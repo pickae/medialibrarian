@@ -11,6 +11,11 @@ permissions:
 jobs:
   default-suite:
     runs-on: ubuntu-latest
+    # Well clear of the ~4.5 minutes this job takes, and far under the 6 HOURS
+    # GitHub allows a step by default. A suite this full of child processes can
+    # wait on one that never returns, and the default turns that into a runner
+    # held all day rather than a red job somebody reads.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -56,6 +61,7 @@ jobs:
   # tier is disk- and tool-free, so it holds on any platform.
   windows-pure:
     runs-on: windows-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -95,6 +101,12 @@ jobs:
     # findings and not regressions. Take this line out the day it passes -
     # a job that cannot fail is a job nobody reads.
     continue-on-error: true
+    # `continue-on-error` is about the VERDICT and says nothing about the clock:
+    # the first run of this job sat in pytest for over 50 minutes against the
+    # same suite Linux finishes in four and a half, and with no limit set it
+    # would have held a macOS runner - billed at ten times a Linux one - until
+    # the 6-hour default cut it off. This bounds the finding instead.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -107,13 +119,19 @@ jobs:
             fdupes beets jq rsync tree zstd sevenzip duckdb
 
       - run: pip install -e . pytest
-      - run: python -m pytest
+      # `--durations` because the question this job cannot answer yet is WHERE
+      # the time goes: the suite starts a child process per case across the
+      # ~1460 in tests/cli, and whether a Mac is uniformly slower at that or
+      # sitting in one case that never returns looks identical from the outside.
+      # The list names it either way.
+      - run: python -m pytest --durations=25
 
   # The type checker. pyproject.toml's mypy section says a module that stops
   # passing should fail the run rather than join a list nobody works down -
   # this is the run that makes that true.
   types:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
