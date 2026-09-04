@@ -1,0 +1,53 @@
+David Ernst
+
+Usage:
+    read-library [options] <inputDir> <outputDir>
+
+    inputDir      scanned RECURSIVELY for e-books.
+    outputDir     where the audiobooks are written: one folder per format, and
+                  inside each the same name and sub-folder as the book -
+                  <outputDir>/opus/... for the listening copy and
+                  <outputDir>/flac/... (or /m4b/...) for the lossless one, two
+                  complete libraries beside each other. Created if missing, and
+                  refused if it lies inside inputDir.
+
+Options:
+    -h, --help      Print this help page.
+    -j, --jobs <jobs>
+                    Narrate up to <jobs> books at a time.
+                    Default: what the device has room for - free VRAM divided by
+                    5 GB on a GPU, and 1 on a CPU, which one narration saturates
+                    on its own. At 1, however it was arrived at, the engine's own
+                    per-book progress is printed as well.
+    -v, --voice <sample>
+                    Voice sample(s) to clone the narrator's voice from.
+                    A FILE is used for every book: any audio or video file, one in
+                    the wrong format is transcoded to WAV first, and one longer
+                    than a minute is cut down to a slice of speech from its middle.
+                    A DIRECTORY holds one sample per language, each named after
+                    the language it speaks (deu.wav, german.m4a, de.mp3, plus an
+                    optional default.wav): every book is then read by the voice of
+                    its own language, because a cloned voice carries the accent of
+                    the sample it was cloned from.
+                    Default the engine's own voice
+    -b, --opus-bitrate <kbps>
+                    Bitrate of the Opus listening copy. 0 writes none, leaving
+                    only the lossless file.
+                    Default 36
+    -o, --opus-only Only the Opus: do not keep the lossless file beside it.
+    -e, --checkout <dir>
+                    The ebook2audiobook checkout to drive.
+                    Default $narrationHome, else ~/ebook2audiobook
+    -d, --device <device>
+                    Where the model runs: cpu, cuda, mps, rocm, xpu, jetson.
+                    Default cuda when an NVIDIA GPU is present, cpu otherwise
+    -t, --engine <engine>
+                    TTS engine: xtts, bark, vits, fairseq, tacotron, yourtts.
+                    Voice cloning (-v) needs one that supports it.
+                    Default xtts
+    -l, --language <language>
+                    Language of the books, ISO 639-3 (eng, deu, ita, ...). Given,
+                    it is used for every book and nothing is detected. Omitted,
+                    each book's own language is established from its metadata,
+                    or from its text when the metadata says nothing.
+                    Default: detected per book

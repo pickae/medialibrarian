@@ -1,0 +1,32 @@
+Directory "no-such-dir" does not exist.
+
+Usage:
+    convert-and-concat [options] <inputDir> <outputDir>
+
+    inputDir      the folder whose subfolders are ingested and concatenated.
+    outputDir     where the finished books are written. Created if missing, and
+                  refused if it lies inside inputDir. A trailing slash on either
+                  is tolerated.
+
+    One output file is made per subfolder of inputDir - or per subfolder of each
+    of those, with -s. An ARCHIVE lying where such a folder would (.zip, .rar,
+    .7z, .tar and the compressed tars) counts as one: it is unpacked into RAM
+    under its own name minus the extension, and ingested from there like a folder
+    of that name. An archive lying beside a FOLDER of the same name is left alone,
+    on the assumption it has already been unpacked there.
+
+    The intermediate transcoded "opus" tree is kept entirely in RAM
+    (/dev/shm), so only the final output folder is written to disk.
+
+    OPTIONS
+    =======
+    -m, --mono
+            mono output, lower default bitrate.
+    -s, --sub-folders
+            iterate through different input subfolders independently
+    -c, --only-concat
+            only concat
+    -b, --bitrate
+            specify bitrate
+    -i, --clean-input
+            clean input folders

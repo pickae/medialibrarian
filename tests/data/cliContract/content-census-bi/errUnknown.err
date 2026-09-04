@@ -1,0 +1,27 @@
+Unknown option: -x
+
+Usage:
+    content-census-bi [options] <reportPath>...
+Arguments:
+    <reportPath>    A census report (audio*.csv, video*.csv, books*.csv,
+                    comics*.csv, or the .tsv of each), or a folder to look for them
+                    in, recursively. Several may be given, including several
+                    libraries' worth of the same type: they are loaded into one
+                    cube per type and stay separable along its "library" axis.
+Options:
+    (may be given before the reports or after them)
+    -o, --database <file>
+                    Write the database to <file> instead of to
+                    contentCensusBI.duckdb beside the first report. The .html page
+                    is always written beside it, under the same name.
+    -e, --export-dir <dir>
+                    Also export each cube as <type>Cube.csv into <dir>.
+    -q, --query <sql>
+                    Run one query against the finished database and print it.
+                    The tables are named above; try
+                      -q "SELECT * FROM videoCube WHERE depth = 1 AND resolution != 'ALL'"
+    -s, --show-totals
+                    Print each cube's grand total when it is built.
+    -h, --help      Print this help page.
+
+Nothing was changed.

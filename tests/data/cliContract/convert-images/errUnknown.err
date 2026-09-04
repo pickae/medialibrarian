@@ -1,0 +1,21 @@
+Unknown option: -x
+
+Usage:
+    convert-images [options] <inputDir> <outputDir>
+Options:
+    -h, --help      Print this help page.
+    -c, --crop      crop excessive whitespace
+    -r, --reverse   reverse from avif to jpeg
+    -j, --jobs <jobs>
+                    Run up to <jobs> encoder processes in parallel.
+                    Only needed when RAM is short, otherwise a good guess is made.
+    -q, --quality <quality>
+                    quality level of the output images
+    -s, --speed <speed>
+                    av1 speed preset, lower is slower, default 5
+    -m, --max-resolution <maxRes>
+                    maximum resolution (height) to keep
+    -f, --fuzz <fuzz>
+                    when trimming, how many percent color difference gets still trimmed
+
+Nothing was changed.

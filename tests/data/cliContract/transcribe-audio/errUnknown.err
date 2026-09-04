@@ -1,0 +1,25 @@
+Unknown option: -x
+
+Usage:
+    transcribe-audio [options] <inputDir> <outputDir>
+
+Audio files are transcribed as they are. Video files are transcribed from their
+FIRST audio track only - the video stream and any further audio tracks are ignored.
+Each input gets one transcript in <outputDir>, in the same sub-folder structure:
+    <inputDir>/a/track.mp3    ->   <outputDir>/a/track.txt
+    <inputDir>/b/movie.mkv    ->   <outputDir>/b/movie.txt
+
+The whisper model is picked for this host automatically (the GPU when whisper can
+really run on it, otherwise the CPU), so there is nothing to configure.
+
+Options:
+    -h, --help      Print this help page.
+    -f, --format <format>
+                    Transcript format: txt, srt, vtt or tsv.
+                    Default txt
+    -j, --jobs <jobs>
+                    Run up to <jobs> transcriptions in parallel.
+                    Default 2
+
+
+Nothing was changed.

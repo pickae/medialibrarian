@@ -1,0 +1,32 @@
+Unknown option: -x
+
+Usage:
+    clean-folder-structure [options] <inputDir>
+Options:
+    -y, --sort-into-years
+                    Sort files named "YYYYMMDD Filename.ext" into yearly
+                    subfolders "YYYY/YYYYMMDD Filename.ext".
+    -d, --fix-dates Before cleaning file names, normalise a leading date of the
+                    form YYYY<sep>MM<sep>DD<sep> (separators: space . / _ -) at
+                    the start of a file name into the compact "YYYYMMDD " form,
+                    keeping the rest of the name. Applied across all subfolders.
+    -n, --number-files
+                    Clean folder names as usual, but instead of cleaning file
+                    names, just number the files in each folder (01, 02, ...
+                    naturally sorted and zero-padded). Only the plurality
+                    (most common) filetype in a folder is numbered; other
+                    files (e.g. a cover.jpg) are left alone.
+    -f, --fragments <file>
+                    Read the name fragments to remove from <file> (one per line,
+                    '#' comments and blank lines ignored) instead of from
+                    data/fragments.txt beside this script. Without this option that
+                    file is used when it is there, and names are cleaned without any
+                    fragment removal when it is not.
+    -s, --simulate  Simulate: do not touch the input at all. Mirror its structure
+                    into a sandbox, run the full cleaning there, and write
+                    "before.tree" and "after.tree" into the input folder so the
+                    result can be reviewed and tested risk-free. Combines with the
+                    other options (-y, -d, -n) to preview their effect too.
+    -h, --help      Print this help page.
+
+Nothing was changed.

@@ -1,0 +1,17 @@
+Unknown option: -x
+
+Usage:
+    ingest-books [options] <inputDir> <outputDir>
+Options:
+    -h, --help
+          Print this help page.
+    -c, --clean-structure
+          Run clean-folder-structure on the output folder when done.
+    -t, --text
+          Text mode: convert every recognized input to a raw .txt file,
+          mirroring the input sub-folder layout, instead of the epub pipeline.
+    -z, --zpaq
+          Text mode only: also create a zpaq archive of the resulting folder
+          (output folder, or input folder when no conversion was done).
+
+Nothing was changed.

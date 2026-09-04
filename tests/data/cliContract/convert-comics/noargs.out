@@ -1,0 +1,20 @@
+David Ernst
+
+Usage:
+    convert-comics [options] <inputDir> <outputDir>
+
+Converts every comic book under <inputDir> into a .cbz of AVIF pages in the
+mirrored folder under <outputDir>. Books may be .cbr/.cbz/.cb7 archives or PDFs
+that hold one large image per page; a PDF that is not shaped like a scanned comic
+(a magazine, a text document) is reported and skipped.
+
+Options:
+    -h, --help      Print this help page.
+    -q, --quality <quality>
+                    quality level of the output images
+    -s, --speed <speed>
+                    av1 speed preset, lower is slower, default 5
+    -m, --max-resolution <maxRes>
+                    maximum resolution (height) to keep
+    -f, --fuzz <fuzz>
+                    when trimming, how many percent color difference gets still trimmed

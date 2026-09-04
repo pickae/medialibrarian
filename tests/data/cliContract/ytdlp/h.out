@@ -1,0 +1,77 @@
+David Ernst
+
+Usage:
+    ytdlp [options] <outputPath> <archiveFile> [<dateRange>]
+
+    <outputPath>    the library root every feed's subdir hangs under - or, with
+                    -i, the parent of the staging and the library trees
+    <archiveFile>   yt-dlp's download archive: the record of what has already
+                    been fetched, so a re-run only picks up what is new. It is
+                    created if it does not exist.
+    <dateRange>     optional upload-date filter, applied to every feed:
+                        20260607             everything since that day
+                        20260607..20260707   a window
+                        ..20260707           everything up to that day
+                        today-2weeks         relative dates work at either end
+                        ..today-10days       and so a rolling window is one of
+                                             them: nothing newer than ten days,
+                                             which is how the video library was
+                                             fetched before it had a table
+                    Without it, --playlist-end and the archive decide alone.
+
+Options:
+    -h, --help      Print this help page.
+    -t, --table <table>
+                    A feed table to read. May be given more than once, and each
+                    table brings its own profile and its own parallelism (see
+                    below). Default: podcasts.tsv beside this script.
+    -j, --jobs <jobs>
+                    Cap how many feeds any one table may fetch at once. Lower
+                    only; a table asking for less keeps its own number.
+    -n, --dry-run   Dry run: print the yt-dlp call each feed would get and
+                    download nothing.
+    -v, --verbose   Verbose: print yt-dlp's own output as well. Without it the
+                    run prints exactly one line per episode and nothing else.
+    -a, --include-inactive
+                    Also fetch the feeds whose active column is 0.
+    -c, --clean-up  Tidy up after the run: the sidecars each finished episode
+                    leaves (the thumbnail that was embedded, the description and
+                    the metadata json, which are attached into a Matroska
+                    first), anything that is not Matroska remuxed into one, the
+                    leftovers of an interrupted download, and the folders left
+                    empty. Only the episodes THIS run downloaded are touched;
+                    the sweep for interrupted leftovers covers <outputPath>.
+    -i, --ingest    Build the phone's library from the run instead of leaving the
+                    downloads as they came off the network. <outputPath> becomes
+                    the parent of two trees: the raw downloads land in
+                    <outputPath>/Staging/<kind>, and when the run is over their
+                    names are cleaned (clean-folder-structure) and they are
+                    converted into <outputPath>/Ingested (convert-audio) - one
+                    staging folder per conversion, all of them into that one
+                    library. The raw downloads are KEPT: they are what a re-run
+                    would otherwise have to fetch again. Normally given with -c,
+                    so the sidecars are gone before the library is built.
+                    Every staging folder with files in it is converted, including
+                    the folders of conversions no table in this run downloads into.
+                    A video table ignores -i and downloads to <outputPath> as
+                    usual - an audio converter would throw its picture away.
+    -m, --match <match>
+                    Only the feeds whose subdir or URL contains <match>
+                    (case-insensitive).
+    -s, --system <system>
+                    Build the calls for "windows" or "linux" instead of for
+                    this host. Only useful with -n, to read off what the other
+                    machine would run.
+
+A table says what it is with a "#!profile <name>" line, one of:
+    youtubeAudio    (the default) audio only, SponsorBlock segments cut out,
+                    politely paced, one feed at a time
+    youtubeVideo    audio and video, muxed into Matroska, with SponsorBlock
+                    segments marked as chapters rather than cut
+    rssAudio        ordinary podcast RSS: audio only, and 10 feeds at
+                    once, because they are 10 different providers each
+                    serving one client one feed
+    rssVideo        the same for a video podcast feed
+    siteVideo       a video site that is neither: no SponsorBlock and no format
+                    codes, just the page's video and its poster frame
+A "#!jobs <n>" line overrides how wide that table runs.

@@ -1,0 +1,16 @@
+David Ernst
+
+Usage:
+    find-fragment-candidates [options] <folderOrTreeFile>
+Argument:
+    <folderOrTreeFile>  Either a folder (a tree of it is generated and parsed)
+                        or an existing tree file (parsed directly).
+Options:
+    -m, --min-prevalence <n>
+                    Only report candidates whose prevalence is at least <n>
+                    (how many distinct names carry them). Default: 2, so purely
+                    one-off title words are hidden and only recurring fragments
+                    remain. Pass "-m 1" to list every candidate.
+    -o, --output <file>
+                    Write the report to <file> instead of the default location.
+    -h, --help      Print this help page.

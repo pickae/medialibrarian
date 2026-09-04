@@ -1,8 +1,13 @@
-legacy/
-data/
-temp/
-logs/
-coverage/
+# The working directories a run leaves beside the checkout, at the ROOT and only
+# there. Anchored with a leading slash, because a bare "data/" matches a
+# directory of that name at every depth: it swallowed tests/data - the 180
+# recorded CLI pages and every other fixture the suite READS - so a fresh clone
+# collected the suite and failed it, while the machine that wrote the fixtures
+# stayed green.
+/legacy/
+/data/
+/temp/
+/logs/
 .claude/settings.local.json
 CLAUDE.local.md
 __pycache__/

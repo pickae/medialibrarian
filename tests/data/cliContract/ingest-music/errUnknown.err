@@ -1,0 +1,24 @@
+Unknown option: -x
+
+Usage:
+    ingest-music [options] <downloadDir> <ingestDir> [opusCopyDir]
+
+    downloadDir   directory holding the freshly downloaded music to ingest
+    ingestDir     directory the cleaned/encoded library is written to
+                  (created if it does not exist)
+    opusCopyDir   directory the 120 kbps Opus copies are written to
+                  (optional; defaults to the sibling folder "<ingestDir>opus")
+
+Options:
+    -h, --help    Print this help page.
+    -j, --jobs <jobs>
+                  Run up to <jobs> encoder processes in parallel
+                  (default: the number of CPU cores).
+
+Dependencies:
+    ffmpeg, mkvtoolnix, ImageMagick, rsync, fdupes, beets, and the mutagen
+    package for this Python (chapter embedding). Optional: flock (numbers the
+    progress lines). Also invokes the sibling commands convert-audio,
+    clean-folder-structure and cue-to-chapters.
+
+Nothing was changed.

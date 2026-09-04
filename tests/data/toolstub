@@ -1,0 +1,234 @@
+#!/usr/bin/env bash
+# The shared fake tool for the tool-coupled differential runs (bin/libcall's
+# bookText and comicPdf operations).
+#
+# It records the call it was given - its own name, then each argument,
+# tab-separated - as one line appended to $TOOLSTUB_LOG, and it is the only
+# tool both implementations can reach for: the module under test runs with a
+# PATH holding the stubs and nothing else, so what is compared between them is
+# WHICH tool was reached for and with what, because the tool is this file on
+# both sides and so cannot differ.
+#
+# How the tool behaves is told to it by the environment, one knob per way a
+# tool can act:
+#
+#   TOOLSTUB_OUT   a directory; when it holds a file named like the tool, that
+#                  file is the tool's stdout - the case chooses what the tool
+#                  prints, without knowing which tool the module will call
+#   TOOLSTUB_TOUCH a file to create, standing for the file the tool writes -
+#                  created only from the (TOOLSTUB_SKIP + 1)-th call on, which
+#                  is how a case makes an invocation succeed or come up empty
+#   TOOLSTUB_STATE the directory the per-tool call counters live in
+#   TOOLSTUB_SKIP  how many of this tool's calls do nothing (default 0)
+#   TOOLSTUB_RC    a number: the status to exit with, in place of the rule below
+#   TOOLSTUB_OUT/<name>.rc  a list of exit codes for THIS tool alone, one per
+#                  call, consumed in order (the order is the per-tool counter
+#                  TOOLSTUB_STATE keeps, the same one TOOLSTUB_SKIP counts
+#                  with): the Nth call exits with the Nth number, and a list
+#                  that runs out falls through to the rule below. A knob that
+#                  decides once for every call cannot say "the third probe of a
+#                  cascade passes and the first two fail", so the list exists;
+#                  it needs TOOLSTUB_STATE set, because the order lives in the
+#                  state, not in the call.
+#   TOOLSTUB_OUT/<name>.write  a list of file paths for THIS tool alone, one per
+#                  call, consumed in the same order: the Nth call creates the Nth
+#                  path - with the tool's canned stdout as its content when the
+#                  case also gave the tool a printed file (its own name in
+#                  TOOLSTUB_OUT), empty otherwise - and "-" stands for a call that
+#                  writes nothing. An entry may name a flag the tool was called
+#                  with, the form ${--log-dir-path}/ffsubsync.log: the stub
+#                  substitutes the value of that flag from its own argv, which is
+#                  how a case reaches a file the tool writes into a directory the
+#                  module made at runtime and only the call itself knows; an entry
+#                  naming a flag this call was not given writes nothing. An entry
+#                  may also be the literal word $LAST: the stub then writes to the
+#                  LAST word of its own argv - the converters' positional output
+#                  file, which like a flag value only the call itself knows. A
+#                  leading "N:" is dropped first - mkvextract's attachment form
+#                  N:file writes to file, the number being the attachment's id -
+#                  and a call with no arguments writes nothing, rather than a path with
+#                  a hole in it. Like the rc list it needs TOOLSTUB_STATE set,
+#                  because the order lives in the state.
+#
+#   TOOLSTUB_OUT/<name>.table  an argv-keyed response table for THIS tool: one line
+#                  per call the case expects it to make, the call's own arguments
+#                  joined by the unit separator and followed by one more, then a
+#                  unit separator, the exit code, a unit separator and the
+#                  response's base64 (absent for a call that prints nothing). The
+#                  first line that begins with the call's own join AND has a
+#                  separator after it is the one that answers: its response is
+#                  printed, decoded, and the call exits with its code, whatever
+#                  the other knobs say. That separator - the one the argv ends
+#                  with, matched rather than merely written - is what makes a line
+#                  match only the call of exactly its own length, and a call the
+#                  table has no line for falls through to the rules below. A
+#                  table line decides before
+#                  anything else: it is the case answering THAT call, not the
+#                  case's rule answering every call.
+#
+# Precedence: a matching table line, then TOOLSTUB_RC (set), then the lists.
+#
+# With none of those set, the exit status falls back to the rule the first users
+# of the stub knew: 0 when its LAST argument contains "ok" (a corpus case
+# chooses the status through the destination it hands over, which both book
+# converters take last), 7 otherwise. The rule sees the argument with every
+# occurrence of the SCRATCH ROOT removed - the dirname of TOOLSTUB_OUT -
+# because that root is a random name each side of the harness draws on its own,
+# and a draw containing "ok" would flip an exhausted list's exit on one side
+# only: the rule must decide by what the case chose, not by what the OS drew.
+#
+# The name is recorded as ${0##*/} rather than $0: both implementations resolve
+# the tool through PATH from their own scratch directories, so $0 is a
+# different full path on each side, and only the base name is part of the
+# answer.
+#
+# When the stub stands on the right of a pipeline (df | tail in ramScratch), a
+# real tail or head consumes that stream before it answers, and so must the
+# stub - otherwise it answers while the pipeline's left side is still running
+# and the left side's log line lands after the report has read the file. Only
+# those two tools are drained, though: every other tool the modules reach for
+# (curl with --data-urlencode, ffmpeg, mktemp, ...) never reads its stdin, and
+# a blanket drain would swallow a stdin the caller is reading from - the
+# find stream a while-read loop feeds the module, for instance.
+
+name="${0##*/}"
+
+case "$name" in
+	tail|head)
+		if [[ -p /dev/stdin ]] && command -v cat > /dev/null 2>&1; then
+			cat > /dev/null
+		fi
+		;;
+esac
+
+# The line goes out in ONE write: parallel callers (the grain probe's -P
+# workers) append at once, and a line built from several writes interleaves.
+logLine=$'call\t'"${name}"
+for a in "$@"; do
+	logLine+=$'\t'"$a"
+done
+printf '%s\n' "$logLine" >> "${TOOLSTUB_LOG:?toolstub: TOOLSTUB_LOG must be set}"
+
+# The table answers THIS call by its own arguments before any rule answers:
+# find the first line that begins with this call's join - each argument plus a
+# unit separator - AND has one more separator after it, which is what ends the
+# argv and so keeps a shorter call from matching a longer call's line. The rest
+# of the line is the exit code, a unit separator and the response's base64.
+if [[ -n "${TOOLSTUB_OUT:-}" && -f "$TOOLSTUB_OUT/$name.table" ]]; then
+	tableLine=""
+	prefix=""
+	for a in "$@"; do
+		prefix+="$a"$'\x1f'
+	done
+	while IFS= read -r l; do
+		# The separator after the join is required: without it a shorter call
+		# matches a longer call's line and reads its next field as an exit code.
+		[[ "$l" == "$prefix"$'\x1f'* ]] && { tableLine="$l"; break; }
+	done < "$TOOLSTUB_OUT/$name.table"
+	if [[ -n "$tableLine" ]]; then
+		rest="${tableLine#"$prefix"}"
+		rest="${rest#$'\x1f'}"
+		rc="${rest%%$'\x1f'*}"
+		b64="${rest#*$'\x1f'}"
+		[[ "$b64" == "$rest" ]] && b64=""
+		[[ -n "$b64" ]] && printf '%s' "$b64" | base64 -d
+		exit "$rc"
+	fi
+fi
+
+if [[ -n "${TOOLSTUB_OUT:-}" && -f "$TOOLSTUB_OUT/$name" ]]; then
+	cat -- "$TOOLSTUB_OUT/$name"
+fi
+
+rcList=""
+if [[ -n "${TOOLSTUB_OUT:-}" && -f "$TOOLSTUB_OUT/$name.rc" && -n "${TOOLSTUB_STATE:-}" ]]; then
+	rcList="$(< "$TOOLSTUB_OUT/$name.rc")"
+fi
+
+writeList=""
+if [[ -n "${TOOLSTUB_OUT:-}" && -f "$TOOLSTUB_OUT/$name.write" && -n "${TOOLSTUB_STATE:-}" ]]; then
+	writeList="$(< "$TOOLSTUB_OUT/$name.write")"
+fi
+
+if [[ -n "${TOOLSTUB_TOUCH:-}" || -n "$rcList" || -n "$writeList" ]]; then
+	n=0
+	if [[ -n "${TOOLSTUB_STATE:-}" && -f "$TOOLSTUB_STATE/$name" ]]; then
+		n="$(< "$TOOLSTUB_STATE/$name")"
+	fi
+	n=$((n + 1))
+	[[ -n "${TOOLSTUB_STATE:-}" ]] && printf '%s\n' "$n" > "$TOOLSTUB_STATE/$name"
+fi
+
+if [[ -n "${TOOLSTUB_TOUCH:-}" ]]; then
+	((n > ${TOOLSTUB_SKIP:-0})) && : > "$TOOLSTUB_TOUCH"
+fi
+
+if [[ -n "$writeList" ]]; then
+	writePath="$(awk -v n="$n" '{ for (i = 1; i <= NF; i++) if (i == n) { print $i; exit } }' <<<"$writeList")"
+	# $LAST names the last word of this call's own argv: the converters'
+	# positional output file, made at runtime by the module under test, so only
+	# the call itself knows it; a call with no arguments writes nothing
+	if [[ "$writePath" == '$LAST' ]]; then
+		(( $# > 0 )) && writePath="${@: -1}" || writePath="-"
+		# mkvextract's attachment form N:file writes to file, the number being
+		# the attachment's id and not part of the name: the tool drops it, and
+		# so does the stub
+		if [[ "$writePath" =~ ^[0-9]+: ]]; then
+			writePath="${writePath#*:}"
+		fi
+	fi
+	# the flag a case named in the entry, valued from this call's own argv - the
+	# directory a --log-dir-path names was made at runtime by the module under
+	# test, so only the call itself knows it; an entry naming a flag this call
+	# was not given writes nothing, rather than a path with a hole in it
+	while [[ "$writePath" == *'${--'*'}'* ]]; do
+		prefix="${writePath%%\$\{--*}"
+		rest="${writePath#*\$\{--}"
+		flag="${rest%%\}*}"
+		suffix="${rest#*\}}"
+		value=""
+		found=0
+		i=0
+		while ((i < $#)); do
+			i=$((i + 1))
+			if [[ "${@:i:1}" == "--$flag" ]]; then
+				found=1
+				((i < $#)) && value="${@:i+1:1}"
+				break
+			fi
+		done
+		((found)) || { writePath="-"; break; }
+		writePath="${prefix}${value}${suffix}"
+	done
+	if [[ "$writePath" == "-" || -z "$writePath" ]]; then
+		:
+	elif [[ -n "${TOOLSTUB_OUT:-}" && -f "$TOOLSTUB_OUT/$name" ]]; then
+		cat -- "$TOOLSTUB_OUT/$name" > "$writePath"
+	else
+		: > "$writePath"
+	fi
+fi
+
+if [[ "${TOOLSTUB_RC:-}" =~ ^[0-9]+$ ]]; then
+	exit "$TOOLSTUB_RC"
+fi
+
+if [[ -n "$rcList" ]]; then
+	rc="$(awk -v n="$n" '{ for (i = 1; i <= NF; i++) if (i == n) { print $i; exit } }' <<<"$rcList")"
+	if [[ "$rc" =~ ^[0-9]+$ ]]; then
+		exit "$rc"
+	fi
+fi
+# The ok rule decides by what the CASE handed over, not by the scratch root
+# the harness happened to draw: that root is a random name, the two sides draw
+# theirs separately, and a draw containing "ok" would flip an exhausted list's
+# exit on one side only. TOOLSTUB_OUT lives in the root, so the rule sees the
+# argument with every occurrence of the root removed.
+last="${@: -1}"
+if [[ -n "${TOOLSTUB_OUT:-}" && "$TOOLSTUB_OUT" == */* ]]; then
+	last="${last//"${TOOLSTUB_OUT%/*}"/}"
+fi
+if [[ $# -gt 0 && "$last" == *ok* ]]; then
+	exit 0
+fi
+exit 7

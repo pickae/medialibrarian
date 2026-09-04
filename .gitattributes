@@ -16,3 +16,22 @@
 *.tsv   text eol=lf
 *.md    text eol=lf
 *.yaml  text eol=lf
+
+# The tool stub is the third bash script and the rules above do not reach it: it
+# carries neither suffix ON PURPOSE, which is the thing tests/test_paths_in_prose
+# asserts about, so it needs its own line rather than a rename.
+tests/data/toolstub             text eol=lf
+
+# The recorded fixtures, which are compared BYTE for byte against what a command
+# prints. None of these suffixes were pinned, so the bytes in the repository were
+# whatever core.autocrlf the committing machine happened to have - and a fixture
+# checked out with CRLF differs from the run on every line, on a host whose own
+# checkout is the innocent one. Enumerated, and under tests/data only, so a real
+# media fixture added later is not silently converted along with them.
+tests/data/**/*.out             text eol=lf
+tests/data/**/*.err             text eol=lf
+tests/data/**/*.rc              text eol=lf
+tests/data/**/*.tree            text eol=lf
+tests/data/**/*.cue             text eol=lf
+tests/data/**/*.chapters        text eol=lf
+tests/data/**/*.srt             text eol=lf
