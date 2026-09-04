@@ -1,0 +1,40 @@
+David Ernst
+
+Usage:
+    content-census [options] <inputPath>...
+Argument:
+    <inputPath>     The folder to census, recursively. The reports are written
+                    into it, named after it. Several may be given: each is
+                    censused as its own library, which is what lets
+                    content-census-bi tell them apart afterwards - and each is
+                    read by a worker of its own, since several paths means
+                    several disks.
+Options:
+    -d, --depth <levels>
+                    Take the libraries <levels> level(s) BELOW each <inputPath>
+                    instead of the paths themselves: -d 1 makes every subfolder
+                    of a given path a library of its own, -d 2 every grandchild,
+                    and so on. Files sitting beside those folders, or above them
+                    next to the path given, belong to no library and are not
+                    censused. Each such library gets its own reports, named after
+                    the way down to it (-d 1 over /media/Films writes
+                    videoFilmsMarvel.csv for its Marvel subfolder), so the cube's
+                    library axis gets a level to drill down into. The libraries
+                    under one given path are censused one after the other - they
+                    share that path's disk. Default 0: the paths given are the
+                    libraries.
+    -o, --output-dir <dir>
+                    Write the reports into <dir> instead of into the library, for
+                    censusing a read-only or a shared library. With several
+                    libraries this is what puts all their reports in one place.
+                    Made if it is not there yet, so a run can be pointed at a
+                    fresh folder without creating it first.
+    -b, --build-cubes
+                    Also build the DuckDB hypercubes from the reports this run
+                    writes, by handing them to content-census-bi. Only a
+                    shorthand: that command can always be run on its own over
+                    reports that already exist, which is the thing to do when the
+                    census itself does not need repeating.
+    -t, --tsv       Write tab-separated .tsv files instead of comma-separated
+                    .csv ones.
+    -h, --help      Print this help page.

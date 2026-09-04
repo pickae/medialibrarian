@@ -1,0 +1,46 @@
+Unknown option: -x
+
+Usage:
+    concat-audio [options] <inputDir> <outputDir>
+
+    Options
+    -------
+    -p, --pretreat
+            opt-in input pretreatment (in-place): renames folders/files in
+            <inputDir> before concatenation.
+    -v, --verbose
+            verbose: show every per-subfolder step. Without it (the default)
+            only the '[i/N] Processing ...' progress line is printed per
+            subfolder; the individual step messages are hidden.
+    -h, --help
+            print this help page.
+    
+    Default behavior
+    ----------------
+    requires per desired output file one subfolder in input
+    each subfolder respectively needs to have only mp3, opus, aac or flac audio
+    those can be in various recursive folders
+    the naming of those files and subfolders should reflect the desired order
+
+    Chapters
+    --------
+    priority: retrieve chapters from a cue file
+      * one cue sheet in the folder (recursively): always used
+      * several: prefer the cue next to the audio file sharing its name,
+        else fall back to the largest cue sheet
+    fallback: concat files and build chapters from individual files
+
+    Thumbnail
+    ---------
+    embed cover from image file(s) in input folder
+    fallback: extract from pdf documents instead
+    fallback: extract from audio files themselves
+
+    Dependencies
+    ------------
+    ffmpeg, imagemagick, wc, mutagen. Optional: mkvtoolnix (chapters and titles
+    for MP3/m4b output - without it the concatenation still succeeds, unchaptered),
+    pdftoppm (renders a booklet PDF's first page as the cover; without it the
+    embedded cover art is used instead), flock (numbers the progress lines)
+
+Nothing was changed.

@@ -297,6 +297,11 @@ def sandbox(tmp_path):
 # missing. It sits far below the real total on purpose: a smoke alarm, not a
 # scale. Lowering it is a decision about what the suite is, and never the way to
 # make a red run green.
+#
+# The question is asked in two places, and the messages below are why: under
+# `-n` the refusal here cannot be the mechanism, so `tests/test_suite_is_whole.py`
+# asks the same two questions as a CASE. What is shared is the wording, so a
+# report does not depend on which of them got there first.
 _MINIMUM_CASES = 4500
 
 _collected_from: set[str] = set()
@@ -309,29 +314,62 @@ def pytest_itemcollected(item):
     _collected_from.add(str(item.path))
 
 
-def pytest_collection_finish(session):
-    """Refuse a run that is quietly smaller than the repository.
+def whole_suite_run(config) -> bool:
+    """Whether this run can say anything about what is missing from the suite.
 
-    Only a whole-suite run can say anything about what is missing from it, and
-    `pytest tests/lib/test_cubes.py` is not one. `config.args` is the configured
+    `pytest tests/lib/test_cubes.py` cannot. `config.args` is the configured
     `testpaths` verbatim until a path argument replaces it, which is exactly the
     distinction - `-k` and `-m` narrow what RUNS and leave collection alone.
     """
-    config = session.config
-    if list(config.args) != list(config.getini("testpaths")):
-        return
+    return list(config.args) == list(config.getini("testpaths"))
 
+
+def suite_shortfall() -> str:
+    """What is missing from the run pytest collected, worded for a report, or ""
+    when the run is the whole repository.
+
+    Reads the tallies :func:`pytest_itemcollected` kept, which is the only place
+    the count is right: by the end `-m` has deselected the media tier, and a
+    media-only file would read as a quiet one.
+    """
     root = pathlib.Path(__file__).parent
     quiet = sorted(str(path.relative_to(root))
                    for path in root.rglob("test_*.py")
                    if str(path) not in _collected_from)
     if quiet:
-        raise pytest.UsageError(
-            "%d test file(s) on disk handed over no cases, so this run is not "
-            "the suite: %s" % (len(quiet), ", ".join(quiet)))
-
+        return ("%d test file(s) on disk handed over no cases, so this run is "
+                "not the suite: %s" % (len(quiet), ", ".join(quiet)))
     if _collected_cases < _MINIMUM_CASES:
-        raise pytest.UsageError(
-            "collected %d cases, under the floor of %d - test files have gone "
-            "missing from disk, not just cases."
-            % (_collected_cases, _MINIMUM_CASES))
+        return ("collected %d cases, under the floor of %d - test files have "
+                "gone missing from disk, not just cases."
+                % (_collected_cases, _MINIMUM_CASES))
+    return ""
+
+
+def pytest_collection_finish(session):
+    """Refuse a run that is quietly smaller than the repository, before it runs.
+
+    Not under `-n`, where this hook is called in the WORKERS and never on the
+    controller, and where raising is not a refusal at all: the worker that raises
+    sends no collection, its siblings send theirs, and xdist reports the
+    disagreement as an INTERNALERROR naming whichever case a surviving worker
+    happened to list. Which workers got through is a race, so the diagnosis was
+    different each run and never the file that went quiet.
+
+    The controller cannot ask instead. xdist offers it every id a worker
+    collected, but only AFTER `-m` has been applied, so under the default
+    `-m 'not media'` the eight media-only files would read as quiet ones - the
+    exact mistake the tallies above exist to avoid.
+
+    So under `-n` the same two questions are a case rather than a refusal, in
+    `tests/test_suite_is_whole.py`: a case is reported by the machinery that
+    reports every other case, and it still cannot come back green and smaller
+    than the repository. What it gives up is stopping the run FIRST, which is
+    why this stays where it can be had.
+    """
+    config = session.config
+    if hasattr(config, "workerinput") or not whole_suite_run(config):
+        return
+    shortfall = suite_shortfall()
+    if shortfall:
+        raise pytest.UsageError(shortfall)

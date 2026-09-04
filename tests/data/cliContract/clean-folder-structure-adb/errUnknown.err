@@ -1,0 +1,20 @@
+Unknown option: -x
+
+Usage:
+    clean-folder-structure-adb [options] <inputPath>
+Argument:
+    <inputPath>   the folder whose names are cleaned on the device.
+Options:
+    -y, --sort-into-years
+                Sort "YYYYMMDD ..." files into YYYY/ subfolders.
+    -d, --fix-dates
+                Normalise leading date prefixes to "YYYYMMDD ".
+    -n, --number-files
+                Number files by plurality filetype instead of cleaning names.
+    -f, --fragments <file>
+                Read the name fragments to remove from this file.
+    -s, --simulate
+                Preview only: print the planned renames and DO NOT touch the device.
+    -h, --help  Print this help page.
+
+Nothing was changed.

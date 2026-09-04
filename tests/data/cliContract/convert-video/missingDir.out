@@ -1,0 +1,109 @@
+Directory "no-such-dir" does not exist.
+
+Usage:
+    convert-video [options] <inputDir> <outputDir>
+
+    inputDir      directory holding the source videos to convert
+    outputDir     directory the re-encoded library is written to
+                  (created if it does not exist)
+
+While it runs:
+    p             Pause the video encoding: every encoder of the moment is stopped
+                  where it is, so the CPU cores or the NVENC engines are free for
+                  something else. Their memory is NOT released, and the pause lasts
+                  only as long as this shell does. Audio keeps encoding.
+    r             Resume: every paused encoder carries on where it stopped.
+                  (Ctrl+C still ends the run, paused or not.)
+
+Options:
+    -h, --help    Print this help page.
+    -j, --cores <cores>
+                  Logical-core count to size the per-file chunking for
+                  (default: the number of CPU cores). Parallelism comes from
+                  chunking one file at a time, not from encoding files in
+                  parallel, so this scales the chunk count up or down.
+    -p, --profile <profile>
+                  Video encoding profile to use (default: av1Grain). Selecting a
+                  *Nvenc profile (hevcNvenc, av1Nvenc) encodes on the GPU.
+    -a, --audio-profile <profile>
+                  Audio encoding profile to use (default: opus).
+    -b, --audio-bitrate <kbit/s>
+                  Opus bitrate applied to every audio track, overriding the
+                  per-channel table. Implies -a opusCustom when no audio profile
+                  is given explicitly; required by, and only valid with, that
+                  profile.
+    -e, --nvenc-engines <count>
+                  NVENC engine count to parallelise hardware encoding across,
+                  overriding the built-in per-GPU guess. Only affects the *Nvenc
+                  profiles.
+    -q, --quality <level>
+                  Constant-quality level to encode at, overriding the one the
+                  chosen video profile hardcodes: -crf for the software profiles,
+                  -cq for the *Nvenc ones. Lower means better quality and a bigger
+                  file, and the bitrate follows from it. Also turns OFF the
+                  resolution bias, so the level given is the level used for every
+                  file. Only valid for the constant-quality profiles - the
+                  av1Constrained* rows target an average bitrate instead and have
+                  no quality level to override.
+    -r, --max-resolution <tier>
+                  Resolution ceiling: scale every video down to at most this tier,
+                  keeping its aspect ratio. A tier is named either by its line
+                  count (720p ... 4320p) or by a marketing name (fullHD, 2K, 4K,
+                  UltraHD, 8K, ...), in any case. A source already at or below the
+                  tier is encoded at its own size - nothing is ever scaled UP.
+                  Default: no ceiling, every source keeps its resolution.
+    -f, --fast-decode <1|2>
+                  Fast-decode level to encode with, trading a little compression
+                  for a cheaper decode on weak playback hardware (2 is cheaper to
+                  decode than 1). Off by default, and only valid for the AV1
+                  software profiles - x265 and the *Nvenc ones have no such setting.
+    -g, --grain <level|0|off>
+                  How much film grain to synthesise, in libsvtav1's 0-50 scale.
+                  Left out, every grain-synthesising profile MEASURES each source
+                  and synthesises what it measured (av1Animation synthesises none).
+                  A number replaces that outright for every file - it is capped by
+                  nothing, so 35 means 35. A level of 0 asks for that same per-source
+                  probe explicitly, on a profile that would not otherwise run it;
+                  note that 0 therefore does NOT mean "none" - off is how none is
+                  asked for.
+                  Only valid for the AV1 software profiles. Note this is lossy: the
+                  encoder denoises before encoding, so the source's real grain is
+                  not in the output either way.
+    -t, --test [percent]
+                  Test each source before encoding it, and convert only the ones
+                  with room to save. A file is measured against the bitrate its
+                  codec, frame size, frame rate and grain make ADEQUATE: one below
+                  that is already starved and is skipped (re-encoding it can only
+                  make it worse), and one above it is converted only if the encode
+                  this run would produce is still adequate after giving up
+                  <percent> of the source's video bitrate. Default 50, i.e. convert
+                  only what can be halved; a smaller number is a looser run (-t 30
+                  converts anything that can save 30%), and -t 0 keeps only the
+                  starved-source check. Audio is left out of the comparison.
+                  Off by default: every source is converted.
+
+    Run with an unknown profile or tier name to have the valid names listed.
+
+Dependencies:
+    ffmpeg (with libsvtav1/libx265/libopus) and ffprobe. Hardware
+    acceleration additionally uses
+    nvidia-smi (NVENC engine count), a VAAPI-capable Intel iGPU, or on macOS
+    VideoToolbox; all are optional and detected at runtime. Keeping Dolby Vision
+    needs an ffmpeg whose
+    libx265/libsvtav1 offer -dolbyvision (ffmpeg 7.1 and newer), which is also
+    detected at runtime - an older build just converts without it. A dual-layer
+    Dolby Vision profile 7 source is normalised to single-layer profile 8.1 before
+    it is encoded, which additionally needs dovi_tool and mkvmerge (mkvtoolnix),
+    both optional too: without them such a file is encoded as plain HDR10. The
+    finished file's Dolby Vision level - the capability claim a player checks
+    before it decodes anything - is corrected if it overstates the video, which
+    needs python3 and is skipped with a warning without it.
+
+    The AV1 profiles ask for psychovisual SVT-AV1 parameters, and the *Nvenc ones
+    for NVENC's uhq tuning, that a distribution's ffmpeg is often too old for -
+    and a too-old libsvtav1 DROPS an unknown parameter silently rather than
+    failing. So a newer build installed beside the packaged one is looked for and
+    preferred when it accepts more: PATH first, then $HOME/.local/bin,
+    /opt/homebrew/bin, /usr/local/bin and /opt/ffmpeg/bin. Set ffmpegOverride to
+    name one outright.
+    The startup summary says which build was used and what it could not do.

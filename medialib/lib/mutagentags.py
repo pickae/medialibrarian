@@ -65,8 +65,12 @@ def embed_cover(audio: str, cover: str) -> int:
         from mutagen.oggopus import OggOpus
 
         opus = OggOpus(audio)
-        if "METADATA_BLOCK_PICTURE" in opus.tags:
-            del opus.tags["METADATA_BLOCK_PICTURE"]
+        # Through the file rather than through `.tags`, which mutagen types as
+        # optional - the same mapping the line below and `embed_chapters` already
+        # use, and it answers "no picture" for a file with no tags at all rather
+        # than raising on the membership test.
+        if "METADATA_BLOCK_PICTURE" in opus:
+            del opus["METADATA_BLOCK_PICTURE"]
         opus["METADATA_BLOCK_PICTURE"] = base64.b64encode(
             picture.write()).decode("ascii")
         opus.save()
@@ -82,8 +86,8 @@ def remove_cover(opus: str) -> int:
         from mutagen.oggopus import OggOpus
 
         handle = OggOpus(opus)
-        if "METADATA_BLOCK_PICTURE" in handle.tags:
-            del handle.tags["METADATA_BLOCK_PICTURE"]
+        if "METADATA_BLOCK_PICTURE" in handle:
+            del handle["METADATA_BLOCK_PICTURE"]
         handle.save()
         return 0
     except Exception:

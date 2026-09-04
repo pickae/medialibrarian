@@ -168,6 +168,37 @@ def test_unregister_pausable_job_drops_the_entry(pause_state):
     assert not (pause_state["jobs"] / "4242").exists()
 
 
+def _a_pid_with_no_process():
+    """A pid the registry walks will find nothing behind.
+
+    What these cases need is a STALE entry, and "one above /proc/sys/kernel/
+    pid_max" was one way to be certain of that - a Linux way, resting on a file
+    macOS does not have, where it raised before asserting anything. A pid this
+    process started and then REAPED is the same certainty on any POSIX host, and
+    it is the property the cases are actually about rather than a fact about how
+    the kernel numbers things.
+
+    Reaped and not merely exited: a child that has not been waited for is a
+    zombie, which is still an entry in the process table and still answers
+    signal 0 - so it would read as live and the case would assert the opposite
+    of what it means to.
+    """
+    spent = subprocess.Popen(
+        [sys.executable, "-c", ""],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    spent.wait()
+    # The kernel hands pids out ascending and wraps, so the number is not about
+    # to come round again - but a case that silently got a LIVE pid here would
+    # assert nothing, so it is checked rather than assumed.
+    assert not pc._kill_zero(spent.pid), (  # noqa: SLF001
+        "pid %d was reused between being reaped and being used as a stale entry"
+        % spent.pid)
+    return spent.pid
+
+
 def _live_job():
     """A real stand-in job, so the liveness filter keeps it: a pid that is not a live
     process is stale, and the registry walks drop it before any signal is sent."""
@@ -205,9 +236,7 @@ def test_pausable_job_pids_drops_a_pid_that_has_gone(pause_state):
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    with open("/proc/sys/kernel/pid_max") as handle:
-        pid_max = int(handle.read().strip())
-    gone = pid_max + 1  # above any pid the kernel will hand out
+    gone = _a_pid_with_no_process()
     _register(pause_state["jobs"], live.pid, gone)
     try:
         assert pc.pausable_job_pids() == [live.pid]
@@ -258,9 +287,7 @@ def test_process_tree_reaches_the_job_descendants_first(pause_state):
 def test_signal_job_tree_never_fails_on_a_job_that_has_gone(pause_state):
     # a job that finished between being listed and being signalled is the ordinary
     # case: the signal reaches nothing and is not an error
-    with open("/proc/sys/kernel/pid_max") as handle:
-        pid_max = int(handle.read().strip())
-    pc.signal_job_tree("STOP", pid_max + 1)  # above any pid the kernel hands out
+    pc.signal_job_tree("STOP", _a_pid_with_no_process())
     assert True  # reaching here is the point: no exception
 
 

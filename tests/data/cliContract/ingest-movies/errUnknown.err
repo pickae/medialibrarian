@@ -1,0 +1,76 @@
+Unknown option: -x
+
+Usage:
+    ingest-movies [options] <movieDir>
+
+    movieDir      directory holding the movies to ingest
+
+    Options
+    -------
+    -f, --fragments <file>
+                  read the name fragments to remove from <file> (one per line,
+                  '#' comments and blank lines ignored) instead of from
+                  data/fragments.txt beside this script. Without it that file is
+                  used when it is there, and names are cleaned without any fragment
+                  removal when it is not.
+
+    Default behavior
+    ----------------
+    sorts loose movie files into one subfolder each (Plex layout)
+    cleans up folder, movie and subtitle names
+    sorts bonus material into the subfolders Plex recognizes (see below)
+
+    IMDb ids (Plex/Jellyfin naming)
+    -------------------------------
+    looks each movie up on TheMovieDB (TMDb) by its cleaned name and year
+    appends the "{imdb-ttXXXXXXX}" id tag to the folder, movie and subtitles
+    only when TMDb returns a single exact title+year match (~99% certainty)
+
+    Languages & subtitles
+    ---------------------
+    six languages are supported out of the box (en, de, fr, nl, es, it)
+    renames pre-existing subtitles to the .xx.srt convention
+    downloads missing subtitles and embeds the language tags
+
+    Tags & commentary
+    ------------------
+    reads the track layout once and refreshes the mkv tags from it
+    transcodes regular audio to opus at a per-channel target bitrate
+    extracts commentary tracks, transcribes them and archives them
+    takes a track for a commentary by its mkv flag or by its name, in any of the
+    supported languages ("Audiokommentar" counts as much as "Audio Commentary")
+    reads each commentary's language from its track name or mkv language tag, and
+    lets whisper detect it when neither says. English gives one "<name>.en.srt",
+    another supported language a native "<name>.xx.srt" plus a translated
+    "<name>.en.srt", an unsupported one only the translated "<name>.en.srt"
+    queues every wanted transcription of every movie in ONE queue, spread over all
+    transcription workers
+    transcribes on the GPU when whisper can use it, picking the largest model
+    the free VRAM fits, and falls back to all CPU threads on base.en if not
+
+    Dolby Vision
+    ------------
+    normalises dual-layer profile 7 to single-layer profile 8.1, so DV survives
+    on hardware that cannot read the enhancement layer (metadata only, the video
+    is never re-encoded, needs dovi_tool)
+    leaves profile 5, profile 8.x, HDR10, HDR10+ and SDR untouched (a profile 5
+    base layer is not HDR10 and cannot be converted without re-encoding)
+    corrects a Dolby Vision level that overstates the video, whatever the profile:
+    players check the level against their hardware before decoding and refuse a
+    file that asks for more than they have (container metadata only, in place)
+
+    RAM usage
+    ---------
+    all large temporary media (extracts, remux copies, Dolby Vision streams)
+    live in tmpfs
+    only the final outputs (.mkv, .srt, .opus) are written to disk
+
+    Dependencies
+    ------------
+    Required: ffmpeg, mkvtoolnix, mediainfo (and curl, once tmdbApiKey is set).
+    Optional, each skipped with a warning when absent: pipx + ffsubsync (together
+    they enable subtitle downloading and commentary transcription - without either,
+    BOTH are skipped, since neither subtitle is worth keeping unaligned), dovi_tool
+    (the Dolby Vision normalisation), flock (numbers the progress lines)
+
+Nothing was changed.

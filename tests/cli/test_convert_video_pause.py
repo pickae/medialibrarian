@@ -23,6 +23,7 @@ itself.
 
 import os
 import signal
+import subprocess
 import time
 
 import pytest
@@ -192,16 +193,44 @@ def run(tmp_path, monkeypatch):
         proc.wait(timeout=30)
 
 
+# Whether this host answers about processes through /proc. Probed once, on our
+# OWN pid: it is a fact about the kernel and not about whichever process is
+# being asked after, and the two readers below are polled ten times a second.
+#
+# The package itself draws the same line in the same place - pausable_job_pids
+# reads /proc where there is one and falls back to kill -0, and _children reads
+# /proc's `children` files or asks `pgrep -P` - so what these helpers were
+# missing was the second rung, not a platform.
+_HAVE_PROC = os.path.isdir("/proc/%d" % os.getpid())
+
+
 def _proc_state(pid):
-    """The kernel's state letter for a process: T while stopped."""
+    """The state letter for a process: T while stopped.
+
+    Through /proc where there is one, unchanged: it is a file read, and these
+    predicates ask after several pids every 100 ms. Where there is none - macOS
+    has no /proc at all - `ps` is the same answer at the cost of a process,
+    which is why it is the fallback and not the implementation. Both spell a
+    stopped process "T"; BSD's column carries trailing modifiers ("T+", "S+"),
+    so the letter is the first character either way.
+    """
+    if _HAVE_PROC:
+        try:
+            with open("/proc/%d/status" % pid, encoding="ascii") as handle:
+                for line in handle:
+                    if line.startswith("State:"):
+                        return line.split()[1]
+        except OSError:
+            return ""
+        return ""
     try:
-        with open("/proc/%d/status" % pid, encoding="ascii") as handle:
-            for line in handle:
-                if line.startswith("State:"):
-                    return line.split()[1]
+        done = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)],
+                              stdin=subprocess.DEVNULL,
+                              stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL, text=True)
     except OSError:
         return ""
-    return ""
+    return done.stdout.strip()[:1]
 
 
 def _wait_for(predicate, limit=60.0, step=0.1):
@@ -214,7 +243,27 @@ def _wait_for(predicate, limit=60.0, step=0.1):
 
 
 def _alive(pid):
-    return os.path.exists("/proc/%d" % pid)
+    """Whether there is still a process behind this pid.
+
+    The /proc path is kept for the same reason as above. Off it, signal 0 is the
+    POSIX question: it reaches the process table rather than a filesystem, and a
+    pid that is alive but not ours refuses the signal rather than reporting
+    nothing - so PermissionError reads as ALIVE here. Written out rather than
+    borrowed from pausecontrol._kill_zero, which folds that refusal into "gone":
+    these cases assert that the encoders were released, and a helper that
+    answered "gone" for a process it merely cannot signal would let that pass
+    without testing it - which is exactly what the /proc-only version did on
+    every host without /proc.
+    """
+    if _HAVE_PROC:
+        return os.path.exists("/proc/%d" % pid)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
 
 def _now():
