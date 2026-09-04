@@ -28,6 +28,7 @@ synthetic ones alias.
 
 ```bash
 pytest                    # everything but media
+pytest -n auto            # the same, across every core - what CI runs
 pytest -m media           # the real-tool tier: ffmpeg, mkvmerge, dovi_tool, ...
 pytest -m 'fs or pure'    # one tier, when narrowing something down
 ```
@@ -41,18 +42,35 @@ work at the test's own directory, and `tests/test_self_containment.py` walks the
 syntax tree of every test file and fails one that creates something under a
 shared root.
 
+`-n auto` needs `pytest-xdist`, and it is worth it: most of the wall clock is
+starting child processes — the ~1460 cases under `tests/cli` each start a
+command — which is the shape that parallelises best. It is what all three test
+jobs in CI run, and the macOS one is where it counts, that being the host where
+starting a process is dearest.
+
 ## A green run is a whole run
 
 A runner counts what it discovers, so "all passed" does not by itself say the
-suite ran. `tests/conftest.py` refuses a whole-suite run that came back smaller
-than the repository: every `test_*.py` under `tests/` has to hand over at least
-one case, and the total has a floor under it for the files that are gone from
-disk entirely. Either way the run stops with an `ERROR:` naming what is missing,
-rather than passing quietly.
+suite ran. Two questions are asked of a whole-suite run: every `test_*.py` under
+`tests/` has to hand over at least one case, and the total has a floor under it
+for the files that are gone from disk entirely.
 
-Both checks are skipped when you ask for part of the suite by path
-(`pytest tests/lib`), and neither is affected by `-k` or `-m`, which narrow what
-runs rather than what is collected.
+`tests/conftest.py` asks them at collection time and *refuses* — the run stops
+with an `ERROR:` naming what is missing, before anything executes. Under `-n` it
+cannot: that hook runs in the workers and never on the controller, and a worker
+that raises there disagrees with its siblings about what was collected, which
+xdist reports as an `INTERNALERROR` naming an unrelated case. The controller
+cannot stand in, because the ids xdist offers it have already been through `-m`,
+so the media-only files would read as missing ones.
+
+So `tests/test_suite_is_whole.py` asks the same two questions as a *case*,
+sharing conftest's wording. That holds however the run was started; what it
+gives up is stopping first, which is why the refusal stays where it can be had.
+Serially both are live and the refusal simply gets there first.
+
+All of it is skipped when you ask for part of the suite by path
+(`pytest tests/lib`), and none of it is affected by `-k` or `-m`, which narrow
+what runs rather than what is collected.
 
 ## Where things are
 
@@ -99,6 +117,18 @@ once). What it does *not* have is glibc, and three cases turn on that: the
 rather than dropping them, so `normalize_title` folds in Python (one case holds
 the two paths to the same answers); and the codepoints that make `iconv` *give
 up*, which two cases ask this host about before asserting on.
+
+It has no `/proc` either, and the package never assumed one — `pausecontrol`
+reads it where there is one and falls back to `kill -0` and `pgrep -P`. Five
+*cases* did assume one, and they are the reason to say so here rather than treat
+it as settled: three read `/proc/<pid>` to ask whether an encoder was stopped or
+released, which off Linux answered "no such process" for a live one — so a case
+asserting the encoders were *gone* passed without testing anything. They now
+take the same two rungs the package does (`ps -o stat=` for the state letter,
+which is `T` for stopped on both; signal 0 for liveness, where a refusal counts
+as alive). The other two wanted a pid with nothing behind it and read
+`/proc/sys/kernel/pid_max` to build one; they reap a child of their own instead,
+which is the property they were after on any POSIX host.
 
 **Windows** runs the `pure` tier and `test_ramscratch.py`, which is what CI
 runs there. The rest fails for reasons that belong to the platform and not to
