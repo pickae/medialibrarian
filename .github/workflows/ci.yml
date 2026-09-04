@@ -101,12 +101,18 @@ jobs:
     # findings and not regressions. Take this line out the day it passes -
     # a job that cannot fail is a job nobody reads.
     continue-on-error: true
-    # `continue-on-error` is about the VERDICT and says nothing about the clock:
-    # the first run of this job sat in pytest for over 50 minutes against the
-    # same suite Linux finishes in four and a half, and with no limit set it
-    # would have held a macOS runner - billed at ten times a Linux one - until
-    # the 6-hour default cut it off. This bounds the finding instead.
-    timeout-minutes: 45
+    # `continue-on-error` is about the VERDICT and says nothing about the clock,
+    # and this is the job with a clock worth bounding: its first run spent 47
+    # minutes in pytest against the same suite Linux finishes in four and a
+    # half. It was slow rather than stuck - it did reach the end and report -
+    # so the limit here is a runaway guard and NOT a target, and it is set well
+    # above that 47 rather than just over it: the fixtures were missing on that
+    # run, and a case that now does its work instead of failing on a absent
+    # page can only take longer. A limit that trips on the ordinary duration
+    # tells nobody anything, while still leaving a genuinely hung run held for
+    # the 6 hours GitHub allows by default, on a runner billed at ten times a
+    # Linux one.
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
