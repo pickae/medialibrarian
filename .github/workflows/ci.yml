@@ -1,0 +1,123 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  default-suite:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The tools the suite reaches for on the HOST rather than through a stub:
+      # the cases that build a PATH out of real binaries (`zip`, `tree`,
+      # `rsync`, `jq`, `duckdb`), and the commands' own preflight, which refuses
+      # to start when one of the tools it names is missing. Without these the
+      # job only exercises the tool-free cases and reports green for a fraction
+      # of the suite.
+      #
+      # The archive, PDF and e-book tools (`p7zip`, `unrar`, `poppler-utils`,
+      # `ghostscript`, Calibre) are absent on purpose: they are stubbed at this
+      # tier, and only the opt-in `media` tier reaches the real ones.
+      - name: install the external tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ffmpeg mkvtoolnix imagemagick mediainfo fdupes beets \
+            jq rsync tree zip unzip
+
+      # duckdb has no apt package - the release is one gzipped ELF binary.
+      # PINNED, because the census hypercubes are built by real SQL and a
+      # version is a dialect: an unpinned CLI turns a syntax change upstream
+      # into a red suite here.
+      - name: install the duckdb CLI
+        run: |
+          curl -fsSL -o duckdb.gz \
+            https://github.com/duckdb/duckdb/releases/download/v1.5.5/duckdb_cli-linux-amd64.gz
+          sha256sum duckdb.gz
+          gunzip duckdb.gz
+          chmod +x duckdb
+          sudo mv duckdb /usr/local/bin/duckdb
+          duckdb --version
+
+      - run: pip install -e . pytest
+      - run: python -m pytest
+
+  # The import canary: collecting the pure tier imports the whole package, so
+  # a POSIX-only module-scope import fails here. The pure cases then run - the
+  # tier is disk- and tool-free, so it holds on any platform.
+  windows-pure:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e . pytest
+      - run: python -m pytest -m pure
+      # And the scratch module on top of the pure tier: it drives the
+      # filesystem directly rather than through coreutils, so its cases are
+      # disk-only and hold here too - and it is the module Windows differs from
+      # Linux in most (no RAM disk, no /proc, no ~/.cache), which is the reason
+      # to gate it on the platform rather than to reason about it.
+      - run: python -m pytest tests/lib/test_ramscratch.py
+
+  # macOS, which is a supported platform with nobody's machine behind it. The
+  # job is the whole default suite, not a tier of it: a Mac IS a POSIX host, so
+  # the stubbed tier's bash stubs and symlinks work there, and what is actually
+  # being asked is whether the BSD-flavoured tooling underneath answers the same
+  # as the GNU one - which is the only way to find out.
+  #
+  # Homebrew is where the tools come from, and the formula names differ from the
+  # apt ones in three places: 7-Zip is "sevenzip" (and installs `7zz`, which the
+  # `7z|7zz|7za` alternatives accept), `flock` is not packaged at all - the
+  # progress counters use the C library's lock there instead - and `unrar` is
+  # not in homebrew-core, so this job is one of the ones without it and the
+  # cases that need it skip.
+  #
+  # rsync is installed rather than inherited: the bundled one is 2.6.9 and has
+  # no `--out-format`. The command falls back to `--log-format` on its own, but
+  # the job that would notice a REGRESSION in that fallback is one where the
+  # modern flag is what gets used, so both spellings want a host - and this is
+  # the one that has the old one to fall back FROM.
+  macos:
+    runs-on: macos-latest
+    # Reporting rather than gating, until it has been green once: the macOS
+    # support was written without a Mac to try it on, so the first runs are
+    # findings and not regressions. Take this line out the day it passes -
+    # a job that cannot fail is a job nobody reads.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: install the external tools
+        run: |
+          brew install --quiet ffmpeg mkvtoolnix imagemagick media-info \
+            fdupes beets jq rsync tree zstd sevenzip duckdb
+
+      - run: pip install -e . pytest
+      - run: python -m pytest
+
+  # The type checker. pyproject.toml's mypy section says a module that stops
+  # passing should fail the run rather than join a list nobody works down -
+  # this is the run that makes that true.
+  types:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e . mypy
+      - run: python -m mypy medialib

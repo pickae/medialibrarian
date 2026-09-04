@@ -1,0 +1,112 @@
+[project]
+# The distribution name, which is not the import package below it: `medialib`
+# is claimed on PyPI by an unrelated project, so `pip install medialib` would
+# fetch that one. The package, the data folder under ~/.local/share and the
+# command names are unaffected - only the name a wheel is published under.
+name = "medialibrarian"
+version = "0.0.0"
+description = "Eighteen commands for building and keeping a media library: transcoding video, audio, images and comics, ingesting films, music and books, cleaning names, and a census of what is in it"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "David Ernst" }]
+# The one third-party import: mutagen writes the FLAC picture blocks and
+# Vorbis-comment chapters ffmpeg has no way to write (medialib/lib/mutagentags.py).
+dependencies = ["mutagen"]
+
+# The eighteen commands. medialib/commands.py holds the same mapping for the
+# other two things that need it - the name a help page prints, and how one
+# command starts another - and tests/test_commands.py fails if the two ever
+# disagree.
+[project.scripts]
+clean-folder-structure = "medialib.cli.clean_folder_structure:cli"
+clean-folder-structure-adb = "medialib.cli.clean_folder_structure_adb:cli"
+concat-audio = "medialib.cli.concat_audio:cli"
+content-census = "medialib.cli.content_census:cli"
+content-census-bi = "medialib.cli.content_census_bi:cli"
+convert-and-concat = "medialib.cli.convert_and_concat:cli"
+convert-audio = "medialib.cli.convert_audio:cli"
+convert-comics = "medialib.cli.convert_comics:cli"
+convert-images = "medialib.cli.convert_images:cli"
+convert-video = "medialib.cli.convert_video_run:cli"
+cue-to-chapters = "medialib.cli.cue_to_chapters:cli"
+find-fragment-candidates = "medialib.cli.find_fragment_candidates:cli"
+ingest-books = "medialib.cli.ingest_books:cli"
+ingest-movies = "medialib.cli.ingest_movies_run:cli"
+ingest-music = "medialib.cli.ingest_music:cli"
+read-library = "medialib.cli.read_library:cli"
+transcribe-audio = "medialib.cli.transcribe_audio:cli"
+ytdlp = "medialib.cli.ytdlp:cli"
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["medialib*"]
+
+# beets' import config and the sample podcast table ship with the package, so an
+# installed command finds them where it actually is (medialib/commands.py,
+# config_dir).
+[tool.setuptools.package-data]
+medialib = ["config/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# The tier gradient survives as markers rather than directories. Only one of them
+# gates anything: everything but media runs
+# by default, and media is opt-in because it encodes video.
+markers = [
+    "pure: no disk, no tools",
+    "fs: real directories, empty files, no tools",
+    "stubbed: a real pipeline against stubbed external tools",
+    "media: the real heavy tools; opt-in, never in a default run",
+]
+addopts = "-m 'not media'"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+# Four rules argue with a decision this port made on purpose, so they are off
+# rather than silenced one site at a time.
+ignore = [
+    # The environment names are the SHELL's, and the entry shims still set some
+    # of them. "ramScratchBase" capitalised is a different variable, and the
+    # contract would break silently.
+    "SIM112",
+    # printf-style formatting is the idiom throughout, and rewriting ~680 sites
+    # as f-strings would be a very large diff for no defect caught.
+    "UP031", "UP032",
+    # `try: ... except OSError: pass` is the shell's `|| true`, and reads as it
+    # in a file full of tool calls that are allowed to fail.
+    "SIM105",
+    # Both of these push toward denser code that reads worse HERE: the ternaries
+    # it wants are two-branch expressions spanning three lines, and the nested
+    # ifs it wants collapsed are the shell's own guard-then-test dispatch.
+    "SIM102", "SIM108",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Four files carry DATA whose lines are the data, and the length rule is off for
+# them and on everywhere else. In two of them a newline would be a different
+# VALUE: a profile row is one ffmpeg argument string, and three lines of the
+# ffprobe stub are JSON a shell echoes in one go.
+"medialib/cli/convert_video.py" = ["E501"]
+"tests/cli/test_convert_video_cli.py" = ["E501"]
+# In the other two it would be legal and still wrong: SQL and CSS do not care
+# where the newlines are, but these blocks are written one rule per line, and
+# wrapping the four longest would break the only thing that makes them readable.
+"medialib/lib/cubes.py" = ["E501"]
+"medialib/lib/censusviewer.py" = ["E501"]
+
+[tool.mypy]
+# For the standard library stubs a given interpreter may not ship, and for
+# mutagen, which ships no type information.
+ignore_missing_imports = true
+
+# There is deliberately no per-module override section: a module that stops
+# passing fails the run rather than joining a list nobody works down.

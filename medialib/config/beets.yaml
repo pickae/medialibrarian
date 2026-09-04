@@ -1,0 +1,36 @@
+# beets configuration shipped with ingest-music
+# --------------------------------------------
+# This file travels with the package so ingest-music can tag and organise a
+# library on any machine without depending on a user-specific
+# ~/.config/beets/config.yaml. ingest-music runs beets with this file via
+# "beet -c <it>" and from inside the ingest directory, so the relative
+# "directory: ." below resolves to whatever <ingestDir> the run is building.
+#
+# It is intentionally conservative: tags are written, and cover art
+# is fetched when missing.
+
+# Organise files where beets is invoked from (ingest-music cds into $ingestDir).
+directory: .
+# Keep the catalogue database out of the music tree; it is disposable here.
+library: ~/.cache/ingestMusic/beets.db
+
+import:
+    copy: no          # do not duplicate
+    move: no          # keep in place
+    write: yes        # write resolved tags back into the files
+    resume: no
+    incremental: no  # do not skip folders already imported on a re-run
+    quiet_fallback: skip
+
+plugins: fetchart embedart lastgenre lyrics replaygain chroma
+
+fetchart:
+    cautious: true
+    cover_names: front back
+    maxwidth: 2000
+
+embedart:
+    maxwidth: 1000
+
+match:
+    strong_rec_thresh: 0.10

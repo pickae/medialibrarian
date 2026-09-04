@@ -1,0 +1,18 @@
+# Line endings are pinned, they are not a matter of taste here.
+#
+# These scripts are edited on both a Linux and a Windows machine and run by bash
+# on both. Bash treats a carriage return as part of the word it follows, so a
+# script saved with CRLF does not merely look odd - it does not run at all: its
+# shebang names an interpreter called "/bin/bash\r", and every "then" is
+# "then\r". ytdlp.sh and lib/podcastFeeds.bash were committed that way once and
+# could not be executed on Linux until they were converted back.
+#
+# The feed tables are here for the same reason from the other side: a row is
+# tab-separated and its last column is a URL, so a stray carriage return ends up
+# inside the address.
+*.sh    text eol=lf
+*.bash  text eol=lf
+*.py    text eol=lf
+*.tsv   text eol=lf
+*.md    text eol=lf
+*.yaml  text eol=lf

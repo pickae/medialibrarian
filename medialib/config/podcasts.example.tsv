@@ -1,0 +1,58 @@
+# Podcast feed table - read by ytdlp (-t <table>).
+#
+# This is the sample. The real tables are one machine's library rather than
+# code, so they live in data/podcasts/ and are not tracked; copy this file to
+# data/podcasts/podcasts.tsv and edit it, or point -t at a copy anywhere else.
+#
+# One TAB-separated row per feed, six columns, empty ones included - a row with
+# five tabs or seven is a fault, not a guess. Blank lines and # lines are
+# ignored, so the grouping below is free to say what the rows have in common.
+#
+# A "#!" line is a directive about the whole table:
+#   #!profile <name>  what these feeds are fetched as - one of:
+#                     youtubeAudio youtubeVideo rssAudio rssVideo siteVideo
+#                     Omitted means youtubeAudio.
+#   #!jobs <n>        how many of them may be fetched at once, overriding what
+#                     the profile alone allows (YouTube one feed, RSS ten).
+# An unrecognised directive stops the run rather than being read as a comment.
+#
+# The columns:
+#   active        1 downloads this feed, 0 leaves it alone. Pausing a podcast is
+#                 this column, not a comment marker - a 0 row still shows up in
+#                 a grep and in the count, and -a runs it anyway.
+#   subdir        where its episodes go under ytdlp's <outputPath>. May
+#                 contain yt-dlp output-template fields, e.g. a
+#                 %(upload_date>%Y)s segment to get a folder per year.
+#   nameTemplate  the file name in that folder. Empty means the shared default:
+#                 %(upload_date)s %(title)s.%(ext)s
+#                 Like subdir, it stays under <outputPath>: a leading / or a
+#                 ".." anywhere in it is a fault.
+#   playlistEnd   how many entries back to walk. Empty means 20, 0 means the
+#                 whole feed.
+#   extraArgs     yt-dlp arguments for this feed alone, on top of the ones every
+#                 feed gets. Split on whitespace, and appended after the
+#                 profile's - so a feed can override what the profile set.
+#                 Not -o/--output, -P/--paths, --exec, --exec-before-download
+#                 or --config-location: a row describes one feed, not where the
+#                 run writes or what it runs.
+#   url           the channel, playlist or feed.
+#
+#!profile youtubeAudio
+#
+# active	subdir	nameTemplate	playlistEnd	extraArgs	url
+
+# The ordinary row: everything default but the folder and how far back to walk.
+1	Podcasts/AI/Example Pod		40		https://www.youtube.com/@examplepod/videos
+1	Podcasts/AI/Example Playlist		20		https://www.youtube.com/playlist?list=PLexamplePlaylistId
+
+# A feed whose titles already carry their own dates, so the default prefix repeats them.
+1	Podcasts/Misc/Own Titles	%(title)s.%(ext)s	20		https://www.youtube.com/@examplehost/videos
+
+# A folder per year, and the whole feed: a back catalogue fetched once.
+1	Podcasts/Misc/By Year/%(upload_date>%Y)s		0		https://www.youtube.com/playlist?list=PLexampleBackCatalogue
+
+# One argument the rest of the table does not want: here the sponsor reads are the show.
+1	Podcasts/Misc/Keep The Reads		20	--no-sponsorblock	https://www.youtube.com/@examplereads/videos
+
+# Paused: kept in the table, not downloaded.
+0	Podcasts/Misc/On Hold		20		https://www.youtube.com/@examplehold/videos
