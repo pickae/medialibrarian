@@ -77,13 +77,28 @@ class TestCpuCount:
 
 
 class TestFlock:
+    """``settle_flock`` writes straight to the environment, so each case declares
+    the variable through ``monkeypatch`` before calling it: that records what was
+    there and puts it back afterwards, whatever the call wrote over it.
+    """
+
     def test_a_host_with_flock_settles_the_flag(self, monkeypatch):
+        monkeypatch.delenv("HAVE_FLOCK", raising=False)
         monkeypatch.setattr(runlog.shutil, "which", lambda name: "/usr/bin/" + name)
         assert runlog.settle_flock() == "1"
         assert runlog.counted_prefix(1, 2) == "[1/2] "
 
     def test_a_host_without_it_settles_the_flag_empty(self, monkeypatch):
+        """Both rungs taken away and not just the tool: with no ``flock(1)`` on
+        PATH ``can_lock`` falls to the C library's own, which every POSIX host
+        has, and the flag would settle "1" on the very hosts this case is about.
+        A None in ``sys.modules`` is what CPython turns into the ImportError the
+        probe catches, so the case reads the same on a host that has the module
+        and one that does not.
+        """
+        monkeypatch.delenv("HAVE_FLOCK", raising=False)
         monkeypatch.setattr(runlog.shutil, "which", lambda name: None)
+        monkeypatch.setitem(sys.modules, "fcntl", None)
         assert runlog.settle_flock() == ""
         assert runlog.counted_prefix(1, 2) == ""
 
