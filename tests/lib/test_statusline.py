@@ -184,11 +184,15 @@ def test_stopping_a_refresher_that_is_not_running_is_safe():
     assert state.mon_pid is None
 
 
-def test_a_tick_under_the_progress_lock_draws_the_row(capsys):
+def test_a_tick_under_the_progress_lock_draws_the_row(capsys, monkeypatch):
     state.row = "1"
     state.cols = 80
-    # HAVE_FLOCK unset: the lock is a no-op, so a lock file is never opened and the
-    # tick draws exactly the same row.
+    # HAVE_FLOCK empty: the lock is a no-op, so a lock file is never opened and the
+    # tick draws exactly the same row. Said here rather than left to whatever the
+    # environment holds - UNSET is not "no", it is "nobody has asked", and the probe
+    # that answers it says yes on every POSIX host, where the tick would then open
+    # the path below for real.
+    monkeypatch.setenv("HAVE_FLOCK", "")
     statusline.status_tick("/nonexistent/lock", lambda: "counted")
     assert _stderr(capsys) == "\rcounted\033[K"
 
