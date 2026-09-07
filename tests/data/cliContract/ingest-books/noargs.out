@@ -5,6 +5,11 @@ Usage:
 Options:
     -h, --help
           Print this help page.
+    -d, --discard-extras
+          Discard what only costs bytes: drop the embedded fonts, delete the
+          junk/teaser images, downscale the illustrations to at most fullHD,
+          and strip a PDF's images. Off by default - none of it can be got
+          back from the output.
     -c, --clean-structure
           Run clean-folder-structure on the output folder when done.
     -t, --text

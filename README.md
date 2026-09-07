@@ -525,12 +525,18 @@ Ingests a folder of e-books into a clean, uniform library, mirroring each
 source's name and sub-folder into the output. Books are processed in parallel
 across all cores, and only the finished file is written to disk:
 
-- PDFs are stripped of their (usually oversized) images and copied across.
+- PDFs are copied across.
 - `mobi`/`chm`/`azw3`/`lit`/`txt` sources are converted to epub.
-- Epub sources (and the just-converted epubs) are unpacked, cleaned (embedded
-  fonts dropped, images downscaled to at most fullHD, junk/teaser images removed
-  via an extensible name-substring list) and repacked, then re-converted once
-  more for consistent readability.
+- Epub sources (and the just-converted epubs) are re-converted once more for
+  consistent readability.
+
+**`-d` is what throws part of a book away**, and it is off by default: with it,
+embedded fonts are dropped, junk/teaser images are removed via an extensible
+name-substring list, illustrations are downscaled to at most fullHD, and a PDF's
+images are stripped. That is the version for reading on a device; the default is
+the version worth keeping, since nothing `-d` discards can be recovered from the
+output. Without `-d` the run needs Calibre alone — Ghostscript, `unzip`/`zip`
+and ImageMagick are only asked for when there is something for them to strip.
 
 The input tree is never modified, and emitted books never clobber an existing
 output (a collision keeps both via a ` (N)` suffix).
