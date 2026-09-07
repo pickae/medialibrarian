@@ -111,32 +111,13 @@ transcription together, and everything else runs normally.
 ### Running on a Mac
 
 Everything here is written to work on macOS and nothing is written *only* for
-it: the differences are handled where they are, and each one is a fallback the
-same code takes on any host that needs it. **No Mac runs the test suite**, so
-this is best-effort — report anything that does not hold.
+it. This is best-effort — report anything that does not hold.
 
-Homebrew is where the tools come from, and a refusal names the `brew` command
-rather than the `apt` one. Two formulae are not named after the binary they
-install: 7-Zip is `brew install sevenzip` (and the binary is `7zz`, which the
-`7z|7zz|7za` alternatives already accept), and `unrar` was dropped from
-homebrew-core over its licence, so it comes from a tap. `curl`, `zip`, `unzip`
-and `tar` ship with the system.
+Three things are **not** solved and will bite:
 
-What differs, and what happens about it:
-
-| On a Mac | What the run does |
-| --- | --- |
-| no `/dev/shm`, no tmpfs | scratch lands in `$TMPDIR`, on disk; a RAM disk made with `hdiutil`/`diskutil` is used by pointing `ramScratchBase` at it |
-| no `~/.cache` | the disk spill goes under `~/Library/Caches` (`$XDG_CACHE_HOME` still wins) |
-| no `flock(1)` | progress lines keep their `[n of total]` position anyway — the lock is the C library's, which macOS has |
-| no `/dev/dri`, no NVENC | hardware **decode** goes through VideoToolbox; **encoding** is the software profiles (`av1Svt`, `x265`) — the `*Nvenc` profiles need an NVIDIA card and refuse up front |
-| `iconv` is GNU libiconv, which spells accents out (`Am'elie`) rather than dropping them | title folding is done in Python instead, to the same answers a glibc `iconv` gives |
-| `rsync` is 2.6.9 (or openrsync), with no `--out-format` | the old `--log-format` spelling is used; `brew install rsync` gets a current one |
-| ImageMagick 7 only, where `convert` is a deprecated wrapper | calls go to `magick` when the old name is gone |
-| no `C.UTF-8` locale | (test suite) the same combination is assembled from `LC_COLLATE=C` and a UTF-8 `LC_CTYPE` |
-
-Two things are **not** solved and will bite:
-
+- No NVENC. While hardware **decode** goes through VideoToolbox;
+  **encoding** is the software profiles (`av1Svt`, `x265`)
+  the `*Nvenc` profiles need an NVIDIA card and refuse up front.
 - **A case-insensitive filesystem.** APFS is case-insensitive by default, so a
   rename that only changes case, and two files that differ only in case, do not
   behave as they do on Linux. Keep the library on a case-**sensitive** volume.
