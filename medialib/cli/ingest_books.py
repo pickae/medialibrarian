@@ -3,12 +3,18 @@
 Every ingestible book under the input becomes one output file under the output,
 keeping the name and the sub-folder layout:
 
-* PDFs are stripped of their (usually oversized) images and copied across - they
-  never enter the epub pipeline, because a PDF is not something to re-flow;
+* PDFs are copied across - they never enter the epub pipeline, because a PDF is
+  not something to re-flow;
 * mobi/chm/azw3/lit/txt are converted to epub;
-* epubs (and the just-converted ones) are unpacked, cleaned - embedded fonts
-  dropped, images downscaled, junk images removed - repacked, and re-converted
-  once more for consistent readability.
+* epubs (and the just-converted ones) are re-converted once more for consistent
+  readability.
+
+None of that throws any of a book away. The steps that DO - dropping the
+embedded fonts, deleting the junk/teaser images, downscaling the illustrations,
+and stripping a PDF's images - are the ones a reader cannot get back from the
+output, so they are all behind -d and off by default. Ask for -d when the
+library is for reading on a device and the bytes matter; leave it off when the
+output is the copy being kept.
 
 With -t the whole thing is bypassed: every recognised input becomes a raw .txt,
 a PDF read by poppler and everything else by ebook-convert.
@@ -45,6 +51,10 @@ Options:"""
 
 OPT_SPEC = """
 h |  | Print this help page.
+d |  | Discard what only costs bytes: drop the embedded fonts, delete the
+          junk/teaser images, downscale the illustrations to at most fullHD,
+          and strip a PDF's images. Off by default - none of it can be got
+          back from the output.
 c |  | Run clean-folder-structure on the output folder when done.
 t |  | Text mode: convert every recognized input to a raw .txt file,
           mirroring the input sub-folder layout, instead of the epub pipeline.
@@ -52,9 +62,10 @@ z |  | Text mode only: also create a zpaq archive of the resulting folder
           (output folder, or input folder when no conversion was done).
 """
 
-OPT_VARS = "c:runCleanFolderStructure t:textMode z:zpaqArchive"
+OPT_VARS = ("d:discardExtras c:runCleanFolderStructure t:textMode "
+            "z:zpaqArchive")
 OPT_COLUMN = 10
-OPT_LONG = "h:help c:clean-structure t:text z:zpaq"
+OPT_LONG = "h:help d:discard-extras c:clean-structure t:text z:zpaq"
 
 # Images larger than this are downscaled to at most the tier's geometry; smaller
 # ones are left alone. An illustration inside an epub is read on a reader, not on
@@ -178,7 +189,11 @@ def clean_book_folder(directory: str, geometry: str = "",
                       run=subprocess.run) -> None:
     """Tidy an unpacked epub in place: drop the embedded fonts (the reader falls
     back to a sane default), delete the junk images by name substring, and
-    downscale what is left."""
+    downscale what is left.
+
+    Every one of those is a deletion the output cannot be walked back from,
+    which is why this is only ever reached under -d.
+    """
     for parent, _dirs, names in os.walk(directory):
         for name in names:
             if enums.lower_extension_of(name) in FONT_EXTENSIONS:
@@ -323,11 +338,18 @@ class Run:
                     self.progress("FAILED (txt): " + base)
                 return
 
-            # A PDF is not something to re-flow: strip its images to shrink it
-            # and copy straight across, skipping unpack/clean/repack.
+            # A PDF is not something to re-flow, so it never enters the epub
+            # pipeline: it goes across as a PDF, with its images stripped to
+            # shrink it only when -d asked for that.
             if extension == "pdf":
-                self.note("PDF: " + base)
                 out = os.path.join(work, "out.pdf")
+                if not self.options["discardExtras"]:
+                    self.note("PDF (copy): " + base)
+                    shutil.copyfile(source, out)
+                    emit_output(out, os.path.join(dest_dir, stem + ".pdf"))
+                    self.progress("Done (pdf): " + base)
+                    return
+                self.note("PDF: " + base)
                 done = subprocess.run(
                     ["gs", "-sDEVICE=pdfwrite", "-dCompatibilityLevel=1.4",
                      "-dPDFSETTINGS=/default", "-dNOPAUSE", "-dQUIET",
@@ -359,26 +381,34 @@ class Run:
                 self.progress("Skip (unsupported): " + base)
                 return
 
-            unpacked = os.path.join(work, "unpacked")
-            os.makedirs(unpacked, exist_ok=True)
-            subprocess.run(["unzip", "-q", "-o", "-d", unpacked, "--", epub],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            # Unpacking and repacking exist only to reach the cleaner between
+            # them, and the cleaner is what -d gates - so without -d the epub
+            # goes to the re-conversion whole, rather than through a round trip
+            # that would put back exactly what it took out.
+            source_epub = epub
+            if self.options["discardExtras"]:
+                unpacked = os.path.join(work, "unpacked")
+                os.makedirs(unpacked, exist_ok=True)
+                subprocess.run(
+                    ["unzip", "-q", "-o", "-d", unpacked, "--", epub],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-            clean_book_folder(unpacked, self.options["imageResolution"])
+                clean_book_folder(unpacked, self.options["imageResolution"])
 
-            repacked = os.path.join(work, "repacked.epub")
-            subprocess.run(["zip", "-q", "-r", "-X", repacked, "."],
-                           cwd=unpacked, stdout=subprocess.DEVNULL,
-                           stderr=subprocess.DEVNULL)
+                source_epub = os.path.join(work, "repacked.epub")
+                subprocess.run(["zip", "-q", "-r", "-X", source_epub, "."],
+                               cwd=unpacked, stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL)
 
-            # Re-converted once more for consistent readability; the repacked
-            # epub is the fallback when that heavier step is unavailable.
+            # Re-converted once more for consistent readability; the epub that
+            # went in is the fallback when that heavier step is unavailable.
             final = os.path.join(work, "final.epub")
             done = subprocess.run(
-                ["ebook-convert", repacked, final, "--no-default-epub-cover"],
+                ["ebook-convert", source_epub, final,
+                 "--no-default-epub-cover"],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             if done.returncode != 0 or not os.path.exists(final):
-                shutil.copyfile(repacked, final)
+                shutil.copyfile(source_epub, final)
 
             emit_output(final, os.path.join(dest_dir, stem + ".epub"))
             self.progress("Done: " + base)
@@ -501,6 +531,7 @@ def main(argv: list, program: str = "ingest-books",
     text_mode = "t" in result.given
     zpaq_archive = "z" in result.given
     clean_structure = "c" in result.given
+    discard_extras = "d" in result.given
     script_dir = script_dir or commands.script_dir()
 
     temp_path = counter_dir = ""
@@ -526,7 +557,11 @@ def main(argv: list, program: str = "ingest-books",
         # once. pdftotext is deliberately absent - book_to_text falls back to
         # ebook-convert without it, so it buys speed and never capability.
         tools = ["ebook-convert"]
-        if not text_mode:
+        if not text_mode and discard_extras:
+            # All four exist to throw part of a book away: Ghostscript strips a
+            # PDF's images, unzip/zip open an epub for the cleaner, and
+            # ImageMagick does the downscaling. Without -d none of them runs, so
+            # asking for them would refuse a run that has no use for them.
             tools += ["gs", "unzip", "zip", imagemagick.CONVERT_SPEC]
         if zpaq_archive:
             tools += ["zpaq"]
@@ -559,6 +594,7 @@ def main(argv: list, program: str = "ingest-books",
         os.makedirs(out_path, exist_ok=True)
         options = {
             "textMode": text_mode,
+            "discardExtras": discard_extras,
             "imageResolution": imagesizes.geometry() or "",
         }
         state = Run(os.path.abspath(in_path), os.path.abspath(out_path),
@@ -589,6 +625,13 @@ def main(argv: list, program: str = "ingest-books",
         else:
             print("Ingesting %d book(s)" % total)
             print("========================")
+            if discard_extras:
+                print("-d: fonts, junk images and PDF images dropped, "
+                      "illustrations downscaled to %s"
+                      % (options["imageResolution"] or "the default tier"))
+            else:
+                print("Every book kept whole (-d discards fonts, junk images "
+                      "and image resolution)")
             print("")
             _run_pool(state, books, jobs)
             safety.exit_if_aborted()

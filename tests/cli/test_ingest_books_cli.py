@@ -3,7 +3,8 @@
 Every heavy tool is a stub, so no real books and no converter are involved. What
 that leaves is the control flow no helper's own cases reach: the mirrored tree,
 which sources take the unpack-clean-repack path and which do not, the collision
-suffix, and the progress counter.
+suffix, the -d gate in front of everything that discards part of a book, and the
+progress counter.
 
 The counter is the interesting one. It counts books FINISHED against the number of
 input books, so every path through a book has to count it exactly once - and the
@@ -59,12 +60,22 @@ def _counted(log: str) -> list[tuple[int, int]]:
 
 @pytest.fixture
 def books(sandbox, tmp_path):
-    """The stubs, and a nested input tree covering every source kind."""
+    """The stubs, and a nested input tree covering every source kind.
+
+    Every tool that only ever throws part of a book away logs its own name as it
+    runs, which is how a case can say that a default run never reached for one.
+    """
+    calls = tmp_path / "calls"
+
+    def discarding(name, body):
+        sandbox.with_tool(name,
+                          'echo %s >> %s\n%s' % (name, calls, body))
+
     sandbox.with_tool("ebook-convert", _EBOOK_CONVERT)
-    sandbox.with_tool("gs", _GHOSTSCRIPT)
-    sandbox.with_tool("unzip", _UNZIP)
-    sandbox.with_tool("zip", _ZIP)
-    sandbox.with_tool("convert", _CONVERT)
+    discarding("gs", _GHOSTSCRIPT)
+    discarding("unzip", _UNZIP)
+    discarding("zip", _ZIP)
+    discarding("convert", _CONVERT)
 
     source = tmp_path / "in"
     for relative in ("fiction/novel.mobi",
@@ -81,14 +92,22 @@ def books(sandbox, tmp_path):
 
     outputs = tmp_path / "out"
 
-    def run():
-        done = sandbox.run("ingest-books", source, outputs, timeout=600)
+    def run(*flags):
+        done = sandbox.run("ingest-books", *flags, source, outputs,
+                           timeout=600)
         assert done.returncode == 0, done.stdout + done.stderr
         return done.stdout + done.stderr
+
+    def discarded():
+        """Which discarding tools this run reached for, in name order."""
+        if not calls.exists():
+            return []
+        return sorted(set(calls.read_text().split()))
 
     sandbox.source = source
     sandbox.outputs = outputs
     sandbox.ingest = run
+    sandbox.discarded = discarded
     return sandbox
 
 
@@ -123,6 +142,38 @@ class TestTheTreeARunProduces:
     def test_the_input_tree_is_left_completely_untouched(self, run):
         books, _, before = run
         assert blackbox.tree_of(books.source) == before
+
+
+class TestTheDiscardGate:
+    """Everything a reader cannot get back from the output - the embedded fonts,
+    the junk images, the illustrations' resolution, a PDF's images - is behind
+    -d. So a default run must not reach for a single tool whose only job is to
+    take part of a book away, and must still emit every book."""
+
+    def test_a_default_run_reaches_for_no_discarding_tool_at_all(self, books):
+        books.ingest()
+        assert books.discarded() == []
+
+    def test_a_default_run_says_which_version_it_is_making(self, books):
+        assert "kept whole" in books.ingest()
+
+    def test_a_default_run_still_emits_every_book(self, books):
+        books.ingest()
+        assert len(list(books.outputs.rglob("*.epub"))) == 4
+        assert len(list(books.outputs.rglob("*.pdf"))) == 1
+
+    def test_d_strips_the_pdf_and_opens_the_epubs_for_the_cleaner(self, books):
+        books.ingest("-d")
+        assert {"gs", "unzip", "zip"} <= set(books.discarded())
+
+    def test_d_still_emits_every_book(self, books):
+        books.ingest("-d")
+        assert len(list(books.outputs.rglob("*.epub"))) == 4
+        assert len(list(books.outputs.rglob("*.pdf"))) == 1
+
+    def test_the_long_form_opens_the_same_gate(self, books):
+        books.ingest("--discard-extras")
+        assert {"gs", "unzip", "zip"} <= set(books.discarded())
 
 
 class TestASecondRun:
