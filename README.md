@@ -41,7 +41,7 @@ its own in there, so several can run at once without sharing one.
 | [`ingest-books`](#ingest-books) | E-books → clean, uniform epub/pdf library |
 | [`read-library`](#read-library) | E-books → audiobooks (Opus + lossless), read aloud by a TTS engine |
 | [`convert-comics`](#convert-comics) | `.cbr`/`.cbz`/`.cb7` and comic PDFs → `.cbz` of AVIF pages |
-| [`convert-images`](#convert-images) | Batch image → AVIF (or back to JPEG) |
+| [`convert-images`](#convert-images) | Batch image → AVIF / WebP / JPEG XL (or back to JPEG) |
 | [`clean-folder-structure`](#clean-folder-structure) | Apply the shared name cleaners across a tree |
 | [`find-fragment-candidates`](#find-fragment-candidates) | Report the recurring name fragments a library still carries |
 | [`ytdlp`](#ytdlp) | Download tables of podcast feeds as audio or video, Windows or Linux |
@@ -601,8 +601,10 @@ hold one large image per page — into a tree of `.cbz` archives of AVIF pages.
 
 ### `convert-images`
 
-Batch-converts images to AVIF (or back to JPEG), with optional whitespace
-cropping and parallel encoding.
+Batch-converts images to AVIF, WebP or JPEG XL (or back to JPEG), with optional
+whitespace cropping and parallel encoding. AVIF is the default, and `-s` stays
+one knob across all three: each encoder's own effort setting is derived from it,
+so a lower `-s` is a slower encode whichever format is being written.
 
 ## Names and folder structure
 

@@ -1,5 +1,5 @@
-"""convert-images: a tree of images converted to AVIF - or, with -r, back to
-JPEG - into a mirrored output tree.
+"""convert-images: a tree of images converted to AVIF, WebP or JPEG XL - or,
+with -r, back to JPEG - into a mirrored output tree.
 
 The interesting half is -c, the crop. What a `-trim` took off, measured as a
 percentage of the original edge, is what decides what the trim MEANT: below the
@@ -16,6 +16,7 @@ import os
 import subprocess
 import sys
 import time
+from typing import NamedTuple
 
 from medialib import commands
 from medialib.lib import (
@@ -34,22 +35,68 @@ USAGE_HEAD = """Usage:
     {program} [options] <inputDir> <outputDir>
 Options:"""
 
+# -o writes the first of enums.IMAGE_CODECS unless it is told another one. Which
+# format that is belongs to the list rather than to this line: the list is in
+# preference order, so the default follows a change to it.
+DEFAULT_FORMAT = enums.IMAGE_CODECS[0]
+
+# The top of the -s range, and why it is checked rather than passed through.
+#
+# The AVIF encoder REFUSES a speed above this instead of clamping it:
+# `heic:speed=10` fails with "Invalid parameter value" and leaves a ZERO-BYTE
+# file behind. With stderr silenced that is a whole run of empty images and no
+# word about why, so the number is settled before the first conversion.
+# Measured against ImageMagick 7.1.2-30 (libheif 1.23.1), where 0-9 all encode
+# and 10 and above do not.
+MAX_SPEED = 9
+DEFAULT_SPEED = 5
+
+
+def _spoken_list(words) -> str:
+    """The formats the way a sentence reads them - "avif, webp or jxl".
+
+    The page below and the check under it are both generated from
+    :data:`enums.IMAGE_CODECS`, so a codec added there is offered and accepted
+    together. Written out by hand, the two drift and the page ends up
+    advertising a format the check refuses.
+    """
+    words = list(words)
+    if len(words) < 2:
+        return "".join(words)
+    return "%s or %s" % (", ".join(words[:-1]), words[-1])
+
+
 OPT_SPEC = """
 h |  | Print this help page.
 c |  | crop excessive whitespace
-r |  | reverse from avif to jpeg
+r |  | reverse: convert the -o format back to jpeg
+o | <format> | output format: {formats}, default {default}
 j | <jobs> | Run up to <jobs> encoder processes in parallel.
                     Only needed when RAM is short, otherwise a good guess is made.
 q | <quality> | quality level of the output images
-s | <speed> | av1 speed preset, lower is slower, default 5
+s | <speed> | av1 speed preset {speeds}, lower is slower, default {speed}
 m | <maxRes> | maximum resolution (height) to keep
 f | <fuzz> | when trimming, how many percent color difference gets still trimmed
-"""
+""".format(formats=_spoken_list(enums.IMAGE_CODECS), default=DEFAULT_FORMAT,
+           speeds="0-%d" % MAX_SPEED, speed=DEFAULT_SPEED)
 
-OPT_VARS = "c:crop r:reverse j:jobs q:quality s:speedPreset m:maxRes f:fuzz"
+# The format has to be one this command can write, or a typo would only surface
+# as a per-image failure deep into the run; the speed preset has to be a number,
+# because each format's own effort setting is derived from it. Both are settled
+# here. The choices are joined with an ESCAPED pipe, because the spec is a wire
+# format whose fields are separated by a plain one: `\|` is how a field says "a
+# literal pipe of my own". Written with a bare pipe, the kind ends at the first
+# codec and every other one is refused.
+OPT_CHECKS = """
+o | enum:{formats} | output format
+s | int:0:{top} | speed preset
+""".format(formats="\\|".join(enums.IMAGE_CODECS), top=MAX_SPEED)
+
+OPT_VARS = ("c:crop r:reverse o:outputFormat j:jobs q:quality s:speedPreset "
+            "m:maxRes f:fuzz")
 OPT_COLUMN = 20
-OPT_LONG = ("h:help c:crop r:reverse j:jobs q:quality s:speed m:max-resolution "
-            "f:fuzz")
+OPT_LONG = ("h:help c:crop r:reverse o:format j:jobs q:quality s:speed "
+            "m:max-resolution f:fuzz")
 
 # One conversion spans about this many threads, so the pool is the cores divided
 # by it.
@@ -60,9 +107,56 @@ THREADS_PER_CONVERSION = 4
 # at N" then take the same code path instead of needing two geometries.
 UNBOUNDED_EDGE = 10000
 
-# AVIF is written 10-bit even from 8-bit sources: at these quality levels the
-# extra headroom costs almost nothing and keeps flat gradients from banding.
-AVIF_BIT_DEPTH = 10
+
+class Format(NamedTuple):
+    """One output format: the bit depth it is written at, the define its
+    encoder takes its effort under, and the two ends of that encoder's own
+    scale - the value meaning "slowest" and the value meaning "fastest"."""
+
+    depth: int
+    effort: str
+    slowest: int
+    fastest: int
+
+    def level(self, speed: int) -> int:
+        """<speed> from the -s scale, as this encoder's own effort number.
+
+        Linear between the two ends, so -s 0 is exactly `slowest` and -s
+        MAX_SPEED exactly `fastest` whichever direction the encoder counts in.
+        The step is computed on the DISTANCE and then added or subtracted,
+        because a negative span through floor division rounds the wrong way -
+        `5 * -6 // 9` is -4, not -3, which would put WebP a method out.
+        """
+        step = speed * abs(self.fastest - self.slowest) // MAX_SPEED
+        if self.fastest >= self.slowest:
+            return self.slowest + step
+        return self.slowest - step
+
+
+# How each of enums.IMAGE_CODECS is asked for, which is the whole of what
+# differs between them.
+#
+# AVIF and JPEG XL are written 10-bit even from 8-bit sources: at these quality
+# levels the extra headroom costs almost nothing and keeps flat gradients from
+# banding. WebP has no more than 8 bits to be written at.
+#
+# The effort setting is where they disagree most, in name AND in direction.
+# AVIF counts a SPEED, so its slowest end is 0; WebP's method and JPEG XL's
+# effort both count effort, so theirs are 6 and 9. -s stays the single knob -
+# the av1 speed of its own name - and each encoder's scale is walked from its
+# own slow end to its own fast one, so turning -s down asks for a slower encode
+# in every format rather than in one of them.
+#
+# Every bound below was measured against ImageMagick 7.1.2-30, not read off a
+# manual page: webp:method refuses 7, and jxl:effort is silently CLAMPED
+# outside 1-9 rather than refused, which is the worse of the two failures
+# because nothing says it happened.
+FORMATS = {
+    "avif": Format(depth=10, effort="heic:speed", slowest=0, fastest=9),
+    "webp": Format(depth=8, effort="webp:method", slowest=6, fastest=0),
+    "jxl": Format(depth=10, effort="jxl:effort", slowest=9, fastest=1),
+}
+
 # The same perceived quality needs a higher number in JPEG than in AVIF.
 JPEG_QUALITY_BONUS = 25
 
@@ -74,9 +168,14 @@ BLANK_TRIM_PERCENT = 99
 LIGHTNESS_THRESHOLD = 40
 
 # The stems a disambiguated output has to look out for: two sources in one folder
-# sharing a stem would otherwise map to the same converted name.
-_SAME_STEM = ("jpg", "JPG", "jpeg", "JPEG", "png", "PNG", "webp", "WEBP",
-              "avif", "AVIF")
+# sharing a stem would otherwise map to the same converted name. Every extension
+# this command reads or writes counts, in either case - the tree is lower-cased
+# later in the run, not before this is computed - so a format added above is
+# covered here without anybody having to add it twice.
+_SAME_STEM = frozenset(
+    spelling
+    for extension in enums.IMAGE_EXTENSIONS + enums.IMAGE_CODECS
+    for spelling in (extension, extension.upper()))
 
 
 def spec(program: str) -> clioptions.Spec:
@@ -85,6 +184,7 @@ def spec(program: str) -> clioptions.Spec:
         options=OPT_SPEC,
         long=OPT_LONG,
         vars=OPT_VARS,
+        checks=OPT_CHECKS,
         column=OPT_COLUMN,
     )
 
@@ -184,22 +284,31 @@ class Run:
             return ""
         return proc.stdout.decode("utf-8", "replace").strip()
 
-    def _avif_arguments(self, source, out):
-        return ["-format", "avif", "-depth", str(AVIF_BIT_DEPTH),
+    def _encode_arguments(self, source, out, extra=()):
+        """The conversion, in whichever format this run writes.
+
+        <extra> goes between the source and the resize, which is where an
+        operation on the loaded image has to sit.
+        """
+        chosen = FORMATS[self.options["format"]]
+        return ["-format", self.options["format"],
+                "-depth", str(chosen.depth),
                 "-quality", str(self.options["quality"]),
-                "-define", "heic:speed=%s" % self.options["speedPreset"],
-                source, "-resize", self.options["maxResCommand"], out]
+                "-define", "%s=%d" % (chosen.effort,
+                                      self.options["effortLevel"]),
+                source, *extra,
+                "-resize", self.options["maxResCommand"], out]
 
     def crop_convert(self, relative: str) -> None:
         """The -c path: trim, then decide from HOW MUCH came off what the trim
         meant."""
-        out = disambiguated_output(relative, "avif", self.input_dir,
-                                   self.output_dir)
+        out = disambiguated_output(relative, self.options["format"],
+                                   self.input_dir, self.output_dir)
         source = relative
         dimensions = self._identify(["-format", "%w %h", source]).split()
         if len(dimensions) != 2:
             self.record("converted", "CONV", relative)
-            self._convert(self._avif_arguments(source, out))
+            self._convert(self._encode_arguments(source, out))
             return
         width, height = int(dimensions[0]), int(dimensions[1])
 
@@ -236,17 +345,12 @@ class Run:
                     # does not end flush with the page edge.
                     border = min(min_w, min_h)
                     self.record("trimmed", "TRIM", relative)
-                    self._convert(
-                        ["-format", "avif", "-depth", str(AVIF_BIT_DEPTH),
-                         "-quality", str(self.options["quality"]),
-                         "-define",
-                         "heic:speed=%s" % self.options["speedPreset"],
-                         "miff:" + trimmed,
-                         "-bordercolor", corner[0], "-border", str(border),
-                         "-resize", self.options["maxResCommand"], out])
+                    self._convert(self._encode_arguments(
+                        "miff:" + trimmed, out,
+                        ["-bordercolor", corner[0], "-border", str(border)]))
                     return
             self.record("converted", "CONV", relative)
-            self._convert(self._avif_arguments(source, out))
+            self._convert(self._encode_arguments(source, out))
         finally:
             try:
                 os.remove(trimmed)
@@ -273,8 +377,8 @@ class Run:
             return None
 
     def transcode(self, relative: str) -> None:
-        out = disambiguated_output(relative, "avif", self.input_dir,
-                                   self.output_dir)
+        out = disambiguated_output(relative, self.options["format"],
+                                   self.input_dir, self.output_dir)
         if not os.path.isfile(relative):
             self.record("notFound", "ERROR (not found)", relative,
                         stream=sys.stderr)
@@ -287,7 +391,7 @@ class Run:
             self.crop_convert(relative)
             return
         self.record("converted", "CONV", relative)
-        self._convert(self._avif_arguments(relative, out))
+        self._convert(self._encode_arguments(relative, out))
 
     def reverse_to_jpeg(self, relative: str) -> None:
         out = disambiguated_output(relative, "jpg", self.input_dir,
@@ -400,10 +504,15 @@ def main(argv: list, program: str = "convert-images") -> int:
 
     crop = "c" in result.given
     reverse = "r" in result.given
+    image_format = result.values["outputFormat"] or DEFAULT_FORMAT
+    speed = int(result.values["speedPreset"] or DEFAULT_SPEED)
     options = {
         "crop": crop,
+        "format": image_format,
         "quality": int(result.values["quality"] or 60),
-        "speedPreset": result.values["speedPreset"] or "5",
+        # Derived once, here: it is the same number for every conversion of the
+        # run, and the workers that read it are separate processes.
+        "effortLevel": FORMATS[image_format].level(speed),
         "fuzzCommand": "%s%%" % (result.values["fuzz"] or "10"),
         "maxResCommand": "%dx%s>" % (UNBOUNDED_EDGE,
                                      result.values["maxRes"] or UNBOUNDED_EDGE),
@@ -413,9 +522,17 @@ def main(argv: list, program: str = "convert-images") -> int:
     runlog.settle_flock()
     tools = [imagemagick.CONVERT_SPEC] + (
         [imagemagick.IDENTIFY_SPEC] if crop else [])
-    if tooldeps.require_tools(
-            program, tools,
-            skip_preflight=bool(os.environ.get("SKIP_TOOL_PREFLIGHT", ""))):
+    skip_preflight = bool(os.environ.get("SKIP_TOOL_PREFLIGHT", ""))
+    if tooldeps.require_tools(program, tools,
+                              skip_preflight=skip_preflight):
+        return 1
+    # Having ImageMagick is not the same as having an ImageMagick that can do
+    # THIS format: each one is a separate delegate the build was or was not
+    # given, and a build without it converts nothing while failing one image at
+    # a time. -r reads the format instead of writing it, so that is what is
+    # asked about.
+    if imagemagick.require_format(program, image_format, writing=not reverse,
+                                  skip_preflight=skip_preflight):
         return 1
     # fdupes is the one tool whose absence changes WHAT happens rather than
     # whether it happens. A parent may have settled it already; inherit that
@@ -435,8 +552,9 @@ def main(argv: list, program: str = "convert-images") -> int:
     # Nothing to convert? Say so before the input is de-duplicated, pruned and
     # lower-cased, so a refused run leaves it exactly as it was.
     if reverse:
-        wanted = "AVIF images (.avif) to convert back to JPEG"
-        extensions = ["avif"]
+        wanted = "%s images (.%s) to convert back to JPEG" % (
+            image_format.upper(), image_format)
+        extensions = [image_format]
     else:
         wanted = "images (%s)" % enums.extension_list(
             list(enums.IMAGE_EXTENSIONS))
