@@ -1,15 +1,22 @@
-"""convert-audio: a tree of spoken-word audio ingested as Opus.
+"""convert-audio: a tree of spoken-word audio ingested as Opus or xHE-AAC.
 
 Video files are ingested too: their audio stream is extracted and converted like
 any other input.
 
-Two questions decide what happens to each file. Does it get an .opus of its own
+Two questions decide what happens to each file. Does it get an output of its own
 at all - yes for every video, for the formats the output must not keep whatever
-their size, and for anything above the bitrate threshold. And is that .opus
+their size, and for anything above the bitrate threshold. And is that output
 ENCODED or LIFTED OUT - lifted when the source's audio already IS what this
-pipeline produces, an Opus below the threshold, which happens all the time inside
-a video pulled off the web: encoding 46 kbps Opus into 46 kbps Opus changes
-nothing except to spend another lossy generation on it.
+pipeline produces, the run's own codec below the threshold, which happens all the
+time inside a video pulled off the web: encoding 46 kbps Opus into 46 kbps Opus
+changes nothing except to spend another lossy generation on it.
+
+-o picks the codec from enums.AUDIO_CODECS, and Opus is the first of them and so
+the default. The other is xHE-AAC, which is a different KIND of encode: ffmpeg
+cannot produce it, so it goes out over a pipe to an external encoder that
+medialib finds and reports for itself (medialib/lib/xheaac.py), and the finished
+file is an .m4a whose chapters are a track rather than a tag. Long-file splitting
+is off for it - see NO_SPLIT_CODECS.
 
 A file longer than the split threshold is cut into one chunk per core, and the
 chunks encode as independent queue jobs mixed in with every other file - so one
@@ -46,6 +53,7 @@ from medialib.lib import (
     thumbnails,
     tooldeps,
     workerpool,
+    xheaac,
 )
 from medialib.lib.runlog import log
 
@@ -56,6 +64,28 @@ like any other input.
 Options:"""
 
 CREDITS_LINE = "ingest spoken word audio files"
+
+# -o writes the first of enums.AUDIO_CODECS unless it is told another one. Which
+# codec that is belongs to the list rather than to this line: the list is in
+# preference order, so the default follows a change to it.
+DEFAULT_CODEC = enums.AUDIO_CODECS[0]
+
+# How a codec is SPELLED on the page and in a message, as against the token -o
+# takes. "xheaac" is one word because an option value with a hyphen in it is a
+# nuisance to type; the codec's name has the hyphen, and a page that prints the
+# token as though it were the name teaches the reader the wrong word for it.
+CODEC_NAMES = {"opus": "Opus", "xheaac": "xHE-AAC"}
+
+# The codecs that keep long files WHOLE, whatever -s says.
+#
+# Splitting works by encoding chunks independently and concatenating them, which
+# needs the pieces to join sample-exactly. Opus does: one libopus encode per
+# chunk, stream-copied together. xHE-AAC does not - the external encoders write
+# finished MP4s with their own edit lists and audio-preroll frames, and
+# concatenating those is a seam that is audible when it is not simply wrong. So
+# the codec keeps files whole rather than shipping a join nobody can hear-test,
+# exactly as adaptive mode does for its own reason.
+NO_SPLIT_CODECS = ("xheaac",)
 
 # The spec is DATA, and the page it renders is compared byte for byte against the
 # recorded contract under tests/data/cliContract.
@@ -75,6 +105,10 @@ a |  | Adaptive mode: decide channels and bitrate per file rather
 k |  | Keep temporary files.
                     Default false
 c |  | Copy non transcoded files from <inputDir> into <outputDir>
+o | <codec> | Output codec: {codecs}.
+                    xhe-aac needs an external encoder ({encoders}), is
+                    written as .m4a, and keeps long files whole.
+                    Default {codec}
 b | <bitrate> | Bitrate of the output files
                     Default 46 kbps or 32 kbps for forced mono output
 j | <jobs> | Run up to <jobs> encoder processes in parallel.
@@ -83,12 +117,27 @@ s | <seconds> | Split files longer than <seconds> into one chunk per logical
                     CPU core, which encode in parallel alongside the other files,
                     then transparently re-concatenate. 0 disables splitting.
                     Default 10000
-"""
+""".format(codecs=" or ".join(enums.AUDIO_CODECS),
+           # Only the back-ends a run could really encode with. Naming a gated
+           # one here would send a reader off to build the tool that is then
+           # declined; the refusal names it, where there is room to say why.
+           encoders=xheaac.usable_tools(),
+           codec=DEFAULT_CODEC)
 
-OPT_VARS = "m:mono a:adaptive c:copy k:keep b:bitrate j:jobs s:splitThreshold"
+OPT_VARS = ("m:mono a:adaptive c:copy k:keep o:outputCodec b:bitrate j:jobs "
+            "s:splitThreshold")
 OPT_COLUMN = 20
-OPT_LONG = ("h:help m:mono a:adaptive k:keep c:copy-others b:bitrate j:jobs "
-            "s:split-threshold")
+OPT_LONG = ("h:help m:mono a:adaptive k:keep c:copy-others o:codec b:bitrate "
+            "j:jobs s:split-threshold")
+
+# The codec has to be one this command can write, or a typo would only surface
+# as a per-file failure deep into a run. The choices are joined with an ESCAPED
+# pipe, because the spec is a wire format whose fields are separated by a plain
+# one: `\\|` is how a field says "a literal pipe of my own". Written with a bare
+# pipe, the kind ends at the first codec and every other one is refused.
+OPT_CHECKS = """
+o | enum:{codecs} | output codec
+""".format(codecs="\\|".join(enums.AUDIO_CODECS))
 
 DEFAULT_BITRATE = 46
 MONO_BITRATE = 32
@@ -118,6 +167,7 @@ def spec(program: str) -> clioptions.Spec:
         options=OPT_SPEC,
         long=OPT_LONG,
         vars=OPT_VARS,
+        checks=OPT_CHECKS,
         column=OPT_COLUMN,
         credits=CREDITS_LINE,
     )
@@ -133,7 +183,7 @@ def _probe(argv: list) -> str:
 
 
 def resolve_bitrate(bitrate: int, mono: bool) -> int:
-    """The Opus bitrate for a track, honouring the forced-mono default swap.
+    """The target bitrate for a track, honouring the forced-mono default swap.
 
     Kept apart so the chunk encoder produces bit-for-bit the same settings as a
     whole-file encode.
@@ -168,6 +218,35 @@ def source_audio_codec(src: str) -> str:
     return _probe(["ffprobe", "-v", "quiet", "-select_streams", "a:0",
                    "-show_entries", "stream=codec_name",
                    "-of", "default=nk=1:nw=1", src]).split("\n")[0].lower()
+
+
+def source_audio_profile(src: str) -> str:
+    """The PROFILE of a source's first audio stream, as ffprobe spells it.
+
+    Needed because xHE-AAC is not a codec name to ffprobe: it is `aac` with the
+    profile "xHE-AAC" (AV_PROFILE_AAC_USAC), sharing its codec name with
+    every AAC-LC file in existence. Asking the codec alone would read a 128 kbps
+    AAC-LC soundtrack as "already what this pipeline produces" and stream-copy
+    it out untouched, which is the one mistake the lift-out must not make.
+
+    Not lower-cased: the answer is compared against ffprobe's own spelling.
+    """
+    return _probe(["ffprobe", "-v", "quiet", "-select_streams", "a:0",
+                   "-show_entries", "stream=profile",
+                   "-of", "default=nk=1:nw=1", src]).split("\n")[0]
+
+
+# What a source's first audio stream has to answer for it to BE what this
+# pipeline produces: the codec name, and - where the codec name is not enough -
+# the profile beside it.
+#
+# The profile is the whole reason this is a table rather than a comparison.
+# `opus` is `opus` and nothing else, but `aac` is AAC-LC, HE-AAC, HE-AACv2, LD,
+# ELD and xHE-AAC, and only the last of those is this command's output.
+FINISHED_STREAM = {
+    "opus": ("opus", ""),
+    "xheaac": ("aac", "xHE-AAC"),
+}
 
 
 def estimated_audio_bitrate(src: str) -> int:
@@ -263,21 +342,26 @@ def source_audio_bitrate(src: str) -> int:
     return int(value) if re.fullmatch(r"[0-9]+", str(value)) else 0
 
 
-def source_audio_is_finished(src: str, bitrate, limit) -> bool:
-    """Whether a source's audio already IS what this pipeline produces, and small
-    enough to be worth keeping as it is: Opus, below the re-encode threshold.
+def source_audio_is_finished(src: str, bitrate, limit,
+                             codec: str = "opus") -> bool:
+    """Whether a source's audio already IS what this run produces, and small
+    enough to be worth keeping as it is: <codec>, below the re-encode threshold.
 
     The bitrate is the one the caller already probed; a 0 from that means
     "nothing stated it", which is not the same as "small", so it is MEASURED
     instead rather than assumed either way. That second probe only ever runs for
-    a stream that is already Opus - the codec is the cheap question and is asked
-    first - so nothing else in a run pays for it.
+    a stream that already IS the output codec - the codec is the cheap question
+    and is asked first - so nothing else in a run pays for it.
 
     What is deliberately NOT asked is the channel count: -m does not downmix a
     file under the threshold either, so a stereo stream small enough to keep is
     kept for exactly the same reason.
     """
-    if source_audio_codec(src) != "opus":
+    wanted_codec, wanted_profile = FINISHED_STREAM[codec]
+    if source_audio_codec(src) != wanted_codec:
+        return False
+    # A second probe, and only for a stream that passed the first one.
+    if wanted_profile and source_audio_profile(src) != wanted_profile:
         return False
     value = bitrate if re.fullmatch(r"[0-9]+", str(bitrate)) else 0
     if int(value) <= 0:
@@ -287,12 +371,17 @@ def source_audio_is_finished(src: str, bitrate, limit) -> bool:
     return int(value) < int(limit)
 
 
-def adaptive_channels(src: str) -> int:
+def source_channels(src: str) -> int:
     """The channel count of the source's first AUDIO stream.
 
     Probing the audio stream rather than stream 0 means a video file is judged by
     its soundtrack, so an extracted video audio track adapts exactly like a plain
     audio file. An unknown count is read as stereo.
+
+    Read by adaptive mode, which decides a file's channels and bitrate from it,
+    and by the xhe-aac encode, because exhale's presets are quoted per channel
+    count: the same preset is 48 kbps in stereo and 24 in mono, so the count is
+    part of choosing one rather than an afterthought.
     """
     raw = _probe(["ffprobe", "-v", "quiet", "-select_streams", "a:0",
                   "-show_entries", "stream=channels",
@@ -302,8 +391,23 @@ def adaptive_channels(src: str) -> int:
     return int(raw)
 
 
+def source_sample_rate(src: str) -> int:
+    """The sample rate of the source's first AUDIO stream, or 0 when the probe
+    cannot say.
+
+    Only the xhe-aac path asks. Its encoders accept 32-48 kHz and no more, so
+    what a source's rate IS decides whether the WAVE fed to them has to be
+    resampled on the way - and 0 is answered as "unknown" rather than as a
+    number, which `xheaac.input_sample_rate` reads as the top of the band.
+    """
+    raw = _probe(["ffprobe", "-v", "quiet", "-select_streams", "a:0",
+                  "-show_entries", "stream=sample_rate",
+                  "-of", "default=nk=1:nw=1", src]).split("\n")[0]
+    return int(raw) if re.fullmatch(r"[0-9]+", raw) else 0
+
+
 def adaptive_bitrate(channels, default: int) -> int:
-    """The Opus target for a channel count, from the shared table's COMMENTARY
+    """The target for a channel count, from the shared table's COMMENTARY
     column - the spoken-word one, which is exactly what this script ingests.
 
     A channel count the table has no row for falls back to the stereo row, and an
@@ -447,6 +551,12 @@ class Run:
     bitrate: int
     threshold: int
     split_threshold: int
+    # The output codec, the extension it is written under, and - for a codec
+    # that needs one - the external encoder settled before the run started.
+    # None for Opus, which ffmpeg encodes itself.
+    codec: str
+    extension: str
+    backend: xheaac.Backend | None
     # A geometry, not None: DEFAULT_TIER is a row of the table by construction.
     cover_resolution: str
     ram_base: str
@@ -465,6 +575,18 @@ class Run:
     def __init__(self, **settings) -> None:
         self.__dict__.update(settings)
 
+    def output_path(self, relative: str) -> str:
+        """Where a track's converted file goes: the mirrored path under the
+        output tree, with the run's own extension on it.
+
+        One place, because "the output of this track" is asked five times across
+        the encode, the planner and the up-to-date check, and an .opus spelled
+        out at four of them and derived at the fifth is how a second codec ends
+        up half-supported.
+        """
+        return os.path.join(self.output_dir,
+                            os.path.splitext(relative)[0] + "." + self.extension)
+
     # --- encoding -------------------------------------------------------------
 
     def encode(self, token: str) -> None:
@@ -476,7 +598,14 @@ class Run:
 
     def encode_chunk(self, token: str) -> None:
         """One time-range straight to Opus, with no metadata: metadata is
-        re-attached once, from the original, after re-concatenation."""
+        re-attached once, from the original, after re-concatenation.
+
+        Opus-only, and not by omission: a codec in NO_SPLIT_CODECS never has
+        chunk jobs built for it, so this is unreachable for anything else. The
+        `.opus` below is therefore the chunk's own format and not the run's
+        output extension - the two happen to agree here because only Opus gets
+        this far.
+        """
         relative, index, total, start, duration = token.split(UNIT)
         self.counters.report_progress(
             "%s [chunk %d/%s]" % (relative, int(index) + 1, total))
@@ -501,8 +630,7 @@ class Run:
         self.counters.report_progress(relative)
 
         source = os.path.join(self.input_dir, relative)
-        opus = os.path.join(self.output_dir,
-                            os.path.splitext(relative)[0] + ".opus")
+        out = self.output_path(relative)
 
         # Video sources are flagged so their audio stream is extracted, and their
         # video stream is not mistaken for cover art - in every mode. Adaptive
@@ -510,8 +638,12 @@ class Run:
         # from its first audio stream instead of the global -m/-b.
         video = is_video_file(relative)
         mono, bitrate, threshold = self.mono, self.bitrate, self.threshold
+        # 0 is "not asked yet". Only two things want it - adaptive mode and the
+        # xhe-aac preset - so it is probed at the first of them that runs and
+        # carried from there rather than probed once per reader.
+        channels = 0
         if self.adaptive:
-            channels = adaptive_channels(source)
+            channels = source_channels(source)
             mono = channels <= 1
             bitrate = adaptive_bitrate(channels, self.bitrate)
 
@@ -521,11 +653,11 @@ class Run:
         input_duration = round(formatting.awk_number(input_duration_raw))
         output_duration = round(formatting.awk_number(_probe(
             ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
-             "-of", "default=nk=1:nw=1", opus])))
+             "-of", "default=nk=1:nw=1", out])))
         source_bitrate = source_audio_bitrate(source)
 
-        if os.path.isfile(opus) and input_duration <= output_duration:
-            self._reapply_sidecar_cover(relative, source, opus)
+        if os.path.isfile(out) and input_duration <= output_duration:
+            self._reapply_sidecar_cover(relative, source, out)
             return
 
         if mono:
@@ -540,48 +672,147 @@ class Run:
         if status != 0 or not tmp_dir:
             return
         try:
-            self._produce(relative, source, opus, video, mono, bitrate,
+            self._produce(relative, source, out, video, mono, bitrate,
                           threshold, source_bitrate, tmp_dir,
-                          input_duration_raw)
+                          input_duration_raw, channels)
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
-    def _produce(self, relative: str, source: str, opus: str, video: bool,
+    def _remux(self, source: str, out: str) -> None:
+        """The lift-out: the source's own audio stream into the output container
+        sample for sample, with no encoder in the path at all.
+
+        One ffmpeg pass whatever the codec is - a stream copy does not care what
+        it is copying, and both output containers take the stream it finds.
+        """
+        subprocess.run(
+            ["ffmpeg", "-nostdin", "-y", "-i", source, "-map", "0:a:0",
+             "-map_metadata", "0:s:0", "-c:a", "copy", out],
+            stderr=subprocess.DEVNULL)
+
+    def _encode(self, source: str, out: str, mono: bool, bitrate: int,
+                channels: int = 0) -> None:
+        """One whole file encoded, by whichever route the run's codec needs.
+
+        <channels> is the source's channel count if a caller already probed it,
+        and 0 for "ask if you need it" - which only the xhe-aac route does.
+        """
+        if self.codec == "xheaac":
+            self._encode_xheaac(source, out, mono, bitrate, channels)
+            return
+        self._encode_opus(source, out, mono, bitrate)
+
+    def _encode_opus(self, source: str, out: str, mono: bool,
+                     bitrate: int) -> None:
+        """The one-pass ffmpeg encode: libopus, in ffmpeg, straight to the
+        output."""
+        codec = ["-c:a", "libopus", "-b:a", "%dk" % bitrate]
+        if mono:
+            codec = ["-ac", "1"] + codec
+        subprocess.run(
+            ["ffmpeg", "-nostdin", "-y", "-i", source, "-map", "0:a:0",
+             "-map_metadata", "0:s:0"] + codec + [out],
+            stderr=subprocess.DEVNULL)
+
+    def _encode_xheaac(self, source: str, out: str, mono: bool,
+                       bitrate: int, channels: int = 0) -> None:
+        """Two processes: ffmpeg decoding to WAVE, the external encoder reading
+        that WAVE off its stdin and writing the finished .m4a.
+
+        A PIPE rather than a temporary file, and that is the difference the
+        back-end choice makes. A three-hour book decodes to about a gigabyte of
+        16-bit PCM per channel; written to the RAM scratch first, a run at one
+        job per core would want that many gigabytes at once. Over a pipe the
+        memory is a kernel buffer, and the reason exhale is the reachable
+        back-end today is precisely that it accepts one.
+
+        The channel count is settled on the ffmpeg side, because the encoder has
+        no downmix of its own - it encodes the channels it is given - so -m is
+        `-ac 1` here exactly as it is for Opus.
+
+        Neither half's failure is raised. A run converts a tree, and one file
+        that would not encode is one missing output the next run picks up again,
+        which is how every other encode in this command already behaves.
+        """
+        # exhale opens its output with O_CREAT|O_EXCL and REFUSES a name that
+        # already exists - there is no -y to give it. ffmpeg overwrites, so the
+        # Opus path never had to think about this, but an output does get here
+        # already present: one from an interrupted run, or one too short to have
+        # passed the up-to-date check above. Left in place it would fail every
+        # such file, every run, for as long as the stale file survived.
+        try:
+            os.remove(out)
+        except OSError:
+            pass
+
+        rate = xheaac.input_sample_rate(source_sample_rate(source))
+        if mono:
+            # -m is a downmix, so the output really is one channel whatever the
+            # source had - and the preset is a rate for the OUTPUT.
+            channels = 1
+        else:
+            channels = max(1, channels or source_channels(source))
+        preset = xheaac.exhale_preset(bitrate, channels)
+
+        # Both spawns are guarded, the way every other tool call in this module
+        # is: the preflight makes a missing binary unlikely rather than
+        # impossible - one can go away between the check and the file - and an
+        # unguarded OSError here would take the whole WORKER down and with it
+        # every other file queued behind it.
+        try:
+            decode = subprocess.Popen(xheaac.wav_argv(source, rate, mono),
+                                      stdout=subprocess.PIPE,
+                                      stderr=subprocess.DEVNULL)
+        except OSError:
+            return
+        if decode.stdout is None:
+            return
+        try:
+            encode = subprocess.Popen(xheaac.exhale_argv(preset, out),
+                                      stdin=decode.stdout,
+                                      stdout=subprocess.DEVNULL,
+                                      stderr=subprocess.DEVNULL)
+        except OSError:
+            decode.stdout.close()
+            decode.kill()
+            decode.wait()
+            return
+        # Closed in THIS process once the encoder holds it, so the pipe really
+        # has one reader: kept open here, a decoder that outlives its encoder
+        # would never see EPIPE and the run would hang on a dead consumer.
+        decode.stdout.close()
+        encode.wait()
+        decode.wait()
+
+    def _produce(self, relative: str, source: str, out: str, video: bool,
                  mono: bool, bitrate: int, threshold: int, source_bitrate: int,
-                 tmp_dir: str, input_duration_raw: str) -> None:
+                 tmp_dir: str, input_duration_raw: str,
+                 channels: int = 0) -> None:
         # Only a video ever reaches the lift-out question: a PLAIN file whose
         # audio is already finished never got past the first one - it is its own
-        # .opus already, and copying it verbatim is what -c is.
+        # output already, and copying it verbatim is what -c is.
         lift_out = video and source_audio_is_finished(source, source_bitrate,
-                                                      threshold)
+                                                      threshold, self.codec)
         cover_target = ""
 
         if video or always_transcode_file(relative) \
                 or source_bitrate >= threshold:
-            # One ffmpeg pass writes the .opus either way, and everything after
-            # it is the same for both. The codec is the only difference: a
-            # straight encode, or "-c:a copy" remuxing the source's own Opus
-            # stream sample for sample with no encoder in the path at all.
             if lift_out:
-                codec = ["-c:a", "copy"]
+                self._remux(source, out)
             else:
-                codec = ["-c:a", "libopus", "-b:a", "%dk" % bitrate]
-                if mono:
-                    codec = ["-ac", "1"] + codec
-            subprocess.run(
-                ["ffmpeg", "-nostdin", "-y", "-i", source, "-map", "0:a:0",
-                 "-map_metadata", "0:s:0"] + codec + [opus],
-                stderr=subprocess.DEVNULL)
+                self._encode(source, out, mono, bitrate, channels)
 
-            # libopus does not carry chapters through, so they are re-attached
-            # from the source with mutagen.
-            chapters.attach_chapters(source, opus, tmp_dir, self.script_dir)
+            # Neither encoder carries chapters through, so they are re-attached
+            # from the source - with mutagen for Opus, and as a chapter track
+            # written by ffmpeg for an .m4a, which the chapter library decides
+            # from the extension it is handed.
+            chapters.attach_chapters(source, out, tmp_dir, self.script_dir)
             # Cover art often lives ONLY inside the source, so it is pulled from
             # there; a sidecar image sharing the track name overrides it below.
             # Skipped for a video, whose "video stream" is not cover art.
             if not video:
                 thumbnails.extract_source_cover(source, tmp_dir)
-            cover_target = opus
+            cover_target = out
         elif self.copy:
             copied = os.path.join(self.output_dir, relative)
             os.makedirs(os.path.dirname(copied) or self.output_dir,
@@ -593,7 +824,7 @@ class Run:
             thumbnails.apply_cover(relative, cover_target, COVER_THRESHOLD,
                                    COVER_QUALITY, self.cover_resolution,
                                    self.input_dir, self.output_dir, tmp_dir,
-                                   opus, self.script_dir)
+                                   out, self.script_dir)
             # The source's modification time, set last: the encode and the
             # mutagen writes each bump it, so the final timestamp matches the
             # source rather than whichever edit happened to run last.
@@ -640,6 +871,9 @@ class Run:
         """A track's Opus chunks joined into the final output, with every piece
         of metadata re-attached from the ORIGINAL file.
 
+        Opus-only, like the chunk encode that feeds it: a codec in
+        NO_SPLIT_CODECS never has chunks to join.
+
         The whole assembly is done on a RAM-backed staging copy and only the
         finished file is written out, once: mutagen rewrites the entire Opus file
         on every chapter and cover embed, so keeping those rewrites in RAM means
@@ -648,8 +882,7 @@ class Run:
         """
         relative, _, total = token.partition("\t")
         source = os.path.join(self.input_dir, relative)
-        opus = os.path.join(self.output_dir,
-                            os.path.splitext(relative)[0] + ".opus")
+        out = self.output_path(relative)
         directory = segments.chunk_dir_for(self.chunk_root, relative)
         chunk_files = [os.path.join(directory, "%04d.opus" % index)
                        for index in range(int(total))]
@@ -697,10 +930,10 @@ class Run:
             # The source's modification time, after the mutagen writes that each
             # bumped it, so the final timestamp matches the source.
             _touch_from(source, stage)
-            os.makedirs(os.path.dirname(opus) or self.output_dir,
+            os.makedirs(os.path.dirname(out) or self.output_dir,
                         exist_ok=True)
-            shutil.move(stage, opus)
-            _touch_from(source, opus)
+            shutil.move(stage, out)
+            _touch_from(source, out)
         except OSError:
             pass
         finally:
@@ -763,7 +996,7 @@ class Planner:
         source_bitrate = source_audio_bitrate(source)
         video = is_video_file(track)
         if video and source_audio_is_finished(source, source_bitrate,
-                                              threshold):
+                                              threshold, state.codec):
             _write_jobs(base, [track])
             return
         if not video and not always_transcode_file(track) \
@@ -771,12 +1004,11 @@ class Planner:
             _write_jobs(base, [track])
             return
 
-        opus = os.path.join(state.output_dir,
-                            os.path.splitext(track)[0] + ".opus")
-        if os.path.isfile(opus):
+        out = state.output_path(track)
+        if os.path.isfile(out):
             output_duration = round(formatting.awk_number(_probe(
                 ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
-                 "-of", "default=nk=1:nw=1", opus])))
+                 "-of", "default=nk=1:nw=1", out])))
             if duration <= output_duration:
                 sys.stdout.write("Up to date, skipping: %s\n" % track)
                 sys.stdout.flush()
@@ -1028,9 +1260,19 @@ def main(argv: list, program: str = "convert-audio",
     keep = "k" in result.given
     bitrate_set = bool(result.values["bitrate"])
     bitrate = int(result.values["bitrate"] or DEFAULT_BITRATE)
+    codec = result.values["outputCodec"] or DEFAULT_CODEC
     jobs = int(result.values["jobs"] or runlog.cpu_count())
     split_threshold = int(result.values["splitThreshold"]
                           or DEFAULT_SPLIT_THRESHOLD)
+
+    # A codec that cannot be chunked keeps files whole whatever -s said. Said
+    # out loud only when -s asked for something, so a default run does not
+    # explain a decision the user never made.
+    if codec in NO_SPLIT_CODECS and split_threshold > 0:
+        if result.values["splitThreshold"]:
+            print("%s output keeps long files whole: ignoring -s."
+                  % CODEC_NAMES[codec])
+        split_threshold = 0
 
     # Adaptive mode owns the channel and bitrate decision per file, so a global
     # -m or -b would contradict it. It also keeps files whole: the split queue
@@ -1060,8 +1302,9 @@ def main(argv: list, program: str = "convert-audio",
     input_dir = os.path.abspath(input_dir)
     output_dir = os.path.abspath(output_dir)
 
-    # Opus is itself an input format here, so an output folder inside the input
-    # would hand the next run its own encodes to encode again.
+    # Every output format here is also an INPUT format - .opus and .m4a are both
+    # in AUDIO_EXTENSIONS - so an output folder inside the input would hand the
+    # next run its own encodes to encode again.
     if safety.require_separate_output(input_dir, output_dir):
         return 1
 
@@ -1076,6 +1319,18 @@ def main(argv: list, program: str = "convert-audio",
             "mutagen", program,
             "writes the chapter marks and the cover art into the output"):
         return 1
+    # Having ffmpeg is not having an xHE-AAC encoder: ffmpeg cannot produce the
+    # codec at all, so that back-end is a separate binary this host has or has
+    # not got. Asked up front, and only when -o asked for the codec, so an Opus
+    # run neither pays for the probe nor is blocked by it.
+    backend = None
+    if codec == "xheaac":
+        skip_preflight = bool(os.environ.get("SKIP_TOOL_PREFLIGHT", ""))
+        if xheaac.require_encoder("%s (-o %s)" % (program, codec),
+                                  skip_preflight=skip_preflight):
+            return 1
+        backend = xheaac.choose_backend()
+        _report_encoder(backend, codec, bitrate, mono, adaptive)
     runlog.warn_uncounted_progress()
     _settle_mkvtoolnix()
 
@@ -1100,11 +1355,42 @@ def main(argv: list, program: str = "convert-audio",
     try:
         return _convert(program, script_dir, input_dir, output_dir, probe_what,
                         skips, mono, adaptive, copy, keep, bitrate, jobs,
-                        split_threshold)
+                        split_threshold, codec, backend)
     finally:
         statusline.stop_status_monitor()
         ramscratch.run_exit_cleanup()
         safety.release_abort_flag()
+
+
+def _report_encoder(backend, codec: str, bitrate: int, mono: bool,
+                    adaptive: bool) -> None:
+    """Say which external encoder the run settled on, and what it will really
+    encode at.
+
+    Named for the same reason ``ffmpegselect.report_ffmpeg_selection`` is: when
+    a run picks one of several tools by itself, the run has to say which, or a
+    library encoded by the fallback is indistinguishable afterwards from one
+    encoded by the preferred back-end.
+
+    The rate is the second half, and the reason it is printed is that exhale
+    does not take a bitrate - it takes a PRESET, a rung on a ladder about 12
+    kbit/s apart, so a -b lands on the nearest rung rather than on the number
+    asked for. Printing both is what keeps that from being silent. Adaptive mode
+    has no one rate to print: it decides per file, so only the encoder is named.
+    """
+    if backend is None:
+        return
+    print("Encoding %s with %s." % (CODEC_NAMES[codec], backend.tool))
+    if adaptive:
+        return
+    channels = 1 if mono else 2
+    target = resolve_bitrate(bitrate, mono)
+    preset = xheaac.exhale_preset(target, channels)
+    actual = xheaac.preset_bitrate(preset, channels)
+    note = "" if actual == target else " (nearest preset to %d)" % target
+    print("  %s preset %s: about %d kbps %s%s"
+          % (backend.tool, preset, actual,
+             "mono" if channels == 1 else "stereo", note))
 
 
 def _holds_input(input_dir: str) -> bool:
@@ -1119,13 +1405,16 @@ def _holds_input(input_dir: str) -> bool:
 
 def _convert(program: str, script_dir: str, input_dir: str, output_dir: str,
              probe_what: str, skips, mono: bool, adaptive: bool, copy: bool,
-             keep: bool, bitrate: int, jobs: int, split_threshold: int) -> int:
+             keep: bool, bitrate: int, jobs: int, split_threshold: int,
+             codec: str = DEFAULT_CODEC, backend=None) -> int:
     pre_start = time.time()
 
     state = Run(
         input_dir=input_dir, output_dir=output_dir, script_dir=script_dir,
         mono=mono, adaptive=adaptive, copy=copy, keep=keep, bitrate=bitrate,
         threshold=THRESHOLD, split_threshold=split_threshold,
+        codec=codec, extension=enums.AUDIO_CODEC_EXTENSIONS[codec],
+        backend=backend,
         # The table's default: a cover that rides along in every transcoded
         # track is glanced at in a track list, not studied, so the floor of the
         # table is the right end of it.

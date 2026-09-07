@@ -10,6 +10,13 @@ chapters go in as the de-facto OGM convention::
 Both containers carry Vorbis comments, so the handling is identical either way and
 only the loader differs by extension.
 
+MP4 is the third container, and it is only half here. Its cover art is a native
+``covr`` atom, which mutagen writes as readily as the other two - but MP4 has no
+Vorbis comments and no place to put a CHAPTERnn row, so chapters into an .m4a are
+not a tag at all: they are a chapter TRACK, and ffmpeg writes those. That half
+lives in :mod:`medialib.lib.chapters` beside the mkvmerge detour the mp3 and m4b
+paths already take, for the same reason.
+
 **Every function here answers with a process-style status: 0 for done, non-zero
 for failed**, because that is the error boundary its callers need: a corrupt file
 is one file `ingest_music` counts as `chaptersFailed` and reports, where a raise
@@ -27,7 +34,14 @@ import base64
 import os
 import sys
 
-__all__ = ["embed_chapters", "embed_cover", "remove_cover"]
+__all__ = ["MP4_SUFFIXES", "embed_chapters", "embed_cover", "remove_cover"]
+
+# The containers whose metadata is MP4's rather than a Vorbis comment's: a cover
+# is a `covr` atom, and chapters are a track this module cannot write at all.
+# One definition, because both halves of that split have to agree about which
+# files they are talking about - :mod:`medialib.lib.chapters` reads it for the
+# other half.
+MP4_SUFFIXES = (".m4a", ".m4b", ".mp4")
 
 # Named here because the refusal below tells the reader how to override it.
 FORCE_FLAG = "--force"
@@ -49,9 +63,23 @@ def embed_cover(audio: str, cover: str) -> int:
 
     FLAC keeps a picture in a native PICTURE block, and the existing ones are
     cleared first so a rerun replaces rather than accumulates. Opus carries the
-    same structure base64-encoded in a METADATA_BLOCK_PICTURE comment.
+    same structure base64-encoded in a METADATA_BLOCK_PICTURE comment. MP4 keeps
+    neither: a `covr` atom holds the JPEG bytes on their own, with no picture
+    structure around them, so it is the one branch that does not build one.
     """
     try:
+        if audio.lower().endswith(MP4_SUFFIXES):
+            from mutagen.mp4 import MP4, MP4Cover
+
+            mp4 = MP4(audio)
+            with open(cover, "rb") as image:
+                data = image.read()
+            # Assigned rather than appended, so a rerun replaces the cover the
+            # way the other two branches do instead of stacking a second one.
+            mp4["covr"] = [MP4Cover(data, imageformat=MP4Cover.FORMAT_JPEG)]
+            mp4.save()
+            return 0
+
         picture = _picture(cover)
         if audio.lower().endswith(".flac"):
             from mutagen.flac import FLAC

@@ -80,6 +80,14 @@ _TOOL_NOTES = {
     "pipx": "running whisper-ctranslate2 and subliminal|apt install pipx",
     "python3": "the mutagen tag/chapter helpers|apt install python3",
     "adb": "reaching the files on the attached phone|apt install android-tools-adb",
+    # The two xHE-AAC encoders. Neither is packaged by any distribution, so
+    # the hint names the source to build rather than an apt line that would
+    # fail - and convert-audio needs only ONE of them, which is why its
+    # preflight asks for them as a single "xaacenc|exhale" alternative.
+    "xaacenc": "encoding xHE-AAC, full USAC toolbox (libxaac)"
+               "|https://github.com/ittiam-systems/libxaac (build with cmake)",
+    "exhale": "encoding xHE-AAC, frequency-domain tools only"
+              "|https://gitlab.com/ecodis/exhale (make release)",
 }
 
 # What to say instead of "apt install ..." on a Mac, one entry per name in
@@ -138,6 +146,9 @@ _MACOS_HINTS = {
     "pipx": "brew install pipx",
     "python3": "brew install python",
     "adb": "brew install --cask android-platform-tools",
+    # Not in Homebrew either, so the same source on both hosts.
+    "xaacenc": "https://github.com/ittiam-systems/libxaac (build with cmake)",
+    "exhale": "https://gitlab.com/ecodis/exhale (make release)",
 }
 
 # The line a name with no entry falls through to, rather than to an empty one,
