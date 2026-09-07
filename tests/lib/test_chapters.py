@@ -9,6 +9,8 @@ fall into, the probe-duration arithmetic the shell did with printf and 10#, and
 the exit status each function leaves behind. """
 
 import os
+import pathlib
+import subprocess
 
 import pytest
 
@@ -537,3 +539,111 @@ def test_attach_without_chapters_embeds_nothing(tmp_path, tags):
     assert tags.calls == []
     with open(tmp_path / "chapters.ogm", encoding="utf-8") as handle:
         assert handle.read() == ""
+
+
+# --- attachChapters into an MP4: a chapter TRACK, not a tag ---------------------
+
+def _staging_run(tmp_path, write=b"muxed", rc=0):
+    """A runner that behaves the way the real ffmpeg does here: it writes the
+    staging file the call names.
+
+    Without that the move afterwards has nothing to move, and a case would pass
+    for the wrong reason.
+    """
+    class _Muxer(_Run):
+        def __call__(self, argv, quiet=False):
+            super().__call__(argv, quiet)
+            if write is not None:
+                pathlib.Path(argv[-1]).write_bytes(write)
+            return subprocess.CompletedProcess(argv, rc)
+
+    return _Muxer()
+
+
+def test_an_mp4_target_gets_a_chapter_track_and_no_tag(tmp_path, tags):
+    """MP4 has nowhere to keep a CHAPTERnn row, so mutagen must not be reached
+    for this half at all - it would write a tag no player reads and report
+    success."""
+    target = tmp_path / "out.m4a"
+    target.write_bytes(b"original")
+    run = _staging_run(tmp_path)
+    assert chapters.attach_chapters("src.flac", str(target), str(tmp_path),
+                                    "script", run=run,
+                                    probe=lambda s: FLAT) == 0
+    assert tags.calls == []
+    assert [os.path.basename(call[0]) for call in run.calls] == ["ffmpeg"]
+
+
+def test_the_source_goes_in_as_a_second_input_only_to_be_read(tmp_path, tags):
+    target = tmp_path / "out.m4a"
+    target.write_bytes(b"original")
+    run = _staging_run(tmp_path)
+    chapters.attach_chapters("src.flac", str(target), str(tmp_path), "script",
+                             run=run, probe=lambda s: FLAT)
+    argv = run.calls[0]
+    # The target first, the source second, and the chapters taken from input 1.
+    assert argv[argv.index("-i") + 1] == str(target)
+    assert argv[argv.index("-map_chapters") + 1] == "1"
+    # The audio is COPIED: the encoder that just made it must not run again.
+    assert argv[argv.index("-c") + 1] == "copy"
+    assert argv[argv.index("-map") + 1] == "0:a:0"
+
+
+def test_the_result_replaces_the_target(tmp_path, tags):
+    """ffmpeg cannot read and write one file at once, so the pass stages and the
+    staging file is then moved over the target."""
+    target = tmp_path / "out.m4a"
+    target.write_bytes(b"original")
+    chapters.attach_chapters("src.flac", str(target), str(tmp_path), "script",
+                             run=_staging_run(tmp_path), probe=lambda s: FLAT)
+    assert target.read_bytes() == b"muxed"
+
+
+def test_a_pass_that_produced_nothing_leaves_the_audio_alone(tmp_path, tags):
+    """Chapters missing is a metadata loss; a truncated output is the recording.
+    A failed mux has to fail the way round that keeps the audio."""
+    target = tmp_path / "out.m4a"
+    target.write_bytes(b"original")
+    run = _staging_run(tmp_path, write=None)
+    assert chapters.attach_mp4_chapters("src.flac", str(target),
+                                        str(tmp_path), run=run) == 1
+    assert target.read_bytes() == b"original"
+
+
+def test_an_empty_staging_file_counts_as_nothing_produced(tmp_path, tags):
+    target = tmp_path / "out.m4a"
+    target.write_bytes(b"original")
+    run = _staging_run(tmp_path, write=b"")
+    assert chapters.attach_mp4_chapters("src.flac", str(target),
+                                        str(tmp_path), run=run) == 1
+    assert target.read_bytes() == b"original"
+
+
+def test_the_staging_file_keeps_the_targets_suffix(tmp_path, tags):
+    """ffmpeg picks its muxer from the output name, so a staging file called
+    something else would be written in the wrong container."""
+    target = tmp_path / "out.m4b"
+    target.write_bytes(b"original")
+    run = _staging_run(tmp_path)
+    chapters.attach_mp4_chapters("src.flac", str(target), str(tmp_path),
+                                 run=run)
+    assert run.calls[0][-1].endswith(".m4b")
+
+
+@pytest.mark.parametrize("name", ["out.m4a", "out.M4A", "out.m4b", "out.mp4"])
+def test_every_mp4_spelling_takes_this_route(tmp_path, tags, name):
+    target = tmp_path / name
+    target.write_bytes(b"original")
+    chapters.attach_chapters("src.flac", str(target), str(tmp_path), "script",
+                             run=_staging_run(tmp_path), probe=lambda s: FLAT)
+    assert tags.calls == []
+
+
+@pytest.mark.parametrize("name", ["out.opus", "out.flac"])
+def test_and_the_vorbis_comment_containers_still_do_not(tmp_path, tags, name):
+    target = tmp_path / name
+    run = _staging_run(tmp_path)
+    chapters.attach_chapters("src.flac", str(target), str(tmp_path), "script",
+                             run=run, probe=lambda s: FLAT)
+    assert len(tags.calls) == 1
+    assert run.calls == []

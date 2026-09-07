@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -35,6 +36,7 @@ __all__ = [
     "embed_chapters",
     "extract_chapters",
     "attach_chapters",
+    "attach_mp4_chapters",
 ]
 
 Runner = Callable[..., "subprocess.CompletedProcess"]
@@ -469,8 +471,67 @@ def attach_chapters(src: str, target: str, tmp_dir: str, script_dir: str,
     libopus does not carry chapters through, so this runs both for a fresh
     single-file encode and for a re-concatenated set of chunks - the
     source's chapters win, written straight in with mutagen.
+
+    An MP4 target takes the other route below: it has nowhere to keep a
+    Vorbis-comment row, so there is nothing for mutagen to write.
     """
+    if _is_mp4(target):
+        return attach_mp4_chapters(src, target, tmp_dir, run)
     chapters = f"{tmp_dir}/chapters.ogm"
     if extract_chapters(src, chapters, probe) == 0:
         mutagentags.embed_chapters(target, chapters, force=True)
     return 0
+
+
+def _is_mp4(path: str) -> bool:
+    """Whether this target's chapters are a TRACK rather than a tag.
+
+    The list is `mutagentags.MP4_SUFFIXES`, the same one the cover half reads:
+    the two halves of that split have to agree about which files they mean, or
+    a container would take its cover through mutagen and its chapters nowhere.
+    """
+    return path.lower().endswith(mutagentags.MP4_SUFFIXES)
+
+
+def attach_mp4_chapters(src: str, target: str, tmp_dir: str,
+                        run: Runner = _run) -> int:
+    """The source's chapters into an MP4 target, copied across by ffmpeg rather
+    than written as a tag.
+
+    MP4 keeps chapters as a chapter TRACK, which mutagen cannot write and which
+    ffmpeg's `-map_chapters` copies from one input to another in a single pass.
+    So the source goes in as a second input, purely to be read for its chapters,
+    while the target's own audio is stream-copied - no encoder in the path, so
+    the xhe-aac the external encoder just produced is carried over sample for
+    sample.
+
+    In place is not possible: ffmpeg cannot read and write one file at once, so
+    the pass writes into <tmp_dir> and the result is moved over the target. A
+    failed or empty pass leaves the target exactly as it was - chapters missing
+    rather than the audio lost, which is the right way round for a step that is
+    only metadata.
+    """
+    staged = os.path.join(tmp_dir, "chapters" + os.path.splitext(target)[1])
+    _remove_quiet(staged)
+    try:
+        run(["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+             "-i", target, "-i", src, "-map", "0:a:0", "-map_chapters", "1",
+             "-c", "copy", staged], quiet=True)
+    except OSError:
+        _remove_quiet(staged)
+        return 1
+    if not os.path.isfile(staged) or os.path.getsize(staged) <= 0:
+        _remove_quiet(staged)
+        return 1
+    return _move_over(staged, target)
+
+
+def _move_over(src: str, dst: str) -> int:
+    """<src> onto <dst>, across filesystems: the staging file lives in RAM and
+    the target does not, so a rename alone would fail with EXDEV."""
+    try:
+        shutil.move(src, dst)
+        return 0
+    except OSError:
+        _remove_quiet(src)
+        return 1

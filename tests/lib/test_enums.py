@@ -72,7 +72,7 @@ class TestTheListsThemselves:
     lists, a suffix no report claims. Every member can be right and the set wrong."""
 
     def test_the_registry_holds_every_list(self):
-        assert len(enums.LISTS) == 17
+        assert len(enums.LISTS) == 18
 
     def test_no_list_is_empty(self):
         assert all(members for members in enums.LISTS.values())
@@ -103,6 +103,29 @@ class TestTheListsThemselves:
         # webp is BOTH - readable and writable - and that is the only overlap
         # there is meant to be, so a second one is a mistake worth catching.
         assert set(enums.IMAGE_CODECS) & set(enums.IMAGE_EXTENSIONS) == {"webp"}
+
+    def test_every_audio_codec_has_a_container_to_be_written_in(self):
+        # The audio codecs are the OTHER kind: they are not their own extension,
+        # so the mapping beside them is what a command asks for a file name -
+        # and a codec offered by -o with no entry there would name its output
+        # after nothing.
+        assert (set(enums.AUDIO_CODECS)
+                == set(enums.AUDIO_CODEC_EXTENSIONS)), "-o would have no suffix"
+
+    def test_no_audio_codec_is_its_own_extension_by_accident(self):
+        # opus IS spelled the same as its container, and that coincidence is
+        # exactly what tempted the old code to derive one from the other. The
+        # test names it so the next codec added cannot inherit the assumption.
+        same = {codec for codec, extension
+                in enums.AUDIO_CODEC_EXTENSIONS.items() if codec == extension}
+        assert same == {"opus"}
+
+    def test_every_audio_output_container_is_also_an_input_extension(self):
+        # convert-audio reads what it writes, which is why it refuses an output
+        # folder inside its input. A container missing from AUDIO_EXTENSIONS
+        # would silently make that trap re-openable for that codec.
+        assert set(enums.AUDIO_CODEC_EXTENSIONS.values()) <= set(
+            enums.AUDIO_EXTENSIONS)
 
     def test_alac_is_absent_from_the_lossless_extensions_but_present_in_the_codecs(self):
         # It arrives as .m4a, an extension that is lossy far more often than not,

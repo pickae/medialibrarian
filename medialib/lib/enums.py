@@ -47,6 +47,25 @@ COVER_IMAGE_EXTENSIONS = ("jpeg", "jpg", "png", "svg", "tiff", "tif", "bmp",)
 COMIC_EXTENSIONS = ("cbr", "cbz", "cb7",)
 COMIC_PDF_EXTENSIONS = ("pdf",)
 AUDIO_EXTENSIONS = ("m4a", "opus", "m4b", "mp3", "mka", "ogg", "ogx", "flac", "mpga",)
+# What audio can be converted TO, as against the AUDIO_EXTENSIONS above, which is
+# what one can be converted FROM. In order of preference, so the first is the one
+# a command writes when it is not told otherwise.
+#
+# These are CODEC names and nothing else. IMAGE_CODECS above doubles as its own
+# extension list because an image codec is written under its own name; an audio
+# codec is not - opus goes into .opus, xhe-aac into .m4a - so the container each
+# one is written in is the separate mapping below, and a reader wanting a file
+# name has to go through it.
+AUDIO_CODECS = ("opus", "xheaac",)
+# The container each of AUDIO_CODECS is written in, which is also the output
+# extension. Kept beside the list rather than in the command that writes it,
+# because "opus" and ".opus" being the same word is a coincidence of that one
+# codec and not a rule anything may derive: xhe-aac in a .xheaac file is not a
+# file any player would open.
+AUDIO_CODEC_EXTENSIONS = {
+    "opus": "opus",
+    "xheaac": "m4a",
+}
 ALWAYS_TRANSCODE_EXTENSIONS = ("m4a", "m4b", "mka",)
 VIDEO_EXTENSIONS = (
     "mp4", "mkv", "avi", "mov", "webm", "m4v", "flv", "mpg", "mpeg", "wmv", "ts",

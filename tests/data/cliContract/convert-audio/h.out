@@ -21,6 +21,11 @@ Options:
                     Default false
     -c, --copy-others
                     Copy non transcoded files from <inputDir> into <outputDir>
+    -o, --codec <codec>
+                    Output codec: opus or xheaac.
+                    xhe-aac needs an external encoder (exhale), is
+                    written as .m4a, and keeps long files whole.
+                    Default opus
     -b, --bitrate <bitrate>
                     Bitrate of the output files
                     Default 46 kbps or 32 kbps for forced mono output
