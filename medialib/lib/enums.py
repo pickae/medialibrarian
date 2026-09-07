@@ -35,6 +35,14 @@ __all__ = [
 ]
 
 IMAGE_EXTENSIONS = ("jpg", "jpeg", "webp", "png",)
+# What an image can be converted TO, as against the IMAGE_EXTENSIONS above,
+# which is what one can be converted FROM. In order of preference, so the first
+# is the one a command writes when it is not told otherwise.
+#
+# Each of these names its codec AND the extension that codec is written under -
+# unlike the audio and video codec lists, where a codec goes into a container of
+# a different name - so a reader of this list can use it as either.
+IMAGE_CODECS = ("avif", "webp", "jxl",)
 COVER_IMAGE_EXTENSIONS = ("jpeg", "jpg", "png", "svg", "tiff", "tif", "bmp",)
 COMIC_EXTENSIONS = ("cbr", "cbz", "cb7",)
 COMIC_PDF_EXTENSIONS = ("pdf",)

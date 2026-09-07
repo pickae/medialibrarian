@@ -5,14 +5,16 @@ Usage:
 Options:
     -h, --help      Print this help page.
     -c, --crop      crop excessive whitespace
-    -r, --reverse   reverse from avif to jpeg
+    -r, --reverse   reverse: convert the -o format back to jpeg
+    -o, --format <format>
+                    output format: avif, webp or jxl, default avif
     -j, --jobs <jobs>
                     Run up to <jobs> encoder processes in parallel.
                     Only needed when RAM is short, otherwise a good guess is made.
     -q, --quality <quality>
                     quality level of the output images
     -s, --speed <speed>
-                    av1 speed preset, lower is slower, default 5
+                    av1 speed preset 0-9, lower is slower, default 5
     -m, --max-resolution <maxRes>
                     maximum resolution (height) to keep
     -f, --fuzz <fuzz>

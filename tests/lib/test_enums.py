@@ -72,7 +72,7 @@ class TestTheListsThemselves:
     lists, a suffix no report claims. Every member can be right and the set wrong."""
 
     def test_the_registry_holds_every_list(self):
-        assert len(enums.LISTS) == 16
+        assert len(enums.LISTS) == 17
 
     def test_no_list_is_empty(self):
         assert all(members for members in enums.LISTS.values())
@@ -91,6 +91,18 @@ class TestTheListsThemselves:
         # A .cbz IS a zip. They are separate lists because a .cbz is a book and a
         # .zip is a folder of tracks, and the plan's own note says so.
         assert set(enums.COMIC_EXTENSIONS) & {"cbz", "cbr", "cb7"}
+
+    def test_every_image_codec_is_named_by_its_own_extension(self):
+        # Unlike the audio and video codec lists, these double as extensions -
+        # which is what lets convert-images use one list for the format it
+        # writes and for the output names it has to keep apart.
+        for codec in enums.IMAGE_CODECS:
+            assert enums.lower_extension_of("page." + codec) == codec
+
+    def test_no_image_codec_is_also_an_input_extension_it_would_shadow(self):
+        # webp is BOTH - readable and writable - and that is the only overlap
+        # there is meant to be, so a second one is a mistake worth catching.
+        assert set(enums.IMAGE_CODECS) & set(enums.IMAGE_EXTENSIONS) == {"webp"}
 
     def test_alac_is_absent_from_the_lossless_extensions_but_present_in_the_codecs(self):
         # It arrives as .m4a, an extension that is lossy far more often than not,
