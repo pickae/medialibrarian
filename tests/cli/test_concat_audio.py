@@ -101,3 +101,60 @@ class TestFormats:
         """Raw ADTS has no container to demux."""
         _source, output, strategy, _codec = ca.FORMATS["aac"]
         assert (output, strategy) == ("m4b", "rawRemux")
+
+
+class TestConcatViaDemuxer:
+    """How the concat list gets to ffmpeg."""
+
+    class _Run:
+        """A stand-in ffmpeg that reads the list it was handed, the way the
+        real one does."""
+
+        def __init__(self):
+            self.argv = []
+            self.listing = ""
+            self.text = ""
+
+        def __call__(self, argv, **kwargs):
+            self.argv = list(argv)
+            self.listing = argv[argv.index("-i") + 1]
+            with open(self.listing) as handle:
+                self.text = handle.read()
+            return None
+
+    def _folder(self, tmp_path, count):
+        for index in range(count):
+            (tmp_path / ("track %04d - a chapter of the book.mp3"
+                         % index)).write_text("")
+        return str(tmp_path)
+
+    def _concat(self, folder, run):
+        return ca.concat_via_demuxer(folder, "mp3", folder + "/out.mp3",
+                                     "copy", "ffmpeg", run=run)
+
+    def test_ffmpeg_is_handed_a_file_holding_the_whole_list(self, tmp_path):
+        run = self._Run()
+        entries = self._concat(self._folder(tmp_path, 3), run)
+        assert run.text == "\n".join(entries) + "\n"
+        assert run.argv[:10] == [
+            "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
+            "-safe", "0", "-f", "concat", "-i"]
+        assert run.argv[11:] == ["-codec", "copy", str(tmp_path) + "/out.mp3"]
+
+    def test_a_list_past_a_pipes_capacity_still_finishes(self, tmp_path):
+        """A pipe holds 64 KiB, and a folder this size writes past that
+        before ffmpeg would be there to drain it."""
+        run = self._Run()
+        entries = self._concat(self._folder(tmp_path, 900), run)
+        assert len(run.text.encode()) > 64 * 1024
+        assert run.text == "\n".join(entries) + "\n"
+
+    def test_the_list_file_does_not_outlive_the_join(self, tmp_path):
+        run = self._Run()
+        self._concat(self._folder(tmp_path, 3), run)
+        assert not os.path.exists(run.listing)
+
+    def test_an_empty_folder_starts_nothing(self, tmp_path):
+        run = self._Run()
+        assert self._concat(str(tmp_path), run) == []
+        assert run.argv == []
