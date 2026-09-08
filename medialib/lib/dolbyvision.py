@@ -5,9 +5,11 @@ the bash RET_* pair) so a caller needs no subshell and no second probe; the
 three pure gates judge the fields the readers settle; and the two pipelines -
 profile 7 -> 8.1, and the video-stream copy that drops a false claim - run the
 same ffmpeg and dovi_tool commands the bash copy spells, through a fakeable
-``run`` so the white box can drive them with stubs.
+``run`` (one tool) or ``pipe`` (two of them joined) so the white box can drive
+them with stubs.
 """
 
+import contextlib
 import json
 import os
 import re
@@ -106,22 +108,58 @@ def _fps_spec(fps, fps_num, fps_den):
 
 
 def _subprocess_run(argv, **kwargs):
-    """The real runner: subprocess.run, with one extension the pipelines
-    need - a bytes value for stdin, the captured stdout of the previous tool
-    in a pipe, which subprocess would not take."""
-    stdin = kwargs.get("stdin")
-    if isinstance(stdin, (bytes, bytearray)):
-        read_fd, write_fd = os.pipe()
-        data = bytes(stdin)
-        while data:
-            data = data[os.write(write_fd, data):]
-        os.close(write_fd)
-        kwargs["stdin"] = read_fd
-        try:
-            return subprocess.run(list(argv), **kwargs)
-        finally:
-            os.close(read_fd)
+    """The real runner for the one-tool probes: subprocess.run."""
     return subprocess.run(list(argv), **kwargs)
+
+
+def _captured(handle):
+    """A capture file read back from the start, or nothing when the caller
+    asked for no capture."""
+    if handle is None:
+        return b""
+    try:
+        handle.seek(0)
+        return handle.read()
+    except OSError:
+        return b""
+
+
+def _subprocess_pipe(first_argv, second_argv, second_stdout=None,
+                     capture_stderr=False):
+    """The real runner for the two pipelines: ``first | second`` joined by an
+    OS pipe, the way the shell joins them, so the second tool consumes the
+    first one's output WHILE it is still being produced - a reader that starts
+    only once the writer has finished blocks forever on the first pipeful, and
+    both these streams are far past a pipe's 64 KiB capacity.
+
+    Returns (first status, second status, first stderr, second stderr), the
+    two byte strings empty unless capture_stderr asked for them - and captured
+    into a temporary FILE rather than a second pipe, which would be the same
+    trap one level down.
+    """
+    with contextlib.ExitStack() as stack:
+        first_err = (stack.enter_context(tempfile.TemporaryFile())
+                     if capture_stderr else None)
+        second_err = (stack.enter_context(tempfile.TemporaryFile())
+                      if capture_stderr else None)
+        first = subprocess.Popen(list(first_argv), stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.PIPE, stderr=first_err)
+        try:
+            second = subprocess.Popen(list(second_argv), stdin=first.stdout,
+                                      stdout=second_stdout, stderr=second_err)
+        except BaseException:
+            first.stdout.close()
+            first.kill()
+            first.wait()
+            raise
+        # Closed in THIS process once the second tool holds it, so the pipe
+        # really has one reader: kept open here, the first tool would never
+        # see the reader go away and the pipeline would not end.
+        first.stdout.close()
+        second.wait()
+        first.wait()
+        return (first.returncode, second.returncode,
+                _captured(first_err), _captured(second_err))
 
 
 def read_video_info(path, run=_subprocess_run):
@@ -132,9 +170,8 @@ def read_video_info(path, run=_subprocess_run):
     "nothing to convert".
 
     ``run`` stands in for the runner - (argv, **kwargs) to a result with
-    returncode/stdout/stderr, where stdin may be a bytes value (the pipe
-    from the previous tool), a file, or DEVNULL - so the white box can feed
-    the reader its canned JSON.
+    returncode/stdout/stderr - so the white box can feed the reader its
+    canned JSON.
     """
     empty = {"PROFILE": "", "SETTINGS": "", "HDR": "", "TRANSFER": "",
              "FPS_SPEC": "", "STREAM_SIZE": ""}
@@ -251,7 +288,7 @@ def _pipeline_status(first, second):
     return second if second else first
 
 
-def stream_has_rpu(path, run=_subprocess_run, tmpdir=None):
+def stream_has_rpu(path, pipe=_subprocess_pipe, tmpdir=None):
     """dvStreamHasRpu: true when dovi_tool can actually FIND Dolby Vision RPU
     data in the video bitstream - the claim the container makes is checked
     against the 48 frames it can get cheaply, a fraction of a second even on a
@@ -261,13 +298,12 @@ def stream_has_rpu(path, run=_subprocess_run, tmpdir=None):
     fd, probe = tempfile.mkstemp(prefix="dvRpuProbe.", dir=probe_dir)
     os.close(fd)
     try:
-        first = run(["ffmpeg", "-loglevel", "error", "-nostats", "-i", path,
-                     "-map", "0:v:0", "-c", "copy", "-frames:v", "48",
-                     "-bsf:v", "hevc_mp4toannexb", "-f", "hevc", "-"],
-                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE)
-        second = run(["dovi_tool", "extract-rpu", "-", "-o", probe],
-                     stdin=first.stdout)
-        return _pipeline_status(first.returncode, second.returncode) == 0
+        first, second, _first_err, _second_err = pipe(
+            ["ffmpeg", "-loglevel", "error", "-nostats", "-i", path,
+             "-map", "0:v:0", "-c", "copy", "-frames:v", "48",
+             "-bsf:v", "hevc_mp4toannexb", "-f", "hevc", "-"],
+            ["dovi_tool", "extract-rpu", "-", "-o", probe])
+        return _pipeline_status(first, second) == 0
     finally:
         try:
             os.remove(probe)
@@ -302,7 +338,7 @@ def _reason(*streams):
     return text if text else "<no output>"
 
 
-def convert_to_profile81(movie, out, log=print, run=_subprocess_run):
+def convert_to_profile81(movie, out, log=print, pipe=_subprocess_pipe):
     """dvConvertToProfile81: the video track out of <movie> rewritten from
     profile 7 to profile 8.1 - the RPU rewritten, the enhancement layer
     dropped, no re-encode - to <out>. The extraction is piped straight into
@@ -311,21 +347,18 @@ def convert_to_profile81(movie, out, log=print, run=_subprocess_run):
     it leaves nothing behind, says why, and returns 1, so the caller can fall
     back to keeping the original profile 7 video."""
     _mkdirs_parent(out)
-    first = run(["ffmpeg", "-loglevel", "error", "-nostats", "-i", movie,
-                 "-map", "0:v:0", "-c", "copy", "-bsf:v", "hevc_mp4toannexb",
-                 "-f", "hevc", "-"],
-                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE)
-    second = run(["dovi_tool", "-m", "2", "--drop-hdr10plus", "convert",
-                  "--discard", "-", "-o", out],
-                 stdin=first.stdout, stdout=subprocess.DEVNULL,
-                 stderr=subprocess.PIPE)
-    if _pipeline_status(first.returncode, second.returncode) == 0 \
-            and _nonempty(out):
+    first, second, first_err, second_err = pipe(
+        ["ffmpeg", "-loglevel", "error", "-nostats", "-i", movie,
+         "-map", "0:v:0", "-c", "copy", "-bsf:v", "hevc_mp4toannexb",
+         "-f", "hevc", "-"],
+        ["dovi_tool", "-m", "2", "--drop-hdr10plus", "convert",
+         "--discard", "-", "-o", out],
+        second_stdout=subprocess.DEVNULL, capture_stderr=True)
+    if _pipeline_status(first, second) == 0 and _nonempty(out):
         return 0
     _unlink(out)
     log("  WARNING: Dolby Vision conversion failed, keeping profile 7: " + movie)
-    log("    reason: " + _reason(first.stderr, second.stderr))
+    log("    reason: " + _reason(first_err, second_err))
     return 1
 
 
