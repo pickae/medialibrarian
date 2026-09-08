@@ -617,8 +617,8 @@ def _ingest(state, root: str, subtitle_work: bool) -> None:
 
     log("Phase: cleaning up junk files")
     rules.cleanup(root)
-    log("Phase: muxing non-mkv videos into Matroska")
-    rules.mkv_mux(root, state.ram_root)
+    log("Phase: muxing non-Matroska videos into Matroska")
+    rules.mkv_mux(root)
     log("Phase: sorting loose movies into subfolders")
     rules.movies_into_subfolders(root)
     log("Phase: normalising file extensions to lower case")

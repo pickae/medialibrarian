@@ -33,6 +33,7 @@ from medialib.lib import (
     enums,
     languages,
     objectaudio,
+    ramscratch,
     safety,
 )
 from medialib.lib.runlog import log
@@ -162,6 +163,12 @@ BONUS_FOLDER_NAMES = ("Featurettes",) + tuple(
 
 # The image-based subtitle codecs, as mkvmerge reports them.
 IMAGE_SUB_CODECS = ("S_HDMV/PGS", "S_VOBSUB", "S_DVBSUB")
+
+# The first four bytes of an EBML document, which is what a Matroska file
+# starts with. Releases do ship an MP4 under a ".mkv" name, and mkvpropedit
+# answers for one with "not a Matroska file or it could not be found" - which
+# reads as the film being missing when it is right there.
+MATROSKA_MAGIC = b"\x1a\x45\xdf\xa3"
 
 # The junk a release ships with, deleted before anything else runs.
 JUNK_EXTENSIONS = ("txt", "nfo", "exe", "DOC", "sfv")
@@ -624,21 +631,63 @@ def extras_into_subfolders(root: str, skips) -> None:
             _rename_quiet(os.path.join(folder, name), destination)
 
 
-def mkv_mux(root: str, ram_root: str) -> None:
-    """``mkvMux``: every non-Matroska video remuxed into one."""
-    for path in _files_below(root, matches=lambda name:
-                             enums.lower_extension_of(name)
-                             in enums.SOURCE_VIDEO_EXTENSIONS):
+def mkv_mux(root: str) -> None:
+    """``mkvMux``: every non-Matroska video remuxed into one.
+
+    What makes a video non-Matroska is its first bytes, not its extension, so a
+    file already named ".mkv" is read too: an MP4 shipped under that name would
+    otherwise skip this pass and fail every mkvtoolnix call after it.
+    """
+    for path in _files_below(root, matches=_could_need_mux):
+        if _is_matroska(path):
+            continue
         relative = os.path.relpath(path, root)
         log("Muxing into Matroska: ./" + relative)
-        as_mkv = os.path.splitext(path)[0] + ".mkv"
-        _rename_quiet(path, as_mkv)
-        target = os.path.join(ram_root, os.path.splitext(relative)[0]
-                              + " (compressed).mkv")
-        os.makedirs(os.path.dirname(target), exist_ok=True)
-        if _run(["mkvmerge", "-q", "-o", target, as_mkv]) == 0:
-            _remove(as_mkv)
-            _rename_quiet(target, as_mkv)
+
+        # A remux writes the whole film out again, and a 4K release is tens of
+        # gigabytes, which is more than a tmpfs can be asked for.
+        size = _size_of(path)
+        scratch, on_disk, status = ramscratch.ram_scratch_dir_for(
+            str(size) if size else "", "mkvMux", os.path.dirname(path))
+        if status != 0:
+            log("WARNING: no scratch directory could be made, left as it is: "
+                "./" + relative)
+            continue
+        ramscratch.add_exit_cleanup([scratch])
+        if on_disk:
+            log("  Too large for the RAM scratch, working on disk instead")
+
+        try:
+            target = os.path.join(scratch, "muxed.mkv")
+            # The source keeps its own name until a Matroska actually exists,
+            # so that a failed mux leaves no MP4 called ".mkv" behind. mkvmerge
+            # exits 1 on warnings having written the file, so only 2 and above
+            # is a failure.
+            if _run(["mkvmerge", "-q", "-o", target, path]) < 2 \
+                    and _is_matroska(target):
+                as_mkv = os.path.splitext(path)[0] + ".mkv"
+                _remove(path)
+                _rename_quiet(target, as_mkv)
+            else:
+                log("WARNING: could not remux into Matroska, left as it is: "
+                    "./" + relative)
+        finally:
+            ramscratch.release_exit_cleanup([scratch])
+
+
+def _could_need_mux(name: str) -> bool:
+    """The cheap half of the test, on the name alone, so that only the handful
+    of files that could be video are opened."""
+    extension = enums.lower_extension_of(name)
+    return extension in enums.SOURCE_VIDEO_EXTENSIONS or extension == "mkv"
+
+
+def _is_matroska(path: str) -> bool:
+    try:
+        with open(path, "rb") as handle:
+            return handle.read(len(MATROSKA_MAGIC)) == MATROSKA_MAGIC
+    except OSError:
+        return False
 
 
 def update_tags(root: str) -> None:
@@ -652,6 +701,13 @@ def update_tags(root: str) -> None:
                               name.endswith("mkv")):
         directory = os.path.dirname(movie)
         if is_bonus_folder(directory):
+            continue
+
+        # Said plainly, because mkvpropedit's own answer for one of these is
+        # "not a Matroska file or it could not be found".
+        if not _is_matroska(movie):
+            log("WARNING: not a Matroska file despite its name, tags left "
+                "alone: ./" + os.path.relpath(movie, root))
             continue
 
         log("Tagging tracks: ./" + os.path.relpath(movie, root))
