@@ -662,12 +662,16 @@ def _ingest(state, root: str, subtitle_work: bool) -> None:
 
     if subtitle_work:
         log("Phase: extracting and transcribing commentary tracks")
+        from medialib.lib import whisper as whisper_lib
+        jobs = whisper_lib.WHISPER_JOBS
         commentarytranscription.export_commentary(
             root, rules.read_track_info, rules.is_bonus_folder,
             lambda name: rules.rename(name, state.fragments_file),
             rules.audio_stream_index, state.ram_root, state.whisper,
-            runlog.jobs_per_core(CORES_PER_JOB), log, None,
+            jobs, log,
+            lambda records, _queue: _drain_commentary(state, records, jobs),
             rules.MAX_WHISPER_SYNC_OFFSET, state.ffsubsync_quality)
+        safety.exit_if_aborted()
     else:
         log("Phase: extracting and transcribing commentary tracks - SKIPPED "
             "(no ffsubsync/pipx, see the warning at startup)")
@@ -683,6 +687,36 @@ def _ingest(state, root: str, subtitle_work: bool) -> None:
 
     safety.print_run_footer()
     log("Ingest complete: " + root)
+
+
+def _transcribe_one(state, record: str) -> None:
+    commentarytranscription.transcribe_commentary(
+        record, state.whisper, rules.MAX_WHISPER_SYNC_OFFSET,
+        state.ffsubsync_quality, state.ram_root, log)
+
+
+def _in_transcribe_worker(state, record: str) -> None:
+    """One queued transcription, in a worker PROCESS - the interrupt handling
+    belongs here and not in the transcription, which the serial path runs in the
+    RUN's own process."""
+    safety.trap_worker_abort()
+    ramscratch.adopt_ram_base(getattr(state, "ram_base", ""))
+    _transcribe_one(state, record)
+
+
+def _drain_commentary(state, records: list, jobs: int) -> None:
+    """The queue exportCommentary filled, at ``jobs`` workers - a width that is
+    whisper's and not the core count, one run already spanning the GPU or every
+    CPU thread."""
+    if jobs <= 1:
+        for record in records:
+            if safety.abort_requested():
+                return
+            _transcribe_one(state, record)
+        return
+
+    workerpool.run(records, jobs, _in_transcribe_worker,
+                   lambda record: (state, record))
 
 
 def _transcode_opus(state, root: str) -> None:
