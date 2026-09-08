@@ -8,6 +8,7 @@ the three pure gates, and the two pipelines' status, output and log wording.
 import json
 import os
 import subprocess
+import sys
 
 import pytest
 
@@ -40,6 +41,19 @@ class _Run:
         else:
             returncode, out, err = 0, b"", b""
         return _Proc(returncode, out, err)
+
+
+class _Pipe:
+    """The pipeline runner stand-in: the two statuses and the two stderrs the
+    real one hands back, and the argv of the call recorded (with its kwargs)."""
+
+    def __init__(self, first=0, second=0, first_err=b"", second_err=b""):
+        self.result = (first, second, first_err, second_err)
+        self.calls = []
+
+    def __call__(self, first_argv, second_argv, **kwargs):
+        self.calls.append((list(first_argv), list(second_argv), kwargs))
+        return self.result
 
 
 def _media_run(document, returncode=0, raw=None):
@@ -395,14 +409,46 @@ class TestIsDolbyVisionFree:
         assert seen == ("", "", "0")
 
 
+class TestSubprocessPipe:
+    """The real pipe runner, driven with two real processes rather than stubs:
+    what is under test is the plumbing itself."""
+
+    def _python(self, source):
+        return [sys.executable, "-c", source]
+
+    def test_a_payload_past_a_pipes_capacity_still_finishes(self):
+        # A pipe holds 64 KiB, and the smaller of the two real streams - the
+        # 48-frame RPU probe - is already several times that.
+        megabyte = self._python(
+            "import sys; sys.stdout.buffer.write(b'x' * (1 << 20))")
+        counted = self._python(
+            "import sys; sys.exit(0 if len(sys.stdin.buffer.read())"
+            " == (1 << 20) else 9)")
+        assert dolbyvision._subprocess_pipe(megabyte, counted) \
+            == (0, 0, b"", b"")
+
+    def test_both_statuses_come_back(self):
+        first, second, _out, _err = dolbyvision._subprocess_pipe(
+            self._python("raise SystemExit(3)"),
+            self._python("import sys; sys.stdin.buffer.read();"
+                         " raise SystemExit(4)"))
+        assert (first, second) == (3, 4)
+
+    def test_the_stderrs_are_captured_only_when_asked(self):
+        noisy = self._python("import sys; sys.stderr.write('first\\n')")
+        also = self._python("import sys; sys.stdin.buffer.read();"
+                            " sys.stderr.write('second\\n')")
+        assert dolbyvision._subprocess_pipe(noisy, also)[2:] == (b"", b"")
+        assert dolbyvision._subprocess_pipe(noisy, also,
+                                            capture_stderr=True)[2:] \
+            == (b"first\n", b"second\n")
+
+
 class TestStreamHasRpu:
     def _rpu(self, first_rc, second_rc, tmpdir):
-        run = _Run({
-            "ffmpeg": [(first_rc, b"hevc-bytes", b"")],
-            "dovi_tool": [(second_rc, b"", b"")],
-        })
-        ok = dolbyvision.stream_has_rpu("movie.mkv", run=run, tmpdir=tmpdir)
-        return ok, run
+        pipe = _Pipe(first_rc, second_rc)
+        ok = dolbyvision.stream_has_rpu("movie.mkv", pipe=pipe, tmpdir=tmpdir)
+        return ok, pipe
 
     @pytest.mark.parametrize("first,second,expected", [
         (0, 0, True),
@@ -415,33 +461,26 @@ class TestStreamHasRpu:
         assert ok is expected
 
     def test_the_argv_of_both_tools(self, tmp_path):
-        _, run = self._rpu(0, 0, str(tmp_path))
-        ffmpeg_argv, ffmpeg_kw = run.calls[0]
-        dovi_argv, dovi_kw = run.calls[1]
+        _, pipe = self._rpu(0, 0, str(tmp_path))
+        ffmpeg_argv, dovi_argv, _kw = pipe.calls[0]
         assert ffmpeg_argv == ["ffmpeg", "-loglevel", "error", "-nostats",
                                "-i", "movie.mkv", "-map", "0:v:0", "-c",
                                "copy", "-frames:v", "48", "-bsf:v",
                                "hevc_mp4toannexb", "-f", "hevc", "-"]
-        assert ffmpeg_kw["stdin"] is not None
         assert dovi_argv[:4] == ["dovi_tool", "extract-rpu", "-", "-o"]
         assert dovi_argv[4].startswith(os.path.join(str(tmp_path), "dvRpuProbe."))
-        # the pipe: dovi_tool's stdin is the ffmpeg's stdout
-        assert dovi_kw["stdin"] == b"hevc-bytes"
 
     def test_the_probe_is_removed_either_way(self, tmp_path):
         for first, second in ((0, 0), (1, 0)):
-            _, run = self._rpu(first, second, str(tmp_path))
-            assert not os.path.exists(run.calls[1][0][4])
+            _, pipe = self._rpu(first, second, str(tmp_path))
+            assert not os.path.exists(pipe.calls[0][1][4])
 
     def test_the_probe_dir_falls_back_to_tmpdir(self, tmp_path, monkeypatch):
         monkeypatch.setenv("TMPDIR", str(tmp_path))
-        run = _Run({
-            "ffmpeg": [(0, b"", b"")],
-            "dovi_tool": [(0, b"", b"")],
-        })
-        dolbyvision.stream_has_rpu("movie.mkv", run=run)
-        assert run.calls[1][0][4].startswith(os.path.join(str(tmp_path),
-                                                          "dvRpuProbe."))
+        pipe = _Pipe()
+        dolbyvision.stream_has_rpu("movie.mkv", pipe=pipe)
+        assert pipe.calls[0][1][4].startswith(os.path.join(str(tmp_path),
+                                                           "dvRpuProbe."))
 
 
 class TestConvertToProfile81:
@@ -452,24 +491,23 @@ class TestConvertToProfile81:
             os.makedirs(os.path.dirname(out), exist_ok=True)
             with open(out, "wb") as handle:
                 handle.write(pre_write)
-        run = _Run({
-            "ffmpeg": [(first_rc, b"", err[0].encode("utf-8"))],
-            "dovi_tool": [(second_rc, b"", err[1].encode("utf-8"))],
-        })
+        pipe = _Pipe(first_rc, second_rc, err[0].encode("utf-8"),
+                     err[1].encode("utf-8"))
         logs = []
         status = dolbyvision.convert_to_profile81(
-            str(tmp_path / "movie.mkv"), out, log=logs.append, run=run)
-        return status, logs, out, run
+            str(tmp_path / "movie.mkv"), out, log=logs.append, pipe=pipe)
+        return status, logs, out, pipe
 
     def test_success_leaves_the_stream_and_says_nothing(self, tmp_path):
-        status, logs, out, run = self._convert(0, 0, "stream.hevc",
-                                               tmp_path=tmp_path)
+        status, logs, out, pipe = self._convert(0, 0, "stream.hevc",
+                                                tmp_path=tmp_path)
         assert status == 0
         assert logs == []
         assert os.path.getsize(out) > 0
-        assert run.calls[0][0][-1] == "-"       # piped, not to a file
-        assert run.calls[1][0] == ["dovi_tool", "-m", "2", "--drop-hdr10plus",
-                                   "convert", "--discard", "-", "-o", out]
+        ffmpeg_argv, dovi_argv, _kw = pipe.calls[0]
+        assert ffmpeg_argv[-1] == "-"           # piped, not to a file
+        assert dovi_argv == ["dovi_tool", "-m", "2", "--drop-hdr10plus",
+                             "convert", "--discard", "-", "-o", out]
 
     @pytest.mark.parametrize("first,second,out", [
         (0, 1, b"converted"),    # dovi_tool fails
