@@ -20,6 +20,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 
 from medialib import commands
 from medialib.lib import (
@@ -222,17 +223,19 @@ def concat_via_demuxer(folder: str, source_extension: str, output_file: str,
 
     codec = ["-codec", "copy"] if audio_codec == "copy" \
         else ["-c:a", audio_codec]
-    # The list reaches ffmpeg through a pipe rather than a temp file, which is
-    # what the shell's process substitution does.
-    read_fd, write_fd = os.pipe()
+    # The list goes to ffmpeg as a temporary file rather than a pipe: it is
+    # written in full before ffmpeg is started to read it, and a pipe holds
+    # only 64 KiB, so a folder of some 600 tracks would deadlock the write.
+    descriptor, list_file = tempfile.mkstemp(prefix="concatAudio.",
+                                             suffix=".txt")
     try:
-        with os.fdopen(write_fd, "w") as handle:
+        with os.fdopen(descriptor, "w") as handle:
             handle.write("\n".join(concat_list) + "\n")
         run([ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
-             "-safe", "0", "-f", "concat", "-i", "/dev/fd/%d" % read_fd]
-            + codec + [output_file], pass_fds=(read_fd,))
+             "-safe", "0", "-f", "concat", "-i", list_file]
+            + codec + [output_file])
     finally:
-        os.close(read_fd)
+        os.remove(list_file)
     return concat_list
 
 
