@@ -120,12 +120,30 @@ class TestChunkCount:
         assert cv.chunk_count_for("", 2160, 32) == 1
 
 
-class TestDownscaleArgs:
+class TestCroppedSize:
+    """What the frame measures once its bands are off - one answer, because the
+    scale filter, the quality bias and the chunk count all read it."""
+
+    def test_no_crop_leaves_the_size_as_it_came(self):
+        assert cv.cropped_size(1920, 1080, "") == (1920, 1080)
+
+    def test_a_crop_answers_with_its_own_size(self):
+        assert cv.cropped_size(1920, 1080, "1920:800:0:140") == ("1920", "800")
+
+    @pytest.mark.parametrize("crop", ["1920:800", "1920:800:0:140:2",
+                                      "1920:800:0:x", ""])
+    def test_a_rectangle_that_is_not_one_changes_nothing(self, crop):
+        """A malformed crop is not a smaller frame: it is no measurement at all,
+        and the frame it arrived in is the one that stands."""
+        assert cv.cropped_size(1920, 1080, crop) == (1920, 1080)
+
+
+class TestVideoFilterArgs:
     """The ceiling only ever scales DOWN, and only when the source is really above
     it: a filter that resamples the picture is not free."""
 
     def test_without_a_ceiling_nothing_is_scaled(self):
-        assert cv.downscale_args(3840, 2160, "") == ""
+        assert cv.video_filter_args(3840, 2160, "") == ""
 
     @pytest.mark.parametrize("width,height,expected", [
         (3840, 2160, " -vf scale=1920:1080"),
@@ -134,27 +152,46 @@ class TestDownscaleArgs:
     ])
     def test_a_larger_source_is_capped_with_its_aspect_kept(self, width,
                                                             height, expected):
-        assert cv.downscale_args(width, height, "1080p") == expected
+        assert cv.video_filter_args(width, height, "1080p") == expected
 
     @pytest.mark.parametrize("width,height", [(1920, 1080), (1280, 720)])
     def test_a_source_at_or_below_the_ceiling_is_left_alone(self, width,
                                                             height):
         """Nothing is ever scaled UP: the pixels to fill a bigger frame do not
         exist."""
-        assert cv.downscale_args(width, height, "1080p") == ""
+        assert cv.video_filter_args(width, height, "1080p") == ""
 
     def test_a_size_that_could_not_be_read_is_left_alone(self):
         """Rather than guessed at, since a wrong guess would resample the
         picture."""
-        assert cv.downscale_args("", "", "1080p") == ""
+        assert cv.video_filter_args("", "", "1080p") == ""
 
     def test_the_scaled_size_is_even_on_both_sides(self):
         """An odd size would be rejected by the 10-bit 4:2:0 pixel formats these
         profiles encode in."""
-        assert cv.downscale_args(2048, 858, "1080p") == " -vf scale=1920:804"
+        assert cv.video_filter_args(2048, 858, "1080p") == " -vf scale=1920:804"
 
     def test_an_alias_names_the_same_ceiling(self):
-        assert cv.downscale_args(7680, 4320, "4k") == " -vf scale=3840:2160"
+        assert cv.video_filter_args(7680, 4320, "4k") == " -vf scale=3840:2160"
+
+    def test_a_crop_alone_is_the_whole_chain(self):
+        assert cv.video_filter_args(1920, 1080, "",
+                                    "1920:800:0:140") == " -vf crop=1920:800:0:140"
+
+    def test_the_crop_comes_before_the_scale(self):
+        """The ceiling is a ceiling on the PICTURE: scaling first would spend the
+        tier's pixels on black."""
+        assert cv.video_filter_args(3840, 2160, "1080p", "3840:1600:0:280") == (
+            " -vf crop=3840:1600:0:280,scale=1920:800")
+
+    def test_the_ceiling_is_measured_against_what_is_left_after_the_crop(self):
+        """A widescreen picture inside a taller frame is under the ceiling once
+        its bands are off, and is then not resampled at all - where the same
+        source uncropped would have been scaled to 1440x1080."""
+        assert cv.video_filter_args(1920, 1440, "1080p", "") == (
+            " -vf scale=1440:1080")
+        assert cv.video_filter_args(1920, 1440, "1080p", "1920:1080:0:180") == (
+            " -vf crop=1920:1080:0:180")
 
 
 class TestEqualBoundaries:

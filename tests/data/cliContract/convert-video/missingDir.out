@@ -52,6 +52,14 @@ Options:
                   UltraHD, 8K, ...), in any case. A source already at or below the
                   tier is encoded at its own size - nothing is ever scaled UP.
                   Default: no ceiling, every source keeps its resolution.
+    -c, --crop    Crop the black bands off the picture. The source is measured
+                  at moments spread across its whole running time, and only the
+                  SMALLEST bands any of them found come off - so a film that
+                  changes shape partway through, an IMAX sequence in a scope
+                  feature, keeps every pixel of its widest scenes. The crop is
+                  always symmetric: the same lines off the top and the bottom, the
+                  same columns off each side. Off by default, and the -r ceiling
+                  then applies to what is left.
     -f, --fast-decode <1|2>
                   Fast-decode level to encode with, trading a little compression
                   for a cheaper decode on weak playback hardware (2 is cheaper to

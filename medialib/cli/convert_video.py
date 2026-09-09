@@ -14,9 +14,9 @@ copy, because the chunk count is already sized to fill the encoder.
 How a file is encoded is chosen by NAME: a video profile and an audio profile each
 name a bundle of ffmpeg arguments in the tables below, so adding or tuning a preset
 is one row. What a row deliberately does not fix is decided per file or per run -
-the quality level moves with the tier the file is ENCODED at, film grain is
-measured per source, and the resolution ceiling, fast-decode level and Dolby Vision
-mode all come from the run or the file.
+the quality level moves with the tier the file is ENCODED at, film grain and the
+black bands around the picture are measured per source, and the resolution ceiling,
+fast-decode level and Dolby Vision mode all come from the run or the file.
 """
 
 import os
@@ -73,6 +73,14 @@ r | <tier> | Resolution ceiling: scale every video down to at most this tier,
                   UltraHD, 8K, ...), in any case. A source already at or below the
                   tier is encoded at its own size - nothing is ever scaled UP.
                   Default: no ceiling, every source keeps its resolution.
+c |  | Crop the black bands off the picture. The source is measured
+                  at moments spread across its whole running time, and only the
+                  SMALLEST bands any of them found come off - so a film that
+                  changes shape partway through, an IMAX sequence in a scope
+                  feature, keeps every pixel of its widest scenes. The crop is
+                  always symmetric: the same lines off the top and the bottom, the
+                  same columns off each side. Off by default, and the -r ceiling
+                  then applies to what is left.
 f | <1\|2> | Fast-decode level to encode with, trading a little compression
                   for a cheaper decode on weak playback hardware (2 is cheaper to
                   decode than 1). Off by default, and only valid for the AV1
@@ -102,8 +110,8 @@ t | [percent] | Test each source before encoding it, and convert only the ones
 """
 
 OPT_LONG = ("h:help j:cores p:profile a:audio-profile b:audio-bitrate "
-            "e:nvenc-engines q:quality r:max-resolution f:fast-decode "
-            "g:grain t:test")
+            "e:nvenc-engines q:quality r:max-resolution c:crop "
+            "f:fast-decode g:grain t:test")
 
 USAGE_TAIL = r"""
 
@@ -464,19 +472,42 @@ def dolby_vision_args(args: str, mode: str) -> str:
     return args + " -dolbyvision 0"
 
 
-def downscale_args(width, height, ceiling: str) -> str:
-    """``downscaleArgs``: the filter that scales a source down to the -r ceiling,
-    or nothing when it needs none.
+def cropped_size(width, height, crop: str) -> tuple:
+    """The frame size left after a ``w:h:x:y`` crop, or the size as it came for a
+    file with no crop.
 
-    The size is computed here as fixed numbers rather than left to a min(iw,1920)
-    expression, so every chunk of one file encodes to the same size.
+    One place answers it, because three decisions read the same number - what the
+    scale filter is aimed at, which tier biases the quality level, and how many
+    chunks the file is cut into - and a crop that only reached some of them would
+    encode a frame nobody sized for.
     """
-    if not ceiling:
+    fields = crop.split(":") if crop else []
+    if len(fields) != 4 or not all(field.isdigit() for field in fields):
+        return width, height
+    return fields[0], fields[1]
+
+
+def video_filter_args(width, height, ceiling: str, crop: str = "") -> str:
+    """``videoFilterArgs``: the filter chain a file is encoded through - the
+    measured crop, then the -r downscale - or nothing when it needs neither.
+
+    In that order, because the ceiling is a ceiling on the PICTURE: a scope film
+    stored in a 16:9 frame is 1080p once its bands are off, and scaling first
+    would spend the tier's pixels on black. Both sizes are computed here as fixed
+    numbers rather than left to a min(iw,1920) expression, so every chunk of one
+    file encodes to the same size.
+    """
+    chain = []
+    if crop:
+        chain.append("crop=" + crop)
+    width, height = cropped_size(width, height, crop)
+    if ceiling:
+        capped_width, capped_height = resolutions.capped(width, height, ceiling)
+        if (capped_width, capped_height) != (width, height):
+            chain.append("scale=%s:%s" % (capped_width, capped_height))
+    if not chain:
         return ""
-    capped_width, capped_height = resolutions.capped(width, height, ceiling)
-    if (capped_width, capped_height) == (width, height):
-        return ""
-    return " -vf scale=%s:%s" % (capped_width, capped_height)
+    return " -vf " + ",".join(chain)
 
 
 def video_only_path_for(relative: str, output_dir: str) -> str:
@@ -731,9 +762,12 @@ def build_video_args(base: str, path: str, settings) -> str:
     # The source's coded size, read ONCE and used for both decisions that depend
     # on it: the -r downscale filter, and the resolution bias on the quality
     # level. Reading it once is what keeps the bias describing the frame the scale
-    # filter actually produces rather than the one that arrived.
+    # filter actually produces rather than the one that arrived. The bias is taken
+    # from the CROPPED frame for the same reason: black bands cost an encoder
+    # nothing, so they must not decide how hard the picture beside them is coded.
     width, height, _order, _sar = video_dimensions(path)
-    enc_width, enc_height = resolutions.capped(width, height,
+    crop_width, crop_height = cropped_size(width, height, settings.crop)
+    enc_width, enc_height = resolutions.capped(crop_width, crop_height,
                                                settings.max_resolution)
 
     base = apply_video_quality(base, enc_width, enc_height,
@@ -778,8 +812,9 @@ def build_video_args(base: str, path: str, settings) -> str:
 
     base = dolby_vision_args(base, settings.dolby_vision_mode)
     return "%s -pix_fmt %s%s%s" % (base, pix_fmt_for(base), color_args,
-                                   downscale_args(width, height,
-                                                  settings.max_resolution))
+                                   video_filter_args(width, height,
+                                                     settings.max_resolution,
+                                                     settings.crop))
 
 
 def video_intermediate_complete(directory: str, source_duration) -> bool:
@@ -952,6 +987,7 @@ class Settings:
         self.quality = ""
         self.quality_given = False
         self.max_resolution = ""
+        self.crop_wanted = False
         self.fast_decode = ""
         self.grain_level = "0"
         self.grain_probe_wanted = False
@@ -964,9 +1000,11 @@ class Settings:
         self.decode_accel = ""
         self.dv_encoder_support = False
         # Per file, not per run: the Dolby Vision decision this file was given,
-        # and the profile 8.1 intermediate prepared for it, if any.
+        # the profile 8.1 intermediate prepared for it, if any, and the crop -c
+        # measured on it, as ffmpeg's crop filter takes it.
         self.dolby_vision_mode = ""
         self.dolby_vision_source = ""
+        self.crop = ""
         self.__dict__.update(values)
 
 
