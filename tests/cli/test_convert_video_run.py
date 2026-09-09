@@ -86,6 +86,40 @@ def test_an_unmeasurable_source_is_judged_clean_by_the_bitrate_test(measured):
     assert judged == ["0"]
 
 
+class TestTheSizeAFileIsAnnouncedAt:
+    """A crop and a scale do quite different things to a picture - one throws
+    bands away, the other resamples what is left - so the line names each step it
+    really took rather than collapsing them into one arrow."""
+
+    @pytest.fixture
+    def size_text(self):
+        return run_module.Run(rules.Settings())._size_text
+
+    def test_an_untouched_file_is_named_once(self, size_text):
+        assert size_text("1920", "1080", "1920", "1080",
+                         "1920", "1080") == "1920x1080"
+
+    def test_a_crop_names_the_source_and_what_is_left_of_it(self, size_text):
+        assert size_text("1920", "1080", "1920", "804", "1920", "804") == (
+            "1920x1080 -> cropped 1920x804")
+
+    def test_a_scale_alone_still_reads_as_it_always_did(self, size_text):
+        assert size_text("3840", "2160", "3840", "2160", 1920, 1080) == (
+            "3840x2160 -> 1920x1080")
+
+    def test_both_are_named_in_the_order_the_filters_apply(self, size_text):
+        """The ceiling is a ceiling on the PICTURE, so the crop is the middle
+        step and the encoded size follows from it, not from the source."""
+        assert size_text("1920", "1080", "1920", "804", 1280, 536) == (
+            "1920x1080 -> cropped 1920x804 -> 1280x536")
+
+    def test_a_size_that_could_not_be_read_says_so(self, size_text):
+        assert size_text("", "", "", "", "", "") == "size unknown"
+
+    def test_a_half_read_size_names_the_axis_that_came_through(self, size_text):
+        assert size_text("", "1080", "", "1080", "", "1080") == "?x1080"
+
+
 class TestTheHardwareDecodeLadder:
     """Which interface a run decodes through, and what it says it chose.
 

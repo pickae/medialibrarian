@@ -781,7 +781,8 @@ class Run:
                                                      settings.crop)
         enc_width, enc_height = resolutions.capped(crop_width, crop_height,
                                                    settings.max_resolution)
-        size_text = self._size_text(width, height, enc_width, enc_height)
+        size_text = self._size_text(width, height, crop_width, crop_height,
+                                    enc_width, enc_height)
 
         # A hardware encode uses one chunk per NVENC engine so the GPU's engines
         # all stay busy; a software encode uses the resolution-driven count that
@@ -829,11 +830,23 @@ class Run:
         self.video_seconds += micros / 1000000
         return 0
 
-    def _size_text(self, width, height, enc_width, enc_height) -> str:
+    def _size_text(self, width, height, crop_width, crop_height,
+                   enc_width, enc_height) -> str:
+        """The sizes this file passes through, in the order the filters change
+        them: what it arrived as, what the crop left, and what is encoded.
+
+        Each step is named on its own rather than collapsed into one arrow,
+        because the two do quite different things to a picture - a crop throws
+        bands away and a scale resamples what is left - and "1920x1080 ->
+        1280x536" alone does not say which of them happened, or that both did. A
+        step that changes nothing is not stated.
+        """
         if not width and not height:
             return "size unknown"
         text = "%sx%s" % (width or "?", height or "?")
-        if (enc_width, enc_height) != (width, height):
+        if (crop_width, crop_height) != (width, height):
+            text += " -> cropped %sx%s" % (crop_width, crop_height)
+        if (enc_width, enc_height) != (crop_width, crop_height):
             text += " -> %sx%s" % (enc_width, enc_height)
         return text
 
