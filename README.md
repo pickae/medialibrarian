@@ -438,6 +438,23 @@ is scaled down to fit with its aspect ratio kept, so a 2.39:1 scope film capped 
 tier is encoded at its own size: **nothing is ever scaled up.** The tiers are the
 same ones `content-census-bi` reports a library by.
 
+**`-c` crops the black bands off.** They are picture as far as an encoder is
+concerned — scaled, filtered and coded like everything else — and a player that has
+to letterbox anyway puts them back for free. But **a film does not have one shape**:
+a feature with IMAX sequences opens up to a taller frame for them and closes again
+afterwards, so a crop measured at any one place cuts the picture somewhere else. Two
+dozen moments spread across the whole running time are measured instead, and only
+the band *every* one of them agreed on comes off — the smallest common band, which
+cannot cut a frame any sampled moment filled. The crop is **symmetric by
+construction**, the same lines off the top and the bottom and the same columns off
+each side, because taking more off one side re-centres the picture. Every
+uncertainty resolves towards keeping pixels: a moment that could not be read is
+skipped, a file too few of whose moments could be read is not cropped, and a band
+too thin to be letterboxing is left on. A file keeping its Dolby Vision RPU is never
+cropped — that RPU describes where the picture sits in the frame it was graded in.
+`-r` then caps what is left, so a scope film stored in a 2160-line frame is judged
+on its picture rather than on its bands.
+
 **A newer ffmpeg is preferred if the preset needs one.** The AV1 presets ask for
 psychovisual SVT-AV1 parameters and the NVENC ones for `uhq` tuning, which a
 distribution's ffmpeg is often a year or two too old to do — and a too-old SVT-AV1

@@ -34,6 +34,7 @@ from medialib.lib import (
     segments,
     statusline,
     tooldeps,
+    videocrop,
     videograin,
     workerpool,
 )
@@ -736,11 +737,14 @@ class Run:
         # The source's coded size, and the size it will actually be ENCODED at -
         # the same unless -r caps this one. The encoded size is what the chunk
         # planning goes by: a 2160p source scaled down to 1080p does a 1080p
-        # file's worth of encoding work.
+        # file's worth of encoding work. Settled a second time once -c has
+        # measured the file, since a crop moves it too.
         width, height, _order, sar = rules.video_dimensions(source)
+        # Whatever the file before this one was cropped to has nothing to say
+        # about this one, and every argument string built from here on reads it.
+        settings.crop = ""
         enc_width, enc_height = resolutions.capped(width, height,
                                                    settings.max_resolution)
-        size_text = self._size_text(width, height, enc_width, enc_height)
 
         # Film grain: measure THIS source, so a clean file is not given grain it
         # never had and a grainy one gets as much as it actually has.
@@ -768,6 +772,16 @@ class Run:
             sar)
 
         scratch = self._settle_dolby_vision(relative, source)
+
+        # After the Dolby Vision decision, because a file that keeps its RPU
+        # cannot be cropped, and after the -t test, so a source this run is not
+        # going to convert is not measured for a crop it will never use.
+        settings.crop = self._settle_crop(relative, source)
+        crop_width, crop_height = rules.cropped_size(width, height,
+                                                     settings.crop)
+        enc_width, enc_height = resolutions.capped(crop_width, crop_height,
+                                                   settings.max_resolution)
+        size_text = self._size_text(width, height, enc_width, enc_height)
 
         # A hardware encode uses one chunk per NVENC engine so the GPU's engines
         # all stay busy; a software encode uses the resolution-driven count that
@@ -856,6 +870,29 @@ class Run:
             settings.dolby_vision_source = ""
             return ""
         return scratch
+
+    def _settle_crop(self, relative: str, source: str) -> str:
+        """The per-file crop -c asks for, which every chunk then inherits, or ""
+        for a file that keeps its whole frame.
+
+        Measured from the ORIGINAL rather than from a Dolby Vision intermediate:
+        the two carry the same picture, and the original is the file that is
+        certainly there. The one file that is never cropped is the one keeping its
+        RPU, because that RPU describes where the picture sits in the frame it was
+        graded in - cut the bands off and the metadata is measuring a frame that no
+        longer exists, which is a worse outcome than a few coded rows of black.
+        """
+        settings = self.settings
+        if not settings.crop_wanted:
+            return ""
+        if settings.dolby_vision_mode == "1":
+            log("Crop: not measured - this file carries its Dolby Vision RPU "
+                "through the encode, and the RPU describes the uncropped frame: "
+                "%s" % relative)
+            return ""
+        return videocrop.crop_for(source, relative, _media_duration,
+                                  _dimensions_line, runlog.jobs_per_core,
+                                  settings.decode_accel)
 
     def _encode(self, relative: str, directory: str, duration: float,
                 count: int, size_text: str) -> int:
@@ -1090,6 +1127,7 @@ def main(argv: list, program: str = "convert-video",
         quality=result.values["videoQuality"] or "",
         quality_given="q" in result.given,
         max_resolution=result.values["maxVideoResolution"] or "",
+        crop_wanted="c" in result.given,
         fast_decode=result.values["videoFastDecode"] or "",
         test_source_bitrate="t" in result.given,
         required_saving=saving[0])
@@ -1374,6 +1412,15 @@ def _summarise(settings, video_args: str, grain: str) -> None:
                                   quality=settings.quality),
         settings.nvenc_tune)
     log("Video profile: %s -> %s" % (settings.video_profile, settled))
+
+    if settings.crop_wanted:
+        log("Crop: on (-c) - each source is measured at %d moments across its "
+            "running time and only the smallest black bands any of them found "
+            "come off, symmetrically. A file keeping its Dolby Vision RPU is "
+            "left whole." % videocrop.CROP_PROBE_SAMPLES)
+    else:
+        log("Crop: off, every source is encoded with the whole frame it was "
+            "stored in, black bands and all (-c crops them).")
 
     ceiling = (resolutions.ceiling(settings.max_resolution)
                if settings.max_resolution else None)

@@ -242,6 +242,30 @@ class TestTheBitrateTest:
                 '(got "100").') in log
 
 
+class TestTheCrop:
+    """-c is a bare flag: a crop is measured per file, so there is nothing for a
+    run to settle beyond whether it measures at all."""
+
+    @pytest.mark.parametrize("options,summary", [
+        (["-c"], "Crop: on (-c)"),
+        (["-c"], "only the smallest black bands any of them found come off"),
+        (["-c", "--"], "Crop: on (-c)"),
+        (["--crop"], "Crop: on (-c)"),
+        ([], "Crop: off, every source is encoded with the whole frame"),
+    ], ids=["-c alone", "what it says it does", "after --", "the long name",
+            "without -c"])
+    def test_what_the_summary_reports(self, video_cli, options, summary):
+        _, log = video_cli.start(*options)
+        assert summary in log
+
+    def test_it_does_not_eat_the_input_directory(self, video_cli):
+        """The flag takes no argument, unlike -t, so the word after it is the
+        first positional and the run has both of its directories."""
+        status, log = video_cli.start("-c")
+        assert "Usage:" not in log
+        assert status != 1 or "Crop: on (-c)" in log
+
+
 class TestWhereTheQualityLevelComesFrom:
     """The resolution bias is otherwise invisible: the profile row and the
     summary both show the unbiased level, and a 2160p file is then encoded two
