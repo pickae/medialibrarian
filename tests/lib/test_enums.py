@@ -99,10 +99,11 @@ class TestTheListsThemselves:
         for codec in enums.IMAGE_CODECS:
             assert enums.lower_extension_of("page." + codec) == codec
 
-    def test_no_image_codec_is_also_an_input_extension_it_would_shadow(self):
-        # webp is BOTH - readable and writable - and that is the only overlap
-        # there is meant to be, so a second one is a mistake worth catching.
-        assert set(enums.IMAGE_CODECS) & set(enums.IMAGE_EXTENSIONS) == {"webp"}
+    def test_every_image_codec_is_also_an_input_extension(self):
+        # The input list holds every still format a library plausibly holds,
+        # and the three this command writes are among them, so a tree of them
+        # can be censused, judged and re-converted like any other.
+        assert set(enums.IMAGE_CODECS) <= set(enums.IMAGE_EXTENSIONS)
 
     def test_every_audio_codec_has_a_container_to_be_written_in(self):
         # The audio codecs are the OTHER kind: they are not their own extension,
