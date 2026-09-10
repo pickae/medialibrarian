@@ -178,6 +178,40 @@ class TestResizeImage:
                         run=lambda argv, **kw: _Failed())
         assert image.exists()
 
+    def test_a_large_but_starved_image_is_left_alone_too(self, tmp_path):
+        """Scaling it down and re-compressing it at the fixed quality would take
+        a second helping out of a picture that had none to give - so it passes
+        through the way an image under the size limit does."""
+        image = tmp_path / "page.jpg"
+        image.write_bytes(b"x" * (ib.FILE_SIZE_LIMIT + 1))
+        calls = []
+        ib.resize_image(str(image), "1600x1200",
+                        run=lambda argv, **kw: calls.append(argv),
+                        verdict_of=lambda path: "starved")
+        assert calls == []
+        assert image.read_bytes() == b"x" * (ib.FILE_SIZE_LIMIT + 1)
+
+    @pytest.mark.parametrize("verdict", ["adequate", "generous", "unknown"])
+    def test_but_every_other_verdict_is_resized(self, tmp_path, verdict):
+        """Unknown among them: an image nothing could measure is resized, the way
+        an unmeasurable file is converted everywhere else here."""
+        image = tmp_path / "page.jpg"
+        image.write_bytes(b"x" * (ib.FILE_SIZE_LIMIT + 1))
+        calls = []
+
+        class _Done:
+            returncode = 0
+
+        def run(argv, **kwargs):
+            calls.append(argv)
+            with open(argv[-1], "wb") as temporary:
+                temporary.write(b"small")
+            return _Done()
+
+        ib.resize_image(str(image), "1600x1200", run=run,
+                        verdict_of=lambda path: verdict)
+        assert len(calls) == 1
+
 
 class TestEmitOutput:
     def test_the_first_book_is_moved_into_place(self, tmp_path):

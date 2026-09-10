@@ -33,9 +33,11 @@ import tempfile
 
 from medialib import commands
 from medialib.lib import (
+    adequacy,
     booktext,
     clioptions,
     enums,
+    imagebitrate,
     imagemagick,
     imagesizes,
     ramscratch,
@@ -160,18 +162,33 @@ def _is_image(name: str) -> bool:
 
 
 def resize_image(path: str, geometry: str,
-                 run=subprocess.run) -> None:
+                 run=subprocess.run, verdict_of=None) -> None:
     """Downscale one image in place, but only when it is big enough to be worth
-    it. The name and extension are kept so references inside the epub stay
-    valid - for an image-wrapper SVG that rasterises the payload, which is
-    exactly the shrink wanted without breaking the link."""
+    it AND has bytes to spare. The name and extension are kept so references
+    inside the epub stay valid - for an image-wrapper SVG that rasterises the
+    payload, which is exactly the shrink wanted without breaking the link.
+
+    Two questions, and the illustration has to fail both to be left as it is.
+    Being under the size limit means the shrink would save nothing worth having;
+    being STARVED means it has already been compressed past what its format and
+    size need, so scaling it down and re-compressing it at the fixed quality
+    below would take a second helping out of a picture that had none to give.
+    Either way the file passes through untouched, which is what the copy under
+    the branch is for.
+
+    An image nothing could measure is resized, the way an unmeasurable file is
+    converted everywhere else here: the check is there to avoid harm, not to
+    become a new way of skipping work.
+    """
     stem, _, extension = path.rpartition(".")
     temporary = "%s.temp.%s" % (stem or path, extension)
     try:
         size = os.path.getsize(path)
     except OSError:
         return
-    if size >= FILE_SIZE_LIMIT:
+    if verdict_of is None:
+        verdict_of = imagebitrate.image_adequacy
+    if size >= FILE_SIZE_LIMIT and not adequacy.is_starved(verdict_of(path)):
         done = run(
             imagemagick.convert_argv(
                 [path, "-quality", str(IMAGE_QUALITY),
@@ -186,7 +203,7 @@ def resize_image(path: str, geometry: str,
 
 
 def clean_book_folder(directory: str, geometry: str = "",
-                      run=subprocess.run) -> None:
+                      run=subprocess.run, verdict_of=None) -> None:
     """Tidy an unpacked epub in place: drop the embedded fonts (the reader falls
     back to a sane default), delete the junk images by name substring, and
     downscale what is left.
@@ -218,7 +235,8 @@ def clean_book_folder(directory: str, geometry: str = "",
     for parent, _dirs, names in os.walk(directory):
         for name in sorted(names, key=os.fsencode):
             if _is_image(name):
-                resize_image(os.path.join(parent, name), geometry, run=run)
+                resize_image(os.path.join(parent, name), geometry, run=run,
+                             verdict_of=verdict_of)
 
 
 def emit_output(source: str, destination: str) -> None:
@@ -558,11 +576,14 @@ def main(argv: list, program: str = "ingest-books",
         # ebook-convert without it, so it buys speed and never capability.
         tools = ["ebook-convert"]
         if not text_mode and discard_extras:
-            # All four exist to throw part of a book away: Ghostscript strips a
-            # PDF's images, unzip/zip open an epub for the cleaner, and
-            # ImageMagick does the downscaling. Without -d none of them runs, so
-            # asking for them would refuse a run that has no use for them.
-            tools += ["gs", "unzip", "zip", imagemagick.CONVERT_SPEC]
+            # All of these exist to throw part of a book away: Ghostscript
+            # strips a PDF's images, unzip/zip open an epub for the cleaner, and
+            # ImageMagick does the downscaling and, through identify, decides
+            # which illustration has bytes to spare for it. Without -d none of
+            # them runs, so asking for them would refuse a run that has no use
+            # for them.
+            tools += ["gs", "unzip", "zip", imagemagick.CONVERT_SPEC,
+                      imagemagick.IDENTIFY_SPEC]
         if zpaq_archive:
             tools += ["zpaq"]
         runlog.settle_flock()

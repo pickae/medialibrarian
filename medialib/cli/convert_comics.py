@@ -20,6 +20,15 @@ strips the affixes sibling books share and so has to see all of them together.
 That happens first, on a throwaway tree of markers, before anything is converted
 - which is also what makes a re-run able to recognise a finished book instead of
 converting it a second time.
+
+The one thing decided per BOOK rather than per page is whether to convert it at
+all. A book's pages are judged against medialib/lib/imagebitrate.py's model, and if
+more than STARVED_PAGE_PERCENT of them are already starved the book is repackaged
+into a .cbz with its own pages untouched: what is left of such a scan is all
+there is, and a second generation of loss over most of a book buys nothing. Below
+that share every page is converted, starved ones included - which is why the
+conversion is asked for with -a. A book whose pages came out in two formats is
+not a book, it is a bag of pages, and no reader shows it as one.
 """
 
 import os
@@ -31,9 +40,11 @@ from typing import Any
 
 from medialib import commands
 from medialib.lib import (
+    adequacy,
     clioptions,
     comicpdf,
     enums,
+    imagebitrate,
     imagemagick,
     numbering,
     ramscratch,
@@ -81,6 +92,15 @@ DEFAULT_FUZZ = 10
 # produced less than this produced no picture - a truncated or empty encode - and
 # the page is dropped rather than shipped inside the finished book.
 MIN_PAGE_SIZE = 10 * 1024
+
+# How much of a book has to be starved before the book is left as it is, in
+# percent of the pages that could be measured. Above four fifths the book IS a
+# starved scan - the handful of pages still holding bytes are the covers and the
+# text pages, not evidence that the rest can be improved - and converting it
+# would spend a generation of loss on nearly every page to save bytes off a file
+# that is already small. Below it the odd thin page is converted with the rest,
+# because a book whose pages are half AVIF and half JPEG is worse than either.
+STARVED_PAGE_PERCENT = 80
 
 # ImageMagick spends about this many threads on one page whatever we do; four
 # pages convert at once inside a book, fixed.
@@ -287,6 +307,36 @@ def _flatten(destination: str) -> None:
             pass
 
 
+def starved_pages(book_dir: str) -> tuple[int, int]:
+    """``(starved, measured)`` over the pages of one unpacked book.
+
+    One ``identify -ping`` per page - the header and nothing else - so this is a
+    read of a few hundred bytes per page against a book that is already in RAM.
+    Pages nothing could measure are left out of BOTH counts rather than counted
+    as sound: the share is what decides the book's fate, and an unreadable page
+    is evidence about neither side of it.
+    """
+    starved = measured = 0
+    for page in _files_matching(book_dir, enums.IMAGE_EXTENSIONS):
+        verdict = imagebitrate.image_adequacy(page)
+        if verdict == adequacy.UNKNOWN:
+            continue
+        measured += 1
+        if adequacy.is_starved(verdict):
+            starved += 1
+    return starved, measured
+
+
+def book_is_starved(starved: int, measured: int) -> bool:
+    """Whether that count puts the book past :data:`STARVED_PAGE_PERCENT`.
+
+    A book none of whose pages could be measured is NOT starved: the share is
+    undefined, and the answer that converts it is the one that matches what every
+    other unmeasurable thing in this repo gets.
+    """
+    return measured > 0 and starved * 100 > STARVED_PAGE_PERCENT * measured
+
+
 def package_book(book_dir: str, out_path: str, out_rel: str,
                  source_archive: str, stage_root: str,
                  counters: Counters) -> bool:
@@ -417,6 +467,15 @@ class Run:
             return
         self.counters.bump("pagesFound")
 
+        # Judged before a single page is encoded, because the answer decides
+        # whether any of them are.
+        starved, measured = starved_pages(book_temp)
+        if book_is_starved(starved, measured):
+            self._repackage_book(book_temp, out_rel, partial_path, file_name,
+                                 starved, measured)
+            shutil.rmtree(book_temp, ignore_errors=True)
+            return
+
         os.makedirs(os.path.dirname(book_avif) or self.avif_path, exist_ok=True)
         self._convert_pages(book_temp, book_avif, file_name)
         shutil.rmtree(book_temp, ignore_errors=True)
@@ -462,6 +521,28 @@ class Run:
         # before the next one is unpacked into it.
         shutil.rmtree(book_avif, ignore_errors=True)
 
+    def _repackage_book(self, book_temp: str, out_rel: str, partial_path: str,
+                        file_name: str, starved: int, measured: int) -> None:
+        """A book past the starved share, into a .cbz with its OWN pages.
+
+        The same archive every other book gets - numbered, stored rather than
+        deflated, stamped with the archive it came from - so a library converted
+        by this command is one shelf of .cbz whether or not a given book was
+        worth re-encoding. What differs is only that the pages inside it are the
+        ones that came out of the original.
+        """
+        self.counters.note(
+            "Repackaged unconverted (%d of %d page(s) already starved): %s"
+            % (starved, measured, file_name))
+        numbering.number_files_in_folder(
+            book_temp,
+            sorted((entry.path for entry in os.scandir(book_temp)
+                    if entry.is_file()), key=version_key))
+        if package_book(book_temp, self.out_path, out_rel, partial_path,
+                        self.temp_path, self.counters):
+            self.counters.bump("packaged")
+            self.counters.bump("repackaged")
+
     def _convert_pages(self, book_temp: str, book_avif: str,
                        file_name: str) -> None:
         """This book's pages, converted by convert-images as its own process -
@@ -472,7 +553,12 @@ class Run:
         with open(log_path, "w") as handle:
             done = commands.run_command(
                 "convert-images",
-                ["-c", "-j", IMAGES_PER_BOOK, "-m", self.max_res,
+                # -a: every page or none. That command's own default leaves a
+                # starved image alone, which is the right answer for a folder of
+                # loose pictures and the wrong one inside a book - the decision
+                # was already taken above, for the WHOLE book, and a book that
+                # got this far is one being converted.
+                ["-c", "-a", "-j", IMAGES_PER_BOOK, "-m", self.max_res,
                  "-q", self.quality, "-s", self.speed_preset,
                  "-f", self.fuzz, book_temp, book_avif],
                 script_dir=self.script_dir,
@@ -583,6 +669,11 @@ def footer(state: Run) -> None:
               % (packaged, state.total, runtime))
         if packaged > 0:
             print("%.2f seconds per book" % (runtime / packaged))
+        repackaged = counters.read("repackaged")
+        if repackaged > 0:
+            print("%d of those were repackaged with their own pages: more than "
+                  "%d%% of each was" % (repackaged, STARVED_PAGE_PERCENT))
+            print("already starved, so re-encoding could only have cost them.")
 
         # A book is a coarse unit to judge a run by - collections hold 20-page
         # floppies and 300-page omnibuses in the same folder - so seconds per PAGE

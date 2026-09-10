@@ -22,6 +22,7 @@ import math
 import re
 import subprocess
 
+from medialib.lib import adequacy
 from medialib.lib.codecs import (
     MODERN_ERA,
     MPEG2_ERA,
@@ -63,8 +64,10 @@ adequate_bitrate_1080 = 5000
 adequate_bitrate_pixels = 2073600
 
 # Where "generous" starts: twice adequate is a whole adequate encode's worth of
-# spare, which is the same reading a caller demanding a 50% saving applies.
-generous_bitrate_factor = 2
+# spare, which is the same reading a caller demanding a 50% saving applies. The
+# figure is :mod:`medialib.lib.adequacy`'s, so one library's "generous" means the
+# same thing whichever report it was counted in.
+generous_bitrate_factor = adequacy.GENEROUS_FACTOR
 
 # Per-family tuning, keyed on the family names of ``codecs``. Each row is
 # (family, factor, exponent): what the family needs at the 1080p anchor,
@@ -280,19 +283,14 @@ def bitrate_verdict(kbit: str, adequate: str) -> str:
     ``generous_bitrate_factor`` times it or above, adequate in between, and
     unknown when either figure is missing.
 
+    The three words and the boundary between them are
+    :mod:`medialib.lib.adequacy`'s; what is this model's own is the requirement
+    they are read against.
+
     This is the verdict on the source alone; whether a conversion follows is a
     second question, asked against the output's requirement.
     """
-    b = awk_number(kbit)
-    a = awk_number(adequate)
-    gen = awk_number(generous_bitrate_factor)
-    if a <= 0 or b <= 0:
-        return "unknown"
-    if b < a:
-        return "starved"
-    if b >= a * gen:
-        return "generous"
-    return "adequate"
+    return adequacy.verdict(kbit, adequate, generous_bitrate_factor)
 
 
 def _num(x) -> float | None:

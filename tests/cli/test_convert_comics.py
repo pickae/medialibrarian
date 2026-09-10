@@ -149,3 +149,60 @@ class TestBookWorkers:
         """With a single worker there is no second book to convert through the
         first one's unpacking and zipping, which is half the point."""
         assert cc.book_workers(threads) == 2
+
+
+class TestTheStarvedShare:
+    """Whether a book is converted at all, which is decided once for the WHOLE
+    book: a .cbz whose pages are half AVIF and half JPEG is worse than either."""
+
+    def test_a_book_past_the_share_is_left_as_it_is(self):
+        # 9 of 10 measured pages starved, against a threshold of 80%
+        assert cc.book_is_starved(9, 10)
+
+    def test_one_exactly_at_it_is_not(self):
+        """Strictly more, so a book that is exactly four fifths starved is
+        converted - the boundary belongs to the side that does the work."""
+        assert not cc.book_is_starved(8, 10)
+
+    @pytest.mark.parametrize("starved,measured", [(0, 24), (5, 24), (19, 24)])
+    def test_nor_is_one_below_it_however_many_thin_pages_it_holds(
+            self, starved, measured):
+        """The odd thin page is converted with the rest. Partial conversion is
+        not on the table."""
+        assert not cc.book_is_starved(starved, measured)
+
+    def test_a_book_nothing_could_measure_is_converted(self):
+        """The share is undefined, and the answer that converts it is the one
+        every other unmeasurable thing in this repo gets."""
+        assert not cc.book_is_starved(0, 0)
+
+    def test_the_threshold_is_a_percentage_of_the_pages_that_were_measured(self):
+        """Pages nothing could read are left out of both counts rather than
+        counted as sound: an unreadable page is evidence about neither side."""
+        assert cc.book_is_starved(9, 10)          # 90% of ten
+        assert cc.book_is_starved(9, 10) == cc.book_is_starved(90, 100)
+
+
+class TestCountingTheStarvedPages:
+    def test_only_the_pages_are_counted(self, tmp_path, monkeypatch):
+        """A folder of pages is what this is handed, but the pruning that made it
+        one is a separate step and a caller may not have run it."""
+        for name in ("a.jpg", "b.png", "notes.txt", "cover.webp"):
+            (tmp_path / name).write_bytes(b"x")
+        seen = []
+        monkeypatch.setattr(cc.imagebitrate, "image_adequacy",
+                            lambda path: seen.append(path) or "adequate")
+        starved, measured = cc.starved_pages(str(tmp_path))
+        assert (starved, measured) == (0, 3)
+        assert not any(name.endswith(".txt") for name in seen)
+
+    def test_a_page_that_could_not_be_judged_counts_for_neither_side(
+            self, tmp_path, monkeypatch):
+        for name in ("a.jpg", "b.jpg", "c.jpg"):
+            (tmp_path / name).write_bytes(b"x")
+        answers = {"a.jpg": "starved", "b.jpg": "unknown", "c.jpg": "generous"}
+        monkeypatch.setattr(
+            cc.imagebitrate, "image_adequacy",
+            lambda path: answers[os.path.basename(path)])
+        assert cc.starved_pages(str(tmp_path)) == (1, 2)
+

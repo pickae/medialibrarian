@@ -7,6 +7,12 @@ minimum it found no margin worth removing, above the maximum it is cutting into
 the picture rather than removing a border, and past the blank threshold there was
 nothing on the page at all.
 
+The other half is what this command declines to do. An image whose file size is
+already below what its format, size and content need is STARVED: whatever is left
+of it is all there is, and encoding it again spends a second generation of loss
+on a picture that had none to spare. Those are left alone unless -a says
+otherwise. The model behind the verdict is medialib/lib/imagebitrate.py.
+
 Every conversion is one ImageMagick call whose output is checked and whose stderr
 is silenced, so the tools are asked for up front: a missing ImageMagick would
 otherwise read as a run in which no image could be converted.
@@ -20,8 +26,10 @@ from typing import NamedTuple
 
 from medialib import commands
 from medialib.lib import (
+    adequacy,
     clioptions,
     enums,
+    imagebitrate,
     imagemagick,
     ramscratch,
     runlog,
@@ -69,6 +77,9 @@ def _spoken_list(words) -> str:
 OPT_SPEC = """
 h |  | Print this help page.
 c |  | crop excessive whitespace
+a |  | convert every image, including one whose file size says it is
+                    already starved. Without it such an image is left alone: see
+                    below.
 r |  | reverse: convert the -o format back to jpeg
 o | <format> | output format: {formats}, default {default}
 j | <jobs> | Run up to <jobs> encoder processes in parallel.
@@ -92,10 +103,10 @@ o | enum:{formats} | output format
 s | int:0:{top} | speed preset
 """.format(formats="\\|".join(enums.IMAGE_CODECS), top=MAX_SPEED)
 
-OPT_VARS = ("c:crop r:reverse o:outputFormat j:jobs q:quality s:speedPreset "
-            "m:maxRes f:fuzz")
+OPT_VARS = ("c:crop a:alwaysConvert r:reverse o:outputFormat j:jobs q:quality "
+            "s:speedPreset m:maxRes f:fuzz")
 OPT_COLUMN = 20
-OPT_LONG = ("h:help c:crop r:reverse o:format j:jobs q:quality s:speed "
+OPT_LONG = ("h:help c:crop a:always r:reverse o:format j:jobs q:quality s:speed "
             "m:max-resolution f:fuzz")
 
 # One conversion spans about this many threads, so the pool is the cores divided
@@ -376,6 +387,22 @@ class Run:
         except ValueError:
             return None
 
+    def starved(self, relative: str) -> bool:
+        """Whether this image is already too small to be worth re-encoding.
+
+        One ``identify -ping`` - a read of the header and no decoding at all -
+        against the model's requirement for that format at that size. What is IN
+        the picture is deliberately not measured: that costs a full decode per
+        image, which is the conversion's own cost paid twice, and leaving the axis
+        unmeasured is the reading that cannot skip an image that deserved
+        converting.
+
+        An image nothing could measure is CONVERTED: the check exists to avoid
+        pointless work, and refusing a conversion over a missing measurement
+        would lose one worth doing.
+        """
+        return adequacy.is_starved(imagebitrate.image_adequacy(relative))
+
     def transcode(self, relative: str) -> None:
         out = disambiguated_output(relative, self.options["format"],
                                    self.input_dir, self.output_dir)
@@ -387,6 +414,10 @@ class Run:
             self.record("alreadyDone", "SKIP (already done)", relative,
                         stream=sys.stderr)
             return
+        if self.options["skipStarved"] and self.starved(relative):
+            self.record("starved", "SKIP (starved)", relative,
+                        stream=sys.stderr)
+            return
         if self.options["crop"]:
             self.crop_convert(relative)
             return
@@ -394,6 +425,9 @@ class Run:
         self._convert(self._encode_arguments(relative, out))
 
     def reverse_to_jpeg(self, relative: str) -> None:
+        """The -r path, which the starved check has nothing to say about: -r
+        exists to get a picture into a format something else can open, and a
+        source too small to improve is exactly as unopenable as a large one."""
         out = disambiguated_output(relative, "jpg", self.input_dir,
                                    self.output_dir)
         if os.path.isfile(out):
@@ -503,11 +537,17 @@ def main(argv: list, program: str = "convert-images") -> int:
         return 1
 
     crop = "c" in result.given
+    always = "a" in result.given
     reverse = "r" in result.given
     image_format = result.values["outputFormat"] or DEFAULT_FORMAT
     speed = int(result.values["speedPreset"] or DEFAULT_SPEED)
+    # -r never asks: converting back to JPEG is about what can open the file, not
+    # about what it would cost to store, so the check would only refuse a
+    # conversion nobody asked it to judge.
+    skip_starved = not always and not reverse
     options = {
         "crop": crop,
+        "skipStarved": skip_starved,
         "format": image_format,
         "quality": int(result.values["quality"] or 60),
         # Derived once, here: it is the same number for every conversion of the
@@ -521,7 +561,7 @@ def main(argv: list, program: str = "convert-images") -> int:
 
     runlog.settle_flock()
     tools = [imagemagick.CONVERT_SPEC] + (
-        [imagemagick.IDENTIFY_SPEC] if crop else [])
+        [imagemagick.IDENTIFY_SPEC] if crop or skip_starved else [])
     skip_preflight = bool(os.environ.get("SKIP_TOOL_PREFLIGHT", ""))
     if tooldeps.require_tools(program, tools,
                               skip_preflight=skip_preflight):
@@ -609,8 +649,8 @@ def main(argv: list, program: str = "convert-images") -> int:
         if total == 0:
             return safety.fail_no_relevant_input(input_dir, wanted)
 
-        for name in ("current", "converted", "trimmed", "blank", "alreadyDone",
-                     "notFound"):
+        for name in ("current", "converted", "trimmed", "blank", "starved",
+                     "alreadyDone", "notFound"):
             with open(os.path.join(counter_dir, name), "w") as handle:
                 handle.write("0")
 
@@ -637,6 +677,7 @@ def _print_footer(state, started, values, own_safety_log) -> None:
     for label, name in (("input not found", "notFound"),
                         ("already done", "alreadyDone"),
                         ("blank", "blank"),
+                        ("starved, left alone", "starved"),
                         ("converted", "converted"),
                         ("trimmed", "trimmed")):
         count = state.counter(name)
@@ -652,11 +693,12 @@ def _print_footer(state, started, values, own_safety_log) -> None:
         with open(stats_file + ".lock", "w") as handle, \
                 runlog.take_lock(handle), \
                 open(stats_file, "a") as out:
-            out.write("%d %d %d %d %d %d\n" % (
+            out.write("%d %d %d %d %d %d %d\n" % (
                 total, state.counter("converted"),
                 state.counter("trimmed"), state.counter("blank"),
                 state.counter("alreadyDone"),
-                state.counter("notFound")))
+                state.counter("notFound"),
+                state.counter("starved")))
 
     if own_safety_log:
         safety.report_safety_skips()

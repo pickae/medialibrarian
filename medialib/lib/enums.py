@@ -34,7 +34,17 @@ __all__ = [
     "DATE_PREFIX_PATTERN",
 ]
 
-IMAGE_EXTENSIONS = ("jpg", "jpeg", "webp", "png",)
+# Every still-image suffix a command here can be pointed at. What each of these
+# formats IS - its family, and whether it throws pixels away - is
+# :mod:`medialib.lib.imagecodecs`, which groups the same suffixes by format. The
+# two cannot be one list without a circular import, so they are one list and one
+# test: ``tests/lib/test_imagecodecs.py`` fails if a suffix is in either and not
+# the other.
+IMAGE_EXTENSIONS = (
+    "jpg", "jpeg", "jpe", "jfif", "jp2", "j2k", "jpf", "jpx", "webp", "heic",
+    "heif", "hif", "avif", "jxl", "png", "tif", "tiff", "bmp", "dib", "tga",
+    "pcx", "pnm", "ppm", "pgm", "pbm", "psd", "gif", "ico",
+)
 # What an image can be converted TO, as against the IMAGE_EXTENSIONS above,
 # which is what one can be converted FROM. In order of preference, so the first
 # is the one a command writes when it is not told otherwise.

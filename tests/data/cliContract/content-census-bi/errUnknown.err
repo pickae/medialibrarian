@@ -3,11 +3,12 @@ Unknown option: -x
 Usage:
     content-census-bi [options] <reportPath>...
 Arguments:
-    <reportPath>    A census report (audio*.csv, video*.csv, books*.csv,
-                    comics*.csv, or the .tsv of each), or a folder to look for them
-                    in, recursively. Several may be given, including several
-                    libraries' worth of the same type: they are loaded into one
-                    cube per type and stay separable along its "library" axis.
+    <reportPath>    A census report (audio*.csv, video*.csv, images*.csv,
+                    books*.csv, comics*.csv, or the .tsv of each), or a folder to
+                    look for them in, recursively. Several may be given,
+                    including several libraries' worth of the same type: they are
+                    loaded into one cube per type and stay separable along its
+                    "library" axis.
 Options:
     (may be given before the reports or after them)
     -o, --database <file>

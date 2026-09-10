@@ -41,12 +41,17 @@ pytestmark = [
 _WRITABLE = sorted(name for name in ci.FORMATS if "w" in _MODES.get(name, ""))
 
 
-def _needs(image_format: str):
-    """Skip a case for a format this build was not given the delegate for."""
-    return pytest.mark.skipif(
-        image_format not in _WRITABLE,
-        reason="this ImageMagick cannot write %s (needs %s)"
-               % (image_format, imagemagick.DELEGATES.get(image_format, "?")))
+def _needs(image_format: str) -> None:
+    """Skip a case for a format this build was not given the delegate for.
+
+    ``pytest.skip`` from inside the case, and not a ``skipif`` marker handed to
+    ``request.applymarker``: a skip condition is evaluated in setup, before the
+    body runs, so a marker applied from the body applies to nothing.
+    """
+    if image_format not in _WRITABLE:
+        pytest.skip("this ImageMagick cannot write %s (needs %s)"
+                    % (image_format,
+                       imagemagick.DELEGATES.get(image_format, "?")))
 
 
 @pytest.fixture(scope="module")
@@ -89,8 +94,8 @@ class TestEveryFormatReallyEncodes:
     @pytest.mark.parametrize("image_format", sorted(ci.FORMATS),
                              ids=sorted(ci.FORMATS))
     def test_the_default_call_produces_a_file_of_that_format(
-            self, image_format, source, tmp_path, request):
-        request.applymarker(_needs(image_format))
+            self, image_format, source, tmp_path):
+        _needs(image_format)
         out = tmp_path / ("page." + image_format)
         argv = _run(image_format)._encode_arguments(str(source), str(out))
         assert _encode(source, out, argv) == 0
@@ -100,11 +105,10 @@ class TestEveryFormatReallyEncodes:
     @pytest.mark.parametrize("image_format", sorted(ci.FORMATS),
                              ids=sorted(ci.FORMATS))
     def test_the_depth_asked_for_is_the_depth_carried(self, image_format,
-                                                      source, tmp_path,
-                                                      request):
+                                                      source, tmp_path):
         """WebP has 8 bits and no more; the other two are asked for 10 so flat
         gradients do not band, and must come back with more than 8."""
-        request.applymarker(_needs(image_format))
+        _needs(image_format)
         out = tmp_path / ("depth." + image_format)
         argv = _run(image_format)._encode_arguments(str(source), str(out))
         assert _encode(source, out, argv) == 0
@@ -123,8 +127,8 @@ class TestEverySpeedTheMappingCanEmit:
     @pytest.mark.parametrize("image_format", sorted(ci.FORMATS),
                              ids=sorted(ci.FORMATS))
     def test_the_encoder_accepts_it_and_writes_something(
-            self, image_format, speed, source, tmp_path, request):
-        request.applymarker(_needs(image_format))
+            self, image_format, speed, source, tmp_path):
+        _needs(image_format)
         out = tmp_path / ("s%d.%s" % (speed, image_format))
         argv = _run(image_format, speed)._encode_arguments(str(source),
                                                            str(out))
@@ -165,12 +169,20 @@ class TestTheDelegateProbeAgreesWithTheTool:
     def test_what_the_probe_calls_writable_really_writes(self, source,
                                                          tmp_path):
         """The probe is only worth having if its answer matches what happens,
-        so the two are compared on this host's own build."""
+        so the two are compared on this host's own build.
+
+        "Wrote it" has to mean the file IS that format, not that a file
+        appeared. Handed a suffix its build has no delegate for, ImageMagick
+        does not fail: it writes the SOURCE's format under the name it was
+        given, so a `.jxl` holding a PNG exits 0 and is not empty - the silent
+        mislabelling `require_format` exists to stop.
+        """
         for image_format in sorted(ci.FORMATS):
             out = tmp_path / ("agree." + image_format)
             argv = _run(image_format)._encode_arguments(str(source), str(out))
             wrote = _encode(source, out, argv) == 0 and out.exists() \
-                and out.stat().st_size > 0
+                and out.stat().st_size > 0 \
+                and _identify(out, "%m").lower() == image_format
             assert wrote == (image_format in _WRITABLE), image_format
 
     def test_a_format_the_probe_refuses_is_refused_before_any_work(self,

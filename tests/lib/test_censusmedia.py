@@ -29,7 +29,7 @@ _TOOLSTUB = blackbox.TOOLSTUB
 
 _PLUMBING = ("bash", "awk", "cat", "base64", "stat")
 
-_CENSUS_ENV = ("CENSUS_SEP", "CENSUS_HAVE_MEDIAINFO")
+_CENSUS_ENV = ("CENSUS_SEP", "CENSUS_HAVE_MEDIAINFO", "CENSUS_ADEQUACY")
 
 
 @pytest.fixture()
@@ -78,6 +78,17 @@ def probe(tmp_path, monkeypatch):
                            install=install, tmp_path=tmp_path)
 
 
+@pytest.fixture()
+def judging(monkeypatch):
+    """A run that was asked for the adequacy column - content-census's -a.
+
+    Its own fixture because the column is OFF by default: the reading behind it
+    costs a decode per picture, so a census only makes it when it was asked to,
+    and every test about the judgement itself has to say so first.
+    """
+    monkeypatch.setenv("CENSUS_ADEQUACY", "1")
+
+
 # --- one probe per file ---------------------------------------------------------
 
 
@@ -99,7 +110,7 @@ class TestTheProbe:
                                  "codec_name": "mp3"}]}, rc="7")
         row, reason = cm.census_audio_row(path)
         assert reason is None
-        assert row.split(",")[5] == "mp3"
+        assert row.split(",")[6] == "mp3"
 
     def test_a_probe_that_says_nothing_is_an_unreadable_file(self, probe):
         path = probe.media("a.mp3")
@@ -209,16 +220,34 @@ class TestAudioRow:
         probe.says(document)
         return cm.census_audio_row(path)
 
-    def test_the_columns_are_path_size_duration_bitrate_channels_codec_chapters(
+    DOCUMENT = {
+        "format": {"duration": "100.5", "bit_rate": "128000"},
+        "streams": [{"codec_type": "audio", "channels": 2,
+                     "codec_name": "mp3"}],
+        "chapters": [{}, {}, {}]}
+
+    def test_the_columns_are_path_size_duration_bitrate_adequacy_channels_codec_chapters(
             self, probe):
-        row, reason = self._row(probe, {
-            "format": {"duration": "100.5", "bit_rate": "128000"},
-            "streams": [{"codec_type": "audio", "channels": 2,
-                         "codec_name": "mp3"}],
-            "chapters": [{}, {}, {}]})
+        row, reason = self._row(probe, self.DOCUMENT)
         assert reason is None
-        assert row.split(",")[1:] == ["4096", "100.500", "128000", "2", "mp3",
-                                      "3"]
+        assert row.split(",")[1:] == ["4096", "100.500", "128000", "", "2",
+                                      "mp3", "3"]
+
+    def test_the_adequacy_column_is_empty_unless_the_run_asked_for_it(
+            self, probe):
+        """Nothing about it is expensive for audio - it is arithmetic over what
+        the one probe already read - but it is the same column under the same
+        flag as the images report's, and one flag with two meanings is worse
+        than a column that waits to be asked for."""
+        row, _reason = self._row(probe, self.DOCUMENT)
+        assert row.split(",")[4] == ""
+
+    def test_and_holds_the_verdict_when_it_did(self, probe, judging):
+        """128 kbit/s of stereo MP3 is under the 192 the shared table's stereo
+        row comes to in that codec, so it is starved - which is the reading that
+        says re-encoding it to Opus could only cost it."""
+        row, _reason = self._row(probe, self.DOCUMENT)
+        assert row.split(",")[4] == "starved"
 
     def test_the_bitrate_is_the_containers_and_not_the_streams(self, probe):
         """It is the number actually stated for every format this list holds, and
@@ -267,7 +296,7 @@ class TestAudioRow:
                         {"codec_type": "video", "codec_name": "mjpeg",
                          "disposition": {"attached_pic": 1}}]})
         assert reason is None
-        assert row.split(",")[5] == "mp3"
+        assert row.split(",")[6] == "mp3"
 
     def test_a_file_that_marks_no_chapter_is_the_one_chapter_it_is(self, probe):
         """Recorded as 0 the column would be unusable in exactly the place a
@@ -275,7 +304,7 @@ class TestAudioRow:
         row, _reason = self._row(probe, {
             "streams": [{"codec_type": "audio", "channels": 2}],
             "chapters": []})
-        assert row.split(",")[6] == "1"
+        assert row.split(",")[7] == "1"
 
 
 # --- the video row --------------------------------------------------------------
@@ -302,13 +331,20 @@ class TestVideoRow:
         probe.says(self.FILM if document is None else document)
         return cm.census_video_row(path)
 
-    def test_the_columns_in_order(self, probe):
+    def test_the_columns_in_order(self, probe, judging):
         row, reason = self._row(probe)
         assert reason is None
         assert row.split(",") == [
             os.path.join(str(probe.tmp_path), "m.mkv"), "4096", "3600.000",
             "4000000", "starved", "1920x1080", "25.000", "h264", "matroska",
             "SDR", "1", "6", "eac3", "640000", "2", "2"]
+
+    def test_the_adequacy_column_is_empty_unless_the_run_asked_for_it(
+            self, probe):
+        """One flag over the three types that have a verdict, rather than a
+        column that is free for one of them and dear for another."""
+        row, _reason = self._row(probe)
+        assert row.split(",")[4] == ""
 
     def test_the_frame_rate_is_the_average_and_not_the_nominal(self, probe):
         """r_frame_rate is doubled for anything field-coded and would report a
@@ -363,7 +399,7 @@ class TestVideoRow:
         assert fields[10] == "2"          # both tracks counted
         assert fields[11:14] == ["6", "eac3", "640000"]   # only the first named
 
-    def test_a_bitrate_the_container_does_not_state_is_estimated(self, probe):
+    def test_a_bitrate_the_container_does_not_state_is_estimated(self, probe, judging):
         """Which is what keeps the adequacy column from being empty for most of a
         Matroska library."""
         document = json.loads(json.dumps(self.FILM))
@@ -375,7 +411,7 @@ class TestVideoRow:
         # ...but the judgement is made on it
         assert fields[4] in ("starved", "adequate", "generous")
 
-    def test_the_estimate_removes_the_audio_it_can_see(self, probe):
+    def test_the_estimate_removes_the_audio_it_can_see(self, probe, judging):
         document = json.loads(json.dumps(self.FILM))
         del document["streams"][0]["bit_rate"]
         document["format"]["bit_rate"] = "6000000"
@@ -495,21 +531,27 @@ class TestBitrateAdequacy:
     same model convertVideo's -t decides a single file with - so a library counted
     here as starved is the set of files that test refuses to re-encode."""
 
-    def test_a_file_whose_size_nobody_stated_cannot_be_judged(self, probe):
+    def test_nothing_at_all_without_the_flag(self, probe):
+        path = probe.media("m.mkv")
+        assert cm.census_bitrate_adequacy(path, "h264", "1920", "1080", "25",
+                                          "5000000") == ""
+
+    def test_a_file_whose_size_nobody_stated_cannot_be_judged(self, probe,
+                                                              judging):
         path = probe.media("m.mkv")
         assert cm.census_bitrate_adequacy(path, "h264", "", "1080", "25",
                                           "5000000") == "unknown"
         assert cm.census_bitrate_adequacy(path, "h264", "1920", "", "25",
                                           "5000000") == "unknown"
 
-    def test_nor_one_whose_bitrate_nobody_stated(self, probe):
+    def test_nor_one_whose_bitrate_nobody_stated(self, probe, judging):
         path = probe.media("m.mkv")
         assert cm.census_bitrate_adequacy(path, "h264", "1920", "1080", "25",
                                           "") == "unknown"
         assert cm.census_bitrate_adequacy(path, "h264", "1920", "1080", "25",
                                           "abc") == "unknown"
 
-    def test_unknown_rather_than_empty(self, probe):
+    def test_unknown_rather_than_empty(self, probe, judging):
         """Every other column here uses the empty string for "nobody stated it",
         but a dimension in a cube must be a value and never a hole - so the two
         things that cannot be judged answer "unknown"."""
@@ -517,7 +559,7 @@ class TestBitrateAdequacy:
         assert cm.census_bitrate_adequacy(path, "h264", "", "", "", "") \
             == "unknown"
 
-    def test_an_unstated_codec_is_still_judged(self, probe):
+    def test_an_unstated_codec_is_still_judged(self, probe, judging):
         """The model has a tuning for a codec it does not know, so what decides
         whether a judgement is possible at all is the frame size and the
         bitrate - not the codec."""
@@ -528,12 +570,12 @@ class TestBitrateAdequacy:
     @pytest.mark.parametrize("bits,expected", [
         ("500000", "starved"), ("5880000", "adequate"),
         ("20000000", "generous")])
-    def test_the_three_verdicts(self, probe, bits, expected):
+    def test_the_three_verdicts(self, probe, judging, bits, expected):
         path = probe.media("m.mkv")
         assert cm.census_bitrate_adequacy(path, "h264", "1920", "1080", "25",
                                           bits) == expected
 
-    def test_the_grain_axis_is_switched_off(self, probe):
+    def test_the_grain_axis_is_switched_off(self, probe, judging):
         """Grain has to be measured off the pixels, which is a decode per file -
         exactly what a census does not do. The grainless reading is the model's
         most generous one and never calls a file starved that a grain-aware run

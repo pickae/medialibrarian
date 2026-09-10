@@ -29,7 +29,7 @@ from medialib.lib import (
 )
 from medialib.lib.runlog import log
 
-CENSUS_TYPES = ("audio", "video", "books", "comics")
+CENSUS_TYPES = ("audio", "video", "images", "books", "comics")
 
 
 class Refusal(Exception):
@@ -298,6 +298,8 @@ def needed_tools(seen, run_bi):
             "censusVideoExtensions",
             contentcensus.census_video_extensions()).split()):
         add("ffprobe")
+    if any_seen(*enums.IMAGE_EXTENSIONS):
+        add(imagemagick.IDENTIFY_SPEC)
     if any_seen("cbz"):
         add("unzip", imagemagick.IDENTIFY_SPEC)
     if any_seen("cbr"):
@@ -699,7 +701,7 @@ def _cleanup(scratch, created_out_root):
 
 
 def run(arguments, depth, out_dir, run_bi, separator, extension,
-        script_dir, program):
+        script_dir, program, adequacy=False):
     """Everything after the command line. Returns the process status."""
     in_paths, report_names = resolve_input_paths(arguments)
     lib_paths, lib_names, lib_roots = resolve_libraries(in_paths, report_names,
@@ -709,7 +711,7 @@ def run(arguments, depth, out_dir, run_bi, separator, extension,
     scratch = ""
     try:
         os.environ["CENSUS_SEP"] = separator
-        contentcensus.census_init()
+        contentcensus.census_init(adequacy_wanted=adequacy)
         runlog.settle_flock()
 
         files, totals, starts = collect_files(
