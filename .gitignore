@@ -29,3 +29,7 @@ build/
 *.swp
 .DS_Store
 Thumbs.db
+
+# The Windows yt-dlp: the ytdlp command picks a yt-dlp.exe up from the checkout
+# root, and it is a 17 MB binary each machine downloads for itself.
+yt-dlp.exe
