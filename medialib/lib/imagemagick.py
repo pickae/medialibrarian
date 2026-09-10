@@ -63,10 +63,16 @@ DELEGATES = {
     "jxl": "libjxl",
 }
 
-# One row of ``-list format``: the name, an optional ``*``, then the three
-# characters of the mode - read, write, multi-image - as in ``rw+`` or ``r--``.
-# The header row survives the name group and is turned away by the mode.
-_FORMAT_ROW = re.compile(r"^\s*([A-Za-z0-9._+-]+)\*?\s+([r-][w-][+-])\s")
+# One row of ``-list format``: the name, an optional ``*``, the delegate MODULE
+# that serves it, then the three characters of the mode - read, write,
+# multi-image - as in ``rw+``, ``-w+`` or ``---``. The header row survives the
+# name group and is turned away by the mode, which "Mode" is not.
+#
+# The module column is what a whole family shares - AVIF, HEIC, HEIF and AVCI
+# are all served by HEIC - so it is matched and dropped rather than captured,
+# and it is optional so that a listing without it still parses.
+_FORMAT_ROW = re.compile(
+    r"^\s*([A-Za-z0-9._+-]+)\*?(?:\s+[A-Za-z0-9._+-]+)?\s+([r-][w-][+-])\s")
 
 
 def format_modes() -> dict[str, str]:

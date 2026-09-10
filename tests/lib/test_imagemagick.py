@@ -109,19 +109,22 @@ class TestTheArgumentsAreNotTouched:
 
 # One real `-list format` listing, trimmed to the interesting rows: the header
 # that must not be read as a format, a name carrying the `*`, a format that can
-# be read but NOT written (HEIC), and the three this package writes. Recorded
-# from ImageMagick 7.1.2-30 rather than composed, because the whole point of
-# the parse is that it survives what the tool really prints.
-REAL_LISTING = """   Format  Mode  Description
+# be read but NOT written (HEIC), one that can be neither (AVCI), and the three
+# this package writes. Recorded from a running ImageMagick rather than composed,
+# because the whole point of the parse is that it survives what the tool really
+# prints - four columns, the delegate module sitting between the name and the
+# mode.
+REAL_LISTING = """   Format  Module    Mode  Description
 -------------------------------------------------------------------------------
-      3FR  r--   Hasselblad CFV/H3D39II Raw Format (0.22.2-Release)
-        A* rw+   Raw alpha samples
-     AVIF  rw+   AV1 Image File Format (1.23.1)
-     HEIC  r--   High Efficiency Image Format (1.23.1)
-      JXL* rw+   JPEG XL (ISO/IEC 18181) (libjxl 0.12.0)
-     JPEG  rw-   Joint Photographic Experts Group JFIF format (9.0)
-      PNG  rw-   Portable Network Graphics (1.6.44)
-     WEBP* rw+   WebP Image Format (libwebp 1.6.0 [0210])
+      3FR  DNG       r--   Hasselblad CFV/H3D39II Raw Format (0.21.5-Release)
+        A* A         rw+   Raw alpha samples
+     AVCI  HEIC      ---   AVC Image File Format (1.21.2)
+     AVIF  HEIC      rw+   AV1 Image File Format (1.21.2)
+     HEIC  HEIC      r--   High Efficiency Image Format (1.21.2)
+      JXL* JXL       rw+   JPEG XL (ISO/IEC 18181) (libjxl 0.12.0)
+     JPEG* JPEG      rw-   Joint Photographic Experts Group JFIF format (libjpeg-turbo 2.1.5)
+      PNG* PNG       rw-   Portable Network Graphics (libpng 1.6.55,1.6.57)
+     WEBP* WEBP      rw+   WebP Image Format (libwebp 1.5.0 [0210])
 """
 
 
