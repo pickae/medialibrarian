@@ -117,6 +117,36 @@ esac
 exit 0
 """
 
+# The Cloudflare 403, which names its own way out: the feed whose folder says so
+# is refused until the argument yt-dlp asked for is in the call. DEP_CLAUSE is
+# the sentence yt-dlp adds when it has no impersonation target to offer at all.
+_STUB_CLOUDFLARE = r"""
+n=$(( $(ls "$CALL_LOG" | wc -l) + 1 ))
+printf '%s\n' "$@" > "$CALL_LOG/call$n"
+marker=""; outTemplate=""; impersonate=0; prev=""
+for a in "$@"; do
+    [[ "$prev" == "--extractor-args" && "$a" == "generic:impersonate" ]] && impersonate=1
+    [[ "$prev" == "--print" ]] && marker="${a#after_move:}"
+    [[ "$prev" == "-o" ]] && outTemplate="$a"
+    prev="$a"
+done
+marker="${marker%\%(filepath)s}"
+label="${outTemplate%/*}"
+if [[ "$label" == *cloudflare* && "$impersonate" == 0 ]]; then
+    printf 'ERROR: [generic] Got HTTP Error 403 caused by Cloudflare anti-bot' >&2
+    printf ' challenge; %s' "${DEP_CLAUSE:-}" >&2
+    printf 'try again with  --extractor-args "generic:impersonate"\n' >&2
+    exit 1
+fi
+episode="$label/e.opus"
+mkdir -p "$label"; printf 'x' > "$episode"
+printf '%s%s\n' "$marker" "$episode"
+exit 0
+"""
+
+_DEP_CLAUSE = ("see  https://github.com/yt-dlp/yt-dlp#impersonation  for how to "
+               "install the required impersonation dependency, and ")
+
 # Exactly what yt-dlp leaves beside an episode: the thumbnail it embedded, the
 # description and metadata sidecar the video profile asks for, a converted
 # subtitle carrying its language between the stem and the extension, and the
@@ -552,6 +582,86 @@ class TestAProviderRefusingTheRun:
             self, run):
         log, _ = run
         assert len(re.findall("not a bot", log)) >= 2, log
+
+
+class TestTheCloudflareChallenge:
+    """The one refusal the run answers by itself rather than reporting.
+
+    yt-dlp's message names the argument that gets past it, so the feed is asked
+    again with that argument. The first attempt's error is therefore NOT a
+    failure - it is a question the second attempt answers - and must reach
+    neither the run's failure count nor its per-episode lines. Everything else
+    is untouched: other feeds are not retried, and do not get the argument.
+    """
+
+    @pytest.fixture
+    def run(self, ytdlp, tmp_path):
+        def go(dependency=True, extra="", expect=0):
+            ytdlp.with_tool("yt-dlp", _STUB_CLOUDFLARE)
+            # One at a time, so the stub's numbered call log is not two feeds
+            # racing for the same number.
+            table = tmp_path / "cf.tsv"
+            table.write_text(
+                "#!profile rssAudio\n#!jobs 1\n"
+                + "1\tRSS/cloudflare\t\t\t%s\thttps://example.test/cf\n" % extra
+                + _feed(1, "RSS/plain", "https://example.test/ok"))
+            library = tmp_path / "librarycf"
+            environment = dict(ytdlp.env)
+            if not dependency:
+                environment["DEP_CLAUSE"] = _DEP_CLAUSE
+            return ytdlp.ytdlp("-t", table, library, library / "archive.log",
+                               expect=expect, env=environment)
+        return go
+
+    def _calls(self, ytdlp, folder):
+        """The recorded argvs whose output template names that feed."""
+        found = []
+        for call in sorted(ytdlp.calls.glob("call*")):
+            argv = call.read_text().splitlines()
+            if folder in (_option(argv, "-o") or ""):
+                found.append(argv)
+        return found
+
+    def test_the_feed_is_asked_again_with_the_argument_it_was_told_to_use(
+            self, run, ytdlp):
+        run()
+        calls = self._calls(ytdlp, "RSS/cloudflare")
+        assert len(calls) == 2, calls
+        assert "generic:impersonate" not in calls[0]
+        assert calls[1][-3:-1] == ["--extractor-args", "generic:impersonate"]
+
+    def test_the_retry_downloads_and_the_run_never_calls_it_a_failure(
+            self, run):
+        log = run()
+        assert "feed(s) failed" not in log, log
+        assert "FAIL" not in log, log
+        assert "retrying with impersonation" in log, log
+        assert len(re.findall(r"\bok\b", log)) == 2, log
+
+    def test_a_feed_that_was_not_challenged_is_called_once_and_plainly(
+            self, run, ytdlp):
+        run()
+        calls = self._calls(ytdlp, "RSS/plain")
+        assert len(calls) == 1, calls
+        assert "generic:impersonate" not in calls[0]
+
+    def test_without_an_impersonation_target_there_is_nothing_to_retry_with(
+            self, run, ytdlp):
+        log = run(dependency=False, expect=1)
+        assert len(self._calls(ytdlp, "RSS/cloudflare")) == 1
+        assert "FAIL" in log, log
+        # yt-dlp's own line survives, install advice and all, and the run adds
+        # only why it did not retry.
+        assert "impersonation dependency" in log, log
+        assert "nothing to retry with" in log, log
+
+    def test_a_feed_already_asking_to_impersonate_is_left_to_its_own_answer(
+            self, run, ytdlp):
+        log = run(extra="--extractor-args generic:impersonate=safari",
+                  expect=1)
+        assert len(self._calls(ytdlp, "RSS/cloudflare")) == 1
+        assert "FAIL" in log, log
+        assert "retrying with impersonation" not in log, log
 
 
 class TestTheTidyUp:

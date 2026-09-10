@@ -407,6 +407,15 @@ spot: the feeds and tables queued behind it are not started, while tables of
 other providers carry on untouched. It is said once where it happens and once
 more at the end, and the run does not report success.
 
+A Cloudflare anti-bot challenge is the opposite case: yt-dlp answers the 403 by
+naming the argument that gets past it, so the run simply asks that feed again
+with `--extractor-args generic:impersonate` and reports the episodes it then
+gets, rather than the refusal. Nothing else in the run is affected, and a feed
+whose `extraArgs` already asks to impersonate is left to its own answer. Getting
+past the challenge needs yt-dlp's [impersonation
+dependency](https://github.com/yt-dlp/yt-dlp#impersonation); without it there is
+nothing to retry with, and the run says so once and reports the feed as failed.
+
 A run can also be stopped with Ctrl+C at any point: nothing that had not begun is
 begun, and the run still reports what it managed before exiting — which is what
 every command here does (see [Stopping a run](#stopping-a-run)).

@@ -657,6 +657,75 @@ def test_the_warning_says_what_to_do(capsys):
     ]
 
 
+# --- the Cloudflare challenge ------------------------------------------------------
+
+CF_LINE = ('ERROR: [generic] Got HTTP Error 403 caused by Cloudflare anti-bot '
+           'challenge; try again with  --extractor-args "generic:impersonate"')
+
+CF_NO_DEPENDENCY = (
+    'ERROR: [generic] Got HTTP Error 403 caused by Cloudflare anti-bot '
+    'challenge; see  https://github.com/yt-dlp/yt-dlp#impersonation  for how '
+    'to install the required impersonation dependency, and try again with  '
+    '--extractor-args "generic:impersonate"')
+
+
+@pytest.mark.parametrize("line", [CF_LINE, CF_NO_DEPENDENCY])
+def test_the_challenge_is_recognised_with_and_without_the_install_advice(line):
+    assert pf.is_cloudflare_challenge(line)
+
+
+@pytest.mark.parametrize("line", [
+    "ERROR: [generic] a: HTTP Error 403: Forbidden",
+    "ERROR: [generic] a: Got HTTP Error 403 caused by Cloudflare anti-bot "
+    "challenge; try again with  --extractor-args \"example:something\"",
+    BOT_LINE,
+])
+def test_a_line_that_does_not_ask_for_this_argument_is_not_the_challenge(line):
+    assert not pf.is_cloudflare_challenge(line)
+
+
+def test_only_the_line_without_a_target_asks_for_the_dependency():
+    assert pf.cloudflare_wants_dependency(CF_NO_DEPENDENCY)
+    assert not pf.cloudflare_wants_dependency(CF_LINE)
+
+
+def test_the_retry_adds_the_argument_before_the_url():
+    call = ["yt-dlp", "-x", "https://example.test/feed"]
+    assert pf.podcast_impersonate_retry(call) == [
+        "yt-dlp", "-x", "--extractor-args", "generic:impersonate",
+        "https://example.test/feed"]
+
+
+def test_a_youtube_extractor_argument_names_another_extractor_and_stays():
+    call = pf.podcast_call("/out", "/a.log", "AI", "", "", "",
+                           "https://example.test/f",
+                           ytdlp_command=["yt-dlp"], profile="youtubeAudio")
+    retry = pf.podcast_impersonate_retry(call)
+    assert retry is not None
+    assert "youtube:player-client=android" in retry
+    assert retry[-3:] == ["--extractor-args", "generic:impersonate",
+                          "https://example.test/f"]
+
+
+@pytest.mark.parametrize("extra", [
+    "--extractor-args generic:impersonate=safari",
+    "--extractor-args=generic:impersonate",
+])
+def test_a_row_that_already_impersonates_is_not_retried(extra):
+    call = pf.podcast_call("/out", "/a.log", "AI", "", "", extra,
+                           "https://example.test/f",
+                           ytdlp_command=["yt-dlp"], profile="rssAudio")
+    assert pf.podcast_impersonate_retry(call) is None
+
+
+def test_the_dependency_warning_says_what_to_install(capsys):
+    pf.podcast_impersonate_dependency_warning()
+    err = capsys.readouterr().err
+    assert "Cloudflare anti-bot challenge" in err
+    assert "generic:impersonate" in err
+    assert "https://github.com/yt-dlp/yt-dlp#impersonation" in err
+
+
 # --- what the run downloaded ----------------------------------------------------------
 
 def test_the_stats_are_read_off_the_disk(tmp_path):
