@@ -764,8 +764,8 @@ Converts a `.cue` sheet into an OGM chapter file (`CHAPTERNN=` /
 ### `content-census`
 
 Reads a library and writes down what is in it: one row per file, one report per
-content type (audio, video, books, comics), written into the folder that was
-censused and named after it. Every file whose suffix is in one of the central
+content type (audio, video, images, books, comics), written into the folder that
+was censused and named after it. Every file whose suffix is in one of the central
 extension lists is included; nothing in the tree is renamed, moved or converted.
 
 **Several libraries can be censused in one call**, each as its own library with
@@ -807,18 +807,34 @@ down into without a second census.
   file. What the container *claims* is what is recorded: verifying that a Dolby
   Vision RPU is really in the bitstream costs a pass over the whole stream, which
   is the ingest's job, not a census's.
-- **Every video is judged starved, adequate or generous** for what it is, in a
-  column of its own. Whether a bitrate is enough depends on the codec, the frame
-  size and the frame rate together, so no single column can answer it — and the
-  answer is what "which of this is worth re-encoding" actually asks. It is taken
-  with the very model [`convert-video`](#convert-video)'s `-t` decides one file
-  with, so the census and the conversion cannot disagree about a film, and it becomes an axis of the cube like any other. It costs the
-  census nothing: every input but one is already in the header being read, and that
-  one — how grainy the picture is, which has to be measured off the pixels — is
-  switched off here, because a decode per file is not a census. Grain only ever
-  *raises* what a stream needs, so nothing is called starved that a run which did
-  measure it would call adequate. A file whose bitrate or frame size nobody stated
-  reads `unknown`.
+- **`-a` judges every video, soundtrack and image starved, adequate or
+  generous** for what it is, in a column of its own that becomes an axis of the
+  cube like any other. Whether a file is big enough depends on the codec, the
+  size and what is in it together, so no single column can answer it — and the
+  answer is what "which of this is worth re-encoding" actually asks. Each of the
+  three is taken with the very model its own converter decides one file with, so
+  the census and the conversion cannot disagree about a film, an album or a scan.
+  Off by default because the image half is dear: telling a photograph from a page
+  of flat artwork means decoding the picture, which over a library of scans is a
+  run of its own.
+- **The dear axis of each model is the one a census leaves unmeasured**, and in
+  each case that is the forgiving direction: a video's grain and an image's
+  content only ever *raise* what the file needs, so nothing is called starved
+  that a run which did measure them would call adequate. A soundtrack is read as
+  spoken word when the container says so or when it runs past twenty minutes, and
+  as music otherwise — the mistakes that makes (a symphony movement, a DJ set)
+  all land on the lower requirement too. A file whose size, bitrate or dimensions
+  nobody stated reads `unknown`.
+- **A lossless file is never starved.** A PNG, a TIFF, a FLAC and a WAV hold
+  every pixel or sample they were given, so "it was not given enough bytes" is
+  not a thing that can be true of one however small it is — a 400-byte lossless
+  icon is a small picture, not a degraded one. Their verdict is floored at
+  `adequate`, which leaves the reading that still means something: whether
+  re-encoding would save anything.
+- **Loose images are a report of their own** — path, size, resolution and format,
+  plus the verdict under `-a`. The format is what the file's own header says and
+  not what its suffix claims, so a `.jpg` holding a PNG is recorded as the PNG it
+  is.
 - **Books are counted on their text**: each one is converted with Calibre and
   counted from that, so epub, mobi, chm, azw3, lit and PDF all answer the same
   way instead of each needing its own extractor.

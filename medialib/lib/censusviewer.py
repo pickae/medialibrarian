@@ -72,15 +72,19 @@ PERSPECTIVE_STYLESHEET = "@perspective-dev/viewer/dist/css/themes.css"
 # because the number this is compared against is a disk's stated capacity.
 SECONDS_PER_HOUR = "3600.0"
 BYTES_PER_GIGABYTE = "1000000000.0"
+# And pixels to megapixels, which is the only unit a picture's size is ever
+# spoken in - a library counted in raw pixels is a column of twelve-digit numbers.
+MEGAPIXEL = "1000000.0"
 
-_TITLES = {"audio": "Audio", "video": "Video", "books": "Books",
-           "comics": "Comics"}
+_TITLES = {"audio": "Audio", "video": "Video", "images": "Images",
+           "books": "Books", "comics": "Comics"}
 
 # The summable columns the export carries, in the order they should appear.
 # "files" first, because it is the one every question starts with.
 _MEASURES = {
     "audio": "files sizeGigabytes durationHours chapters",
     "video": "files sizeGigabytes durationHours chapters",
+    "images": "files sizeGigabytes megapixels",
     "books": "files sizeGigabytes pages words characters",
     "comics": "files sizeGigabytes pages",
 }
@@ -97,11 +101,12 @@ _CODEC_READINGS = {"video": "videoCodecFamily videoCodecEra"}
 # The axis a tab opens grouped by, and the measures it opens showing. The bitrate
 # halves are left out of the opening columns: they are one click away, but they are
 # a fraction rather than a number and would read as two nonsense columns.
-_OPENING_AXIS = {"audio": "codec", "video": "resolution", "books": "format",
-                 "comics": "resolution"}
+_OPENING_AXIS = {"audio": "codec", "video": "resolution", "images": "imageCodec",
+                 "books": "format", "comics": "resolution"}
 _OPENING_COLUMNS = {
     "audio": "files durationHours sizeGigabytes",
     "video": "files durationHours sizeGigabytes",
+    "images": "files megapixels sizeGigabytes",
     "books": "files words pages sizeGigabytes",
     "comics": "files pages sizeGigabytes",
 }
@@ -117,7 +122,7 @@ _OPENING_COLUMNS = {
 # "12" and not "12.00".
 _INTEGER_COLUMNS = ("files", "chapters", "pages")
 _FLOAT_COLUMNS = ("sizeGigabytes", "durationHours", "words", "characters",
-                  "sizeBytes", "durationSeconds")
+                  "sizeBytes", "durationSeconds", "megapixels")
 
 # The measure block of each type's grain SELECT, after the axes and COUNT(*).
 _MEASURE_SQL = {
@@ -131,6 +136,8 @@ _MEASURE_SQL = {
               "    SUM(pages) AS pages,\n"
               "    SUM(words) AS words,\n"
               "    SUM(characters) AS characters"),
+    "images": ("    SUM(sizeBytes) / %s AS sizeGigabytes,\n"
+               "    SUM(pixels) / " + MEGAPIXEL + " AS megapixels"),
     "comics": ("    SUM(sizeBytes) / %s AS sizeGigabytes,\n"
                "    SUM(pages) AS pages"),
 }

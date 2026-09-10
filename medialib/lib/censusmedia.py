@@ -26,17 +26,39 @@ import math
 import os
 import subprocess
 
-from medialib.lib import census, dolbyvision, videobitrate
+from medialib.lib import (
+    adequacy,
+    audiobitrate,
+    census,
+    dolbyvision,
+    videobitrate,
+)
 from medialib.lib.enums import lower_extension_of, shell_lower
+from medialib.lib.formatting import awk_number
 
 __all__ = [
     "census_probe_json",
     "census_audio_row",
     "census_video_row",
     "census_bitrate_adequacy",
+    "census_audio_adequacy",
+    "census_audio_content",
     "census_container_name",
     "census_dynamic_range",
 ]
+
+# Above this many seconds a recording is read as SPOKEN WORD rather than music,
+# which is the column of the shared bitrate table its requirement comes from. The
+# census has no other signal to go on and cannot afford one: nothing in a file
+# says what kind of sound is in it, and twenty minutes separates a song from an
+# audiobook chapter, a podcast episode and a commentary track without needing to
+# listen. The mistakes it makes - a symphony movement, a DJ set - all land on the
+# lower requirement, so the axis can flatter a file and never starve one.
+SPEECH_DURATION_SECONDS = 1200
+
+# The one container that says so outright. An .m4b IS an audiobook - it is what
+# the extension is for - however long the file happens to be.
+SPEECH_EXTENSIONS = ("m4b",)
 
 # jq's empty stream, which is not the same as its null: a `tonumber?` over a
 # string that is not a number produces NO value, and a binding over no value
@@ -291,7 +313,7 @@ def _audio_filter(text):
 
 def census_audio_row(path, separator=None):
     """The audio report's row for <path> - path, size, duration, bitrate,
-    channels, codec, chapters - or ``(None, reason)``.
+    adequacy, channels, codec, chapters - or ``(None, reason)``.
 
     The bitrate is the CONTAINER's overall one rather than the audio stream's: it
     is the number actually stated for every format this list holds, and over a
@@ -314,9 +336,14 @@ def census_audio_row(path, separator=None):
     if video_streams and video_streams != "0":
         return None, "its suffix says audio but it holds a video track"
 
-    row = census.join([path, census.file_size(path),
-                       census.to_seconds(duration), census.to_int(bitrate),
-                       census.to_int(channels), codec,
+    duration = census.to_seconds(duration)
+    bitrate = census.to_int(bitrate)
+    channels = census.to_int(channels)
+
+    row = census.join([path, census.file_size(path), duration, bitrate,
+                       census_audio_adequacy(path, codec, channels, duration,
+                                             bitrate),
+                       channels, codec,
                        census.to_chapters(chapters)], separator)
     return row, None
 
@@ -491,9 +518,59 @@ def census_video_row(path, separator=None):
 # --- the one compound column ----------------------------------------------------
 
 
+def census_audio_content(path, duration):
+    """Which kind of content that recording is read as - the axis the shared
+    bitrate table has two columns for.
+
+    Spoken word when the container says so or when it is longer than
+    :data:`SPEECH_DURATION_SECONDS`, music otherwise. That is the whole signal a
+    census has: see the constants above for why it is enough and which way its
+    errors fall.
+    """
+    if lower_extension_of(path) in SPEECH_EXTENSIONS:
+        return audiobitrate.SPEECH
+    # The duration column as the row already holds it: seconds with three
+    # decimals, or empty for a file that stated none - which is read as music,
+    # since an unstated length is no evidence of an audiobook.
+    if awk_number(duration) > SPEECH_DURATION_SECONDS:
+        return audiobitrate.SPEECH
+    return audiobitrate.MUSIC
+
+
+def census_audio_adequacy(path, codec, channels, duration, bits):
+    """What that stream's bitrate IS for what the recording is - "starved",
+    "adequate", "generous", or "unknown" when it cannot be judged; and nothing
+    at all unless the run asked for the column.
+
+    Made against ``audiobitrate``, whose requirement is the bitrate this repo's
+    own encoder would give the same content in the same codec.
+
+    The bitrate this is handed is the CONTAINER's, which for a file holding one
+    audio stream and a cover is the stream's plus a rounding error - and reading
+    it as the stream's is the generous direction, since cover art only ever makes
+    a file look better fed than it is.
+    """
+    if not _adequacy_wanted():
+        return ""
+    if not str(bits).isdigit() or not str(channels).isdigit():
+        return adequacy.UNKNOWN
+    return audiobitrate.audio_adequacy(codec, channels, bits,
+                                       census_audio_content(path, duration))
+
+
+def _adequacy_wanted():
+    """Whether this run was asked to judge its files as well as read them.
+
+    Read from the environment per row, because the workers are separate
+    processes and a variable one of them holds is one nobody else ever sees.
+    """
+    return bool(os.environ.get("CENSUS_ADEQUACY", ""))
+
+
 def census_bitrate_adequacy(path, codec, width, height, fps, bits):
     """What that video stream's bitrate IS for what the file is - "starved",
-    "adequate", "generous", or "unknown" when it cannot be judged.
+    "adequate", "generous", or "unknown" when it cannot be judged; and nothing
+    at all unless the run asked for the column.
 
     The one judgement in this census rather than a reading, made against the model
     in ``videobitrate`` - the same model, tables and boundaries convertVideo's -t
@@ -504,6 +581,8 @@ def census_bitrate_adequacy(path, codec, width, height, fps, bits):
     most generous reading and never calls a file starved that a grain-aware run
     would not.
     """
+    if not _adequacy_wanted():
+        return ""
     if not width or not height or not str(bits).isdigit():
         return "unknown"
     grain = videobitrate.source_bitrate_grain(path, probe_enabled=0)

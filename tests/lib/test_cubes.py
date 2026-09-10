@@ -326,3 +326,60 @@ class TestTheFactView:
 
     def test_a_type_there_is_no_report_for_has_no_view(self):
         assert cubes.fact_sql("nope") is None
+
+
+class TestTheAdequacyAxis:
+    """The one axis three of the five cubes share, and the reason it is worth a
+    class of its own: it is what lets a library be counted by how much of it is
+    worth re-encoding, in the same three words whichever report the rows came
+    from."""
+
+    @pytest.mark.parametrize("content,column", [
+        ("audio", "bitrateAdequacy"), ("video", "bitrateAdequacy"),
+        ("images", "sizeAdequacy")])
+    def test_each_of_the_three_has_it_as_a_dimension(self, content, column):
+        assert column in cubes.DIMENSIONS[content]
+        assert column in dict(cubes.COLUMN_SPECS[content])
+
+    @pytest.mark.parametrize("content,column", [
+        ("audio", "bitrateAdequacy"), ("video", "bitrateAdequacy"),
+        ("images", "sizeAdequacy")])
+    def test_and_an_empty_cell_reads_as_unknown_rather_than_as_a_verdict(
+            self, content, column):
+        """Which is what a run without -a leaves behind: the column is there and
+        every row of it is empty, and a cube that read that as a bucket named ""
+        would answer questions nobody asked it."""
+        assert "%s AS %s" % (cubes.text_dimension(column), column) \
+            in cubes.fact_sql(content)
+
+    @pytest.mark.parametrize("content,column", [
+        ("audio", "bitrateAdequacy"), ("video", "bitrateAdequacy"),
+        ("images", "sizeAdequacy")])
+    def test_it_is_an_axis_and_never_a_measure(self, content, column):
+        """A count of files per verdict is the question; a sum of verdicts is
+        not a thing."""
+        assert column not in cubes.MEASURES[content]
+
+
+class TestTheImagesCube:
+    def test_the_resolution_axis_is_the_video_ladder(self):
+        """So a 1080p scan and a 1080p film mean the same number of pixels
+        across, and the two reports can be read side by side."""
+        assert "'1080p'" in cubes.fact_sql("images")
+        assert "pixelWidth" in cubes.fact_sql("images")
+
+    def test_the_codec_is_read_twice_over(self):
+        """Once as itself and once as its kind, which is the coarsest reading of
+        the column and the one that separates the files a library can still save
+        bytes on from the ones it cannot."""
+        sql = cubes.fact_sql("images")
+        assert "AS imageCodec," in sql and "AS imageCodecKind" in sql
+        assert "'lossless'" in sql and "'lossy'" in sql
+
+    def test_the_pixels_measure_is_computed_and_not_a_column(self):
+        """The report states a resolution as text, because that is what a person
+        reads; the cube wants a number it can sum."""
+        assert "pixels" not in dict(cubes.COLUMN_SPECS["images"])
+        assert "pixels" in cubes.MEASURES["images"]
+        assert "pixelWidth * pixelHeight AS pixels" in cubes.fact_sql("images")
+

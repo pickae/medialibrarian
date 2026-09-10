@@ -1,10 +1,11 @@
 """What a file IS, and its report row.
 
 ``content-census`` is the command around it; this is the part that decides which
-report a file belongs in and renders one row for it. The two halves of the actual
-probing live beside it, split the way the tools do: ``censusmedia`` reads audio
-and video with ffprobe and mediainfo, ``censusdocuments`` reads books and comics
-with Calibre, poppler, the archive extractors and ImageMagick.
+report a file belongs in and renders one row for it. The actual probing lives
+beside it, split the way the tools do: ``censusmedia`` reads audio and video with
+ffprobe and mediainfo, ``censusdocuments`` reads books and comics with Calibre,
+poppler, the archive extractors and ImageMagick, and ``censusimages`` reads a
+loose picture with ImageMagick alone.
 
 The classification is by suffix, except for a PDF. A PDF is in the comic list AND
 in the book list, because it genuinely is both in the wild: a scanned comic and a
@@ -21,7 +22,13 @@ import io
 import os
 import shutil
 
-from medialib.lib import censusdocuments, censusmedia, comicpdf, enums
+from medialib.lib import (
+    censusdocuments,
+    censusimages,
+    censusmedia,
+    comicpdf,
+    enums,
+)
 from medialib.lib.enums import lower_extension_of, shell_lower
 
 __all__ = [
@@ -79,13 +86,19 @@ def census_all_extensions():
                         + census_video_extensions().split()
                         + list(enums.COMIC_EXTENSIONS)
                         + list(enums.COMIC_PDF_EXTENSIONS)
-                        + list(enums.BOOK_INPUT_EXTENSIONS))
+                        + list(enums.BOOK_INPUT_EXTENSIONS)
+                        + list(enums.IMAGE_EXTENSIONS))
 
 
-def census_init():
+def census_init(adequacy_wanted=False):
     """Settle the derived enums and what this host can actually probe, once, so no
     row builder asks the same question per file - and so the caller can say up
     front which columns are going to stay empty.
+
+    ``adequacy_wanted`` is the run's -a, settled here with everything else it
+    settles once: it is what turns the adequacy column on for the audio, video
+    and images reports, and it is off by default because the reading behind it
+    costs a decode per picture.
 
     These are the OPTIONAL tools: their absence costs a column, and the run says
     so and goes on. The ones whose absence would cost a whole content type are
@@ -95,6 +108,7 @@ def census_init():
     assignments leave them, so the row builders read one answer rather than
     probing again.
     """
+    os.environ["CENSUS_ADEQUACY"] = "1" if adequacy_wanted else ""
     os.environ["censusVideoExtensions"] = census_video_extensions()
     os.environ["censusPageExtensions"] = census_page_extensions()
     os.environ["censusAllExtensions"] = census_all_extensions()
@@ -133,9 +147,9 @@ def _missing_pdf_tools():
 
 
 def census_classify(path):
-    """Which report this file belongs in - "audio", "video", "books", "comics",
-    or "" for a suffix no list claims - and the PDF probe's numbers alongside it,
-    as ``(type, stats)``.
+    """Which report this file belongs in - "audio", "video", "images", "books",
+    "comics", or "" for a suffix no list claims - and the PDF probe's numbers
+    alongside it, as ``(type, stats)``.
 
     Both are returned together for the reason the shell leaves them in globals: a
     caller that took only the type would have to run the probe again to get the
@@ -173,7 +187,8 @@ def census_classify(path):
             (enums.AUDIO_EXTENSIONS, "audio"),
             (video, "video"),
             (enums.COMIC_EXTENSIONS, "comics"),
-            (enums.BOOK_INPUT_EXTENSIONS, "books")):
+            (enums.BOOK_INPUT_EXTENSIONS, "books"),
+            (enums.IMAGE_EXTENSIONS, "images")):
         if extension in [shell_lower(e) for e in names]:
             return content, ""
     return "", ""
@@ -191,4 +206,6 @@ def census_row(content, path, separator=None):
         return censusdocuments.census_book_row(path)
     if content == "comics":
         return censusdocuments.census_comic_row(path)
+    if content == "images":
+        return censusimages.census_image_row(path, separator)
     return None, 'no census knows what a "%s" is' % content

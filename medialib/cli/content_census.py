@@ -1,4 +1,4 @@
-"""content-census: what a media library HOLDS, as four reports.
+"""content-census: what a media library HOLDS, as five reports.
 
 The spec below is data, rendered and parsed by medialib.lib.clioptions, so the
 help page and every refusal come out of the one renderer every command shares.
@@ -43,6 +43,13 @@ o | <dir> | Write the reports into <dir> instead of into the library, for
                     libraries this is what puts all their reports in one place.
                     Made if it is not there yet, so a run can be pointed at a
                     fresh folder without creating it first.
+a |  | Also judge each file's size: the audio, video and images
+                    reports get a "starved" / "adequate" / "generous" verdict on
+                    every row, saying whether the bytes it was given are enough
+                    for what it is - so a library can be counted by how much of
+                    it is worth re-encoding. Off by default because the reading
+                    behind it costs a decode of every picture, which over a
+                    library of scans is a run of its own.
 b |  | Also build the DuckDB hypercubes from the reports this run
                     writes, by handing them to content-census-bi. Only a
                     shorthand: that command can always be run on its own over
@@ -60,9 +67,9 @@ OPT_CHECKS = """
 d | nonNegInt | depth in levels
 """
 
-OPT_VARS = "d:depth o:outDir b:runBI"
+OPT_VARS = "d:depth o:outDir a:judgeSize b:runBI"
 OPT_COLUMN = 20
-OPT_LONG = "d:depth o:output-dir b:build-cubes t:tsv h:help"
+OPT_LONG = "d:depth o:output-dir a:adequacy b:build-cubes t:tsv h:help"
 
 
 def spec(program: str) -> clioptions.Spec:
@@ -121,6 +128,7 @@ def main(argv: list[str], program: str = "content-census",
             extension="tsv" if tab else "csv",
             script_dir=script_dir,
             program=program,
+            adequacy=bool(result.values["judgeSize"]),
         )
     except census_run.Refusal as refusal:
         sys.stderr.write(refusal.text)

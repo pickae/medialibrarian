@@ -4,19 +4,25 @@
 census report are MEASURES, which are DIMENSIONS, and what a raw column has to
 be turned into before it can be one.
 
-Four cubes and not one, for the same reason the census writes four reports: the
+Five cubes and not one, for the same reason the census writes five reports: the
 interesting columns differ per content type. A film has a resolution, a frame rate
 and a dynamic range; an audiobook has channels; a novel has neither. Forcing all
-four into one table would give a fact table three quarters empty and a cube whose
-every axis is meaningless for three quarters of its rows.
+five into one table would give a fact table four fifths empty and a cube whose
+every axis is meaningless for four fifths of its rows.
 """
 
 from __future__ import annotations
 
-from medialib.lib import aspectratios, census, codecs, resolutions
+from medialib.lib import (
+    aspectratios,
+    census,
+    codecs,
+    imagecodecs,
+    resolutions,
+)
 
 # In the order the census writes them.
-TYPES = ("audio", "video", "books", "comics")
+TYPES = ("audio", "video", "images", "books", "comics")
 
 # Spelled out rather than sniffed, and the reader is given these types rather than
 # left to guess: a census column is empty when nobody stated the value, and a report
@@ -26,6 +32,7 @@ TYPES = ("audio", "video", "books", "comics")
 COLUMN_SPECS = {
     "audio": (("path", "VARCHAR"), ("sizeBytes", "BIGINT"),
               ("durationSeconds", "DOUBLE"), ("bitrateBitsPerSecond", "BIGINT"),
+              ("bitrateAdequacy", "VARCHAR"),
               ("channels", "INTEGER"), ("codec", "VARCHAR"), ("chapters", "INTEGER")),
     "video": (("path", "VARCHAR"), ("sizeBytes", "BIGINT"),
               ("durationSeconds", "DOUBLE"),
@@ -37,6 +44,9 @@ COLUMN_SPECS = {
               ("firstAudioCodec", "VARCHAR"),
               ("firstAudioBitrateBitsPerSecond", "BIGINT"),
               ("subtitleTracks", "INTEGER"), ("chapters", "INTEGER")),
+    "images": (("path", "VARCHAR"), ("sizeBytes", "BIGINT"),
+               ("sizeAdequacy", "VARCHAR"), ("resolution", "VARCHAR"),
+               ("imageCodec", "VARCHAR")),
     "books": (("path", "VARCHAR"), ("sizeBytes", "BIGINT"), ("pages", "INTEGER"),
               ("words", "BIGINT"), ("characters", "BIGINT")),
     "comics": (("path", "VARCHAR"), ("sizeBytes", "BIGINT"), ("pages", "INTEGER"),
@@ -47,10 +57,12 @@ COLUMN_SPECS = {
 # Named once; the SQL below is generated from these, so adding an axis is one line
 # here and one expression in fact_sql.
 DIMENSIONS = {
-    "audio": ("library", "container", "channels", "codec"),
+    "audio": ("library", "container", "channels", "codec", "bitrateAdequacy"),
     "video": ("library", "resolution", "hfr", "dynamicRange", "videoCodec",
               "bitrateAdequacy", "container", "audioTracks", "firstAudioChannels",
               "firstAudioCodec", "subtitleTracks"),
+    "images": ("library", "resolution", "imageCodec", "imageCodecKind",
+               "sizeAdequacy"),
     "books": ("library", "format"),
     "comics": ("library", "resolution", "container", "imageCodec"),
 }
@@ -61,6 +73,7 @@ MEASURES = {
               "bitrateBitsPerSecond"),
     "video": ("files", "sizeBytes", "durationSeconds", "chapters",
               "videoBitrateBitsPerSecond", "firstAudioBitrateBitsPerSecond"),
+    "images": ("files", "sizeBytes", "pixels"),
     "books": ("files", "sizeBytes", "pages", "words", "characters"),
     "comics": ("files", "sizeBytes", "pages"),
 }
@@ -301,6 +314,7 @@ SELECT
     {suffix_dimension('path')} AS container,
     {number_dimension('channels')} AS channels,
     {text_dimension('codec')} AS codec,
+    {text_dimension('bitrateAdequacy')} AS bitrateAdequacy,
     {bitrate_tier_case('bitrateBitsPerSecond', 'audio')} AS bitrateTier,
     sizeBytes,
     durationSeconds,
@@ -338,6 +352,24 @@ SELECT
     chapters,
     videoBitrateBitsPerSecond,
     firstAudioBitrateBitsPerSecond
+FROM measured;\n""")
+    if content == "images":
+        return (f"""CREATE OR REPLACE VIEW imagesFacts AS
+WITH measured AS (
+    SELECT *,
+        TRY_CAST(regexp_extract(resolution, '^([0-9]+)x([0-9]+)$', 1) AS BIGINT) AS pixelWidth,
+        TRY_CAST(regexp_extract(resolution, '^([0-9]+)x([0-9]+)$', 2) AS BIGINT) AS pixelHeight
+    FROM imagesFiles
+)
+SELECT
+    path,
+    {library} AS library,
+    {resolutions.tier_sql('pixelWidth', 'pixelHeight')} AS resolution,
+    {text_dimension('imageCodec')} AS imageCodec,
+    {imagecodecs.kind_sql('imageCodec')} AS imageCodecKind,
+    {text_dimension('sizeAdequacy')} AS sizeAdequacy,
+    sizeBytes,
+    pixelWidth * pixelHeight AS pixels
 FROM measured;\n""")
     if content == "books":
         return (f"""CREATE OR REPLACE VIEW booksFacts AS

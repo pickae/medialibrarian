@@ -29,6 +29,13 @@ Options:
                     libraries this is what puts all their reports in one place.
                     Made if it is not there yet, so a run can be pointed at a
                     fresh folder without creating it first.
+    -a, --adequacy  Also judge each file's size: the audio, video and images
+                    reports get a "starved" / "adequate" / "generous" verdict on
+                    every row, saying whether the bytes it was given are enough
+                    for what it is - so a library can be counted by how much of
+                    it is worth re-encoding. Off by default because the reading
+                    behind it costs a decode of every picture, which over a
+                    library of scans is a run of its own.
     -b, --build-cubes
                     Also build the DuckDB hypercubes from the reports this run
                     writes, by handing them to content-census-bi. Only a

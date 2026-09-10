@@ -26,18 +26,25 @@ _WHOLE = re.compile(r"[0-9]+")
 _DECIMAL = re.compile(r"[0-9]+(?:[.][0-9]+)?")
 _RATIONAL = re.compile(r"([0-9]+)/([0-9]+)")
 
-# What each report's row holds. Two columns are common to all four - the full path
+# What each report's row holds. Two columns are common to all five - the full path
 # and the raw size in bytes - and everything after them is that type's own, because
 # a duration means nothing for a comic and a page count means nothing for a film.
 # The units are in the NAMES so a spreadsheet can sum a column without parsing it.
+#
+# The adequacy column is the one three of them share: what that file's size IS for
+# what the file is, in the three words medialib/lib/adequacy.py defines. It is named
+# for what was measured - a bitrate for the two types that have one, a size for
+# the one that does not - and it is EMPTY unless the run was asked for it, which
+# is what -a does.
 COLUMNS = {
     "audio": ("path", "sizeBytes", "durationSeconds", "bitrateBitsPerSecond",
-              "channels", "codec", "chapters"),
+              "bitrateAdequacy", "channels", "codec", "chapters"),
     "video": ("path", "sizeBytes", "durationSeconds", "videoBitrateBitsPerSecond",
               "bitrateAdequacy", "resolution", "frameRateFps", "videoCodec",
               "container", "dynamicRange", "audioTracks", "firstAudioChannels",
               "firstAudioCodec", "firstAudioBitrateBitsPerSecond",
               "subtitleTracks", "chapters"),
+    "images": ("path", "sizeBytes", "sizeAdequacy", "resolution", "imageCodec"),
     "books": ("path", "sizeBytes", "pages", "words", "characters"),
     "comics": ("path", "sizeBytes", "pages", "firstPageResolution", "container",
                "imageCodec"),

@@ -22,11 +22,12 @@ from medialib.lib.runlog import log
 USAGE_HEAD = """Usage:
     {program} [options] <reportPath>...
 Arguments:
-    <reportPath>    A census report (audio*.csv, video*.csv, books*.csv,
-                    comics*.csv, or the .tsv of each), or a folder to look for them
-                    in, recursively. Several may be given, including several
-                    libraries' worth of the same type: they are loaded into one
-                    cube per type and stay separable along its \"library\" axis.
+    <reportPath>    A census report (audio*.csv, video*.csv, images*.csv,
+                    books*.csv, comics*.csv, or the .tsv of each), or a folder to
+                    look for them in, recursively. Several may be given,
+                    including several libraries' worth of the same type: they are
+                    loaded into one cube per type and stay separable along its
+                    \"library\" axis.
 Options:"""
 
 OPT_SPEC = """
@@ -46,7 +47,9 @@ OPT_VARS = "o:dbPath e:exportDir q:query s:showTotals"
 OPT_COLUMN = 20
 OPT_LONG = "o:database e:export-dir q:query s:show-totals h:help"
 
-REPORT_GLOBS = ("audio", "video", "books", "comics")
+# The report name prefixes this command looks for, which are the census's own
+# content types and not a second list of them.
+REPORT_GLOBS = cubes.TYPES
 
 
 class Refusal(Exception):
@@ -101,9 +104,24 @@ def collect_paths(arguments):
     if not found:
         raise Refusal(
             "\nError: none of the given paths holds a census report.\n"
-            "Expected audio*.csv, video*.csv, books*.csv or comics*.csv (or "
-            ".tsv),\nas written by content-census. Nothing was changed.\n")
+            "Expected %s (or .tsv),\nas written by content-census. Nothing was "
+            "changed.\n" % _expected_names())
     return found
+
+
+def _expected_names():
+    """The report names a refusal offers - "audio*.csv, video*.csv, ... or
+    comics*.csv" - built from the census's own types so a type added there is
+    named here too."""
+    names = ["%s*.csv" % content for content in REPORT_GLOBS]
+    return "%s or %s" % (", ".join(names[:-1]), names[-1])
+
+
+def _spoken_types():
+    """The content types the way a sentence reads them - "audio, video, images,
+    books or comics"."""
+    names = list(REPORT_GLOBS)
+    return "%s or %s" % (", ".join(names[:-1]), names[-1])
 
 
 def _first_line(path: str) -> str:
@@ -126,8 +144,8 @@ def classify(found):
     for path, explicit in found:
         content = cubes.report_type(path)
         if not content:
-            reason = ("its name does not start with audio, video, books or "
-                      "comics")
+            reason = ("its name does not start with %s"
+                      % _spoken_types())
             if explicit:
                 raise Refusal('\nError: "%s" is not a census report: %s.\n'
                               "Nothing was changed.\n" % (path, reason))

@@ -44,11 +44,12 @@ def test_the_recorded_scenario_is_reproduced_byte_for_byte(scenario, argv):
 
 class TestTheOptionsThemselves:
     def test_the_defaults_are_what_the_script_declares(self):
-        # -d, -o and -b reach the run as values; -t is a flag the script acts on
-        # through cliOnOpt and so has no variable of its own.
+        # -d, -o, -a and -b reach the run as values; -t is a flag the script
+        # acts on through cliOnOpt and so has no variable of its own.
         from medialib.lib import clioptions
         result = clioptions.parse(content_census.spec(_PROGRAM), ["lib"])
-        assert result.values == {"depth": "", "outDir": "", "runBI": ""}
+        assert result.values == {"depth": "", "outDir": "", "judgeSize": "",
+                                 "runBI": ""}
         assert result.positionals == ["lib"]
 
     def test_options_are_taken_after_a_positional_too(self):

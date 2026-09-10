@@ -79,7 +79,8 @@ class TestTheDerivedEnums:
     def test_the_all_list_covers_every_type_the_census_reports(self):
         every = cc.census_all_extensions().split()
         for names in (enums.AUDIO_EXTENSIONS, enums.COMIC_EXTENSIONS,
-                      enums.COMIC_PDF_EXTENSIONS, enums.BOOK_INPUT_EXTENSIONS):
+                      enums.COMIC_PDF_EXTENSIONS, enums.BOOK_INPUT_EXTENSIONS,
+                      enums.IMAGE_EXTENSIONS):
             for extension in names:
                 assert extension in every
         for extension in cc.census_video_extensions().split():
@@ -114,6 +115,10 @@ class TestClassify:
                 continue
             assert cc.census_classify("/x." + extension)[0] == "books"
 
+    @pytest.mark.parametrize("extension", enums.IMAGE_EXTENSIONS)
+    def test_every_image_suffix_is_images(self, extension):
+        assert cc.census_classify("/x." + extension)[0] == "images"
+
     def test_a_suffix_no_list_claims_is_nothing(self):
         assert cc.census_classify("/x.zzz") == ("", "")
 
@@ -133,7 +138,8 @@ class TestClassify:
                 (enums.AUDIO_EXTENSIONS, "audio"),
                 (cc.census_video_extensions().split(), "video"),
                 (enums.COMIC_EXTENSIONS, "comics"),
-                (enums.BOOK_INPUT_EXTENSIONS, "books")):
+                (enums.BOOK_INPUT_EXTENSIONS, "books"),
+                (enums.IMAGE_EXTENSIONS, "images")):
             for extension in names:
                 if extension in enums.COMIC_PDF_EXTENSIONS:
                     continue
