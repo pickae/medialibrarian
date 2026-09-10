@@ -132,6 +132,7 @@ def _run(image_format="avif", speed=5, quality=60, max_res=ci.UNBOUNDED_EDGE):
     """
     options = {
         "crop": False,
+        "skipStarved": False,
         "format": image_format,
         "quality": quality,
         "effortLevel": ci.FORMATS[image_format].level(speed),
@@ -259,6 +260,82 @@ class TestTheFormatReachesTheOutputName:
         assert "jxl" in ci._SAME_STEM and "JXL" in ci._SAME_STEM
 
 
+class TestTheStarvedSkip:
+    """The -a decision, which is what this command does INSTEAD of converting.
+
+    The verdict itself belongs to imagebitrate and is pinned there; what is
+    pinned here is that the flag reaches the decision, that a skipped image
+    leaves no output, and that the two exemptions - -a and -r - are exemptions.
+    """
+
+    def _run(self, tmp_path, verdict, skip_starved=True):
+        """A Run over one image, with the model's answer stood in for: the
+        conversion path is what is under test, not the arithmetic."""
+        counters = tmp_path / "counters"
+        counters.mkdir()
+        for name in ("current", "converted", "trimmed", "blank", "starved",
+                     "alreadyDone", "notFound"):
+            (counters / name).write_text("0")
+        options = {
+            "crop": False,
+            "skipStarved": skip_starved,
+            "format": "avif",
+            "quality": 60,
+            "effortLevel": 5,
+            "fuzzCommand": "10%",
+            "maxResCommand": "10000x10000>",
+        }
+        state = ci.Run(str(tmp_path), str(tmp_path / "out"), str(counters),
+                       options, 1)
+        state.starved = lambda relative: verdict
+        state._convert = lambda arguments: converted.append(arguments) or 0
+        converted = []
+        return state, converted
+
+    def test_a_starved_image_is_not_converted(self, tmp_path, monkeypatch):
+        (tmp_path / "page.jpg").write_bytes(b"x")
+        (tmp_path / "out").mkdir()
+        monkeypatch.chdir(tmp_path)
+        state, converted = self._run(tmp_path, verdict=True)
+        state.transcode("page.jpg")
+        assert converted == []
+        assert state.counter("starved") == 1
+        assert not (tmp_path / "out" / "page.avif").exists()
+
+    def test_one_that_is_not_starved_is(self, tmp_path, monkeypatch):
+        (tmp_path / "page.jpg").write_bytes(b"x")
+        (tmp_path / "out").mkdir()
+        monkeypatch.chdir(tmp_path)
+        state, converted = self._run(tmp_path, verdict=False)
+        state.transcode("page.jpg")
+        assert len(converted) == 1
+        assert state.counter("converted") == 1
+
+    def test_and_neither_is_asked_when_the_run_was_told_to_convert_everything(
+            self, tmp_path, monkeypatch):
+        """-a: the question is not asked at all, so an image the model would
+        have refused is converted with the rest."""
+        (tmp_path / "page.jpg").write_bytes(b"x")
+        (tmp_path / "out").mkdir()
+        monkeypatch.chdir(tmp_path)
+        state, converted = self._run(tmp_path, verdict=True,
+                                     skip_starved=False)
+        state.transcode("page.jpg")
+        assert len(converted) == 1
+        assert state.counter("starved") == 0
+
+    def test_an_image_that_could_not_be_measured_is_converted(self, tmp_path,
+                                                              monkeypatch):
+        """The same answer convert-video's -t gives an unreadable source: the
+        check exists to avoid pointless work, and refusing a conversion over a
+        missing measurement would lose one worth doing."""
+        image = tmp_path / "page.jpg"
+        image.write_bytes(b"not an image at all")
+        monkeypatch.chdir(tmp_path)
+        assert ci.Run(str(tmp_path), str(tmp_path / "out"), "/counters",
+                      {}, 1).starved("page.jpg") is False
+
+
 class TestTheOptionsAreSettledUpFront:
     """Both new checks refuse the run before an image is touched, because
     neither mistake would show up until deep inside it."""
@@ -285,6 +362,11 @@ class TestTheOptionsAreSettledUpFront:
     def test_the_long_form_is_the_same_option(self):
         assert self._parse("--format=jxl", "in", "out").values["outputFormat"] \
             == "jxl"
+
+    def test_the_starved_skip_is_on_unless_a_flag_turns_it_off(self):
+        assert "a" not in self._parse("in", "out").given
+        assert "a" in self._parse("-a", "in", "out").given
+        assert "a" in self._parse("--always", "in", "out").given
 
     def test_a_speed_that_is_not_a_number_is_refused(self):
         """Every format's effort setting is derived from -s arithmetically, so

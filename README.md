@@ -585,6 +585,13 @@ the version worth keeping, since nothing `-d` discards can be recovered from the
 output. Without `-d` the run needs Calibre alone — Ghostscript, `unzip`/`zip`
 and ImageMagick are only asked for when there is something for them to strip.
 
+An illustration has to be worth downscaling on *both* counts before `-d` touches
+it: over the size threshold, and not already starved. Scaling a picture that has
+been compressed past what its format and size need, and re-compressing it at a
+fixed quality on the way, would take a second helping out of something that had
+none to give — so those pass through untouched, exactly as an image under the
+threshold does.
+
 The input tree is never modified, and emitted books never clobber an existing
 output (a collision keeps both via a ` (N)` suffix).
 
@@ -651,6 +658,15 @@ hold one large image per page — into a tree of `.cbz` archives of AVIF pages.
   the same file count as the input rather than one extra folder level per book.
 - A `.cbz` left by an earlier run is skipped, so re-running over a grown library
   neither duplicates nor rewrites finished books.
+- **A book that is already a starved scan is repackaged rather than converted.**
+  Its pages are judged before any of them is encoded, and if more than 80% of
+  them are starved the book goes into a `.cbz` with its *own* pages: what is left
+  of such a scan is all there is, and a second generation of loss over nearly
+  every page would buy a small saving off a file that is already small. Below
+  that share every page is converted, thin ones included — the decision is taken
+  once for the whole book, because a `.cbz` whose pages are half AVIF and half
+  JPEG is worse than either. Books repackaged this way are named in the closing
+  report.
 
 ### `convert-images`
 
@@ -658,6 +674,26 @@ Batch-converts images to AVIF, WebP or JPEG XL (or back to JPEG), with optional
 whitespace cropping and parallel encoding. AVIF is the default, and `-s` stays
 one knob across all three: each encoder's own effort setting is derived from it,
 so a lower `-s` is a slower encode whichever format is being written.
+
+Input is every still format a library plausibly holds: JPEG, PNG, WebP, AVIF,
+HEIC, JPEG XL, JPEG 2000, TIFF, BMP, GIF, TGA, PCX, Netpbm, PSD and ICO. An
+animated GIF is read for its first frame; the input is never modified, so nothing
+is lost by pointing a run at one.
+
+- **An image that is already starved is left alone.** Whether a file is big
+  enough depends on its format, its pixel count and what is in it together, and
+  below that point whatever is left of the picture is all there is: encoding it
+  again spends a second generation of loss on something that had none to spare.
+  Such images are counted in the closing report and skipped. `-a` converts
+  everything regardless, which is what [`convert-comics`](#convert-comics) asks
+  for — inside one book every page has to come out in the same format.
+- **The check is one header read per image**, not a decode: `identify -ping`
+  stops at the header, which states the format, the pixel size and whether there
+  is colour in the picture. What is *in* the picture — photograph, flat artwork,
+  line art — would cost a full decode, so it is left unmeasured here and read at
+  its most forgiving. An image nothing could measure is converted, not skipped.
+- `-r` never asks: converting back to JPEG is about what can open the file, and a
+  source too small to improve is exactly as unopenable as a large one.
 
 ## Names and folder structure
 

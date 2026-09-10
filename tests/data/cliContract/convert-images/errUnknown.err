@@ -5,6 +5,9 @@ Usage:
 Options:
     -h, --help      Print this help page.
     -c, --crop      crop excessive whitespace
+    -a, --always    convert every image, including one whose file size says it is
+                    already starved. Without it such an image is left alone: see
+                    below.
     -r, --reverse   reverse: convert the -o format back to jpeg
     -o, --format <format>
                     output format: avif, webp or jxl, default avif
