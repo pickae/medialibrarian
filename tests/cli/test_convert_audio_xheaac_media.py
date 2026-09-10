@@ -77,18 +77,13 @@ def _has_cover(path):
     return bool(MP4(str(path)).get("covr"))
 
 
-def _noise(path, seconds, codec_args, chapters=None):
-    """<seconds> of pink noise in whatever the codec arguments ask for.
-
-    A metadata file goes in as a second input when chapters are wanted, which
-    is how ffmpeg is given chapters to write.
-    """
-    argv = ["ffmpeg", "-y", "-loglevel", "error",
-            "-f", "lavfi", "-i", "anoisesrc=d=%d:c=pink:r=48000" % seconds]
-    if chapters:
-        argv += ["-i", str(chapters), "-map_metadata", "1"]
-    argv += ["-map", "0:a", "-ac", "2", *codec_args, str(path)]
-    subprocess.run(argv, check=True, stdin=subprocess.DEVNULL)
+def _noise(path, seconds, codec_args):
+    """<seconds> of pink noise in whatever the codec arguments ask for."""
+    subprocess.run(
+        ["ffmpeg", "-y", "-loglevel", "error",
+         "-f", "lavfi", "-i", "anoisesrc=d=%d:c=pink:r=48000" % seconds,
+         "-map", "0:a", "-ac", "2", *codec_args, str(path)],
+        check=True, stdin=subprocess.DEVNULL)
     return path
 
 
@@ -106,14 +101,23 @@ def _video_with_audio(path, seconds, codec_args):
     return path
 
 
-def _metadata_with_chapters(path, seconds):
-    """An ffmetadata file with two chapters in it."""
-    half = int(seconds * 1000 / 2)
-    path.write_text(
-        ";FFMETADATA1\n"
-        "[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=%d\ntitle=One\n"
-        "[CHAPTER]\nTIMEBASE=1/1000\nSTART=%d\nEND=%d\ntitle=Two\n"
-        % (half, half, seconds * 1000), encoding="utf-8")
+def _add_chapters(path, seconds):
+    """Two chapters into a FLAC, as the OGM "CHAPTERnnn=" Vorbis-comment rows a
+    FLAC really carries them in - which is what mutagen writes and what ffprobe
+    reads back as chapters, so this is the shape a chaptered source has here.
+
+    Written with mutagen because ffmpeg's FLAC muxer writes no chapters at all:
+    not from an ffmetadata input, not with an explicit -map_chapters.
+    """
+    from mutagen.flac import FLAC
+
+    half = seconds // 2
+    tags = FLAC(str(path))
+    tags["CHAPTER000"] = "00:00:00.000"
+    tags["CHAPTER000NAME"] = "One"
+    tags["CHAPTER001"] = "00:%02d:%02d.000" % (half // 60, half % 60)
+    tags["CHAPTER001NAME"] = "Two"
+    tags.save()
     return path
 
 
@@ -129,10 +133,10 @@ def converted(tmp_path_factory):
     source.mkdir()
 
     # A plain FLAC, well above the threshold, so it is encoded. Chapters go in
-    # with it: MP4 has nowhere to keep a Vorbis-comment row, so carrying these
+    # after it: MP4 has nowhere to keep a Vorbis-comment row, so carrying these
     # across is a chapter TRACK written by ffmpeg and not a tag.
-    meta = _metadata_with_chapters(tmp / "chapters.txt", SECONDS)
-    chaptered = _noise(source / "chaptered.flac", SECONDS, [], chapters=meta)
+    chaptered = _add_chapters(_noise(source / "chaptered.flac", SECONDS, []),
+                              SECONDS)
 
     # A sidecar cover sharing the track's name, which has to end up inside the
     # .m4a as a `covr` atom.
