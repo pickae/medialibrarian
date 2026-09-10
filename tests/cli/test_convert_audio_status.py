@@ -1,7 +1,8 @@
 """convertAudio's live status row and its per-file line.
 
 What the row is DRAWN with has its own file; this is the content convertAudio
-supplies, and the erase/re-pin dance around each line it prints.
+supplies, the erase/re-pin dance around each line it prints, and the settlement a
+worker process has to be handed before it can join in.
 """
 
 import pytest
@@ -120,3 +121,39 @@ class TestPerFileLine:
         counters.progress.write_text("12\n")
         counters.report_progress("track13.m4a")
         assert capsys.readouterr().out == "[13/80] Converting: track13.m4a\n"
+
+
+class _Reporter:
+    """A job whose whole work is saying what the row looked like where it ran."""
+
+    def __init__(self, seen_file: str) -> None:
+        self.seen_file = seen_file
+
+    def encode(self, item: str) -> None:
+        with open(self.seen_file, "w") as seen:
+            seen.write("%s %s" % (statusline.state.row or "-",
+                                  statusline.state.cols))
+
+
+class TestTheRowInAWorkerProcess:
+    """The row is settled once, in the run's own process, and the lines that
+    displace it are printed by the workers - which on any host whose start method
+    is ``forkserver`` or ``spawn`` are fresh interpreters that share none of it."""
+
+    def test_a_worker_encodes_against_the_row_the_run_settled(
+            self, tmp_path, monkeypatch):
+        """Without this a worker believes there is no terminal, erases nothing,
+        and prints its "Converting:" line onto the end of the pinned row."""
+        monkeypatch.setattr(statusline.state, "row", "1")
+        monkeypatch.setattr(statusline.state, "cols", 96)
+        seen = tmp_path / "seen"
+        ca._run_pool(_Reporter(str(seen)), "encode", ["track1.m4a"], 2)
+        assert seen.read_text() == "1 96"
+
+    def test_off_a_terminal_a_worker_is_handed_no_row_either(
+            self, tmp_path, monkeypatch):
+        monkeypatch.setattr(statusline.state, "row", "")
+        monkeypatch.setattr(statusline.state, "cols", 1000)
+        seen = tmp_path / "seen"
+        ca._run_pool(_Reporter(str(seen)), "encode", ["track1.m4a"], 2)
+        assert seen.read_text() == "- 1000"
