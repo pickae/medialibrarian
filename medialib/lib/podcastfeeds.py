@@ -44,6 +44,11 @@ __all__ = [
     "report_episodes",
     "podcast_bot_block_warning",
     "is_bot_block",
+    "is_cloudflare_challenge",
+    "cloudflare_wants_dependency",
+    "podcast_impersonate_retry",
+    "podcast_impersonate_dependency_warning",
+    "PODCAST_IMPERSONATE_ARGS",
     "podcast_download_stats",
     "render_call",
     "quote_posix",
@@ -636,6 +641,67 @@ def podcast_bot_block_warning(provider: str, stderr=None) -> None:
         "         are being stopped here. Feeds from other providers are unaffected.\n"
         "         What helps: wait, come back from a different address, or pass cookies -\n"
         "         https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies\n")
+
+
+# What yt-dlp's own message asks for, verbatim. The key is fixed rather than
+# read back out of the line: the challenge is the generic extractor's alone.
+PODCAST_IMPERSONATE_ARGS = ("--extractor-args", "generic:impersonate")
+
+
+def is_cloudflare_challenge(line: str) -> bool:
+    """True for the 403 yt-dlp attributes to a Cloudflare anti-bot challenge AND
+    offers impersonation for.
+
+    Matched on two fragments, the cause and the remedy it names, because the
+    remedy is what gets retried: a line that stopped naming this argument would
+    be asking for something else, and retrying the old one would be a guess.
+    """
+    lower = shell_lower(line)
+    return ("cloudflare anti-bot challenge" in lower
+            and "generic:impersonate" in lower)
+
+
+def cloudflare_wants_dependency(line: str) -> bool:
+    """Whether that line is the version yt-dlp prints when no impersonation
+    target is installed - the clause about installing the dependency is in the
+    message only then, so the line itself says whether a retry could work."""
+    return "impersonation dependency" in shell_lower(line)
+
+
+def podcast_impersonate_retry(call: Sequence[str]) -> list[str] | None:
+    """The same call with impersonation asked for, or None when it already asks.
+
+    None for a feed whose row already asks to impersonate: appending ours would
+    overwrite the target it chose.
+    """
+    for index, arg in enumerate(call):
+        value = ""
+        if arg == "--extractor-args" and index + 1 < len(call):
+            value = call[index + 1]
+        elif arg.startswith("--extractor-args="):
+            value = arg[len("--extractor-args="):]
+        if value.startswith("generic:") and "impersonate" in value:
+            return None
+    if not call:
+        return None
+    # Before the URL, where every other option already sits.
+    return list(call[:-1]) + list(PODCAST_IMPERSONATE_ARGS) + [call[-1]]
+
+
+def podcast_impersonate_dependency_warning(stderr=None) -> None:
+    """What to say when the retry is the right answer and cannot be made."""
+    if stderr is None:
+        stderr = sys.stderr
+    stderr.write(
+        "WARNING: a feed was refused by a Cloudflare anti-bot challenge, which is\n")
+    stderr.write(
+        "         retried automatically with --extractor-args generic:impersonate -\n")
+    stderr.write(
+        "         but this yt-dlp has no impersonation target installed, so there is\n")
+    stderr.write(
+        "         nothing to retry with. What helps: install the dependency -\n")
+    stderr.write(
+        "         https://github.com/yt-dlp/yt-dlp#impersonation\n")
 
 
 def _read_counter(counter_file: str) -> int:

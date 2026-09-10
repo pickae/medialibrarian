@@ -281,7 +281,17 @@ class Run:
 
         manifest = os.path.join(self.manifest_dir, "feed%d" % index)
         block_flag = os.path.join(self.status_dir, "blocked." + provider)
-        status = self._download(argv, manifest, podcast, block_flag, provider)
+
+        # The one refusal this run answers by itself: yt-dlp names the
+        # argument that gets past it, so the feed is asked again with it.
+        retry = podcastfeeds.podcast_impersonate_retry(argv)
+        status, challenged = self._download(argv, manifest, podcast, block_flag,
+                                            provider, retriable=retry is not None)
+        if challenged and retry is not None:
+            log("%s: Cloudflare anti-bot challenge, retrying with impersonation"
+                % podcast)
+            status, _ = self._download(retry, manifest, podcast, block_flag,
+                                       provider)
 
         # A feed the reader cut short did not fail - it was stopped, and saying
         # otherwise would put it in the list of feeds to go and look at.
@@ -302,30 +312,44 @@ class Run:
             return
 
     def _download(self, argv, manifest: str, podcast: str, block_flag: str,
-                  provider: str):
-        """Run one call, reporting its episodes AS THEY ARRIVE.
+                  provider: str, retriable: bool = False):
+        """Run one call, reporting its episodes AS THEY ARRIVE, and answer with
+        its status and whether a Cloudflare challenge refused it.
 
         The shell pipes yt-dlp straight into the reporter, so a feed's lines
         appear while it downloads rather than when it finishes; the reporter is
         stateless between lines - everything it counts lives in files - so it is
         fed one complete line at a time and the liveness survives the port.
+
+        ``retriable`` says a second call with impersonation is available. Only
+        then is the challenge held back from the reporter: it is about to be
+        answered, and a FAIL line for a feed that then downloads would be a lie.
         """
         try:
             process = subprocess.Popen(argv, stdout=subprocess.PIPE,
                                        stderr=subprocess.STDOUT,
                                        stdin=subprocess.DEVNULL)
         except OSError:
-            return 1
+            return 1, False
         if process.stdout is None:
             # stdout=PIPE was asked for, so this is the same "could not start"
             # the OSError above answers.
-            return 1
+            return 1, False
+        challenged = False
         with process.stdout as stream:
             for raw in stream:
                 line = raw.decode("utf-8", "replace")
                 if not line.endswith("\n"):
                     # The shell's `read` does not deliver a final partial line.
                     break
+                if retriable and podcastfeeds.is_cloudflare_challenge(line):
+                    if not podcastfeeds.cloudflare_wants_dependency(line):
+                        challenged = True
+                        continue
+                    # No target to impersonate with, so nothing to retry:
+                    # yt-dlp's own line says how to fix that, and goes through
+                    # as the failure it is.
+                    self._warn_impersonation_missing()
                 podcastfeeds.report_episodes(
                     line, self.counter_file, manifest, podcast, block_flag,
                     provider, os.environ.get("PODCAST_VERBOSE", ""),
@@ -334,7 +358,21 @@ class Run:
                     # Carrying on through the remaining refusals is precisely
                     # the behaviour that deepens the block.
                     break
-        return process.wait()
+        return process.wait(), challenged
+
+    def _warn_impersonation_missing(self) -> None:
+        """Said once for the whole run, through a file: the feeds that hit it
+        are separate processes, and O_EXCL succeeds for exactly one."""
+        flag = os.path.join(self.status_dir, "noImpersonation") \
+            if self.status_dir else ""
+        if flag:
+            try:
+                os.close(os.open(flag, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+            except FileExistsError:
+                return
+            except OSError:
+                pass
+        podcastfeeds.podcast_impersonate_dependency_warning()
 
     # --- one table --------------------------------------------------------
     def run_table(self, profile: str, jobs: int, label: str, rows) -> None:
