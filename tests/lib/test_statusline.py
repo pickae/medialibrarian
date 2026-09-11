@@ -12,7 +12,7 @@ import os
 
 import pytest
 
-from medialib.lib import statusline
+from medialib.lib import runlog, statusline
 from medialib.lib.statusline import state
 
 pytestmark = pytest.mark.pure
@@ -253,6 +253,9 @@ def _report_whether_the_lock_is_free(lock_file: str, answer_file: str) -> None:
 
 
 @pytest.mark.fs
+@pytest.mark.skipif(not runlog.can_lock(),
+                    reason="a host that cannot lock holds nothing to observe, and "
+                           "fcntl is not built into the Windows interpreter")
 def test_the_tick_holds_the_lock_while_it_draws(tmp_path, monkeypatch):
     """The whole point of the lock: a refresh must not land between a worker's
     erase and the line that erase made room for, which would put the row and the
