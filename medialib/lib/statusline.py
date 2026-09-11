@@ -13,6 +13,7 @@ text becomes an ordinary line, appended far more rarely, so a log gets an occasi
 heartbeat rather than one refresh per tick.
 """
 
+import contextlib
 import os
 import subprocess
 import sys
@@ -28,6 +29,8 @@ __all__ = [
     "clear_status",
     "end_status",
     "repin_status",
+    "status_geometry",
+    "adopt_status_geometry",
     "status_tick",
     "status_monitor",
     "start_status_monitor",
@@ -186,16 +189,54 @@ def repin_status(render) -> int:
     return draw_status(text)
 
 
+def status_geometry() -> tuple:
+    """What this process settled about the row, for handing to a worker that has
+    none: ``(row, cols, interval)``."""
+    return (state.row, state.cols, state.interval)
+
+
+def adopt_status_geometry(geometry) -> int:
+    """Draw against a row a PARENT settled.
+
+    A worker process shares no module state - it is a fresh interpreter, not a fork,
+    on any host whose default start method is ``forkserver`` or ``spawn`` - so
+    without this it starts out believing there is no terminal. ``clear_status`` then
+    does nothing, and the counted line the worker prints lands on the end of the
+    pinned row instead of on a console row of its own.
+
+    Nothing to adopt (a parent that settled no row, or a caller that passes none)
+    leaves this process as it is.
+    """
+    if not geometry:
+        return 0
+    state.row, state.cols, state.interval = geometry
+    return 0
+
+
+@contextlib.contextmanager
 def _take_lock(lock_file: str):
     """bash's ``takeLock`` on the row's console lock: serialise against the parallel
     workers' own printing. A no-op where flock is not in play.
+
+    Held for the whole block: closing the descriptor drops the lock, and a refresh
+    drawn without it lands between a worker's erase and the line that erase made
+    room for.
     """
-    if not runlog.have_flock():
+    if not lock_file or not runlog.have_flock():
+        yield
         return
     import fcntl
-    fd = os.open(lock_file, os.O_RDWR | os.O_CREAT, 0o644)
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        fd = os.open(lock_file, os.O_RDWR | os.O_CREAT, 0o644)
+    except OSError:
+        yield
+        return
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        except OSError:
+            pass
+        yield
     finally:
         os.close(fd)
 
@@ -206,13 +247,10 @@ def status_tick(lock_file: str, render) -> int:
     ``lock_file`` is the file whose lock serialises the console against the workers
     that print the scrolling lines; pass "" when nothing else prints concurrently.
     """
-    text = render()
-    if text is None:
-        return 0
-    if lock_file:
-        _take_lock(lock_file)
-        draw_status(text)
-    else:
+    with _take_lock(lock_file):
+        text = render()
+        if text is None:
+            return 0
         draw_status(text)
     return 0
 

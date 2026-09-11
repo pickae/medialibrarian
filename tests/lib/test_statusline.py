@@ -3,12 +3,16 @@
 What is pinned here: the path shortening and the row's two rendering modes under a
 controlled width, the settlement init_status_line makes from the terminal it is
 handed (the stty-then-tput-then-80 chain and its floor, with the probes stubbed),
-the background refresher's lifecycle, and the lock/no-lock tick.
+the background refresher's lifecycle, the lock/no-lock tick, and the settlement
+a worker process adopts from the run that started it.
 """
+
+import multiprocessing
+import os
 
 import pytest
 
-from medialib.lib import statusline
+from medialib.lib import runlog, statusline
 from medialib.lib.statusline import state
 
 pytestmark = pytest.mark.pure
@@ -202,3 +206,73 @@ def test_a_tick_whose_render_fails_draws_nothing(capsys):
     state.cols = 80
     statusline.status_tick("", lambda: None)
     assert _stderr(capsys) == ""
+
+
+# --- the settlement a worker adopts -------------------------------------------
+
+def test_the_settled_row_travels_as_a_geometry():
+    state.row, state.cols, state.interval = "1", 96, 2
+    assert statusline.status_geometry() == ("1", 96, 2)
+
+
+def test_a_worker_adopting_the_geometry_draws_the_row_the_run_settled():
+    """A worker process is a fresh interpreter on any host whose start method is
+    ``forkserver`` or ``spawn``, so it begins believing there is no terminal.
+    Adopting the run's settlement is what lets it erase the row before printing."""
+    statusline.adopt_status_geometry(("1", 96, 2))
+    assert (state.row, state.cols, state.interval) == ("1", 96, 2)
+
+
+def test_nothing_to_adopt_leaves_the_process_as_it_is():
+    """A run that settled no row hands its workers none, and the serial path hands
+    none either - neither is a reason to change what this process decided."""
+    state.row, state.cols, state.interval = "1", 96, 2
+    statusline.adopt_status_geometry(None)
+    assert (state.row, state.cols, state.interval) == ("1", 96, 2)
+
+
+def _report_whether_the_lock_is_free(lock_file: str, answer_file: str) -> None:
+    """Whether the console lock can be taken RIGHT NOW, from another process.
+
+    In another process on purpose: flock is held by an open file description, and
+    a second open in the holder's own process would conflict with itself and say
+    "held" whether the tick took the lock or not.
+    """
+    import fcntl
+    handle = os.open(lock_file, os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(handle, fcntl.LOCK_UN)
+        free = "free"
+    except OSError:
+        free = "held"
+    finally:
+        os.close(handle)
+    with open(answer_file, "w") as answer:
+        answer.write(free)
+
+
+@pytest.mark.fs
+@pytest.mark.skipif(not runlog.can_lock(),
+                    reason="a host that cannot lock holds nothing to observe, and "
+                           "fcntl is not built into the Windows interpreter")
+def test_the_tick_holds_the_lock_while_it_draws(tmp_path, monkeypatch):
+    """The whole point of the lock: a refresh must not land between a worker's
+    erase and the line that erase made room for, which would put the row and the
+    line on one console row."""
+    monkeypatch.setenv("HAVE_FLOCK", "1")
+    state.row, state.cols = "1", 80
+    lock_file = str(tmp_path / "lock")
+    answer_file = str(tmp_path / "answer")
+
+    def draw_and_ask(text):
+        prober = multiprocessing.Process(
+            target=_report_whether_the_lock_is_free,
+            args=(lock_file, answer_file))
+        prober.start()
+        prober.join()
+        return 0
+
+    monkeypatch.setattr(statusline, "draw_status", draw_and_ask)
+    statusline.status_tick(lock_file, lambda: "counted")
+    assert (tmp_path / "answer").read_text() == "held"

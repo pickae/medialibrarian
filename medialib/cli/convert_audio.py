@@ -1191,17 +1191,19 @@ def footer(state: Run) -> None:
     safety.report_safety_skips()
 
 
-def _in_worker(state, method: str, item) -> None:
+def _in_worker(state, method: str, item, status_geometry=None) -> None:
     """One job, in a worker PROCESS.
 
     The worker's interrupt handling is installed here rather than in the work,
     because at width 1 that same work runs in the RUN's own process - where the
-    worker's handler would replace the run's. The run's scratch base is adopted
-    for the same kind of reason: a worker that settled its own would make a
-    second run directory beside the parent's and leave it behind.
+    worker's handler would replace the run's. The run's scratch base and its
+    status row are adopted for the same kind of reason: a worker that settled its
+    own would make a second run directory beside the parent's, and one that
+    settled no row would print its counted line onto the end of the pinned row.
     """
     safety.trap_worker_abort()
     ramscratch.adopt_ram_base(getattr(state, "ram_base", ""))
+    statusline.adopt_status_geometry(status_geometry)
     getattr(state, method)(item)
 
 
@@ -1213,7 +1215,9 @@ def _run_pool(state, method: str, items: list, jobs: int) -> None:
             getattr(state, method)(item)
         return
 
-    workerpool.run(items, jobs, _in_worker, lambda item: (state, method, item))
+    geometry = statusline.status_geometry()
+    workerpool.run(items, jobs, _in_worker,
+                   lambda item: (state, method, item, geometry))
 
 
 def _scan_tracks(input_dir: str) -> list:
