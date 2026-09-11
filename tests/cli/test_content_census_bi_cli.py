@@ -159,3 +159,44 @@ class TestWhatTheFlagsBuild:
         assert (bi.cubes / "booksCube.csv").is_file()
         assert "books, all of it" in log
         assert (bi.work / "real2.duckdb").is_file()
+
+
+class TestRebuildingOverAGoodDatabase:
+    """A rebuild replaces the file, and a rebuild that fails does not.
+
+    The whole command, through the real DuckDB: the unit cases inject the
+    failures, and this is the one that proves the successful path still ends
+    with the new database where the old one was.
+    """
+
+    def test_a_second_run_replaces_it_and_the_page_beside_it(self, bi):
+        database = bi.work / "again.duckdb"
+        bi.bi(bi.reports, "-o", database)
+        first = database.stat().st_mtime_ns
+        (bi.reports / "booksShelf.csv").write_text(
+            "path,sizeBytes,pages,words,characters\n"
+            "%s/Books/c.txt,90000,500,99000,610000\n" % bi.work)
+
+        log = bi.bi(bi.reports, "-o", database)
+
+        assert "Replacing the existing again.duckdb" in log
+        assert database.is_file()
+        assert database.stat().st_mtime_ns != first
+        assert (bi.work / "again.html").is_file()
+        assert not list(bi.work.glob(".building.*"))
+
+    def test_a_build_that_fails_leaves_the_last_good_one(self, bi):
+        database = bi.work / "kept.duckdb"
+        bi.bi(bi.reports, "-o", database)
+        before = database.read_bytes()
+        # A duckdb that refuses everything, ahead of the real one on PATH: the
+        # preflight still finds a duckdb, and the build still fails.
+        stub = bi.bin / "duckdb"
+        stub.write_text("#!/usr/bin/env bash\nexit 1\n")
+        stub.chmod(0o755)
+
+        log = bi.bi(bi.reports, "-o", database, expect=1)
+
+        assert "DuckDB refused the build" in log
+        assert database.read_bytes() == before
+        assert not list(bi.work.glob(".building.*"))

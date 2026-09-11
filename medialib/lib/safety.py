@@ -25,6 +25,7 @@ import random
 import shutil
 import signal
 import sys
+import tempfile
 from collections.abc import Iterable, Iterator
 from typing import Any
 
@@ -600,17 +601,31 @@ def require_separate_output(input_dir: str, output_dir: str,
 # owns it, and the inner run appends to the same file rather than truncating it.
 
 def init_safety_log(path: str = "") -> str:
-    if path:
+    """Settle where this run records the renames it declined, and empty it.
+
+    The default name is made by ``mkstemp``, not chosen and then opened: that is
+    exclusive creation in one step, so nothing that already carries the name -
+    a symlink pointing at a file of the user's, above all - can be what gets
+    truncated. A caller that NAMES a file is taken at its word, but not through
+    a link: a log path that is a symlink is refused rather than followed, and
+    the run falls back to a temporary of its own.
+    """
+    if path and not os.path.islink(path):
         os.environ["SAFETY_LOG"] = path
+        open(path, "w").close()
+        return path
+    if path:
+        sys.stderr.write("\nWARNING: the safety log path is a symlink and was "
+                         "not used:\n  %s\n" % path)
     else:
         inherited = os.environ.get("SAFETY_LOG", "")
-        if inherited and os.path.isfile(inherited):
+        if inherited and os.path.isfile(inherited) and not os.path.islink(
+                inherited):
             return inherited
-        directory = os.environ.get("TMPDIR", "/tmp")
-        path = os.path.join(directory, "safetySkips." + "".join(
-            random.choice(_MKTEMP_ALPHABET) for _ in range(8)))
-        os.environ["SAFETY_LOG"] = path
-    open(path, "w").close()
+    directory = os.environ.get("TMPDIR", "/tmp")
+    descriptor, path = tempfile.mkstemp(prefix="safetySkips.", dir=directory)
+    os.close(descriptor)
+    os.environ["SAFETY_LOG"] = path
     return path
 
 

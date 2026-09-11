@@ -185,3 +185,42 @@ class TestTwoWorkersSharingACoverName:
         done = concat.run("concat-audio", concat.inputs, concat.outputs)
         assert done.returncode == 0, done.stdout + done.stderr
         assert len(_names(concat.outputs, ".opus")) == 2
+
+
+class TestTheOutputFolderIsNotSweptByExtension:
+    """What a run removes is what the run made.
+
+    This command writes nothing temporary into the output tree - the join and
+    the thumbnail work in the scratch, and the chapter "file" is a stem handed
+    to the embedder rather than a file - so there is nothing under the output it
+    owns, and a sweep by suffix would be removing somebody else's files. A
+    refused input made it worse still: the sweep ran before the check, so a run
+    that ended by saying "Nothing was changed" had already deleted them.
+    """
+
+    def test_a_refused_input_changes_nothing_in_the_output(self, concat):
+        # Loose audio files and no sub-folder: the shape this command refuses.
+        _tree(concat.inputs, "01 - part.mp3", "02 - part.mp3")
+        kept = concat.outputs / "Some Book.ch"
+        kept.write_text("CHAPTER01=00:00:00.000\n")
+        (concat.outputs / "cover.jpg").write_text("a picture of a book")
+
+        done = concat.run("concat-audio", concat.inputs, concat.outputs)
+
+        assert done.returncode == 1
+        assert "Nothing was changed" in done.stdout + done.stderr
+        assert kept.read_text() == "CHAPTER01=00:00:00.000\n"
+        assert (concat.outputs / "cover.jpg").exists()
+
+    def test_a_run_that_works_leaves_the_same_files_alone(self, concat):
+        _tree(concat.inputs, "Book opus A/01 - part.opus")
+        chapters = concat.outputs / "Another Book.ch"
+        chapters.write_text("CHAPTER01=00:00:00.000\n")
+        (concat.outputs / "cover.jpg").write_text("a picture of a book")
+
+        done = concat.run("concat-audio", concat.inputs, concat.outputs)
+
+        assert done.returncode == 0, done.stdout + done.stderr
+        assert _names(concat.outputs, ".opus") == ["Book opus A.opus"]
+        assert chapters.read_text() == "CHAPTER01=00:00:00.000\n"
+        assert (concat.outputs / "cover.jpg").exists()

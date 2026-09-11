@@ -16,11 +16,25 @@ jobs:
     # wait on one that never returns, and the default turns that into a runner
     # held all day rather than a red job somebody reads.
     timeout-minutes: 20
+    # Both ends of the range pyproject.toml declares, because only the ends can
+    # differ: a call that arrived after the floor passes on the newer one and
+    # fails on the older, and nobody would find out. 3.11.4 exactly, rather than
+    # "3.11", because the floor is where it is for a reason - extractall learned
+    # the filter the archive extraction depends on in that release - and a job on
+    # 3.11.9 would not stand on it.
+    #
+    # A matrix rather than a job of its own: the tiers below need real tools
+    # (ffmpeg, duckdb), so a separate job would be this one's whole setup
+    # written out twice and free to drift from it.
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11.4", "3.12"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "${{ matrix.python-version }}"
 
       # The tools the suite reaches for on the HOST rather than through a stub:
       # the cases that build a PATH out of real binaries (`zip`, `tree`,

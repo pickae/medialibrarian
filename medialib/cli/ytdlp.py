@@ -437,8 +437,7 @@ class Run:
 
         # This table's stragglers, before the next table in the same lane
         # starts: that is what "one table at a time within a lane" means.
-        for job in running:
-            job.join()
+        workerpool.join_all(running)
 
     def run_lane(self, lane_tables, tables, profiles, jobs_of) -> None:
         """The tables of one lane, one after another."""
@@ -913,8 +912,7 @@ def _run(options, tables, profiles, jobs_of, rows_of, feed_count, output_path,
             running = [_spawn(_lane_worker,
                               (state, lanes[lane], tables, profiles, jobs_of))
                        for lane in order]
-            for job in running:
-                job.join()
+            workerpool.join_all(running)
 
         return _report(state, ingest, started, feed_count)
     finally:
@@ -1081,7 +1079,7 @@ def _report(state, ingest, started, feed_count) -> int:
     # A run cut short by a provider did not do what it was asked to do, so it
     # does not get to report success - a nightly cron that only looks at the
     # status would otherwise never learn that half the library stopped arriving.
-    return 1 if blocked_providers else 0
+    return workerpool.exit_status(1 if blocked_providers else 0)
 
 
 def _skips(inactive: int, unmatched: int, match: str) -> None:

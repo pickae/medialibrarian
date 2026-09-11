@@ -41,6 +41,7 @@ from typing import Any
 from medialib import commands
 from medialib.lib import (
     adequacy,
+    archives,
     clioptions,
     comicpdf,
     enums,
@@ -228,6 +229,9 @@ def pretreat_input(in_path: str, skips: safety.SkipLog) -> None:
 COMIC_INPUT_EXTENSIONS = tuple(enums.COMIC_EXTENSIONS) + tuple(
     enums.COMIC_PDF_EXTENSIONS)
 
+# Which archive each comic container really is, for the member check below.
+_COMIC_CONTAINERS = {"cbz": "zip", "cbr": "rar", "cb7": "7z"}
+
 
 def extract(archive: str, destination: str, max_res: int) -> None:
     """One book's pages into <destination>, whatever container they arrived in.
@@ -243,6 +247,17 @@ def extract(archive: str, destination: str, max_res: int) -> None:
     quiet: dict[str, Any] = {"stdout": subprocess.DEVNULL,
                              "stderr": subprocess.DEVNULL}
     lowered = archive.lower()
+
+    # A comic container is a zip, a rar or a 7z under another name, and is held
+    # to the same rule: a book asking to write outside its own folder is read
+    # before an unpacker starts, and not unpacked at all.
+    container = _COMIC_CONTAINERS.get(lowered.rsplit(".", 1)[-1], "")
+    if container:
+        refused = archives.unsafe_members(archive, container)
+        if refused:
+            log('  WARNING: not unpacking "%s": %s (%s)'
+                % (os.path.basename(archive), refused[0][1], refused[0][0]))
+            return
 
     if lowered.endswith(".cbr"):
         subprocess.run(["unrar", "e", "--", archive, destination], **quiet)
@@ -266,6 +281,9 @@ def extract(archive: str, destination: str, max_res: int) -> None:
     elif lowered.endswith(".pdf"):
         comicpdf.render_comic_pdf_pages(archive, destination, str(max_res))
 
+    # The links an archive was allowed to carry, gone before the flattening
+    # walks the tree: a page that is a link is somebody else's file.
+    archives.prune_irregular(destination)
     _flatten(destination)
 
 
@@ -1025,7 +1043,7 @@ def _run(result, declaration, program: str, script_dir: str,
             "or came out broken)")
 
     safety.print_run_footer()
-    return 0
+    return workerpool.exit_status()
 
 
 def _missing_pdf_tools() -> str:

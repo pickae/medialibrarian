@@ -661,7 +661,7 @@ def main(argv: list, program: str = "convert-images") -> int:
                   "reverse_to_jpeg" if reverse else "transcode")
         safety.exit_if_aborted()
         safety.print_run_footer()
-        return 0
+        return workerpool.exit_status()
     finally:
         ramscratch.run_exit_cleanup()
 

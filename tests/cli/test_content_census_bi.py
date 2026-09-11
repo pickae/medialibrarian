@@ -29,6 +29,26 @@ def _report(tmp_path, name, content=None, header=None):
     return str(path)
 
 
+class _Done:
+    """What subprocess.run answers with, for the duckdb calls a case stands in
+    for."""
+
+    def __init__(self, returncode=0):
+        self.returncode = returncode
+        self.stdout = b""
+
+
+def _duckdb_that_fails(arguments, **_kwargs):
+    return _Done(1)
+
+
+def _duckdb_that_builds_nothing(arguments, **_kwargs):
+    """A build that answers success and writes no database - the shape of a
+    DuckDB that was killed after it had reported, and the one case the checks
+    before the replacement cannot catch."""
+    return _Done(0)
+
+
 class TestCollectPaths:
     def test_a_named_file_is_taken_as_claimed(self, tmp_path):
         path = _report(tmp_path, "audioFilms.csv")
@@ -161,6 +181,141 @@ class TestWhereTheOutputGoes:
 
     def test_no_export_folder_is_no_refusal(self):
         assert bi.resolve_export_dir("") == ""
+
+
+class TestTheDatabaseIsReplacedOnlyByOneThatWasBuilt:
+    """The old database is the last answer the library gave, and a run that
+    cannot produce a new one must not cost it.
+
+    Every case here is a failure INJECTED at a different point of the build, and
+    every one of them asks the same question afterwards: is the file that was
+    there still there, and is it still what it was.
+    """
+
+    @pytest.fixture
+    def library(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("SKIP_TOOL_PREFLIGHT", "1")
+        report = _report(tmp_path, "booksShelf.csv")
+        database = tmp_path / "contentCensusBI.duckdb"
+        database.write_bytes(b"the last good database")
+        return report, database
+
+    def test_a_scratch_that_cannot_be_made(self, library, monkeypatch, capsys):
+        report, database = library
+        monkeypatch.setattr(bi.ramscratch, "ram_scratch_dir",
+                            lambda _name: ("", 1))
+
+        assert bi.main([report]) == 1
+        assert "no scratch directory" in capsys.readouterr().err
+        assert database.read_bytes() == b"the last good database"
+
+    def test_a_duckdb_that_refuses_the_build(self, library, monkeypatch,
+                                             capsys):
+        report, database = library
+        monkeypatch.setattr(bi, "_duckdb", _duckdb_that_fails)
+
+        assert bi.main([report]) == 1
+        assert "DuckDB refused the build" in capsys.readouterr().err
+        assert database.read_bytes() == b"the last good database"
+        # and the statements it refused, kept where they can be read
+        assert (database.parent / (database.name + ".failed.sql")).is_file()
+
+    def test_a_build_that_leaves_nothing_at_the_destination(self, library,
+                                                            monkeypatch):
+        """DuckDB answering zero without writing a database is the case the
+        replacement itself fails on - and it fails BEFORE the destination is
+        touched, because the move is the only thing that touches it."""
+        report, database = library
+        monkeypatch.setattr(bi, "_duckdb", _duckdb_that_builds_nothing)
+
+        assert bi.main([report]) == 1
+        assert database.read_bytes() == b"the last good database"
+
+    def test_the_scaffolding_is_gone_either_way(self, library, monkeypatch):
+        report, database = library
+        monkeypatch.setattr(bi, "_duckdb", _duckdb_that_fails)
+        bi.main([report])
+
+        leftovers = [name for name in os.listdir(str(database.parent))
+                     if name.startswith(".building.")]
+        assert leftovers == []
+
+    def test_the_finished_one_takes_the_place_of_the_old(self, tmp_path):
+        """The commit itself: the destination is the new database, and the WAL
+        of the one it replaced does not outlive it."""
+        holder = tmp_path / ".building.x"
+        holder.mkdir()
+        built = holder / "contentCensusBI.duckdb"
+        built.write_bytes(b"the new one")
+        database = tmp_path / "contentCensusBI.duckdb"
+        database.write_bytes(b"the old one")
+        (tmp_path / "contentCensusBI.duckdb.wal").write_bytes(b"the old log")
+
+        bi.commit_build(str(built), str(database))
+
+        assert database.read_bytes() == b"the new one"
+        assert not (tmp_path / "contentCensusBI.duckdb.wal").exists()
+
+    def test_a_write_ahead_log_of_the_new_one_travels_with_it(self, tmp_path):
+        holder = tmp_path / ".building.x"
+        holder.mkdir()
+        built = holder / "db.duckdb"
+        built.write_bytes(b"the new one")
+        (holder / "db.duckdb.wal").write_bytes(b"the new log")
+        database = tmp_path / "db.duckdb"
+
+        bi.commit_build(str(built), str(database))
+
+        assert database.read_bytes() == b"the new one"
+        assert (tmp_path / "db.duckdb.wal").read_bytes() == b"the new log"
+
+    def test_the_build_happens_beside_the_destination(self, tmp_path):
+        """Beside it, because the commit is a rename and a rename is one
+        filesystem. A scratch in RAM would be the wrong side of that."""
+        database = tmp_path / "deep" / "db.duckdb"
+        database.parent.mkdir()
+
+        build_path = bi.build_target(str(database))
+
+        assert os.path.dirname(os.path.dirname(build_path)) == str(
+            database.parent)
+        assert not os.path.exists(build_path)
+        bi.discard_build(build_path)
+        assert os.listdir(str(database.parent)) == []
+
+
+class TestTheViewerPageIsNotTheRun:
+    def test_a_page_that_cannot_be_written_says_what_went_wrong(
+            self, tmp_path, monkeypatch, capsys):
+        """Non-fatal, because the database is the output and it is written -
+        but a warning that does not name the failure makes a full disk, a
+        read-only folder and a bug look like the same thing."""
+        scratch = tmp_path / "scratch"
+        scratch.mkdir()
+        (scratch / "books.viewer.csv").write_text("library,files\nMain,2\n")
+
+        def no_page(*_args, **_kwargs):
+            raise OSError("No space left on device")
+
+        monkeypatch.setattr(bi.censusviewer, "viewer_html", no_page)
+
+        assert bi.write_page(str(tmp_path / "db.duckdb"), str(scratch),
+                             ["books"]) == ""
+        said = capsys.readouterr().err
+        assert "No space left on device" in said
+        assert "OSError" in said
+
+    def test_a_page_the_run_could_write_is_written(self, tmp_path):
+        scratch = tmp_path / "scratch"
+        scratch.mkdir()
+        (scratch / "books.viewer.csv").write_text("library,files\nMain,2\n")
+
+        path = bi.write_page(str(tmp_path / "db.duckdb"), str(scratch),
+                             ["books"])
+
+        assert path == str(tmp_path / "db.html")
+        assert os.path.isfile(path)
+        assert not os.path.exists(path + ".part")
 
 
 class TestHumanSize:

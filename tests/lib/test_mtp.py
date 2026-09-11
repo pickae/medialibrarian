@@ -222,6 +222,47 @@ class TestResolveMtpUri:
         assert error == ""
         assert path == str(tmp_path / "mtp:host=Pixel 7/Podcasts")
 
+    def test_a_uri_reaching_out_of_the_mount_is_refused(self, monkeypatch,
+                                                        tmp_path):
+        """A URI is a claim about the phone. Its relative half spelled through
+        ".." makes it a claim about a local folder instead - and the caller
+        renames and renumbers whatever it is handed."""
+        self._root(tmp_path, [("mtp:host=Pixel 7", [])])
+        (tmp_path / "Documents").mkdir()
+
+        path, error = self._resolve(monkeypatch, tmp_path,
+                                    "mtp://Pixel 7/../Documents")
+
+        assert path == ""
+        assert "resolves outside" in error
+
+    def test_the_escape_is_refused_percent_encoded_too(self, monkeypatch,
+                                                       tmp_path):
+        """The decode happens first, so the check has to be after it: "%2E%2E"
+        is spelled nothing like ".." and is the same folder."""
+        self._root(tmp_path, [("mtp:host=Pixel 7", [])])
+        (tmp_path / "Documents").mkdir()
+
+        path, error = self._resolve(monkeypatch, tmp_path,
+                                    "mtp://Pixel%207/%2E%2E%2FDocuments")
+
+        assert path == ""
+        assert "resolves outside" in error
+
+    def test_a_folder_under_a_symlinked_mount_is_still_inside_it(
+            self, monkeypatch, tmp_path):
+        """Both sides are resolved before they are compared, or the ordinary
+        case - a mount that is a link, which some desktops make - would be
+        refused as an escape."""
+        (tmp_path / "phones/phone 1/Podcasts").mkdir(parents=True)
+        os.symlink("phones/phone 1", str(tmp_path / "mtp:host=Pixel 7"))
+
+        path, error = self._resolve(monkeypatch, tmp_path,
+                                    "mtp://Pixel%207/Podcasts")
+
+        assert error == ""
+        assert path == str(tmp_path / "mtp:host=Pixel 7/Podcasts")
+
     def test_the_single_mount_fallback(self, monkeypatch, tmp_path):
         self._root(tmp_path, [("mtp:host=Pixel 7", [])])
         path, error = self._resolve(monkeypatch, tmp_path, "mtp://Nokia Lumia 9")

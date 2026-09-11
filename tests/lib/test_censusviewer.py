@@ -321,10 +321,44 @@ class TestThePage:
     def test_the_data_is_embedded_and_never_fetched(self, tmp_path):
         page = self._page(tmp_path)
         assert '"csv": "' in page
-        # the engine is the only thing loaded from the network
+        # the engine is the only thing loaded from the network, and the policy
+        # line naming where it comes from is the one other place the origin is
+        # spelled - everything else in the page is the page.
+        origin = v.asset_origin(v.CDN_BASE)
         for line in page.split("\n"):
-            if "http" in line:
-                assert v.CDN_BASE in line
+            if "http" not in line:
+                continue
+            if "Content-Security-Policy" in line:
+                assert set(re.findall(r"https?://[^\s;\"']+", line)) == {origin}
+                continue
+            assert v.CDN_BASE in line
+
+    def test_the_page_states_where_it_may_reach(self, tmp_path):
+        """The figures are in the file, so what the file may TALK TO is the
+        question. Everything is denied and the engine's own origin allowed
+        back - nothing else has a destination."""
+        page = self._page(tmp_path)
+        assert 'http-equiv="Content-Security-Policy"' in page
+        policy = v.viewer_csp(v.CDN_BASE)
+        assert "default-src 'none'" in policy
+        assert "form-action 'none'" in policy
+        for directive in ("script-src", "style-src", "connect-src"):
+            assert "%s %s" % (directive, v.asset_origin(v.CDN_BASE)) in policy
+
+    def test_a_page_pointed_at_a_local_engine_reaches_no_network(self,
+                                                                 tmp_path):
+        """The offline form of the page: the assets are a folder rather than a
+        URL, and then the policy names no host at all."""
+        policy = v.viewer_csp("/srv/perspective")
+        assert "http" not in policy
+        assert "'self'" in policy
+
+    def test_the_origin_is_the_host_and_not_the_whole_base(self):
+        assert v.asset_origin("https://cdn.jsdelivr.net/npm") == \
+            "https://cdn.jsdelivr.net"
+        assert v.asset_origin("http://localhost:8080/npm") == \
+            "http://localhost:8080"
+        assert v.asset_origin("/srv/perspective") == ""
 
     def test_a_page_with_no_tabs_is_still_a_page(self, tmp_path):
         page = v.viewer_html("Empty", [])

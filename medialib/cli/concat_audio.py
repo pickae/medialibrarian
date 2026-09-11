@@ -583,13 +583,19 @@ def main(argv: list, program: str = "concat-audio",
 
     have_mkvtoolnix = _settle_mkvtoolnix()
 
-    if os.path.isdir(output_dir):
-        for parent, _dirs, names in os.walk(output_dir):
-            for name in names:
-                if name.endswith(".ch"):
-                    os.remove(os.path.join(parent, name))
-    else:
-        os.makedirs(output_dir, exist_ok=True)
+    # Checked before the output folder is made and before pretreatment, which
+    # would otherwise rename an input this run is about to refuse - and before
+    # anything at all exists at the destination, so "nothing was changed" is
+    # exactly true.
+    if not _has_audio_subfolder(input_dir):
+        return safety.fail_no_relevant_input(
+            input_dir,
+            "sub-folders each holding the audio files (%s) of one output file"
+            % enums.extension_list(list(enums.AUDIO_EXTENSIONS)))
+
+    # Made, and nothing under it removed: this run writes nothing temporary to
+    # the output tree, so a file there by a given extension is somebody else's.
+    os.makedirs(output_dir, exist_ok=True)
 
     # The bigger intermediary audio and image files go to RAM so they put no
     # write load on the SSD; only the finished output files reach the disk.
@@ -631,14 +637,6 @@ def _run_with_scratch(ram_dir: str, input_dir: str, output_dir: str,
     except OSError:
         return 1
 
-    # Checked before pretreatment, which would otherwise rename an input the run
-    # is about to refuse.
-    if not _has_audio_subfolder(input_dir):
-        return safety.fail_no_relevant_input(
-            input_dir,
-            "sub-folders each holding the audio files (%s) of one output file"
-            % enums.extension_list(list(enums.AUDIO_EXTENSIONS)))
-
     if pretreat:
         log('Pretreating input folders in "%s"' % input_dir)
         pretreat_input(input_dir, "ffmpeg", skips)
@@ -671,16 +669,14 @@ def _run_with_scratch(ram_dir: str, input_dir: str, output_dir: str,
         _run_pool(state, list(zip(input_paths, output_paths, strict=True)), jobs)
         safety.exit_if_aborted()
 
+    # By the paths this run made them at, which are all in the scratch: the join
+    # and the thumbnail leave nothing in the output tree to clean up.
     log("Cleaning up temporary files")
     for path in (progress_file, progress_file + ".lock"):
         try:
             os.remove(path)
         except OSError:
             pass
-    for parent, _dirs, names in os.walk(output_dir):
-        for name in names:
-            if name.endswith(".ls") or name.endswith(".jpg"):
-                os.remove(os.path.join(parent, name))
     # Deepest first, so a folder that only becomes empty once its own empty
     # children are gone goes too. The output folder the user named stays, even
     # when nothing landed in it.
@@ -701,7 +697,7 @@ def _run_with_scratch(ram_dir: str, input_dir: str, output_dir: str,
     # fill. Only this run's own directory, never the whole list: the wrapper's
     # is on it too, and that is the tree the NEXT sub-folder is read from.
     ramscratch.release_exit_cleanup([ram_dir])
-    return 0
+    return workerpool.exit_status()
 
 
 def _settle_mkvtoolnix() -> bool:
