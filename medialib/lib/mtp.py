@@ -150,4 +150,28 @@ def resolve_mtp_uri(uri: str) -> tuple[str, str]:
     path = matched if not rel else matched + "/" + rel
     if not os.path.isdir(path):
         return "", "not a folder on the mounted phone: {}".format(path)
+    if not _within(matched, path):
+        return "", (
+            'that URI does not name a folder on the phone: "{}" resolves '
+            "outside {}.".format(path, matched)
+        )
     return path, ""
+
+
+def _within(mount: str, path: str) -> bool:
+    """Whether the resolved folder is really ON the mount that was matched.
+
+    A URI is a claim about the phone, and a relative part spelled through ``..``
+    - or pasted with a percent-encoded one, which is the same thing a decode
+    later - makes that claim about a local folder instead. The caller cleans,
+    renames and renumbers whatever it is handed, so the boundary the URI implies
+    is checked rather than assumed. Both sides are resolved first: the mount
+    itself is a symlink on some desktops, and comparing the spellings would then
+    refuse the ordinary case.
+    """
+    try:
+        mount_real = os.path.realpath(mount)
+        path_real = os.path.realpath(path)
+        return os.path.commonpath([mount_real, path_real]) == mount_real
+    except (OSError, ValueError):
+        return False

@@ -7,7 +7,12 @@ name = "medialibrarian"
 version = "0.0.0"
 description = "Eighteen commands for building and keeping a media library: transcoding video, audio, images and comics, ingesting films, music and books, cleaning names, and a census of what is in it"
 readme = "README.md"
-requires-python = ">=3.11"
+# 3.11.4 and not 3.11: the archive extraction asks tarfile.extractall for the
+# "tar" filter, which is what keeps a member spelled through ".." from being
+# written outside the destination, and that keyword arrived in the 3.11 series
+# at 3.11.4. On 3.11.0-3.11.3 the call is a TypeError, so the floor is the
+# release that has the guard rather than the one that has the syntax.
+requires-python = ">=3.11.4"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "David Ernst" }]

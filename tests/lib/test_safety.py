@@ -467,6 +467,96 @@ class TestRunSkipLog:
         safety.RunSkipLog().record("x", "y")
 
 
+class TestWhereTheSafetyLogIsMade:
+    """The default log is a temporary file in a shared directory, so how it is
+    CREATED is the whole question: exclusively, and never through a link."""
+
+    def test_the_default_is_made_in_the_temporary_directory(self, tmp_path,
+                                                            monkeypatch):
+        monkeypatch.delenv("SAFETY_LOG", raising=False)
+        monkeypatch.setenv("TMPDIR", str(tmp_path))
+
+        path = safety.init_safety_log()
+
+        assert os.path.dirname(path) == str(tmp_path)
+        assert os.path.basename(path).startswith("safetySkips.")
+        assert os.path.isfile(path)
+        assert os.environ["SAFETY_LOG"] == path
+
+    def test_two_runs_at_once_never_share_one(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TMPDIR", str(tmp_path))
+        monkeypatch.delenv("SAFETY_LOG", raising=False)
+        first = safety.init_safety_log()
+        monkeypatch.delenv("SAFETY_LOG", raising=False)
+        second = safety.init_safety_log()
+
+        assert first != second
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="making a symlink needs a privilege the CI "
+                               "account does not have")
+    def test_a_named_log_that_is_a_symlink_is_not_followed(self, tmp_path,
+                                                           monkeypatch,
+                                                           capsys):
+        """Opening it for writing would TRUNCATE whatever it points at, which
+        in a shared temporary directory is somebody else's file."""
+        monkeypatch.setenv("TMPDIR", str(tmp_path))
+        monkeypatch.delenv("SAFETY_LOG", raising=False)
+        victim = tmp_path / "important.txt"
+        victim.write_text("not this run's file")
+        link = tmp_path / "safetySkips.guessed"
+        link.symlink_to(victim)
+
+        path = safety.init_safety_log(str(link))
+
+        assert path != str(link)
+        assert victim.read_text() == "not this run's file"
+        assert "symlink" in capsys.readouterr().err
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="making a symlink needs a privilege the CI "
+                               "account does not have")
+    def test_an_inherited_log_that_is_a_symlink_is_not_taken_either(
+            self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TMPDIR", str(tmp_path))
+        victim = tmp_path / "important.txt"
+        victim.write_text("not this run's file")
+        link = tmp_path / "inherited.log"
+        link.symlink_to(victim)
+        monkeypatch.setenv("SAFETY_LOG", str(link))
+
+        path = safety.init_safety_log()
+
+        assert path != str(link)
+        assert victim.read_text() == "not this run's file"
+
+    def test_a_named_log_is_still_the_one_that_is_used(self, tmp_path,
+                                                       monkeypatch):
+        """A caller that names a file is taken at its word - the wrappers put
+        the log in their own scratch, which is the whole point of the argument.
+        """
+        monkeypatch.delenv("SAFETY_LOG", raising=False)
+        named = tmp_path / "run" / "safetySkips.log"
+        named.parent.mkdir()
+        named.write_text("a previous run's line\n")
+
+        path = safety.init_safety_log(str(named))
+
+        assert path == str(named)
+        assert named.read_text() == ""
+
+    def test_an_inherited_log_is_appended_to_rather_than_emptied(
+            self, tmp_path, monkeypatch):
+        inherited = tmp_path / "wrapper.log"
+        inherited.write_text("the wrapper's line\n")
+        monkeypatch.setenv("SAFETY_LOG", str(inherited))
+
+        path = safety.init_safety_log()
+
+        assert path == str(inherited)
+        assert inherited.read_text() == "the wrapper's line\n"
+
+
 # --- the interrupt, and the refusal an unusable input gets ---------------------
 
 class TestAbortFlag:

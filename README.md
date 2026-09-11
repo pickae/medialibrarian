@@ -61,7 +61,7 @@ option can never change what a command you already type means.
 
 ## Requirements
 
-- Python 3.11+, and one package with it: `mutagen`, which the install brings in
+- Python 3.11.4+, and one package with it: `mutagen`, which the install brings in
 - A UTF-8 locale (accented/multibyte filenames are handled character-wise)
 - Per-tool external dependencies (see each command's `-h` output). Across the set:
   `ffmpeg`, `mkvtoolnix`, `dovi_tool`, `mediainfo`, `ImageMagick`, `rsync`,
@@ -223,6 +223,10 @@ actually needs are required.
   single book.
 - The redundant folder most archives carry (`Some Book.zip` holding `Some Book/…`)
   is dropped, so the tracks end up where they would have been unpacked by hand.
+- An archive is read before it is unpacked, and one asking to write **outside its
+  own folder** — a member spelled `/etc/…` or `../…`, or a link pointing out of
+  the tree — is skipped whole rather than unpacked and tidied up afterwards. The
+  same applies to `.cbz`/`.cbr`/`.cb7` in `convert-comics`.
 
 ### `transcribe-audio`
 
@@ -925,10 +929,14 @@ the part of it that is worth acting on.
 
 The page is one file with one tab per content type, each a
 [Perspective](https://perspective-dev.github.io/) pivot table. Opening it needs
-**nothing installed**: no server, no DuckDB, no Python. The data is embedded and
-never leaves the file; only the Perspective engine itself is loaded from a CDN,
-so the page needs the network the *first* time it is opened on a machine and
-nothing after that, and the library listing is never sent anywhere.
+**nothing installed**: no server, no DuckDB, no Python. The data is embedded in
+the file and the page sends it nowhere: it carries a content-security policy
+that denies every destination except the one the engine is fetched from, so the
+page needs the network the *first* time it is opened on a machine and nothing
+after that. The engine itself is the other side of that: it is code from
+jsDelivr, running in the page beside your figures, pinned to an exact release.
+Point `viewerCdnBase` at a local copy of that release and the page reaches
+nothing at all.
 
 **The page reads in human units**: sizes in gigabytes (1 GB = 1,000,000,000
 bytes) and durations as `hours:minutes`. Only the page — the reports, the fact
@@ -936,8 +944,9 @@ views and the cubes keep the exact bytes and seconds a probe reported. Both are 
 multiplication by a constant, so every roll-up still adds up.
 
 The database is rebuilt from nothing on every run and says so — a cube is derived
-data with no history in it. Every refusal happens before that, so a run that is
-refused leaves the previous database intact.
+data with no history in it. The new one is built beside the old and moved onto it
+at the end, so a run that is refused, interrupted or that DuckDB rejects leaves
+the previous database exactly as it was.
 
 ## File safety
 
@@ -974,6 +983,15 @@ Two rules every command that takes an input folder follows:
 The name cleaners are the exception to the second rule by nature: any name at all
 is work for them, so only a completely empty folder means there is nothing to do.
 
+### How wide a run goes
+
+The parallel commands default to a width taken from the logical CPU count, which
+is the right guess for work that is CPU-bound and only that. Memory, disk
+bandwidth and GPU memory are the limits that bite first on a smaller machine, and
+none of them is visible in a core count — so on a host that swaps, thrashes or
+runs out of VRAM, lower the width with the command's own `-j`/`-P` rather than
+leaving it to the default.
+
 ### Stopping a run
 
 Every long-running command can be stopped at any point — with `Ctrl+C`, with a
@@ -997,6 +1015,11 @@ end the run the same way:
   different tmpfs.
 - **The exit status says a person stopped it**, not that it went wrong: `130`
   (`128 + SIGINT`), so a caller or a cron job can tell the two apart.
+- **A worker that dies is not a finished item.** A parallel run whose worker
+  process ends abnormally — an uncaught error, a kill, a library that took the
+  process down with it — names the item that was lost as it happens, recaps them
+  at the end, and exits non-zero. The per-file failures a command handles itself
+  are unchanged: those are reported and deliberately not fatal.
 
 A second `Ctrl+C` during the wind-down is not caught, so an impatient user can
 always get out — even when what is being waited for is a `rm -rf` over a mount that
@@ -1059,9 +1082,13 @@ do too, which is less obvious:
   table.
 - **`content-census-bi`** writes an `.html` page that loads the Perspective
   engine from jsDelivr when you open it, pinned to an exact release with the
-  stylesheet checked against a hash. Your census data is not uploaded anywhere —
-  it is embedded in the file itself, which is why the page is worth as much
-  offline as the engine's cache allows.
+  stylesheet checked against a hash. Your census data is not uploaded anywhere:
+  it is embedded in the file, and the page's content-security policy allows no
+  destination but that one origin. The engine's four scripts are ES modules,
+  which have nowhere to carry a hash, so they are pinned by version and not by
+  content — code jsDelivr serves runs in the page and can read the figures in
+  it. Set `viewerCdnBase` to a folder holding that release to get a page that
+  fetches nothing.
 
 ## License / credits
 

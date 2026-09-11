@@ -9,6 +9,7 @@ what is being tested is everything after it.
 
 import os
 import stat
+import zipfile
 
 import pytest
 
@@ -51,8 +52,14 @@ printf x > "$dest/sub2/notes.txt"
 printf d > "$dest/00.jpg"
 exit 0
 ''')
+        # A real container, holding the names the stub above lays out: the
+        # unpacking is stubbed, but what the archive ASKS for is read from the
+        # archive itself before any unpacker runs.
         archive = tmp_path / "book.cbz"
-        archive.write_text("")
+        with zipfile.ZipFile(str(archive), "w") as packed:
+            for name in ("00.jpg", "sub1/01.jpg", "sub1/02.jpg",
+                         "sub2/01.jpg", "sub2/notes.txt"):
+                packed.writestr(name, "x")
         # The work folder is named after the whole FILE, extension included:
         # "book.cbz" and "book.pdf" side by side are two different books that
         # would otherwise be unpacked into one folder.
@@ -97,8 +104,19 @@ class TestSevenZip:
     @pytest.fixture
     def book(self, tmp_path, stub_bin):
         log = tmp_path / "7z.args"
+        # Two commands, because the real tool is asked two things: what is in
+        # the archive, and then - only if the answer is a tree that stays inside
+        # its own folder - unpack it.
         _stub(str(stub_bin), "7z", '''
 printf "%%s\\n" "$*" >> "%s"
+if [[ "$1" == "l" ]]; then
+    printf -- "----------\\n"
+    printf "Path = chapter one\\nAttributes = D drwxr-xr-x\\n\\n"
+    printf "Path = chapter one/01.jpg\\nAttributes = A -rw-r--r--\\n\\n"
+    printf "Path = chapter one/02.jpg\\nAttributes = A -rw-r--r--\\n\\n"
+    printf "Path = ComicInfo.xml\\nAttributes = A -rw-r--r--\\n\\n"
+    exit 0
+fi
 dest=""
 for a in "$@"; do [[ "$a" == -o* ]] && dest="${a#-o}"; done
 mkdir -p "$dest/chapter one"

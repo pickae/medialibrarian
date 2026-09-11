@@ -1504,7 +1504,7 @@ def _ingest(program: str, script_dir: str, download_dir: str, ingest_dir: str,
 
     state.run_end = time.time()
     safety.print_run_footer()
-    return 0
+    return workerpool.exit_status()
 
 
 def _copy_the_rest(state, download_dir: str, ingest_dir: str,

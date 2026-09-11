@@ -345,7 +345,7 @@ def main(argv: list, program: str = "transcribe-audio") -> int:
         safety.exit_if_aborted()
         sys.stdout.write("Done.\n")
         safety.print_run_footer()
-        return 0
+        return workerpool.exit_status()
     finally:
         ramscratch.run_exit_cleanup()
 

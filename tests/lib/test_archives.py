@@ -16,7 +16,9 @@ What is pinned here:
 
 import io
 import os
+import shutil
 import stat
+import subprocess
 import sys
 import tarfile
 from types import SimpleNamespace
@@ -262,20 +264,89 @@ def _pack_tar(path, mode):
             archive.addfile(info, io.BytesIO(body))
 
 
+def _pack_tar_zst(path, tmp_path, escaping=False):
+    """A .tar.zst made the way a host without tarfile's zstd would have to read
+    it: a plain tar, compressed by the zstd binary."""
+    plain = tmp_path / "staging.tar"
+    if escaping:
+        with tarfile.open(str(plain), "w") as archive:
+            info = tarfile.TarInfo("../escaped.txt")
+            info.size = 1
+            archive.addfile(info, io.BytesIO(b"x"))
+    else:
+        _pack_tar(plain, "w")
+    subprocess.run(["zstd", "-q", "-f", str(plain), "-o", str(path)],
+                   check=True)
+    plain.unlink()
+
+
+def _tarfile_without_zstd(monkeypatch):
+    """tarfile as the 3.11 and 3.12 series have it: a .tar.zst opened by NAME is
+    a format it does not know, while a stream handed to it still reads."""
+    real_open = tarfile.open
+
+    def no_zstd(*args, **kwargs):
+        if args and isinstance(args[0], str):
+            raise tarfile.ReadError("this tarfile has no zstd")
+        return real_open(*args, **kwargs)
+
+    monkeypatch.setattr(archives.tarfile, "open", no_zstd)
+
+
 def _assert_unpacked(dest):
     assert (dest / "notes.txt").read_bytes() == b"top"
     assert (dest / "inner" / "page.txt").read_bytes() == b"deep"
 
 
-def _record_calls(monkeypatch, rc=0):
+# What each listing tool says about an archive of one ordinary file. The
+# dispatch cases are about the EXTRACTION argv, and the listing before it is a
+# different tool call with a different question - so it is answered here rather
+# than left to fail and take the extraction with it.
+_SAFE_LISTINGS = {
+    "unrar": "        Name: notes.txt\n        Type: File\n",
+    "7z": ("Listing archive: Book.7z\n\n----------\n"
+           "Path = notes.txt\nAttributes = A -rw-r--r--\n\n"),
+}
+
+
+def _is_listing(command):
+    if command[0] == "unrar" and len(command) > 1 and command[1] == "vt":
+        return "unrar"
+    if command[0] in ("7z", "7zz", "7za") and len(command) > 1 \
+            and command[1] == "l":
+        return "7z"
+    return ""
+
+
+def _record_calls(monkeypatch, rc=0, listings=None):
+    """The tool calls, with the member listing answered rather than recorded.
+
+    ``listings`` replaces what a listing tool says, which is how a case asks for
+    an archive that is refused rather than unpacked.
+    """
     calls = []
+    answers = dict(_SAFE_LISTINGS)
+    answers.update(listings or {})
 
     def fake_run(command, stdout=None, **_kwargs):
+        tool = _is_listing(command)
+        if tool:
+            return SimpleNamespace(returncode=0,
+                                   stdout=answers[tool].encode("utf-8"))
         calls.append((command, stdout))
         return SimpleNamespace(returncode=rc)
 
     monkeypatch.setattr(archives.subprocess, "run", fake_run)
     return calls
+
+
+def _pack_zip(path, names=("notes.txt",)):
+    """A real zip of ordinary members: what the extraction cases are handed, so
+    the member check they now pass through has something true to read."""
+    import zipfile
+    with zipfile.ZipFile(str(path), "w") as packed:
+        for name in names:
+            packed.writestr(name, "x")
 
 
 class TestExtractArchive:
@@ -287,6 +358,7 @@ class TestExtractArchive:
         calls = _record_calls(monkeypatch)
         dest = tmp_path / "out"
         dest.mkdir()
+        _pack_zip(tmp_path / "Book.zip")
         monkeypatch.chdir(tmp_path)
         assert archives.extract_archive("Book.zip", "out") == 0
         assert calls == [(["unzip", "-qq", "-o", "-d", "out", "--", "Book.zip"],
@@ -352,18 +424,48 @@ class TestExtractArchive:
         assert calls == []
 
     @pytest.mark.parametrize("ext", ["tar.zst", "tzst"])
-    def test_a_zstd_tarfile_cannot_open_goes_to_the_host_tar(self, tmp_path,
-                                                             monkeypatch, ext):
-        # a file that is not a tar at all stands in for the zstd an older
-        # tarfile cannot open: unopenable on every interpreter
-        calls = _record_calls(monkeypatch)
+    def test_a_zstd_tarfile_cannot_open_is_decompressed_and_still_filtered(
+            self, tmp_path, monkeypatch, ext):
+        """The interpreter whose tarfile has no zstd hands the host the
+        COMPRESSION and nothing else.
+
+        What lands is still read by tarfile, through the same filter every other
+        tar in the family goes through - so which members may be written is this
+        package's answer on every interpreter, and not the host tar's.
+        """
+        if not shutil.which("zstd"):
+            pytest.skip("the fallback is the zstd binary")
         dest = tmp_path / "out"
         dest.mkdir()
-        (tmp_path / f"Book.{ext}").write_bytes(b"not a tar at all")
+        _pack_tar_zst(tmp_path / f"Book.{ext}", tmp_path)
+        _tarfile_without_zstd(monkeypatch)
         monkeypatch.chdir(tmp_path)
+
         assert archives.extract_archive(f"Book.{ext}", "out") == 0
-        assert calls == [(["tar", "-xf", f"Book.{ext}", "-C", "out"],
-                          archives.subprocess.DEVNULL)]
+        _assert_unpacked(dest)
+
+    @pytest.mark.parametrize("ext", ["tar.zst", "tzst"])
+    def test_the_zstd_fallback_refuses_a_member_reaching_outside(
+            self, tmp_path, monkeypatch, ext):
+        if not shutil.which("zstd"):
+            pytest.skip("the fallback is the zstd binary")
+        dest = tmp_path / "out"
+        dest.mkdir()
+        _pack_tar_zst(tmp_path / f"Book.{ext}", tmp_path, escaping=True)
+        _tarfile_without_zstd(monkeypatch)
+        monkeypatch.chdir(tmp_path)
+
+        assert archives.extract_archive(f"Book.{ext}", "out") == 1
+        assert not (tmp_path / "escaped.txt").exists()
+
+    def test_a_zstd_that_is_not_a_tar_at_all_is_a_status_one(self, tmp_path,
+                                                             monkeypatch):
+        dest = tmp_path / "out"
+        dest.mkdir()
+        (tmp_path / "Book.tar.zst").write_bytes(b"not a tar at all")
+        monkeypatch.chdir(tmp_path)
+        assert archives.extract_archive("Book.tar.zst", "out") == 1
+        assert list(dest.iterdir()) == []
 
     def test_a_tar_that_is_not_one_is_a_status_one(self, tmp_path, monkeypatch):
         # and the rest of the family has nothing to fall back to, so an
@@ -410,9 +512,218 @@ class TestExtractArchive:
         calls = _record_calls(monkeypatch, rc=9)
         dest = tmp_path / "out"
         dest.mkdir()
+        _pack_zip(tmp_path / "Book.zip")
         monkeypatch.chdir(tmp_path)
         assert archives.extract_archive("Book.zip", "out") == 9
         assert len(calls) == 1
+
+
+class TestWhatAnArchiveIsAllowedToAskFor:
+    """The policy itself, on the member's own spelling.
+
+    It is tarfile's "tar" filter, written out: nothing absolute, nothing through
+    "..", no link that lands outside the tree, and no device or fifo. The three
+    unpackers that have no filter are held to it by asking the archive what is
+    in it before starting them.
+    """
+
+    @pytest.mark.parametrize("name", [
+        "/etc/passwd", "//etc/passwd", "C:/Windows/system32/x.dll",
+        "../escaped.txt", "a/../../escaped.txt", "a/b/../../../escaped.txt",
+    ])
+    def test_a_path_that_leaves_the_destination(self, name):
+        assert archives.unsafe_member(name)
+
+    @pytest.mark.parametrize("name", [
+        "notes.txt", "a/b/page.jpg", "./cover.jpg",
+        "..hidden.txt", "a/..b/c.txt", "a:b.txt", "Vol 1: The Start/01.jpg",
+    ])
+    def test_a_path_that_stays_inside_it(self, name):
+        assert archives.unsafe_member(name) == ""
+
+    def test_a_dotted_component_is_refused_even_where_it_cancels_out(self):
+        """"a/../b" lands inside the destination and is still refused: a member
+        spelled that way is not how anything packs a book, and a rule about the
+        SPELLING is one that cannot be walked around with a longer path."""
+        assert archives.unsafe_member("a/../b/page.jpg")
+
+    def test_a_link_is_judged_where_it_would_land(self):
+        assert archives.unsafe_member("alias.jpg", "link", "cover.jpg") == ""
+        assert archives.unsafe_member("sub/alias.jpg", "link",
+                                      "../cover.jpg") == ""
+        assert archives.unsafe_member("alias", "link", "../../etc")
+        assert archives.unsafe_member("alias", "link", "/etc/passwd")
+
+    def test_a_link_whose_target_is_unknown_is_not_unpacked(self):
+        """unrar and 7-Zip do not print a link's target, so a link in one of
+        them is a link this cannot check - and an unchecked link is the exact
+        shape the check exists for."""
+        assert archives.unsafe_member("alias", "link", "")
+
+    def test_a_device_or_a_fifo_is_not_content(self):
+        assert archives.unsafe_member("dev/null", "special")
+
+    def test_a_folder_is_a_folder(self):
+        assert archives.unsafe_member("chapter one/", "dir") == ""
+
+
+def _rar_listing(*members):
+    """What ``unrar vt`` prints, as (name, type) pairs."""
+    return "".join("        Name: %s\n        Type: %s\n" % pair
+                   for pair in members)
+
+
+def _seven_zip_listing(*members):
+    """What ``7z l -slt`` prints, as (name, attributes) pairs."""
+    return ("Listing archive: Book.7z\n\n--\nPath = Book.7z\nType = 7z\n"
+            "\n----------\n"
+            + "".join("Path = %s\nAttributes = %s\n\n" % pair
+                      for pair in members))
+
+
+class TestAnArchiveThatAsksForTooMuchIsNotUnpacked:
+    """The three unpackers with no filter of their own, each asked what is in
+    the archive before it is started - and not started at all when the answer
+    is a member that would be written outside the destination."""
+
+    def _dest(self, tmp_path, monkeypatch):
+        dest = tmp_path / "out"
+        dest.mkdir()
+        monkeypatch.chdir(tmp_path)
+        return dest
+
+    @pytest.mark.parametrize("member", ["../escaped.txt", "/etc/passwd"])
+    def test_a_zip_whose_member_escapes(self, tmp_path, monkeypatch, member):
+        calls = _record_calls(monkeypatch)
+        self._dest(tmp_path, monkeypatch)
+        _pack_zip(tmp_path / "Book.zip", ("page.jpg", member))
+
+        assert archives.extract_archive("Book.zip", "out") == 1
+        assert calls == [], "the unpacker must not be started at all"
+
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="making a symlink needs a privilege the CI "
+                               "account does not have")
+    def test_a_zip_carrying_a_link_out_of_the_tree(self, tmp_path,
+                                                   monkeypatch):
+        import zipfile
+        calls = _record_calls(monkeypatch)
+        self._dest(tmp_path, monkeypatch)
+        with zipfile.ZipFile(str(tmp_path / "Book.zip"), "w") as packed:
+            packed.writestr("page.jpg", "x")
+            link = zipfile.ZipInfo("escape")
+            link.external_attr = (stat.S_IFLNK | 0o777) << 16
+            packed.writestr(link, "../../../etc")
+
+        assert archives.extract_archive("Book.zip", "out") == 1
+        assert calls == []
+
+    def test_a_zip_whose_link_stays_inside_is_unpacked(self, tmp_path,
+                                                       monkeypatch):
+        """And the link itself is removed afterwards, which is what the prune
+        has always been for: a book is files in folders."""
+        import zipfile
+        calls = _record_calls(monkeypatch)
+        self._dest(tmp_path, monkeypatch)
+        with zipfile.ZipFile(str(tmp_path / "Book.zip"), "w") as packed:
+            packed.writestr("cover.jpg", "x")
+            link = zipfile.ZipInfo("alias.jpg")
+            link.external_attr = (stat.S_IFLNK | 0o777) << 16
+            packed.writestr(link, "cover.jpg")
+
+        assert archives.extract_archive("Book.zip", "out") == 0
+        assert len(calls) == 1
+
+    def test_a_zip_that_cannot_be_read_at_all(self, tmp_path, monkeypatch):
+        calls = _record_calls(monkeypatch)
+        self._dest(tmp_path, monkeypatch)
+        (tmp_path / "Book.zip").write_bytes(b"not a zip")
+
+        assert archives.extract_archive("Book.zip", "out") == 1
+        assert calls == []
+
+    @pytest.mark.parametrize("listing", [
+        _rar_listing(("../escaped.txt", "File")),
+        _rar_listing(("escape", "Symbolic link")),
+        _rar_listing(("/etc/passwd", "File")),
+        "",
+    ])
+    def test_a_rar_whose_listing_says_so(self, tmp_path, monkeypatch, listing):
+        calls = _record_calls(monkeypatch, listings={"unrar": listing})
+        self._dest(tmp_path, monkeypatch)
+
+        assert archives.extract_archive("Book.rar", "out") == 1
+        assert calls == []
+
+    def test_a_rar_of_ordinary_members_is_unpacked(self, tmp_path,
+                                                   monkeypatch):
+        calls = _record_calls(monkeypatch, listings={
+            "unrar": _rar_listing(("Disc 1", "Directory"),
+                                  ("Disc 1/01.mp3", "File"))})
+        self._dest(tmp_path, monkeypatch)
+
+        assert archives.extract_archive("Book.rar", "out") == 0
+        assert calls[0][0][:2] == ["unrar", "x"]
+
+    @pytest.mark.parametrize("listing", [
+        _seven_zip_listing(("../escaped.txt", "A -rw-r--r--")),
+        _seven_zip_listing(("escape", "A lrwxrwxrwx")),
+        _seven_zip_listing(("dev/null", "A crw-rw-rw-")),
+        "",
+    ])
+    def test_a_7z_whose_listing_says_so(self, tmp_path, monkeypatch, listing):
+        calls = _record_calls(monkeypatch, listings={"7z": listing})
+        monkeypatch.setattr(archives, "seven_zip_command", lambda: "7z")
+        self._dest(tmp_path, monkeypatch)
+
+        assert archives.extract_archive("Book.7z", "out") == 1
+        assert calls == []
+
+    def test_a_7z_of_ordinary_members_is_unpacked(self, tmp_path, monkeypatch):
+        calls = _record_calls(monkeypatch, listings={
+            "7z": _seven_zip_listing(("chapter one", "D drwxr-xr-x"),
+                                     ("chapter one/01.jpg", "A -rw-r--r--"))})
+        monkeypatch.setattr(archives, "seven_zip_command", lambda: "7z")
+        self._dest(tmp_path, monkeypatch)
+
+        assert archives.extract_archive("Book.7z", "out") == 0
+        assert calls[0][0][:2] == ["7z", "x"]
+
+    def test_the_listing_is_asked_of_the_tool_that_knows(self, tmp_path,
+                                                         monkeypatch):
+        """The argv of the question itself: a listing that names the archive
+        after "--" cannot be read as options, exactly as the extraction is."""
+        asked = []
+
+        def fake_run(command, stdout=None, **_kwargs):
+            asked.append(command)
+            return SimpleNamespace(returncode=0,
+                                   stdout=_SAFE_LISTINGS["unrar"].encode())
+
+        monkeypatch.setattr(archives.subprocess, "run", fake_run)
+        self._dest(tmp_path, monkeypatch)
+        archives.extract_archive("Book.rar", "out")
+
+        assert asked[0] == ["unrar", "vt", "-idq", "--", "Book.rar"]
+
+    def test_a_refused_archive_leaves_the_destination_empty(self, tmp_path,
+                                                            monkeypatch):
+        dest = self._dest(tmp_path, monkeypatch)
+        _pack_zip(tmp_path / "Book.zip", ("page.jpg", "../escaped.txt"))
+
+        assert archives.extract_archive("Book.zip", "out") == 1
+        assert list(dest.iterdir()) == []
+        assert not (tmp_path / "escaped.txt").exists()
+
+    def test_and_leaves_no_folder_behind_when_it_was_the_book(self, tmp_path,
+                                                              monkeypatch):
+        """extract_archive_as_folder unpacks into a temporary sibling first, so
+        a refusal there must not leave one - the parent holds what it held."""
+        monkeypatch.chdir(tmp_path)
+        _pack_zip(tmp_path / "Book.zip", ("page.jpg", "../escaped.txt"))
+
+        assert archives.extract_archive_as_folder("Book.zip", "Book") == 1
+        assert sorted(os.listdir(str(tmp_path))) == ["Book.zip"]
 
 
 def _fake_extraction(monkeypatch, layout, rc=0):

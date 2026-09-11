@@ -63,6 +63,26 @@ jobs:
       - run: pip install -e . pytest pytest-xdist
       - run: python -m pytest -n auto
 
+  # The floor of the declared range, which the job above does not stand on: it
+  # runs 3.12, where a call the oldest supported interpreter does not have still
+  # passes - and pyproject.toml says that interpreter is enough. The tool-free
+  # tiers are what is asked of it, because the point is the INTERPRETER:
+  # installing the whole tool chain a second time would buy another five minutes
+  # of the same coverage.
+  minimum-python:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          # The exact floor rather than "3.11": the series' earlier releases
+          # have no tar extraction filter, which is why the floor is where it
+          # is, and a job on 3.11.9 would not notice the difference.
+          python-version: "3.11.4"
+      - run: pip install -e . pytest pytest-xdist
+      - run: python -m pytest -m "pure or fs" -n auto
+
   # The import canary: collecting the pure tier imports the whole package, so
   # a POSIX-only module-scope import fails here. The pure cases then run - the
   # tier is disk- and tool-free, so it holds on any platform.

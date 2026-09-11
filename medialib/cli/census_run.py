@@ -592,8 +592,7 @@ class Run:
         # The books the pool is still holding, then their rows and skips folded
         # back in the library's file order - only then is the books file
         # complete, which is what the reports below read.
-        for worker in running:
-            worker.join()
+        workerpool.join_all(running)
         if self.merge_book_results(scratch, start, count, rows["books"],
                                    skipped_path):
             sanitised = True
@@ -788,8 +787,7 @@ def run(arguments, depth, out_dir, run_bi, separator, extension,
                                                  args=(root_index,))
                 worker.start()
                 workers.append(worker)
-            for worker in workers:
-                worker.join()
+            workerpool.join_all(workers)
         else:
             for root_index in worker_roots:
                 state.root(root_index)
@@ -862,7 +860,9 @@ def _summarise(state, worker_roots, results, run_bi, script_dir, total):
     if run_bi:
         _build_cubes(reports, written, interrupted, script_dir)
 
-    return safety.INTERRUPTED_EXIT_STATUS if interrupted else 0
+    if interrupted:
+        return safety.INTERRUPTED_EXIT_STATUS
+    return workerpool.exit_status()
 
 
 def _build_cubes(reports, written, interrupted, script_dir):

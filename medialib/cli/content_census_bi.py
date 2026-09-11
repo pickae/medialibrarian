@@ -14,6 +14,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 
 from medialib import commands
 from medialib.lib import censusviewer, clioptions, cubes, ramscratch, safety, tooldeps
@@ -267,9 +268,16 @@ def _duckdb(arguments, **kwargs):
     return subprocess.run(["duckdb"] + list(arguments), **kwargs)
 
 
-def run_build(sql_file: str, db_path: str) -> None:
+def run_build(sql_file: str, build_path: str, db_path: str = "") -> None:
+    """The whole script through DuckDB, into the database being BUILT.
+
+    ``db_path`` is where that database will end up, and is only used to name the
+    SQL kept behind on failure: a build that failed leaves nothing at the
+    destination, so the statements have to be readable from beside it.
+    """
+    db_path = db_path or build_path
     with open(sql_file) as handle:
-        done = _duckdb(["-bail", db_path], stdin=handle,
+        done = _duckdb(["-bail", build_path], stdin=handle,
                        stdout=subprocess.DEVNULL)
     if done.returncode == 0:
         return
@@ -282,7 +290,65 @@ def run_build(sql_file: str, db_path: str) -> None:
         sys.stderr.write("  (copied to %s)\n" % (db_path + ".failed.sql"))
     except OSError:
         pass
-    raise Refusal("Nothing was changed except that file.\n")
+    raise Refusal("Nothing but that file was changed; the previous database, "
+                  "if there was one, is still there.\n")
+
+
+# --- the replacement -----------------------------------------------------------
+# A cube is rebuilt from nothing every time, and "from nothing" must not mean
+# "after the last good one was deleted": the build happens beside the
+# destination and only a finished database is moved onto it.
+
+def build_target(db_path: str) -> str:
+    """Where the new database is assembled: inside a directory of its own, in
+    the folder the database itself goes to.
+
+    Beside the destination rather than in the RAM scratch, because the commit is
+    an ``os.replace`` and that only works within one filesystem. A directory
+    rather than a name, because the name has to be free for DuckDB to create and
+    a directory is the only thing this can claim without a race.
+    """
+    try:
+        holder = tempfile.mkdtemp(prefix=".building.",
+                                  dir=os.path.dirname(db_path) or ".")
+    except OSError as error:
+        raise Refusal('\nCannot build the database beside "%s": %s\n'
+                      "Nothing was changed.\n"
+                      % (db_path, error)) from error
+    return os.path.join(holder, os.path.basename(db_path))
+
+
+def commit_build(build_path: str, db_path: str) -> None:
+    """The finished database onto the destination, and its write-ahead log with
+    it.
+
+    ``os.replace`` is the whole point: the destination is either the database it
+    was or the one just built, never a half-written one and never nothing. The
+    destination's old WAL belongs to the database that has just been replaced,
+    so it goes in the same breath - left behind, it would be read as this one's.
+    """
+    try:
+        os.replace(build_path, db_path)
+        if os.path.exists(build_path + ".wal"):
+            os.replace(build_path + ".wal", db_path + ".wal")
+            return
+    except OSError as error:
+        raise Refusal('\nThe database was built but could not be moved onto '
+                      '"%s": %s\n'
+                      "That file is untouched.\n" % (db_path, error)) from error
+    try:
+        os.remove(db_path + ".wal")
+    except OSError:
+        pass
+
+
+def discard_build(build_path: str) -> None:
+    """The scaffolding of a build that is over, however it ended. Nothing here
+    can touch the destination: everything it removes is inside the directory
+    made for this run."""
+    if not build_path:
+        return
+    shutil.rmtree(os.path.dirname(build_path), ignore_errors=True)
 
 
 def report_counts(db_path: str, built) -> None:
@@ -318,15 +384,18 @@ def write_page(db_path: str, scratch: str, built) -> str:
             handle.write(censusviewer.viewer_html(
                 "Content census - " + name, pairs))
         shutil.move(part, html_path)
-    except Exception:
+    except (OSError, UnicodeError, ValueError) as error:
         # The database is the run's real output and it is already written; a
         # page that could not be assembled is worth a warning, not a failed run.
+        # Its own words with it: a read-only folder and a full disk are two
+        # different things to do about it. Only the expected failures are caught,
+        # so a programming error here still reaches the tests as one.
         try:
             os.remove(part)
         except OSError:
             pass
         log("WARNING: the database was written but the viewer page could not "
-            "be.")
+            "be: %s: %s" % (type(error).__name__, error))
         return ""
     size = _human_size(html_path)
     log('Wrote "%s" (%s, %s)' % (html_path, size, " ".join(built)))
@@ -374,6 +443,7 @@ def main(argv: list, program: str = "content-census-bi") -> int:
         return 1
 
     scratch = ""
+    build_path = ""
     try:
         found = collect_paths(result.positionals)
         by_type, skipped = classify(found)
@@ -387,13 +457,12 @@ def main(argv: list, program: str = "content-census-bi") -> int:
         # data with no history in it: keeping the old tables would only leave the
         # cubes of a type that is no longer among the reports sitting beside the
         # ones that are, with nothing to tell them apart afterwards.
+        #
+        # "From nothing" is about the CONTENT, not the file: the new one is built
+        # beside the old and moved onto it, so a build that fails leaves the last
+        # good database where it was.
         if os.path.exists(db_path):
             log("Replacing the existing " + os.path.basename(db_path))
-            for leftover in (db_path, db_path + ".wal"):
-                try:
-                    os.remove(leftover)
-                except OSError:
-                    pass
 
         ramscratch.init_ram_base(os.environ.get("censusRamBase", ""))
         scratch, status = ramscratch.ram_scratch_dir("contentCensusBI")
@@ -411,14 +480,19 @@ def main(argv: list, program: str = "content-census-bi") -> int:
 
         log("Building %s from %d content type(s)"
             % (os.path.basename(db_path), len(built)))
-        run_build(sql_file, db_path)
+        build_path = build_target(db_path)
+        run_build(sql_file, build_path, db_path)
 
-        report_counts(db_path, built)
+        report_counts(build_path, built)
 
         if result.values["showTotals"]:
             for content in built:
                 sys.stderr.write("\n%s, all of it:\n" % content)
-                _duckdb(["-box", db_path, "-c", cubes.totals_sql(content)])
+                _duckdb(["-box", build_path, "-c", cubes.totals_sql(content)])
+
+        # Every statement ran and every count came back, so this is the run's
+        # result and takes the destination.
+        commit_build(build_path, db_path)
 
         if export_dir:
             log('Exported %sinto "%s"'
@@ -448,6 +522,7 @@ def main(argv: list, program: str = "content-census-bi") -> int:
         sys.stderr.write(refusal.text)
         return refusal.status
     finally:
+        discard_build(build_path)
         ramscratch.run_exit_cleanup()
 
 

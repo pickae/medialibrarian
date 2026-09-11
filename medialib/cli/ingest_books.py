@@ -664,7 +664,7 @@ def main(argv: list, program: str = "ingest-books",
                                  script_dir=script_dir)
 
         safety.print_run_footer()
-        return 0
+        return workerpool.exit_status()
     finally:
         ramscratch.run_exit_cleanup()
 

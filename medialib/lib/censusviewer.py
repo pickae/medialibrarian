@@ -1,8 +1,11 @@
 """What looking at a cube looks like.
 
 ``cubes`` says what a cube is; this says what a person clicking on one sees. The
-output is a single self-contained .html: opening it needs nothing but a browser,
-and the library's own file listing never leaves the file.
+output is a single .html: opening it needs nothing but a browser, and the figures
+in it have nowhere to go - the page denies every destination but the one origin
+the engine itself comes from (see ``viewer_csp``). The engine is the one thing
+that is NOT in the file: four ES modules from a pinned release, which run beside
+the data and are trusted by version rather than by hash.
 
 The one thing to understand before changing anything here is the BASE GRAIN. The
 page is given one row per COMBINATION of dimension values - every axis at its
@@ -43,6 +46,8 @@ __all__ = [
     "viewer_html_escape",
     "asset_url",
     "sri_attribute",
+    "asset_origin",
+    "viewer_csp",
     "viewer_html",
 ]
 
@@ -159,6 +164,7 @@ _PAGE_HEAD = """<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="@@CSP@@">
 <title>@@TITLE@@</title>
 <link rel="stylesheet" crossorigin="anonymous"@@CSSHASH@@
       href="@@BASE@@/@perspective-dev/viewer@@@VER@@/dist/css/themes.css">
@@ -553,6 +559,52 @@ def sri_attribute(asset, base, version):
     return ' integrity="%s"' % digest if digest else ""
 
 
+def asset_origin(base):
+    """The ``scheme://host`` the assets are fetched from, or ``""`` when the base
+    is not a URL at all - a folder of files beside the page, which is what an
+    offline viewer is given."""
+    for scheme in ("https://", "http://"):
+        if base.startswith(scheme):
+            rest = base[len(scheme):]
+            return scheme + rest.split("/", 1)[0]
+    return ""
+
+
+def viewer_csp(base):
+    """What the page is allowed to reach, as a Content-Security-Policy.
+
+    The page carries the library's figures in it, so what it may TALK TO is
+    worth stating rather than leaving to whatever the engine happens to do:
+    everything is denied, and then the one origin the pinned Perspective build
+    comes from is allowed back - for the scripts, the stylesheet, the fonts and
+    the fetch that pulls its WebAssembly. Nothing else has a destination, so no
+    part of the data in this file has anywhere to go.
+
+    What the policy does NOT do is make the CDN trustworthy. An ES module has
+    nowhere to carry an integrity hash, so the four scripts are pinned by
+    version and not by content: code that origin serves runs in the page and can
+    read the embedded figures. A run that cannot accept that points
+    ``viewerCdnBase`` at a local copy of the same release, and then the page
+    reaches nothing at all - which is the only form of this page that is offline
+    in the full sense.
+
+    ``blob:`` is Perspective's own worker and ``wasm-unsafe-eval`` its engine;
+    ``'unsafe-inline'`` is this file's own <style> and <script>, which are the
+    page itself.
+    """
+    origin = asset_origin(base) or "'self'"
+    return "; ".join((
+        "default-src 'none'",
+        "script-src %s 'unsafe-inline' 'wasm-unsafe-eval' blob:" % origin,
+        "style-src %s 'unsafe-inline'" % origin,
+        "font-src %s data:" % origin,
+        "img-src data: blob:",
+        "connect-src %s data: blob:" % origin,
+        "worker-src blob: %s" % origin,
+        "form-action 'none'",
+    ))
+
+
 def viewer_html_escape(text):
     """Text safe to drop between HTML tags."""
     text = text.replace("&", "&amp;")
@@ -576,6 +628,7 @@ def viewer_html(title, pairs, base=None, version=None):
         version = os.environ.get("viewerPerspectiveVersion",
                                  PERSPECTIVE_VERSION)
     head = (_PAGE_HEAD.replace("@@TITLE@@", viewer_html_escape(title))
+            .replace("@@CSP@@", viewer_html_escape(viewer_csp(base)))
             .replace("@@CSSHASH@@",
                      sri_attribute(PERSPECTIVE_STYLESHEET, base, version))
             .replace("@@BASE@@", base).replace("@@VER@@", version))

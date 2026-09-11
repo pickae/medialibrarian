@@ -1526,7 +1526,7 @@ def _convert(program: str, script_dir: str, input_dir: str, output_dir: str,
                     os.rmdir(parent)
                 except OSError:
                     pass
-    return 0
+    return workerpool.exit_status()
 
 
 def _build_queue(state: Run, jobs: int) -> tuple:

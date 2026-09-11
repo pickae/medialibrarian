@@ -552,7 +552,7 @@ def main(argv: list, program: str = "ingest-movies",
         _ingest(state, root, subtitle_work)
     finally:
         ramscratch.run_exit_cleanup()
-    return 0
+    return workerpool.exit_status()
 
 
 def _settle_subtitle_work() -> bool:

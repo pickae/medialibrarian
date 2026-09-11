@@ -1615,7 +1615,7 @@ def _run_all(settings) -> int:
         ramscratch.run_exit_cleanup()
 
     safety.print_run_footer()
-    return 1 if run.failed else 0
+    return workerpool.exit_status(1 if run.failed else 0)
 
 
 def cli(argv: list | None = None) -> int:

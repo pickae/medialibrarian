@@ -1043,7 +1043,7 @@ def _read(result, program: str, script_dir: str, in_path: str, out_path: str,
 
     state.run_end = time.time()
     safety.print_run_footer()
-    return 0
+    return workerpool.exit_status()
 
 
 def _order_the_queue(state: Run, scan: list, total: int) -> list:
