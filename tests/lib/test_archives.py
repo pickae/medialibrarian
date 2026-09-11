@@ -769,8 +769,8 @@ class TestWhatIsLeftBehindIsFilesAndFolders:
         (dest / "inner" / "victim").symlink_to(outside)
 
         assert archives.prune_irregular(str(dest)) == 2
-        assert not (dest / "escape").exists(follow_symlinks=False)
-        assert not (dest / "inner" / "victim").exists(follow_symlinks=False)
+        assert not os.path.lexists(str(dest / "escape"))
+        assert not os.path.lexists(str(dest / "inner" / "victim"))
         # unlink never follows: what went is the link, never what it pointed at
         assert outside.read_text() == "not this run's file"
         assert (dest / "inner" / "page.txt").read_text() == "content"
@@ -810,7 +810,7 @@ class TestWhatIsLeftBehindIsFilesAndFolders:
 
         assert archives.extract_archive("Book.tar", "out") == 0
         assert (dest / "page.txt").read_bytes() == b"x"
-        assert not (dest / "alias.txt").exists(follow_symlinks=False)
+        assert not os.path.lexists(str(dest / "alias.txt"))
 
 
 class TestExtractAsFolder:
