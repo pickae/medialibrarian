@@ -212,11 +212,15 @@ given rather than derived: it usually lives on a different disk than the source.
 A book may arrive as an **archive instead of a folder**. Wherever the run expects a
 folder of tracks — the input's subfolders, or theirs with `-s` — a `.zip`, `.rar`,
 `.7z`, `.tar` or compressed tar lying there counts as one: it is unpacked into RAM
-under its own name minus the suffix, and ingested from there like a folder of that
-name. The archive itself is never touched, and only the extractors the input
-actually needs are required.
+and ingested from there like a folder. The archive itself is never touched, and
+only the extractors the input actually needs are required.
 
-- An archive beside a **folder of the same name** is left alone: that folder is
+- The unpacked folder is named for the **one folder the archive holds at its
+  root** — `dl-4471.zip` holding `Some Book/…` becomes `Some Book` — and for the
+  archive file minus its suffix when the root holds anything else: several
+  folders, files, or files beside a folder. A download renamed on its way here
+  still carries the name it was packed under.
+- An archive beside a **folder of that name** is left alone: that folder is
   taken to be it, already unpacked, and possibly corrected since.
 - Of two archives claiming one name (a `.zip` and a `.rar` of one book), the first
   stands in for it and the other is passed over, so the two are never mixed into a

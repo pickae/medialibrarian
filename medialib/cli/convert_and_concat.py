@@ -50,9 +50,11 @@ USAGE_HEAD = """Usage:
     One output file is made per subfolder of inputDir - or per subfolder of each
     of those, with -s. An ARCHIVE lying where such a folder would (.zip, .rar,
     .7z, .tar and the compressed tars) counts as one: it is unpacked into RAM
-    under its own name minus the extension, and ingested from there like a folder
-    of that name. An archive lying beside a FOLDER of the same name is left alone,
-    on the assumption it has already been unpacked there.
+    and ingested from there like a folder. That folder is named for the one
+    folder the archive holds at its root, and for the archive file minus its
+    extension when it holds anything else there. An archive lying beside a
+    FOLDER of that name is left alone, on the assumption it has already been
+    unpacked there.
 
     The intermediate transcoded \"opus\" tree is kept entirely in RAM
     (/dev/shm), so only the final output folder is written to disk.
@@ -195,7 +197,7 @@ def _children(directory: str, want_dirs: bool):
 
 class Staging:
     """Phase 2's tree: every archive standing in for a folder, unpacked into one
-    of its own name."""
+    named for the folder it holds, or for itself when it holds no single one."""
 
     def __init__(self, path: str):
         self.path = path
@@ -209,10 +211,15 @@ class Staging:
         for path in sorted(_children(parent, want_dirs=False), key=os.fsencode):
             if not archives.is_archive_file(path):
                 continue
-            base = archives.archive_base_name(path)
+            # The name the book was PACKED under when the archive holds one
+            # folder and nothing else at its root, and the archive's own name
+            # otherwise: a download renamed on its way here - numbered,
+            # truncated, suffixed - carries its title inside.
+            base = (archives.archive_root_folder(path)
+                    or archives.archive_base_name(path))
             name = os.path.basename(path)
-            # A folder of the same name beside it wins.
-            if archives.archive_shadowed_by_folder(path):
+            # A folder of that name beside it wins.
+            if archives.archive_shadowed_by_folder(path, base):
                 progress('  "%s" is already a folder here, leaving its archive '
                          "alone" % base)
                 continue

@@ -894,3 +894,107 @@ class TestExtractAsFolder:
         assert archives.extract_archive_as_folder("Book.zip", "Book") == 1
         assert not os.path.exists("Book")
         assert os.listdir(tmp_path) == []
+
+def _pack_tar_names(path, names, mode="w"):
+    """A tar of the given member names, empty files - what the root question
+    reads, which is the names and nothing else."""
+    with tarfile.open(str(path), mode) as archive:
+        for name in names:
+            info = tarfile.TarInfo(name)
+            if name.endswith("/"):
+                info.type = tarfile.DIRTYPE
+            archive.addfile(info, io.BytesIO(b""))
+
+
+class TestTheRootFolderAnArchiveCarries:
+    """Packing a folder stores the folder itself, and the name it was packed
+    under is the one the person who packed it chose - which the file it arrived
+    in may well have lost. That name is only there to be had when the root holds
+    ONE folder and nothing else."""
+
+    def test_one_folder_at_the_root_gives_its_name(self, tmp_path):
+        _pack_zip(tmp_path / "dl-4471.zip",
+                  ("Bleak House/01.mp3", "Bleak House/02.mp3"))
+        assert archives.archive_root_folder(
+            str(tmp_path / "dl-4471.zip")) == "Bleak House"
+
+    def test_the_root_folder_and_not_the_innermost_one(self, tmp_path):
+        """The name wanted is the one at the root: what the extraction then
+        descends through inside it is a different question."""
+        _pack_zip(tmp_path / "dl.zip", ("Bleak House/Disc 1/01.mp3",))
+        assert archives.archive_root_folder(
+            str(tmp_path / "dl.zip")) == "Bleak House"
+
+    def test_an_empty_folder_is_still_the_root_folder(self, tmp_path):
+        # nothing lies under it to give it away, so this is the case the stored
+        # member TYPE answers
+        _pack_zip(tmp_path / "dl.zip", ("Bleak House/",))
+        assert archives.archive_root_folder(
+            str(tmp_path / "dl.zip")) == "Bleak House"
+
+    def test_files_at_the_root_have_no_name_to_give(self, tmp_path):
+        _pack_zip(tmp_path / "Moby Dick.zip", ("01.mp3", "02.mp3"))
+        assert archives.archive_root_folder(str(tmp_path / "Moby Dick.zip")) == ""
+
+    def test_two_folders_at_the_root_have_none_either(self, tmp_path):
+        _pack_zip(tmp_path / "Books.zip", ("Book A/01.mp3", "Book B/01.mp3"))
+        assert archives.archive_root_folder(str(tmp_path / "Books.zip")) == ""
+
+    def test_nor_a_folder_with_a_file_beside_it(self, tmp_path):
+        _pack_zip(tmp_path / "Book.zip", ("Bleak House/01.mp3", "cover.jpg"))
+        assert archives.archive_root_folder(str(tmp_path / "Book.zip")) == ""
+
+    def test_an_empty_archive(self, tmp_path):
+        _pack_zip(tmp_path / "Book.zip", ())
+        assert archives.archive_root_folder(str(tmp_path / "Book.zip")) == ""
+
+    @pytest.mark.parametrize("member", ["../Bleak House/01.mp3",
+                                        "/Bleak House/01.mp3"])
+    def test_a_root_that_reaches_out_of_the_tree_is_no_name(self, tmp_path,
+                                                            member):
+        """The answer becomes a folder of the caller's, so it goes through the
+        same policy every other member does."""
+        _pack_zip(tmp_path / "Book.zip", (member,))
+        assert archives.archive_root_folder(str(tmp_path / "Book.zip")) == ""
+
+    @pytest.mark.parametrize("ext", ["tar", "tar.gz", "tbz2", "txz"])
+    def test_the_tar_family_is_read_too(self, tmp_path, ext):
+        # "./Book/01.mp3" is how tar spells what zip spells "Book/01.mp3", and
+        # the leading "." is not a second root
+        path = tmp_path / ("dl.%s" % ext)
+        _pack_tar_names(path, ("./", "./Bleak House/", "./Bleak House/01.mp3"),
+                        _TAR_WRITE_MODES[ext])
+        assert archives.archive_root_folder(str(path)) == "Bleak House"
+
+    def test_a_flat_tar_has_no_name_to_give(self, tmp_path):
+        _pack_tar_names(tmp_path / "Moby Dick.tar", ("./", "./01.mp3",
+                                                     "./02.mp3"))
+        assert archives.archive_root_folder(
+            str(tmp_path / "Moby Dick.tar")) == ""
+
+    def test_a_tar_this_host_cannot_read(self, tmp_path):
+        (tmp_path / "Book.tar.gz").write_bytes(b"not a tar at all")
+        assert archives.archive_root_folder(str(tmp_path / "Book.tar.gz")) == ""
+
+    def test_a_rar_is_read_through_its_own_listing(self, tmp_path, monkeypatch):
+        _record_calls(monkeypatch, listings={
+            "unrar": _rar_listing(("Bleak House", "Directory"),
+                                  ("Bleak House/01.mp3", "File"))})
+        assert archives.archive_root_folder("Book.rar") == "Bleak House"
+
+    def test_a_7z_is_read_through_its_own(self, tmp_path, monkeypatch):
+        _record_calls(monkeypatch, listings={
+            "7z": _seven_zip_listing(("Bleak House", "D drwxr-xr-x"),
+                                     ("Bleak House/01.mp3", "A -rw-r--r--"))})
+        monkeypatch.setattr(archives, "seven_zip_command", lambda: "7z")
+        assert archives.archive_root_folder("Book.7z") == "Bleak House"
+
+    def test_a_listing_that_cannot_be_made_is_no_name(self, monkeypatch):
+        """Not "empty": an archive whose members cannot be read is one with
+        nothing to say about its root, and the caller keeps the file's name."""
+        _record_calls(monkeypatch, listings={"unrar": ""})
+        assert archives.archive_root_folder("Book.rar") == ""
+
+    def test_a_name_that_is_not_an_archive(self, tmp_path):
+        (tmp_path / "notes.txt").write_text("x")
+        assert archives.archive_root_folder(str(tmp_path / "notes.txt")) == ""

@@ -36,12 +36,17 @@ def _book(folder, extension, count=2):
     return folder
 
 
+def _pack_entries(archive, parent, *names):
+    """Pack the named entries of <parent> as the archive's own top level."""
+    subprocess.run(["zip", "-qr", str(archive), *names], cwd=str(parent),
+                   check=True)
+    return archive
+
+
 def _pack_with_folder(archive, folder):
     """Pack the way packing a folder does: the folder itself as the archive's
     single top-level entry, which is the shape a real download arrives in."""
-    subprocess.run(["zip", "-qr", str(archive), folder.name],
-                   cwd=str(folder.parent), check=True)
-    return archive
+    return _pack_entries(archive, folder.parent, folder.name)
 
 
 def _pack_flat(archive, folder):
@@ -143,6 +148,77 @@ class TestAnArchiveIsOneOfTheInputsOwnSubfolders:
         """Nothing here consumes them."""
         _, source, _, _ = run
         assert (source / "Bleak House.zip").is_file()
+
+    def test_the_unpacking_scratch_is_handed_back(self, run):
+        wrapper, _, _, _ = run
+        _assert_no_leak(wrapper)
+
+
+class TestTheNameAnArchiveIsUnpackedUnder:
+    """One folder at an archive's root is the folder it was packed from, and its
+    name is the book's - the FILE may have been renamed on the way here, and
+    `dl-4471.zip` is no title. A root that is anything else has no name to give
+    and the archive's own stands."""
+
+    @pytest.fixture
+    def run(self, wrapper, tmp_path):
+        source = tmp_path / "nin"
+        outputs = tmp_path / "nout"
+        packs = wrapper.packs
+        source.mkdir(parents=True)
+
+        _pack_with_folder(source / "dl-4471.zip",
+                          _book(packs / "Our Mutual Friend", "mp3"))
+        # No folder at the root: the tracks lie in the archive itself.
+        _pack_flat(source / "Moby Dick.tar.gz", _book(packs / "flat", "mp3"))
+        # Two folders at the root, which name nothing between them.
+        _book(packs / "sampler" / "Disc 1", "mp3")
+        _book(packs / "sampler" / "Disc 2", "mp3")
+        _pack_entries(source / "Sampler.zip", packs / "sampler",
+                      "Disc 1", "Disc 2")
+        # Shadowed by the name from INSIDE it: the folder holds one track and
+        # the archive two, so which of them reached the output is visible.
+        _book(source / "Hard Times", "mp3", count=1)
+        _pack_with_folder(source / "dl-9999.zip",
+                          _book(packs / "Hard Times", "mp3", count=2))
+        # Two files claiming one name, and neither is the name of a file.
+        _pack_with_folder(source / "dl-1111.zip",
+                          _book(packs / "Little Dorrit", "mp3"))
+        _pack_with_folder(source / "dl-2222.zip", packs / "Little Dorrit")
+
+        log = wrapper.wrapper(source, outputs)
+        return wrapper, source, outputs, log
+
+    def test_the_book_is_named_for_the_folder_inside_the_archive(self, run):
+        _, _, outputs, log = run
+        assert (outputs / "Our Mutual Friend.mp3").is_file()
+        assert not (outputs / "dl-4471.mp3").exists()
+        assert "unpacked: dl-4471.zip -> Our Mutual Friend" in log, log
+
+    def test_a_root_that_is_not_one_folder_keeps_the_archives_own_name(self,
+                                                                       run):
+        """Files at the root, or two folders there: neither says what the book
+        is called, so the file name stands."""
+        _, _, outputs, _ = run
+        assert _names(outputs) == ["Hard Times.mp3", "Little Dorrit.mp3",
+                                   "Moby Dick.mp3", "Our Mutual Friend.mp3",
+                                   "Sampler.mp3"]
+
+    def test_a_folder_of_the_inside_name_beside_it_still_wins(self, run):
+        """The rule is about the name the book would be unpacked under, so it
+        follows that name inside - and the one track of the folder is the one
+        that reached the output."""
+        _, source, _, log = run
+        assert '"Hard Times" is already a folder here' in log, log
+        assert (source / "dl-9999.zip").is_file()
+        assert log.count("Converting: Hard Times/") == 1, log
+
+    def test_two_archives_holding_one_name_are_never_mixed(self, run):
+        """Their file names differ, so only the name from inside catches this
+        pair before they unpack into a single folder."""
+        _, _, _, log = run
+        assert 'already stands in for "Little Dorrit"' in log, log
+        assert log.count("Converting: Little Dorrit/") == 2, log
 
     def test_the_unpacking_scratch_is_handed_back(self, run):
         wrapper, _, _, _ = run
