@@ -363,7 +363,7 @@ def ffmetadata_chapters(chapter_lines: Sequence[str], title: str,
 
 
 def _embed_mp4_chapters(m4b_file: str, chapter_lines: Sequence[str],
-                        title: str, run: Runner = _run) -> int:
+                        title: str, ram_dir: str, run: Runner = _run) -> int:
     """The rows into an m4b, in the one rewrite mp4 needs to gain a chapter
     track. No mkvtoolnix: ffmpeg writes both the chapters and the title."""
     if len(chapter_lines) < 2:
@@ -372,10 +372,11 @@ def _embed_mp4_chapters(m4b_file: str, chapter_lines: Sequence[str],
     document = ffmetadata_chapters(chapter_lines, title, duration)
 
     metadata_file = _ram_temp()
-    # Written beside the original rather than over it: ffmpeg cannot read and
-    # write one file in the same call, and the original is only replaced once
-    # the new one is complete.
-    chaptered = m4b_file + ".chapters.m4b"
+    # Staged in the scratch and moved over at the end: ffmpeg cannot read and
+    # write one file in the same call, and the output tree is for finished
+    # files only - a half-written book must never appear there under any name.
+    chaptered = os.path.join(ram_dir,
+                             os.path.basename(m4b_file) + ".chapters.m4b")
     try:
         with open(metadata_file, "w", encoding="utf-8") as handle:
             handle.write(document)
@@ -387,10 +388,10 @@ def _embed_mp4_chapters(m4b_file: str, chapter_lines: Sequence[str],
                 or not os.path.isfile(chaptered):
             _remove_quiet(chaptered)
             return 1
-        os.replace(chaptered, m4b_file)
+        # Across filesystems: the scratch is a tmpfs and the output is not.
+        return _move_over(chaptered, m4b_file)
     finally:
         _remove_quiet(metadata_file)
-    return 0
 
 
 def embed_chapters(chapter_file: str, chapter_lines: Sequence[str],
@@ -436,7 +437,8 @@ def embed_chapters(chapter_file: str, chapter_lines: Sequence[str],
     # ("Referenced QT chapter track not found"), and a player that reads
     # chapters only from that track finds none.
     if audio_file == m4b_file:
-        return _embed_mp4_chapters(m4b_file, chapter_lines, title, run)
+        return _embed_mp4_chapters(m4b_file, chapter_lines, title, ram_dir,
+                                   run)
 
     # The mp3 path cannot run without mkvtoolnix: ID3 carries no
     # Vorbis-comment chapters. Unset means absent, and outside a run the safe

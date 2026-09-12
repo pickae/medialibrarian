@@ -29,15 +29,33 @@ So the preference order is libxaac first, exhale second, and a host with only on
 of them uses that one. It is not a quality ranking dressed up as a fallback -
 they are a full USAC encoder and a partial one.
 
-**libxaac is not usable yet, and this module says so rather than half-driving
-it.** ``xaacenc`` at AOT 42 does not write a container: it writes a BARE USAC
-elementary stream with no framing at all, plus a sidecar ``.txt`` holding the
-per-frame sample sizes and timescales an MP4 muxer would need. ADTS cannot carry
-AOT 42 (its profile field has two bits), libxaac ships no packager - only its own
-decoder reads that sidecar - and ffmpeg can neither demux nor mux the pair. Until
-medialib grows an MP4 writer for it, ``xaacenc`` is detected, reported and
-declined, so a host that has it and not exhale is told exactly what is missing
-instead of producing a tree of files no player opens.
+**libxaac is not usable here, and this module says so rather than half-driving
+it.** Two things stand in the way, and only the first is medialib's to fix.
+
+The PACKAGING. ``xaacenc`` at AOT 42 does not write a container: it writes a BARE
+USAC elementary stream, prefixed by the AudioSpecificConfig, plus a sidecar
+``.txt`` giving that config's length and the size of every frame after it. ADTS
+cannot carry AOT 42 (its profile field has two bits), libxaac ships no packager -
+only its own decoder reads that sidecar - and ffmpeg can neither demux nor mux
+the pair. This much IS solvable here: the sidecar carries everything an MP4
+writer needs, and a writer that puts the config in an ``esds`` and the frames in
+an ``mdat`` produces a file ffmpeg reads back as xHE-AAC at the right rate and
+duration, frames byte-identical to the encoder's own.
+
+The BITRATE, which is what actually decides it. The USAC encoder accepts exactly
+two rates and silently replaces every other with 96 kbps::
+
+    if (i_bitrate != 64000 && i_bitrate != 96000)
+        i_bitrate = USAC_BITRATE_DEFAULT_VALUE;   /* 96000 */
+
+    -- encoder/ixheaace_api.c
+
+So libxaac cannot encode a spoken-word library at all: 64 kbps is above the top
+of the range this pipeline uses, and there is no way down. exhale's eSBR ladder
+reaches 36 kbps stereo and 18 mono, which is the range that matters here, so the
+partial encoder is the one that does the work and the full one is declined. That
+is a limit of the encoder rather than a gap in medialib, which is why writing the
+MP4 muxer would not change the answer.
 """
 
 from __future__ import annotations
@@ -92,8 +110,10 @@ BACKENDS = (
     Backend(
         name=LIBXAAC, tool="xaacenc", usable=False,
         # Short on purpose: it is printed inside a refusal line. The whole
-        # story is in this module's docstring.
-        gap="writes a bare USAC stream that still needs an MP4 muxer",
+        # story is in this module's docstring. The BITRATE is named rather than
+        # the missing muxer: the muxer is a thing medialib could write, and the
+        # two fixed rates are the reason writing it would not help.
+        gap="encodes USAC only at 64 or 96 kbps, far above spoken word",
     ),
     Backend(name=EXHALE, tool="exhale", usable=True, gap=""),
 )
