@@ -205,9 +205,12 @@ for this codec.
 ### `convert-and-concat`
 
 Wrapper that ingests (`convert-audio`) and then concatenates
-(`concat-audio`), keeping the intermediate Opus tree entirely in RAM, so only
+(`concat-audio`), keeping the intermediate tree entirely in RAM, so only
 the finished books are ever written to disk — which is why the output folder is
 given rather than derived: it usually lives on a different disk than the source.
+`-o` picks the codec that tree is written in and is handed straight to
+`convert-audio`: Opus by default, or xHE-AAC as `.m4a`, which the concatenating
+phase then joins into an `.m4b`.
 
 A book may arrive as an **archive instead of a folder**. Wherever the run expects a
 folder of tracks — the input's subfolders, or theirs with `-s` — a `.zip`, `.rar`,

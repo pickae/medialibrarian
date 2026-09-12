@@ -3,10 +3,14 @@ phases, with the bulk of the work in RAM.
 
     1  clean the input's names   (-i, clean-folder-structure)
     2  unpack the archives standing in for folders
-    3  transcode to opus         (convert-audio)
+    3  transcode                 (convert-audio)
     4  concatenate               (concat-audio)
 
-The intermediate opus tree lives entirely in RAM and only the finished book
+The transcode writes whichever codec -o names, Opus by default and xHE-AAC
+otherwise; the two differ in the container the concatenating phase then joins,
+.opus against the .m4a that becomes an .m4b.
+
+The intermediate tree lives entirely in RAM and only the finished book
 reaches the disk. The three phases that are other scripts run as CHILD
 processes: they inherit the run directory through the environment, and a phase
 that exits non-zero ends this run rather than being skipped.
@@ -32,12 +36,18 @@ from medialib.lib import (
     runlog,
     safety,
     tooldeps,
+    xheaac,
 )
 from medialib.lib.runlog import log
 
 # The spec is DATA, and the page it renders is compared byte for byte against the
 # recorded contract under tests/data/cliContract.
 CREDITS = "convert-and-concat 0.1"
+
+# The transcoding phase is convert-audio, so the codecs on offer and the one
+# taken when -o is not given are that command's - read from the shared list
+# rather than restated, so the two pages cannot come to disagree.
+DEFAULT_CODEC = enums.AUDIO_CODECS[0]
 
 USAGE_HEAD = """Usage:
     {program} [options] <inputDir> <outputDir>
@@ -54,7 +64,7 @@ USAGE_HEAD = """Usage:
     of that name. An archive lying beside a FOLDER of the same name is left alone,
     on the assumption it has already been unpacked there.
 
-    The intermediate transcoded \"opus\" tree is kept entirely in RAM
+    The intermediate transcoded tree is kept entirely in RAM
     (/dev/shm), so only the final output folder is written to disk.
 
     OPTIONS
@@ -66,12 +76,25 @@ s |  | iterate through different input subfolders independently
 c |  | only concat
 b |  | specify bitrate
 i |  | clean input folders
-"""
+o | <codec> | output codec of the transcoding phase, handed to
+            convert-audio: {codecs}. xheaac needs an external encoder and
+            is written as .m4a, which the concatenating phase joins into
+            an .m4b.
+            Default {codec}
+""".format(codecs=" or ".join(enums.AUDIO_CODECS), codec=DEFAULT_CODEC)
 
-OPT_VARS = "m:mono s:subFolders c:onlyConcat b:bitrate i:inputClean"
+OPT_VARS = ("m:mono s:subFolders c:onlyConcat b:bitrate i:inputClean "
+            "o:outputCodec")
 OPT_FLAGS = "arg:b"
 OPT_COLUMN = 12
-OPT_LONG = "m:mono s:sub-folders c:only-concat b:bitrate i:clean-input"
+OPT_LONG = ("m:mono s:sub-folders c:only-concat b:bitrate i:clean-input "
+            "o:codec")
+
+# Checked here and not left to the child: the transcode is the THIRD phase, so
+# a typo would surface only after the cleaning and unpacking have run.
+OPT_CHECKS = """
+o | enum:{codecs} | output codec
+""".format(codecs="\\|".join(enums.AUDIO_CODECS))
 
 
 def spec(program: str) -> clioptions.Spec:
@@ -81,6 +104,7 @@ def spec(program: str) -> clioptions.Spec:
         long=OPT_LONG,
         vars=OPT_VARS,
         flags=OPT_FLAGS,
+        checks=OPT_CHECKS,
         column=OPT_COLUMN,
         credits=CREDITS,
     )
@@ -318,6 +342,7 @@ def main(argv: list, program: str = "convert-and-concat",
     only_concat = "c" in result.given
     input_clean = "i" in result.given
     bitrate = result.values["bitrate"]
+    codec = result.values["outputCodec"] or DEFAULT_CODEC
     script_dir = script_dir or commands.script_dir()
 
     in_path = result.positionals[0].rstrip("/")
@@ -378,7 +403,7 @@ def main(argv: list, program: str = "convert-and-concat",
         archive_types, archive_tools = _archives_present(in_path, archive_depth)
 
         _summarise(in_path, out_path, temp_path, only_concat, mono, bitrate,
-                   sub_folders, archive_types)
+                   codec, sub_folders, archive_types)
         if sub_folders:
             _warn_top_level_archives(in_path)
 
@@ -395,6 +420,13 @@ def main(argv: list, program: str = "convert-and-concat",
         ffmpegselect.report_ffmpeg_selection()
         if tooldeps.require_tools(program, chain,
                                   skip_preflight=skip):
+            return 1
+        # Having ffmpeg is not having an xHE-AAC encoder: ffmpeg cannot produce
+        # the codec at all. Asked here rather than left to the transcoding
+        # phase, which is the THIRD of four - by then the input has been cleaned
+        # and the archives unpacked into RAM for a run that cannot finish.
+        if not only_concat and codec == "xheaac" and xheaac.require_encoder(
+                "%s (-o %s)" % (program, codec), skip_preflight=skip):
             return 1
         runlog.warn_uncounted_progress()
         _settle_mkvtoolnix()
@@ -418,7 +450,7 @@ def main(argv: list, program: str = "convert-and-concat",
 
         # PHASE 3
         _transcode_phase(in_path, temp_path, stage, only_concat, mono, bitrate,
-                         script_dir)
+                         codec, script_dir)
         _stop_if_interrupted()
 
         # PHASE 4
@@ -482,13 +514,14 @@ def _archives_present(in_path: str, depth: int):
 
 
 def _summarise(in_path, out_path, temp_path, only_concat, mono, bitrate,
-               sub_folders, archive_types) -> None:
+               codec, sub_folders, archive_types) -> None:
     progress("Input:   " + in_path)
     progress("Output:  " + out_path)
     progress("Temp:    " + temp_path)
-    progress("Mode: %s | channels: %s | bitrate: %s | per-subfolder: %s"
+    progress("Mode: %s | codec: %s | channels: %s | bitrate: %s | "
+             "per-subfolder: %s"
              % ("only-concat" if only_concat else "transcode+concat",
-                "mono" if mono else "stereo", bitrate or "default",
+                codec, "mono" if mono else "stereo", bitrate or "default",
                 "yes" if sub_folders else "no"))
     progress("Archives standing in for a folder: %s"
              % (" ".join(archive_types) if archive_types else "none"))
@@ -535,19 +568,23 @@ def _unpack_phase(in_path: str, archive_types, depth: int):
 
 
 def _transcode_phase(in_path, temp_path, stage, only_concat, mono, bitrate,
-                     script_dir) -> None:
+                     codec, script_dir) -> None:
     if only_concat:
         progress("PHASE 3/4: skipped")
         return
     options = ["-m", "-c"] if mono else ["-c"]
     if bitrate:
         options += ["-b", bitrate]
+    # Always passed, never only when it differs from the default: a run that
+    # SAYS which codec it is using must not leave the choice to be settled
+    # somewhere else.
+    options += ["-o", codec]
 
-    # One opus tree, fed from up to two input trees: the input as given, and the
-    # unpacked archives. Each is handed over only when it holds something to
-    # transcode, because the transcoder refuses an input with no audio in it at
-    # all - and a phase that refuses ends this whole run rather than skipping one
-    # tree. Both being empty is that same refusal, made here.
+    # One transcoded tree, fed from up to two input trees: the input as given,
+    # and the unpacked archives. Each is handed over only when it holds
+    # something to transcode, because the transcoder refuses an input with no
+    # audio in it at all - and a phase that refuses ends this whole run rather
+    # than skipping one tree. Both being empty is that same refusal, made here.
     inputs = []
     if holds_ingestible_audio(in_path):
         inputs.append(in_path)
@@ -562,7 +599,7 @@ def _transcode_phase(in_path, temp_path, stage, only_concat, mono, bitrate,
                enums.extension_list(list(enums.VIDEO_EXTENSIONS)))))
 
     for source in inputs:
-        progress("PHASE 3/4: transcoding to opus: " + source)
+        progress("PHASE 3/4: transcoding to %s: %s" % (codec, source))
         _run_phase("convert-audio", options + [source, temp_path],
                    script_dir)
     progress("PHASE 3/4: transcoding complete")
@@ -585,8 +622,8 @@ def _concat_phase(in_path, out_path, temp_path, stage, only_concat,
     progress("PHASE 4/4: concatenating audio")
 
     # The trees the finished books are read from. One in the normal case:
-    # whatever came out of an archive was transcoded into the opus tree
-    # alongside the folders from disk. Two under -c, which builds no opus tree -
+    # whatever came out of an archive was transcoded into the intermediate tree
+    # alongside the folders from disk. Two under -c, which builds no such tree -
     # there the input is read as it lies.
     roots = [temp_path]
     if only_concat and stage:
