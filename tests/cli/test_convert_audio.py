@@ -205,6 +205,13 @@ class TestTheOutputCodec:
     def test_every_codec_has_a_spoken_name_for_the_messages(self):
         assert set(ca.CODEC_NAMES) == set(enums.AUDIO_CODECS)
 
+    def test_the_page_spells_the_token_and_not_the_codecs_name(self):
+        """`xHE-AAC` is what the codec is called and `xheaac` is what -o takes;
+        the page is where a reader learns what to TYPE, so a hyphen here is a
+        line the reader copies into a refusal."""
+        assert "xhe-aac" not in ca.OPT_SPEC.lower()
+        assert "xheaac" in ca.OPT_SPEC
+
     def test_the_page_names_only_encoders_worth_installing(self):
         """A gated back-end on the page sends a reader off to build the one
         tool that is then declined. The refusal names it instead, where there

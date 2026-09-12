@@ -106,7 +106,7 @@ k |  | Keep temporary files.
                     Default false
 c |  | Copy non transcoded files from <inputDir> into <outputDir>
 o | <codec> | Output codec: {codecs}.
-                    xhe-aac needs an external encoder ({encoders}), is
+                    xheaac needs an external encoder ({encoders}), is
                     written as .m4a, and keeps long files whole.
                     Default {codec}
 b | <bitrate> | Bitrate of the output files

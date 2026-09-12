@@ -18,7 +18,8 @@ Usage:
     Default behavior
     ----------------
     requires per desired output file one subfolder in input
-    each subfolder respectively needs to have only mp3, opus, aac or flac audio
+    each subfolder respectively needs to have only one of mp3, opus, aac,
+    m4a (incl. xHE-AAC) or flac audio
     those can be in various recursive folders
     the naming of those files and subfolders should reflect the desired order
 

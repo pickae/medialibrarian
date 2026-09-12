@@ -56,7 +56,12 @@ IMAGE_CODECS = ("avif", "webp", "jxl",)
 COVER_IMAGE_EXTENSIONS = ("jpeg", "jpg", "png", "svg", "tiff", "tif", "bmp",)
 COMIC_EXTENSIONS = ("cbr", "cbz", "cb7",)
 COMIC_PDF_EXTENSIONS = ("pdf",)
-AUDIO_EXTENSIONS = ("m4a", "opus", "m4b", "mp3", "mka", "ogg", "ogx", "flac", "mpga",)
+# aac is raw ADTS rather than a container, which is why it sits beside the two
+# MP4 spellings of the same codec. It belongs on the list because concat-audio
+# joins a folder of it, and this is what every command answers "is there any
+# audio here at all?" from.
+AUDIO_EXTENSIONS = ("m4a", "opus", "m4b", "aac", "mp3", "mka", "ogg", "ogx",
+                    "flac", "mpga",)
 # What audio can be converted TO, as against the AUDIO_EXTENSIONS above, which is
 # what one can be converted FROM. In order of preference, so the first is the one
 # a command writes when it is not told otherwise.

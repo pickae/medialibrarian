@@ -17,7 +17,7 @@ Usage:
     FOLDER of that name is left alone, on the assumption it has already been
     unpacked there.
 
-    The intermediate transcoded "opus" tree is kept entirely in RAM
+    The intermediate transcoded tree is kept entirely in RAM
     (/dev/shm), so only the final output folder is written to disk.
 
     OPTIONS
@@ -32,3 +32,9 @@ Usage:
             specify bitrate
     -i, --clean-input
             clean input folders
+    -o, --codec <codec>
+            output codec of the transcoding phase, handed to
+            convert-audio: opus or xheaac. xheaac needs an external encoder and
+            is written as .m4a, which the concatenating phase joins into
+            an .m4b.
+            Default opus

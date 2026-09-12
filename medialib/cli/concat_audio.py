@@ -2,9 +2,9 @@
 
 A sub-folder's tracks are gathered recursively and joined into one file, and the
 result gets the two things a book needs: chapter marks, and a cover image. Which
-of the four formats a sub-folder holds decides how the join is done, and a folder
-holding two of them is skipped rather than mangled - mp3, opus, aac and flac
-streams cannot be concatenated with each other.
+of the formats a sub-folder holds decides how the join is done, and a folder
+holding two of them is skipped rather than mangled - mp3, opus, aac, m4a and
+flac streams cannot be concatenated with each other.
 
 The chapters come from a cue sheet when the folder holds one audio file and a cue
 that describes it, and from the individual files otherwise. The cover comes from
@@ -65,7 +65,8 @@ USAGE_TAIL = """
     Default behavior
     ----------------
     requires per desired output file one subfolder in input
-    each subfolder respectively needs to have only mp3, opus, aac or flac audio
+    each subfolder respectively needs to have only one of mp3, opus, aac,
+    m4a (incl. xHE-AAC) or flac audio
     those can be in various recursive folders
     the naming of those files and subfolders should reflect the desired order
 
@@ -113,17 +114,44 @@ JOBS_PER_CORE = 4
 # so the result reports only the first segment's length and players hide every
 # chapter past it. Re-encoding recomputes the header, and FLAC being lossless
 # that costs CPU rather than quality.
+#
+# m4a is MP4-framed AAC, so it demuxes like mp3 and opus rather than taking the
+# raw path .aac needs - but with only its audio mapped: these files usually carry
+# their cover as a second (mjpeg) stream, and the m4b muxer refuses to write one.
+# The profile inside is not this script's business; xHE-AAC copies through the
+# same way AAC-LC does, which matters because it cannot go any other way - ADTS
+# has no spelling for it, so converting an xHE-AAC .m4a to .aac fails outright.
 FORMATS = {
     "mp3": ("mp3", "mp3", "demuxer", "copy"),
     "opus": ("opus", "opus", "demuxer", "copy"),
     "flac": ("flac", "flac", "demuxer", "flac"),
     "aac": ("aac", "m4b", "rawRemux", "copy"),
+    "m4a": ("m4a", "m4b", "mp4Demuxer", "copy"),
 }
 
 # The order the formats are counted in, which decides the label a single-format
-# folder is announced with.
+# folder is announced with - and the order the per-format counts are listed in
+# when a folder holding more than one of them is passed over.
 FORMAT_ORDER = (("mp3", "MP3"), ("opus", "Opus"), ("aac", "AAC"),
-                ("flac", "FLAC"))
+                ("m4a", "M4A"), ("flac", "FLAC"))
+
+
+def _mixed_formats_note(scan: "Scan") -> str:
+    """Why a folder holding two of the formats is passed over, with the tally
+    that says which two - built from FORMAT_ORDER so a format added to the table
+    appears here without anyone remembering to add it."""
+    counts = " ".join("%s:%d" % (fmt, scan.counts[fmt])
+                      for fmt, _label in FORMAT_ORDER)
+    return ("Skipping: mixed audio formats (%s) cannot be concatenated"
+            % counts)
+
+
+def _nothing_found_note() -> str:
+    """Why a folder with nothing joinable in it is passed over. It names the
+    extensions rather than only saying "nothing", because the usual cause is
+    audio in a format this table has no row for."""
+    return ("Nothing to concatenate: no %s files found"
+            % enums.extension_list([fmt for fmt, _label in FORMAT_ORDER]))
 
 
 def spec(program: str) -> clioptions.Spec:
@@ -181,7 +209,7 @@ class Scan:
     """
 
     def __init__(self, root: str) -> None:
-        self.counts = {"mp3": 0, "opus": 0, "aac": 0, "flac": 0}
+        self.counts = {fmt: 0 for fmt, _label in FORMAT_ORDER}
         self.cues: list = []
         self.audio_file = ""
         for parent, _dirs, names in os.walk(root):
@@ -209,12 +237,64 @@ def _sorted_by_extension(folder: str, extension: str) -> list:
     return sorted(found, key=version_key)
 
 
+def join_failures(failure_file: str) -> list:
+    """The sub-folders this run could make no file out of, in the order the
+    workers recorded them."""
+    try:
+        with open(failure_file, encoding="utf-8",
+                  errors="surrogateescape") as handle:
+            # The trailing newline is a terminator, not a separator, so the
+            # empty piece after the last one is dropped rather than counted.
+            return handle.read().split("\n")[:-1]
+    except OSError:
+        return []
+
+
+def report_join_failures(failure_file: str, stream=None) -> None:
+    """The closing recap, printed only when there is something to recap - a run
+    where everything joined says so in its own "Done" line instead."""
+    failed = join_failures(failure_file)
+    if not failed:
+        return
+    out = sys.stderr if stream is None else stream
+    out.write("%d subfolder(s) produced no file:\n" % len(failed))
+    for name in failed:
+        out.write("  %s\n" % name)
+
+
+def _join_failed(result, output_file: str, existed_before: bool) -> bool:
+    """Whether a join that has just run left nothing usable behind.
+
+    Two signals, because neither covers it alone: the tool's status catches the
+    input it refused outright, and the file catches a runner that reports no
+    status at all.
+
+    A file this run CREATED and then failed on is removed, so no later step
+    mistakes a headerless fragment for a finished book. One that was already
+    there is left exactly as it was: ffmpeg declines to overwrite rather than
+    truncating, so the file in the way is somebody else's, and the refusal is
+    the thing to report rather than to clear out of the way.
+    """
+    if getattr(result, "returncode", 0) == 0 and os.path.exists(output_file):
+        return False
+    if not existed_before:
+        try:
+            os.remove(output_file)
+        except OSError:
+            pass
+    return True
+
+
 def concat_via_demuxer(folder: str, source_extension: str, output_file: str,
-                       audio_codec: str, ffmpeg: str, run=_run) -> list:
+                       audio_codec: str, ffmpeg: str, run=_run,
+                       audio_only: bool = False) -> list:
     """ffmpeg's concat demuxer, for streams that already carry a container.
 
     Returns the ordered list of concat entries, so the chapter builder can reuse
     the exact order the join used.
+
+    `audio_only` maps the audio stream alone, for sources whose cover art rides
+    along as a picture stream the output container will not take.
     """
     files = _sorted_by_extension(folder, source_extension)
     if not files:
@@ -223,19 +303,26 @@ def concat_via_demuxer(folder: str, source_extension: str, output_file: str,
 
     codec = ["-codec", "copy"] if audio_codec == "copy" \
         else ["-c:a", audio_codec]
+    if audio_only:
+        codec = ["-map", "0:a"] + codec
     # The list goes to ffmpeg as a temporary file rather than a pipe: it is
     # written in full before ffmpeg is started to read it, and a pipe holds
     # only 64 KiB, so a folder of some 600 tracks would deadlock the write.
     descriptor, list_file = tempfile.mkstemp(prefix="concatAudio.",
                                              suffix=".txt")
+    existed_before = os.path.exists(output_file)
     try:
         with os.fdopen(descriptor, "w") as handle:
             handle.write("\n".join(concat_list) + "\n")
-        run([ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
-             "-safe", "0", "-f", "concat", "-i", list_file]
-            + codec + [output_file])
+        result = run([ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
+                      "-safe", "0", "-f", "concat", "-i", list_file]
+                     + codec + [output_file])
     finally:
         os.remove(list_file)
+    # An empty list is what a caller reads as "nothing was joined", which is
+    # the truth of a failed join as much as of an empty folder.
+    if _join_failed(result, output_file, existed_before):
+        return []
     return concat_list
 
 
@@ -243,26 +330,28 @@ def concat_via_raw_remux(folder: str, base_name: str, source_extension: str,
                          output_file: str, ram_dir: str, ffmpeg: str,
                          run=_run) -> list:
     """Raw bytes joined and re-wrapped, for ADTS aac - which has no container to
-    demux. The sources are joined in RAM and removed once they are in the m4b."""
+    demux. Only the joined copy is made in RAM and removed again; the sources
+    are left alone, as every other strategy leaves them. Nothing in this
+    pipeline writes a .aac, so one in an input tree is the user's own file.
+    """
     files = _sorted_by_extension(folder, source_extension)
     if not files:
         return []
 
     temporary = os.path.join(ram_dir, "%s.%s" % (os.path.basename(base_name),
                                                  source_extension))
+    existed_before = os.path.exists(output_file)
     with open(temporary, "wb") as target:
         for path in files:
             with open(path, "rb") as source:
                 shutil.copyfileobj(source, target)
-    run([ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
-         "-i", temporary, "-acodec", "copy", "-bsf:a", "aac_adtstoasc",
-         output_file])
+    result = run([ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
+                  "-i", temporary, "-acodec", "copy", "-bsf:a",
+                  "aac_adtstoasc", output_file])
     os.remove(temporary)
-    for path in files:
-        try:
-            os.remove(path)
-        except OSError:
-            pass
+
+    if _join_failed(result, output_file, existed_before):
+        return []
     return ["file '%s'" % path for path in files]
 
 
@@ -271,9 +360,10 @@ def concat_format(folder: str, base_name: str, fmt: str, ram_dir: str,
     """One sub-folder joined, by whichever strategy its format calls for."""
     source_extension, output_extension, strategy, audio_codec = FORMATS[fmt]
     output_file = "%s.%s" % (base_name, output_extension)
-    if strategy == "demuxer":
+    if strategy in ("demuxer", "mp4Demuxer"):
         return concat_via_demuxer(folder, source_extension, output_file,
-                                  audio_codec, ffmpeg, run)
+                                  audio_codec, ffmpeg, run,
+                                  audio_only=strategy == "mp4Demuxer")
     return concat_via_raw_remux(folder, base_name, source_extension,
                                 output_file, ram_dir, ffmpeg, run)
 
@@ -330,10 +420,9 @@ def name_output_files(input_dir: str, output_dir: str) -> tuple:
     return input_paths, output_paths
 
 
-def pretreat_input(input_dir: str, ffmpeg: str, skips: safety.SkipLog,
-                   run=_run) -> None:
+def pretreat_input(input_dir: str, skips: safety.SkipLog) -> None:
     """Only the known problems in names and paths, with as little interference
-    as possible."""
+    as possible. Renames only - nothing here re-encodes or rewrites a file."""
     # Folders breadth-first, so a tree needing several levels cleaned is cleaned
     # from the top down and each level still carries the path it was found at.
     depths: dict[int, list[str]] = {}
@@ -352,14 +441,11 @@ def pretreat_input(input_dir: str, ffmpeg: str, skips: safety.SkipLog,
 
     safety.lower_case_extensions(input_dir, skips)
 
+    # .m4b to .m4a, so a book already in one piece is counted with the tracks
+    # beside it rather than as a format of its own - both are MP4 and join the
+    # same way. Neither is unwrapped to raw .aac; see FORMATS for why not.
     for path in _files_matching(input_dir, ("m4b",)):
         safety.safe_rename(path, os.path.splitext(path)[0] + ".m4a", skips)
-
-    for path in _files_matching(input_dir, ("m4a",)):
-        output = os.path.splitext(path)[0] + ".aac"
-        if not os.path.isfile(output):
-            run([ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
-                 "-i", path, "-acodec", "copy", output])
 
     for path in _files_matching(input_dir, ("jpeg",)):
         safety.safe_rename(path, os.path.splitext(path)[0] + ".jpg", skips)
@@ -400,15 +486,21 @@ class Run:
     # A geometry, not None: the tier is a row of the table by construction.
     thumbnail_resolution: str
     progress_file: str
+    failure_file: str
     total: int
 
     def __init__(self, **settings) -> None:
         self.__dict__.update(settings)
 
-    def report_progress(self, name: str) -> None:
+    def report_progress(self, name: str, note: str = "") -> None:
         """The one status line kept per folder, atomic and ordered across the
         parallel workers - so it is printed directly rather than through log(),
-        which quiet mode silences."""
+        which quiet mode silences.
+
+        A folder that will produce nothing carries the reason as a second line
+        written inside the same lock, so it cannot land under another worker's
+        heading.
+        """
         with open(self.progress_file + ".lock", "w") as lock, \
                 runlog.take_lock(lock):
             try:
@@ -418,12 +510,51 @@ class Run:
                 current = 1
             with open(self.progress_file, "w") as handle:
                 handle.write("%d\n" % current)
-            sys.stderr.write('==> %sProcessing "%s"\n' % (
-                runlog.counted_prefix(current, self.total), name))
+            line = '==> %sProcessing "%s"\n' % (
+                runlog.counted_prefix(current, self.total), name)
+            if note:
+                line += "    %s\n" % note
+            sys.stderr.write(line)
+
+    def record_failure(self, name: str, reason: str) -> None:
+        """A sub-folder whose join produced no file: said at once, and recorded
+        where the run that has to set an exit status can read it.
+
+        A FILE, because the joins run in worker processes and a counter raised
+        in one of them is invisible to the run - the same reason the safety log
+        is one. The line names its sub-folder rather than relying on position:
+        it goes out after a join that may have taken minutes, by which time
+        another worker's heading has been printed.
+        """
+        sys.stderr.write('\n!!! "%s": %s\n' % (name, reason))
+        try:
+            with open(self.failure_file, "a", encoding="utf-8",
+                      errors="surrogateescape") as handle:
+                handle.write("%s\n" % name)
+        except OSError:
+            pass
 
     def process_subfolder(self, input_path: str, output_path: str) -> None:
         chapter_file = output_path.rstrip("/") + ".ch"
-        self.report_progress(os.path.basename(output_path.rstrip("/")))
+        name = os.path.basename(output_path.rstrip("/"))
+
+        scan = Scan(input_path)
+
+        # Joined only when the folder holds EXACTLY ONE format: mp3, opus, aac,
+        # m4a and flac streams can never be joined with each other.
+        present = [(fmt, label) for fmt, label in FORMAT_ORDER
+                   if scan.counts[fmt] > 0]
+
+        # On the progress line itself rather than through step(): a quiet run
+        # shows only the heading, which promises processing that never happens.
+        if len(present) != 1:
+            if scan.audio_files > 0:
+                self.report_progress(name, _mixed_formats_note(scan))
+            else:
+                self.report_progress(name, _nothing_found_note())
+            return
+
+        self.report_progress(name)
 
         # Quiet mode (the default) silences the per-step lines from here on.
         # Each sub-folder is its own worker, so this reaches only that worker
@@ -431,29 +562,20 @@ class Run:
         # progress line above is printed directly, so it stays visible.
         step = log if self.verbose else (lambda _message: None)
 
-        scan = Scan(input_path)
+        fmt, label = present[0]
+        step("    Concatenating %d %s file(s)" % (scan.counts[fmt], label))
+        concat_list = concat_format(input_path, output_path, fmt,
+                                    self.ram_dir, self.ffmpeg)
 
-        # Joined only when the folder holds EXACTLY ONE format: mp3, opus, aac
-        # and flac streams can never be joined with each other.
-        present = [(fmt, label) for fmt, label in FORMAT_ORDER
-                   if scan.counts[fmt] > 0]
-        concat_list = []
-        joined = False
-        if len(present) == 1:
-            fmt, label = present[0]
-            step("    Concatenating %d %s file(s)" % (scan.counts[fmt], label))
-            concat_list = concat_format(input_path, output_path, fmt,
-                                        self.ram_dir, self.ffmpeg)
-            joined = True
-        elif scan.audio_files > 0:
-            # A graceful skip, logged rather than silent: the other sub-folders
-            # keep processing.
-            step("    Skipping: mixed audio formats (mp3:%d opus:%d aac:%d "
-                 "flac:%d) cannot be concatenated"
-                 % (scan.counts["mp3"], scan.counts["opus"],
-                    scan.counts["aac"], scan.counts["flac"]))
-
-        if not joined:
+        # Nothing joined, so there is nothing for the two steps below to write
+        # into. Going on would run them against a file that is not there and
+        # end the run saying "Done" over a book it never made.
+        if not concat_list:
+            self.record_failure(
+                name, "the %s join produced no file - chapters and cover "
+                      "skipped. ffmpeg's own error is above; a file already at "
+                      "the output name is the usual cause, and is never "
+                      "overwritten." % label)
             return
 
         # Chapters, one of two ways. A cue sheet wins when there is one and the
@@ -626,11 +748,18 @@ def _run_with_scratch(ram_dir: str, input_dir: str, output_dir: str,
     safety.init_abort_flag(os.path.join(ram_dir, "abortRequested"))
     safety.trap_run_abort()
 
-    # The closing report: the safety recap, which only pretreatment has anything
-    # to put in. Named above the concatenation the run can be cut short in, so a
-    # Ctrl+C still says which renames were held back before it stopped.
-    safety.set_run_footer(
-        lambda: safety.report_safety_skips() if pretreat else None)
+    failure_file = os.path.join(ram_dir, "joinFailures.log")
+
+    # The closing report: the sub-folders that produced no file, and the safety
+    # recap that only pretreatment has anything to put in. Named above the
+    # concatenation the run can be cut short in, so a Ctrl+C still says what was
+    # lost and which renames were held back before it stopped.
+    def footer() -> None:
+        report_join_failures(failure_file)
+        if pretreat:
+            safety.report_safety_skips()
+
+    safety.set_run_footer(footer)
 
     try:
         os.chdir(input_dir)
@@ -639,7 +768,7 @@ def _run_with_scratch(ram_dir: str, input_dir: str, output_dir: str,
 
     if pretreat:
         log('Pretreating input folders in "%s"' % input_dir)
-        pretreat_input(input_dir, "ffmpeg", skips)
+        pretreat_input(input_dir, skips)
     else:
         log("Skipping input pretreatment (enable with -p)")
 
@@ -662,6 +791,7 @@ def _run_with_scratch(ram_dir: str, input_dir: str, output_dir: str,
         have_mkvtoolnix=have_mkvtoolnix,
         thumbnail_resolution=imagesizes.geometry(THUMBNAIL_RESOLUTION_TIER),
         progress_file=progress_file,
+        failure_file=failure_file,
         total=total,
     )
 
@@ -688,7 +818,12 @@ def _run_with_scratch(ram_dir: str, input_dir: str, output_dir: str,
         except OSError:
             pass
 
-    log('Done. Output written to "%s"' % output_dir)
+    failed = join_failures(failure_file)
+    if failed:
+        log('Finished with %d of %d subfolder(s) unjoined. Output written to '
+            '"%s"' % (len(failed), total, output_dir))
+    else:
+        log('Done. Output written to "%s"' % output_dir)
     safety.print_run_footer()
 
     # This run's scratch back now rather than at exit: a wrapper runs this
@@ -697,7 +832,10 @@ def _run_with_scratch(ram_dir: str, input_dir: str, output_dir: str,
     # fill. Only this run's own directory, never the whole list: the wrapper's
     # is on it too, and that is the tree the NEXT sub-folder is read from.
     ramscratch.release_exit_cleanup([ram_dir])
-    return workerpool.exit_status()
+    # A sub-folder that produced nothing is a per-item failure the worker
+    # handled itself, so the pool never saw it - but the run still asked for a
+    # file it did not get, and must not end on the status of one that did.
+    return workerpool.exit_status(1 if failed else 0)
 
 
 def _settle_mkvtoolnix() -> bool:

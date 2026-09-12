@@ -68,15 +68,16 @@ class TestScan:
 
     @pytest.fixture
     def folder(self, tmp_path):
-        for name in ("a.mp3", "b.mp3", "c.opus", "d.flac", "notes.txt",
-                     "sheet.CUE", "other.cue"):
+        for name in ("a.mp3", "b.mp3", "c.opus", "d.flac", "f.m4a",
+                     "notes.txt", "sheet.CUE", "other.cue"):
             (tmp_path / name).write_text("")
         (tmp_path / "deep").mkdir()
         (tmp_path / "deep" / "e.mp3").write_text("")
         return ca.Scan(str(tmp_path))
 
     def test_it_counts_each_format_at_every_depth(self, folder):
-        assert folder.counts == {"mp3": 3, "opus": 1, "aac": 0, "flac": 1}
+        assert folder.counts == {"mp3": 3, "opus": 1, "aac": 0, "m4a": 1,
+                                 "flac": 1}
 
     def test_a_cue_matches_in_either_case(self, folder):
         """Deliberately unlike the audio extensions, which match exactly - the
@@ -85,7 +86,7 @@ class TestScan:
             "other.cue", "sheet.CUE"]
 
     def test_the_audio_total_is_what_decides_the_chapter_source(self, folder):
-        assert folder.audio_files == 5
+        assert folder.audio_files == 6
 
 
 class TestFormats:
@@ -102,13 +103,70 @@ class TestFormats:
         _source, output, strategy, _codec = ca.FORMATS["aac"]
         assert (output, strategy) == ("m4b", "rawRemux")
 
+    def test_m4a_demuxes_into_an_m4b_rather_than_going_through_adts(self):
+        """ADTS has no spelling for xHE-AAC, so unwrapping an .m4a to .aac
+        fails outright - the MP4 frames are demuxed where they are."""
+        _source, output, strategy, codec = ca.FORMATS["m4a"]
+        assert (output, strategy, codec) == ("m4b", "mp4Demuxer", "copy")
+
+    def test_every_counted_format_has_a_row_in_the_table(self):
+        """The tally on the skip line is built from FORMAT_ORDER, so a name
+        there that the table does not carry would be an unjoinable count."""
+        assert sorted(fmt for fmt, _label in ca.FORMAT_ORDER) == sorted(
+            ca.FORMATS)
+
+
+class TestTheRawRemuxLeavesItsSources:
+    """It joins a copy in RAM and remuxes that, so the input is only ever read.
+
+    No step in this pipeline writes a .aac, so one reaching here is the user's
+    own file rather than an intermediate to tidy away - and the chapter builder
+    probes each of them for its duration after the join, which a source taken
+    away at the join would leave starting at 0:00.
+    """
+
+    def _folder(self, tmp_path):
+        folder = tmp_path / "book"
+        folder.mkdir()
+        for name in ("01 - part.aac", "02 - part.aac"):
+            (folder / name).write_bytes(b"\xff\xf1")
+        return folder
+
+    def _run(self, argv, **kwargs):
+        open(argv[-1], "w").close()
+        return None
+
+    def test_the_sources_are_still_there_when_the_join_returns(self, tmp_path):
+        folder = self._folder(tmp_path)
+        ca.concat_format(str(folder), str(tmp_path / "out"), "aac",
+                         str(tmp_path), "ffmpeg", run=self._run)
+        assert sorted(p.name for p in folder.iterdir()) == [
+            "01 - part.aac", "02 - part.aac"]
+
+    def test_the_joined_copy_it_made_in_ram_is_not(self, tmp_path):
+        """The one file it does own, and the one it takes back."""
+        folder = self._folder(tmp_path)
+        scratch = tmp_path / "scratch"
+        scratch.mkdir()
+        ca.concat_format(str(folder), str(tmp_path / "out"), "aac",
+                         str(scratch), "ffmpeg", run=self._run)
+        assert list(scratch.iterdir()) == []
+
+    def test_the_entries_are_the_sources_in_order(self, tmp_path):
+        folder = self._folder(tmp_path)
+        entries = ca.concat_format(str(folder), str(tmp_path / "out"), "aac",
+                                   str(tmp_path), "ffmpeg", run=self._run)
+        assert [e.rsplit("/", 1)[-1] for e in entries] == [
+            "01 - part.aac'", "02 - part.aac'"]
+
 
 class TestConcatViaDemuxer:
     """How the concat list gets to ffmpeg."""
 
     class _Run:
-        """A stand-in ffmpeg that reads the list it was handed, the way the
-        real one does."""
+        """A stand-in ffmpeg that reads the list it was handed and creates the
+        output it was asked for, the way the real one does - the second half
+        being what tells a caller the join worked."""
 
         def __init__(self):
             self.argv = []
@@ -120,6 +178,7 @@ class TestConcatViaDemuxer:
             self.listing = argv[argv.index("-i") + 1]
             with open(self.listing) as handle:
                 self.text = handle.read()
+            open(argv[-1], "w").close()
             return None
 
     def _folder(self, tmp_path, count):
@@ -158,3 +217,18 @@ class TestConcatViaDemuxer:
         run = self._Run()
         assert self._concat(str(tmp_path), run) == []
         assert run.argv == []
+
+    def test_audio_only_maps_the_audio_stream_and_nothing_else(self, tmp_path):
+        """An .m4a usually carries its cover as a second stream, and the m4b
+        muxer refuses to write one - so the join asks for the audio alone."""
+        run = self._Run()
+        (tmp_path / "01 - part.m4a").write_text("")
+        ca.concat_via_demuxer(str(tmp_path), "m4a", str(tmp_path) + "/out.m4b",
+                              "copy", "ffmpeg", run=run, audio_only=True)
+        assert run.argv[11:] == ["-map", "0:a", "-codec", "copy",
+                                 str(tmp_path) + "/out.m4b"]
+
+    def test_the_map_is_absent_when_it_was_not_asked_for(self, tmp_path):
+        run = self._Run()
+        self._concat(self._folder(tmp_path, 2), run)
+        assert "-map" not in run.argv
