@@ -2,16 +2,15 @@
 
 `mkvmerge` and its siblings are not requirements of `convert-audio`,
 `concat-audio` or `convert-and-concat`. A run can do everything but a few things
-without them - the MP3/m4b chapter-and-title detour, which routes those two
-formats through Matroska, the opus-source cover extraction, and pulling cover art
-out of a Matroska source - so their absence is a startup warning rather than a
-refusal.
+without them - the MP3 chapter-and-title detour, which routes that one format
+through Matroska, the opus-source cover extraction, and pulling cover art out of
+a Matroska source - so their absence is a startup warning rather than a refusal.
 
 The state is settled once at startup and travels in the environment, which is what
 makes both halves of this testable on any host:
 
   * the GUARDS are asserted with the state forced, so they behave exactly as if
-    the tools were gone whatever the host has installed - the MP3/m4b step skips
+    the tools were gone whatever the host has installed - the MP3 step skips
     with a visible line instead of killing the worker, and `mkvmerge` is never
     executed;
   * the SETTLEMENT is asserted on a PATH that genuinely cannot find any of the
@@ -89,6 +88,17 @@ class TestTheGuardsWithTheStateForced:
         log = forced.forced("concat-audio", "-v", source, outputs)
         assert (outputs / "Album.mp3").is_file()
         assert log.count("chapters and title not embedded") == 1, log
+        assert forced.calls.read_text() == "", "mkvmerge was executed"
+
+    def test_an_m4b_run_keeps_its_chapters(self, forced, tmp_path):
+        """mp4 takes its chapter track from an ffmetadata file through ffmpeg,
+        so this format needs none of the trio - the skip line that an MP3 gets
+        would be a book quietly losing its chapters for no reason."""
+        source = _album(tmp_path / "aacin", "01 - first.aac", "02 - second.aac")
+        outputs = tmp_path / "aacout"
+        log = forced.forced("concat-audio", "-v", source, outputs)
+        assert (outputs / "Album.m4b").is_file()
+        assert "chapters and title not embedded" not in log, log
         assert forced.calls.read_text() == "", "mkvmerge was executed"
 
     def test_a_forced_state_does_not_also_warn_at_startup(self, forced,

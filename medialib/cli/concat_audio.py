@@ -87,7 +87,7 @@ USAGE_TAIL = """
     Dependencies
     ------------
     ffmpeg, imagemagick, wc, mutagen. Optional: mkvtoolnix (chapters and titles
-    for MP3/m4b output - without it the concatenation still succeeds, unchaptered),
+    for MP3 output - without it an MP3 still concatenates, unchaptered),
     pdftoppm (renders a booklet PDF's first page as the cover; without it the
     embedded cover art is used instead), flock (numbers the progress lines)"""
 
@@ -688,11 +688,10 @@ def main(argv: list, program: str = "concat-audio",
     # pdftoppm is deliberately not required, though the dependency list names
     # it: a booklet PDF is only the preferred of several cover sources, so the
     # thumbnail step falls through to the embedded artwork with a warning rather
-    # than costing the whole run. mkvtoolnix is not required either - the Opus
-    # and FLAC outputs of the same run write their chapters with mutagen and
-    # never touch it, so a host without it loses only the MP3/m4b chapters and
-    # titles, said once at startup rather than refusing a run that can do
-    # everything else.
+    # than costing the whole run. mkvtoolnix is not required either - every
+    # output but MP3 writes its chapters without it, so a host without it loses
+    # only the MP3 chapters and titles, said once at startup rather than
+    # refusing a run that can do everything else.
     if tooldeps.require_tools(program, ["ffmpeg", "ffprobe",
                                         imagemagick.CONVERT_SPEC]):
         return 1
@@ -852,8 +851,8 @@ def _settle_mkvtoolnix() -> bool:
     if not present:
         log("WARNING: mkvtoolnix not found (apt install mkvtoolnix) - chapters "
             "and titles cannot be embedded in")
-        log("         MP3 and m4b output (Opus and FLAC are written by mutagen "
-            "and do not need it), and cover")
+        log("         MP3 output (Opus and FLAC go through mutagen, m4b through "
+            "ffmpeg), and cover")
         log("         art embedded in opus sources is left unextracted (sidecar "
             "images still work). The")
         log("         concatenation itself is unaffected.")

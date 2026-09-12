@@ -481,7 +481,7 @@ def _settle_mkvtoolnix() -> None:
 
     A warning rather than a refusal: the transcoding half uses mkvtoolnix only to
     pull cover art out of a Matroska source, and the concatenating half only for
-    the MP3/m4b chapter-and-title detour.
+    the MP3 chapter-and-title detour.
     """
     if "HAVE_MKVTOOLNIX" in os.environ:
         return
@@ -495,9 +495,10 @@ def _settle_mkvtoolnix() -> None:
     log("         embedded in Matroska sources will not be extracted (sidecar "
         "images still work); in the")
     log("         concatenating phase, chapters and titles cannot be embedded "
-        "in MP3 and m4b output (Opus")
-    log("         and FLAC go through mutagen) and cover art embedded in opus "
-        "sources is left unextracted.")
+        "in MP3 output (Opus and")
+    log("         FLAC go through mutagen, m4b through ffmpeg) and cover art "
+        "embedded in opus sources is")
+    log("         left unextracted.")
     log("         The encoding and concatenation themselves are unaffected.")
 
 
