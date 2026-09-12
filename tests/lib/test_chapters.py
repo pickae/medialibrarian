@@ -494,6 +494,9 @@ def test_embed_mp3_with_mkvtoolnix_detours_over_mka(tmp_path, monkeypatch,
 
 def _m4b_run(tmp_path, monkeypatch, lines, duration="61.0", results=None):
     (tmp_path / "song.m4b").write_bytes(b"x")
+    # The scratch is a real directory: the rewrite is staged there rather than
+    # beside the book, so the output tree never holds a half-written file.
+    (tmp_path / "ram").mkdir(exist_ok=True)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(chapters, "_probe_duration", lambda path: duration)
     run = _Run(results)
@@ -513,6 +516,8 @@ def test_embed_m4b_takes_one_call_and_no_mkvtoolnix(tmp_path, monkeypatch):
     assert status == 0
     assert [os.path.basename(str(c[0])) for c in run.calls] == ["ffmpeg"]
     argv = run.calls[0]
+    # Staged in the scratch, never in the tree the book lives in.
+    assert argv[-1] == "ram/song.m4b.chapters.m4b"
     # The metadata input supplies the chapters and the title; only the audio is
     # mapped from the book, so a cover stream cannot displace the chapter track.
     assert argv[argv.index("-map_metadata") + 1] == "1"
@@ -537,7 +542,9 @@ def test_embed_m4b_replaces_the_file_only_once_the_rewrite_is_there(
     status, _run = _m4b_run(tmp_path, monkeypatch, _M4B_LINES)
     assert status == 0
     assert (tmp_path / "song.m4b").exists()
+    # Neither beside the book nor left in the scratch.
     assert list(tmp_path.glob("*.chapters.m4b")) == []
+    assert list((tmp_path / "ram").iterdir()) == []
 
 
 def test_embed_m4b_reports_a_rewrite_that_failed(tmp_path, monkeypatch):
@@ -548,6 +555,7 @@ def test_embed_m4b_reports_a_rewrite_that_failed(tmp_path, monkeypatch):
     assert status == 1
     assert (tmp_path / "song.m4b").read_bytes() == b"x"
     assert list(tmp_path.glob("*.chapters.m4b")) == []
+    assert list((tmp_path / "ram").iterdir()) == []
 
 
 def test_embed_m4b_without_rows_writes_nothing(tmp_path, monkeypatch):
