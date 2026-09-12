@@ -212,15 +212,11 @@ class TestTheOutputCodec:
         assert "xhe-aac" not in ca.OPT_SPEC.lower()
         assert "xheaac" in ca.OPT_SPEC
 
-    def test_the_page_names_only_encoders_worth_installing(self):
-        """A gated back-end on the page sends a reader off to build the one
-        tool that is then declined. The refusal names it instead, where there
-        is room to say why."""
+    def test_the_page_names_the_encoder_the_refusal_points_at(self):
+        """One name in both places, so a reader who installs what the page
+        asked for does not then meet a refusal naming something else."""
         named = ca.OPT_SPEC.split("external encoder (")[1].split(")")[0]
-        assert named == xheaac.usable_tools()
-        for backend in xheaac.BACKENDS:
-            if not backend.usable:
-                assert backend.tool not in named
+        assert named == xheaac.ENCODER_SPEC == xheaac.EXHALE
 
     @pytest.mark.parametrize("codec,expected", [
         ("opus", "book/track.opus"),
@@ -337,18 +333,16 @@ class TestTheSampleRateProbe:
 
 
 class TestTheEncoderReport:
-    """A run that picks one of two tools by itself has to say which, or a library
-    encoded by the fallback cannot be told apart afterwards from one encoded by
-    the preferred back-end."""
+    """What an xHE-AAC run says it will encode at. Reached only from the
+    xHE-AAC branch: an Opus run has nothing to add, ffmpeg encodes it and
+    ffmpegselect already says which ffmpeg."""
 
     def _lines(self, capsys, **kwargs):
-        settings = {"backend": xheaac.backend_named(xheaac.EXHALE),
-                    "codec": "xheaac", "bitrate": 46, "mono": False,
+        settings = {"codec": "xheaac", "bitrate": 46, "mono": False,
                     "adaptive": False}
         settings.update(kwargs)
-        ca._report_encoder(settings["backend"], settings["codec"],
-                           settings["bitrate"], settings["mono"],
-                           settings["adaptive"])
+        ca._report_encoder(settings["codec"], settings["bitrate"],
+                           settings["mono"], settings["adaptive"])
         return capsys.readouterr().out.splitlines()
 
     def test_the_chosen_encoder_is_named(self, capsys):
@@ -378,10 +372,10 @@ class TestTheEncoderReport:
         printing the global one would be printing a number nothing uses."""
         assert len(self._lines(capsys, adaptive=True)) == 1
 
-    def test_an_opus_run_reports_nothing_at_all(self, capsys):
-        """There is no back-end to name: ffmpeg encodes it, and ffmpegselect
-        already says which ffmpeg."""
-        assert self._lines(capsys, backend=None) == []
+    def test_the_encoder_named_is_the_one_this_host_encodes_with(self, capsys):
+        """Not a label written out beside the call: the same constant the
+        preflight looks for and the page tells a reader to install."""
+        assert xheaac.EXHALE in self._lines(capsys)[0]
 
 
 class TestTheXheAacEncodeCall:
@@ -419,8 +413,7 @@ class TestTheXheAacEncodeCall:
         return calls
 
     def _run(self, **settings):
-        base = {"codec": "xheaac", "extension": "m4a", "output_dir": "out",
-                "backend": xheaac.backend_named(xheaac.EXHALE)}
+        base = {"codec": "xheaac", "extension": "m4a", "output_dir": "out"}
         base.update(settings)
         return ca.Run(**base)
 
@@ -566,8 +559,7 @@ class TestTheOpusEncodeIsUnchanged:
         seen = []
         monkeypatch.setattr(ca.subprocess, "run",
                             lambda argv, **kw: seen.append(list(argv)))
-        run = ca.Run(codec="opus", extension="opus", output_dir="out",
-                     backend=None)
+        run = ca.Run(codec="opus", extension="opus", output_dir="out")
         run._encode("a.flac", "out/a.opus", mono=False, bitrate=46)
         assert seen == [["ffmpeg", "-nostdin", "-y", "-i", "a.flac",
                          "-map", "0:a:0", "-map_metadata", "0:s:0",
@@ -578,8 +570,7 @@ class TestTheOpusEncodeIsUnchanged:
         seen = []
         monkeypatch.setattr(ca.subprocess, "run",
                             lambda argv, **kw: seen.append(list(argv)))
-        run = ca.Run(codec="opus", extension="opus", output_dir="out",
-                     backend=None)
+        run = ca.Run(codec="opus", extension="opus", output_dir="out")
         run._encode("a.flac", "out/a.opus", mono=True, bitrate=32)
         assert seen == [["ffmpeg", "-nostdin", "-y", "-i", "a.flac",
                          "-map", "0:a:0", "-map_metadata", "0:s:0",
@@ -590,8 +581,7 @@ class TestTheOpusEncodeIsUnchanged:
         seen = []
         monkeypatch.setattr(ca.subprocess, "run",
                             lambda argv, **kw: seen.append(list(argv)))
-        run = ca.Run(codec="opus", extension="opus", output_dir="out",
-                     backend=None)
+        run = ca.Run(codec="opus", extension="opus", output_dir="out")
         run._remux("a.mkv", "out/a.opus")
         assert "-c:a" in seen[0] and seen[0][seen[0].index("-c:a") + 1] == "copy"
         assert "libopus" not in seen[0]

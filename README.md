@@ -70,12 +70,10 @@ option can never change what a command you already type means.
   `whisper-ctranslate2`, `ffsubsync`, `tree`, `beets`, Calibre's `ebook-convert`,
   Ghostscript (`gs`), `duckdb` and `wc` — that last one being the only piece of
   coreutils anything here still shells out to.
-- `convert-audio -o xheaac` additionally needs an xHE-AAC encoder, which ffmpeg
-  cannot be: it decodes the codec but does not encode it, and no distribution
-  packages either encoder. Build one —
-  [exhale](https://gitlab.com/ecodis/exhale) is the one that works today, and
-  [libxaac](https://github.com/ittiam-systems/libxaac) is preferred once its
-  output can be muxed (see [`convert-audio`](#convert-audio)).
+- `convert-audio -o xheaac` additionally needs
+  [exhale](https://gitlab.com/ecodis/exhale), which ffmpeg cannot stand in for:
+  it decodes the codec but does not encode it. No distribution packages exhale,
+  so it has to be built (see [`convert-audio`](#convert-audio)).
 - `read-library` additionally needs a local
   [ebook2audiobook](https://github.com/DrewThomasson/ebook2audiobook) checkout and
   a Python 3.10–3.12 to build its environment from; everything inside that
@@ -181,19 +179,9 @@ enough already and is copied verbatim (`-c`) or left alone.
 
 **xHE-AAC** (`-o xheaac`) is the one output codec ffmpeg cannot produce — it
 decodes the codec and has no encoder for it — so the audio goes out over a pipe
-to an external one. Two exist and they are not interchangeable:
-[libxaac](https://github.com/ittiam-systems/libxaac) implements the whole USAC
-toolbox, including the speech coders that are the entire point at these bitrates,
-while [exhale](https://gitlab.com/ecodis/exhale) implements the
-frequency-domain path only. libxaac is therefore preferred and exhale is the
-fallback, and a machine with only one of them uses that one.
-
-Today that means exhale. libxaac's encoder writes a bare USAC elementary stream
-plus a sidecar table of frame sizes rather than a container, and nothing
-available — not ffmpeg, not libxaac itself — can mux that pair into an `.m4a`.
-It is detected and reported rather than half-driven, so a machine that has it and
-not exhale is told what is missing instead of filling a tree with files no player
-opens.
+to [exhale](https://gitlab.com/ecodis/exhale), which reads WAVE on stdin and
+writes a finished `.m4a`. No distribution packages it, so a run that asks for
+this codec without it says where to build it from and offers `-o opus` instead.
 
 Two consequences worth knowing before using it. exhale takes a *preset* about 12
 kbps apart rather than a bitrate, so a `-b` lands on the nearest rung and the run

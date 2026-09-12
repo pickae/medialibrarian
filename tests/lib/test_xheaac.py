@@ -1,10 +1,10 @@
-"""Tests for medialib.lib.xheaac - which xHE-AAC encoder a host can use, and
-what a bitrate becomes on exhale's preset ladder.
+"""Tests for medialib.lib.xheaac - whether a host can encode xHE-AAC at all,
+and what a bitrate becomes on exhale's preset ladder.
 
-Nothing here runs an encoder. What is under test is the three decisions the
-module makes BEFORE one is reached: which back-end a given host gets, what a run
-is told when it gets none, and which preset a -b lands on - all of which are
-pure, and all of which decide the shape of a whole library.
+Nothing here runs an encoder. What is under test is the two decisions the module
+makes BEFORE one is reached: what a run is told when the host has none, and
+which preset a -b lands on - both pure, and both deciding the shape of a whole
+library.
 """
 
 import pytest
@@ -24,73 +24,33 @@ def having(*tools):
     return lambda spec: bool(set(spec.split("|")) & wanted)
 
 
-class TestTheBackendTable:
-    def test_libxaac_is_preferred_over_exhale(self):
-        """The order is the whole point of the table: libxaac has the USAC
-        speech coders exhale leaves out, so it is asked for first."""
-        assert [backend.name for backend in xheaac.BACKENDS] == [
-            xheaac.LIBXAAC, xheaac.EXHALE]
+class TestTheEncoder:
+    """One encoder, named once: the spec a preflight asks PATH for, the name a
+    refusal prints, and the word the help page tells a reader to install are the
+    same constant."""
 
-    def test_every_backend_is_named_and_reachable_by_name(self):
-        for backend in xheaac.BACKENDS:
-            assert xheaac.backend_named(backend.name) is backend
+    def test_the_tool_spec_is_the_binary_a_preflight_asks_for(self):
+        assert xheaac.ENCODER_SPEC == xheaac.EXHALE == "exhale"
 
-    def test_an_unknown_name_is_none_rather_than_an_error(self):
-        assert xheaac.backend_named("fdk") is None
+    def test_the_binary_has_a_line_in_the_shared_notes_table(self):
+        """A refusal reads its role and its install hint from there, so a
+        binary missing from it would refuse with an empty sentence."""
+        note = tooldeps.tool_note(xheaac.EXHALE)
+        role, hint = note.split("|", 1)
+        assert role and hint
 
-    def test_the_tool_spec_lists_every_backend_binary(self):
-        """Derived, not written twice - a back-end added to the table joins the
-        alternatives spec with it."""
-        assert xheaac.ENCODER_SPEC.split("|") == [
-            backend.tool for backend in xheaac.BACKENDS]
+    def test_a_host_with_the_binary_can_encode(self):
+        assert xheaac.encoder_present(having("exhale")) is True
 
-    def test_every_backend_binary_has_a_line_in_the_shared_notes_table(self):
-        """The refusal prints a role and an install hint per binary, and
-        tooldeps' generic fallback would print "required by this script" plus a
-        package-manager shrug for a tool nobody added a line for."""
-        for backend in xheaac.BACKENDS:
-            role, hint = tooldeps.tool_note(backend.tool).split("|", 1)
-            assert "xHE-AAC" in role
-            assert hint and "check your package manager" not in hint
-
-    def test_a_gated_backend_says_what_is_missing_and_a_usable_one_does_not(self):
-        for backend in xheaac.BACKENDS:
-            assert bool(backend.gap) is not backend.usable
-
-
-class TestChoosingABackend:
-    """Which encoder a host actually gets. `usable` and `present` are different
-    questions and the choice reads both."""
-
-    def test_a_host_with_only_exhale_gets_exhale(self):
-        chosen = xheaac.choose_backend(having("exhale"))
-        assert chosen is not None and chosen.name == xheaac.EXHALE
-
-    def test_a_host_with_both_still_gets_exhale_while_libxaac_is_gated(self):
-        """The preferred back-end is SKIPPED rather than chosen and then failed.
-        A host with both must encode, not refuse over the one medialib cannot
-        drive - which is the bug this ordering exists to prevent."""
-        chosen = xheaac.choose_backend(having("xaacenc", "exhale"))
-        assert chosen is not None and chosen.name == xheaac.EXHALE
-
-    def test_a_host_with_only_the_gated_backend_gets_nothing(self):
-        assert xheaac.choose_backend(having("xaacenc")) is None
-
-    def test_a_host_with_neither_gets_nothing(self):
-        assert xheaac.choose_backend(having()) is None
-
-    def test_present_is_not_the_same_question_as_chosen(self):
-        """xaacenc present and not chosen is the state the whole gate exists
-        for, and it is what lets the refusal name it as installed."""
-        present = xheaac.present_backends(having("xaacenc"))
-        assert [backend.name for backend in present] == [xheaac.LIBXAAC]
+    def test_a_host_without_it_cannot(self):
+        assert xheaac.encoder_present(having()) is False
 
     def test_the_presence_test_is_read_at_the_call_and_not_at_import(self):
-        """Written as a default argument this would freeze to whatever
-        tooldeps.tool_present was when the module was imported, and silently
-        ignore a caller - or a run - that replaced it."""
-        assert xheaac.choose_backend(having()) is None
-        assert xheaac.choose_backend(having("exhale")) is not None
+        """A default argument is bound once, at import, so a signature default
+        would freeze this to whatever the function was then."""
+        calls = []
+        xheaac.encoder_present(lambda spec: calls.append(spec) or True)
+        assert calls == [xheaac.EXHALE]
 
 
 class TestRefusing:
@@ -100,38 +60,27 @@ class TestRefusing:
                                       file=buffer) == 0
         assert buffer.text == ""
 
-    def test_a_host_with_neither_is_told_about_both(self):
+    def test_a_host_without_it_is_told_what_to_install_and_from_where(self):
+        """The source rather than an apt line: no distribution packages it, so
+        a hint naming a package would send the reader to a command that fails.
+        """
         buffer = _Buffer()
         assert xheaac.require_encoder("convert-audio (-o xheaac)",
                                       present=having(), file=buffer) == 1
-        for backend in xheaac.BACKENDS:
-            assert backend.tool in buffer.text
-        # Both install hints, not just the first: the two are different
-        # projects, and tooldeps' alternatives spec would print only one.
-        assert "ittiam-systems/libxaac" in buffer.text
+        assert xheaac.EXHALE in buffer.text
         assert "ecodis/exhale" in buffer.text
 
-    def test_a_host_with_neither_is_pointed_at_the_one_that_works(self):
+    def test_the_refusal_names_the_command_that_was_asked_for(self):
+        buffer = _Buffer()
+        xheaac.require_encoder("convert-audio (-o xheaac)", present=having(),
+                               file=buffer)
+        assert "convert-audio (-o xheaac)" in buffer.text
+
+    def test_the_refusal_offers_opus_as_the_way_out(self):
         buffer = _Buffer()
         xheaac.require_encoder("x", present=having(), file=buffer)
-        assert "Install exhale" in buffer.text
-        assert "not usable yet" in buffer.text
-
-    def test_a_host_with_only_the_gated_backend_is_not_told_it_is_missing(self):
-        """The tool IS there. Calling it missing sends the reader to install
-        something they already have."""
-        buffer = _Buffer()
-        assert xheaac.require_encoder("x", present=having("xaacenc"),
-                                      file=buffer) == 1
-        assert "is installed, but" in buffer.text
-        assert "has neither" not in buffer.text
-
-    def test_every_refusal_offers_opus_as_the_way_out(self):
-        for present in (having(), having("xaacenc")):
-            buffer = _Buffer()
-            xheaac.require_encoder("x", present=present, file=buffer)
-            assert "-o opus" in buffer.text
-            assert "Nothing was changed." in buffer.text
+        assert "-o opus" in buffer.text
+        assert "Nothing was changed." in buffer.text
 
     def test_the_preflight_can_be_skipped_like_every_other_one(self):
         buffer = _Buffer()

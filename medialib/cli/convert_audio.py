@@ -118,10 +118,7 @@ s | <seconds> | Split files longer than <seconds> into one chunk per logical
                     then transparently re-concatenate. 0 disables splitting.
                     Default 10000
 """.format(codecs=" or ".join(enums.AUDIO_CODECS),
-           # Only the back-ends a run could really encode with. Naming a gated
-           # one here would send a reader off to build the tool that is then
-           # declined; the refusal names it, where there is room to say why.
-           encoders=xheaac.usable_tools(),
+           encoders=xheaac.ENCODER_SPEC,
            codec=DEFAULT_CODEC)
 
 OPT_VARS = ("m:mono a:adaptive c:copy k:keep o:outputCodec b:bitrate j:jobs "
@@ -556,7 +553,6 @@ class Run:
     # None for Opus, which ffmpeg encodes itself.
     codec: str
     extension: str
-    backend: xheaac.Backend | None
     # A geometry, not None: DEFAULT_TIER is a row of the table by construction.
     cover_resolution: str
     ram_base: str
@@ -1327,14 +1323,12 @@ def main(argv: list, program: str = "convert-audio",
     # codec at all, so that back-end is a separate binary this host has or has
     # not got. Asked up front, and only when -o asked for the codec, so an Opus
     # run neither pays for the probe nor is blocked by it.
-    backend = None
     if codec == "xheaac":
         skip_preflight = bool(os.environ.get("SKIP_TOOL_PREFLIGHT", ""))
         if xheaac.require_encoder("%s (-o %s)" % (program, codec),
                                   skip_preflight=skip_preflight):
             return 1
-        backend = xheaac.choose_backend()
-        _report_encoder(backend, codec, bitrate, mono, adaptive)
+        _report_encoder(codec, bitrate, mono, adaptive)
     runlog.warn_uncounted_progress()
     _settle_mkvtoolnix()
 
@@ -1359,32 +1353,24 @@ def main(argv: list, program: str = "convert-audio",
     try:
         return _convert(program, script_dir, input_dir, output_dir, probe_what,
                         skips, mono, adaptive, copy, keep, bitrate, jobs,
-                        split_threshold, codec, backend)
+                        split_threshold, codec)
     finally:
         statusline.stop_status_monitor()
         ramscratch.run_exit_cleanup()
         safety.release_abort_flag()
 
 
-def _report_encoder(backend, codec: str, bitrate: int, mono: bool,
+def _report_encoder(codec: str, bitrate: int, mono: bool,
                     adaptive: bool) -> None:
-    """Say which external encoder the run settled on, and what it will really
-    encode at.
+    """Say what this run will really encode at.
 
-    Named for the same reason ``ffmpegselect.report_ffmpeg_selection`` is: when
-    a run picks one of several tools by itself, the run has to say which, or a
-    library encoded by the fallback is indistinguishable afterwards from one
-    encoded by the preferred back-end.
-
-    The rate is the second half, and the reason it is printed is that exhale
-    does not take a bitrate - it takes a PRESET, a rung on a ladder about 12
-    kbit/s apart, so a -b lands on the nearest rung rather than on the number
-    asked for. Printing both is what keeps that from being silent. Adaptive mode
-    has no one rate to print: it decides per file, so only the encoder is named.
+    The reason it is printed is that exhale does not take a bitrate - it takes
+    a PRESET, a rung on a ladder about 12 kbit/s apart, so a -b lands on the
+    nearest rung rather than on the number asked for. Printing both is what
+    keeps that from being silent. Adaptive mode has no one rate to print: it
+    decides per file, so only the encoder is named.
     """
-    if backend is None:
-        return
-    print("Encoding %s with %s." % (CODEC_NAMES[codec], backend.tool))
+    print("Encoding %s with %s." % (CODEC_NAMES[codec], xheaac.EXHALE))
     if adaptive:
         return
     channels = 1 if mono else 2
@@ -1393,7 +1379,7 @@ def _report_encoder(backend, codec: str, bitrate: int, mono: bool,
     actual = xheaac.preset_bitrate(preset, channels)
     note = "" if actual == target else " (nearest preset to %d)" % target
     print("  %s preset %s: about %d kbps %s%s"
-          % (backend.tool, preset, actual,
+          % (xheaac.EXHALE, preset, actual,
              "mono" if channels == 1 else "stereo", note))
 
 
@@ -1410,7 +1396,7 @@ def _holds_input(input_dir: str) -> bool:
 def _convert(program: str, script_dir: str, input_dir: str, output_dir: str,
              probe_what: str, skips, mono: bool, adaptive: bool, copy: bool,
              keep: bool, bitrate: int, jobs: int, split_threshold: int,
-             codec: str = DEFAULT_CODEC, backend=None) -> int:
+             codec: str = DEFAULT_CODEC) -> int:
     pre_start = time.time()
 
     state = Run(
@@ -1418,7 +1404,6 @@ def _convert(program: str, script_dir: str, input_dir: str, output_dir: str,
         mono=mono, adaptive=adaptive, copy=copy, keep=keep, bitrate=bitrate,
         threshold=THRESHOLD, split_threshold=split_threshold,
         codec=codec, extension=enums.AUDIO_CODEC_EXTENSIONS[codec],
-        backend=backend,
         # The table's default: a cover that rides along in every transcoded
         # track is glanced at in a track list, not studied, so the floor of the
         # table is the right end of it.
