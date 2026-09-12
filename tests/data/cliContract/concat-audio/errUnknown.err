@@ -40,7 +40,7 @@ Usage:
     Dependencies
     ------------
     ffmpeg, imagemagick, wc, mutagen. Optional: mkvtoolnix (chapters and titles
-    for MP3/m4b output - without it the concatenation still succeeds, unchaptered),
+    for MP3 output - without it an MP3 still concatenates, unchaptered),
     pdftoppm (renders a booklet PDF's first page as the cover; without it the
     embedded cover art is used instead), flock (numbers the progress lines)
 

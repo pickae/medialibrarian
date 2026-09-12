@@ -14,8 +14,8 @@ MP4 is the third container, and it is only half here. Its cover art is a native
 ``covr`` atom, which mutagen writes as readily as the other two - but MP4 has no
 Vorbis comments and no place to put a CHAPTERnn row, so chapters into an .m4a are
 not a tag at all: they are a chapter TRACK, and ffmpeg writes those. That half
-lives in :mod:`medialib.lib.chapters` beside the mkvmerge detour the mp3 and m4b
-paths already take, for the same reason.
+lives in :mod:`medialib.lib.chapters`, beside the m4b path that writes one the
+same way.
 
 **Every function here answers with a process-style status: 0 for done, non-zero
 for failed**, because that is the error boundary its callers need: a corrupt file

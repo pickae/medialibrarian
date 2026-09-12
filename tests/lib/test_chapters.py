@@ -55,14 +55,20 @@ def tags(monkeypatch):
 
 class _Run:
     """The command runner stand-in: per-tool canned statuses, the argv of
-    every call recorded, and the chapter file a mkvmerge --chapters call is
-    handed, read at the moment it is handed it (the port removes the file right
-    after the call)."""
+    every call recorded, and the sidecar a call is handed - a mkvmerge
+    --chapters file or an ffmpeg ffmetadata one - read at the moment it is
+    handed it (the port removes the file right after the call).
+
+    An ffmpeg call creates its output, the way the real one does: a caller that
+    checks whether the file it asked for is there would otherwise read every
+    stubbed run as a failure.
+    """
 
     def __init__(self, results=None):
         self.results = results or {}
         self.calls = []
         self.chapter_contents = []
+        self.metadata_contents = []
         self._rc_index = {}
 
     def __call__(self, argv, quiet=False):
@@ -75,6 +81,14 @@ class _Run:
                     with open(path, encoding="utf-8") as handle:
                         self.chapter_contents.append(handle.read())
                 break
+        if name == "ffmpeg":
+            inputs = [str(argv[i + 1]) for i, a in enumerate(argv)
+                      if str(a) == "-i"]
+            if "-map_metadata" in [str(a) for a in argv] and len(inputs) > 1 \
+                    and os.path.isfile(inputs[1]):
+                with open(inputs[1], encoding="utf-8") as handle:
+                    self.metadata_contents.append(handle.read())
+            open(str(argv[-1]), "w").close()
         rcs = self.results.get(name, [0])
         i = self._rc_index.get(name, 0)
         self._rc_index[name] = i + 1
@@ -448,7 +462,7 @@ def test_embed_mp3_without_mkvtoolnix_skips_with_a_note(tmp_path, capsys,
     assert tags.calls == []
     assert capsys.readouterr().err == (
         "==>     chapters and title not embedded: mkvtoolnix is not installed "
-        "(MP3 and m4b need it)\n")
+        "(MP3 needs it)\n")
 
 
 def test_embed_mp3_with_mkvtoolnix_detours_over_mka(tmp_path, monkeypatch,
@@ -478,38 +492,84 @@ def test_embed_mp3_with_mkvtoolnix_detours_over_mka(tmp_path, monkeypatch,
     assert tags.calls == []
 
 
-def test_embed_m4b_with_rows_keeps_the_chapters_and_clears_the_file(
-        tmp_path, monkeypatch):
+def _m4b_run(tmp_path, monkeypatch, lines, duration="61.0", results=None):
     (tmp_path / "song.m4b").write_bytes(b"x")
     monkeypatch.chdir(tmp_path)
-    lines = ["CHAPTER01=00:00:00.000", "CHAPTER01NAME=One",
-             "CHAPTER02=00:00:01.000", "CHAPTER02NAME=Two"]
-    run = _Run()
-    assert chapters.embed_chapters("song.m4b", lines, "ram", "script", True,
-                                   run) == 0
-    assert run.calls[0] == ["mkvmerge", "--quiet", "song.m4b", "--chapters",
-                            run.calls[0][4], "-o", "ram/song.mka"]
-    assert run.chapter_contents == ["\n".join(lines) + "\n"]
-    assert not (tmp_path / "song.m4b").exists()
-    assert run.calls[2] == ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel",
-                            "error", "-y", "-i", "ram/song.mka", "-codec",
-                            "copy", "song.m4b"]
+    monkeypatch.setattr(chapters, "_probe_duration", lambda path: duration)
+    run = _Run(results)
+    status = chapters.embed_chapters("song.m4b", lines, "ram", "script", True,
+                                     run)
+    return status, run
+
+
+_M4B_LINES = ["CHAPTER01=00:00:00.000", "CHAPTER01NAME=One",
+              "CHAPTER02=00:00:01.000", "CHAPTER02NAME=Two"]
+
+
+def test_embed_m4b_takes_one_call_and_no_mkvtoolnix(tmp_path, monkeypatch):
+    """mp4 gains a chapter track by being rewritten, which ffmpeg does on its
+    own: three processes and a dependency buy nothing here."""
+    status, run = _m4b_run(tmp_path, monkeypatch, _M4B_LINES)
+    assert status == 0
+    assert [os.path.basename(str(c[0])) for c in run.calls] == ["ffmpeg"]
+    argv = run.calls[0]
+    # The metadata input supplies the chapters and the title; only the audio is
+    # mapped from the book, so a cover stream cannot displace the chapter track.
+    assert argv[argv.index("-map_metadata") + 1] == "1"
+    assert argv[argv.index("-map") + 1] == "0:a"
+    assert argv[argv.index("-codec") + 1] == "copy"
+
+
+def test_embed_m4b_hands_ffmpeg_the_rows_as_ffmetadata(tmp_path, monkeypatch):
+    status, run = _m4b_run(tmp_path, monkeypatch, _M4B_LINES)
+    assert status == 0
+    assert run.metadata_contents == [
+        ";FFMETADATA1\n"
+        "title=song\n"
+        "[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=1000\ntitle=One\n"
+        "[CHAPTER]\nTIMEBASE=1/1000\nSTART=1000\nEND=61000\ntitle=Two\n"]
+
+
+def test_embed_m4b_replaces_the_file_only_once_the_rewrite_is_there(
+        tmp_path, monkeypatch):
+    """The rewrite cannot read and write one file in the same call, so it goes
+    beside the original - which is replaced, not cleared in advance."""
+    status, _run = _m4b_run(tmp_path, monkeypatch, _M4B_LINES)
+    assert status == 0
+    assert (tmp_path / "song.m4b").exists()
+    assert list(tmp_path.glob("*.chapters.m4b")) == []
+
+
+def test_embed_m4b_reports_a_rewrite_that_failed(tmp_path, monkeypatch):
+    """A non-zero ffmpeg leaves the original in place rather than a half-file
+    under its name."""
+    status, _run = _m4b_run(tmp_path, monkeypatch, _M4B_LINES,
+                            results={"ffmpeg": [1]})
+    assert status == 1
+    assert (tmp_path / "song.m4b").read_bytes() == b"x"
+    assert list(tmp_path.glob("*.chapters.m4b")) == []
+
+
+def test_embed_m4b_without_rows_writes_nothing(tmp_path, monkeypatch):
+    status, run = _m4b_run(tmp_path, monkeypatch, [])
+    assert status == 0
+    assert run.calls == []
 
 
 def test_embed_returns_the_status_of_the_last_removal(tmp_path, monkeypatch):
-    """The removal that ends the detour is the function's status.
+    """The removal that ends the mka detour is the function's status.
 
     Injected rather than arranged on disk, because what makes a removal fail is
     the platform's own; what is pinned is that the failure comes back out.
     """
-    (tmp_path / "song.m4b").write_bytes(b"x")
+    (tmp_path / "song.mp3").write_bytes(b"x")
     monkeypatch.chdir(tmp_path)
 
     def refuse(path):
         raise PermissionError(13, "Permission denied", path)
 
     monkeypatch.setattr(chapters.os, "remove", refuse)
-    assert chapters.embed_chapters("song.m4b", [], "ram", "script", True,
+    assert chapters.embed_chapters("song.mp3", [], "ram", "script", True,
                                    _Run()) == 1
 
 

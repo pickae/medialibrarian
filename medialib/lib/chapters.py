@@ -11,8 +11,9 @@ chapters are read back out and re-attached to what was encoded from it.
 
 Chapter marks are carried as OGM-style "CHAPTERnn=" / "CHAPTERnnNAME=" rows,
 which is what every target format here accepts: mutagen writes them into Opus
-and FLAC directly, while an mp3 or m4b takes the detour through a Matroska
-because ffmpeg cannot write chapters into MP4 in place.
+and FLAC directly, an m4b gets a chapter track from an ffmetadata file in one
+ffmpeg rewrite, and only an mp3 takes the detour through a Matroska - ID3 has no
+chapter form ffmpeg will write.
 """
 
 from __future__ import annotations
@@ -305,6 +306,93 @@ def chapters_from_files(concat_list: Sequence[str],
     return lines
 
 
+# The characters ffmetadata reads as syntax, which a title carrying one of them
+# has to hand over escaped: the comment mark, the two that end a line's key and
+# its value, and the escape itself.
+_FFMETADATA_SYNTAX = "=;#\\\n"
+
+
+def _ffmetadata_escape(text: str) -> str:
+    return "".join("\\" + ch if ch in _FFMETADATA_SYNTAX else ch
+                   for ch in text)
+
+
+def _ogm_milliseconds(stamp: str) -> int:
+    """HH:MM:SS.mmm back to milliseconds. A row this cannot read is 0, the way
+    the rest of this module reads an unparseable duration."""
+    hours, _, rest = stamp.partition(":")
+    minutes, _, seconds = rest.partition(":")
+    try:
+        return (int(hours) * _MS_PER_HOUR + int(minutes) * _MS_PER_MINUTE
+                + int(round(float(seconds) * _MS_PER_SECOND)))
+    except ValueError:
+        return 0
+
+
+def ffmetadata_chapters(chapter_lines: Sequence[str], title: str,
+                        end_ms: int) -> str:
+    """The OGM rows as an ffmetadata document, plus the file's own title.
+
+    Every chapter needs an END, which ffmpeg refuses to infer: each one ends
+    where the next begins, and the last one at ``end_ms`` - the finished file's
+    own duration, since nothing in the rows themselves says where it stops.
+    """
+    starts: list[int] = []
+    names: list[str] = []
+    for line in chapter_lines:
+        key, _, value = line.partition("=")
+        if key.endswith("NAME"):
+            names.append(value)
+        elif key.startswith("CHAPTER"):
+            starts.append(_ogm_milliseconds(value))
+
+    out = [";FFMETADATA1", "title=" + _ffmetadata_escape(title)]
+    for index, start in enumerate(starts):
+        stop = starts[index + 1] if index + 1 < len(starts) else end_ms
+        # A last chapter the duration does not reach past would be zero-length
+        # and dropped; one millisecond is under any player's resolution and
+        # keeps it in the list.
+        if stop <= start:
+            stop = start + 1
+        name = names[index] if index < len(names) else "Chapter %02d" % (
+            index + 1)
+        out += ["[CHAPTER]", "TIMEBASE=1/%d" % _MS_PER_SECOND,
+                "START=%d" % start, "END=%d" % stop,
+                "title=" + _ffmetadata_escape(name)]
+    return "\n".join(out) + "\n"
+
+
+def _embed_mp4_chapters(m4b_file: str, chapter_lines: Sequence[str],
+                        title: str, run: Runner = _run) -> int:
+    """The rows into an m4b, in the one rewrite mp4 needs to gain a chapter
+    track. No mkvtoolnix: ffmpeg writes both the chapters and the title."""
+    if len(chapter_lines) < 2:
+        return 0
+    duration = _duration_ms(_probe_duration(m4b_file))
+    document = ffmetadata_chapters(chapter_lines, title, duration)
+
+    metadata_file = _ram_temp()
+    # Written beside the original rather than over it: ffmpeg cannot read and
+    # write one file in the same call, and the original is only replaced once
+    # the new one is complete.
+    chaptered = m4b_file + ".chapters.m4b"
+    try:
+        with open(metadata_file, "w", encoding="utf-8") as handle:
+            handle.write(document)
+        result = run(["ffmpeg", "-nostdin", "-hide_banner", "-loglevel",
+                      "error", "-y", "-i", m4b_file, "-i", metadata_file,
+                      "-map_metadata", "1", "-map", "0:a", "-codec", "copy",
+                      chaptered])
+        if getattr(result, "returncode", 0) != 0 \
+                or not os.path.isfile(chaptered):
+            _remove_quiet(chaptered)
+            return 1
+        os.replace(chaptered, m4b_file)
+    finally:
+        _remove_quiet(metadata_file)
+    return 0
+
+
 def embed_chapters(chapter_file: str, chapter_lines: Sequence[str],
                    ram_dir: str, script_dir: str, have_mkvtoolnix: bool,
                    run: Runner = _run) -> int:
@@ -341,12 +429,21 @@ def embed_chapters(chapter_file: str, chapter_lines: Sequence[str],
             _remove_quiet(chapter_temp)
         return 0
 
-    # The mp3 and m4b path cannot run without mkvtoolnix: neither format
-    # carries Vorbis-comment chapters. Unset means absent, and outside a run
-    # the safe answer is to skip, not die.
+    # An m4b takes its chapters straight from an ffmetadata file, in one
+    # rewrite. Not over a Matroska: the mp4 muxer cannot fit that route's
+    # nanosecond chapter durations into the chapter track it writes, drops the
+    # track, and leaves the audio pointing at it - ffmpeg says so on every read
+    # ("Referenced QT chapter track not found"), and a player that reads
+    # chapters only from that track finds none.
+    if audio_file == m4b_file:
+        return _embed_mp4_chapters(m4b_file, chapter_lines, title, run)
+
+    # The mp3 path cannot run without mkvtoolnix: ID3 carries no
+    # Vorbis-comment chapters. Unset means absent, and outside a run the safe
+    # answer is to skip, not die.
     if not have_mkvtoolnix:
         _log("    chapters and title not embedded: mkvtoolnix is not installed "
-             "(MP3 and m4b need it)")
+             "(MP3 needs it)")
         return 0
 
     # The detour over mka, but only if there is more than one chapter:
@@ -368,11 +465,8 @@ def embed_chapters(chapter_file: str, chapter_lines: Sequence[str],
          "--set", f"title={title}", "--edit", "track:1",
          "--set", f"name={title}"])
 
-    # Re-extract the audio from the mka, now with chapters: the m4b is
-    # overwritten in place, so it is cleared before the re-mux.
+    # Re-extract the audio from the mka, now with chapters.
     if audio_file:
-        if audio_file == m4b_file:
-            _remove_quiet(m4b_file)
         run(["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
              "-i", mka_file, "-codec", "copy", audio_file])
     return _remove_status(mka_file)
