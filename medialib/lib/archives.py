@@ -42,6 +42,7 @@ __all__ = [
     "unsafe_member",
     "archive_members",
     "unsafe_members",
+    "archive_root_folder",
     "extract_archive",
     "extract_archive_as_folder",
     "prune_irregular",
@@ -132,16 +133,19 @@ def _dirname(path: str) -> str:
     return head if head else "/"
 
 
-def archive_shadowed_by_folder(file: str) -> bool:
+def archive_shadowed_by_folder(file: str, base: str = "") -> bool:
     """True when a directory of the archive's own name sits next to it -
     ``Some Book.zip`` beside ``Some Book/``. That pair is one book twice, and the
     folder is the one to believe, so the caller keeps it and lets the archive be.
 
     Compared as spelled, because that is how an unpacked copy beside its archive
-    is named: the extractors take the name from the archive.
+    is named: the extractors take the name from the archive. ``base`` is the name
+    to look for and defaults to the archive's own - a caller that unpacks under
+    the name from INSIDE the archive asks about that one instead, since that is
+    the name the pair would be one book twice under.
     """
     directory = _dirname(file)
-    base = archive_base_name(file)
+    base = base or archive_base_name(file)
     if not base:
         return False
     return os.path.isdir(os.path.join(directory, base))
@@ -436,6 +440,100 @@ def unsafe_members(file: str, ext: str = "") -> list:
         if reason:
             found.append((name, reason))
     return found
+
+
+# --- the name a folder-shaped archive carries ------------------------------------
+# Packing a folder stores the folder itself, and the name it was packed under is
+# the one the person who packed it chose - which the file it arrived in may well
+# have lost on the way here.
+
+
+def _member_names(file: str, ext: str) -> list | None:
+    """Every member of an archive as (name, kind), or ``None`` when this host's
+    tools cannot list it.
+
+    The tar family is read HERE rather than through ``archive_members``, which
+    answers ``[]`` for it on purpose: what a tar may write is the extraction
+    filter's business, and this is a question about names. A compressed tar has
+    no index, so answering it reads the archive through once.
+    """
+    if ext in ("zip", "rar", "7z"):
+        members = archive_members(file, ext)
+        return None if members is None else [(name, kind)
+                                             for name, kind, _target in members]
+    if not ext:
+        return None
+    return _tar_names(file, ext)
+
+
+def _tar_names(file: str, ext: str) -> list | None:
+    try:
+        with tarfile.open(file, "r:*") as archive:
+            return [(info.name, "dir" if info.isdir() else "file")
+                    for info in archive]
+    except tarfile.ReadError:
+        if ext in _ZSTD_TAR_EXTENSIONS:
+            return _zstd_tar_names(file)
+        return None
+    except (OSError, tarfile.TarError):
+        return None
+
+
+def _zstd_tar_names(file: str) -> list | None:
+    """A .tar.zst on an interpreter whose tarfile cannot open one - the host's
+    zstd decompresses and tarfile still reads."""
+    try:
+        zstd = subprocess.Popen(["zstd", "-dc", "--", file],
+                                stdout=subprocess.PIPE)
+    except OSError:
+        return None
+    try:
+        with tarfile.open(fileobj=zstd.stdout, mode="r|") as archive:
+            return [(info.name, "dir" if info.isdir() else "file")
+                    for info in archive]
+    except (OSError, tarfile.TarError):
+        return None
+    finally:
+        if zstd.stdout is not None:
+            zstd.stdout.close()
+        zstd.wait()
+
+
+def archive_root_folder(file: str, ext: str = "") -> str:
+    """The name of the ONE folder an archive holds at its root, or ``""``.
+
+    ``Some Book.zip`` whose only root entry is ``Read by Someone/`` answers
+    ``Read by Someone``: that is the name the book was packed under, and a file
+    renamed - or numbered, or truncated - on the way here has lost it. An
+    archive holding several entries at its root, or holding files there, or one
+    whose members cannot be listed, has no such name to give and answers ``""``,
+    so the caller falls back to the archive's own name.
+    """
+    entries = _member_names(file, ext or archive_extension_of(file))
+    if entries is None:
+        return ""
+    root = ""
+    holds_a_folder = False
+    for name, kind in entries:
+        spelling = name.replace("\\", "/")
+        # The path policy the members themselves go through. A name spelled
+        # absolutely or through ".." does not say where the archive lands - it
+        # is refused outright, or rewritten by the tar filter - so an archive
+        # carrying one has no root to name a folder after.
+        if unsafe_member(spelling):
+            return ""
+        # "./Book/01.mp3" is how tar spells what zip spells "Book/01.mp3", and
+        # the depth is what says the root is a folder rather than a file: a
+        # member lying under it, or a member that IS one.
+        parts = [part for part in spelling.split("/") if part not in ("", ".")]
+        if not parts:
+            continue
+        if root and parts[0] != root:
+            return ""
+        root = parts[0]
+        if len(parts) > 1 or kind == "dir":
+            holds_a_folder = True
+    return root if holds_a_folder else ""
 
 
 def prune_irregular(dest: str) -> int:
