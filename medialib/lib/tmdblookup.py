@@ -387,6 +387,36 @@ def id_tag_for(text: str) -> str:
     return "{tmdb-" + match.group(4) + "}"
 
 
+def write_ambiguous_list(path: str, folders, root: str,
+                         log: Callable[[str], None] | None = None) -> bool:
+    """The folders holding more than one film, as a report to read and act on.
+
+    Not a file to feed back: what to do about two films in one folder is to
+    give the files names that say which release each one is, and only someone
+    who knows them can. The report says where they are and what is in them.
+    """
+    lines = [
+        _ID_COMMENT + " Folders holding more than one film, or one film in",
+        _ID_COMMENT + " files that do not say so. The tagging left them alone.",
+        _ID_COMMENT + " Name the files for the release each one is - '<film>",
+        _ID_COMMENT + " Extended', '<film> Part1' - and run the tagging again.",
+        "",
+    ]
+    for folder, movies in folders:
+        lines.append(os.path.relpath(folder, root))
+        lines += ["    " + name for name in movies]
+        lines.append("")
+    try:
+        with open(path, "w", encoding="utf-8",
+                  errors="surrogateescape") as handle:
+            handle.write("\n".join(lines) + "\n")
+    except OSError as error:
+        if log is not None:
+            log("WARNING: could not write %s: %s" % (path, error))
+        return False
+    return True
+
+
 def read_id_list(path: str) -> dict:
     """A hand-filled id list as {folder name: tag}.
 
@@ -444,6 +474,15 @@ def write_id_list(path: str, names, ids: dict | None = None,
     return True
 
 
+def _candidates(directory: str, recursive: bool) -> list:
+    """The folders to consider: one level for a full ingest, the whole tree for
+    a run that was pointed at a library rather than at a film folder."""
+    if not recursive:
+        return [entry for entry in os.scandir(directory)
+                if entry.is_dir(follow_symlinks=False)]
+    return _film_folders(directory)
+
+
 def _film_folders(directory: str) -> list:
     """Every film folder at or below ``directory``, in the filesystem's own
     order - the order the shell's ``find`` walks, so the lines they each log
@@ -474,7 +513,8 @@ def _film_folders(directory: str) -> list:
 def tag_plex_ids(directory: str, log: Callable[[str], None],
                  skip_log: safety.SkipLog | None = None,
                  dry_run: bool = False, ids: dict | None = None,
-                 unmatched: list | None = None) -> int:
+                 unmatched: list | None = None, recursive: bool = False,
+                 ambiguous: list | None = None) -> int:
     """Name each confidently-matched movie folder, its films and their sidecars
     the way Plex reads them: the folder and every file carry the id tag, an
     edition carries its own, and a split film keeps its stacking token last.
@@ -495,18 +535,38 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
 
     ``ids`` is a hand-written {folder name: tag} that answers BEFORE the network
     is asked, for the films TMDb cannot identify on its own. ``unmatched``, when
-    a list is passed, collects the folder names that neither could name - which
-    is what the list to fill in is written from.
+    a list is passed, collects the folder names that neither could name, and
+    ``ambiguous`` the folders holding more than one film - both are left exactly
+    as they are, and both lists are what the run writes its reports from.
+
+    ``recursive`` walks the whole tree rather than the one level the phase reads
+    inside a full ingest, where the caller is pointed at the folder that holds
+    the films and the phases around this one read that same one level.
     """
     skip_log = skip_log if skip_log is not None else safety.SkipLog()
     if not os.environ.get("tmdbApiKey", ""):
         log("WARNING: tmdbApiKey not set, skipping IMDb id tagging")
         return 0
 
-    for folder in _film_folders(directory):
+    for folder in _candidates(directory, recursive):
         base, tag = plexnames.untagged_base(folder.name)
         match = _YEAR_RE.match(base)
         if not match:
+            continue
+
+        names = [entry.name for entry in os.scandir(folder.path)
+                 if entry.is_file(follow_symlinks=False)]
+        # A folder holding a film that is not this folder's is left whole and
+        # reported instead. A name that EXTENDS the folder's own is one of this
+        # film's releases, whatever word the release used for itself; one that
+        # does not is something else, and guessing which film it is is how a
+        # second feature becomes an edition of the first.
+        strays = plexnames.strays_in(base, names)
+        if strays:
+            if ambiguous is not None:
+                ambiguous.append((folder.path, strays))
+            log('  "{}" holds {} file(s) that are not this film - left as it '
+                "is".format(base, len(strays)))
             continue
         asked = not tag
         by_hand = False
@@ -518,11 +578,12 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
             if not tag:
                 imdb = tmdb_imdb_id(match.group(1), match.group(2))
                 tag = "{imdb-" + imdb + "}" if imdb else ""
-            if not tag and unmatched is not None:
-                unmatched.append(base)
+            if not tag:
+                if unmatched is not None:
+                    unmatched.append(base)
+                _report(log, base, "", [], False)
+                continue
 
-        names = [entry.name for entry in os.scandir(folder.path)
-                 if entry.is_file(follow_symlinks=False)]
         # The folder's own name is settled BEFORE a single file is touched:
         # renaming the files under a folder that cannot take its name leaves
         # them spelled for a folder they are not in, beside the folder they are
@@ -557,9 +618,6 @@ def _report(log: Callable[[str], None], base: str, tag: str,
         log('  {}: "{}" -> {}, editions: {}'.format(source, base, tag, named))
     elif tag:
         log('  {}: "{}" -> {}'.format(source, base, tag))
-    elif editions:
-        log('  no confident TMDb match: "{}" - editions named ({}), no id'
-            .format(base, named))
     else:
         log('  no confident TMDb match: "{}" - left as it is'.format(base))
 

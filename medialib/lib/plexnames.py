@@ -159,6 +159,22 @@ def editions_in(base: str, names) -> list:
     return sorted(found)
 
 
+def strays_in(base: str, names) -> list:
+    """The movie files in a folder that are not this folder's film.
+
+    A name that extends the folder's own is one of that film's releases - a
+    version, an edition, a part - whatever word the release used for itself. A
+    name that does not is something else entirely, and which film it is is a
+    thing only someone who knows it can say: a folder holding one is left whole
+    and reported rather than guessed at.
+    """
+    return sorted(
+        name for name in names
+        if is_movie_file(name)
+        and not (name[:-len(".mkv")] == base
+                 or name[:-len(".mkv")].startswith(base + " ")))
+
+
 def folder_renames(base: str, tag: str, names) -> list:
     """Every rename one movie folder needs, as (old name, new name) pairs.
 

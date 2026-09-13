@@ -812,24 +812,59 @@ class TestTagPlexIds:
                         "- left as it is"]
         assert (tmp_path / "Unknown Film (2010)/Unknown Film (2010).mkv").is_file()
 
-    def test_a_film_tmdB_rejects_still_gets_its_editions_named(self, monkeypatch,
-                                                               tmp_path):
-        """Which release a file is is on the disk already; saying so does not
-        wait on TMDb, and a folder whose editions are named is one the improve
-        pass can tell apart."""
+    def test_a_film_tmdB_rejects_is_left_whole(self, monkeypatch, tmp_path):
+        """Nothing is renamed for a film nothing could name: the editions would
+        be guesses about a film that has not been identified, and the folder is
+        reported instead so someone can give it an id."""
         monkeypatch.chdir(tmp_path)
         _tree(tmp_path, ("Unknown Film (2010)",
                          ["Unknown Film (2010) colorized.mkv",
                           "Unknown Film (2010) (Uncut).mkv"]))
         self._env(monkeypatch, {"Unknown Film": None})
         logs = []
-        tmdblookup.tag_plex_ids(".", logs.append, SkipLog())
+        unmatched: list = []
+        tmdblookup.tag_plex_ids(".", logs.append, SkipLog(),
+                                unmatched=unmatched)
         folder = tmp_path / "Unknown Film (2010)"
         assert sorted(p.name for p in folder.iterdir()) == [
-            "Unknown Film (2010) {edition-Colorized}.mkv",
-            "Unknown Film (2010) {edition-Uncut}.mkv"]
+            "Unknown Film (2010) (Uncut).mkv",
+            "Unknown Film (2010) colorized.mkv"]
+        assert unmatched == ["Unknown Film (2010)"]
         assert logs == ['  no confident TMDb match: "Unknown Film (2010)" '
-                        "- editions named (Colorized, Uncut), no id"]
+                        "- left as it is"]
+
+    def test_a_folder_holding_a_film_that_is_not_its_own_is_reported(
+            self, monkeypatch, tmp_path):
+        """A name that EXTENDS the folder's own is one of this film's releases.
+        One that does not is something else, and which film it is is not
+        something a tag may guess."""
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("The Movie (1999)",
+                         ["The Movie (1999).mkv", "Some Other Film.mkv"]))
+        self._env(monkeypatch, {"The Movie": "tt0120737"})
+        logs = []
+        ambiguous: list = []
+        tmdblookup.tag_plex_ids(".", logs.append, SkipLog(),
+                                ambiguous=ambiguous)
+        assert (tmp_path / "The Movie (1999)/The Movie (1999).mkv").is_file()
+        assert [names for _path, names in ambiguous] == [["Some Other Film.mkv"]]
+        assert logs == ['  "The Movie (1999)" holds 1 file(s) that are not '
+                        "this film - left as it is"]
+
+    def test_several_releases_of_the_one_film_are_not_ambiguous(
+            self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("The Movie (1999)",
+                         ["The Movie (1999).mkv",
+                          "The Movie (1999) Theatrical Cut.mkv"]))
+        self._env(monkeypatch, {"The Movie": "tt0120737"})
+        ambiguous: list = []
+        tmdblookup.tag_plex_ids(".", [].append, SkipLog(),
+                                ambiguous=ambiguous)
+        assert ambiguous == []
+        assert (tmp_path / "The Movie (1999) {imdb-tt0120737}"
+                / "The Movie (1999) {imdb-tt0120737} "
+                  "{edition-Theatrical Cut}.mkv").is_file()
 
     def test_a_match_with_editions_names_both(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
@@ -881,7 +916,7 @@ class TestTagPlexIds:
         (tmp_path / "Link").symlink_to("Real")
         self._env(monkeypatch, {"The Movie": "tt0120737"})
         logs = []
-        tmdblookup.tag_plex_ids(".", logs.append, SkipLog())
+        tmdblookup.tag_plex_ids(".", logs.append, SkipLog(), recursive=True)
         assert logs == ['  match: "The Movie (1999)" -> {imdb-tt0120737}']
         assert (real / "The Movie (1999) {imdb-tt0120737}").is_dir()
         assert (tmp_path / "Link").is_symlink()
@@ -898,9 +933,22 @@ class TestTagPlexIds:
         self._env(monkeypatch, {"The Movie": "tt0120737",
                                 "Another Film": "tt0000003"},
                   base="1999-06-23")
-        tmdblookup.tag_plex_ids(".", [].append, SkipLog())
+        tmdblookup.tag_plex_ids(".", [].append, SkipLog(), recursive=True)
         assert (tmp_path / "Unsorted/The Movie (1999) {imdb-tt0120737}"
                 "/The Movie (1999) {imdb-tt0120737}.mkv").is_file()
+
+    def test_and_a_full_ingest_reads_one_level_as_it_always_did(
+            self, monkeypatch, tmp_path):
+        """The phases around this one inside a full run read that same one
+        level, and the caller is pointed at the folder holding the films."""
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path / "Unsorted", ("The Movie (1999)",
+                                      ["The Movie (1999).mkv"]))
+        self._env(monkeypatch, {"The Movie": "tt0120737"})
+        logs = []
+        tmdblookup.tag_plex_ids(".", logs.append, SkipLog())
+        assert logs == []
+        assert (tmp_path / "Unsorted/The Movie (1999)").is_dir()
 
     def test_what_sits_inside_a_film_is_not_another_film(self, monkeypatch,
                                                           tmp_path):

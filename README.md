@@ -609,6 +609,13 @@ An id is read however you have it to hand (`tt0000002`, `imdb-tt0000002`, a bare
 TMDb number), answers before the network is asked, and stays in the file so the
 lookup you did by hand is not lost. Requests to TMDb are paced to ten a second.
 
+Nothing is renamed for a film TMDb could not name, nor for a folder holding a
+film that is not its own — a name that *extends* the folder's is one of that
+film's releases, a name that does not is something else. Both are listed to
+read: the first to fill an id in, the second to give the files names that say
+which release each one is. `-t` walks the whole tree, so it can be pointed at a
+library; a full ingest reads the one level it always did.
+
 ## Books, comics and images
 
 ### `ingest-books`
