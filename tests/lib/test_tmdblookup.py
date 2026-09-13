@@ -428,6 +428,111 @@ def _tree(root, *folders):
             (root / base / name).touch()
 
 
+class TestTheIdList:
+    """The file someone fills in for the films TMDb cannot name on its own."""
+
+    @pytest.mark.parametrize("written,expected", [
+        ("tt0000002", "{imdb-tt0000002}"),
+        ("imdb-tt0000002", "{imdb-tt0000002}"),
+        ("{imdb-tt0000002}", "{imdb-tt0000002}"),
+        ("  tt0000002  ", "{imdb-tt0000002}"),
+        ("TT0000002", "{imdb-tt0000002}"),
+        ("12345", "{tmdb-12345}"),
+        ("tmdb-12345", "{tmdb-12345}"),
+    ])
+    def test_an_id_is_read_the_way_someone_has_it_to_hand(self, written,
+                                                          expected):
+        assert tmdblookup.id_tag_for(written) == expected
+
+    @pytest.mark.parametrize("written", ["", "   ", "nonsense", "tt", "-",
+                                         "{imdb-}", "tt12ab34"])
+    def test_and_anything_else_is_not_an_id(self, written):
+        assert tmdblookup.id_tag_for(written) == ""
+
+    def test_a_line_still_blank_is_one_still_to_do(self, tmp_path):
+        path = tmp_path / "ids.tsv"
+        path.write_text("# a comment\n\nDone (1999)\ttt0000001\n"
+                        "Not Yet (2001)\t\n", encoding="utf-8")
+        assert tmdblookup.read_id_list(str(path)) == {
+            "Done (1999)": "{imdb-tt0000001}"}
+
+    def test_a_missing_file_is_simply_no_ids(self, tmp_path):
+        assert tmdblookup.read_id_list(str(tmp_path / "nothing.tsv")) == {}
+
+    def test_what_was_filled_in_survives_being_rewritten(self, tmp_path):
+        """The ids someone looked up by hand are the only record of them
+        anywhere: dropping them would un-identify the film on the next run."""
+        path = str(tmp_path / "ids.tsv")
+        tmdblookup.write_id_list(path, ["Still Unknown (2001)"],
+                                 {"Done (1999)": "{imdb-tt0000001}"})
+        assert tmdblookup.read_id_list(path) == {
+            "Done (1999)": "{imdb-tt0000001}"}
+        body = [line for line in open(path, encoding="utf-8").read().splitlines()
+                if line and not line.startswith("#")]
+        assert body == ["Done (1999)\t{imdb-tt0000001}", "Still Unknown (2001)\t"]
+
+    def test_a_film_named_from_the_list_never_reaches_the_network(
+            self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("Unknown Film (2010)", ["Unknown Film (2010).mkv"]))
+        monkeypatch.setenv("tmdbApiKey", "apikey")
+        calls = []
+        monkeypatch.setattr(tmdblookup, "_curl",
+                            lambda url, params: calls.append(url))
+        logs = []
+        unmatched: list = []
+        tmdblookup.tag_plex_ids(
+            ".", logs.append, SkipLog(),
+            ids={"Unknown Film (2010)": "{imdb-tt0000002}"},
+            unmatched=unmatched)
+        assert calls == []
+        assert unmatched == []
+        assert (tmp_path / "Unknown Film (2010) {imdb-tt0000002}").is_dir()
+        assert logs == ['  from the id list: "Unknown Film (2010)" -> '
+                        "{imdb-tt0000002}"]
+
+
+class TestTheRateLimit:
+    """TMDb asks for no more than about ten requests a second, and one film
+    costs several - the search, an alternative-titles call per candidate, and
+    the external-ids call."""
+
+    def test_requests_are_spaced_at_the_limit(self, monkeypatch):
+        tmdblookup.reset_rate_limit()
+        ticks = [0.0]
+        slept = []
+        monkeypatch.setattr(tmdblookup.time, "monotonic", lambda: ticks[0])
+
+        def fake_sleep(seconds):
+            slept.append(seconds)
+            ticks[0] += seconds
+        monkeypatch.setattr(tmdblookup.time, "sleep", fake_sleep)
+        monkeypatch.setattr(tmdblookup.subprocess, "run",
+                            lambda *a, **k: _Done())
+        for _call in range(3):
+            tmdblookup._curl("https://example.invalid", [])
+        # the first goes straight out, each one after it waits its slot
+        assert slept == [1.0 / tmdblookup.MAX_REQUESTS_PER_SECOND] * 2
+
+    def test_a_caller_that_took_its_time_waits_for_nothing(self, monkeypatch):
+        tmdblookup.reset_rate_limit()
+        ticks = [0.0]
+        slept = []
+        monkeypatch.setattr(tmdblookup.time, "monotonic", lambda: ticks[0])
+        monkeypatch.setattr(tmdblookup.time, "sleep", slept.append)
+        monkeypatch.setattr(tmdblookup.subprocess, "run",
+                            lambda *a, **k: _Done())
+        tmdblookup._curl("https://example.invalid", [])
+        ticks[0] = 5.0
+        tmdblookup._curl("https://example.invalid", [])
+        assert slept == []
+
+
+class _Done:
+    returncode = 0
+    stdout = b"{}"
+
+
 class TestTagPlexIds:
     def _env(self, monkeypatch, matches, base="1999-06-23"):
         """Stand the network so that, for each title in ``matches`` that
@@ -630,6 +735,29 @@ class TestTagPlexIds:
         assert (tmp_path / ".The Movie (1999)/.The Movie (1999).mkv").is_file()
         assert not (tmp_path / ".The Movie (1999) {imdb-tt0120737}").exists()
 
+    def test_a_dry_run_says_what_it_would_do_and_does_none_of_it(
+            self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("The Movie (1999)",
+                         ["The Movie (1999) colorized.mkv",
+                          "The Movie (1999) colorized.en.srt"]))
+        self._env(monkeypatch, {"The Movie": "tt0120737"})
+        before = sorted(str(p.relative_to(tmp_path))
+                        for p in tmp_path.rglob("*"))
+        logs = []
+        tmdblookup.tag_plex_ids(".", logs.append, SkipLog(), dry_run=True)
+        assert sorted(str(p.relative_to(tmp_path))
+                      for p in tmp_path.rglob("*")) == before
+        assert logs == [
+            '  match: "The Movie (1999)" -> {imdb-tt0120737}, '
+            "editions: Colorized",
+            '    would rename: "The Movie (1999) colorized.en.srt" -> '
+            '"The Movie (1999) {imdb-tt0120737} {edition-Colorized}.en.srt"',
+            '    would rename: "The Movie (1999) colorized.mkv" -> '
+            '"The Movie (1999) {imdb-tt0120737} {edition-Colorized}.mkv"',
+            '    would rename: "The Movie (1999)" -> '
+            '"The Movie (1999) {imdb-tt0120737}"']
+
     def test_files_that_do_not_share_the_base_are_untouched(self, monkeypatch,
                                                              tmp_path):
         monkeypatch.chdir(tmp_path)
@@ -660,6 +788,16 @@ class TestTagPlexIds:
         tmdblookup.tag_plex_ids(".", logs.append, SkipLog())
         assert logs == []
         assert (tmp_path / "Just A Movie/Just A Movie.mkv").is_file()
+
+    def test_the_films_it_could_not_name_are_collected(self, monkeypatch,
+                                                        tmp_path):
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("Unknown Film (2010)", ["Unknown Film (2010).mkv"]),
+              ("The Movie (1999)", ["The Movie (1999).mkv"]))
+        self._env(monkeypatch, {"The Movie": "tt0120737", "Unknown Film": None})
+        unmatched: list = []
+        tmdblookup.tag_plex_ids(".", [].append, SkipLog(), unmatched=unmatched)
+        assert unmatched == ["Unknown Film (2010)"]
 
     def test_a_folder_tmdB_rejects_is_left_alone_and_says_so(self, monkeypatch,
                                                               tmp_path):

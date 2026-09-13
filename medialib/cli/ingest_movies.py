@@ -53,11 +53,23 @@ f | <file> | read the name fragments to remove from <file> (one per line,
                   '#' comments and blank lines ignored) instead of from
                   data/fragments.txt beside this script. Without it that file is
                   used when it is there, and names are cleaned without any fragment
-                  removal when it is not."""
+                  removal when it is not.
+t |  | tags only: the Plex/Jellyfin naming and nothing else - the IMDb id,
+                  the editions a folder's several versions become, and a split
+                  film's stacking token kept last. Nothing is converted,
+                  remuxed, downloaded or transcribed. A DRY RUN unless -w is
+                  given: it asks TMDb, prints every rename it would make, and
+                  changes nothing on disk.
+w |  | with -t, actually perform the renames instead of printing them.
+i | <file> | with -t, the hand-written id list. Read before TMDb is asked, so a
+                  film someone has already looked up is named from it; and the
+                  films TMDb could not identify are written back to it to fill
+                  in. Without it they go to ingest-movies-unmatched.tsv in the
+                  current directory."""
 
-OPT_VARS = "f:fragmentsOverride"
+OPT_VARS = "f:fragmentsOverride t:tagsOnly w:writeTags i:idList"
 OPT_COLUMN = 18
-OPT_LONG = "f:fragments"
+OPT_LONG = "f:fragments t:tags-only w:write i:ids"
 
 USAGE_TAIL = """
 
@@ -67,8 +79,11 @@ USAGE_TAIL = """
     cleans up folder, movie and subtitle names
     sorts bonus material into the subfolders Plex recognizes (see below)
 
-    IMDb ids and editions (Plex/Jellyfin naming)
-    --------------------------------------------
+    IMDb ids and editions (Plex/Jellyfin naming, and all that -t does)
+    ------------------------------------------------------------------
+    -t does this phase and nothing else, as a dry run unless -w is given, and
+    writes the films it could not name to a list to fill in by hand and feed
+    back with -i
     looks each movie up on TheMovieDB (TMDb) by its cleaned name and year
     appends the \"{imdb-ttXXXXXXX}\" id tag to the folder, movie and subtitles
     only when TMDb returns a single exact title+year match (~99% certainty)

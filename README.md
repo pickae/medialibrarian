@@ -596,6 +596,19 @@ Every sidecar follows its own film, including a commentary transcript whose name
 extends the film's. The `(old)` backup keeps its own name, and running the
 ingest again changes nothing.
 
+**`-t` does only this phase** — no conversion, no remux, no downloads, no
+transcription — and does it as a **dry run** unless `-w` is given, printing
+every rename it would make. The films TMDb could not name confidently are
+written to a list to fill in by hand and feed back with `-i`:
+
+```
+Your Film (1975)	tt0000002
+```
+
+An id is read however you have it to hand (`tt0000002`, `imdb-tt0000002`, a bare
+TMDb number), answers before the network is asked, and stays in the file so the
+lookup you did by hand is not lost. Requests to TMDb are paced to ten a second.
+
 ## Books, comics and images
 
 ### `ingest-books`
