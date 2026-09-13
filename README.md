@@ -556,7 +556,7 @@ transcribed **in the language it is spoken in**: English gets an English
 subtitle, another supported language gets the native one *and* an English
 translation, anything else only the translation.
 
-As a final step it remuxes an improved copy of each film in **one** `mkvmerge`
+As the last work on each film it remuxes an improved copy in **one** `mkvmerge`
 call, so the film is remuxed once and only one output exists at a time:
 
 - Lossless tracks that were converted to Opus are swapped in place, keeping
@@ -579,6 +579,22 @@ call, so the film is remuxed once and only one output exists at a time:
 The original is preserved as `<name> (old).mkv`, so nothing is lost and a rerun
 is a no-op — which is also what makes the Dolby Vision work a one-time job per
 film: a folder that already carries a `(old)` backup is skipped whole.
+
+Last, once each film is the file it is going to stay, the folder and everything
+in it are renamed — renamed only, in place — into the three names Plex reads:
+
+- `{imdb-ttXXXXXXX}` on the folder and on every file, so the match is forced.
+- `{edition-...}` on a folder's second, third and fourth *version* of one film,
+  which Plex collapses into a single film with a named picker. A version named
+  the way a release names itself (`Your Film (2020) colorized.mkv`) becomes
+  `Your Film (2020) {imdb-tt0000000} {edition-Colorized}.mkv`.
+- A split film's `Part1` / `cd1` token stays **last**, because that is where
+  Plex's scanner reads it — a tag appended after it would stop the parts
+  stacking at all.
+
+Every sidecar follows its own film, including a commentary transcript whose name
+extends the film's. The `(old)` backup keeps its own name, and running the
+ingest again changes nothing.
 
 ## Books, comics and images
 

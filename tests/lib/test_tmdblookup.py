@@ -487,6 +487,111 @@ class TestTagPlexIds:
         assert logs == ['  match: "The Movie (1999)" -> {imdb-tt0120737}']
         assert skip.skips == []
 
+    def test_the_library_is_tagged_where_it_is_and_not_where_the_run_started(
+            self, monkeypatch, tmp_path):
+        """The library is an argument, so a run started from anywhere else
+        renames each film beside itself rather than moving it to the caller."""
+        library = tmp_path / "library"
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        monkeypatch.chdir(elsewhere)
+        _tree(library, ("The Movie (1999)", ["The Movie (1999).mkv"]))
+        self._env(monkeypatch, {"The Movie": "tt0120737"})
+        tmdblookup.tag_plex_ids(str(library), [].append, SkipLog())
+        tagged = library / "The Movie (1999) {imdb-tt0120737}"
+        assert (tagged / "The Movie (1999) {imdb-tt0120737}.mkv").is_file()
+        assert list(elsewhere.iterdir()) == []
+
+    def test_the_old_copy_an_improved_remux_left_keeps_its_name(self,
+                                                                monkeypatch,
+                                                                tmp_path):
+        """Tagging runs after the improved copies are made; the original kept
+        beside one is not renamed with it."""
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("The Movie (1999)",
+                         ["The Movie (1999).mkv",
+                          "The Movie (1999) (old).mkv"]))
+        self._env(monkeypatch, {"The Movie": "tt0120737"})
+        skip = SkipLog()
+        tmdblookup.tag_plex_ids(".", [].append, skip)
+        tagged = tmp_path / "The Movie (1999) {imdb-tt0120737}"
+        assert (tagged / "The Movie (1999) {imdb-tt0120737}.mkv").is_file()
+        assert (tagged / "The Movie (1999) (old).mkv").is_file()
+        assert skip.skips == []
+
+    def test_several_versions_of_one_film_become_named_editions(
+            self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("The Movie (1999)",
+                         ["The Movie (1999) (Original Mono Track).mkv",
+                          "The Movie (1999) (Original Mono Track).en.srt",
+                          "The Movie (1999) (Original Mono Track) 2 "
+                          "Commentary.srt",
+                          "The Movie (1999) colorized.mkv",
+                          "The Movie (1999) colorized.nl.srt"]))
+        self._env(monkeypatch, {"The Movie": "tt0000001"})
+        tmdblookup.tag_plex_ids(".", [].append, SkipLog())
+        tagged = tmp_path / "The Movie (1999) {imdb-tt0000001}"
+        assert sorted(p.name for p in tagged.iterdir()) == [
+            "The Movie (1999) {imdb-tt0000001} {edition-Colorized}.mkv",
+            "The Movie (1999) {imdb-tt0000001} {edition-Colorized}.nl.srt",
+            "The Movie (1999) {imdb-tt0000001} "
+            "{edition-Original Mono Track} 2 Commentary.srt",
+            "The Movie (1999) {imdb-tt0000001} "
+            "{edition-Original Mono Track}.en.srt",
+            "The Movie (1999) {imdb-tt0000001} "
+            "{edition-Original Mono Track}.mkv"]
+
+    def test_a_split_film_keeps_its_stacking_token_last(self, monkeypatch,
+                                                         tmp_path):
+        """Plex reads the stacking suffix at the end of the name, so the id goes
+        in front of it and not after."""
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("The Movie (1968)",
+                         ["The Movie (1968) Part1.mkv", "The Movie (1968) Part2.mkv",
+                          "The Movie (1968) Part1.en.srt"]))
+        self._env(monkeypatch, {"The Movie": "tt0120737"}, base="1968-01-01")
+        tmdblookup.tag_plex_ids(".", [].append, SkipLog())
+        tagged = tmp_path / "The Movie (1968) {imdb-tt0120737}"
+        assert sorted(p.name for p in tagged.iterdir()) == [
+            "The Movie (1968) {imdb-tt0120737} Part1.en.srt",
+            "The Movie (1968) {imdb-tt0120737} Part1.mkv",
+            "The Movie (1968) {imdb-tt0120737} Part2.mkv"]
+
+    def test_a_tagged_folder_whose_files_were_missed_is_put_right(
+            self, monkeypatch, tmp_path):
+        """The library an earlier version left half-renamed: the folder carries
+        the id, the files do not, and no second lookup is needed to finish it."""
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("The Movie (1999) {imdb-tt0120737}",
+                         ["The Movie (1999).mkv", "The Movie (1999).en.srt"]))
+        calls = self._env(monkeypatch, {"The Movie": "tt0120737"})
+        logs = []
+        tmdblookup.tag_plex_ids(".", logs.append, SkipLog())
+        tagged = tmp_path / "The Movie (1999) {imdb-tt0120737}"
+        assert sorted(p.name for p in tagged.iterdir()) == [
+            "The Movie (1999) {imdb-tt0120737}.en.srt",
+            "The Movie (1999) {imdb-tt0120737}.mkv"]
+        assert calls == []
+        assert logs == []
+
+    def test_a_second_run_over_a_tagged_library_changes_nothing(
+            self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("The Movie (1999)",
+                         ["The Movie (1999) colorized.mkv",
+                          "The Movie (1999) colorized.en.srt",
+                          "The Movie (1999) (old).mkv"]))
+        self._env(monkeypatch, {"The Movie": "tt0000001"})
+        tmdblookup.tag_plex_ids(".", [].append, SkipLog())
+        before = sorted(str(p.relative_to(tmp_path))
+                        for p in tmp_path.rglob("*"))
+        skip = SkipLog()
+        tmdblookup.tag_plex_ids(".", [].append, skip)
+        assert sorted(str(p.relative_to(tmp_path))
+                      for p in tmp_path.rglob("*")) == before
+        assert skip.skips == []
+
     def test_files_that_do_not_share_the_base_are_untouched(self, monkeypatch,
                                                              tmp_path):
         monkeypatch.chdir(tmp_path)

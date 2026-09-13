@@ -36,6 +36,20 @@ class TestRename:
         rename failing."""
         assert im.rename("Dante's   Peak") == "Dantes Peak"
 
+    @pytest.mark.parametrize("tagged", [
+        "Some Movie (2020) {imdb-tt0120737}",
+        "Some Movie (2020) {imdb-tt0120737} {edition-Director's Cut}",
+        "Some Movie (2020) {imdb-tt0120737} {edition-Colorized} Part.2"])
+    def test_a_plex_tag_comes_through_exactly_as_written(self, tagged):
+        """Every rule here would change one: the apostrophe pass renames the
+        edition, and the dot pass unstacks a "Part.2". A tag is a convention
+        rather than a release's noise, and the sidecars are named after it."""
+        assert im.rename(tagged) == tagged
+
+    def test_the_title_in_front_of_a_tag_is_still_cleaned(self):
+        assert im.rename("Some.Movie_2020 {imdb-tt0120737}") \
+            == "Some Movie (2020) {imdb-tt0120737}"
+
     @pytest.mark.parametrize("raw", ["Some Movie ()", "Some Movie ( )"])
     def test_an_empty_trailing_bracket_pair_is_dropped(self, raw):
         """A film whose year was stripped by an earlier pass is otherwise left
