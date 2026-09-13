@@ -980,6 +980,48 @@ class TestTagPlexIds:
         assert (tmp_path / ".The Movie (1999)/.The Movie (1999).mkv").is_file()
         assert not (tmp_path / ".The Movie (1999) {imdb-tt0120737}").exists()
 
+    def test_a_dry_run_hands_back_every_rename_it_would_make(
+            self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("The Movie (1999)",
+                         ["The Movie (1999).mkv", "The Movie (1999).en.srt"]))
+        self._env(monkeypatch, {"The Movie": "tt0120737"})
+        planned: list = []
+        tmdblookup.tag_plex_ids(".", [].append, SkipLog(), dry_run=True,
+                                planned=planned)
+        assert planned == [
+            ("./The Movie (1999)/The Movie (1999).en.srt",
+             "./The Movie (1999)/The Movie (1999) {imdb-tt0120737}.en.srt"),
+            ("./The Movie (1999)/The Movie (1999).mkv",
+             "./The Movie (1999)/The Movie (1999) {imdb-tt0120737}.mkv"),
+            ("./The Movie (1999)",
+             "./The Movie (1999) {imdb-tt0120737}")]
+
+    def test_a_real_run_collects_no_such_list(self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("The Movie (1999)", ["The Movie (1999).mkv"]))
+        self._env(monkeypatch, {"The Movie": "tt0120737"})
+        planned: list = []
+        tmdblookup.tag_plex_ids(".", [].append, SkipLog(), planned=planned)
+        assert planned == []
+        assert (tmp_path / "The Movie (1999) {imdb-tt0120737}").is_dir()
+
+    def test_a_refused_rename_is_not_one_it_would_make(self, monkeypatch,
+                                                        tmp_path):
+        """It is recorded as a safety skip, and the preview says only what
+        would really happen."""
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("The Movie (1999)",
+                         ["The Movie (1999).mkv",
+                          "The Movie (1999) {imdb-tt0120737}.mkv"]))
+        self._env(monkeypatch, {"The Movie": "tt0120737"})
+        planned: list = []
+        skip = SkipLog()
+        tmdblookup.tag_plex_ids(".", [].append, skip, dry_run=True,
+                                planned=planned)
+        assert [t for _s, t in planned] == ["./The Movie (1999) {imdb-tt0120737}"]
+        assert len(skip.skips) == 1
+
     def test_a_dry_run_says_what_it_would_do_and_does_none_of_it(
             self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)

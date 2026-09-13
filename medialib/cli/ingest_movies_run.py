@@ -626,6 +626,11 @@ UNMATCHED_LIST = "ingest-movies-unmatched-%s.tsv"
 # the same way and for the same reason.
 AMBIGUOUS_LIST = "ingest-movies-ambiguous-%s.txt"
 
+# And what a dry run WOULD have renamed. A library of any size prints thousands
+# of those lines, and a file is where they can be read through rather than
+# scrolled past.
+RENAMES_LIST = "ingest-movies-renames-%s.txt"
+
 
 def _tags_only(program: str, roots: list, names: list, write: bool,
                id_list: str) -> int:
@@ -665,11 +670,12 @@ def _tags_only(program: str, roots: list, names: list, write: bool,
             log('Tagging "%s"' % root)
         unmatched: list = []
         ambiguous: list = []
+        planned: list = []
         # Recursive here and only here: this mode is pointed at a library, where
         # a full ingest is pointed at the folder that holds the films.
         tmdblookup.tag_plex_ids(root, log, skips, dry_run=not write, ids=ids,
                                 unmatched=unmatched, recursive=True,
-                                ambiguous=ambiguous)
+                                ambiguous=ambiguous, planned=planned)
         if id_list:
             shared += unmatched
         elif unmatched:
@@ -682,6 +688,11 @@ def _tags_only(program: str, roots: list, names: list, write: bool,
             if tmdblookup.write_ambiguous_list(listing, ambiguous, root, log):
                 log('%d folder(s) in "%s" hold more than one film - listed in '
                     '"%s"' % (len(ambiguous), root, listing))
+        if planned:
+            listing = RENAMES_LIST % name
+            if tmdblookup.write_rename_list(listing, planned, root, log):
+                log('%d rename(s) in "%s" would be made - listed in "%s"'
+                    % (len(planned), root, listing))
 
     for line in skips.report():
         sys.stderr.write(line + "\n")

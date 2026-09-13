@@ -573,6 +573,35 @@ def id_tag_for(text: str) -> str:
     return "{tmdb-" + match.group(4) + "}"
 
 
+def write_rename_list(path: str, renames, root: str,
+                      log: Callable[[str], None] | None = None) -> bool:
+    """Every rename a dry run would have made, as a file to read through.
+
+    The same lines the run printed, kept where they can be searched and diffed
+    rather than scrolled through: a library of any size prints thousands of
+    them, and the point of a dry run is to be able to check them.
+    """
+    lines = [
+        _ID_COMMENT + " Every rename the tagging would make, in the order it",
+        _ID_COMMENT + " would make them: a folder's files first, then the",
+        _ID_COMMENT + " folder itself. Nothing here has happened - run the",
+        _ID_COMMENT + " tagging again with -w to carry these out.",
+        "",
+    ]
+    for source, target in renames:
+        lines.append(os.path.relpath(source, root))
+        lines.append("    -> " + os.path.relpath(target, root))
+    try:
+        with open(path, "w", encoding="utf-8",
+                  errors="surrogateescape") as handle:
+            handle.write("\n".join(lines) + "\n")
+    except OSError as error:
+        if log is not None:
+            log("WARNING: could not write %s: %s" % (path, error))
+        return False
+    return True
+
+
 def write_ambiguous_list(path: str, folders, root: str,
                          log: Callable[[str], None] | None = None) -> bool:
     """The folders holding more than one film, as a report to read and act on.
@@ -708,7 +737,8 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
                  skip_log: safety.SkipLog | None = None,
                  dry_run: bool = False, ids: dict | None = None,
                  unmatched: list | None = None, recursive: bool = False,
-                 ambiguous: list | None = None) -> int:
+                 ambiguous: list | None = None,
+                 planned: list | None = None) -> int:
     """Name each confidently-matched movie folder, its films and their sidecars
     the way Plex reads them: the folder and every file carry the id tag, an
     edition carries its own, and a split film keeps its stacking token last.
@@ -732,6 +762,7 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
     a list is passed, collects the folder names that neither could name, and
     ``ambiguous`` the folders holding more than one film - both are left exactly
     as they are, and both lists are what the run writes its reports from.
+    ``planned`` collects the renames a dry run would have made, for the third.
 
     ``recursive`` walks the whole tree rather than the one level the phase reads
     inside a full ingest, where the caller is pointed at the folder that holds
@@ -829,7 +860,7 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
             _report(log, base, tag, plexnames.editions_in(base, names),
                     by_hand)
         _rename_in_place(folder, names, base, tag, target, skip_log, dry_run,
-                         log)
+                         log, planned)
     return 0
 
 
@@ -872,7 +903,8 @@ def _report(log: Callable[[str], None], base: str, tag: str,
 
 def _rename_in_place(folder, names: list, base: str, tag: str, target: str,
                      skip_log: safety.SkipLog, dry_run: bool,
-                     log: Callable[[str], None]) -> None:
+                     log: Callable[[str], None],
+                     planned: list | None = None) -> None:
     """One folder's films and sidecars, then the folder itself.
 
     That order and no other: renaming the folder first would move every path
@@ -884,15 +916,21 @@ def _rename_in_place(folder, names: list, base: str, tag: str, target: str,
     """
     for old, new in plexnames.folder_renames(base, tag, names):
         _rename(os.path.join(folder.path, old),
-                os.path.join(folder.path, new), skip_log, dry_run, log)
-    _rename(folder.path, target, skip_log, dry_run, log)
+                os.path.join(folder.path, new), skip_log, dry_run, log,
+                planned)
+    _rename(folder.path, target, skip_log, dry_run, log, planned)
 
 
 def _rename(source: str, target: str, skip_log: safety.SkipLog,
             dry_run: bool = False,
-            log: Callable[[str], None] | None = None) -> None:
+            log: Callable[[str], None] | None = None,
+            planned: list | None = None) -> None:
     """A rename that refuses to land on something that is already there, or to
-    hide what it moves - and that only SAYS what it would do on a dry run."""
+    hide what it moves - and that only SAYS what it would do on a dry run.
+
+    ``planned`` collects what a dry run would have done, so the run can hand it
+    over as a file rather than as output that scrolls away.
+    """
     if source == target:
         return
     if safety.would_hide(target) or os.path.exists(target):
@@ -902,5 +940,7 @@ def _rename(source: str, target: str, skip_log: safety.SkipLog,
         if log is not None:
             log('    would rename: "{}" -> "{}"'.format(
                 os.path.basename(source), os.path.basename(target)))
+        if planned is not None:
+            planned.append((source, target))
         return
     os.rename(source, target)

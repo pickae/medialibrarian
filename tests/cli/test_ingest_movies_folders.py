@@ -144,7 +144,8 @@ class TestTheListsEachFolderLeaves:
         asked = []
 
         def fake_tag(root, _log, _skips, dry_run=False, ids=None,
-                     unmatched=None, recursive=False, ambiguous=None):
+                     unmatched=None, recursive=False, ambiguous=None,
+                     planned=None):
             asked.append(root)
             name = root.rsplit("/", 1)[-1]
             if unmatched is not None:
@@ -153,6 +154,10 @@ class TestTheListsEachFolderLeaves:
                 ambiguous += [(root + "/Double (1999)",
                                "holds a film that is not its own",
                                ["One.mkv", "Two.mkv"])]
+            if planned is not None and dry_run:
+                planned += [(root + "/A film (1999)/A film (1999).mkv",
+                             root + "/A film (1999)/A film (1999) "
+                             "{imdb-tt0000001}.mkv")]
             return 0
 
         monkeypatch.setattr(run.tmdblookup, "tag_plex_ids", fake_tag)
@@ -182,6 +187,33 @@ class TestTheListsEachFolderLeaves:
                   str(tmp_path / "Documentaries")])
         assert (tmp_path / "ingest-movies-ambiguous-Films.txt").is_file()
         assert (tmp_path / "ingest-movies-ambiguous-Documentaries.txt").is_file()
+
+    def test_and_a_dry_run_writes_down_what_it_would_have_renamed(
+            self, monkeypatch, tmp_path):
+        """A library of any size prints thousands of those lines: the file is
+        where they can be read through rather than scrolled past."""
+        monkeypatch.chdir(tmp_path)
+        self._tagging(monkeypatch)
+        _library(tmp_path, "Films")
+        _library(tmp_path, "Documentaries")
+        run.main(["-t", str(tmp_path / "Films"),
+                  str(tmp_path / "Documentaries")])
+        listing = tmp_path / "ingest-movies-renames-Films.txt"
+        assert listing.is_file()
+        body = [line for line in listing.read_text(encoding="utf-8").splitlines()
+                if line and not line.startswith("#")]
+        assert body == ["A film (1999)/A film (1999).mkv",
+                        "    -> A film (1999)/A film (1999) {imdb-tt0000001}.mkv"]
+        assert (tmp_path / "ingest-movies-renames-Documentaries.txt").is_file()
+
+    def test_but_a_real_run_writes_no_such_list(self, monkeypatch, tmp_path):
+        """There is nothing to preview once it has happened, and the renames
+        that DID happen are the library itself."""
+        monkeypatch.chdir(tmp_path)
+        self._tagging(monkeypatch)
+        _library(tmp_path, "Films")
+        run.main(["-t", "-w", str(tmp_path / "Films")])
+        assert not (tmp_path / "ingest-movies-renames-Films.txt").exists()
 
     def test_but_one_id_list_named_by_hand_holds_them_all(self, monkeypatch,
                                                           tmp_path):
