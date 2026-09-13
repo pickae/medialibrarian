@@ -129,9 +129,32 @@ _STATE_KNOBS = (
     "PAUSE_ACCUM",
     "PAUSE_KEY_PID",
     "SAFETY_LOG",
+    "LENGTH_LOG",
     "ABORT_FLAG",
     "UNCOUNTED_PROGRESS_WARNED",
 )
+
+
+@pytest.fixture(autouse=True)
+def length_checks_need_real_media(request, monkeypatch):
+    """Outside the media tier, a command does not measure what it produced.
+
+    The length check asks whether an output is as long as its input, and answers
+    with ffprobe. Below `media` there is nothing for it to measure: the heavy
+    tools are stand-ins that touch an empty file, so every output is shorter than
+    every input and every conversion would be reported as truncated. The switch
+    is the one the tool preflight already uses for the same reason - a run whose
+    tools are not real cannot be asked what they made.
+
+    The media tier keeps it ON, which is where the check is exercised: those runs
+    encode with the real tools, and an output that came out short there is the
+    thing this is all for.
+    """
+    from medialib.lib import durationcheck
+    if request.node.get_closest_marker("media"):
+        monkeypatch.delenv(durationcheck.SKIP_VARIABLE, raising=False)
+    else:
+        monkeypatch.setenv(durationcheck.SKIP_VARIABLE, "1")
 
 
 @pytest.fixture(autouse=True)

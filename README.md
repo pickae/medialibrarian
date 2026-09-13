@@ -185,10 +185,18 @@ this codec without it says where to build it from and offers `-o opus` instead.
 
 Two consequences worth knowing before using it. exhale takes a *preset* about 12
 kbps apart rather than a bitrate, so a `-b` lands on the nearest rung and the run
-prints which — `-b 46` really encodes at 48. And long files are kept whole:
-splitting works by joining independently encoded chunks, which the external
-encoders' own edit lists and preroll frames make unreliable, so `-s` is ignored
-for this codec.
+prints which — `-b 46` really encodes at 48. And one pass through the pipe cannot
+carry more than about 13½ hours of mono at 44.1 kHz, or half that in stereo,
+because WAVE states its length in 32 bits — so a book past that is split whatever
+`-s` says, chunking being the only way to encode it at all.
+
+Long files split here as they do for Opus, and a re-joined book is its source's
+length to the sample.
+
+Every conversion is measured afterwards, here and in the other commands that
+transcode: an output that is not as long as its input is removed and named, and
+the run ends non-zero — an encoder that stops early otherwise leaves a playable
+file and a zero exit status.
 
 ### `convert-and-concat`
 

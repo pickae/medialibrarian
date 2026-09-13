@@ -217,11 +217,42 @@ class TestTheCalls:
         argv = xheaac.wav_argv("a.mp3", 44100, mono=False)
         assert argv[argv.index("-ar") + 1] == "44100"
 
-    def test_a_range_seeks_before_the_input_rather_than_after_it(self):
-        """`-ss` after `-i` decodes up to the mark and throws it away."""
-        argv = xheaac.wav_argv("a.mp3", 48000, False, start="10", duration="5")
+    def test_a_range_seeks_short_of_the_mark_and_cuts_in_the_filter_graph(self):
+        """The seek is rough on purpose: on an m4b it lands late by about a
+        thousand samples, reliably, and a chunk that begins a thousand samples
+        after it was asked to is a hole in the joined book. So it seeks EARLY
+        and the exact cut is a timestamp range in the filter graph.
+        """
+        argv = xheaac.wav_argv("a.mp3", 48000, False, start="10",
+                               duration="5")
         assert argv.index("-ss") < argv.index("-i")
-        assert argv.index("-t") < argv.index("-i")
+        assert argv[argv.index("-ss") + 1] == "%.9f" % (10 - xheaac.SEEK_LEAD)
+        assert "-t" not in argv
+        trim = argv[argv.index("-af") + 1]
+        assert trim.startswith("atrim=start=10.000000000:end=15.000000000")
+
+    def test_the_range_is_named_in_the_source_s_own_timestamps(self):
+        """`atrim` cuts by timestamp, and without `-copyts` the decoder
+        renumbers every seek from zero - so the range would name a moment in a
+        file that does not exist."""
+        argv = xheaac.wav_argv("a.mp3", 48000, False, start="10",
+                               duration="5")
+        assert "-copyts" in argv
+        assert argv.index("-copyts") < argv.index("-i")
+
+    def test_the_cut_pieces_are_put_back_on_a_timeline_of_their_own(self):
+        """`-copyts` would otherwise write a WAVE that claims to begin ten
+        seconds in, and the encoder would be handed ten seconds of nothing."""
+        trim = xheaac.wav_argv("a.mp3", 48000, False, "10", "5")
+        assert "asetpts=PTS-STARTPTS" in trim[trim.index("-af") + 1]
+
+    def test_a_seek_never_goes_before_the_start_of_the_file(self):
+        argv = xheaac.wav_argv("a.mp3", 48000, False, start="1", duration="5")
+        assert argv[argv.index("-ss") + 1] == "%.9f" % 0.0
+
+    def test_the_whole_file_decode_has_no_range_at_all(self):
+        argv = xheaac.wav_argv("a.mp3", 48000, False)
+        assert "-ss" not in argv and "-af" not in argv and "-copyts" not in argv
 
     def test_exhale_is_given_two_arguments_so_it_reads_its_stdin(self):
         """Three arguments is exhale's FILE form: it would then read the WAVE
@@ -288,3 +319,62 @@ class TestExhalesOwnSampleRateGuards:
         really is a combination the helper above rejects."""
         assert self._refused("0", 44100) is True
         assert self._refused("a", 44100) is False
+
+
+class TestHowLongAWaveCanBe:
+    """The one limit of the pipe, and the reason an 83-hour audiobook came out
+    of it at thirteen and a half hours with a zero exit status.
+
+    RIFF states a chunk's length in 32 bits, and exhale reads exactly the count
+    the header declares. Over a pipe ffmpeg has no length to state and writes the
+    field full of ones, which is that same 4 GiB rather than "read to the end" -
+    so the ceiling is reached whether or not a file is in between.
+    """
+
+    def test_the_ceiling_is_the_largest_a_32_bit_length_can_say(self):
+        assert xheaac.WAVE_DATA_CEILING == 0xFFFFFFFF
+
+    def test_it_is_the_byte_count_divided_by_the_bytes_a_second_costs(self):
+        assert xheaac.wave_seconds_ceiling(48000, 2) == pytest.approx(
+            xheaac.WAVE_DATA_CEILING / (48000 * 2 * xheaac.SAMPLE_BYTES))
+
+    def test_the_sample_width_is_the_one_the_decode_actually_writes(self):
+        """The arithmetic and the ffmpeg call have to agree, or the ceiling
+        describes a WAVE nobody writes: `pcm_s16le` is two bytes."""
+        argv = xheaac.wav_argv("in.m4b", 44100, True)
+        assert "pcm_s16le" in argv
+        assert xheaac.SAMPLE_BYTES == 2
+
+    def test_mono_at_44_1_kHz_runs_out_after_about_thirteen_and_a_half_hours(
+            self):
+        hours = xheaac.wave_seconds_ceiling(44100, 1) / 3600
+        assert 13.5 < hours < 13.6
+
+    def test_more_channels_reach_the_ceiling_proportionally_sooner(self):
+        assert xheaac.wave_seconds_ceiling(48000, 1) == pytest.approx(
+            2 * xheaac.wave_seconds_ceiling(48000, 2))
+
+    def test_an_ordinary_book_fits(self):
+        assert xheaac.fits_in_one_wave(6 * 3600, 44100, 1)
+
+    def test_the_book_that_did_not_does_not(self):
+        """83:41:50 of mono at 44.1 kHz - the file this check was written for,
+        which encoded its first 13:31:36 and reported success."""
+        assert not xheaac.fits_in_one_wave(301309.7, 44100, 1)
+
+    def test_the_ceiling_itself_is_the_last_length_that_fits(self):
+        ceiling = xheaac.wave_seconds_ceiling(44100, 1)
+        assert xheaac.fits_in_one_wave(ceiling, 44100, 1)
+        assert not xheaac.fits_in_one_wave(ceiling + 1, 44100, 1)
+
+    def test_a_length_nothing_could_probe_is_not_a_refusal(self):
+        """An unreadable header must not become "this file cannot be encoded":
+        the finished output is measured against the source either way."""
+        assert xheaac.fits_in_one_wave(0, 44100, 1)
+        assert xheaac.fits_in_one_wave(-1, 44100, 1)
+
+    def test_every_rate_in_the_band_has_a_ceiling_a_long_book_can_exceed(self):
+        """Not a limit only the exotic rates have: the shortest ceiling in the
+        band is under seven hours, which an audiobook reaches routinely."""
+        for rate in xheaac.SAMPLE_RATES:
+            assert xheaac.wave_seconds_ceiling(rate, 2) < 24 * 3600

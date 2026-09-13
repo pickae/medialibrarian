@@ -16,6 +16,12 @@ tools, ACELP and TCX and MPEG Surround with unified stereo, "won't be
 integrated" - and it takes a PRESET rather than a bitrate, whose two ladders are
 the table at the bottom of this module.
 
+Splitting a long file works here as it does for Opus, but the pieces need
+placing rather than merely cutting: the encoder primes its decoder with a frame
+whose output a joined MP4 has no way to discard, so the cuts leave that frame a
+gap of its own to fill. `encoder_timing` measures it and the three helpers below
+it do the arithmetic.
+
 Ittiam's libxaac implements the whole USAC toolbox including those speech
 coders, and is deliberately not used: its encoder takes exactly two bitrates and
 silently replaces every other with 96 kbps, which is above the top of the range
@@ -27,7 +33,11 @@ them.
 
 from __future__ import annotations
 
+import os
+import struct
+import subprocess
 import sys
+import tempfile
 
 from medialib.lib import tooldeps
 
@@ -42,6 +52,13 @@ __all__ = [
     "wav_argv",
     "SAMPLE_RATES",
     "input_sample_rate",
+    "SAMPLE_BYTES",
+    "WAVE_DATA_CEILING",
+    "wave_seconds_ceiling",
+    "fits_in_one_wave",
+    "encoder_timing",
+    "chunk_start_offset",
+    "align_to_frame",
 ]
 
 EXHALE = "exhale"
@@ -195,6 +212,12 @@ def exhale_preset(bitrate: int, channels: int = _QUOTED_CHANNELS) -> str:
 # handed over and refused. These three are the rates the band holds.
 SAMPLE_RATES = (32000, 44100, 48000)
 
+# How far before a chunk's first sample the decode is told to seek. The seek is
+# allowed to be imprecise - that is the point of it - and the filter graph makes
+# the exact cut, so this only has to be more slack than a seek can plausibly
+# miss by. Seconds of decoding nobody keeps, per chunk.
+SEEK_LEAD = 5.0
+
 
 def input_sample_rate(rate: int) -> int:
     """The rate the WAVE fed to the encoder is written at.
@@ -216,6 +239,186 @@ def input_sample_rate(rate: int) -> int:
     return min(SAMPLE_RATES, key=lambda candidate: abs(candidate - rate))
 
 
+# --- how long a WAVE can be ---------------------------------------------------
+# RIFF states a chunk's length in 32 BITS, so a WAVE can describe at most 4 GiB
+# of samples however large the file carrying it is - and exhale reads exactly
+# the count the header declares and then stops, with a finished MP4 and a zero
+# exit status. Over a pipe ffmpeg has no length to state and writes the field
+# full of ones, which is that same 4 GiB rather than "read to the end", so the
+# ceiling is reached the same way with or without a file in between.
+#
+# That is a real limit on this route and not a detail of it: 16-bit PCM at
+# 44.1 kHz mono runs out after about thirteen and a half hours, and an audiobook
+# read in one file is regularly longer. The caller asks BEFORE encoding, because
+# what it prevents is not an error - it is hours of work producing a book with
+# five sixths of it missing.
+
+# The sample width the WAVE is written at - `pcm_s16le` in `wav_argv` below,
+# which is what both this ceiling and that encoder call have to agree on.
+SAMPLE_BYTES = 2
+
+# The largest a 32-bit unsigned length can say.
+WAVE_DATA_CEILING = 0xFFFFFFFF
+
+
+def wave_seconds_ceiling(rate: int, channels: int) -> float:
+    """The longest recording one WAVE can carry at this rate and channel count.
+
+    The rate and the count are the ones the WAVE is WRITTEN at - the resampled
+    rate from `input_sample_rate` and the channels after any downmix - not the
+    source's own, which is why the caller settles both before asking.
+    """
+    per_second = max(1, rate) * max(1, channels) * SAMPLE_BYTES
+    return WAVE_DATA_CEILING / per_second
+
+
+def fits_in_one_wave(seconds: float, rate: int, channels: int) -> bool:
+    """Whether a recording of this length can reach the encoder whole.
+
+    A length of zero or less is a source nothing could measure, and it answers
+    true: refusing a file because its duration could not be probed would turn an
+    unreadable header into a refusal to encode, and the finished output is
+    measured against the source either way.
+    """
+    if seconds <= 0:
+        return True
+    return seconds <= wave_seconds_ceiling(rate, channels)
+
+
+# --- joining what was encoded apart ------------------------------------------
+# A chunked encode has to be re-joined sample for sample, and what stands in the
+# way is one frame: the encoder emits a PRIMING frame ahead of the audio, whose
+# output the decoder is meant to discard. Each chunk's own MP4 says so in its
+# edit list and each chunk therefore decodes to exactly its own length - but a
+# joined file has ONE edit list, at the head, so every chunk after the first has
+# its priming frame played as audio instead. That, and nothing else, is the seam.
+#
+# It cannot be cut out afterwards. The frame is not silence to be trimmed and it
+# is not droppable either: USAC overlap-adds, so the frame after it decodes from
+# it, and a join that drops the packet corrupts the frame that follows.
+#
+# What CAN be done is to leave it a hole to land in: cut each chunk to start one
+# priming's worth LATE, and the frame the decoder plays fills exactly the gap the
+# cut left. The join is then sample-exact, and the cost is that the priming's
+# worth of audio at each boundary is the decoder's fade-in ramp rather than the
+# source - which is why the boundaries are the silences the planner already finds.
+#
+# Both numbers are MEASURED from the encoder rather than written down here. They
+# are an implementation detail of a binary this library does not ship, and a
+# wrong constant would not fail: it would drift a long book by a frame per chunk.
+
+
+def _silence_wave(rate: int, channels: int, seconds: int = 1) -> bytes:
+    """One WAVE of silence, for asking the encoder about its own timing.
+
+    Built here rather than decoded out of ffmpeg because the answer has to be
+    about the encoder alone, and because a probe that spawns two processes to
+    learn two integers is a probe that gets skipped.
+    """
+    channels = max(1, channels)
+    data = b"\0" * (rate * channels * SAMPLE_BYTES * seconds)
+    header = b"RIFF" + struct.pack("<I", 36 + len(data)) + b"WAVEfmt "
+    header += struct.pack("<IHHIIHH", 16, 1, channels, rate,
+                          rate * channels * SAMPLE_BYTES,
+                          channels * SAMPLE_BYTES, SAMPLE_BYTES * 8)
+    return header + b"data" + struct.pack("<I", len(data)) + data
+
+
+# Answers already paid for, per (preset, rate, channels). One process at most per
+# combination, and a run's files share very few of them.
+_TIMING: dict = {}
+
+
+def encoder_timing(preset: str, rate: int, channels: int) -> tuple[int, int]:
+    """(priming samples, frame samples) for what this encoder writes here.
+
+    Both come off one second of silence encoded at the settings the real chunks
+    will use: the first packet's timestamp is the priming the container asks the
+    decoder to discard, and its duration is the frame.
+
+    (0, 0) is "could not be asked", which a caller reads as "do not chunk this" -
+    the join arithmetic has no meaning without these two numbers, and guessing
+    them would drift the very file that needed chunking most.
+    """
+    key = (preset, rate, channels)
+    if key in _TIMING:
+        return _TIMING[key]
+
+    answer = (0, 0)
+    directory = ""
+    try:
+        directory = tempfile.mkdtemp(prefix="xheaacTiming.")
+        # A name that does not exist: exhale opens its output O_CREAT|O_EXCL.
+        out = os.path.join(directory, "probe.m4a")
+        done = subprocess.run(exhale_argv(preset, out),
+                              input=_silence_wave(rate, channels),
+                              stdout=subprocess.DEVNULL,
+                              stderr=subprocess.DEVNULL)
+        if done.returncode == 0:
+            answer = _first_packet(out)
+    except OSError:
+        answer = (0, 0)
+    finally:
+        if directory:
+            _discard(directory)
+    _TIMING[key] = answer
+    return answer
+
+
+def _first_packet(path: str) -> tuple[int, int]:
+    """The first packet's timestamp and duration, in samples."""
+    try:
+        done = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "a:0",
+             "-show_entries", "packet=pts,duration", "-of", "compact=p=0",
+             path], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    except OSError:
+        return 0, 0
+    fields = {}
+    line = done.stdout.decode("utf-8", "surrogateescape").split("\n")[0]
+    # The compact writer ends a row with a separator, so the last piece of the
+    # split is empty rather than a field.
+    for field in [piece for piece in line.split("|") if piece]:
+        key, _sep, value = field.partition("=")
+        try:
+            fields[key] = int(value)
+        except ValueError:
+            return 0, 0
+    frame = fields.get("duration", 0)
+    # A negative timestamp is the container saying "discard this much"; a
+    # non-negative one is an encoder with nothing to discard.
+    priming = max(0, -fields.get("pts", 0))
+    return (priming, frame) if frame > 0 else (0, 0)
+
+
+def _discard(directory: str) -> None:
+    import shutil
+
+    shutil.rmtree(directory, ignore_errors=True)
+
+
+def align_to_frame(seconds: float, rate: int, frame: int) -> float:
+    """<seconds> moved to the nearest whole frame.
+
+    A boundary that falls mid-frame leaves the chunk before it a partial last
+    frame, which the join writes out whole - a second frame of drift per seam, on
+    top of the priming. Half a frame is about 23 ms, far inside the silences the
+    boundaries sit in.
+    """
+    if frame <= 0 or rate <= 0:
+        return seconds
+    samples = round(seconds * rate / frame) * frame
+    return samples / rate
+
+
+def chunk_start_offset(priming: int, rate: int) -> float:
+    """How long after its boundary a chunk starts, so the priming frame the
+    decoder plays fills the gap instead of pushing everything after it along."""
+    if rate <= 0:
+        return 0.0
+    return max(0, priming) / rate
+
+
 def wav_argv(source: str, rate: int, mono: bool,
              start: str = "", duration: str = "") -> list[str]:
     """ffmpeg decoding one source's first audio stream to WAVE on stdout.
@@ -228,15 +431,29 @@ def wav_argv(source: str, rate: int, mono: bool,
     would only give the encoder a WAVE header full of tags to ignore.
 
     <start> and <duration> cut one time range out instead of taking the whole
-    file, and are placed BEFORE `-i` so ffmpeg seeks rather than decoding up to
-    the mark - the same ordering the Opus chunk encoder uses.
+    file, which is what makes this the chunk decoder as well as the whole-file
+    one - and the range has to come out SAMPLE-exact, because the pieces are
+    joined end to end and every sample one of them does not carry is a hole in
+    the finished book.
+
+    `-ss` alone does not give that. It seeks to a packet and hands over from
+    wherever the decoder settles, which on an m4b lands late by a fixed amount
+    per seek position - a thousand samples, reliably, for every chunk. So the
+    seek is only ROUGH, deliberately short of the mark by `SEEK_LEAD`, and the
+    cut itself is made in the filter graph where a timestamp means a sample.
+    `-copyts` is what makes that possible: without it the decoded frames are
+    renumbered from zero and the range would have nothing absolute to name.
     """
     argv = ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error"]
-    if start:
+    cut = []
+    if start and duration:
+        begin = max(0.0, float(start) - SEEK_LEAD)
+        argv += ["-copyts", "-ss", "%.9f" % begin]
+        cut = ["-af", "atrim=start=%.9f:end=%.9f,asetpts=PTS-STARTPTS"
+               % (float(start), float(start) + float(duration))]
+    elif start:
         argv += ["-ss", start]
-    if duration:
-        argv += ["-t", duration]
-    argv += ["-i", source, "-map", "0:a:0", "-map_metadata", "-1"]
+    argv += ["-i", source, "-map", "0:a:0", "-map_metadata", "-1"] + cut
     if mono:
         argv += ["-ac", "1"]
     return argv + ["-ar", str(rate), "-c:a", "pcm_s16le", "-f", "wav", "-"]

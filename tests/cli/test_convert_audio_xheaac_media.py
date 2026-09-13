@@ -221,14 +221,106 @@ class TestTheMetadataMp4CannotKeepAsATag:
         assert _has_cover(converted["out"] / "chaptered.m4a")
 
 
-class TestSplittingIsOff:
-    def test_a_low_split_threshold_is_refused_out_loud(self, converted):
-        """-s 5 over 20-second files would chunk every one of them for a codec
-        that could be chunked. This one says so rather than ignoring the flag
-        silently."""
-        assert "keeps long files whole" in converted["done"].stdout
+class TestSplittingHappensAndLeavesNoSeam:
+    """-s 5 over 20-second files chunks every one of them, which is the point:
+    the join has to survive being asked for far more seams than a real book
+    would ever have."""
 
-    def test_and_nothing_was_re_concatenated(self, converted):
-        """The join is the step that would not be sample-exact, so its absence
-        is the thing to assert."""
-        assert "Re-concatenating" not in converted["done"].stdout
+    def test_the_files_really_were_cut_up(self, converted):
+        assert "chunk 1/" in converted["done"].stdout
+
+    def test_and_put_back_together(self, converted):
+        assert "Re-concatenating" in converted["done"].stdout
+
+    @pytest.mark.parametrize("name", ["chaptered", "aaclc", "opus"])
+    def test_a_rejoined_file_is_its_source_length_to_the_millisecond(
+            self, converted, name):
+        """Not "about as long": the pieces are cut to allow for the frame the
+        decoder plays at the head of each one, so the seams cost nothing at all.
+        A join that did not would run long by about 46 ms per seam."""
+        assert _seconds(converted["out"] / (name + ".m4a")) == \
+            pytest.approx(SECONDS, abs=0.01)
+
+
+def _hours_of_silence(path, seconds):
+    """A source of <seconds>, in ONE encode.
+
+    Silence rather than noise because the only thing this fixture has to be is
+    long - the ceiling is a byte count and does not care what the samples are -
+    and silence is what makes six hours cost seconds to write.
+
+    One encode rather than a minute stream-copied back to back, which is the
+    cheaper way to get length and the wrong one: every joined piece contributes
+    its own encoder priming as playable audio, so such a file decodes LONGER
+    than its container claims and there is no true length left to measure
+    against. That is the same defect this whole test is about.
+    """
+    subprocess.run(
+        ["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi",
+         "-i", "anullsrc=r=48000:cl=stereo", "-t", str(seconds),
+         "-c:a", "aac", "-b:a", "8k", str(path)],
+        check=True, stdin=subprocess.DEVNULL)
+    return path
+
+
+class TestABookTooLongForOneWave:
+    """The failure this was all built for, end to end.
+
+    A WAVE states its length in 32 bits, so one pass through the pipe carries
+    4 GiB and no more - about six hours of 48 kHz stereo - and exhale reads
+    exactly the count it is given and stops. The 83-hour audiobook that prompted
+    this came out at 13:31:36, with chapters, a cover, and a zero exit status.
+
+    A book past that ceiling is therefore CUT UP, which is the only way to encode
+    it at all, and the pieces are placed so the join costs nothing.
+    """
+
+    @pytest.fixture(scope="class")
+    def long_book(self, tmp_path_factory):
+        tmp = tmp_path_factory.mktemp("xheaacLong")
+        source, out = tmp / "in", tmp / "out"
+        source.mkdir()
+        # Past the 48 kHz stereo ceiling, and not much past it: the fixture
+        # has to cost seconds, not minutes.
+        made = _hours_of_silence(source / "book.m4b", 22700)
+        done = blackbox.run("convert-audio", "-o", "xheaac", source, out,
+                            cwd=tmp, timeout=3600)
+        return {"out": out, "done": done, "source": made,
+                "seconds": _seconds(made)}
+
+    def test_the_fixture_really_is_past_the_ceiling(self, long_book):
+        from medialib.lib import xheaac
+
+        assert long_book["seconds"] > xheaac.wave_seconds_ceiling(48000, 2)
+
+    def test_and_says_its_own_length_honestly(self, long_book):
+        """The comparison below is against this number, so a fixture whose
+        container disagreed with its samples would prove nothing either way."""
+        decoded = subprocess.run(
+            ["ffmpeg", "-nostdin", "-loglevel", "error", "-i",
+             str(long_book["source"]), "-map", "0:a:0", "-f", "null", "-",
+             "-progress", "-", "-nostats"],
+            capture_output=True, text=True).stdout
+        micros = [line.partition("=")[2] for line in decoded.splitlines()
+                  if line.startswith("out_time_us=")]
+        assert float(micros[-1]) / 1e6 == pytest.approx(long_book["seconds"],
+                                                        abs=0.01)
+
+    def test_the_run_succeeds(self, long_book):
+        done = long_book["done"]
+        assert done.returncode == 0, done.stdout + done.stderr
+
+    def test_it_was_cut_up_rather_than_refused(self, long_book):
+        said = long_book["done"].stdout + long_book["done"].stderr
+        assert "Re-concatenating" in said
+        assert "too long for exhale" not in said
+
+    def test_and_the_book_that_came_out_is_the_whole_book(self, long_book):
+        """The assertion the old truncation would have failed by five sixths."""
+        made = long_book["out"] / "book.m4a"
+        assert _property(made, "profile") == PROFILE
+        assert _seconds(made) == pytest.approx(long_book["seconds"], abs=0.01)
+
+    def test_and_it_is_reported_as_converted_rather_than_short(self, long_book):
+        assert "did not convert to their full length" not in (
+            long_book["done"].stdout + long_book["done"].stderr)

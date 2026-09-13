@@ -296,17 +296,47 @@ class TestWhichSourcesAreAlreadyFinished:
 
 
 class TestSplittingAndTheCodec:
-    def test_xhe_aac_keeps_long_files_whole(self):
-        """Chunks are encoded separately and concatenated, which needs a
-        sample-exact join. The external encoders write finished MP4s with their
-        own edit lists and preroll frames, so there is no such join to make."""
-        assert "xheaac" in ca.NO_SPLIT_CODECS
+    """Both codecs split. What differs is what the pieces have to obey to join
+    without a seam, which is what `Planner.join_rules` answers."""
 
-    def test_opus_does_not(self):
-        assert "opus" not in ca.NO_SPLIT_CODECS
+    def _planner(self, **settings):
+        base = {"codec": "opus", "input_dir": "in", "mono": False,
+                "bitrate": ca.DEFAULT_BITRATE}
+        base.update(settings)
+        return ca.Planner(ca.Run(**base), jobs=4)
 
-    def test_every_no_split_codec_is_a_codec_that_exists(self):
-        assert set(ca.NO_SPLIT_CODECS) <= set(enums.AUDIO_CODECS)
+    def test_opus_joins_wherever_it_was_cut(self, monkeypatch):
+        """No frame to land on and no priming to allow for, so the planner asks
+        the encoder nothing at all."""
+        monkeypatch.setattr(ca.xheaac, "encoder_timing",
+                            lambda *a: pytest.fail("Opus asked the xhe-aac "
+                                                   "encoder about its timing"))
+        assert self._planner().join_rules("book.flac") == (0, 0, 0)
+
+    def test_xhe_aac_reads_the_rules_off_the_encoder(self, monkeypatch):
+        monkeypatch.setattr(ca, "source_sample_rate", lambda src: 44100)
+        monkeypatch.setattr(ca, "source_channels", lambda src: 2)
+        monkeypatch.setattr(ca.xheaac, "encoder_timing",
+                            lambda preset, rate, channels: (2048, 2048))
+        assert self._planner(codec="xheaac").join_rules("book.flac") == (
+            44100, 2048, 2048)
+
+    def test_the_rules_are_asked_for_the_settings_the_chunks_will_use(
+            self, monkeypatch):
+        """Not the source's own rate and not the run's nominal bitrate: the
+        WAVE is resampled into the encoder's band and -m downmixes it, and the
+        preset follows the channel count. An answer about anything else would
+        be an answer about a file that is not being encoded."""
+        asked = []
+        monkeypatch.setattr(ca, "source_sample_rate", lambda src: 96000)
+        monkeypatch.setattr(ca, "source_channels", lambda src: 6)
+        monkeypatch.setattr(ca.xheaac, "encoder_timing",
+                            lambda *a: asked.append(a) or (2048, 2048))
+        self._planner(codec="xheaac", mono=True).join_rules("book.flac")
+        preset, rate, channels = asked[0]
+        assert rate == 48000
+        assert channels == 1
+        assert preset == xheaac.exhale_preset(ca.MONO_BITRATE, 1)
 
 
 class TestTheSampleRateProbe:
@@ -585,3 +615,118 @@ class TestTheOpusEncodeIsUnchanged:
         run._remux("a.mkv", "out/a.opus")
         assert "-c:a" in seen[0] and seen[0][seen[0].index("-c:a") + 1] == "copy"
         assert "libopus" not in seen[0]
+
+
+def _stub_popen(monkeypatch):
+    """Both halves of the pipe, stubbed, recording the argv of each spawn."""
+    calls = []
+
+    class _Process:
+        def __init__(self, argv, **kwargs):
+            self.argv = list(argv)
+            self.stdout = _Pipe() if kwargs.get("stdout") is not None else None
+
+        def wait(self):
+            return 0
+
+        def kill(self):
+            pass
+
+    def popen(argv, **kwargs):
+        process = _Process(argv, **kwargs)
+        calls.append(process.argv)
+        return process
+
+    monkeypatch.setattr(ca.subprocess, "Popen", popen)
+    return calls
+
+
+class TestABookTooLongForOnePipe:
+    """The refusal that stands between a 15-minute encode and a book with five
+    sixths of it missing.
+
+    The encode goes over a WAVE, which states its length in 32 bits, and exhale
+    reads exactly the count it is given. Nothing about that fails: the encoder
+    closes a finished MP4 and exits 0. So the length is asked BEFORE the encoder
+    is started, and the arithmetic is `xheaac.wave_seconds_ceiling`.
+    """
+
+    @pytest.fixture
+    def spawned(self, monkeypatch):
+        """Every Popen the encode would start - which, for a file over the
+        ceiling, has to be none at all."""
+        calls = _stub_popen(monkeypatch)
+        monkeypatch.setattr(ca, "source_sample_rate", lambda src: 44100)
+        monkeypatch.setattr(ca, "source_channels", lambda src: 1)
+        return calls
+
+    def _run(self):
+        return ca.Run(codec="xheaac", extension="m4a", output_dir="out")
+
+    # 83:41:50 of mono at 44.1 kHz: the file this was written for.
+    TOO_LONG = 301309.7
+
+    def test_no_encoder_is_started_for_a_file_over_the_ceiling(self, spawned,
+                                                               tmp_path):
+        assert self._run()._encode_xheaac(
+            "book.m4b", str(tmp_path / "book.m4a"), mono=True, bitrate=18,
+            duration=self.TOO_LONG) is False
+        assert spawned == []
+
+    def test_and_the_run_is_told_what_to_do_instead(self, spawned, tmp_path,
+                                                    capsys):
+        self._run()._encode_xheaac("book.m4b", str(tmp_path / "book.m4a"),
+                                   mono=True, bitrate=18,
+                                   duration=self.TOO_LONG)
+        said = capsys.readouterr().err
+        assert "too long for exhale to encode whole" in said
+        assert "83:41:50" in said and "book.m4b" in said
+        assert "-o opus" in said
+
+    def test_a_book_inside_the_ceiling_is_encoded_as_it_always_was(
+            self, spawned, tmp_path):
+        assert self._run()._encode_xheaac(
+            "book.m4b", str(tmp_path / "book.m4a"), mono=True, bitrate=18,
+            duration=6 * 3600) is True
+        assert [argv[0] for argv in spawned] == ["ffmpeg", "exhale"]
+
+    def test_a_duration_nothing_could_probe_is_not_a_refusal(self, spawned,
+                                                             tmp_path):
+        """An unreadable header must not become "this cannot be encoded": what
+        came out is measured against the source either way."""
+        assert self._run()._encode_xheaac(
+            "book.m4b", str(tmp_path / "book.m4a"), mono=True, bitrate=18,
+            duration=0) is True
+        assert [argv[0] for argv in spawned] == ["ffmpeg", "exhale"]
+
+    def test_the_ceiling_is_read_at_the_rate_the_WAVE_is_written_at(
+            self, monkeypatch, tmp_path):
+        """Not the source's own rate. A 96 kHz source is resampled down to 48
+        before it reaches the pipe, so it fits twice as much as its own rate
+        would suggest - and refusing it on the source's rate would decline a
+        book the encoder could have taken.
+        """
+        calls = _stub_popen(monkeypatch)
+        monkeypatch.setattr(ca, "source_sample_rate", lambda src: 96000)
+        monkeypatch.setattr(ca, "source_channels", lambda src: 1)
+        # Over the ceiling for 96 kHz, inside it for the 48 kHz it is resampled
+        # to.
+        seconds = xheaac.wave_seconds_ceiling(48000, 1) - 60
+        assert self._run()._encode_xheaac(
+            "book.m4b", str(tmp_path / "book.m4a"), mono=True, bitrate=18,
+            duration=seconds) is True
+        assert [argv[0] for argv in calls] == ["ffmpeg", "exhale"]
+
+    def test_the_downmix_doubles_what_fits(self, spawned, tmp_path,
+                                           monkeypatch):
+        """-m is a real downmix on the ffmpeg side, so a mono encode carries
+        half the bytes a stereo one would and reaches twice as far."""
+        monkeypatch.setattr(ca, "source_channels", lambda src: 2)
+        seconds = xheaac.wave_seconds_ceiling(44100, 2) + 60
+        run = self._run()
+        assert run._encode_xheaac("book.m4b", str(tmp_path / "a.m4a"),
+                                  mono=False, bitrate=36,
+                                  duration=seconds) is False
+        assert run._encode_xheaac("book.m4b", str(tmp_path / "b.m4a"),
+                                  mono=True, bitrate=18,
+                                  duration=seconds) is True
