@@ -133,6 +133,20 @@ def _restore_mtime(path: str, when: int | None) -> None:
         pass
 
 
+def would_hide(destination: str) -> bool:
+    """Whether renaming something to ``destination`` would hide it: a basename
+    starting with a dot, which the shell and every file manager leave out of a
+    listing.
+
+    No rename here has a reason to do that. The scratch directories that ARE
+    hidden are created under their own names and never renamed into, so a dot
+    arriving at a rename target is a name that went wrong somewhere - and a
+    film that vanishes out of its folder is worse than one whose name was left
+    as it was.
+    """
+    return os.path.basename(destination.rstrip("/")).startswith(".")
+
+
 def safe_rename(source: str, destination: str, log: SkipLog | None = None) -> bool:
     """Rename ``source`` to ``destination``, and report whether one happened.
 
@@ -142,6 +156,10 @@ def safe_rename(source: str, destination: str, log: SkipLog | None = None) -> bo
     caller count its changes.
     """
     if source == destination:
+        return False
+    if would_hide(destination):
+        if log is not None:
+            log.record(source, destination)
         return False
     # lexists, not exists: a BROKEN symlink answers False to os.path.exists, so a
     # destination that is one reads as free. shutil.move then writes to it, and

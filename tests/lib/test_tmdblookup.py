@@ -618,6 +618,18 @@ class TestTagPlexIds:
         assert logs[-1] == ('  "The Movie (1999) {imdb-tt0120737}" is already '
                             'there, left "The Movie (1999)" untouched')
 
+    def test_a_film_is_never_tagged_into_a_hidden_name(self, monkeypatch,
+                                                        tmp_path):
+        """A folder already hidden keeps its films where they are: tagging it
+        would rename every file to a name starting with a dot, and a film that
+        drops out of the listing is worse than one left untagged."""
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, (".The Movie (1999)", [".The Movie (1999).mkv"]))
+        self._env(monkeypatch, {".The Movie": "tt0120737"})
+        tmdblookup.tag_plex_ids(".", [].append, SkipLog())
+        assert (tmp_path / ".The Movie (1999)/.The Movie (1999).mkv").is_file()
+        assert not (tmp_path / ".The Movie (1999) {imdb-tt0120737}").exists()
+
     def test_files_that_do_not_share_the_base_are_untouched(self, monkeypatch,
                                                              tmp_path):
         monkeypatch.chdir(tmp_path)

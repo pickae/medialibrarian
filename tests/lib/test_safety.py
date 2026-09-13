@@ -27,6 +27,39 @@ _POSIX_LINKS = pytest.mark.skipif(
     reason="making a symlink needs a privilege the CI account does not have")
 
 
+class TestARenameNeverHides:
+    """No rename here may make a file or folder disappear from a listing.
+
+    The scratch directories that ARE hidden are created under their own names
+    and never renamed into, so a dot arriving at a rename target is a name that
+    went wrong upstream - and the answer is to leave the thing where it is.
+    """
+
+    @pytest.mark.parametrize("target", [
+        ".Film (2020).mkv", "sub/.Film (2020).mkv", ".hidden",
+        "a/b/.Film (2020) {imdb-tt0120737}", ".Film (2020)/"])
+    def test_a_dotted_basename_is_refused(self, target):
+        assert safety.would_hide(target) is True
+
+    @pytest.mark.parametrize("target", [
+        "Film (2020).mkv", "./Film (2020).mkv", "/a/.hidden/Film (2020).mkv",
+        "Film (2020) {imdb-tt0120737}/", "a.b.mkv"])
+    def test_an_ordinary_name_is_not(self, target):
+        """A dot INSIDE the path, or on a parent that is already hidden, is
+        not this rename hiding anything."""
+        assert safety.would_hide(target) is False
+
+    def test_safe_rename_refuses_and_records_it(self, tmp_path):
+        source = tmp_path / "Film (2020).mkv"
+        source.write_text("x")
+        log = safety.SkipLog()
+        moved = safety.safe_rename(str(source), str(tmp_path / ".Film (2020).mkv"),
+                                   log)
+        assert moved is False
+        assert source.is_file()
+        assert log.skips == [(str(source), str(tmp_path / ".Film (2020).mkv"))]
+
+
 class TestTheDirnameTheShellMeans:
     """``dirname(1)``, not ``os.path.dirname``.
 
