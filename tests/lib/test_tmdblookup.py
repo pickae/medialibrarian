@@ -869,8 +869,12 @@ class TestTagPlexIds:
             ("./The Movie (1999)/The Movie (1999).mkv",
              "./The Movie (1999)/The Movie (1999) {imdb-tt0120737}.mkv")]
 
-    def test_a_symlinked_folder_is_not_tagged(self, monkeypatch, tmp_path):
-        # find -P -type d: a link to a movie folder is a link, not a movie
+    def test_a_symlinked_folder_is_not_descended_through(self, monkeypatch,
+                                                          tmp_path):
+        """find -P -type d: a link to a folder is a link, not a folder. The
+        film below the real one is tagged once, through the path that is
+        really there, and the link is left as a link rather than becoming a
+        second way to reach the same film."""
         monkeypatch.chdir(tmp_path)
         real = tmp_path / "Real"
         _tree(real, ("The Movie (1999)", ["The Movie (1999).mkv"]))
@@ -878,9 +882,43 @@ class TestTagPlexIds:
         self._env(monkeypatch, {"The Movie": "tt0120737"})
         logs = []
         tmdblookup.tag_plex_ids(".", logs.append, SkipLog())
-        # the link is not descended through; the real tree is not under "."
-        assert logs == []
+        assert logs == ['  match: "The Movie (1999)" -> {imdb-tt0120737}']
+        assert (real / "The Movie (1999) {imdb-tt0120737}").is_dir()
         assert (tmp_path / "Link").is_symlink()
+
+    def test_a_library_that_keeps_its_films_a_level_down_is_walked(
+            self, monkeypatch, tmp_path):
+        """An "Unsorted" or a box set between the root and the films: the
+        folders in between are not films, so they are walked through."""
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path / "Unsorted", ("The Movie (1999)",
+                                      ["The Movie (1999).mkv"]))
+        _tree(tmp_path / "Box Set" / "Deeper", ("Another Film (2014)",
+                                                ["Another Film (2014).mkv"]))
+        self._env(monkeypatch, {"The Movie": "tt0120737",
+                                "Another Film": "tt0000003"},
+                  base="1999-06-23")
+        tmdblookup.tag_plex_ids(".", [].append, SkipLog())
+        assert (tmp_path / "Unsorted/The Movie (1999) {imdb-tt0120737}"
+                "/The Movie (1999) {imdb-tt0120737}.mkv").is_file()
+
+    def test_what_sits_inside_a_film_is_not_another_film(self, monkeypatch,
+                                                          tmp_path):
+        """A film folder is not descended into: its extras are its own
+        material, and a bonus folder that happens to carry a year is not a
+        second feature to look up."""
+        monkeypatch.chdir(tmp_path)
+        folder = tmp_path / "The Movie (1999)" / "Deleted Scenes (1999)"
+        folder.mkdir(parents=True)
+        (folder / "A scene.mkv").touch()
+        (tmp_path / "The Movie (1999)" / "The Movie (1999).mkv").touch()
+        self._env(monkeypatch, {"The Movie": "tt0120737",
+                                "Deleted Scenes": "tt0000009"})
+        logs = []
+        tmdblookup.tag_plex_ids(".", logs.append, SkipLog())
+        assert logs == ['  match: "The Movie (1999)" -> {imdb-tt0120737}']
+        assert (tmp_path / "The Movie (1999) {imdb-tt0120737}"
+                / "Deleted Scenes (1999)").is_dir()
 
     def test_the_report_lists_the_refused_renames(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)

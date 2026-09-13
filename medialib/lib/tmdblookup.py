@@ -444,6 +444,33 @@ def write_id_list(path: str, names, ids: dict | None = None,
     return True
 
 
+def _film_folders(directory: str) -> list:
+    """Every film folder at or below ``directory``, in the filesystem's own
+    order - the order the shell's ``find`` walks, so the lines they each log
+    come out in the same sequence.
+
+    A folder named "Title (Year)" IS a film and is not descended into: what
+    sits inside one is that film's own material - its extras, its Subs - and
+    not more films. Everything else is descended through, which is what finds
+    the films in a library that keeps them a level down, in an "Unsorted" or a
+    box set, rather than directly under the root it was handed.
+    """
+    found: list = []
+    try:
+        entries = list(os.scandir(directory))
+    except OSError:
+        return found
+    for entry in entries:
+        if not entry.is_dir(follow_symlinks=False):
+            continue
+        base, _tag = plexnames.untagged_base(entry.name)
+        if _YEAR_RE.match(base):
+            found.append(entry)
+        else:
+            found.extend(_film_folders(entry.path))
+    return found
+
+
 def tag_plex_ids(directory: str, log: Callable[[str], None],
                  skip_log: safety.SkipLog | None = None,
                  dry_run: bool = False, ids: dict | None = None,
@@ -476,12 +503,7 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
         log("WARNING: tmdbApiKey not set, skipping IMDb id tagging")
         return 0
 
-    # Immediate subdirectories only, in the filesystem's own order - the same
-    # order the shell's `find . -maxdepth 1 -mindepth 1 -type d` walks, so the
-    # "match" lines they each log come out in the same sequence.
-    for folder in os.scandir(directory):
-        if not folder.is_dir(follow_symlinks=False):
-            continue
+    for folder in _film_folders(directory):
         base, tag = plexnames.untagged_base(folder.name)
         match = _YEAR_RE.match(base)
         if not match:
@@ -506,7 +528,7 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
         # them spelled for a folder they are not in, beside the folder they are
         # spelled for.
         wanted = plexnames.folder_name(base, tag)
-        target = _folder_spelling(directory, wanted)
+        target = _folder_spelling(os.path.dirname(folder.path) or ".", wanted)
         if wanted != folder.name and os.path.exists(target):
             skip_log.record(folder.path, target)
             log('  "{}" is already there, left "{}" untouched'
