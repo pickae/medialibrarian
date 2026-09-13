@@ -356,6 +356,10 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
             imdb = tmdb_imdb_id(match.group(1), match.group(2))
             tag = "{imdb-" + imdb + "}" if imdb else ""
         editions = _rename_in_place(directory, folder, base, tag, skip_log)
+        if editions is None:
+            log('  "{}" is already there, left "{}" untouched'
+                .format(plexnames.folder_name(base, tag), folder.name))
+            continue
         # Only a folder this run asked about says anything: one already tagged
         # would repeat its line for the rest of the library's life.
         if asked:
@@ -380,9 +384,10 @@ def _report(log: Callable[[str], None], base: str, tag: str,
 
 
 def _rename_in_place(directory, folder, base: str, tag: str,
-                     skip_log: safety.SkipLog) -> list:
+                     skip_log: safety.SkipLog) -> list | None:
     """One folder's films and sidecars, then the folder itself, answering the
-    editions it named.
+    editions it named - or None when the folder's own name is taken and
+    NOTHING was renamed.
 
     That order and no other: renaming the folder first would move every path
     underneath it out from under the names just worked out.
@@ -391,15 +396,24 @@ def _rename_in_place(directory, folder, base: str, tag: str,
     is on the disk already, whether or not TMDb could say which film they are
     all versions of.
     """
+    # The folder's own name is settled FIRST, before a single file is touched:
+    # renaming the files under a folder that cannot take its name leaves them
+    # spelled for a folder they are not in, beside the folder they are spelled
+    # for.
+    wanted = plexnames.folder_name(base, tag)
+    target = _folder_spelling(directory, wanted)
+    if wanted != folder.name and os.path.exists(target):
+        skip_log.record(folder.path, target)
+        return None
+
     names = [entry.name for entry in os.scandir(folder.path)
              if entry.is_file(follow_symlinks=False)]
     for old, new in plexnames.folder_renames(base, tag, names):
         _rename(os.path.join(folder.path, old),
                 os.path.join(folder.path, new), skip_log)
 
-    wanted = plexnames.folder_name(base, tag)
     if wanted != folder.name:
-        _rename(folder.path, _folder_spelling(directory, wanted), skip_log)
+        _rename(folder.path, target, skip_log)
     return plexnames.editions_in(base, names)
 
 
