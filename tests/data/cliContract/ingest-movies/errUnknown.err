@@ -1,9 +1,12 @@
 Unknown option: -x
 
 Usage:
-    ingest-movies [options] <movieDir>
+    ingest-movies [options] <movieDir>...
 
-    movieDir      directory holding the movies to ingest
+    movieDir      directory holding the movies to ingest. Several may be given:
+                  each is worked through in full, one after the other, in the
+                  order they were typed. With -t each gets a list of its own,
+                  named after it.
 
     Options
     -------
@@ -29,8 +32,9 @@ Usage:
                   with -t, the hand-written id list. Read before TMDb is asked, so a
                   film someone has already looked up is named from it; and the
                   films TMDb could not identify are written back to it to fill
-                  in. Without it they go to ingest-movies-unmatched.tsv in the
-                  current directory.
+                  in - every folder given into the one file. Without it each
+                  folder gets its own ingest-movies-unmatched-<folder>.tsv in
+                  the current directory.
 
     Default behavior
     ----------------
@@ -45,7 +49,9 @@ Usage:
     back with -i
     looks each movie up on TheMovieDB (TMDb) by its cleaned name and year
     appends the "{imdb-ttXXXXXXX}" id tag to the folder, movie and subtitles
-    only when TMDb returns a single exact title+year match (~99% certainty)
+    only when ONE film carries that title and was released that year in some
+    country - and where that leaves several or none, only when the film's own
+    length fits one of them and rules out every other
     names a folder's several versions of one film as editions, so Plex collapses
     them into one film with a named picker: "<film> {imdb-id} {edition-Colorized}"
     keeps a split film's "Part1" / "cd1" token LAST, which is where Plex reads it

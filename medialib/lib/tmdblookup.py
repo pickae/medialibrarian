@@ -12,6 +12,7 @@ What is rewritten is the glue - the JSON navigation (``json`` instead of
 drift from the original.
 """
 
+import functools
 import json
 import os
 import re
@@ -19,8 +20,9 @@ import subprocess
 import time
 import unicodedata
 from collections.abc import Callable
+from typing import NamedTuple
 
-from medialib.lib import plexnames, safety
+from medialib.lib import durationcheck, plexnames, safety
 from medialib.lib.enums import shell_lower
 
 # The TMDb endpoint everything is relative to.
@@ -255,14 +257,62 @@ def _as_json(text: str | None):
     return parsed if isinstance(parsed, dict) else {}
 
 
-def tmdb_imdb_id(title: str, year: str) -> str:
+# How far a film on disk may be from the runtime TMDb states and still be the
+# same film, whichever of the two is larger. The five minutes are what the two
+# figures are MADE of rather than any disagreement about the film: TMDb rounds
+# to whole minutes, and a release carries its distributor's logos and its
+# credits where a catalogue counts the feature. The fraction is for a long one,
+# where a PAL transfer's 4% speed-up is four minutes on its own.
+RUNTIME_TOLERANCE_SECONDS = 300.0
+RUNTIME_TOLERANCE_FRACTION = 0.07
+
+# How far the folder's year may be from a release year when the runtime is what
+# vouches for the match: the off-by-one of a production or festival year
+# written where a release year was meant, and no further.
+NEAR_YEARS = 1
+
+# How many of the search results are worth asking about in detail. They arrive
+# most popular first, and a film that is not in the first handful of answers to
+# its own title is not one a certainty rule is going to settle - while every
+# one of them costs a request.
+MAX_CANDIDATES = 8
+
+# The three documents a candidate is judged on, asked for with the candidate
+# itself so that a candidate costs one request: its alternative titles, its
+# IMDb id, and every country's release date.
+_APPENDED = "alternative_titles,external_ids,release_dates"
+
+
+class _Candidate(NamedTuple):
+    """One film TMDb offered, with everything the certainty rule asks of it."""
+
+    years: frozenset        # every year some country released it in
+    titles: frozenset       # its primary, original and alternative titles, folded
+    runtime: float          # minutes, 0.0 when TMDb does not say
+    imdb: str               # "" when it has no usable IMDb id
+
+
+def tmdb_imdb_id(title: str, year: str,
+                 runtime: Callable[[], float] | None = None) -> str:
     """The IMDb id (``ttXXXXXXX``) of a film, ONLY when the match is unambiguous.
 
     Returns "" (never the id) when it is not certain enough to rename on, so a
-    caller can gate on an empty result and leave the film untouched. Certainty
-    rule: among the search results released in the requested year, exactly one
-    may carry the wanted title on its primary, original OR any translated/
-    alternative title. Zero or several such candidates -> no output.
+    caller can gate on an empty result and leave the film untouched.
+
+    Certain, in the ordinary case: exactly one film that carries the wanted
+    title - on its primary, original or any alternative - and was released in
+    the wanted year. A film's year is every year ANY country released it in
+    rather than only the one TMDb prints as its primary date, because a
+    festival premiere and a home release a year apart are one film with two
+    true years and a folder may have been named from either.
+
+    ``runtime`` is asked - and only asked - when that rule does not settle it:
+    how long the film on the disk is, in seconds, or 0.0 when nothing can say.
+    A length is what stands in for the year when the year has been given up on,
+    and for the title when two films share one: a candidate is picked out of
+    several only when the file's length fits it and RULES OUT every other, so a
+    candidate nobody can measure keeps the answer at "not certain" rather than
+    losing to one that could be.
     """
     api_key = os.environ.get("tmdbApiKey", "")
     if not api_key:
@@ -271,69 +321,178 @@ def tmdb_imdb_id(title: str, year: str) -> str:
     if not want:
         return ""
 
-    search = _curl(_BASE + "/search/movie", [
-        ("api_key", api_key), ("query", title), ("year", year),
-        ("include_adult", "false")])
-    if search is None:
+    rows = _search(api_key, title, year)
+    if rows is None:
         return ""
-    results = _as_json(search).get("results")
-    if not isinstance(results, list):
-        results = []
+    if not rows:
+        # Nothing at all for that year: ask again without one, and let the
+        # rules below decide what the year is worth. This is the search that
+        # finds a film whose folder was named from a year no release of it
+        # happened in.
+        rows = _search(api_key, title, "") or []
 
-    # 2. the candidates released in the requested year, in result order.
-    ids = []
-    for row in results:
-        if not isinstance(row, dict):
+    candidates = [_candidate(api_key, row) for row in _worth_asking(rows, year, want)]
+    named = [row for row in candidates if want in row.titles]
+    dated = [row for row in named if year in row.years]
+    if len(dated) == 1:
+        return dated[0].imdb
+
+    # Several films of one title and one year - a remake released the same year,
+    # or one release recorded twice - or, where the year settled nothing at all,
+    # the ones that came out either side of it.
+    contenders = dated or [row for row in named
+                           if any(_near(y, year) for y in row.years)]
+    if not contenders:
+        return ""
+    # The one thing that reads the disk, and it is read here and nowhere
+    # earlier: the probe is paid for only by the films the plain rule could not
+    # name on its own.
+    settled = _settled_by_runtime(
+        contenders, runtime() if runtime is not None else 0.0)
+    return settled.imdb if settled is not None else ""
+
+
+def _search(api_key: str, title: str, year: str):
+    """The search results for a title, in TMDb's order: a list, or None when
+    the call itself failed - which is not the same as an answer of none."""
+    params = [("api_key", api_key), ("query", title)]
+    if year:
+        params.append(("year", year))
+    params.append(("include_adult", "false"))
+    body = _curl(_BASE + "/search/movie", params)
+    if body is None:
+        return None
+    results = _as_json(body).get("results")
+    return results if isinstance(results, list) else []
+
+
+def _worth_asking(rows, year: str, want: str) -> list:
+    """The search results worth a request of their own, in the order they came.
+
+    Two ways to be worth one, both answered from what the search already said:
+    a primary release year near the wanted one, or a title that already matches.
+    The first is the ordinary candidate; the second is the film whose only
+    release near this year is in a country the primary date is not, and whose
+    full document is the one thing that can say so.
+    """
+    keep: list = []
+    seen = set()
+    for row in rows:
+        if not isinstance(row, dict) or row.get("id") in seen:
             continue
         release = row.get("release_date")
         release = release if isinstance(release, str) else ""
-        if release[:4] == year:
-            ids.append(row.get("id"))
-    if not ids:
-        return ""
+        titled = any(normalize_title(str(t)) == want for t in _row_titles(row))
+        if _near(release[:4], year) or titled:
+            seen.add(row.get("id"))
+            keep.append(row)
+        if len(keep) >= MAX_CANDIDATES:
+            break
+    return keep
 
-    # 3. of those, how many carry the wanted title (primary, original or any
-    #    alternative). A missing primary/original is the literal word "null"
-    #    the way `jq -r` prints it, so it is compared (and missed) like any
-    #    other title, not skipped.
-    match_count = 0
-    match_id = None
-    for candidate in ids:
-        titles = []
-        for row in results:
-            if isinstance(row, dict) and row.get("id") == candidate:
-                primary = row.get("title")
-                titles.append("null" if primary is None else primary)
-                original = row.get("original_title")
-                titles.append("null" if original is None else original)
-        alt = _curl(_BASE + "/movie/{}/alternative_titles".format(
-                    _id_token(candidate)),
-                    [("api_key", api_key)])
-        if alt:
-            for entry in _as_json(alt).get("titles") or []:
-                if isinstance(entry, dict) and entry.get("title") is not None:
-                    # `.title // empty`: a null/missing alternative is skipped,
-                    # unlike the search titles above.
-                    titles.append(entry.get("title"))
-        for t in titles:
-            if t == "":
-                continue
-            if normalize_title(str(t)) == want:
-                match_count += 1
-                match_id = candidate
-                break
-    if match_count != 1:
-        return ""
 
-    # 4. resolve that one match's IMDb id; only a "tt..." string is a tag.
-    ext = _curl(_BASE + "/movie/{}/external_ids".format(_id_token(match_id)),
-                [("api_key", api_key)])
-    if ext is None:
-        return ""
-    imdb = _as_json(ext).get("imdb_id")
-    if not (isinstance(imdb, str) and imdb.startswith("tt")):
-        return ""
-    return imdb
+def _candidate(api_key: str, row: dict) -> _Candidate:
+    """One search result and its own document, read into what the rule asks."""
+    detail = _as_json(_curl(_BASE + "/movie/" + _id_token(row.get("id")),
+                            [("api_key", api_key),
+                             ("append_to_response", _APPENDED)]))
+    folded = {normalize_title(str(t))
+              for t in _row_titles(row) + _detail_titles(detail)}
+    imdb = (detail.get("external_ids") or {}).get("imdb_id")
+    return _Candidate(
+        years=frozenset(_release_years(row, detail)),
+        titles=frozenset(t for t in folded if t),
+        runtime=_minutes(detail.get("runtime")),
+        imdb=imdb if isinstance(imdb, str) and imdb.startswith("tt") else "")
+
+
+def _row_titles(row: dict) -> list:
+    """A search result's own two titles. A missing one is the literal word
+    "null" the way ``jq -r`` prints it, so it is compared - and missed - like
+    any other title rather than skipped."""
+    titles = []
+    for field in ("title", "original_title"):
+        value = row.get(field)
+        titles.append("null" if value is None else value)
+    return titles
+
+
+def _detail_titles(detail: dict) -> list:
+    """A film document's titles: its own two, and every alternative it carries.
+
+    An alternative with no title is skipped rather than read as "null", which
+    is the one place the two differ - ``.title // empty`` in the shell.
+    """
+    titles = _row_titles(detail)
+    alternatives = (detail.get("alternative_titles") or {}).get("titles") or []
+    for entry in alternatives:
+        if isinstance(entry, dict) and entry.get("title") is not None:
+            titles.append(entry["title"])
+    return titles
+
+
+def _release_years(row: dict, detail: dict) -> set:
+    """Every year this film was released in, anywhere.
+
+    The primary date both documents carry, plus each country's own in
+    ``release_dates`` - which is what a premiere in one year and a release in
+    the next comes down to, and what lets either of them answer for the folder.
+    """
+    years = set()
+    for source in (row, detail):
+        date = source.get("release_date")
+        if isinstance(date, str) and len(date) >= 4:
+            years.add(date[:4])
+    countries = (detail.get("release_dates") or {}).get("results") or []
+    for country in countries:
+        if not isinstance(country, dict):
+            continue
+        for release in country.get("release_dates") or []:
+            date = release.get("release_date") if isinstance(release, dict) else None
+            if isinstance(date, str) and len(date) >= 4:
+                years.add(date[:4])
+    return years
+
+
+def _minutes(value) -> float:
+    """A stated runtime in minutes, or 0.0 for one that says nothing - which is
+    what a missing, null or zero runtime all are."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0.0
+    return float(value) if value > 0 else 0.0
+
+
+def _near(year: str, wanted: str) -> bool:
+    """Whether two years are the same or next door, and both are years."""
+    if not (year.isdigit() and wanted.isdigit()):
+        return False
+    return abs(int(year) - int(wanted)) <= NEAR_YEARS
+
+
+def _runtime_agrees(seconds: float, minutes: float):
+    """Whether a file of ``seconds`` is the film TMDb states ``minutes`` for:
+    True, False, or None when either side does not say."""
+    if seconds <= 0 or minutes <= 0:
+        return None
+    stated = minutes * 60.0
+    allowed = max(RUNTIME_TOLERANCE_SECONDS, stated * RUNTIME_TOLERANCE_FRACTION)
+    return abs(seconds - stated) <= allowed
+
+
+def _settled_by_runtime(candidates: list, seconds: float):
+    """The one candidate the file's own length picks out, or None.
+
+    Picked out means both halves: exactly one it fits, and no other left
+    unmeasured. A candidate TMDb states no runtime for is not ruled out by a
+    length, so as long as one is standing the answer is still "not certain" -
+    which is the rule this module is for.
+    """
+    verdicts = [(row, _runtime_agrees(seconds, row.runtime)) for row in candidates]
+    fits = [row for row, verdict in verdicts if verdict is True]
+    unknown = [row for row, verdict in verdicts if verdict is None]
+    if len(fits) == 1 and not unknown:
+        return fits[0]
+    return None
 
 
 def _id_token(value):
@@ -576,7 +735,10 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
             tag = (ids or {}).get(base, "")
             by_hand = bool(tag)
             if not tag:
-                imdb = tmdb_imdb_id(match.group(1), match.group(2))
+                imdb = tmdb_imdb_id(
+                    match.group(1), match.group(2),
+                    functools.partial(_folder_runtime, folder.path, base,
+                                      names))
                 tag = "{imdb-" + imdb + "}" if imdb else ""
             if not tag:
                 if unmatched is not None:
@@ -606,6 +768,25 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
         _rename_in_place(folder, names, base, tag, target, skip_log, dry_run,
                          log)
     return 0
+
+
+def _folder_runtime(path: str, base: str, names: list) -> float:
+    """How long the film in this folder is, in seconds - or 0.0 when nothing
+    here can say, which is most of the ways a folder can be arranged.
+
+    A folder holding named editions says nothing on purpose: a catalogue states
+    one runtime, and which of a theatrical and an extended cut it is for is
+    exactly what is not known. A split film is its parts added up, which IS what
+    the catalogue states for it. Anything else is the one file, measured the way
+    every other duration in this library is - the container's own figure.
+    """
+    if plexnames.editions_in(base, names):
+        return 0.0
+    movies = plexnames.one_film_in(base, names)
+    if not movies:
+        return 0.0
+    return durationcheck.total_duration(
+        [os.path.join(path, name) for name in movies])
 
 
 def _report(log: Callable[[str], None], base: str, tag: str,
