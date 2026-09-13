@@ -730,3 +730,100 @@ class TestABookTooLongForOnePipe:
         assert run._encode_xheaac("book.m4b", str(tmp_path / "b.m4a"),
                                   mono=True, bitrate=18,
                                   duration=seconds) is True
+
+
+class TestTheQueueOrder:
+    """The encode queue ordered on what each JOB is worth, not on the file it
+    came from.
+
+    The queue was sorted before the planner ran, so a huge book's chunks all
+    inherited its place at the very front and every other file waited behind a
+    pile of small jobs. A chunk is worth its own share of the file's bytes, and
+    takes that place instead; nothing here depends on the chunks staying
+    adjacent, because the re-concatenation is a pass of its own after the whole
+    queue has drained.
+    """
+
+    def _queue(self, tmp_path, sizes, chunked):
+        """`_build_queue` with the planning stubbed out: every track's jobs are
+        written as the planner would write them, so what is under test is the
+        weighing and the order alone."""
+        import types
+
+        inputs = tmp_path / "in"
+        plans = tmp_path / "plans"
+        inputs.mkdir()
+        plans.mkdir()
+        for track, size in sizes.items():
+            (inputs / track).write_bytes(b"\0" * size)
+
+        class _Planner:
+            def __init__(self, state, jobs):
+                pass
+
+            def classify(self, track):
+                base = ca.segments.plan_file_for(str(plans), track)
+                if track in chunked:
+                    return
+                ca._write_jobs(base, [track])
+
+            def window_jobs(self, tracks):
+                return [track for track in tracks if track in chunked], []
+
+            def write_chunk_jobs_for(self, track):
+                total = chunked[track]
+                length = sizes[track] / float(total)
+                ca._write_jobs(
+                    ca.segments.plan_file_for(str(plans), track),
+                    [ca.UNIT.join([track, str(index), str(total), "0",
+                                   "%.9f" % length])
+                     for index in range(total)])
+
+        state = types.SimpleNamespace(
+            tracks=sorted(sizes, key=lambda track: -sizes[track]),
+            input_dir=str(inputs), plan_root=str(plans))
+        original = ca.Planner
+        ca.Planner = _Planner
+        try:
+            return ca._build_queue(state, 1)[0]
+        finally:
+            ca.Planner = original
+
+    def _names(self, queue):
+        return [token.split(ca.UNIT)[0] for token in queue]
+
+    def test_a_chunk_queues_at_its_own_size_and_not_the_books(self, tmp_path):
+        """The book is five times the size of the whole file beside it, but cut
+        into eight it is eight jobs SMALLER than that file - so the file leads
+        instead of waiting behind all of them."""
+        queue = self._queue(tmp_path, {"book.m4b": 800, "track.m4a": 150},
+                            {"book.m4b": 8})
+        assert self._names(queue)[0] == "track.m4a"
+        assert self._names(queue).count("book.m4b") == 8
+
+    def test_the_chunks_of_one_file_are_still_all_there_and_in_order(
+            self, tmp_path):
+        """Interleaving is free, losing a piece is not: every index the planner
+        wrote is in the queue, and they keep their order among themselves so the
+        run is reproducible."""
+        queue = self._queue(tmp_path,
+                            {"book.m4b": 400, "a.m4a": 100, "b.m4a": 100},
+                            {"book.m4b": 4})
+        indexes = [token.split(ca.UNIT)[1] for token in queue
+                   if ca.UNIT in token]
+        assert indexes == ["0", "1", "2", "3"]
+
+    def test_whole_files_still_run_largest_first(self, tmp_path):
+        queue = self._queue(tmp_path,
+                            {"small.m4a": 10, "big.m4a": 900, "mid.m4a": 100},
+                            {})
+        assert self._names(queue) == ["big.m4a", "mid.m4a", "small.m4a"]
+
+    def test_a_book_cut_into_pieces_no_smaller_stays_at_the_front(self,
+                                                                 tmp_path):
+        """The order follows the sizes and nothing else: two chunks of a file
+        ten times the size of its neighbours are still the two biggest jobs."""
+        queue = self._queue(tmp_path,
+                            {"book.m4b": 2000, "a.m4a": 100, "b.m4a": 100},
+                            {"book.m4b": 2})
+        assert self._names(queue)[:2] == ["book.m4b", "book.m4b"]
