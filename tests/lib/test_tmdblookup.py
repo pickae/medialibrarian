@@ -639,6 +639,40 @@ def _tree(root, *folders):
             (root / base / name).touch()
 
 
+class TestTitleKeys:
+    """A title carrying an apostrophe is matched by both readings of it.
+
+    normalize_title collapses each run of punctuation to a SPACE, which is
+    right for a dash and wrong for an apostrophe: a library whose names have
+    had their apostrophes stripped would otherwise never meet the same title
+    on TMDb.
+    """
+
+    def test_a_title_with_no_apostrophe_costs_no_second_fold(self):
+        assert tmdblookup.title_keys("The Movie") == {"the movie"}
+
+    def test_both_readings_are_offered_for_one_that_has_one(self):
+        assert tmdblookup.title_keys("A Cats Owners Tale".replace("s ", "'s ")) \
+            == {"a cat s owner s tale", "a cats owners tale"}
+
+    @pytest.mark.parametrize("written,stripped", [
+        ("A Cat's Tale", "A Cats Tale"),
+        ("A Cat\u2019s Tale", "A Cats Tale"),
+        ("L'Animal", "LAnimal"),
+    ])
+    def test_the_two_spellings_of_one_title_meet(self, written, stripped):
+        assert tmdblookup.title_keys(written) & tmdblookup.title_keys(stripped)
+
+    def test_a_title_that_matched_before_still_matches(self):
+        """Widening only ever ADDS keys."""
+        assert tmdblookup.normalize_title("The Movie") \
+            in tmdblookup.title_keys("The Movie")
+
+    def test_two_different_titles_still_do_not_meet(self):
+        assert not (tmdblookup.title_keys("A Cat's Tale")
+                    & tmdblookup.title_keys("A Dog's Tale"))
+
+
 class TestTheIdList:
     """The file someone fills in for the films TMDb cannot name on its own."""
 
@@ -1085,9 +1119,55 @@ class TestTagPlexIds:
         tmdblookup.tag_plex_ids(".", logs.append, SkipLog(),
                                 ambiguous=ambiguous)
         assert (tmp_path / "The Movie (1999)/The Movie (1999).mkv").is_file()
-        assert [names for _path, names in ambiguous] == [["Some Other Film.mkv"]]
+        assert [(reason, names) for _path, reason, names in ambiguous] == [
+            ("holds a film that is not its own", ["Some Other Film.mkv"])]
         assert logs == ['  "The Movie (1999)" holds 1 file(s) that are not '
                         "this film - left as it is"]
+
+    def test_a_film_in_parts_that_will_not_stack_is_left_alone(
+            self, monkeypatch, tmp_path):
+        """Plex reads a part from the END of the name, and these have a title
+        after the token. Tagged as editions they would read as three separate
+        releases of the film rather than one film in three files."""
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("The Movie (1934)",
+                         ["The Movie (1934) Part 1 - The First Half.mkv",
+                          "The Movie (1934) Part 1 - The First Half.en.srt",
+                          "The Movie (1934) Part 2 - The Others.mkv"]))
+        calls = self._env(monkeypatch, {"The Movie": "tt0120737"})
+        logs = []
+        ambiguous: list = []
+        tmdblookup.tag_plex_ids(".", logs.append, SkipLog(),
+                                ambiguous=ambiguous)
+        # left exactly as it was, and not even looked up
+        assert sorted(p.name for p in (tmp_path / "The Movie (1934)").iterdir()) \
+            == ["The Movie (1934) Part 1 - The First Half.en.srt",
+                "The Movie (1934) Part 1 - The First Half.mkv",
+                "The Movie (1934) Part 2 - The Others.mkv"]
+        assert calls == []
+        assert [(reason, names) for _path, reason, names in ambiguous] == [
+            ("is one film in parts that do not stack",
+             ["The Movie (1934) Part 1 - The First Half.mkv",
+              "The Movie (1934) Part 2 - The Others.mkv"])]
+        assert logs == ['  "The Movie (1934)" is in parts that Plex will not '
+                        "stack - left as it is"]
+
+    def test_a_part_written_the_way_plex_reads_it_still_stacks(
+            self, monkeypatch, tmp_path):
+        """The token last and its number against it: that one Plex stacks, so
+        it is named rather than reported."""
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("The Movie (1934)",
+                         ["The Movie (1934) Part1.mkv",
+                          "The Movie (1934) Part2.mkv"]))
+        self._env(monkeypatch, {"The Movie": "tt0120737"},
+                  base="1934-02-01")
+        ambiguous: list = []
+        tmdblookup.tag_plex_ids(".", [].append, SkipLog(),
+                                ambiguous=ambiguous)
+        assert ambiguous == []
+        assert (tmp_path / "The Movie (1934) {imdb-tt0120737}"
+                / "The Movie (1934) {imdb-tt0120737} Part1.mkv").is_file()
 
     def test_several_releases_of_the_one_film_are_not_ambiguous(
             self, monkeypatch, tmp_path):

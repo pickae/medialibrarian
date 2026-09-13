@@ -32,7 +32,15 @@ EDITION_RE = re.compile(r"\{edition-([^{}]*)\}")
 # The tokens Plex's scanner stacks on, as one trailing word: the keyword, an
 # optional dot, and a number. Matched case-insensitively, the way the scanner
 # does, so a "Part1" and a "cd2" are both recognised as written.
-STACK_RE = re.compile(r"^(?:cd|dvd|part|pt|disk|disc)\.?[0-9]+$", re.I)
+STACK_WORDS = ("cd", "dvd", "part", "pt", "disk", "disc")
+STACK_RE = re.compile(r"^(?:" + "|".join(STACK_WORDS) + r")\.?[0-9]+$", re.I)
+
+# The same words loose in a name rather than as its trailing token: a
+# "Part 1 - The First Half" is a part written the way a person writes one, and
+# Plex stacks none of it - the keyword has to be the last thing in the name,
+# with its number against it.
+_NAMES_A_PART = re.compile(r"^(?:" + "|".join(STACK_WORDS) + r")\.?[0-9]*$",
+                           re.I)
 
 # What an improved remux leaves the original under, lower-cased for the compare.
 # A copy is never renamed: it is the film as it arrived, and a tag on it would
@@ -157,6 +165,31 @@ def editions_in(base: str, names) -> list:
         if edition:
             found.add(edition)
     return sorted(found)
+
+
+def is_only_a_marker(edition: str) -> bool:
+    """Whether an edition name is nothing but a number.
+
+    A "(1)" beside a film is what a copy gets when two of the same name land in
+    one folder - a duplicate marker, not a release anyone chose. As an edition
+    tag it would put a picker in Plex offering "1", which says nothing about
+    either file.
+    """
+    return edition.strip().isdigit()
+
+
+def names_a_part(edition: str) -> bool:
+    """Whether an edition name is really a PART said in words.
+
+    "Part 1 - The First Half", "Part 2", "disc 3": the keyword is in
+    there, but not as the trailing token Plex stacks on, and what Plex would
+    make of it as an edition is three separate releases of one film rather than
+    one film in three files. Nothing here can turn it into a stacking token
+    either - the token has to come last, and there is a title sitting after it -
+    so the folder is left alone for someone to name.
+    """
+    return any(_NAMES_A_PART.match(word)
+               for word in re.split(r"[^0-9A-Za-z]+", edition) if word)
 
 
 def strays_in(base: str, names) -> list:
