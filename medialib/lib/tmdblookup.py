@@ -16,6 +16,7 @@ import json
 import os
 import re
 import subprocess
+import time
 import unicodedata
 from collections.abc import Callable
 
@@ -158,6 +159,42 @@ def _fold_without_iconv(title: str) -> str:
     return kept.encode("ascii", "ignore").decode("ascii")
 
 
+# What TMDb asks of a caller: about ten requests a second. One film costs
+# several - the search, an alternative-titles call per candidate, and the
+# external-ids call - so a library goes through them far faster than a person
+# would, and the limit is worth keeping to rather than finding out where the
+# service draws it.
+MAX_REQUESTS_PER_SECOND = 10.0
+
+# The moment the last request went out, so the next can wait out the remainder
+# of its slot. A list rather than a global name, the way the iconv answer above
+# is kept, so it can be reset without a `global` statement.
+_LAST_REQUEST: list[float] = []
+
+
+def reset_rate_limit() -> None:
+    """Forget when the last request went out, so the next one goes immediately.
+    For a test that would otherwise pay the interval."""
+    _LAST_REQUEST.clear()
+
+
+def _wait_for_a_slot() -> None:
+    """Hold the next request back until its slot comes round.
+
+    A plain minimum interval rather than a rolling window: the calls here are
+    sequential, so spacing each one evenly IS the rate, and it needs no history
+    to be kept.
+    """
+    interval = 1.0 / MAX_REQUESTS_PER_SECOND
+    now = time.monotonic()
+    if _LAST_REQUEST:
+        waiting = _LAST_REQUEST[0] + interval - now
+        if waiting > 0:
+            time.sleep(waiting)
+            now = time.monotonic()
+    _LAST_REQUEST[:] = [now]
+
+
 # The escapes a curl config file's double-quoted value has, and all it has.
 _CONFIG_ESCAPES = (("\\", "\\\\"), ('"', '\\"'), ("\t", "\\t"),
                    ("\n", "\\n"), ("\r", "\\r"), ("\v", "\\v"))
@@ -179,12 +216,17 @@ def _curl(url: str, params) -> str | None:
     when curl fails (the ``-f`` makes an HTTP error a non-zero exit, which is
     how the caller tells "no answer" from an answer).
 
+    Paced to :data:`MAX_REQUESTS_PER_SECOND` before it goes out, which is where
+    the whole module's traffic is metered: every question reaching TMDb is one
+    of these calls.
+
     Handed to curl through ``--config -`` rather than as argv, because one of
     those params is the API key and argv is not private: /proc/<pid>/cmdline is
     readable by every account on the machine, and a run over a library opens
     that window once per candidate folder. On stdin it reaches curl and nothing
     else.
     """
+    _wait_for_a_slot()
     lines = ["url = " + _config_value(url), "get", "fail", "silent",
              "show-error"]
     for key, value in params:
@@ -320,8 +362,92 @@ def _folder_spelling(directory: str, name: str) -> str:
     return directory + "/" + name
 
 
+# The id list's own spelling: one film per line, its folder name and its id
+# separated by a tab, "#" comments and blank lines ignored. A tab because a
+# film's name is full of everything else - spaces, brackets, dashes, colons -
+# and is the one character a folder name cannot contain.
+_ID_COMMENT = "#"
+
+_ID_FORMS = re.compile(r"^\{?(?:(imdb)-)?(tt[0-9]+)\}?$|^\{?(?:(tmdb)-)?([0-9]+)\}?$",
+                       re.I)
+
+
+def id_tag_for(text: str) -> str:
+    """The tag a hand-written id becomes, or "" when it is not one.
+
+    Written the way someone has it to hand: "tt0000001", "imdb-tt0000001",
+    "{imdb-tt0000001}", a bare TMDb number, or "tmdb-12345". An IMDb id is a
+    "tt" and digits; anything else that is only digits is TMDb's.
+    """
+    match = _ID_FORMS.match(text.strip())
+    if not match:
+        return ""
+    if match.group(2):
+        return "{imdb-" + match.group(2).lower() + "}"
+    return "{tmdb-" + match.group(4) + "}"
+
+
+def read_id_list(path: str) -> dict:
+    """A hand-filled id list as {folder name: tag}.
+
+    A line with no id yet is skipped rather than refused - the file is meant to
+    be filled in over several sittings, and the ones still blank are simply the
+    ones still to do.
+    """
+    found: dict[str, str] = {}
+    try:
+        with open(path, encoding="utf-8", errors="surrogateescape") as handle:
+            lines = handle.read().splitlines()
+    except OSError:
+        return found
+    for line in lines:
+        if not line.strip() or line.lstrip().startswith(_ID_COMMENT):
+            continue
+        name, _tab, written = line.partition("\t")
+        tag = id_tag_for(written)
+        if name.strip() and tag:
+            found[name.strip()] = tag
+    return found
+
+
+def write_id_list(path: str, names, ids: dict | None = None,
+                  log: Callable[[str], None] | None = None) -> bool:
+    """The id list as it stands: what has been filled in, then what has not.
+
+    ``ids`` is written back verbatim. It is the file's whole point - the ids
+    someone looked up by hand are the only record of them anywhere, and a film
+    named from one still answers "identified" on the next run only because the
+    line is still there. ``names`` are the ones still to do, each left blank.
+
+    Rewritten whole rather than appended to, so a film that has since been
+    identified by TMDb itself drops off the list instead of lingering on it.
+    """
+    lines = [
+        _ID_COMMENT + " Films TheMovieDB could not identify on its own.",
+        _ID_COMMENT + " Put the id after the tab - tt0000001, imdb-tt0000001",
+        _ID_COMMENT + " or a bare TMDb number - and run the tagging again with",
+        _ID_COMMENT + "   ingest-movies -t -i <this file> <library>",
+        _ID_COMMENT + " adding -w once the dry run reads right. Lines still",
+        _ID_COMMENT + " blank are simply the ones still to do.",
+        "",
+    ]
+    lines += [name + "\t" + tag for name, tag in sorted((ids or {}).items())]
+    lines += [name + "\t" for name in names]
+    try:
+        with open(path, "w", encoding="utf-8",
+                  errors="surrogateescape") as handle:
+            handle.write("\n".join(lines) + "\n")
+    except OSError as error:
+        if log is not None:
+            log("WARNING: could not write the id list %s: %s" % (path, error))
+        return False
+    return True
+
+
 def tag_plex_ids(directory: str, log: Callable[[str], None],
-                 skip_log: safety.SkipLog | None = None) -> int:
+                 skip_log: safety.SkipLog | None = None,
+                 dry_run: bool = False, ids: dict | None = None,
+                 unmatched: list | None = None) -> int:
     """Name each confidently-matched movie folder, its films and their sidecars
     the way Plex reads them: the folder and every file carry the id tag, an
     edition carries its own, and a split film keeps its stacking token last.
@@ -335,6 +461,15 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
     network. The "<film> (old).mkv" an improved remux keeps is never renamed: it
     is the film as it arrived, and tagging it would offer Plex a second edition
     of every film that has one.
+
+    ``dry_run`` asks TMDb the same questions and works out the same names, then
+    prints each rename instead of doing it: the name is the thing being
+    previewed, so the lookup still happens.
+
+    ``ids`` is a hand-written {folder name: tag} that answers BEFORE the network
+    is asked, for the films TMDb cannot identify on its own. ``unmatched``, when
+    a list is passed, collects the folder names that neither could name - which
+    is what the list to fill in is written from.
     """
     skip_log = skip_log if skip_log is not None else safety.SkipLog()
     if not os.environ.get("tmdbApiKey", ""):
@@ -352,30 +487,54 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
         if not match:
             continue
         asked = not tag
+        by_hand = False
         if asked:
-            imdb = tmdb_imdb_id(match.group(1), match.group(2))
-            tag = "{imdb-" + imdb + "}" if imdb else ""
-        editions = _rename_in_place(directory, folder, base, tag, skip_log)
-        if editions is None:
+            # The hand-written id first: a film someone has already looked up is
+            # not worth asking an API that has already failed to name it.
+            tag = (ids or {}).get(base, "")
+            by_hand = bool(tag)
+            if not tag:
+                imdb = tmdb_imdb_id(match.group(1), match.group(2))
+                tag = "{imdb-" + imdb + "}" if imdb else ""
+            if not tag and unmatched is not None:
+                unmatched.append(base)
+
+        names = [entry.name for entry in os.scandir(folder.path)
+                 if entry.is_file(follow_symlinks=False)]
+        # The folder's own name is settled BEFORE a single file is touched:
+        # renaming the files under a folder that cannot take its name leaves
+        # them spelled for a folder they are not in, beside the folder they are
+        # spelled for.
+        wanted = plexnames.folder_name(base, tag)
+        target = _folder_spelling(directory, wanted)
+        if wanted != folder.name and os.path.exists(target):
+            skip_log.record(folder.path, target)
             log('  "{}" is already there, left "{}" untouched'
-                .format(plexnames.folder_name(base, tag), folder.name))
+                .format(wanted, folder.name))
             continue
-        # Only a folder this run asked about says anything: one already tagged
-        # would repeat its line for the rest of the library's life.
+
+        # Said before the renames it explains, so a dry run reads as a film and
+        # then what would happen to it. Only a folder this run ASKED about says
+        # anything: one already tagged would repeat its line for the rest of
+        # the library's life.
         if asked:
-            _report(log, base, tag, editions)
+            _report(log, base, tag, plexnames.editions_in(base, names),
+                    by_hand)
+        _rename_in_place(folder, names, base, tag, target, skip_log, dry_run,
+                         log)
     return 0
 
 
 def _report(log: Callable[[str], None], base: str, tag: str,
-            editions: list) -> None:
+            editions: list, by_hand: bool = False) -> None:
     """What this folder got, in one line - including the folder that got
     nothing, which is the answer people go looking for."""
     named = ", ".join(editions)
+    source = "from the id list" if by_hand else "match"
     if tag and editions:
-        log('  match: "{}" -> {}, editions: {}'.format(base, tag, named))
+        log('  {}: "{}" -> {}, editions: {}'.format(source, base, tag, named))
     elif tag:
-        log('  match: "{}" -> {}'.format(base, tag))
+        log('  {}: "{}" -> {}'.format(source, base, tag))
     elif editions:
         log('  no confident TMDb match: "{}" - editions named ({}), no id'
             .format(base, named))
@@ -383,11 +542,10 @@ def _report(log: Callable[[str], None], base: str, tag: str,
         log('  no confident TMDb match: "{}" - left as it is'.format(base))
 
 
-def _rename_in_place(directory, folder, base: str, tag: str,
-                     skip_log: safety.SkipLog) -> list | None:
-    """One folder's films and sidecars, then the folder itself, answering the
-    editions it named - or None when the folder's own name is taken and
-    NOTHING was renamed.
+def _rename_in_place(folder, names: list, base: str, tag: str, target: str,
+                     skip_log: safety.SkipLog, dry_run: bool,
+                     log: Callable[[str], None]) -> None:
+    """One folder's films and sidecars, then the folder itself.
 
     That order and no other: renaming the folder first would move every path
     underneath it out from under the names just worked out.
@@ -396,33 +554,25 @@ def _rename_in_place(directory, folder, base: str, tag: str,
     is on the disk already, whether or not TMDb could say which film they are
     all versions of.
     """
-    # The folder's own name is settled FIRST, before a single file is touched:
-    # renaming the files under a folder that cannot take its name leaves them
-    # spelled for a folder they are not in, beside the folder they are spelled
-    # for.
-    wanted = plexnames.folder_name(base, tag)
-    target = _folder_spelling(directory, wanted)
-    if wanted != folder.name and os.path.exists(target):
-        skip_log.record(folder.path, target)
-        return None
-
-    names = [entry.name for entry in os.scandir(folder.path)
-             if entry.is_file(follow_symlinks=False)]
     for old, new in plexnames.folder_renames(base, tag, names):
         _rename(os.path.join(folder.path, old),
-                os.path.join(folder.path, new), skip_log)
-
-    if wanted != folder.name:
-        _rename(folder.path, target, skip_log)
-    return plexnames.editions_in(base, names)
+                os.path.join(folder.path, new), skip_log, dry_run, log)
+    _rename(folder.path, target, skip_log, dry_run, log)
 
 
-def _rename(source: str, target: str, skip_log: safety.SkipLog) -> None:
+def _rename(source: str, target: str, skip_log: safety.SkipLog,
+            dry_run: bool = False,
+            log: Callable[[str], None] | None = None) -> None:
     """A rename that refuses to land on something that is already there, or to
-    hide what it moves."""
+    hide what it moves - and that only SAYS what it would do on a dry run."""
     if source == target:
         return
     if safety.would_hide(target) or os.path.exists(target):
         skip_log.record(source, target)
+        return
+    if dry_run:
+        if log is not None:
+            log('    would rename: "{}" -> "{}"'.format(
+                os.path.basename(source), os.path.basename(target)))
         return
     os.rename(source, target)

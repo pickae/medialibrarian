@@ -528,6 +528,10 @@ def main(argv: list, program: str = "ingest-movies",
         sys.stderr.write(clioptions.missing_dir_text(declaration, root))
         return 1
 
+    if result.values.get("tagsOnly"):
+        return _tags_only(program, root, bool(result.values.get("writeTags")),
+                          result.values.get("idList") or "")
+
     # Which ffmpeg of the ones installed, before the preflight asks whether PATH
     # can reach one.
     ffmpegselect.select_ffmpeg()
@@ -592,6 +596,58 @@ def main(argv: list, program: str = "ingest-movies",
     finally:
         ramscratch.run_exit_cleanup()
     return workerpool.exit_status(1 if durationcheck.failures() else 0)
+
+
+# Where the films TMDb could not identify are listed when -i named no file of
+# its own. In the current directory and not in the library: a run over the
+# library deletes stray .txt files as junk, and this is a worklist rather than
+# part of the collection.
+UNMATCHED_LIST = "ingest-movies-unmatched.tsv"
+
+
+def _tags_only(program: str, root: str, write: bool, id_list: str) -> int:
+    """The naming phase on its own: the id, the editions and a split film's
+    stacking token, and not one thing else.
+
+    A dry run unless asked otherwise, because this is the phase whose whole
+    effect is the names - there is no output to inspect afterwards and compare,
+    only the library it already renamed. Everything the full run sets up first -
+    the RAM scratch, the whisper model, the ffmpeg it picked - belongs to work
+    this mode does not do, so none of it is built.
+    """
+    if not os.environ.get("tmdbApiKey"):
+        sys.stderr.write("tmdbApiKey is not set, so there is nothing to tag "
+                         "with.\n")
+        return 1
+    if tooldeps.require_tools(program, ["curl"]):
+        return 1
+
+    ids = tmdblookup.read_id_list(id_list) if id_list else {}
+    if ids:
+        log("Read %d hand-written id(s) from %s" % (len(ids), id_list))
+
+    skips = safety.RunSkipLog()
+    unmatched: list = []
+    log("Phase: tagging movies with IMDb ids (Plex/Jellyfin naming)"
+        + ("" if write else " - DRY RUN, nothing will be renamed"))
+    tmdblookup.tag_plex_ids(root, log, skips, dry_run=not write, ids=ids,
+                            unmatched=unmatched)
+    for line in skips.report():
+        sys.stderr.write(line + "\n")
+
+    # The file is rewritten whenever there is one to keep current, and the ids
+    # already in it are written back: they are the only record anywhere of a
+    # lookup someone did by hand, and dropping them would un-identify the film
+    # on the very next run.
+    listing = id_list or UNMATCHED_LIST
+    if unmatched or id_list:
+        if tmdblookup.write_id_list(listing, unmatched, ids, log) and unmatched:
+            log('%d film(s) could not be identified - listed in "%s" to fill '
+                "in by hand" % (len(unmatched), listing))
+
+    if not write:
+        log("Dry run: nothing was renamed. Pass -w to carry these out.")
+    return 0
 
 
 def _settle_subtitle_work() -> bool:
