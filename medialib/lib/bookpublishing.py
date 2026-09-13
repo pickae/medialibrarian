@@ -24,7 +24,7 @@ import shutil
 import subprocess
 
 from medialib import commands
-from medialib.lib import chapters, mutagentags
+from medialib.lib import chapters, durationcheck, mutagentags
 from medialib.lib.newestfile import newest_file
 
 __all__ = ["audiobook_lossless", "audiobook_to_opus"]
@@ -133,6 +133,12 @@ def audiobook_lossless(master, tagged, work_dir, script_dir=None,
                              LOSSLESS_COMPRESSION), finished]) != 0:
         return None
     if not _nonempty(finished):
+        return None
+    # The one file here that cannot be made again: the narration took hours of a
+    # machine and the master is about to be thrown away. A filter pass that gave
+    # up half way still closes a valid FLAC and exits 0, so the length is asked
+    # before anything downstream treats this as the copy to keep.
+    if not durationcheck.verify(finished, master, finished):
         return None
 
     chapters.attach_chapters(tagged, finished, out_dir, script_dir)

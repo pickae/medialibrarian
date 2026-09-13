@@ -19,6 +19,7 @@ from medialib.lib import (
     clioptions,
     commentarytranscription,
     dolbyvision,
+    durationcheck,
     enums,
     ffmpegselect,
     ramscratch,
@@ -525,13 +526,18 @@ def main(argv: list, program: str = "ingest-movies",
     ramscratch.add_exit_cleanup([ram_root])
 
     safety.init_safety_log(os.path.join(ram_root, "safetySkips.log"))
+    durationcheck.init_log(os.path.join(ram_root, "lengthMismatch.log"))
     skips = safety.RunSkipLog()
     safety.init_abort_flag(os.path.join(ram_root, "abortRequested"))
     safety.trap_run_abort()
     # Named above the phases a Ctrl+C can cut short, so an ingest stopped halfway
     # still recaps the renames it held back instead of leaving them buried in
     # output that scrolled away hours ago.
-    safety.set_run_footer(safety.report_safety_skips)
+    def recap() -> None:
+        safety.report_safety_skips()
+        durationcheck.report()
+
+    safety.set_run_footer(recap)
 
     whisper = {}
     if subtitle_work:
@@ -552,7 +558,7 @@ def main(argv: list, program: str = "ingest-movies",
         _ingest(state, root, subtitle_work)
     finally:
         ramscratch.run_exit_cleanup()
-    return workerpool.exit_status()
+    return workerpool.exit_status(1 if durationcheck.failures() else 0)
 
 
 def _settle_subtitle_work() -> bool:

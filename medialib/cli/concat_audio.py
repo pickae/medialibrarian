@@ -29,8 +29,10 @@ from medialib.lib import (
     cleannamesindividually,
     clioptions,
     cuechapters,
+    durationcheck,
     enums,
     ffmpegselect,
+    formatting,
     imagemagick,
     imagesizes,
     ramscratch,
@@ -576,6 +578,32 @@ class Run:
                       "skipped. ffmpeg's own error is above; a file already at "
                       "the output name is the usual cause, and is never "
                       "overwritten." % label)
+            return
+
+        # A join reports the status of the last thing it managed to write, so a
+        # book that is missing half its tracks comes back as a success with a
+        # file to prove it. The one question that catches that is arithmetic: a
+        # joined book is as long as the tracks that went into it.
+        joined = "%s.%s" % (output_path, FORMATS[fmt][1])
+        expected = produced = 0.0
+        if durationcheck.checking():
+            expected = durationcheck.total_duration(
+                _sorted_by_extension(input_path, FORMATS[fmt][0]))
+            produced = durationcheck.media_duration(joined)
+        if expected and not durationcheck.length_matches(expected, produced):
+            # Removed rather than left: nothing else here made this file - a
+            # name already taken is refused above, not overwritten - and a book
+            # with tracks missing is worse than no book, because it looks
+            # finished.
+            try:
+                os.remove(joined)
+            except OSError:
+                pass
+            self.record_failure(
+                name, "the join came out %s from %s of %s files - the output "
+                      "was removed, since it is not the whole book."
+                      % (formatting.fmt_hms("%.3f" % produced),
+                         formatting.fmt_hms("%.3f" % expected), label))
             return
 
         # Chapters, one of two ways. A cue sheet wins when there is one and the

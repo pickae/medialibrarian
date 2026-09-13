@@ -30,6 +30,7 @@ from medialib.lib import (
     cleannamesindividually,
     clioptions,
     commentarytranscription,
+    durationcheck,
     enums,
     languages,
     objectaudio,
@@ -859,6 +860,15 @@ def check_audio_tracks(movie: str, root: str) -> None:
                 + layout_args + [opus]) != 0:
             log("WARNING: opus transcode failed (track %d): %s"
                 % (position - 1, movie))
+        else:
+            # The status said a file was written, not that the whole track went
+            # into it. The resume check above keeps an opus "of at least the
+            # source's length", so a short one would be kept by this run and
+            # muxed in as the track - which is the failure worth an error.
+            durationcheck.verify(
+                "%s (audio track %d)" % ("./" + os.path.relpath(movie, root),
+                                         position - 1),
+                movie, opus, file_duration)
 
 
 # --- the improved copy --------------------------------------------------------

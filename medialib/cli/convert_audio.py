@@ -15,8 +15,9 @@ changes nothing except to spend another lossy generation on it.
 the default. The other is xHE-AAC, which is a different KIND of encode: ffmpeg
 cannot produce it, so it goes out over a pipe to an external encoder that
 medialib finds and reports for itself (medialib/lib/xheaac.py), and the finished
-file is an .m4a whose chapters are a track rather than a tag. Long-file splitting
-is off for it - see NO_SPLIT_CODECS.
+file is an .m4a whose chapters are a track rather than a tag. It splits like any
+other codec, which takes three steps the Opus path does not need - see
+medialib/lib/xheaac.py.
 
 A file longer than the split threshold is cut into one chunk per core, and the
 chunks encode as independent queue jobs mixed in with every other file - so one
@@ -40,6 +41,7 @@ from medialib.lib import (
     bitrates,
     chapters,
     clioptions,
+    durationcheck,
     enums,
     ffmpegselect,
     formatting,
@@ -76,17 +78,6 @@ DEFAULT_CODEC = enums.AUDIO_CODECS[0]
 # token as though it were the name teaches the reader the wrong word for it.
 CODEC_NAMES = {"opus": "Opus", "xheaac": "xHE-AAC"}
 
-# The codecs that keep long files WHOLE, whatever -s says.
-#
-# Splitting works by encoding chunks independently and concatenating them, which
-# needs the pieces to join sample-exactly. Opus does: one libopus encode per
-# chunk, stream-copied together. xHE-AAC does not - the external encoders write
-# finished MP4s with their own edit lists and audio-preroll frames, and
-# concatenating those is a seam that is audible when it is not simply wrong. So
-# the codec keeps files whole rather than shipping a join nobody can hear-test,
-# exactly as adaptive mode does for its own reason.
-NO_SPLIT_CODECS = ("xheaac",)
-
 # The spec is DATA, and the page it renders is compared byte for byte against the
 # recorded contract under tests/data/cliContract.
 OPT_SPEC = """
@@ -106,8 +97,8 @@ k |  | Keep temporary files.
                     Default false
 c |  | Copy non transcoded files from <inputDir> into <outputDir>
 o | <codec> | Output codec: {codecs}.
-                    xheaac needs an external encoder ({encoders}), is
-                    written as .m4a, and keeps long files whole.
+                    xheaac needs an external encoder ({encoders}) and is
+                    written as .m4a.
                     Default {codec}
 b | <bitrate> | Bitrate of the output files
                     Default 46 kbps or 32 kbps for forced mono output
@@ -138,6 +129,11 @@ o | enum:{codecs} | output codec
 
 DEFAULT_BITRATE = 46
 MONO_BITRATE = 32
+
+# The widest layout a source here is taken to carry, for the probe-free half of
+# the "can this be encoded in one go" test. 7.1 - the widest layout the bitrate
+# table has a row for.
+WIDEST_LAYOUT = 8
 THRESHOLD = 90000
 MONO_THRESHOLD = 50000
 COVER_THRESHOLD = 500000
@@ -403,6 +399,30 @@ def source_sample_rate(src: str) -> int:
     return int(raw) if re.fullmatch(r"[0-9]+", raw) else 0
 
 
+def too_long_for_one_encode(source: str, duration: float,
+                           mono: bool) -> bool:
+    """Whether this file is past what one encode of it could carry, so that
+    chunking it is the only way to convert it at all.
+
+    Asked of every file under -s once a run is chunking for the ceiling, so the
+    cheap half comes first: below the shortest ceiling the band can produce - the
+    top rate at the widest layout, about an hour and a half - no file can be too
+    long, and nothing is probed. Only what survives that pays for the two probes
+    that settle it exactly.
+
+    A layout wider than that floor would slip past the cheap half. What it falls
+    through to is the whole-file refusal, which measures the real ceiling and
+    says so by name - a file left unconverted with a reason, never a file
+    quietly cut short.
+    """
+    if duration <= xheaac.wave_seconds_ceiling(max(xheaac.SAMPLE_RATES),
+                                               WIDEST_LAYOUT):
+        return False
+    rate = xheaac.input_sample_rate(source_sample_rate(source))
+    channels = 1 if mono else max(1, source_channels(source))
+    return not xheaac.fits_in_one_wave(duration, rate, channels)
+
+
 def adaptive_bitrate(channels, default: int) -> int:
     """The target for a channel count, from the shared table's COMMENTARY
     column - the spoken-word one, which is exactly what this script ingests.
@@ -548,6 +568,12 @@ class Run:
     bitrate: int
     threshold: int
     split_threshold: int
+    # Whether a file too long to encode in one go is cut up even where -s would
+    # not have bothered. Settled from what the RUN asked for, not from what it
+    # later decided: a run that stops chunking because it has thousands of files
+    # is saying chunking is pointless, not that a book it cannot otherwise encode
+    # should be skipped.
+    chunk_over_ceiling: bool
     # The output codec, the extension it is written under, and - for a codec
     # that needs one - the external encoder settled before the run started.
     # None for Opus, which ffmpeg encodes itself.
@@ -592,32 +618,55 @@ class Run:
             return
         self.encode_whole(token)
 
-    def encode_chunk(self, token: str) -> None:
-        """One time-range straight to Opus, with no metadata: metadata is
-        re-attached once, from the original, after re-concatenation.
+    def chunk_path(self, directory: str, index: int) -> str:
+        """Where one chunk of a split file is written.
 
-        Opus-only, and not by omission: a codec in NO_SPLIT_CODECS never has
-        chunk jobs built for it, so this is unreachable for anything else. The
-        `.opus` below is therefore the chunk's own format and not the run's
-        output extension - the two happen to agree here because only Opus gets
-        this far.
+        The run's own extension, because the chunk is the output codec already -
+        the join is a stream copy, so a chunk is a small file of exactly what the
+        finished one holds.
         """
+        return os.path.join(directory, "%04d.%s" % (index, self.extension))
+
+    def encode_chunk(self, token: str) -> None:
+        """One time-range, with no metadata: metadata is re-attached once, from
+        the original, after re-concatenation."""
         relative, index, total, start, duration = token.split(UNIT)
         self.counters.report_progress(
             "%s [chunk %d/%s]" % (relative, int(index) + 1, total))
 
+        source = os.path.join(self.input_dir, relative)
         directory = segments.chunk_dir_for(self.chunk_root, relative)
         os.makedirs(directory, exist_ok=True)
-        out = os.path.join(directory, "%04d.opus" % int(index))
+        out = self.chunk_path(directory, int(index))
         bitrate = resolve_bitrate(self.bitrate, self.mono)
 
-        argv = ["ffmpeg", "-nostdin", "-y", "-ss", start, "-t", duration,
-                "-i", os.path.join(self.input_dir, relative),
-                "-map", "0:a:0", "-map_metadata", "-1"]
-        if self.mono:
-            argv += ["-ac", "1"]
-        argv += ["-c:a", "libopus", "-b:a", "%dk" % bitrate, out]
-        subprocess.run(argv, stderr=subprocess.DEVNULL)
+        if self.codec == "xheaac":
+            self._encode_xheaac(source, out, self.mono, bitrate,
+                                duration=duration, start=start, take=duration)
+        else:
+            argv = ["ffmpeg", "-nostdin", "-y", "-ss", start, "-t", duration,
+                    "-i", source, "-map", "0:a:0", "-map_metadata", "-1"]
+            if self.mono:
+                argv += ["-ac", "1"]
+            argv += ["-c:a", "libopus", "-b:a", "%dk" % bitrate, out]
+            subprocess.run(argv, stderr=subprocess.DEVNULL)
+
+        # Measured here as well as on the finished file, because a chunk is the
+        # one place the answer names WHERE a split file lost its time. The chunk
+        # is removed with it, so the re-join fails outright rather than quietly
+        # producing a book with a hole in the middle.
+        if not durationcheck.verify(
+                "%s [chunk %d/%s]" % (relative, int(index) + 1, total),
+                source, out, duration):
+            return
+
+        # The join is a plain concatenation, and an MP4 carries ONE edit list -
+        # so a chunk that still asks for its own priming to be discarded would
+        # have that request applied to the whole book or to none of it. Flattened
+        # here, where the chunks are still separate files and the work is spread
+        # over the pool.
+        if self.codec == "xheaac":
+            _flatten_edit_list(out)
 
         # A chunk's slice of audio; the chunks of one file sum to its length.
         self.counters.tally_duration(duration)
@@ -687,16 +736,23 @@ class Run:
             stderr=subprocess.DEVNULL)
 
     def _encode(self, source: str, out: str, mono: bool, bitrate: int,
-                channels: int = 0) -> None:
+                channels: int = 0, duration: object = 0) -> bool:
         """One whole file encoded, by whichever route the run's codec needs.
 
         <channels> is the source's channel count if a caller already probed it,
         and 0 for "ask if you need it" - which only the xhe-aac route does.
+        <duration> is the source's length, for the one route that has a limit on
+        it.
+
+        False means the file was DECLINED before an encoder ran - there is a
+        reason this route cannot carry this file, and it has been said. It is not
+        "the encode failed": that is measured afterwards, from what came out.
         """
         if self.codec == "xheaac":
-            self._encode_xheaac(source, out, mono, bitrate, channels)
-            return
+            return self._encode_xheaac(source, out, mono, bitrate, channels,
+                                       duration)
         self._encode_opus(source, out, mono, bitrate)
+        return True
 
     def _encode_opus(self, source: str, out: str, mono: bool,
                      bitrate: int) -> None:
@@ -711,7 +767,9 @@ class Run:
             stderr=subprocess.DEVNULL)
 
     def _encode_xheaac(self, source: str, out: str, mono: bool,
-                       bitrate: int, channels: int = 0) -> None:
+                       bitrate: int, channels: int = 0,
+                       duration: object = 0, start: str = "",
+                       take: str = "") -> bool:
         """Two processes: ffmpeg decoding to WAVE, the external encoder reading
         that WAVE off its stdin and writing the finished .m4a.
 
@@ -725,6 +783,10 @@ class Run:
         The channel count is settled on the ffmpeg side, because the encoder has
         no downmix of its own - it encodes the channels it is given - so -m is
         `-ac 1` here exactly as it is for Opus.
+
+        <start> and <take> cut one range out instead of taking the whole file,
+        which is what makes this the chunk encoder as well as the whole-file one.
+        The range is the one the planner settled, priming offset and all.
 
         Neither half's failure is raised. A run converts a tree, and one file
         that would not encode is one missing output the next run picks up again,
@@ -750,19 +812,40 @@ class Run:
             channels = max(1, channels or source_channels(source))
         preset = xheaac.exhale_preset(bitrate, channels)
 
+        # The one limit of the pipe, asked before the hours are spent rather
+        # than discovered from what came out. A WAVE states its length in 32
+        # bits and exhale stops at the count it is given, so a file past the
+        # ceiling encodes its first 4 GiB, exits 0, and looks converted.
+        seconds = formatting.awk_number(duration)
+        if not xheaac.fits_in_one_wave(seconds, rate, channels):
+            ceiling = xheaac.wave_seconds_ceiling(rate, channels)
+            log("ERROR: too long for %s to encode whole (%s, and one WAVE holds "
+                "%s at %d Hz %s):"
+                % (xheaac.EXHALE, formatting.fmt_hms("%.3f" % seconds),
+                   formatting.fmt_hms("%.3f" % ceiling), rate,
+                   "mono" if channels == 1 else "%d channels" % channels))
+            log("       %s" % os.path.basename(source))
+            log("       Encode it as Opus (-o opus), or split the source into "
+                "shorter files first.")
+            return False
+
         # Both spawns are guarded, the way every other tool call in this module
         # is: the preflight makes a missing binary unlikely rather than
         # impossible - one can go away between the check and the file - and an
         # unguarded OSError here would take the whole WORKER down and with it
         # every other file queued behind it.
         try:
-            decode = subprocess.Popen(xheaac.wav_argv(source, rate, mono),
+            decode = subprocess.Popen(xheaac.wav_argv(source, rate, mono,
+                                                      start, take),
                                       stdout=subprocess.PIPE,
                                       stderr=subprocess.DEVNULL)
         except OSError:
-            return
+            # Still "attempted": a spawn that failed leaves no output, and an
+            # output that is not there is caught by the measuring afterwards
+            # along with every other way this can produce nothing.
+            return True
         if decode.stdout is None:
-            return
+            return True
         try:
             encode = subprocess.Popen(xheaac.exhale_argv(preset, out),
                                       stdin=decode.stdout,
@@ -772,13 +855,14 @@ class Run:
             decode.stdout.close()
             decode.kill()
             decode.wait()
-            return
+            return True
         # Closed in THIS process once the encoder holds it, so the pipe really
         # has one reader: kept open here, a decoder that outlives its encoder
         # would never see EPIPE and the run would hang on a dead consumer.
         decode.stdout.close()
         encode.wait()
         decode.wait()
+        return True
 
     def _produce(self, relative: str, source: str, out: str, video: bool,
                  mono: bool, bitrate: int, threshold: int, source_bitrate: int,
@@ -795,8 +879,19 @@ class Run:
                 or source_bitrate >= threshold:
             if lift_out:
                 self._remux(source, out)
-            else:
-                self._encode(source, out, mono, bitrate, channels)
+            elif not self._encode(source, out, mono, bitrate, channels,
+                                  input_duration_raw):
+                durationcheck.record(relative, input_duration_raw, 0)
+                return
+
+            # An output is checked against its input before anything is hung on
+            # it: an encode can finish, exit 0 and still have stopped early, and
+            # a short book with chapters and a cover on it looks converted.
+            # Everything below - the metadata, the timestamp, the tally - is for
+            # a file that is all there.
+            if not durationcheck.verify(relative, source, out,
+                                        input_duration_raw):
+                return
 
             # Neither encoder carries chapters through, so they are re-attached
             # from the source - with mutagen for Opus, and as a chapter track
@@ -864,23 +959,22 @@ class Run:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
     def reconcat(self, token: str) -> None:
-        """A track's Opus chunks joined into the final output, with every piece
-        of metadata re-attached from the ORIGINAL file.
+        """A track's chunks joined into the final output, with every piece of
+        metadata re-attached from the ORIGINAL file.
 
-        Opus-only, like the chunk encode that feeds it: a codec in
-        NO_SPLIT_CODECS never has chunks to join.
+        A stream copy for either codec: a chunk is already the output format, and
+        the pieces were cut to join without a seam.
 
         The whole assembly is done on a RAM-backed staging copy and only the
-        finished file is written out, once: mutagen rewrites the entire Opus file
-        on every chapter and cover embed, so keeping those rewrites in RAM means
-        the disk sees a single sequential write instead of three
-        read-modify-write passes.
+        finished file is written out, once: the chapter and cover writes rewrite
+        the file each time, so keeping those rewrites in RAM means the disk sees a
+        single sequential write instead of three read-modify-write passes.
         """
         relative, _, total = token.partition("\t")
         source = os.path.join(self.input_dir, relative)
         out = self.output_path(relative)
         directory = segments.chunk_dir_for(self.chunk_root, relative)
-        chunk_files = [os.path.join(directory, "%04d.opus" % index)
+        chunk_files = [self.chunk_path(directory, index)
                        for index in range(int(total))]
 
         sys.stdout.write("Joining %s chunks: %s\n" % (total, relative))
@@ -889,7 +983,7 @@ class Run:
         tmp_dir, status = ramscratch.ram_scratch_dir("convertAudio.rc")
         if status != 0 or not tmp_dir:
             return
-        stage = os.path.join(tmp_dir, "out.opus")
+        stage = os.path.join(tmp_dir, "out." + self.extension)
         try:
             listing = os.path.join(tmp_dir, "concat.txt")
             with open(listing, "w") as handle:
@@ -935,6 +1029,43 @@ class Run:
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
+        # Outside the try, so a join that never reached the move is measured too:
+        # an output that is not there is as short as one that stopped early.
+        durationcheck.verify(relative, source, out)
+
+
+def _flatten_edit_list(path: str) -> None:
+    """One chunk rewritten so its samples start where the file starts.
+
+    An encoder that primes its decoder says so in an edit list: "discard the
+    first frame". Read back that way the chunk is exactly its own length, which
+    is right for a chunk and wrong for a piece of a join - a joined MP4 has one
+    edit list, so every chunk after the first would have its priming played
+    instead. The planner has already left that frame a gap of its own to fill, so
+    what is wanted here is the samples with no instruction attached, and that is
+    a stream copy with the edit list ignored on the way in and not written on the
+    way out.
+
+    A failure leaves the chunk as it was: the join then carries the seam it was
+    built to avoid, which the length check on the finished file reports.
+    """
+    # The staging name keeps the chunk's own extension: ffmpeg picks its muxer
+    # from that, and a name ending in anything else is refused outright.
+    root, extension = os.path.splitext(path)
+    staged = root + ".flat" + extension
+    try:
+        done = subprocess.run(
+            ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+             "-ignore_editlist", "1", "-i", path, "-c", "copy",
+             "-use_editlist", "0", "-movflags", "+faststart", staged],
+            stdin=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if done.returncode == 0 and os.path.getsize(staged) > 0:
+            os.replace(staged, path)
+            return
+    except OSError:
+        pass
+    _remove(staged)
+
 
 def _touch_from(source: str, target: str) -> None:
     try:
@@ -972,14 +1103,22 @@ class Planner:
         base = segments.plan_file_for(state.plan_root, track)
         source = os.path.join(state.input_dir, track)
 
-        if state.split_threshold <= 0:
+        if state.split_threshold <= 0 and not state.chunk_over_ceiling:
             _write_jobs(base, [track])
             return
 
         duration = round(formatting.awk_number(_probe(
             ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
              "-of", "default=nk=1:nw=1", source])))
-        if duration <= state.split_threshold:
+        # Two reasons to cut a file up, and they are not the same reason. Past -s
+        # it is worth doing: one huge file would otherwise pin one core while the
+        # rest of the machine idles. Past what the encoder can take in one go it
+        # is the only way to encode the file at all, which is why that one
+        # survives a run that has turned chunking off as pointless.
+        worth_splitting = 0 < state.split_threshold < duration
+        if not worth_splitting and not (
+                state.chunk_over_ceiling
+                and too_long_for_one_encode(source, duration, state.mono)):
             _write_jobs(base, [track])
             return
 
@@ -1048,6 +1187,26 @@ class Planner:
                                         "%s.mids.%d" % (base, index)]))
         return candidates, queue
 
+    def join_rules(self, track: str) -> tuple:
+        """(rate, priming, frame) for this track's chunks: what the encoder will
+        do at the head of each piece, so the cuts can allow for it.
+
+        (0, 0, 0) for a codec that joins wherever it is cut, and for an encoder
+        that could not be asked - a file whose pieces cannot be placed is better
+        left whole, which the ceiling refusal then reports if it is too long to
+        encode in one go.
+        """
+        state = self.state
+        if state.codec != "xheaac":
+            return 0, 0, 0
+        source = os.path.join(state.input_dir, track)
+        rate = xheaac.input_sample_rate(source_sample_rate(source))
+        channels = 1 if state.mono else max(1, source_channels(source))
+        preset = xheaac.exhale_preset(
+            resolve_bitrate(state.bitrate, state.mono), channels)
+        priming, frame = xheaac.encoder_timing(preset, rate, channels)
+        return rate, priming, frame
+
     def _seek_copy(self, track: str, base: str) -> str:
         """A RAM-backed, seek-cheap copy of just this candidate's audio stream.
 
@@ -1096,18 +1255,43 @@ class Planner:
             pass
 
         interior = segments.select_boundaries(midpoints, duration, self.jobs)
-        bounds = ["0"] + list(interior) + [duration]
+        bounds = [formatting.awk_number(point)
+                  for point in ["0"] + list(interior) + [duration]]
         total = len(bounds) - 1
         if total < 2:
             _write_jobs(base, [track])
             return
 
+        # What the pieces have to obey to join without a seam. Nothing for Opus,
+        # which joins wherever it is cut; a frame and a priming for xhe-aac.
+        rate, priming, frame = self.join_rules(track)
+        if state.codec == "xheaac" and frame <= 0:
+            # Nothing said how the pieces would have to be placed, so they are
+            # not cut. Too long to encode whole is then refused by name rather
+            # than joined on a guess.
+            _write_jobs(base, [track])
+            return
+        if frame > 0:
+            bounds = [bounds[0]] + [
+                xheaac.align_to_frame(point, rate, frame)
+                for point in bounds[1:-1]] + [bounds[-1]]
+        offset = xheaac.chunk_start_offset(priming, rate) if priming else 0.0
+
         tokens = []
         for index in range(total):
-            start, end = bounds[index], bounds[index + 1]
-            length = formatting.awk_number(end) - formatting.awk_number(start)
-            tokens.append(UNIT.join([track, str(index), str(total), start,
-                                     "%.3f" % length]))
+            # Every chunk starts one priming LATE, the first included: the frame
+            # the decoder plays at the head of each piece is what fills the gap,
+            # so a piece that did not leave one would push the whole book along.
+            start = bounds[index] + offset
+            length = bounds[index + 1] - start
+            if length <= 0:
+                # Two boundaries closer together than the allowance between
+                # them. Nothing here can be cut into pieces that join, so the
+                # file is not cut at all.
+                _write_jobs(base, [track])
+                return
+            tokens.append(UNIT.join([track, str(index), str(total),
+                                     "%.9f" % start, "%.9f" % length]))
         _write_jobs(base, tokens)
         with open(base + ".plans", "w") as handle:
             handle.write("%s\t%d\0" % (track, total))
@@ -1185,6 +1369,7 @@ def footer(state: Run) -> None:
 
     sys.stdout.flush()
     safety.report_safety_skips()
+    durationcheck.report()
 
 
 def _in_worker(state, method: str, item, status_geometry=None) -> None:
@@ -1265,15 +1450,6 @@ def main(argv: list, program: str = "convert-audio",
     split_threshold = int(result.values["splitThreshold"]
                           or DEFAULT_SPLIT_THRESHOLD)
 
-    # A codec that cannot be chunked keeps files whole whatever -s said. Said
-    # out loud only when -s asked for something, so a default run does not
-    # explain a decision the user never made.
-    if codec in NO_SPLIT_CODECS and split_threshold > 0:
-        if result.values["splitThreshold"]:
-            print("%s output keeps long files whole: ignoring -s."
-                  % CODEC_NAMES[codec])
-        split_threshold = 0
-
     # Adaptive mode owns the channel and bitrate decision per file, so a global
     # -m or -b would contradict it. It also keeps files whole: the split queue
     # threads the global settings through its chunk jobs, whereas adaptive needs a
@@ -1286,6 +1462,11 @@ def main(argv: list, program: str = "convert-audio",
                                 clioptions.page(declaration)))
             return 1
         split_threshold = 0
+
+    # A codec with a whole-file ceiling cuts past it even where chunking would
+    # otherwise be skipped - but only if this run is chunking at all. `-s 0` and
+    # adaptive mode have both said no by here, and they are answers, not defaults.
+    chunk_over_ceiling = codec == "xheaac" and split_threshold > 0
 
     if clioptions.args_out_of_range(len(result.positionals), 2, None):
         sys.stdout.write(clioptions.no_args_text(declaration))
@@ -1344,6 +1525,7 @@ def main(argv: list, program: str = "convert-audio",
     os.makedirs(output_dir, exist_ok=True)
 
     safety.init_safety_log()
+    durationcheck.init_log()
     skips = safety.RunSkipLog()
     safety.init_abort_flag()
     safety.trap_run_abort()
@@ -1353,7 +1535,7 @@ def main(argv: list, program: str = "convert-audio",
     try:
         return _convert(program, script_dir, input_dir, output_dir, probe_what,
                         skips, mono, adaptive, copy, keep, bitrate, jobs,
-                        split_threshold, codec)
+                        split_threshold, codec, chunk_over_ceiling)
     finally:
         statusline.stop_status_monitor()
         ramscratch.run_exit_cleanup()
@@ -1396,7 +1578,8 @@ def _holds_input(input_dir: str) -> bool:
 def _convert(program: str, script_dir: str, input_dir: str, output_dir: str,
              probe_what: str, skips, mono: bool, adaptive: bool, copy: bool,
              keep: bool, bitrate: int, jobs: int, split_threshold: int,
-             codec: str = DEFAULT_CODEC) -> int:
+             codec: str = DEFAULT_CODEC,
+             chunk_over_ceiling: bool = False) -> int:
     pre_start = time.time()
 
     state = Run(
@@ -1404,6 +1587,7 @@ def _convert(program: str, script_dir: str, input_dir: str, output_dir: str,
         mono=mono, adaptive=adaptive, copy=copy, keep=keep, bitrate=bitrate,
         threshold=THRESHOLD, split_threshold=split_threshold,
         codec=codec, extension=enums.AUDIO_CODEC_EXTENSIONS[codec],
+        chunk_over_ceiling=chunk_over_ceiling,
         # The table's default: a cover that rides along in every transcoded
         # track is glanced at in a track list, not studied, so the floor of the
         # table is the right end of it.
@@ -1511,7 +1695,9 @@ def _convert(program: str, script_dir: str, input_dir: str, output_dir: str,
                     os.rmdir(parent)
                 except OSError:
                     pass
-    return workerpool.exit_status()
+    # A file that came out the wrong length is not a warning: the run did not do
+    # what it was asked, and a caller chaining commands has to see that.
+    return workerpool.exit_status(1 if durationcheck.failures() else 0)
 
 
 def _build_queue(state: Run, jobs: int) -> tuple:

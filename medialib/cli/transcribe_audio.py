@@ -20,6 +20,7 @@ import time
 from medialib import commands
 from medialib.lib import (
     clioptions,
+    durationcheck,
     enums,
     ffmpegselect,
     ramscratch,
@@ -179,6 +180,13 @@ class Run:
                         + relative)
                     self.report_progress("skipped (no audio): " + relative)
                     return
+                # A short extraction transcribes cleanly and stops early, and a
+                # transcript that simply ends is the hardest kind of wrong to
+                # notice - there is no gap in it to see.
+                if not durationcheck.verify(relative, source, for_whisper):
+                    self.report_progress(
+                        "skipped (audio extracted short): " + relative)
+                    return
             else:
                 for_whisper = source
 
@@ -321,7 +329,9 @@ def main(argv: list, program: str = "transcribe-audio") -> int:
             sys.stdout.write("Files:        %d\n" % len(tracks))
             sys.stdout.write("Total time:   %d s (%s)\n"
                              % (total, fmt_hms(total)))
+            durationcheck.report()
 
+        durationcheck.init_log()
         safety.set_run_footer(footer)
 
         _mirror_folders(input_dir, output_dir)
@@ -345,7 +355,8 @@ def main(argv: list, program: str = "transcribe-audio") -> int:
         safety.exit_if_aborted()
         sys.stdout.write("Done.\n")
         safety.print_run_footer()
-        return workerpool.exit_status()
+        return workerpool.exit_status(
+            1 if durationcheck.failures() else 0)
     finally:
         ramscratch.run_exit_cleanup()
 

@@ -23,6 +23,7 @@ from medialib.cli import convert_video as rules
 from medialib.lib import (
     clioptions,
     codecs,
+    durationcheck,
     ffmpegselect,
     formatting,
     hostos,
@@ -996,6 +997,20 @@ class Run:
             shutil.rmtree(directory, ignore_errors=True)
             return 1
 
+        # The video intermediate was measured against the source above, but that
+        # was the picture alone: the mux is another stream copy, of a different
+        # set of streams, and it reports success on what it managed to write. So
+        # the FILE is measured too, and the encode is kept beside it the way a
+        # failed mux keeps it - hours of encoding must not die with a container.
+        if not durationcheck.verify(
+                relative, os.path.join(settings.input_dir, relative), output,
+                duration):
+            write_video_only(relative, directory,
+                             "the muxed output was not as long as the source",
+                             settings)
+            shutil.rmtree(directory, ignore_errors=True)
+            return 1
+
         # This run produced the complete file, so a failsafe left by an earlier
         # run for the same source is now just a duplicate of its video stream.
         _remove(rules.video_only_path_for(relative, settings.output_dir))
@@ -1056,6 +1071,7 @@ class Run:
             out.write("Real-time speedup: %sx\n" % formatting.fmt_ratio(
                 "%.6f" % (self.video_seconds / encoding)))
         out.flush()
+        durationcheck.report(out)
 
 
 def _audio_worker(relative: str, directory: str, settings) -> None:
@@ -1582,6 +1598,7 @@ def _run_all(settings) -> int:
 
     run = Run(settings)
     safety.set_run_footer(run.footer)
+    durationcheck.init_log()
     safety.init_abort_flag()
     safety.trap_run_abort()
 

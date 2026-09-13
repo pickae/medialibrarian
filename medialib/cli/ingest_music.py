@@ -33,6 +33,7 @@ from medialib import commands
 from medialib.lib import (
     clioptions,
     cuechapters,
+    durationcheck,
     enums,
     ffmpegselect,
     formatting,
@@ -730,7 +731,12 @@ class Run:
                 # they know and leave the rest of the comment block alone.
                 "-metadata", "%s=%s" % (INGEST_SOURCE_TAG, relative),
                 "-f", "flac", output]
-        if _run(argv) == 0 and _copy_mtime(source, output):
+        # ffmpeg's status says it wrote a file, not that it wrote the whole
+        # track: a decode that gives up part way still closes a valid flac and
+        # exits 0, so the length is what settles it.
+        if _run(argv) == 0 and durationcheck.verify(
+                relative, source, output, input_duration) \
+                and _copy_mtime(source, output):
             self.counters.bump("encoded")
             # Only counted when the encode landed, so the figure stays the rate
             # of real work.
@@ -1199,6 +1205,7 @@ def footer(state) -> None:
                 "%.6f" % (audio_seconds / encode_seconds)))
 
     safety.report_safety_skips()
+    durationcheck.report()
 
 
 # --- the run ------------------------------------------------------------------
@@ -1319,6 +1326,7 @@ def main(argv: list, program: str = "ingest-music",
     ramscratch.add_exit_cleanup([counter_dir])
 
     safety.init_safety_log(os.path.join(counter_dir, "safetySkips.log"))
+    durationcheck.init_log(os.path.join(counter_dir, "lengthMismatch.log"))
     skips = safety.RunSkipLog()
     safety.init_abort_flag(os.path.join(counter_dir, "abortRequested"))
     safety.trap_run_abort()
@@ -1504,7 +1512,7 @@ def _ingest(program: str, script_dir: str, download_dir: str, ingest_dir: str,
 
     state.run_end = time.time()
     safety.print_run_footer()
-    return workerpool.exit_status()
+    return workerpool.exit_status(1 if durationcheck.failures() else 0)
 
 
 def _copy_the_rest(state, download_dir: str, ingest_dir: str,
