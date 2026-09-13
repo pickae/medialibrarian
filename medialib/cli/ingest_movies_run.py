@@ -604,6 +604,9 @@ def main(argv: list, program: str = "ingest-movies",
 # part of the collection.
 UNMATCHED_LIST = "ingest-movies-unmatched.tsv"
 
+# And the folders holding more than one film, which no id can settle.
+AMBIGUOUS_LIST = "ingest-movies-ambiguous.txt"
+
 
 def _tags_only(program: str, root: str, write: bool, id_list: str) -> int:
     """The naming phase on its own: the id, the editions and a split film's
@@ -628,10 +631,14 @@ def _tags_only(program: str, root: str, write: bool, id_list: str) -> int:
 
     skips = safety.RunSkipLog()
     unmatched: list = []
+    ambiguous: list = []
     log("Phase: tagging movies with IMDb ids (Plex/Jellyfin naming)"
         + ("" if write else " - DRY RUN, nothing will be renamed"))
+    # Recursive here and only here: this mode is pointed at a library, where a
+    # full ingest is pointed at the folder that holds the films.
     tmdblookup.tag_plex_ids(root, log, skips, dry_run=not write, ids=ids,
-                            unmatched=unmatched)
+                            unmatched=unmatched, recursive=True,
+                            ambiguous=ambiguous)
     for line in skips.report():
         sys.stderr.write(line + "\n")
 
@@ -644,6 +651,12 @@ def _tags_only(program: str, root: str, write: bool, id_list: str) -> int:
         if tmdblookup.write_id_list(listing, unmatched, ids, log) and unmatched:
             log('%d film(s) could not be identified - listed in "%s" to fill '
                 "in by hand" % (len(unmatched), listing))
+
+    if ambiguous:
+        if tmdblookup.write_ambiguous_list(AMBIGUOUS_LIST, ambiguous, root,
+                                           log):
+            log('%d folder(s) hold more than one film - listed in "%s"'
+                % (len(ambiguous), AMBIGUOUS_LIST))
 
     if not write:
         log("Dry run: nothing was renamed. Pass -w to carry these out.")

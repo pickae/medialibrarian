@@ -59,7 +59,11 @@ t |  | tags only: the Plex/Jellyfin naming and nothing else - the IMDb id,
                   film's stacking token kept last. Nothing is converted,
                   remuxed, downloaded or transcribed. A DRY RUN unless -w is
                   given: it asks TMDb, prints every rename it would make, and
-                  changes nothing on disk.
+                  changes nothing on disk. Walks the whole tree, so it can be
+                  pointed at a library rather than at the folder holding the
+                  films. A film TMDb could not name, and a folder holding a
+                  film that is not its own, are both left exactly as they are
+                  and written to a list to read.
 w |  | with -t, actually perform the renames instead of printing them.
 i | <file> | with -t, the hand-written id list. Read before TMDb is asked, so a
                   film someone has already looked up is named from it; and the
