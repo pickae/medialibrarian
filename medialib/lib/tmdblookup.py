@@ -19,7 +19,7 @@ import subprocess
 import unicodedata
 from collections.abc import Callable
 
-from medialib.lib import safety
+from medialib.lib import plexnames, safety
 from medialib.lib.enums import shell_lower
 
 # The TMDb endpoint everything is relative to.
@@ -322,13 +322,19 @@ def _folder_spelling(directory: str, name: str) -> str:
 
 def tag_plex_ids(directory: str, log: Callable[[str], None],
                  skip_log: safety.SkipLog | None = None) -> int:
-    """Append "{imdb-ttXXXXXXX}" to each confidently-matched movie folder, its
-    movie file and its subtitle sidecars.
+    """Name each confidently-matched movie folder, its films and their sidecars
+    the way Plex reads them: the folder and every file carry the id tag, an
+    edition carries its own, and a split film keeps its stacking token last.
 
-    The on-disk name is kept verbatim; only the tag is appended. Idempotent: a
-    folder already carrying an "{imdb-...}" or "{tmdb-...}" tag is left alone.
-    ``directory`` is the library to tag; the caller has already moved into the
-    parent, so it is normally ".".
+    Renaming only, each name beside what it already was - the files inside the
+    folder first, then the folder itself - so nothing is copied anywhere.
+
+    The on-disk name is kept verbatim; only the tags are added. A folder that
+    already carries an "{imdb-...}" or "{tmdb-...}" tag is not looked up again,
+    but its files ARE brought into line with it, without a second ask of the
+    network. The "<film> (old).mkv" an improved remux keeps is never renamed: it
+    is the film as it arrived, and tagging it would offer Plex a second edition
+    of every film that has one.
     """
     skip_log = skip_log if skip_log is not None else safety.SkipLog()
     if not os.environ.get("tmdbApiKey", ""):
@@ -341,38 +347,43 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
     for folder in os.scandir(directory):
         if not folder.is_dir(follow_symlinks=False):
             continue
-        base = folder.name
-        if "{imdb-" in base or "{tmdb-" in base:
-            continue
+        base, tag = plexnames.untagged_base(folder.name)
         match = _YEAR_RE.match(base)
         if not match:
             continue
-        title, year = match.group(1), match.group(2)
-        imdb = tmdb_imdb_id(title, year)
-        if not imdb:
-            continue
-
-        tag = "{imdb-" + imdb + "}"
-        new_folder = _folder_spelling(".", base + " " + tag)
-        log('  match: "{}" -> {}'.format(base, tag))
-
-        # The movie file and its sidecars first (their name is "base.<ext>"),
-        # then the folder itself.
-        for entry in os.scandir(folder.path):
-            if not entry.is_file(follow_symlinks=False):
+        if not tag:
+            imdb = tmdb_imdb_id(match.group(1), match.group(2))
+            if not imdb:
                 continue
-            fname = entry.name
-            if not fname.startswith(base + "."):
-                continue
-            new_name = "{}/{} {}{}".format(folder.path, base, tag,
-                                          fname[len(base):])
-            if os.path.exists(new_name) and entry.path != new_name:
-                skip_log.record(entry.path, new_name)
-                continue
-            os.rename(entry.path, new_name)
-
-        if os.path.exists(new_folder) and folder.path != new_folder:
-            skip_log.record(folder.path, new_folder)
-        else:
-            os.rename(folder.path, new_folder)
+            tag = "{imdb-" + imdb + "}"
+            log('  match: "{}" -> {}'.format(base, tag))
+        _rename_in_place(directory, folder, base, tag, skip_log)
     return 0
+
+
+def _rename_in_place(directory, folder, base: str, tag: str,
+                     skip_log: safety.SkipLog) -> None:
+    """One folder's films and sidecars, then the folder itself.
+
+    That order and no other: renaming the folder first would move every path
+    underneath it out from under the names just worked out.
+    """
+    names = [entry.name for entry in os.scandir(folder.path)
+             if entry.is_file(follow_symlinks=False)]
+    for old, new in plexnames.folder_renames(base, tag, names):
+        _rename(os.path.join(folder.path, old),
+                os.path.join(folder.path, new), skip_log)
+
+    wanted = plexnames.folder_name(base, tag)
+    if wanted != folder.name:
+        _rename(folder.path, _folder_spelling(directory, wanted), skip_log)
+
+
+def _rename(source: str, target: str, skip_log: safety.SkipLog) -> None:
+    """A rename that refuses to land on something that is already there."""
+    if source == target:
+        return
+    if os.path.exists(target):
+        skip_log.record(source, target)
+        return
+    os.rename(source, target)

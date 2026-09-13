@@ -344,6 +344,17 @@ class TestTheLibraryWalk:
         run_module.improve_main_movies(state, str(root))
         assert reached == []
 
+    def test_an_improved_film_tagged_afterwards_is_still_skipped(self, walked):
+        """Tagging is the last phase, so an earlier run's "(old)" copy kept the
+        untagged name while the film beside it now carries the id."""
+        reached, state, root = walked
+        folder = root / "Film (2020) {imdb-tt0120737}"
+        folder.mkdir()
+        open(str(folder / "Film (2020) {imdb-tt0120737}.mkv"), "w").close()
+        open(str(folder / "Film (2020) (old).mkv"), "w").close()
+        run_module.improve_main_movies(state, str(root))
+        assert reached == []
+
     def test_the_old_copy_does_not_itself_count_as_a_second_mkv(self, walked):
         """Or a folder holding one would read as ambiguous rather than as
         finished."""
@@ -354,6 +365,62 @@ class TestTheLibraryWalk:
         open(str(folder / "Something (old).mkv"), "w").close()
         run_module.improve_main_movies(state, str(root))
         assert reached == [str(folder / "Film (2020).mkv")]
+
+    def test_every_tagged_edition_of_one_film_is_improved(self, walked):
+        """Several files, one film: each edition is its own container with its
+        own tracks, and the tags are what say they belong together."""
+        reached, state, root = walked
+        folder = root / "The Movie (1999) {imdb-tt0000001}"
+        folder.mkdir()
+        for edition in ("Colorized", "Original Mono Track"):
+            open(str(folder / ("The Movie (1999) {imdb-tt0000001} {edition-%s}.mkv"
+                               % edition)), "w").close()
+        run_module.improve_main_movies(state, str(root))
+        assert len(reached) == 2
+
+    def test_the_parts_of_a_split_film_are_each_improved(self, walked):
+        reached, state, root = walked
+        folder = root / "The Movie (1968)"
+        folder.mkdir()
+        for part in ("Part1", "Part2"):
+            open(str(folder / ("The Movie (1968) %s.mkv" % part)), "w").close()
+        run_module.improve_main_movies(state, str(root))
+        assert len(reached) == 2
+
+    def test_versions_not_yet_tagged_are_still_ambiguous(self, walked):
+        """Tagging is the last phase, so the run that writes the editions is the
+        run after the one that finds them - until then there is no telling a
+        second version from a second feature."""
+        reached, state, root = walked
+        folder = root / "The Movie (1999)"
+        folder.mkdir()
+        open(str(folder / "The Movie (1999) colorized.mkv"), "w").close()
+        open(str(folder / "The Movie (1999) (Reissue).mkv"), "w").close()
+        run_module.improve_main_movies(state, str(root))
+        assert reached == []
+
+    def test_an_edition_improved_before_the_tagging_is_not_improved_again(
+            self, walked):
+        """Its kept copy is the one file tagging leaves alone, so it is matched
+        by the name it would be given rather than the name it has."""
+        reached, state, root = walked
+        folder = root / "The Movie (1999) {imdb-tt0000001}"
+        folder.mkdir()
+        open(str(folder / "The Movie (1999) {imdb-tt0000001} "
+                          "{edition-Colorized}.mkv"), "w").close()
+        open(str(folder / "The Movie (1999) colorized (old).mkv"), "w").close()
+        run_module.improve_main_movies(state, str(root))
+        assert reached == []
+
+    def test_a_stray_kept_copy_does_not_mark_the_film_as_improved(self, walked):
+        reached, state, root = walked
+        folder = root / "Film (2020) {imdb-tt0120737}"
+        folder.mkdir()
+        movie = folder / "Film (2020) {imdb-tt0120737}.mkv"
+        open(str(movie), "w").close()
+        open(str(folder / "Something Else (old).mkv"), "w").close()
+        run_module.improve_main_movies(state, str(root))
+        assert reached == [str(movie)]
 
     def test_several_films_are_all_reached_in_one_pass(self, walked):
         reached, state, root = walked

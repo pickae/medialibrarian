@@ -20,11 +20,15 @@ Usage:
     cleans up folder, movie and subtitle names
     sorts bonus material into the subfolders Plex recognizes (see below)
 
-    IMDb ids (Plex/Jellyfin naming)
-    -------------------------------
+    IMDb ids and editions (Plex/Jellyfin naming)
+    --------------------------------------------
     looks each movie up on TheMovieDB (TMDb) by its cleaned name and year
     appends the "{imdb-ttXXXXXXX}" id tag to the folder, movie and subtitles
     only when TMDb returns a single exact title+year match (~99% certainty)
+    names a folder's several versions of one film as editions, so Plex collapses
+    them into one film with a named picker: "<film> {imdb-id} {edition-Colorized}"
+    keeps a split film's "Part1" / "cd1" token LAST, which is where Plex reads it
+    renames only, at the end of the run, with every sidecar following its own film
 
     Languages & subtitles
     ---------------------

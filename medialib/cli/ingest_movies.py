@@ -34,6 +34,7 @@ from medialib.lib import (
     enums,
     languages,
     objectaudio,
+    plexnames,
     ramscratch,
     safety,
 )
@@ -66,11 +67,15 @@ USAGE_TAIL = """
     cleans up folder, movie and subtitle names
     sorts bonus material into the subfolders Plex recognizes (see below)
 
-    IMDb ids (Plex/Jellyfin naming)
-    -------------------------------
+    IMDb ids and editions (Plex/Jellyfin naming)
+    --------------------------------------------
     looks each movie up on TheMovieDB (TMDb) by its cleaned name and year
     appends the \"{imdb-ttXXXXXXX}\" id tag to the folder, movie and subtitles
     only when TMDb returns a single exact title+year match (~99% certainty)
+    names a folder's several versions of one film as editions, so Plex collapses
+    them into one film with a named picker: \"<film> {imdb-id} {edition-Colorized}\"
+    keeps a split film's \"Part1\" / \"cd1\" token LAST, which is where Plex reads it
+    renames only, at the end of the run, with every sidecar following its own film
 
     Languages & subtitles
     ---------------------
@@ -225,6 +230,9 @@ def rename(name: str, fragments_file: str = "") -> str:
     # recombine, so the movie-specific rules below act on a full path.
     directory, _slash, base = name.rpartition("/")
     directory = directory + "/" if _slash else ""
+    # The Plex tags are held back from every rule below: they are a convention
+    # rather than a release's noise, and cleaning one changes what it means.
+    base, tags = plexnames.split_tags(base)
 
     prefix, cleaned = cleannamesindividually.clean_names_individually(
         base, fragments_file or None)
@@ -253,7 +261,7 @@ def rename(name: str, fragments_file: str = "") -> str:
     trailing = name[-4:]
     if _YEAR.search(trailing):
         name = name[:-4] + "(" + trailing + ")"
-    return name
+    return name + " " + tags if tags else name
 
 
 def is_image_sub_codec(codec: str) -> bool:

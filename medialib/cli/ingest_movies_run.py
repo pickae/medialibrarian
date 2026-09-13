@@ -22,6 +22,7 @@ from medialib.lib import (
     durationcheck,
     enums,
     ffmpegselect,
+    plexnames,
     ramscratch,
     runlog,
     safety,
@@ -413,24 +414,56 @@ class Run:
 
 
 def improve_main_movies(state, root: str) -> None:
-    """Every film folder's single main movie, improved.
+    """Every film folder's main movie, improved.
 
-    Extras subfolders are skipped, as are folders with zero or several main mkvs
-    - there is no telling which one is the feature - and folders already carrying
-    an improved copy, which is what makes a second run a no-op.
+    Extras subfolders are skipped, as are folders already carrying an improved
+    copy and folders whose several mkvs are several FILMS - there is no telling
+    which of those is the feature. Several files of ONE film are improved one by
+    one: an edition and a part are each their own container with their own
+    tracks, and what makes them one film is that they are named systematically.
     """
     for directory in [root] + rules._folders_below(root):
         if rules.is_bonus_folder(directory):
             continue
-        movies = [os.path.join(directory, name)
-                  for name in sorted(rules._names_in(directory))
-                  if name.endswith(".mkv") and not name.endswith(" (old).mkv")
-                  and os.path.isfile(os.path.join(directory, name))]
-        if len(movies) != 1:
+        base, _tag = plexnames.untagged_base(os.path.basename(
+            directory.rstrip("/")))
+        names = [name for name in rules._names_in(directory)
+                 if os.path.isfile(os.path.join(directory, name))]
+        for name in plexnames.one_film_in(base, names):
+            movie = os.path.join(directory, name)
+            if _already_improved(movie):
+                continue
+            state.improve_main_movie(movie)
+
+
+def _already_improved(movie: str) -> bool:
+    """Whether this film's improved copy has already been made, which is what a
+    second run over the same library skips itself on.
+
+    The "(old)" copy beside it says so, matched by the name it WOULD be given
+    rather than the name it has: it is the one file the tagging leaves alone, so
+    it still carries the version name its film was imported under.
+    """
+    directory, name = os.path.split(movie)
+    stem = os.path.splitext(name)[0]
+    if os.path.isfile(os.path.join(directory, stem + plexnames.OLD_SUFFIX)):
+        return True
+
+    base, tag = plexnames.untagged_base(os.path.basename(
+        directory.rstrip("/")))
+    for other in rules._names_in(directory):
+        if not other.endswith(plexnames.OLD_SUFFIX):
             continue
-        if os.path.isfile(os.path.splitext(movies[0])[0] + " (old).mkv"):
+        kept = other[:-len(plexnames.OLD_SUFFIX)]
+        # Guarded, or a stray "(old)" belonging to nothing would read as the
+        # plain film's copy: an unreadable stem gives no edition and no part,
+        # and that is exactly the plain film's name.
+        if not kept.startswith(base):
             continue
-        state.improve_main_movie(movies[0])
+        if plexnames.plex_stem(base, tag,
+                               *plexnames.read_stem(base, kept)) == stem:
+            return True
+    return False
 
 
 def check_folders(root: str) -> None:
@@ -656,9 +689,6 @@ def _ingest(state, root: str, subtitle_work: bool) -> None:
         log("Phase: downloading missing subtitles - SKIPPED (no "
             "ffsubsync/pipx, see the warning at startup)")
 
-    log("Phase: tagging movies with IMDb ids (Plex/Jellyfin naming)")
-    tmdblookup.tag_plex_ids(root, log)
-
     log("Phase: refreshing mkv tags and track flags")
     rules.update_tags(root)
     rules.cleanup(root)
@@ -682,10 +712,15 @@ def _ingest(state, root: str, subtitle_work: bool) -> None:
         log("Phase: extracting and transcribing commentary tracks - SKIPPED "
             "(no ffsubsync/pipx, see the warning at startup)")
 
-    # The final phase: an improved copy of each film's main movie, with the
-    # original kept as "<name> (old).mkv".
+    # An improved copy of each film's main movie, with the original kept as
+    # "<name> (old).mkv".
     log("Phase: remuxing improved main movie copies")
     improve_main_movies(state, root)
+
+    # Last, once every film is the file it is going to stay: a rename costs
+    # nothing to hold back, and the phases above keep the names they gave.
+    log("Phase: tagging movies with IMDb ids (Plex/Jellyfin naming)")
+    tmdblookup.tag_plex_ids(root, log, state.skips)
 
     rules.cleanup(root)
     log("Phase: checking for folders without a movie")
