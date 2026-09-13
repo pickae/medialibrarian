@@ -351,22 +351,45 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
         match = _YEAR_RE.match(base)
         if not match:
             continue
-        if not tag:
+        asked = not tag
+        if asked:
             imdb = tmdb_imdb_id(match.group(1), match.group(2))
-            if not imdb:
-                continue
-            tag = "{imdb-" + imdb + "}"
-            log('  match: "{}" -> {}'.format(base, tag))
-        _rename_in_place(directory, folder, base, tag, skip_log)
+            tag = "{imdb-" + imdb + "}" if imdb else ""
+        editions = _rename_in_place(directory, folder, base, tag, skip_log)
+        # Only a folder this run asked about says anything: one already tagged
+        # would repeat its line for the rest of the library's life.
+        if asked:
+            _report(log, base, tag, editions)
     return 0
 
 
+def _report(log: Callable[[str], None], base: str, tag: str,
+            editions: list) -> None:
+    """What this folder got, in one line - including the folder that got
+    nothing, which is the answer people go looking for."""
+    named = ", ".join(editions)
+    if tag and editions:
+        log('  match: "{}" -> {}, editions: {}'.format(base, tag, named))
+    elif tag:
+        log('  match: "{}" -> {}'.format(base, tag))
+    elif editions:
+        log('  no confident TMDb match: "{}" - editions named ({}), no id'
+            .format(base, named))
+    else:
+        log('  no confident TMDb match: "{}" - left as it is'.format(base))
+
+
 def _rename_in_place(directory, folder, base: str, tag: str,
-                     skip_log: safety.SkipLog) -> None:
-    """One folder's films and sidecars, then the folder itself.
+                     skip_log: safety.SkipLog) -> list:
+    """One folder's films and sidecars, then the folder itself, answering the
+    editions it named.
 
     That order and no other: renaming the folder first would move every path
     underneath it out from under the names just worked out.
+
+    An empty ``tag`` still does the rest of the work: which release a file is
+    is on the disk already, whether or not TMDb could say which film they are
+    all versions of.
     """
     names = [entry.name for entry in os.scandir(folder.path)
              if entry.is_file(follow_symlinks=False)]
@@ -377,6 +400,7 @@ def _rename_in_place(directory, folder, base: str, tag: str,
     wanted = plexnames.folder_name(base, tag)
     if wanted != folder.name:
         _rename(folder.path, _folder_spelling(directory, wanted), skip_log)
+    return plexnames.editions_in(base, names)
 
 
 def _rename(source: str, target: str, skip_log: safety.SkipLog) -> None:

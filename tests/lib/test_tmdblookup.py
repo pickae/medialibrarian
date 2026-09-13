@@ -623,14 +623,48 @@ class TestTagPlexIds:
         assert logs == []
         assert (tmp_path / "Just A Movie/Just A Movie.mkv").is_file()
 
-    def test_a_folder_tmdB_rejects_is_left_alone(self, monkeypatch, tmp_path):
+    def test_a_folder_tmdB_rejects_is_left_alone_and_says_so(self, monkeypatch,
+                                                              tmp_path):
+        """Said rather than passed over in silence: a film that came back
+        untagged is the thing people go looking for in the log."""
         monkeypatch.chdir(tmp_path)
         _tree(tmp_path, ("Unknown Film (2010)", ["Unknown Film (2010).mkv"]))
         self._env(monkeypatch, {"Unknown Film": None})
         logs = []
         tmdblookup.tag_plex_ids(".", logs.append, SkipLog())
-        assert logs == []
+        assert logs == ['  no confident TMDb match: "Unknown Film (2010)" '
+                        "- left as it is"]
         assert (tmp_path / "Unknown Film (2010)/Unknown Film (2010).mkv").is_file()
+
+    def test_a_film_tmdB_rejects_still_gets_its_editions_named(self, monkeypatch,
+                                                               tmp_path):
+        """Which release a file is is on the disk already; saying so does not
+        wait on TMDb, and a folder whose editions are named is one the improve
+        pass can tell apart."""
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("Unknown Film (2010)",
+                         ["Unknown Film (2010) colorized.mkv",
+                          "Unknown Film (2010) (Uncut).mkv"]))
+        self._env(monkeypatch, {"Unknown Film": None})
+        logs = []
+        tmdblookup.tag_plex_ids(".", logs.append, SkipLog())
+        folder = tmp_path / "Unknown Film (2010)"
+        assert sorted(p.name for p in folder.iterdir()) == [
+            "Unknown Film (2010) {edition-Colorized}.mkv",
+            "Unknown Film (2010) {edition-Uncut}.mkv"]
+        assert logs == ['  no confident TMDb match: "Unknown Film (2010)" '
+                        "- editions named (Colorized, Uncut), no id"]
+
+    def test_a_match_with_editions_names_both(self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("The Movie (1999)",
+                         ["The Movie (1999) colorized.mkv",
+                          "The Movie (1999) (Uncut).mkv"]))
+        self._env(monkeypatch, {"The Movie": "tt0120737"})
+        logs = []
+        tmdblookup.tag_plex_ids(".", logs.append, SkipLog())
+        assert logs == ['  match: "The Movie (1999)" -> {imdb-tt0120737}, '
+                        "editions: Colorized, Uncut"]
 
     def test_a_title_spanning_a_year_keeps_the_last_year(self, monkeypatch,
                                                           tmp_path):

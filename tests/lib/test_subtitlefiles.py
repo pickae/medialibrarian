@@ -496,6 +496,25 @@ class TestDownloadSubs:
         assert w.calls() == []
         assert logs == []
 
+    @pytest.mark.parametrize("kept", [
+        "Movie (old).mkv",
+        "Movie {imdb-tt0120737} {edition-Colorized} (old).mkv"])
+    def test_the_copy_an_improvement_kept_is_not_downloaded_for(
+            self, w, monkeypatch, kept):
+        """Its living sibling is getting these same subtitles; a second set
+        beside the copy only asks OpenSubtitles for what the folder has. The
+        suffix comes last, after every tag, so a copy of an already-tagged film
+        is passed over as readily as one made before the tagging."""
+        tree = _tree(w, kept)
+        monkeypatch.chdir(tree)
+        w.install("pipx")
+        w.write("pipx", "Movie.en.srt")
+        logs = []
+        subtitlefiles.download_subs(str(tree), "u", "p", "600", "60", "yes",
+                                    logs.append)
+        assert w.calls() == []
+        assert logs == []
+
     def test_the_movie_match_is_case_sensitive(self, w, monkeypatch):
         tree = _tree(w, "Movie.MKV")
         monkeypatch.chdir(tree)

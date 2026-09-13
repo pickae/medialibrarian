@@ -635,6 +635,26 @@ class TestExportEdges:
         assert w.calls() == []
         assert "Extras" not in "".join(logs)
 
+    @pytest.mark.parametrize("kept", [
+        "movie (old).mkv",
+        "movie {imdb-tt0120737} {edition-Colorized} (old).mkv"])
+    def test_and_so_is_the_copy_an_improvement_kept(self, w, kept):
+        """Its commentary is the same audio as its living sibling's, which is
+        already being transcribed. The suffix comes last, after every tag, so a
+        copy of an already-tagged film is passed over just the same."""
+        root = w.tmp_path / "root"
+        root.mkdir()
+        (root / kept).touch()
+        ram = w.tmp_path / "ram"
+        ram.mkdir()
+        logs, records = _run_export(
+            w, str(root), str(ram),
+            {os.path.splitext(kept)[0]: [("Commentary", "true", "audio",
+                                          "eng")]},
+            _detected("English"), "0 0")
+        assert records == []
+        assert w.calls() == []
+
     def test_the_extract_failure_leaves_nothing_in_ram(self, w):
         # a track whose extract fails and a track that succeeds: the sweep at
         # the end of the export leaves RAM clean either way. The walk names the
