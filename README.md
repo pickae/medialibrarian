@@ -619,6 +619,10 @@ An id is read however you have it to hand (`tt0000002`, `imdb-tt0000002`, a bare
 TMDb number), answers before the network is asked, and stays in the file so the
 lookup you did by hand is not lost. Requests to TMDb are paced to ten a second.
 
+A dry run also writes down every rename it *would* have made, beside the other
+two lists — a library of any size prints thousands of those lines, and the point
+of a dry run is to be able to read them.
+
 Nothing is renamed for a film TMDb could not name, nor for a folder holding a
 film that is not its own — a name that *extends* the folder's is one of that
 film's releases, a name that does not is something else. Both are listed to
