@@ -24,7 +24,7 @@ import subprocess
 import tempfile
 import time
 
-from medialib.lib import languages
+from medialib.lib import languages, plexnames
 from medialib.lib.census import printf_f0
 from medialib.lib.enums import shell_lower
 from medialib.lib.formatting import awk_number
@@ -345,6 +345,10 @@ def export_commentary(directory: str, read_track_info, is_bonus_folder,
         dir_name = os.path.dirname(file)
         # a commentary is a film's, so bonus material is passed over
         if is_bonus_folder(dir_name):
+            continue
+        # and so is the "(old)" copy an improved remux kept: its commentary is
+        # the same audio as its living sibling's, already being transcribed.
+        if plexnames.is_kept_copy(file):
             continue
         (names, _codecs, _channels, comments, types, langs) = \
             read_track_info(file)

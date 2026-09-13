@@ -155,6 +155,31 @@ class TestTheFilesOfOneFolder:
             "The Movie (1999).en.srt": "The Movie (1999) " + TAG + ".en.srt"}
 
 
+class TestTheKeptCopy:
+    """Whether a name is the original an improved remux kept - the one rule
+    every phase reads to leave a finished copy alone."""
+
+    @pytest.mark.parametrize("name", [
+        "The Movie (1999) (old).mkv",
+        "The Movie (1999) " + TAG + " (old).mkv",
+        "The Movie (1999) " + TAG + " {edition-Colorized} (old).mkv",
+        "The Movie (1968) " + TAG + " Part1 (old).mkv"])
+    def test_the_suffix_comes_last_whatever_tags_precede_it(self, name):
+        assert plexnames.is_kept_copy(name) is True
+
+    def test_a_whole_path_is_read_by_its_last_segment(self):
+        assert plexnames.is_kept_copy(
+            "/library/The Movie (1999)/The Movie (1999) (old).mkv") is True
+
+    @pytest.mark.parametrize("name", [
+        "The Movie (1999).mkv",
+        "The Movie (1999) {edition-Old}.mkv",
+        "The Movie (1999) (old).en.srt",
+        "Something (old).mp4"])
+    def test_and_nothing_else_is_one(self, name):
+        assert plexnames.is_kept_copy(name) is False
+
+
 class TestReadingAFolderName:
     def test_an_untagged_folder_keeps_its_whole_name(self):
         assert plexnames.untagged_base("The Movie (1999)") == ("The Movie (1999)", "")

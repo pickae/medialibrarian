@@ -34,13 +34,24 @@ EDITION_RE = re.compile(r"\{edition-([^{}]*)\}")
 # does, so a "Part1" and a "cd2" are both recognised as written.
 STACK_RE = re.compile(r"^(?:cd|dvd|part|pt|disk|disc)\.?[0-9]+$", re.I)
 
-# What an improved remux leaves the original under. These are never renamed:
-# the copy is the film as it arrived, and a tag on it would offer Plex a second
-# edition of every film that has one.
+# What an improved remux leaves the original under, lower-cased for the compare.
+# A copy is never renamed: it is the film as it arrived, and a tag on it would
+# offer Plex a second edition of every film that has one.
 OLD_SUFFIX = " (old).mkv"
 
 # The wrappers a hand-written version name tends to arrive in.
 _WRAPPERS = (("(", ")"), ("[", "]"))
+
+
+def is_kept_copy(path: str) -> bool:
+    """Whether ``path`` is the original an improved remux kept, rather than a
+    film to work on: a copy is finished, and anything asked of it would redo
+    what its living sibling has already had done.
+
+    The suffix comes last, after every tag, so a copy made from an
+    already-tagged film answers yes as readily as one made before the tagging.
+    """
+    return os.path.basename(path).lower().endswith(OLD_SUFFIX)
 
 
 def film_key(stem: str) -> str:
@@ -129,12 +140,23 @@ def movie_stems(base: str, names) -> list:
     """
     stems = {base}
     for name in names:
-        if not name.lower().endswith(".mkv") or name.endswith(OLD_SUFFIX):
+        if not name.lower().endswith(".mkv") or is_kept_copy(name):
             continue
         stem = name[:-len(".mkv")]
         if stem == base or stem.startswith(base + " "):
             stems.add(stem)
     return sorted(stems, key=len, reverse=True)
+
+
+def editions_in(base: str, names) -> list:
+    """The edition names the folder's films carry, in the order a report reads
+    them out: alphabetical, and each one once."""
+    found = set()
+    for stem in movie_stems(base, names):
+        edition, _part = read_stem(base, stem)
+        if edition:
+            found.add(edition)
+    return sorted(found)
 
 
 def folder_renames(base: str, tag: str, names) -> list:
@@ -148,7 +170,7 @@ def folder_renames(base: str, tag: str, names) -> list:
     stems = movie_stems(base, names)
     plan = []
     for name in sorted(names):
-        if name.endswith(OLD_SUFFIX):
+        if is_kept_copy(name):
             continue
         for stem in stems:
             if name.startswith(stem):
@@ -199,7 +221,7 @@ def untagged_base(folder: str) -> tuple:
 
 def is_movie_file(name: str) -> bool:
     """A playable film in a movie folder - not the copy an improvement kept."""
-    return name.lower().endswith(".mkv") and not name.endswith(OLD_SUFFIX)
+    return name.lower().endswith(".mkv") and not is_kept_copy(name)
 
 
 def one_film_in(base: str, names) -> list:

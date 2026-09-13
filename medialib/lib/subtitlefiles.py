@@ -20,7 +20,7 @@ import subprocess
 import tempfile
 from collections.abc import Callable
 
-from medialib.lib import languages
+from medialib.lib import languages, plexnames
 from medialib.lib.safety import SkipLog
 
 __all__ = [
@@ -259,8 +259,10 @@ def download_subs(directory: str, user: str, password: str,
     A movie is anything named ``*mkv`` (case-sensitively) anywhere under the
     tree, and one is NOT a movie when its folder's path carries one of the
     extras words - Featurettes, Other, Scenes, Interviews, Shorts, Trailers,
-    Extras - the folders that hold the material a film comes with. Sequential
-    by design: rapid-fire downloads get throttled.
+    Extras - the folders that hold the material a film comes with, nor when it
+    is the "(old)" copy an improved remux kept: its living sibling is getting
+    these same subtitles. Sequential by design: rapid-fire downloads get
+    throttled.
     """
     def spell(rel):
         # the way find spells a path under the start point it was given: a bare
@@ -284,6 +286,8 @@ def download_subs(directory: str, user: str, password: str,
         slash = movie.rfind("/")
         folder = movie[:slash] if slash != -1 else movie
         if any(word in folder for word in EXTRAS_WORDS):
+            continue
+        if plexnames.is_kept_copy(movie):
             continue
         for row in languages.LANGUAGES:
             download_srt(movie, row.code2, user, password, max_sync_offset,
