@@ -150,7 +150,9 @@ class TestTheListsEachFolderLeaves:
             if unmatched is not None:
                 unmatched += ["%s film (1999)" % name]
             if ambiguous is not None:
-                ambiguous += [(root + "/Double (1999)", ["One.mkv", "Two.mkv"])]
+                ambiguous += [(root + "/Double (1999)",
+                               "holds a film that is not its own",
+                               ["One.mkv", "Two.mkv"])]
             return 0
 
         monkeypatch.setattr(run.tmdblookup, "tag_plex_ids", fake_tag)

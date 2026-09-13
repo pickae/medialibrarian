@@ -75,6 +75,32 @@ def normalize_title(title: str) -> str:
     return folded.strip(" ")
 
 
+# The apostrophes a title is written with, in every shape a keyboard or a
+# typesetter produces one.
+_APOSTROPHES = re.compile(r"['\u2019\u02bc\u055a`\u00b4]")
+
+
+def title_keys(title: str) -> set:
+    """Every key a title may be matched by.
+
+    :func:`normalize_title` collapses each run of punctuation to a SPACE, which
+    is right for a dash or a colon and wrong for an apostrophe: "A Cat's Tale"
+    folds to "a cat s tale" while the same film in a library whose names have
+    had their apostrophes stripped folds to "a cats tale", and the two never
+    meet. So a title carrying one is matched by both readings, and a title
+    carrying none costs no second fold.
+
+    Widening only ever adds keys, so a title that matches today still matches;
+    what it can do is bring a SECOND candidate into the year, and the certainty
+    rule answers that the way it answers any tie - by naming nothing.
+    """
+    keys = {normalize_title(title)}
+    stripped = _APOSTROPHES.sub("", title)
+    if stripped != title:
+        keys.add(normalize_title(stripped))
+    return {key for key in keys if key}
+
+
 # One accented letter and what a glibc iconv makes of it. The probe is a single
 # letter on purpose: what is being told apart is the two tables' rule for a
 # base-plus-accent, which is the case every title in a Latin-script library
@@ -317,7 +343,7 @@ def tmdb_imdb_id(title: str, year: str,
     api_key = os.environ.get("tmdbApiKey", "")
     if not api_key:
         return ""
-    want = normalize_title(title)
+    want = title_keys(title)
     if not want:
         return ""
 
@@ -332,7 +358,7 @@ def tmdb_imdb_id(title: str, year: str,
         rows = _search(api_key, title, "") or []
 
     candidates = [_candidate(api_key, row) for row in _worth_asking(rows, year, want)]
-    named = [row for row in candidates if want in row.titles]
+    named = [row for row in candidates if want & row.titles]
     dated = [row for row in named if year in row.years]
     if len(dated) == 1:
         return dated[0].imdb
@@ -366,7 +392,7 @@ def _search(api_key: str, title: str, year: str):
     return results if isinstance(results, list) else []
 
 
-def _worth_asking(rows, year: str, want: str) -> list:
+def _worth_asking(rows, year: str, want: set) -> list:
     """The search results worth a request of their own, in the order they came.
 
     Two ways to be worth one, both answered from what the search already said:
@@ -382,7 +408,7 @@ def _worth_asking(rows, year: str, want: str) -> list:
             continue
         release = row.get("release_date")
         release = release if isinstance(release, str) else ""
-        titled = any(normalize_title(str(t)) == want for t in _row_titles(row))
+        titled = any(title_keys(str(t)) & want for t in _row_titles(row))
         if _near(release[:4], year) or titled:
             seen.add(row.get("id"))
             keep.append(row)
@@ -396,8 +422,9 @@ def _candidate(api_key: str, row: dict) -> _Candidate:
     detail = _as_json(_curl(_BASE + "/movie/" + _id_token(row.get("id")),
                             [("api_key", api_key),
                              ("append_to_response", _APPENDED)]))
-    folded = {normalize_title(str(t))
-              for t in _row_titles(row) + _detail_titles(detail)}
+    folded = set()
+    for t in _row_titles(row) + _detail_titles(detail):
+        folded |= title_keys(str(t))
     imdb = (detail.get("external_ids") or {}).get("imdb_id")
     return _Candidate(
         years=frozenset(_release_years(row, detail)),
@@ -555,14 +582,22 @@ def write_ambiguous_list(path: str, folders, root: str,
     who knows them can. The report says where they are and what is in them.
     """
     lines = [
-        _ID_COMMENT + " Folders holding more than one film, or one film in",
-        _ID_COMMENT + " files that do not say so. The tagging left them alone.",
-        _ID_COMMENT + " Name the files for the release each one is - '<film>",
-        _ID_COMMENT + " Extended', '<film> Part1' - and run the tagging again.",
+        _ID_COMMENT + " Folders the tagging left alone, and why.",
+        _ID_COMMENT + "",
+        _ID_COMMENT + " 'holds a film that is not its own': a movie file whose",
+        _ID_COMMENT + " name does not extend the folder's. Which film it is is",
+        _ID_COMMENT + " not something a tag may guess.",
+        _ID_COMMENT + "",
+        _ID_COMMENT + " 'one film in parts that do not stack': Plex reads a",
+        _ID_COMMENT + " part from the END of the name - '<film> Part1' - and",
+        _ID_COMMENT + " these have a title after the token, so it cannot.",
+        _ID_COMMENT + " Tagged as editions they would read as separate films.",
+        _ID_COMMENT + "",
+        _ID_COMMENT + " Rename the files and run the tagging again.",
         "",
     ]
-    for folder, movies in folders:
-        lines.append(os.path.relpath(folder, root))
+    for folder, reason, movies in folders:
+        lines.append("%s  -  %s" % (os.path.relpath(folder, root), reason))
         lines += ["    " + name for name in movies]
         lines.append("")
     try:
@@ -722,10 +757,38 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
         # second feature becomes an edition of the first.
         strays = plexnames.strays_in(base, names)
         if strays:
-            if ambiguous is not None:
-                ambiguous.append((folder.path, strays))
+            _flag(ambiguous, folder.path, "holds a film that is not its own",
+                  strays)
             log('  "{}" holds {} file(s) that are not this film - left as it '
                 "is".format(base, len(strays)))
+            continue
+
+        # A part written the way a person writes one - "Part 1 - The First
+        # Half" - would become an edition, and Plex would read three separate
+        # releases of the film where there is one film in three files. Nothing
+        # here can make it stack either: the token has to be last, and there is
+        # a title sitting after it.
+        in_parts, markers = [], []
+        for stem in plexnames.movie_stems(base, names):
+            edition = plexnames.read_stem(base, stem)[0]
+            if plexnames.names_a_part(edition):
+                in_parts.append(stem + ".mkv")
+            elif plexnames.is_only_a_marker(edition):
+                markers.append(stem + ".mkv")
+        if in_parts:
+            _flag(ambiguous, folder.path, "is one film in parts that do not "
+                  "stack", sorted(in_parts))
+            log('  "{}" is in parts that Plex will not stack - left as it is'
+                .format(base))
+            continue
+        # A "(1)" is what a copy gets when two of the same name land in one
+        # folder. Which of the two to keep is not a naming question, and an
+        # edition called "1" says nothing about either.
+        if markers:
+            _flag(ambiguous, folder.path, "holds a duplicate marked only by a "
+                  "number", sorted(markers))
+            log('  "{}" holds a duplicate marked only by a number - left as '
+                "it is".format(base))
             continue
         asked = not tag
         by_hand = False
@@ -787,6 +850,10 @@ def _folder_runtime(path: str, base: str, names: list) -> float:
         return 0.0
     return durationcheck.total_duration(
         [os.path.join(path, name) for name in movies])
+def _flag(ambiguous: list | None, path: str, reason: str, names) -> None:
+    """Record a folder the tagging will not touch, and why."""
+    if ambiguous is not None:
+        ambiguous.append((path, reason, list(names)))
 
 
 def _report(log: Callable[[str], None], base: str, tag: str,
