@@ -504,13 +504,12 @@ def main(argv: list, program: str = "ingest-movies",
                                                      error.message))
         return 1
 
-    if clioptions.args_out_of_range(len(result.positionals), 1, 1):
+    if clioptions.args_out_of_range(len(result.positionals), 1, None):
         sys.stderr.write(clioptions.no_args_text(declaration))
         return 1
 
     script_dir = script_dir or commands.script_dir()
 
-    root = result.positionals[0]
     # This is a long run, so its log lines carry a wall-clock stamp.
     os.environ["LOG_TIMESTAMPS"] = "1"
 
@@ -524,12 +523,13 @@ def main(argv: list, program: str = "ingest-movies",
                          % result.values.get("fragmentsOverride"))
         return 1
 
-    if not os.path.isdir(root):
-        sys.stderr.write(clioptions.missing_dir_text(declaration, root))
+    roots, names = _resolve_roots(declaration, result.positionals)
+    if roots is None:
         return 1
 
     if result.values.get("tagsOnly"):
-        return _tags_only(program, root, bool(result.values.get("writeTags")),
+        return _tags_only(program, roots, names,
+                          bool(result.values.get("writeTags")),
                           result.values.get("idList") or "")
 
     # Which ffmpeg of the ones installed, before the preflight asks whether PATH
@@ -548,13 +548,25 @@ def main(argv: list, program: str = "ingest-movies",
     subtitle_work = _settle_subtitle_work()
     ffsubsync_quality = _settle_ffsubsync_quality()
 
-    if not rules._files_below(root, matches=lambda name:
-                              enums.lower_extension_of(name) == "mkv"
-                              or enums.lower_extension_of(name)
-                              in enums.SOURCE_VIDEO_EXTENSIONS):
-        return safety.fail_no_relevant_input(
-            root, "movies (.mkv, or a video to remux into Matroska: %s)"
-            % enums.extension_list(list(enums.SOURCE_VIDEO_EXTENSIONS)))
+    # Asked of each folder before any of them is set up for, and a folder with
+    # nothing to ingest is dropped rather than ending the run: the others were
+    # named in the same breath and are not answerable for it. One folder on its
+    # own still gets the full refusal, which is the whole of what it was asked
+    # to do.
+    wanted = "movies (.mkv, or a video to remux into Matroska: %s)" % (
+        enums.extension_list(list(enums.SOURCE_VIDEO_EXTENSIONS)))
+    ingestable = [root for root in roots
+                  if rules._files_below(root, matches=lambda name:
+                                        enums.lower_extension_of(name) == "mkv"
+                                        or enums.lower_extension_of(name)
+                                        in enums.SOURCE_VIDEO_EXTENSIONS)]
+    for root in roots:
+        if root not in ingestable:
+            if len(roots) == 1:
+                return safety.fail_no_relevant_input(root, wanted)
+            log('Nothing this ingest can read under "%s" - skipped' % root)
+    if not ingestable:
+        return 1
 
     ramscratch.init_ram_base()
     ram_root, status = ramscratch.ram_scratch_dir("ingestMovies")
@@ -592,7 +604,8 @@ def main(argv: list, program: str = "ingest-movies",
                 ffsubsync_quality=ffsubsync_quality)
 
     try:
-        _ingest(state, root, subtitle_work)
+        for root in ingestable:
+            _ingest(state, root, subtitle_work)
     finally:
         ramscratch.run_exit_cleanup()
     return workerpool.exit_status(1 if durationcheck.failures() else 0)
@@ -602,13 +615,20 @@ def main(argv: list, program: str = "ingest-movies",
 # its own. In the current directory and not in the library: a run over the
 # library deletes stray .txt files as junk, and this is a worklist rather than
 # part of the collection.
-UNMATCHED_LIST = "ingest-movies-unmatched.tsv"
+#
+# One file per folder given, named after it, because the lists are worked
+# through by hand: two libraries' unnamed films in one file would be a worklist
+# nobody could tell apart, and each folder overwriting the last one's file
+# would be worse.
+UNMATCHED_LIST = "ingest-movies-unmatched-%s.tsv"
 
-# And the folders holding more than one film, which no id can settle.
-AMBIGUOUS_LIST = "ingest-movies-ambiguous.txt"
+# And the folders holding more than one film, which no id can settle - named
+# the same way and for the same reason.
+AMBIGUOUS_LIST = "ingest-movies-ambiguous-%s.txt"
 
 
-def _tags_only(program: str, root: str, write: bool, id_list: str) -> int:
+def _tags_only(program: str, roots: list, names: list, write: bool,
+               id_list: str) -> int:
     """The naming phase on its own: the id, the editions and a split film's
     stacking token, and not one thing else.
 
@@ -617,6 +637,10 @@ def _tags_only(program: str, root: str, write: bool, id_list: str) -> int:
     only the library it already renamed. Everything the full run sets up first -
     the RAM scratch, the whisper model, the ffmpeg it picked - belongs to work
     this mode does not do, so none of it is built.
+
+    Every folder given is tagged in turn, each with a list of its own named
+    after it - except under -i, where the one file someone named holds them all
+    and is read once for every folder.
     """
     if not os.environ.get("tmdbApiKey"):
         sys.stderr.write("tmdbApiKey is not set, so there is nothing to tag "
@@ -630,15 +654,35 @@ def _tags_only(program: str, root: str, write: bool, id_list: str) -> int:
         log("Read %d hand-written id(s) from %s" % (len(ids), id_list))
 
     skips = safety.RunSkipLog()
-    unmatched: list = []
-    ambiguous: list = []
     log("Phase: tagging movies with IMDb ids (Plex/Jellyfin naming)"
         + ("" if write else " - DRY RUN, nothing will be renamed"))
-    # Recursive here and only here: this mode is pointed at a library, where a
-    # full ingest is pointed at the folder that holds the films.
-    tmdblookup.tag_plex_ids(root, log, skips, dry_run=not write, ids=ids,
-                            unmatched=unmatched, recursive=True,
-                            ambiguous=ambiguous)
+    # Every folder's unnamed films together, for the one file -i named. Only
+    # that mode collects them: without -i each folder's are written as its own
+    # folder is finished.
+    shared: list = []
+    for root, name in zip(roots, names, strict=True):
+        if len(roots) > 1:
+            log('Tagging "%s"' % root)
+        unmatched: list = []
+        ambiguous: list = []
+        # Recursive here and only here: this mode is pointed at a library, where
+        # a full ingest is pointed at the folder that holds the films.
+        tmdblookup.tag_plex_ids(root, log, skips, dry_run=not write, ids=ids,
+                                unmatched=unmatched, recursive=True,
+                                ambiguous=ambiguous)
+        if id_list:
+            shared += unmatched
+        elif unmatched:
+            listing = UNMATCHED_LIST % name
+            if tmdblookup.write_id_list(listing, unmatched, None, log):
+                log('%d film(s) in "%s" could not be identified - listed in '
+                    '"%s" to fill in by hand' % (len(unmatched), root, listing))
+        if ambiguous:
+            listing = AMBIGUOUS_LIST % name
+            if tmdblookup.write_ambiguous_list(listing, ambiguous, root, log):
+                log('%d folder(s) in "%s" hold more than one film - listed in '
+                    '"%s"' % (len(ambiguous), root, listing))
+
     for line in skips.report():
         sys.stderr.write(line + "\n")
 
@@ -646,21 +690,56 @@ def _tags_only(program: str, root: str, write: bool, id_list: str) -> int:
     # already in it are written back: they are the only record anywhere of a
     # lookup someone did by hand, and dropping them would un-identify the film
     # on the very next run.
-    listing = id_list or UNMATCHED_LIST
-    if unmatched or id_list:
-        if tmdblookup.write_id_list(listing, unmatched, ids, log) and unmatched:
+    if id_list:
+        if tmdblookup.write_id_list(id_list, shared, ids, log) and shared:
             log('%d film(s) could not be identified - listed in "%s" to fill '
-                "in by hand" % (len(unmatched), listing))
-
-    if ambiguous:
-        if tmdblookup.write_ambiguous_list(AMBIGUOUS_LIST, ambiguous, root,
-                                           log):
-            log('%d folder(s) hold more than one film - listed in "%s"'
-                % (len(ambiguous), AMBIGUOUS_LIST))
+                "in by hand" % (len(shared), id_list))
 
     if not write:
         log("Dry run: nothing was renamed. Pass -w to carry these out.")
     return 0
+
+
+def _capitalise(text: str) -> str:
+    """bash's ``${var^}``: the first character upper-cased, the rest untouched."""
+    return text[:1].upper() + text[1:]
+
+
+def _resolve_roots(declaration, arguments: list):
+    """Every folder given, checked and named before any of them is touched - so
+    a typo in the third of five is found now rather than after the first two
+    have been ingested.
+
+    Returns (roots, names), or (None, None) once it has written the refusal.
+    The name is what a folder's lists are called after, so the same folder named
+    twice is one folder, and two folders of the same name are a refusal: their
+    lists would be written to one path and the second would silently replace the
+    first.
+    """
+    roots: list = []
+    names: list = []
+    for argument in arguments:
+        if not os.path.isdir(argument):
+            sys.stderr.write(clioptions.missing_dir_text(declaration, argument))
+            return None, None
+        absolute = os.path.realpath(argument)
+        if absolute in roots:
+            log('Ignoring "%s": that folder is already in this run' % argument)
+            continue
+        name = os.path.basename(absolute)
+        name = _capitalise(name) if name not in ("", "/") else "root"
+        if name in names:
+            sys.stderr.write(
+                '\nError: two of the folders given are both named "%s":\n'
+                "  %s\n  %s\n"
+                "Their lists would be written to one file, and the second would "
+                "replace the\nfirst. Rename one, or tag them in separate runs "
+                "from separate folders.\nNothing was changed.\n"
+                % (name, roots[names.index(name)], absolute))
+            return None, None
+        roots.append(absolute)
+        names.append(name)
+    return roots, names
 
 
 def _settle_subtitle_work() -> bool:

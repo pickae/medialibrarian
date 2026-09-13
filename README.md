@@ -596,6 +596,16 @@ Every sidecar follows its own film, including a commentary transcript whose name
 extends the film's. The `(old)` backup keeps its own name, and running the
 ingest again changes nothing.
 
+A film is named when **one** candidate carries its title — primary, original or
+any alternative — and was released in the folder's year *in some country*, which
+is what keeps a festival premiere and a release a year later from being two
+different films. Where that leaves several candidates or none, the film's own
+length decides: the folder is tagged only if exactly one candidate's runtime
+fits what is on the disk and every other is ruled out, which is also what lets a
+folder whose year is off by one be named at all. A folder of named editions
+offers no length — which of the cuts the catalogue's one runtime is for is
+exactly what is not known — so it falls back to the year alone.
+
 **`-t` does only this phase** — no conversion, no remux, no downloads, no
 transcription — and does it as a **dry run** unless `-w` is given, printing
 every rename it would make. The films TMDb could not name confidently are
@@ -615,6 +625,15 @@ film's releases, a name that does not is something else. Both are listed to
 read: the first to fill an id in, the second to give the files names that say
 which release each one is. `-t` walks the whole tree, so it can be pointed at a
 library; a full ingest reads the one level it always did.
+
+**Several folders may be given**, and each is worked through in full before the
+next is started, in the order they were typed. Each leaves lists of its own,
+named after it — `ingest-movies-unmatched-Films.tsv`,
+`ingest-movies-ambiguous-Films.txt` — so two libraries' worklists never land in
+one file. An `-i` list you named yourself is the exception: it is read for every
+folder and written back once, holding them all. Two folders of the same name are
+refused before anything is touched, since their lists would be written to one
+path.
 
 ## Books, comics and images
 
