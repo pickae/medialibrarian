@@ -592,6 +592,32 @@ class TestTagPlexIds:
                       for p in tmp_path.rglob("*")) == before
         assert skip.skips == []
 
+    def test_a_folder_whose_tagged_name_is_taken_is_left_whole(self, monkeypatch,
+                                                               tmp_path):
+        """A library holding both the film and an already-tagged copy of it.
+
+        Renaming the files anyway would leave them spelled for a folder they
+        are not in, beside the folder they are spelled for - which reads, to
+        anyone looking, as the film having left the place it was.
+        """
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path,
+              ("The Movie (1999)",
+               ["The Movie (1999).mkv", "The Movie (1999).en.srt"]),
+              ("The Movie (1999) {imdb-tt0120737}",
+               ["The Movie (1999) {imdb-tt0120737}.mkv"]))
+        self._env(monkeypatch, {"The Movie": "tt0120737"})
+        logs = []
+        skip = SkipLog()
+        tmdblookup.tag_plex_ids(".", logs.append, skip)
+        assert sorted(p.name for p in (tmp_path / "The Movie (1999)").iterdir()) \
+            == ["The Movie (1999).en.srt", "The Movie (1999).mkv"]
+        assert skip.skips == [
+            ("./The Movie (1999)",
+             "./The Movie (1999) {imdb-tt0120737}")]
+        assert logs[-1] == ('  "The Movie (1999) {imdb-tt0120737}" is already '
+                            'there, left "The Movie (1999)" untouched')
+
     def test_files_that_do_not_share_the_base_are_untouched(self, monkeypatch,
                                                              tmp_path):
         monkeypatch.chdir(tmp_path)
