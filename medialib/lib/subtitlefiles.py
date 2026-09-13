@@ -20,7 +20,7 @@ import subprocess
 import tempfile
 from collections.abc import Callable
 
-from medialib.lib import languages, plexnames
+from medialib.lib import languages, plexnames, safety
 from medialib.lib.safety import SkipLog
 
 __all__ = [
@@ -47,6 +47,8 @@ def _move(source: str, destination: str) -> None:
     is rather than failing the run."""
     if os.path.isdir(destination):
         destination = os.path.join(destination, os.path.basename(source))
+    if safety.would_hide(destination):
+        return
     try:
         os.rename(source, destination)
     except OSError:

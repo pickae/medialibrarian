@@ -530,6 +530,9 @@ def rename_folders(root: str, fragments_file: str, skips) -> int:
         if new_name == name:
             continue
         target = os.path.join(root, new_name)
+        if safety.would_hide(target):
+            skips.record(path, target)
+            continue
         if os.path.exists(target):
             skips.record(path, target)
             continue
@@ -555,7 +558,10 @@ def rename_movies(root: str, fragments_file: str, skips) -> int:
         new_movie = os.path.join(directory, new_base + ".mkv")
 
         if new_movie != movie:
-            if os.path.exists(new_movie):
+            if safety.would_hide(new_movie):
+                skips.record(movie, new_movie)
+                new_movie = movie
+            elif os.path.exists(new_movie):
                 skips.record(movie, new_movie)
                 new_movie = movie
             else:
@@ -1095,6 +1101,8 @@ def _rename_quiet(source: str, target: str) -> None:
     improved copy in its original's place crosses a file system - which
     ``os.replace`` refuses and ``mv`` does not.
     """
+    if safety.would_hide(target):
+        return
     try:
         os.replace(source, target)
         return

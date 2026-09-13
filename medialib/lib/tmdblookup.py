@@ -418,10 +418,11 @@ def _rename_in_place(directory, folder, base: str, tag: str,
 
 
 def _rename(source: str, target: str, skip_log: safety.SkipLog) -> None:
-    """A rename that refuses to land on something that is already there."""
+    """A rename that refuses to land on something that is already there, or to
+    hide what it moves."""
     if source == target:
         return
-    if os.path.exists(target):
+    if safety.would_hide(target) or os.path.exists(target):
         skip_log.record(source, target)
         return
     os.rename(source, target)
