@@ -20,8 +20,9 @@ other codec, which takes three steps the Opus path does not need - see
 medialib/lib/xheaac.py.
 
 A file longer than the split threshold is cut into one chunk per core, and the
-chunks encode as independent queue jobs mixed in with every other file - so one
-huge file does not pin a single core while the rest of the machine idles. The
+chunks encode as independent queue jobs, each taking its own place in the queue
+at the size of one chunk - so one huge file neither pins a single core while the
+rest of the machine idles nor keeps the whole run waiting behind it. The
 cuts are nudged to the nearest quiet spot, so the seam between separately encoded
 chunks is inaudible. Finding those quiet spots is the one expensive part of
 planning, and it is windowed: each interior cut becomes a small silencedetect job
@@ -1087,8 +1088,8 @@ class Planner:
        from one pool.
     C. turn each candidate's gathered midpoints into chunk jobs, which is cheap.
 
-    The per-track outputs are stitched back together in track order, so the
-    queue's interleaved chunk/whole-file ordering matches a serial walk.
+    The per-track outputs are stitched back together in track order; the queue
+    they form is ordered afterwards, by the size of each individual job.
     """
 
     def __init__(self, state: Run, jobs: int) -> None:
@@ -1407,7 +1408,8 @@ def _scan_tracks(input_dir: str) -> list:
     Byte size is a cheap, probe-free proxy for encode time, and starting the long
     encodes at the very front means they finish near the beginning of the run
     instead of one huge file landing last and pinning a core while everything else
-    has drained.
+    has drained. The queue is ordered again after planning, on what each JOB is
+    worth rather than what its file is.
     """
     wanted = tuple("." + extension for extension in
                    tuple(enums.AUDIO_EXTENSIONS) + tuple(enums.VIDEO_EXTENSIONS))
@@ -1717,12 +1719,39 @@ def _build_queue(state: Run, jobs: int) -> tuple:
     for track in candidates:
         planner.write_chunk_jobs_for(track)
 
-    jobs_queue, plans_queue = [], []
+    weighed, plans_queue = [], []
     for track in state.tracks:
         base = segments.plan_file_for(state.plan_root, track)
-        jobs_queue += _records(base + ".jobs")
+        weighed += _weigh_jobs(state, track, _records(base + ".jobs"))
         plans_queue += _records(base + ".plans")
-    return jobs_queue, plans_queue
+    # Biggest job first, settled only now the chunking is known: a split file's
+    # pieces are each worth one chunk and take a chunk's place in the queue,
+    # rather than the whole file's at the very front. Position in the walk breaks
+    # ties, so the order is reproducible.
+    ordered = sorted(enumerate(weighed),
+                     key=lambda entry: (-entry[1][0], entry[0]))
+    return [token for _seq, (_weight, token) in ordered], plans_queue
+
+
+def _weigh_jobs(state: Run, track: str, tokens: list) -> list:
+    """One track's jobs, each paired with what it is expected to COST.
+
+    Byte size is the run's probe-free proxy for encode time, and a chunk is worth
+    the share of it that its own slice of the audio comes to - which is the whole
+    point of cutting the file up. That slice is already in the token, so the
+    share costs no probe.
+    """
+    try:
+        size = float(os.path.getsize(os.path.join(state.input_dir, track)))
+    except OSError:
+        size = 0.0
+    lengths = [formatting.awk_number(token.split(UNIT)[4])
+               if UNIT in token else 0.0 for token in tokens]
+    total = sum(lengths)
+    if total <= 0:
+        return [(size, token) for token in tokens]
+    return [(size * length / total, token)
+            for length, token in zip(lengths, tokens)]
 
 
 class _Detector:
