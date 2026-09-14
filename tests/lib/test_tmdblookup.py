@@ -523,7 +523,9 @@ class TestTheIdList:
                                  {"Done (1999)": "{imdb-tt0000001}"})
         assert tmdblookup.read_id_list(path) == {
             "Done (1999)": "{imdb-tt0000001}"}
-        body = [line for line in open(path, encoding="utf-8").read().splitlines()
+        with open(path, encoding="utf-8") as handle:
+            written = handle.read()
+        body = [line for line in written.splitlines()
                 if line and not line.startswith("#")]
         assert body == ["Done (1999)\t{imdb-tt0000001}", "Still Unknown (2001)\t"]
 

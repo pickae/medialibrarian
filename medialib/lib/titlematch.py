@@ -81,6 +81,14 @@ def normalize_title(title: str) -> str:
     spelling gives. Those hosts, and a host with no iconv at all, fold in
     Python instead (:func:`_fold_without_iconv`).
     """
+    if title.isascii():
+        # Nothing for a transliteration to do, so it is not asked: ASCII goes
+        # through ASCII//TRANSLIT unchanged and with a zero exit, and asking
+        # anyway is a process per title. Most of a library is this case, and
+        # the folder-against-file comparisons ask it once per name per word
+        # boundary - so the short-circuit is the difference between a handful
+        # of processes over a run and tens of thousands of them.
+        return re.sub(r"[^a-z0-9]+", " ", shell_lower(title)).strip(" ")
     folded = None
     if _iconv_drops_accents():
         # No guard on the start, unlike everywhere else a tool is optional: the

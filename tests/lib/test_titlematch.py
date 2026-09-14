@@ -170,6 +170,32 @@ class TestNormalizeTitle:
         probe = titlematch._TRANSLIT_PROBE.encode("utf-8")
         assert calls.count(probe) == 1
 
+    def test_an_ascii_title_never_reaches_iconv(self, monkeypatch):
+        """ASCII goes through ASCII//TRANSLIT unchanged, so asking is a process
+        per title for no answer - and a run over a library asks once per name
+        per word boundary."""
+        def refuse(*_a, **_k):
+            raise AssertionError("asked iconv about an ASCII title")
+
+        titlematch.reset_iconv_flavour()
+        monkeypatch.setattr(titlematch.subprocess, "run", refuse)
+        assert titlematch.normalize_title("SPIDER-MAN: Homecoming") \
+            == "spider man homecoming"
+
+    def test_and_the_short_circuit_answers_what_iconv_would_have(self):
+        """Character for character, over every printable ASCII run."""
+        for title in ("a---b..c   d", "!!!", "  spaced   out  ", "half life 3",
+                      "(Weird)  Title!!", "A Cat's Tale", "S.W.A.T."):
+            titlematch.reset_iconv_flavour()
+            short = titlematch.normalize_title(title)
+            done = subprocess.run(
+                ["iconv", "-f", "UTF-8", "-t", "ASCII//TRANSLIT"],
+                input=title.encode("utf-8"), capture_output=True)
+            through = done.stdout.decode("utf-8") if done.returncode == 0 \
+                else title
+            assert short == re.sub(r"[^a-z0-9]+", " ",
+                                   through.lower()).strip(" ")
+
     def test_empty_and_blank_fold_to_empty(self):
         assert titlematch.normalize_title("") == ""
         assert titlematch.normalize_title("   ") == ""
