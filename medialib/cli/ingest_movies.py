@@ -101,7 +101,10 @@ USAGE_TAIL = """
     length fits one of them and rules out every other
     recognises a file that is the same film named in another language by the
     titles TMDb holds it under, and leaves its name alone - only the id is
-    added, and the folder is listed in a file of its own
+    added, and the folder is listed in a file of its own; a language written
+    after the year is an EDITION, and becomes one
+    asks the films inside a folder under their own names when nothing answers
+    to the folder\'s
     reads an accent dropped or written out, a dash, an apostrophe, a roman
     numeral, articles gone from anywhere in the name and a written-out \"&\" as
     the same title said differently - several at once in one name included -

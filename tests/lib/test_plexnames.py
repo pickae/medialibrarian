@@ -445,3 +445,50 @@ class TestANumberLeftOutOfTheFolderName:
     def test_a_sequel_of_its_own_is_still_not_this_film(self):
         assert plexnames.onto_base("Steel Halo Silence (2004)",
                                    "Steel Halo 3 (2006).mkv") == ""
+
+
+class TestALanguageKeptAsAnEdition:
+    """A library that cannot mux every language into one file keeps one file
+    per language and writes the language after the year."""
+
+    AKA = ("Le Seigneur de Val-Mont", "The Lord of Val-Mont")
+
+    def test_the_language_becomes_an_edition_and_the_title_the_folders(self):
+        assert plexnames.alias_renames(
+            "Le Seigneur de Val-Mont (1961)",
+            ["The Lord of Val-Mont (1961) English.mkv"], self.AKA) \
+            == {"The Lord of Val-Mont (1961) English.mkv":
+                "Le Seigneur de Val-Mont (1961) English.mkv"}
+
+    def test_and_the_whole_folder_reads_as_editions(self):
+        plan = plexnames.folder_renames(
+            "Le Seigneur de Val-Mont (1961)", TAG,
+            ["The Lord of Val-Mont (1961) English.mkv"], self.AKA)
+        assert plan == [("The Lord of Val-Mont (1961) English.mkv",
+                         "Le Seigneur de Val-Mont (1961) " + TAG
+                         + " {edition-English}.mkv")]
+
+    @pytest.mark.parametrize("name", [
+        "The Lord of Val-Mont (1961).mkv",
+        "The Lord of Val-Mont.mkv",
+    ])
+    def test_a_name_that_says_only_the_title_is_left_alone(self, name):
+        """Its title is the only thing distinguishing it, and rewriting that
+        would throw away which language the file is."""
+        assert plexnames.alias_renames("Le Seigneur de Val-Mont (1961)",
+                                       [name], self.AKA) == {}
+
+    def test_nor_is_a_repeated_year_an_edition(self):
+        assert plexnames.alias_renames(
+            "Le Seigneur de Val-Mont (1961)",
+            ["The Lord of Val-Mont (1961).mkv"], self.AKA) == {}
+
+    def test_and_a_numbered_sequel_is_still_another_film(self):
+        assert plexnames.alias_renames(
+            "Le Seigneur de Val-Mont (1961)",
+            ["The Lord of Val-Mont 2 (1964).mkv"], self.AKA) == {}
+
+    def test_without_the_catalogue_nothing_is_recognised(self):
+        assert plexnames.alias_renames(
+            "Le Seigneur de Val-Mont (1961)",
+            ["The Lord of Val-Mont (1961) English.mkv"], ()) == {}

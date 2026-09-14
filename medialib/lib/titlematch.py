@@ -17,7 +17,9 @@ The keys come from four independent readings of one title, and their
 combinations:
 
 * the **separator** it was written with, or none at all - which is one reading
-  of an apostrophe, a dash, a point in an abbreviation and a joined-up compound;
+  of an apostrophe, a dash, a point in an abbreviation and a joined-up compound,
+  and, with the possessive "s" the fold leaves standing, of a series named with
+  one and without;
 * the **accents** it carries, dropped the way a transliteration drops them and
   spelled out the way a language writes them when it cannot reach them;
 * the **articles** it carries, kept and dropped - the one it leads or trails
@@ -496,6 +498,22 @@ def _an_ordinal(word: str) -> bool:
     return word.isdigit() and not (len(word) == 4 and word[0] in "12")
 
 
+def _without_the_possessive(words: list[str]) -> list[str]:
+    """``words`` without the "s" an apostrophe left standing on its own.
+
+    A series' name is written with the possessive and without it - "Wilder and
+    Bright's Watch This" against a folder called "Wilder and Bright Watch This"
+    - and the fold turns the apostrophe into a space, so the "s" survives as a
+    word of its own and the two titles differ by it.
+
+    Only a bare "s", which is a thing the fold makes and not a thing anybody
+    writes: a title with a real word "s" in it does not exist, and one that did
+    would only gain a key.
+    """
+    kept = [word for word in words if word != "s"]
+    return kept if kept and kept != words else words
+
+
 def _widen(forms: list, reading) -> list:
     """Every form ``forms`` holds, plus what ``reading`` makes of each - once.
 
@@ -529,7 +547,8 @@ def title_keys(title: str) -> frozenset:
     if written != forms[0]:
         forms.append(written)
     for reading in (_one_conjunction, _without_article, _without_articles,
-                    _without_filler, _arabic_numerals, _without_the_first,
+                    _without_filler, _without_the_possessive,
+                    _arabic_numerals, _without_the_first,
                     _without_the_inner_number):
         forms = _widen(forms, reading)
     keys = set()

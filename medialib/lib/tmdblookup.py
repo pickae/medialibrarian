@@ -1133,6 +1133,36 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
                         base = spelled
                         respelled = [corrected.get(n, n) for n in names]
                         on_disk = {v: k for k, v in corrected.items()}
+            if not tag:
+                # Nothing answered to the FOLDER's name. Its files have names
+                # of their own, and a library that holds a film under two
+                # languages usually names the folder in a third - so the files
+                # are asked in their own right, and a folder whose every film
+                # comes back as one film IS that film. Asked here, before
+                # anything judges the folder, because a folder judged first is
+                # reported for holding films that are not its own and never
+                # gets this far.
+                settled, byfile = _named_by_its_files(base, year, folder.path,
+                                                      names, notes)
+                if settled:
+                    _flag_alias(aliases, folder.path, base, settled, byfile)
+                    _tag_only(folder, names, settled, skip_log, dry_run, log,
+                              None, functools.partial(
+                                  _say_the_files_named_it, log, base, settled))
+                    continue
+
+        # A file that is this film under another of its titles AND says
+        # something else besides - a language written after the year, for a
+        # library that cannot mux them into one file. That something else is an
+        # edition, and once it is written as one Plex collapses the files into
+        # one film with a picker, so the title in front of it may take the
+        # folder's spelling: nothing is lost that the edition does not keep.
+        if found.aliases:
+            editions = plexnames.alias_renames(base, names, found.aliases)
+            if editions:
+                corrected = dict(corrected, **editions)
+                respelled = [corrected.get(n, n) for n in names]
+                on_disk = {v: k for k, v in corrected.items()}
 
         # A folder holding one film under several of its titles. Only the
         # catalogue can say so, and what it buys is recognition and not a
@@ -1199,7 +1229,7 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
             _report(log, base, tag, plexnames.editions_in(base, respelled),
                     by_hand)
         _rename_in_place(folder, names, base, tag, target, skip_log, dry_run,
-                         log, planned)
+                         log, planned, found.aliases)
     return 0
 
 
@@ -1386,6 +1416,64 @@ def _reads_as(stem: str) -> str:
     return titlematch.normalize_title(plexnames.film_key(stem))
 
 
+def _named_by_its_files(base: str, year: str, path: str, names: list,
+                        notes: list | None = None) -> tuple:
+    """The id every film in this folder answers to, and what each answered
+    under - or ("", {}) when they do not agree, or cannot all be named.
+
+    For the folder whose OWN name is the one nothing knows. A library that
+    holds a film under two languages usually names the folder in a third, and
+    that third is the one being looked up: the files are the only names here a
+    catalogue has ever heard of.
+
+    Asked of every film in the folder and not just one, because a folder whose
+    films answer to two different ids is a folder holding two films - which is
+    exactly the thing an id must not be guessed over. Every one of them has to
+    answer, and all of them to the same id.
+
+    Only the files whose names DIFFER from the folder's are asked: one that
+    says what the folder says has already been looked up under it.
+    """
+    movies = sorted(name for name in names if plexnames.is_movie_file(name))
+    if not movies:
+        return "", {}
+    named = _YEAR_RE.match(base)
+    folder_title = named.group(1) if named else base
+    found: dict[str, str] = {}
+    ids = set()
+    for name in movies:
+        stem = plexnames.film_key(os.path.splitext(name)[0])
+        match = _YEAR_RE.match(repair_year(stem))
+        title, its_year = (match.group(1), match.group(2)) if match \
+            else (stem, year)
+        if titlematch.equivalent(title, folder_title):
+            continue
+        _note(notes, 'asked under its own file "%s":' % name)
+        settled = identify(title, its_year,
+                           functools.partial(_one_film_runtime, path, name),
+                           notes)
+        if not settled.imdb:
+            return "", {}
+        ids.add(settled.imdb)
+        found[name] = settled.title or title
+    if len(ids) != 1 or not found:
+        return "", {}
+    return "{imdb-" + ids.pop() + "}", found
+
+
+def _one_film_runtime(path: str, name: str) -> float:
+    """How long one movie file is, for a lookup asking about that file alone."""
+    return durationcheck.total_duration([os.path.join(path, name)])
+
+
+def _say_the_files_named_it(log: Callable[[str], None], base: str,
+                            tag: str) -> None:
+    """The line a folder gets when its own name said nothing and its files
+    said everything."""
+    log('  "{}" is not a name TMDb knows, but every film in it is {} - '
+        "tagging only".format(base, tag))
+
+
 def _say_the_titles_met(log: Callable[[str], None], base: str,
                         how_many: int) -> None:
     """The line a folder gets when the catalogue's own titles are what held it
@@ -1445,7 +1533,7 @@ def _report(log: Callable[[str], None], base: str, tag: str,
 def _rename_in_place(folder, names: list, base: str, tag: str, target: str,
                      skip_log: safety.SkipLog, dry_run: bool,
                      log: Callable[[str], None],
-                     planned: list | None = None) -> None:
+                     planned: list | None = None, aliases=()) -> None:
     """One folder's films and sidecars, then the folder itself.
 
     That order and no other: renaming the folder first would move every path
@@ -1455,7 +1543,7 @@ def _rename_in_place(folder, names: list, base: str, tag: str, target: str,
     is on the disk already, whether or not TMDb could say which film they are
     all versions of.
     """
-    for old, new in plexnames.folder_renames(base, tag, names):
+    for old, new in plexnames.folder_renames(base, tag, names, aliases):
         _rename(os.path.join(folder.path, old),
                 os.path.join(folder.path, new), skip_log, dry_run, log,
                 planned)
