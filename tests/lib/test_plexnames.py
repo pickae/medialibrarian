@@ -389,3 +389,37 @@ class TestAYearWithADigitWrong:
         assert plexnames.onto_base("Dragons Forever (1988)",
                                    "Dragons Forever (1998).mkv") \
             == "Dragons Forever (1988) (1998).mkv"
+
+
+class TestANumberedSequelIsNotAnEdition:
+    """The reading that makes "Winnetou" match the folder "Winnetou I (1963)"
+    also makes "Winnetou II (1964).mkv" match it, with the "II" left over as
+    though it were an edition. It is the sequel."""
+
+    @pytest.mark.parametrize("name", [
+        "Winnetou II (1964).mkv",
+        "Winnetou 2.mkv",
+        "Winnetou II.mkv",
+        "Winnetou III (1965).mkv",
+    ])
+    def test_a_bare_number_after_the_title_names_another_film(self, name):
+        assert plexnames.onto_base("Winnetou I (1963)", name) == ""
+
+    @pytest.mark.parametrize("name,wanted", [
+        ("Winnetou (1963).mkv", "Winnetou I (1963).mkv"),
+        ("Winnetou I (1963) (1).mkv", "Winnetou I (1963).mkv"),
+        ("Winnetou 1 (1963).mkv", "Winnetou I (1963).mkv"),
+    ])
+    def test_while_the_first_of_the_series_still_comes_home(self, name, wanted):
+        assert plexnames.onto_base("Winnetou I (1963)", name) == wanted
+
+    def test_a_number_in_brackets_is_not_a_sequel(self):
+        """It is a year or a copy's marker, and both say something about THIS
+        film rather than naming another."""
+        assert plexnames.onto_base("Dragons Forever (1988)",
+                                   "Dragons Forever (1998).mkv") \
+            == "Dragons Forever (1988) (1998).mkv"
+
+    def test_nor_is_a_part(self):
+        assert plexnames.onto_base("Film (2020)", "film (2020) part 1.mkv") \
+            == "Film (2020) part 1.mkv"

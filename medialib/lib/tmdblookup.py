@@ -283,8 +283,9 @@ def identify(title: str, year: str,
     if not want:
         return Match()
 
+    plainly = frozenset(normalize_title(one) for one in reading) - {""}
     for query in _queries(reading):
-        found = _under(api_key, query, want, year, runtime, notes)
+        found = _under(api_key, query, want, year, runtime, notes, plainly)
         if found.imdb:
             return found
     return Match()
@@ -309,12 +310,17 @@ def _queries(reading: tuple) -> list:
 
 def _under(api_key: str, query: str, want: frozenset, year: str,
            runtime: Callable[[], float] | None,
-           notes: list | None = None) -> Match:
+           notes: list | None = None,
+           plainly: frozenset = frozenset()) -> Match:
     """The certainty rule over one query's results.
 
     ``query`` is what TMDb is asked; ``want`` stays the folder's own keys
     throughout, because what is being asked about is still that film - a wider
     query is a way of REACHING the candidate, never a looser test of it.
+
+    ``plainly`` is the folder's title folded and nothing more - no reading, no
+    widening - and it is what tells a strong match from a weak one. See
+    :func:`_the_best_evidence`.
     """
     rows = _search(api_key, query, year)
     if rows is None:
@@ -333,7 +339,9 @@ def _under(api_key: str, query: str, want: frozenset, year: str,
     candidates = [_candidate(api_key, row) for row in worth]
     named = [row for row in candidates if want & row.titles]
     _note_the_unnamed(notes, candidates, named)
-    dated = [row for row in named if year in row.years]
+    named = _the_best_evidence(named, plainly, notes)
+    dated = _not_a_rerelease([row for row in named if year in row.years],
+                             year, notes)
     if len(dated) == 1:
         return _matched(dated[0], want)
 
@@ -356,6 +364,63 @@ def _under(api_key: str, query: str, want: frozenset, year: str,
     if settled is None:
         _note_the_lengths(notes, contenders, seconds)
     return _matched(settled, want) if settled is not None else Match()
+
+
+def _the_best_evidence(named: list, plainly: frozenset,
+                       notes: list | None = None) -> list:
+    """The candidates that carry the folder's title EXACTLY, or all of them.
+
+    A match through one of the widened readings and a match on the folder's
+    title as written are not the same evidence, and weighing them equally is
+    what leaves an obvious film unnamed. A folder called "1917" is offered the
+    film "1917", which folds to exactly what the folder does, alongside a
+    "Bisbee '17" that only reached the list through a reading - and the rule,
+    seeing several candidates whose lengths all fit, named neither.
+
+    So where any candidate matches plainly, only those are considered. It
+    narrows and never widens: two films that really do share one title are
+    still two, and still answered by naming neither.
+    """
+    exact = [row for row in named
+             if any(normalize_title(spelling) in plainly
+                    for spelling in row.spellings)]
+    if not exact or len(exact) == len(named):
+        return named
+    for row in named:
+        if row not in exact:
+            _note(notes, "    %s - set aside: it carries the title only "
+                  "through a reading, and another carries it as written"
+                  % _says(row))
+    return exact
+
+
+def _not_a_rerelease(dated: list, year: str, notes: list | None = None) -> list:
+    """The candidates that CAME OUT in the wanted year, or all of them.
+
+    A film's year is every year any country released it in, which is what lets
+    a festival premiere and a release the year after both answer for a folder.
+    It also lets a re-release answer, and a re-release is timed to something -
+    usually a remake: "A Star Is Born" from 1976 went back into cinemas in 2018
+    because "A Star Is Born" from 2018 came out, and a folder named for the
+    remake was offered both and told they were equally likely.
+
+    So where some candidates were FIRST released around the wanted year and
+    others only reached it decades later, the others are set aside. Around, and
+    not exactly on, because a premiere and a general release a year apart are
+    the case the year rule exists for and must keep answering.
+
+    Narrows and never widens: where every candidate is equally old, or none is,
+    they all stand and the length decides as before.
+    """
+    original = [row for row in dated
+                if row.years and _near(min(row.years), year)]
+    if not original or len(original) == len(dated):
+        return dated
+    for row in dated:
+        if row not in original:
+            _note(notes, "    %s - set aside: it first came out in %s, so %s "
+                  "is a re-release" % (_says(row), min(row.years), year))
+    return original
 
 
 def _note(notes: list | None, line: str) -> None:
@@ -727,12 +792,20 @@ def write_ambiguous_list(path: str, folders, root: str,
         _ID_COMMENT + " can see which film these are; what it still cannot see",
         _ID_COMMENT + " is which release each file is.",
         _ID_COMMENT + "",
+        _ID_COMMENT + "",
+        _ID_COMMENT + " Each name is followed by what it READS AS once the",
+        _ID_COMMENT + " spelling is folded away. Two lines that read the same",
+        _ID_COMMENT + " are two names the matching refused to call one thing,",
+        _ID_COMMENT + " which is a reading it does not have yet; two that read",
+        _ID_COMMENT + " differently are two different films.",
+        _ID_COMMENT + "",
         _ID_COMMENT + " Rename the files and run the tagging again.",
         "",
     ]
     for folder, reason, movies in folders:
         lines.append("%s  -  %s" % (os.path.relpath(folder, root), reason))
-        lines += ["    " + name for name in movies]
+        lines += _how_close(read_folder(os.path.basename(folder))[0] or folder,
+                            movies)
         lines.append("")
     try:
         with open(path, "w", encoding="utf-8",
@@ -755,11 +828,13 @@ def write_near_miss_list(path: str, folders, root: str,
     not have yet; a page of films that merely share a word is the rule working.
     """
     lines = [
-        _ID_COMMENT + " Every folder the tagging left alone, and how close it",
-        _ID_COMMENT + " came. Nothing here has happened and nothing here is a",
-        _ID_COMMENT + " worklist - it is what a dry run saw, so that \"no",
-        _ID_COMMENT + ' confident match" can be read rather than taken on',
-        _ID_COMMENT + " trust.",
+        _ID_COMMENT + " Every film TheMovieDB could not name, and how close",
+        _ID_COMMENT + " it came: what was asked, what came back, and why none",
+        _ID_COMMENT + " of it was certain enough to rename on.",
+        _ID_COMMENT + "",
+        _ID_COMMENT + " Only those. A folder one of the other lists accounts",
+        _ID_COMMENT + " for is that list's business, and a folder read twice",
+        _ID_COMMENT + " is a folder looked at twice.",
         "",
     ]
     for folder, reason, notes in folders:
@@ -942,10 +1017,12 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
     as they are, and both lists are what the run writes its reports from.
     ``planned`` collects the renames a dry run would have made, for the third.
     ``near_misses`` collects what TMDb was asked and what it offered for every
-    folder that ended up in one of the other two lists, for the fourth - the one
-    that says whether "no confident match" was the right answer. ``aliases``
-    collects the folders holding one film under several of its own titles, for
-    the fifth: nothing is renamed for those, so no other list mentions them.
+    film it could NOT name, for the fourth - the one that says whether "no
+    confident match" was the right answer. Only those: a folder another list
+    already accounts for is that list's business, and a film in two of them is
+    a film read twice. ``aliases`` collects the folders holding one film under
+    several of its own titles, for the fifth: nothing is renamed for those, so
+    no other list mentions them.
 
     ``recursive`` walks the whole tree rather than the one level the phase reads
     inside a full ingest, where the caller is pointed at the folder that holds
@@ -1049,7 +1126,6 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
                                     log, planned)
             reason = trouble[0] + (TAGGED_ANYWAY if tagged else "")
             _flag(ambiguous, folder.path, reason, left)
-            _flag(near_misses, folder.path, reason, _how_close(base, left))
             if not tagged:
                 log('  "{}" {} - left as it is'.format(base, trouble[2]))
             continue
@@ -1256,10 +1332,10 @@ def _how_close(base: str, names: list) -> list:
     which is a reading that is missing; two that read differently are two
     different films, which is the answer the folder was left for.
     """
-    lines = ["the folder reads as: " + _reads_as(base)]
+    lines = ["    the folder reads as: " + _reads_as(base)]
     for name in names:
-        lines.append('"%s" reads as: %s'
-                     % (name, _reads_as(os.path.splitext(name)[0])))
+        lines.append("    %s" % name)
+        lines.append("        reads as: " + _reads_as(os.path.splitext(name)[0]))
     return lines
 
 

@@ -22,7 +22,8 @@ combinations:
   spelled out the way a language writes them when it cannot reach them;
 * the **articles** it carries, kept and dropped - the one it leads or trails
   with, and all of them wherever they sit;
-* its **numerals**, roman read as arabic;
+* its **numerals**, roman read as arabic - and a trailing "1" dropped, because
+  the first film of a series is numbered three ways and meant identically;
 * the **filler** a local library puts in front of a name and a catalogue never
   carries.
 
@@ -358,14 +359,40 @@ def _spelled_out(title: str) -> str:
 
 
 def _tokens(title: str) -> list[str]:
-    """The folded words of a title, with the symbols that are words spelled out
-    and the conjunctions read as one."""
+    """The folded words of a title, with the symbols that are words spelled
+    out."""
     text = title
     for symbol, word in SYMBOL_WORDS:
         text = text.replace(symbol, word)
-    words = normalize_title(text).split()
+    return normalize_title(text).split()
+
+
+def _one_conjunction(words: list[str]) -> list[str]:
+    """``words`` with every conjunction read as the same one.
+
+    A reading and not part of the fold, because two of these words are numerals
+    as well: "Winnetou I (1963)" has its "I" in a conjunction's place and is not
+    a conjunction at all - read as one it folds to "winnetou and 1963", and the
+    numeral it really is never gets read at all. Widening keeps both meanings.
+    """
     return [CONJUNCTIONS.get(word, word) if 0 < index < len(words) - 1 else word
             for index, word in enumerate(words)]
+
+
+def _without_the_first(words: list[str]) -> list[str]:
+    """``words`` without a trailing "1", while a title remains.
+
+    The first film of a series is numbered three ways and meant identically:
+    "Winnetou I", "Winnetou 1" and plain "Winnetou" are one film, and a library
+    and a catalogue rarely agree on which. Only ONE of them - a trailing "2" is
+    the sequel, and dropping it would file the sequel under the original.
+
+    Runs after the numerals are read, so the roman "I" has already become the
+    "1" this looks for.
+    """
+    if len(words) > 1 and words[-1] == "1":
+        return words[:-1]
+    return words
 
 
 def _without_article(words: list[str]) -> list[str]:
@@ -471,8 +498,8 @@ def title_keys(title: str) -> frozenset:
     written = _tokens(_spelled_out(title))
     if written != forms[0]:
         forms.append(written)
-    for reading in (_without_article, _without_articles, _without_filler,
-                    _arabic_numerals):
+    for reading in (_one_conjunction, _without_article, _without_articles,
+                    _without_filler, _arabic_numerals, _without_the_first):
         forms = _widen(forms, reading)
     keys = set()
     for words in forms:
@@ -522,7 +549,8 @@ def search_titles(title: str) -> list:
     found = [title]
     folds = {normalize_title(title)}
     for spelling in (stripped, _last_segment(stripped),
-                     _arabic_spelling(stripped), normalize_title(title)):
+                     _arabic_spelling(stripped), _unnumbered(stripped),
+                     normalize_title(title)):
         folded = normalize_title(spelling) if spelling else ""
         if folded and folded not in folds:
             found.append(spelling)
@@ -555,6 +583,15 @@ def _last_segment(title: str) -> str:
     """
     tail = _SEGMENT.split(title)[-1].strip()
     return tail if tail and tail != title.strip() else ""
+
+
+def _unnumbered(title: str) -> str:
+    """``title`` without a trailing "I" or "1", for a catalogue that holds the
+    first of a series under its bare name."""
+    words = title.split()
+    if len(words) > 1 and shell_lower(words[-1]) in ("i", "1"):
+        return " ".join(words[:-1])
+    return ""
 
 
 def _arabic_spelling(title: str) -> str:

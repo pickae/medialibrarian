@@ -554,3 +554,41 @@ class TestALetterFromTheWrongKeyboard:
 
     def test_and_two_different_films_still_do_not_meet(self):
         assert not titlematch.equivalent("Тhor", "Loki")
+
+
+class TestTheFirstOfASeries:
+    """Numbered three ways and meant identically."""
+
+    @pytest.mark.parametrize("one,other", [
+        ("Winnetou I", "Winnetou 1"),
+        ("Winnetou I", "Winnetou"),
+        ("Winnetou 1", "Winnetou"),
+        ("Winnetou I (1963)", "Winnetou (1963)"),
+    ])
+    def test_all_three_numberings_are_one_film(self, one, other):
+        assert titlematch.equivalent(one, other)
+
+    @pytest.mark.parametrize("one,other", [
+        ("Winnetou II", "Winnetou"),
+        ("Winnetou 2", "Winnetou"),
+        ("Winnetou 2", "Winnetou 1"),
+        ("Rocky III", "Rocky"),
+    ])
+    def test_but_only_the_first(self, one, other):
+        """A trailing "2" is the sequel, and dropping it would file the sequel
+        under the film before it."""
+        assert not titlematch.equivalent(one, other)
+
+    def test_the_bare_name_is_offered_as_a_query(self):
+        assert "Winnetou" in titlematch.search_titles("Winnetou I")
+
+    def test_a_roman_numeral_in_a_conjunctions_place_is_still_a_numeral(self):
+        """"Winnetou I (1963)" has its "I" between two words, which is where a
+        conjunction sits - read as one it folds to "winnetou and 1963" and the
+        numeral is never read at all."""
+        keys = titlematch.title_keys("Winnetou I (1963)")
+        assert "winnetou 1 1963" in keys
+        assert "winnetou 1963" in keys
+
+    def test_and_a_conjunction_in_that_place_is_still_a_conjunction(self):
+        assert titlematch.equivalent("Hansel & Gretel", "Hänsel und Gretel")

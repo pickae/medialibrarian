@@ -304,10 +304,35 @@ def onto_base(base: str, name: str) -> str:
         head = name[:cut].rstrip()
         if not head:
             continue
+        if _numbers_another_film(name[cut:]):
+            continue
         if _names_this_film(base, head) or _names_this_film(
                 base, titlematch.strip_duplicate_marker(head)):
             return base + name[cut:]
     return ""
+
+
+# A number standing on its own, in words or in roman, with nothing holding it.
+_A_NUMBER = re.compile(r"^(?:[0-9]+|[ivxlcdm]+)$", re.I)
+
+
+def _numbers_another_film(rest: str) -> bool:
+    """Whether what follows a matched title numbers a DIFFERENT film.
+
+    "Winnetou" matches the folder "Winnetou I (1963)", because the first of a
+    series is numbered three ways and meant identically - and that same reading
+    makes "Winnetou II (1964).mkv" match it too, with the "II" left over as
+    though it were an edition. It is not an edition: it is the sequel, and
+    absorbing it is precisely how a sequel gets filed under the film before it.
+
+    Only a BARE number counts. One in brackets is a year or a copy's marker,
+    and "Part 2" is a part - both of them say something about this film rather
+    than naming another.
+    """
+    words = rest.split()
+    # Cut at the first dot, or the number that IS the whole rest of the name
+    # arrives wearing its extension: "Winnetou 2.mkv" leaves "2.mkv".
+    return bool(words) and bool(_A_NUMBER.match(words[0].split(".", 1)[0]))
 
 
 def _boundaries(name: str) -> list:

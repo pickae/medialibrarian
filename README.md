@@ -607,7 +607,9 @@ wrong in several ways at once is still found:
   be reached — `ä` reads as `a` and as `ae`, `ø` as `o` and as `oe`;
 - a dash, apostrophe, comma or point written as a space, or as nothing at all,
   which is also how an abbreviation with its points meets one without;
-- a roman numeral for an arabic one;
+- a roman numeral for an arabic one, and a trailing `1` dropped altogether —
+  the first of a series is written `Winnetou I`, `Winnetou 1` and `Winnetou`
+  and meant identically. Only the first: a trailing `2` is the sequel.
 - an article gone from anywhere in the name, or several of them, or moved to
   the end the way a catalogue that sorts by the first real word moves it;
 - `&` written out, in any of the six languages;
@@ -624,7 +626,23 @@ writes half the title on each, so the folder above is read as the first half and
 the two together are asked about as one title. Where
 that leaves several candidates or none, the film's own length decides: the folder is tagged only if exactly one candidate's runtime
 fits what is on the disk and every other is ruled out, which is also what lets a
-folder whose year is off by one be named at all. A folder of named editions
+folder whose year is off by one be named at all.
+
+Before the length is asked, two narrowings settle most of what used to reach it,
+because candidates are not equally likely just because they all survived:
+
+- **A title as written beats one reached through a reading.** Where any
+  candidate folds to exactly what the folder is called, only those are
+  considered — a folder called `1917` is not left unnamed because some other
+  film also answers to it through a dropped article.
+- **A re-release does not answer for the film it was timed to.** A 1976 film
+  back in cinemas in 2018 lists 2018 among its years; where another candidate
+  was *first* released around the wanted year, the older one is set aside.
+  Around, not exactly on — a premiere and a general release a year apart are
+  the case the year rule exists for.
+
+Both narrow and never widen: where every candidate is equally strong, they all
+stand and the length decides as before. A folder of named editions
 offers no length — which of the cuts the catalogue's one runtime is for is
 exactly what is not known — so it falls back to the year alone.
 
@@ -691,13 +709,15 @@ two lists — a library of any size prints thousands of those lines, and the poi
 of a dry run is to be able to read them.
 
 And a fourth list, `ingest-movies-nearmisses-<folder>.txt`, says **how close the
-folders it left alone came**: what TMDb was asked, which films it offered under
-each query, and why every one of them was refused — a title that did not meet,
-a year that did not, a length that ruled nothing out. For a folder whose files
-could not be made to agree, it prints what the folder and each of its files
-*read as* once the tags are off, side by side: two lines that read the same are
-a reading the matching does not have yet; two that read differently are two
-different films. It is the list to read
+films it could not name came**: what TMDb was asked, which films it offered
+under each query, and why every one of them was refused — a title that did not
+meet, a year that did not, a length that ruled nothing out.
+
+The lists do not overlap. Each folder appears in exactly one of them, because a
+folder read twice is a folder looked at twice. The ambiguous list carries its
+own diagnosis instead: under each name, what it *reads as* once the spelling is
+folded away. Two lines that read the same are a reading the matching does not
+have yet — worth reporting; two that read differently are two different films. It is the list to read
 before trusting the other two. A page of candidates that are plainly the film
 means the matching is too narrow; a page of films that merely share a word means
 it is working. Dry run only — once the renames have happened, the library is the
