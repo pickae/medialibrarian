@@ -99,6 +99,9 @@ USAGE_TAIL = """
     only when ONE film carries that title and was released that year in some
     country - and where that leaves several or none, only when the film's own
     length fits one of them and rules out every other
+    recognises a file that is the same film named in another language by the
+    titles TMDb holds it under, and leaves its name alone - only the id is
+    added, and the folder is listed in a file of its own
     reads an accent dropped or written out, a dash, an apostrophe, a roman
     numeral, articles gone from anywhere in the name and a written-out \"&\" as
     the same title said differently - several at once in one name included -

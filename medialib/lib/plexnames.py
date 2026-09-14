@@ -312,6 +312,35 @@ def _names_this_film(base: str, head: str) -> bool:
     return bare != base and titlematch.equivalent(bare, head)
 
 
+def named_by_catalogue(names, aliases) -> dict:
+    """{name: the catalogue's own writing of the title it answers to}, for the
+    names a CATALOGUE says are this film - and which nothing about the strings
+    could have said.
+
+    "Das Krokodil und sein Nilpferd" and "Io sto con gli ippopotami" have not a
+    syllable in common with "I'm For The Hippopotamus" or with each other, and
+    are one film in three languages. No rule over the text will ever join them;
+    the alternative titles the catalogue holds do.
+
+    Recognition only. A name this accounts for keeps every character it has -
+    which of a film's languages a file is named in is a thing its owner chose,
+    and a lookup is no reason to overwrite it.
+
+    ``aliases`` are the titles as the catalogue writes them, and one of those is
+    what comes back - not the key that matched. A report is read by a person,
+    and a fold is not a title: "Das Krokodil und sein Nilpferd" folds to a key
+    with "and" in the middle of it, which is not a name anything has.
+    """
+    found = {}
+    for name in names:
+        keys = titlematch.title_keys(untitled_base(os.path.splitext(name)[0]))
+        for written in aliases:
+            if titlematch.title_keys(written) & keys:
+                found[name] = written
+                break
+    return found
+
+
 def spelling_renames(base: str, names) -> dict:
     """{name: the name it should be spelled as}, for the names that differ.
 

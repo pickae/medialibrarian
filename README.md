@@ -649,6 +649,22 @@ moves. One id that disagrees stops it: two ids in a folder is how a sequel ends
 up filed under the film before it, and that is a mistake to be shown rather than
 a spelling to be tidied.
 
+One kind of disagreement the names themselves can never settle: a folder whose
+files are the **same film named in another language**. "Das Krokodil und sein
+Nilpferd" and "Io sto con gli ippopotami" share not a syllable with each other,
+and TMDb lists both as titles of the film the folder matched. Where every file
+in a folder is accounted for that way, the folder takes TMDb's spelling and the
+id, and **every file keeps its own name** — which of a film's languages a file
+is named in is a thing you chose, and a lookup is no reason to overwrite it. All
+that is added is the id, so Plex knows they are one film. One file the catalogue
+cannot account for and the folder is left alone as before: a second feature is
+still a second feature.
+
+Nothing is renamed for those folders, so no other list would mention them — they
+get one of their own, `ingest-movies-othertitles-<folder>.txt`, naming each file
+and the catalogued title it answered to. It is written on real runs as well as
+dry ones, because it records what *happened*.
+
 Such a folder **stays on the lists** either way, marked `id applied, names still
 to settle`. The id is no longer missing; the names still are, and whether they
 really could not be settled is exactly the thing worth looking at — an id going

@@ -637,6 +637,11 @@ RENAMES_LIST = "ingest-movies-renames-%s.txt"
 # worth having before anything has been renamed.
 NEAR_MISS_LIST = "ingest-movies-nearmisses-%s.txt"
 
+# And the folders holding one film under several of its own titles, which is
+# the one outcome nothing else records: no name changed, so the rename list is
+# silent about them, and they are not a problem, so the other two are too.
+ALIAS_LIST = "ingest-movies-othertitles-%s.txt"
+
 
 def _tags_only(program: str, roots: list, names: list, write: bool,
                id_list: str) -> int:
@@ -678,12 +683,14 @@ def _tags_only(program: str, roots: list, names: list, write: bool,
         ambiguous: list = []
         planned: list = []
         near_misses: list = []
+        alias_titles: list = []
         # Recursive here and only here: this mode is pointed at a library, where
         # a full ingest is pointed at the folder that holds the films.
         tmdblookup.tag_plex_ids(root, log, skips, dry_run=not write, ids=ids,
                                 unmatched=unmatched, recursive=True,
                                 ambiguous=ambiguous, planned=planned,
-                                near_misses=near_misses if not write else None)
+                                near_misses=near_misses if not write else None,
+                                aliases=alias_titles)
         if id_list:
             shared += unmatched
         elif unmatched:
@@ -701,6 +708,12 @@ def _tags_only(program: str, roots: list, names: list, write: bool,
             if tmdblookup.write_rename_list(listing, planned, root, log):
                 log('%d rename(s) in "%s" would be made - listed in "%s"'
                     % (len(planned), root, listing))
+        if alias_titles:
+            listing = ALIAS_LIST % name
+            if tmdblookup.write_alias_list(listing, alias_titles, root, log):
+                log('%d folder(s) in "%s" hold one film under several of its '
+                    'titles - listed in "%s"'
+                    % (len(alias_titles), root, listing))
         if near_misses:
             listing = NEAR_MISS_LIST % name
             if tmdblookup.write_near_miss_list(listing, near_misses, root, log):

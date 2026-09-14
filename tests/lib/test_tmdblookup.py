@@ -990,17 +990,19 @@ class TestTagPlexIds:
                          ["The Movie (1934) Part 1 - The First Half.mkv",
                           "The Movie (1934) Part 1 - The First Half.en.srt",
                           "The Movie (1934) Part 2 - The Others.mkv"]))
-        calls = self._env(monkeypatch, {"The Movie": "tt0120737"})
+        self._env(monkeypatch, {"The Movie": "tt0120737"})
         logs = []
         ambiguous: list = []
         tmdblookup.tag_plex_ids(".", logs.append, SkipLog(),
                                 ambiguous=ambiguous)
-        # left exactly as it was, and not even looked up
+        # Left exactly as it was. It IS looked up - the catalogue is what
+        # settles a folder holding one film under several of its titles, and
+        # that cannot be known before asking - but an id this run found is
+        # never put on a name it cannot account for.
         assert sorted(p.name for p in (tmp_path / "The Movie (1934)").iterdir()) \
             == ["The Movie (1934) Part 1 - The First Half.en.srt",
                 "The Movie (1934) Part 1 - The First Half.mkv",
                 "The Movie (1934) Part 2 - The Others.mkv"]
-        assert calls == []
         assert [(reason, names) for _path, reason, names in ambiguous] == [
             ("is one film in parts that do not stack",
              ["The Movie (1934) Part 1 - The First Half.mkv",
@@ -1304,8 +1306,9 @@ class TestWhatASpellingSettles:
         candidate = tmdblookup._Candidate(
             years=frozenset({"1997"}), titles=tmdblookup.title_keys("Face/Off"),
             spellings=("Face/Off",), runtime=0.0, imdb="tt0119094")
-        assert tmdblookup._matched(candidate, tmdblookup.title_keys("Face Off")) \
-            == tmdblookup.Match("tt0119094", "")
+        settled = tmdblookup._matched(candidate,
+                                      tmdblookup.title_keys("Face Off"))
+        assert (settled.imdb, settled.title) == ("tt0119094", "")
 
     def test_the_filler_a_library_wrote_in_front_is_asked_around(
             self, monkeypatch, tmp_path):
@@ -1328,8 +1331,10 @@ class TestTheFolderNothingCanRename:
     def _run(self, monkeypatch, tmp_path, folder, files):
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("tmdbApiKey", "apikey")
+        # The lookup runs before the folder is judged now, so the network is
+        # reached; what these cases are about is that it settles nothing here.
         monkeypatch.setattr(tmdblookup, "_curl",
-                            lambda *_a, **_k: pytest.fail("asked the network"))
+                            lambda *_a, **_k: json.dumps({"results": []}))
         _tree(tmp_path, (folder, files))
         logs, ambiguous = [], []
         tmdblookup.tag_plex_ids(".", logs.append, SkipLog(),
@@ -1652,3 +1657,102 @@ class TestTheFoldsAReportShows:
         assert folds == ["the film 1961",
                          "the film 1961 part 2 the revenge",
                          "the film 1961 part 1 the escape"]
+
+
+class TestOneFilmUnderSeveralOfItsTitles:
+    """A folder whose files are the same film named in other languages. Nothing
+    about the strings can say so - "Das Krokodil und sein Nilpferd" and "Io sto
+    con gli ippopotami" share not a syllable with each other or with "I'm For
+    The Hippopotamus" - and the catalogue's own alternative titles can."""
+
+    HIPPO = ("I'm For The Hippopotamus", "Das Krokodil und sein Nilpferd",
+             "Io sto con gli ippopotami")
+
+    def _catalogue(self, monkeypatch, titles, imdb="tt0079068", year="1979"):
+        monkeypatch.setenv("tmdbApiKey", "apikey")
+
+        def fake_curl(url, params):
+            kv = dict(params)
+            if url == _BASE + "/search/movie":
+                if not any(titlematch.equivalent(kv["query"], t)
+                           for t in titles):
+                    return json.dumps({"results": []})
+                return json.dumps({"results": [
+                    _row(1, titles[0], date=year + "-04-01")]})
+            if url == _BASE + "/movie/1":
+                return json.dumps({
+                    "external_ids": {"imdb_id": imdb},
+                    "alternative_titles": {
+                        "titles": [{"title": t} for t in titles[1:]]},
+                    "release_dates": {"results": []}})
+            return None
+
+        monkeypatch.setattr(tmdblookup, "_curl", fake_curl)
+
+    def test_the_folder_is_tagged_and_every_file_keeps_its_own_language(
+            self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("I'm For The Hippopotamus (1979)",
+                         ["Das Krokodil und sein Nilpferd (1979).mkv",
+                          "Io Sto Con Gli Ippopotami (1979).mkv"]))
+        self._catalogue(monkeypatch, self.HIPPO)
+        aliases, ambiguous = [], []
+        tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog(),
+                                aliases=aliases, ambiguous=ambiguous)
+        tagged = tmp_path / "I'm For The Hippopotamus (1979) {imdb-tt0079068}"
+        assert tagged.is_dir()
+        assert ambiguous == []
+        # Each keeps the language it was named in, and gains only the id.
+        assert sorted(path.name for path in tagged.iterdir()) == [
+            "Das Krokodil und sein Nilpferd (1979) {imdb-tt0079068}.mkv",
+            "Io Sto Con Gli Ippopotami (1979) {imdb-tt0079068}.mkv"]
+
+    def test_and_it_is_announced(self, monkeypatch, tmp_path):
+        """Nothing was renamed away, so no other list would mention it."""
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("I'm For The Hippopotamus (1979)",
+                         ["Das Krokodil und sein Nilpferd (1979).mkv",
+                          "Io Sto Con Gli Ippopotami (1979).mkv"]))
+        self._catalogue(monkeypatch, self.HIPPO)
+        aliases = []
+        tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog(),
+                                aliases=aliases)
+        (_path, base, tag, known), = aliases
+        assert (base, tag) == ("I'm For The Hippopotamus (1979)",
+                               "{imdb-tt0079068}")
+        assert sorted(known) == ["Das Krokodil und sein Nilpferd (1979).mkv",
+                                 "Io Sto Con Gli Ippopotami (1979).mkv"]
+
+    def test_a_file_the_catalogue_does_not_know_keeps_the_folder_ambiguous(
+            self, monkeypatch, tmp_path):
+        """One name the catalogue accounts for does not vouch for another it
+        does not: a second feature is still a second feature."""
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("I'm For The Hippopotamus (1979)",
+                         ["Das Krokodil und sein Nilpferd (1979).mkv",
+                          "A Wholly Different Film.mkv"]))
+        self._catalogue(monkeypatch, self.HIPPO)
+        aliases, ambiguous = [], []
+        tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog(),
+                                aliases=aliases, ambiguous=ambiguous)
+        assert aliases == []
+        assert [reason for _p, reason, _n in ambiguous] \
+            == ["holds a film that is not its own"]
+        # And nothing was renamed, so neither file was tagged as the other.
+        assert (tmp_path / "I'm For The Hippopotamus (1979)"
+                / "A Wholly Different Film.mkv").is_file()
+
+    def test_an_id_this_run_found_is_never_put_on_a_name_it_cannot_account_for(
+            self, monkeypatch, tmp_path):
+        """The whole safety of the alias path: only names the CATALOGUE
+        vouched for get the folder's id."""
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("I'm For The Hippopotamus (1979)",
+                         ["I'm For The Hippopotamus (1979).mkv",
+                          "A Wholly Different Film.mkv"]))
+        self._catalogue(monkeypatch, self.HIPPO)
+        tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog())
+        held = sorted(path.name for path in
+                      (tmp_path / "I'm For The Hippopotamus (1979)").iterdir())
+        assert held == ["A Wholly Different Film.mkv",
+                        "I'm For The Hippopotamus (1979).mkv"]
