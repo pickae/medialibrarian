@@ -21,6 +21,9 @@ that is mostly already named.
 import os
 import re
 
+from medialib.lib import titlematch
+from medialib.lib.enums import PART_WORDS
+
 # A film's id tag, anywhere in the name. Plex reads the tag whether it sits on
 # the folder or the file, and is indifferent to the order tags come in.
 ID_TAG_RE = re.compile(r"\{(?:imdb|tmdb)-[^{}]*\}")
@@ -32,15 +35,33 @@ EDITION_RE = re.compile(r"\{edition-([^{}]*)\}")
 # The tokens Plex's scanner stacks on, as one trailing word: the keyword, an
 # optional dot, and a number. Matched case-insensitively, the way the scanner
 # does, so a "Part1" and a "cd2" are both recognised as written.
-STACK_WORDS = ("cd", "dvd", "part", "pt", "disk", "disc")
-STACK_RE = re.compile(r"^(?:" + "|".join(STACK_WORDS) + r")\.?[0-9]+$", re.I)
+_WORDS = "|".join(PART_WORDS)
+STACK_RE = re.compile(r"^(?:" + _WORDS + r")\.?[0-9]+$", re.I)
+
+# The same token written with the number held off - "Part 1", "cd - 2". Plex
+# stacks none of it, because its scanner wants the number against the keyword;
+# but nothing else in the name is in question, so it is a spelling this module
+# corrects rather than a folder it gives up on.
+_LOOSE_PART = re.compile(r"^(" + _WORDS + r")[\s._-]*$", re.I)
+
+# A word that is nothing but separator, which is what stands between the keyword
+# and its number when someone wrote "Part - 6".
+_SEPARATOR = re.compile(r"^[._\-]+$")
 
 # The same words loose in a name rather than as its trailing token: a
 # "Part 1 - The First Half" is a part written the way a person writes one, and
 # Plex stacks none of it - the keyword has to be the last thing in the name,
 # with its number against it.
-_NAMES_A_PART = re.compile(r"^(?:" + "|".join(STACK_WORDS) + r")\.?[0-9]*$",
-                           re.I)
+_NAMES_A_PART = re.compile(r"^(?:" + _WORDS + r")\.?[0-9]*$", re.I)
+
+# The year a film folder carries, as the last thing in its name. Read here so a
+# file that left the year off can still be recognised as the folder's own film.
+_YEAR_SUFFIX = re.compile(r"\s*\([12][0-9]{3}\)\s*$")
+
+# The same year wherever it sits in a name, which is where a tag goes in after:
+# the end of the film's name, and the start of what the release says about
+# itself. The LAST one, the way a folder's own name is read.
+_YEAR_IN_NAME = re.compile(r"\([12][0-9]{3}\)")
 
 # What an improved remux leaves the original under, lower-cased for the compare.
 # A copy is never renamed: it is the film as it arrived, and a tag on it would
@@ -69,21 +90,32 @@ def film_key(stem: str) -> str:
     parts of it, or one of each - which is what lets a folder holding several
     movie files be told from a folder holding several movies.
     """
-    _edition, part = _markers(stem)
+    _edition, _part, eaten = _markers(stem)
     words = ID_TAG_RE.sub(" ", EDITION_RE.sub(" ", stem)).split()
-    if part:
-        words = words[:-1]
-    return " ".join(words)
+    return " ".join(words[:len(words) - eaten])
 
 
 def _markers(stem: str) -> tuple:
-    """The edition name and the stacking token ``stem`` carries, either of which
-    may be ""."""
+    """The edition name, the stacking token, and how many words the token ate.
+
+    Either of the first two may be "". The count is what the callers trim by,
+    because a token is not always one word: "Part 1" is the same stacking token
+    as "Part1", written with the number held off, and it is read as one and
+    written back tight.
+    """
     match = EDITION_RE.search(stem)
     edition = match.group(1) if match else ""
     words = ID_TAG_RE.sub(" ", EDITION_RE.sub(" ", stem)).split()
-    part = words[-1] if words and STACK_RE.match(words[-1]) else ""
-    return edition, part
+    if words and STACK_RE.match(words[-1]):
+        return edition, words[-1], 1
+    if words and words[-1].isdigit():
+        index = len(words) - 2
+        while index >= 0 and _SEPARATOR.match(words[index]):
+            index -= 1
+        loose = _LOOSE_PART.match(words[index]) if index >= 0 else None
+        if loose:
+            return edition, loose.group(1) + words[-1], len(words) - index
+    return edition, "", 0
 
 
 def read_stem(base: str, stem: str) -> tuple:
@@ -98,10 +130,9 @@ def read_stem(base: str, stem: str) -> tuple:
     if not stem.startswith(base):
         return "", ""
     remainder = stem[len(base):]
-    edition, part = _markers(remainder)
+    edition, part, eaten = _markers(remainder)
     leftover = ID_TAG_RE.sub(" ", EDITION_RE.sub(" ", remainder)).split()
-    if part:
-        leftover = leftover[:-1]
+    leftover = leftover[:len(leftover) - eaten]
     if not edition:
         edition = edition_name(" ".join(leftover))
     return edition, part
@@ -208,6 +239,110 @@ def strays_in(base: str, names) -> list:
                  or name[:-len(".mkv")].startswith(base + " ")))
 
 
+def untitled_base(base: str) -> str:
+    """``base`` without its "(Year)": what a file that left the year off says.
+
+    The folder carries the year by convention and a file beside it often does
+    not, so the two are compared both ways round before either is called a
+    different film.
+    """
+    return _YEAR_SUFFIX.sub("", base)
+
+
+def onto_base(base: str, name: str) -> str:
+    """``name`` with its title respelled the way the folder spells it, or "".
+
+    A file whose name only DIFFERS from the folder's - an accent the keyboard
+    could not reach, "Part II" for "Part 2", a dropped "The", an apostrophe
+    stripped out, a year the file never carried - is one of this folder's films
+    written by a different hand, and the difference is a spelling to correct
+    rather than a second film to report.
+
+    The longest leading run of words equivalent to the folder's name is what is
+    replaced, so everything the file said ABOUT its release - its edition, its
+    part, its language suffix - comes through untouched. "" when no prefix of
+    the name names this film, which is the answer for a file that really is
+    something else.
+
+    A copy's marker comes off either way: a "(1)", a "(another copy)" or a
+    " - Copy" is what a file manager writes when two files of one name land in
+    one folder, it says nothing about the film, and a name is neither a stray
+    nor an edition for carrying one. Only where the name it leaves is free -
+    :func:`spelling_renames` will not put two files under one name, and a folder
+    that really does hold the same film twice keeps both and is reported.
+    """
+    if is_kept_copy(name):
+        return ""
+    if name.startswith(base):
+        # Already this film, and the only thing that can be wrong with it is a
+        # marker a file manager left: everything else after the base is what the
+        # release says about itself, and is read rather than corrected.
+        stem, extension = os.path.splitext(name)
+        stripped = titlematch.strip_duplicate_marker(stem)
+        if stripped != stem and len(stripped) >= len(base):
+            return stripped + extension
+        return ""
+    for cut in _boundaries(name):
+        head = name[:cut].rstrip()
+        if not head:
+            continue
+        if _names_this_film(base, head) or _names_this_film(
+                base, titlematch.strip_duplicate_marker(head)):
+            return base + name[cut:]
+    return ""
+
+
+def _boundaries(name: str) -> list:
+    """Where a title could end inside ``name``, longest candidate first.
+
+    A space, because the rest of the name is words; a dot, because a sidecar
+    wears its language and its format there and a film its extension - "<film>.en.srt"
+    has to be able to give up both of them to be recognised as that film.
+    """
+    return [len(name)] + [index for index in range(len(name) - 1, 0, -1)
+                          if name[index] in " ."]
+
+
+def _names_this_film(base: str, head: str) -> bool:
+    """Whether ``head`` is the folder's own film said differently - with the
+    year on either side of the comparison, or on neither."""
+    if titlematch.equivalent(base, head):
+        return True
+    bare = untitled_base(base)
+    return bare != base and titlematch.equivalent(bare, head)
+
+
+def spelling_renames(base: str, names) -> dict:
+    """{name: the name it should be spelled as}, for the names that differ.
+
+    Only the ones a spelling explains: a name this folder's film cannot be read
+    out of is not in here at all, and is what :func:`strays_in` goes on to
+    report. A rename that would land on a name the folder already holds is
+    dropped rather than made - the two files are then genuinely two, whatever
+    their names say, and that is a thing for someone to look at.
+    """
+    held = set(names)
+    corrected: dict[str, str] = {}
+    for name in sorted(names):
+        wanted = onto_base(base, name)
+        if wanted and wanted != name and wanted not in held:
+            corrected[name] = wanted
+            held.add(wanted)
+    return corrected
+
+
+def ids_in(names) -> set:
+    """Every id tag the folder's movie files carry, as a set.
+
+    One entry and nothing else means every film in the folder was tagged, by
+    hand or by an earlier run, as the SAME film - which is the one thing that
+    can be said about a folder whose names cannot be made to agree.
+    """
+    return {match.group(0)
+            for name in names if is_movie_file(name)
+            for match in [ID_TAG_RE.search(name)] if match}
+
+
 def folder_renames(base: str, tag: str, names) -> list:
     """Every rename one movie folder needs, as (old name, new name) pairs.
 
@@ -215,8 +350,88 @@ def folder_renames(base: str, tag: str, names) -> list:
     ``names`` is the folder's listing. A file that belongs to no film in the
     folder is left alone, as is every "(old)" copy, and a name that is already
     right produces no pair - so a second run over the same folder returns [].
+
+    A name that says this folder's film in a different spelling is brought onto
+    the folder's own first, and then read as any other name is - so a file that
+    arrived as "le comte de monte cristo pt 1.mkv" leaves with the folder's
+    capitals, the folder's accents and a stacking token Plex can see.
     """
-    stems = movie_stems(base, names)
+    corrected = spelling_renames(base, names)
+    respelled = [corrected.get(name, name) for name in names]
+    stems = movie_stems(base, respelled)
+    plan = []
+    for name in sorted(names):
+        if is_kept_copy(name):
+            continue
+        spelled = corrected.get(name, name)
+        for stem in stems:
+            if spelled.startswith(stem):
+                break
+        else:
+            continue
+        wanted = plex_stem(base, tag, *read_stem(base, stem))
+        target = wanted + spelled[len(stem):]
+        if target != name:
+            plan.append((name, target))
+    return plan
+
+
+def retag(stem: str, tag: str) -> str:
+    """``stem`` given ``tag``, with every other character of it where it was.
+
+    For the folder nothing can rename: what is wrong with its names is not
+    something a tag may guess at, but the id itself is known, and Plex reads it
+    off whichever name carries it. So the tag goes in and the name is otherwise
+    untouched.
+
+    Where it goes is where it goes everywhere else - straight after the year,
+    which is the end of the film's name and the start of what the release says
+    about itself. A name with no year takes it before its edition tag and before
+    its stacking token, the two things that have to stay after it, and at the
+    end when it has neither.
+
+    A stem that already carries an id is left alone: it is the agreement that
+    was checked, and rewriting it would say the check had found a disagreement.
+    """
+    if not tag or ID_TAG_RE.search(stem):
+        return stem
+    cuts = []
+    for match in _YEAR_IN_NAME.finditer(stem):
+        cuts = [match.end()]
+    edition = EDITION_RE.search(stem)
+    if edition:
+        cuts.append(edition.start())
+    _edition, part, eaten = _markers(stem)
+    if part:
+        cuts.append(_word_start(stem, eaten))
+    cut = min(cuts) if cuts else len(stem)
+    head = stem[:cut].rstrip()
+    tail = stem[cut:].strip()
+    return head + " " + tag + (" " + tail if tail else "")
+
+
+def _word_start(text: str, words: int) -> int:
+    """Where the last ``words`` whitespace-separated words of ``text`` begin."""
+    index = len(text)
+    for _ in range(words):
+        index = len(text[:index].rstrip())
+        space = text.rfind(" ", 0, index)
+        if space < 0:
+            return 0
+        index = space
+    return index
+
+
+def id_tag_renames(tag: str, names) -> list:
+    """Every rename that does nothing but put ``tag`` on this folder's files.
+
+    The answer for a folder whose names cannot be made to agree and whose id is
+    not in doubt: each film keeps the name it has, each sidecar follows its own
+    film the way it always does, and the one thing that changes is that Plex can
+    now see which film they are.
+    """
+    stems = sorted({name[:-len(".mkv")] for name in names if is_movie_file(name)},
+                   key=len, reverse=True)
     plan = []
     for name in sorted(names):
         if is_kept_copy(name):
@@ -226,7 +441,7 @@ def folder_renames(base: str, tag: str, names) -> list:
                 break
         else:
             continue
-        wanted = plex_stem(base, tag, *read_stem(base, stem))
+        wanted = retag(stem, tag)
         if wanted != stem:
             plan.append((name, wanted + name[len(stem):]))
     return plan

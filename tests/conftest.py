@@ -181,13 +181,14 @@ def private_workspace(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(ramscratch._STATE, "ram_base", "", raising=False)
 
     # The other piece of per-process state a test can set and the next test
-    # would inherit: what the host's iconv was found to do. A case that stands
-    # a fake iconv in front of the fold pins the answer for the whole session
-    # otherwise, and the case that suffers is whichever one runs next.
-    from medialib.lib import tmdblookup
-    tmdblookup.reset_iconv_flavour()
+    # would inherit: what the host's iconv was found to do, and the titles
+    # folded by it. A case that stands a fake iconv in front of the fold pins
+    # the answer for the whole session otherwise, and the case that suffers is
+    # whichever one runs next.
+    from medialib.lib import titlematch
+    titlematch.reset_iconv_flavour()
     yield scratch
-    tmdblookup.reset_iconv_flavour()
+    titlematch.reset_iconv_flavour()
     monkeypatch.setattr(ramscratch._STATE, "ram_base", "", raising=False)
 
 

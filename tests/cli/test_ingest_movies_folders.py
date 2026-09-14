@@ -145,9 +145,13 @@ class TestTheListsEachFolderLeaves:
 
         def fake_tag(root, _log, _skips, dry_run=False, ids=None,
                      unmatched=None, recursive=False, ambiguous=None,
-                     planned=None):
+                     planned=None, near_misses=None):
             asked.append(root)
             name = root.rsplit("/", 1)[-1]
+            if near_misses is not None:
+                near_misses += [(root + "/A film (1999)",
+                                 "no confident TMDb match",
+                                 ['asked "A film": 0 result(s)'])]
             if unmatched is not None:
                 unmatched += ["%s film (1999)" % name]
             if ambiguous is not None:
@@ -205,6 +209,32 @@ class TestTheListsEachFolderLeaves:
         assert body == ["A film (1999)/A film (1999).mkv",
                         "    -> A film (1999)/A film (1999) {imdb-tt0000001}.mkv"]
         assert (tmp_path / "ingest-movies-renames-Documentaries.txt").is_file()
+
+    def test_and_how_close_the_folders_it_left_alone_came(
+            self, monkeypatch, tmp_path):
+        """The list that says whether the other two are the right length: a
+        page of candidates that are plainly the film is a reading the matching
+        does not have yet."""
+        monkeypatch.chdir(tmp_path)
+        self._tagging(monkeypatch)
+        _library(tmp_path, "Films")
+        run.main(["-t", str(tmp_path / "Films")])
+        listing = tmp_path / "ingest-movies-nearmisses-Films.txt"
+        assert listing.is_file()
+        body = [line for line in listing.read_text(encoding="utf-8").splitlines()
+                if line and not line.startswith("#")]
+        assert body == ["A film (1999)  -  no confident TMDb match",
+                        '    asked "A film": 0 result(s)']
+
+    def test_but_a_real_run_leaves_no_near_miss_list(self, monkeypatch,
+                                                     tmp_path):
+        """It is a dry run's question. Once the renames have happened, the
+        answer to "should this have matched?" is the library itself."""
+        monkeypatch.chdir(tmp_path)
+        self._tagging(monkeypatch)
+        _library(tmp_path, "Films")
+        run.main(["-t", "-w", str(tmp_path / "Films")])
+        assert not (tmp_path / "ingest-movies-nearmisses-Films.txt").exists()
 
     def test_but_a_real_run_writes_no_such_list(self, monkeypatch, tmp_path):
         """There is nothing to preview once it has happened, and the renames
