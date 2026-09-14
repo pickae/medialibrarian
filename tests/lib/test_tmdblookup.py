@@ -1336,6 +1336,9 @@ class TestTheFolderNothingCanRename:
                                 ambiguous=ambiguous)
         return logs, ambiguous
 
+    def _reasons(self, ambiguous):
+        return [reason for _p, reason, _n in ambiguous]
+
     def test_a_second_film_in_the_folder_still_gets_the_agreed_id(
             self, monkeypatch, tmp_path):
         tag = "{imdb-tt0054824}"
@@ -1343,9 +1346,13 @@ class TestTheFolderNothingCanRename:
             monkeypatch, tmp_path, "Le comte de Monte-Cristo (1961) " + tag,
             ["Le comte de Monte-Cristo (1961) " + tag + ".mkv",
              "L'evasion.mkv"])
-        assert ambiguous == []
         assert (tmp_path / ("Le comte de Monte-Cristo (1961) " + tag)
                 / ("L'evasion " + tag + ".mkv")).is_file()
+        # And it is STILL on the list: the id is no longer missing, the names
+        # still are, and whether they really could not be settled is the thing
+        # somebody has to look at.
+        assert self._reasons(ambiguous) == [
+            "holds a film that is not its own" + tmdblookup.TAGGED_ANYWAY]
 
     def test_a_part_with_a_title_after_it_gets_it_too(self, monkeypatch,
                                                        tmp_path):
@@ -1355,7 +1362,8 @@ class TestTheFolderNothingCanRename:
             monkeypatch, tmp_path, folder,
             ["The Film (1961) " + tag + " Part 1 - The Escape.mkv",
              "The Film (1961) Part 2 - The Revenge.mkv"])
-        assert ambiguous == []
+        assert self._reasons(ambiguous) == [
+            "is one film in parts that do not stack" + tmdblookup.TAGGED_ANYWAY]
         assert (tmp_path / folder
                 / ("The Film (1961) " + tag + " Part 2 - The Revenge.mkv")
                 ).is_file()
@@ -1387,8 +1395,12 @@ class TestTheFolderNothingCanRename:
             monkeypatch, tmp_path, folder,
             ["The Film (1961) " + tag + ".mkv",
              "Another Film " + tag + ".mkv"])
-        assert ambiguous == [] and logs == []
+        assert logs == []
         assert (tmp_path / folder / ("Another Film " + tag + ".mkv")).is_file()
+        # No work to do, and still reported: a run that says nothing about it
+        # would be a folder that quietly stopped being on anyone's list.
+        assert self._reasons(ambiguous) == [
+            "holds a film that is not its own" + tmdblookup.TAGGED_ANYWAY]
 
 
 class TestTheNamesAReportAndAProbeSee:
@@ -1614,3 +1626,29 @@ class TestTheFolderAboveAsTheFirstHalfOfTheTitle:
                                 recursive=True)
         assert (tmp_path / "Alien"
                 / "Alien Resurrection (1997) {imdb-tt0118583}").is_dir()
+
+
+class TestTheFoldsAReportShows:
+    def test_a_tag_is_not_folded_into_what_a_name_says(self, monkeypatch,
+                                                        tmp_path):
+        """Two names that differ only in that one already carries its id would
+        otherwise read as two different films, with the id the loudest thing on
+        the line."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("tmdbApiKey", "apikey")
+        monkeypatch.setattr(tmdblookup, "_curl", lambda *_a, **_k: None)
+        tag = "{imdb-tt0054824}"
+        _tree(tmp_path, ("The Film (1961) " + tag,
+                         ["The Film (1961) " + tag + " Part 1 - The Escape.mkv",
+                          "The Film (1961) Part 2 - The Revenge.mkv"]))
+        near = []
+        tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog(),
+                                dry_run=True, near_misses=near)
+        _path, _reason, notes = near[0]
+        # The name on disk is quoted verbatim, tag and all - it is what the
+        # file is called. What must not carry the tag is the FOLD after it.
+        folds = [note.split("reads as: ", 1)[1] for note in notes]
+        assert not any("imdb" in fold for fold in folds)
+        assert folds == ["the film 1961",
+                         "the film 1961 part 2 the revenge",
+                         "the film 1961 part 1 the escape"]

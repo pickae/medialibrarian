@@ -632,6 +632,11 @@ def _folder_spelling(directory: str, name: str) -> str:
     return directory + "/" + name
 
 
+# What a reason gains when the folder could not be renamed but its id was known
+# all the same. The names still need someone; the id is simply no longer
+# missing too.
+TAGGED_ANYWAY = " (id applied, names still to settle)"
+
 # The id list's own spelling: one film per line, its folder name and its id
 # separated by a tab, "#" comments and blank lines ignored. A tab because a
 # film's name is full of everything else - spaces, brackets, dashes, colons -
@@ -705,6 +710,12 @@ def write_ambiguous_list(path: str, folders, root: str,
         _ID_COMMENT + " part from the END of the name - '<film> Part1' - and",
         _ID_COMMENT + " these have a title after the token, so it cannot.",
         _ID_COMMENT + " Tagged as editions they would read as separate films.",
+        _ID_COMMENT + "",
+        _ID_COMMENT + " '" + TAGGED_ANYWAY.strip(" ()") + "': every id already",
+        _ID_COMMENT + " in the folder said the same film, so the id went on to",
+        _ID_COMMENT + " the folder and its files and nothing else moved. Plex",
+        _ID_COMMENT + " can see which film these are; what it still cannot see",
+        _ID_COMMENT + " is which release each file is.",
         _ID_COMMENT + "",
         _ID_COMMENT + " Rename the files and run the tagging again.",
         "",
@@ -912,12 +923,17 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
         on_disk = {new: old for old, new in corrected.items()}
         trouble = _what_is_wrong(base, respelled)
         if trouble:
-            if not _tag_and_leave(folder, names, tag, skip_log, dry_run, log,
-                                  planned):
-                left = [on_disk.get(name, name) for name in trouble[1]]
-                _flag(ambiguous, folder.path, trouble[0], left)
-                _flag(near_misses, folder.path, trouble[0],
-                      _how_close(base, left))
+            left = [on_disk.get(name, name) for name in trouble[1]]
+            # Reported either way. A folder whose id was settled is still a
+            # folder nothing could rename, and whether it REALLY could not is
+            # the thing a person has to look at - an id going on quietly is
+            # what would keep it off the list it belongs on.
+            tagged = _tag_and_leave(folder, names, tag, skip_log, dry_run, log,
+                                    planned)
+            reason = trouble[0] + (TAGGED_ANYWAY if tagged else "")
+            _flag(ambiguous, folder.path, reason, left)
+            _flag(near_misses, folder.path, reason, _how_close(base, left))
+            if not tagged:
                 log('  "{}" {} - left as it is'.format(base, trouble[2]))
             continue
 
@@ -1128,12 +1144,21 @@ def _how_close(base: str, names: list) -> list:
     which is a reading that is missing; two that read differently are two
     different films, which is the answer the folder was left for.
     """
-    lines = ["the folder reads as: " + titlematch.normalize_title(base)]
+    lines = ["the folder reads as: " + _reads_as(base)]
     for name in names:
         lines.append('"%s" reads as: %s'
-                     % (name, titlematch.normalize_title(
-                         os.path.splitext(name)[0])))
+                     % (name, _reads_as(os.path.splitext(name)[0])))
     return lines
+
+
+def _reads_as(stem: str) -> str:
+    """One name folded to what it SAYS, with the systematic tags off.
+
+    An id or an edition tag is not part of any title, and folded in it would be
+    the loudest thing on the line - two names that differ only in that one
+    already carries its id would read as two different films.
+    """
+    return titlematch.normalize_title(plexnames.film_key(stem))
 
 
 def _flag(ambiguous: list | None, path: str, reason: str, names) -> None:

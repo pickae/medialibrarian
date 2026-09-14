@@ -649,6 +649,11 @@ moves. One id that disagrees stops it: two ids in a folder is how a sequel ends
 up filed under the film before it, and that is a mistake to be shown rather than
 a spelling to be tidied.
 
+Such a folder **stays on the lists** either way, marked `id applied, names still
+to settle`. The id is no longer missing; the names still are, and whether they
+really could not be settled is exactly the thing worth looking at — an id going
+on quietly is what would keep the folder off the list it belongs on.
+
 **`-t` does only this phase** — no conversion, no remux, no downloads, no
 transcription — and does it as a **dry run** unless `-w` is given, printing
 every rename it would make. The films TMDb could not name confidently are
@@ -669,7 +674,11 @@ of a dry run is to be able to read them.
 And a fourth list, `ingest-movies-nearmisses-<folder>.txt`, says **how close the
 folders it left alone came**: what TMDb was asked, which films it offered under
 each query, and why every one of them was refused — a title that did not meet,
-a year that did not, a length that ruled nothing out. It is the list to read
+a year that did not, a length that ruled nothing out. For a folder whose files
+could not be made to agree, it prints what the folder and each of its files
+*read as* once the tags are off, side by side: two lines that read the same are
+a reading the matching does not have yet; two that read differently are two
+different films. It is the list to read
 before trusting the other two. A page of candidates that are plainly the film
 means the matching is too narrow; a page of films that merely share a word means
 it is working. Dry run only — once the renames have happened, the library is the
