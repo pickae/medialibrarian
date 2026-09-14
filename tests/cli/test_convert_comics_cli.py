@@ -353,11 +353,22 @@ class TestStreamingBookByBook:
             depth, the run having a directory of its own in the base."""
             from pathlib import Path
             while not stop.is_set():
-                resident = [path for tree in Path(base).glob("**/convertComics.*")
-                            for path in tree.iterdir()
-                            if path.is_dir() and not path.name.startswith(".pack.")]
-                on_disk = list(comics.outputs.rglob("*.cbz")) \
-                    if comics.outputs.exists() else []
+                # Every one of these walks a tree the RUN is building and
+                # tearing down as we look at it, so a directory can go between
+                # being listed and being descended into. That is not a sample
+                # worth half of - it is a moment to skip, and the next one
+                # comes 20ms later.
+                try:
+                    resident = [path
+                                for tree in Path(base).glob("**/convertComics.*")
+                                for path in tree.iterdir()
+                                if path.is_dir()
+                                and not path.name.startswith(".pack.")]
+                    on_disk = list(comics.outputs.rglob("*.cbz")) \
+                        if comics.outputs.exists() else []
+                except OSError:
+                    time.sleep(0.02)
+                    continue
                 samples.append((len(resident), len(on_disk)))
                 time.sleep(0.02)
 
