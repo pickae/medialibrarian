@@ -73,11 +73,11 @@ def _stub_iconv(monkeypatch, returncode: int, stdout: bytes = b""):
 
 class TestNormalizeTitle:
     @pytest.mark.parametrize("title,want", [
-        ("Amélie", "amelie"),
-        ("SPIDER-MAN: Homecoming", "spider man homecoming"),
+        ("Sélène", "selene"),
+        ("IRON-WOLF: Homecoming", "iron wolf homecoming"),
         ("Café au lait", "cafe au lait"),
-        ("Übung 2: The Æra", "ubung 2 the aera"),
-        ("Bàtman", "batman"),
+        ("Übung 2: Die Æra", "ubung 2 die aera"),
+        ("Nìghthawk", "nighthawk"),
         ("(Weird)  Title!!", "weird title"),
         ("Mì Đội", "mi doi"),
         ("  spaced   out  ", "spaced out"),
@@ -109,24 +109,24 @@ class TestNormalizeTitle:
         resets the string to the original is this module's, and is pinned
         without asking any host."""
         _stub_iconv(monkeypatch, 1)
-        assert titlematch.normalize_title("Amélie 2") == "am lie 2"
+        assert titlematch.normalize_title("Sélène 2") == "s l ne 2"
 
     def test_and_a_transliteration_that_succeeds_is_the_one_used(self,
                                                                  monkeypatch):
-        _stub_iconv(monkeypatch, 0, b"Amelie 2")
-        assert titlematch.normalize_title("Amélie 2") == "amelie 2"
+        _stub_iconv(monkeypatch, 0, b"Selene 2")
+        assert titlematch.normalize_title("Sélène 2") == "selene 2"
 
     def test_an_iconv_that_spells_the_accent_out_is_not_used(self,
                                                              monkeypatch):
         """The macOS rung. GNU libiconv answers "'e" where glibc answers "e",
-        and a fold that took that would key "Amélie" as "am elie" - which
+        and a fold that took that would key "Sélène" as "am elie" - which
         stops matching the same film's ASCII spelling, so the whole reason
         the fold exists is gone."""
         monkeypatch.setattr(
             titlematch.subprocess, "run",
             lambda *_a, **_k: subprocess.CompletedProcess([], 0, b"'e", b""))
         titlematch.reset_iconv_flavour()
-        assert titlematch.normalize_title("Amélie") == "amelie"
+        assert titlematch.normalize_title("Sélène") == "selene"
 
     def test_and_neither_is_a_host_with_no_iconv_at_all(self, monkeypatch):
         """Which used to be a FileNotFoundError out of the middle of a
@@ -139,12 +139,12 @@ class TestNormalizeTitle:
         assert titlematch.normalize_title("Café au lait") == "cafe au lait"
 
     @pytest.mark.parametrize("title,want", [
-        ("Amélie", "amelie"),
-        ("Übung 2: The Æra", "ubung 2 the aera"),
-        ("Bàtman", "batman"),
+        ("Sélène", "selene"),
+        ("Übung 2: Die Æra", "ubung 2 die aera"),
+        ("Nìghthawk", "nighthawk"),
         ("Mì Đội", "mi doi"),
         ("Straße", "strasse"),
-        ("Blade Runner", "blade runner"),
+        ("Night Runner", "night runner"),
     ])
     def test_the_python_fold_answers_what_glibc_answers(self, title, want):
         """The fallback is only a fallback while it agrees with the tool it
@@ -166,7 +166,7 @@ class TestNormalizeTitle:
         monkeypatch.setattr(titlematch.subprocess, "run", counted)
         titlematch.reset_iconv_flavour()
         for _ in range(3):
-            titlematch.normalize_title("Amélie")
+            titlematch.normalize_title("Sélène")
         probe = titlematch._TRANSLIT_PROBE.encode("utf-8")
         assert calls.count(probe) == 1
 
@@ -179,13 +179,13 @@ class TestNormalizeTitle:
 
         titlematch.reset_iconv_flavour()
         monkeypatch.setattr(titlematch.subprocess, "run", refuse)
-        assert titlematch.normalize_title("SPIDER-MAN: Homecoming") \
-            == "spider man homecoming"
+        assert titlematch.normalize_title("IRON-WOLF: Homecoming") \
+            == "iron wolf homecoming"
 
     def test_and_the_short_circuit_answers_what_iconv_would_have(self):
         """Character for character, over every printable ASCII run."""
         for title in ("a---b..c   d", "!!!", "  spaced   out  ", "half life 3",
-                      "(Weird)  Title!!", "A Cat's Tale", "S.W.A.T."):
+                      "(Weird)  Title!!", "A Cat's Tale", "N.E.S.T."):
             titlematch.reset_iconv_flavour()
             short = titlematch.normalize_title(title)
             done = subprocess.run(
@@ -235,36 +235,36 @@ class TestTheReadingsOfOneTitle:
     """The disagreements a library and a catalogue actually have."""
 
     @pytest.mark.parametrize("one,other,about", [
-        ("Amelie", "Am\u00e9lie", "an accent the keyboard could not reach"),
+        ("Selene", "S\u00e9l\u00e8ne", "an accent the keyboard could not reach"),
         ("Fahrenheit 451", "FAHRENHEIT 451", "capitals"),
-        ("Spider-Man", "Spider Man", "a dash written as a space"),
-        ("Spider-Man", "SpiderMan", "a dash written as nothing"),
-        ("Ocean\u2019s Eleven", "Oceans Eleven", "an apostrophe stripped out"),
-        ("Paris, Texas", "Paris - Texas", "a comma written as a dash"),
-        ("Paris, Texas", "Paris \u2014 Texas", "a comma written as an em dash"),
-        ("S.W.A.T.", "SWAT", "an abbreviation with its points"),
-        ("S.W.A.T.", "S W A T", "an abbreviation spaced out"),
-        ("Rocky II", "Rocky 2", "a roman numeral"),
-        ("Star Wars Episode IV", "Star Wars Episode 4", "the same, mid-name"),
-        ("The Thing", "Thing", "an article the folder left off"),
-        ("Shining, The", "The Shining", "an article a catalogue moved"),
-        ("Hansel & Gretel", "Hansel and Gretel", "an ampersand written out"),
-        ("Hansel & Gretel", "Hansel und Gretel", "and written in German"),
-        ("Alien vs. Predator", "Alien versus Predator", "versus written out"),
-        ("Movie - Casablanca", "Casablanca", "a filler word in front"),
-        ("Who Am I?", "Who Am I", "a question mark"),
-        ("Se7en!!", "Se7en", "exclamation marks"),
+        ("Iron-Wolf", "Iron Wolf", "a dash written as a space"),
+        ("Iron-Wolf", "IronWolf", "a dash written as nothing"),
+        ("Harbour\u2019s Eleven", "Harbours Eleven", "an apostrophe stripped out"),
+        ("Dover, Kansas", "Dover - Kansas", "a comma written as a dash"),
+        ("Dover, Kansas", "Dover \u2014 Kansas", "a comma written as an em dash"),
+        ("N.E.S.T.", "NEST", "an abbreviation with its points"),
+        ("N.E.S.T.", "N E S T", "an abbreviation spaced out"),
+        ("Granite II", "Granite 2", "a roman numeral"),
+        ("Nordwind Episode IV", "Nordwind Episode 4", "the same, mid-name"),
+        ("The Shape", "Shape", "an article the folder left off"),
+        ("Beacon, The", "The Beacon", "an article a catalogue moved"),
+        ("Jonas & Greta", "Jonas and Greta", "an ampersand written out"),
+        ("Jonas & Greta", "Jonas und Greta", "and written in German"),
+        ("Seewolf vs. Baer", "Seewolf versus Baer", "versus written out"),
+        ("Movie - Rivertown", "Rivertown", "a filler word in front"),
+        ("What Now?", "What Now", "a question mark"),
+        ("Fi5e!!", "Fi5e", "exclamation marks"),
     ])
     def test_the_two_spellings_meet(self, one, other, about):
         assert titlematch.equivalent(one, other), about
 
     @pytest.mark.parametrize("one,other", [
         ("A Cat's Tale", "A Dog's Tale"),
-        ("Rocky II", "Rocky 3"),
-        ("The Thing", "The Thing II"),
-        ("Toy Story", "Toy Story 2"),
-        ("Alien", "Aliens"),
-        ("Heat", "The Heat Wave"),
+        ("Granite II", "Granite 3"),
+        ("The Shape", "The Shape II"),
+        ("Tin Soldier", "Tin Soldier 2"),
+        ("Seewolf", "Seewoelfe"),
+        ("Heat", "The Frost Wave"),
     ])
     def test_and_two_different_titles_do_not(self, one, other):
         assert not titlematch.equivalent(one, other)
@@ -272,7 +272,7 @@ class TestTheReadingsOfOneTitle:
     def test_a_roman_numeral_is_read_one_way_only(self):
         """A number has one roman spelling, so folding the roman ONTO the
         arabic meets everything folding the other way would."""
-        assert "rocky 2" in titlematch.title_keys("Rocky II")
+        assert "granite 2" in titlematch.title_keys("Granite II")
 
     @pytest.mark.parametrize("word", ["Did", "Dim", "Civil", "Mill", "Lid"])
     def test_a_word_that_looks_roman_is_still_a_word(self, word):
@@ -308,8 +308,8 @@ class TestTheReadingsOfOneTitle:
 
     def test_a_title_that_matched_before_still_matches(self):
         """Widening only ever ADDS keys."""
-        assert titlematch.normalize_title("Casablanca") \
-            in titlematch.title_keys("Casablanca")
+        assert titlematch.normalize_title("Rivertown") \
+            in titlematch.title_keys("Rivertown")
 
 
 class TestWhatToGoAskingUnder:
@@ -318,10 +318,10 @@ class TestWhatToGoAskingUnder:
     and has never heard of a key."""
 
     def test_the_written_title_always_leads(self):
-        assert titlematch.search_titles("Casablanca")[0] == "Casablanca"
+        assert titlematch.search_titles("Rivertown")[0] == "Rivertown"
 
     def test_a_title_that_is_already_right_costs_one_query(self):
-        assert titlematch.search_titles("Casablanca") == ["Casablanca"]
+        assert titlematch.search_titles("Rivertown") == ["Rivertown"]
 
     def test_and_so_does_one_that_only_differs_by_a_fold(self):
         """A catalogue's own search is no more troubled by an accent or a
@@ -330,20 +330,20 @@ class TestWhatToGoAskingUnder:
         assert titlematch.search_titles("AM\u00c9LIE") == ["AM\u00c9LIE"]
 
     def test_the_filler_a_library_wrote_in_front_comes_off(self):
-        assert "James Bond - Goldfinger" in titlematch.search_titles(
-            "Movie - James Bond - Goldfinger")
+        assert "Agent Ward - Blackfeather" in titlematch.search_titles(
+            "Movie - Agent Ward - Blackfeather")
 
     def test_and_so_does_the_franchise_repeated_on_every_film(self):
-        assert "Goldfinger" in titlematch.search_titles(
-            "Movie - James Bond - Goldfinger")
+        assert "Blackfeather" in titlematch.search_titles(
+            "Movie - Agent Ward - Blackfeather")
 
     def test_a_roman_numeral_is_offered_as_a_number(self):
-        assert "Star Wars: Episode 4 - A New Hope" in titlematch.search_titles(
-            "Star Wars: Episode IV - A New Hope")
+        assert "Nordwind: Episode 4 - Der Sturm" in titlematch.search_titles(
+            "Nordwind: Episode IV - Der Sturm")
 
     def test_a_title_that_is_all_separator_asks_nothing_extra(self):
         """A tail the split cuts to nothing has nothing to ask about."""
-        assert "" not in titlematch.search_titles("Heat - ")
+        assert "" not in titlematch.search_titles("Frost - ")
 
     def test_the_queries_are_bounded(self):
         many = "Movie - Special - Film - The Franchise - Part II - The Sequel"
@@ -372,7 +372,7 @@ class TestTheMarkerACopyCarries:
         "Film (1961)",
         "Film (1961) Part1",
         "Film (1961) {edition-Colorized}",
-        "Blade Runner 2049",
+        "Night Runner 2049",
     ])
     def test_and_a_name_that_carries_none_is_untouched(self, name):
         assert titlematch.strip_duplicate_marker(name) == name
@@ -389,10 +389,10 @@ class TestAnArticleThatWentMissingAltogether:
     missing one at a time."""
 
     @pytest.mark.parametrize("one,other", [
-        ("The Lord of the Rings", "Lord of Rings"),
-        ("The Lord of the Rings", "Lord of the Rings"),
-        ("The Lord of the Rings", "The Lord of Rings"),
-        ("Le Comte de Monte-Cristo", "Comte de Monte-Cristo"),
+        ("The Keeper of the Keys", "Keeper of Keys"),
+        ("The Keeper of the Keys", "Keeper of the Keys"),
+        ("The Keeper of the Keys", "The Keeper of Keys"),
+        ("Le Seigneur de Val-Mont", "Seigneur de Val-Mont"),
         ("De Zaak Alzheimer", "Zaak Alzheimer"),
         ("Il Buono, il Brutto, il Cattivo", "Buono Brutto Cattivo"),
     ])
@@ -400,8 +400,8 @@ class TestAnArticleThatWentMissingAltogether:
         assert titlematch.equivalent(one, other)
 
     @pytest.mark.parametrize("one,other", [
-        ("La La Land", "Land"),
-        ("The Grand Budapest Hotel", "Hotel"),
+        ("Bel Bel Ville", "Land"),
+        ("The Grand Riverside Hotel", "Hotel"),
     ])
     def test_but_not_down_to_a_single_word(self, one, other):
         """Not for correctness - a widening cannot name the wrong film, since a
@@ -412,11 +412,11 @@ class TestAnArticleThatWentMissingAltogether:
     def test_the_leading_article_still_comes_off_a_two_word_title(self):
         """That one IS the convention a catalogue varies by, and the floor
         above is the other reading's own."""
-        assert titlematch.equivalent("The Thing", "Thing")
+        assert titlematch.equivalent("The Shape", "Shape")
 
     def test_two_titles_that_only_share_their_articles_do_not_meet(self):
-        assert not titlematch.equivalent("The Lord of the Rings",
-                                         "The Fellowship of the Ring")
+        assert not titlematch.equivalent("The Keeper of the Keys",
+                                         "The Circle of Keys")
 
     def test_the_keys_are_still_bounded(self):
         stacked = "The Movie Special Film Part II & The Sequel III et IV"
@@ -430,7 +430,7 @@ class TestAnAccentALanguageWritesOut:
 
     @pytest.mark.parametrize("accented,written,dropped", [
         ("Übung", "Uebung", "Ubung"),
-        ("Mädchen in Uniform", "Maedchen in Uniform", "Madchen in Uniform"),
+        ("Vögel im Regen", "Voegel im Regen", "Vogel im Regen"),
         ("Der Förster", "Der Foerster", "Der Forster"),
         ("Århus", "Aarhus", "Arhus"),
         ("Køge", "Koege", "Koge"),
@@ -440,8 +440,8 @@ class TestAnAccentALanguageWritesOut:
         assert titlematch.equivalent(accented, dropped)
 
     @pytest.mark.parametrize("one,other", [
-        ("Michael", "Michal"),
-        ("Aeon Flux", "Aon Flux"),
+        ("Rafael", "Rafal"),
+        ("Aeon Vale", "Aon Vale"),
     ])
     def test_and_the_reading_never_runs_backwards(self, one, other):
         """Reading "ae" back as "a" is the same rule reversed, and it cannot be:
@@ -451,10 +451,10 @@ class TestAnAccentALanguageWritesOut:
 
     @pytest.mark.parametrize("one,other", [
         ("François", "Francois"),
-        ("Amélie", "Amelie"),
+        ("Sélène", "Selene"),
         ("Niño", "Nino"),
         ("Straße", "Strasse"),
-        ("Æon Flux", "Aeon Flux"),
+        ("Æon Vale", "Aeon Vale"),
     ])
     def test_the_accents_with_only_one_reading_still_have_it(self, one, other):
         """A cedilla, an acute and a tilde are dropped and nothing else; the
@@ -482,20 +482,20 @@ class TestSeveralOfThemInOneName:
     name that went wrong once usually went wrong twice."""
 
     @pytest.mark.parametrize("one,other,about", [
-        ("THE SHINING", "Shining, The", "case and where the article sits"),
-        ("DER FOERSTER VOM SILBERWALD", "Förster vom Silberwald",
+        ("THE BEACON", "Beacon, The", "case and where the article sits"),
+        ("DER FOERSTER VOM NEBELTAL", "Förster vom Nebeltal",
          "case, a written-out accent and a dropped article"),
-        ("OCEANS ELEVEN II", "Ocean's Eleven 2",
+        ("HARBOURS ELEVEN II", "Harbour's Eleven 2",
          "case, an apostrophe and a roman numeral"),
         ("MOVIE - UEBUNG II", "Übung 2",
          "a filler, a separator, a written-out accent and a numeral"),
-        ("HANSEL AND GRETEL: WITCH-HUNTERS",
-         "Hänsel & Gretel: WitchHunters",
+        ("JONAS AND GRETA: STORM-CHASERS",
+         "Jönas & Greta: StormChasers",
          "an ampersand, an accent, a colon and a joined-up compound"),
-        ("LORD OF RINGS PART II — THE TOWERS",
-         "The Lord of the Rings Part 2 - The Towers",
+        ("KEEPER OF KEYS PART II — THE TOWERS",
+         "The Keeper of the Keys Part 2 - The Towers",
          "two missing articles, a numeral, an em dash and case"),
-        ("S.W.A.T. II", "The SWAT 2",
+        ("N.E.S.T. II", "The NEST 2",
          "an abbreviation's points, an article and a numeral"),
     ])
     def test_a_name_that_went_wrong_twice_is_still_the_same_title(self, one,
@@ -508,28 +508,28 @@ class TestSeveralOfThemInOneName:
         is wrong in six ways still costs a handful of keys rather than every
         combination of six."""
         keys = titlematch.title_keys(
-            "LORD OF RINGS PART II — THE TOWERS")
+            "KEEPER OF KEYS PART II — THE TOWERS")
         assert len(keys) <= 16
 
     def test_and_two_different_films_do_not_meet_through_a_stack(self):
         """Widening is not the same as matching everything."""
         assert not titlematch.equivalent(
             "THE LORD OF THE RINGS PART II",
-            "The Hobbit Part 2")
+            "The Smith Part 2")
 
 
 class TestALetterFromTheWrongKeyboard:
     """A name whose letters are the SHAPE of Latin ones is that name. The fold
-    has no opinion about Cyrillic beyond dropping it, which turned "Thor" whose
+    has no opinion about Cyrillic beyond dropping it, which turned "Tempest" whose
     T is a Cyrillic TE into "hor" and called the file a different film."""
 
     @pytest.mark.parametrize("latin,confusable,about", [
-        ("Thor - Ragnarok", "Тhor - Ragnarok", "Cyrillic TE for T"),
-        ("Apollo 13", "Аpollo 13", "Cyrillic A"),
+        ("Tempest - Rising", "Тempest - Rising", "Cyrillic TE for T"),
+        ("Aurora 13", "Аurora 13", "Cyrillic A"),
         ("Cars", "Сars", "Cyrillic ES for C"),
         ("Home", "Hоme", "Cyrillic O, mid-word"),
         ("Alpha Beta", "Αlpha Βeta", "Greek alpha and beta"),
-        ("Oxygen", "Οxygen", "Greek omicron"),
+        ("Origin", "Οrigin", "Greek omicron"),
     ])
     def test_it_reads_as_the_letter_it_looks_like(self, latin, confusable,
                                                    about):
@@ -543,36 +543,36 @@ class TestALetterFromTheWrongKeyboard:
 
         titlematch.reset_iconv_flavour()
         monkeypatch.setattr(titlematch.subprocess, "run", refuse)
-        assert titlematch.normalize_title("Тhor - Ragnarok (2017)") \
-            == "thor ragnarok 2017"
+        assert titlematch.normalize_title("Тempest - Rising (2017)") \
+            == "tempest rising 2017"
 
     def test_a_title_really_written_in_cyrillic_is_unharmed(self):
         """Both sides of every comparison are folded by this same function, so
         a real Cyrillic title matches itself whether these apply or not."""
-        assert titlematch.equivalent("Сталкер",
-                                     "Сталкер")
+        assert titlematch.equivalent("Корабль",
+                                     "Корабль")
 
     def test_and_two_different_films_still_do_not_meet(self):
-        assert not titlematch.equivalent("Тhor", "Loki")
+        assert not titlematch.equivalent("Тempest", "Loki")
 
 
 class TestTheFirstOfASeries:
     """Numbered three ways and meant identically."""
 
     @pytest.mark.parametrize("one,other", [
-        ("Winnetou I", "Winnetou 1"),
-        ("Winnetou I", "Winnetou"),
-        ("Winnetou 1", "Winnetou"),
-        ("Winnetou I (1963)", "Winnetou (1963)"),
+        ("Falkenauge I", "Falkenauge 1"),
+        ("Falkenauge I", "Falkenauge"),
+        ("Falkenauge 1", "Falkenauge"),
+        ("Falkenauge I (1963)", "Falkenauge (1963)"),
     ])
     def test_all_three_numberings_are_one_film(self, one, other):
         assert titlematch.equivalent(one, other)
 
     @pytest.mark.parametrize("one,other", [
-        ("Winnetou II", "Winnetou"),
-        ("Winnetou 2", "Winnetou"),
-        ("Winnetou 2", "Winnetou 1"),
-        ("Rocky III", "Rocky"),
+        ("Falkenauge II", "Falkenauge"),
+        ("Falkenauge 2", "Falkenauge"),
+        ("Falkenauge 2", "Falkenauge 1"),
+        ("Granite III", "Granite"),
     ])
     def test_but_only_the_first(self, one, other):
         """A trailing "2" is the sequel, and dropping it would file the sequel
@@ -580,18 +580,18 @@ class TestTheFirstOfASeries:
         assert not titlematch.equivalent(one, other)
 
     def test_the_bare_name_is_offered_as_a_query(self):
-        assert "Winnetou" in titlematch.search_titles("Winnetou I")
+        assert "Falkenauge" in titlematch.search_titles("Falkenauge I")
 
     def test_a_roman_numeral_in_a_conjunctions_place_is_still_a_numeral(self):
-        """"Winnetou I (1963)" has its "I" between two words, which is where a
-        conjunction sits - read as one it folds to "winnetou and 1963" and the
+        """"Falkenauge I (1963)" has its "I" between two words, which is where a
+        conjunction sits - read as one it folds to "falkenauge and 1963" and the
         numeral is never read at all."""
-        keys = titlematch.title_keys("Winnetou I (1963)")
-        assert "winnetou 1 1963" in keys
-        assert "winnetou 1963" in keys
+        keys = titlematch.title_keys("Falkenauge I (1963)")
+        assert "falkenauge 1 1963" in keys
+        assert "falkenauge 1963" in keys
 
     def test_and_a_conjunction_in_that_place_is_still_a_conjunction(self):
-        assert titlematch.equivalent("Hansel & Gretel", "Hänsel und Gretel")
+        assert titlematch.equivalent("Jonas & Greta", "Jönas und Greta")
 
 
 class TestANumberTheTitleSurrounds:
@@ -599,18 +599,18 @@ class TestANumberTheTitleSurrounds:
     surrounds it still says which film it is."""
 
     @pytest.mark.parametrize("written,without", [
-        ("Ghost in the Shell 2: Innocence", "Ghost In The Shell Innocence"),
-        ("Ghost in the Shell II: Innocence", "Ghost In The Shell Innocence"),
-        ("Rambo 3 The Return", "Rambo The Return"),
+        ("Steel Halo 2: Silence", "Steel Halo Silence"),
+        ("Steel Halo II: Silence", "Steel Halo Silence"),
+        ("Ranger 3 The Return", "Ranger The Return"),
     ])
     def test_the_number_may_be_left_out(self, written, without):
         assert titlematch.equivalent(written, without)
 
     @pytest.mark.parametrize("one,other", [
-        ("Winnetou 2", "Winnetou"),
-        ("Ip Man 3", "Ip Man"),
-        ("Kill Bill Vol 2", "Kill Bill Vol"),
-        ("Rocky II", "Rocky"),
+        ("Falkenauge 2", "Falkenauge"),
+        ("Ember 3", "Ember"),
+        ("Cut Short Vol 2", "Cut Short Vol"),
+        ("Granite II", "Granite"),
     ])
     def test_but_never_the_one_at_the_end(self, one, other):
         """There is nothing after it to say which film it is: the sequel would
@@ -620,12 +620,12 @@ class TestANumberTheTitleSurrounds:
     def test_nor_a_year_in_the_middle(self, ):
         """The year is the one thing besides the title that says which film
         this is."""
-        assert not titlematch.equivalent("Blade Runner 2049 Nexus",
-                                         "Blade Runner Nexus")
+        assert not titlematch.equivalent("Night Runner 2049 Nexus",
+                                         "Night Runner Nexus")
 
     def test_and_two_sequels_that_differ_only_by_it_are_still_two(self):
-        assert not titlematch.equivalent("Halloween 4 The Return",
-                                         "Halloween 5 The Revenge")
+        assert not titlematch.equivalent("Hallows 4 The Return",
+                                         "Hallows 5 The Revenge")
 
     def test_the_keys_stay_bounded(self):
         stacked = "The Movie Special Film Part II & The Sequel III et IV I"

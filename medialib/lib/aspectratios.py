@@ -88,7 +88,7 @@ TABLE: tuple[Bucket, ...] = (
     Bucket("academy", 11, 8, "1.37", "Academy ratio (properly)",
            "The 1932-53 studio standard; Ida, First Reformed, parts of The Grand Budapest Hotel"),
     Bucket("imaxFilm", 10, 7, "1.43", "IMAX (15/70 film), ~10:7",
-           "True IMAX sequences: The Dark Knight, Oppenheimer, Dune Part Two"),
+           "True IMAX sequences: a film shot partly on IMAX cameras"),
     Bucket("vistaVision", 3, 2, "1.50", "VistaVision native, 35mm stills",
            "Wings of Desire (partly), photographic work"),
     Bucket("broadcastCompromise", 14, 9, "1.56", "14:9 compromise",

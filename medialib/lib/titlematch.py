@@ -79,8 +79,8 @@ def normalize_title(title: str) -> str:
     Only where the host's iconv is glibc's, though - see
     :func:`_iconv_drops_accents`. The other widespread implementation, GNU
     libiconv, is what macOS and MSYS ship, and it SPELLS an accent out rather
-    than dropping it: "Amélie" comes back "Am'elie", which folds on to
-    "am elie" and no longer matches the "amelie" the same film's ASCII
+    than dropping it: "Sélène" comes back "Am'elie", which folds on to
+    "am elie" and no longer matches the "selene" the same film's ASCII
     spelling gives. Those hosts, and a host with no iconv at all, fold in
     Python instead (:func:`_fold_without_iconv`).
 
@@ -228,7 +228,7 @@ def _fold_without_iconv(title: str) -> str:
 # --- the words a fold has to know about --------------------------------------
 
 # The letters of another alphabet that are the SAME SHAPE as a Latin one, and
-# what they are the shape of. A file called "Тhor - Ragnarok" whose first letter
+# what they are the shape of. A file called "Тempest - Rising" whose first letter
 # is a Cyrillic TE is the same name as one spelled with a Latin T - it is the
 # same name on the screen - and the fold, which has no opinion about Cyrillic
 # beyond dropping it, made "hor" of it and called the file a different film.
@@ -261,8 +261,8 @@ CONFUSABLES = str.maketrans({
 
 # The symbols that are WORDS, spelled out before the fold takes them away. "&"
 # and "and" are one title written twice, and the fold's own rule - every
-# non-alphanumeric run becomes a space - would leave "Hansel Gretel" against
-# "Hansel and Gretel" and no way back.
+# non-alphanumeric run becomes a space - would leave "Jonas Greta" against
+# "Jonas and Greta" and no way back.
 SYMBOL_WORDS = (
     ("&", " and "),
     ("＆", " and "),      # fullwidth ampersand
@@ -287,8 +287,8 @@ CONJUNCTIONS = {
 }
 
 # The articles a title leads or trails with, over the same languages. Dropped
-# and kept, never one or the other: "The Thing" and "Thing" are matched either
-# way round, and so is a catalogue's "Shining, The".
+# and kept, never one or the other: "The Shape" and "Shape" are matched either
+# way round, and so is a catalogue's "Beacon, The".
 ARTICLES = frozenset((
     "the", "a", "an",
     "le", "la", "les", "l", "un", "une", "des", "du", "de",
@@ -320,8 +320,8 @@ FILLER_WORDS = frozenset((
 # already spells those out - "Æ" is "ae" and "ß" is "ss" on both sides.
 #
 # One direction only, and it has to stay that way. Reading "ae" back as "a"
-# would be the same rule run backwards, and it cannot be: "Michael" would
-# answer to "Michal" and "Aeon Flux" to "Aon Flux". The accented spelling is
+# would be the same rule run backwards, and it cannot be: "Rafael" would
+# answer to "Rafal" and "Aeon Vale" to "Aon Vale". The accented spelling is
 # what the two written ones have in common, and a catalogue carries it - so
 # both of them meet it there, which is where they need to meet.
 SPELLED_OUT = (
@@ -373,8 +373,8 @@ def _one_conjunction(words: list[str]) -> list[str]:
     """``words`` with every conjunction read as the same one.
 
     A reading and not part of the fold, because two of these words are numerals
-    as well: "Winnetou I (1963)" has its "I" in a conjunction's place and is not
-    a conjunction at all - read as one it folds to "winnetou and 1963", and the
+    as well: "Falkenauge I (1963)" has its "I" in a conjunction's place and is not
+    a conjunction at all - read as one it folds to "falkenauge and 1963", and the
     numeral it really is never gets read at all. Widening keeps both meanings.
     """
     return [CONJUNCTIONS.get(word, word) if 0 < index < len(words) - 1 else word
@@ -385,7 +385,7 @@ def _without_the_first(words: list[str]) -> list[str]:
     """``words`` without a trailing "1", while a title remains.
 
     The first film of a series is numbered three ways and meant identically:
-    "Winnetou I", "Winnetou 1" and plain "Winnetou" are one film, and a library
+    "Falkenauge I", "Falkenauge 1" and plain "Falkenauge" are one film, and a library
     and a catalogue rarely agree on which. Only ONE of them - a trailing "2" is
     the sequel, and dropping it would file the sequel under the original.
 
@@ -401,7 +401,7 @@ def _without_article(words: list[str]) -> list[str]:
     """``words`` with a leading or trailing article taken off, or ``words``.
 
     Both ends, because the two conventions for the same title put it at
-    opposite ones: "The Shining" on disk, "Shining, The" in a catalogue that
+    opposite ones: "The Beacon" on disk, "Beacon, The" in a catalogue that
     sorts by the first real word.
     """
     if len(words) > 1 and words[0] in ARTICLES:
@@ -414,23 +414,23 @@ def _without_article(words: list[str]) -> list[str]:
 def _without_articles(words: list[str]) -> list[str]:
     """``words`` with EVERY article taken out, while two words are left.
 
-    An article does not only go missing from the front. "The Lord of the Rings"
-    is written "Lord of the Rings", "Lord of Rings" and "The Lord of Rings" by
+    An article does not only go missing from the front. "The Keeper of the Keys"
+    is written "Keeper of the Keys", "Keeper of Keys" and "The Keeper of Keys" by
     three different hands, and taking all of them out of both sides is what
     makes those one title however many went missing from either.
 
     The two-word floor is there to keep RECALL, not to keep the module honest -
     a widening cannot make it name the wrong film, because a second candidate
     coming into view is answered by naming neither. What it can do is take a
-    certain match away: "La La Land" worn down to "Land" carries a key a real
+    certain match away: "Bel Bel Ville" worn down to "Land" carries a key a real
     and different film already has, and a folder holding one of them would stop
     being nameable at all. So a title this reading would wear down to a single
     word keeps its articles.
 
     The floor is this reading's own. The leading-article reading above still
     takes one article off a two-word title, because that IS the convention a
-    catalogue varies by - which is also what makes "Los Angeles" answer to
-    "Angeles".
+    catalogue varies by - which is also what makes "Los Robles" answer to
+    "Robles".
     """
     kept = [word for word in words if word not in ARTICLES]
     return kept if len(kept) >= 2 else words
@@ -471,11 +471,11 @@ def _roman_value(numeral: str) -> int:
 def _without_the_inner_number(words: list[str]) -> list[str]:
     """``words`` without a number that has title on BOTH sides of it.
 
-    "Ghost in the Shell 2: Innocence" is written "Ghost in the Shell Innocence"
-    by a library that left the number out, and the two are one film - because
-    everything around the number still says which film it is. That is what
-    makes the number droppable here and not at the end: "Winnetou 2" reduced to
-    "Winnetou" would be the sequel wearing the original's name, and there is
+    "Steel Halo 2: Silence" is written "Steel Halo Silence" by a library that
+    left the number out, and the two are one film - because everything around
+    the number still says which film it is. That is what makes the number
+    droppable here and not at the end: "Falkenauge 2" reduced to "Falkenauge"
+    would be the sequel wearing the original's name, and there is
     nothing else in it to say otherwise.
 
     Runs after the numerals are read, so a roman "II" in the middle of a title
@@ -520,8 +520,8 @@ def title_keys(title: str) -> frozenset:
 
     Each key comes in two spellings, the words joined by a space and the words
     joined by nothing. That pair is the whole of the punctuation question: a
-    title written "S.W.A.T.", "S W A T" or "SWAT" folds to one squeezed key, and
-    so do "Spider-Man" and "Spider Man", "A Cat's Tale" and "A Cats Tale", and
+    title written "N.E.S.T.", "N E S T" or "NEST" folds to one squeezed key, and
+    so do "Iron-Wolf" and "Iron Wolf", "A Cat's Tale" and "A Cats Tale", and
     every dash, comma, point and exclamation mark between two words.
     """
     forms = [_tokens(title)]
@@ -604,8 +604,8 @@ def _filler_stripped(title: str) -> str:
 def _last_segment(title: str) -> str:
     """What stands after the LAST " - " or ": " in ``title``.
 
-    The franchise someone repeated on every film in it - "James Bond - Goldfinger",
-    "Star Wars: A New Hope" - is not on the catalogue's side of the name, and
+    The franchise someone repeated on every film in it - "Agent Ward - Blackfeather",
+    "Nordwind: Der Sturm" - is not on the catalogue's side of the name, and
     what is left once every such prefix is gone is the film's own title.
 
     Empty when the title has no such break, and empty when the break is the only

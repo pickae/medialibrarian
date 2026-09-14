@@ -28,8 +28,8 @@ from medialib.lib.titlematch import normalize_title, title_keys
 _BASE = "https://api.themoviedb.org/3"
 
 # A movie folder is "Title (Year)" where the Year is 1xxx or 2xxx. The greedy
-# title takes everything up to the LAST "(Year)", so "Batman (1999) (2005)"
-# reads as title "Batman (1999)", year "2005".
+# title takes everything up to the LAST "(Year)", so "Nighthawk (1999) (2005)"
+# reads as title "Nighthawk (1999)", year "2005".
 _YEAR_RE = re.compile(r"^(.+) \(([12][0-9]{3})\)$")
 
 # The same thing with one of its brackets lost - to a rename that cut the name
@@ -373,7 +373,7 @@ def _that_can_answer(named: list, notes: list | None = None) -> list:
     What is being asked for is an IMDb id, so a candidate that has none was
     never a possible answer to it - settling on one returns nothing, and the
     only thing it can do is stand beside a candidate that does have one and
-    make the pair of them look uncertain. A folder called "Re Born" was offered
+    make the pair of them look uncertain. A folder called "Re Made" was offered
     the film it is and an idol video with no id, both lengths fitting, and was
     told the question could not be settled.
 
@@ -402,9 +402,9 @@ def _the_best_evidence(named: list, plainly: frozenset,
 
     A match through one of the widened readings and a match on the folder's
     title as written are not the same evidence, and weighing them equally is
-    what leaves an obvious film unnamed. A folder called "1917" is offered the
-    film "1917", which folds to exactly what the folder does, alongside a
-    "Bisbee '17" that only reached the list through a reading - and the rule,
+    what leaves an obvious film unnamed. A folder called "1815" is offered the
+    film "1815", which folds to exactly what the folder does, alongside a
+    "Bramble '15" that only reached the list through a reading - and the rule,
     seeing several candidates whose lengths all fit, named neither.
 
     So where any candidate matches plainly, only those are considered. It
@@ -430,8 +430,8 @@ def _not_a_rerelease(dated: list, year: str, notes: list | None = None) -> list:
     A film's year is every year any country released it in, which is what lets
     a festival premiere and a release the year after both answer for a folder.
     It also lets a re-release answer, and a re-release is timed to something -
-    usually a remake: "A Star Is Born" from 1976 went back into cinemas in 2018
-    because "A Star Is Born" from 2018 came out, and a folder named for the
+    usually a remake: "A Light Is Lit" from 1976 went back into cinemas in 2018
+    because "A Light Is Lit" from 2018 came out, and a folder named for the
     remake was offered both and told they were equally likely.
 
     So where some candidates were FIRST released around the wanted year and
@@ -538,7 +538,7 @@ def _matched(candidate: _Candidate, want: frozenset) -> Match:
     found under and is not one it is renamed to.
 
     "" for a spelling no file may be named after - one carrying a path separator
-    or a NUL. Face/Off is a real film and not a real folder, and the id is still
+    or a NUL. Trade/Off is a real film and not a real folder, and the id is still
     worth having.
     """
     for spelling in candidate.spellings:
@@ -1126,8 +1126,8 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
                         # Re-based rather than worked out afresh: the files
                         # matched the name the FOLDER had, and a catalogue's
                         # fuller title need not fold to anything they say -
-                        # "Episode IV - A New Hope" is not "Star Wars: Episode
-                        # IV - A New Hope". Asking again under the new name
+                        # "Episode IV - Der Sturm" is not "Nordwind: Episode
+                        # IV - Der Sturm". Asking again under the new name
                         # would leave this film's own files behind as strays.
                         corrected = _rebased(corrected, names, base, spelled)
                         base = spelled
@@ -1339,8 +1339,8 @@ def _with_the_folder_above(root: str, folder, title: str) -> str:
     """This film's title with the folder above it read as its first half, or "".
 
     A library that keeps a franchise in a folder of its own writes half the
-    title on each: "Star Wars" holding "Episode IV - A New Hope", "The Lord of
-    the Rings" holding "The Fellowship of the Ring". Neither half is the title
+    title on each: "Nordwind" holding "Episode IV - Der Sturm", "The Lord of
+    the Rings" holding "The Circle of Keys". Neither half is the title
     a catalogue has, and put together they are.
 
     The mirror of the franchise a library repeats on every film IN it, which the
@@ -1349,7 +1349,7 @@ def _with_the_folder_above(root: str, folder, title: str) -> str:
 
     "" for a film sitting directly in the folder the run was pointed at: that
     one is the library, named by whoever typed it, and gluing it to every title
-    underneath would ask about "Films Casablanca" once per film.
+    underneath would ask about "Films Rivertown" once per film.
     """
     above = os.path.dirname(os.path.abspath(folder.path))
     if above == os.path.abspath(root):

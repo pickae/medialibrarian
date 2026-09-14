@@ -226,7 +226,7 @@ class TestWhetherAFolderHoldsOneFilm:
             == ["Film (2020).mkv"]
 
 
-BASE = "Le comte de Monte-Cristo (1961)"
+BASE = "Le seigneur de Val-Mont (1961)"
 
 
 class TestAPartWrittenWithItsNumberHeldOff:
@@ -272,12 +272,12 @@ class TestBringingANameOntoTheFoldersOwn:
     written by another hand, not a second film."""
 
     @pytest.mark.parametrize("name,wanted", [
-        ("le comte de monte cristo (1961).mkv", BASE + ".mkv"),
-        ("Le Comte De Monte-Cristo (1961).mkv", BASE + ".mkv"),
-        ("Le comte de Monte Cristo (1961).mkv", BASE + ".mkv"),
-        ("Le comte de Monte-Cristo.mkv", BASE + ".mkv"),
-        ("le comte de monte cristo (1961) part 1.mkv", BASE + " part 1.mkv"),
-        ("Le Comte de Monte Cristo.en.srt", BASE + ".en.srt"),
+        ("le seigneur de val mont (1961).mkv", BASE + ".mkv"),
+        ("Le Seigneur De Val-Mont (1961).mkv", BASE + ".mkv"),
+        ("Le seigneur de Val Mont (1961).mkv", BASE + ".mkv"),
+        ("Le seigneur de Val-Mont.mkv", BASE + ".mkv"),
+        ("le seigneur de val mont (1961) part 1.mkv", BASE + " part 1.mkv"),
+        ("Le Seigneur de Val-Mont.en.srt", BASE + ".en.srt"),
     ])
     def test_the_spelling_is_corrected_and_the_rest_comes_through(self, name,
                                                                    wanted):
@@ -285,27 +285,27 @@ class TestBringingANameOntoTheFoldersOwn:
 
     @pytest.mark.parametrize("name", [
         "Some Other Film.mkv",
-        "The Count of Monte Cristo (1961).mkv",
-        "Le comte de Monte-Cristo (1961).mkv",
+        "The Lord of Val-Mont (1961).mkv",
+        "Le seigneur de Val-Mont (1961).mkv",
     ])
     def test_and_a_name_this_film_cannot_be_read_out_of_is_left(self, name):
         assert plexnames.onto_base(BASE, name) == ""
 
     def test_the_copy_an_improved_remux_kept_is_never_respelled(self):
-        assert plexnames.onto_base(BASE, "le comte de monte cristo (old).mkv") == ""
+        assert plexnames.onto_base(BASE, "le seigneur de val mont (old).mkv") == ""
 
     def test_a_rename_that_would_land_on_a_held_name_is_dropped(self):
         """The two files are then genuinely two, whatever their names say."""
         assert plexnames.spelling_renames(
-            BASE, [BASE + ".mkv", "le comte de monte cristo (1961).mkv"]) == {}
+            BASE, [BASE + ".mkv", "le seigneur de val mont (1961).mkv"]) == {}
 
     def test_the_whole_folder_is_respelled_and_tagged_in_one_plan(self):
         assert plexnames.folder_renames(
-            BASE, TAG, ["le comte de monte cristo (1961) part 1.mkv",
-                        "le comte de monte cristo (1961) part 2.mkv"]) \
-            == [("le comte de monte cristo (1961) part 1.mkv",
+            BASE, TAG, ["le seigneur de val mont (1961) part 1.mkv",
+                        "le seigneur de val mont (1961) part 2.mkv"]) \
+            == [("le seigneur de val mont (1961) part 1.mkv",
                  BASE + " " + TAG + " part1.mkv"),
-                ("le comte de monte cristo (1961) part 2.mkv",
+                ("le seigneur de val mont (1961) part 2.mkv",
                  BASE + " " + TAG + " part2.mkv")]
 
     def test_a_folder_already_right_still_returns_no_work(self):
@@ -379,46 +379,46 @@ class TestAYearWithADigitWrong:
         assert not plexnames.is_only_a_year(text)
 
     def test_the_file_is_read_as_this_film_dated_differently(self):
-        assert plexnames.read_stem("Dragons Forever (1988)",
-                                   "Dragons Forever (1988) (1998)") \
+        assert plexnames.read_stem("Falcons Forever (1988)",
+                                   "Falcons Forever (1988) (1998)") \
             == ("1998", "")
 
     def test_a_file_dated_differently_is_brought_onto_the_folders_name(self):
         """It is this film - the title says so and only the year differs - so
         it is not a stray; what it is instead is the folder's own business."""
-        assert plexnames.onto_base("Dragons Forever (1988)",
-                                   "Dragons Forever (1998).mkv") \
-            == "Dragons Forever (1988) (1998).mkv"
+        assert plexnames.onto_base("Falcons Forever (1988)",
+                                   "Falcons Forever (1998).mkv") \
+            == "Falcons Forever (1988) (1998).mkv"
 
 
 class TestANumberedSequelIsNotAnEdition:
-    """The reading that makes "Winnetou" match the folder "Winnetou I (1963)"
-    also makes "Winnetou II (1964).mkv" match it, with the "II" left over as
+    """The reading that makes "Falkenauge" match the folder "Falkenauge I (1963)"
+    also makes "Falkenauge II (1964).mkv" match it, with the "II" left over as
     though it were an edition. It is the sequel."""
 
     @pytest.mark.parametrize("name", [
-        "Winnetou II (1964).mkv",
-        "Winnetou 2.mkv",
-        "Winnetou II.mkv",
-        "Winnetou III (1965).mkv",
+        "Falkenauge II (1964).mkv",
+        "Falkenauge 2.mkv",
+        "Falkenauge II.mkv",
+        "Falkenauge III (1965).mkv",
     ])
     def test_a_bare_number_after_the_title_names_another_film(self, name):
-        assert plexnames.onto_base("Winnetou I (1963)", name) == ""
+        assert plexnames.onto_base("Falkenauge I (1963)", name) == ""
 
     @pytest.mark.parametrize("name,wanted", [
-        ("Winnetou (1963).mkv", "Winnetou I (1963).mkv"),
-        ("Winnetou I (1963) (1).mkv", "Winnetou I (1963).mkv"),
-        ("Winnetou 1 (1963).mkv", "Winnetou I (1963).mkv"),
+        ("Falkenauge (1963).mkv", "Falkenauge I (1963).mkv"),
+        ("Falkenauge I (1963) (1).mkv", "Falkenauge I (1963).mkv"),
+        ("Falkenauge 1 (1963).mkv", "Falkenauge I (1963).mkv"),
     ])
     def test_while_the_first_of_the_series_still_comes_home(self, name, wanted):
-        assert plexnames.onto_base("Winnetou I (1963)", name) == wanted
+        assert plexnames.onto_base("Falkenauge I (1963)", name) == wanted
 
     def test_a_number_in_brackets_is_not_a_sequel(self):
         """It is a year or a copy's marker, and both say something about THIS
         film rather than naming another."""
-        assert plexnames.onto_base("Dragons Forever (1988)",
-                                   "Dragons Forever (1998).mkv") \
-            == "Dragons Forever (1988) (1998).mkv"
+        assert plexnames.onto_base("Falcons Forever (1988)",
+                                   "Falcons Forever (1998).mkv") \
+            == "Falcons Forever (1988) (1998).mkv"
 
     def test_nor_is_a_part(self):
         assert plexnames.onto_base("Film (2020)", "film (2020) part 1.mkv") \
@@ -426,22 +426,22 @@ class TestANumberedSequelIsNotAnEdition:
 
 
 class TestANumberLeftOutOfTheFolderName:
-    """A library that wrote "Ghost In The Shell Innocence" for a film the
-    catalogue calls "Ghost in the Shell 2: Innocence"."""
+    """A library that wrote "Steel Halo Silence" for a film the
+    catalogue calls "Steel Halo 2: Silence"."""
 
     def test_the_file_that_kept_the_number_is_still_this_film(self):
         assert plexnames.onto_base(
-            "Ghost In The Shell Innocence (2004)",
-            "Ghost In The Shell 2 Innocence (2004) HD.mkv") \
-            == "Ghost In The Shell Innocence (2004) HD.mkv"
+            "Steel Halo Silence (2004)",
+            "Steel Halo 2 Silence (2004) HD.mkv") \
+            == "Steel Halo Silence (2004) HD.mkv"
 
     def test_and_the_folder_stops_holding_a_film_that_is_not_its_own(self):
         assert plexnames.strays_in(
-            "Ghost In The Shell Innocence (2004)",
+            "Steel Halo Silence (2004)",
             [plexnames.onto_base(
-                "Ghost In The Shell Innocence (2004)",
-                "Ghost In The Shell 2 Innocence (2004) HD.mkv")]) == []
+                "Steel Halo Silence (2004)",
+                "Steel Halo 2 Silence (2004) HD.mkv")]) == []
 
     def test_a_sequel_of_its_own_is_still_not_this_film(self):
-        assert plexnames.onto_base("Ghost In The Shell Innocence (2004)",
-                                   "Ghost In The Shell 3 (2006).mkv") == ""
+        assert plexnames.onto_base("Steel Halo Silence (2004)",
+                                   "Steel Halo 3 (2006).mkv") == ""
