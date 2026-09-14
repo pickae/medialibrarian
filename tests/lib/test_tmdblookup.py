@@ -237,7 +237,10 @@ class TestTmdbImdbId:
         # point of the alternative/original scan
         search = json.dumps({"results": [
             _row(1, "Batman"), _row(2, "The Dark Knight", original="Batman")]})
-        calls = _install(monkeypatch, search, {1: [], 2: []}, {1: "tt1"})
+        # Both carry an id, so both are answers this could settle on and the
+        # pair of them is what makes it uncertain.
+        calls = _install(monkeypatch, search, {1: [], 2: []},
+                         {1: "tt1", 2: "tt2"})
         assert tmdblookup.tmdb_imdb_id("Batman", "1999") == ""
         assert [url for url, _params in calls] == [
             _BASE + "/search/movie", _detail_url(1), _detail_url(2)]
@@ -2001,3 +2004,69 @@ class TestWhichListAFolderBelongsTo:
         assert unmatched == ["Unknowable (1899)"]
         assert [os.path.basename(path) for path, _r, _n in near] \
             == ["Unknowable (1899)"]
+
+
+class TestACandidateThatCouldNotBeTheAnswer:
+    """What is being asked for is an IMDb id. A candidate with none was never a
+    possible answer, and the only thing it can do is stand beside one that is
+    and make the pair look uncertain."""
+
+    def test_the_one_with_an_id_is_taken(self, monkeypatch):
+        """A folder called "Re Born" was offered the film it is and an idol
+        video with no id, both lengths fitting."""
+        search = json.dumps({"results": [
+            _row(1, "RE:BORN", date="2016-09-10"),
+            _row(2, "忍野さら/Re-Born", date="2016-01-01")]})
+        _install(monkeypatch, search, {}, {1: "tt5678110"},
+                 runtimes={1: 101, 2: 102})
+        assert tmdblookup.tmdb_imdb_id("Re Born", "2016",
+                                       lambda: 100 * 60.0) == "tt5678110"
+
+    def test_where_none_of_them_has_one_they_all_stand(self, monkeypatch):
+        """There is nothing to answer with either way, and the reports should
+        still say what was offered."""
+        search = json.dumps({"results": [_row(1, "Re Born", date="2016-09-10"),
+                                         _row(2, "Re Born", date="2016-01-01")]})
+        _install(monkeypatch, search, {}, {}, runtimes={1: 101, 2: 102})
+        near: list = []
+        assert tmdblookup.identify("Re Born", "2016", lambda: 100 * 60.0,
+                                   near).imdb == ""
+        assert any("does not fit" in note or "fits" in note for note in near)
+
+    def test_and_it_is_said_in_the_report(self, monkeypatch):
+        search = json.dumps({"results": [
+            _row(1, "Re Born", date="2016-09-10"),
+            _row(2, "Re Born", date="2016-01-01"),
+            _row(3, "Re Born", date="2016-02-01")]})
+        _install(monkeypatch, search, {}, {1: "tt0000001"},
+                 runtimes={1: 101, 2: 102, 3: 103})
+        near: list = []
+        tmdblookup.identify("Re Born", "2016", lambda: 0.0, near)
+        assert sum("no IMDb id, so it could not be the answer" in note
+                   for note in near) == 2
+
+    def test_and_it_stops_blocking_as_an_unmeasurable_one(self, monkeypatch):
+        """Worse than standing beside a fit: a candidate with no runtime is
+        never ruled OUT by a length, so one that could not have been the answer
+        kept the answer at "not certain" all by itself."""
+        search = json.dumps({"results": [
+            _row(1, "Mr. Right", date="2015-04-01"),
+            _row(2, "Mr. Right", date="2015-01-01"),
+            _row(3, "我的Mr. Right", date="2015-01-01")]})
+        _install(monkeypatch, search, {},
+                 {1: "tt2091935", 2: "tt3812348"},
+                 runtimes={1: 95, 2: 79})
+        assert tmdblookup.tmdb_imdb_id("Mr. Right", "2015",
+                                       lambda: 95.5 * 60.0) == "tt2091935"
+
+    def test_but_one_that_could_have_been_still_blocks(self, monkeypatch):
+        """The rule this rests on is unchanged: a candidate nobody can measure
+        is not ruled out by a length, so as long as one is standing the answer
+        is still "not certain"."""
+        search = json.dumps({"results": [
+            _row(1, "Mr. Right", date="2015-04-01"),
+            _row(2, "Mr. Right", date="2015-01-01")]})
+        _install(monkeypatch, search, {},
+                 {1: "tt2091935", 2: "tt3812348"}, runtimes={1: 95})
+        assert tmdblookup.tmdb_imdb_id("Mr. Right", "2015",
+                                       lambda: 95.5 * 60.0) == ""

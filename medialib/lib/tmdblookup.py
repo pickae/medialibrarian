@@ -339,6 +339,7 @@ def _under(api_key: str, query: str, want: frozenset, year: str,
     candidates = [_candidate(api_key, row) for row in worth]
     named = [row for row in candidates if want & row.titles]
     _note_the_unnamed(notes, candidates, named)
+    named = _that_can_answer(named, notes)
     named = _the_best_evidence(named, plainly, notes)
     dated = _not_a_rerelease([row for row in named if year in row.years],
                              year, notes)
@@ -364,6 +365,35 @@ def _under(api_key: str, query: str, want: frozenset, year: str,
     if settled is None:
         _note_the_lengths(notes, contenders, seconds)
     return _matched(settled, want) if settled is not None else Match()
+
+
+def _that_can_answer(named: list, notes: list | None = None) -> list:
+    """The candidates that could BE the answer: the ones carrying an IMDb id.
+
+    What is being asked for is an IMDb id, so a candidate that has none was
+    never a possible answer to it - settling on one returns nothing, and the
+    only thing it can do is stand beside a candidate that does have one and
+    make the pair of them look uncertain. A folder called "Re Born" was offered
+    the film it is and an idol video with no id, both lengths fitting, and was
+    told the question could not be settled.
+
+    Worse than standing beside a fit: a candidate TMDb states no runtime for is
+    never ruled OUT by a length either, so one that could not have been the
+    answer kept the answer at "not certain" all by itself.
+
+    Removing something that could not have been the answer is not choosing
+    between films. Where NO candidate has an id there is nothing to answer with
+    either way, and they all stand so that the reports still say what was
+    offered.
+    """
+    answerable = [row for row in named if row.imdb]
+    if not answerable or len(answerable) == len(named):
+        return named
+    for row in named:
+        if not row.imdb:
+            _note(notes, "    %s - set aside: no IMDb id, so it could not be "
+                  "the answer to a question asking for one" % _says(row))
+    return answerable
 
 
 def _the_best_evidence(named: list, plainly: frozenset,

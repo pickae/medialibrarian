@@ -631,9 +631,12 @@ that leaves several candidates or none, the film's own length decides: the folde
 fits what is on the disk and every other is ruled out, which is also what lets a
 folder whose year is off by one be named at all.
 
-Before the length is asked, two narrowings settle most of what used to reach it,
-because candidates are not equally likely just because they all survived:
+Before the length is asked, three narrowings settle most of what used to reach
+it, because candidates are not equally likely just because they all survived:
 
+- **A candidate with no IMDb id was never a possible answer.** What is being
+  asked for is an id; one that has none can only stand beside a candidate that
+  has one and make the pair look uncertain.
 - **A title as written beats one reached through a reading.** Where any
   candidate folds to exactly what the folder is called, only those are
   considered — a folder called `1917` is not left unnamed because some other
@@ -644,8 +647,8 @@ because candidates are not equally likely just because they all survived:
   Around, not exactly on — a premiere and a general release a year apart are
   the case the year rule exists for.
 
-Both narrow and never widen: where every candidate is equally strong, they all
-stand and the length decides as before. A folder of named editions
+All three narrow and never widen: where every candidate is equally strong — or
+equally useless — they all stand and the length decides as before. A folder of named editions
 offers no length — which of the cuts the catalogue's one runtime is for is
 exactly what is not known — so it falls back to the year alone.
 
