@@ -57,7 +57,8 @@ Usage:
     reads an accent dropped or written out, a dash, an apostrophe, a roman
     numeral, articles gone from anywhere in the name and a written-out "&" as
     the same title said differently - several at once in one name included -
-    and asks again
+    reads the folder ABOVE a film as the first half of its title, for a library
+    that keeps a franchise in a folder of its own, and asks again
     without the "Movie"/"Special" a library wrote in front of the name
     writes the folder and its files under TMDb's own spelling of whichever title
     matched, so folder and files stop disagreeing about how the film is spelled

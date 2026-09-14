@@ -13,6 +13,7 @@ COUNTS as the same title is not.
 """
 
 import json
+import os
 import pathlib
 import re
 import subprocess
@@ -1509,3 +1510,107 @@ class TestHowCloseItCame:
         calls = _install(monkeypatch, json.dumps({"results": []}), {}, {})
         tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog())
         assert calls
+
+
+class TestTheFolderAboveAsTheFirstHalfOfTheTitle:
+    """A library that keeps a franchise in a folder of its own writes half the
+    title on each, and neither half is the title a catalogue has."""
+
+    def _network(self, monkeypatch, known):
+        """A catalogue that answers only to the titles in ``known``, folded
+        exactly - so what is being exercised is which spellings are asked."""
+        monkeypatch.setenv("tmdbApiKey", "apikey")
+        asked = []
+
+        def fake_curl(url, params):
+            kv = dict(params)
+            if url == _BASE + "/search/movie":
+                asked.append(kv["query"])
+                for wanted, (rid, _imdb, year) in known.items():
+                    if titlematch.normalize_title(kv["query"]) \
+                            == titlematch.normalize_title(wanted):
+                        return json.dumps({"results": [
+                            _row(rid, wanted, date=year + "-05-01")]})
+                return json.dumps({"results": []})
+            match = re.match(r"^" + re.escape(_BASE) + r"/movie/(\d+)$", url)
+            if match:
+                for _t, (rid, imdb, _y) in known.items():
+                    if rid == int(match.group(1)):
+                        return json.dumps({"external_ids": {"imdb_id": imdb}})
+            return None
+
+        monkeypatch.setattr(tmdblookup, "_curl", fake_curl)
+        return asked
+
+    def test_the_two_halves_together_name_the_film(self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "Star Wars" / "Episode IV - A New Hope (1977)").mkdir(
+            parents=True)
+        (tmp_path / "Star Wars" / "Episode IV - A New Hope (1977)"
+         / "Episode IV - A New Hope (1977).mkv").touch()
+        asked = self._network(monkeypatch, {
+            "Star Wars: Episode IV - A New Hope": (1, "tt0076759", "1977")})
+        tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog(),
+                                recursive=True)
+        # Asked under its own name first, and only then under the two halves.
+        assert asked[0] == "Episode IV - A New Hope"
+        assert "Star Wars Episode IV - A New Hope" in asked
+        # And written under the spelling that answered.
+        assert (tmp_path / "Star Wars"
+                / "Star Wars: Episode IV - A New Hope (1977) {imdb-tt0076759}"
+                ).is_dir()
+
+    def test_and_the_films_own_name_still_comes_first(self, monkeypatch,
+                                                      tmp_path):
+        """A film findable under its own name never pays for the reading."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "Star Wars" / "A New Hope (1977)").mkdir(parents=True)
+        (tmp_path / "Star Wars" / "A New Hope (1977)"
+         / "A New Hope (1977).mkv").touch()
+        asked = self._network(monkeypatch, {"A New Hope": (1, "tt0076759",
+                                                           "1977")})
+        tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog(),
+                                recursive=True)
+        assert asked == ["A New Hope"]
+        assert (tmp_path / "Star Wars"
+                / "A New Hope (1977) {imdb-tt0076759}").is_dir()
+
+    def test_the_folder_the_run_was_pointed_at_is_not_a_franchise(
+            self, monkeypatch, tmp_path):
+        """It is the library, named by whoever typed it, and gluing it to every
+        title underneath would ask about "Films Casablanca" once per film."""
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("A New Hope (1977)", ["A New Hope (1977).mkv"]))
+        asked = self._network(monkeypatch, {})
+        tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog(),
+                                recursive=True)
+        assert not any(query.startswith(os.path.basename(str(tmp_path)))
+                       for query in asked)
+
+    def test_a_tag_an_earlier_run_left_on_the_folder_above_is_not_a_title(
+            self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        above = tmp_path / "Star Wars {imdb-tt0076759}" / "A New Hope (1977)"
+        above.mkdir(parents=True)
+        (above / "A New Hope (1977).mkv").touch()
+        asked = self._network(monkeypatch, {})
+        tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog(),
+                                recursive=True)
+        assert "Star Wars A New Hope" in asked
+        assert not any("imdb" in query for query in asked)
+
+    def test_the_reading_is_offered_to_the_matching_and_not_only_the_search(
+            self, monkeypatch, tmp_path):
+        """A candidate found under the film's own name still has to carry a
+        title this folder answers to - and with the folder above read in, the
+        full title is one of them."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "Alien" / "Resurrection (1997)").mkdir(parents=True)
+        (tmp_path / "Alien" / "Resurrection (1997)"
+         / "Resurrection (1997).mkv").touch()
+        self._network(monkeypatch, {"Alien Resurrection": (1, "tt0118583",
+                                                           "1997")})
+        tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog(),
+                                recursive=True)
+        assert (tmp_path / "Alien"
+                / "Alien Resurrection (1997) {imdb-tt0118583}").is_dir()

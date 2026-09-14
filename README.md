@@ -615,7 +615,10 @@ wrong in several ways at once is still found:
 
 A film nothing is found under is looked for again under the spellings a library
 adds and a catalogue does not — a "Movie"/"Special" in front of the name, a
-franchise repeated on every film in it, its roman numerals as numbers. Where
+franchise repeated on every film in it, its roman numerals as numbers. And under
+the one it *leaves out*: a library that keeps a franchise in a folder of its own
+writes half the title on each, so the folder above is read as the first half and
+the two together are asked about as one title. Where
 that leaves several candidates or none, the film's own length decides: the folder is tagged only if exactly one candidate's runtime
 fits what is on the disk and every other is ruled out, which is also what lets a
 folder whose year is off by one be named at all. A folder of named editions
@@ -623,7 +626,9 @@ offers no length — which of the cuts the catalogue's one runtime is for is
 exactly what is not known — so it falls back to the year alone.
 
 Once a film is named, **TMDb's own spelling of whichever title matched is what
-the folder and every file in it are written under** — the one spelling of the
+the folder and every file in it are written under** — including a film found
+only by reading the folder above it as the first half of its title, which is
+then written out in full — the one spelling of the
 several that is known to be right. Whichever title matched, and not the
 catalogue's primary one: a French film found under its French name stays French,
 because the English title it is also catalogued under folds to something the

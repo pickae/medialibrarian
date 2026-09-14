@@ -22,7 +22,7 @@ from collections.abc import Callable
 from typing import NamedTuple
 
 from medialib.lib import durationcheck, plexnames, safety, titlematch
-from medialib.lib.titlematch import title_keys
+from medialib.lib.titlematch import normalize_title, title_keys
 
 # The TMDb endpoint everything is relative to.
 _BASE = "https://api.themoviedb.org/3"
@@ -224,7 +224,7 @@ def tmdb_imdb_id(title: str, year: str,
 
 def identify(title: str, year: str,
              runtime: Callable[[], float] | None = None,
-             notes: list | None = None) -> Match:
+             notes: list | None = None, also: tuple = ()) -> Match:
     """A film's id and catalogue spelling, ONLY when the match is unambiguous.
 
     Returns an empty :class:`Match` (never a half-certain id) when it is not
@@ -263,19 +263,43 @@ def identify(title: str, year: str,
     writes down so that "no confident match" can be read rather than taken on
     trust, and so a rule that is too narrow shows up as a page of candidates
     that were obviously the film.
+
+    ``also`` are further titles this folder might be the film of - the one the
+    folder above it makes when its name is read as the first half of the title.
+    They count both ways: each is asked about in its own right, and a candidate
+    that carries one of them carries this film's title. The folder's own comes
+    first either way, so a film findable under its own name never pays for them.
     """
     api_key = os.environ.get("tmdbApiKey", "")
     if not api_key:
         return Match()
-    want = title_keys(title)
+    reading = (title,) + tuple(other for other in also if other)
+    want = frozenset().union(*(title_keys(one) for one in reading))
     if not want:
         return Match()
 
-    for query in titlematch.search_titles(title):
+    for query in _queries(reading):
         found = _under(api_key, query, want, year, runtime, notes)
         if found.imdb:
             return found
     return Match()
+
+
+def _queries(reading: tuple) -> list:
+    """Every spelling to ask about, over every title this folder may be of.
+
+    Deduplicated by FOLD across all of them, so a longer reading that only adds
+    punctuation to a shorter one is not a second request for the same answer.
+    """
+    asked: list = []
+    folds = set()
+    for one in reading:
+        for query in titlematch.search_titles(one):
+            folded = normalize_title(query)
+            if folded and folded not in folds:
+                asked.append(query)
+                folds.add(folded)
+    return asked
 
 
 def _under(api_key: str, query: str, want: frozenset, year: str,
@@ -910,7 +934,8 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
                     title, year,
                     functools.partial(_folder_runtime, folder.path, base,
                                       respelled, on_disk),
-                    notes if near_misses is not None else None)
+                    notes if near_misses is not None else None,
+                    also=(_with_the_folder_above(directory, folder, title),))
                 tag = "{imdb-" + found.imdb + "}" if found.imdb else ""
                 # The catalogue's own spelling of whichever title matched is
                 # what the whole folder is written under from here: it is the
@@ -1069,6 +1094,32 @@ def _folder_runtime(path: str, base: str, names: list,
     return durationcheck.total_duration(
         [os.path.join(path, (on_disk or {}).get(name, name))
          for name in movies])
+def _with_the_folder_above(root: str, folder, title: str) -> str:
+    """This film's title with the folder above it read as its first half, or "".
+
+    A library that keeps a franchise in a folder of its own writes half the
+    title on each: "Star Wars" holding "Episode IV - A New Hope", "The Lord of
+    the Rings" holding "The Fellowship of the Ring". Neither half is the title
+    a catalogue has, and put together they are.
+
+    The mirror of the franchise a library repeats on every film IN it, which the
+    search spellings already take OFF - a name can carry too little of the title
+    as easily as too much.
+
+    "" for a film sitting directly in the folder the run was pointed at: that
+    one is the library, named by whoever typed it, and gluing it to every title
+    underneath would ask about "Films Casablanca" once per film.
+    """
+    above = os.path.dirname(os.path.abspath(folder.path))
+    if above == os.path.abspath(root):
+        return ""
+    # Without whatever tag an earlier run put on it, which is not part of any
+    # title. It cannot be a film folder itself - the walk stops at one and does
+    # not look inside - so what is left is a container someone named.
+    name = plexnames.untagged_base(os.path.basename(above))[0].strip()
+    return name + " " + title if name else ""
+
+
 def _how_close(base: str, names: list) -> list:
     """How near each file a folder was left for came to being that folder's own
     film, as the fold that decided it.
