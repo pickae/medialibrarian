@@ -83,7 +83,7 @@ def test_the_folding_the_pin_exists_for():
     """An accent folds to ASCII rather than being dropped - the thing the pin is
     for, in one line."""
     from medialib.lib import titlematch
-    assert titlematch.normalize_title("Amélie") == "amelie"
+    assert titlematch.normalize_title("Sélène") == "selene"
 
 
 # --- the one-name spelling ------------------------------------------------------

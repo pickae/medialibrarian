@@ -618,9 +618,9 @@ class TestComicsThatArriveAsPdfs:
         _pdf(meta, comics.inputs / "Series" / "Scanned Comic.pdf", 3, 1)
         _pdf(meta, comics.inputs / "Series" / "Weekly Magazine.pdf", 6, 4)
         # The same book in both containers, in one folder.
-        _cbz(comics.inputs, "Both/Batman.cbz",
+        _cbz(comics.inputs, "Both/Nighthawk.cbz",
              {"0%d.jpg" % p: "page %d" % p for p in (1, 2)})
-        _pdf(meta, comics.inputs / "Both" / "Batman.pdf", 2, 1)
+        _pdf(meta, comics.inputs / "Both" / "Nighthawk.pdf", 2, 1)
 
         comics.meta = meta
         comics.rendered = rendered
@@ -648,7 +648,7 @@ class TestComicsThatArriveAsPdfs:
     def test_each_archive_records_the_book_it_came_from(self, run):
         comics, _, _ = run
         assert sorted(_source_of(p) for p in comics.outputs.rglob("*.cbz")) == [
-            "Alpha.cbz", "Both/Batman.cbz", "Both/Batman.pdf",
+            "Alpha.cbz", "Both/Nighthawk.cbz", "Both/Nighthawk.pdf",
             "Series/Scanned Comic.pdf"]
 
     def test_one_book_in_two_containers_gives_two_archives(self, run):
@@ -659,10 +659,10 @@ class TestComicsThatArriveAsPdfs:
         comics, _, _ = run
         both = comics.outputs / "Both"
         assert sorted(p.name for p in both.glob("*.cbz")) == [
-            "Batman (2).cbz", "Batman.cbz"]
-        assert _source_of(both / "Batman.cbz") == "Both/Batman.cbz"
-        assert _source_of(both / "Batman (2).cbz") == "Both/Batman.pdf"
-        assert len(_entries(both / "Batman (2).cbz")) == 2
+            "Nighthawk (2).cbz", "Nighthawk.cbz"]
+        assert _source_of(both / "Nighthawk.cbz") == "Both/Nighthawk.cbz"
+        assert _source_of(both / "Nighthawk (2).cbz") == "Both/Nighthawk.pdf"
+        assert len(_entries(both / "Nighthawk (2).cbz")) == 2
 
     def test_the_pdfs_pages_are_the_rendered_ones(self, run):
         comics, _, _ = run

@@ -319,9 +319,9 @@ _A_NUMBER = re.compile(r"^(?:[0-9]+|[ivxlcdm]+)$", re.I)
 def _numbers_another_film(rest: str) -> bool:
     """Whether what follows a matched title numbers a DIFFERENT film.
 
-    "Winnetou" matches the folder "Winnetou I (1963)", because the first of a
+    "Falkenauge" matches the folder "Falkenauge I (1963)", because the first of a
     series is numbered three ways and meant identically - and that same reading
-    makes "Winnetou II (1964).mkv" match it too, with the "II" left over as
+    makes "Falkenauge II (1964).mkv" match it too, with the "II" left over as
     though it were an edition. It is not an edition: it is the sequel, and
     absorbing it is precisely how a sequel gets filed under the film before it.
 
@@ -331,7 +331,7 @@ def _numbers_another_film(rest: str) -> bool:
     """
     words = rest.split()
     # Cut at the first dot, or the number that IS the whole rest of the name
-    # arrives wearing its extension: "Winnetou 2.mkv" leaves "2.mkv".
+    # arrives wearing its extension: "Falkenauge 2.mkv" leaves "2.mkv".
     return bool(words) and bool(_A_NUMBER.match(words[0].split(".", 1)[0]))
 
 
@@ -360,8 +360,8 @@ def named_by_catalogue(names, aliases) -> dict:
     names a CATALOGUE says are this film - and which nothing about the strings
     could have said.
 
-    "Das Krokodil und sein Nilpferd" and "Io sto con gli ippopotami" have not a
-    syllable in common with "I'm For The Hippopotamus" or with each other, and
+    "Die Blaue Stunde" and "L'Ora Blu" have not a
+    syllable in common with "The Blue Hour" or with each other, and
     are one film in three languages. No rule over the text will ever join them;
     the alternative titles the catalogue holds do.
 
@@ -371,7 +371,7 @@ def named_by_catalogue(names, aliases) -> dict:
 
     ``aliases`` are the titles as the catalogue writes them, and one of those is
     what comes back - not the key that matched. A report is read by a person,
-    and a fold is not a title: "Das Krokodil und sein Nilpferd" folds to a key
+    and a fold is not a title: "Die Blaue Stunde" folds to a key
     with "and" in the middle of it, which is not a name anything has.
     """
     found = {}
@@ -425,7 +425,7 @@ def folder_renames(base: str, tag: str, names) -> list:
 
     A name that says this folder's film in a different spelling is brought onto
     the folder's own first, and then read as any other name is - so a file that
-    arrived as "le comte de monte cristo pt 1.mkv" leaves with the folder's
+    arrived as "le seigneur de valmont pt 1.mkv" leaves with the folder's
     capitals, the folder's accents and a stacking token Plex can see.
     """
     corrected = spelling_renames(base, names)

@@ -139,7 +139,7 @@ DUPLICATE_MARKER_PATTERNS = (
     r"\s+copy(?:\s+[0-9]+)?",
     # Every manager's last resort, and a person's first: a bare number in
     # brackets. Never a YEAR, though - a film folder ends in one by convention,
-    # and a rule that read "Casablanca (1942)" as the 1942nd copy of Casablanca
+    # and a rule that read "Rivertown (1942)" as the 1942nd copy of Rivertown
     # would take the year off every name in the library.
     r"\s*\((?![12][0-9]{3}\))[0-9]+\)",
 )

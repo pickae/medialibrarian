@@ -770,8 +770,8 @@ def _naming_pass(state: Run, archives: list) -> list:
         os.makedirs(marker_dir, exist_ok=True)
         marker_name = os.path.basename(archive_rel)
         # One marker per output NAME, and a book APPENDS rather than replacing
-        # what is there: "Batman.cbz" and "Batman.pdf" in one folder are two books
-        # that both want to be called "Batman.cbz". Overwriting would drop one of
+        # what is there: "Nighthawk.cbz" and "Nighthawk.pdf" in one folder are two books
+        # that both want to be called "Nighthawk.cbz". Overwriting would drop one of
         # them; giving the second a " (2)" marker would be worse - the collective
         # rules would then see two siblings sharing "Batman" and strip it from
         # both, so a pair of books would come out as "Batman.cbz" and "(2).cbz".
