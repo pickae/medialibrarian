@@ -609,7 +609,10 @@ wrong in several ways at once is still found:
   which is also how an abbreviation with its points meets one without;
 - a roman numeral for an arabic one, and a trailing `1` dropped altogether —
   the first of a series is written `Winnetou I`, `Winnetou 1` and `Winnetou`
-  and meant identically. Only the first: a trailing `2` is the sequel.
+  and meant identically. Only the first at the end: a trailing `2` is the
+  sequel. A number with title on **both** sides of it may go at any value —
+  `Ghost in the Shell 2: Innocence` is also written `Ghost In The Shell
+  Innocence`, and what surrounds the number still says which film it is;
 - an article gone from anywhere in the name, or several of them, or moved to
   the end the way a catalogue that sorts by the first real word moves it;
 - `&` written out, in any of the six languages;

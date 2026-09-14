@@ -12,6 +12,7 @@ on, and which of the catalogue's spellings the folder is then renamed onto. What
 COUNTS as the same title is not.
 """
 
+import itertools
 import json
 import os
 import pathlib
@@ -1922,3 +1923,81 @@ class TestEvidenceOfDifferentStrength:
         _install(monkeypatch, search, {}, {1: "tt0000001", 2: "tt0000002"},
                  years={1: ["1976", "2018"], 2: ["1976", "2018"]})
         assert tmdblookup.tmdb_imdb_id("The Film", "2018") == ""
+
+
+class TestWhichListAFolderBelongsTo:
+    """Four reports, each folder in exactly one - except the hand-fill list,
+    which is meant to hold the near misses so they can be looked up by hand."""
+
+    def _library(self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("tmdbApiKey", "apikey")
+        _tree(tmp_path,
+              ("Ordinary (1999)", ["Ordinary (1999).mkv"]),
+              ("Box (1999)", ["Box (1999).mkv", "Other Film.mkv"]),
+              ("Unknowable (1899)", ["Unknowable (1899).mkv"]),
+              ("Hippo (1979)", ["Krokodil (1979).mkv"]))
+
+        def fake_curl(url, params):
+            kv = dict(params)
+            if url == _BASE + "/search/movie":
+                for rid, title, year in ((1, "Ordinary", "1999"),
+                                         (2, "Box", "1999"),
+                                         (4, "Hippo", "1979")):
+                    if titlematch.normalize_title(kv["query"]) \
+                            == titlematch.normalize_title(title):
+                        return json.dumps({"results": [
+                            _row(rid, title, date=year + "-01-01")]})
+                return json.dumps({"results": []})
+            match = re.match(r"^" + re.escape(_BASE) + r"/movie/(\d+)$", url)
+            rid = int(match.group(1)) if match else 0
+            body = {"external_ids": {"imdb_id": "tt000000%d" % rid},
+                    "release_dates": {"results": []},
+                    "alternative_titles": {"titles": []}}
+            if rid == 4:
+                body["alternative_titles"] = {"titles": [{"title": "Krokodil"}]}
+            return json.dumps(body)
+
+        monkeypatch.setattr(tmdblookup, "_curl", fake_curl)
+
+    def test_each_folder_is_named_by_exactly_one_report(self, monkeypatch,
+                                                         tmp_path):
+        self._library(monkeypatch, tmp_path)
+        unmatched, ambiguous, planned, near, aliases = [], [], [], [], []
+        tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog(),
+                                dry_run=True, recursive=True,
+                                unmatched=unmatched, ambiguous=ambiguous,
+                                planned=planned, near_misses=near,
+                                aliases=aliases)
+        seen = {
+            "ambiguous": {os.path.basename(path) for path, _r, _n in ambiguous},
+            "nearmiss": {os.path.basename(path) for path, _r, _n in near},
+            "othertitles": {os.path.basename(path)
+                            for path, _b, _t, _k in aliases},
+            # A rename is either of a film folder or of a file inside one, so
+            # the folder it is about is one of those two parts.
+            "renames": {part for source, _target in planned
+                        for part in (os.path.basename(source),
+                                     os.path.basename(os.path.dirname(source)))
+                        if part in ("Ordinary (1999)", "Box (1999)",
+                                    "Unknowable (1899)", "Hippo (1979)")},
+        }
+        assert seen["ambiguous"] == {"Box (1999)"}
+        assert seen["nearmiss"] == {"Unknowable (1899)"}
+        assert seen["othertitles"] == {"Hippo (1979)"}
+        assert seen["renames"] == {"Ordinary (1999)"}
+        for one, other in itertools.combinations(seen, 2):
+            assert not seen[one] & seen[other], (one, other)
+
+    def test_but_the_hand_fill_list_still_holds_the_near_misses(
+            self, monkeypatch, tmp_path):
+        """It is the file somebody types an id into, so the films to look up
+        have to be in it."""
+        self._library(monkeypatch, tmp_path)
+        unmatched, near = [], []
+        tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog(),
+                                dry_run=True, recursive=True,
+                                unmatched=unmatched, near_misses=near)
+        assert unmatched == ["Unknowable (1899)"]
+        assert [os.path.basename(path) for path, _r, _n in near] \
+            == ["Unknowable (1899)"]

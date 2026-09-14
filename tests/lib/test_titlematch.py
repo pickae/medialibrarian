@@ -592,3 +592,41 @@ class TestTheFirstOfASeries:
 
     def test_and_a_conjunction_in_that_place_is_still_a_conjunction(self):
         assert titlematch.equivalent("Hansel & Gretel", "Hänsel und Gretel")
+
+
+class TestANumberTheTitleSurrounds:
+    """A number with title on both sides of it may be left out, because what
+    surrounds it still says which film it is."""
+
+    @pytest.mark.parametrize("written,without", [
+        ("Ghost in the Shell 2: Innocence", "Ghost In The Shell Innocence"),
+        ("Ghost in the Shell II: Innocence", "Ghost In The Shell Innocence"),
+        ("Rambo 3 The Return", "Rambo The Return"),
+    ])
+    def test_the_number_may_be_left_out(self, written, without):
+        assert titlematch.equivalent(written, without)
+
+    @pytest.mark.parametrize("one,other", [
+        ("Winnetou 2", "Winnetou"),
+        ("Ip Man 3", "Ip Man"),
+        ("Kill Bill Vol 2", "Kill Bill Vol"),
+        ("Rocky II", "Rocky"),
+    ])
+    def test_but_never_the_one_at_the_end(self, one, other):
+        """There is nothing after it to say which film it is: the sequel would
+        be wearing the original's name."""
+        assert not titlematch.equivalent(one, other)
+
+    def test_nor_a_year_in_the_middle(self, ):
+        """The year is the one thing besides the title that says which film
+        this is."""
+        assert not titlematch.equivalent("Blade Runner 2049 Nexus",
+                                         "Blade Runner Nexus")
+
+    def test_and_two_sequels_that_differ_only_by_it_are_still_two(self):
+        assert not titlematch.equivalent("Halloween 4 The Return",
+                                         "Halloween 5 The Revenge")
+
+    def test_the_keys_stay_bounded(self):
+        stacked = "The Movie Special Film Part II & The Sequel III et IV I"
+        assert len(titlematch.title_keys(stacked)) <= titlematch.MAX_KEYS

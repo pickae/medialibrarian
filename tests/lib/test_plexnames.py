@@ -423,3 +423,25 @@ class TestANumberedSequelIsNotAnEdition:
     def test_nor_is_a_part(self):
         assert plexnames.onto_base("Film (2020)", "film (2020) part 1.mkv") \
             == "Film (2020) part 1.mkv"
+
+
+class TestANumberLeftOutOfTheFolderName:
+    """A library that wrote "Ghost In The Shell Innocence" for a film the
+    catalogue calls "Ghost in the Shell 2: Innocence"."""
+
+    def test_the_file_that_kept_the_number_is_still_this_film(self):
+        assert plexnames.onto_base(
+            "Ghost In The Shell Innocence (2004)",
+            "Ghost In The Shell 2 Innocence (2004) HD.mkv") \
+            == "Ghost In The Shell Innocence (2004) HD.mkv"
+
+    def test_and_the_folder_stops_holding_a_film_that_is_not_its_own(self):
+        assert plexnames.strays_in(
+            "Ghost In The Shell Innocence (2004)",
+            [plexnames.onto_base(
+                "Ghost In The Shell Innocence (2004)",
+                "Ghost In The Shell 2 Innocence (2004) HD.mkv")]) == []
+
+    def test_a_sequel_of_its_own_is_still_not_this_film(self):
+        assert plexnames.onto_base("Ghost In The Shell Innocence (2004)",
+                                   "Ghost In The Shell 3 (2006).mkv") == ""

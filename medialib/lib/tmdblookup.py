@@ -746,6 +746,10 @@ def write_rename_list(path: str, renames, root: str,
         _ID_COMMENT + " would make them: a folder's files first, then the",
         _ID_COMMENT + " folder itself. Nothing here has happened - run the",
         _ID_COMMENT + " tagging again with -w to carry these out.",
+        _ID_COMMENT + "",
+        _ID_COMMENT + " Folders the other reports are about are not in here.",
+        _ID_COMMENT + " Each of them is explained where it is listed, and the",
+        _ID_COMMENT + " four files between them name every folder once.",
         "",
     ]
     for source, target in renames:
@@ -1015,7 +1019,10 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
     a list is passed, collects the folder names that neither could name, and
     ``ambiguous`` the folders holding more than one film - both are left exactly
     as they are, and both lists are what the run writes its reports from.
-    ``planned`` collects the renames a dry run would have made, for the third.
+    ``planned`` collects the renames a dry run would have made, for the third -
+    the renames of the folders that went through ORDINARY naming, so that the
+    four reports between them cover each folder exactly once. A folder one of
+    the other lists is about is that list's to explain.
     ``near_misses`` collects what TMDb was asked and what it offered for every
     film it could NOT name, for the fourth - the one that says whether "no
     confident match" was the right answer. Only those: a folder another list
@@ -1110,7 +1117,7 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
             # other match here does - it was matched on its own name. Only the
             # files the catalogue vouched for keep theirs.
             _tag_only(
-                folder, names, tag, skip_log, dry_run, log, planned,
+                folder, names, tag, skip_log, dry_run, log, None,
                 functools.partial(_say_the_titles_met, log, base, len(known)),
                 base)
             continue
@@ -1123,7 +1130,7 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
             # the thing a person has to look at - an id going on quietly is
             # what would keep it off the list it belongs on.
             tagged = _tag_and_leave(folder, names, had_tag, skip_log, dry_run,
-                                    log, planned)
+                                    log, None)
             reason = trouble[0] + (TAGGED_ANYWAY if tagged else "")
             _flag(ambiguous, folder.path, reason, left)
             if not tagged:

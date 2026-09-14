@@ -22,8 +22,10 @@ combinations:
   spelled out the way a language writes them when it cannot reach them;
 * the **articles** it carries, kept and dropped - the one it leads or trails
   with, and all of them wherever they sit;
-* its **numerals**, roman read as arabic - and a trailing "1" dropped, because
-  the first film of a series is numbered three ways and meant identically;
+* its **numerals**, roman read as arabic; a trailing "1" dropped, because the
+  first film of a series is numbered three ways and meant identically; and a
+  number with title on BOTH sides of it dropped, because what surrounds it
+  still says which film it is;
 * the **filler** a local library puts in front of a name and a catalogue never
   carries.
 
@@ -466,6 +468,34 @@ def _roman_value(numeral: str) -> int:
     return total
 
 
+def _without_the_inner_number(words: list[str]) -> list[str]:
+    """``words`` without a number that has title on BOTH sides of it.
+
+    "Ghost in the Shell 2: Innocence" is written "Ghost in the Shell Innocence"
+    by a library that left the number out, and the two are one film - because
+    everything around the number still says which film it is. That is what
+    makes the number droppable here and not at the end: "Winnetou 2" reduced to
+    "Winnetou" would be the sequel wearing the original's name, and there is
+    nothing else in it to say otherwise.
+
+    Runs after the numerals are read, so a roman "II" in the middle of a title
+    is dropped as readily as an arabic one.
+    """
+    kept = [word for index, word in enumerate(words)
+            if not (0 < index < len(words) - 1 and _an_ordinal(word))]
+    return kept if len(kept) > 1 else words
+
+
+def _an_ordinal(word: str) -> bool:
+    """Whether a number is a film's place in its series rather than a year.
+
+    A four-digit 19xx or 20xx in the middle of a name is the year, and the year
+    is the one thing besides the title that says which film this is - dropping
+    it would widen a name onto every other year's.
+    """
+    return word.isdigit() and not (len(word) == 4 and word[0] in "12")
+
+
 def _widen(forms: list, reading) -> list:
     """Every form ``forms`` holds, plus what ``reading`` makes of each - once.
 
@@ -499,7 +529,8 @@ def title_keys(title: str) -> frozenset:
     if written != forms[0]:
         forms.append(written)
     for reading in (_one_conjunction, _without_article, _without_articles,
-                    _without_filler, _arabic_numerals, _without_the_first):
+                    _without_filler, _arabic_numerals, _without_the_first,
+                    _without_the_inner_number):
         forms = _widen(forms, reading)
     keys = set()
     for words in forms:
