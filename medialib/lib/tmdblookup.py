@@ -22,7 +22,7 @@ from collections.abc import Callable
 from typing import NamedTuple
 
 from medialib.lib import durationcheck, plexnames, safety, titlematch
-from medialib.lib.titlematch import title_keys
+from medialib.lib.titlematch import normalize_title, title_keys
 
 # The TMDb endpoint everything is relative to.
 _BASE = "https://api.themoviedb.org/3"
@@ -213,6 +213,11 @@ class Match(NamedTuple):
 
     imdb: str = ""
     title: str = ""
+    # Every title the matched film is catalogued under, as the catalogue writes
+    # them. A library that holds one film under two languages' names has no
+    # other way to know they are one film: the names have nothing in common,
+    # and the catalogue is the only thing that says they are the same.
+    aliases: tuple = ()
 
 
 def tmdb_imdb_id(title: str, year: str,
@@ -224,7 +229,7 @@ def tmdb_imdb_id(title: str, year: str,
 
 def identify(title: str, year: str,
              runtime: Callable[[], float] | None = None,
-             notes: list | None = None) -> Match:
+             notes: list | None = None, also: tuple = ()) -> Match:
     """A film's id and catalogue spelling, ONLY when the match is unambiguous.
 
     Returns an empty :class:`Match` (never a half-certain id) when it is not
@@ -263,29 +268,59 @@ def identify(title: str, year: str,
     writes down so that "no confident match" can be read rather than taken on
     trust, and so a rule that is too narrow shows up as a page of candidates
     that were obviously the film.
+
+    ``also`` are further titles this folder might be the film of - the one the
+    folder above it makes when its name is read as the first half of the title.
+    They count both ways: each is asked about in its own right, and a candidate
+    that carries one of them carries this film's title. The folder's own comes
+    first either way, so a film findable under its own name never pays for them.
     """
     api_key = os.environ.get("tmdbApiKey", "")
     if not api_key:
         return Match()
-    want = title_keys(title)
+    reading = (title,) + tuple(other for other in also if other)
+    want = frozenset().union(*(title_keys(one) for one in reading))
     if not want:
         return Match()
 
-    for query in titlematch.search_titles(title):
-        found = _under(api_key, query, want, year, runtime, notes)
+    plainly = frozenset(normalize_title(one) for one in reading) - {""}
+    for query in _queries(reading):
+        found = _under(api_key, query, want, year, runtime, notes, plainly)
         if found.imdb:
             return found
     return Match()
 
 
+def _queries(reading: tuple) -> list:
+    """Every spelling to ask about, over every title this folder may be of.
+
+    Deduplicated by FOLD across all of them, so a longer reading that only adds
+    punctuation to a shorter one is not a second request for the same answer.
+    """
+    asked: list = []
+    folds = set()
+    for one in reading:
+        for query in titlematch.search_titles(one):
+            folded = normalize_title(query)
+            if folded and folded not in folds:
+                asked.append(query)
+                folds.add(folded)
+    return asked
+
+
 def _under(api_key: str, query: str, want: frozenset, year: str,
            runtime: Callable[[], float] | None,
-           notes: list | None = None) -> Match:
+           notes: list | None = None,
+           plainly: frozenset = frozenset()) -> Match:
     """The certainty rule over one query's results.
 
     ``query`` is what TMDb is asked; ``want`` stays the folder's own keys
     throughout, because what is being asked about is still that film - a wider
     query is a way of REACHING the candidate, never a looser test of it.
+
+    ``plainly`` is the folder's title folded and nothing more - no reading, no
+    widening - and it is what tells a strong match from a weak one. See
+    :func:`_the_best_evidence`.
     """
     rows = _search(api_key, query, year)
     if rows is None:
@@ -304,7 +339,10 @@ def _under(api_key: str, query: str, want: frozenset, year: str,
     candidates = [_candidate(api_key, row) for row in worth]
     named = [row for row in candidates if want & row.titles]
     _note_the_unnamed(notes, candidates, named)
-    dated = [row for row in named if year in row.years]
+    named = _that_can_answer(named, notes)
+    named = _the_best_evidence(named, plainly, notes)
+    dated = _not_a_rerelease([row for row in named if year in row.years],
+                             year, notes)
     if len(dated) == 1:
         return _matched(dated[0], want)
 
@@ -327,6 +365,92 @@ def _under(api_key: str, query: str, want: frozenset, year: str,
     if settled is None:
         _note_the_lengths(notes, contenders, seconds)
     return _matched(settled, want) if settled is not None else Match()
+
+
+def _that_can_answer(named: list, notes: list | None = None) -> list:
+    """The candidates that could BE the answer: the ones carrying an IMDb id.
+
+    What is being asked for is an IMDb id, so a candidate that has none was
+    never a possible answer to it - settling on one returns nothing, and the
+    only thing it can do is stand beside a candidate that does have one and
+    make the pair of them look uncertain. A folder called "Re Born" was offered
+    the film it is and an idol video with no id, both lengths fitting, and was
+    told the question could not be settled.
+
+    Worse than standing beside a fit: a candidate TMDb states no runtime for is
+    never ruled OUT by a length either, so one that could not have been the
+    answer kept the answer at "not certain" all by itself.
+
+    Removing something that could not have been the answer is not choosing
+    between films. Where NO candidate has an id there is nothing to answer with
+    either way, and they all stand so that the reports still say what was
+    offered.
+    """
+    answerable = [row for row in named if row.imdb]
+    if not answerable or len(answerable) == len(named):
+        return named
+    for row in named:
+        if not row.imdb:
+            _note(notes, "    %s - set aside: no IMDb id, so it could not be "
+                  "the answer to a question asking for one" % _says(row))
+    return answerable
+
+
+def _the_best_evidence(named: list, plainly: frozenset,
+                       notes: list | None = None) -> list:
+    """The candidates that carry the folder's title EXACTLY, or all of them.
+
+    A match through one of the widened readings and a match on the folder's
+    title as written are not the same evidence, and weighing them equally is
+    what leaves an obvious film unnamed. A folder called "1917" is offered the
+    film "1917", which folds to exactly what the folder does, alongside a
+    "Bisbee '17" that only reached the list through a reading - and the rule,
+    seeing several candidates whose lengths all fit, named neither.
+
+    So where any candidate matches plainly, only those are considered. It
+    narrows and never widens: two films that really do share one title are
+    still two, and still answered by naming neither.
+    """
+    exact = [row for row in named
+             if any(normalize_title(spelling) in plainly
+                    for spelling in row.spellings)]
+    if not exact or len(exact) == len(named):
+        return named
+    for row in named:
+        if row not in exact:
+            _note(notes, "    %s - set aside: it carries the title only "
+                  "through a reading, and another carries it as written"
+                  % _says(row))
+    return exact
+
+
+def _not_a_rerelease(dated: list, year: str, notes: list | None = None) -> list:
+    """The candidates that CAME OUT in the wanted year, or all of them.
+
+    A film's year is every year any country released it in, which is what lets
+    a festival premiere and a release the year after both answer for a folder.
+    It also lets a re-release answer, and a re-release is timed to something -
+    usually a remake: "A Star Is Born" from 1976 went back into cinemas in 2018
+    because "A Star Is Born" from 2018 came out, and a folder named for the
+    remake was offered both and told they were equally likely.
+
+    So where some candidates were FIRST released around the wanted year and
+    others only reached it decades later, the others are set aside. Around, and
+    not exactly on, because a premiere and a general release a year apart are
+    the case the year rule exists for and must keep answering.
+
+    Narrows and never widens: where every candidate is equally old, or none is,
+    they all stand and the length decides as before.
+    """
+    original = [row for row in dated
+                if row.years and _near(min(row.years), year)]
+    if not original or len(original) == len(dated):
+        return dated
+    for row in dated:
+        if row not in original:
+            _note(notes, "    %s - set aside: it first came out in %s, so %s "
+                  "is a re-release" % (_says(row), min(row.years), year))
+    return original
 
 
 def _note(notes: list | None, line: str) -> None:
@@ -420,8 +544,9 @@ def _matched(candidate: _Candidate, want: frozenset) -> Match:
     for spelling in candidate.spellings:
         if title_keys(spelling) & want:
             return Match(candidate.imdb,
-                         spelling if _nameable(spelling) else "")
-    return Match(candidate.imdb, "")
+                         spelling if _nameable(spelling) else "",
+                         candidate.spellings)
+    return Match(candidate.imdb, "", candidate.spellings)
 
 
 def _nameable(title: str) -> bool:
@@ -608,6 +733,11 @@ def _folder_spelling(directory: str, name: str) -> str:
     return directory + "/" + name
 
 
+# What a reason gains when the folder could not be renamed but its id was known
+# all the same. The names still need someone; the id is simply no longer
+# missing too.
+TAGGED_ANYWAY = " (id applied, names still to settle)"
+
 # The id list's own spelling: one film per line, its folder name and its id
 # separated by a tab, "#" comments and blank lines ignored. A tab because a
 # film's name is full of everything else - spaces, brackets, dashes, colons -
@@ -646,6 +776,10 @@ def write_rename_list(path: str, renames, root: str,
         _ID_COMMENT + " would make them: a folder's files first, then the",
         _ID_COMMENT + " folder itself. Nothing here has happened - run the",
         _ID_COMMENT + " tagging again with -w to carry these out.",
+        _ID_COMMENT + "",
+        _ID_COMMENT + " Folders the other reports are about are not in here.",
+        _ID_COMMENT + " Each of them is explained where it is listed, and the",
+        _ID_COMMENT + " four files between them name every folder once.",
         "",
     ]
     for source, target in renames:
@@ -682,12 +816,30 @@ def write_ambiguous_list(path: str, folders, root: str,
         _ID_COMMENT + " these have a title after the token, so it cannot.",
         _ID_COMMENT + " Tagged as editions they would read as separate films.",
         _ID_COMMENT + "",
+        _ID_COMMENT + " 'holds the same film under another year': one of the",
+        _ID_COMMENT + " two dates has a digit wrong. Which one is not a thing",
+        _ID_COMMENT + " a tag may guess at.",
+        _ID_COMMENT + "",
+        _ID_COMMENT + " '" + TAGGED_ANYWAY.strip(" ()") + "': every id already",
+        _ID_COMMENT + " in the folder said the same film, so the id went on to",
+        _ID_COMMENT + " the folder and its files and nothing else moved. Plex",
+        _ID_COMMENT + " can see which film these are; what it still cannot see",
+        _ID_COMMENT + " is which release each file is.",
+        _ID_COMMENT + "",
+        _ID_COMMENT + "",
+        _ID_COMMENT + " Each name is followed by what it READS AS once the",
+        _ID_COMMENT + " spelling is folded away. Two lines that read the same",
+        _ID_COMMENT + " are two names the matching refused to call one thing,",
+        _ID_COMMENT + " which is a reading it does not have yet; two that read",
+        _ID_COMMENT + " differently are two different films.",
+        _ID_COMMENT + "",
         _ID_COMMENT + " Rename the files and run the tagging again.",
         "",
     ]
     for folder, reason, movies in folders:
         lines.append("%s  -  %s" % (os.path.relpath(folder, root), reason))
-        lines += ["    " + name for name in movies]
+        lines += _how_close(read_folder(os.path.basename(folder))[0] or folder,
+                            movies)
         lines.append("")
     try:
         with open(path, "w", encoding="utf-8",
@@ -710,16 +862,58 @@ def write_near_miss_list(path: str, folders, root: str,
     not have yet; a page of films that merely share a word is the rule working.
     """
     lines = [
-        _ID_COMMENT + " Every folder the tagging left alone, and how close it",
-        _ID_COMMENT + " came. Nothing here has happened and nothing here is a",
-        _ID_COMMENT + " worklist - it is what a dry run saw, so that \"no",
-        _ID_COMMENT + ' confident match" can be read rather than taken on',
-        _ID_COMMENT + " trust.",
+        _ID_COMMENT + " Every film TheMovieDB could not name, and how close",
+        _ID_COMMENT + " it came: what was asked, what came back, and why none",
+        _ID_COMMENT + " of it was certain enough to rename on.",
+        _ID_COMMENT + "",
+        _ID_COMMENT + " Only those. A folder one of the other lists accounts",
+        _ID_COMMENT + " for is that list's business, and a folder read twice",
+        _ID_COMMENT + " is a folder looked at twice.",
         "",
     ]
     for folder, reason, notes in folders:
         lines.append("%s  -  %s" % (os.path.relpath(folder, root), reason))
         lines += ["    " + note for note in notes]
+        lines.append("")
+    try:
+        with open(path, "w", encoding="utf-8",
+                  errors="surrogateescape") as handle:
+            handle.write("\n".join(lines) + "\n")
+    except OSError as error:
+        if log is not None:
+            log("WARNING: could not write %s: %s" % (path, error))
+        return False
+    return True
+
+
+def write_alias_list(path: str, folders, root: str,
+                     log: Callable[[str], None] | None = None) -> bool:
+    """The folders held together by the catalogue's own alternative titles.
+
+    Nothing was renamed for any of them, so no other list mentions them: this
+    is where to see that the recognition is working, and the only place a film
+    kept under two languages' names is written down at all.
+    """
+    lines = [
+        _ID_COMMENT + " Folders holding one film under several of its own",
+        _ID_COMMENT + " titles - the same film named in another language,",
+        _ID_COMMENT + " which nothing about the names themselves could say.",
+        _ID_COMMENT + " TheMovieDB lists each of these as a title of the film",
+        _ID_COMMENT + " the folder was matched to.",
+        _ID_COMMENT + "",
+        _ID_COMMENT + " Every one of them KEPT its name - which of a film's",
+        _ID_COMMENT + " languages a file is named in is a thing you chose, and",
+        _ID_COMMENT + " a lookup is no reason to overwrite it. All that was",
+        _ID_COMMENT + " added is the id, so Plex knows they are one film.",
+        "",
+    ]
+    for folder, base, tag, known in folders:
+        lines.append("%s  -  %s" % (os.path.relpath(folder, root), tag))
+        lines.append("    matched as: " + base)
+        for name in sorted(known):
+            lines.append('    "%s"' % name)
+            lines.append("        is a title TMDb holds it under: "
+                         + known[name])
         lines.append("")
     try:
         with open(path, "w", encoding="utf-8",
@@ -830,7 +1024,8 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
                  unmatched: list | None = None, recursive: bool = False,
                  ambiguous: list | None = None,
                  planned: list | None = None,
-                 near_misses: list | None = None) -> int:
+                 near_misses: list | None = None,
+                 aliases: list | None = None) -> int:
     """Name each confidently-matched movie folder, its films and their sidecars
     the way Plex reads them: the folder and every file carry the id tag, an
     edition carries its own, and a split film keeps its stacking token last.
@@ -854,10 +1049,17 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
     a list is passed, collects the folder names that neither could name, and
     ``ambiguous`` the folders holding more than one film - both are left exactly
     as they are, and both lists are what the run writes its reports from.
-    ``planned`` collects the renames a dry run would have made, for the third.
+    ``planned`` collects the renames a dry run would have made, for the third -
+    the renames of the folders that went through ORDINARY naming, so that the
+    four reports between them cover each folder exactly once. A folder one of
+    the other lists is about is that list's to explain.
     ``near_misses`` collects what TMDb was asked and what it offered for every
-    folder that ended up in one of the other two lists, for the fourth - the one
-    that says whether "no confident match" was the right answer.
+    film it could NOT name, for the fourth - the one that says whether "no
+    confident match" was the right answer. Only those: a folder another list
+    already accounts for is that list's business, and a film in two of them is
+    a film read twice. ``aliases`` collects the folders holding one film under
+    several of its own titles, for the fifth: nothing is renamed for those, so
+    no other list mentions them.
 
     ``recursive`` walks the whole tree rather than the one level the phase reads
     inside a full ingest, where the caller is pointed at the folder that holds
@@ -886,19 +1088,16 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
         # a file by the name it would have had names no file at all, and the
         # runtime probe would go looking for one that is not there.
         on_disk = {new: old for old, new in corrected.items()}
-        trouble = _what_is_wrong(base, respelled)
-        if trouble:
-            if not _tag_and_leave(folder, names, tag, skip_log, dry_run, log,
-                                  planned):
-                left = [on_disk.get(name, name) for name in trouble[1]]
-                _flag(ambiguous, folder.path, trouble[0], left)
-                _flag(near_misses, folder.path, trouble[0],
-                      _how_close(base, left))
-                log('  "{}" {} - left as it is'.format(base, trouble[2]))
-            continue
 
+        # What the folder ALREADY said its film was, before anything was asked.
+        # The only id that may be put on a file whose name this run cannot
+        # account for: a freshly looked-up one says what the FOLDER is, and
+        # stamping it on a stray is how a sequel gets filed under the film
+        # before it.
+        had_tag = tag
         asked = not tag
         by_hand = False
+        found = Match()
         if asked:
             # The hand-written id first: a film someone has already looked up is
             # not worth asking an API that has already failed to name it.
@@ -910,23 +1109,72 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
                     title, year,
                     functools.partial(_folder_runtime, folder.path, base,
                                       respelled, on_disk),
-                    notes if near_misses is not None else None)
+                    notes if near_misses is not None else None,
+                    also=(_with_the_folder_above(directory, folder, title),))
                 tag = "{imdb-" + found.imdb + "}" if found.imdb else ""
                 # The catalogue's own spelling of whichever title matched is
                 # what the whole folder is written under from here: it is the
                 # one spelling of the several that is known to be right, and
                 # the folder and its files disagreeing about which to use is
-                # what made this hard to begin with.
+                # what made this hard to begin with. Worked out now and SAID
+                # later, because a folder that turns out to be a muddle is
+                # renamed to nothing and a line about renaming it would be a
+                # line about something that did not happen.
                 if tag and found.title:
-                    base = _as_folder(base, found.title, year, log)
-            if not tag:
-                if unmatched is not None:
-                    unmatched.append(base)
-                if not by_hand:
-                    _flag(near_misses, folder.path, "no confident TMDb match",
-                          notes or ["nothing was asked"])
-                _report(log, base, "", [], False)
-                continue
+                    spelled = "%s (%s)" % (found.title, year)
+                    if spelled != base:
+                        # Re-based rather than worked out afresh: the files
+                        # matched the name the FOLDER had, and a catalogue's
+                        # fuller title need not fold to anything they say -
+                        # "Episode IV - A New Hope" is not "Star Wars: Episode
+                        # IV - A New Hope". Asking again under the new name
+                        # would leave this film's own files behind as strays.
+                        corrected = _rebased(corrected, names, base, spelled)
+                        base = spelled
+                        respelled = [corrected.get(n, n) for n in names]
+                        on_disk = {v: k for k, v in corrected.items()}
+
+        # A folder holding one film under several of its titles. Only the
+        # catalogue can say so, and what it buys is recognition and not a
+        # rename: each file keeps the language its owner named it in, and gains
+        # the id that says which film they all are.
+        strays = plexnames.strays_in(base, respelled)
+        known = plexnames.named_by_catalogue(strays, found.aliases) \
+            if tag and strays else {}
+        if strays and len(known) == len(strays):
+            _flag_alias(aliases, folder.path, base, tag, known)
+            # The FOLDER still takes the catalogue's spelling, the way every
+            # other match here does - it was matched on its own name. Only the
+            # files the catalogue vouched for keep theirs.
+            _tag_only(
+                folder, names, tag, skip_log, dry_run, log, None,
+                functools.partial(_say_the_titles_met, log, base, len(known)),
+                base)
+            continue
+
+        trouble = _what_is_wrong(base, respelled)
+        if trouble:
+            left = [on_disk.get(name, name) for name in trouble[1]]
+            # Reported either way. A folder whose id was settled is still a
+            # folder nothing could rename, and whether it REALLY could not is
+            # the thing a person has to look at - an id going on quietly is
+            # what would keep it off the list it belongs on.
+            tagged = _tag_and_leave(folder, names, had_tag, skip_log, dry_run,
+                                    log, None)
+            reason = trouble[0] + (TAGGED_ANYWAY if tagged else "")
+            _flag(ambiguous, folder.path, reason, left)
+            if not tagged:
+                log('  "{}" {} - left as it is'.format(base, trouble[2]))
+            continue
+
+        if asked and not tag:
+            if unmatched is not None:
+                unmatched.append(base)
+            if not by_hand:
+                _flag(near_misses, folder.path, "no confident TMDb match",
+                      notes or ["nothing was asked"])
+            _report(log, base, "", [], False)
+            continue
 
         # The folder's own name is settled BEFORE a single file is touched:
         # renaming the files under a folder that cannot take its name leaves
@@ -944,25 +1192,15 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
         # then what would happen to it. Only a folder this run ASKED about says
         # anything: one already tagged would repeat its line for the rest of
         # the library's life.
+        if asked and base != read_folder(folder.name)[0]:
+            log('  TMDb spells it "{}" - renaming "{}" onto it'.format(
+                base.rsplit(" (", 1)[0], folder.name))
         if asked:
             _report(log, base, tag, plexnames.editions_in(base, respelled),
                     by_hand)
         _rename_in_place(folder, names, base, tag, target, skip_log, dry_run,
                          log, planned)
     return 0
-
-
-def _as_folder(base: str, title: str, year: str,
-               log: Callable[[str], None]) -> str:
-    """The folder name a catalogue's spelling gives, and a line about it.
-
-    ``base`` back unchanged when the spelling is the one already on disk, which
-    is the ordinary case and says nothing.
-    """
-    wanted = "%s (%s)" % (title, year)
-    if wanted != base:
-        log('  TMDb spells it "{}" - renaming "{}" onto it'.format(title, base))
-    return wanted
 
 
 # What can be wrong with a folder that no id settles, as
@@ -990,16 +1228,26 @@ def _what_is_wrong(base: str, names: list):
     # stack either: the token has to be last, and there is a title sitting after
     # it. A part written "Part 1" and nothing else IS fixable, and was fixed
     # before this was asked.
-    in_parts, markers = [], []
+    in_parts, markers, misdated = [], [], []
     for stem in plexnames.movie_stems(base, names):
         edition = plexnames.read_stem(base, stem)[0]
         if plexnames.names_a_part(edition):
             in_parts.append(stem + ".mkv")
+        elif plexnames.is_only_a_year(edition):
+            misdated.append(stem + ".mkv")
         elif plexnames.is_only_a_marker(edition):
             markers.append(stem + ".mkv")
     if in_parts:
         return ("is one film in parts that do not stack", sorted(in_parts),
                 "is in parts that Plex will not stack")
+    # A digit wrong in a file's year, which reads as a bare number exactly the
+    # way a copy's "(1)" does and is nothing like it. Which of the two dates is
+    # the right one is not a thing to guess at - the folder's is the one TMDb
+    # was asked about, but only someone who knows the film can say the file was
+    # not a different cut of it.
+    if misdated:
+        return ("holds the same film under another year", sorted(misdated),
+                "is dated one way by its folder and another by its files")
     # A "(1)" that could not simply be taken off, because taking it off would
     # put two files under one name. Which of the two to keep is not a naming
     # question, and an edition called "1" says nothing about either.
@@ -1028,17 +1276,35 @@ def _tag_and_leave(folder, names: list, tag: str, skip_log: safety.SkipLog,
     if len(settled) != 1:
         return False
     only = settled.pop()
+    return _tag_only(
+        folder, names, only, skip_log, dry_run, log, planned,
+        lambda: log('  "{}" cannot be renamed, but every id in it says {} - '
+                    "tagging only".format(folder.name, only)))
+
+
+def _tag_only(folder, names: list, only: str, skip_log: safety.SkipLog,
+              dry_run: bool, log: Callable[[str], None],
+              planned: list | None,
+              announce: Callable[[], None] | None = None,
+              base: str = "") -> bool:
+    """Put ``only`` on the folder and on every name still without an id, and
+    change nothing else about any of them.
+
+    ``announce`` is called once, and only when there is something to do: a
+    folder already carrying its id throughout is finished, and a line about it
+    would be a line repeated for the rest of the library's life.
+    """
     plan = plexnames.id_tag_renames(only, names)
-    wanted = folder.name if tag else plexnames.folder_name(
-        plexnames.untagged_base(folder.name)[0], only)
+    wanted = plexnames.folder_name(
+        base or plexnames.untagged_base(folder.name)[0], only)
     target = _folder_spelling(os.path.dirname(folder.path) or ".", wanted)
     if wanted != folder.name and os.path.exists(target):
         skip_log.record(folder.path, target)
         return False
     if not plan and wanted == folder.name:
         return True
-    log('  "{}" cannot be renamed, but every id in it says {} - tagging only'
-        .format(folder.name, only))
+    if announce is not None:
+        announce()
     for old, new in plan:
         _rename(os.path.join(folder.path, old), os.path.join(folder.path, new),
                 skip_log, dry_run, log, planned)
@@ -1069,6 +1335,32 @@ def _folder_runtime(path: str, base: str, names: list,
     return durationcheck.total_duration(
         [os.path.join(path, (on_disk or {}).get(name, name))
          for name in movies])
+def _with_the_folder_above(root: str, folder, title: str) -> str:
+    """This film's title with the folder above it read as its first half, or "".
+
+    A library that keeps a franchise in a folder of its own writes half the
+    title on each: "Star Wars" holding "Episode IV - A New Hope", "The Lord of
+    the Rings" holding "The Fellowship of the Ring". Neither half is the title
+    a catalogue has, and put together they are.
+
+    The mirror of the franchise a library repeats on every film IN it, which the
+    search spellings already take OFF - a name can carry too little of the title
+    as easily as too much.
+
+    "" for a film sitting directly in the folder the run was pointed at: that
+    one is the library, named by whoever typed it, and gluing it to every title
+    underneath would ask about "Films Casablanca" once per film.
+    """
+    above = os.path.dirname(os.path.abspath(folder.path))
+    if above == os.path.abspath(root):
+        return ""
+    # Without whatever tag an earlier run put on it, which is not part of any
+    # title. It cannot be a film folder itself - the walk stops at one and does
+    # not look inside - so what is left is a container someone named.
+    name = plexnames.untagged_base(os.path.basename(above))[0].strip()
+    return name + " " + title if name else ""
+
+
 def _how_close(base: str, names: list) -> list:
     """How near each file a folder was left for came to being that folder's own
     film, as the fold that decided it.
@@ -1077,12 +1369,57 @@ def _how_close(base: str, names: list) -> list:
     which is a reading that is missing; two that read differently are two
     different films, which is the answer the folder was left for.
     """
-    lines = ["the folder reads as: " + titlematch.normalize_title(base)]
+    lines = ["    the folder reads as: " + _reads_as(base)]
     for name in names:
-        lines.append('"%s" reads as: %s'
-                     % (name, titlematch.normalize_title(
-                         os.path.splitext(name)[0])))
+        lines.append("    %s" % name)
+        lines.append("        reads as: " + _reads_as(os.path.splitext(name)[0]))
     return lines
+
+
+def _reads_as(stem: str) -> str:
+    """One name folded to what it SAYS, with the systematic tags off.
+
+    An id or an edition tag is not part of any title, and folded in it would be
+    the loudest thing on the line - two names that differ only in that one
+    already carries its id would read as two different films.
+    """
+    return titlematch.normalize_title(plexnames.film_key(stem))
+
+
+def _say_the_titles_met(log: Callable[[str], None], base: str,
+                        how_many: int) -> None:
+    """The line a folder gets when the catalogue's own titles are what held it
+    together."""
+    log('  "{}" holds {} file(s) TMDb knows as other titles of this film - '
+        "tagging only".format(base, how_many))
+
+
+def _rebased(corrected: dict, names: list, base: str, spelled: str) -> dict:
+    """The corrections again, with ``base`` swapped for ``spelled`` in each.
+
+    Every name that was this folder's film under its old name is still its film
+    under the catalogue's; every name that was not is left exactly as it was,
+    which is what keeps a stray a stray.
+    """
+    swapped = {}
+    for name in names:
+        onto = corrected.get(name, name)
+        if onto == base or onto.startswith(base + " ") \
+                or onto.startswith(base + "."):
+            swapped[name] = spelled + onto[len(base):]
+    return swapped
+
+
+def _flag_alias(aliases: list | None, path: str, base: str, tag: str,
+                known: dict) -> None:
+    """Record a folder whose files are this film under other titles of its own.
+
+    Nothing was renamed for it, so there is no rename list to read it out of -
+    this is the only place it is written down, and the only way to see that the
+    recognition is working.
+    """
+    if aliases is not None:
+        aliases.append((path, base, tag, dict(known)))
 
 
 def _flag(ambiguous: list | None, path: str, reason: str, names) -> None:

@@ -362,3 +362,86 @@ class TestTaggingAFolderNothingCanRename:
 
     def test_a_sidecar_is_not_one_of_the_films(self):
         assert plexnames.ids_in(["A.mkv", "A " + TAG + ".en.srt"]) == set()
+
+
+class TestAYearWithADigitWrong:
+    """A folder dated 1988 beside a file of it dated 1998 is one of them
+    mistyped. The leftover reads as a bare number, which is also what a copy's
+    "(1)" reads as, and they are nothing like each other."""
+
+    @pytest.mark.parametrize("text", ["1988", "1998", "2017", " 1979 "])
+    def test_a_bare_year_is_a_year(self, text):
+        assert plexnames.is_only_a_year(text)
+
+    @pytest.mark.parametrize("text", ["1", "2", "12", "0998", "99", "12345",
+                                      "2019 Restoration", "Colorized"])
+    def test_and_anything_else_is_not(self, text):
+        assert not plexnames.is_only_a_year(text)
+
+    def test_the_file_is_read_as_this_film_dated_differently(self):
+        assert plexnames.read_stem("Dragons Forever (1988)",
+                                   "Dragons Forever (1988) (1998)") \
+            == ("1998", "")
+
+    def test_a_file_dated_differently_is_brought_onto_the_folders_name(self):
+        """It is this film - the title says so and only the year differs - so
+        it is not a stray; what it is instead is the folder's own business."""
+        assert plexnames.onto_base("Dragons Forever (1988)",
+                                   "Dragons Forever (1998).mkv") \
+            == "Dragons Forever (1988) (1998).mkv"
+
+
+class TestANumberedSequelIsNotAnEdition:
+    """The reading that makes "Winnetou" match the folder "Winnetou I (1963)"
+    also makes "Winnetou II (1964).mkv" match it, with the "II" left over as
+    though it were an edition. It is the sequel."""
+
+    @pytest.mark.parametrize("name", [
+        "Winnetou II (1964).mkv",
+        "Winnetou 2.mkv",
+        "Winnetou II.mkv",
+        "Winnetou III (1965).mkv",
+    ])
+    def test_a_bare_number_after_the_title_names_another_film(self, name):
+        assert plexnames.onto_base("Winnetou I (1963)", name) == ""
+
+    @pytest.mark.parametrize("name,wanted", [
+        ("Winnetou (1963).mkv", "Winnetou I (1963).mkv"),
+        ("Winnetou I (1963) (1).mkv", "Winnetou I (1963).mkv"),
+        ("Winnetou 1 (1963).mkv", "Winnetou I (1963).mkv"),
+    ])
+    def test_while_the_first_of_the_series_still_comes_home(self, name, wanted):
+        assert plexnames.onto_base("Winnetou I (1963)", name) == wanted
+
+    def test_a_number_in_brackets_is_not_a_sequel(self):
+        """It is a year or a copy's marker, and both say something about THIS
+        film rather than naming another."""
+        assert plexnames.onto_base("Dragons Forever (1988)",
+                                   "Dragons Forever (1998).mkv") \
+            == "Dragons Forever (1988) (1998).mkv"
+
+    def test_nor_is_a_part(self):
+        assert plexnames.onto_base("Film (2020)", "film (2020) part 1.mkv") \
+            == "Film (2020) part 1.mkv"
+
+
+class TestANumberLeftOutOfTheFolderName:
+    """A library that wrote "Ghost In The Shell Innocence" for a film the
+    catalogue calls "Ghost in the Shell 2: Innocence"."""
+
+    def test_the_file_that_kept_the_number_is_still_this_film(self):
+        assert plexnames.onto_base(
+            "Ghost In The Shell Innocence (2004)",
+            "Ghost In The Shell 2 Innocence (2004) HD.mkv") \
+            == "Ghost In The Shell Innocence (2004) HD.mkv"
+
+    def test_and_the_folder_stops_holding_a_film_that_is_not_its_own(self):
+        assert plexnames.strays_in(
+            "Ghost In The Shell Innocence (2004)",
+            [plexnames.onto_base(
+                "Ghost In The Shell Innocence (2004)",
+                "Ghost In The Shell 2 Innocence (2004) HD.mkv")]) == []
+
+    def test_a_sequel_of_its_own_is_still_not_this_film(self):
+        assert plexnames.onto_base("Ghost In The Shell Innocence (2004)",
+                                   "Ghost In The Shell 3 (2006).mkv") == ""

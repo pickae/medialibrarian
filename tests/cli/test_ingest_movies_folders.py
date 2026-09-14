@@ -145,9 +145,14 @@ class TestTheListsEachFolderLeaves:
 
         def fake_tag(root, _log, _skips, dry_run=False, ids=None,
                      unmatched=None, recursive=False, ambiguous=None,
-                     planned=None, near_misses=None):
+                     planned=None, near_misses=None, aliases=None):
             asked.append(root)
             name = root.rsplit("/", 1)[-1]
+            if aliases is not None:
+                aliases += [(root + "/Il buono (1966)", "Il buono (1966)",
+                             "{imdb-tt0060196}",
+                             {"The Good the Bad and the Ugly (1966).mkv":
+                              "the good the bad and the ugly"})]
             if near_misses is not None:
                 near_misses += [(root + "/A film (1999)",
                                  "no confident TMDb match",
@@ -225,6 +230,33 @@ class TestTheListsEachFolderLeaves:
                 if line and not line.startswith("#")]
         assert body == ["A film (1999)  -  no confident TMDb match",
                         '    asked "A film": 0 result(s)']
+
+    def test_and_the_folders_held_together_by_another_of_their_titles(
+            self, monkeypatch, tmp_path):
+        """Nothing is renamed for those, so no other list mentions them: this
+        is the only way to see the recognition working."""
+        monkeypatch.chdir(tmp_path)
+        self._tagging(monkeypatch)
+        _library(tmp_path, "Films")
+        run.main(["-t", str(tmp_path / "Films")])
+        listing = tmp_path / "ingest-movies-othertitles-Films.txt"
+        assert listing.is_file()
+        body = [line for line in listing.read_text(encoding="utf-8").splitlines()
+                if line and not line.startswith("#")]
+        assert body == ["Il buono (1966)  -  {imdb-tt0060196}",
+                        "    matched as: Il buono (1966)",
+                        '    "The Good the Bad and the Ugly (1966).mkv"',
+                        "        is a title TMDb holds it under: "
+                        "the good the bad and the ugly"]
+
+    def test_and_a_real_run_leaves_it_too(self, monkeypatch, tmp_path):
+        """Unlike the near-miss list: this one records what HAPPENED, and is
+        worth having after the renaming as much as before it."""
+        monkeypatch.chdir(tmp_path)
+        self._tagging(monkeypatch)
+        _library(tmp_path, "Films")
+        run.main(["-t", "-w", str(tmp_path / "Films")])
+        assert (tmp_path / "ingest-movies-othertitles-Films.txt").is_file()
 
     def test_but_a_real_run_leaves_no_near_miss_list(self, monkeypatch,
                                                      tmp_path):

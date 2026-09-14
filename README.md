@@ -607,23 +607,55 @@ wrong in several ways at once is still found:
   be reached — `ä` reads as `a` and as `ae`, `ø` as `o` and as `oe`;
 - a dash, apostrophe, comma or point written as a space, or as nothing at all,
   which is also how an abbreviation with its points meets one without;
-- a roman numeral for an arabic one;
+- a roman numeral for an arabic one, and a trailing `1` dropped altogether —
+  the first of a series is written `Winnetou I`, `Winnetou 1` and `Winnetou`
+  and meant identically. Only the first at the end: a trailing `2` is the
+  sequel. A number with title on **both** sides of it may go at any value —
+  `Ghost in the Shell 2: Innocence` is also written `Ghost In The Shell
+  Innocence`, and what surrounds the number still says which film it is;
 - an article gone from anywhere in the name, or several of them, or moved to
   the end the way a catalogue that sorts by the first real word moves it;
 - `&` written out, in any of the six languages;
-- upper case, lower case, or any mixture.
+- upper case, lower case, or any mixture;
+- a letter from the wrong keyboard — a Cyrillic or Greek letter that is the
+  same *shape* as a Latin one reads as the Latin one, so a name that looks
+  identical on screen is treated as identical.
 
 A film nothing is found under is looked for again under the spellings a library
 adds and a catalogue does not — a "Movie"/"Special" in front of the name, a
-franchise repeated on every film in it, its roman numerals as numbers. Where
+franchise repeated on every film in it, its roman numerals as numbers. And under
+the one it *leaves out*: a library that keeps a franchise in a folder of its own
+writes half the title on each, so the folder above is read as the first half and
+the two together are asked about as one title. Where
 that leaves several candidates or none, the film's own length decides: the folder is tagged only if exactly one candidate's runtime
 fits what is on the disk and every other is ruled out, which is also what lets a
-folder whose year is off by one be named at all. A folder of named editions
+folder whose year is off by one be named at all.
+
+Before the length is asked, three narrowings settle most of what used to reach
+it, because candidates are not equally likely just because they all survived:
+
+- **A candidate with no IMDb id was never a possible answer.** What is being
+  asked for is an id; one that has none can only stand beside a candidate that
+  has one and make the pair look uncertain.
+- **A title as written beats one reached through a reading.** Where any
+  candidate folds to exactly what the folder is called, only those are
+  considered — a folder called `1917` is not left unnamed because some other
+  film also answers to it through a dropped article.
+- **A re-release does not answer for the film it was timed to.** A 1976 film
+  back in cinemas in 2018 lists 2018 among its years; where another candidate
+  was *first* released around the wanted year, the older one is set aside.
+  Around, not exactly on — a premiere and a general release a year apart are
+  the case the year rule exists for.
+
+All three narrow and never widen: where every candidate is equally strong — or
+equally useless — they all stand and the length decides as before. A folder of named editions
 offers no length — which of the cuts the catalogue's one runtime is for is
 exactly what is not known — so it falls back to the year alone.
 
 Once a film is named, **TMDb's own spelling of whichever title matched is what
-the folder and every file in it are written under** — the one spelling of the
+the folder and every file in it are written under** — including a film found
+only by reading the folder above it as the first half of its title, which is
+then written out in full — the one spelling of the
 several that is known to be right. Whichever title matched, and not the
 catalogue's primary one: a French film found under its French name stays French,
 because the English title it is also catalogued under folds to something the
@@ -644,6 +676,27 @@ moves. One id that disagrees stops it: two ids in a folder is how a sequel ends
 up filed under the film before it, and that is a mistake to be shown rather than
 a spelling to be tidied.
 
+One kind of disagreement the names themselves can never settle: a folder whose
+files are the **same film named in another language**. "Das Krokodil und sein
+Nilpferd" and "Io sto con gli ippopotami" share not a syllable with each other,
+and TMDb lists both as titles of the film the folder matched. Where every file
+in a folder is accounted for that way, the folder takes TMDb's spelling and the
+id, and **every file keeps its own name** — which of a film's languages a file
+is named in is a thing you chose, and a lookup is no reason to overwrite it. All
+that is added is the id, so Plex knows they are one film. One file the catalogue
+cannot account for and the folder is left alone as before: a second feature is
+still a second feature.
+
+Nothing is renamed for those folders, so no other list would mention them — they
+get one of their own, `ingest-movies-othertitles-<folder>.txt`, naming each file
+and the catalogued title it answered to. It is written on real runs as well as
+dry ones, because it records what *happened*.
+
+Such a folder **stays on the lists** either way, marked `id applied, names still
+to settle`. The id is no longer missing; the names still are, and whether they
+really could not be settled is exactly the thing worth looking at — an id going
+on quietly is what would keep the folder off the list it belongs on.
+
 **`-t` does only this phase** — no conversion, no remux, no downloads, no
 transcription — and does it as a **dry run** unless `-w` is given, printing
 every rename it would make. The films TMDb could not name confidently are
@@ -662,9 +715,15 @@ two lists — a library of any size prints thousands of those lines, and the poi
 of a dry run is to be able to read them.
 
 And a fourth list, `ingest-movies-nearmisses-<folder>.txt`, says **how close the
-folders it left alone came**: what TMDb was asked, which films it offered under
-each query, and why every one of them was refused — a title that did not meet,
-a year that did not, a length that ruled nothing out. It is the list to read
+films it could not name came**: what TMDb was asked, which films it offered
+under each query, and why every one of them was refused — a title that did not
+meet, a year that did not, a length that ruled nothing out.
+
+The lists do not overlap. Each folder appears in exactly one of them, because a
+folder read twice is a folder looked at twice. The ambiguous list carries its
+own diagnosis instead: under each name, what it *reads as* once the spelling is
+folded away. Two lines that read the same are a reading the matching does not
+have yet — worth reporting; two that read differently are two different films. It is the list to read
 before trusting the other two. A page of candidates that are plainly the film
 means the matching is too narrow; a page of films that merely share a word means
 it is working. Dry run only — once the renames have happened, the library is the

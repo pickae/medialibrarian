@@ -513,14 +513,24 @@ class TestNormalisingDolbyVisionProfile7:
         run over a folder of profile 7 films must not accumulate one per file.
 
         Every base a run may pick, not one of them: an assertion that looked in
-        the wrong directory would be an empty list either way."""
+        the wrong directory would be an empty list either way.
+
+        Walked with `os.walk` rather than `rglob`, because these are roots the
+        whole machine shares: under `-n auto` a sibling worker's directory can
+        go between this walk listing it and descending into it, and on 3.11
+        that reaches `rglob` as a FileNotFoundError naming a path this test has
+        never heard of. `os.walk` ignores an entry that stops existing, which
+        is the only sane reading of "is it still there?"."""
         import os as _os
         bases = {_os.environ.get(name, "") for name in
                  ("ramBase", "ramScratchBase", "TMPDIR")}
         bases.add("/dev/shm")
         bases.add("/tmp")
-        return sorted(str(path) for base in bases if base and Path(base).is_dir()
-                      for path in Path(base).rglob("dv81.*"))
+        return sorted(
+            _os.path.join(root, name)
+            for base in bases if base and Path(base).is_dir()
+            for root, _dirs, files in _os.walk(base)
+            for name in files if name.startswith("dv81."))
 
     @pytest.fixture
     def normalised(self, dv):

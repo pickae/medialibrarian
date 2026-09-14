@@ -12,7 +12,9 @@ on, and which of the catalogue's spellings the folder is then renamed onto. What
 COUNTS as the same title is not.
 """
 
+import itertools
 import json
+import os
 import pathlib
 import re
 import subprocess
@@ -235,7 +237,10 @@ class TestTmdbImdbId:
         # point of the alternative/original scan
         search = json.dumps({"results": [
             _row(1, "Batman"), _row(2, "The Dark Knight", original="Batman")]})
-        calls = _install(monkeypatch, search, {1: [], 2: []}, {1: "tt1"})
+        # Both carry an id, so both are answers this could settle on and the
+        # pair of them is what makes it uncertain.
+        calls = _install(monkeypatch, search, {1: [], 2: []},
+                         {1: "tt1", 2: "tt2"})
         assert tmdblookup.tmdb_imdb_id("Batman", "1999") == ""
         assert [url for url, _params in calls] == [
             _BASE + "/search/movie", _detail_url(1), _detail_url(2)]
@@ -989,17 +994,19 @@ class TestTagPlexIds:
                          ["The Movie (1934) Part 1 - The First Half.mkv",
                           "The Movie (1934) Part 1 - The First Half.en.srt",
                           "The Movie (1934) Part 2 - The Others.mkv"]))
-        calls = self._env(monkeypatch, {"The Movie": "tt0120737"})
+        self._env(monkeypatch, {"The Movie": "tt0120737"})
         logs = []
         ambiguous: list = []
         tmdblookup.tag_plex_ids(".", logs.append, SkipLog(),
                                 ambiguous=ambiguous)
-        # left exactly as it was, and not even looked up
+        # Left exactly as it was. It IS looked up - the catalogue is what
+        # settles a folder holding one film under several of its titles, and
+        # that cannot be known before asking - but an id this run found is
+        # never put on a name it cannot account for.
         assert sorted(p.name for p in (tmp_path / "The Movie (1934)").iterdir()) \
             == ["The Movie (1934) Part 1 - The First Half.en.srt",
                 "The Movie (1934) Part 1 - The First Half.mkv",
                 "The Movie (1934) Part 2 - The Others.mkv"]
-        assert calls == []
         assert [(reason, names) for _path, reason, names in ambiguous] == [
             ("is one film in parts that do not stack",
              ["The Movie (1934) Part 1 - The First Half.mkv",
@@ -1303,8 +1310,9 @@ class TestWhatASpellingSettles:
         candidate = tmdblookup._Candidate(
             years=frozenset({"1997"}), titles=tmdblookup.title_keys("Face/Off"),
             spellings=("Face/Off",), runtime=0.0, imdb="tt0119094")
-        assert tmdblookup._matched(candidate, tmdblookup.title_keys("Face Off")) \
-            == tmdblookup.Match("tt0119094", "")
+        settled = tmdblookup._matched(candidate,
+                                      tmdblookup.title_keys("Face Off"))
+        assert (settled.imdb, settled.title) == ("tt0119094", "")
 
     def test_the_filler_a_library_wrote_in_front_is_asked_around(
             self, monkeypatch, tmp_path):
@@ -1327,13 +1335,18 @@ class TestTheFolderNothingCanRename:
     def _run(self, monkeypatch, tmp_path, folder, files):
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("tmdbApiKey", "apikey")
+        # The lookup runs before the folder is judged now, so the network is
+        # reached; what these cases are about is that it settles nothing here.
         monkeypatch.setattr(tmdblookup, "_curl",
-                            lambda *_a, **_k: pytest.fail("asked the network"))
+                            lambda *_a, **_k: json.dumps({"results": []}))
         _tree(tmp_path, (folder, files))
         logs, ambiguous = [], []
         tmdblookup.tag_plex_ids(".", logs.append, SkipLog(),
                                 ambiguous=ambiguous)
         return logs, ambiguous
+
+    def _reasons(self, ambiguous):
+        return [reason for _p, reason, _n in ambiguous]
 
     def test_a_second_film_in_the_folder_still_gets_the_agreed_id(
             self, monkeypatch, tmp_path):
@@ -1342,9 +1355,13 @@ class TestTheFolderNothingCanRename:
             monkeypatch, tmp_path, "Le comte de Monte-Cristo (1961) " + tag,
             ["Le comte de Monte-Cristo (1961) " + tag + ".mkv",
              "L'evasion.mkv"])
-        assert ambiguous == []
         assert (tmp_path / ("Le comte de Monte-Cristo (1961) " + tag)
                 / ("L'evasion " + tag + ".mkv")).is_file()
+        # And it is STILL on the list: the id is no longer missing, the names
+        # still are, and whether they really could not be settled is the thing
+        # somebody has to look at.
+        assert self._reasons(ambiguous) == [
+            "holds a film that is not its own" + tmdblookup.TAGGED_ANYWAY]
 
     def test_a_part_with_a_title_after_it_gets_it_too(self, monkeypatch,
                                                        tmp_path):
@@ -1354,7 +1371,8 @@ class TestTheFolderNothingCanRename:
             monkeypatch, tmp_path, folder,
             ["The Film (1961) " + tag + " Part 1 - The Escape.mkv",
              "The Film (1961) Part 2 - The Revenge.mkv"])
-        assert ambiguous == []
+        assert self._reasons(ambiguous) == [
+            "is one film in parts that do not stack" + tmdblookup.TAGGED_ANYWAY]
         assert (tmp_path / folder
                 / ("The Film (1961) " + tag + " Part 2 - The Revenge.mkv")
                 ).is_file()
@@ -1386,8 +1404,12 @@ class TestTheFolderNothingCanRename:
             monkeypatch, tmp_path, folder,
             ["The Film (1961) " + tag + ".mkv",
              "Another Film " + tag + ".mkv"])
-        assert ambiguous == [] and logs == []
+        assert logs == []
         assert (tmp_path / folder / ("Another Film " + tag + ".mkv")).is_file()
+        # No work to do, and still reported: a run that says nothing about it
+        # would be a folder that quietly stopped being on anyone's list.
+        assert self._reasons(ambiguous) == [
+            "holds a film that is not its own" + tmdblookup.TAGGED_ANYWAY]
 
 
 class TestTheNamesAReportAndAProbeSee:
@@ -1485,21 +1507,37 @@ class TestHowCloseItCame:
         _path, _reason, notes = near[0]
         assert not any('"null"' in note for note in notes)
 
-    def test_a_folder_left_alone_shows_both_folds_side_by_side(
+    def test_a_folder_another_list_accounts_for_is_not_in_here(
             self, monkeypatch, tmp_path):
-        """Two lines that read the same are a reading that is missing; two that
-        read differently are two different films."""
+        """One folder, one list. A folder read twice is a folder looked at
+        twice, and the ambiguous list is where this one belongs."""
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("tmdbApiKey", "apikey")
         monkeypatch.setattr(tmdblookup, "_curl", lambda *_a, **_k: None)
         _tree(tmp_path, ("Box (1999)", ["Box (1999).mkv", "Other Film.mkv"]))
-        near = []
+        near, ambiguous = [], []
         tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog(),
-                                dry_run=True, near_misses=near)
-        _path, reason, notes = near[0]
-        assert reason == "holds a film that is not its own"
-        assert notes == ["the folder reads as: box 1999",
-                         '"Other Film.mkv" reads as: other film']
+                                dry_run=True, near_misses=near,
+                                ambiguous=ambiguous)
+        assert near == []
+        assert [reason for _p, reason, _n in ambiguous] \
+            == ["holds a film that is not its own"]
+
+    def test_and_the_folds_are_shown_where_it_IS_listed(self, tmp_path):
+        """The comparison that says whether it was really unfixable goes with
+        the folder, in the one list that has it."""
+        listing = tmp_path / "ambiguous.txt"
+        tmdblookup.write_ambiguous_list(
+            str(listing),
+            [(str(tmp_path / "Box (1999)"), "holds a film that is not its own",
+              ["Other Film.mkv"])],
+            str(tmp_path))
+        body = [line for line in listing.read_text(encoding="utf-8").splitlines()
+                if line and not line.startswith("#")]
+        assert body == ["Box (1999)  -  holds a film that is not its own",
+                        "    the folder reads as: box 1999",
+                        "    Other Film.mkv",
+                        "        reads as: other film"]
 
     def test_nothing_is_collected_when_no_list_was_passed(self, monkeypatch,
                                                            tmp_path):
@@ -1509,3 +1547,526 @@ class TestHowCloseItCame:
         calls = _install(monkeypatch, json.dumps({"results": []}), {}, {})
         tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog())
         assert calls
+
+
+class TestTheFolderAboveAsTheFirstHalfOfTheTitle:
+    """A library that keeps a franchise in a folder of its own writes half the
+    title on each, and neither half is the title a catalogue has."""
+
+    def _network(self, monkeypatch, known):
+        """A catalogue that answers only to the titles in ``known``, folded
+        exactly - so what is being exercised is which spellings are asked."""
+        monkeypatch.setenv("tmdbApiKey", "apikey")
+        asked = []
+
+        def fake_curl(url, params):
+            kv = dict(params)
+            if url == _BASE + "/search/movie":
+                asked.append(kv["query"])
+                for wanted, (rid, _imdb, year) in known.items():
+                    if titlematch.normalize_title(kv["query"]) \
+                            == titlematch.normalize_title(wanted):
+                        return json.dumps({"results": [
+                            _row(rid, wanted, date=year + "-05-01")]})
+                return json.dumps({"results": []})
+            match = re.match(r"^" + re.escape(_BASE) + r"/movie/(\d+)$", url)
+            if match:
+                for _t, (rid, imdb, _y) in known.items():
+                    if rid == int(match.group(1)):
+                        return json.dumps({"external_ids": {"imdb_id": imdb}})
+            return None
+
+        monkeypatch.setattr(tmdblookup, "_curl", fake_curl)
+        return asked
+
+    def test_the_two_halves_together_name_the_film(self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "Star Wars" / "Episode IV - A New Hope (1977)").mkdir(
+            parents=True)
+        (tmp_path / "Star Wars" / "Episode IV - A New Hope (1977)"
+         / "Episode IV - A New Hope (1977).mkv").touch()
+        asked = self._network(monkeypatch, {
+            "Star Wars: Episode IV - A New Hope": (1, "tt0076759", "1977")})
+        tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog(),
+                                recursive=True)
+        # Asked under its own name first, and only then under the two halves.
+        assert asked[0] == "Episode IV - A New Hope"
+        assert "Star Wars Episode IV - A New Hope" in asked
+        # And written under the spelling that answered.
+        assert (tmp_path / "Star Wars"
+                / "Star Wars: Episode IV - A New Hope (1977) {imdb-tt0076759}"
+                ).is_dir()
+
+    def test_and_the_films_own_name_still_comes_first(self, monkeypatch,
+                                                      tmp_path):
+        """A film findable under its own name never pays for the reading."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "Star Wars" / "A New Hope (1977)").mkdir(parents=True)
+        (tmp_path / "Star Wars" / "A New Hope (1977)"
+         / "A New Hope (1977).mkv").touch()
+        asked = self._network(monkeypatch, {"A New Hope": (1, "tt0076759",
+                                                           "1977")})
+        tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog(),
+                                recursive=True)
+        assert asked == ["A New Hope"]
+        assert (tmp_path / "Star Wars"
+                / "A New Hope (1977) {imdb-tt0076759}").is_dir()
+
+    def test_the_folder_the_run_was_pointed_at_is_not_a_franchise(
+            self, monkeypatch, tmp_path):
+        """It is the library, named by whoever typed it, and gluing it to every
+        title underneath would ask about "Films Casablanca" once per film."""
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("A New Hope (1977)", ["A New Hope (1977).mkv"]))
+        asked = self._network(monkeypatch, {})
+        tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog(),
+                                recursive=True)
+        assert not any(query.startswith(os.path.basename(str(tmp_path)))
+                       for query in asked)
+
+    def test_a_tag_an_earlier_run_left_on_the_folder_above_is_not_a_title(
+            self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        above = tmp_path / "Star Wars {imdb-tt0076759}" / "A New Hope (1977)"
+        above.mkdir(parents=True)
+        (above / "A New Hope (1977).mkv").touch()
+        asked = self._network(monkeypatch, {})
+        tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog(),
+                                recursive=True)
+        assert "Star Wars A New Hope" in asked
+        assert not any("imdb" in query for query in asked)
+
+    def test_the_reading_is_offered_to_the_matching_and_not_only_the_search(
+            self, monkeypatch, tmp_path):
+        """A candidate found under the film's own name still has to carry a
+        title this folder answers to - and with the folder above read in, the
+        full title is one of them."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "Alien" / "Resurrection (1997)").mkdir(parents=True)
+        (tmp_path / "Alien" / "Resurrection (1997)"
+         / "Resurrection (1997).mkv").touch()
+        self._network(monkeypatch, {"Alien Resurrection": (1, "tt0118583",
+                                                           "1997")})
+        tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog(),
+                                recursive=True)
+        assert (tmp_path / "Alien"
+                / "Alien Resurrection (1997) {imdb-tt0118583}").is_dir()
+
+
+class TestTheFoldsAReportShows:
+    def test_a_tag_is_not_folded_into_what_a_name_says(self, monkeypatch,
+                                                        tmp_path):
+        """Two names that differ only in that one already carries its id would
+        otherwise read as two different films, with the id the loudest thing on
+        the line."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("tmdbApiKey", "apikey")
+        monkeypatch.setattr(tmdblookup, "_curl", lambda *_a, **_k: None)
+        tag = "{imdb-tt0054824}"
+        _tree(tmp_path, ("The Film (1961) " + tag,
+                         ["The Film (1961) " + tag + " Part 1 - The Escape.mkv",
+                          "The Film (1961) Part 2 - The Revenge.mkv"]))
+        ambiguous = []
+        tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog(),
+                                dry_run=True, ambiguous=ambiguous)
+        listing = tmp_path / "ambiguous.txt"
+        tmdblookup.write_ambiguous_list(str(listing), ambiguous, str(tmp_path))
+        written = listing.read_text(encoding="utf-8")
+        # The name on disk is quoted verbatim, tag and all - it is what the
+        # file is called. What must not carry the tag is the FOLD after it.
+        folds = [line.split("reads as: ", 1)[1]
+                 for line in written.splitlines() if "reads as: " in line]
+        assert not any("imdb" in fold for fold in folds)
+        assert sorted(folds) == ["the film 1961",
+                                 "the film 1961 part 1 the escape",
+                                 "the film 1961 part 2 the revenge"]
+
+
+class TestOneFilmUnderSeveralOfItsTitles:
+    """A folder whose files are the same film named in other languages. Nothing
+    about the strings can say so - "Das Krokodil und sein Nilpferd" and "Io sto
+    con gli ippopotami" share not a syllable with each other or with "I'm For
+    The Hippopotamus" - and the catalogue's own alternative titles can."""
+
+    HIPPO = ("I'm For The Hippopotamus", "Das Krokodil und sein Nilpferd",
+             "Io sto con gli ippopotami")
+
+    def _catalogue(self, monkeypatch, titles, imdb="tt0079068", year="1979"):
+        monkeypatch.setenv("tmdbApiKey", "apikey")
+
+        def fake_curl(url, params):
+            kv = dict(params)
+            if url == _BASE + "/search/movie":
+                if not any(titlematch.equivalent(kv["query"], t)
+                           for t in titles):
+                    return json.dumps({"results": []})
+                return json.dumps({"results": [
+                    _row(1, titles[0], date=year + "-04-01")]})
+            if url == _BASE + "/movie/1":
+                return json.dumps({
+                    "external_ids": {"imdb_id": imdb},
+                    "alternative_titles": {
+                        "titles": [{"title": t} for t in titles[1:]]},
+                    "release_dates": {"results": []}})
+            return None
+
+        monkeypatch.setattr(tmdblookup, "_curl", fake_curl)
+
+    def test_the_folder_is_tagged_and_every_file_keeps_its_own_language(
+            self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("I'm For The Hippopotamus (1979)",
+                         ["Das Krokodil und sein Nilpferd (1979).mkv",
+                          "Io Sto Con Gli Ippopotami (1979).mkv"]))
+        self._catalogue(monkeypatch, self.HIPPO)
+        aliases, ambiguous = [], []
+        tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog(),
+                                aliases=aliases, ambiguous=ambiguous)
+        tagged = tmp_path / "I'm For The Hippopotamus (1979) {imdb-tt0079068}"
+        assert tagged.is_dir()
+        assert ambiguous == []
+        # Each keeps the language it was named in, and gains only the id.
+        assert sorted(path.name for path in tagged.iterdir()) == [
+            "Das Krokodil und sein Nilpferd (1979) {imdb-tt0079068}.mkv",
+            "Io Sto Con Gli Ippopotami (1979) {imdb-tt0079068}.mkv"]
+
+    def test_and_it_is_announced(self, monkeypatch, tmp_path):
+        """Nothing was renamed away, so no other list would mention it."""
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("I'm For The Hippopotamus (1979)",
+                         ["Das Krokodil und sein Nilpferd (1979).mkv",
+                          "Io Sto Con Gli Ippopotami (1979).mkv"]))
+        self._catalogue(monkeypatch, self.HIPPO)
+        aliases = []
+        tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog(),
+                                aliases=aliases)
+        (_path, base, tag, known), = aliases
+        assert (base, tag) == ("I'm For The Hippopotamus (1979)",
+                               "{imdb-tt0079068}")
+        assert sorted(known) == ["Das Krokodil und sein Nilpferd (1979).mkv",
+                                 "Io Sto Con Gli Ippopotami (1979).mkv"]
+
+    def test_a_file_the_catalogue_does_not_know_keeps_the_folder_ambiguous(
+            self, monkeypatch, tmp_path):
+        """One name the catalogue accounts for does not vouch for another it
+        does not: a second feature is still a second feature."""
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("I'm For The Hippopotamus (1979)",
+                         ["Das Krokodil und sein Nilpferd (1979).mkv",
+                          "A Wholly Different Film.mkv"]))
+        self._catalogue(monkeypatch, self.HIPPO)
+        aliases, ambiguous = [], []
+        tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog(),
+                                aliases=aliases, ambiguous=ambiguous)
+        assert aliases == []
+        assert [reason for _p, reason, _n in ambiguous] \
+            == ["holds a film that is not its own"]
+        # And nothing was renamed, so neither file was tagged as the other.
+        assert (tmp_path / "I'm For The Hippopotamus (1979)"
+                / "A Wholly Different Film.mkv").is_file()
+
+    def test_an_id_this_run_found_is_never_put_on_a_name_it_cannot_account_for(
+            self, monkeypatch, tmp_path):
+        """The whole safety of the alias path: only names the CATALOGUE
+        vouched for get the folder's id."""
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("I'm For The Hippopotamus (1979)",
+                         ["I'm For The Hippopotamus (1979).mkv",
+                          "A Wholly Different Film.mkv"]))
+        self._catalogue(monkeypatch, self.HIPPO)
+        tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog())
+        held = sorted(path.name for path in
+                      (tmp_path / "I'm For The Hippopotamus (1979)").iterdir())
+        assert held == ["A Wholly Different Film.mkv",
+                        "I'm For The Hippopotamus (1979).mkv"]
+
+
+class TestAYearWithADigitWrong:
+    def test_it_is_reported_as_a_date_and_not_as_a_duplicate(self, monkeypatch,
+                                                              tmp_path):
+        """One is a second file nobody meant to keep, the other is one file
+        with a digit wrong, and reporting the second as the first sends
+        somebody looking for a duplicate that was never there."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("tmdbApiKey", "apikey")
+        monkeypatch.setattr(tmdblookup, "_curl",
+                            lambda *_a, **_k: json.dumps({"results": []}))
+        _tree(tmp_path, ("Dragons Forever (1988)",
+                         ["Dragons Forever (1998).mkv"]))
+        ambiguous = []
+        tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog(),
+                                ambiguous=ambiguous)
+        assert [reason for _p, reason, _n in ambiguous] \
+            == ["holds the same film under another year"]
+
+    def test_and_a_real_copy_marker_still_reads_as_one(self, monkeypatch,
+                                                        tmp_path):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("tmdbApiKey", "apikey")
+        monkeypatch.setattr(tmdblookup, "_curl",
+                            lambda *_a, **_k: json.dumps({"results": []}))
+        _tree(tmp_path, ("The Movie (1999)",
+                         ["The Movie (1999).mkv", "The Movie (1999) (1).mkv"]))
+        ambiguous = []
+        tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog(),
+                                ambiguous=ambiguous)
+        assert [reason for _p, reason, _n in ambiguous] \
+            == ["holds a duplicate marked only by a number"]
+
+    def test_a_homoglyph_is_not_a_film_of_its_own(self, monkeypatch, tmp_path):
+        """The file's name is the folder's name on the screen; only one letter
+        came from another keyboard."""
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("Thor - Ragnarok (2017)",
+                         ["Тhor - Ragnarok (2017) IMAX.mkv"]))
+        self._knows_thor(monkeypatch)
+        ambiguous = []
+        tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog(),
+                                ambiguous=ambiguous)
+        assert ambiguous == []
+        tagged = tmp_path / "Thor - Ragnarok (2017) {imdb-tt3501632}"
+        assert tagged.is_dir()
+        assert [path.name for path in tagged.iterdir()] == [
+            "Thor - Ragnarok (2017) {imdb-tt3501632} {edition-IMAX}.mkv"]
+
+    def _knows_thor(self, monkeypatch):
+        monkeypatch.setenv("tmdbApiKey", "apikey")
+
+        def fake_curl(url, params):
+            kv = dict(params)
+            if url == _BASE + "/search/movie":
+                if not titlematch.equivalent(kv["query"], "Thor: Ragnarok"):
+                    return json.dumps({"results": []})
+                return json.dumps({"results": [
+                    _row(1, "Thor - Ragnarok", date="2017-10-25")]})
+            return json.dumps({"external_ids": {"imdb_id": "tt3501632"}})
+
+        monkeypatch.setattr(tmdblookup, "_curl", fake_curl)
+
+
+class TestEvidenceOfDifferentStrength:
+    """Two candidates are not equally likely just because both survived the
+    rules. Weighing them as though they were is what left obvious films
+    unnamed."""
+
+    def test_a_title_as_written_beats_one_reached_through_a_reading(
+            self, monkeypatch):
+        """The folder "1917" was offered the film "1917" - which folds to
+        exactly what the folder does - alongside a "Bisbee '17" that only
+        reached the list through a reading, and both their lengths fit."""
+        search = json.dumps({"results": [
+            _row(1, "1917", date="2019-01-10"),
+            _row(2, "Bisbee '17", date="2019-01-10")]})
+        # The second reaches the list only through the article reading, which
+        # is the whole distinction: its titles fold to "the 1917", never to the
+        # "1917" the folder is written as.
+        _install(monkeypatch, search, {2: ["The 1917"]},
+                 {1: "tt8579674", 2: "tt7520286"},
+                 runtimes={1: 119, 2: 124})
+        assert tmdblookup.tmdb_imdb_id("1917", "2019",
+                                       lambda: 119 * 60.0) == "tt8579674"
+
+    def test_but_a_second_that_also_carries_it_as_written_still_stops_it(
+            self, monkeypatch):
+        """If a catalogue really does hold both films under one title, two
+        candidates whose lengths both fit are two candidates."""
+        search = json.dumps({"results": [
+            _row(1, "1917", date="2019-01-10"),
+            _row(2, "Bisbee '17", date="2019-01-10")]})
+        _install(monkeypatch, search, {2: ["1917"]},
+                 {1: "tt8579674", 2: "tt7520286"},
+                 runtimes={1: 119, 2: 124})
+        assert tmdblookup.tmdb_imdb_id("1917", "2019",
+                                       lambda: 119 * 60.0) == ""
+
+    def test_two_that_both_carry_it_as_written_are_still_two(self,
+                                                             monkeypatch):
+        """It narrows and never widens."""
+        search = json.dumps({"results": [_row(1, "Batman", date="1999-01-10"),
+                                         _row(2, "Batman", date="1999-01-10")]})
+        _install(monkeypatch, search, {}, {1: "tt0000001", 2: "tt0000002"})
+        assert tmdblookup.tmdb_imdb_id("Batman", "1999") == ""
+
+    def test_and_where_none_carries_it_as_written_they_all_stand(self,
+                                                                 monkeypatch):
+        search = json.dumps({"results": [_row(1, "The Batman",
+                                              date="1999-01-10")]})
+        _install(monkeypatch, search, {}, {1: "tt0000001"})
+        assert tmdblookup.tmdb_imdb_id("Batman", "1999") == "tt0000001"
+
+    def test_a_re_release_does_not_answer_for_the_film_it_was_timed_to(
+            self, monkeypatch):
+        """"A Star Is Born" from 1976 went back into cinemas in 2018 because
+        "A Star Is Born" from 2018 came out."""
+        search = json.dumps({"results": [
+            _row(1, "A Star Is Born", date="2018-10-03"),
+            _row(2, "A Star Is Born", date="1976-12-17")]})
+        _install(monkeypatch, search, {}, {1: "tt1517451", 2: "tt0075265"},
+                 runtimes={1: 136, 2: 140},
+                 years={1: ["2018", "2019", "2021"],
+                        2: ["1976", "1977", "1982", "2018"]})
+        assert tmdblookup.tmdb_imdb_id("A Star Is Born", "2018",
+                                       lambda: 135.8 * 60.0) == "tt1517451"
+
+    def test_a_premiere_a_year_before_the_release_is_not_a_re_release(
+            self, monkeypatch):
+        """Around the wanted year, not exactly on it: the festival premiere and
+        the general release a year apart are the case the year rule exists
+        for."""
+        search = json.dumps({"results": [_row(1, "The Film", date="2017-09-01")]})
+        _install(monkeypatch, search, {}, {1: "tt0000001"},
+                 years={1: ["2017", "2018"]})
+        assert tmdblookup.tmdb_imdb_id("The Film", "2018") == "tt0000001"
+
+    def test_and_where_every_candidate_is_equally_old_they_all_stand(
+            self, monkeypatch):
+        search = json.dumps({"results": [
+            _row(1, "The Film", date="1976-01-01"),
+            _row(2, "The Film", date="1976-01-01")]})
+        _install(monkeypatch, search, {}, {1: "tt0000001", 2: "tt0000002"},
+                 years={1: ["1976", "2018"], 2: ["1976", "2018"]})
+        assert tmdblookup.tmdb_imdb_id("The Film", "2018") == ""
+
+
+class TestWhichListAFolderBelongsTo:
+    """Four reports, each folder in exactly one - except the hand-fill list,
+    which is meant to hold the near misses so they can be looked up by hand."""
+
+    def _library(self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("tmdbApiKey", "apikey")
+        _tree(tmp_path,
+              ("Ordinary (1999)", ["Ordinary (1999).mkv"]),
+              ("Box (1999)", ["Box (1999).mkv", "Other Film.mkv"]),
+              ("Unknowable (1899)", ["Unknowable (1899).mkv"]),
+              ("Hippo (1979)", ["Krokodil (1979).mkv"]))
+
+        def fake_curl(url, params):
+            kv = dict(params)
+            if url == _BASE + "/search/movie":
+                for rid, title, year in ((1, "Ordinary", "1999"),
+                                         (2, "Box", "1999"),
+                                         (4, "Hippo", "1979")):
+                    if titlematch.normalize_title(kv["query"]) \
+                            == titlematch.normalize_title(title):
+                        return json.dumps({"results": [
+                            _row(rid, title, date=year + "-01-01")]})
+                return json.dumps({"results": []})
+            match = re.match(r"^" + re.escape(_BASE) + r"/movie/(\d+)$", url)
+            rid = int(match.group(1)) if match else 0
+            body = {"external_ids": {"imdb_id": "tt000000%d" % rid},
+                    "release_dates": {"results": []},
+                    "alternative_titles": {"titles": []}}
+            if rid == 4:
+                body["alternative_titles"] = {"titles": [{"title": "Krokodil"}]}
+            return json.dumps(body)
+
+        monkeypatch.setattr(tmdblookup, "_curl", fake_curl)
+
+    def test_each_folder_is_named_by_exactly_one_report(self, monkeypatch,
+                                                         tmp_path):
+        self._library(monkeypatch, tmp_path)
+        unmatched, ambiguous, planned, near, aliases = [], [], [], [], []
+        tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog(),
+                                dry_run=True, recursive=True,
+                                unmatched=unmatched, ambiguous=ambiguous,
+                                planned=planned, near_misses=near,
+                                aliases=aliases)
+        seen = {
+            "ambiguous": {os.path.basename(path) for path, _r, _n in ambiguous},
+            "nearmiss": {os.path.basename(path) for path, _r, _n in near},
+            "othertitles": {os.path.basename(path)
+                            for path, _b, _t, _k in aliases},
+            # A rename is either of a film folder or of a file inside one, so
+            # the folder it is about is one of those two parts.
+            "renames": {part for source, _target in planned
+                        for part in (os.path.basename(source),
+                                     os.path.basename(os.path.dirname(source)))
+                        if part in ("Ordinary (1999)", "Box (1999)",
+                                    "Unknowable (1899)", "Hippo (1979)")},
+        }
+        assert seen["ambiguous"] == {"Box (1999)"}
+        assert seen["nearmiss"] == {"Unknowable (1899)"}
+        assert seen["othertitles"] == {"Hippo (1979)"}
+        assert seen["renames"] == {"Ordinary (1999)"}
+        for one, other in itertools.combinations(seen, 2):
+            assert not seen[one] & seen[other], (one, other)
+
+    def test_but_the_hand_fill_list_still_holds_the_near_misses(
+            self, monkeypatch, tmp_path):
+        """It is the file somebody types an id into, so the films to look up
+        have to be in it."""
+        self._library(monkeypatch, tmp_path)
+        unmatched, near = [], []
+        tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog(),
+                                dry_run=True, recursive=True,
+                                unmatched=unmatched, near_misses=near)
+        assert unmatched == ["Unknowable (1899)"]
+        assert [os.path.basename(path) for path, _r, _n in near] \
+            == ["Unknowable (1899)"]
+
+
+class TestACandidateThatCouldNotBeTheAnswer:
+    """What is being asked for is an IMDb id. A candidate with none was never a
+    possible answer, and the only thing it can do is stand beside one that is
+    and make the pair look uncertain."""
+
+    def test_the_one_with_an_id_is_taken(self, monkeypatch):
+        """A folder called "Re Born" was offered the film it is and an idol
+        video with no id, both lengths fitting."""
+        search = json.dumps({"results": [
+            _row(1, "RE:BORN", date="2016-09-10"),
+            _row(2, "忍野さら/Re-Born", date="2016-01-01")]})
+        _install(monkeypatch, search, {}, {1: "tt5678110"},
+                 runtimes={1: 101, 2: 102})
+        assert tmdblookup.tmdb_imdb_id("Re Born", "2016",
+                                       lambda: 100 * 60.0) == "tt5678110"
+
+    def test_where_none_of_them_has_one_they_all_stand(self, monkeypatch):
+        """There is nothing to answer with either way, and the reports should
+        still say what was offered."""
+        search = json.dumps({"results": [_row(1, "Re Born", date="2016-09-10"),
+                                         _row(2, "Re Born", date="2016-01-01")]})
+        _install(monkeypatch, search, {}, {}, runtimes={1: 101, 2: 102})
+        near: list = []
+        assert tmdblookup.identify("Re Born", "2016", lambda: 100 * 60.0,
+                                   near).imdb == ""
+        assert any("does not fit" in note or "fits" in note for note in near)
+
+    def test_and_it_is_said_in_the_report(self, monkeypatch):
+        search = json.dumps({"results": [
+            _row(1, "Re Born", date="2016-09-10"),
+            _row(2, "Re Born", date="2016-01-01"),
+            _row(3, "Re Born", date="2016-02-01")]})
+        _install(monkeypatch, search, {}, {1: "tt0000001"},
+                 runtimes={1: 101, 2: 102, 3: 103})
+        near: list = []
+        tmdblookup.identify("Re Born", "2016", lambda: 0.0, near)
+        assert sum("no IMDb id, so it could not be the answer" in note
+                   for note in near) == 2
+
+    def test_and_it_stops_blocking_as_an_unmeasurable_one(self, monkeypatch):
+        """Worse than standing beside a fit: a candidate with no runtime is
+        never ruled OUT by a length, so one that could not have been the answer
+        kept the answer at "not certain" all by itself."""
+        search = json.dumps({"results": [
+            _row(1, "Mr. Right", date="2015-04-01"),
+            _row(2, "Mr. Right", date="2015-01-01"),
+            _row(3, "我的Mr. Right", date="2015-01-01")]})
+        _install(monkeypatch, search, {},
+                 {1: "tt2091935", 2: "tt3812348"},
+                 runtimes={1: 95, 2: 79})
+        assert tmdblookup.tmdb_imdb_id("Mr. Right", "2015",
+                                       lambda: 95.5 * 60.0) == "tt2091935"
+
+    def test_but_one_that_could_have_been_still_blocks(self, monkeypatch):
+        """The rule this rests on is unchanged: a candidate nobody can measure
+        is not ruled out by a length, so as long as one is standing the answer
+        is still "not certain"."""
+        search = json.dumps({"results": [
+            _row(1, "Mr. Right", date="2015-04-01"),
+            _row(2, "Mr. Right", date="2015-01-01")]})
+        _install(monkeypatch, search, {},
+                 {1: "tt2091935", 2: "tt3812348"}, runtimes={1: 95})
+        assert tmdblookup.tmdb_imdb_id("Mr. Right", "2015",
+                                       lambda: 95.5 * 60.0) == ""

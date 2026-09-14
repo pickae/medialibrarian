@@ -209,6 +209,24 @@ def is_only_a_marker(edition: str) -> bool:
     return edition.strip().isdigit()
 
 
+def is_only_a_year(edition: str) -> bool:
+    """Whether an edition name is nothing but a YEAR.
+
+    A folder's film dated 1988 beside a file of it dated 1998 is one of them
+    mistyped, and the leftover reads as a bare number - which is also what a
+    copy's "(1)" reads as. They are not the same thing at all: one is a second
+    file nobody meant to keep, the other is one file with a digit wrong, and
+    reporting the second as the first sends someone looking for a duplicate
+    that was never there.
+
+    Asked before :func:`is_only_a_marker`, which every year would otherwise
+    answer to as well.
+    """
+    text = edition.strip()
+    return (len(text) == 4 and text.isdigit()
+            and text[0] in "12")
+
+
 def names_a_part(edition: str) -> bool:
     """Whether an edition name is really a PART said in words.
 
@@ -286,10 +304,35 @@ def onto_base(base: str, name: str) -> str:
         head = name[:cut].rstrip()
         if not head:
             continue
+        if _numbers_another_film(name[cut:]):
+            continue
         if _names_this_film(base, head) or _names_this_film(
                 base, titlematch.strip_duplicate_marker(head)):
             return base + name[cut:]
     return ""
+
+
+# A number standing on its own, in words or in roman, with nothing holding it.
+_A_NUMBER = re.compile(r"^(?:[0-9]+|[ivxlcdm]+)$", re.I)
+
+
+def _numbers_another_film(rest: str) -> bool:
+    """Whether what follows a matched title numbers a DIFFERENT film.
+
+    "Winnetou" matches the folder "Winnetou I (1963)", because the first of a
+    series is numbered three ways and meant identically - and that same reading
+    makes "Winnetou II (1964).mkv" match it too, with the "II" left over as
+    though it were an edition. It is not an edition: it is the sequel, and
+    absorbing it is precisely how a sequel gets filed under the film before it.
+
+    Only a BARE number counts. One in brackets is a year or a copy's marker,
+    and "Part 2" is a part - both of them say something about this film rather
+    than naming another.
+    """
+    words = rest.split()
+    # Cut at the first dot, or the number that IS the whole rest of the name
+    # arrives wearing its extension: "Winnetou 2.mkv" leaves "2.mkv".
+    return bool(words) and bool(_A_NUMBER.match(words[0].split(".", 1)[0]))
 
 
 def _boundaries(name: str) -> list:
@@ -310,6 +353,35 @@ def _names_this_film(base: str, head: str) -> bool:
         return True
     bare = untitled_base(base)
     return bare != base and titlematch.equivalent(bare, head)
+
+
+def named_by_catalogue(names, aliases) -> dict:
+    """{name: the catalogue's own writing of the title it answers to}, for the
+    names a CATALOGUE says are this film - and which nothing about the strings
+    could have said.
+
+    "Das Krokodil und sein Nilpferd" and "Io sto con gli ippopotami" have not a
+    syllable in common with "I'm For The Hippopotamus" or with each other, and
+    are one film in three languages. No rule over the text will ever join them;
+    the alternative titles the catalogue holds do.
+
+    Recognition only. A name this accounts for keeps every character it has -
+    which of a film's languages a file is named in is a thing its owner chose,
+    and a lookup is no reason to overwrite it.
+
+    ``aliases`` are the titles as the catalogue writes them, and one of those is
+    what comes back - not the key that matched. A report is read by a person,
+    and a fold is not a title: "Das Krokodil und sein Nilpferd" folds to a key
+    with "and" in the middle of it, which is not a name anything has.
+    """
+    found = {}
+    for name in names:
+        keys = titlematch.title_keys(untitled_base(os.path.splitext(name)[0]))
+        for written in aliases:
+            if titlematch.title_keys(written) & keys:
+                found[name] = written
+                break
+    return found
 
 
 def spelling_renames(base: str, names) -> dict:

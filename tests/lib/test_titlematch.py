@@ -516,3 +516,117 @@ class TestSeveralOfThemInOneName:
         assert not titlematch.equivalent(
             "THE LORD OF THE RINGS PART II",
             "The Hobbit Part 2")
+
+
+class TestALetterFromTheWrongKeyboard:
+    """A name whose letters are the SHAPE of Latin ones is that name. The fold
+    has no opinion about Cyrillic beyond dropping it, which turned "Thor" whose
+    T is a Cyrillic TE into "hor" and called the file a different film."""
+
+    @pytest.mark.parametrize("latin,confusable,about", [
+        ("Thor - Ragnarok", "Тhor - Ragnarok", "Cyrillic TE for T"),
+        ("Apollo 13", "Аpollo 13", "Cyrillic A"),
+        ("Cars", "Сars", "Cyrillic ES for C"),
+        ("Home", "Hоme", "Cyrillic O, mid-word"),
+        ("Alpha Beta", "Αlpha Βeta", "Greek alpha and beta"),
+        ("Oxygen", "Οxygen", "Greek omicron"),
+    ])
+    def test_it_reads_as_the_letter_it_looks_like(self, latin, confusable,
+                                                   about):
+        assert titlematch.equivalent(latin, confusable), about
+
+    def test_and_the_name_costs_no_process_once_it_is_ascii(self, monkeypatch):
+        """The substitution runs before the short-circuit, so a name whose only
+        non-ASCII character was a wrong-keyboard letter never reaches iconv."""
+        def refuse(*_a, **_k):
+            raise AssertionError("asked iconv about what is now ASCII")
+
+        titlematch.reset_iconv_flavour()
+        monkeypatch.setattr(titlematch.subprocess, "run", refuse)
+        assert titlematch.normalize_title("Тhor - Ragnarok (2017)") \
+            == "thor ragnarok 2017"
+
+    def test_a_title_really_written_in_cyrillic_is_unharmed(self):
+        """Both sides of every comparison are folded by this same function, so
+        a real Cyrillic title matches itself whether these apply or not."""
+        assert titlematch.equivalent("Сталкер",
+                                     "Сталкер")
+
+    def test_and_two_different_films_still_do_not_meet(self):
+        assert not titlematch.equivalent("Тhor", "Loki")
+
+
+class TestTheFirstOfASeries:
+    """Numbered three ways and meant identically."""
+
+    @pytest.mark.parametrize("one,other", [
+        ("Winnetou I", "Winnetou 1"),
+        ("Winnetou I", "Winnetou"),
+        ("Winnetou 1", "Winnetou"),
+        ("Winnetou I (1963)", "Winnetou (1963)"),
+    ])
+    def test_all_three_numberings_are_one_film(self, one, other):
+        assert titlematch.equivalent(one, other)
+
+    @pytest.mark.parametrize("one,other", [
+        ("Winnetou II", "Winnetou"),
+        ("Winnetou 2", "Winnetou"),
+        ("Winnetou 2", "Winnetou 1"),
+        ("Rocky III", "Rocky"),
+    ])
+    def test_but_only_the_first(self, one, other):
+        """A trailing "2" is the sequel, and dropping it would file the sequel
+        under the film before it."""
+        assert not titlematch.equivalent(one, other)
+
+    def test_the_bare_name_is_offered_as_a_query(self):
+        assert "Winnetou" in titlematch.search_titles("Winnetou I")
+
+    def test_a_roman_numeral_in_a_conjunctions_place_is_still_a_numeral(self):
+        """"Winnetou I (1963)" has its "I" between two words, which is where a
+        conjunction sits - read as one it folds to "winnetou and 1963" and the
+        numeral is never read at all."""
+        keys = titlematch.title_keys("Winnetou I (1963)")
+        assert "winnetou 1 1963" in keys
+        assert "winnetou 1963" in keys
+
+    def test_and_a_conjunction_in_that_place_is_still_a_conjunction(self):
+        assert titlematch.equivalent("Hansel & Gretel", "Hänsel und Gretel")
+
+
+class TestANumberTheTitleSurrounds:
+    """A number with title on both sides of it may be left out, because what
+    surrounds it still says which film it is."""
+
+    @pytest.mark.parametrize("written,without", [
+        ("Ghost in the Shell 2: Innocence", "Ghost In The Shell Innocence"),
+        ("Ghost in the Shell II: Innocence", "Ghost In The Shell Innocence"),
+        ("Rambo 3 The Return", "Rambo The Return"),
+    ])
+    def test_the_number_may_be_left_out(self, written, without):
+        assert titlematch.equivalent(written, without)
+
+    @pytest.mark.parametrize("one,other", [
+        ("Winnetou 2", "Winnetou"),
+        ("Ip Man 3", "Ip Man"),
+        ("Kill Bill Vol 2", "Kill Bill Vol"),
+        ("Rocky II", "Rocky"),
+    ])
+    def test_but_never_the_one_at_the_end(self, one, other):
+        """There is nothing after it to say which film it is: the sequel would
+        be wearing the original's name."""
+        assert not titlematch.equivalent(one, other)
+
+    def test_nor_a_year_in_the_middle(self, ):
+        """The year is the one thing besides the title that says which film
+        this is."""
+        assert not titlematch.equivalent("Blade Runner 2049 Nexus",
+                                         "Blade Runner Nexus")
+
+    def test_and_two_sequels_that_differ_only_by_it_are_still_two(self):
+        assert not titlematch.equivalent("Halloween 4 The Return",
+                                         "Halloween 5 The Revenge")
+
+    def test_the_keys_stay_bounded(self):
+        stacked = "The Movie Special Film Part II & The Sequel III et IV I"
+        assert len(titlematch.title_keys(stacked)) <= titlematch.MAX_KEYS

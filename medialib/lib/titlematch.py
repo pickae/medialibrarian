@@ -22,7 +22,10 @@ combinations:
   spelled out the way a language writes them when it cannot reach them;
 * the **articles** it carries, kept and dropped - the one it leads or trails
   with, and all of them wherever they sit;
-* its **numerals**, roman read as arabic;
+* its **numerals**, roman read as arabic; a trailing "1" dropped, because the
+  first film of a series is numbered three ways and meant identically; and a
+  number with title on BOTH sides of it dropped, because what surrounds it
+  still says which film it is;
 * the **filler** a local library puts in front of a name and a catalogue never
   carries.
 
@@ -80,7 +83,15 @@ def normalize_title(title: str) -> str:
     "am elie" and no longer matches the "amelie" the same film's ASCII
     spelling gives. Those hosts, and a host with no iconv at all, fold in
     Python instead (:func:`_fold_without_iconv`).
+
+    A letter that is the SHAPE of a Latin one is read as that letter first -
+    see :data:`CONFUSABLES` - because no transliteration will ever do it: to
+    iconv a Cyrillic TE is Cyrillic, and to a reader it is a T.
     """
+    # Before anything else, including the short-circuit below: a name whose only
+    # non-ASCII character is a letter from the wrong keyboard becomes ASCII here
+    # and costs no process at all.
+    title = title.translate(CONFUSABLES)
     if title.isascii():
         # Nothing for a transliteration to do, so it is not asked: ASCII goes
         # through ASCII//TRANSLIT unchanged and with a zero exit, and asking
@@ -216,6 +227,38 @@ def _fold_without_iconv(title: str) -> str:
 
 # --- the words a fold has to know about --------------------------------------
 
+# The letters of another alphabet that are the SAME SHAPE as a Latin one, and
+# what they are the shape of. A file called "Тhor - Ragnarok" whose first letter
+# is a Cyrillic TE is the same name as one spelled with a Latin T - it is the
+# same name on the screen - and the fold, which has no opinion about Cyrillic
+# beyond dropping it, made "hor" of it and called the file a different film.
+#
+# Only the letters that are visually IDENTICAL, which is what makes the
+# substitution safe to make before anything else: a title really written in
+# Cyrillic folds to the same keys on both sides of every comparison whether
+# these are applied or not, so nothing that matched stops matching, while a
+# Latin title with one letter from the wrong keyboard starts.
+# https://www.unicode.org/reports/tr39/
+CONFUSABLES = str.maketrans({
+    # Cyrillic capitals
+    "А": "A", "В": "B", "Е": "E", "К": "K",
+    "М": "M", "Н": "H", "О": "O", "Р": "P",
+    "С": "C", "Т": "T", "У": "Y", "Х": "X",
+    "Ѕ": "S", "І": "I", "Ј": "J", "Ԛ": "Q",
+    "Ԝ": "W",
+    # Cyrillic smalls
+    "а": "a", "е": "e", "о": "o", "р": "p",
+    "с": "c", "у": "y", "х": "x", "ѕ": "s",
+    "і": "i", "ј": "j", "ԛ": "q", "ԝ": "w",
+    # Greek capitals
+    "Α": "A", "Β": "B", "Ε": "E", "Ζ": "Z",
+    "Η": "H", "Ι": "I", "Κ": "K", "Μ": "M",
+    "Ν": "N", "Ο": "O", "Ρ": "P", "Τ": "T",
+    "Υ": "Y", "Χ": "X",
+    # Greek smalls
+    "ο": "o", "ν": "v",
+})
+
 # The symbols that are WORDS, spelled out before the fold takes them away. "&"
 # and "and" are one title written twice, and the fold's own rule - every
 # non-alphanumeric run becomes a space - would leave "Hansel Gretel" against
@@ -318,14 +361,40 @@ def _spelled_out(title: str) -> str:
 
 
 def _tokens(title: str) -> list[str]:
-    """The folded words of a title, with the symbols that are words spelled out
-    and the conjunctions read as one."""
+    """The folded words of a title, with the symbols that are words spelled
+    out."""
     text = title
     for symbol, word in SYMBOL_WORDS:
         text = text.replace(symbol, word)
-    words = normalize_title(text).split()
+    return normalize_title(text).split()
+
+
+def _one_conjunction(words: list[str]) -> list[str]:
+    """``words`` with every conjunction read as the same one.
+
+    A reading and not part of the fold, because two of these words are numerals
+    as well: "Winnetou I (1963)" has its "I" in a conjunction's place and is not
+    a conjunction at all - read as one it folds to "winnetou and 1963", and the
+    numeral it really is never gets read at all. Widening keeps both meanings.
+    """
     return [CONJUNCTIONS.get(word, word) if 0 < index < len(words) - 1 else word
             for index, word in enumerate(words)]
+
+
+def _without_the_first(words: list[str]) -> list[str]:
+    """``words`` without a trailing "1", while a title remains.
+
+    The first film of a series is numbered three ways and meant identically:
+    "Winnetou I", "Winnetou 1" and plain "Winnetou" are one film, and a library
+    and a catalogue rarely agree on which. Only ONE of them - a trailing "2" is
+    the sequel, and dropping it would file the sequel under the original.
+
+    Runs after the numerals are read, so the roman "I" has already become the
+    "1" this looks for.
+    """
+    if len(words) > 1 and words[-1] == "1":
+        return words[:-1]
+    return words
 
 
 def _without_article(words: list[str]) -> list[str]:
@@ -399,6 +468,34 @@ def _roman_value(numeral: str) -> int:
     return total
 
 
+def _without_the_inner_number(words: list[str]) -> list[str]:
+    """``words`` without a number that has title on BOTH sides of it.
+
+    "Ghost in the Shell 2: Innocence" is written "Ghost in the Shell Innocence"
+    by a library that left the number out, and the two are one film - because
+    everything around the number still says which film it is. That is what
+    makes the number droppable here and not at the end: "Winnetou 2" reduced to
+    "Winnetou" would be the sequel wearing the original's name, and there is
+    nothing else in it to say otherwise.
+
+    Runs after the numerals are read, so a roman "II" in the middle of a title
+    is dropped as readily as an arabic one.
+    """
+    kept = [word for index, word in enumerate(words)
+            if not (0 < index < len(words) - 1 and _an_ordinal(word))]
+    return kept if len(kept) > 1 else words
+
+
+def _an_ordinal(word: str) -> bool:
+    """Whether a number is a film's place in its series rather than a year.
+
+    A four-digit 19xx or 20xx in the middle of a name is the year, and the year
+    is the one thing besides the title that says which film this is - dropping
+    it would widen a name onto every other year's.
+    """
+    return word.isdigit() and not (len(word) == 4 and word[0] in "12")
+
+
 def _widen(forms: list, reading) -> list:
     """Every form ``forms`` holds, plus what ``reading`` makes of each - once.
 
@@ -431,8 +528,9 @@ def title_keys(title: str) -> frozenset:
     written = _tokens(_spelled_out(title))
     if written != forms[0]:
         forms.append(written)
-    for reading in (_without_article, _without_articles, _without_filler,
-                    _arabic_numerals):
+    for reading in (_one_conjunction, _without_article, _without_articles,
+                    _without_filler, _arabic_numerals, _without_the_first,
+                    _without_the_inner_number):
         forms = _widen(forms, reading)
     keys = set()
     for words in forms:
@@ -482,7 +580,8 @@ def search_titles(title: str) -> list:
     found = [title]
     folds = {normalize_title(title)}
     for spelling in (stripped, _last_segment(stripped),
-                     _arabic_spelling(stripped), normalize_title(title)):
+                     _arabic_spelling(stripped), _unnumbered(stripped),
+                     normalize_title(title)):
         folded = normalize_title(spelling) if spelling else ""
         if folded and folded not in folds:
             found.append(spelling)
@@ -515,6 +614,15 @@ def _last_segment(title: str) -> str:
     """
     tail = _SEGMENT.split(title)[-1].strip()
     return tail if tail and tail != title.strip() else ""
+
+
+def _unnumbered(title: str) -> str:
+    """``title`` without a trailing "I" or "1", for a catalogue that holds the
+    first of a series under its bare name."""
+    words = title.split()
+    if len(words) > 1 and shell_lower(words[-1]) in ("i", "1"):
+        return " ".join(words[:-1])
+    return ""
 
 
 def _arabic_spelling(title: str) -> str:
