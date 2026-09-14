@@ -82,8 +82,8 @@ def test_a_child_inherits_both():
 def test_the_folding_the_pin_exists_for():
     """An accent folds to ASCII rather than being dropped - the thing the pin is
     for, in one line."""
-    from medialib.lib import tmdblookup
-    assert tmdblookup.normalize_title("Amélie") == "amelie"
+    from medialib.lib import titlematch
+    assert titlematch.normalize_title("Amélie") == "amelie"
 
 
 # --- the one-name spelling ------------------------------------------------------

@@ -224,3 +224,141 @@ class TestWhetherAFolderHoldsOneFilm:
         assert plexnames.one_film_in(
             "Film (2020)", ["Film (2020).mkv", "Film (2020) (old).mkv"]) \
             == ["Film (2020).mkv"]
+
+
+BASE = "Le comte de Monte-Cristo (1961)"
+
+
+class TestAPartWrittenWithItsNumberHeldOff:
+    """Plex's scanner wants the number against the keyword. "Part 1" is the
+    same token written by a person, and is a spelling to correct rather than a
+    folder to give up on."""
+
+    @pytest.mark.parametrize("written,tight", [
+        ("Part 1", "Part1"),
+        ("part 2", "part2"),
+        ("cd 3", "cd3"),
+        ("disc  4", "disc4"),
+        ("pt. 5", "pt5"),
+        ("Part - 6", "Part6"),
+    ])
+    def test_it_is_read_as_the_token_it_is(self, written, tight):
+        assert plexnames.read_stem("Film (2020)", "Film (2020) " + written) \
+            == ("", tight)
+
+    def test_and_written_back_where_plex_reads_it(self):
+        assert plexnames.folder_renames(
+            "Film (2020)", TAG,
+            ["Film (2020) Part 1.mkv", "Film (2020) Part 2.mkv"]) \
+            == [("Film (2020) Part 1.mkv", "Film (2020) " + TAG + " Part1.mkv"),
+                ("Film (2020) Part 2.mkv", "Film (2020) " + TAG + " Part2.mkv")]
+
+    def test_a_part_with_a_title_after_it_is_still_not_a_token(self):
+        """Nothing can make it stack: the token has to come last, and there is
+        a title sitting after it."""
+        edition = plexnames.read_stem(
+            "Film (2020)", "Film (2020) Part 1 - The Escape")[0]
+        assert edition == "Part 1 - The Escape"
+        assert plexnames.names_a_part(edition)
+
+    def test_the_parts_of_one_film_are_one_film(self):
+        assert plexnames.one_film_in(
+            "Film (2020)", ["Film (2020) Part 1.mkv", "Film (2020) Part 2.mkv"]) \
+            == ["Film (2020) Part 1.mkv", "Film (2020) Part 2.mkv"]
+
+
+class TestBringingANameOntoTheFoldersOwn:
+    """A file that says the folder's film in a different spelling is that film
+    written by another hand, not a second film."""
+
+    @pytest.mark.parametrize("name,wanted", [
+        ("le comte de monte cristo (1961).mkv", BASE + ".mkv"),
+        ("Le Comte De Monte-Cristo (1961).mkv", BASE + ".mkv"),
+        ("Le comte de Monte Cristo (1961).mkv", BASE + ".mkv"),
+        ("Le comte de Monte-Cristo.mkv", BASE + ".mkv"),
+        ("le comte de monte cristo (1961) part 1.mkv", BASE + " part 1.mkv"),
+        ("Le Comte de Monte Cristo.en.srt", BASE + ".en.srt"),
+    ])
+    def test_the_spelling_is_corrected_and_the_rest_comes_through(self, name,
+                                                                   wanted):
+        assert plexnames.onto_base(BASE, name) == wanted
+
+    @pytest.mark.parametrize("name", [
+        "Some Other Film.mkv",
+        "The Count of Monte Cristo (1961).mkv",
+        "Le comte de Monte-Cristo (1961).mkv",
+    ])
+    def test_and_a_name_this_film_cannot_be_read_out_of_is_left(self, name):
+        assert plexnames.onto_base(BASE, name) == ""
+
+    def test_the_copy_an_improved_remux_kept_is_never_respelled(self):
+        assert plexnames.onto_base(BASE, "le comte de monte cristo (old).mkv") == ""
+
+    def test_a_rename_that_would_land_on_a_held_name_is_dropped(self):
+        """The two files are then genuinely two, whatever their names say."""
+        assert plexnames.spelling_renames(
+            BASE, [BASE + ".mkv", "le comte de monte cristo (1961).mkv"]) == {}
+
+    def test_the_whole_folder_is_respelled_and_tagged_in_one_plan(self):
+        assert plexnames.folder_renames(
+            BASE, TAG, ["le comte de monte cristo (1961) part 1.mkv",
+                        "le comte de monte cristo (1961) part 2.mkv"]) \
+            == [("le comte de monte cristo (1961) part 1.mkv",
+                 BASE + " " + TAG + " part1.mkv"),
+                ("le comte de monte cristo (1961) part 2.mkv",
+                 BASE + " " + TAG + " part2.mkv")]
+
+    def test_a_folder_already_right_still_returns_no_work(self):
+        assert plexnames.folder_renames(
+            BASE + " " + TAG, "", [BASE + " " + TAG + ".mkv"]) == []
+
+
+class TestTheMarkerAFileManagerLeft:
+    @pytest.mark.parametrize("name", [
+        BASE + " (1).mkv",
+        BASE + " (copy).mkv",
+        BASE + " - Copy.mkv",
+        BASE + " (another copy).mkv",
+    ])
+    def test_a_lone_copy_just_loses_its_marker(self, name):
+        assert plexnames.spelling_renames(BASE, [name]) == {name: BASE + ".mkv"}
+
+    def test_two_of_them_keep_both_names(self):
+        """Which of the two to keep is not a naming question."""
+        names = [BASE + ".mkv", BASE + " (1).mkv"]
+        assert plexnames.spelling_renames(BASE, names) == {}
+
+    def test_the_year_is_not_a_copy_number(self):
+        assert plexnames.spelling_renames(BASE, [BASE + ".mkv"]) == {}
+
+
+class TestTaggingAFolderNothingCanRename:
+    """The id is known even where which file is which release is not."""
+
+    @pytest.mark.parametrize("stem,wanted", [
+        ("Some Other Film", "Some Other Film " + TAG),
+        ("Film (2020) Part1", "Film (2020) " + TAG + " Part1"),
+        ("Film (2020) {edition-Colorized}",
+         "Film (2020) " + TAG + " {edition-Colorized}"),
+    ])
+    def test_the_tag_goes_in_front_of_what_has_to_stay_last(self, stem, wanted):
+        assert plexnames.retag(stem, TAG) == wanted
+
+    def test_a_stem_that_already_carries_one_is_left_alone(self):
+        assert plexnames.retag("Film (2020) {imdb-tt9}", TAG) \
+            == "Film (2020) {imdb-tt9}"
+
+    def test_every_sidecar_follows_its_own_film(self):
+        assert plexnames.id_tag_renames(
+            TAG, ["A Film.mkv", "A Film.en.srt", "B Film.mkv"]) \
+            == [("A Film.en.srt", "A Film " + TAG + ".en.srt"),
+                ("A Film.mkv", "A Film " + TAG + ".mkv"),
+                ("B Film.mkv", "B Film " + TAG + ".mkv")]
+
+    def test_the_ids_a_folder_already_holds_are_read_off_its_films(self):
+        assert plexnames.ids_in(["A " + TAG + ".mkv", "B " + TAG + ".mkv",
+                                 "C {imdb-tt0000002}.mkv"]) \
+            == {TAG, "{imdb-tt0000002}"}
+
+    def test_a_sidecar_is_not_one_of_the_films(self):
+        assert plexnames.ids_in(["A.mkv", "A " + TAG + ".en.srt"]) == set()

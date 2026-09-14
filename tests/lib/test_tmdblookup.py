@@ -7,179 +7,24 @@ literal word "null", an empty-string title is dropped, an empty alternative is
 skipped while a null one is not), the curl argv the lookup hands the network, the
 safety skips a rename records, and the no-key warning.
 
-``normalize_title`` is the awkward one, because what it delegates to is not the
-same everywhere. A glibc iconv is its source of truth and the recorded folds
-are that iconv's answers - so the two cases about the codepoints that make it
-GIVE UP ask this host before asserting on what happens then, because which
-codepoints those are belongs to the installed glibc. A host whose iconv is GNU
-libiconv (macOS, MSYS) spells accents out instead and is not used at all; the
-cases for that rung, and for the Python fold it falls to, are further down, and
-one of them holds the two to the same answers.
+What the lookup does with a widened match is here - which candidate it settles
+on, and which of the catalogue's spellings the folder is then renamed onto. What
+COUNTS as the same title is not.
 """
 
 import json
+import pathlib
 import re
 import subprocess
 
 import pytest
 
-from medialib.lib import tmdblookup
+from medialib.lib import titlematch, tmdblookup
 from medialib.lib.safety import SkipLog
 
 pytestmark = pytest.mark.stubbed
 
 _BASE = tmdblookup._BASE
-
-
-def _iconv_gives_up_on(text: str) -> bool:
-    """Whether this host's iconv FAILS on ``text`` rather than transliterating
-    it: the condition the two reset cases below are about.
-
-    A handful of codepoints transliterate AND fail, which resets the string to
-    the original, and which ones do is glibc's business and its version's - so
-    the two cases ask this host rather than recording one host's answer.
-    """
-    try:
-        done = subprocess.run(
-            ["iconv", "-f", "UTF-8", "-t", "ASCII//TRANSLIT"],
-            input=text.encode("utf-8"), capture_output=True)
-    except OSError:
-        return False
-    return done.returncode != 0
-
-
-# Both reset cases are about what the module does with ICONV's answer, so they
-# are only asked on a host the module actually reaches iconv on - a GNU
-# libiconv one (macOS, MSYS) folds in Python and never sees a give-up at all.
-_RESETS_MICRO = tmdblookup._iconv_drops_accents() and _iconv_gives_up_on("a\u00b5b")
-_RESETS_FRACTION = (tmdblookup._iconv_drops_accents()
-                    and _iconv_gives_up_on("\u00bd life"))
-tmdblookup.reset_iconv_flavour()
-
-
-def _stub_iconv(monkeypatch, returncode: int, stdout: bytes = b""):
-    """Stand a fake iconv in front of the fold, answering the module's flavour
-    probe the way a glibc one does and every other call as the case asks.
-
-    The probe needs answering separately: a fake that failed it too would send
-    the fold down the Python path, and these cases are about what the module
-    does with what ICONV said.
-    """
-    probe = tmdblookup._TRANSLIT_PROBE.encode("utf-8")
-    answer = tmdblookup._TRANSLIT_PROBE_GLIBC.encode("utf-8")
-
-    def fake_run(*_args, input=None, **_kwargs):
-        if input == probe:
-            return subprocess.CompletedProcess([], 0, answer, b"")
-        return subprocess.CompletedProcess([], returncode, stdout, b"")
-
-    tmdblookup.reset_iconv_flavour()
-    monkeypatch.setattr(tmdblookup.subprocess, "run", fake_run)
-
-
-class TestNormalizeTitle:
-    @pytest.mark.parametrize("title,want", [
-        ("Amélie", "amelie"),
-        ("SPIDER-MAN: Homecoming", "spider man homecoming"),
-        ("Café au lait", "cafe au lait"),
-        ("Übung 2: The Æra", "ubung 2 the aera"),
-        ("Bàtman", "batman"),
-        ("(Weird)  Title!!", "weird title"),
-        ("Mì Đội", "mi doi"),
-        ("  spaced   out  ", "spaced out"),
-        ("half life 3", "half life 3"),
-    ])
-    def test_folds_accents_case_and_punctuation(self, title, want):
-        assert tmdblookup.normalize_title(title) == want
-
-    def test_non_alphanumeric_runs_collapse_to_one_space(self):
-        assert tmdblookup.normalize_title("a---b..c   d") == "a b c d"
-
-    @pytest.mark.skipif(not _RESETS_MICRO,
-                        reason="this host's iconv transliterates U+00B5")
-    def test_an_untransliteratable_codepoint_resets_to_the_original(self):
-        # micro U+00B5 makes this host's iconv fail rather than emit "?", so the
-        # shell's `|| s="$1"` stands the original up and only the fold applies:
-        # the micro becomes a space, the letters stay
-        assert tmdblookup.normalize_title("aµb") == "a b"
-
-    @pytest.mark.skipif(not _RESETS_FRACTION,
-                        reason="this host's iconv transliterates U+00BD")
-    def test_a_fraction_resets_to_the_original(self):
-        # U+00BD (one half) also falls in the reset set, so "½ life" keeps its
-        # letters and loses the fraction to a dropped run
-        assert tmdblookup.normalize_title("½ life") == "life"
-
-    def test_the_reset_itself_needs_no_iconv_to_pin(self, monkeypatch):
-        """WHICH codepoints make iconv give up is the host's; that giving up
-        resets the string to the original is this module's, and is pinned
-        without asking any host."""
-        _stub_iconv(monkeypatch, 1)
-        assert tmdblookup.normalize_title("Amélie 2") == "am lie 2"
-
-    def test_and_a_transliteration_that_succeeds_is_the_one_used(self,
-                                                                 monkeypatch):
-        _stub_iconv(monkeypatch, 0, b"Amelie 2")
-        assert tmdblookup.normalize_title("Amélie 2") == "amelie 2"
-
-    def test_an_iconv_that_spells_the_accent_out_is_not_used(self,
-                                                             monkeypatch):
-        """The macOS rung. GNU libiconv answers "'e" where glibc answers "e",
-        and a fold that took that would key "Amélie" as "am elie" - which
-        stops matching the same film's ASCII spelling, so the whole reason
-        the fold exists is gone."""
-        monkeypatch.setattr(
-            tmdblookup.subprocess, "run",
-            lambda *_a, **_k: subprocess.CompletedProcess([], 0, b"'e", b""))
-        tmdblookup.reset_iconv_flavour()
-        assert tmdblookup.normalize_title("Amélie") == "amelie"
-
-    def test_and_neither_is_a_host_with_no_iconv_at_all(self, monkeypatch):
-        """Which used to be a FileNotFoundError out of the middle of a
-        lookup."""
-        def absent(*_a, **_k):
-            raise FileNotFoundError(2, "no such file", "iconv")
-
-        monkeypatch.setattr(tmdblookup.subprocess, "run", absent)
-        tmdblookup.reset_iconv_flavour()
-        assert tmdblookup.normalize_title("Café au lait") == "cafe au lait"
-
-    @pytest.mark.parametrize("title,want", [
-        ("Amélie", "amelie"),
-        ("Übung 2: The Æra", "ubung 2 the aera"),
-        ("Bàtman", "batman"),
-        ("Mì Đội", "mi doi"),
-        ("Straße", "strasse"),
-        ("Blade Runner", "blade runner"),
-    ])
-    def test_the_python_fold_answers_what_glibc_answers(self, title, want):
-        """The fallback is only a fallback while it agrees with the tool it
-        stands in for: one library read on Linux and on a Mac has to fold to
-        the same keys, or the same film reads as two."""
-        folded = tmdblookup._fold_without_iconv(title)
-        assert re.sub(r"[^a-z0-9]+", " ", folded.lower()).strip() == want
-
-    def test_the_flavour_is_settled_once_and_not_per_title(self, monkeypatch):
-        """A lookup folds once per folder, and the answer cannot change under
-        a running command."""
-        calls = []
-
-        def counted(*_a, input=None, **_k):
-            calls.append(input)
-            return subprocess.CompletedProcess(
-                [], 0, tmdblookup._TRANSLIT_PROBE_GLIBC.encode("utf-8"), b"")
-
-        monkeypatch.setattr(tmdblookup.subprocess, "run", counted)
-        tmdblookup.reset_iconv_flavour()
-        for _ in range(3):
-            tmdblookup.normalize_title("Amélie")
-        probe = tmdblookup._TRANSLIT_PROBE.encode("utf-8")
-        assert calls.count(probe) == 1
-
-    def test_empty_and_blank_fold_to_empty(self):
-        assert tmdblookup.normalize_title("") == ""
-        assert tmdblookup.normalize_title("   ") == ""
-        assert tmdblookup.normalize_title("!!!") == ""
 
 
 # --- the one way out to the network -------------------------------------------
@@ -639,40 +484,6 @@ def _tree(root, *folders):
             (root / base / name).touch()
 
 
-class TestTitleKeys:
-    """A title carrying an apostrophe is matched by both readings of it.
-
-    normalize_title collapses each run of punctuation to a SPACE, which is
-    right for a dash and wrong for an apostrophe: a library whose names have
-    had their apostrophes stripped would otherwise never meet the same title
-    on TMDb.
-    """
-
-    def test_a_title_with_no_apostrophe_costs_no_second_fold(self):
-        assert tmdblookup.title_keys("The Movie") == {"the movie"}
-
-    def test_both_readings_are_offered_for_one_that_has_one(self):
-        assert tmdblookup.title_keys("A Cats Owners Tale".replace("s ", "'s ")) \
-            == {"a cat s owner s tale", "a cats owners tale"}
-
-    @pytest.mark.parametrize("written,stripped", [
-        ("A Cat's Tale", "A Cats Tale"),
-        ("A Cat\u2019s Tale", "A Cats Tale"),
-        ("L'Animal", "LAnimal"),
-    ])
-    def test_the_two_spellings_of_one_title_meet(self, written, stripped):
-        assert tmdblookup.title_keys(written) & tmdblookup.title_keys(stripped)
-
-    def test_a_title_that_matched_before_still_matches(self):
-        """Widening only ever ADDS keys."""
-        assert tmdblookup.normalize_title("The Movie") \
-            in tmdblookup.title_keys("The Movie")
-
-    def test_two_different_titles_still_do_not_meet(self):
-        assert not (tmdblookup.title_keys("A Cat's Tale")
-                    & tmdblookup.title_keys("A Dog's Tale"))
-
-
 class TestTheIdList:
     """The file someone fills in for the films TMDb cannot name on its own."""
 
@@ -712,7 +523,9 @@ class TestTheIdList:
                                  {"Done (1999)": "{imdb-tt0000001}"})
         assert tmdblookup.read_id_list(path) == {
             "Done (1999)": "{imdb-tt0000001}"}
-        body = [line for line in open(path, encoding="utf-8").read().splitlines()
+        with open(path, encoding="utf-8") as handle:
+            written = handle.read()
+        body = [line for line in written.splitlines()
                 if line and not line.startswith("#")]
         assert body == ["Done (1999)\t{imdb-tt0000001}", "Still Unknown (2001)\t"]
 
@@ -1342,3 +1155,357 @@ class TestTagPlexIds:
             "Safety skip details:",
             "  ./The Movie (1999)/The Movie (1999).mkv -> "
             "./The Movie (1999)/The Movie (1999) {imdb-tt0120737}.mkv"]
+
+class TestWhatASpellingSettles:
+    """The folders a dry run over a real library reported, and what the module
+    does with them now.
+
+    Each of these was "holds a film that is not its own", "is one film in parts
+    that do not stack" or "holds a duplicate marked only by a number" - and each
+    of them was one film all along, written by two hands.
+    """
+
+    def _network(self, monkeypatch, title, imdb, spelled=None, year="1961"):
+        """A catalogue that knows one film, under ``spelled`` (its own writing
+        of the title) whatever it is asked."""
+        monkeypatch.setenv("tmdbApiKey", "apikey")
+        queries = []
+
+        def fake_curl(url, params):
+            kv = dict(params)
+            if url == _BASE + "/search/movie":
+                queries.append(kv["query"])
+                # Exactly the fold and no reading beyond it: what is being
+                # exercised is which SPELLINGS the lookup goes asking under, so
+                # a catalogue that answered to all of them would prove nothing.
+                if titlematch.normalize_title(kv["query"]) \
+                        != titlematch.normalize_title(title):
+                    return json.dumps({"results": []})
+                return json.dumps({"results": [
+                    _row(1, spelled or title, date=year + "-06-23")]})
+            if url == _BASE + "/movie/1":
+                return json.dumps({"external_ids": {"imdb_id": imdb}})
+            return None
+
+        monkeypatch.setattr(tmdblookup, "_curl", fake_curl)
+        return queries
+
+    def _run(self, monkeypatch, tmp_path, folder, files, **network):
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, (folder, files))
+        queries = self._network(monkeypatch, **network)
+        logs, ambiguous = [], []
+        tmdblookup.tag_plex_ids(".", logs.append, SkipLog(),
+                                ambiguous=ambiguous)
+        return logs, ambiguous, queries
+
+    def _listing(self, tmp_path):
+        return sorted(str(path.relative_to(tmp_path))
+                      for path in tmp_path.rglob("*"))
+
+    def test_a_film_written_two_ways_is_one_film(self, monkeypatch, tmp_path):
+        """The file said the same title as its folder, in another hand - and
+        the folder was reported as holding a film that is not its own."""
+        _logs, ambiguous, _q = self._run(
+            monkeypatch, tmp_path, "Le comte de Monte-Cristo (1961)",
+            ["le comte de monte cristo (1961).mkv"],
+            title="Le comte de Monte-Cristo", imdb="tt0054824")
+        assert ambiguous == []
+        assert self._listing(tmp_path) == [
+            "Le comte de Monte-Cristo (1961) {imdb-tt0054824}",
+            "Le comte de Monte-Cristo (1961) {imdb-tt0054824}/"
+            "Le comte de Monte-Cristo (1961) {imdb-tt0054824}.mkv"]
+
+    def test_a_film_in_parts_that_now_stack(self, monkeypatch, tmp_path):
+        """"Part 1" is the token Plex stacks on, written with the number held
+        off."""
+        _logs, ambiguous, _q = self._run(
+            monkeypatch, tmp_path, "Le comte de Monte-Cristo (1961)",
+            ["Le comte de Monte-Cristo (1961) Part 1.mkv",
+             "Le comte de Monte-Cristo (1961) Part 2.mkv"],
+            title="Le comte de Monte-Cristo", imdb="tt0054824")
+        assert ambiguous == []
+        tagged = "Le comte de Monte-Cristo (1961) {imdb-tt0054824}"
+        assert self._listing(tmp_path) == [
+            tagged, tagged + "/" + tagged + " Part1.mkv",
+            tagged + "/" + tagged + " Part2.mkv"]
+
+    def test_a_lone_copy_loses_its_marker(self, monkeypatch, tmp_path):
+        _logs, ambiguous, _q = self._run(
+            monkeypatch, tmp_path, "The Movie (1999)",
+            ["The Movie (1999) (1).mkv"],
+            title="The Movie", imdb="tt0120737", year="1999")
+        assert ambiguous == []
+        tagged = "The Movie (1999) {imdb-tt0120737}"
+        assert self._listing(tmp_path) == [tagged, tagged + "/" + tagged + ".mkv"]
+
+    def test_but_two_copies_are_still_two_files(self, monkeypatch, tmp_path):
+        """Which of them to keep is not a naming question."""
+        _logs, ambiguous, _q = self._run(
+            monkeypatch, tmp_path, "The Movie (1999)",
+            ["The Movie (1999).mkv", "The Movie (1999) (1).mkv"],
+            title="The Movie", imdb="tt0120737", year="1999")
+        assert [reason for _p, reason, _n in ambiguous] \
+            == ["holds a duplicate marked only by a number"]
+
+    def test_a_year_missing_half_its_brackets_is_repaired(self, monkeypatch,
+                                                           tmp_path):
+        _logs, ambiguous, _q = self._run(
+            monkeypatch, tmp_path, "The Movie (1999",
+            ["The Movie (1999.mkv"],
+            title="The Movie", imdb="tt0120737", year="1999")
+        assert ambiguous == []
+        tagged = "The Movie (1999) {imdb-tt0120737}"
+        assert self._listing(tmp_path) == [tagged, tagged + "/" + tagged + ".mkv"]
+
+    def test_the_catalogues_own_spelling_is_what_everything_is_written_under(
+            self, monkeypatch, tmp_path):
+        """The folder matched through an equivalence, so the spelling that is
+        known to be right is the catalogue's and not the disk's."""
+        logs, _a, _q = self._run(
+            monkeypatch, tmp_path, "LE COMTE DE MONTE CRISTO (1961)",
+            ["LE COMTE DE MONTE CRISTO (1961).mkv"],
+            title="Le comte de Monte-Cristo", imdb="tt0054824",
+            spelled="Le comte de Monte-Cristo")
+        tagged = "Le comte de Monte-Cristo (1961) {imdb-tt0054824}"
+        assert self._listing(tmp_path) == [tagged, tagged + "/" + tagged + ".mkv"]
+        assert '  TMDb spells it "Le comte de Monte-Cristo" - renaming ' \
+            '"LE COMTE DE MONTE CRISTO (1961)" onto it' in logs
+
+    def test_a_film_found_under_its_own_language_keeps_it(self, monkeypatch,
+                                                           tmp_path):
+        """The catalogue's primary title is English and the folder's is not, so
+        the English one folds to keys this folder never had - it is not a
+        spelling the film was found under, and not one it is renamed to."""
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("Le comte de Monte Cristo (1961)",
+                         ["Le comte de Monte Cristo (1961).mkv"]))
+        monkeypatch.setenv("tmdbApiKey", "apikey")
+
+        def fake_curl(url, params):
+            if url == _BASE + "/search/movie":
+                return json.dumps({"results": [
+                    _row(1, "The Count of Monte Cristo",
+                         original="Le comte de Monte-Cristo",
+                         date="1961-06-23")]})
+            if url == _BASE + "/movie/1":
+                return json.dumps({"external_ids": {"imdb_id": "tt0054824"}})
+            return None
+
+        monkeypatch.setattr(tmdblookup, "_curl", fake_curl)
+        tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog())
+        assert (tmp_path / "Le comte de Monte-Cristo (1961) "
+                           "{imdb-tt0054824}").is_dir()
+
+    def test_a_spelling_no_file_can_be_named_after_is_not_used(self):
+        """Face/Off is a real film and not a real folder, and the id is still
+        worth having."""
+        candidate = tmdblookup._Candidate(
+            years=frozenset({"1997"}), titles=tmdblookup.title_keys("Face/Off"),
+            spellings=("Face/Off",), runtime=0.0, imdb="tt0119094")
+        assert tmdblookup._matched(candidate, tmdblookup.title_keys("Face Off")) \
+            == tmdblookup.Match("tt0119094", "")
+
+    def test_the_filler_a_library_wrote_in_front_is_asked_around(
+            self, monkeypatch, tmp_path):
+        _logs, ambiguous, queries = self._run(
+            monkeypatch, tmp_path, "Movie - The Movie (1999)",
+            ["Movie - The Movie (1999).mkv"],
+            title="The Movie", imdb="tt0120737", year="1999")
+        assert ambiguous == []
+        assert queries[0] == "Movie - The Movie"
+        assert "The Movie" in queries
+        # And the filler goes with it: the spelling the film was FOUND under is
+        # the catalogue's, and that is what the folder is written under.
+        assert (tmp_path / "The Movie (1999) {imdb-tt0120737}").is_dir()
+
+
+class TestTheFolderNothingCanRename:
+    """Which file is which release cannot be guessed. Which FILM they are is not
+    a guess at all when every id already in the folder is the same id."""
+
+    def _run(self, monkeypatch, tmp_path, folder, files):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("tmdbApiKey", "apikey")
+        monkeypatch.setattr(tmdblookup, "_curl",
+                            lambda *_a, **_k: pytest.fail("asked the network"))
+        _tree(tmp_path, (folder, files))
+        logs, ambiguous = [], []
+        tmdblookup.tag_plex_ids(".", logs.append, SkipLog(),
+                                ambiguous=ambiguous)
+        return logs, ambiguous
+
+    def test_a_second_film_in_the_folder_still_gets_the_agreed_id(
+            self, monkeypatch, tmp_path):
+        tag = "{imdb-tt0054824}"
+        _logs, ambiguous = self._run(
+            monkeypatch, tmp_path, "Le comte de Monte-Cristo (1961) " + tag,
+            ["Le comte de Monte-Cristo (1961) " + tag + ".mkv",
+             "L'evasion.mkv"])
+        assert ambiguous == []
+        assert (tmp_path / ("Le comte de Monte-Cristo (1961) " + tag)
+                / ("L'evasion " + tag + ".mkv")).is_file()
+
+    def test_a_part_with_a_title_after_it_gets_it_too(self, monkeypatch,
+                                                       tmp_path):
+        tag = "{imdb-tt0054824}"
+        folder = "The Film (1961) " + tag
+        _logs, ambiguous = self._run(
+            monkeypatch, tmp_path, folder,
+            ["The Film (1961) " + tag + " Part 1 - The Escape.mkv",
+             "The Film (1961) Part 2 - The Revenge.mkv"])
+        assert ambiguous == []
+        assert (tmp_path / folder
+                / ("The Film (1961) " + tag + " Part 2 - The Revenge.mkv")
+                ).is_file()
+
+    def test_two_ids_that_disagree_stop_it_dead(self, monkeypatch, tmp_path):
+        """Two ids in a folder is how a sequel ends up filed under the film
+        before it."""
+        folder = "The Film (1961) {imdb-tt0000001}"
+        _logs, ambiguous = self._run(
+            monkeypatch, tmp_path, folder,
+            ["The Film (1961) {imdb-tt0000001}.mkv",
+             "Another Film {imdb-tt0000002}.mkv"])
+        assert [reason for _p, reason, _n in ambiguous] \
+            == ["holds a film that is not its own"]
+        assert (tmp_path / folder / "Another Film {imdb-tt0000002}.mkv").is_file()
+
+    def test_and_so_does_having_no_id_to_agree_on(self, monkeypatch, tmp_path):
+        _logs, ambiguous = self._run(
+            monkeypatch, tmp_path, "The Film (1961)",
+            ["The Film (1961).mkv", "Another Film.mkv"])
+        assert [reason for _p, reason, _n in ambiguous] \
+            == ["holds a film that is not its own"]
+
+    def test_a_folder_already_tagged_throughout_is_no_work(self, monkeypatch,
+                                                            tmp_path):
+        tag = "{imdb-tt0054824}"
+        folder = "The Film (1961) " + tag
+        logs, ambiguous = self._run(
+            monkeypatch, tmp_path, folder,
+            ["The Film (1961) " + tag + ".mkv",
+             "Another Film " + tag + ".mkv"])
+        assert ambiguous == [] and logs == []
+        assert (tmp_path / folder / ("Another Film " + tag + ".mkv")).is_file()
+
+
+class TestTheNamesAReportAndAProbeSee:
+    """Nothing has been renamed while the folder is still being read, so both
+    of them have to name the file that is actually there."""
+
+    def test_a_report_names_the_file_on_disk_and_not_the_one_it_would_be(
+            self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("tmdbApiKey", "apikey")
+        monkeypatch.setattr(tmdblookup, "_curl",
+                            lambda *_a, **_k: json.dumps({"results": []}))
+        _tree(tmp_path, ("The Film (1961)",
+                         ["the film (1961) part 1 - the escape.mkv",
+                          "the film (1961) part 2 - the revenge.mkv"]))
+        ambiguous = []
+        tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog(),
+                                ambiguous=ambiguous)
+        _path, reason, listed = ambiguous[0]
+        assert reason == "is one film in parts that do not stack"
+        for name in listed:
+            assert (tmp_path / "The Film (1961)" / name).is_file(), name
+
+    def test_the_length_is_read_off_the_file_that_is_there(self, monkeypatch,
+                                                            tmp_path):
+        """The parts are respelled onto the folder's own name, and the probe
+        still has to open them under the names they arrived with."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("tmdbApiKey", "apikey")
+        _tree(tmp_path, ("The Film (1961)",
+                         ["the film (1961) part 1.mkv",
+                          "the film (1961) part 2.mkv"]))
+        opened = []
+
+        def fake_duration(paths):
+            # Asked while the folder still has its old name, which is the only
+            # moment the answer means anything.
+            opened.extend((name, pathlib.Path(name).is_file()) for name in paths)
+            return 7200.0
+
+        monkeypatch.setattr(tmdblookup.durationcheck, "total_duration",
+                            fake_duration)
+        search = json.dumps({"results": [_row(1, "The Film", date="1962-01-01"),
+                                         _row(2, "The Film", date="1962-01-01")]})
+        _install(monkeypatch, search, {}, {1: "tt0000001", 2: "tt0000002"},
+                 runtimes={1: 120, 2: 30})
+        tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog())
+        assert opened == [
+            ("./The Film (1961)/the film (1961) part 1.mkv", True),
+            ("./The Film (1961)/the film (1961) part 2.mkv", True)]
+        assert (tmp_path / "The Film (1961) {imdb-tt0000001}").is_dir()
+
+
+class TestHowCloseItCame:
+    """The list a dry run leaves so that "no confident match" can be read
+    rather than taken on trust."""
+
+    def _asked(self, monkeypatch, tmp_path, folder, rows, runtimes=None):
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, (folder, [folder + ".mkv"]))
+        search = json.dumps({"results": rows})
+        _install(monkeypatch, search, {},
+                 {row["id"]: "tt000000%d" % row["id"] for row in rows},
+                 runtimes=runtimes)
+        near = []
+        tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog(),
+                                dry_run=True, near_misses=near)
+        return near
+
+    def test_a_candidate_refused_for_its_year_says_so(self, monkeypatch,
+                                                       tmp_path):
+        near = self._asked(monkeypatch, tmp_path, "Some Film (1988)",
+                           [_row(1, "Some Film", date="1991-01-01"),
+                            _row(2, "Some Film", date="1992-01-01")])
+        _path, reason, notes = near[0]
+        assert reason == "no confident TMDb match"
+        assert '    "Some Film" (1991) tt0000001 - carries the title, but ' \
+            "came out 1991, not 1988" in notes
+
+    def test_a_candidate_refused_for_its_title_says_which_titles_it_has(
+            self, monkeypatch, tmp_path):
+        """The line that says a reading is missing."""
+        near = self._asked(monkeypatch, tmp_path, "Some Film (1991)",
+                           [_row(1, "A Wholly Other Film", date="1991-01-01")])
+        _path, _reason, notes = near[0]
+        assert any("no title of its meets this folder's: A Wholly Other Film"
+                   in note for note in notes)
+
+    def test_a_candidate_with_no_title_is_not_called_null(self, monkeypatch,
+                                                           tmp_path):
+        """jq's word for a missing title is not a name to list films under."""
+        near = self._asked(monkeypatch, tmp_path, "Some Film (1988)",
+                           [{"id": 1, "title": None, "original_title": None,
+                             "release_date": "1991-01-01"}])
+        _path, _reason, notes = near[0]
+        assert not any('"null"' in note for note in notes)
+
+    def test_a_folder_left_alone_shows_both_folds_side_by_side(
+            self, monkeypatch, tmp_path):
+        """Two lines that read the same are a reading that is missing; two that
+        read differently are two different films."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("tmdbApiKey", "apikey")
+        monkeypatch.setattr(tmdblookup, "_curl", lambda *_a, **_k: None)
+        _tree(tmp_path, ("Box (1999)", ["Box (1999).mkv", "Other Film.mkv"]))
+        near = []
+        tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog(),
+                                dry_run=True, near_misses=near)
+        _path, reason, notes = near[0]
+        assert reason == "holds a film that is not its own"
+        assert notes == ["the folder reads as: box 1999",
+                         '"Other Film.mkv" reads as: other film']
+
+    def test_nothing_is_collected_when_no_list_was_passed(self, monkeypatch,
+                                                           tmp_path):
+        """A real run pays none of it."""
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("Some Film (1988)", ["Some Film (1988).mkv"]))
+        calls = _install(monkeypatch, json.dumps({"results": []}), {}, {})
+        tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog())
+        assert calls

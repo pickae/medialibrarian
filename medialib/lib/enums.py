@@ -31,6 +31,8 @@ __all__ = [
     "extension_list",
     "BRACKET_OPEN",
     "BRACKET_CLOSE",
+    "PART_WORDS",
+    "DUPLICATE_MARKER_PATTERNS",
     "DATE_PREFIX_PATTERN",
 ]
 
@@ -111,6 +113,36 @@ LOSSLESS_TRACK_CODECS = ("dts", "flac", "truehd", "wav", "ape", "pcm",)
 # direction-specific character class - and keeps that locally.
 BRACKET_OPEN = "([{<"
 BRACKET_CLOSE = ")]}>"
+
+# --- the parts Plex stacks ---------------------------------------------------
+# The keywords Plex's scanner reads as "this file is one piece of a film that was
+# split": the keyword, an optional dot, and a number, as one trailing word.
+# Matched case-insensitively wherever it is used, the way the scanner matches.
+# https://support.plex.tv/articles/naming-and-organizing-your-movie-media-files/
+PART_WORDS = ("cd", "dvd", "part", "pt", "disk", "disc")
+
+# --- the markers a copy gets --------------------------------------------------
+# What a file manager appends when a second file of one name lands in a folder.
+# None of them says anything about the film: they are the two desktops' way of
+# not overwriting, and a name carrying one is the same name as its sibling.
+#
+# Each is anchored at the END of a stem and matched case-insensitively. The
+# bracketed number is the widest of them and the reason the list is a list: it
+# is also how a person writes a second version, so only a folder where nothing
+# else tells the copies apart may act on it.
+DUPLICATE_MARKER_PATTERNS = (
+    # Windows Explorer: "Film - Copy", "Film - Copy (2)".
+    r"\s*-\s*copy(?:\s*\([0-9]+\))?",
+    # GNOME Files and the other freedesktop managers.
+    r"\s*\((?:another |[0-9]+(?:st|nd|rd|th) )?copy\)",
+    # macOS Finder: "Film copy", "Film copy 2".
+    r"\s+copy(?:\s+[0-9]+)?",
+    # Every manager's last resort, and a person's first: a bare number in
+    # brackets. Never a YEAR, though - a film folder ends in one by convention,
+    # and a rule that read "Casablanca (1942)" as the 1942nd copy of Casablanca
+    # would take the year off every name in the library.
+    r"\s*\((?![12][0-9]{3}\))[0-9]+\)",
+)
 
 # --- the date prefix ----------------------------------------------------------
 # What counts as a DATE at the front of a name: an eight-digit YYYYMMDD whose year

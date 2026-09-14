@@ -21,7 +21,8 @@ Usage:
                   remuxed, downloaded or transcribed. A DRY RUN unless -w is
                   given: it asks TMDb, prints every rename it would make, and
                   changes nothing on disk, writing the renames it would have
-                  made to a list beside the other two. Walks the whole tree, so it can be
+                  made to a list beside the other two, and how close every folder it
+                  left alone came to matching, to a fourth. Walks the whole tree, so it can be
                   pointed at a library rather than at the folder holding the
                   films. A film TMDb could not name, and a folder holding a
                   film that is not its own, are both left exactly as they are
@@ -51,6 +52,13 @@ Usage:
     only when ONE film carries that title and was released that year in some
     country - and where that leaves several or none, only when the film's own
     length fits one of them and rules out every other
+    reads an accent dropped or written out, a dash, an apostrophe, a roman
+    numeral, articles gone from anywhere in the name and a written-out "&" as
+    the same title said differently - several at once in one name included -
+    and asks again
+    without the "Movie"/"Special" a library wrote in front of the name
+    writes the folder and its files under TMDb's own spelling of whichever title
+    matched, so folder and files stop disagreeing about how the film is spelled
     names a folder's several versions of one film as editions, so Plex collapses
     them into one film with a named picker: "<film> {imdb-id} {edition-Colorized}"
     keeps a split film's "Part1" / "cd1" token LAST, which is where Plex reads it

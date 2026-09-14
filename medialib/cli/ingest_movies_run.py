@@ -631,6 +631,12 @@ AMBIGUOUS_LIST = "ingest-movies-ambiguous-%s.txt"
 # scrolled past.
 RENAMES_LIST = "ingest-movies-renames-%s.txt"
 
+# And how close the folders in the first two lists came - what TMDb was asked,
+# what it offered, and why none of it was certain. A dry run only: it is what
+# says whether the two lists above are the right length, and the answer is only
+# worth having before anything has been renamed.
+NEAR_MISS_LIST = "ingest-movies-nearmisses-%s.txt"
+
 
 def _tags_only(program: str, roots: list, names: list, write: bool,
                id_list: str) -> int:
@@ -671,11 +677,13 @@ def _tags_only(program: str, roots: list, names: list, write: bool,
         unmatched: list = []
         ambiguous: list = []
         planned: list = []
+        near_misses: list = []
         # Recursive here and only here: this mode is pointed at a library, where
         # a full ingest is pointed at the folder that holds the films.
         tmdblookup.tag_plex_ids(root, log, skips, dry_run=not write, ids=ids,
                                 unmatched=unmatched, recursive=True,
-                                ambiguous=ambiguous, planned=planned)
+                                ambiguous=ambiguous, planned=planned,
+                                near_misses=near_misses if not write else None)
         if id_list:
             shared += unmatched
         elif unmatched:
@@ -693,6 +701,12 @@ def _tags_only(program: str, roots: list, names: list, write: bool,
             if tmdblookup.write_rename_list(listing, planned, root, log):
                 log('%d rename(s) in "%s" would be made - listed in "%s"'
                     % (len(planned), root, listing))
+        if near_misses:
+            listing = NEAR_MISS_LIST % name
+            if tmdblookup.write_near_miss_list(listing, near_misses, root, log):
+                log('%d folder(s) in "%s" were left alone - what was asked and '
+                    'what came back is in "%s"'
+                    % (len(near_misses), root, listing))
 
     for line in skips.report():
         sys.stderr.write(line + "\n")
