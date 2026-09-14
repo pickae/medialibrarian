@@ -516,3 +516,41 @@ class TestSeveralOfThemInOneName:
         assert not titlematch.equivalent(
             "THE LORD OF THE RINGS PART II",
             "The Hobbit Part 2")
+
+
+class TestALetterFromTheWrongKeyboard:
+    """A name whose letters are the SHAPE of Latin ones is that name. The fold
+    has no opinion about Cyrillic beyond dropping it, which turned "Thor" whose
+    T is a Cyrillic TE into "hor" and called the file a different film."""
+
+    @pytest.mark.parametrize("latin,confusable,about", [
+        ("Thor - Ragnarok", "Тhor - Ragnarok", "Cyrillic TE for T"),
+        ("Apollo 13", "Аpollo 13", "Cyrillic A"),
+        ("Cars", "Сars", "Cyrillic ES for C"),
+        ("Home", "Hоme", "Cyrillic O, mid-word"),
+        ("Alpha Beta", "Αlpha Βeta", "Greek alpha and beta"),
+        ("Oxygen", "Οxygen", "Greek omicron"),
+    ])
+    def test_it_reads_as_the_letter_it_looks_like(self, latin, confusable,
+                                                   about):
+        assert titlematch.equivalent(latin, confusable), about
+
+    def test_and_the_name_costs_no_process_once_it_is_ascii(self, monkeypatch):
+        """The substitution runs before the short-circuit, so a name whose only
+        non-ASCII character was a wrong-keyboard letter never reaches iconv."""
+        def refuse(*_a, **_k):
+            raise AssertionError("asked iconv about what is now ASCII")
+
+        titlematch.reset_iconv_flavour()
+        monkeypatch.setattr(titlematch.subprocess, "run", refuse)
+        assert titlematch.normalize_title("Тhor - Ragnarok (2017)") \
+            == "thor ragnarok 2017"
+
+    def test_a_title_really_written_in_cyrillic_is_unharmed(self):
+        """Both sides of every comparison are folded by this same function, so
+        a real Cyrillic title matches itself whether these apply or not."""
+        assert titlematch.equivalent("Сталкер",
+                                     "Сталкер")
+
+    def test_and_two_different_films_still_do_not_meet(self):
+        assert not titlematch.equivalent("Тhor", "Loki")

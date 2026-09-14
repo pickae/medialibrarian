@@ -362,3 +362,30 @@ class TestTaggingAFolderNothingCanRename:
 
     def test_a_sidecar_is_not_one_of_the_films(self):
         assert plexnames.ids_in(["A.mkv", "A " + TAG + ".en.srt"]) == set()
+
+
+class TestAYearWithADigitWrong:
+    """A folder dated 1988 beside a file of it dated 1998 is one of them
+    mistyped. The leftover reads as a bare number, which is also what a copy's
+    "(1)" reads as, and they are nothing like each other."""
+
+    @pytest.mark.parametrize("text", ["1988", "1998", "2017", " 1979 "])
+    def test_a_bare_year_is_a_year(self, text):
+        assert plexnames.is_only_a_year(text)
+
+    @pytest.mark.parametrize("text", ["1", "2", "12", "0998", "99", "12345",
+                                      "2019 Restoration", "Colorized"])
+    def test_and_anything_else_is_not(self, text):
+        assert not plexnames.is_only_a_year(text)
+
+    def test_the_file_is_read_as_this_film_dated_differently(self):
+        assert plexnames.read_stem("Dragons Forever (1988)",
+                                   "Dragons Forever (1988) (1998)") \
+            == ("1998", "")
+
+    def test_a_file_dated_differently_is_brought_onto_the_folders_name(self):
+        """It is this film - the title says so and only the year differs - so
+        it is not a stray; what it is instead is the folder's own business."""
+        assert plexnames.onto_base("Dragons Forever (1988)",
+                                   "Dragons Forever (1998).mkv") \
+            == "Dragons Forever (1988) (1998).mkv"

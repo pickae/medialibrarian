@@ -209,6 +209,24 @@ def is_only_a_marker(edition: str) -> bool:
     return edition.strip().isdigit()
 
 
+def is_only_a_year(edition: str) -> bool:
+    """Whether an edition name is nothing but a YEAR.
+
+    A folder's film dated 1988 beside a file of it dated 1998 is one of them
+    mistyped, and the leftover reads as a bare number - which is also what a
+    copy's "(1)" reads as. They are not the same thing at all: one is a second
+    file nobody meant to keep, the other is one file with a digit wrong, and
+    reporting the second as the first sends someone looking for a duplicate
+    that was never there.
+
+    Asked before :func:`is_only_a_marker`, which every year would otherwise
+    answer to as well.
+    """
+    text = edition.strip()
+    return (len(text) == 4 and text.isdigit()
+            and text[0] in "12")
+
+
 def names_a_part(edition: str) -> bool:
     """Whether an edition name is really a PART said in words.
 

@@ -1756,3 +1756,66 @@ class TestOneFilmUnderSeveralOfItsTitles:
                       (tmp_path / "I'm For The Hippopotamus (1979)").iterdir())
         assert held == ["A Wholly Different Film.mkv",
                         "I'm For The Hippopotamus (1979).mkv"]
+
+
+class TestAYearWithADigitWrong:
+    def test_it_is_reported_as_a_date_and_not_as_a_duplicate(self, monkeypatch,
+                                                              tmp_path):
+        """One is a second file nobody meant to keep, the other is one file
+        with a digit wrong, and reporting the second as the first sends
+        somebody looking for a duplicate that was never there."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("tmdbApiKey", "apikey")
+        monkeypatch.setattr(tmdblookup, "_curl",
+                            lambda *_a, **_k: json.dumps({"results": []}))
+        _tree(tmp_path, ("Dragons Forever (1988)",
+                         ["Dragons Forever (1998).mkv"]))
+        ambiguous = []
+        tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog(),
+                                ambiguous=ambiguous)
+        assert [reason for _p, reason, _n in ambiguous] \
+            == ["holds the same film under another year"]
+
+    def test_and_a_real_copy_marker_still_reads_as_one(self, monkeypatch,
+                                                        tmp_path):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("tmdbApiKey", "apikey")
+        monkeypatch.setattr(tmdblookup, "_curl",
+                            lambda *_a, **_k: json.dumps({"results": []}))
+        _tree(tmp_path, ("The Movie (1999)",
+                         ["The Movie (1999).mkv", "The Movie (1999) (1).mkv"]))
+        ambiguous = []
+        tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog(),
+                                ambiguous=ambiguous)
+        assert [reason for _p, reason, _n in ambiguous] \
+            == ["holds a duplicate marked only by a number"]
+
+    def test_a_homoglyph_is_not_a_film_of_its_own(self, monkeypatch, tmp_path):
+        """The file's name is the folder's name on the screen; only one letter
+        came from another keyboard."""
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("Thor - Ragnarok (2017)",
+                         ["Тhor - Ragnarok (2017) IMAX.mkv"]))
+        self._knows_thor(monkeypatch)
+        ambiguous = []
+        tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog(),
+                                ambiguous=ambiguous)
+        assert ambiguous == []
+        tagged = tmp_path / "Thor - Ragnarok (2017) {imdb-tt3501632}"
+        assert tagged.is_dir()
+        assert [path.name for path in tagged.iterdir()] == [
+            "Thor - Ragnarok (2017) {imdb-tt3501632} {edition-IMAX}.mkv"]
+
+    def _knows_thor(self, monkeypatch):
+        monkeypatch.setenv("tmdbApiKey", "apikey")
+
+        def fake_curl(url, params):
+            kv = dict(params)
+            if url == _BASE + "/search/movie":
+                if not titlematch.equivalent(kv["query"], "Thor: Ragnarok"):
+                    return json.dumps({"results": []})
+                return json.dumps({"results": [
+                    _row(1, "Thor - Ragnarok", date="2017-10-25")]})
+            return json.dumps({"external_ids": {"imdb_id": "tt3501632"}})
+
+        monkeypatch.setattr(tmdblookup, "_curl", fake_curl)

@@ -717,6 +717,10 @@ def write_ambiguous_list(path: str, folders, root: str,
         _ID_COMMENT + " these have a title after the token, so it cannot.",
         _ID_COMMENT + " Tagged as editions they would read as separate films.",
         _ID_COMMENT + "",
+        _ID_COMMENT + " 'holds the same film under another year': one of the",
+        _ID_COMMENT + " two dates has a digit wrong. Which one is not a thing",
+        _ID_COMMENT + " a tag may guess at.",
+        _ID_COMMENT + "",
         _ID_COMMENT + " '" + TAGGED_ANYWAY.strip(" ()") + "': every id already",
         _ID_COMMENT + " in the folder said the same film, so the id went on to",
         _ID_COMMENT + " the folder and its files and nothing else moved. Plex",
@@ -1111,16 +1115,26 @@ def _what_is_wrong(base: str, names: list):
     # stack either: the token has to be last, and there is a title sitting after
     # it. A part written "Part 1" and nothing else IS fixable, and was fixed
     # before this was asked.
-    in_parts, markers = [], []
+    in_parts, markers, misdated = [], [], []
     for stem in plexnames.movie_stems(base, names):
         edition = plexnames.read_stem(base, stem)[0]
         if plexnames.names_a_part(edition):
             in_parts.append(stem + ".mkv")
+        elif plexnames.is_only_a_year(edition):
+            misdated.append(stem + ".mkv")
         elif plexnames.is_only_a_marker(edition):
             markers.append(stem + ".mkv")
     if in_parts:
         return ("is one film in parts that do not stack", sorted(in_parts),
                 "is in parts that Plex will not stack")
+    # A digit wrong in a file's year, which reads as a bare number exactly the
+    # way a copy's "(1)" does and is nothing like it. Which of the two dates is
+    # the right one is not a thing to guess at - the folder's is the one TMDb
+    # was asked about, but only someone who knows the film can say the file was
+    # not a different cut of it.
+    if misdated:
+        return ("holds the same film under another year", sorted(misdated),
+                "is dated one way by its folder and another by its files")
     # A "(1)" that could not simply be taken off, because taking it off would
     # put two files under one name. Which of the two to keep is not a naming
     # question, and an edition called "1" says nothing about either.

@@ -611,7 +611,10 @@ wrong in several ways at once is still found:
 - an article gone from anywhere in the name, or several of them, or moved to
   the end the way a catalogue that sorts by the first real word moves it;
 - `&` written out, in any of the six languages;
-- upper case, lower case, or any mixture.
+- upper case, lower case, or any mixture;
+- a letter from the wrong keyboard — a Cyrillic or Greek letter that is the
+  same *shape* as a Latin one reads as the Latin one, so a name that looks
+  identical on screen is treated as identical.
 
 A film nothing is found under is looked for again under the spellings a library
 adds and a catalogue does not — a "Movie"/"Special" in front of the name, a

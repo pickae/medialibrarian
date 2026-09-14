@@ -80,7 +80,15 @@ def normalize_title(title: str) -> str:
     "am elie" and no longer matches the "amelie" the same film's ASCII
     spelling gives. Those hosts, and a host with no iconv at all, fold in
     Python instead (:func:`_fold_without_iconv`).
+
+    A letter that is the SHAPE of a Latin one is read as that letter first -
+    see :data:`CONFUSABLES` - because no transliteration will ever do it: to
+    iconv a Cyrillic TE is Cyrillic, and to a reader it is a T.
     """
+    # Before anything else, including the short-circuit below: a name whose only
+    # non-ASCII character is a letter from the wrong keyboard becomes ASCII here
+    # and costs no process at all.
+    title = title.translate(CONFUSABLES)
     if title.isascii():
         # Nothing for a transliteration to do, so it is not asked: ASCII goes
         # through ASCII//TRANSLIT unchanged and with a zero exit, and asking
@@ -215,6 +223,38 @@ def _fold_without_iconv(title: str) -> str:
 
 
 # --- the words a fold has to know about --------------------------------------
+
+# The letters of another alphabet that are the SAME SHAPE as a Latin one, and
+# what they are the shape of. A file called "Тhor - Ragnarok" whose first letter
+# is a Cyrillic TE is the same name as one spelled with a Latin T - it is the
+# same name on the screen - and the fold, which has no opinion about Cyrillic
+# beyond dropping it, made "hor" of it and called the file a different film.
+#
+# Only the letters that are visually IDENTICAL, which is what makes the
+# substitution safe to make before anything else: a title really written in
+# Cyrillic folds to the same keys on both sides of every comparison whether
+# these are applied or not, so nothing that matched stops matching, while a
+# Latin title with one letter from the wrong keyboard starts.
+# https://www.unicode.org/reports/tr39/
+CONFUSABLES = str.maketrans({
+    # Cyrillic capitals
+    "А": "A", "В": "B", "Е": "E", "К": "K",
+    "М": "M", "Н": "H", "О": "O", "Р": "P",
+    "С": "C", "Т": "T", "У": "Y", "Х": "X",
+    "Ѕ": "S", "І": "I", "Ј": "J", "Ԛ": "Q",
+    "Ԝ": "W",
+    # Cyrillic smalls
+    "а": "a", "е": "e", "о": "o", "р": "p",
+    "с": "c", "у": "y", "х": "x", "ѕ": "s",
+    "і": "i", "ј": "j", "ԛ": "q", "ԝ": "w",
+    # Greek capitals
+    "Α": "A", "Β": "B", "Ε": "E", "Ζ": "Z",
+    "Η": "H", "Ι": "I", "Κ": "K", "Μ": "M",
+    "Ν": "N", "Ο": "O", "Ρ": "P", "Τ": "T",
+    "Υ": "Y", "Χ": "X",
+    # Greek smalls
+    "ο": "o", "ν": "v",
+})
 
 # The symbols that are WORDS, spelled out before the fold takes them away. "&"
 # and "and" are one title written twice, and the fold's own rule - every
