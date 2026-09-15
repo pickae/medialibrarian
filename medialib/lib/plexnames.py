@@ -99,6 +99,105 @@ _WRAPPERS = (("(", ")"), ("[", "]"))
 # run of several comes off together.
 _SEPARATORS = " -:_|.–—"
 
+# The longest a single file name may be, in bytes. Every filesystem this library
+# is kept on stops at the same figure, and a rename past it fails outright with
+# ENAMETOOLONG rather than being cut to fit - so a name that would pass it is
+# worked out here, before anything is renamed.
+NAME_MAX_BYTES = 255
+
+# How much of that a commentary's outputs keep back for their own suffixes: an
+# ".opus" and an ".<language>.srt" both hang off one stem, so the stem is cut to
+# leave room for the longest of them.
+COMMENTARY_SUFFIX_BYTES = 8
+COMMENTARY_STEM_MAX_BYTES = NAME_MAX_BYTES - COMMENTARY_SUFFIX_BYTES
+
+# What hangs off that stem, and the only extensions a name may be cut for: the
+# audio a commentary was extracted to, and the transcript made from it.
+COMMENTARY_EXTENSIONS = ("opus", "srt")
+
+# What a commentary's output puts after the film it belongs to: the track's
+# number, then the track's own name. The number is what says which of a film's
+# commentaries the file is of, and is the one part of the tail that may not be
+# cut into.
+_COMMENTARY_TAIL = re.compile(r"^ ([0-9]+) (\S.*)$", re.S)
+
+# The language the transcription writes between a commentary's name and its
+# extension: two or three letters, and nothing a track name would end on.
+_LANGUAGE_EXT = re.compile(r"^\.[A-Za-z]{2,3}$")
+
+
+def fits_name(name: str) -> bool:
+    """Whether ``name`` is short enough to be a file name at all.
+
+    Bytes and not characters: the limit is the filesystem's, and an accented
+    title spends two of them on a letter that a count of characters spends one
+    on.
+    """
+    return len(name.encode("utf-8", "surrogateescape")) <= NAME_MAX_BYTES
+
+
+def _split_suffix(tail: str) -> tuple:
+    """A sidecar's tail as (what is named, the extensions on the end)."""
+    named, extension = os.path.splitext(tail)
+    head, language = os.path.splitext(named)
+    if _LANGUAGE_EXT.match(language):
+        return head, language + extension
+    return named, extension
+
+
+def crop_commentary(wanted: str, tail: str) -> str:
+    """``wanted`` and ``tail`` joined and cut back to a name that fits, or "".
+
+    One thing in a movie folder may be cut and one only: a commentary's own
+    output, and only into the track's NAME. The transcription cuts that same
+    stem at that same place when it writes one, so a file cut here is the file
+    the next run goes looking for rather than one it writes a second time.
+
+    Everything else has to survive whole - the film, its id tag, and the number
+    that says which commentary the file is of - and "" is the answer for a name
+    where the cut would reach any of them.
+    """
+    named, suffix = _split_suffix(tail)
+    track = _COMMENTARY_TAIL.match(named)
+    if not track:
+        return ""
+    if suffix.rsplit(".", 1)[-1].lower() not in COMMENTARY_EXTENSIONS:
+        return ""
+    # Cut where the transcription cuts, and then further for a name whose
+    # characters cost more than a byte each: that cut counts characters, and
+    # the limit this has to come in under counts bytes.
+    stem = (wanted + named)[:COMMENTARY_STEM_MAX_BYTES]
+    while stem and not fits_name(stem + suffix):
+        stem = stem[:-1]
+    # The film, the tag and the track's number, which is as deep as a cut may
+    # go - and a track left with no name at all is a cut that went that deep.
+    kept = len(wanted) + len(" ") + len(track.group(1)) + len(" ")
+    if len(stem) <= kept:
+        return ""
+    return stem + suffix
+
+
+def _fits_or_crops(name: str, wanted: str, tail: str,
+                   cropped: list | None, over_limit: list | None) -> str:
+    """The name one file should take once the length limit has had its say, or
+    "" for a name that cannot be brought under it.
+
+    The two lists collect either outcome for the run to report: a commentary cut
+    back into the track's name is a rename to mention, and a name that may not
+    be cut is a folder to leave alone.
+    """
+    target = wanted + tail
+    if fits_name(target):
+        return target
+    cut = crop_commentary(wanted, tail)
+    if not cut:
+        if over_limit is not None:
+            over_limit.append((name, target))
+        return ""
+    if cropped is not None and cut != name:
+        cropped.append((name, cut))
+    return cut
+
 
 def is_kept_copy(path: str) -> bool:
     """Whether ``path`` is the original an improved remux kept, rather than a
@@ -632,7 +731,9 @@ def ids_in(names) -> set:
 
 
 def folder_renames(base: str, tag: str, names, aliases=(),
-                   corrected: dict | None = None) -> list:
+                   corrected: dict | None = None,
+                   cropped: list | None = None,
+                   over_limit: list | None = None) -> list:
     """Every rename one movie folder needs, as (old name, new name) pairs.
 
     ``base`` is the folder without its id tag and ``tag`` the tag to carry;
@@ -655,6 +756,13 @@ def folder_renames(base: str, tag: str, names, aliases=(),
     readings than this function has - a franchise the folder above says, a year
     a catalogue vouched for, a letter somebody got wrong - renames what it
     reported rather than a second, narrower answer to the same question.
+
+    ``cropped`` and ``over_limit``, when lists are passed, collect what the file
+    name limit did to the plan: the commentary outputs whose track name had to
+    be cut back to fit, and the names the id tag pushes past the limit that may
+    not be cut at all. Neither is in the plan under its long name - the first is
+    in it cut, the second is not in it at all - so a caller that asks for
+    neither list still gets a plan that can be carried out.
     """
     if corrected is None:
         corrected = spelling_renames(base, names)
@@ -676,8 +784,9 @@ def folder_renames(base: str, tag: str, names, aliases=(),
         else:
             continue
         wanted = plex_stem(base, tag, *read_stem(base, stem))
-        target = wanted + spelled[len(stem):]
-        if target != name:
+        target = _fits_or_crops(name, wanted, spelled[len(stem):],
+                                cropped, over_limit)
+        if target and target != name:
             plan.append((name, target))
     return plan
 
@@ -728,13 +837,17 @@ def _word_start(text: str, words: int) -> int:
     return index
 
 
-def id_tag_renames(tag: str, names) -> list:
+def id_tag_renames(tag: str, names, cropped: list | None = None,
+                   over_limit: list | None = None) -> list:
     """Every rename that does nothing but put ``tag`` on this folder's files.
 
     The answer for a folder whose names cannot be made to agree and whose id is
     not in doubt: each film keeps the name it has, each sidecar follows its own
     film the way it always does, and the one thing that changes is that Plex can
     now see which film they are.
+
+    ``cropped`` and ``over_limit`` collect what the file name limit did to the
+    plan, exactly as they do for a folder being renamed outright.
     """
     stems = sorted({name[:-len(".mkv")] for name in names if is_movie_file(name)},
                    key=len, reverse=True)
@@ -748,8 +861,12 @@ def id_tag_renames(tag: str, names) -> list:
         else:
             continue
         wanted = retag(stem, tag)
-        if wanted != stem:
-            plan.append((name, wanted + name[len(stem):]))
+        if wanted == stem:
+            continue
+        target = _fits_or_crops(name, wanted, name[len(stem):],
+                                cropped, over_limit)
+        if target and target != name:
+            plan.append((name, target))
     return plan
 
 

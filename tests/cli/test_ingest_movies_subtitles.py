@@ -10,6 +10,7 @@ failed sync and answer by discarding a subtitle that was perfectly good.
 import pytest
 
 from medialib.cli import ingest_movies_run as run_module
+from medialib.lib import tmdblookup
 
 pytestmark = pytest.mark.pure
 
@@ -84,7 +85,8 @@ def ingested(monkeypatch):
 
         state = run_module.Run(script_dir="", ram_root="", skips=None,
                                fragments_file="", whisper={},
-                               ffsubsync_quality=quality)
+                               ffsubsync_quality=quality,
+                               long_names=tmdblookup.LongNames())
         run_module._ingest(state, "/x", subtitle_work)
         return seen
     return run

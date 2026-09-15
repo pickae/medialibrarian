@@ -53,6 +53,7 @@ class Run:
     fragments_file: str
     whisper: dict
     ffsubsync_quality: str
+    long_names: tmdblookup.LongNames
 
     def __init__(self, **settings) -> None:
         self.__dict__.update(settings)
@@ -577,6 +578,7 @@ def main(argv: list, program: str = "ingest-movies",
     safety.init_safety_log(os.path.join(ram_root, "safetySkips.log"))
     durationcheck.init_log(os.path.join(ram_root, "lengthMismatch.log"))
     skips = safety.RunSkipLog()
+    long_names = tmdblookup.LongNames()
     safety.init_abort_flag(os.path.join(ram_root, "abortRequested"))
     safety.trap_run_abort()
     # Named above the phases a Ctrl+C can cut short, so an ingest stopped halfway
@@ -585,6 +587,8 @@ def main(argv: list, program: str = "ingest-movies",
     def recap() -> None:
         safety.report_safety_skips()
         durationcheck.report()
+        for line in long_names.report():
+            sys.stderr.write(line + "\n")
 
     safety.set_run_footer(recap)
 
@@ -601,7 +605,7 @@ def main(argv: list, program: str = "ingest-movies",
 
     state = Run(script_dir=script_dir, ram_root=ram_root, skips=skips,
                 fragments_file=fragments_file, whisper=whisper,
-                ffsubsync_quality=ffsubsync_quality)
+                ffsubsync_quality=ffsubsync_quality, long_names=long_names)
 
     try:
         for root in ingestable:
@@ -670,6 +674,7 @@ def _tags_only(program: str, roots: list, names: list, write: bool,
         log("Read %d hand-written id(s) from %s" % (len(ids), id_list))
 
     skips = safety.RunSkipLog()
+    long_names = tmdblookup.LongNames()
     log("Phase: tagging movies with IMDb ids (Plex/Jellyfin naming)"
         + ("" if write else " - DRY RUN, nothing will be renamed"))
     # Every folder's unnamed films together, for the one file -i named. Only
@@ -690,7 +695,7 @@ def _tags_only(program: str, roots: list, names: list, write: bool,
                                 unmatched=unmatched, recursive=True,
                                 ambiguous=ambiguous, planned=planned,
                                 near_misses=near_misses if not write else None,
-                                aliases=alias_titles)
+                                aliases=alias_titles, long_names=long_names)
         if id_list:
             shared += unmatched
         elif unmatched:
@@ -722,6 +727,8 @@ def _tags_only(program: str, roots: list, names: list, write: bool,
                     % (len(near_misses), root, listing))
 
     for line in skips.report():
+        sys.stderr.write(line + "\n")
+    for line in long_names.report():
         sys.stderr.write(line + "\n")
 
     # The file is rewritten whenever there is one to keep current, and the ids
@@ -906,7 +913,8 @@ def _ingest(state, root: str, subtitle_work: bool) -> None:
     # Last, once every film is the file it is going to stay: a rename costs
     # nothing to hold back, and the phases above keep the names they gave.
     log("Phase: tagging movies with IMDb ids (Plex/Jellyfin naming)")
-    tmdblookup.tag_plex_ids(root, log, state.skips)
+    tmdblookup.tag_plex_ids(root, log, state.skips,
+                            long_names=state.long_names)
 
     rules.cleanup(root)
     log("Phase: checking for folders without a movie")

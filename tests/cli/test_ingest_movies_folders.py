@@ -145,7 +145,8 @@ class TestTheListsEachFolderLeaves:
 
         def fake_tag(root, _log, _skips, dry_run=False, ids=None,
                      unmatched=None, recursive=False, ambiguous=None,
-                     planned=None, near_misses=None, aliases=None):
+                     planned=None, near_misses=None, aliases=None,
+                     long_names=None):
             asked.append(root)
             name = root.rsplit("/", 1)[-1]
             if aliases is not None:

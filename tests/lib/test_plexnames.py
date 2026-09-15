@@ -621,3 +621,140 @@ class TestTheWiderReadingsAFolderHasToBeVouchedFor:
         assert plexnames.spelling_renames(
             "Falkenauge 2 (1964)", ["Falkenauge 3 (1965).mkv"],
             typos=True) == {}
+
+
+class TestTheFileNameLimit:
+    """A name that will not fit, which is the one thing the tagging can want to
+    do that the filesystem refuses outright.
+
+    An id tag is seventeen characters the names did not have, and a
+    commentary's transcript is already the film, the track's number and the
+    whole of the way the track announces itself. Where the tag pushes one of
+    those past the limit it is cut back into the track's name - at the very
+    place the transcription cuts its own stem, so the file stays the file the
+    next run goes looking for. Nothing else in a movie folder may be cut.
+    """
+
+    FOLDER = "Harbour Lights (1979)"
+
+    def _spoken(self, characters: int) -> str:
+        """A track name of exactly ``characters``, as a commentary announces
+        itself."""
+        return ("Commentary by the director and the cast recorded in 2003 "
+                * 10)[:characters]
+
+    def _sidecar(self, suffix: str = ".en.srt") -> str:
+        """A commentary output as long as one may be: a name that fits, and
+        that the id tag and nothing else pushes past the limit."""
+        room = plexnames.NAME_MAX_BYTES - len("%s 2 %s" % (self.FOLDER, suffix))
+        return "%s 2 %s%s" % (self.FOLDER, self._spoken(room), suffix)
+
+    def test_a_name_is_measured_in_bytes_and_not_in_characters(self):
+        assert plexnames.fits_name("é" * 127)
+        assert not plexnames.fits_name("é" * 128)
+
+    def test_a_commentary_the_tag_pushes_over_is_cut_into_the_track_name(self):
+        name = self._sidecar()
+        assert plexnames.fits_name(name)
+        cropped: list = []
+        over_limit: list = []
+        plan = plexnames.folder_renames(
+            self.FOLDER, TAG, [self.FOLDER + ".mkv", name], (), None,
+            cropped, over_limit)
+        target = dict(plan)[name]
+        assert over_limit == []
+        assert cropped == [(name, target)]
+        assert plexnames.fits_name(target)
+        assert target.startswith("%s %s 2 Commentary by" % (self.FOLDER, TAG))
+        assert target.endswith(".en.srt")
+
+    def test_and_it_is_cut_where_the_transcription_cuts_its_own_stem(self):
+        """The two cuts are one cut, or the next run writes the transcript
+        again under the name it looked for and did not find."""
+        name = self._sidecar()
+        plan = plexnames.folder_renames(
+            self.FOLDER, TAG, [self.FOLDER + ".mkv", name])
+        spoken = name[len("%s 2 " % self.FOLDER):-len(".en.srt")]
+        stem = "%s %s 2 %s" % (self.FOLDER, TAG, spoken)
+        assert dict(plan)[name] == \
+            stem[:plexnames.COMMENTARY_STEM_MAX_BYTES] + ".en.srt"
+
+    def test_every_output_of_one_track_is_cut_to_the_same_stem(self):
+        """The opus and the transcript are one commentary, and a cut that took
+        them to different names would leave the audio behind."""
+        srt, opus = self._sidecar(".en.srt"), self._sidecar(".opus")
+        plan = dict(plexnames.folder_renames(
+            self.FOLDER, TAG, [self.FOLDER + ".mkv", srt, opus]))
+        assert plan[srt][:-len(".en.srt")] == plan[opus][:-len(".opus")]
+
+    def test_a_cut_name_is_left_alone_the_second_time_around(self):
+        """The property the whole phase rests on: its own output is no work."""
+        name = self._sidecar()
+        renamed = dict(plexnames.folder_renames(
+            self.FOLDER, TAG, [self.FOLDER + ".mkv", name]))
+        assert plexnames.folder_renames(
+            self.FOLDER, TAG,
+            ["%s %s.mkv" % (self.FOLDER, TAG), renamed[name]]) == []
+
+    def test_a_sidecar_that_is_not_a_commentary_is_refused_whole(self):
+        """No track number, so nothing in this name says which part of it a cut
+        may reach."""
+        room = plexnames.NAME_MAX_BYTES - len("%s .en.srt" % self.FOLDER)
+        name = "%s %s.en.srt" % (self.FOLDER, self._spoken(room))
+        cropped: list = []
+        over_limit: list = []
+        plan = plexnames.folder_renames(
+            self.FOLDER, TAG, [self.FOLDER + ".mkv", name], (), None,
+            cropped, over_limit)
+        assert cropped == []
+        assert [refused for refused, _target in over_limit] == [name]
+        assert name not in dict(plan)
+
+    def test_a_movie_file_is_never_cut_to_fit(self):
+        """A film's own name is the film; there is nothing in it to spare."""
+        folder = "%s (1979)" % ("Harbour Lights and the Longer Afternoon " * 6)
+        name = folder + ".mkv"
+        over_limit: list = []
+        plan = plexnames.folder_renames(folder, TAG, [name], (), None, None,
+                                        over_limit)
+        assert [refused for refused, _target in over_limit] == [name]
+        assert plan == []
+
+    def test_a_cut_that_would_reach_the_track_number_is_refused(self):
+        """The number says which of a film's commentaries the file is of, so a
+        name that can only be made to fit by cutting it is not made to fit.
+
+        A film named at just that length: the tag ends where the number begins,
+        and every character of the track's own name is already past the limit.
+        """
+        folder = ("Harbour Lights by Night " * 10)[
+            :plexnames.COMMENTARY_STEM_MAX_BYTES - len(TAG) - len(" ") - 2]
+        name = "%s 2 Commentary.en.srt" % folder
+        assert plexnames.fits_name(name)
+        cropped: list = []
+        over_limit: list = []
+        plexnames.folder_renames(folder, TAG, [folder + ".mkv", name], (),
+                                 None, cropped, over_limit)
+        assert cropped == []
+        assert [refused for refused, _target in over_limit] == [name]
+
+    def test_a_cut_comes_in_under_the_limit_in_bytes(self):
+        """A track name of two-byte characters is cut further than a count of
+        characters would have cut it."""
+        folder = "Härbøür Lights (1979)"
+        name = "%s 3 %s.en.srt" % (folder, "é" * 200)
+        plan = plexnames.folder_renames(folder, TAG, [folder + ".mkv", name])
+        assert plexnames.fits_name(dict(plan)[name])
+
+    def test_the_tag_only_path_cuts_and_refuses_the_same_way(self):
+        """A folder nothing can rename still gains its id, and the limit has
+        the same say over that name as over any other."""
+        commentary = self._sidecar()
+        room = plexnames.NAME_MAX_BYTES - len("%s .en.srt" % self.FOLDER)
+        stray = "%s %s.en.srt" % (self.FOLDER, self._spoken(room))
+        cropped: list = []
+        over_limit: list = []
+        plexnames.id_tag_renames(TAG, [self.FOLDER + ".mkv", commentary,
+                                       stray], cropped, over_limit)
+        assert [name for name, _target in cropped] == [commentary]
+        assert [name for name, _target in over_limit] == [stray]
