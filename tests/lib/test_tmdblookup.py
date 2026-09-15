@@ -1595,6 +1595,38 @@ class TestWhichResultsTheBudgetGoesOn:
         assert '    passed over: "A Wholly Other Film" (1961) - neither its ' \
             "title nor its year was close" in notes
 
+    def test_and_the_rest_go_in_order_of_how_near_their_names_are(
+            self, monkeypatch):
+        """The film reached only by one of its OTHER titles cannot land in the
+        first list - nothing the search said about it matches - so the budget
+        has to reach it on its own name being near, or the miss is not fixable
+        at all."""
+        crowd = ["Sunfall Divided", "Reckoning Day", "The Long Sunfall",
+                 "Reckoning of the Deep", "Sunfall Over Kirren",
+                 "A Reckoning", "Sunfall and Shadow", "The Last Reckoning",
+                 "Reckoning Hill"]
+        rows = [_row(number, title, date="2019-04-02")
+                for number, title in enumerate(crowd, start=1)]
+        # Last of ten, and nothing the search says about it matches: its own
+        # title says one word more than the folder does.
+        rows.append(_row(99, "Sunfall Reckoning Redux", date="2019-04-02"))
+        _install(monkeypatch, json.dumps({"results": rows}),
+                 {99: ["Sunfall Reckoning"]},
+                 {row["id"]: "tt%07d" % row["id"] for row in rows})
+        assert tmdblookup.tmdb_imdb_id("Sunfall Reckoning", "2019") \
+            == "tt0000099"
+
+    def test_a_result_that_says_less_besides_the_title_is_the_nearer_one(self):
+        """Both carry the whole of a folder called "Border"; only one of them
+        is mostly about something else."""
+        tight = _row(1, "Hard Border", date="2018-01-01")
+        loose = _row(2, "Wad: surviving on the border of water and land",
+                     date="2018-01-01")
+        order = tmdblookup._worth_asking(
+            [loose, tight], "2018", titlematch.title_keys("Border"),
+            frozenset({"border"}))
+        assert [row["id"] for row in order] == [1, 2]
+
     def test_the_film_it_settled_on_with_no_id_is_written_down(self,
                                                                monkeypatch):
         """It settled on the film under the folder's own name, had nothing to

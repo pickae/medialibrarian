@@ -378,7 +378,7 @@ def _under(api_key: str, query: str, want: frozenset, year: str,
         rows = _search(api_key, query, "") or []
 
     _note(notes, 'asked "%s": %d result(s)' % (query, len(rows)))
-    worth = _worth_asking(rows, year, want)
+    worth = _worth_asking(rows, year, want, plainly)
     asking, over_budget = worth[:MAX_CANDIDATES], worth[MAX_CANDIDATES:]
     _note_the_passed_over(notes, rows, asking, over_budget)
     candidates = [_candidate(api_key, row) for row in asking]
@@ -720,7 +720,8 @@ def _search(api_key: str, title: str, year: str):
     return results if isinstance(results, list) else []
 
 
-def _worth_asking(rows, year: str, want: frozenset) -> list:
+def _worth_asking(rows, year: str, want: frozenset,
+                  plainly: frozenset = frozenset()) -> list:
     """The search results worth a request of their own, the likeliest first.
 
     Two ways to be worth one, both answered from what the search already said:
@@ -737,6 +738,16 @@ def _worth_asking(rows, year: str, want: frozenset) -> list:
     two called exactly that sat at the bottom of the page unread. Popularity is the
     catalogue's ordering and carries no opinion about which film this folder
     holds; carrying the folder's title is the closest thing to one there is.
+
+    The ones left are ordered by how NEAR their names are - see
+    :func:`_how_much_of_the_name`. A film reached by a reading this module does
+    not have yet cannot land in the first list by definition, and those are
+    precisely the ones the budget has to reach for a miss to be fixable: the
+    result that shares three words of the folder's four is worth a document
+    before the one that shares one, whatever the two of them are worth to the
+    catalogue's readers. Ordering only, and never a filter - a result is
+    eligible for exactly the two reasons above, and this decides which of the
+    eligible ones the budget is spent on.
     """
     titled: list = []
     dated: list = []
@@ -752,7 +763,37 @@ def _worth_asking(rows, year: str, want: frozenset) -> list:
         elif _near(release[:4], year):
             seen.add(row.get("id"))
             dated.append(row)
+    wanted = {word for one in plainly for word in one.split()}
+    # A stable sort, so results the measure cannot tell apart keep the order
+    # the catalogue put them in - which is the only opinion left at that point.
+    dated.sort(key=lambda row: -_how_much_of_the_name(row, wanted))
     return titled + dated
+
+
+def _how_much_of_the_name(row: dict, wanted: set) -> float:
+    """How much of a result's name and the folder's is the same name: the words
+    they share against the words they do not, over whichever of the result's own
+    two titles answers best.
+
+    A word count and not a fold, because a fold has already been asked and said
+    no. What is being measured here is how near a MISS is, and the two things
+    that make one near are both in this one ratio: a result carrying more of the
+    folder's words is nearer, and a result saying less besides them is nearer -
+    "Hard Border" is a better use of a request than "Wad: surviving on the
+    border of water and land", and both carry the whole of a folder called
+    "Border".
+
+    0.0 where nothing can be measured, which puts the result behind everything
+    that can be.
+    """
+    if not wanted:
+        return 0.0
+    best = 0.0
+    for title in _row_titles(row):
+        words = set(normalize_title(str(title)).split())
+        if words:
+            best = max(best, len(words & wanted) / len(words | wanted))
+    return best
 
 
 def _candidate(api_key: str, row: dict) -> _Candidate:

@@ -660,9 +660,13 @@ year is off by one be named at all.
 Which results are looked at in the first place is its own question. Only the
 first handful are worth a document each, and TMDb answers *most popular* first
 — so a common word of a title fills the page with films that merely contain it.
-The ones already carrying the folder's title are read before the rest, because
-popularity is the catalogue's ordering and carries no opinion about which film
-this folder holds.
+The ones already carrying the folder's title are read before the rest, and the
+rest in order of **how near their names are**: the words a result and the
+folder share, against the words they do not. A film reached only by one of its
+other titles can never be in the first group — nothing the search said about it
+matches — so its own name being near is the only thing that can spend a request
+on it. Popularity is the catalogue's ordering and carries no opinion about which
+film this folder holds, so it is what breaks a tie and nothing more.
 
 Before the length is asked, three narrowings settle most of what used to reach
 it, because candidates are not equally likely just because they all survived:
