@@ -32,22 +32,37 @@ _BASE = "https://api.themoviedb.org/3"
 # reads as title "Nighthawk (1999)", year "2005".
 _YEAR_RE = re.compile(r"^(.+) \(([12][0-9]{3})\)$")
 
-# The same thing with one of its brackets lost - to a rename that cut the name
-# short, or to a filesystem that would not take it. Both halves are repaired,
-# and only ever where a bracket is still THERE: a trailing number with no
-# bracket at all is as likely to be part of the title as a year, and "Blade
-# Runner 2049" is not a film from the year 2049.
-_HALF_YEAR = (
+# The four ways a folder writes a year that no reader here can see - or that it
+# reads as half of the title. None of them is a matching question: each is a
+# name that is wrong on the disk, and the folder is renamed onto the right one
+# before anything is looked up.
+#
+# The space before the bracket written as some other separator -
+# "The Movie-(1999)" - which stops the name being a film folder at all; or
+# written as several spaces, which leaves the title carrying a trailing one into
+# everything it is asked under. Then one of the brackets lost, to a rename that
+# cut the name short or to a filesystem that would not take it. Both halves are
+# repaired, and only ever where a bracket is still THERE: a trailing number with
+# no bracket at all is as likely to be part of the title as a year, and
+# "The Movie 2049" is not a film from the year 2049.
+_SEPARATOR_RUN = "[" + re.escape(plexnames.SEPARATORS.replace(" ", "")) + "]+"
+_BROKEN_YEAR = (
+    re.compile(r"^(.+?)" + _SEPARATOR_RUN + r"\(([12][0-9]{3})\)$"),
+    re.compile(r"^(.+?)\s{2,}\(([12][0-9]{3})\)$"),
     re.compile(r"^(.+?)\s*\(\s*([12][0-9]{3})\s*$"),
     re.compile(r"^(.+?)\s+([12][0-9]{3})\s*\)\s*$"),
 )
 
 
 def repair_year(base: str) -> str:
-    """``base`` with its year parentheses put back, or ``base`` unchanged."""
-    if _YEAR_RE.match(base):
-        return base
-    for pattern in _HALF_YEAR:
+    """``base`` with the brackets around its year spelled the way everything
+    here reads them, or ``base`` unchanged.
+
+    A name already written that way matches none of the four and comes back as
+    it is, which is what the lazy title and the anchored year buy: the run
+    before the bracket has to be wrong for any of them to fire.
+    """
+    for pattern in _BROKEN_YEAR:
         match = pattern.match(base)
         if match:
             return "%s (%s)" % (match.group(1).rstrip(), match.group(2))
@@ -62,7 +77,6 @@ def read_folder(name: str) -> tuple:
     folders to descend into, and the tagging that decides what to look up.
     """
     base, tag = plexnames.untagged_base(name)
-    base = repair_year(base)
     match = _YEAR_RE.match(base)
     if not match:
         return "", "", "", ""
@@ -1214,6 +1228,58 @@ def _candidates(directory: str, recursive: bool) -> list:
     return _film_folders(directory)
 
 
+def _repair_year_names(directory: str, recursive: bool,
+                       skip_log: safety.SkipLog, dry_run: bool,
+                       log: Callable[[str], None]) -> None:
+    """Rename every folder whose year is written where nothing can read it.
+
+    Walked and renamed BEFORE a single thing is looked up, because a folder
+    written "The Movie-(1999)" is not a film folder to anything here: the
+    tagging passes it over, and the walk that looks for films goes looking
+    INSIDE it. On the disk rather than at the moment it is read, so the name is
+    right whether or not anything is ever found under it.
+
+    The same walk the tagging does, so the two agree about which folders are
+    the films: one level for a full ingest, the whole tree for a run pointed at
+    a library.
+    """
+    try:
+        entries = list(os.scandir(directory))
+    except OSError:
+        return
+    for entry in entries:
+        if not entry.is_dir(follow_symlinks=False):
+            continue
+        base, tag = plexnames.untagged_base(entry.name)
+        repaired = repair_year(base)
+        if repaired != base:
+            _repair_one(entry, directory, plexnames.folder_name(repaired, tag),
+                        skip_log, dry_run, log)
+            continue
+        if recursive and not read_folder(entry.name)[0]:
+            _repair_year_names(entry.path, recursive, skip_log, dry_run, log)
+
+
+def _repair_one(entry, directory: str, wanted: str,
+                skip_log: safety.SkipLog, dry_run: bool,
+                log: Callable[[str], None]) -> None:
+    """One folder onto the name its year is readable under."""
+    target = _folder_spelling(directory, wanted)
+    if safety.would_hide(target) or os.path.exists(target):
+        skip_log.record(entry.path, target)
+        log('  "{}" writes its year where nothing can read it, and "{}" is '
+            "already there - left as it is".format(entry.name, wanted))
+        return
+    if dry_run:
+        log('  "{}" writes its year where nothing can read it'
+            .format(entry.name))
+        log('    would rename: "{}" -> "{}"'.format(entry.name, wanted))
+        return
+    os.rename(entry.path, target)
+    log('  "{}" wrote its year where nothing could read it - renamed it "{}"'
+        .format(entry.name, wanted))
+
+
 def _film_folders(directory: str) -> list:
     """Every film folder at or below ``directory``, in the filesystem's own
     order - the order the shell's ``find`` walks, so the lines they each log
@@ -1262,9 +1328,16 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
     is the film as it arrived, and tagging it would offer Plex a second edition
     of every film that has one.
 
+    A folder whose year is written where nothing can read it is renamed onto a
+    readable one first, so the rest of this reads a library whose film folders
+    all say they are film folders.
+
     ``dry_run`` asks TMDb the same questions and works out the same names, then
     prints each rename instead of doing it: the name is the thing being
-    previewed, so the lookup still happens.
+    previewed, so the lookup still happens. The repair above is held back with
+    it, so a dry run says what it would rename such a folder to and nothing
+    further: until that rename is made, there is no film folder there to look
+    up.
 
     ``ids`` is a hand-written {folder name: tag} that answers BEFORE the network
     is asked, for the films TMDb cannot identify on its own. ``unmatched``, when
@@ -1292,6 +1365,7 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
         log("WARNING: tmdbApiKey not set, skipping IMDb id tagging")
         return 0
 
+    _repair_year_names(directory, recursive, skip_log, dry_run, log)
     for folder in _candidates(directory, recursive):
         base, tag, title, year = read_folder(folder.name)
         if not base:
@@ -1709,7 +1783,7 @@ def _named_by_its_files(base: str, year: str, path: str, names: list,
     ids = set()
     for name in movies:
         stem = plexnames.film_key(os.path.splitext(name)[0])
-        match = _YEAR_RE.match(repair_year(stem))
+        match = _YEAR_RE.match(stem)
         title, its_year = (match.group(1), match.group(2)) if match \
             else (stem, year)
         if titlematch.equivalent(title, folder_title):

@@ -93,11 +93,11 @@ OLD_SUFFIX = " (old).mkv"
 # The wrappers a hand-written version name tends to arrive in.
 _WRAPPERS = (("(", ")"), ("[", "]"))
 
-# What a file puts BETWEEN the film's name and the version it is of - never part
-# of the version's own name, and on both ends because a name is as often closed
-# off as introduced. Whitespace is stripped with them and again after them, so a
-# run of several comes off together.
-_SEPARATORS = " -:_|.–—"
+# What a name puts BETWEEN two of its parts - the film and the version it is of,
+# the film and its year - and never part of either part's own name. Whitespace
+# is stripped with them and again after them, so a run of several comes off
+# together.
+SEPARATORS = " -:_|.–—"
 
 
 def is_kept_copy(path: str) -> bool:
@@ -189,7 +189,7 @@ def edition_name(text: str) -> str:
             text = " ".join(text[1:-1].split())
             break
     text = text.replace("{", "(").replace("}", ")")
-    text = text.strip(_SEPARATORS).strip()
+    text = text.strip(SEPARATORS).strip()
     if not any(character.isalnum() for character in text):
         return ""
     if text == text.lower():
