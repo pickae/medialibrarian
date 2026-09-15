@@ -31,6 +31,18 @@ The `.tree` fixtures are not typed. `REGEN=1` writes them from the real layouts,
 the way `clean-folder-structure -s` writes its own, and `_CASES` below is their
 specification - which the first case here asserts they still match, so the two
 cannot drift.
+
+**Replaying needs no key and no network**, which is why these are an ordinary
+part of the default run rather than an opt-in tier like `media`: CI has no TMDb
+key and does not need one, and a question the recording cannot answer fails the
+case rather than going online. Only `REGEN=1` talks to the service, and it
+refuses to run without a key rather than recording a file of nulls.
+
+Before anything has been recorded the cases SKIP - a branch where nobody has
+run REGEN yet is not a defect, and reddening a run that has no key to fix it
+with helps nobody. A recording with holes in it FAILS, because that is a
+committed fixture gone missing. The layouts that went IN are committed and are
+asserted either way, so this file never goes entirely quiet.
 """
 
 from __future__ import annotations
@@ -58,9 +70,16 @@ _REGEN = bool(os.environ.get("REGEN", ""))
 # until the diff says otherwise - the same rule the recorded command pages under
 # `tests/data/cliContract` are kept by.
 _HOW_TO_RECORD = (
-    "no recording at %s. These cases are recorded against the live service:\n"
-    "    REGEN=1 tmdbApiKey=<key> pytest tests/lib/test_tmdblookup_recorded.py\n"
-    "on a host with network and curl, and the fixtures it writes are committed.")
+    "REGEN=1 tmdbApiKey=<key> pytest tests/lib/test_tmdblookup_recorded.py")
+
+# Replaying needs neither, so the recorded cases are an ordinary part of the
+# default run wherever the recording is on disk - which is the point of
+# recording rather than gating: CI has no key and does not need one.
+_NOT_RECORDED_YET = (
+    "these cases have not been recorded yet. They replay a recording of the "
+    "live service, and nothing here has one:\n    " + _HOW_TO_RECORD
+    + "\non a host with network, curl and GNU `tree`. What it writes is "
+      "committed, and every run after that is offline.")
 
 
 # Each case is a layout a library really has, named for what makes it hard. The
@@ -212,19 +231,62 @@ def _record(recording):
     return curl
 
 
+def _recorded() -> tuple:
+    """(what the recording put on disk, what is missing from it).
+
+    All three halves, because they are one artifact: the answers, the layout
+    each case came out as, and what each case refused to name. A checkout has
+    all of them or none.
+    """
+    wanted = [_CASSETTE]
+    for name in _CASES:
+        wanted += [_FIXTURES / ("%s after.tree" % name), _reports_of(name)]
+    return ([path for path in wanted if path.exists()],
+            [path for path in wanted if not path.exists()])
+
+
 @pytest.fixture(scope="session")
 def recording():
-    """The committed answers, or the dict a REGEN run fills and writes."""
+    """The committed answers, or the dict a REGEN run fills and writes.
+
+    Nothing recorded at all SKIPS, and a recording with holes in it FAILS. The
+    two states are different: the first is a branch where nobody has run REGEN
+    yet, which is not a defect and should not redden a run that has no key to
+    fix it with; the second is a committed fixture that has gone missing, which
+    is exactly the thing this suite refuses to let pass quietly.
+
+    Either way the layouts that went IN are still asserted - they are committed
+    and need no recording - so this file never goes entirely silent.
+    """
     if _REGEN:
+        if not os.environ.get("tmdbApiKey"):
+            pytest.fail(
+                "REGEN=1 records against the live service and tmdbApiKey is "
+                "not set. Without it every call fails and the recording would "
+                "be a file of nulls, committed as though it were answers.")
         kept: dict = {}
         yield kept
+        answered = [body for body in kept.values() if body]
+        if not answered:
+            pytest.fail(
+                "REGEN=1 recorded %d request(s) and not one answer. Nothing "
+                "has been written: curl reached nothing, or the key was "
+                "refused." % len(kept))
         _FIXTURES.mkdir(parents=True, exist_ok=True)
         _CASSETTE.write_bytes(
             (json.dumps(dict(sorted(kept.items())), indent=1,
                         ensure_ascii=False) + "\n").encode("utf-8"))
         return
-    if not _CASSETTE.exists():
-        pytest.fail(_HOW_TO_RECORD % _CASSETTE)
+    here, missing = _recorded()
+    if not here:
+        pytest.skip(_NOT_RECORDED_YET)
+    if missing:
+        pytest.fail(
+            "the recording is incomplete - %d of its %d files are missing, "
+            "starting with %s. A recording is one artifact; re-record it "
+            "whole:\n    %s"
+            % (len(missing), len(here) + len(missing),
+               missing[0].name, _HOW_TO_RECORD))
     yield json.loads(_CASSETTE.read_text(encoding="utf-8"))
 
 
@@ -305,14 +367,29 @@ def _record_tree(name: str, half: str, root) -> None:
 
 # --- what the cases claim ----------------------------------------------------
 
-class TestTheRecordedLayouts:
-    """Each case is a library that went in and a library that came out."""
+class TestTheLayoutsThatWentIn:
+    """The half that needs no recording, and so is asserted on every host and
+    in every run - including one that has never recorded anything."""
 
-    def test_the_recorded_layout_is_the_one_that_went_in(self, case):
+    @pytest.mark.parametrize("name", sorted(_CASES))
+    def test_the_recorded_layout_is_the_one_that_went_in(self, name):
         """The `.tree` fixture and `_CASES` are one specification written twice,
         and a case where they disagree is testing a layout nobody wrote down."""
-        recorded = treefiles.paths(_FIXTURES / ("%s before.tree" % case.name))
-        assert _files(recorded) == sorted(_CASES[case.name])
+        recorded = treefiles.paths(_FIXTURES / ("%s before.tree" % name))
+        assert _files(recorded) == sorted(_CASES[name])
+
+    @pytest.mark.parametrize("name", sorted(_CASES))
+    def test_and_it_rebuilds_as_the_layout_it_records(self, name, tmp_path):
+        """The fixture is only a specification while it reconstructs: every
+        case below starts by rebuilding one of these, and a rendering that
+        parsed differently would quietly test a different library."""
+        treefiles.reconstruct(_FIXTURES / ("%s before.tree" % name), tmp_path)
+        assert treefiles.paths_on_disk(tmp_path / name) == treefiles.paths(
+            _FIXTURES / ("%s before.tree" % name))
+
+
+class TestTheRecordedLayouts:
+    """Each case is a library that went in and a library that came out."""
 
     def test_the_library_it_left_is_the_recorded_one(self, case):
         assert treefiles.paths_on_disk(case.root) == treefiles.paths(

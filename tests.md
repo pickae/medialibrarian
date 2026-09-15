@@ -121,6 +121,27 @@ suite stays offline, fast and the same on every host. Re-recording is how a
 change on TMDb's side becomes a diff to read rather than a library quietly
 renamed wrong.
 
+**Replaying needs no key**, which is why these are an ordinary part of the
+default run rather than an opt-in tier like `media`: CI has no TMDb key and does
+not need one. Only `REGEN=1` talks to the service, and it refuses to run without
+a key rather than recording a file of nulls and committing it as though it were
+answers.
+
+Three states, deliberately different:
+
+| On disk | What a run does |
+| --- | --- |
+| the whole recording | replays it, offline |
+| no recording at all | **skips**, naming the command that makes one |
+| a recording with holes in it | **fails** - that is a committed fixture gone missing |
+
+The skip is the one concession to the rule below that a missing prerequisite
+should fail rather than skip. A branch where nobody has run `REGEN=1` yet is not
+a defect, and reddening a run that has no key to fix it with helps nobody. It is
+paid for: the layouts that went *in* are committed, need no recording, and are
+asserted in every run on every host, so the file never goes entirely quiet and
+the per-file floor keeps meaning something.
+
 **Those cases are the one place in the suite that names real films**, because
 the point of them is the catalogue and an invented title is not in it. They are
 silent-era work long in the public domain, which is also where the matching is
