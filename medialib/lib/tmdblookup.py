@@ -43,6 +43,62 @@ _HALF_YEAR = (
 )
 
 
+class LongNames:
+    """What the file name limit did to a run's renames, for the run to close
+    with.
+
+    Two outcomes, and they are not the same news. A commentary's transcript or
+    its opus can be cut back into the track's own name - the transcription cuts
+    that same stem at that same place when it writes one, so the file stays the
+    file the next run looks for - and that is a rename to mention rather than
+    one to hold back. Anything else the id tag pushes past the limit would have
+    to be cut in the film's name, in the tag itself, or in the number that says
+    which commentary a file is of, and none of those may move: that folder is
+    left exactly as it was, listed here, and the rest of the library is renamed
+    around it.
+    """
+
+    def __init__(self) -> None:
+        self.cropped: list[tuple[str, str]] = []
+        self.refused: list[tuple[str, str, str]] = []
+
+    def crop(self, folder: str, name: str, target: str) -> None:
+        self.cropped.append((os.path.join(folder, name), target))
+
+    def refuse(self, folder: str, name: str, why: str = "") -> None:
+        self.refused.append((folder, name, why))
+
+    def report(self) -> list[str]:
+        """The closing lines, or [] when the limit got in nobody's way.
+
+        Silent when there is nothing to say: a run whose every name fitted says
+        so by the library reading right, not by printing that it did.
+        """
+        lines: list[str] = []
+        if self.cropped:
+            lines.append(
+                "WARNING: %d commentary file(s) were renamed with the track's "
+                "name cut to fit the %d-byte file name limit:"
+                % (len(self.cropped), plexnames.NAME_MAX_BYTES))
+            for path, target in self.cropped:
+                lines.append("  %s" % path)
+                lines.append("    -> %s" % target)
+        if self.refused:
+            folders: dict[str, list[tuple[str, str]]] = {}
+            for folder, name, why in self.refused:
+                folders.setdefault(folder, []).append((name, why))
+            lines.append(
+                "ERROR: %d folder(s) were left unrenamed: a name goes past the "
+                "%d-byte file name limit where nothing may be cut:"
+                % (len(folders), plexnames.NAME_MAX_BYTES))
+            for folder, names in folders.items():
+                lines.append("  %s" % folder)
+                for name, why in names:
+                    lines.append("    %s%s" % (name, " (%s)" % why if why
+                                               else ""))
+        return lines
+
+
 def repair_year(base: str) -> str:
     """``base`` with its year parentheses put back, or ``base`` unchanged."""
     if _YEAR_RE.match(base):
@@ -1247,7 +1303,8 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
                  ambiguous: list | None = None,
                  planned: list | None = None,
                  near_misses: list | None = None,
-                 aliases: list | None = None) -> int:
+                 aliases: list | None = None,
+                 long_names: LongNames | None = None) -> int:
     """Name each confidently-matched movie folder, its films and their sidecars
     the way Plex reads them: the folder and every file carry the id tag, an
     edition carries its own, and a split film keeps its stacking token last.
@@ -1283,11 +1340,17 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
     several of its own titles, for the fifth: nothing is renamed for those, so
     no other list mentions them.
 
+    ``long_names`` collects what the file name limit did - the commentary
+    outputs cut back to fit it and the folders left alone because nothing in
+    their names may be cut - for the run to close with. A folder over the limit
+    is left exactly as it was and the ones after it are named as usual.
+
     ``recursive`` walks the whole tree rather than the one level the phase reads
     inside a full ingest, where the caller is pointed at the folder that holds
     the films and the phases around this one read that same one level.
     """
     skip_log = skip_log if skip_log is not None else safety.SkipLog()
+    long_names = long_names if long_names is not None else LongNames()
     if not os.environ.get("tmdbApiKey", ""):
         log("WARNING: tmdbApiKey not set, skipping IMDb id tagging")
         return 0
@@ -1376,7 +1439,8 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
                     _flag_alias(aliases, folder.path, base, settled, byfile)
                     _tag_only(folder, names, settled, skip_log, dry_run, log,
                               None, functools.partial(
-                                  _say_the_files_named_it, log, base, settled))
+                                  _say_the_files_named_it, log, base, settled),
+                              long_names=long_names)
                     continue
 
         # The names read once more, now that something has vouched for the one
@@ -1419,7 +1483,7 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
             _tag_only(
                 folder, names, tag, skip_log, dry_run, log, None,
                 functools.partial(_say_the_titles_met, log, base, len(known)),
-                base)
+                base, long_names)
             continue
 
         trouble = _what_is_wrong(base, respelled)
@@ -1430,7 +1494,7 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
             # the thing a person has to look at - an id going on quietly is
             # what would keep it off the list it belongs on.
             tagged = _tag_and_leave(folder, names, had_tag, skip_log, dry_run,
-                                    log, None)
+                                    log, None, long_names)
             reason = trouble[0] + (TAGGED_ANYWAY if tagged else "")
             _flag(ambiguous, folder.path, reason, left)
             if not tagged:
@@ -1469,7 +1533,7 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
             _report(log, base, tag, plexnames.editions_in(base, respelled),
                     by_hand)
         _rename_in_place(folder, names, base, tag, target, skip_log, dry_run,
-                         log, planned, found.aliases, corrected)
+                         log, planned, found.aliases, corrected, long_names)
     return 0
 
 
@@ -1529,7 +1593,8 @@ def _what_is_wrong(base: str, names: list):
 
 def _tag_and_leave(folder, names: list, tag: str, skip_log: safety.SkipLog,
                    dry_run: bool, log: Callable[[str], None],
-                   planned: list | None) -> bool:
+                   planned: list | None,
+                   long_names: LongNames | None = None) -> bool:
     """Tag a folder nothing can rename, when its own files already say which
     film it is. False when they do not, and the folder is reported instead.
 
@@ -1549,25 +1614,40 @@ def _tag_and_leave(folder, names: list, tag: str, skip_log: safety.SkipLog,
     return _tag_only(
         folder, names, only, skip_log, dry_run, log, planned,
         lambda: log('  "{}" cannot be renamed, but every id in it says {} - '
-                    "tagging only".format(folder.name, only)))
+                    "tagging only".format(folder.name, only)),
+        long_names=long_names)
 
 
 def _tag_only(folder, names: list, only: str, skip_log: safety.SkipLog,
               dry_run: bool, log: Callable[[str], None],
               planned: list | None,
               announce: Callable[[], None] | None = None,
-              base: str = "") -> bool:
+              base: str = "",
+              long_names: LongNames | None = None) -> bool:
     """Put ``only`` on the folder and on every name still without an id, and
     change nothing else about any of them.
 
     ``announce`` is called once, and only when there is something to do: a
     folder already carrying its id throughout is finished, and a line about it
     would be a line repeated for the rest of the library's life.
+
+    False for a folder where the tag would push a name past the file name
+    limit, having changed nothing: the id is exactly the thing that does not
+    fit, so there is no tagging to be had here either.
     """
-    plan = plexnames.id_tag_renames(only, names)
+    cropped: list = []
+    over_limit: list = []
+    plan = plexnames.id_tag_renames(only, names, cropped, over_limit)
     wanted = plexnames.folder_name(
         base or plexnames.untagged_base(folder.name)[0], only)
     target = _folder_spelling(os.path.dirname(folder.path) or ".", wanted)
+    if not plexnames.fits_name(wanted):
+        over_limit.append((folder.name, wanted))
+    if over_limit:
+        if long_names is not None:
+            for name, _target in over_limit:
+                long_names.refuse(folder.path, name)
+        return False
     if wanted != folder.name and os.path.exists(target):
         skip_log.record(folder.path, target)
         return False
@@ -1575,10 +1655,18 @@ def _tag_only(folder, names: list, only: str, skip_log: safety.SkipLog,
         return True
     if announce is not None:
         announce()
+    if long_names is not None:
+        for name, cut in cropped:
+            long_names.crop(folder.path, name, cut)
+    done = True
     for old, new in plan:
-        _rename(os.path.join(folder.path, old), os.path.join(folder.path, new),
-                skip_log, dry_run, log, planned)
-    _rename(folder.path, target, skip_log, dry_run, log, planned)
+        if not _rename(os.path.join(folder.path, old),
+                       os.path.join(folder.path, new), skip_log, dry_run, log,
+                       planned, long_names):
+            done = False
+    if done:
+        _rename(folder.path, target, skip_log, dry_run, log, planned,
+                long_names)
     return True
 
 
@@ -1784,7 +1872,8 @@ def _rename_in_place(folder, names: list, base: str, tag: str, target: str,
                      skip_log: safety.SkipLog, dry_run: bool,
                      log: Callable[[str], None],
                      planned: list | None = None, aliases=(),
-                     corrected: dict | None = None) -> None:
+                     corrected: dict | None = None,
+                     long_names: LongNames | None = None) -> None:
     """One folder's films and sidecars, then the folder itself.
 
     That order and no other: renaming the folder first would move every path
@@ -1799,35 +1888,79 @@ def _rename_in_place(folder, names: list, base: str, tag: str, target: str,
     is what keeps the renames and the reports one answer: the caller read this
     folder under everything the catalogue told it, and a second reading would
     only know what the two names say.
+
+    A name the id tag would push past the file name limit stops the folder
+    outright, before a single file has moved: the tag is not a thing that may be
+    cut, and half a folder renamed is worse than none of it. The folder goes
+    into the closing report and the run carries on to the next film.
     """
-    for old, new in plexnames.folder_renames(base, tag, names, aliases,
-                                             corrected):
-        _rename(os.path.join(folder.path, old),
-                os.path.join(folder.path, new), skip_log, dry_run, log,
-                planned)
-    _rename(folder.path, target, skip_log, dry_run, log, planned)
+    cropped: list = []
+    over_limit: list = []
+    plan = plexnames.folder_renames(base, tag, names, aliases, corrected,
+                                    cropped, over_limit)
+    if not plexnames.fits_name(os.path.basename(target)):
+        over_limit.append((folder.name, os.path.basename(target)))
+    if over_limit:
+        if long_names is not None:
+            for name, _wanted in over_limit:
+                long_names.refuse(folder.path, name)
+        log('  "{}" cannot be named without going past the {}-byte file name '
+            "limit - left as it is, with its files".format(
+                base, plexnames.NAME_MAX_BYTES))
+        return
+    if long_names is not None:
+        for name, cut in cropped:
+            long_names.crop(folder.path, name, cut)
+    done = True
+    for old, new in plan:
+        if not _rename(os.path.join(folder.path, old),
+                       os.path.join(folder.path, new), skip_log, dry_run, log,
+                       planned, long_names):
+            done = False
+    # Only over a folder whose files all landed: a folder renamed over
+    # half-renamed contents files them under a name they do not carry.
+    if done:
+        _rename(folder.path, target, skip_log, dry_run, log, planned,
+                long_names)
 
 
 def _rename(source: str, target: str, skip_log: safety.SkipLog,
             dry_run: bool = False,
             log: Callable[[str], None] | None = None,
-            planned: list | None = None) -> None:
+            planned: list | None = None,
+            long_names: LongNames | None = None) -> bool:
     """A rename that refuses to land on something that is already there, or to
     hide what it moves - and that only SAYS what it would do on a dry run.
 
     ``planned`` collects what a dry run would have done, so the run can hand it
     over as a file rather than as output that scrolls away.
+
+    True unless the rename was attempted and the system refused it, which is
+    what tells the caller to stop working on this folder. A rename that was not
+    needed and one that was held back to save what is already there are both
+    outcomes rather than failures, and both answer True.
     """
     if source == target:
-        return
+        return True
     if safety.would_hide(target) or os.path.exists(target):
         skip_log.record(source, target)
-        return
+        return True
     if dry_run:
         if log is not None:
             log('    would rename: "{}" -> "{}"'.format(
                 os.path.basename(source), os.path.basename(target)))
         if planned is not None:
             planned.append((source, target))
-        return
-    os.rename(source, target)
+        return True
+    try:
+        os.rename(source, target)
+    except OSError as error:
+        # One film's rename, and never the run's: the library behind this
+        # folder still has its names to gain, and a traceback here would cost
+        # it every one of them.
+        if long_names is None:
+            raise
+        long_names.refuse(os.path.dirname(source), os.path.basename(source),
+                          str(error))
+        return False
+    return True

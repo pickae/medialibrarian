@@ -46,9 +46,11 @@ __all__ = [
 # How long a commentary stem ("<movie> <trackIndex> <trackName>") may get before
 # the suffixes are appended to it. Every output derived from one stem has to fit
 # the file name limit, so the stem is cut to leave room for the longest of them.
-NAME_MAX_BYTES = 255
-COMMENTARY_SUFFIX_BYTES = 8
-COMMENTARY_STEM_MAX_BYTES = NAME_MAX_BYTES - COMMENTARY_SUFFIX_BYTES
+# Taken from the naming, which cuts this same stem at this same place when an id
+# tag pushes one of these past the limit.
+NAME_MAX_BYTES = plexnames.NAME_MAX_BYTES
+COMMENTARY_SUFFIX_BYTES = plexnames.COMMENTARY_SUFFIX_BYTES
+COMMENTARY_STEM_MAX_BYTES = plexnames.COMMENTARY_STEM_MAX_BYTES
 
 # How long a commentary excerpt is, cut from the MIDDLE of the track (commentaries
 # open on the film's music or silence, and whisper only looks at the first 30 s),

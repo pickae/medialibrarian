@@ -2682,3 +2682,127 @@ class TestTheFoldersARealLibraryLeft:
             ["Gorse and Gallows - Part 2 (2012).mkv"])
         assert reasons == []
         assert "Part 2" not in asked
+
+
+class TestANameThatWillNotFit:
+    """The id tag is seventeen characters a folder's names did not have, and a
+    commentary transcript is named after the whole of what the track announces
+    itself as. Where the two meet, the filesystem refuses the rename outright.
+
+    A commentary is cut back into the track's own name, which is where the
+    transcription cuts it too. Anything else is a folder left exactly as it was,
+    and the films after it are named as usual - one name that will not fit is
+    one film's, and never the library's.
+    """
+
+    FOLDER = "Harbour Lights (1979)"
+    TAG = "{imdb-tt0000001}"
+
+    def _spoken(self, characters: int) -> str:
+        return ("Commentary by the director and the cast recorded in 2003 "
+                * 10)[:characters]
+
+    def _longest(self, middle: str, suffix: str = ".en.srt") -> str:
+        """A sidecar as long as one may be: a name that fits now, and that the
+        id tag and nothing else pushes past the limit."""
+        room = tmdblookup.plexnames.NAME_MAX_BYTES \
+            - len("%s%s%s" % (self.FOLDER, middle, suffix))
+        return "%s%s%s%s" % (self.FOLDER, middle, self._spoken(room), suffix)
+
+    def _run(self, monkeypatch, tmp_path, *folders):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("tmdbApiKey", "apikey")
+        # Every id is hand-written, so nothing here asks the network what these
+        # films are: what is being tested is what their names do.
+        monkeypatch.setattr(tmdblookup, "_curl",
+                            lambda *_a, **_k: json.dumps({"results": []}))
+        _tree(tmp_path, *folders)
+        logs: list = []
+        long_names = tmdblookup.LongNames()
+        tmdblookup.tag_plex_ids(
+            ".", logs.append, SkipLog(), long_names=long_names,
+            ids={base: self.TAG for base, _files in folders})
+        return logs, long_names
+
+    def test_a_commentary_is_renamed_with_its_track_name_cut_to_fit(
+            self, monkeypatch, tmp_path):
+        name = self._longest(" 2 ")
+        _logs, long_names = self._run(
+            monkeypatch, tmp_path,
+            (self.FOLDER, [self.FOLDER + ".mkv", name]))
+        tagged = tmp_path / ("%s %s" % (self.FOLDER, self.TAG))
+        assert tagged.is_dir()
+        cut = [entry.name for entry in tagged.iterdir()
+               if entry.name.endswith(".en.srt")]
+        assert len(cut) == 1
+        assert cut[0].startswith("%s %s 2 Commentary by" % (self.FOLDER,
+                                                            self.TAG))
+        assert long_names.refused == []
+        assert [target for _path, target in long_names.cropped] == cut
+
+    def test_and_the_run_closes_by_saying_so(self, monkeypatch, tmp_path):
+        _logs, long_names = self._run(
+            monkeypatch, tmp_path,
+            (self.FOLDER, [self.FOLDER + ".mkv", self._longest(" 2 ")]))
+        report = long_names.report()
+        assert report[0].startswith("WARNING: 1 commentary file(s)")
+        assert not any(line.startswith("ERROR") for line in report)
+
+    def test_a_name_that_may_not_be_cut_leaves_the_whole_folder_alone(
+            self, monkeypatch, tmp_path):
+        """No track number in it, so nothing says which part of this name a cut
+        could reach - and the film's own name is not up for cutting."""
+        stray = self._longest(" ")
+        logs, long_names = self._run(
+            monkeypatch, tmp_path,
+            (self.FOLDER, [self.FOLDER + ".mkv", stray]))
+        assert (tmp_path / self.FOLDER / stray).is_file()
+        assert (tmp_path / self.FOLDER / (self.FOLDER + ".mkv")).is_file()
+        assert not (tmp_path / ("%s %s" % (self.FOLDER, self.TAG))).exists()
+        assert [name for _folder, name, _why in long_names.refused] == [stray]
+        assert long_names.report()[0].startswith("ERROR: 1 folder(s)")
+        assert any("file name limit" in line for line in logs)
+
+    def test_and_the_films_after_it_are_named_as_usual(self, monkeypatch,
+                                                       tmp_path):
+        """The whole point of holding one folder back rather than stopping."""
+        other = "Dust and Distance (1953)"
+        _logs, long_names = self._run(
+            monkeypatch, tmp_path,
+            (self.FOLDER, [self.FOLDER + ".mkv", self._longest(" ")]),
+            (other, [other + ".mkv"]))
+        tagged = tmp_path / ("%s %s" % (other, self.TAG))
+        assert (tagged / ("%s %s.mkv" % (other, self.TAG))).is_file()
+        assert len(long_names.refused) == 1
+
+    def test_a_run_where_everything_fitted_closes_with_nothing_to_say(
+            self, monkeypatch, tmp_path):
+        _logs, long_names = self._run(
+            monkeypatch, tmp_path,
+            (self.FOLDER, [self.FOLDER + ".mkv", self.FOLDER + ".en.srt"]))
+        assert long_names.report() == []
+
+    def test_a_rename_the_system_refuses_is_one_film_and_not_the_run(
+            self, monkeypatch, tmp_path):
+        """Whatever the reason - and there are reasons no name can be read
+        beforehand - the library behind this folder still has its names to
+        gain."""
+        other = "Dust and Distance (1953)"
+        real = os.rename
+
+        def refuse(source, target):
+            if self.FOLDER in os.path.basename(source):
+                raise OSError(36, "File name too long")
+            real(source, target)
+
+        monkeypatch.setattr(tmdblookup.os, "rename", refuse)
+        _logs, long_names = self._run(
+            monkeypatch, tmp_path,
+            (self.FOLDER, [self.FOLDER + ".mkv"]),
+            (other, [other + ".mkv"]))
+        assert (tmp_path / ("%s %s" % (other, self.TAG))).is_dir()
+        # The folder is left where it is, too: renaming it over contents that
+        # did not move would file them under a name they do not carry.
+        assert (tmp_path / self.FOLDER).is_dir()
+        assert [why for _folder, _name, why in long_names.refused] \
+            == ["[Errno 36] File name too long"]

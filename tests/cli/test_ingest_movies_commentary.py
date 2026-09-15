@@ -9,6 +9,7 @@ CPU thread.
 import pytest
 
 from medialib.cli import ingest_movies_run as run_module
+from medialib.lib import tmdblookup
 from medialib.lib import whisper as whisper_lib
 
 pytestmark = pytest.mark.pure
@@ -48,7 +49,8 @@ def ingested(monkeypatch):
 
         state = run_module.Run(script_dir="", ram_root="/ram", skips=None,
                                fragments_file="", whisper={"model": "m"},
-                               ffsubsync_quality="yes")
+                               ffsubsync_quality="yes",
+                               long_names=tmdblookup.LongNames())
         run_module._ingest(state, "/x", True)
         return seen
     return run
