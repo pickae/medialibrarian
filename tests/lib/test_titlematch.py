@@ -236,7 +236,7 @@ class TestTheReadingsOfOneTitle:
 
     @pytest.mark.parametrize("one,other,about", [
         ("Selene", "S\u00e9l\u00e8ne", "an accent the keyboard could not reach"),
-        ("Fahrenheit 451", "FAHRENHEIT 451", "capitals"),
+        ("Meridian 88", "MERIDIAN 88", "capitals"),
         ("Iron-Wolf", "Iron Wolf", "a dash written as a space"),
         ("Iron-Wolf", "IronWolf", "a dash written as nothing"),
         ("Harbour\u2019s Eleven", "Harbours Eleven", "an apostrophe stripped out"),
@@ -288,9 +288,11 @@ class TestTheReadingsOfOneTitle:
         assert titlematch.equivalent("Mix", "1009")
 
     def test_a_conjunction_is_only_one_in_a_conjunctions_place(self):
-        """The short ones are articles and letters elsewhere: "E.T." ends in a
-        "t" and "I, Robot" begins with an "i", and neither is an "and"."""
-        assert not titlematch.equivalent("I Robot", "And Robot")
+        """The short ones are articles and letters elsewhere: "E.D.G.E." opens
+        and closes on an "e" and "I Sentinel" begins with an "i", and none of
+        the three is an "and"."""
+        assert not titlematch.equivalent("I Sentinel", "And Sentinel")
+        assert not titlematch.equivalent("E.D.G.E.", "And D G And")
         assert titlematch.equivalent("Dogs et Cats", "Dogs and Cats")
 
     def test_a_filler_is_never_the_whole_title(self):
@@ -327,7 +329,7 @@ class TestWhatToGoAskingUnder:
         """A catalogue's own search is no more troubled by an accent or a
         capital than the fold is, so asking it twice buys the same answer and a
         second request."""
-        assert titlematch.search_titles("AM\u00c9LIE") == ["AM\u00c9LIE"]
+        assert titlematch.search_titles("S\u00c9L\u00c8NE") == ["S\u00c9L\u00c8NE"]
 
     def test_the_filler_a_library_wrote_in_front_comes_off(self):
         assert "Agent Ward - Blackfeather" in titlematch.search_titles(

@@ -80,10 +80,73 @@ tests/
   blackbox.py      starting a command as a child, and stubbing the heavy tools
   test_*.py        what is about the package as a whole
   cli/  lib/       one module per module under test
+  treefiles.py     the `.tree` fixture format: a folder's whole shape as one
+                   comparable value, shared by the two commands recorded in it
   data/            what the tests READ: the 180 recorded pages under
-                   cliContract/, the cue, name-cleaning and subtitle fixtures,
-                   the shared tool stub, and the Dolby Vision claim injector
+                   cliContract/, the cue, name-cleaning, movie-matching and
+                   subtitle fixtures, the shared tool stub, and the Dolby
+                   Vision claim injector
 ```
+
+## What is recorded rather than written
+
+Three sets of fixtures are recordings of something real, and each has an
+environment variable that rewrites it. **Regenerating is a decision, never the
+way to make a red case green**: a fixture that "needs" rewriting is a bug until
+the diff proves otherwise.
+
+| Fixture | Rewritten by | A recording of |
+| --- | --- | --- |
+| `data/cliContract/` | `REGEN=1` | every command's help, no-args, unknown-flag and missing-path pages |
+| `data/nameCleaning/` | `clean-folder-structure -s` | real folders that were wrong, and the layout the cleaner leaves |
+| `data/movieMatching/` | `REGEN=1` **and network** | what TheMovieDB really answers, and the library `ingest-movies` leaves |
+
+The third is the odd one out, because what it records is not this repository. The
+matching rule is unit-tested against a catalogue written for the case, which can
+say whether the rule is right and cannot say whether the *service*, asked the way
+`tmdblookup` asks it, hands back something the rule settles - TMDb's alternative
+titles, which countries it recorded a release in, and what its search puts first
+for a common word are facts about TMDb that no fixture written here can discover.
+
+So `tests/lib/test_tmdblookup_recorded.py` runs its cases against the live
+service once and commits the requests, the responses and the two layouts:
+
+```bash
+REGEN=1 tmdbApiKey=<key> pytest tests/lib/test_tmdblookup_recorded.py
+```
+
+A plain run replays that recording and never reaches the network - a question
+the recording has no answer to fails the case rather than going online, so the
+suite stays offline, fast and the same on every host. Re-recording is how a
+change on TMDb's side becomes a diff to read rather than a library quietly
+renamed wrong.
+
+**Replaying needs no key**, which is why these are an ordinary part of the
+default run rather than an opt-in tier like `media`: CI has no TMDb key and does
+not need one. Only `REGEN=1` talks to the service, and it refuses to run without
+a key rather than recording a file of nulls and committing it as though it were
+answers.
+
+Three states, deliberately different:
+
+| On disk | What a run does |
+| --- | --- |
+| the whole recording | replays it, offline |
+| no recording at all | **skips**, naming the command that makes one |
+| a recording with holes in it | **fails** - that is a committed fixture gone missing |
+
+The skip is the one concession to the rule below that a missing prerequisite
+should fail rather than skip. A branch where nobody has run `REGEN=1` yet is not
+a defect, and reddening a run that has no key to fix it with helps nobody. It is
+paid for: the layouts that went *in* are committed, need no recording, and are
+asserted in every run on every host, so the file never goes entirely quiet and
+the per-file floor keeps meaning something.
+
+**Those cases are the one place in the suite that names real films**, because
+the point of them is the catalogue and an invented title is not in it. They are
+silent-era work long in the public domain, which is also where the matching is
+hardest. Everything else in the suite uses invented names and should stay that
+way.
 
 The package ships without any of it: `medialib/` is the wheel, `tests/` is the
 repository.

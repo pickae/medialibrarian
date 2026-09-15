@@ -93,6 +93,12 @@ OLD_SUFFIX = " (old).mkv"
 # The wrappers a hand-written version name tends to arrive in.
 _WRAPPERS = (("(", ")"), ("[", "]"))
 
+# What a file puts BETWEEN the film's name and the version it is of - never part
+# of the version's own name, and on both ends because a name is as often closed
+# off as introduced. Whitespace is stripped with them and again after them, so a
+# run of several comes off together.
+_SEPARATORS = " -:_|.–—"
+
 
 def is_kept_copy(path: str) -> bool:
     """Whether ``path`` is the original an improved remux kept, rather than a
@@ -167,6 +173,15 @@ def edition_name(text: str) -> str:
     given a capital where the whole thing was written in lower case - a folder's
     "colorized" reads as "Colorized" in Plex's picker, while a name that already
     has capitals of its own is left exactly as it was.
+
+    The separator that only INTRODUCED it comes off, and punctuation alone is
+    not a name at all and answers "". What reaches this from :func:`read_stem`
+    is whatever a stem had left over once the tags and the stacking token were
+    accounted for, so a file written "<film> - Director's Cut" leaves the dash
+    on the front of the name and "<film> - Part 1" leaves nothing but the dash.
+    Written out those read "{edition-- Director's Cut}" and "{edition--}" - a
+    picker entry wearing its own separator, and one with nothing in it standing
+    between a split film's two halves and stacking.
     """
     text = " ".join(text.split())
     for opening, closing in _WRAPPERS:
@@ -174,7 +189,10 @@ def edition_name(text: str) -> str:
             text = " ".join(text[1:-1].split())
             break
     text = text.replace("{", "(").replace("}", ")")
-    if text and text == text.lower():
+    text = text.strip(_SEPARATORS).strip()
+    if not any(character.isalnum() for character in text):
+        return ""
+    if text == text.lower():
         text = text[0].upper() + text[1:]
     return text
 

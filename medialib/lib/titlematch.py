@@ -292,9 +292,9 @@ SYMBOL_WORDS = (
 # is which language the "and" was written in.
 #
 # Applied to an INTERIOR token only - never the first or the last - which is
-# what keeps the short ones from eating a title. "E.T." folds to "e t", "I" and
-# "Y" begin titles of their own, and none of them is a conjunction in the one
-# position a conjunction sits in.
+# what keeps the short ones from eating a title. "E.D.G.E." folds to "e d g e",
+# "I" and "Y" begin titles of their own, and none of them is a conjunction in
+# the one position a conjunction sits in.
 CONJUNCTIONS = {
     "and": "and", "und": "and", "et": "and", "en": "and", "y": "and",
     "e": "and", "ed": "and", "i": "and", "og": "and", "och": "and",

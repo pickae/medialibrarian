@@ -74,6 +74,36 @@ class TestAnEditionName:
         assert plexnames.edition_name("a {weird} print") == "A (weird) print"
 
 
+class TestTheSeparatorThatOnlyIntroducedAnEdition:
+    """What a file puts between the film and the version it is of belongs to
+    neither, and read_stem hands it over with the version."""
+
+    @pytest.mark.parametrize("written", [
+        "- colorized", ": colorized", "| colorized", "- - colorized",
+        "– colorized", "colorized -",
+    ])
+    def test_it_is_not_part_of_the_name(self, written):
+        assert plexnames.edition_name(written) == "Colorized"
+
+    def test_and_a_separator_alone_is_no_edition_at_all(self):
+        """A split film written "<film> - Part 1" leaves the dash behind once
+        the stacking token is accounted for. As an edition it reads
+        "{edition--}", which offers Plex a picker entry with nothing in it and
+        stops the two halves stacking."""
+        assert plexnames.read_stem("Falkenauge (1964)",
+                                   "Falkenauge (1964) - Part 1") \
+            == ("", "Part1")
+
+    @pytest.mark.parametrize("nothing", ["-", " - ", "--", "(-)", ".", "|"])
+    def test_punctuation_is_never_a_name(self, nothing):
+        assert plexnames.edition_name(nothing) == ""
+
+    def test_a_version_that_is_only_digits_still_is_one(self):
+        """The guard is "no letter or digit", not "no letter": a restoration
+        names itself by its year and nothing else."""
+        assert plexnames.edition_name("- 2001") == "2001"
+
+
 class TestAssemblingAStem:
     def test_the_stacking_token_goes_last(self):
         """Plex matches the stacking suffix at the END of the name: a tag after
