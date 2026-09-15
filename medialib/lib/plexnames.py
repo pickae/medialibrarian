@@ -22,7 +22,7 @@ import os
 import re
 
 from medialib.lib import titlematch
-from medialib.lib.enums import PART_WORDS
+from medialib.lib.enums import PART_WORDS, SOURCE_PART_WORDS
 
 # A film's id tag, anywhere in the name. Plex reads the tag whether it sits on
 # the folder or the file, and is indifferent to the order tags come in.
@@ -52,11 +52,27 @@ _SEPARATOR = re.compile(r"^[._\-]+$")
 # "Part 1 - The First Half" is a part written the way a person writes one, and
 # Plex stacks none of it - the keyword has to be the last thing in the name,
 # with its number against it.
-_NAMES_A_PART = re.compile(r"^(?:" + _WORDS + r")\.?[0-9]*$", re.I)
+#
+# Two spellings, because a name is split on its punctuation before either is
+# asked: the keyword with its number grown onto it, and the keyword on its own
+# with the number standing as the next word.
+_A_PART_NUMBERED = re.compile(r"^(?:" + _WORDS + r")[0-9]+$", re.I)
+_A_PART_WORD = re.compile(r"^(?:" + _WORDS + r")$", re.I)
+
+# And the ones of those that name a SOURCE rather than a piece, which are the
+# only ones a missing number does not condemn.
+_A_SOURCE_WORD = re.compile(r"^(?:" + "|".join(SOURCE_PART_WORDS) + r")$", re.I)
 
 # The year a film folder carries, as the last thing in its name. Read here so a
 # file that left the year off can still be recognised as the folder's own film.
 _YEAR_SUFFIX = re.compile(r"\s*\([12][0-9]{3}\)\s*$")
+
+# The same year with the brackets a file often does not bother with. Never read
+# on its own: a title may END in a year - "Rivertown 2049", "1915" - and
+# taking it for the date would file the film under a name it does not have. It
+# is only read where the FOLDER says the same year, which is what makes it the
+# date said a second time rather than part of the name.
+_BARE_YEAR_SUFFIX = re.compile(r"\s*([12][0-9]{3})\s*$")
 
 # The same year wherever it sits in a name, which is where a tag goes in after:
 # the end of the film's name, and the start of what the release says about
@@ -204,6 +220,23 @@ def editions_in(base: str, names) -> list:
     return sorted(found)
 
 
+def years_disagreeing(base: str, names) -> list:
+    """The years this folder's own films are dated that the FOLDER is not.
+
+    A file dated one way and its folder another leaves the file's year standing
+    where an edition would be, which is what :func:`is_only_a_year` reads. What
+    that means is not a naming question - one of the two dates is wrong, or
+    they are two different films - so this only says which other years are in
+    play, and leaves the answering to whoever can ask a catalogue.
+    """
+    found = set()
+    for stem in movie_stems(base, names):
+        edition = read_stem(base, stem)[0]
+        if is_only_a_year(edition):
+            found.add(edition.strip())
+    return sorted(found)
+
+
 def is_only_a_marker(edition: str) -> bool:
     """Whether an edition name is nothing but a number.
 
@@ -242,9 +275,29 @@ def names_a_part(edition: str) -> bool:
     one film in three files. Nothing here can turn it into a stacking token
     either - the token has to come last, and there is a title sitting after it -
     so the folder is left alone for someone to name.
+
+    A keyword with no number after it is still one of these, with one
+    exception: :data:`medialib.lib.enums.SOURCE_PART_WORDS`, the keywords that
+    are also the name of a source. A "<film> (2001) DVD.mkv" beside a
+    "<film> (2001) BluRay.mkv" is one film twice over, and the two words are
+    doing the same job - the second was always an edition, and the first was
+    being read as a part that had lost its number.
+
+    A bare "disc", "cd" or "part" is not that. Those words name a PIECE and
+    nothing else, so one standing without its number is a part that cannot
+    stack, which is the thing to report rather than to write into an edition
+    tag nobody chose.
     """
-    return any(_NAMES_A_PART.match(word)
-               for word in re.split(r"[^0-9A-Za-z]+", edition) if word)
+    words = [word for word in re.split(r"[^0-9A-Za-z]+", edition) if word]
+    for index, word in enumerate(words):
+        if _A_PART_NUMBERED.match(word):
+            return True
+        if not _A_PART_WORD.match(word):
+            continue
+        numbered = index + 1 < len(words) and words[index + 1].isdigit()
+        if numbered or not _A_SOURCE_WORD.match(word):
+            return True
+    return False
 
 
 def strays_in(base: str, names) -> list:
@@ -263,17 +316,38 @@ def strays_in(base: str, names) -> list:
                  or name[:-len(".mkv")].startswith(base + " ")))
 
 
-def untitled_base(base: str) -> str:
+def untitled_base(base: str, year: str = "") -> str:
     """``base`` without its "(Year)": what a file that left the year off says.
 
     The folder carries the year by convention and a file beside it often does
     not, so the two are compared both ways round before either is called a
     different film.
+
+    ``year`` is the year the FOLDER carries, and giving it reads one more
+    spelling: a year written without its brackets, which is how a file names
+    itself when nothing ever put them there - "Den Ljusa Vagen 1992 Part1.mkv".
+    Only that one year, never any other, for the reason
+    :data:`_BARE_YEAR_SUFFIX` gives.
     """
-    return _YEAR_SUFFIX.sub("", base)
+    shortened = _YEAR_SUFFIX.sub("", base)
+    if shortened != base or not year:
+        return shortened
+    match = _BARE_YEAR_SUFFIX.search(base)
+    return base[:match.start()] if match and match.group(1) == year else base
 
 
-def onto_base(base: str, name: str) -> str:
+def year_of(base: str) -> str:
+    """The year a folder's name carries, or "".
+
+    What :func:`untitled_base` has to be told to read a file's own spelling of
+    the same year, and what says two names disagree about the date rather than
+    about the film.
+    """
+    match = _YEAR_SUFFIX.search(base)
+    return match.group(0).strip(" ()") if match else ""
+
+
+def onto_base(base: str, name: str, also=(), typos: bool = False) -> str:
     """``name`` with its title respelled the way the folder spells it, or "".
 
     A file whose name only DIFFERS from the folder's - an accent the keyboard
@@ -294,6 +368,18 @@ def onto_base(base: str, name: str) -> str:
     nor an edition for carrying one. Only where the name it leaves is free -
     :func:`spelling_renames` will not put two files under one name, and a folder
     that really does hold the same film twice keeps both and is reported.
+
+    ``also`` are further spellings of this FOLDER's own name - the franchise it
+    wrote that the file did not, the year it is dated one side of - each of
+    which a file may name this film under. They are the caller's to work out
+    and to vouch for, because what says a second spelling is this same film is
+    never in the two strings: it is the folder above saying the franchise, or a
+    catalogue saying the two years are one film.
+
+    ``typos`` allows the last reading of all, a single letter wrong, on a name
+    every other reading has refused. A guess, so the caller only sets it where
+    something has already vouched for the name being guessed AT - see
+    :func:`medialib.lib.titlematch.one_typo_apart`.
     """
     if is_kept_copy(name):
         return ""
@@ -312,9 +398,10 @@ def onto_base(base: str, name: str) -> str:
             continue
         if _numbers_another_film(name[cut:]):
             continue
-        if _names_this_film(base, head) or _names_this_film(
-                base, titlematch.strip_duplicate_marker(head)):
-            return base + name[cut:]
+        for spelling in (base,) + tuple(also):
+            if _names_this_film(spelling, head, typos) or _names_this_film(
+                    spelling, titlematch.strip_duplicate_marker(head), typos):
+                return base + name[cut:]
     return ""
 
 
@@ -352,13 +439,23 @@ def _boundaries(name: str) -> list:
                           if name[index] in " ."]
 
 
-def _names_this_film(base: str, head: str) -> bool:
+def _names_this_film(base: str, head: str, typos: bool = False) -> bool:
     """Whether ``head`` is the folder's own film said differently - with the
-    year on either side of the comparison, or on neither."""
+    year on either side of the comparison, or on neither.
+
+    ``typos`` adds the one reading that is a guess, and adds it last: a name no
+    fold could bring home is asked whether it is this one with a single letter
+    wrong. Both comparisons again, because the year is as likely to be the
+    thing the file left off here as anywhere else.
+    """
     if titlematch.equivalent(base, head):
         return True
     bare = untitled_base(base)
-    return bare != base and titlematch.equivalent(bare, head)
+    if bare != base and titlematch.equivalent(bare, head):
+        return True
+    return bool(typos) and (titlematch.one_typo_apart(base, head)
+                            or (bare != base
+                                and titlematch.one_typo_apart(bare, head)))
 
 
 def alias_renames(base: str, names, aliases) -> dict:
@@ -398,8 +495,9 @@ def _onto_base_by_alias(base: str, name: str, keys: frozenset) -> str:
     """
     if not keys or is_kept_copy(name) or name.startswith(base):
         return ""
+    year = year_of(base)
     for cut in _boundaries(name):
-        head = untitled_base(name[:cut].rstrip())
+        head = untitled_base(name[:cut].rstrip(), year)
         rest = name[cut:]
         if not head or not _says_more_than_the_year(rest):
             continue
@@ -422,7 +520,7 @@ def _says_more_than_the_year(rest: str) -> bool:
     return bool(rest) and not rest.startswith(".")
 
 
-def named_by_catalogue(names, aliases) -> dict:
+def named_by_catalogue(names, aliases, base: str = "") -> dict:
     """{name: the catalogue's own writing of the title it answers to}, for the
     names a CATALOGUE says are this film - and which nothing about the strings
     could have said.
@@ -440,10 +538,19 @@ def named_by_catalogue(names, aliases) -> dict:
     what comes back - not the key that matched. A report is read by a person,
     and a fold is not a title: "Die Blaue Stunde" folds to a key
     with "and" in the middle of it, which is not a name anything has.
+
+    ``base`` is the folder's own name, and what it is for is the year: a file
+    named in another language carries its date the way its owner wrote it, in
+    brackets or without them, and either way that date is the folder's and not
+    part of the title a catalogue would recognise. Its stacking token and its
+    tags come off for the same reason - "Den Ljusa Vagen 1992 Part1" is one
+    piece of a film whose title is two of those words.
     """
     found = {}
+    year = year_of(base)
     for name in names:
-        keys = titlematch.title_keys(untitled_base(os.path.splitext(name)[0]))
+        stem = film_key(os.path.splitext(name)[0])
+        keys = titlematch.title_keys(untitled_base(stem, year))
         for written in aliases:
             if titlematch.title_keys(written) & keys:
                 found[name] = written
@@ -451,7 +558,7 @@ def named_by_catalogue(names, aliases) -> dict:
     return found
 
 
-def spelling_renames(base: str, names) -> dict:
+def spelling_renames(base: str, names, also=(), typos: bool = False) -> dict:
     """{name: the name it should be spelled as}, for the names that differ.
 
     Only the ones a spelling explains: a name this folder's film cannot be read
@@ -459,14 +566,30 @@ def spelling_renames(base: str, names) -> dict:
     report. A rename that would land on a name the folder already holds is
     dropped rather than made - the two files are then genuinely two, whatever
     their names say, and that is a thing for someone to look at.
+
+    ``also`` and ``typos`` are :func:`onto_base`'s, and they are asked
+    differently. A spelling in ``also`` is a name something has VOUCHED for, so
+    it stands beside the folder's own and is read at the same time - which
+    matters, because it is usually the longer reading of the two: a file dated
+    "(1952)" answers to a vouched-for "Film (1952)" whole, and to the folder's
+    own "Film (1953)" only by giving the date up as a leftover.
+
+    A typo is a guess, so it is asked in a SECOND pass over the names the first
+    could not explain at all. That order is the whole of "only where nothing
+    closer was found": the guess never gets to claim a name from under a
+    reading, nor the name a reading was going to take, because the first pass
+    has already held it.
     """
     held = set(names)
     corrected: dict[str, str] = {}
-    for name in sorted(names):
-        wanted = onto_base(base, name)
-        if wanted and wanted != name and wanted not in held:
-            corrected[name] = wanted
-            held.add(wanted)
+    for guessing in (False, True) if typos else (False,):
+        for name in sorted(names):
+            if name in corrected:
+                continue
+            wanted = onto_base(base, name, also, guessing)
+            if wanted and wanted != name and wanted not in held:
+                corrected[name] = wanted
+                held.add(wanted)
     return corrected
 
 
@@ -482,7 +605,8 @@ def ids_in(names) -> set:
             for match in [ID_TAG_RE.search(name)] if match}
 
 
-def folder_renames(base: str, tag: str, names, aliases=()) -> list:
+def folder_renames(base: str, tag: str, names, aliases=(),
+                   corrected: dict | None = None) -> list:
     """Every rename one movie folder needs, as (old name, new name) pairs.
 
     ``base`` is the folder without its id tag and ``tag`` the tag to carry;
@@ -499,13 +623,20 @@ def folder_renames(base: str, tag: str, names, aliases=()) -> list:
     the folder's own first, and then read as any other name is - so a file that
     arrived as "le seigneur de valmont pt 1.mkv" leaves with the folder's
     capitals, the folder's accents and a stacking token Plex can see.
+
+    ``corrected`` is those respellings when the caller has already worked them
+    out, and passing them is how a caller that read the folder under WIDER
+    readings than this function has - a franchise the folder above says, a year
+    a catalogue vouched for, a letter somebody got wrong - renames what it
+    reported rather than a second, narrower answer to the same question.
     """
-    corrected = spelling_renames(base, names)
-    # Never over a correction the NAMES themselves account for. What the two
-    # readings disagree about is always the catalogue reaching further than it
-    # should: a name the spelling already explains is explained.
-    for name, wanted in alias_renames(base, names, aliases).items():
-        corrected.setdefault(name, wanted)
+    if corrected is None:
+        corrected = spelling_renames(base, names)
+        # Never over a correction the NAMES themselves account for. What the
+        # two readings disagree about is always the catalogue reaching further
+        # than it should: a name the spelling already explains is explained.
+        for name, wanted in alias_renames(base, names, aliases).items():
+            corrected.setdefault(name, wanted)
     respelled = [corrected.get(name, name) for name in names]
     stems = movie_stems(base, respelled)
     plan = []

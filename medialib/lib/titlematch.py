@@ -29,7 +29,15 @@ combinations:
   number with title on BOTH sides of it dropped, because what surrounds it
   still says which film it is;
 * the **filler** a local library puts in front of a name and a catalogue never
-  carries.
+  carries - or writes INTO the middle of it, which is the same word doing the
+  same nothing in another position.
+
+One thing here is not a fold, and is kept apart from them for that reason:
+:func:`one_typo_apart` answers whether two titles are one title with a single
+letter wrong. A fold is a reading of what somebody wrote and cannot be wrong;
+a typo is the claim that they wrote it wrong, which is a guess - so it is
+never a key, it is asked only where every fold has already failed, and it is
+refused on a short name and on any difference that touches a digit.
 
 Nothing here is about films. A title is a title, and the same fold serves a
 book, an album or an episode.
@@ -48,6 +56,8 @@ __all__ = [
     "normalize_title",
     "title_keys",
     "equivalent",
+    "one_typo_apart",
+    "leading_segment",
     "search_titles",
     "strip_duplicate_marker",
     "reset_iconv_flavour",
@@ -311,6 +321,18 @@ FILLER_WORDS = frozenset((
     "thefilm", "themovie",
 ))
 
+# The same label written INTO a title rather than in front of it: a library's
+# "Sunstriker the Movie - Ember" against a catalogue's "Sunstriker: Ember".
+# It is the filler above in another position, and it says the same nothing.
+#
+# A much shorter list than the filler, and deliberately. A leading run can be
+# cut on sight - whatever stands in front of the title is not the title - while
+# an interior word has title on both sides of it and might BE the title: a
+# "Special" or a "Feature" in the middle of a name is as likely to be a word of
+# it as a label on it. These four are not: nobody writes "the Movie" into the
+# middle of a name meaning anything by it.
+INTERJECTED_WORDS = frozenset(("movie", "film", "themovie", "thefilm"))
+
 # The letters a language spells OUT when it cannot write the accent, rather than
 # dropping the accent the way a transliteration does. A German keyboard's
 # "Uebung" and a German title's "Übung" are one word; so are Danish "Aarhus" and
@@ -446,6 +468,25 @@ def _without_filler(words: list[str]) -> list[str]:
     return words[cut:]
 
 
+def _without_the_interjection(words: list[str]) -> list[str]:
+    """``words`` without a label that has title on BOTH sides of it.
+
+    "Sunstriker the Movie - Ember and the Clockwork Wonder" is the film a
+    catalogue holds as "Sunstriker: Ember and the Clockwork Wonder", and the
+    only thing between them is a label somebody wrote into the middle of the
+    name. Both sides, for the same reason the inner number is dropped on both
+    sides: what surrounds the label still says which film this is.
+
+    The article in front of the label is not this reading's business.
+    :func:`_without_articles` already has one that takes every article out, and
+    the two widenings meet - so "the movie" and "movie" reduce alike without
+    this one having to know that "the" was part of the label.
+    """
+    kept = [word for index, word in enumerate(words)
+            if not (0 < index < len(words) - 1 and word in INTERJECTED_WORDS)]
+    return kept if len(kept) > 1 else words
+
+
 def _arabic_numerals(words: list[str]) -> list[str]:
     """``words`` with every roman numeral token written as a number.
 
@@ -547,7 +588,8 @@ def title_keys(title: str) -> frozenset:
     if written != forms[0]:
         forms.append(written)
     for reading in (_one_conjunction, _without_article, _without_articles,
-                    _without_filler, _without_the_possessive,
+                    _without_filler, _without_the_interjection,
+                    _without_the_possessive,
                     _arabic_numerals, _without_the_first,
                     _without_the_inner_number):
         forms = _widen(forms, reading)
@@ -564,6 +606,67 @@ def title_keys(title: str) -> frozenset:
 def equivalent(one: str, other: str) -> bool:
     """Whether two written titles name the same title."""
     return bool(title_keys(one) & title_keys(other))
+
+
+# --- the one letter somebody got wrong ---------------------------------------
+
+# How short a title may be and still have a typo read out of it. One letter in
+# three is most of a short name, and the short names are where the accidents
+# are: "Ash" and "Ashe", "Orb" and "Orbs", "Kite" and "Kites". Six characters
+# is the floor, counted on the fold, so the spaces count and the punctuation
+# does not.
+MIN_TYPO_LENGTH = 6
+
+
+def one_typo_apart(one: str, other: str) -> bool:
+    """Whether two written titles are one title with a single letter wrong.
+
+    The last thing asked and never the first. Every reading in this module says
+    what somebody MIGHT have written and cannot be wrong about it; this says
+    they wrote it wrong, which is a guess, and a guess is only worth making
+    where nothing else has answered.
+
+    What it buys, besides the plain slip, is the two families of difference no
+    table will ever hold: an americanism ("color" against "colour", "traveled"
+    against "travelled") and a character that is the SHAPE of another and is
+    not one - the ones :data:`CONFUSABLES` has not heard of yet.
+
+    Three things make it safe enough to ask at all:
+
+    * the edit is a LETTER. A digit is never a slip - "Falkenauge 2" and
+      "Falkenauge 3" are one letter apart and two films, and so are a film's
+      year and the year before it. This is also why the year needs no rule of
+      its own: it is digits, so nothing in it can be a typo;
+    * neither title is shorter than :data:`MIN_TYPO_LENGTH`;
+    * one edit exactly, and the titles are not already the same - a title that
+      matches has been matched, and this was not asked.
+    """
+    return _one_letter_apart(normalize_title(one), normalize_title(other))
+
+
+def _one_letter_apart(one: str, other: str) -> bool:
+    """The comparison itself, over two titles already folded.
+
+    Worked out from the ends rather than with an edit-distance table: what is
+    left once the common head and the common tail are taken off the two titles
+    IS the edit, and a single substitution leaves one letter on each side while
+    a single insertion or deletion leaves one letter on one side and nothing on
+    the other. Anything else is two edits or more, and is not asked about
+    further.
+    """
+    if one == other or abs(len(one) - len(other)) > 1:
+        return False
+    if min(len(one), len(other)) < MIN_TYPO_LENGTH:
+        return False
+    shortest = min(len(one), len(other))
+    head = 0
+    while head < shortest and one[head] == other[head]:
+        head += 1
+    tail = 0
+    while tail < shortest - head and one[-1 - tail] == other[-1 - tail]:
+        tail += 1
+    edit = one[head:len(one) - tail] + other[head:len(other) - tail]
+    return len(edit) == (2 if len(one) == len(other) else 1) and edit.isalpha()
 
 
 # --- what to go asking under -------------------------------------------------
@@ -599,6 +702,7 @@ def search_titles(title: str) -> list:
     found = [title]
     folds = {normalize_title(title)}
     for spelling in (stripped, _last_segment(stripped),
+                     _uninterjected(stripped),
                      _arabic_spelling(stripped), _unnumbered(stripped),
                      normalize_title(title)):
         folded = normalize_title(spelling) if spelling else ""
@@ -620,6 +724,22 @@ def _filler_stripped(title: str) -> str:
     return rest if rest != title else ""
 
 
+def leading_segment(title: str) -> tuple:
+    """``title`` as (what stands before its FIRST " - " or ": ", what stands
+    after it), or ("", "") when it has no such break.
+
+    The other end of :func:`_last_segment`, and for a caller that needs to know
+    what the prefix SAID rather than only that there was one: what is worth
+    dropping off the front of a title is the franchise, the artist or the
+    collection somebody repeated, and the only thing that can say a prefix is
+    one of those is something outside the title agreeing.
+    """
+    match = _SEGMENT.search(title)
+    if not match:
+        return "", ""
+    return title[:match.start()].strip(), title[match.end():].strip()
+
+
 def _last_segment(title: str) -> str:
     """What stands after the LAST " - " or ": " in ``title``.
 
@@ -633,6 +753,26 @@ def _last_segment(title: str) -> str:
     """
     tail = _SEGMENT.split(title)[-1].strip()
     return tail if tail and tail != title.strip() else ""
+
+
+def _uninterjected(title: str) -> str:
+    """``title`` without the "the Movie" somebody wrote into the middle of it,
+    for a catalogue that holds the film without it.
+
+    "" when the title carries no such label, which is what keeps this from
+    being a query: a spelling is only worth asking about where the thing it
+    corrects was there to correct.
+    """
+    words = title.split()
+    kept: list[str] = []
+    for index, word in enumerate(words):
+        if 0 < index < len(words) - 1 \
+                and normalize_title(word) in INTERJECTED_WORDS:
+            if kept and normalize_title(kept[-1]) in ARTICLES:
+                kept.pop()
+            continue
+        kept.append(word)
+    return " ".join(kept) if kept != words and len(kept) > 1 else ""
 
 
 def _unnumbered(title: str) -> str:

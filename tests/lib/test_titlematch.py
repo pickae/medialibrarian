@@ -650,3 +650,77 @@ class TestAPossessiveThatWentMissing:
 
     def test_two_different_films_still_do_not(self):
         assert not titlematch.equivalent("A Cat's Tale", "A Dog's Tale")
+
+
+class TestALabelWrittenIntoTheMiddleOfATitle:
+    """"Sunstriker the Movie - Ember" is the film a catalogue holds as
+    "Sunstriker: Ember", and the only thing between them is a label somebody
+    wrote into the middle of the name."""
+
+    def test_the_label_and_the_number_it_stands_in_for_meet(self):
+        assert titlematch.equivalent(
+            "Sunstriker 19 - Ember and the Clockwork Wonder",
+            "Sunstriker the Movie - Ember and the Clockwork Wonder")
+
+    @pytest.mark.parametrize("written", [
+        "Sunstriker the Movie - Ember",
+        "Sunstriker The Film: Ember",
+        "Sunstriker Movie - Ember",
+    ])
+    def test_however_it_was_written(self, written):
+        assert titlematch.equivalent("Sunstriker: Ember", written)
+
+    def test_but_a_label_is_only_one_where_title_stands_on_both_sides(self):
+        """A leading run can be cut on sight; an interior word might BE the
+        title, and a trailing one is all that tells two entries apart."""
+        assert not titlematch.equivalent("Falcons Forever The Movie",
+                                         "Falcons Forever The Sequel")
+
+    def test_and_the_spelling_is_only_asked_about_where_it_was_written(self):
+        assert "Sunstriker - Ember" in titlematch.search_titles(
+            "Sunstriker the Movie - Ember")
+        assert titlematch.search_titles("Sunstriker - Ember") \
+            == ["Sunstriker - Ember", "Ember"]
+
+
+class TestOneLetterWrong:
+    """The last reading of all, and the only one that says somebody wrote the
+    title wrongly rather than differently."""
+
+    @pytest.mark.parametrize("one,other", [
+        ("Thinner Then Air", "Thinner Than Air"),       # the plain slip
+        ("The Colorized Print", "The Colourized Print"),  # an americanism
+        ("Marekk Halvor", "Marek Halvor"),              # a doubled letter
+        ("Falcons Forevr", "Falcons Forever"),          # a dropped one
+    ])
+    def test_a_single_letter_is_read_as_a_slip(self, one, other):
+        assert titlematch.one_typo_apart(one, other)
+        assert titlematch.one_typo_apart(other, one)
+
+    @pytest.mark.parametrize("one,other", [
+        ("Falkenauge 2", "Falkenauge 3"),      # the sequel
+        ("Falkenauge (1963)", "Falkenauge (1964)"),   # the year
+        ("Ash", "Ashe"),                        # too short to risk
+        ("Orbit", "Orbits"),                    # still too short
+        ("Falcons Forever", "Falcons Forever"),  # already the same title
+        ("Falcons Forever", "Falcon Forevr"),   # two letters, not one
+    ])
+    def test_and_nothing_else_is(self, one, other):
+        assert not titlematch.one_typo_apart(one, other)
+        assert not titlematch.one_typo_apart(other, one)
+
+    def test_it_is_not_a_key_and_never_widens_a_fold(self):
+        """A guess must not be able to make two titles equivalent - every
+        caller asks for it by name, and asks last."""
+        assert not titlematch.equivalent("Thinner Then Air", "Thinner Than Air")
+
+
+class TestTheHeadingAPrefixMightBe:
+    def test_a_title_breaks_at_its_first_separator(self):
+        assert titlematch.leading_segment("Marek Halvor - Sunfall") \
+            == ("Marek Halvor", "Sunfall")
+        assert titlematch.leading_segment("Nordwind: Der Sturm") \
+            == ("Nordwind", "Der Sturm")
+
+    def test_and_a_title_with_no_break_has_no_heading(self):
+        assert titlematch.leading_segment("Falcons Forever") == ("", "")

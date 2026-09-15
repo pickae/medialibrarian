@@ -121,6 +121,19 @@ BRACKET_CLOSE = ")]}>"
 # https://support.plex.tv/articles/naming-and-organizing-your-movie-media-files/
 PART_WORDS = ("cd", "dvd", "part", "pt", "disk", "disc")
 
+# The ones of those that are also the name of a SOURCE. Written with no number
+# after it, "DVD" is not a part that lost its number - it is what the release
+# was made from, and it stands beside the "BluRay" and the "VHS" that were
+# always read that way because they are not part keywords at all.
+#
+# Only "dvd". The rest of the list is pieces rather than formats: "part" and
+# "pt" say nothing else, and a bare "disc" or "disk" is the piece word with its
+# number gone. "cd" is the one that could be argued either way, and it is not
+# in here on purpose - a film on a Compact Disc is a rarity, while "cd1"/"cd2"
+# is how a generation of films was split in two, so a bare "cd" is far likelier
+# to be a lost number than a source.
+SOURCE_PART_WORDS = ("dvd",)
+
 # --- the markers a copy gets --------------------------------------------------
 # What a file manager appends when a second file of one name lands in a folder.
 # None of them says anything about the film: they are the two desktops' way of
