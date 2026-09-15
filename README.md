@@ -596,6 +596,15 @@ Every sidecar follows its own film, including a commentary transcript whose name
 extends the film's. The `(old)` backup keeps its own name, and running the
 ingest again changes nothing.
 
+Before anything is looked up, a folder whose **year is not written where a
+reader can see it** is renamed onto one where it is: a separator standing where
+the space before the bracket should be (`The Movie-(1999)`), a run of spaces
+standing there instead of one, or a year that kept only one of its two brackets.
+The first and the last are not years to Plex's scanner either; the middle one
+leaves the title carrying a trailing space into every lookup. The name is put
+right on the disk, so the folders no catalogue can name are fixed along with the
+ones it can.
+
 A film is named when **one** candidate carries its title — primary, original or
 any alternative — and was released in the folder's year *in some country*, which
 is what keeps a festival premiere and a release a year later from being two
@@ -723,8 +732,7 @@ whose name says the folder's film in another hand is respelled onto the folder's
 own rather than reported as a second film; a `Part 1` written with the number
 held off becomes the `Part1` Plex stacks on; a `(1)`, `(copy)` or `- Copy` that a
 file manager left is taken off, unless doing so would put two files under one
-name, which is a real duplicate and is still reported; and a year that lost one
-of its brackets is repaired.
+name, which is a real duplicate and is still reported.
 
 Where the names genuinely cannot be made to agree — a second feature in the
 folder, parts that each have a title of their own — **the id still goes on**,
