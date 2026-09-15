@@ -608,11 +608,12 @@ wrong in several ways at once is still found:
 - a dash, apostrophe, comma or point written as a space, or as nothing at all,
   which is also how an abbreviation with its points meets one without;
 - a roman numeral for an arabic one, and a trailing `1` dropped altogether —
-  the first of a series is written `Winnetou I`, `Winnetou 1` and `Winnetou`
+  the first of a series is written `Nordwind I`, `Nordwind 1` and `Nordwind`
   and meant identically. Only the first at the end: a trailing `2` is the
   sequel. A number with title on **both** sides of it may go at any value —
-  `Ghost in the Shell 2: Innocence` is also written `Ghost In The Shell
-  Innocence`, and what surrounds the number still says which film it is;
+  `Nordwind 2: Der Sturm` is also written `Nordwind Der Sturm`, and what
+  surrounds the number still says which film it is;
+- a possessive `'s` that one side has and the other does not;
 - an article gone from anywhere in the name, or several of them, or moved to
   the end the way a catalogue that sorts by the first real word moves it;
 - `&` written out, in any of the six languages;
@@ -677,9 +678,9 @@ up filed under the film before it, and that is a mistake to be shown rather than
 a spelling to be tidied.
 
 One kind of disagreement the names themselves can never settle: a folder whose
-files are the **same film named in another language**. "Das Krokodil und sein
-Nilpferd" and "Io sto con gli ippopotami" share not a syllable with each other,
-and TMDb lists both as titles of the film the folder matched. Where every file
+files are the **same film named in another language**. `Die Blaue Stunde` and
+`L'Ora Blu` share not a syllable with each other, and TMDb lists both as titles
+of the film the folder matched. Where every file
 in a folder is accounted for that way, the folder takes TMDb's spelling and the
 id, and **every file keeps its own name** — which of a film's languages a file
 is named in is a thing you chose, and a lookup is no reason to overwrite it. All
@@ -696,6 +697,21 @@ Such a folder **stays on the lists** either way, marked `id applied, names still
 to settle`. The id is no longer missing; the names still are, and whether they
 really could not be settled is exactly the thing worth looking at — an id going
 on quietly is what would keep the folder off the list it belongs on.
+
+**A language kept as an edition** is the other half of that. A library that
+cannot mux every language into one file keeps one file per language and writes
+the language after the year. Once the catalogue confirms the film, that suffix
+becomes an `{edition-}` tag and the title in front of it takes the folder's
+spelling — Plex then collapses them into one film with a named picker, and the
+language survives in the tag. A file whose title is the *only* thing
+distinguishing it keeps its name, because there is no tag for the language to
+survive in.
+
+And **when nothing answers to the folder's own name, its files are asked under
+theirs**: a library holding a film under two languages often names the folder in
+a third, and the files are then the only names a catalogue has ever heard of.
+Every film in the folder must answer, and all of them to the same id — a folder
+whose films answer to two ids is a folder holding two films.
 
 **`-t` does only this phase** — no conversion, no remux, no downloads, no
 transcription — and does it as a **dry run** unless `-w` is given, printing

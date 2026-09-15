@@ -132,6 +132,10 @@ _STATE_KNOBS = (
     "LENGTH_LOG",
     "ABORT_FLAG",
     "UNCOUNTED_PROGRESS_WARNED",
+    # ingest-music exports this so its children stamp their lines the same way,
+    # and exporting it means SETTING it in this process - after which every
+    # later test in the same worker reads a timestamp where it expects "==>".
+    "LOG_TIMESTAMPS",
 )
 
 

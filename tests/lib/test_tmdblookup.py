@@ -2069,3 +2069,159 @@ class TestACandidateThatCouldNotBeTheAnswer:
                  {1: "tt2091935", 2: "tt3812348"}, runtimes={1: 95})
         assert tmdblookup.tmdb_imdb_id("Mr. Blue", "2015",
                                        lambda: 95.5 * 60.0) == ""
+
+
+class TestAFolderNamedInAThirdLanguage:
+    """A library that holds a film under two languages usually names the folder
+    in a third, and that third is the one being looked up. The files are then
+    the only names a catalogue has ever heard of."""
+
+    TITLES = ("Die Blaue Stunde", "The Blue Hour", "L'Ora Blu")
+
+    def _catalogue(self, monkeypatch, titles, imdb="tt0071877", year="1974"):
+        monkeypatch.setenv("tmdbApiKey", "apikey")
+        asked = []
+
+        def fake_curl(url, params):
+            kv = dict(params)
+            if url == _BASE + "/search/movie":
+                asked.append(kv["query"])
+                for rid, group in enumerate(titles, start=1):
+                    if any(titlematch.equivalent(kv["query"], t) for t in group):
+                        return json.dumps({"results": [
+                            _row(rid, group[0], date=year + "-03-01")]})
+                return json.dumps({"results": []})
+            match = re.match(r"^" + re.escape(_BASE) + r"/movie/(\d+)$", url)
+            rid = int(match.group(1)) if match else 1
+            group = titles[rid - 1]
+            return json.dumps({
+                "external_ids": {"imdb_id": imdb if rid == 1
+                                 else "tt000000%d" % rid},
+                "alternative_titles": {"titles": [{"title": t} for t in group]},
+                "release_dates": {"results": []}})
+
+        monkeypatch.setattr(tmdblookup, "_curl", fake_curl)
+        return asked
+
+    def _run(self, monkeypatch, tmp_path, files, titles=None):
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("Twee Misdienaars (1974)", files))
+        asked = self._catalogue(monkeypatch, titles or [self.TITLES])
+        aliases, ambiguous, unmatched = [], [], []
+        tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog(),
+                                aliases=aliases, ambiguous=ambiguous,
+                                unmatched=unmatched)
+        return asked, aliases, ambiguous, unmatched
+
+    def test_the_files_name_the_film_the_folder_could_not(self, monkeypatch,
+                                                           tmp_path):
+        asked, aliases, ambiguous, unmatched = self._run(
+            monkeypatch, tmp_path,
+            ["Die Blaue Stunde (1974).mkv", "L'Ora Blu (1974).mkv"])
+        assert ambiguous == [] and unmatched == []
+        # The folder's own name first, and only then the files' own.
+        assert asked[0] == "Twee Misdienaars"
+        assert "L'Ora Blu" in asked
+        tagged = tmp_path / "Twee Misdienaars (1974) {imdb-tt0071877}"
+        assert tagged.is_dir()
+        # Every name is its own still; only the id is added.
+        assert sorted(path.name for path in tagged.iterdir()) == [
+            "Die Blaue Stunde (1974) {imdb-tt0071877}.mkv",
+            "L'Ora Blu (1974) {imdb-tt0071877}.mkv"]
+
+    def test_and_it_is_announced_with_what_each_answered_under(
+            self, monkeypatch, tmp_path):
+        _asked, aliases, _amb, _un = self._run(
+            monkeypatch, tmp_path,
+            ["Die Blaue Stunde (1974).mkv", "L'Ora Blu (1974).mkv"])
+        (_path, base, tag, known), = aliases
+        assert (base, tag) == ("Twee Misdienaars (1974)", "{imdb-tt0071877}")
+        assert known["L'Ora Blu (1974).mkv"] == "L'Ora Blu"
+
+    def test_two_films_that_answer_to_different_ids_settle_nothing(
+            self, monkeypatch, tmp_path):
+        """A folder whose films answer to two ids is a folder holding two
+        films, which is exactly the thing an id must not be guessed over."""
+        _asked, aliases, ambiguous, _un = self._run(
+            monkeypatch, tmp_path,
+            ["L'Ora Blu (1974).mkv", "Een Andere Film (1974).mkv"],
+            titles=[self.TITLES, ("Een Andere Film",)])
+        assert aliases == []
+        assert [reason for _p, reason, _n in ambiguous] \
+            == ["holds a film that is not its own"]
+
+    def test_and_so_does_one_the_catalogue_cannot_name_at_all(
+            self, monkeypatch, tmp_path):
+        """Every one of them has to answer, or the folder is not settled."""
+        _asked, aliases, ambiguous, unmatched = self._run(
+            monkeypatch, tmp_path,
+            ["L'Ora Blu (1974).mkv", "Nobody Knows This (1974).mkv"])
+        assert aliases == []
+        assert ambiguous or unmatched
+
+    def test_a_folder_whose_own_name_answers_never_asks_its_files(
+            self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("L'Ora Blu (1974)",
+                         ["L'Ora Blu (1974).mkv"]))
+        asked = self._catalogue(monkeypatch, [self.TITLES])
+        tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog())
+        assert asked == ["L'Ora Blu"]
+
+
+class TestALanguageWrittenAsAnEdition:
+    """A file named in one language with the language written after the year,
+    in a folder named in another. The suffix is an edition, and once it is
+    written as one Plex collapses the files into one film with a picker."""
+
+    TITLES = ("Le Seigneur de Val-Mont", "The Lord of Val-Mont")
+
+    def _run(self, monkeypatch, tmp_path, files):
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("tmdbApiKey", "apikey")
+        _tree(tmp_path, ("Le Seigneur de Val-Mont (1961)", files))
+
+        def fake_curl(url, params):
+            kv = dict(params)
+            if url == _BASE + "/search/movie":
+                if not any(titlematch.equivalent(kv["query"], t)
+                           for t in self.TITLES):
+                    return json.dumps({"results": []})
+                return json.dumps({"results": [
+                    _row(1, self.TITLES[1], date="1961-06-23")]})
+            return json.dumps({
+                "external_ids": {"imdb_id": "tt0054824"},
+                "alternative_titles": {"titles": [{"title": t}
+                                                  for t in self.TITLES]},
+                "release_dates": {"results": []}})
+
+        monkeypatch.setattr(tmdblookup, "_curl", fake_curl)
+        ambiguous: list = []
+        tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog(),
+                                ambiguous=ambiguous)
+        return ambiguous
+
+    def test_both_languages_become_editions_of_one_film(self, monkeypatch,
+                                                         tmp_path):
+        ambiguous = self._run(
+            monkeypatch, tmp_path,
+            ["The Lord of Val-Mont (1961) English.mkv",
+             "Le Seigneur de Val-Mont (1961) French.mkv"])
+        assert ambiguous == []
+        tagged = tmp_path / "Le Seigneur de Val-Mont (1961) {imdb-tt0054824}"
+        assert sorted(path.name for path in tagged.iterdir()) == [
+            "Le Seigneur de Val-Mont (1961) {imdb-tt0054824} "
+            "{edition-English}.mkv",
+            "Le Seigneur de Val-Mont (1961) {imdb-tt0054824} "
+            "{edition-French}.mkv"]
+
+    def test_but_a_language_that_is_only_the_title_keeps_its_name(
+            self, monkeypatch, tmp_path):
+        """Nothing else distinguishes it, so rewriting the title would throw
+        away which language the file is."""
+        ambiguous = self._run(monkeypatch, tmp_path,
+                              ["The Lord of Val-Mont (1961).mkv"])
+        assert ambiguous == []
+        tagged = tmp_path / "Le Seigneur de Val-Mont (1961) {imdb-tt0054824}"
+        assert [path.name for path in tagged.iterdir()] == [
+            "The Lord of Val-Mont (1961) {imdb-tt0054824}.mkv"]

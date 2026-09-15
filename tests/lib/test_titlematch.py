@@ -630,3 +630,23 @@ class TestANumberTheTitleSurrounds:
     def test_the_keys_stay_bounded(self):
         stacked = "The Movie Special Film Part II & The Sequel III et IV I"
         assert len(titlematch.title_keys(stacked)) <= titlematch.MAX_KEYS
+
+
+class TestAPossessiveThatWentMissing:
+    """A series' name is written with the possessive and without it, and the
+    fold turns the apostrophe into a space - so the "s" survives as a word of
+    its own and the two titles differ by it."""
+
+    @pytest.mark.parametrize("one,other", [
+        ("Wilder & Bright's Watch This", "Wilder and Bright Watch This"),
+        ("Wilder and Bright's Watch This", "Wilder and Bright Watch This"),
+        ("A Cat's Tale", "A Cat Tale"),
+    ])
+    def test_the_two_spellings_meet(self, one, other):
+        assert titlematch.equivalent(one, other)
+
+    def test_and_the_apostrophe_readings_still_work(self):
+        assert titlematch.equivalent("A Cat's Tale", "A Cats Tale")
+
+    def test_two_different_films_still_do_not(self):
+        assert not titlematch.equivalent("A Cat's Tale", "A Dog's Tale")

@@ -63,6 +63,12 @@ _YEAR_SUFFIX = re.compile(r"\s*\([12][0-9]{3}\)\s*$")
 # itself. The LAST one, the way a folder's own name is read.
 _YEAR_IN_NAME = re.compile(r"\([12][0-9]{3}\)")
 
+# And the same year at the START of what is left over once a title has been
+# matched, which is the folder's own year said a second time.
+# Either bracket may be missing: a folder whose year lost one is repaired, and
+# the file beside it lost the same one.
+_YEAR_LEADING = re.compile(r"^\(?[12][0-9]{3}\)?")
+
 # What an improved remux leaves the original under, lower-cased for the compare.
 # A copy is never renamed: it is the film as it arrived, and a tag on it would
 # offer Plex a second edition of every film that has one.
@@ -355,6 +361,67 @@ def _names_this_film(base: str, head: str) -> bool:
     return bare != base and titlematch.equivalent(bare, head)
 
 
+def alias_renames(base: str, names, aliases) -> dict:
+    """{name: the name it should take} for a file that is this film under
+    another of its titles AND says something else besides.
+
+    The something else is an edition: a library that cannot mux every language
+    into one file keeps one file per language and writes the language after the
+    year. That suffix is what tells the files apart, and once it becomes an
+    ``{edition-}`` tag Plex collapses them into one film with a picker - so the
+    title in front of it is free to take the folder's spelling, and nothing is
+    lost by its doing so.
+
+    A file whose WHOLE name is this film under another title is not in here: its
+    title is the only thing distinguishing it, and rewriting that would throw
+    away which language the file is. :func:`named_by_catalogue` recognises those
+    and leaves them alone.
+    """
+    keys = frozenset().union(*(titlematch.title_keys(t) for t in aliases)) \
+        if aliases else frozenset()
+    held = set(names)
+    renames: dict[str, str] = {}
+    for name in sorted(names):
+        wanted = _onto_base_by_alias(base, name, keys)
+        if wanted and wanted != name and wanted not in held:
+            renames[name] = wanted
+            held.add(wanted)
+    return renames
+
+
+def _onto_base_by_alias(base: str, name: str, keys: frozenset) -> str:
+    """``name`` respelled onto ``base`` when a PROPER prefix of it is one of the
+    catalogue's titles for this film, or "".
+
+    Proper: something has to be left over. A name the catalogue accounts for
+    entirely is the language case, not the edition case.
+    """
+    if not keys or is_kept_copy(name) or name.startswith(base):
+        return ""
+    for cut in _boundaries(name):
+        head = untitled_base(name[:cut].rstrip())
+        rest = name[cut:]
+        if not head or not _says_more_than_the_year(rest):
+            continue
+        if _numbers_another_film(rest):
+            continue
+        if titlematch.title_keys(head) & keys:
+            return base + rest
+    return ""
+
+
+def _says_more_than_the_year(rest: str) -> bool:
+    """Whether what follows a matched title is an EDITION rather than nothing.
+
+    The year is not one: the folder carries it already, and a remainder of
+    " (1979).mkv" appended to a base that ends in "(1979)" writes the year
+    twice. Neither is a bare extension - that is the whole-name match, which
+    this function's caller must leave alone.
+    """
+    rest = _YEAR_LEADING.sub("", rest.strip(), count=1).strip()
+    return bool(rest) and not rest.startswith(".")
+
+
 def named_by_catalogue(names, aliases) -> dict:
     """{name: the catalogue's own writing of the title it answers to}, for the
     names a CATALOGUE says are this film - and which nothing about the strings
@@ -415,7 +482,7 @@ def ids_in(names) -> set:
             for match in [ID_TAG_RE.search(name)] if match}
 
 
-def folder_renames(base: str, tag: str, names) -> list:
+def folder_renames(base: str, tag: str, names, aliases=()) -> list:
     """Every rename one movie folder needs, as (old name, new name) pairs.
 
     ``base`` is the folder without its id tag and ``tag`` the tag to carry;
@@ -423,12 +490,22 @@ def folder_renames(base: str, tag: str, names) -> list:
     folder is left alone, as is every "(old)" copy, and a name that is already
     right produces no pair - so a second run over the same folder returns [].
 
+    ``aliases`` are the catalogue's own titles for this film, which is what
+    lets a file named in another language and carrying an edition after it -
+    "<film in English> (1968) English.mkv" - be read as this film's English
+    edition rather than as a second film.
+
     A name that says this folder's film in a different spelling is brought onto
     the folder's own first, and then read as any other name is - so a file that
     arrived as "le seigneur de valmont pt 1.mkv" leaves with the folder's
     capitals, the folder's accents and a stacking token Plex can see.
     """
     corrected = spelling_renames(base, names)
+    # Never over a correction the NAMES themselves account for. What the two
+    # readings disagree about is always the catalogue reaching further than it
+    # should: a name the spelling already explains is explained.
+    for name, wanted in alias_renames(base, names, aliases).items():
+        corrected.setdefault(name, wanted)
     respelled = [corrected.get(name, name) for name in names]
     stems = movie_stems(base, respelled)
     plan = []
