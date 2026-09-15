@@ -345,6 +345,12 @@ class TestWhatToGoAskingUnder:
         """A tail the split cuts to nothing has nothing to ask about."""
         assert "" not in titlematch.search_titles("Frost - ")
 
+    def test_and_neither_does_one_whose_tail_is_only_a_number(self):
+        """A catalogue asked for "Part 2" answers with every film that was ever
+        released in halves, which is twenty results and no film."""
+        assert titlematch.search_titles("Gorse and Gallows - Part 2") \
+            == ["Gorse and Gallows - Part 2"]
+
     def test_the_queries_are_bounded(self):
         many = "Movie - Special - Film - The Franchise - Part II - The Sequel"
         assert len(titlematch.search_titles(many)) <= titlematch.MAX_QUERIES
@@ -504,17 +510,17 @@ class TestSeveralOfThemInOneName:
         assert titlematch.equivalent(one, other), about
 
     def test_stacking_them_does_not_stack_the_keys(self):
-        """Each reading only widens where it CHANGES something, so a name that
-        is wrong in six ways still costs a handful of keys rather than every
-        combination of six."""
+        """Each reading only widens where it CHANGES something, so a name five
+        readings all have something to say about still costs a handful of keys
+        rather than every combination of five."""
         keys = titlematch.title_keys(
             "KEEPER OF KEYS PART II — THE TOWERS")
-        assert len(keys) <= 16
+        assert len(keys) <= 32
 
     def test_and_two_different_films_do_not_meet_through_a_stack(self):
         """Widening is not the same as matching everything."""
         assert not titlematch.equivalent(
-            "THE LORD OF THE RINGS PART II",
+            "THE KEEPER OF THE KEYS PART II",
             "The Smith Part 2")
 
 
@@ -652,10 +658,10 @@ class TestAPossessiveThatWentMissing:
         assert not titlematch.equivalent("A Cat's Tale", "A Dog's Tale")
 
 
-class TestALabelWrittenIntoTheMiddleOfATitle:
+class TestALabelWrittenIntoATitle:
     """"Sunstriker the Movie - Ember" is the film a catalogue holds as
     "Sunstriker: Ember", and the only thing between them is a label somebody
-    wrote into the middle of the name."""
+    wrote into the name to say what KIND of thing the file is."""
 
     def test_the_label_and_the_number_it_stands_in_for_meet(self):
         assert titlematch.equivalent(
@@ -670,17 +676,123 @@ class TestALabelWrittenIntoTheMiddleOfATitle:
     def test_however_it_was_written(self, written):
         assert titlematch.equivalent("Sunstriker: Ember", written)
 
-    def test_but_a_label_is_only_one_where_title_stands_on_both_sides(self):
-        """A leading run can be cut on sight; an interior word might BE the
-        title, and a trailing one is all that tells two entries apart."""
+    @pytest.mark.parametrize("written", [
+        "Looking for Group Documentary",
+        "Looking for Group - The Documentary",
+        "Looking for Group the Movie",
+        "Looking for Group Dokumentation",
+    ])
+    def test_and_the_end_of_a_name_is_the_same_word_in_another_place(
+            self, written):
+        """Where the label landed is where their hand happened to be, not a
+        difference in what it says."""
+        assert titlematch.equivalent("Looking for Group", written)
+
+    def test_but_a_label_is_only_one_where_title_stands_in_FRONT_of_it(self):
+        """A leading run can be cut on sight - nothing standing before the
+        title is the title - while a word further in is only a label if a title
+        came first. And a word of the name is still a word of it."""
         assert not titlematch.equivalent("Falcons Forever The Movie",
                                          "Falcons Forever The Sequel")
+        assert not titlematch.equivalent("Falcons Forever The Sequel",
+                                         "Falcons Forever")
 
     def test_and_the_spelling_is_only_asked_about_where_it_was_written(self):
         assert "Sunstriker - Ember" in titlematch.search_titles(
             "Sunstriker the Movie - Ember")
+        assert "Looking for Group" in titlematch.search_titles(
+            "Looking for Group Documentary")
         assert titlematch.search_titles("Sunstriker - Ember") \
             == ["Sunstriker - Ember", "Ember"]
+
+
+class TestTheWordThatOnlyLabelsANumber:
+    """A catalogue writes "Part 2" where a folder writes "2", and a German one
+    writes "2. Teil". The figure says which film of the series this is; the
+    word beside it says only that a figure is there."""
+
+    @pytest.mark.parametrize("one,other", [
+        ("The Hills Beyond 2", "The Hills Beyond Part 2"),
+        ("The Hills Beyond 2", "The Hills Beyond Part II"),
+        ("Falkenauge 2", "Falkenauge Teil 2"),
+        ("Falkenauge 2", "Falkenauge 2. Teil"),
+        ("Steel Halo 3", "Steel Halo Chapter Three"),
+        ("Granite 2", "Granite Vol. 2"),
+    ])
+    def test_the_label_may_be_on_either_side_or_neither(self, one, other):
+        assert titlematch.equivalent(one, other)
+
+    def test_and_it_stacks_with_the_number_a_title_surrounds(self):
+        """The folder above said the franchise, the file left the number out,
+        and the catalogue wrote both plus the word labelling the number - which
+        is three readings between one film and itself."""
+        assert titlematch.equivalent(
+            "Falkenauge The New Blood",
+            "Falkenauge Part VII - The New Blood")
+
+    @pytest.mark.parametrize("one,other", [
+        ("Cut Short Vol 2", "Cut Short Vol"),
+        ("Falkenauge Part", "Falkenauge"),
+        ("Falkenauge Part 2", "Falkenauge Part 3"),
+    ])
+    def test_but_a_word_with_no_number_to_label_is_a_word(self, one, other):
+        assert not titlematch.equivalent(one, other)
+
+
+class TestANumberSpelledOut:
+    """A title counts in figures on one side and in words on the other."""
+
+    @pytest.mark.parametrize("one,other", [
+        ("2 Wanderers", "Two Wanderers"),
+        ("The Glorious 7", "The Glorious Seven"),
+        ("Falkenauge 2", "Falkenauge Two"),
+    ])
+    def test_the_word_and_the_figure_are_one_number(self, one, other):
+        assert titlematch.equivalent(one, other)
+
+    def test_the_reading_runs_one_way_only(self):
+        """A number has one spelling in words, so folding the word ONTO the
+        figure meets everything folding the other way would."""
+        assert "2 wanderers" in titlematch.title_keys("Two Wanderers")
+
+    def test_and_two_different_numbers_are_still_two(self):
+        assert not titlematch.equivalent("Falkenauge Two", "Falkenauge Three")
+
+    def test_the_figure_is_offered_as_a_query(self):
+        assert "Falkenauge Chapter 2" in titlematch.search_titles(
+            "Falkenauge Chapter Two")
+
+
+class TestTheNameASequelHasOfItsOwn:
+    """What follows a sequel's number is the sequel's own name, and it is the
+    half of the title one side routinely leaves out - because nobody says it
+    out loud."""
+
+    @pytest.mark.parametrize("one,other", [
+        ("Missing Since 2", "Missing Since 2 - The Beginning"),
+        ("Missing Since 2", "Missing Since 2. Teil - Die Rückkehr"),
+        ("Steel Halo II", "Steel Halo Part 2: Silence"),
+        ("Falkenauge", "Falkenauge 1: The First Flight"),
+    ])
+    def test_the_number_already_says_which_film_it_is(self, one, other):
+        assert titlematch.equivalent(one, other)
+
+    def test_and_so_is_a_second_title_written_after_the_first(self):
+        """A catalogue that concatenates a market's name on to the film's, and
+        a folder that wrote the other name into brackets, are the same shape
+        from two directions."""
+        assert titlematch.equivalent("W-D-R-2 (S:W-D-R)", "W/D/R/2")
+
+    @pytest.mark.parametrize("one,other", [
+        ("Nordwind", "Nordwind: Der Sturm"),
+        ("Rivertown", "Rivertown - The Reckoning"),
+        ("Falkenauge 2", "Falkenauge 3: The Return"),
+    ])
+    def test_but_a_title_with_no_number_in_it_is_only_its_name(self, one,
+                                                               other):
+        """Cutting one at its separator would file every subtitle under a
+        franchise that is a film of its own."""
+        assert not titlematch.equivalent(one, other)
 
 
 class TestOneLetterWrong:

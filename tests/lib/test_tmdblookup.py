@@ -1309,7 +1309,9 @@ class TestWhatASpellingSettles:
         worth having."""
         candidate = tmdblookup._Candidate(
             years=frozenset({"1997"}), titles=tmdblookup.title_keys("Trade/Off"),
-            spellings=("Trade/Off",), runtime=0.0, imdb="tt0119094")
+            spellings=("Trade/Off",),
+            own=frozenset({tmdblookup.normalize_title("Trade/Off")}),
+            runtime=0.0, imdb="tt0119094")
         settled = tmdblookup._matched(candidate,
                                       tmdblookup.title_keys("Trade Off"))
         assert (settled.imdb, settled.title) == ("tt0119094", "")
@@ -1547,6 +1549,133 @@ class TestHowCloseItCame:
         calls = _install(monkeypatch, json.dumps({"results": []}), {}, {})
         tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog())
         assert calls
+
+
+class TestWhichResultsTheBudgetGoesOn:
+    """Eight documents is what one film is worth asking for, and TMDb answers
+    most popular first - so a common word of a title fills the page with films
+    that merely contain it."""
+
+    _CROWD = ("Onward", "Homeward", "Skyward", "Inward", "Outward",
+              "Backward", "Forward", "Downward", "Upward")
+
+    def _page(self, title, year):
+        """A page of results the way the service hands one over: the popular
+        films that merely carry the word, and the film itself at the bottom."""
+        rows = [_row(number, "%s %s" % (title, word), date=year + "-01-01")
+                for number, word in enumerate(self._CROWD, start=1)]
+        return rows + [_row(99, title, date=year + "-01-01")]
+
+    def test_a_result_carrying_the_title_is_asked_about_first(self,
+                                                              monkeypatch):
+        """The folder "Sprint" was offered a page of results, the budget went
+        on the most popular films with "sprint" somewhere in their names, and
+        the one called exactly that sat at the bottom of the page unread.
+        Popularity is the catalogue's ordering and carries no opinion about
+        which film this folder holds."""
+        rows = self._page("Sprint", "2020")
+        _install(monkeypatch, json.dumps({"results": rows}), {},
+                 {row["id"]: "tt%07d" % row["id"] for row in rows})
+        assert tmdblookup.tmdb_imdb_id("Sprint", "2020") == "tt0000099"
+
+    def test_and_the_ones_it_did_not_reach_say_which_of_the_two_they_are(
+            self, monkeypatch):
+        """Two reasons a result was never asked about, and telling them apart
+        is the point: one is that it was nothing like this film, the other that
+        the budget had gone on results that were closer - which is a line to
+        read as "raise the budget", not as "the rule is too narrow"."""
+        rows = self._page("Sprint", "2020")
+        rows.append(_row(50, "A Wholly Other Film", date="1961-01-01"))
+        _install(monkeypatch, json.dumps({"results": rows}), {},
+                 {row["id"]: "tt%07d" % row["id"] for row in rows})
+        notes: list = []
+        tmdblookup.identify("Sprint", "2020", notes=notes)
+        crowded = [note for note in notes if "were closer" in note]
+        assert len(crowded) == 2 and all("Sprint " in note for note in crowded)
+        assert '    passed over: "A Wholly Other Film" (1961) - neither its ' \
+            "title nor its year was close" in notes
+
+    def test_and_the_rest_go_in_order_of_how_near_their_names_are(
+            self, monkeypatch):
+        """The film reached only by one of its OTHER titles cannot land in the
+        first list - nothing the search said about it matches - so the budget
+        has to reach it on its own name being near, or the miss is not fixable
+        at all."""
+        crowd = ["Sunfall Divided", "Reckoning Day", "The Long Sunfall",
+                 "Reckoning of the Deep", "Sunfall Over Kirren",
+                 "A Reckoning", "Sunfall and Shadow", "The Last Reckoning",
+                 "Reckoning Hill"]
+        rows = [_row(number, title, date="2019-04-02")
+                for number, title in enumerate(crowd, start=1)]
+        # Last of ten, and nothing the search says about it matches: its own
+        # title says one word more than the folder does.
+        rows.append(_row(99, "Sunfall Reckoning Redux", date="2019-04-02"))
+        _install(monkeypatch, json.dumps({"results": rows}),
+                 {99: ["Sunfall Reckoning"]},
+                 {row["id"]: "tt%07d" % row["id"] for row in rows})
+        assert tmdblookup.tmdb_imdb_id("Sunfall Reckoning", "2019") \
+            == "tt0000099"
+
+    def test_a_result_that_says_less_besides_the_title_is_the_nearer_one(self):
+        """Both carry the whole of a folder called "Border"; only one of them
+        is mostly about something else."""
+        tight = _row(1, "Hard Border", date="2018-01-01")
+        loose = _row(2, "Wad: surviving on the border of water and land",
+                     date="2018-01-01")
+        order = tmdblookup._worth_asking(
+            [loose, tight], "2018", titlematch.title_keys("Border"),
+            frozenset({"border"}))
+        assert [row["id"] for row in order] == [1, 2]
+
+    def test_but_a_name_that_BEGINS_the_folder_s_is_nearer_than_either(self):
+        """Two names running together from the left until one of them stops is
+        the shape of a subtitle, of a market's title run on after the film's
+        own, and of a label somebody added. Scattered words that happen to
+        coincide are not that shape however many of them there are - so where
+        the shape and the count disagree, the shape is the one read.
+
+        The first here shares LESS of the two names than the second does. What
+        puts it in front is where the words it shares are.
+        """
+        begins = _row(1, "Sunfall Reckoning of the Long Grey Winter",
+                      date="2019-01-01")
+        scattered = _row(2, "The Reckoning of Sunfall", date="2019-01-01")
+        order = tmdblookup._worth_asking(
+            [scattered, begins], "2019",
+            titlematch.title_keys("Sunfall Reckoning"),
+            frozenset({"sunfall reckoning"}))
+        assert [row["id"] for row in order] == [1, 2]
+
+    def test_and_the_shape_holds_whichever_of_the_two_keeps_going(self):
+        """The folder is the longer name as often as the catalogue is, so it is
+        one name beginning the other and not the result being the longer.
+
+        The first shares less of the two names than the second again.
+        """
+        begins = _row(1, "Sunfall", date="2019-01-01")
+        scattered = _row(2, "Redux of the Reckoning", date="2019-01-01")
+        order = tmdblookup._worth_asking(
+            [scattered, begins], "2019",
+            titlematch.title_keys("Sunfall Reckoning Redux"),
+            frozenset({"sunfall reckoning redux"}))
+        assert [row["id"] for row in order] == [1, 2]
+
+    def test_the_film_it_settled_on_with_no_id_is_written_down(self,
+                                                               monkeypatch):
+        """It settled on the film under the folder's own name, had nothing to
+        answer with, and went on asking as though the query had come back
+        empty - leaving a report that showed only what came of the rest."""
+        search = json.dumps({"results": [
+            _row(1, "Gorse and Gallows - Part 2", date="2012-01-01")]})
+        calls = _install(monkeypatch, search, {}, {})
+        notes: list = []
+        assert tmdblookup.identify("Gorse and Gallows - Part 2", "2012",
+                                   notes=notes).imdb == ""
+        assert any("no IMDb id for it" in note for note in notes)
+        # and the tail of that name was never a question worth asking
+        assert [dict(params).get("query") for url, params in calls
+                if url == _BASE + "/search/movie"] \
+            == ["Gorse and Gallows - Part 2"]
 
 
 class TestTheFolderAboveAsTheFirstHalfOfTheTitle:
@@ -1871,12 +2000,41 @@ class TestEvidenceOfDifferentStrength:
         candidates whose lengths both fit are two candidates."""
         search = json.dumps({"results": [
             _row(1, "1815", date="2019-01-10"),
-            _row(2, "Bramble '15", date="2019-01-10")]})
-        _install(monkeypatch, search, {2: ["1815"]},
-                 {1: "tt8579674", 2: "tt7520286"},
+            _row(2, "Bramble '15", original="1815", date="2019-01-10")]})
+        _install(monkeypatch, search, {}, {1: "tt8579674", 2: "tt7520286"},
                  runtimes={1: 119, 2: 124})
         assert tmdblookup.tmdb_imdb_id("1815", "2019",
                                        lambda: 119 * 60.0) == ""
+
+    def test_a_films_own_name_beats_one_of_the_names_it_is_also_known_by(
+            self, monkeypatch):
+        """A catalogue's alternative titles hold every market's poster name,
+        and one of them is bound to be somebody's whole title. The folder
+        "Bleak Friday" was offered the film of that name alongside an unrelated
+        one carrying it down its alternatives, with not a word of the folder's
+        in either of its own two titles - and both their lengths fit."""
+        search = json.dumps({"results": [
+            _row(1, "Bleak Friday", date="1980-05-09"),
+            _row(2, "Touch and Leave", date="1980-08-01")]})
+        _install(monkeypatch, search, {2: ["Bleak Friday"]},
+                 {1: "tt0080761", 2: "tt0081645"},
+                 runtimes={1: 95, 2: 93})
+        assert tmdblookup.tmdb_imdb_id("Bleak Friday", "1980",
+                                       lambda: 95.5 * 60.0) == "tt0080761"
+
+    def test_and_a_translated_title_is_one_of_a_films_own_names(self,
+                                                                monkeypatch):
+        """The catalogue leads with the title of the asking language, so a
+        Swedish film catalogued in English carries the English name among its
+        own two and is not set aside by this."""
+        search = json.dumps({"results": [
+            _row(1, "The Boundary", original="Gränsen", date="2018-09-27"),
+            _row(2, "Far Afield", date="2018-02-02")]})
+        _install(monkeypatch, search, {2: ["The Boundary"]},
+                 {1: "tt5501104", 2: "tt11007024"},
+                 runtimes={1: 110, 2: 96})
+        assert tmdblookup.tmdb_imdb_id("The Boundary", "2018",
+                                       lambda: 105.4 * 60.0) == "tt5501104"
 
     def test_two_that_both_carry_it_as_written_are_still_two(self,
                                                              monkeypatch):
@@ -2452,3 +2610,75 @@ class TestTheFoldersARealLibraryLeft:
             monkeypatch, tmp_path, "Author/Rennick/Dust and Distance (1953)",
             ["Dust and Distance (1952).mkv"])
         assert reasons == ["holds the same film under another year"]
+
+    def test_the_franchise_from_the_folder_and_the_number_the_file_left_out(
+            self, monkeypatch, tmp_path):
+        """Each reading worked on its own and the pair of them did not: the
+        folder above says the franchise, the file leaves the series number out,
+        and the catalogue writes both plus the word that labels the number."""
+        self._catalogue(monkeypatch, _film(
+            1, "tt0095179", "1988",
+            ["Falkenauge Part VII - The New Blood"],
+            found_under=["The New Blood", "Falkenauge The New Blood"]))
+        _logs, reasons = self._run(
+            monkeypatch, tmp_path, "Horror/Falkenauge/The New Blood (1988)",
+            ["The New Blood (1988).mkv"])
+        assert reasons == []
+        tagged = "Falkenauge Part VII - The New Blood (1988) {imdb-tt0095179}"
+        assert (tmp_path / "Horror" / "Falkenauge" / tagged
+                / (tagged + ".mkv")).is_file()
+
+    def test_the_word_labelling_a_number_only_the_catalogue_wrote(
+            self, monkeypatch, tmp_path):
+        self._catalogue(monkeypatch, _film(
+            1, "tt0089274", "1985", ["The Hills Beyond Part 2"],
+            found_under=["The Hills Beyond 2"]))
+        _logs, reasons = self._run(
+            monkeypatch, tmp_path,
+            "Horror/The Hills Beyond/The Hills Beyond 2 (1985)",
+            ["The Hills Beyond 2 (1985).mkv"])
+        assert reasons == []
+        tagged = "The Hills Beyond Part 2 (1985) {imdb-tt0089274}"
+        assert (tmp_path / "Horror" / "The Hills Beyond" / tagged
+                / (tagged + ".mkv")).is_file()
+
+    def test_the_name_a_sequel_has_of_its_own_and_nobody_says(
+            self, monkeypatch, tmp_path):
+        """The number already says which film of the series this is, so the
+        subtitle after it is a half of the name one side may leave out."""
+        self._catalogue(monkeypatch, _film(
+            1, "tt0089604", "1985", ["Missing Since 2 - The Beginning"],
+            found_under=["Missing Since 2"]))
+        _logs, reasons = self._run(
+            monkeypatch, tmp_path, "Action/Iron Vale/Missing Since 2 (1985)",
+            ["Missing Since 2 (1985).mkv"])
+        assert reasons == []
+        tagged = "Missing Since 2 - The Beginning (1985) {imdb-tt0089604}"
+        assert (tmp_path / "Action" / "Iron Vale" / tagged
+                / (tagged + ".mkv")).is_file()
+
+    def test_the_kind_of_thing_the_file_is_written_on_to_its_name(
+            self, monkeypatch, tmp_path):
+        self._catalogue(monkeypatch, _film(
+            1, "tt3121964", "2014", ["Looking for Group"]))
+        _logs, reasons = self._run(
+            monkeypatch, tmp_path,
+            "Doku/Games/Looking for Group Documentary (2014)",
+            ["Looking for Group Documentary (2014).mkv"])
+        assert reasons == []
+        tagged = "Looking for Group (2014) {imdb-tt3121964}"
+        assert (tmp_path / "Doku" / "Games" / tagged
+                / (tagged + ".mkv")).is_file()
+
+    def test_and_a_tail_that_is_only_a_number_is_never_a_question(
+            self, monkeypatch, tmp_path):
+        """A catalogue asked for "Part 2" answers with every film that was ever
+        released in halves, and the report filled up with them."""
+        asked = self._catalogue(monkeypatch, _film(
+            1, "tt2215477", "2012", ["Gorse and Gallows - Part 2"]))
+        _logs, reasons = self._run(
+            monkeypatch, tmp_path,
+            "Bollywood/Misc/Gorse and Gallows - Part 2 (2012)",
+            ["Gorse and Gallows - Part 2 (2012).mkv"])
+        assert reasons == []
+        assert "Part 2" not in asked

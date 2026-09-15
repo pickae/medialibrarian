@@ -24,13 +24,16 @@ combinations:
   spelled out the way a language writes them when it cannot reach them;
 * the **articles** it carries, kept and dropped - the one it leads or trails
   with, and all of them wherever they sit;
-* its **numerals**, roman read as arabic; a trailing "1" dropped, because the
-  first film of a series is numbered three ways and meant identically; and a
-  number with title on BOTH sides of it dropped, because what surrounds it
-  still says which film it is;
+* its **numerals**, roman and spelled out both read as figures; the word that
+  only LABELS one - "Part", "Teil", "Chapter" - dropped beside it; a trailing
+  "1" dropped, because the first film of a series is numbered three ways and
+  meant identically; a number with title on BOTH sides of it dropped, because
+  what surrounds it still says which film it is; and what a separator
+  introduces AFTER a series number dropped, because a sequel's own subtitle is
+  the half of the name one side routinely leaves out;
 * the **filler** a local library puts in front of a name and a catalogue never
-  carries - or writes INTO the middle of it, which is the same word doing the
-  same nothing in another position.
+  carries - or writes into the middle or the end of it, which is the same word
+  doing the same nothing in another position.
 
 One thing here is not a fold, and is kept apart from them for that reason:
 :func:`one_typo_apart` answers whether two titles are one title with a single
@@ -321,17 +324,59 @@ FILLER_WORDS = frozenset((
     "thefilm", "themovie",
 ))
 
-# The same label written INTO a title rather than in front of it: a library's
-# "Sunstriker the Movie - Ember" against a catalogue's "Sunstriker: Ember".
-# It is the filler above in another position, and it says the same nothing.
+# The same label written INTO a title rather than in front of it, or on to the
+# END of it: a library's "Sunstriker the Movie - Ember" against a catalogue's
+# "Sunstriker: Ember", and a library's "Looking for Group Documentary" against
+# a catalogue's "Looking for Group". It is the filler above in another
+# position, and it says the same nothing.
 #
 # A much shorter list than the filler, and deliberately. A leading run can be
 # cut on sight - whatever stands in front of the title is not the title - while
-# an interior word has title on both sides of it and might BE the title: a
-# "Special" or a "Feature" in the middle of a name is as likely to be a word of
-# it as a label on it. These four are not: nobody writes "the Movie" into the
-# middle of a name meaning anything by it.
-INTERJECTED_WORDS = frozenset(("movie", "film", "themovie", "thefilm"))
+# a word further in has title before it and might BE the title: a "Special" or
+# a "Feature" in the middle of a name is as likely to be a word of it as a
+# label on it. These are not: nobody writes "the Movie" or "Documentary" into a
+# name meaning anything by it, they write it to say what kind of thing the file
+# is - which is the one thing a catalogue never carries.
+LABEL_WORDS = frozenset((
+    "movie", "film", "themovie", "thefilm",
+    "documentary", "documentaries", "thedocumentary", "doku", "dokumentation",
+    "docu", "documentaire", "documental", "documentario",
+))
+
+# The word that says nothing the NUMBER beside it does not already say. A
+# catalogue writes "Part 2" where a folder writes "2", and either of them
+# writes "Teil II" - what tells which film of a series this is is the figure,
+# and the word in front of it is a label on that figure.
+#
+# Only ever dropped where a series number really is beside it, which is what
+# keeps a title's own word: "Cut Short Vol" keeps its "Vol" and "Cut Short Vol
+# 2" does not, because only the second has a number for the word to be
+# labelling.
+#
+# Not :data:`medialib.lib.enums.PART_WORDS`, which is the opposite thing: the
+# token a SPLIT film's halves are numbered with, and all a file says about
+# which half it holds.
+NUMBER_LABELS = frozenset((
+    "part", "parts", "pt", "teil", "chapter", "chapitre", "kapitel",
+    "vol", "volume", "deel", "parte", "episode", "episodio", "epizoda",
+))
+
+# The small numbers a title spells out, and the figure each is. Read one way
+# only, the way the roman numerals below are and for the same reason: a number
+# has one spelling in words, so folding the word ONTO the figure makes "Two
+# Idiots" and "2 Idiots" one key, while folding the other way would have to
+# pick a spelling and would meet nothing that was not already met.
+#
+# It stops at twenty because that is as far as a film title counts. Past it the
+# words are two and three tokens long - "twenty five" - and reading those would
+# be arithmetic rather than a reading.
+NUMBER_WORDS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+    "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11,
+    "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
+    "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19,
+    "twenty": 20,
+}
 
 # The letters a language spells OUT when it cannot write the accent, rather than
 # dropping the accent the way a transliteration does. A German keyboard's
@@ -468,14 +513,21 @@ def _without_filler(words: list[str]) -> list[str]:
     return words[cut:]
 
 
-def _without_the_interjection(words: list[str]) -> list[str]:
-    """``words`` without a label that has title on BOTH sides of it.
+def _without_the_label(words: list[str]) -> list[str]:
+    """``words`` without a label that has title in FRONT of it.
 
     "Sunstriker the Movie - Ember and the Clockwork Wonder" is the film a
-    catalogue holds as "Sunstriker: Ember and the Clockwork Wonder", and the
-    only thing between them is a label somebody wrote into the middle of the
-    name. Both sides, for the same reason the inner number is dropped on both
-    sides: what surrounds the label still says which film this is.
+    catalogue holds as "Sunstriker: Ember and the Clockwork Wonder", and
+    "Looking for Group Documentary" is the film it holds as "Looking for
+    Group": the only thing between either pair is a word somebody wrote in to
+    say what KIND of thing the file is. Whether that word landed in the middle
+    of the name or at the end of it is where their hand happened to be, not a
+    difference in what it says.
+
+    Title in front of it is the whole of the test, and what keeps the leading
+    run someone else's business: :func:`_without_filler` cuts that on sight,
+    because nothing standing before the title is the title, while a word this
+    far in is only a label if a title came first.
 
     The article in front of the label is not this reading's business.
     :func:`_without_articles` already has one that takes every article out, and
@@ -483,20 +535,79 @@ def _without_the_interjection(words: list[str]) -> list[str]:
     this one having to know that "the" was part of the label.
     """
     kept = [word for index, word in enumerate(words)
-            if not (0 < index < len(words) - 1 and word in INTERJECTED_WORDS)]
+            if not (index > 0 and word in LABEL_WORDS)]
     return kept if len(kept) > 1 else words
 
 
-def _arabic_numerals(words: list[str]) -> list[str]:
-    """``words`` with every roman numeral token written as a number.
+def _without_the_part_word(words: list[str]) -> list[str]:
+    """``words`` without a word that only labels the number beside it.
 
-    One direction and not both: a number has exactly one roman spelling, so
-    folding the roman ONTO the arabic makes "Part II" and "Part 2" one key,
-    while folding the other way would have to pick a spelling and would meet
-    nothing that was not already met.
+    A catalogue's "The Hills Beyond Part 2" and a folder's "The Hills Beyond 2"
+    are one film written by two hands, and so are "Falkenauge 2. Teil" and
+    "Falkenauge 2". The figure says which film of the series this is; the word
+    next to it says only that a figure is there.
+
+    Runs after the numerals are read, so the roman "II" and the spelled-out
+    "Two" are already the figure this looks for - which is also what makes the
+    reading safe. A "Vol" with nothing to label keeps its place, and a series
+    written "Cut Short Vol" stays a different title from "Cut Short Vol 2".
     """
-    return [str(_roman_value(word)) if _ROMAN.match(word) and word else word
-            for word in words]
+    kept = [word for index, word in enumerate(words)
+            if not (word in NUMBER_LABELS and _labels_a_number(words, index))]
+    return kept if len(kept) > 1 else words
+
+
+def _labels_a_number(words: list[str], index: int) -> bool:
+    """Whether the word at ``index`` has a series number next to it.
+
+    Either side, because the two languages put them the other way round: a
+    catalogue writes "Part 2" and a German one writes "2. Teil", and the word
+    is labelling the figure in both.
+
+    Never a trailing "1", which is the one number a title may leave out
+    altogether (:func:`_without_the_first`) - so dropping the word in front of
+    it would leave nothing, and make "Nordwind Part 1" and "Nordwind" one
+    title. They are one title in a catalogue, and the word buys nothing there
+    either: the numbers a label has to be read past are the ones that DIFFER.
+    On a disk it buys a good deal, because "Part 1" is the half of a split film
+    that has to survive being read.
+    """
+    return any(_an_ordinal(words[beside])
+               and not (words[beside] == "1" and beside == len(words) - 1)
+               for beside in (index - 1, index + 1)
+               if 0 <= beside < len(words))
+
+
+def _arabic_numerals(words: list[str]) -> list[str]:
+    """``words`` with every numeral token written as a figure - the roman ones,
+    and the small ones a title spells out.
+
+    One direction and not both: a number has exactly one roman spelling and one
+    English word, so folding those ONTO the figure makes "Part II", "Part Two"
+    and "Part 2" one key, while folding the other way would have to pick a
+    spelling and would meet nothing that was not already met.
+    """
+    return [_as_a_figure(word) for word in words]
+
+
+def _as_a_figure(word: str) -> str:
+    """``word`` written as a figure where it is a numeral, and ``word`` where
+    it is a word."""
+    value = _figure(word)
+    return word if value is None else str(value)
+
+
+def _figure(word: str):
+    """What a numeral token counts to, or None for a token that is a word.
+
+    The roman reading is asked first because it is the stricter of the two -
+    :data:`_ROMAN` accepts one spelling of each number and nothing else - and
+    because the two never disagree: no roman numeral is also an English number
+    word.
+    """
+    if word and _ROMAN.match(word):
+        return _roman_value(word)
+    return NUMBER_WORDS.get(word)
 
 
 def _roman_value(numeral: str) -> int:
@@ -536,7 +647,12 @@ def _an_ordinal(word: str) -> bool:
     is the one thing besides the title that says which film this is - dropping
     it would widen a name onto every other year's.
     """
-    return word.isdigit() and not (len(word) == 4 and word[0] in "12")
+    return word.isdigit() and not _a_year(word)
+
+
+def _a_year(word: str) -> bool:
+    """Whether a number is a year: four digits beginning 1 or 2."""
+    return word.isdigit() and len(word) == 4 and word[0] in "12"
 
 
 def _without_the_possessive(words: list[str]) -> list[str]:
@@ -553,6 +669,60 @@ def _without_the_possessive(words: list[str]) -> list[str]:
     """
     kept = [word for word in words if word != "s"]
     return kept if kept and kept != words else words
+
+
+# Where a name that begins with something other than the title breaks: a
+# franchise someone repeated on every film in it, a label, a collection. What
+# stands AFTER one of these is worth asking about on its own.
+_SEGMENT = re.compile(r"\s[-–—]\s|:\s|\s\|\s")
+
+# The same breaks, plus an opening bracket, which is the other way a name says
+# "and here is something else about this film".
+_SUBTITLE = re.compile(_SEGMENT.pattern + r"|\s\(")
+
+
+def _up_to_the_subtitle(title: str) -> str:
+    """``title`` without the name a sequel has of its own, or ``title``.
+
+    What follows a sequel's number is the sequel's own name - "Missing Since 2:
+    The Beginning" - and it is the half of the title one side routinely leaves
+    out, because nobody says it out loud. A catalogue that carries a market's
+    title concatenated on to the film's is the same shape from the other
+    direction, and so is a folder that wrote the other title into brackets.
+
+    Two things together make the cut safe, and neither would on its own:
+
+    * a **series number** standing at the end of the head. A name and a number
+      already say which film this is, so what follows can go; a title with no
+      number in it is only its name, and cutting one at a separator would file
+      every "Nordwind: Der Sturm" under a "Nordwind" that is a film of its own.
+      The first of a series is not an exception - a catalogue that numbers it
+      leaves "Nordwind 1", which :func:`_without_the_first` reads as "Nordwind"
+      in the next breath;
+    * a **separator** at the cut. A subtitle is introduced, and the things that
+      follow a title with no introduction are what a library writes after one:
+      a source, a resolution, a language, an extension. This is asked of file
+      names as well as of titles, and "Falkenauge 2 1080p BluRay" must keep
+      everything that says which release it is.
+
+    A year in what is cut comes back, alone. The year is the other thing that
+    says which film this is, so a reading that took it away would make one
+    sequel out of "Falkenauge 2 (1985)" and "Falkenauge 2 (1999)" - while
+    keeping it is what lets a file that spells the subtitle out meet a folder
+    that does not.
+
+    A string rather than a word list, like :func:`_spelled_out` and unlike the
+    readings below it, because the separator it turns on is the one thing the
+    fold takes away.
+    """
+    for match in _SUBTITLE.finditer(title):
+        head = title[:match.start()].strip()
+        words = _without_the_part_word(_arabic_numerals(_tokens(head)))
+        if len(words) > 1 and _an_ordinal(words[-1]):
+            return " ".join([head] + [word for word
+                                      in _tokens(title[match.end():])
+                                      if _a_year(word)])
+    return title
 
 
 def _widen(forms: list, reading) -> list:
@@ -582,15 +752,23 @@ def title_keys(title: str) -> frozenset:
     title written "N.E.S.T.", "N E S T" or "NEST" folds to one squeezed key, and
     so do "Iron-Wolf" and "Iron Wolf", "A Cat's Tale" and "A Cats Tale", and
     every dash, comma, point and exclamation mark between two words.
+
+    The two readings that work on the WRITTEN title rather than on its words
+    seed the forms; the rest widen what they leave. Both of them turn on
+    something the fold takes away - an accent, and the separator a subtitle is
+    introduced by - so neither could be asked once the title is a word list.
     """
-    forms = [_tokens(title)]
-    written = _tokens(_spelled_out(title))
-    if written != forms[0]:
-        forms.append(written)
+    forms: list = []
+    for spelling in (title, _spelled_out(title)):
+        for written in (spelling, _up_to_the_subtitle(spelling)):
+            words = _tokens(written)
+            if words not in forms:
+                forms.append(words)
     for reading in (_one_conjunction, _without_article, _without_articles,
-                    _without_filler, _without_the_interjection,
+                    _without_filler, _without_the_label,
                     _without_the_possessive,
-                    _arabic_numerals, _without_the_first,
+                    _arabic_numerals, _without_the_part_word,
+                    _without_the_first,
                     _without_the_inner_number):
         forms = _widen(forms, reading)
     keys = set()
@@ -671,11 +849,6 @@ def _one_letter_apart(one: str, other: str) -> bool:
 
 # --- what to go asking under -------------------------------------------------
 
-# Where a name that begins with something other than the title breaks: a
-# franchise someone repeated on every film in it, a label, a collection. What
-# stands AFTER one of these is worth asking about on its own.
-_SEGMENT = re.compile(r"\s[-–—]\s|:\s|\s\|\s")
-
 # How many spellings one title is worth asking a catalogue about. Every one of
 # them is a request, and a title that is not found under the first few is not
 # one more query is going to settle.
@@ -702,7 +875,7 @@ def search_titles(title: str) -> list:
     found = [title]
     folds = {normalize_title(title)}
     for spelling in (stripped, _last_segment(stripped),
-                     _uninterjected(stripped),
+                     _unlabelled(stripped),
                      _arabic_spelling(stripped), _unnumbered(stripped),
                      normalize_title(title)):
         folded = normalize_title(spelling) if spelling else ""
@@ -749,15 +922,29 @@ def _last_segment(title: str) -> str:
 
     Empty when the title has no such break, and empty when the break is the only
     thing that made it one: a tail this cuts to nothing has nothing to ask
-    about.
+    about. A tail that is only a number and the word labelling it - the "Part 2"
+    of "Gorse and Gallows - Part 2" - is cut to nothing in the same sense, and
+    for the same reason: a catalogue asked for "Part 2" answers with every
+    film that was ever released in halves.
     """
     tail = _SEGMENT.split(title)[-1].strip()
-    return tail if tail and tail != title.strip() else ""
+    if not tail or tail == title.strip() or _only_a_number(tail):
+        return ""
+    return tail
 
 
-def _uninterjected(title: str) -> str:
-    """``title`` without the "the Movie" somebody wrote into the middle of it,
-    for a catalogue that holds the film without it.
+def _only_a_number(title: str) -> bool:
+    """Whether a title says nothing but which film of a series it is - a
+    figure, a roman numeral or a spelled-out number, and at most the word
+    labelling it."""
+    words = _arabic_numerals(_tokens(title))
+    return not [word for word in words
+                if not (word.isdigit() or word in NUMBER_LABELS)]
+
+
+def _unlabelled(title: str) -> str:
+    """``title`` without the "the Movie" or the "Documentary" somebody wrote
+    into it, for a catalogue that holds the film without it.
 
     "" when the title carries no such label, which is what keeps this from
     being a query: a spelling is only worth asking about where the thing it
@@ -766,8 +953,7 @@ def _uninterjected(title: str) -> str:
     words = title.split()
     kept: list[str] = []
     for index, word in enumerate(words):
-        if 0 < index < len(words) - 1 \
-                and normalize_title(word) in INTERJECTED_WORDS:
+        if index > 0 and normalize_title(word) in LABEL_WORDS:
             if kept and normalize_title(kept[-1]) in ARTICLES:
                 kept.pop()
             continue
@@ -785,12 +971,13 @@ def _unnumbered(title: str) -> str:
 
 
 def _arabic_spelling(title: str) -> str:
-    """``title`` with its roman numerals written as numbers, for a catalogue
-    that has the film under "Part 2" where the disk says "Part II"."""
+    """``title`` with its numerals written as figures, for a catalogue that has
+    the film under "Part 2" where the disk says "Part II" or "Part Two"."""
     words = title.split()
-    rewritten = [str(_roman_value(shell_lower(word)))
-                 if _ROMAN.match(shell_lower(word)) and word else word
-                 for word in words]
+    rewritten = []
+    for word in words:
+        value = _figure(shell_lower(word))
+        rewritten.append(word if value is None else str(value))
     return " ".join(rewritten) if rewritten != words else ""
 
 

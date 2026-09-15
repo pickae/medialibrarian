@@ -197,6 +197,7 @@ class _Candidate(NamedTuple):
     years: frozenset        # every year some country released it in
     titles: frozenset       # its primary, original and alternative titles, folded
     spellings: tuple        # those same titles as TMDb writes them, in its order
+    own: frozenset          # its own two titles alone, folded - see _the_best_evidence
     runtime: float          # minutes, 0.0 when TMDb does not say
     imdb: str               # "" when it has no usable IMDb id
 
@@ -377,9 +378,10 @@ def _under(api_key: str, query: str, want: frozenset, year: str,
         rows = _search(api_key, query, "") or []
 
     _note(notes, 'asked "%s": %d result(s)' % (query, len(rows)))
-    worth = _worth_asking(rows, year, want)
-    _note_the_passed_over(notes, rows, worth)
-    candidates = [_candidate(api_key, row) for row in worth]
+    worth = _worth_asking(rows, year, want, plainly)
+    asking, over_budget = worth[:MAX_CANDIDATES], worth[MAX_CANDIDATES:]
+    _note_the_passed_over(notes, rows, asking, over_budget)
+    candidates = [_candidate(api_key, row) for row in asking]
     named = [row for row in candidates if want & row.titles]
     if not named:
         named = _a_letter_wrong(candidates, plainly, notes)
@@ -389,7 +391,7 @@ def _under(api_key: str, query: str, want: frozenset, year: str,
     dated = _not_a_rerelease([row for row in named if year in row.years],
                              year, notes)
     if len(dated) == 1:
-        return _matched(dated[0], want, plainly)
+        return _matched(dated[0], want, plainly, notes)
 
     # Several films of one title and one year - a remake released the same year,
     # or one release recorded twice - or, where the year settled nothing at all,
@@ -409,7 +411,8 @@ def _under(api_key: str, query: str, want: frozenset, year: str,
     settled = _settled_by_runtime(contenders, seconds)
     if settled is None:
         _note_the_lengths(notes, contenders, seconds)
-    return _matched(settled, want, plainly) if settled is not None else Match()
+        return Match()
+    return _matched(settled, want, plainly, notes)
 
 
 def _a_letter_wrong(candidates: list, plainly: frozenset,
@@ -477,32 +480,63 @@ def _that_can_answer(named: list, notes: list | None = None) -> list:
     return answerable
 
 
+# How a candidate may carry the folder's title, strongest reading first, with
+# what to say about the candidates a stronger one leaves behind.
+#
+# Each rung is contained in the one below it, so the first that anything
+# reaches is the best evidence there is and the rest of the ladder is already
+# in it.
+_EVIDENCE = (
+    (lambda row, plainly: bool(row.own & plainly),
+     "it is one of the OTHER names this film is known by, and another "
+     "carries the title as its own"),
+    (lambda row, plainly: any(normalize_title(spelling) in plainly
+                              for spelling in row.spellings),
+     "it carries the title only through a reading, and another carries it "
+     "as written"),
+)
+
+
 def _the_best_evidence(named: list, plainly: frozenset,
                        notes: list | None = None) -> list:
-    """The candidates that carry the folder's title EXACTLY, or all of them.
+    """The candidates carrying the folder's title on the strongest evidence any
+    of them has, or all of them.
 
-    A match through one of the widened readings and a match on the folder's
-    title as written are not the same evidence, and weighing them equally is
-    what leaves an obvious film unnamed. A folder called "1815" is offered the
-    film "1815", which folds to exactly what the folder does, alongside a
-    "Bramble '15" that only reached the list through a reading - and the rule,
-    seeing several candidates whose lengths all fit, named neither.
+    Two candidates are not equally likely just because both survived the rules,
+    and weighing them as though they were is what leaves an obvious film
+    unnamed. There are two ways to be the weaker of a pair:
 
-    So where any candidate matches plainly, only those are considered. It
-    narrows and never widens: two films that really do share one title are
-    still two, and still answered by naming neither.
+    * **through a reading.** A folder called "1815" is offered the film "1815",
+      which folds to exactly what the folder does, alongside a "Bramble '15"
+      that only reached the list at all through the article reading;
+    * **as an also-known-as.** A folder called "Bleak Friday" is offered the
+      film of that name, whose own title it is, alongside an unrelated film
+      that carries "Bleak Friday" somewhere down its list of alternative
+      titles - a thing a catalogue's alternatives are full of, because they
+      hold every market's poster name. Neither its primary title nor its
+      original one has a word of the folder's in it, and it was still weighed
+      as the equal of the film itself.
+
+    A film's OWN titles are its original one and the one the catalogue leads
+    with in the asking language - which is why this does not strand a film
+    found under a translation: the catalogue's English title is one of its own
+    two, so a folder named in English meets a Swedish film there and not among
+    its alternatives.
+
+    It narrows and never widens: two films that really do share a title on the
+    same rung are still two, and still answered by naming neither.
     """
-    exact = [row for row in named
-             if any(normalize_title(spelling) in plainly
-                    for spelling in row.spellings)]
-    if not exact or len(exact) == len(named):
-        return named
-    for row in named:
-        if row not in exact:
-            _note(notes, "    %s - set aside: it carries the title only "
-                  "through a reading, and another carries it as written"
-                  % _says(row))
-    return exact
+    for carries, beaten in _EVIDENCE:
+        best = [row for row in named if carries(row, plainly)]
+        if not best:
+            continue
+        if len(best) == len(named):
+            return named
+        for row in named:
+            if row not in best:
+                _note(notes, "    %s - set aside: %s" % (_says(row), beaten))
+        return best
+    return named
 
 
 def _not_a_rerelease(dated: list, year: str, notes: list | None = None) -> list:
@@ -559,22 +593,38 @@ def _written(candidate: _Candidate) -> list:
     return [t for t in candidate.spellings if t and t != "null"]
 
 
-def _note_the_passed_over(notes: list | None, rows: list, worth: list) -> None:
+def _note_the_passed_over(notes: list | None, rows: list, asking: list,
+                          over_budget: list) -> None:
     """The results that never cost a request of their own, and why.
 
     The ones most worth reading in the list: a film whose document was never
     asked for is one the search itself offered and the cheap filter set aside.
+
+    Two different reasons, and telling them apart is the point. One is that the
+    result was nothing like this film; the other is that it was worth asking
+    about and the budget had already gone on results that were closer - which
+    is a line to read as "raise the budget", not as "the rule is too narrow".
     """
     if notes is None:
         return
-    kept = {id(row) for row in worth}
+    crowded = {id(row) for row in over_budget}
+    kept = {id(row) for row in asking} | crowded
     for row in rows:
         if not isinstance(row, dict) or id(row) in kept:
             continue
-        release = row.get("release_date")
-        _note(notes, '    passed over: "%s" (%s) - neither its title nor its '
-              "year was close" % (row.get("title"),
-                                  (release or "")[:4] or "no year"))
+        _note(notes, '    passed over: %s - neither its title nor its year '
+              "was close" % _as_offered(row))
+    for row in over_budget:
+        _note(notes, "    passed over: %s - %d result(s) were closer, which is "
+              "as many as are asked about" % (_as_offered(row), len(asking)))
+
+
+def _as_offered(row: dict) -> str:
+    """One search result as the near-miss list names it, out of what the search
+    itself said - which is all that is known about a result nothing was asked
+    about."""
+    release = row.get("release_date")
+    return '"%s" (%s)' % (row.get("title"), (release or "")[:4] or "no year")
 
 
 def _note_the_unnamed(notes: list | None, candidates: list, named: list) -> None:
@@ -609,7 +659,8 @@ def _note_the_lengths(notes: list | None, contenders: list,
 
 
 def _matched(candidate: _Candidate, want: frozenset,
-             plainly: frozenset = frozenset()) -> Match:
+             plainly: frozenset = frozenset(),
+             notes: list | None = None) -> Match:
     """A settled candidate as (id, the spelling to write it under).
 
     The spelling is the first of the candidate's own titles that the folder's
@@ -627,7 +678,16 @@ def _matched(candidate: _Candidate, want: frozenset,
     keys meet - that is what it means to be a letter wrong - so the spelling is
     the one the letter was wrong in. Which is the whole point of naming it: the
     folder is spelt the way the catalogue spells it, and the slip goes away.
+
+    A candidate with no IMDb id is settled on all the same, and is still no
+    answer: an id is what was asked for. It is SAID here, because an empty
+    result is indistinguishable from a query that found nothing - so the lookup
+    goes on asking under the wider spellings, and the report shows only the
+    nonsense those turned up rather than the film that was already found.
     """
+    if not candidate.imdb:
+        _note(notes, "    %s - this is the film, and TMDb holds no IMDb id for "
+              "it, so there is nothing to answer with" % _says(candidate))
     for spelling in candidate.spellings:
         if title_keys(spelling) & want:
             return Match(candidate.imdb,
@@ -660,29 +720,97 @@ def _search(api_key: str, title: str, year: str):
     return results if isinstance(results, list) else []
 
 
-def _worth_asking(rows, year: str, want: frozenset) -> list:
-    """The search results worth a request of their own, in the order they came.
+def _worth_asking(rows, year: str, want: frozenset,
+                  plainly: frozenset = frozenset()) -> list:
+    """The search results worth a request of their own, the likeliest first.
 
     Two ways to be worth one, both answered from what the search already said:
-    a primary release year near the wanted one, or a title that already matches.
-    The first is the ordinary candidate; the second is the film whose only
-    release near this year is in a country the primary date is not, and whose
-    full document is the one thing that can say so.
+    a title that already matches, or a primary release year near the wanted
+    one. The second is the ordinary candidate - the film whose only release
+    near this year is in a country the primary date is not, and whose full
+    document is the one thing that can say so.
+
+    The first comes ahead of it, and that ordering is the whole point of the
+    function. TMDb answers most popular first, and a common word of a title
+    fills the first page with films that merely contain it: a folder called
+    "Sprint" was offered twenty results, and the budget below was spent on the
+    eight most popular films with "sprint" somewhere in their names while the
+    two called exactly that sat at the bottom of the page unread. Popularity is the
+    catalogue's ordering and carries no opinion about which film this folder
+    holds; carrying the folder's title is the closest thing to one there is.
+
+    The ones left are ordered by how NEAR their names are - see
+    :func:`_how_near_the_name_is`. A film reached by a reading this module does
+    not have yet cannot land in the first list by definition, and those are
+    precisely the ones the budget has to reach for a miss to be fixable: the
+    result that shares three words of the folder's four is worth a document
+    before the one that shares one, whatever the two of them are worth to the
+    catalogue's readers. Ordering only, and never a filter - a result is
+    eligible for exactly the two reasons above, and this decides which of the
+    eligible ones the budget is spent on.
     """
-    keep: list = []
+    titled: list = []
+    dated: list = []
     seen = set()
     for row in rows:
         if not isinstance(row, dict) or row.get("id") in seen:
             continue
         release = row.get("release_date")
         release = release if isinstance(release, str) else ""
-        titled = any(title_keys(str(t)) & want for t in _row_titles(row))
-        if _near(release[:4], year) or titled:
+        if any(title_keys(str(t)) & want for t in _row_titles(row)):
             seen.add(row.get("id"))
-            keep.append(row)
-        if len(keep) >= MAX_CANDIDATES:
-            break
-    return keep
+            titled.append(row)
+        elif _near(release[:4], year):
+            seen.add(row.get("id"))
+            dated.append(row)
+    wanted = [one.split() for one in plainly]
+    # A stable sort, so results the measure cannot tell apart keep the order
+    # the catalogue put them in - which is the only opinion left at that point.
+    dated.sort(key=lambda row: _how_near_the_name_is(row, wanted), reverse=True)
+    return titled + dated
+
+
+def _how_near_the_name_is(row: dict, wanted: list) -> tuple:
+    """How near a result's name is to the folder's, as (does one name begin the
+    other, how much of the two names is the same name).
+
+    A tuple because the two are not worth adding up. The first is a SHAPE and
+    the second a count, and where they disagree the shape is right - so they
+    sort the way they read, and neither needs a weight invented for it.
+
+    **One name beginning the other** is two names that run together from the
+    left until one of them stops: "Sunfall Reckoning" against "Sunfall
+    Reckoning Redux". That is the shape of a subtitle, of a market's title run
+    on after the film's own, and of a label somebody added - which is to say it
+    is the shape of the near misses this module has readings for, and of the
+    ones it has no reading for yet. Scattered words that happen to coincide are
+    not that shape however many of them there are.
+
+    **How much of the two names is the same name** is the words they share
+    against the words they do not, and it says the rest: a result carrying more
+    of the folder's words is nearer, and a result saying less besides them is
+    nearer - "Hard Border" is a better use of a request than "Wad: surviving on
+    the border of water and land", and both carry the whole of a folder called
+    "Border".
+
+    A word count and not a fold, because a fold has already been asked here and
+    said no. What is measured is how near a MISS is.
+
+    ``wanted`` is the folder's own title as words, once per spelling it answers
+    to; whichever of the result's own two titles answers best is the one that
+    counts. (0, 0.0) where nothing can be measured, which puts the result
+    behind everything that can be.
+    """
+    best = (0, 0.0)
+    for title in _row_titles(row):
+        words = normalize_title(str(title)).split()
+        for name in wanted:
+            if not words or not name:
+                continue
+            begins = words[:len(name)] == name or name[:len(words)] == words
+            shared = len(set(words) & set(name)) / len(set(words) | set(name))
+            best = max(best, (int(begins), shared))
+    return best
 
 
 def _candidate(api_key: str, row: dict) -> _Candidate:
@@ -702,6 +830,8 @@ def _candidate(api_key: str, row: dict) -> _Candidate:
         years=frozenset(_release_years(row, detail)),
         titles=frozenset(t for t in folded if t),
         spellings=tuple(written),
+        own=frozenset(normalize_title(str(t))
+                      for t in _row_titles(detail) + _row_titles(row)) - {""},
         runtime=_minutes(detail.get("runtime")),
         imdb=imdb if isinstance(imdb, str) and imdb.startswith("tt") else "")
 
@@ -1479,8 +1609,8 @@ def _with_the_folder_above(root: str, folder, title: str) -> str:
     """This film's title with the folder above it read as its first half, or "".
 
     A library that keeps a franchise in a folder of its own writes half the
-    title on each: "Nordwind" holding "Episode IV - Der Sturm", "The Lord of
-    the Rings" holding "The Circle of Keys". Neither half is the title
+    title on each: "Nordwind" holding "Episode IV - Der Sturm", "The Keeper of
+    the Keys" holding "The Circle of Keys". Neither half is the title
     a catalogue has, and put together they are.
 
     The mirror of the franchise a library repeats on every film IN it, which the

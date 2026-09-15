@@ -607,12 +607,25 @@ wrong in several ways at once is still found:
   be reached — `ä` reads as `a` and as `ae`, `ø` as `o` and as `oe`;
 - a dash, apostrophe, comma or point written as a space, or as nothing at all,
   which is also how an abbreviation with its points meets one without;
-- a roman numeral for an arabic one, and a trailing `1` dropped altogether —
-  the first of a series is written `Nordwind I`, `Nordwind 1` and `Nordwind`
-  and meant identically. Only the first at the end: a trailing `2` is the
-  sequel. A number with title on **both** sides of it may go at any value —
-  `Nordwind 2: Der Sturm` is also written `Nordwind Der Sturm`, and what
-  surrounds the number still says which film it is;
+- a roman numeral or a spelled-out one for an arabic one — `Part II`, `Part
+  Two` and `Part 2` are one number — and the word that only *labels* a number
+  dropped beside it, so `The Hills Beyond 2` meets `The Hills Beyond Part 2`
+  and `Falkenauge 2. Teil`;
+- a trailing `1` dropped altogether — the first of a series is written
+  `Nordwind I`, `Nordwind 1` and `Nordwind` and meant identically. Only the
+  first at the end: a trailing `2` is the sequel. A number with title on
+  **both** sides of it may go at any value — `Nordwind 2: Der Sturm` is also
+  written `Nordwind Der Sturm`, and what surrounds the number still says which
+  film it is;
+- the name a sequel has of its own, which nobody says out loud: `Missing Since
+  2` is the film a catalogue holds as `Missing Since 2: The Beginning`, and a
+  catalogue that runs a market's title on after the film's own is the same
+  thing from the other side. Only after a series **number**, and only where a
+  separator introduces it — a title with no number in it is only its name, and
+  what follows one with no introduction is what a library writes after a title:
+  a source, a resolution, a language, an extension. A year in what is cut comes
+  back with the title, so `Falkenauge 2 (1985)` and `Falkenauge 2 (1999)` stay
+  two films;
 - a possessive `'s` that one side has and the other does not;
 - an article gone from anywhere in the name, or several of them, or moved to
   the end the way a catalogue that sorts by the first real word moves it;
@@ -622,15 +635,52 @@ wrong in several ways at once is still found:
   same *shape* as a Latin one reads as the Latin one, so a name that looks
   identical on screen is treated as identical.
 
+One more thing a name can carry that a catalogue never does: **what kind of
+thing the file is.** A `Movie`, `Film` or `Documentary` written in front of a
+title, into the middle of it or on to the end of it says the same nothing in
+each position, so `Looking for Group Documentary` is the film catalogued as
+`Looking for Group`. In front of the title it comes off on sight — nothing
+standing before the title is the title; further in it has to have a title in
+front of it to be a label at all.
+
 A film nothing is found under is looked for again under the spellings a library
-adds and a catalogue does not — a "Movie"/"Special" in front of the name, a
-franchise repeated on every film in it, its roman numerals as numbers. And under
-the one it *leaves out*: a library that keeps a franchise in a folder of its own
-writes half the title on each, so the folder above is read as the first half and
-the two together are asked about as one title. Where
-that leaves several candidates or none, the film's own length decides: the folder is tagged only if exactly one candidate's runtime
-fits what is on the disk and every other is ruled out, which is also what lets a
-folder whose year is off by one be named at all.
+adds and a catalogue does not — a "Movie"/"Special" in front of the name, the
+"Documentary" written into it, a franchise repeated on every film in it, its
+numerals as figures. And under the one it *leaves out*: a library that keeps a
+franchise in a folder of its own writes half the title on each, so the folder
+above is read as the first half and the two together are asked about as one
+title. A tail that is only a number is never asked about on its own — a
+catalogue asked for `Part 2` answers with every film ever released in halves.
+
+Where that leaves several candidates or none, the film's own length decides:
+the folder is tagged only if exactly one candidate's runtime fits what is on
+the disk and every other is ruled out, which is also what lets a folder whose
+year is off by one be named at all.
+
+Which results are looked at in the first place is its own question. Only the
+first handful are worth a document each, and TMDb answers *most popular* first
+— so a common word of a title fills the page with films that merely contain it.
+The ones already carrying the folder's title are read before the rest, and the
+rest in order of **how near their names are** — two things, read in this order:
+
+- **does one name begin the other.** Two names that run together from the left
+  until one of them stops is the shape of a subtitle, of a market's title run
+  on after the film's own, and of a label somebody added: `Sunfall Reckoning`
+  against `Sunfall Reckoning Redux`. Scattered words that happen to coincide
+  are not that shape however many of them there are;
+- **how much of the two names is the same name** — the words they share against
+  the words they do not. A result carrying more of the folder's words is
+  nearer, and a result saying less besides them is nearer: `Hard Border` is a
+  better use of a request than `Wad: surviving on the border of water and land`,
+  and both carry the whole of a folder called `Border`.
+
+The first is a shape and the second a count, so where they disagree the shape
+is the one read and neither needs a weight invented for it. A film reached only
+by one of its other titles can never be in the group above — nothing the search
+said about it matches — so its own name being near is the only thing that can
+spend a request on it. Popularity is the catalogue's ordering and carries no
+opinion about which film this folder holds, so it is what breaks a tie and
+nothing more.
 
 Before the length is asked, three narrowings settle most of what used to reach
 it, because candidates are not equally likely just because they all survived:
@@ -638,10 +688,16 @@ it, because candidates are not equally likely just because they all survived:
 - **A candidate with no IMDb id was never a possible answer.** What is being
   asked for is an id; one that has none can only stand beside a candidate that
   has one and make the pair look uncertain.
-- **A title as written beats one reached through a reading.** Where any
-  candidate folds to exactly what the folder is called, only those are
-  considered — a folder called `1917` is not left unnamed because some other
-  film also answers to it through a dropped article.
+- **A title as written beats one reached through a reading, and a film's own
+  name beats one of the names it is also known by.** Where any candidate folds
+  to exactly what the folder is called, only those are considered — a folder
+  called `1815` is not left unnamed because some other film also answers to it
+  through a dropped article. And a catalogue's alternative titles hold every
+  market's poster name, so one of them is bound to be somebody else's whole
+  title: a film whose own name this is outweighs one carrying it down a list.
+  A translation is not weakened by that — the catalogue leads with the title of
+  the asking language, so a Swedish film catalogued in English carries the
+  English name among its own.
 - **A re-release does not answer for the film it was timed to.** A 1976 film
   back in cinemas in 2018 lists 2018 among its years; where another candidate
   was *first* released around the wanted year, the older one is set aside.
