@@ -434,9 +434,17 @@ def _boundaries(name: str) -> list:
     A space, because the rest of the name is words; a dot, because a sidecar
     wears its language and its format there and a film its extension - "<film>.en.srt"
     has to be able to give up both of them to be recognised as that film.
+
+    The END of the name is offered only where there is no extension to give up.
+    A title is a title and knows nothing about files, so a fold has no reason
+    to refuse one: read as words, "Falkenauge 2.mkv" is a title with a format
+    written after it, and the readings that drop what follows a series number
+    drop that as readily as a subtitle. What comes back is then the name with
+    its extension gone, which is not a rename anybody meant.
     """
-    return [len(name)] + [index for index in range(len(name) - 1, 0, -1)
-                          if name[index] in " ."]
+    ends = [] if os.path.splitext(name)[1] else [len(name)]
+    return ends + [index for index in range(len(name) - 1, 0, -1)
+                   if name[index] in " ."]
 
 
 def _names_this_film(base: str, head: str, typos: bool = False) -> bool:
