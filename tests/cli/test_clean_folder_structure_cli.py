@@ -10,7 +10,8 @@ no media, no stubs, no codecs. Three groups:
     against a real run on an identical copy rather than against a transcript;
   * the recorded real-world cases under `tests/data/nameCleaning`,
     where a `tree` snapshot is compared byte for byte with a committed answer.
-    The comment on each case in `_CASES` is its specification.
+    The comment on each case in `_CASES` is its specification, and the
+    format itself is `tests/treefiles.py`.
 
 **Every run names its fragments file explicitly**, and the file holds no
 fragments. Without `-f` the default is `data/fragments.txt` beside the package -
@@ -23,81 +24,14 @@ byte-for-byte the same run.
 from __future__ import annotations
 
 import shutil
-import subprocess
 
 import pytest
 
-from tests import blackbox
+from tests import blackbox, treefiles
 
 pytestmark = pytest.mark.fs
 
 _FIXTURES = blackbox.DATA / "nameCleaning"
-
-
-def _snapshot(folder) -> str:
-    """The layout as `tree` renders it, rooted at the folder's own basename -
-    exactly the form the fixtures are recorded in.
-
-    `tree` and not a walk written here: it is the tool the command itself writes
-    its before/after artifacts with, so rendering the comparison any other way
-    would compare two different formats.
-    """
-    done = subprocess.run(
-        ["tree", "-a", "-n", "--charset", "ascii", "--noreport", folder.name],
-        cwd=str(folder.parent), capture_output=True, text=True, check=True)
-    return done.stdout
-
-
-def _parse(text: str) -> list[tuple[int, str]]:
-    """The (depth, name) pairs of a `tree` rendering, depth 0 being the root.
-
-    The branch marker's COLUMN carries the depth - four characters per level -
-    which is the only thing in the format that does.
-    """
-    lines = text.splitlines()
-    nodes = [(0, lines[0])]
-    for line in lines[1:]:
-        if not line.strip():
-            continue
-        columns = [line.find(marker) for marker in ("|-- ", "`-- ")]
-        found = [column for column in columns if column >= 0]
-        if not found:
-            continue
-        column = min(found)
-        nodes.append((column // 4 + 1, line[column + 4:]))
-    return nodes
-
-
-def _reconstruct(tree_file, destination) -> str:
-    """Recreate a recorded layout as empty files and folders, and answer the
-    root's name.
-
-    A node is a folder when something sits one level deeper than it; everything
-    else is a file. The command reads names and never contents, so empty files
-    exercise it fully.
-    """
-    nodes = _parse(tree_file.read_text(encoding="utf-8"))
-    deeper = {index for index, (depth, _) in enumerate(nodes)
-              if any(other == depth + 1
-                     for other, _ in _until_shallower(nodes, index, depth))}
-    stack: list[str] = []
-    for index, (depth, name) in enumerate(nodes):
-        stack = stack[:depth] + [name]
-        full = destination.joinpath(*stack)
-        if index in deeper:
-            full.mkdir(parents=True, exist_ok=True)
-        else:
-            full.parent.mkdir(parents=True, exist_ok=True)
-            full.touch()
-    return nodes[0][1]
-
-
-def _until_shallower(nodes, index, depth):
-    """The nodes after ``index`` that are still inside it - its subtree."""
-    for other_depth, name in nodes[index + 1:]:
-        if other_depth <= depth:
-            return
-        yield other_depth, name
 
 
 def _tree(root, *paths):
@@ -457,7 +391,7 @@ class TestSimulation:
     def simulated(self, cleaner, tmp_path):
         preview = tmp_path / "sim" / "data"
         self._fixture(preview)
-        before = _snapshot(preview)
+        before = treefiles.snapshot(preview)
         cleaner.clean(preview, "-s")
         return cleaner, preview, before
 
@@ -485,7 +419,7 @@ class TestSimulation:
         self._fixture(real)
         cleaner.clean(real)
         assert (preview / "after.tree").read_text(encoding="utf-8") \
-            == _snapshot(real)
+            == treefiles.snapshot(real)
 
     def test_the_options_reach_the_preview(self, cleaner, tmp_path):
         """`-n` renumbers inside the sandbox and still not in the input."""
@@ -503,7 +437,7 @@ class TestSimulation:
         cleaner.clean(real, "-n")
 
         assert (preview / "after.tree").read_text(encoding="utf-8") \
-            == _snapshot(real)
+            == treefiles.snapshot(real)
         assert (preview / "set" / "track_10.mp3").is_file()
         assert not (preview / "set" / "02.mp3").exists()
 
@@ -611,7 +545,7 @@ class TestTheRecordedCases:
         name = request.param
         destination = tmp_path / "cases" / name
         destination.mkdir(parents=True)
-        root = destination / _reconstruct(
+        root = destination / treefiles.reconstruct(
             _FIXTURES / ("%s before.tree" % name), destination)
         cleaner.clean(root)
         return name, cleaner, root
@@ -620,10 +554,10 @@ class TestTheRecordedCases:
         name, _, root = case
         expected = (_FIXTURES / ("%s after.tree" % name)).read_text(
             encoding="utf-8")
-        assert _snapshot(root) == expected
+        assert treefiles.snapshot(root) == expected
 
     def test_a_second_run_changes_nothing(self, case):
         _, cleaner, root = case
-        produced = _snapshot(root)
+        produced = treefiles.snapshot(root)
         cleaner.clean(root)
-        assert _snapshot(root) == produced
+        assert treefiles.snapshot(root) == produced
