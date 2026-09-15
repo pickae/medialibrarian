@@ -91,9 +91,10 @@ _CASES = {
     "plainFolder": [
         "The Kid (1921)/The Kid (1921).mkv",
     ],
-    # One letter wrong in the folder and the file, which no fold reaches and the
-    # typo rung has to. "Caligary" is the misspelling a library actually
-    # accumulates, and it is six letters past the minimum the rung refuses under.
+    # One letter wrong in the folder and the file, which no fold reaches. The
+    # typo rung is built for exactly this and never gets the chance: TMDb
+    # answers "Caligary" with no results at all, year or no year, so nothing
+    # comes back for it to recognise and the folder is reported unmatched.
     "oneLetterWrong": [
         "The Cabinet of Dr. Caligary (1920)/"
         "The Cabinet of Dr. Caligary (1920).mkv",

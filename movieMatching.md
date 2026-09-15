@@ -7,14 +7,14 @@ Eight kinds of film match far worse than the rest, and this is an account of
 **why** each one does - which is not the same answer in each case, and in most of
 them is not the catalogue's fault at all.
 
-The short version: **four gates account for nearly all of it, three of them are
+The short version: **five gates account for nearly all of it, three of them are
 ours, and only one of the eight categories is really a coverage problem.** A
 second provider is worth having, but it is the last thing to reach for, not the
 first.
 
 ---
 
-## The four gates
+## The five gates
 
 ### Gate 1 - a folder with no year is never asked about at all
 
@@ -31,7 +31,9 @@ if not base:
 That `continue` is silent. The folder is not looked up, not renamed, and **not
 put in the unmatched report either** - so it does not appear in any of the five
 reports a run writes. From the outside it looks like the catalogue had no
-answer, when in fact nothing was ever asked.
+answer, when in fact nothing was ever asked. `noYearAtAll` in
+`tests/data/movieMatching/` is the only case of the fifteen that sends no
+request at all and files nothing under either report.
 
 This is the single largest effect, and it lands hardest on exactly the
 categories below: a standup special, a concert disc, a documentary and a silent
@@ -79,6 +81,23 @@ popularity order, which is what its own docstring says it exists for. What it
 cannot fix is a page that never contained the right film: TMDb returns 20 rows
 per page and only the first page is read, so an obscure film with a common-word
 title can be on page two and is then simply absent.
+
+### Gate 5 - a misspelling reaches nothing, so the typo rung never runs
+
+The one gate that is the catalogue's.
+
+`_a_letter_wrong` ([tmdblookup.py:418](medialib/lib/tmdblookup.py:418)) reads a
+folder spelled a letter wrong, and it costs no request of its own because it
+does not make the near miss - it recognises one TMDb's own search already made.
+That is the assumption, and for "The Cabinet of Dr. Caligary" it does not hold:
+the search answers **zero results**, with the year and without it
+(`oneLetterWrong` in `tests/data/movieMatching/tmdb.json`). Nothing comes back, so
+there is no row for the rung to measure and the folder is reported unmatched.
+
+TMDb's search tolerates less than a search box suggests, and the rung is only as
+good as what reaches it. Whatever fixes this is a *second* query rather than a
+better rule - which is the one place in this document where a provider question
+is the honest answer to a naming problem.
 
 ---
 
