@@ -2225,3 +2225,230 @@ class TestALanguageWrittenAsAnEdition:
         tagged = tmp_path / "Le Seigneur de Val-Mont (1961) {imdb-tt0054824}"
         assert [path.name for path in tagged.iterdir()] == [
             "The Lord of Val-Mont (1961) {imdb-tt0054824}.mkv"]
+
+
+def _film(rid, imdb, year, titles, found_under=()):
+    """One film a stubbed catalogue holds: the titles it CARRIES, and the
+    queries its search happens to answer to besides them.
+
+    The two are separate on purpose. TMDb's own search is fuzzy and its titles
+    are not, so a misspelt query reaching the right film is the service's
+    doing, while whether that film is then accepted as the folder's is the
+    module's - and only the second is being tested.
+    """
+    return {"id": rid, "imdb": imdb, "year": year, "titles": tuple(titles),
+            "found_under": tuple(found_under)}
+
+
+class TestTheFoldersARealLibraryLeft:
+    """More folders a dry run over a real library reported, each one a film all
+    along. The reports they left: "holds a film that is not its own", "is one
+    film in parts that do not stack", "holds the same film under another year".
+    """
+
+    def _catalogue(self, monkeypatch, *films):
+        """Stand TMDb in with the films given, answering a search by the fold
+        of any title it carries or is found under, and honouring the year the
+        search was filtered by the way the service does."""
+        monkeypatch.setenv("tmdbApiKey", "apikey")
+        asked = []
+
+        def fake_curl(url, params):
+            kv = dict(params)
+            if url == _BASE + "/search/movie":
+                asked.append(kv["query"])
+                folded = titlematch.normalize_title(kv["query"])
+                rows = [
+                    _row(film["id"], film["titles"][0],
+                         original=film["titles"][-1],
+                         date=film["year"] + "-06-23")
+                    for film in films
+                    if any(titlematch.normalize_title(one) == folded
+                           for one in film["titles"] + film["found_under"])
+                    and kv.get("year", film["year"]) == film["year"]]
+                return json.dumps({"results": rows})
+            match = re.match(r"^" + re.escape(_BASE) + r"/movie/(\d+)$", url)
+            for film in films if match else []:
+                if film["id"] != int(match.group(1)):
+                    continue
+                return json.dumps({
+                    "alternative_titles": {
+                        "titles": [{"title": one}
+                                   for one in film["titles"][1:]]},
+                    "external_ids": {"imdb_id": film["imdb"]},
+                    "release_dates": {"results": []}})
+            return None
+
+        monkeypatch.setattr(tmdblookup, "_curl", fake_curl)
+        return asked
+
+    def _run(self, monkeypatch, tmp_path, folder, files):
+        """The tagging over one film folder, which may sit any depth down."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / folder).mkdir(parents=True)
+        for name in files:
+            (tmp_path / folder / name).touch()
+        logs, ambiguous = [], []
+        tmdblookup.tag_plex_ids(".", logs.append, SkipLog(),
+                                ambiguous=ambiguous, recursive=True)
+        return logs, [reason for _p, reason, _n in ambiguous]
+
+    def _listing(self, tmp_path):
+        return sorted(str(path.relative_to(tmp_path)).replace(os.sep, "/")
+                      for path in tmp_path.rglob("*"))
+
+    def test_a_single_typo_in_the_folder_is_the_catalogues_to_correct(
+            self, monkeypatch, tmp_path):
+        """And the "colorized" the file said besides it is an edition, which is
+        the only thing it ever was."""
+        self._catalogue(monkeypatch, _film(
+            1, "tt0026578", "1935", ["Thinner Than Air"],
+            found_under=["Thinner Then Air"]))
+        _logs, reasons = self._run(
+            monkeypatch, tmp_path, "Classics/Thinner Then Air (1935)",
+            ["Thinner Than Air (1935) colorized.mkv"])
+        assert reasons == []
+        tagged = "Thinner Than Air (1935) {imdb-tt0026578}"
+        assert self._listing(tmp_path) == [
+            "Classics", "Classics/" + tagged,
+            "Classics/" + tagged + "/" + tagged + " {edition-Colorized}.mkv"]
+
+    def test_and_a_typo_in_the_file_is_read_against_the_settled_folder(
+            self, monkeypatch, tmp_path):
+        self._catalogue(monkeypatch,
+                        _film(1, "tt0026578", "1935", ["Thinner Than Air"]))
+        _logs, reasons = self._run(
+            monkeypatch, tmp_path, "Classics/Thinner Than Air (1935)",
+            ["Thinner Then Air (1935).mkv"])
+        assert reasons == []
+        tagged = "Thinner Than Air (1935) {imdb-tt0026578}"
+        assert self._listing(tmp_path) == [
+            "Classics", "Classics/" + tagged,
+            "Classics/" + tagged + "/" + tagged + ".mkv"]
+
+    def test_but_a_sequel_a_digit_away_is_not_a_typo(self, monkeypatch,
+                                                     tmp_path):
+        self._catalogue(monkeypatch,
+                        _film(1, "tt0000002", "1964", ["Falkenauge 2"]),
+                        _film(2, "tt0000003", "1965", ["Falkenauge 3"]))
+        _logs, reasons = self._run(
+            monkeypatch, tmp_path, "Series/Falkenauge 2 (1964)",
+            ["Falkenauge 3 (1965).mkv"])
+        assert reasons == ["holds a film that is not its own"]
+
+    def test_a_label_written_into_the_middle_of_the_file_name(
+            self, monkeypatch, tmp_path):
+        """The folder numbered the film and the file labelled it, and neither
+        is on the catalogue's side of the name."""
+        self._catalogue(monkeypatch, _film(
+            1, "tt4600952", "2016",
+            ["Sunstriker the Movie - Ember and the Clockwork Wonder"],
+            found_under=["Sunstriker 19 - Ember and the Clockwork Wonder"]))
+        _logs, reasons = self._run(
+            monkeypatch, tmp_path,
+            "Manga/Sunstriker/Sunstriker 19 - Ember and the Clockwork "
+            "Wonder (2016)",
+            ["Sunstriker the Movie - Ember and the Clockwork Wonder "
+             "(2016).mkv"])
+        assert reasons == []
+        tagged = ("Sunstriker the Movie - Ember and the Clockwork Wonder "
+                  "(2016) {imdb-tt4600952}")
+        assert self._listing(tmp_path) == [
+            "Manga", "Manga/Sunstriker", "Manga/Sunstriker/" + tagged,
+            "Manga/Sunstriker/" + tagged + "/" + tagged + ".mkv"]
+
+    def test_a_bare_source_after_the_year_is_an_edition_not_a_broken_part(
+            self, monkeypatch, tmp_path):
+        self._catalogue(monkeypatch, _film(
+            1, "tt0281203", "2001", ["Hare and Hound - The Silver Ring"]))
+        _logs, reasons = self._run(
+            monkeypatch, tmp_path,
+            "Animation/Hare and Hound/Hare and Hound - The Silver Ring (2001)",
+            ["Hare and Hound - The Silver Ring (2001) DVD.mkv"])
+        assert reasons == []
+        tagged = "Hare and Hound - The Silver Ring (2001) {imdb-tt0281203}"
+        assert (tmp_path / "Animation" / "Hare and Hound" / tagged
+                / (tagged + " {edition-DVD}.mkv")).is_file()
+
+    def test_the_folder_above_said_the_artist_and_the_file_did_not(
+            self, monkeypatch, tmp_path):
+        """The heading is written twice on the way down and not at all in the
+        catalogue - and a misspelling of it is the same heading twice over."""
+        self._catalogue(monkeypatch,
+                        _film(1, "tt9024136", "2019", ["Sunfall"]))
+        _logs, reasons = self._run(
+            monkeypatch, tmp_path,
+            "Music/Classic/Marekk Halvor/Marek Halvor - Sunfall (2019)",
+            ["Sunfall (2019).mkv"])
+        assert reasons == []
+        tagged = "Sunfall (2019) {imdb-tt9024136}"
+        assert (tmp_path / "Music" / "Classic" / "Marekk Halvor" / tagged
+                / (tagged + ".mkv")).is_file()
+
+    def test_and_a_heading_no_folder_above_says_is_half_the_title(
+            self, monkeypatch, tmp_path):
+        """Plenty of real titles have a dash in them and mean both halves."""
+        self._catalogue(monkeypatch,
+                        _film(1, "tt9024136", "2019", ["Sunfall"]))
+        _logs, reasons = self._run(
+            monkeypatch, tmp_path, "Music/Marek Halvor - Sunfall (2019)",
+            ["Sunfall (2019).mkv"])
+        assert reasons == []
+        # The film was named by its own file, which is a different reading
+        # and the right one here: what it does NOT do is decide that the
+        # heading was a franchise and write the folder without it.
+        assert (tmp_path / "Music"
+                / "Marek Halvor - Sunfall (2019) {imdb-tt9024136}").is_dir()
+
+    def test_a_translated_title_split_into_parts(self, monkeypatch, tmp_path):
+        """Parts work and translated titles are matched; the two stacked were
+        what eloped."""
+        self._catalogue(monkeypatch, _film(
+            1, "tt0103924", "1992", ["The Bright Road", "Den Ljusa Vagen"]))
+        _logs, reasons = self._run(
+            monkeypatch, tmp_path, "Author/Vance/The Bright Road (1992)",
+            ["Den Ljusa Vagen 1992 Part%d.mkv" % part for part in (1, 2, 3)])
+        assert reasons == []
+        tagged = "The Bright Road (1992) {imdb-tt0103924}"
+        assert self._listing(tmp_path) == [
+            "Author", "Author/Vance", "Author/Vance/" + tagged] + [
+            "Author/Vance/%s/%s Part%d.mkv" % (tagged, tagged, part)
+            for part in (1, 2, 3)]
+
+    def test_a_year_one_off_between_folder_and_file_is_one_film(
+            self, monkeypatch, tmp_path):
+        self._catalogue(monkeypatch,
+                        _film(1, "tt0045566", "1953", ["Dust and Distance"]))
+        _logs, reasons = self._run(
+            monkeypatch, tmp_path, "Author/Rennick/Dust and Distance (1953)",
+            ["Dust and Distance (1952).mkv"])
+        assert reasons == []
+        tagged = "Dust and Distance (1953) {imdb-tt0045566}"
+        assert (tmp_path / "Author" / "Rennick" / tagged
+                / (tagged + ".mkv")).is_file()
+
+    def test_and_the_folder_takes_the_year_the_catalogue_knows(
+            self, monkeypatch, tmp_path):
+        """Nothing answered under the folder's year and the film answered under
+        the file's: the FOLDER is the one with the digit wrong."""
+        self._catalogue(monkeypatch,
+                        _film(1, "tt0045566", "1952", ["Dust and Distance"]))
+        _logs, reasons = self._run(
+            monkeypatch, tmp_path, "Author/Rennick/Dust and Distance (1953)",
+            ["Dust and Distance (1952).mkv"])
+        assert reasons == []
+        tagged = "Dust and Distance (1952) {imdb-tt0045566}"
+        assert (tmp_path / "Author" / "Rennick" / tagged
+                / (tagged + ".mkv")).is_file()
+
+    def test_but_two_films_a_year_apart_are_left_for_someone_to_split(
+            self, monkeypatch, tmp_path):
+        """A remake released the year after its original is exactly what an
+        off-by-one pair looks like."""
+        self._catalogue(monkeypatch,
+                        _film(1, "tt0045566", "1953", ["Dust and Distance"]),
+                        _film(2, "tt0044444", "1952", ["Dust and Distance"]))
+        _logs, reasons = self._run(
+            monkeypatch, tmp_path, "Author/Rennick/Dust and Distance (1953)",
+            ["Dust and Distance (1952).mkv"])
+        assert reasons == ["holds the same film under another year"]

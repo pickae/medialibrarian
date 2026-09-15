@@ -492,3 +492,102 @@ class TestALanguageKeptAsAnEdition:
         assert plexnames.alias_renames(
             "Le Seigneur de Val-Mont (1961)",
             ["The Lord of Val-Mont (1961) English.mkv"], ()) == {}
+
+
+class TestASourceIsNotAPart:
+    """A keyword that is also the name of a SOURCE says which one the file was
+    made from. A keyword that only ever names a piece says nothing of the
+    kind."""
+
+    @pytest.mark.parametrize("edition", ["DVD", "dvd"])
+    def test_a_source_with_no_number_is_an_edition(self, edition):
+        assert not plexnames.names_a_part(edition)
+
+    @pytest.mark.parametrize("edition", ["disc", "Disk", "CD", "Pt", "part"])
+    def test_but_a_piece_word_with_no_number_is_a_part_that_lost_one(
+            self, edition):
+        """Which is the thing to report, not to write into an edition tag
+        nobody chose."""
+        assert plexnames.names_a_part(edition)
+
+    @pytest.mark.parametrize("edition", ["Part 1 - The Escape", "disc 3",
+                                         "Part2", "cd.4", "DVD 2", "dvd1"])
+    def test_and_a_number_makes_a_part_of_any_of_them(self, edition):
+        assert plexnames.names_a_part(edition)
+
+    def test_so_the_two_sources_of_one_film_become_two_editions(self):
+        base = "Falcons Forever (1988)"
+        assert [plexnames.read_stem(base, base + " " + source)[0]
+                for source in ("DVD", "BluRay")] == ["DVD", "BluRay"]
+
+
+class TestTheYearAFileWroteWithoutBrackets:
+    """A file named in another language carries its date the way its owner
+    wrote it, and either way that date is the folder's rather than part of a
+    title a catalogue would know."""
+
+    AKA = ("The Bright Road", "Den Ljusa Vagen")
+    BASE = "The Bright Road (1992)"
+
+    def test_the_bare_year_is_read_as_the_folders_own(self):
+        assert plexnames.untitled_base("Den Ljusa Vagen 1992", "1992") \
+            == "Den Ljusa Vagen"
+
+    def test_but_only_that_year_and_never_another(self):
+        """A title may END in a year, and taking it for the date would file the
+        film under a name it does not have."""
+        assert plexnames.untitled_base("Rivertown 2049", "2017") \
+            == "Rivertown 2049"
+
+    def test_a_translated_title_in_parts_is_this_film_in_parts(self):
+        assert plexnames.alias_renames(
+            self.BASE, ["Den Ljusa Vagen 1992 Part%d.mkv" % part
+                        for part in (1, 2)], self.AKA) \
+            == {"Den Ljusa Vagen 1992 Part1.mkv": self.BASE + " Part1.mkv",
+                "Den Ljusa Vagen 1992 Part2.mkv": self.BASE + " Part2.mkv"}
+
+    def test_and_the_catalogue_recognises_it_under_its_own_title(self):
+        assert plexnames.named_by_catalogue(
+            ["Den Ljusa Vagen 1992 Part1.mkv"], self.AKA, self.BASE) \
+            == {"Den Ljusa Vagen 1992 Part1.mkv": "Den Ljusa Vagen"}
+
+
+class TestTheWiderReadingsAFolderHasToBeVouchedFor:
+    """Two readings say the folder's own name is not the only name its film
+    answers to, and neither is anything the two strings could have said."""
+
+    def test_a_spelling_the_caller_vouched_for_brings_a_file_home(self):
+        """The file is dated a year off, and something has said the two years
+        are one film."""
+        assert plexnames.spelling_renames(
+            "Dust and Distance (1953)", ["Dust and Distance (1952).mkv"],
+            also=("Dust and Distance (1952)",)) \
+            == {"Dust and Distance (1952).mkv": "Dust and Distance (1953).mkv"}
+
+    def test_and_without_the_vouching_the_year_stands_where_it_was(self):
+        """Which of the two dates is right is not a thing to guess at."""
+        assert plexnames.spelling_renames(
+            "Dust and Distance (1953)", ["Dust and Distance (1952).mkv"]) \
+            == {"Dust and Distance (1952).mkv":
+                "Dust and Distance (1953) (1952).mkv"}
+
+    def test_one_letter_wrong_is_read_only_when_typos_are_allowed(self):
+        folder = "Thinner Than Air (1935)"
+        name = "Thinner Then Air (1935) colorized.mkv"
+        assert plexnames.spelling_renames(folder, [name]) == {}
+        assert plexnames.spelling_renames(folder, [name], typos=True) \
+            == {name: "Thinner Than Air (1935) colorized.mkv"}
+
+    def test_and_the_guess_never_claims_a_name_a_reading_wanted(self):
+        """The plain pass runs first and holds every name it takes."""
+        folder = "Thinner Than Air (1935)"
+        assert plexnames.spelling_renames(
+            folder, ["thinner than air (1935).mkv",
+                     "Thinner Then Air (1935).mkv"], typos=True) \
+            == {"thinner than air (1935).mkv": folder + ".mkv"}
+
+    def test_a_number_is_still_not_a_letter(self):
+        """A digit is never a slip: it is the sequel, or the year."""
+        assert plexnames.spelling_renames(
+            "Falkenauge 2 (1964)", ["Falkenauge 3 (1965).mkv"],
+            typos=True) == {}
