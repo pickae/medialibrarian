@@ -661,12 +661,26 @@ Which results are looked at in the first place is its own question. Only the
 first handful are worth a document each, and TMDb answers *most popular* first
 — so a common word of a title fills the page with films that merely contain it.
 The ones already carrying the folder's title are read before the rest, and the
-rest in order of **how near their names are**: the words a result and the
-folder share, against the words they do not. A film reached only by one of its
-other titles can never be in the first group — nothing the search said about it
-matches — so its own name being near is the only thing that can spend a request
-on it. Popularity is the catalogue's ordering and carries no opinion about which
-film this folder holds, so it is what breaks a tie and nothing more.
+rest in order of **how near their names are** — two things, read in this order:
+
+- **does one name begin the other.** Two names that run together from the left
+  until one of them stops is the shape of a subtitle, of a market's title run
+  on after the film's own, and of a label somebody added: `Sunfall Reckoning`
+  against `Sunfall Reckoning Redux`. Scattered words that happen to coincide
+  are not that shape however many of them there are;
+- **how much of the two names is the same name** — the words they share against
+  the words they do not. A result carrying more of the folder's words is
+  nearer, and a result saying less besides them is nearer: `Hard Border` is a
+  better use of a request than `Wad: surviving on the border of water and land`,
+  and both carry the whole of a folder called `Border`.
+
+The first is a shape and the second a count, so where they disagree the shape
+is the one read and neither needs a weight invented for it. A film reached only
+by one of its other titles can never be in the group above — nothing the search
+said about it matches — so its own name being near is the only thing that can
+spend a request on it. Popularity is the catalogue's ordering and carries no
+opinion about which film this folder holds, so it is what breaks a tie and
+nothing more.
 
 Before the length is asked, three narrowings settle most of what used to reach
 it, because candidates are not equally likely just because they all survived:

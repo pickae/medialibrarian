@@ -1627,6 +1627,39 @@ class TestWhichResultsTheBudgetGoesOn:
             frozenset({"border"}))
         assert [row["id"] for row in order] == [1, 2]
 
+    def test_but_a_name_that_BEGINS_the_folder_s_is_nearer_than_either(self):
+        """Two names running together from the left until one of them stops is
+        the shape of a subtitle, of a market's title run on after the film's
+        own, and of a label somebody added. Scattered words that happen to
+        coincide are not that shape however many of them there are - so where
+        the shape and the count disagree, the shape is the one read.
+
+        The first here shares LESS of the two names than the second does. What
+        puts it in front is where the words it shares are.
+        """
+        begins = _row(1, "Sunfall Reckoning of the Long Grey Winter",
+                      date="2019-01-01")
+        scattered = _row(2, "The Reckoning of Sunfall", date="2019-01-01")
+        order = tmdblookup._worth_asking(
+            [scattered, begins], "2019",
+            titlematch.title_keys("Sunfall Reckoning"),
+            frozenset({"sunfall reckoning"}))
+        assert [row["id"] for row in order] == [1, 2]
+
+    def test_and_the_shape_holds_whichever_of_the_two_keeps_going(self):
+        """The folder is the longer name as often as the catalogue is, so it is
+        one name beginning the other and not the result being the longer.
+
+        The first shares less of the two names than the second again.
+        """
+        begins = _row(1, "Sunfall", date="2019-01-01")
+        scattered = _row(2, "Redux of the Reckoning", date="2019-01-01")
+        order = tmdblookup._worth_asking(
+            [scattered, begins], "2019",
+            titlematch.title_keys("Sunfall Reckoning Redux"),
+            frozenset({"sunfall reckoning redux"}))
+        assert [row["id"] for row in order] == [1, 2]
+
     def test_the_film_it_settled_on_with_no_id_is_written_down(self,
                                                                monkeypatch):
         """It settled on the film under the folder's own name, had nothing to

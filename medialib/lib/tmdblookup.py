@@ -740,7 +740,7 @@ def _worth_asking(rows, year: str, want: frozenset,
     holds; carrying the folder's title is the closest thing to one there is.
 
     The ones left are ordered by how NEAR their names are - see
-    :func:`_how_much_of_the_name`. A film reached by a reading this module does
+    :func:`_how_near_the_name_is`. A film reached by a reading this module does
     not have yet cannot land in the first list by definition, and those are
     precisely the ones the budget has to reach for a miss to be fixable: the
     result that shares three words of the folder's four is worth a document
@@ -763,36 +763,53 @@ def _worth_asking(rows, year: str, want: frozenset,
         elif _near(release[:4], year):
             seen.add(row.get("id"))
             dated.append(row)
-    wanted = {word for one in plainly for word in one.split()}
+    wanted = [one.split() for one in plainly]
     # A stable sort, so results the measure cannot tell apart keep the order
     # the catalogue put them in - which is the only opinion left at that point.
-    dated.sort(key=lambda row: -_how_much_of_the_name(row, wanted))
+    dated.sort(key=lambda row: _how_near_the_name_is(row, wanted), reverse=True)
     return titled + dated
 
 
-def _how_much_of_the_name(row: dict, wanted: set) -> float:
-    """How much of a result's name and the folder's is the same name: the words
-    they share against the words they do not, over whichever of the result's own
-    two titles answers best.
+def _how_near_the_name_is(row: dict, wanted: list) -> tuple:
+    """How near a result's name is to the folder's, as (does one name begin the
+    other, how much of the two names is the same name).
 
-    A word count and not a fold, because a fold has already been asked and said
-    no. What is being measured here is how near a MISS is, and the two things
-    that make one near are both in this one ratio: a result carrying more of the
-    folder's words is nearer, and a result saying less besides them is nearer -
-    "Hard Border" is a better use of a request than "Wad: surviving on the
-    border of water and land", and both carry the whole of a folder called
+    A tuple because the two are not worth adding up. The first is a SHAPE and
+    the second a count, and where they disagree the shape is right - so they
+    sort the way they read, and neither needs a weight invented for it.
+
+    **One name beginning the other** is two names that run together from the
+    left until one of them stops: "Sunfall Reckoning" against "Sunfall
+    Reckoning Redux". That is the shape of a subtitle, of a market's title run
+    on after the film's own, and of a label somebody added - which is to say it
+    is the shape of the near misses this module has readings for, and of the
+    ones it has no reading for yet. Scattered words that happen to coincide are
+    not that shape however many of them there are.
+
+    **How much of the two names is the same name** is the words they share
+    against the words they do not, and it says the rest: a result carrying more
+    of the folder's words is nearer, and a result saying less besides them is
+    nearer - "Hard Border" is a better use of a request than "Wad: surviving on
+    the border of water and land", and both carry the whole of a folder called
     "Border".
 
-    0.0 where nothing can be measured, which puts the result behind everything
-    that can be.
+    A word count and not a fold, because a fold has already been asked here and
+    said no. What is measured is how near a MISS is.
+
+    ``wanted`` is the folder's own title as words, once per spelling it answers
+    to; whichever of the result's own two titles answers best is the one that
+    counts. (0, 0.0) where nothing can be measured, which puts the result
+    behind everything that can be.
     """
-    if not wanted:
-        return 0.0
-    best = 0.0
+    best = (0, 0.0)
     for title in _row_titles(row):
-        words = set(normalize_title(str(title)).split())
-        if words:
-            best = max(best, len(words & wanted) / len(words | wanted))
+        words = normalize_title(str(title)).split()
+        for name in wanted:
+            if not words or not name:
+                continue
+            begins = words[:len(name)] == name or name[:len(words)] == words
+            shared = len(set(words) & set(name)) / len(set(words) | set(name))
+            best = max(best, (int(begins), shared))
     return best
 
 
