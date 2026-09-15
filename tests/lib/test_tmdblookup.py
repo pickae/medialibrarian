@@ -489,6 +489,179 @@ def _tree(root, *folders):
             (root / base / name).touch()
 
 
+def _stub_network(monkeypatch, matches, base="1999-06-23"):
+    """Stand the network so that, for each title in ``matches`` that resolves
+    to an id, its search returns one same-year same-title result whose document
+    carries that id; every other title is a miss."""
+    monkeypatch.setenv("tmdbApiKey", "apikey")
+    by_title = {}
+    for index, (title, imdb) in enumerate(matches.items()):
+        if imdb:
+            by_title[title] = (index + 1, imdb)
+    calls = []
+
+    def fake_curl(url, params):
+        calls.append(url)
+        kv = dict(params)
+        if url == _BASE + "/search/movie":
+            hit = by_title.get(kv["query"])
+            if hit is None:
+                return json.dumps({"results": []})
+            rid, _ = hit
+            return json.dumps({"results": [_row(rid, kv["query"], date=base)]})
+        match = re.match(r"^" + re.escape(_BASE) + r"/movie/(\d+)$", url)
+        if match:
+            rid = int(match.group(1))
+            for _t, (r2, imdb) in by_title.items():
+                if r2 == rid:
+                    return json.dumps({"external_ids": {"imdb_id": imdb}})
+        return None
+    monkeypatch.setattr(tmdblookup, "_curl", fake_curl)
+    return calls
+
+
+class TestTheYearNothingCanRead:
+    """A folder that carries a year, written where the reader cannot see one.
+
+    Every one of these is a name that is wrong on the disk, so it is renamed
+    before anything is looked up rather than read around.
+    """
+
+    @pytest.mark.parametrize("broken", [
+        "The Movie-(1999)", "The Movie.(1999)", "The Movie_(1999)",
+        "The Movie:(1999)", "The Movie|(1999)", "The Movie\u2013(1999)",
+        "The Movie\u2014(1999)", "The Movie -(1999)", "The Movie--(1999)",
+    ])
+    def test_a_separator_where_the_space_should_be(self, broken):
+        assert tmdblookup.repair_year(broken) == "The Movie (1999)"
+
+    @pytest.mark.parametrize("broken", ["The Movie  (1999)",
+                                        "The Movie   (1999)"])
+    def test_a_run_of_spaces_where_one_should_be(self, broken):
+        """This one IS read as a film folder - and the title it hands every
+        lookup and every rename carries a trailing space."""
+        assert tmdblookup.repair_year(broken) == "The Movie (1999)"
+
+    def test_only_the_run_against_the_bracket_is_touched(self):
+        """A separator with a space already on either side of it is readable,
+        whatever else it is - so the spacing is settled and the separator is
+        left where the name put it."""
+        assert tmdblookup.repair_year("The Movie -  (1999)") \
+            == "The Movie - (1999)"
+
+    @pytest.mark.parametrize("broken", ["The Movie (1999", "The Movie 1999)"])
+    def test_a_year_missing_half_its_brackets(self, broken):
+        assert tmdblookup.repair_year(broken) == "The Movie (1999)"
+
+    @pytest.mark.parametrize("name", [
+        "The Movie (1999)",
+        # A year needs a bracket to be one. Nothing here is from the year 2049.
+        "The Movie 2049",
+        # The greedy title takes up to the LAST year, and the first one is part
+        # of the title rather than a year written badly.
+        "Nighthawk (1999) (2005)",
+        # The separator is the one BEFORE the bracket, and this one has a space
+        # there already - the dot belongs to the title.
+        "The Movie Jr. (2020)",
+        # A separator inside the title is the title's, however it is spaced.
+        "Movie - The Movie (1999)",
+        # Four digits in a bracket that is not a year's.
+        "The Movie (1080p)",
+        # Not a film folder at all, and not made into one.
+        "Extras",
+    ])
+    def test_a_year_already_readable_is_left_alone(self, name):
+        assert tmdblookup.repair_year(name) == name
+
+    def test_the_folder_is_renamed_and_then_tagged(self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("The Movie-(1999)", ["The Movie-(1999).mkv"]))
+        _stub_network(monkeypatch, {"The Movie": "tt0120737"})
+        logs = []
+        tmdblookup.tag_plex_ids(".", logs.append, SkipLog())
+        tagged = tmp_path / "The Movie (1999) {imdb-tt0120737}"
+        assert (tagged / "The Movie (1999) {imdb-tt0120737}.mkv").is_file()
+        assert logs[0] == ('  "The Movie-(1999)" wrote its year where nothing '
+                           'could read it - renamed it "The Movie (1999)"')
+
+    def test_a_folder_read_as_a_film_is_renamed_too(self, monkeypatch,
+                                                    tmp_path):
+        """The run of spaces is the one of the four that does not stop the
+        tagging - it is renamed on the same pass all the same, because the
+        title everything is asked under is the one the folder name holds."""
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("The Movie  (1999)", ["The Movie  (1999).mkv"]))
+        # The catalogue here answers to "The Movie" and to nothing else, so a
+        # folder still holding its trailing space asks under a title that is
+        # not one and comes back unnamed.
+        _stub_network(monkeypatch, {"The Movie": "tt0120737"})
+        tmdblookup.tag_plex_ids(".", [].append, SkipLog())
+        tagged = tmp_path / "The Movie (1999) {imdb-tt0120737}"
+        assert (tagged / "The Movie (1999) {imdb-tt0120737}.mkv").is_file()
+
+    def test_a_folder_no_catalogue_can_name_is_repaired_all_the_same(
+            self, monkeypatch, tmp_path):
+        """The reason the repair is a rename and not a reading: the folders
+        that most need their names put right are the ones nothing will tag."""
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("The Movie-(1999)", ["The Movie-(1999).mkv"]))
+        _stub_network(monkeypatch, {})
+        unmatched = []
+        tmdblookup.tag_plex_ids(".", [].append, SkipLog(), unmatched=unmatched)
+        assert (tmp_path / "The Movie (1999)").is_dir()
+        assert unmatched == ["The Movie (1999)"]
+
+    def test_a_broken_folder_deeper_in_a_library_is_found(self, monkeypatch,
+                                                           tmp_path):
+        """A recursive walk does not stop at a broken name and it does not
+        descend past a repaired one: the repair runs first, so the folder that
+        the walk would have gone looking INSIDE is a film by the time it gets
+        there."""
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("Unsorted/The Movie-(1999)",
+                         ["The Movie-(1999).mkv"]))
+        _stub_network(monkeypatch, {"The Movie": "tt0120737"})
+        tmdblookup.tag_plex_ids(".", [].append, SkipLog(), recursive=True)
+        tagged = tmp_path / "Unsorted/The Movie (1999) {imdb-tt0120737}"
+        assert (tagged / "The Movie (1999) {imdb-tt0120737}.mkv").is_file()
+
+    def test_a_dry_run_says_what_it_would_rename_and_moves_nothing(
+            self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("The Movie-(1999)", ["The Movie-(1999).mkv"]))
+        _stub_network(monkeypatch, {"The Movie": "tt0120737"})
+        logs = []
+        tmdblookup.tag_plex_ids(".", logs.append, SkipLog(), dry_run=True)
+        assert (tmp_path / "The Movie-(1999)").is_dir()
+        assert logs == [
+            '  "The Movie-(1999)" writes its year where nothing can read it',
+            '    would rename: "The Movie-(1999)" -> "The Movie (1999)"']
+
+    def test_a_repair_that_would_land_on_a_folder_that_is_there_is_refused(
+            self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("The Movie-(1999)", ["The Movie-(1999).mkv"]),
+              ("The Movie (1999)", ["The Movie (1999).mkv"]))
+        _stub_network(monkeypatch, {"The Movie": "tt0120737"})
+        skip = SkipLog()
+        tmdblookup.tag_plex_ids(".", [].append, skip)
+        assert (tmp_path / "The Movie-(1999)/The Movie-(1999).mkv").is_file()
+        assert skip.skips == [("./The Movie-(1999)", "./The Movie (1999)")]
+
+    def test_the_id_a_folder_already_carries_survives_the_repair(
+            self, monkeypatch, tmp_path):
+        """The tag is not part of the name being put right, and a folder that
+        keeps it is not looked up a second time."""
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("The Movie-(1999) {imdb-tt0120737}",
+                         ["The Movie-(1999).mkv"]))
+        calls = _stub_network(monkeypatch, {"The Movie": "tt0120737"})
+        tmdblookup.tag_plex_ids(".", [].append, SkipLog())
+        tagged = tmp_path / "The Movie (1999) {imdb-tt0120737}"
+        assert (tagged / "The Movie (1999) {imdb-tt0120737}.mkv").is_file()
+        assert calls == []
+
+
 class TestTheIdList:
     """The file someone fills in for the films TMDb cannot name on its own."""
 
@@ -598,35 +771,7 @@ class _Done:
 
 class TestTagPlexIds:
     def _env(self, monkeypatch, matches, base="1999-06-23"):
-        """Stand the network so that, for each title in ``matches`` that
-        resolves to an id, its search returns one same-year same-title result
-        whose document carries that id; every other title is a miss."""
-        monkeypatch.setenv("tmdbApiKey", "apikey")
-        by_title = {}
-        for index, (title, imdb) in enumerate(matches.items()):
-            if imdb:
-                by_title[title] = (index + 1, imdb)
-        calls = []
-
-        def fake_curl(url, params):
-            calls.append(url)
-            kv = dict(params)
-            if url == _BASE + "/search/movie":
-                hit = by_title.get(kv["query"])
-                if hit is None:
-                    return json.dumps({"results": []})
-                rid, _ = hit
-                return json.dumps({"results": [
-                    _row(rid, kv["query"], date=base)]})
-            match = re.match(r"^" + re.escape(_BASE) + r"/movie/(\d+)$", url)
-            if match:
-                rid = int(match.group(1))
-                for _t, (r2, imdb) in by_title.items():
-                    if r2 == rid:
-                        return json.dumps({"external_ids": {"imdb_id": imdb}})
-            return None
-        monkeypatch.setattr(tmdblookup, "_curl", fake_curl)
-        return calls
+        return _stub_network(monkeypatch, matches, base)
 
     def test_without_a_key_it_warns_and_touches_nothing(self, monkeypatch, tmp_path):
         monkeypatch.setenv("tmdbApiKey", "")
