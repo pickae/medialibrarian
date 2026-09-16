@@ -662,6 +662,147 @@ class TestTheYearNothingCanRead:
         assert calls == []
 
 
+class TestTheEditionAFolderNames:
+    """A folder that says which release it holds after its year.
+
+    The words are a release naming itself, exactly as they are when a FILE
+    carries them - so the folder is a film folder, and what it said is written
+    where Plex reads it rather than being dropped or left to stop the lookup.
+
+    Mostly they are the film's own words said twice, because the phase that
+    gives a loose film a folder names that folder after the file. Those the
+    folder simply sheds; only words no film in the folder claims are carried
+    onto the films.
+    """
+
+    @pytest.mark.parametrize("name,base,edition", [
+        ("The Movie (1999) Extended Edition", "The Movie (1999)",
+         "Extended Edition"),
+        # Wrapped, and given the capital a picker entry wants - read exactly as
+        # the same words on a file beside it would be.
+        ("The Movie (1999) (director's cut)", "The Movie (1999)",
+         "Director's cut"),
+        # Nothing but separator is not a name, and comes off as tidying.
+        ("The Movie (1999) - ", "The Movie (1999)", ""),
+        # The greedy title still takes the LAST year.
+        ("Nighthawk (1999) (2005)", "Nighthawk (1999) (2005)", ""),
+    ])
+    def test_the_folder_stops_at_its_year(self, name, base, edition):
+        read = tmdblookup.read_folder(name)
+        assert (read[0], read[4]) == (base, edition)
+
+    def test_the_folder_is_looked_up_and_sheds_the_words(self, monkeypatch,
+                                                         tmp_path):
+        """The title asked about is the film's, not the film's plus the
+        release's - which is what the silence was: no year at the end, no film
+        folder, no question asked."""
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("The Movie (1999) Extended Edition",
+                         ["The Movie (1999) Extended Edition.mkv",
+                          "The Movie (1999) Extended Edition.en.srt"]))
+        _stub_network(monkeypatch, {"The Movie": "tt0120737"})
+        logs = []
+        tmdblookup.tag_plex_ids(".", logs.append, SkipLog())
+        tagged = tmp_path / "The Movie (1999) {imdb-tt0120737}"
+        assert sorted(item.name for item in tagged.iterdir()) == [
+            "The Movie (1999) {imdb-tt0120737} "
+            "{edition-Extended Edition}.en.srt",
+            "The Movie (1999) {imdb-tt0120737} "
+            "{edition-Extended Edition}.mkv"]
+        assert logs == ['  match: "The Movie (1999)" -> {imdb-tt0120737}, '
+                        "editions: Extended Edition"]
+
+    def test_a_film_that_names_no_release_takes_the_folders(self, monkeypatch,
+                                                            tmp_path):
+        """The one thing the rename may not do is lose the words: the folder is
+        about to stop carrying them, and no film in it says them."""
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("The Movie (1999) Extended Edition",
+                         ["The Movie (1999).mkv", "The Movie (1999).en.srt"]))
+        _stub_network(monkeypatch, {"The Movie": "tt0120737"})
+        tmdblookup.tag_plex_ids(".", [].append, SkipLog())
+        tagged = tmp_path / "The Movie (1999) {imdb-tt0120737}"
+        assert sorted(item.name for item in tagged.iterdir()) == [
+            "The Movie (1999) {imdb-tt0120737} "
+            "{edition-Extended Edition}.en.srt",
+            "The Movie (1999) {imdb-tt0120737} "
+            "{edition-Extended Edition}.mkv"]
+
+    def test_a_film_that_names_its_own_keeps_it(self, monkeypatch, tmp_path):
+        """Two answers, and the file's is the nearer one."""
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("The Movie (1999) Extended Edition",
+                         ["The Movie (1999) colorized.mkv"]))
+        _stub_network(monkeypatch, {"The Movie": "tt0120737"})
+        tmdblookup.tag_plex_ids(".", [].append, SkipLog())
+        assert (tmp_path / "The Movie (1999) {imdb-tt0120737}"
+                / "The Movie (1999) {imdb-tt0120737} "
+                  "{edition-Colorized}.mkv").is_file()
+
+    def test_a_film_saying_nothing_beside_one_that_does_stays_silent(
+            self, monkeypatch, tmp_path):
+        """The theatrical cut kept beside the extended one. The folder's words
+        are the extended cut's, said twice - handing them to the file that
+        deliberately says nothing would put two files under one name."""
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("The Movie (1999) Extended Edition",
+                         ["The Movie (1999).mkv",
+                          "The Movie (1999) Extended Edition.mkv"]))
+        _stub_network(monkeypatch, {"The Movie": "tt0120737"})
+        skip = SkipLog()
+        tmdblookup.tag_plex_ids(".", [].append, skip)
+        tagged = tmp_path / "The Movie (1999) {imdb-tt0120737}"
+        assert sorted(item.name for item in tagged.iterdir()) == [
+            "The Movie (1999) {imdb-tt0120737} "
+            "{edition-Extended Edition}.mkv",
+            "The Movie (1999) {imdb-tt0120737}.mkv"]
+        assert skip.skips == []
+
+    def test_the_copy_an_improved_remux_left_is_still_left_alone(
+            self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("The Movie (1999) Extended Edition",
+                         ["The Movie (1999) Extended Edition.mkv",
+                          "The Movie (1999) Extended Edition (old).mkv"]))
+        _stub_network(monkeypatch, {"The Movie": "tt0120737"})
+        tmdblookup.tag_plex_ids(".", [].append, SkipLog())
+        tagged = tmp_path / "The Movie (1999) {imdb-tt0120737}"
+        assert (tagged
+                / "The Movie (1999) Extended Edition (old).mkv").is_file()
+
+    def test_tagging_it_twice_changes_nothing_the_second_time(
+            self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("The Movie (1999) Extended Edition",
+                         ["The Movie (1999) Extended Edition.mkv"]))
+        _stub_network(monkeypatch, {"The Movie": "tt0120737"})
+        tmdblookup.tag_plex_ids(".", [].append, SkipLog())
+        calls = _stub_network(monkeypatch, {"The Movie": "tt0120737"})
+        logs = []
+        tmdblookup.tag_plex_ids(".", logs.append, SkipLog())
+        assert (tmp_path / "The Movie (1999) {imdb-tt0120737}"
+                / "The Movie (1999) {imdb-tt0120737} "
+                  "{edition-Extended Edition}.mkv").is_file()
+        assert (logs, calls) == ([], [])
+
+    def test_a_folder_of_films_is_still_looked_inside(self, monkeypatch,
+                                                      tmp_path):
+        """The words after a year are also how a shelf of films names what they
+        have in common, and a box set read as one film is every film in it
+        lost. Which it is, is on the disk: a film folder holds the film."""
+        monkeypatch.chdir(tmp_path)
+        shelf = tmp_path / "Boxed Films (1999) Collection"
+        _tree(shelf, ("The Movie (1999)", ["The Movie (1999).mkv"]),
+              ("Another Movie (1999)", ["Another Movie (1999).mkv"]))
+        _stub_network(monkeypatch, {"The Movie": "tt0120737",
+                                    "Another Movie": "tt0120738"})
+        tmdblookup.tag_plex_ids(".", [].append, SkipLog(), recursive=True)
+        assert (shelf / "The Movie (1999) {imdb-tt0120737}"
+                / "The Movie (1999) {imdb-tt0120737}.mkv").is_file()
+        assert (shelf / "Another Movie (1999) {imdb-tt0120738}"
+                / "Another Movie (1999) {imdb-tt0120738}.mkv").is_file()
+
+
 class TestTheIdList:
     """The file someone fills in for the films TMDb cannot name on its own."""
 

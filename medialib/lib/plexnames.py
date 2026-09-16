@@ -326,14 +326,18 @@ def movie_stems(base: str, names) -> list:
     return sorted(stems, key=len, reverse=True)
 
 
-def editions_in(base: str, names) -> list:
+def editions_in(base: str, names, edition: str = "") -> list:
     """The edition names the folder's films carry, in the order a report reads
-    them out: alphabetical, and each one once."""
+    them out: alphabetical, and each one once.
+
+    ``edition`` is a release only the FOLDER named, which every film in it that
+    names none of its own is an instance of.
+    """
     found = set()
     for stem in movie_stems(base, names):
-        edition, _part = read_stem(base, stem)
-        if edition:
-            found.add(edition)
+        own, _part = read_stem(base, stem)
+        if own or edition:
+            found.add(own or edition)
     return sorted(found)
 
 
@@ -733,7 +737,8 @@ def ids_in(names) -> set:
 def folder_renames(base: str, tag: str, names, aliases=(),
                    corrected: dict | None = None,
                    cropped: list | None = None,
-                   over_limit: list | None = None) -> list:
+                   over_limit: list | None = None,
+                   edition: str = "") -> list:
     """Every rename one movie folder needs, as (old name, new name) pairs.
 
     ``base`` is the folder without its id tag and ``tag`` the tag to carry;
@@ -763,6 +768,10 @@ def folder_renames(base: str, tag: str, names, aliases=(),
     not be cut at all. Neither is in the plan under its long name - the first is
     in it cut, the second is not in it at all - so a caller that asks for
     neither list still gets a plan that can be carried out.
+
+    ``edition`` is a release only the FOLDER named, for a film that names none
+    of its own. A film that names its own keeps that one - it is the nearer of
+    the two answers.
     """
     if corrected is None:
         corrected = spelling_renames(base, names)
@@ -783,7 +792,8 @@ def folder_renames(base: str, tag: str, names, aliases=(),
                 break
         else:
             continue
-        wanted = plex_stem(base, tag, *read_stem(base, stem))
+        own, part = read_stem(base, stem)
+        wanted = plex_stem(base, tag, own or edition, part)
         target = _fits_or_crops(name, wanted, spelled[len(stem):],
                                 cropped, over_limit)
         if target and target != name:

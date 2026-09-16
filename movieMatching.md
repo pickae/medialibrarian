@@ -18,13 +18,13 @@ first.
 
 ### Gate 1 - a folder with no year is never asked about at all
 
-`read_folder` ([tmdblookup.py:57](medialib/lib/tmdblookup.py:57)) answers four
+`read_folder` ([tmdblookup.py:136](medialib/lib/tmdblookup.py:136)) answers
 empty strings for a name with no `(YYYY)` in it, and the walk
-([tmdblookup.py:1298](medialib/lib/tmdblookup.py:1298)) does
+([tmdblookup.py:1478](medialib/lib/tmdblookup.py:1478)) does
 
 ```python
-base, tag, title, year = read_folder(folder.name)
-if not base:
+base, tag, title, year, edition = read_folder(folder.name)
+if not base or not is_film_folder(folder):
     continue
 ```
 

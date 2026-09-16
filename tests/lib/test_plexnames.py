@@ -185,6 +185,46 @@ class TestTheFilesOfOneFolder:
             "The Movie (1999).en.srt": "The Movie (1999) " + TAG + ".en.srt"}
 
 
+class TestTheEditionAFolderCarries:
+    """What the folder said about the release, for the films in it that say
+    nothing of their own - which is how a folder sheds those words without
+    losing them."""
+
+    def test_a_film_naming_no_release_takes_the_folders(self):
+        plan = dict(plexnames.folder_renames(
+            "The Movie (1999)", TAG,
+            ["The Movie (1999).mkv", "The Movie (1999).en.srt"],
+            edition="Extended Edition"))
+        assert plan == {
+            "The Movie (1999).mkv":
+                "The Movie (1999) " + TAG + " {edition-Extended Edition}.mkv",
+            "The Movie (1999).en.srt":
+                "The Movie (1999) " + TAG
+                + " {edition-Extended Edition}.en.srt"}
+
+    def test_a_film_naming_its_own_keeps_it(self):
+        plan = dict(plexnames.folder_renames(
+            "The Movie (1999)", TAG, ["The Movie (1999) colorized.mkv"],
+            edition="Extended Edition"))
+        assert plan["The Movie (1999) colorized.mkv"] \
+            == "The Movie (1999) " + TAG + " {edition-Colorized}.mkv"
+
+    def test_the_stacking_token_still_comes_last(self):
+        plan = dict(plexnames.folder_renames(
+            "The Movie (1968)", TAG,
+            ["The Movie (1968) Part1.mkv", "The Movie (1968) Part2.mkv"],
+            edition="Extended Edition"))
+        assert plan["The Movie (1968) Part2.mkv"] \
+            == ("The Movie (1968) " + TAG
+                + " {edition-Extended Edition} Part2.mkv")
+
+    def test_the_report_reads_it_out_with_the_rest(self):
+        assert plexnames.editions_in(
+            "The Movie (1999)",
+            ["The Movie (1999).mkv", "The Movie (1999) colorized.mkv"],
+            "Extended Edition") == ["Colorized", "Extended Edition"]
+
+
 class TestTheKeptCopy:
     """Whether a name is the original an improved remux kept - the one rule
     every phase reads to leave a finished copy alone."""
