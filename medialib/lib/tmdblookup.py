@@ -1308,7 +1308,7 @@ def write_id_list(path: str, names, ids: dict | None = None,
         _ID_COMMENT + " Films TheMovieDB could not identify on its own.",
         _ID_COMMENT + " Put the id after the tab - tt0000001, imdb-tt0000001",
         _ID_COMMENT + " or a bare TMDb number - and run the tagging again with",
-        _ID_COMMENT + "   ingest-movies -t -i <this file> <library>",
+        _ID_COMMENT + "   ingest-movies -i <this file> <library>",
         _ID_COMMENT + " adding -w once the dry run reads right. Lines still",
         _ID_COMMENT + " blank are simply the ones still to do.",
         "",
@@ -1494,6 +1494,7 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
                  planned: list | None = None,
                  near_misses: list | None = None,
                  aliases: list | None = None,
+                 seen: set | None = None,
                  long_names: LongNames | None = None) -> int:
     """Name each confidently-matched movie folder, its films and their sidecars
     the way Plex reads them: the folder and every file carry the id tag, an
@@ -1537,6 +1538,13 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
     several of its own titles, for the fifth: nothing is renamed for those, so
     no other list mentions them.
 
+    ``seen`` collects the base name of every film folder this walk considered,
+    which is what lets a caller holding a hand-written id list tell a row that
+    named a folder from a row that named nothing: the ids are keyed by that
+    same base, so whatever is not in here is not on disk. Collected for every
+    folder rather than only the ones that consulted the list, because a film
+    already carrying its id never asks for one and is still there.
+
     ``long_names`` collects what the file name limit did - the commentary
     outputs cut back to fit it and the folders left alone because nothing in
     their names may be cut - for the run to close with. A folder over the limit
@@ -1557,6 +1565,8 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
         base, tag, title, year, edition = read_folder(folder.name)
         if not base or not is_film_folder(folder):
             continue
+        if seen is not None:
+            seen.add(base)
 
         names = [entry.name for entry in os.scandir(folder.path)
                  if entry.is_file(follow_symlinks=False)]

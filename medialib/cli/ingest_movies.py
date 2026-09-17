@@ -69,13 +69,19 @@ t |  | tags only: the Plex/Jellyfin naming and nothing else - the IMDb id,
                   films. A film TMDb could not name, and a folder holding a
                   film that is not its own, are both left exactly as they are
                   and written to a list to read.
-w |  | with -t, actually perform the renames instead of printing them.
-i | <file> | with -t, the hand-written id list. Read before TMDb is asked, so a
-                  film someone has already looked up is named from it; and the
-                  films TMDb could not identify are written back to it to fill
-                  in - every folder given into the one file. Without it each
-                  folder gets its own ingest-movies-unmatched-<folder>.tsv in
-                  the current directory."""
+w |  | with -t or -i, actually perform the renames instead of printing
+                  them. On its own it is a usage error rather than a full
+                  ingest: there is no dry run to carry out.
+i | <file> | the hand-written id list filled in and read BACK: tagging and
+                  nothing else, like -t, but going on what is in this file. It
+                  is read before TMDb is asked, so a film someone has already
+                  looked up is named from it rather than guessed at again. A
+                  DRY RUN unless -w is given, and a quieter one than -t's: it
+                  prints what those ids would rename and writes NOTHING - not
+                  the lists, which are -t's to write, and not the file it was
+                  handed, which is still being filled in. -w carries the
+                  renames out and brings the file up to date, every folder
+                  given into that one file."""
 
 OPT_VARS = "f:fragmentsOverride t:tagsOnly w:writeTags i:idList"
 OPT_COLUMN = 18
@@ -93,7 +99,7 @@ USAGE_TAIL = """
     ------------------------------------------------------------------
     -t does this phase and nothing else, as a dry run unless -w is given, and
     writes the films it could not name to a list to fill in by hand and feed
-    back with -i
+    back with -i, which is that same phase going on the filled-in list
     looks each movie up on TheMovieDB (TMDb) by its cleaned name and year
     appends the \"{imdb-ttXXXXXXX}\" id tag to the folder, movie and subtitles
     only when ONE film carries that title and was released that year in some

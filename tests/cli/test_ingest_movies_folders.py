@@ -146,9 +146,11 @@ class TestTheListsEachFolderLeaves:
         def fake_tag(root, _log, _skips, dry_run=False, ids=None,
                      unmatched=None, recursive=False, ambiguous=None,
                      planned=None, near_misses=None, aliases=None,
-                     long_names=None):
+                     seen=None, long_names=None):
             asked.append(root)
             name = root.rsplit("/", 1)[-1]
+            if seen is not None:
+                seen.add("The Movie (1999)")
             if aliases is not None:
                 aliases += [(root + "/Il buono (1966)", "Il buono (1966)",
                              "{imdb-tt0060196}",
@@ -278,6 +280,97 @@ class TestTheListsEachFolderLeaves:
         run.main(["-t", "-w", str(tmp_path / "Films")])
         assert not (tmp_path / "ingest-movies-renames-Films.txt").exists()
 
+    def test_w_on_its_own_is_refused_rather_than_ignored(self, monkeypatch,
+                                                         tmp_path, capsys):
+        """-w carries out the dry run of -t or -i, and without either there is
+        no dry run to carry out. A run meant to be -tw and typed as -w would
+        otherwise start a full ingest - hours of converting and remuxing - on a
+        library it was asked to do nothing but name."""
+        monkeypatch.chdir(tmp_path)
+        _library(tmp_path, "Films")
+        assert run.main(["-w", str(tmp_path / "Films")]) == 1
+        errors = capsys.readouterr().err
+        assert "-w on its own" in errors
+        assert "Nothing was changed." in errors
+
+    def test_an_id_list_asks_for_the_tagging_and_nothing_else(
+            self, monkeypatch, tmp_path):
+        """The list is only ever read by the tagging phase, so naming one names
+        that phase: a run given -i alone used to fall through to the full
+        ingest and remux films while the list went unread."""
+        monkeypatch.chdir(tmp_path)
+        self._tagging(monkeypatch)
+
+        def no_ingest(*_a, **_k):
+            raise AssertionError("the full ingest ran")
+
+        monkeypatch.setattr(run.rules, "mkv_mux", no_ingest)
+        listing = tmp_path / "by-hand.tsv"
+        listing.write_text("The Movie (1999)\ttt0000001\n", encoding="utf-8")
+        _library(tmp_path, "Films")
+        assert run.main(["-i", str(listing), str(tmp_path / "Films")]) == 0
+
+    def test_and_writes_nothing_at_all_until_w(self, monkeypatch, tmp_path):
+        """The lists are -t's: -t is the pass that has only TMDb to go on and
+        writes down what it could not name, and -i is the pass that reads one
+        back. Rewriting them from a half-filled answer would lose the question,
+        and the file being filled in is the last thing to edit underneath
+        someone."""
+        monkeypatch.chdir(tmp_path)
+        self._tagging(monkeypatch)
+        listing = tmp_path / "by-hand.tsv"
+        written = "The Movie (1999)\ttt0000001\n"
+        listing.write_text(written, encoding="utf-8")
+        _library(tmp_path, "Films")
+        assert run.main(["-i", str(listing), str(tmp_path / "Films")]) == 0
+        assert not list(tmp_path.glob("ingest-movies-*"))
+        assert listing.read_text(encoding="utf-8") == written
+
+    def test_and_w_is_what_brings_the_file_up_to_date(self, monkeypatch,
+                                                      tmp_path):
+        """-i and -iw stand to each other as -t and -tw do, and -w is the only
+        thing that renames anything or touches the list."""
+        monkeypatch.chdir(tmp_path)
+        self._tagging(monkeypatch)
+        listing = tmp_path / "by-hand.tsv"
+        listing.write_text("The Movie (1999)\ttt0000001\n", encoding="utf-8")
+        _library(tmp_path, "Films")
+        assert run.main(["-i", str(listing), "-w",
+                         str(tmp_path / "Films")]) == 0
+        rewritten = listing.read_text(encoding="utf-8")
+        assert "The Movie (1999)\t{imdb-tt0000001}" in rewritten
+        assert "Films film (1999)\t" in rewritten
+        assert not list(tmp_path.glob("ingest-movies-*"))
+
+    def test_and_a_row_naming_no_folder_here_is_an_error_it_carries_on_past(
+            self, monkeypatch, tmp_path, capsys):
+        """The other ids are somebody's afternoon of looking things up. One row
+        that names nothing on disk is worth saying loudly and is not worth
+        dropping them over."""
+        monkeypatch.chdir(tmp_path)
+        self._tagging(monkeypatch)
+        listing = tmp_path / "by-hand.tsv"
+        listing.write_text("The Movie (1999)\ttt0000001\n"
+                           "Not here (1901)\ttt0000002\n", encoding="utf-8")
+        _library(tmp_path, "Films")
+        assert run.main(["-i", str(listing), str(tmp_path / "Films")]) == 0
+        errors = capsys.readouterr().err
+        assert "Not here (1901)" in errors
+        assert "{imdb-tt0000002}" in errors
+        assert "The Movie (1999)" not in errors
+
+    def test_but_a_row_still_blank_is_simply_one_still_to_do(
+            self, monkeypatch, tmp_path, capsys):
+        """The file is filled in over several sittings. A blank line is the
+        work remaining, not a mistake to report."""
+        monkeypatch.chdir(tmp_path)
+        self._tagging(monkeypatch)
+        listing = tmp_path / "by-hand.tsv"
+        listing.write_text("Not here (1901)\t\n", encoding="utf-8")
+        _library(tmp_path, "Films")
+        assert run.main(["-i", str(listing), str(tmp_path / "Films")]) == 0
+        assert "ERROR" not in capsys.readouterr().err
+
     def test_but_one_id_list_named_by_hand_holds_them_all(self, monkeypatch,
                                                           tmp_path):
         """Someone who named a file meant that file: it is read once for every
@@ -288,7 +381,7 @@ class TestTheListsEachFolderLeaves:
         listing.write_text("Old film (1970)\ttt0000001\n", encoding="utf-8")
         _library(tmp_path, "Films")
         _library(tmp_path, "Documentaries")
-        assert run.main(["-t", "-i", str(listing), str(tmp_path / "Films"),
+        assert run.main(["-i", str(listing), "-w", str(tmp_path / "Films"),
                          str(tmp_path / "Documentaries")]) == 0
         written = listing.read_text(encoding="utf-8")
         assert "Old film (1970)\t{imdb-tt0000001}" in written
