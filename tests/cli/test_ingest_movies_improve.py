@@ -180,6 +180,237 @@ class TestTheCommentaryTranscripts:
             "--commentary-flag", "0:1", "--default-track-flag", "0:0"]
 
 
+class TestTheEXRung:
+    """Dolby Surround EX, read off the mediainfo pass and taken to the ladder."""
+
+    def _tracks(self, rows):
+        found = []
+        for id, codec, channels, name, ex in rows:
+            track = rules.Track(id=str(id), type="audio", codec=codec,
+                                channels=channels, language="eng", name=name,
+                                commentary="false", default="false")
+            track.ex = ex
+            found.append(track)
+        return found
+
+    def test_it_beats_the_5_1_it_is_encoded_as(self):
+        tracks = self._tracks([(0, "A_AC3", "6", "AC-3 5.1", ""),
+                               (1, "A_AC3", "6", "AC-3 5.1-EX", "1")])
+        assert rules.apply_surround_ladder(tracks) == [(0, 1)]
+        assert [track.action for track in tracks] == ["drop", "keep"]
+
+    def test_and_loses_to_a_discrete_7_1(self):
+        tracks = self._tracks([(0, "A_AC3", "6", "AC-3 5.1-EX", "1"),
+                               (1, "A_EAC3", "8", "E-AC-3 7.1", "")])
+        assert rules.apply_surround_ladder(tracks) == [(0, 1)]
+        assert [track.action for track in tracks] == ["drop", "keep"]
+
+    def test_the_flag_is_read_off_the_settings_mode(self, tmp_path,
+                                                    monkeypatch):
+        """Which is where mediainfo writes it, and what tells an EX track from
+        the plain "Dolby Surround" every commentary track carries."""
+        import json
+
+        document = {"media": {"track": [
+            {"@type": "Video"},
+            {"@type": "Audio", "Format_Settings_Mode": "Dolby Surround EX"},
+            {"@type": "Audio", "Format_Settings_Mode": "Dolby Surround"},
+        ]}}
+
+        class Done:
+            returncode = 0
+            stdout = json.dumps(document).encode("utf-8")
+
+        monkeypatch.setattr(rules.subprocess, "run", lambda *a, **k: Done())
+        tracks = self._tracks([(0, "A_AC3", "6", "AC-3 5.1", ""),
+                               (1, "A_AC3", "2", "Commentary", "")])
+        rules._object_flags("film.mkv", tracks)
+        assert [track.ex for track in tracks] == ["1", ""]
+
+
+class TestWhatCountsAsAlreadyThere:
+    """Which of a film's commentaries the file already carries as a subtitle
+    track. The ones it has are left alone and the ones it is missing are
+    appended beside them, however the two were named."""
+
+    def _film(self, tmp_path, audio, subtitles):
+        """A film whose every commentary has a transcript on disk, and which
+        already carries the named subtitle tracks. What comes back is the title
+        each appended transcript would be given."""
+        folder = tmp_path / "Film (2020)"
+        folder.mkdir(exist_ok=True)
+        base = str(folder / "Film (2020)")
+        tracks = []
+        for id, name in audio:
+            tracks.append(rules.Track(
+                id=str(id), type="audio", codec="A_AC3", channels="2",
+                language="eng", name=name, commentary="true",
+                default="false", forced="false"))
+            open("%s %s %s.en.srt" % (base, id, name), "w").close()
+        for entry in subtitles:
+            id, name = entry[0], entry[1]
+            codec = entry[2] if len(entry) > 2 else "S_TEXT/UTF8"
+            tracks.append(rules.Track(
+                id=str(id), type="subtitles", codec=codec, channels="null",
+                language="eng", name=name, commentary="true",
+                default="false", forced="false"))
+        return [title for _srt, _language, title
+                in rules.gather_commentary_transcripts(base, tracks)]
+
+    def test_the_missing_ones_are_appended_beside_the_one_already_there(
+            self, tmp_path):
+        assert self._film(
+            tmp_path,
+            [(1, "Commentary by Director"), (2, "Commentary by Cast"),
+             (3, "Commentary by Crew")],
+            [(4, "Commentary by Cast")]) == \
+            ["Commentary by Director", "Commentary by Crew"]
+
+    def test_the_same_name_is_the_same_commentary(self, tmp_path):
+        assert self._film(tmp_path, [(1, "Commentary by Director")],
+                          [(2, "Commentary by Director")]) == []
+
+    def test_a_cut_name_is_too_while_it_still_says_which(self, tmp_path):
+        """The file name a muxed title was taken from is cut to fit the
+        filesystem, so the title in the film can be the shorter of the two."""
+        assert self._film(tmp_path, [(1, "Commentary by Director and Cast")],
+                          [(2, "Commentary by Director an")]) == []
+
+    def test_and_the_cut_may_be_on_either_side(self, tmp_path):
+        """A track whose own name is the shorter one: the film was muxed from a
+        file named after something longer than the track is called now."""
+        assert self._film(tmp_path, [(1, "Commentary by Director")],
+                          [(2, "Commentary by Director and Cast")]) == []
+
+    def test_a_stub_that_fits_more_than_one_of_them_is_no_answer(self,
+                                                                 tmp_path):
+        """Cut back that far the title says only that the film has a
+        commentary, not which of the two - so both are appended, under their
+        whole names."""
+        assert self._film(
+            tmp_path, [(1, "Commentary track one"), (2, "Commentary track two")],
+            [(3, "Commentary track")]) == \
+            ["Commentary track one", "Commentary track two"]
+
+    def test_a_number_the_cut_kept_says_which_as_surely_as_a_name(self,
+                                                                   tmp_path):
+        """A film whose commentaries are numbered rather than named: the number
+        is the whole of what tells them apart, and it is there."""
+        assert self._film(tmp_path, [(1, "Commentary 1"), (2, "Commentary 2")],
+                          [(3, "Commentary 2")]) == ["Commentary 1"]
+
+    def test_and_one_the_cut_took_off_says_nothing(self, tmp_path):
+        """Cut back to the bare word the title fits both of them, so both are
+        appended - under the names that tell them apart."""
+        assert self._film(tmp_path, [(1, "Commentary 1"), (2, "Commentary 2")],
+                          [(3, "Commentary")]) == \
+            ["Commentary 1", "Commentary 2"]
+
+    def test_the_bare_word_does_say_which_in_a_film_that_has_one(self,
+                                                                 tmp_path):
+        """There being no other commentary it could be of."""
+        assert self._film(tmp_path, [(1, "Commentary by Director")],
+                          [(2, "Commentary")]) == []
+
+    def test_a_title_naming_no_commentary_of_the_film_matches_none(self,
+                                                                   tmp_path):
+        assert self._film(tmp_path, [(1, "Commentary by Director")],
+                          [(2, "Commentary 2")]) == ["Commentary by Director"]
+
+    def test_a_nameless_commentary_is_matched_one_for_one(self, tmp_path):
+        """Nothing tells two of them apart by name, so what the file has stands
+        for one of them and the rest are still missing."""
+        assert self._film(tmp_path,
+                          [(1, "Commentary"), (2, "Commentary"),
+                           (3, "Commentary")],
+                          [(4, "Commentary")]) == ["Commentary", "Commentary"]
+
+    def test_and_is_not_spent_on_a_commentary_that_has_a_name(self, tmp_path):
+        """The named one is appended on its own account, and the nameless one
+        still has the file's nameless subtitle track to stand for it."""
+        assert self._film(tmp_path,
+                          [(1, "Commentary"), (2, "Commentary by Director")],
+                          [(3, "Commentary")]) == ["Commentary by Director"]
+
+    def test_an_image_subtitle_named_like_one_is_not_a_transcript(self,
+                                                                  tmp_path):
+        """A disc's own "Commentary #1" subtitle is a picture of the film's
+        subtitles, not a transcript, however it is named and flagged."""
+        assert self._film(tmp_path, [(1, "Commentary by Director")],
+                          [(2, "Commentary by Director", "S_HDMV/PGS")]) == \
+            ["Commentary by Director"]
+
+    def test_a_subtitle_of_another_language_is_not_one_either(self, tmp_path):
+        folder = tmp_path / "Film (2020)"
+        folder.mkdir()
+        base = str(folder / "Film (2020)")
+        open(base + " 1 Commentary by Director.en.srt", "w").close()
+        tracks = [
+            rules.Track(id="1", type="audio", codec="A_AC3", channels="2",
+                        language="eng", name="Commentary by Director",
+                        commentary="true", default="false", forced="false"),
+            rules.Track(id="2", type="subtitles", codec="S_TEXT/UTF8",
+                        channels="null", language="ger",
+                        name="Commentary by Director", commentary="true",
+                        default="false", forced="false")]
+        assert [title for _srt, _language, title
+                in rules.gather_commentary_transcripts(base, tracks)] == \
+            ["Commentary by Director"]
+
+
+class TestATranscriptCutForLength:
+    """A track name too long for the filesystem is cut, and the place it is cut
+    at moves with everything else in the path. The lookup is by the film and the
+    track number, which no cut may reach, so the transcript is found either
+    way - and a run that could not find it would leave the transcripts out of
+    the improved copy and transcribe them all over again."""
+
+    def _film(self, tmp_path, track_id, name, written):
+        folder = tmp_path / "Film (2020)"
+        folder.mkdir()
+        base = str(folder / "Film (2020)")
+        open(written, "w").close()
+        track = rules.Track(id=track_id, type="audio", codec="A_AC3",
+                            channels="2", language="eng", name=name,
+                            commentary="true")
+        return rules.gather_commentary_transcripts(base, [track])
+
+    def test_one_cut_at_another_place_is_still_this_track_s(self, tmp_path):
+        from medialib.lib import commentarytranscription
+        name = "Commentary by " + "Someone " * 40
+        base = str(tmp_path / "Film (2020)" / "Film (2020)")
+        stem = commentarytranscription.commentary_stem(base, 3, name)
+        written = stem[:-12] + ".en.srt"
+        assert self._film(tmp_path, "3", name, written) == \
+            [(written, "en", name)]
+
+    def test_two_copies_of_one_transcript_are_appended_once(self, tmp_path):
+        """What an interrupted run leaves behind: the same track transcribed a
+        second time under the cut its film's longer name gave it. Appending
+        both would put the same subtitle track in the film twice, so the
+        longest name - the one that lost the least to the cut - is the one
+        taken."""
+        from medialib.lib import commentarytranscription
+        name = "Commentary by " + "Someone " * 40
+        base = str(tmp_path / "Film (2020)" / "Film (2020)")
+        stem = commentarytranscription.commentary_stem(base, 3, name)
+        (tmp_path / "Film (2020)").mkdir()
+        for path in (stem + ".en.srt", stem[:-12] + ".en.srt"):
+            open(path, "w").close()
+        track = rules.Track(id="3", type="audio", codec="A_AC3", channels="2",
+                            language="eng", name=name, commentary="true")
+        assert rules.gather_commentary_transcripts(base, [track]) == \
+            [(stem + ".en.srt", "en", name)]
+
+    def test_and_one_of_another_track_is_not(self, tmp_path):
+        """The number is what says which of a film's commentaries a file is
+        of, and it is never cut into."""
+        name = "Commentary by Director"
+        base = str(tmp_path / "Film (2020)" / "Film (2020)")
+        written = base + " 4 Commentary by Director.en.srt"
+        assert self._film(tmp_path, "3", name, written) == []
+
+
 class TestIdempotency:
 
     def test_a_folder_that_already_has_an_old_copy_is_skipped(self, remux):

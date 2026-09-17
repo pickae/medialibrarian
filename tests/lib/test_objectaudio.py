@@ -50,6 +50,39 @@ class TestObjectFlag:
         assert oa.audio_object_flag("", "", name) == ""
 
 
+class TestExFlag:
+    """Dolby Surround EX: a 5.1 bed with a matrixed back surround."""
+
+    @pytest.mark.parametrize("mode", [
+        "Dolby Surround EX", "DOLBY SURROUND EX", "Surround EX",
+    ])
+    def test_the_settings_mode_is_what_mediainfo_writes_for_the_flag(self,
+                                                                     mode):
+        assert oa.audio_ex_flag(mode, "") == "1"
+
+    @pytest.mark.parametrize("mode", ["Dolby Surround", "Dolby Digital", "-",
+                                      ""])
+    def test_the_plain_surround_mode_is_the_downmix_flag_and_not_EX(self, mode):
+        """Every commentary track of a film carries "Dolby Surround"."""
+        assert oa.audio_ex_flag(mode, "") == ""
+
+    @pytest.mark.parametrize("name", [
+        "AC-3 5.1-EX", "Dolby Digital EX", "DD-EX", "ddex", "Surround EX",
+        "English 5.1 EX", "E-AC-3 EX",
+    ])
+    def test_the_track_name_is_the_last_resort(self, name):
+        assert oa.audio_ex_flag("", name) == "1"
+
+    @pytest.mark.parametrize("name", [
+        "Commentary by Alex Doe", "Extended Edition", "Surround 5.1",
+        "Exclusive", "Texas", "", "Dolby Atmos 7.1",
+    ])
+    def test_a_syllable_is_not_a_format(self, name):
+        """"ex" is a syllable of too many other words - and of too many names,
+        a commentary track being a list of them - to read on its own."""
+        assert oa.audio_ex_flag("", name) == ""
+
+
 class TestLadder:
     """One winner per language, the best available tier."""
 
@@ -63,6 +96,41 @@ class TestLadder:
     ])
     def test_the_six_rungs(self, codec, channels, objects, score):
         assert oa.audio_ladder_score(codec, channels, objects) == score
+
+    @pytest.mark.parametrize("codec,score", [
+        ("A_AC3", "62"), ("A_EAC3", "65"),
+    ])
+    def test_the_EX_rungs_sit_between_the_two_bed_widths(self, codec, score):
+        assert oa.audio_ladder_score(codec, "6", "", "1") == score
+
+    def test_EX_beats_the_5_1_it_is_encoded_as_and_loses_to_everything_above(
+            self):
+        """Above 5.1, because of the channel it carries that a 5.1 does not;
+        below a discrete 7.1 and below every Atmos tier, which carry more."""
+        ex = int(oa.audio_ladder_score("A_AC3", "6", "", "1"))
+        assert ex > int(oa.audio_ladder_score("A_AC3", "6", "", ""))
+        assert ex < int(oa.audio_ladder_score("A_EAC3", "6", "", "1"))
+        assert ex < int(oa.audio_ladder_score("A_AC3", "8", "", ""))
+        assert (int(oa.audio_ladder_score("A_EAC3", "6", "", "1"))
+                < int(oa.audio_ladder_score("A_AC3", "8", "", "")))
+        for atmos in (oa.audio_ladder_score("A_EAC3", "6", "1", ""),
+                      oa.audio_ladder_score("A_EAC3", "8", "1", "")):
+            assert int(oa.audio_ladder_score("A_EAC3", "6", "", "1")) \
+                < int(atmos)
+
+    def test_objects_outrank_an_EX_flag_on_the_same_track(self):
+        """A track that is both is an Atmos track: the objects are what the
+        matrixed channel only approximates."""
+        assert oa.audio_ladder_score("A_EAC3", "6", "1", "1") == "80"
+
+    @pytest.mark.parametrize("codec,score", [
+        ("A_AC3", "70"), ("A_EAC3", "90"),
+    ])
+    def test_an_EX_flag_on_a_7_1_bed_changes_nothing(self, codec, score):
+        """EX is 5.1 and a matrix, so the flag is only read on that bed - and a
+        7.1 that claims it stays on its own rung rather than falling off the
+        ladder."""
+        assert oa.audio_ladder_score(codec, "8", "", "1") == score
 
     def test_objects_on_a_narrow_bed_outrank_a_wider_plain_one(self):
         """The one order that is not obvious: an E-AC-3 5.1 WITH objects sits

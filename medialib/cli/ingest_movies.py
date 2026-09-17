@@ -232,6 +232,10 @@ UNIT = "\x1f"
 _YEAR = re.compile(r"[1-2][0-9][0-9][0-9]")
 _TWO_LETTER = re.compile(r"^[a-z][a-z]$")
 
+# What an append puts on the end of a title when one commentary has transcripts
+# in more than one language, so the two are told apart in the player.
+_LANGUAGE_MARKER = re.compile(r"\s*\([A-Za-z]{2,3}\)$")
+
 
 def spec(program: str) -> "clioptions.Spec":
     return clioptions.Spec(
@@ -390,6 +394,7 @@ class Track:
         for field in self.FIELDS:
             setattr(self, field, fields.get(field, ""))
         self.objects = ""
+        self.ex = ""
         self.action = "keep"
         self.opus = ""
 
@@ -473,12 +478,14 @@ def read_track_info(movie: str) -> tuple:
 
 
 def _object_flags(movie: str, tracks: list) -> None:
-    """Which audio tracks carry object-based metadata (Dolby Atmos / DTS:X).
+    """Which audio tracks carry object-based metadata (Dolby Atmos / DTS:X), and
+    which carry a matrixed Dolby Surround EX channel.
 
-    One mediainfo pass gives each track's commercial name and object count in the
-    same file order as the mkvmerge list, so the a-th audio track here is the
-    a-th one mediainfo reports. A mediainfo that cannot read the file leaves
-    every flag empty and the ladder deduplicates on codec and channels alone.
+    One mediainfo pass gives each track's commercial name, object count and
+    settings mode in the same file order as the mkvmerge list, so the a-th audio
+    track here is the a-th one mediainfo reports. A mediainfo that cannot read
+    the file leaves every flag empty and the ladder deduplicates on codec and
+    channels alone.
     """
     import json
     rows = []
@@ -495,7 +502,8 @@ def _object_flags(movie: str, tracks: list) -> None:
                 continue
             extra = entry.get("extra") or {}
             rows.append((entry.get("Format_Commercial_IfAny") or "-",
-                         _as_text(extra.get("NumberOfDynamicObjects") or "-")))
+                         _as_text(extra.get("NumberOfDynamicObjects") or "-"),
+                         entry.get("Format_Settings_Mode") or "-"))
     except (OSError, ValueError, AttributeError):
         rows = []
 
@@ -503,10 +511,11 @@ def _object_flags(movie: str, tracks: list) -> None:
     for track in tracks:
         if not track.is_audio:
             continue
-        commercial, objects = rows[audio_index] if audio_index < len(rows) \
-            else ("", "")
+        commercial, objects, mode = rows[audio_index] \
+            if audio_index < len(rows) else ("", "", "")
         track.objects = objectaudio.audio_object_flag(commercial, objects,
                                                       track.name)
+        track.ex = objectaudio.audio_ex_flag(mode, track.name)
         audio_index += 1
 
 
@@ -955,58 +964,160 @@ def gather_commentary_transcripts(base: str, tracks: list) -> list:
     """``gatherCommentaryTranscripts``: the transcripts to append as commentary
     subtitle tracks, as (srt, language, title) triples.
 
-    A transcript the movie already carries as a subtitle track - same name and
-    language, one a previous improvement appended - is left out, or every run
-    would pile another identical track on top of what the last one left.
+    A transcript the movie already carries as a subtitle track is left out, or
+    every run would pile another identical track on top of what the last one
+    left - and only that one: the commentaries the file is missing are appended
+    beside it.
     """
     found = []
+    # What every commentary of this film is called, which is what says whether a
+    # cropped title still points at one of them and at no other.
+    siblings = [_source_title(other) for other in tracks
+                if other.is_audio and other.is_commentary]
+    # The commentary subtitles whose title does not say which commentary they
+    # are of. Those cannot be told apart by name, so they are matched one for
+    # one instead: one of them in the file stands for one such commentary, and
+    # the rest are still missing.
+    unplaced = [other for other in tracks if _is_transcript_subtitle(other)
+                and not _identifies_one(other.name, siblings)]
     for track in tracks:
         if not (track.is_audio and track.is_commentary):
             continue
-        name = track.name.replace("/", "").replace("&", "and")
-        stem = "%s %s %s" % (base, track.id, rename(name))
-        # Cut exactly as the transcription cut it when it wrote these, or this
-        # would look for a name that was never written.
-        stem = stem[:commentarytranscription.COMMENTARY_STEM_MAX_BYTES]
+        # Looked for by the track rather than by the whole name the
+        # transcription gave the file: that name ends in whatever was left of
+        # the track's own name after the cut for length, and the cut moves with
+        # every other part of the path. The film and the track number are the
+        # part of it no cut may reach.
+        found_at = commentarytranscription.commentary_prefix(base, track.id)
+        directory = os.path.dirname(found_at) or "."
+        prefix = os.path.basename(found_at)
 
         # Gathered before any is muxed, so a track with more than one can have
-        # the language put into their titles.
-        transcripts = []
-        directory = os.path.dirname(stem) or "."
-        prefix = os.path.basename(stem) + "."
+        # the language put into their titles - and one per language, because
+        # two files cut at different places are two copies of one transcript
+        # and appending both would put the same subtitle track in twice. The
+        # longest name wins, that being the one that lost the least of the
+        # track's own name to the cut.
+        best: dict = {}
         for candidate in sorted(_names_in(directory)):
             if not (candidate.startswith(prefix)
                     and candidate.endswith(".srt")):
                 continue
             suffix = candidate[:-len(".srt")].rpartition(".")[2]
-            # Exactly what the transcription appends - never a
-            # "<stem>.something else.srt" that happens to sit there.
-            if not _TWO_LETTER.match(suffix):
-                continue
-            transcripts.append((os.path.join(directory, candidate), suffix))
-        # One written by an older version carries no language suffix at all;
-        # those were always English.
-        if os.path.isfile(stem + ".srt"):
-            transcripts.append((stem + ".srt", "eng"))
+            # One written by an older version carries no language suffix at
+            # all; those were always English.
+            language = suffix if _TWO_LETTER.match(suffix) else "eng"
+            if len(candidate) >= len(best.get(language, "")):
+                best[language] = candidate
+        transcripts = [(os.path.join(directory, name), language)
+                       for language, name in sorted(best.items())]
 
         for srt, language in transcripts:
-            title = track.name
-            if not title or title == "null":
-                title = "Commentary"
+            title = _source_title(track)
             if len(transcripts) > 1:
                 title = "%s (%s)" % (title, language.upper())
-            if _already_a_subtitle(tracks, title, language):
+            already = _already_a_subtitle(tracks, title, language, siblings)
+            if already is None:
+                # Nothing to match this one on but the count.
+                already = _take_unplaced(unplaced, language)
+            if already:
                 log("  Commentary transcript already a subtitle track in the "
                     "file, not appending it again: " + title)
                 continue
+            # Appended under the track's own name whole, never the cut one: a
+            # title that had to be cut is what left the doubt in the first
+            # place.
             found.append((srt, language, title))
     return found
 
 
-def _already_a_subtitle(tracks: list, title: str, language: str) -> bool:
-    return any(track.is_subtitle and track.name == title
-               and languages.same_language_tag(track.language, language)
-               for track in tracks)
+def _source_title(track) -> str:
+    """The title a commentary track's transcript is appended under: the track's
+    own name, or the word itself for a track that has none."""
+    return track.name if track.name and track.name != "null" else "Commentary"
+
+
+def _identifies_one(title: str, siblings: list) -> bool:
+    """Whether a title says WHICH of a film's commentaries it is: exactly one of
+    them is named that, or named something this is the front of.
+
+    The film's own commentary tracks are what decides, and nothing else. A
+    number says which as surely as a list of names does, so "Commentary 2" is an
+    answer in a film whose tracks are numbered - until a cut for length takes
+    the number off and leaves "Commentary", which every one of them fits. By
+    that same measure the bare word IS an answer in a film that has one
+    commentary, there being nothing else it could be of.
+
+    A language marker an append put on the end is not part of the name.
+    """
+    title = _LANGUAGE_MARKER.sub("", title or "").strip()
+    if not title:
+        return False
+    return sum(1 for name in siblings if name.startswith(title)) == 1
+
+
+def _is_transcript_subtitle(track) -> bool:
+    """Whether a track is the kind of thing an appended transcript is: a TEXT
+    subtitle flagged as a commentary. The image subtitles a disc ships are
+    neither, however they are named."""
+    return (track.is_subtitle and track.is_commentary
+            and track.codec.upper().startswith("S_TEXT"))
+
+
+def _take_unplaced(unplaced: list, language: str) -> bool:
+    """Whether one of the file's commentary subtitles that says of which
+    commentary it is nothing stands for this transcript - and, where it does,
+    spends it, so the next such commentary of the film is matched against what
+    is left rather than against the same track again."""
+    for track in unplaced:
+        if languages.same_language_tag(track.language, language):
+            unplaced.remove(track)
+            return True
+    return False
+
+
+def _already_a_subtitle(tracks: list, title: str, language: str,
+                        siblings: list):
+    """Whether this transcript is already a subtitle track of the film, or None
+    for a title that cannot answer the question.
+
+    The track has to be a commentary subtitle of the same language, and to name
+    the same commentary - see :func:`_same_commentary`. A title that does not
+    say which of the film's commentaries it is of answers nothing at all, and
+    says so.
+    """
+    if not _identifies_one(title, siblings):
+        return None
+    for track in tracks:
+        if not _is_transcript_subtitle(track):
+            continue
+        if not languages.same_language_tag(track.language, language):
+            continue
+        if _same_commentary(track.name, title, siblings):
+            return True
+    return False
+
+
+def _same_commentary(have: str, want: str, siblings: list) -> bool:
+    """Whether a commentary subtitle already in the file is of the commentary
+    this transcript is of.
+
+    The same name is the same commentary. So is a name that is the other one cut
+    short from the left - the filesystem cut the file one of them was named
+    after - but only while what is left of it still says which commentary that
+    is: a stub the film's other commentaries fit as well is no answer, and a
+    transcript is appended under its whole name rather than passed over on a
+    maybe.
+    """
+    have, want = (have or "").strip(), (want or "").strip()
+    if not have or not want:
+        return False
+    if have == want:
+        return True
+    short, long = (have, want) if len(have) < len(want) else (want, have)
+    if not long.startswith(short):
+        return False
+    return _identifies_one(short, siblings)
 
 
 def apply_surround_ladder(tracks: list) -> list:
@@ -1030,7 +1141,7 @@ def apply_surround_ladder(tracks: list) -> list:
         if track.is_commentary:
             continue
         score = objectaudio.audio_ladder_score(track.codec, track.channels,
-                                               track.objects)
+                                               track.objects, track.ex)
         if not score:
             continue
         scores[position] = int(score)

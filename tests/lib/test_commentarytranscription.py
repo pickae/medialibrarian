@@ -655,6 +655,33 @@ class TestExportEdges:
         assert records == []
         assert w.calls() == []
 
+    def test_a_transcript_cut_at_another_place_is_still_this_track_s(self, w):
+        """The resume check asks after the TRACK, not after today's name.
+
+        Anything that changes the length of a film's name - an id tag added, a
+        folder renamed - moves the place a long track name is cut at, and a
+        check for the exact name would not see the transcript sitting right
+        there: the whole transcription would be spent again to write a second
+        copy of it under the new name.
+        """
+        root = w.tmp_path / "root"
+        root.mkdir()
+        (root / "movie.mkv").touch()
+        ram = w.tmp_path / "ram"
+        ram.mkdir()
+        name = "Commentary by " + "Someone " * 40
+        tracks = {"movie": [(name, "true", "audio", "eng")]}
+
+        # what a run whose film was named something shorter left behind: the
+        # same track, cut ten characters earlier than today's run would cut it
+        stem = ct.commentary_stem("movie", 0, name)
+        (root / (stem[:-10] + ".en.srt")).touch()
+
+        logs, records = _run_export(w, str(root), str(ram), tracks,
+                                    _detected("English"), "0 0")
+        assert records == []
+        assert w.calls() == []
+
     def test_the_extract_failure_leaves_nothing_in_ram(self, w):
         # a track whose extract fails and a track that succeeds: the sweep at
         # the end of the export leaves RAM clean either way. The walk names the
@@ -676,6 +703,39 @@ class TestExportEdges:
         # failed), and the sweep leaves RAM clean of both extracts
         assert len(records) == 1
         assert _leftover_mkas(str(ram)) == []
+
+
+class TestStem:
+    """The name every output of one commentary track hangs off."""
+
+    def test_the_cut_takes_the_file_name_and_not_the_path(self):
+        """The limit is one file name's, so a film in a deeply nested folder
+        keeps as much of its track's name as one in a shallow folder."""
+        name = "Commentary by " + "Someone " * 40
+        shallow = ct.commentary_stem("./Film", 3, name)
+        deep = ct.commentary_stem("./a/rather/deeper/place/Film", 3, name)
+        assert os.path.basename(shallow) == os.path.basename(deep)
+        assert len(os.path.basename(deep)) == ct.COMMENTARY_STEM_MAX_BYTES
+        assert os.path.dirname(deep) == "./a/rather/deeper/place"
+
+    def test_the_cut_counts_bytes(self):
+        """An accented name spends two of them on a letter that a count of
+        characters spends one on."""
+        stem = ct.commentary_stem("Film", 3, "Kommentar von " + "é" * 300)
+        assert len(stem.encode("utf-8")) <= ct.COMMENTARY_STEM_MAX_BYTES
+        assert len(stem) < ct.COMMENTARY_STEM_MAX_BYTES
+
+    def test_a_name_that_fits_is_left_whole(self):
+        assert ct.commentary_stem("./Film (2001)", 2, "Director") == \
+            "./Film (2001) 2 Director"
+
+    def test_the_prefix_is_what_no_cut_may_reach(self):
+        """The film and the track number say which track a file is of, whatever
+        was left of the name after the cut."""
+        name = "Commentary by " + "Someone " * 40
+        prefix = ct.commentary_prefix("./Film", 3)
+        assert prefix == "./Film 3 "
+        assert ct.commentary_stem("./Film", 3, name).startswith(prefix)
 
 
 class TestDetect:

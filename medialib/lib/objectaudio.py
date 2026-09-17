@@ -6,7 +6,7 @@ own. """
 
 import re
 
-__all__ = ["audio_object_flag", "audio_ladder_score"]
+__all__ = ["audio_object_flag", "audio_ex_flag", "audio_ladder_score"]
 
 # The ladder the improved-copy remux deduplicates on, per language: one winner
 # per language, the best available tier.
@@ -16,17 +16,29 @@ __all__ = ["audio_object_flag", "audio_ladder_score"]
 # above a plain AC-3 7.1, because the objects are the only thing the narrower
 # track carries that no other tier does.
 #
-# (channels, has objects) -> score, for E-AC-3.
+# Dolby Surround EX is a bed of its own between those two widths: a 5.1 track
+# carrying a matrixed back surround, so it is worth more than the 5.1 it is
+# encoded as and less than a discrete 7.1 - and less than any Atmos, whose
+# objects it has none of.
+#
+# (channels, has objects, is EX) -> score, for E-AC-3.
 _EAC3_LADDER = {
-    ("8", True): 100,     # Dolby Digital Plus Atmos 7.1
-    ("8", False): 90,
-    ("6", True): 80,      # Dolby Digital Plus Atmos 5.1
-    ("6", False): 60,
+    ("8", True, False): 100,    # Dolby Digital Plus Atmos 7.1
+    ("8", False, False): 90,
+    ("6", True, False): 80,     # Dolby Digital Plus Atmos 5.1
+    ("6", False, True): 65,     # Dolby Digital Plus 5.1 EX
+    ("6", False, False): 60,
 }
 
 # AC-3's rungs, which do NOT consult the object flag: plain AC-3 carries no JOC,
 # so a flag on one says nothing and must not move it up or off the ladder.
-_AC3_LADDER = {"8": 70, "6": 50}
+#
+# (channels, is EX) -> score.
+_AC3_LADDER = {
+    ("8", False): 70,
+    ("6", True): 62,            # Dolby Digital 5.1 EX
+    ("6", False): 50,
+}
 
 # The digits the shell's [0-9] matches, which is not what str.isdigit() accepts -
 # that one also takes superscripts and other numerals the shell would refuse.
@@ -34,6 +46,11 @@ _DIGITS = re.compile(r"[0-9]+")
 
 # What a track's own name says, when mediainfo parsed no metadata at all.
 _NAME_MARKERS = ("atmos", "dts:x", "dtsx")
+
+# The same last resort for Surround EX. Anchored on the word the "EX" hangs off
+# - a bare "ex" is a syllable of too many other words to read as a format.
+_EX_NAME = re.compile(r"(?:^|[^a-z0-9])(?:dd|ac-?3|e-?ac-?3|digital|surround"
+                      r"|5\.1|6\.1)[ \-_]?ex(?![a-z0-9])")
 
 
 def audio_object_flag(commercial: str, objects: str, name: str) -> str:
@@ -58,7 +75,24 @@ def audio_object_flag(commercial: str, objects: str, name: str) -> str:
     return ""
 
 
-def audio_ladder_score(codec_id: str, channels: str, object_flag: str) -> str:
+def audio_ex_flag(mode: str, name: str) -> str:
+    """``audioExFlag``: "1" for a Dolby Surround EX track, "" otherwise.
+
+    Two sources, the way the object flag has three. The settings mode is what
+    mediainfo writes for the flag in the AC-3 header ("Dolby Surround EX"), and
+    the track's own name is the last resort - a track that advertises itself
+    although mediainfo read no mode at all.
+
+    A plain "Dolby Surround" is NOT EX: that mode is the stereo downmix flag,
+    which the commentary tracks of a film all carry.
+    """
+    if "surround ex" in (mode or "").lower():
+        return "1"
+    return "1" if _EX_NAME.search((name or "").lower()) else ""
+
+
+def audio_ladder_score(codec_id: str, channels: str, object_flag: str,
+                       ex_flag: str = "") -> str:
     """``audioLadderScore``: this track's rung, or "" for one not on the ladder.
 
     The ladder deduplicates the LOSSY compatibility tracks only. Lossless tracks
@@ -66,11 +100,15 @@ def audio_ladder_score(codec_id: str, channels: str, object_flag: str) -> str:
     neither is opus. Everything else gets nothing back.
     """
     codec = (codec_id or "").upper()
+    # EX is a 5.1 bed with a matrixed sixth channel, so the flag is only read on
+    # that bed - and it says nothing next to objects, which outrank it anyway.
+    objects = object_flag == "1"
+    ex = ex_flag == "1" and not objects and channels == "6"
     # A_EAC3 first, the way the shell's case arms are ordered.
     if codec.startswith("A_EAC3"):
-        score = _EAC3_LADDER.get((channels, object_flag == "1"))
+        score = _EAC3_LADDER.get((channels, objects, ex))
     elif codec.startswith("A_AC3"):
-        score = _AC3_LADDER.get(channels)
+        score = _AC3_LADDER.get((channels, ex))
     else:
         return ""
     return str(score) if score is not None else ""
