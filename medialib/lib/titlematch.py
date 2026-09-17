@@ -35,7 +35,8 @@ combinations:
   carries - or writes into the middle or the end of it, which is the same word
   doing the same nothing in another position.
 
-One thing here is not a fold, and is kept apart from them for that reason:
+Two things here are not folds, and are kept apart from them for that reason.
+
 :func:`one_typo_apart` answers whether two titles are one title with a single
 slip of the hand in it: a letter wrong, a character too many or too few, or two
 characters written in the wrong order - the space between two words counting as
@@ -43,6 +44,12 @@ a character in the last two. A fold is a reading of what somebody wrote and
 cannot be wrong; a typo is the claim that they wrote it wrong, which is a guess
 - so it is never a key, it is asked only where every fold has already failed,
 and it is refused on a short name and on any difference that touches a digit.
+
+:func:`titles_written_together` answers something no key could, because it is
+not about two names at all: whether ONE name is several names, which is what a
+library writes when it cannot choose between a film's titles and puts an "aka"
+between them. A fold makes a name reach further; this says the name was never
+one name, and hands back the titles it holds for a caller to ask about in turn.
 
 Nothing here is about films. A title is a title, and the same fold serves a
 book, an album or an episode.
@@ -62,6 +69,7 @@ __all__ = [
     "title_keys",
     "equivalent",
     "one_typo_apart",
+    "titles_written_together",
     "leading_segment",
     "search_titles",
     "strip_duplicate_marker",
@@ -992,6 +1000,98 @@ def _a_space_crossed(left: str, right: str) -> bool:
     """
     return (len(left) == 2 and left == right[::-1]
             and " " in left and left.strip().isalpha())
+
+
+# --- the name that is several names ------------------------------------------
+
+# How many titles one name is read as. A library that could not choose between
+# two names writes two; the third is already unusual and the fourth is somebody
+# pasting a catalogue's whole alias list into a folder name, where the titles
+# past the first few are the ones nothing was ever released under. Every title
+# read out here costs a ladder of queries of its own, so the count is bounded
+# for the same reason :data:`MAX_QUERIES` is.
+MAX_JOINED_TITLES = 3
+
+# How a name says "and this film is also called". Only the abbreviation and the
+# words it stands for, in the spellings a keyboard produces: "aka", "AKA",
+# "a.k.a.", "a/k/a", "also known as".
+#
+# Deliberately nothing else. The other things a library puts between two names
+# - a slash, a dash, a bracket - are the same characters a title uses for its
+# own purposes, and a rule that read those would cut real titles in half far
+# more often than it would find a second one. This marker says in words that
+# what follows is ANOTHER NAME FOR THE SAME FILM, which is the one thing that
+# can justify throwing half a name away.
+#
+# It has to stand on its own: whitespace before it, and whitespace or the
+# punctuation that closes an aside after it, so that "Nakamura Lane" keeps its
+# "aka" and a film actually called "Aka Sunfall" keeps the whole of its name. The
+# bracket a library opens the aside with is taken with the marker, because
+# "Falcons Forever (aka Nordwind Rising)" is the same name written with the
+# second title held at arm's length.
+_ALSO_KNOWN_AS = re.compile(
+    r"""\s[(\[{]?\s*
+        (?: a\.?\s?k\.?\s?a\.? | a\s*/\s*k\s*/\s*a | also\s+known\s+as )
+        (?=[\s:,.;)\]}-]|$)
+        [\s:,.;–—-]*""", re.I | re.X)
+
+# What is left on the edge of a title once the marker between two of them is
+# gone: the separator somebody wrote on both sides of it, and the bracket they
+# opened the aside with.
+_EDGE = " \t-–—:,;|"
+
+
+def titles_written_together(name: str) -> list:
+    """The several titles ``name`` turns out to be, left to right - or [] when
+    it is one title, which is nearly always.
+
+    A folder is sometimes named with every title its film has rather than with
+    one of them: "Falcons Forever aka Nordwind Rising (1998)". That name is not
+    a spelling of either film's title and no catalogue holds it, so it is not
+    something the fold can reach - which is the whole difference between this
+    and everything above it. A fold says one name is another name written
+    differently; this says one name is not ONE name at all, and the reply is
+    two names rather than a wider key.
+
+    Which is why it is a reading of its own and not a key: a caller asks the
+    catalogue under each title in turn and takes the first that answers, and
+    the answer is ONE film - the two names were two names for it. Folding both
+    into one key set would instead say that a folder called by either name is
+    this film, which is a claim about two titles nothing but the marker
+    supports, and the marker is a thing a librarian typed.
+
+    Left to right because that is the order the names were written in, and the
+    first of them is the one whoever named the folder led with.
+
+    [] wherever the marker does not cleanly hold two titles apart - a name that
+    only leads or trails with it, or that folds to nothing on one side of it.
+    A name that cannot be divided in two has not been shown to be two names,
+    and one title read whole is what every rung above expects.
+    """
+    parts = [_closed_up(part) for part in _ALSO_KNOWN_AS.split(name)]
+    if len(parts) < 2 or not all(normalize_title(part) for part in parts):
+        return []
+    return parts[:MAX_JOINED_TITLES]
+
+
+def _closed_up(part: str) -> str:
+    """One title with the punctuation that belonged to the marker taken off
+    both its ends.
+
+    The bracket is the reason this is more than a strip: a library that held
+    the second title at arm's length wrote a closer at the very end of the
+    name, and its opener went with the marker - so the closer is left over and
+    is nothing to do with the title. Only where it is left OVER, though: a
+    title that carries brackets of its own keeps them, because a title with as
+    many closers as openers has lost nothing.
+    """
+    part = part.strip(_EDGE)
+    for opener, closer in (("(", ")"), ("[", "]"), ("{", "}")):
+        if part.endswith(closer) and part.count(closer) > part.count(opener):
+            part = part[:-1].strip(_EDGE)
+        if part.startswith(opener) and part.count(opener) > part.count(closer):
+            part = part[1:].strip(_EDGE)
+    return part
 
 
 # --- what to go asking under -------------------------------------------------

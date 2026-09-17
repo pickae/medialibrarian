@@ -652,6 +652,18 @@ each position, so `Looking for Group Documentary` is the film catalogued as
 standing before the title is the title; further in it has to have a title in
 front of it to be a label at all.
 
+And one more that no reading of a *title* could reach, because the name is not
+one title: a folder called `Falcons Forever aka Nordwind Rising (1998)`, where
+whoever named it could not choose between the film's names and wrote both.
+Nothing was ever released under that, so it is taken apart at the `aka` — in
+any of the spellings a keyboard makes it, `AKA`, `a.k.a.`, `a/k/a`, `also known
+as`, and the bracket a library holds the second name at arm's length in — and
+the titles it holds are asked about **left to right**, the order they were
+written in, until one answers. Whichever does names the film, and the folder is
+written under that one alone. Only where the marker plainly holds two titles
+apart: `Nakamura Lane` keeps its name, and so does a film actually called `Aka
+Manto`.
+
 A film nothing is found under is looked for again under the spellings a library
 adds and a catalogue does not — a "Movie"/"Special" in front of the name, the
 "Documentary" written into it, a franchise repeated on every film in it, its
