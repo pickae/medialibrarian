@@ -263,6 +263,69 @@ class TestReadingAFolderName:
             == ("The Movie (1999)", "{tmdb-1234}")
 
 
+class TestTheFolderALooseFilmBelongsIn:
+    """A file says which cut it is; the folder holding it says only which film
+    it is. So the words after the year come off the folder's name, and the two
+    cuts of one film are given one folder rather than a folder each."""
+
+    def test_the_film_and_its_year_are_the_whole_name(self):
+        assert plexnames.folder_for("The Movie (1999)") == "The Movie (1999)"
+
+    def test_the_release_the_file_names_is_not_the_folders(self):
+        assert plexnames.folder_for("The Movie (1999) Extended Edition") \
+            == "The Movie (1999)"
+
+    def test_both_cuts_of_one_film_name_one_folder(self):
+        assert plexnames.folder_for("The Movie (1999)") \
+            == plexnames.folder_for("The Movie (1999) Extended Edition")
+
+    def test_an_edition_already_written_as_a_tag_comes_off_too(self):
+        assert plexnames.folder_for(
+            "The Movie (1999) {edition-Extended Edition}") \
+            == "The Movie (1999)"
+
+    def test_both_halves_of_a_split_film_name_one_folder(self):
+        assert plexnames.folder_for("The Movie (1999) Part2") \
+            == "The Movie (1999)"
+
+    def test_the_id_is_the_folders_own_and_is_kept(self):
+        assert plexnames.folder_for("The Movie (1999) " + TAG + " colorized") \
+            == "The Movie (1999) " + TAG
+
+    def test_the_last_year_is_the_one_read(self):
+        assert plexnames.folder_for("Nighthawk (1999) (2005) remaster") \
+            == "Nighthawk (1999) (2005)"
+
+    def test_a_name_with_no_year_has_nothing_to_cut_at(self):
+        assert plexnames.folder_for("The Movie") == "The Movie"
+
+    def test_a_year_inside_the_title_is_not_cut_at(self):
+        """Read as the film's date, the way a folder's own name reads it - the
+        title's own "(1999)" is all there is, so it is the date."""
+        assert plexnames.folder_for("Rivertown 2049") == "Rivertown 2049"
+
+
+class TestWhatPlexReadsExtrasOutOf:
+    """Which folder names may sit inside a film's own folder."""
+
+    @pytest.mark.parametrize("name", plexnames.BONUS_FOLDERS)
+    def test_every_folder_plex_knows_is_one(self, name):
+        assert plexnames.is_bonus_folder_name(name) is True
+
+    def test_a_disc_naming_the_film_before_it_still_counts(self):
+        assert plexnames.is_bonus_folder_name("The Movie Featurettes") is True
+
+    @pytest.mark.parametrize("spelling", ["Extras", "extras", "EXTRAS",
+                                          "Bonus Extras"])
+    def test_the_spelling_found_in_the_wild_counts_in_any_case(self, spelling):
+        assert plexnames.is_bonus_folder_name(spelling) is True
+
+    @pytest.mark.parametrize("name", ["Subs", "The Movie (1999)", "Disc 2",
+                                      "featurettes"])
+    def test_anything_else_is_not_one(self, name):
+        assert plexnames.is_bonus_folder_name(name) is False
+
+
 class TestWhetherAFolderHoldsOneFilm:
     def test_a_single_movie_is_that_film(self):
         assert plexnames.one_film_in("Film (2020)", ["Film (2020).mkv"]) \

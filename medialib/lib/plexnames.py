@@ -22,7 +22,7 @@ import os
 import re
 
 from medialib.lib import titlematch
-from medialib.lib.enums import PART_WORDS, SOURCE_PART_WORDS
+from medialib.lib.enums import PART_WORDS, SOURCE_PART_WORDS, shell_lower
 
 # A film's id tag, anywhere in the name. Plex reads the tag whether it sits on
 # the folder or the file, and is indifferent to the order tags come in.
@@ -92,6 +92,13 @@ OLD_SUFFIX = " (old).mkv"
 
 # The wrappers a hand-written version name tends to arrive in.
 _WRAPPERS = (("(", ")"), ("[", "]"))
+
+# The folders Plex reads bonus material out of, which are the only folders that
+# belong INSIDE a film's own folder: everything there is that film's extras
+# rather than another film.
+# https://support.plex.tv/articles/local-files-for-trailers-and-extras/
+BONUS_FOLDERS = ("Behind The Scenes", "Deleted Scenes", "Featurettes",
+                 "Interviews", "Other", "Scenes", "Shorts", "Trailers")
 
 # What a name puts BETWEEN two of its parts - the film and the version it is of,
 # the film and its year - and never part of either part's own name. Whitespace
@@ -900,6 +907,44 @@ def folder_name(base: str, tag: str) -> str:
     """The folder's own name: the film and its id, and neither of the two
     per-file conventions - a folder holds every edition and every part."""
     return base + " " + tag if tag else base
+
+
+def folder_for(stem: str) -> str:
+    """The folder one loose film belongs in, read off the film's own name.
+
+    The film and its id, and not the release: the words a file puts after its
+    year say which CUT it is, and a folder holds every cut of one film. So a
+    "<film> (1999) Extended Edition.mkv" keeps those words - Plex reads the
+    edition off the file - and is given a "<film> (1999)" to sit in, which is
+    the folder the theatrical copy beside it is given too.
+
+    The same cut written out twice, once on the folder and once on the file, is
+    what :func:`folder_renames` then has to unpick, and is where a theatrical
+    cut ends up wearing an extended one's name. Not writing it twice is the
+    cheaper half of that.
+
+    A name with no year says nothing that can be cut at, and stands as the
+    folder's name whole.
+    """
+    base, tag = untagged_base(stem)
+    years = list(_YEAR_IN_NAME.finditer(base))
+    if not years:
+        return stem
+    return folder_name(base[:years[-1].end()], tag)
+
+
+def is_bonus_folder_name(name: str) -> bool:
+    """Whether a folder of this name holds bonus material rather than a film.
+
+    Matched on the name's END, so a disc's "Movie Featurettes" counts as much
+    as a plain "Featurettes". Two ways in: a name ending in "extras" in any
+    case - the one spelling common enough in the wild to catch before anything
+    has been renamed - or one ending in a folder name in the case Plex spells
+    it, which is also the case this library writes.
+    """
+    if shell_lower(name).endswith("extras"):
+        return True
+    return any(name.endswith(candidate) for candidate in BONUS_FOLDERS)
 
 
 def untagged_base(folder: str) -> tuple:

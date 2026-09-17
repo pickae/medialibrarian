@@ -205,6 +205,10 @@ BONUS_CATEGORIES = (
 # above, plus Featurettes - the folder extras land in before they are sorted.
 # DERIVED, because a category added above but missing here would have its folder
 # treated as a film folder and each featurette in it remuxed as a feature.
+#
+# The same list lives in :data:`plexnames.BONUS_FOLDERS`, which is where the
+# rest of the library asks what may sit inside a film's folder; only a category
+# added here that Plex's own list has not caught up with is this script's alone.
 BONUS_FOLDER_NAMES = ("Featurettes",) + tuple(
     name for name, _keywords in BONUS_CATEGORIES)
 
@@ -248,14 +252,15 @@ def is_bonus_folder(path: str) -> bool:
     """``isBonusFolder``: does this folder hold bonus material rather than a
     film? The guard every per-movie phase opens with.
 
-    Matched on the folder's own last component, by SUFFIX, so a disc's "Movie
-    Featurettes" counts as much as a plain "Featurettes". Two ways in: a name
-    ending in "extras" in any case - the one spelling common enough in the wild
-    to catch before anything has been renamed - or one ending in a category name
-    in the case Plex spells it, which is also the case this script writes.
+    Asked of the folder's own last component, and answered by
+    :func:`plexnames.is_bonus_folder_name` - one answer for the whole library,
+    because the phase that decides what to remux and the phase that decides
+    what is a film folder have to agree about what a "Featurettes" is. The
+    categories above are asked after it, so one added here before Plex's list
+    knows it is still not mistaken for a film.
     """
     name = os.path.basename(path.rstrip("/"))
-    if enums.shell_lower(name).endswith("extras"):
+    if plexnames.is_bonus_folder_name(name):
         return True
     return any(name.endswith(candidate) for candidate in BONUS_FOLDER_NAMES)
 
@@ -546,15 +551,33 @@ def _remove_empty_below(root: str) -> None:
 
 def movies_into_subfolders(root: str) -> None:
     """``moviesIntoSubfolders``: a movie that arrived as a loose file gets a
-    folder of its own, which is the layout Plex wants."""
+    folder of its own, which is the layout Plex wants.
+
+    Named for the FILM and not for the file: a file says which cut it is and
+    which of a split film's halves it is, and a folder holds every cut and both
+    halves. So a "<film> (1999) Extended Edition.mkv" is given a "<film>
+    (1999)" - it keeps its own words, where Plex reads the edition off - and
+    the theatrical copy beside it is given that same folder rather than a
+    second one naming the same film.
+
+    Which is why the folder is only MADE when it is missing: two files of one
+    film want one folder, and the second of them is joining a folder rather
+    than failing to create it. A film already there under the name this one
+    would take is left loose, the way it always has been - that is a collision
+    to look at, not one to resolve by overwriting.
+    """
     for name in sorted(_names_in(root)):
         path = os.path.join(root, name)
         if not (os.path.isfile(path) and name.endswith(".mkv")):
             continue
-        folder = os.path.join(root, os.path.splitext(name)[0])
+        folder = os.path.join(root, plexnames.folder_for(
+            os.path.splitext(name)[0]))
+        target = os.path.join(folder, name)
+        if os.path.exists(target):
+            continue
         try:
-            os.mkdir(folder)
-            os.rename(path, os.path.join(folder, name))
+            os.makedirs(folder, exist_ok=True)
+            os.rename(path, target)
         except OSError:
             continue
 

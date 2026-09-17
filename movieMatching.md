@@ -18,9 +18,9 @@ first.
 
 ### Gate 1 - a folder with no year is never asked about at all
 
-`read_folder` ([tmdblookup.py:136](medialib/lib/tmdblookup.py:136)) answers
+`read_folder` ([tmdblookup.py:133](medialib/lib/tmdblookup.py:133)) answers
 empty strings for a name with no `(YYYY)` in it, and the walk
-([tmdblookup.py:1478](medialib/lib/tmdblookup.py:1478)) does
+([tmdblookup.py:1512](medialib/lib/tmdblookup.py:1512)) does
 
 ```python
 base, tag, title, year, edition = read_folder(folder.name)

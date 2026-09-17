@@ -1357,27 +1357,71 @@ def is_film_folder(entry) -> bool:
     film's own material - its extras, its Subs - and not more films.
 
     A folder that says something after its year is that film too, but only
-    while it holds one. The words after a year are how a release names itself,
-    and they are also how a shelf of films names the thing they have in common
-    - so the disk is asked rather than the name, and a folder with no film
-    directly in it is still a folder to look inside.
+    while what is inside it is one film's. The words after a year are how a
+    release names itself, and they are also how a shelf of films names the
+    thing they have in common - "<film> (1999) Collection", "<film> (1999)
+    Trilogy" - so the disk is asked rather than the name, and a folder that
+    holds films rather than a film is one to look inside. Read as a film it
+    would be looked up once, renamed onto whatever that one answer was, and
+    every film under it lost inside it.
+
+    Which the disk says two ways, and both have to hold: the film is here, and
+    nothing is under this folder that is not this film's own. See
+    :func:`_holds_one_films_material`.
     """
     base, _tag, _title, _year, edition = read_folder(entry.name)
     if not base:
         return False
     if not edition:
         return True
-    return _holds_a_film(entry.path)
+    return _holds_one_films_material(entry.path)
 
 
-def _holds_a_film(path: str) -> bool:
-    """Whether a movie file sits directly in this folder."""
+def _holds_one_films_material(path: str) -> bool:
+    """Whether what sits in this folder is one film and nothing but that film's
+    own material.
+
+    The film itself directly in it, and below it only the folders Plex reads
+    extras out of - a "Featurettes", a "Deleted Scenes" - each holding files
+    and no folders of its own. One level, and named the way Plex names them.
+
+    Anything else and this is a folder of FILMS: another film's folder under it
+    is exactly what a box set looks like, and a nesting deeper than Plex reads
+    is a tree nobody laid out for Plex at all. Neither is a thing to look up
+    under the one name this folder carries.
+
+    Strictly, which costs a folder still holding the "Subs" a release shipped:
+    it is read as a shelf and walked into rather than looked up, and the films
+    under it - there are none - are what gets asked about instead. The ingest's
+    own subtitle phase lifts that folder before this runs. A plain
+    "Title (Year)" is never asked any of this: its name left no doubt, so what
+    is under it is its own business, Subs and all.
+    """
     try:
-        return any(item.is_file(follow_symlinks=False)
-                   and plexnames.is_movie_file(item.name)
-                   for item in os.scandir(path))
+        inside = list(os.scandir(path))
     except OSError:
         return False
+    film = False
+    for item in inside:
+        if item.is_dir(follow_symlinks=False):
+            if not plexnames.is_bonus_folder_name(item.name):
+                return False
+            if _holds_a_folder(item.path):
+                return False
+        elif item.is_file(follow_symlinks=False):
+            film = film or plexnames.is_movie_file(item.name)
+    return film
+
+
+def _holds_a_folder(path: str) -> bool:
+    """Whether a folder sits inside this one - which is the second level a
+    film's own material never has. A folder that cannot be read answers yes:
+    what is not seen is not vouched for."""
+    try:
+        return any(item.is_dir(follow_symlinks=False)
+                   for item in os.scandir(path))
+    except OSError:
+        return True
 
 
 def _film_folders(directory: str) -> list:
