@@ -30,7 +30,12 @@ _BASE = "https://api.themoviedb.org/3"
 # A movie folder is "Title (Year)" where the Year is 1xxx or 2xxx. The greedy
 # title takes everything up to the LAST "(Year)", so "Nighthawk (1999) (2005)"
 # reads as title "Nighthawk (1999)", year "2005".
-_YEAR_RE = re.compile(r"^(.+) \(([12][0-9]{3})\)$")
+#
+# Whatever follows the year is what the RELEASE says about itself, read exactly
+# as the same words are when a file rather than a folder carries them: a
+# "The Movie (1999) Extended Edition" is this film's extended edition and not a
+# folder of some other shape.
+_YEAR_RE = re.compile(r"^(.+) \(([12][0-9]{3})\)(.*)$")
 
 # The four ways a folder writes a year that no reader here can see - or that it
 # reads as half of the title. None of them is a matching question: each is a
@@ -126,17 +131,25 @@ def repair_year(base: str) -> str:
 
 
 def read_folder(name: str) -> tuple:
-    """A folder name read as (base, tag, title, year), or four empties.
+    """A folder name read as (base, tag, title, year, edition), or five empties.
 
     The one place a folder name is taken apart, so what counts as a film folder
     is the same question wherever it is asked - the walk that decides which
     folders to descend into, and the tagging that decides what to look up.
+
+    ``base`` stops at the year, and anything the folder said after it comes back
+    as ``edition`` instead: a folder is the film and its id and nothing else,
+    and which release it holds is a thing its films carry. Mostly it is the
+    film's own words said twice, because the phase that gives a loose film a
+    folder names that folder after the file.
     """
     base, tag = plexnames.untagged_base(name)
     match = _YEAR_RE.match(base)
     if not match:
-        return "", "", "", ""
-    return base, tag, match.group(1), match.group(2)
+        return "", "", "", "", ""
+    return ("%s (%s)" % (match.group(1), match.group(2)), tag,
+            match.group(1), match.group(2),
+            plexnames.edition_name(match.group(3)))
 
 
 # What TMDb asks of a caller: about ten requests a second. One film costs
@@ -1312,7 +1325,7 @@ def _repair_year_names(directory: str, recursive: bool,
             _repair_one(entry, directory, plexnames.folder_name(repaired, tag),
                         skip_log, dry_run, log)
             continue
-        if recursive and not read_folder(entry.name)[0]:
+        if recursive and not is_film_folder(entry):
             _repair_year_names(entry.path, recursive, skip_log, dry_run, log)
 
 
@@ -1336,16 +1349,89 @@ def _repair_one(entry, directory: str, wanted: str,
         .format(entry.name, wanted))
 
 
+def is_film_folder(entry) -> bool:
+    """Whether this directory is one film's own folder, rather than one to look
+    for films inside.
+
+    A folder named "Title (Year)" IS a film: what sits inside one is that
+    film's own material - its extras, its Subs - and not more films.
+
+    A folder that says something after its year is that film too, but only
+    while what is inside it is one film's. The words after a year are how a
+    release names itself, and they are also how a shelf of films names the
+    thing they have in common - "<film> (1999) Collection", "<film> (1999)
+    Trilogy" - so the disk is asked rather than the name, and a folder that
+    holds films rather than a film is one to look inside. Read as a film it
+    would be looked up once, renamed onto whatever that one answer was, and
+    every film under it lost inside it.
+
+    Which the disk says two ways, and both have to hold: the film is here, and
+    nothing is under this folder that is not this film's own. See
+    :func:`_holds_one_films_material`.
+    """
+    base, _tag, _title, _year, edition = read_folder(entry.name)
+    if not base:
+        return False
+    if not edition:
+        return True
+    return _holds_one_films_material(entry.path)
+
+
+def _holds_one_films_material(path: str) -> bool:
+    """Whether what sits in this folder is one film and nothing but that film's
+    own material.
+
+    The film itself directly in it, and below it only the folders Plex reads
+    extras out of - a "Featurettes", a "Deleted Scenes" - each holding files
+    and no folders of its own. One level, and named the way Plex names them.
+
+    Anything else and this is a folder of FILMS: another film's folder under it
+    is exactly what a box set looks like, and a nesting deeper than Plex reads
+    is a tree nobody laid out for Plex at all. Neither is a thing to look up
+    under the one name this folder carries.
+
+    Strictly, which costs a folder still holding the "Subs" a release shipped:
+    it is read as a shelf and walked into rather than looked up, and the films
+    under it - there are none - are what gets asked about instead. The ingest's
+    own subtitle phase lifts that folder before this runs. A plain
+    "Title (Year)" is never asked any of this: its name left no doubt, so what
+    is under it is its own business, Subs and all.
+    """
+    try:
+        inside = list(os.scandir(path))
+    except OSError:
+        return False
+    film = False
+    for item in inside:
+        if item.is_dir(follow_symlinks=False):
+            if not plexnames.is_bonus_folder_name(item.name):
+                return False
+            if _holds_a_folder(item.path):
+                return False
+        elif item.is_file(follow_symlinks=False):
+            film = film or plexnames.is_movie_file(item.name)
+    return film
+
+
+def _holds_a_folder(path: str) -> bool:
+    """Whether a folder sits inside this one - which is the second level a
+    film's own material never has. A folder that cannot be read answers yes:
+    what is not seen is not vouched for."""
+    try:
+        return any(item.is_dir(follow_symlinks=False)
+                   for item in os.scandir(path))
+    except OSError:
+        return True
+
+
 def _film_folders(directory: str) -> list:
     """Every film folder at or below ``directory``, in the filesystem's own
     order - the order the shell's ``find`` walks, so the lines they each log
     come out in the same sequence.
 
-    A folder named "Title (Year)" IS a film and is not descended into: what
-    sits inside one is that film's own material - its extras, its Subs - and
-    not more films. Everything else is descended through, which is what finds
-    the films in a library that keeps them a level down, in an "Unsorted" or a
-    box set, rather than directly under the root it was handed.
+    Everything that is not one is descended through, which is what finds the
+    films in a library that keeps them a level down, in an "Unsorted" or a box
+    set, rather than directly under the root it was handed.
     """
     found: list = []
     try:
@@ -1355,7 +1441,7 @@ def _film_folders(directory: str) -> list:
     for entry in entries:
         if not entry.is_dir(follow_symlinks=False):
             continue
-        if read_folder(entry.name)[0]:
+        if is_film_folder(entry):
             found.append(entry)
         else:
             found.extend(_film_folders(entry.path))
@@ -1430,8 +1516,8 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
 
     _repair_year_names(directory, recursive, skip_log, dry_run, log)
     for folder in _candidates(directory, recursive):
-        base, tag, title, year = read_folder(folder.name)
-        if not base:
+        base, tag, title, year, edition = read_folder(folder.name)
+        if not base or not is_film_folder(folder):
             continue
 
         names = [entry.name for entry in os.scandir(folder.path)
@@ -1447,6 +1533,14 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
         # a file by the name it would have had names no file at all, and the
         # runtime probe would go looking for one that is not there.
         on_disk = {new: old for old, new in corrected.items()}
+
+        # Usually the folder is saying the film's own words back: a loose film
+        # is given a folder named after the file, so the release it names is on
+        # the folder BECAUSE it is on the film. An echo carries nothing, and
+        # handing it to a film that named no release is how a theatrical cut
+        # sitting beside an extended one ends up under the other one's name.
+        if edition in plexnames.editions_in(base, respelled):
+            edition = ""
 
         # What the folder ALREADY said its film was, before anything was asked.
         # The only id that may be put on a file whose name this run cannot
@@ -1472,7 +1566,7 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
                 found, year, also = _settle_the_year(
                     title, year, plexnames.years_disagreeing(base, respelled),
                     functools.partial(_folder_runtime, folder.path, base,
-                                      respelled, on_disk),
+                                      respelled, on_disk, edition),
                     notes if near_misses is not None else None,
                     (_with_the_folder_above(directory, folder, title),
                      _without_the_folder_above(directory, folder, title)))
@@ -1604,10 +1698,11 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
             log('  TMDb spells it "{}" - renaming "{}" onto it'.format(
                 base.rsplit(" (", 1)[0], folder.name))
         if asked:
-            _report(log, base, tag, plexnames.editions_in(base, respelled),
-                    by_hand)
+            _report(log, base, tag,
+                    plexnames.editions_in(base, respelled, edition), by_hand)
         _rename_in_place(folder, names, base, tag, target, skip_log, dry_run,
-                         log, planned, found.aliases, corrected, long_names)
+                         log, planned, found.aliases, corrected, long_names,
+                         edition)
     return 0
 
 
@@ -1745,21 +1840,25 @@ def _tag_only(folder, names: list, only: str, skip_log: safety.SkipLog,
 
 
 def _folder_runtime(path: str, base: str, names: list,
-                    on_disk: dict | None = None) -> float:
+                    on_disk: dict | None = None,
+                    edition: str = "") -> float:
     """How long the film in this folder is, in seconds - or 0.0 when nothing
     here can say, which is most of the ways a folder can be arranged.
 
     A folder holding named editions says nothing on purpose: a catalogue states
     one runtime, and which of a theatrical and an extended cut it is for is
-    exactly what is not known. A split film is its parts added up, which IS what
-    the catalogue states for it. Anything else is the one file, measured the way
-    every other duration in this library is - the container's own figure.
+    exactly what is not known. A folder that names the edition itself, in
+    ``edition``, is the same folder - the cut is named once instead of once per
+    file, and the catalogue is no better placed to say which it timed. A split
+    film is its parts added up, which IS what the catalogue states for it.
+    Anything else is the one file, measured the way every other duration in
+    this library is - the container's own figure.
 
     ``names`` are the names the folder WILL hold, which is what says how the
     films in it are arranged; ``on_disk`` maps any of those back to the name the
     file is under now, which is what can actually be opened.
     """
-    if plexnames.editions_in(base, names):
+    if plexnames.editions_in(base, names, edition):
         return 0.0
     movies = plexnames.one_film_in(base, names)
     if not movies:
@@ -1947,7 +2046,8 @@ def _rename_in_place(folder, names: list, base: str, tag: str, target: str,
                      log: Callable[[str], None],
                      planned: list | None = None, aliases=(),
                      corrected: dict | None = None,
-                     long_names: LongNames | None = None) -> None:
+                     long_names: LongNames | None = None,
+                     edition: str = "") -> None:
     """One folder's films and sidecars, then the folder itself.
 
     That order and no other: renaming the folder first would move every path
@@ -1956,6 +2056,10 @@ def _rename_in_place(folder, names: list, base: str, tag: str, target: str,
     An empty ``tag`` still does the rest of the work: which release a file is
     is on the disk already, whether or not TMDb could say which film they are
     all versions of.
+
+    ``edition`` is a release only the FOLDER named, for the films in it that
+    name none of their own. Empty where the films say it themselves, which is
+    the ordinary case: there the folder simply sheds words it was only echoing.
 
     ``corrected`` are the respellings the caller has already worked out and
     reported on. Handing them over rather than letting them be worked out again
@@ -1971,7 +2075,7 @@ def _rename_in_place(folder, names: list, base: str, tag: str, target: str,
     cropped: list = []
     over_limit: list = []
     plan = plexnames.folder_renames(base, tag, names, aliases, corrected,
-                                    cropped, over_limit)
+                                    cropped, over_limit, edition)
     if not plexnames.fits_name(os.path.basename(target)):
         over_limit.append((folder.name, os.path.basename(target)))
     if over_limit:

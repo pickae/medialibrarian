@@ -90,6 +90,63 @@ class TestMoviesIntoSubfolders:
         assert not (tmp_path / "notes").exists()
 
 
+class TestTheFolderALooseFilmIsGiven:
+    """Named for the FILM, not for the file: the words a file puts after its
+    year say which cut it is, and a folder holds every cut of one film."""
+
+    def test_the_release_is_kept_on_the_file_and_left_off_the_folder(
+            self, tmp_path):
+        _write(str(tmp_path / "A Film (2020) Extended Edition.mkv"), "m")
+        im.movies_into_subfolders(str(tmp_path))
+        assert (tmp_path / "A Film (2020)"
+                / "A Film (2020) Extended Edition.mkv").is_file()
+
+    def test_two_cuts_of_one_film_land_in_one_folder(self, tmp_path):
+        """The reason the folder sheds the words at all: named after the file,
+        each cut would get a folder of its own and Plex would read two films
+        where there is one."""
+        _write(str(tmp_path / "A Film (2020).mkv"), "theatrical")
+        _write(str(tmp_path / "A Film (2020) Extended Edition.mkv"), "longer")
+        im.movies_into_subfolders(str(tmp_path))
+        assert _tree(str(tmp_path)) == [
+            "A Film (2020)",
+            os.path.join("A Film (2020)", "A Film (2020) Extended Edition.mkv"),
+            os.path.join("A Film (2020)", "A Film (2020).mkv")]
+
+    def test_both_halves_of_a_split_film_land_in_one_folder(self, tmp_path):
+        _write(str(tmp_path / "A Film (2020) Part1.mkv"), "first")
+        _write(str(tmp_path / "A Film (2020) Part2.mkv"), "second")
+        im.movies_into_subfolders(str(tmp_path))
+        assert (tmp_path / "A Film (2020)" / "A Film (2020) Part1.mkv").is_file()
+        assert (tmp_path / "A Film (2020)" / "A Film (2020) Part2.mkv").is_file()
+
+    def test_a_film_joins_the_folder_it_already_has(self, tmp_path):
+        """A loose copy beside its own film's folder goes in it - which is the
+        same move as the second of two cuts, arrived at a run apart."""
+        _film(str(tmp_path), "A Film (2020)")
+        _write(str(tmp_path / "A Film (2020) Extended Edition.mkv"), "longer")
+        im.movies_into_subfolders(str(tmp_path))
+        assert (tmp_path / "A Film (2020)"
+                / "A Film (2020) Extended Edition.mkv").read_text() == "longer"
+
+    def test_a_film_already_there_under_that_name_is_left_where_it_is(
+            self, tmp_path):
+        """A collision to look at, not one to resolve by overwriting."""
+        _film(str(tmp_path), "A Film (2020)")
+        _write(str(tmp_path / "A Film (2020).mkv"), "the loose one")
+        im.movies_into_subfolders(str(tmp_path))
+        assert (tmp_path / "A Film (2020).mkv").read_text() == "the loose one"
+        assert (tmp_path / "A Film (2020)"
+                / "A Film (2020).mkv").read_text() == "m"
+
+    def test_a_film_with_no_year_is_still_given_its_own_name(self, tmp_path):
+        """Nothing in the name says where the film stops, so none of it is cut
+        off - which is what the phase has always done."""
+        _write(str(tmp_path / "A Film.mkv"), "m")
+        im.movies_into_subfolders(str(tmp_path))
+        assert (tmp_path / "A Film" / "A Film.mkv").is_file()
+
+
 class TestTheFeaturettesRename:
     """Extras / Specials / Bonus are renamed to Featurettes, which Plex knows."""
 
