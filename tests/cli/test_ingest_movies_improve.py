@@ -285,18 +285,35 @@ class TestWhatCountsAsAlreadyThere:
     def test_a_stub_that_fits_more_than_one_of_them_is_no_answer(self,
                                                                  tmp_path):
         """Cut back that far the title says only that the film has a
-        commentary, not which - so both are appended, under their whole
-        names."""
+        commentary, not which of the two - so both are appended, under their
+        whole names."""
         assert self._film(
             tmp_path, [(1, "Commentary track one"), (2, "Commentary track two")],
             [(3, "Commentary track")]) == \
             ["Commentary track one", "Commentary track two"]
 
-    def test_and_neither_is_the_word_itself(self, tmp_path):
-        """Any of a film's commentaries could be "Commentary", or "Commentary
-        2", so a title that is no more than that matches none of them."""
+    def test_a_number_the_cut_kept_says_which_as_surely_as_a_name(self,
+                                                                   tmp_path):
+        """A film whose commentaries are numbered rather than named: the number
+        is the whole of what tells them apart, and it is there."""
+        assert self._film(tmp_path, [(1, "Commentary 1"), (2, "Commentary 2")],
+                          [(3, "Commentary 2")]) == ["Commentary 1"]
+
+    def test_and_one_the_cut_took_off_says_nothing(self, tmp_path):
+        """Cut back to the bare word the title fits both of them, so both are
+        appended - under the names that tell them apart."""
+        assert self._film(tmp_path, [(1, "Commentary 1"), (2, "Commentary 2")],
+                          [(3, "Commentary")]) == \
+            ["Commentary 1", "Commentary 2"]
+
+    def test_the_bare_word_does_say_which_in_a_film_that_has_one(self,
+                                                                 tmp_path):
+        """There being no other commentary it could be of."""
         assert self._film(tmp_path, [(1, "Commentary by Director")],
-                          [(2, "Commentary")]) == ["Commentary by Director"]
+                          [(2, "Commentary")]) == []
+
+    def test_a_title_naming_no_commentary_of_the_film_matches_none(self,
+                                                                   tmp_path):
         assert self._film(tmp_path, [(1, "Commentary by Director")],
                           [(2, "Commentary 2")]) == ["Commentary by Director"]
 
