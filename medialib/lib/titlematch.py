@@ -37,10 +37,12 @@ combinations:
 
 One thing here is not a fold, and is kept apart from them for that reason:
 :func:`one_typo_apart` answers whether two titles are one title with a single
-letter wrong. A fold is a reading of what somebody wrote and cannot be wrong;
-a typo is the claim that they wrote it wrong, which is a guess - so it is
-never a key, it is asked only where every fold has already failed, and it is
-refused on a short name and on any difference that touches a digit.
+slip of the hand in it: a letter wrong, a character too many or too few, or two
+characters written in the wrong order - the space between two words counting as
+a character in the last two. A fold is a reading of what somebody wrote and
+cannot be wrong; a typo is the claim that they wrote it wrong, which is a guess
+- so it is never a key, it is asked only where every fold has already failed,
+and it is refused on a short name and on any difference that touches a digit.
 
 Nothing here is about films. A title is a title, and the same fold serves a
 book, an album or an episode.
@@ -786,7 +788,7 @@ def equivalent(one: str, other: str) -> bool:
     return bool(title_keys(one) & title_keys(other))
 
 
-# --- the one letter somebody got wrong ---------------------------------------
+# --- the one thing somebody got wrong ----------------------------------------
 
 # How short a title may be and still have a typo read out of it. One letter in
 # three is most of a short name, and the short names are where the accidents
@@ -797,40 +799,76 @@ MIN_TYPO_LENGTH = 6
 
 
 def one_typo_apart(one: str, other: str) -> bool:
-    """Whether two written titles are one title with a single letter wrong.
+    """Whether two written titles are one title with a single slip in it.
 
     The last thing asked and never the first. Every reading in this module says
     what somebody MIGHT have written and cannot be wrong about it; this says
     they wrote it wrong, which is a guess, and a guess is only worth making
     where nothing else has answered.
 
-    What it buys, besides the plain slip, is the two families of difference no
-    table will ever hold: an americanism ("color" against "colour", "traveled"
-    against "travelled") and a character that is the SHAPE of another and is
-    not one - the ones :data:`CONFUSABLES` has not heard of yet.
+    A slip has three shapes, because a hand at speed makes three kinds of
+    mistake, and each of them has a reading of its own below. It hits the wrong
+    key - :func:`_a_letter_mistyped` reads that one, and it is the oldest
+    reading here. It strikes a key twice, or misses one altogether -
+    :func:`_a_character_too_many`, which is one reading and not two, because a
+    character too many in this title is a character too few in that one. Or it
+    hits two right keys in the wrong order,
+    which is what nothing but speed explains: "Thinner Tahn Air", "Marek
+    Halovr". None of them is a way of writing the title; each is the one title,
+    arriving damaged.
+
+    The two keys crossed are oftenest a letter and the SPACE beside it -
+    "Falcon sForever" for "Falcons Forever" - because the space is the one key
+    a thumb strikes while the fingers go on spelling, so its turn is the turn
+    nothing is watching. :func:`_a_space_crossed` reads that one, kept apart
+    from the crossing inside a word because a moved word boundary is the wider
+    claim of the two - and, in this module, the claim the FOLD has usually
+    settled first: a title joined up with no separator at all is the same title
+    whether the boundary moved or not.
+
+    What the first shape buys besides the plain slip is the two families of
+    difference no table will ever hold: an americanism ("color" against
+    "colour", "traveled" against "travelled") and a character that is the SHAPE
+    of another and is not one - the ones :data:`CONFUSABLES` has not heard of
+    yet.
 
     Three things make it safe enough to ask at all:
 
-    * the edit is a LETTER. A digit is never a slip - "Falkenauge 2" and
-      "Falkenauge 3" are one letter apart and two films, and so are a film's
+    * what the slip touches is LETTERS, and a space only where a letter
+      crossed it or where there is one too many of it. A digit is never touched
+      at all, and a space between two digits is not touched either -
+      "Falkenauge 2" and
+      "Falkenauge 3" are a letter apart and two films, "Falkenauge 12" and
+      "Falkenauge 21" are a crossing apart and two films, and so are a film's
       year and the year before it. This is also why the year needs no rule of
       its own: it is digits, so nothing in it can be a typo;
     * neither title is shorter than :data:`MIN_TYPO_LENGTH`;
-    * one edit exactly, and the titles are not already the same - a title that
+    * one slip exactly, and the titles are not already the same - a title that
       matches has been matched, and this was not asked.
     """
-    return _one_letter_apart(normalize_title(one), normalize_title(other))
+    return _one_slip_apart(normalize_title(one), normalize_title(other))
 
 
-def _one_letter_apart(one: str, other: str) -> bool:
+def _one_slip_apart(one: str, other: str) -> bool:
     """The comparison itself, over two titles already folded.
 
     Worked out from the ends rather than with an edit-distance table: what is
     left once the common head and the common tail are taken off the two titles
-    IS the edit, and a single substitution leaves one letter on each side while
-    a single insertion or deletion leaves one letter on one side and nothing on
-    the other. Anything else is two edits or more, and is not asked about
-    further.
+    IS the slip, and each shape of slip leaves a residue of its own, which is
+    what the four readings below are told apart by. One character on each side
+    is a key mistyped (:func:`_a_letter_mistyped`); one on a side and nothing on
+    the other is a key struck twice or not at all
+    (:func:`_a_character_too_many`); two
+    on each side, each side the other read backwards, is two keys struck in the
+    wrong order (:func:`_two_letters_crossed`, :func:`_a_space_crossed`).
+
+    The readings that may touch a space are kept apart from the ones that may
+    not, rather than folded into a wider test, because a space is a different
+    claim: a letter changed is a title spelled wrongly, a boundary moved or
+    lost is the same letters divided up differently, and only the second is
+    something the fold here has an opinion of its own about.
+
+    Anything else is two slips or more, and is not asked about further.
     """
     if one == other or abs(len(one) - len(other)) > 1:
         return False
@@ -843,8 +881,117 @@ def _one_letter_apart(one: str, other: str) -> bool:
     tail = 0
     while tail < shortest - head and one[-1 - tail] == other[-1 - tail]:
         tail += 1
-    edit = one[head:len(one) - tail] + other[head:len(other) - tail]
-    return len(edit) == (2 if len(one) == len(other) else 1) and edit.isalpha()
+    left = one[head:len(one) - tail]
+    right = other[head:len(other) - tail]
+    if len(one) != len(other):
+        return (len(left) + len(right) == 1
+                and _a_character_too_many(one, other, head))
+    if len(left) == 1:
+        return _a_letter_mistyped(left, right)
+    return _two_letters_crossed(left, right) or _a_space_crossed(left, right)
+
+
+def _a_letter_mistyped(left: str, right: str) -> bool:
+    """Whether the residue is one letter standing where another belongs.
+
+    The oldest reading here and the one that earns the rung - see
+    :func:`one_typo_apart` for what it buys besides the plain slip.
+
+    A space is neither of the two letters. A boundary that became a letter, or
+    a letter that became a boundary, changes the letters of the title and is a
+    name spelled otherwise, not a key mistyped.
+    """
+    return (left + right).isalpha()
+
+
+def _a_character_too_many(one: str, other: str, head: int) -> bool:
+    """Whether the one character only the longer title has may be a slip.
+
+    The third shape a hand at speed makes, and the plainest. A key went down
+    twice - "Marekk Halvor" - or a key that should have gone down did not -
+    "Falcons Forevr". Those are not two readings but one, because they are the
+    same pair of titles with the question asked from its two ends, and which
+    title somebody actually typed is not known here and does not matter. That
+    is why this takes both titles rather than a residue: the surplus character
+    is whatever the LONGER one has at ``head``, whichever title that is.
+
+    A stray letter counts wherever it stands - doubled, wedged into a word, or
+    hanging off either end - and so does a stray space, because the key most
+    often struck by accident is the one struck by a thumb that is not taking
+    its turn among the fingers: "FalconsForever" for "Falcons Forever", and
+    "Falcon s Forever" for it as well.
+
+    Like :func:`_a_space_crossed`, the space decides little on its own - a
+    title joined up is the key :func:`title_keys` already builds with no
+    separator at all, so a caller that asked :func:`equivalent` first has been
+    told yes. The LETTER is not like that, and never was: it changes the
+    letters, no fold reaches it, and it is most of what this rung is for.
+
+    Two kinds of surplus are refused. A DIGIT, as everywhere else here -
+    "Falkenauge 1233" is not "Falkenauge 123" written clumsily, it is another
+    number. And a space standing between two digits, where what was put in or
+    left out is not a boundary between words but the boundary between two
+    counts: "Falkenauge 12 3" and "Falkenauge 123".
+
+    A space the FOLD does not keep never reaches here at all. It collapses a
+    run of them to one and strips the ends, so a doubled, leading or trailing
+    space leaves two titles that are simply equal - already matched, and never
+    a question for this rung.
+    """
+    longer = one if len(one) > len(other) else other
+    gone = longer[head]
+    if gone.isalpha():
+        return True
+    if gone != " ":
+        return False
+    return not (head and longer[head - 1].isdigit()
+                and head + 1 < len(longer) and longer[head + 1].isdigit())
+
+
+def _two_letters_crossed(left: str, right: str) -> bool:
+    """Whether the residue is two letters that changed places.
+
+    Two characters, each side the other read backwards, is the whole of what a
+    crossing is and why it needs no table either. That the two are ADJACENT the
+    trimming has already established: a pair with anything between them leaves
+    that between them too, so "abc" against "cba" reads backwards and is two
+    letters moved - two slips, not one.
+    """
+    return len(left) == 2 and left == right[::-1] and left.isalpha()
+
+
+def _a_space_crossed(left: str, right: str) -> bool:
+    """Whether the residue is a letter and the space beside it, changed places.
+
+    The same crossing over the one character in a folded title that is not a
+    letter, and the likeliest crossing there is - because the space is not typed
+    the way the letters around it are. A thumb strikes it while both hands go on
+    spelling, so it is the one key whose turn nothing is watching, and it lands
+    a moment early or a moment late: "Falcon sForever" for "Falcons Forever",
+    "FalconsF orever" for the same.
+
+    In a fold the space is more than a space - :func:`normalize_title` collapses
+    every run of punctuation down to one - so this reads a letter crossed with a
+    colon, a dash or an apostrophe as readily as with the space bar. What it
+    always means is that a word boundary moved by one letter.
+
+    Which is why it decides almost nothing here, and that is worth saying
+    plainly rather than leaving for somebody to find. A letter that changes
+    places with a space leaves the LETTERS of the title in the order they were
+    - only the boundary moved - so the key :func:`title_keys` builds with no
+    separator at all is the same key on both sides, and every caller that asks
+    :func:`equivalent` first has already been told yes. This is here to answer
+    a caller that asks this question on its own, and because the shape would
+    otherwise be half-stated: the claim is that two characters in the wrong
+    order are a slip, and the boundary is where a hand puts two characters in
+    the wrong order most.
+
+    The other half still has to be a LETTER. A digit that changed places with a
+    space is a number written in another position, and nothing here guesses
+    about numbers - though the joined-up key will have answered that one too.
+    """
+    return (len(left) == 2 and left == right[::-1]
+            and " " in left and left.strip().isalpha())
 
 
 # --- what to go asking under -------------------------------------------------

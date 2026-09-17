@@ -504,9 +504,9 @@ def onto_base(base: str, name: str, also=(), typos: bool = False) -> str:
     never in the two strings: it is the folder above saying the franchise, or a
     catalogue saying the two years are one film.
 
-    ``typos`` allows the last reading of all, a single letter wrong, on a name
-    every other reading has refused. A guess, so the caller only sets it where
-    something has already vouched for the name being guessed AT - see
+    ``typos`` allows the last reading of all, a single slip of the hand, on a
+    name every other reading has refused. A guess, so the caller only sets it
+    where something has already vouched for the name being guessed AT - see
     :func:`medialib.lib.titlematch.one_typo_apart`.
     """
     if is_kept_copy(name):
@@ -580,9 +580,9 @@ def _names_this_film(base: str, head: str, typos: bool = False) -> bool:
     year on either side of the comparison, or on neither.
 
     ``typos`` adds the one reading that is a guess, and adds it last: a name no
-    fold could bring home is asked whether it is this one with a single letter
-    wrong. Both comparisons again, because the year is as likely to be the
-    thing the file left off here as anywhere else.
+    fold could bring home is asked whether it is this one with a single slip in
+    it. Both comparisons again, because the year is as likely to be the thing
+    the file left off here as anywhere else.
     """
     if titlematch.equivalent(base, head):
         return True

@@ -86,11 +86,12 @@ title can be on page two and is then simply absent.
 
 The one gate that is the catalogue's.
 
-`_a_letter_wrong` ([tmdblookup.py:418](medialib/lib/tmdblookup.py:418)) reads a
-folder spelled a letter wrong, and it costs no request of its own because it
-does not make the near miss - it recognises one TMDb's own search already made.
-That is the assumption, and for "The Cabinet of Dr. Caligary" it does not hold:
-the search answers **zero results**, with the year and without it
+`_misspelt` ([tmdblookup.py:501](medialib/lib/tmdblookup.py:501)) reads a folder
+spelled a letter wrong, a character short or surplus, or two characters crossed,
+and it costs no request of its own because it does not make the near miss - it
+recognises one TMDb's own search already made. That is the assumption, and for
+"The Cabinet of Dr. Caligary" it does not hold: the search answers **zero
+results**, with the year and without it
 (`oneLetterWrong` in `tests/data/movieMatching/tmdb.json`). Nothing comes back, so
 there is no row for the rung to measure and the folder is reported unmatched.
 
@@ -115,7 +116,7 @@ existing fold already does most of it: `LABEL_WORDS`
 
 What is left is Gate 1 (a documentary folder often has no year) and series-style
 naming - a broadcaster's strand name in front of the film's own, which
-`_last_segment` ([titlematch.py:916](medialib/lib/titlematch.py:916)) already
+`_last_segment` ([titlematch.py:1063](medialib/lib/titlematch.py:1063)) already
 offers as a query. **Verdict: no new provider. Fix Gate 1.**
 
 ### German films - already handled better than the rest
@@ -152,7 +153,7 @@ TMDb's silent coverage is better than its reputation, but the era stresses
 everything at once: a film with an original title, an export title, a modern
 English title and a restoration title; a year that can mean four things; and
 frequently no year on disk at all. Short titles also fall under
-`MIN_TYPO_LENGTH = 6` ([titlematch.py:796](medialib/lib/titlematch.py:796)) and
+`MIN_TYPO_LENGTH = 6` ([titlematch.py:798](medialib/lib/titlematch.py:798)) and
 so are refused the typo rung.
 
 Gates 1 and 3 are most of it. What TMDb is genuinely weaker at is **shorts** -

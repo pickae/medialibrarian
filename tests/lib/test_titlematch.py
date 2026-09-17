@@ -797,7 +797,7 @@ class TestTheNameASequelHasOfItsOwn:
         assert not titlematch.equivalent(one, other)
 
 
-class TestOneLetterWrong:
+class TestOneSlipOfTheHand:
     """The last reading of all, and the only one that says somebody wrote the
     title wrongly rather than differently."""
 
@@ -812,12 +812,93 @@ class TestOneLetterWrong:
         assert titlematch.one_typo_apart(other, one)
 
     @pytest.mark.parametrize("one,other", [
+        ("Thinner Tahn Air", "Thinner Than Air"),   # a hand at speed
+        ("Marek Halovr", "Marek Halvor"),           # the last two crossed
+        ("Flacons Forever", "Falcons Forever"),     # the first two
+        ("Nordiwnd Rising", "Nordwind Rising"),     # inside a word
+    ])
+    def test_and_so_are_two_letters_written_in_the_wrong_order(self, one,
+                                                               other):
+        assert titlematch.one_typo_apart(one, other)
+        assert titlematch.one_typo_apart(other, one)
+
+    @pytest.mark.parametrize("one,other", [
+        ("Falcon sForever", "Falcons Forever"),     # the space struck late
+        ("FalconsF orever", "Falcons Forever"),     # and struck early
+        ("MarekH alvor Sunfall", "Marek Halvor Sunfall"),
+    ])
+    def test_and_a_letter_that_crossed_the_space_beside_it(self, one, other):
+        """The likeliest crossing of all, because the space is the one key a
+        thumb strikes while the fingers go on spelling."""
+        assert titlematch.one_typo_apart(one, other)
+        assert titlematch.one_typo_apart(other, one)
+
+    @pytest.mark.parametrize("one,other", [
+        ("Falcons Forevr", "Falcons Forever"),      # a letter never typed
+        ("FalconsForever", "Falcons Forever"),      # the space never typed
+        ("Marek HalvorSunfall", "Marek Halvor Sunfall"),
+    ])
+    def test_and_a_character_that_was_never_typed_at_all(self, one, other):
+        assert titlematch.one_typo_apart(one, other)
+        assert titlematch.one_typo_apart(other, one)
+
+    @pytest.mark.parametrize("one,other", [
+        ("Marekk Halvor Sunfall", "Marek Halvor Sunfall"),  # a key struck twice
+        ("Falconsx Forever", "Falcons Forever"),    # a stray letter in a word
+        ("xFalcons Forever", "Falcons Forever"),    # one hanging off the front
+        ("Falcons Foreverx", "Falcons Forever"),    # and off the back
+        ("Falcon s Forever", "Falcons Forever"),    # a stray space
+    ])
+    def test_and_a_character_struck_one_time_too_many(self, one, other):
+        """The same reading as the one above and not a second one: a character
+        too many in this title is a character too few in that one, and which
+        way round somebody typed it is not known and does not matter."""
+        assert titlematch.one_typo_apart(one, other)
+        assert titlematch.one_typo_apart(other, one)
+
+    @pytest.mark.parametrize("one,other", [
+        ("Falcons  Forever", "Falcons Forever"),    # a doubled space
+        (" Falcons Forever", "Falcons Forever"),    # a leading one
+        ("Falcons Forever ", "Falcons Forever"),    # a trailing one
+    ])
+    def test_but_a_surplus_space_the_fold_drops_is_not_a_slip_at_all(
+            self, one, other):
+        """The fold collapses a run of spaces to one and strips the ends, so
+        these are not two titles one slip apart - they are one title, and
+        matched a rung earlier."""
+        assert not titlematch.one_typo_apart(one, other)
+        assert titlematch.equivalent(one, other)
+
+    def test_and_not_a_digit_struck_twice(self):
+        """"Falkenauge 1233" is not "Falkenauge 123" typed clumsily, it is
+        another number - and nothing here guesses about numbers."""
+        assert not titlematch.one_typo_apart("Falkenauge 1233",
+                                             "Falkenauge 123")
+        assert not titlematch.equivalent("Falkenauge 1233", "Falkenauge 123")
+
+    def test_but_not_the_space_that_holds_two_numbers_apart(self):
+        """Putting that one in, or leaving it out, is not a boundary between
+        words - it is the boundary between two counts."""
+        assert not titlematch.one_typo_apart("Falkenauge 12 3",
+                                             "Falkenauge 123")
+
+    def test_and_not_a_space_that_became_a_letter(self):
+        """That changes the letters of the title, which is a name spelled
+        otherwise rather than a key struck wrongly."""
+        assert not titlematch.one_typo_apart("Falcon Sand", "FalconXSand")
+
+    @pytest.mark.parametrize("one,other", [
         ("Falkenauge 2", "Falkenauge 3"),      # the sequel
+        ("Falkenauge 12", "Falkenauge 21"),    # the sequel, crossed
         ("Falkenauge (1963)", "Falkenauge (1964)"),   # the year
+        ("Falkenauge (1963)", "Falkenauge (1936)"),   # the year, crossed
         ("Ash", "Ashe"),                        # too short to risk
         ("Orbit", "Orbits"),                    # still too short
         ("Falcons Forever", "Falcons Forever"),  # already the same title
         ("Falcons Forever", "Falcon Forevr"),   # two letters, not one
+        ("Rivertown Abcd", "Rivertown Cbad"),   # two crossings, not one
+        ("Marek Halvor", "Halvor Marek"),       # two WORDS crossed is a
+                                                # different title, not a slip
     ])
     def test_and_nothing_else_is(self, one, other):
         assert not titlematch.one_typo_apart(one, other)
@@ -827,6 +908,19 @@ class TestOneLetterWrong:
         """A guess must not be able to make two titles equivalent - every
         caller asks for it by name, and asks last."""
         assert not titlematch.equivalent("Thinner Then Air", "Thinner Than Air")
+        assert not titlematch.equivalent("Thinner Tahn Air", "Thinner Than Air")
+
+    @pytest.mark.parametrize("one,other", [
+        ("Falcon sForever", "Falcons Forever"),
+        ("FalconsForever", "Falcons Forever"),
+    ])
+    def test_but_a_boundary_that_moved_was_already_a_fold(self, one, other):
+        """The two readings that touch a space decide nothing a caller had not
+        already been told: a slip that leaves the LETTERS in the order they
+        were is the key this module builds with no separator at all, and every
+        caller asks that first. They are here so the question answers correctly
+        when it is asked on its own."""
+        assert titlematch.equivalent(one, other)
 
 
 class TestTheHeadingAPrefixMightBe:

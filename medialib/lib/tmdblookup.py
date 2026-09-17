@@ -467,7 +467,7 @@ def _under(api_key: str, query: str, want: frozenset, year: str,
     candidates = [_candidate(api_key, row) for row in asking]
     named = [row for row in candidates if want & row.titles]
     if not named:
-        named = _a_letter_wrong(candidates, plainly, notes)
+        named = _misspelt(candidates, plainly, notes)
     _note_the_unnamed(notes, candidates, named)
     named = _that_can_answer(named, notes)
     named = _the_best_evidence(named, plainly, notes)
@@ -498,16 +498,17 @@ def _under(api_key: str, query: str, want: frozenset, year: str,
     return _matched(settled, want, plainly, notes)
 
 
-def _a_letter_wrong(candidates: list, plainly: frozenset,
-                    notes: list | None = None) -> list:
-    """The candidates that carry this title with ONE LETTER wrong, and only
-    where nothing carries it at all.
+def _misspelt(candidates: list, plainly: frozenset,
+              notes: list | None = None) -> list:
+    """The candidates that carry this title MISSPELT, and only where nothing
+    carries it at all.
 
     The last reading, and the only one in the whole lookup that says the folder
     is WRONG rather than that it is written differently. What it answers is the
-    slip - "Thinner Then Air" for "Thinner Than Air" - and, for free,
-    the two families no table will ever hold: an americanism, and a character
-    that is the shape of another without being one.
+    slip - "Thinner Then Air" for "Thinner Than Air", "Thinner Tahn Air" for
+    the same - and, for free, the two families no table will ever hold: an
+    americanism, and a character that is the shape of another without being
+    one.
 
     Three things make it safe enough to ask, and each of them is somebody
     else's rule:
@@ -515,11 +516,11 @@ def _a_letter_wrong(candidates: list, plainly: frozenset,
     * it is asked last. A single candidate carrying the title as written, or
       under any reading of it, means this is never reached - which is the whole
       of "no alternative that is closer";
-    * what counts as a letter wrong is
+    * what counts as misspelt is
       :func:`medialib.lib.titlematch.one_typo_apart`, which refuses a short
       title and any difference touching a digit - so a year, a sequel's number
       and a series' roman numeral are never slips;
-    * two candidates a letter away are still two, and the certainty rule below
+    * two candidates a slip away are still two, and the certainty rule below
       answers a pair by naming neither. Nothing here chooses between guesses.
 
     It costs no request of its own: TMDb's own search is what turned a
@@ -529,8 +530,8 @@ def _a_letter_wrong(candidates: list, plainly: frozenset,
             if any(titlematch.one_typo_apart(spelling, plain)
                    for spelling in row.spellings for plain in plainly)]
     for row in near:
-        _note(notes, "    %s - carries this title with one letter wrong, and "
-              "nothing carries it as written" % _says(row))
+        _note(notes, "    %s - carries this title misspelt, and nothing "
+              "carries it as written" % _says(row))
     return near
 
 
@@ -757,9 +758,9 @@ def _matched(candidate: _Candidate, want: frozenset,
     or a NUL. Trade/Off is a real film and not a real folder, and the id is still
     worth having.
 
-    A candidate settled on by :func:`_a_letter_wrong` has no title the folder's
-    keys meet - that is what it means to be a letter wrong - so the spelling is
-    the one the letter was wrong in. Which is the whole point of naming it: the
+    A candidate settled on by :func:`_misspelt` has no title the folder's keys
+    meet - that is what it means to be misspelt - so the spelling is the one the
+    slip was made in. Which is the whole point of naming it: the
     folder is spelt the way the catalogue spells it, and the slip goes away.
 
     A candidate with no IMDb id is settled on all the same, and is still no
