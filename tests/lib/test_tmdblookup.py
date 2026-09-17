@@ -2179,6 +2179,108 @@ class TestTheFolderAboveAsTheFirstHalfOfTheTitle:
                 / "Seewolf Wiederkehr (1997) {imdb-tt0118583}").is_dir()
 
 
+class TestAFolderNamedWithTwoOfItsTitles:
+    """A library that could not choose between a film's names wrote both of
+    them, with an "aka" between. That name is not a name any catalogue holds,
+    so it comes apart and each title is asked about in turn."""
+
+    def _network(self, monkeypatch, known):
+        """The same catalogue as above: it answers only to the titles in
+        ``known``, folded exactly, so what is exercised is which spellings are
+        asked and in what order."""
+        monkeypatch.setenv("tmdbApiKey", "apikey")
+        asked = []
+
+        def fake_curl(url, params):
+            kv = dict(params)
+            if url == _BASE + "/search/movie":
+                asked.append(kv["query"])
+                for wanted, (rid, _imdb, year) in known.items():
+                    if titlematch.normalize_title(kv["query"]) \
+                            == titlematch.normalize_title(wanted):
+                        return json.dumps({"results": [
+                            _row(rid, wanted, date=year + "-05-01")]})
+                return json.dumps({"results": []})
+            match = re.match(r"^" + re.escape(_BASE) + r"/movie/(\d+)$", url)
+            if match:
+                for _t, (rid, imdb, _y) in known.items():
+                    if rid == int(match.group(1)):
+                        return json.dumps({"external_ids": {"imdb_id": imdb}})
+            return None
+
+        monkeypatch.setattr(tmdblookup, "_curl", fake_curl)
+        return asked
+
+    def _folder(self, tmp_path, base):
+        _tree(tmp_path, (base, [base + ".mkv"]))
+
+    def test_the_title_on_the_right_names_the_film(self, monkeypatch,
+                                                    tmp_path):
+        """The one the catalogue has need not be the one the librarian led
+        with."""
+        monkeypatch.chdir(tmp_path)
+        self._folder(tmp_path, "Falcons Forever aka Nordwind Rising (1998)")
+        asked = self._network(monkeypatch,
+                              {"Nordwind Rising": (1, "tt0120737", "1998")})
+        tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog())
+        assert (tmp_path
+                / "Nordwind Rising (1998) {imdb-tt0120737}").is_dir()
+        # The name holding both was never a query: no film was released under
+        # it, so asking would buy two requests and no answer.
+        assert not any("aka" in query.lower() for query in asked)
+
+    def test_and_they_are_asked_from_left_to_right(self, monkeypatch,
+                                                   tmp_path):
+        """The order they were written in, which is the order whoever named the
+        folder thought they were worth."""
+        monkeypatch.chdir(tmp_path)
+        self._folder(tmp_path, "Falcons Forever aka Nordwind Rising (1998)")
+        asked = self._network(monkeypatch, {})
+        tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog())
+        # A query that found nothing for the year is asked again without one,
+        # so what says the order is the queries themselves and not the requests.
+        assert list(dict.fromkeys(asked)) == ["Falcons Forever",
+                                              "Nordwind Rising"]
+
+    def test_the_first_that_answers_is_the_answer(self, monkeypatch, tmp_path):
+        """A film found under the name it was led with never pays for the
+        rest."""
+        monkeypatch.chdir(tmp_path)
+        self._folder(tmp_path, "Falcons Forever aka Nordwind Rising (1998)")
+        asked = self._network(monkeypatch,
+                              {"Falcons Forever": (1, "tt0120737", "1998")})
+        tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog())
+        assert asked == ["Falcons Forever"]
+        assert (tmp_path
+                / "Falcons Forever (1998) {imdb-tt0120737}").is_dir()
+
+    def test_the_matching_is_told_of_both_titles_and_not_only_the_search(
+            self, monkeypatch, tmp_path):
+        """Reaching the candidate is half of it: a film offered under one of
+        the two names has to be RECOGNISED under it, and the folder's own keys
+        are what does the recognising."""
+        monkeypatch.chdir(tmp_path)
+        self._folder(tmp_path, "Falcons Forever aka Nordwind Rising (1998)")
+        # Answers to the left-hand title with the right-hand film, the way a
+        # search that reaches past the exact words does.
+        self._network(monkeypatch,
+                      {"Falcons Forever": (1, "tt0000001", "1998"),
+                       "Nordwind Rising": (1, "tt0000001", "1998")})
+        tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog())
+        assert (tmp_path
+                / "Falcons Forever (1998) {imdb-tt0000001}").is_dir()
+
+    def test_a_film_whose_name_merely_holds_the_word_is_left_whole(
+            self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        self._folder(tmp_path, "Nakamura Lane (1998)")
+        asked = self._network(monkeypatch,
+                              {"Nakamura Lane": (1, "tt0120737", "1998")})
+        tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog())
+        assert asked == ["Nakamura Lane"]
+        assert (tmp_path / "Nakamura Lane (1998) {imdb-tt0120737}").is_dir()
+
+
 class TestTheFoldsAReportShows:
     def test_a_tag_is_not_folded_into_what_a_name_says(self, monkeypatch,
                                                         tmp_path):

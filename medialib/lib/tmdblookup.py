@@ -353,6 +353,12 @@ def identify(title: str, year: str,
     trust, and so a rule that is too narrow shows up as a page of candidates
     that were obviously the film.
 
+    A folder whose name turns out to hold SEVERAL of the film's titles rather
+    than one of them - the "aka" a library writes when it cannot choose - is
+    taken apart first, and each title asked about in turn, left to right. See
+    :func:`_each_title`: that name is not a spelling of anything a catalogue
+    holds, so it is not a query, and each of the titles in it is.
+
     ``also`` are further titles this folder might be the film of - the one the
     folder above it makes when its name is read as the first half of the title.
     They count both ways: each is asked about in its own right, and a candidate
@@ -362,7 +368,7 @@ def identify(title: str, year: str,
     api_key = os.environ.get("tmdbApiKey", "")
     if not api_key:
         return Match()
-    reading = (title,) + tuple(other for other in also if other)
+    reading = _each_title((title,) + tuple(other for other in also if other))
     want = frozenset().union(*(title_keys(one) for one in reading))
     if not want:
         return Match()
@@ -416,6 +422,37 @@ def _settle_the_year(title: str, year: str, others: list,
         if second.imdb:
             return second, other, ("%s (%s)" % (title, year),)
     return found, year, ()
+
+
+def _each_title(reading: tuple) -> tuple:
+    """The same readings with any name that is SEVERAL names replaced by the
+    names it holds, left to right.
+
+    A library that could not choose between a film's titles writes both, with
+    an "aka" between them: "Falcons Forever aka Nordwind Rising". Nothing can
+    be looked up under that. It is not a spelling of either title - no
+    catalogue holds it, no fold reaches it, and the search is handed a query no
+    film was ever released under - so the name has to come apart before any of
+    the ladders below see it, which is why this stands here and not among them.
+
+    The whole name is dropped rather than kept as a further reading. Each of
+    the titles in it IS a name the film has, so asking under all of them at
+    once would buy a query that cannot answer and two requests to find that out
+    - and :func:`medialib.lib.titlematch.titles_written_together` only divides
+    a name where the marker plainly holds two titles apart, so a title with the
+    word in it is never taken to pieces to begin with.
+
+    Left to right, and the first that settles is the answer: that is the order
+    somebody wrote them in, and the one they led with is the one they thought
+    the film was called. Each is asked in its own right and each counts as this
+    film's title - the same arrangement ``also`` already has, and for the same
+    reason, because two names for one film is exactly what the folder is
+    claiming.
+    """
+    found: list = []
+    for one in reading:
+        found.extend(titlematch.titles_written_together(one) or [one])
+    return tuple(found)
 
 
 def _queries(reading: tuple) -> list:

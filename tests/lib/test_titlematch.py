@@ -923,6 +923,72 @@ class TestOneSlipOfTheHand:
         assert titlematch.equivalent(one, other)
 
 
+class TestTheNameThatIsSeveralNames:
+    """A folder named with every title its film has rather than with one of
+    them. No fold reaches that name, because it is not a name anybody
+    catalogued - so it comes apart instead."""
+
+    @pytest.mark.parametrize("name", [
+        "Falcons Forever aka Nordwind Rising",
+        "Falcons Forever AKA Nordwind Rising",
+        "Falcons Forever a.k.a. Nordwind Rising",
+        "Falcons Forever a.k.a Nordwind Rising",
+        "Falcons Forever a/k/a Nordwind Rising",
+        "Falcons Forever also known as Nordwind Rising",
+        "Falcons Forever, aka Nordwind Rising",
+        "Falcons Forever - aka - Nordwind Rising",
+    ])
+    def test_the_marker_is_read_in_every_spelling_a_keyboard_makes(self, name):
+        assert titlematch.titles_written_together(name) \
+            == ["Falcons Forever", "Nordwind Rising"]
+
+    @pytest.mark.parametrize("name", [
+        "Falcons Forever (aka Nordwind Rising)",
+        "Falcons Forever [AKA Nordwind Rising]",
+    ])
+    def test_and_the_aside_a_library_held_it_at_arms_length_in(self, name):
+        """The bracket belongs to the marker at both ends: its opener comes off
+        with the marker and its closer is left over at the end of the name."""
+        assert titlematch.titles_written_together(name) \
+            == ["Falcons Forever", "Nordwind Rising"]
+
+    def test_but_a_title_keeps_brackets_of_its_own(self):
+        assert titlematch.titles_written_together(
+            "Nordwind (Der Sturm) aka Sunfall") \
+            == ["Nordwind (Der Sturm)", "Sunfall"]
+
+    def test_the_titles_come_back_in_the_order_they_were_written(self):
+        assert titlematch.titles_written_together(
+            "Falcons Forever aka Nordwind Rising aka Sunfall") \
+            == ["Falcons Forever", "Nordwind Rising", "Sunfall"]
+
+    def test_and_there_are_never_more_of_them_than_the_bound(self):
+        """Each title read out here costs a ladder of queries of its own."""
+        many = " aka ".join(["Falcons Forever", "Nordwind", "Sunfall",
+                             "Ember", "Blackfeather"])
+        assert len(titlematch.titles_written_together(many)) \
+            == titlematch.MAX_JOINED_TITLES
+
+    @pytest.mark.parametrize("name", [
+        "Falcons Forever",              # one title, which is nearly always
+        "Nakamura Lane",                 # the marker inside a word
+        "Aka Sunfall",                    # and a film whose name it is
+        "Marek Halvor aka",             # nothing on the far side
+        "aka Nordwind Rising",          # nor on the near one
+    ])
+    def test_and_nothing_else_is_two_names(self, name):
+        assert titlematch.titles_written_together(name) == []
+
+    def test_two_names_written_together_are_not_made_one_title(self):
+        """The reply is two names for a caller to ask about in turn, never a
+        wider key: a folder called by either name alone is a folder this module
+        has been told nothing about."""
+        assert not titlematch.equivalent("Falcons Forever aka Nordwind Rising",
+                                         "Falcons Forever")
+        assert not titlematch.equivalent("Falcons Forever aka Nordwind Rising",
+                                         "Nordwind Rising")
+
+
 class TestTheHeadingAPrefixMightBe:
     def test_a_title_breaks_at_its_first_separator(self):
         assert titlematch.leading_segment("Marek Halvor - Sunfall") \
