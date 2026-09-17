@@ -143,6 +143,17 @@ def fits_name(name: str) -> bool:
     return len(name.encode("utf-8", "surrogateescape")) <= NAME_MAX_BYTES
 
 
+def cut_to_bytes(name: str, limit: int) -> str:
+    """``name`` cut back until it fits ``limit`` bytes, or "" if it never does.
+
+    Characters come off whole: a name cut mid-character would not be the name
+    anything else works out for itself.
+    """
+    while name and len(name.encode("utf-8", "surrogateescape")) > limit:
+        name = name[:-1]
+    return name
+
+
 def _split_suffix(tail: str) -> tuple:
     """A sidecar's tail as (what is named, the extensions on the end)."""
     named, extension = os.path.splitext(tail)
@@ -170,10 +181,9 @@ def crop_commentary(wanted: str, tail: str) -> str:
         return ""
     if suffix.rsplit(".", 1)[-1].lower() not in COMMENTARY_EXTENSIONS:
         return ""
-    # Cut where the transcription cuts, and then further for a name whose
-    # characters cost more than a byte each: that cut counts characters, and
-    # the limit this has to come in under counts bytes.
-    stem = (wanted + named)[:COMMENTARY_STEM_MAX_BYTES]
+    # Cut where the transcription cuts, and then further for a suffix longer
+    # than the room the stem limit keeps back for one.
+    stem = cut_to_bytes(wanted + named, COMMENTARY_STEM_MAX_BYTES)
     while stem and not fits_name(stem + suffix):
         stem = stem[:-1]
     # The film, the tag and the track's number, which is as deep as a cut may

@@ -390,6 +390,7 @@ class Track:
         for field in self.FIELDS:
             setattr(self, field, fields.get(field, ""))
         self.objects = ""
+        self.ex = ""
         self.action = "keep"
         self.opus = ""
 
@@ -473,12 +474,14 @@ def read_track_info(movie: str) -> tuple:
 
 
 def _object_flags(movie: str, tracks: list) -> None:
-    """Which audio tracks carry object-based metadata (Dolby Atmos / DTS:X).
+    """Which audio tracks carry object-based metadata (Dolby Atmos / DTS:X), and
+    which carry a matrixed Dolby Surround EX channel.
 
-    One mediainfo pass gives each track's commercial name and object count in the
-    same file order as the mkvmerge list, so the a-th audio track here is the
-    a-th one mediainfo reports. A mediainfo that cannot read the file leaves
-    every flag empty and the ladder deduplicates on codec and channels alone.
+    One mediainfo pass gives each track's commercial name, object count and
+    settings mode in the same file order as the mkvmerge list, so the a-th audio
+    track here is the a-th one mediainfo reports. A mediainfo that cannot read
+    the file leaves every flag empty and the ladder deduplicates on codec and
+    channels alone.
     """
     import json
     rows = []
@@ -495,7 +498,8 @@ def _object_flags(movie: str, tracks: list) -> None:
                 continue
             extra = entry.get("extra") or {}
             rows.append((entry.get("Format_Commercial_IfAny") or "-",
-                         _as_text(extra.get("NumberOfDynamicObjects") or "-")))
+                         _as_text(extra.get("NumberOfDynamicObjects") or "-"),
+                         entry.get("Format_Settings_Mode") or "-"))
     except (OSError, ValueError, AttributeError):
         rows = []
 
@@ -503,10 +507,11 @@ def _object_flags(movie: str, tracks: list) -> None:
     for track in tracks:
         if not track.is_audio:
             continue
-        commercial, objects = rows[audio_index] if audio_index < len(rows) \
-            else ("", "")
+        commercial, objects, mode = rows[audio_index] \
+            if audio_index < len(rows) else ("", "", "")
         track.objects = objectaudio.audio_object_flag(commercial, objects,
                                                       track.name)
+        track.ex = objectaudio.audio_ex_flag(mode, track.name)
         audio_index += 1
 
 
@@ -963,31 +968,34 @@ def gather_commentary_transcripts(base: str, tracks: list) -> list:
     for track in tracks:
         if not (track.is_audio and track.is_commentary):
             continue
-        name = track.name.replace("/", "").replace("&", "and")
-        stem = "%s %s %s" % (base, track.id, rename(name))
-        # Cut exactly as the transcription cut it when it wrote these, or this
-        # would look for a name that was never written.
-        stem = stem[:commentarytranscription.COMMENTARY_STEM_MAX_BYTES]
+        # Looked for by the track rather than by the whole name the
+        # transcription gave the file: that name ends in whatever was left of
+        # the track's own name after the cut for length, and the cut moves with
+        # every other part of the path. The film and the track number are the
+        # part of it no cut may reach.
+        found_at = commentarytranscription.commentary_prefix(base, track.id)
+        directory = os.path.dirname(found_at) or "."
+        prefix = os.path.basename(found_at)
 
         # Gathered before any is muxed, so a track with more than one can have
-        # the language put into their titles.
-        transcripts = []
-        directory = os.path.dirname(stem) or "."
-        prefix = os.path.basename(stem) + "."
+        # the language put into their titles - and one per language, because
+        # two files cut at different places are two copies of one transcript
+        # and appending both would put the same subtitle track in twice. The
+        # longest name wins, that being the one that lost the least of the
+        # track's own name to the cut.
+        best: dict = {}
         for candidate in sorted(_names_in(directory)):
             if not (candidate.startswith(prefix)
                     and candidate.endswith(".srt")):
                 continue
             suffix = candidate[:-len(".srt")].rpartition(".")[2]
-            # Exactly what the transcription appends - never a
-            # "<stem>.something else.srt" that happens to sit there.
-            if not _TWO_LETTER.match(suffix):
-                continue
-            transcripts.append((os.path.join(directory, candidate), suffix))
-        # One written by an older version carries no language suffix at all;
-        # those were always English.
-        if os.path.isfile(stem + ".srt"):
-            transcripts.append((stem + ".srt", "eng"))
+            # One written by an older version carries no language suffix at
+            # all; those were always English.
+            language = suffix if _TWO_LETTER.match(suffix) else "eng"
+            if len(candidate) >= len(best.get(language, "")):
+                best[language] = candidate
+        transcripts = [(os.path.join(directory, name), language)
+                       for language, name in sorted(best.items())]
 
         for srt, language in transcripts:
             title = track.name
@@ -1030,7 +1038,7 @@ def apply_surround_ladder(tracks: list) -> list:
         if track.is_commentary:
             continue
         score = objectaudio.audio_ladder_score(track.codec, track.channels,
-                                               track.objects)
+                                               track.objects, track.ex)
         if not score:
             continue
         scores[position] = int(score)

@@ -37,6 +37,8 @@ __all__ = [
     "COMMENTARY_DETECT_SECONDS",
     "COMMENTARY_DETECT_MIN_PROBABILITY",
     "SYNC_SETTLE_SECONDS",
+    "commentary_prefix",
+    "commentary_stem",
     "detect_commentary_language",
     "commentary_language",
     "transcribe_commentary",
@@ -192,15 +194,47 @@ def _strip_last_ext(path: str) -> str:
     return path[:dot] if dot != -1 else path
 
 
-def _has_existing_output(opus: str, base: str) -> bool:
-    """The bash's resume check: any output for this stem. "$base" is quoted so a
-    glob character in the movie name is matched literally and only the
-    ``.*.srt`` tail is a pattern; the ``.opus`` and the bare ``.srt`` are checked
-    separately (the bare ``.srt`` is not matched by the ``.*.srt`` pattern)."""
-    import glob
-    if os.path.isfile(opus) or os.path.isfile(base + ".srt"):
-        return True
-    return any(os.path.isfile(match) for match in glob.glob(glob.escape(base) + ".*.srt"))
+def commentary_prefix(movie_stem: str, track_id) -> str:
+    """The part of a commentary output's name that no cut may reach: the film it
+    belongs to, and the number of the track it is of.
+
+    Everything after it is the track's own name, which is the one part a name too
+    long for the filesystem is cut into - so this is what says "an output of this
+    track", whatever length the rest of it ended up being.
+    """
+    return "%s %s " % (movie_stem, track_id)
+
+
+def commentary_stem(movie_stem: str, track_id, name: str) -> str:
+    """The stem every output of one commentary track hangs off, cut to leave
+    room for the suffixes hung on it.
+
+    The cut takes the FILE NAME only and counts BYTES, because that is what the
+    limit is: a film in a deeply nested folder would otherwise lose the end of
+    its transcripts' names to the length of the path above them, and an accented
+    title spends two bytes on a letter that a count of characters spends one on.
+    """
+    stem = commentary_prefix(movie_stem, track_id) + name
+    directory, base = os.path.split(stem)
+    base = plexnames.cut_to_bytes(base, COMMENTARY_STEM_MAX_BYTES)
+    return os.path.join(directory, base) if directory else base
+
+
+def _has_existing_output(prefix: str) -> bool:
+    """The resume check: whether this TRACK already has an output of any kind.
+
+    Asked of the track and not of today's exact stem: the stem is cut at a
+    different place once anything about the name above it changes - a folder
+    renamed, an id tag added - and a check for the exact name would miss the
+    transcript sitting right there and transcribe it a second time.
+    """
+    directory, start = os.path.split(prefix)
+    try:
+        names = os.listdir(directory or ".")
+    except OSError:
+        return False
+    return any(name.startswith(start) and name.endswith((".opus", ".srt"))
+               for name in names)
 
 
 def transcribe_commentary(record: str, whisper: dict, max_sync_offset: str,
@@ -369,9 +403,8 @@ def export_commentary(directory: str, read_track_info, is_bonus_folder,
             # determine name of file to export
             name = names[i - 1].replace("/", "").replace("&", "and")
             name = rename(name)
-            base = "{} {} {}".format(_strip_last_ext(file), i - 1, name)
-            # cut to leave room for the suffixes put on it below
-            base = base[:COMMENTARY_STEM_MAX_BYTES]
+            prefix = commentary_prefix(_strip_last_ext(file), i - 1)
+            base = commentary_stem(_strip_last_ext(file), i - 1, name)
             # final outputs stay on disk next to the movie
             opus = base + ".opus"
             # the large temp audio extract goes to RAM, mirroring the absolute
@@ -384,7 +417,7 @@ def export_commentary(directory: str, read_track_info, is_bonus_folder,
 
             # Script resume: a track that already has ANY output is skipped
             # before the extract.
-            if _has_existing_output(opus, base):
+            if _has_existing_output(prefix):
                 continue
 
             # mkvtools index the whole matroska while ffmpeg indexes each track
