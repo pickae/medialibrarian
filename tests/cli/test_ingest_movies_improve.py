@@ -228,6 +228,119 @@ class TestTheEXRung:
         assert [track.ex for track in tracks] == ["1", ""]
 
 
+class TestWhatCountsAsAlreadyThere:
+    """Which of a film's commentaries the file already carries as a subtitle
+    track. The ones it has are left alone and the ones it is missing are
+    appended beside them, however the two were named."""
+
+    def _film(self, tmp_path, audio, subtitles):
+        """A film whose every commentary has a transcript on disk, and which
+        already carries the named subtitle tracks. What comes back is the title
+        each appended transcript would be given."""
+        folder = tmp_path / "Film (2020)"
+        folder.mkdir(exist_ok=True)
+        base = str(folder / "Film (2020)")
+        tracks = []
+        for id, name in audio:
+            tracks.append(rules.Track(
+                id=str(id), type="audio", codec="A_AC3", channels="2",
+                language="eng", name=name, commentary="true",
+                default="false", forced="false"))
+            open("%s %s %s.en.srt" % (base, id, name), "w").close()
+        for entry in subtitles:
+            id, name = entry[0], entry[1]
+            codec = entry[2] if len(entry) > 2 else "S_TEXT/UTF8"
+            tracks.append(rules.Track(
+                id=str(id), type="subtitles", codec=codec, channels="null",
+                language="eng", name=name, commentary="true",
+                default="false", forced="false"))
+        return [title for _srt, _language, title
+                in rules.gather_commentary_transcripts(base, tracks)]
+
+    def test_the_missing_ones_are_appended_beside_the_one_already_there(
+            self, tmp_path):
+        assert self._film(
+            tmp_path,
+            [(1, "Commentary by Director"), (2, "Commentary by Cast"),
+             (3, "Commentary by Crew")],
+            [(4, "Commentary by Cast")]) == \
+            ["Commentary by Director", "Commentary by Crew"]
+
+    def test_the_same_name_is_the_same_commentary(self, tmp_path):
+        assert self._film(tmp_path, [(1, "Commentary by Director")],
+                          [(2, "Commentary by Director")]) == []
+
+    def test_a_cut_name_is_too_while_it_still_says_which(self, tmp_path):
+        """The file name a muxed title was taken from is cut to fit the
+        filesystem, so the title in the film can be the shorter of the two."""
+        assert self._film(tmp_path, [(1, "Commentary by Director and Cast")],
+                          [(2, "Commentary by Director an")]) == []
+
+    def test_and_the_cut_may_be_on_either_side(self, tmp_path):
+        """A track whose own name is the shorter one: the film was muxed from a
+        file named after something longer than the track is called now."""
+        assert self._film(tmp_path, [(1, "Commentary by Director")],
+                          [(2, "Commentary by Director and Cast")]) == []
+
+    def test_a_stub_that_fits_more_than_one_of_them_is_no_answer(self,
+                                                                 tmp_path):
+        """Cut back that far the title says only that the film has a
+        commentary, not which - so both are appended, under their whole
+        names."""
+        assert self._film(
+            tmp_path, [(1, "Commentary track one"), (2, "Commentary track two")],
+            [(3, "Commentary track")]) == \
+            ["Commentary track one", "Commentary track two"]
+
+    def test_and_neither_is_the_word_itself(self, tmp_path):
+        """Any of a film's commentaries could be "Commentary", or "Commentary
+        2", so a title that is no more than that matches none of them."""
+        assert self._film(tmp_path, [(1, "Commentary by Director")],
+                          [(2, "Commentary")]) == ["Commentary by Director"]
+        assert self._film(tmp_path, [(1, "Commentary by Director")],
+                          [(2, "Commentary 2")]) == ["Commentary by Director"]
+
+    def test_a_nameless_commentary_is_matched_one_for_one(self, tmp_path):
+        """Nothing tells two of them apart by name, so what the file has stands
+        for one of them and the rest are still missing."""
+        assert self._film(tmp_path,
+                          [(1, "Commentary"), (2, "Commentary"),
+                           (3, "Commentary")],
+                          [(4, "Commentary")]) == ["Commentary", "Commentary"]
+
+    def test_and_is_not_spent_on_a_commentary_that_has_a_name(self, tmp_path):
+        """The named one is appended on its own account, and the nameless one
+        still has the file's nameless subtitle track to stand for it."""
+        assert self._film(tmp_path,
+                          [(1, "Commentary"), (2, "Commentary by Director")],
+                          [(3, "Commentary")]) == ["Commentary by Director"]
+
+    def test_an_image_subtitle_named_like_one_is_not_a_transcript(self,
+                                                                  tmp_path):
+        """A disc's own "Commentary #1" subtitle is a picture of the film's
+        subtitles, not a transcript, however it is named and flagged."""
+        assert self._film(tmp_path, [(1, "Commentary by Director")],
+                          [(2, "Commentary by Director", "S_HDMV/PGS")]) == \
+            ["Commentary by Director"]
+
+    def test_a_subtitle_of_another_language_is_not_one_either(self, tmp_path):
+        folder = tmp_path / "Film (2020)"
+        folder.mkdir()
+        base = str(folder / "Film (2020)")
+        open(base + " 1 Commentary by Director.en.srt", "w").close()
+        tracks = [
+            rules.Track(id="1", type="audio", codec="A_AC3", channels="2",
+                        language="eng", name="Commentary by Director",
+                        commentary="true", default="false", forced="false"),
+            rules.Track(id="2", type="subtitles", codec="S_TEXT/UTF8",
+                        channels="null", language="ger",
+                        name="Commentary by Director", commentary="true",
+                        default="false", forced="false")]
+        assert [title for _srt, _language, title
+                in rules.gather_commentary_transcripts(base, tracks)] == \
+            ["Commentary by Director"]
+
+
 class TestATranscriptCutForLength:
     """A track name too long for the filesystem is cut, and the place it is cut
     at moves with everything else in the path. The lookup is by the film and the

@@ -232,6 +232,15 @@ UNIT = "\x1f"
 _YEAR = re.compile(r"[1-2][0-9][0-9][0-9]")
 _TWO_LETTER = re.compile(r"^[a-z][a-z]$")
 
+# A title that names no commentary in particular: the word itself, which any of
+# a film's commentaries could be, with or without the number that would tell
+# them apart if the file carried one.
+_GENERIC_TITLE = re.compile(r"(?i)^commentary(\s*#?\s*[0-9]+)?$")
+
+# What an append puts on the end of a title when one commentary has transcripts
+# in more than one language, so the two are told apart in the player.
+_LANGUAGE_MARKER = re.compile(r"\s*\([A-Za-z]{2,3}\)$")
+
 
 def spec(program: str) -> "clioptions.Spec":
     return clioptions.Spec(
@@ -960,11 +969,22 @@ def gather_commentary_transcripts(base: str, tracks: list) -> list:
     """``gatherCommentaryTranscripts``: the transcripts to append as commentary
     subtitle tracks, as (srt, language, title) triples.
 
-    A transcript the movie already carries as a subtitle track - same name and
-    language, one a previous improvement appended - is left out, or every run
-    would pile another identical track on top of what the last one left.
+    A transcript the movie already carries as a subtitle track is left out, or
+    every run would pile another identical track on top of what the last one
+    left - and only that one: the commentaries the file is missing are appended
+    beside it.
     """
     found = []
+    # What every commentary of this film is called, which is what says whether a
+    # cropped title still points at one of them and at no other.
+    siblings = [_source_title(other) for other in tracks
+                if other.is_audio and other.is_commentary]
+    # The subtitle tracks whose title names no commentary in particular. Those
+    # cannot be told apart by name, so they are matched one for one instead: an
+    # unnamed commentary already in the file stands for one of the unnamed
+    # commentaries, and the rest are still missing.
+    unnamed = [other for other in tracks if _is_transcript_subtitle(other)
+               and _names_no_commentary(other.name)]
     for track in tracks:
         if not (track.is_audio and track.is_commentary):
             continue
@@ -998,23 +1018,101 @@ def gather_commentary_transcripts(base: str, tracks: list) -> list:
                        for language, name in sorted(best.items())]
 
         for srt, language in transcripts:
-            title = track.name
-            if not title or title == "null":
-                title = "Commentary"
+            title = _source_title(track)
             if len(transcripts) > 1:
                 title = "%s (%s)" % (title, language.upper())
-            if _already_a_subtitle(tracks, title, language):
+            already = _already_a_subtitle(tracks, title, language, siblings)
+            if already is None:
+                # Nothing to match a nameless commentary on but the count.
+                already = _take_unnamed_seat(unnamed, language)
+            if already:
                 log("  Commentary transcript already a subtitle track in the "
                     "file, not appending it again: " + title)
                 continue
+            # Appended under the track's own name whole, never the cut one: a
+            # title that had to be cut is what left the doubt in the first
+            # place.
             found.append((srt, language, title))
     return found
 
 
-def _already_a_subtitle(tracks: list, title: str, language: str) -> bool:
-    return any(track.is_subtitle and track.name == title
-               and languages.same_language_tag(track.language, language)
-               for track in tracks)
+def _source_title(track) -> str:
+    """The title a commentary track's transcript is appended under: the track's
+    own name, or the word itself for a track that has none."""
+    return track.name if track.name and track.name != "null" else "Commentary"
+
+
+def _names_no_commentary(title: str) -> bool:
+    """Whether a title says nothing about WHICH commentary it is: the word
+    itself, or the word and a number, which any of a film's commentaries could
+    be. A language marker an append put on the end is not part of the name."""
+    return bool(_GENERIC_TITLE.match(_LANGUAGE_MARKER.sub("", title or "")
+                                     .strip()))
+
+
+def _is_transcript_subtitle(track) -> bool:
+    """Whether a track is the kind of thing an appended transcript is: a TEXT
+    subtitle flagged as a commentary. The image subtitles a disc ships are
+    neither, however they are named."""
+    return (track.is_subtitle and track.is_commentary
+            and track.codec.upper().startswith("S_TEXT"))
+
+
+def _take_unnamed_seat(unnamed: list, language: str) -> bool:
+    """Whether one of the file's nameless commentary subtitles stands for this
+    transcript - and, where it does, spends it, so the next nameless commentary
+    of the film is matched against what is left rather than against the same
+    track again."""
+    for track in unnamed:
+        if languages.same_language_tag(track.language, language):
+            unnamed.remove(track)
+            return True
+    return False
+
+
+def _already_a_subtitle(tracks: list, title: str, language: str,
+                        siblings: list):
+    """Whether this transcript is already a subtitle track of the film, or None
+    for a title that cannot answer the question.
+
+    The track has to be a commentary subtitle of the same language, and to name
+    the same commentary - see :func:`_same_commentary`. A title that names no
+    commentary in particular answers nothing at all, and says so.
+    """
+    if _names_no_commentary(title):
+        return None
+    for track in tracks:
+        if not _is_transcript_subtitle(track):
+            continue
+        if not languages.same_language_tag(track.language, language):
+            continue
+        if _same_commentary(track.name, title, siblings):
+            return True
+    return False
+
+
+def _same_commentary(have: str, want: str, siblings: list) -> bool:
+    """Whether a commentary subtitle already in the file is of the commentary
+    this transcript is of.
+
+    The same name is the same commentary. So is a name that is the other one cut
+    short from the left - the filesystem cut the file one of them was named
+    after - but only while the cut leaves the commentary identifiable: a stub
+    that fits several of the film's commentaries, or that names none in
+    particular, is no answer, and a transcript is appended under its whole name
+    rather than passed over on a maybe.
+    """
+    have, want = (have or "").strip(), (want or "").strip()
+    if not have or not want:
+        return False
+    if have == want:
+        return True
+    short, long = (have, want) if len(have) < len(want) else (want, have)
+    if not long.startswith(short):
+        return False
+    if _names_no_commentary(short):
+        return False
+    return sum(1 for name in siblings if name.startswith(short)) == 1
 
 
 def apply_surround_ladder(tracks: list) -> list:
