@@ -832,6 +832,12 @@ remux, no tagging. The transcripts stay beside the films rather than muxed into
 them, and a rerun over the same library finds every commentary already
 transcribed and does nothing.
 
+A transcript already beside a film is left alone, unless it is too small to be
+the film's real transcript: a real one runs to the order of a kilobyte per
+minute of film, and a sidecar under half of that is the one an older run wrote
+forcing a non-English commentary through the English model. That one is
+discarded and the commentary is transcribed for real.
+
 A dry run also writes down every rename it *would* have made, beside the other
 two lists — a library of any size prints thousands of those lines, and the point
 of a dry run is to be able to read them.

@@ -10,6 +10,8 @@ touches the library.
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from medialib.cli import ingest_movies_run as run
@@ -128,9 +130,11 @@ class TestThePhaseRunsAndNothingElse:
         assert entry["jobs"] == whisper_lib.WHISPER_JOBS
         assert callable(entry["drain"])
         # The phase syncs whisper transcripts with the tight offset and this
-        # run's ffsubsync answer.
-        assert entry["rest"] == (run.rules.MAX_WHISPER_SYNC_OFFSET,
-                                 "yes")
+        # run's ffsubsync answer, and the last thing it is handed is the
+        # verdict on an existing sidecar that is too small to keep.
+        assert entry["rest"][:2] == (run.rules.MAX_WHISPER_SYNC_OFFSET,
+                                     "yes")
+        assert callable(entry["rest"][2])
 
     def test_the_drain_transcribes_with_this_run_s_settings(
             self, monkeypatch, tmp_path):
@@ -157,6 +161,27 @@ class TestThePhaseRunsAndNothingElse:
         assert offset == run.rules.MAX_WHISPER_SYNC_OFFSET
         assert quality == "yes"
         assert ram_root == str(scratch)
+
+    def test_the_discarder_is_handed_to_the_phase_to_judge_sidecars(
+            self, monkeypatch, tmp_path):
+        """The verdict on an existing sidecar is the run's own: the phase is
+        handed a callable that decides, by the sidecar's size, whether to keep
+        it or discard and re-transcribe."""
+        exports, _settled, _scratch = self._stubbed(monkeypatch, tmp_path)
+        films = _library(tmp_path, "Films")
+        assert run.main(["-c", str(films)]) == 0
+        discard_existing = exports[0]["rest"][2]
+        seen = {}
+
+        def fake_too_small(prefix, movie, durations):
+            seen["prefix"] = prefix
+            seen["movie"] = movie
+            return True
+
+        monkeypatch.setattr(run, "_sidecar_too_small", fake_too_small)
+        assert discard_existing("P ", "M") is True
+        assert seen["prefix"] == "P "
+        assert seen["movie"] == "M"
 
     def test_without_ffsubsync_and_pipx_the_warning_is_the_run(
             self, monkeypatch, tmp_path):
@@ -203,3 +228,88 @@ class TestTheCombosItRefuses:
         errors = capsys.readouterr().err
         assert "two runs, not one" in errors
         assert "Nothing was changed." in errors
+
+
+class TestTheTooSmallSidecar:
+    """A transcript already beside a film is skipped - unless it is too small to
+    be the film's real transcript. The size is judged against the film's length:
+    a real one runs to the order of a kilobyte per minute, and a sidecar under
+    half of that is the one an older run wrote forcing a non-English commentary
+    through the English model."""
+
+    def _folder(self, tmp_path, film="The Movie (1999)"):
+        folder = tmp_path / film
+        folder.mkdir(parents=True)
+        prefix = str(folder) + os.sep + film + " 0 "
+        movie = str(folder / (film + ".mkv"))
+        return prefix, movie, folder
+
+    def _write(self, folder, name, size):
+        (folder / name).write_bytes(b"x" * size)
+
+    def test_well_under_half_a_kilobyte_per_minute_is_too_small(
+            self, monkeypatch, tmp_path):
+        prefix, movie, folder = self._folder(tmp_path)
+        self._write(folder, "The Movie (1999) 0 Commentary.en.srt", 100)
+        monkeypatch.setattr(run.rules, "_duration_of", lambda _m: 100 * 60)
+        assert run._sidecar_too_small(prefix, movie, {}) is True
+
+    def test_at_the_order_of_a_kilobyte_per_minute_is_kept(
+            self, monkeypatch, tmp_path):
+        prefix, movie, folder = self._folder(tmp_path)
+        self._write(folder, "The Movie (1999) 0 Commentary.en.srt",
+                    100 * 1024)
+        monkeypatch.setattr(run.rules, "_duration_of", lambda _m: 100 * 60)
+        assert run._sidecar_too_small(prefix, movie, {}) is False
+
+    def test_the_two_language_sidecars_are_judged_together(
+            self, monkeypatch, tmp_path):
+        """A healthy supported-language commentary is two files, and their sum
+        is what clears the bar."""
+        prefix, movie, folder = self._folder(tmp_path)
+        self._write(folder, "The Movie (1999) 0 Commentary.de.srt", 30 * 1024)
+        self._write(folder, "The Movie (1999) 0 Commentary.en.srt", 30 * 1024)
+        monkeypatch.setattr(run.rules, "_duration_of", lambda _m: 100 * 60)
+        # 60 KB for 100 minutes clears the 50 KB bar.
+        assert run._sidecar_too_small(prefix, movie, {}) is False
+
+    def test_but_two_that_come_in_short_together_are_not(
+            self, monkeypatch, tmp_path):
+        prefix, movie, folder = self._folder(tmp_path)
+        self._write(folder, "The Movie (1999) 0 Commentary.de.srt", 20 * 1024)
+        self._write(folder, "The Movie (1999) 0 Commentary.en.srt", 20 * 1024)
+        monkeypatch.setattr(run.rules, "_duration_of", lambda _m: 100 * 60)
+        # 40 KB for 100 minutes is under the 50 KB bar.
+        assert run._sidecar_too_small(prefix, movie, {}) is True
+
+    def test_without_any_sidecar_there_is_nothing_to_discard(
+            self, monkeypatch, tmp_path):
+        prefix, movie, _folder = self._folder(tmp_path)
+        monkeypatch.setattr(run.rules, "_duration_of", lambda _m: 100 * 60)
+        assert run._sidecar_too_small(prefix, movie, {}) is False
+
+    def test_a_film_whose_length_cannot_be_read_is_left_alone(
+            self, monkeypatch, tmp_path):
+        """An existing transcript is not thrown away over a length that is not
+        there."""
+        prefix, movie, folder = self._folder(tmp_path)
+        self._write(folder, "The Movie (1999) 0 Commentary.en.srt", 100)
+        monkeypatch.setattr(run.rules, "_duration_of", lambda _m: 0)
+        assert run._sidecar_too_small(prefix, movie, {}) is False
+
+    def test_the_film_s_length_is_read_once_and_not_per_track(
+            self, monkeypatch, tmp_path):
+        prefix, movie, folder = self._folder(tmp_path)
+        self._write(folder, "The Movie (1999) 0 Commentary.en.srt", 100)
+        reads = []
+
+        def duration(_m):
+            reads.append(1)
+            return 100 * 60
+
+        monkeypatch.setattr(run.rules, "_duration_of", duration)
+        cache = {}
+        assert run._sidecar_too_small(prefix, movie, cache) is True
+        assert run._sidecar_too_small(prefix, movie, cache) is True
+        assert reads == [1]
+        assert movie in cache
