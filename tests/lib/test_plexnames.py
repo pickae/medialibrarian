@@ -699,6 +699,38 @@ class TestALanguageKeptAsAnEdition:
             ["The Lord of Val-Mont (1961) English.mkv"], ()) == {}
 
 
+class TestAPrefixThatIsOnlyOneWordOfTheTitle:
+    """A cut that meets a catalogue title on ONE word only is not a cut after
+    a title. The head is a prefix of the title the name itself says, and the
+    leftover is that title's continuation - which a rename would write twice."""
+
+    def test_a_roman_numeral_does_not_say_a_film(self):
+        # "II" folds to "2", and a title written in a script the fold cannot
+        # read leaves the same bare numeral in its keys.
+        assert plexnames.alias_renames(
+            "Hollow Creek II: The Stone (1982)",
+            ["II: The Stone (1982).de.srt"],
+            ("Hollow Creek II: The Stone", "Б II: Д")) == {}
+
+    def test_nor_does_the_head_of_a_shorter_title(self):
+        # "Stone One" reads as "Stone" with its one dropped, and "Stone" on
+        # its own is not the film "Stone One".
+        assert plexnames.alias_renames(
+            "Hollow Creek: Stone One (2024)",
+            ["Stone One (2024).es.srt"],
+            ("Hollow Creek: Stone One", "Stone One")) == {}
+
+    def test_a_title_said_whole_is_still_a_title(self):
+        # The guard is on the meeting and not on the name: a title of several
+        # words said whole is still said.
+        assert plexnames.alias_renames(
+            "Hollow Creek II: The Stone (1982)",
+            ["Hollow Creek Stone (1982) Theatrical.srt"],
+            ("Hollow Creek II: The Stone", "Hollow Creek Stone")) \
+            == {"Hollow Creek Stone (1982) Theatrical.srt":
+                "Hollow Creek II: The Stone (1982) Theatrical.srt"}
+
+
 class TestASourceIsNotAPart:
     """A keyword that is also the name of a SOURCE says which one the file was
     made from. A keyword that only ever names a piece says nothing of the

@@ -686,7 +686,17 @@ def _onto_base_by_alias(base: str, name: str, keys: frozenset) -> str:
             continue
         if _numbers_another_film(rest):
             continue
-        if titlematch.title_keys(head) & keys:
+        # On several words, and never on one. A one-word meeting is a word of
+        # the SAME title, not a title: a prefix as short as "II" carries its
+        # own word into the fold of the longer title it is a part of, and a
+        # title written in a script the fold cannot read leaves the same bare
+        # word behind - its "II", its "2". Meeting a catalogue title on that
+        # one word means the head is a PREFIX of the title the name says, and
+        # the leftover is the title's own continuation - which is how
+        # "II: The Stone (1982).de.srt" came back "Hollow Creek II: The Stone
+        # (1982) Stone (1982).de.srt", a name no later run can take apart.
+        shared = titlematch.title_keys(head) & keys
+        if shared and any(" " in key for key in shared):
             return base + rest
     return ""
 
