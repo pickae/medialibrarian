@@ -49,6 +49,24 @@ class TestARenameNeverHides:
         not this rename hiding anything."""
         assert safety.would_hide(target) is False
 
+    @pytest.mark.parametrize("target", [
+        "...Film (2020) {imdb-tt0120737}",
+        "a/b/...Film (2020) {imdb-tt0120737}.mkv",
+        "...Film (2020).mkv", "...",
+        "/a/hidden/...Film (2020).mkv"])
+    def test_a_name_opening_on_an_ellipsis_is_not(self, target):
+        """Three leading dots are an ellipsis in a title, not a hidden file:
+        the catalogue hands back titles that begin that way, and refusing them
+        would strand the film whose name leads with the dots."""
+        assert safety.would_hide(target) is False
+
+    @pytest.mark.parametrize("target", [
+        "..Film (2020).mkv", "a/b/..hidden", ".Film (2020).mkv"])
+    def test_one_or_two_leading_dots_still_is(self, target):
+        """A single or double dot is the hidden-file convention and stays
+        refused - the ellipsis exception is for three dots only."""
+        assert safety.would_hide(target) is True
+
     def test_safe_rename_refuses_and_records_it(self, tmp_path):
         source = tmp_path / "Film (2020).mkv"
         source.write_text("x")
