@@ -57,6 +57,13 @@ f | <file> | read the name fragments to remove from <file> (one per line,
                   data/fragments.txt beside this script. Without it that file is
                   used when it is there, and names are cleaned without any fragment
                   removal when it is not.
+c |  | commentary only: the transcription phase and nothing else - the given
+                  folders are walked the way -t walks them, and every commentary
+                  track that does not already have its transcript beside the film
+                  is transcribed next to it, in the language it is spoken in. No
+                  subtitles are downloaded, nothing is renamed, converted, remuxed
+                  or tagged, and the transcripts are left beside the films rather
+                  than muxed into them.
 t |  | tags only: the Plex/Jellyfin naming and nothing else - the IMDb id,
                   the editions a folder's several versions become, and a split
                   film's stacking token kept last. Nothing is converted,
@@ -86,9 +93,9 @@ i | <file> | the hand-written id list filled in and read BACK: tagging and
                   renames out and brings the file up to date, every folder
                   given into that one file."""
 
-OPT_VARS = "f:fragmentsOverride t:tagsOnly w:writeTags i:idList"
+OPT_VARS = "f:fragmentsOverride c:commentaryOnly t:tagsOnly w:writeTags i:idList"
 OPT_COLUMN = 18
-OPT_LONG = "f:fragments t:tags-only w:write i:ids"
+OPT_LONG = "f:fragments c:commentary t:tags-only w:write i:ids"
 
 USAGE_TAIL = """
 
