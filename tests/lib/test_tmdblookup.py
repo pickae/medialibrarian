@@ -1187,7 +1187,60 @@ class TestTagPlexIds:
             "The Movie (1999) {imdb-tt0120737}.en.srt",
             "The Movie (1999) {imdb-tt0120737}.mkv"]
         assert calls == []
+        # Said, because it HAD work to do. A rename the run cannot account for
+        # reads as a rename nobody asked for.
+        assert logs == ['  already {imdb-tt0120737}: "The Movie (1999)" - '
+                        "bringing its files into line"]
+
+    def test_but_a_tagged_folder_with_nothing_to_do_stays_quiet(
+            self, monkeypatch, tmp_path):
+        """The other half of it. Most of a library is already named, and a line
+        per folder saying so would be the whole output for the rest of its
+        life."""
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("The Movie (1999) {imdb-tt0120737}",
+                         ["The Movie (1999) {imdb-tt0120737}.mkv",
+                          "The Movie (1999) {imdb-tt0120737}.en.srt"]))
+        logs = []
+        self._env(monkeypatch, {"The Movie": "tt0120737"})
+        tmdblookup.tag_plex_ids(".", logs.append, SkipLog())
         assert logs == []
+
+    def test_a_folder_whose_files_all_spell_it_better_takes_their_spelling(
+            self, monkeypatch, tmp_path):
+        """The slip is the folder's: more names say the films' spelling than
+        say the folder's, and renaming the files onto the folder would write
+        its mistake over every name that had it right."""
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("The Moive (1999) {imdb-tt0120737}",
+                         ["The Movie (1999) {imdb-tt0120737}.mkv",
+                          "The Movie (1999) {imdb-tt0120737}.en.srt"]))
+        logs = []
+        self._env(monkeypatch, {"The Movie": "tt0120737"})
+        tmdblookup.tag_plex_ids(".", logs.append, SkipLog())
+        assert (tmp_path / "The Movie (1999) {imdb-tt0120737}").is_dir()
+        assert sorted(
+            path.name for path in
+            (tmp_path / "The Movie (1999) {imdb-tt0120737}").iterdir()) == [
+            "The Movie (1999) {imdb-tt0120737}.en.srt",
+            "The Movie (1999) {imdb-tt0120737}.mkv"]
+        assert any("has the slip in it" in line for line in logs)
+
+    def test_but_one_file_against_the_folder_outvotes_nothing(
+            self, monkeypatch, tmp_path):
+        """One name each, and nothing in the two strings says which of them is
+        the slip. The folder stays the answer there, which is the reading a
+        file with a typo in it has always been given - see
+        ``test_and_a_typo_in_the_file_is_read_against_the_settled_folder``.
+        Only being outnumbered moves it."""
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("The Moive (1999) {imdb-tt0120737}",
+                         ["The Movie (1999) {imdb-tt0120737}.mkv"]))
+        logs = []
+        self._env(monkeypatch, {"The Movie": "tt0120737"})
+        tmdblookup.tag_plex_ids(".", logs.append, SkipLog())
+        assert (tmp_path / "The Moive (1999) {imdb-tt0120737}").is_dir()
+        assert not any("has the slip in it" in line for line in logs)
 
     def test_a_second_run_over_a_tagged_library_changes_nothing(
             self, monkeypatch, tmp_path):

@@ -1685,6 +1685,21 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
                               long_names=long_names)
                     continue
 
+        # A folder whose films all spell the title one slip differently from
+        # the folder itself. The slip is the folder's: the films are what
+        # somebody was handed and the folder is what was written around them,
+        # and more names say theirs than say its. Taken BEFORE the readings
+        # below, so the folder is renamed onto its films rather than every
+        # file that had it right being renamed onto the folder's mistake.
+        if had_tag:
+            theirs, said = plexnames.films_own_spelling(base, names)
+            if theirs and said > 1:
+                log('  "%s" is spelled "%s" by %d of its files - the folder '
+                    "has the slip in it, and takes their spelling"
+                    % (base, theirs, said))
+                also += (base,)
+                base = theirs
+
         # The names read once more, now that something has vouched for the one
         # they are being read against. Two readings are only safe against a
         # vouched-for name and so were held back from the first pass: the other
@@ -1692,7 +1707,8 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
         # wrong. A name the first pass explained is explained the same way -
         # these only reach what it left over.
         if also or tag:
-            corrected = plexnames.spelling_renames(base, names, also, bool(tag))
+            corrected = plexnames.spelling_renames(base, names, also,
+                                                   bool(tag))
 
         # A file that is this film under another of its titles AND says
         # something else besides - a language written after the year, for a
@@ -1774,9 +1790,16 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
         if asked:
             _report(log, base, tag,
                     plexnames.editions_in(base, respelled, edition), by_hand)
+        # A folder already carrying its id says nothing when it has nothing to
+        # do - it would repeat its line for the rest of the library's life -
+        # but the renames it DOES make are its files being brought into line
+        # with an id it has had all along, and unexplained they read as renames
+        # nobody asked for.
+        announce = None if asked else functools.partial(
+            _say_already_tagged, log, base, tag)
         _rename_in_place(folder, names, base, tag, target, skip_log, dry_run,
-                         log, planned, found.aliases, corrected, long_names,
-                         edition)
+                         log, planned, found.aliases,
+                         corrected, long_names, edition, announce)
     return 0
 
 
@@ -1901,6 +1924,9 @@ def _tag_only(folder, names: list, only: str, skip_log: safety.SkipLog,
     if long_names is not None:
         for name, cut in cropped:
             long_names.crop(folder.path, name, cut)
+    if announce is not None and (plan or os.path.basename(target)
+                                 != folder.name):
+        announce()
     done = True
     for old, new in plan:
         if not _rename(os.path.join(folder.path, old),
@@ -2115,14 +2141,26 @@ def _report(log: Callable[[str], None], base: str, tag: str,
         log('  no confident TMDb match: "{}" - left as it is'.format(base))
 
 
+def _say_already_tagged(log: Callable[[str], None], base: str,
+                        tag: str) -> None:
+    """Said once, and only by a folder that turns out to have renames to make:
+    it was tagged before this run and what follows is its files catching up."""
+    log('  already {}: "{}" - bringing its files into line'.format(tag, base))
+
+
 def _rename_in_place(folder, names: list, base: str, tag: str, target: str,
                      skip_log: safety.SkipLog, dry_run: bool,
                      log: Callable[[str], None],
                      planned: list | None = None, aliases=(),
                      corrected: dict | None = None,
                      long_names: LongNames | None = None,
-                     edition: str = "") -> None:
+                     edition: str = "",
+                     announce: Callable[[], None] | None = None) -> None:
     """One folder's films and sidecars, then the folder itself.
+
+    ``announce`` is said once before the first rename and not at all where
+    there is none, for the caller that has a line to print only about a folder
+    that turns out to have work in it.
 
     That order and no other: renaming the folder first would move every path
     underneath it out from under the names just worked out.
@@ -2163,6 +2201,9 @@ def _rename_in_place(folder, names: list, base: str, tag: str, target: str,
     if long_names is not None:
         for name, cut in cropped:
             long_names.crop(folder.path, name, cut)
+    if announce is not None and (plan or os.path.basename(target)
+                                 != folder.name):
+        announce()
     done = True
     for old, new in plan:
         if not _rename(os.path.join(folder.path, old),

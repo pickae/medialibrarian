@@ -400,6 +400,56 @@ class TestAPartWrittenWithItsNumberHeldOff:
             == ["Film (2020) Part 1.mkv", "Film (2020) Part 2.mkv"]
 
 
+class TestTheIdIsWrittenOnce:
+    """plex_stem is the one place an id goes on, so a leftover that still
+    carries one has it written twice."""
+
+    def test_a_sidecar_already_carrying_the_tag_does_not_get_a_second(self):
+        """It matches the folder's bare stem, because the film's own stem
+        carries an edition it has not got - so its own tag is leftover."""
+        base, tag = "The Movie (1999)", "{imdb-tt0000001}"
+        names = ["The Movie (1999) " + tag + " {edition-Av1}.mkv",
+                 "The Movie (1999) " + tag + ".en.srt"]
+        assert plexnames.folder_renames(base, tag, names) == []
+
+    def test_and_what_the_leftover_goes_on_to_say_is_kept(self):
+        base, tag = "The Movie (1999)", "{imdb-tt0000001}"
+        names = ["The Movie (1999) " + tag + " {edition-Av1}.mkv",
+                 "The Movie (1999) " + tag + " 2 Commentary.srt"]
+        assert plexnames.folder_renames(base, tag, names) == []
+
+
+class TestWhoseSlipItIs:
+    """The single-slip reading says two names are one name and cannot say which
+    of them got it right. What can is how many names each spelling has."""
+
+    MISSPELT = "The Moive (1999)"
+    RIGHT = "The Movie (1999)"
+    TAG = "{imdb-tt0000001}"
+
+    def test_the_films_spelling_and_how_many_files_said_it(self):
+        names = [self.RIGHT + " " + self.TAG + ".mkv",
+                 self.RIGHT + " " + self.TAG + ".en.srt",
+                 self.RIGHT + " " + self.TAG + ".de.srt"]
+        assert plexnames.films_own_spelling(self.MISSPELT, names) == (
+            self.RIGHT, 3)
+
+    def test_but_not_where_the_folder_already_agrees(self):
+        names = [self.RIGHT + " " + self.TAG + ".mkv"]
+        assert plexnames.films_own_spelling(self.RIGHT, names) == ("", 0)
+
+    def test_nor_where_the_two_are_further_apart_than_one_slip(self):
+        names = ["Some Other Film (1999) " + self.TAG + ".mkv"]
+        assert plexnames.films_own_spelling(self.MISSPELT, names) == ("", 0)
+
+    def test_nor_where_the_films_disagree_among_themselves(self):
+        """An edition or a part puts more than the title between the two names,
+        and which part of that the slip is in is not a thing to guess at."""
+        names = [self.RIGHT + " " + self.TAG + " Part1.mkv",
+                 self.RIGHT + " " + self.TAG + " Part2.mkv"]
+        assert plexnames.films_own_spelling(self.MISSPELT, names) == ("", 0)
+
+
 class TestBringingANameOntoTheFoldersOwn:
     """A file that says the folder's film in a different spelling is that film
     written by another hand, not a second film."""
