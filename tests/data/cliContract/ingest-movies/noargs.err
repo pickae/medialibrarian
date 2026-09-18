@@ -14,6 +14,14 @@ Usage:
                   data/fragments.txt beside this script. Without it that file is
                   used when it is there, and names are cleaned without any fragment
                   removal when it is not.
+    -c, --commentary
+                  commentary only: the transcription phase and nothing else - the given
+                  folders are walked the way -t walks them, and every commentary
+                  track that does not already have its transcript beside the film
+                  is transcribed next to it, in the language it is spoken in. No
+                  subtitles are downloaded, nothing is renamed, converted, remuxed
+                  or tagged, and the transcripts are left beside the films rather
+                  than muxed into them.
     -t, --tags-only
                   tags only: the Plex/Jellyfin naming and nothing else - the IMDb id,
                   the editions a folder's several versions become, and a split

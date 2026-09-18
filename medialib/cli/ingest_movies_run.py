@@ -41,6 +41,14 @@ CORES_PER_JOB = 4
 # next; the cap is only there so a rule that oscillates cannot loop forever.
 MAX_RENAME_PASSES = 10
 
+# A commentary transcript of a film running M minutes weighs on the order of a
+# kilobyte per minute - the words a commentator speaks are proportional to the
+# film's length. A sidecar that comes in under half of that is the transcript a
+# version of the script wrote before it could tell a commentary's language, which
+# forced a non-English commentary through the English model and came back almost
+# empty. Below it, a -c run discards the sidecar and re-transcribes.
+MIN_COMMENTARY_KB_PER_MINUTE = 0.5
+
 
 class Run:
     """One run's settings, and the work its jobs do."""
@@ -515,6 +523,14 @@ def main(argv: list, program: str = "ingest-movies",
     # nothing but its names.
     if result.values.get("writeTags") and not (result.values.get("tagsOnly")
                                                or result.values.get("idList")):
+        if result.values.get("commentaryOnly"):
+            # -c writes transcripts, not names, so there is no dry run of its
+            # for -w to turn into real renames.
+            sys.stderr.write(clioptions.usage_error_text(
+                declaration,
+                "-w has no part in -c: it turns the dry run of -t or -i into "
+                "real renames, and\n-c writes none. Drop the -w."))
+            return 1
         sys.stderr.write(clioptions.usage_error_text(
             declaration,
             "-w on its own does nothing to carry out: it is what turns the dry "
@@ -522,6 +538,19 @@ def main(argv: list, program: str = "ingest-movies",
             "Without one of them this is a FULL\nINGEST - converting, "
             "transcribing and remuxing - which -w has no part in.\n\n"
             "Did you mean -tw, or -iw?"))
+        return 1
+
+    # -c is the commentary phase on its own and -t and -i the tagging phase:
+    # two runs over the same folders, neither knowing what the other would do
+    # to the names, so they are refused together rather than run in a guessed
+    # order.
+    if result.values.get("commentaryOnly") and (result.values.get("tagsOnly")
+                                                or result.values.get("idList")):
+        sys.stderr.write(clioptions.usage_error_text(
+            declaration,
+            "-c transcribes the commentary tracks and nothing else, and -t and "
+            "-i tag and nothing\nelse: they are two runs, not one. Give the "
+            "folders to each of them in turn."))
         return 1
 
     script_dir = script_dir or commands.script_dir()
@@ -542,6 +571,12 @@ def main(argv: list, program: str = "ingest-movies",
     roots, names = _resolve_roots(declaration, result.positionals)
     if roots is None:
         return 1
+
+    # Commentary only is the one phase of the full ingest it names, run on the
+    # folders given: the walk and the transcription, and not the rest of the
+    # run around them.
+    if result.values.get("commentaryOnly"):
+        return _commentary_only(program, script_dir, roots, fragments_file)
 
     # An id list is only ever read by the tagging phase, so asking for one asks
     # for that phase.
@@ -810,6 +845,132 @@ def _tags_only(program: str, roots: list, names: list, write: bool,
     if not write:
         log("Dry run: nothing was renamed. Pass -w to carry these out.")
     return 0
+
+
+def _sidecar_too_small(prefix: str, movie: str, durations: dict) -> bool:
+    """Whether the commentary sidecar already beside the film is too small to be
+    its real transcript.
+
+    The size is judged against the film's length: a real transcript runs to the
+    order of a kilobyte per minute, so a sidecar under half a kilobyte per
+    minute is the one an older run wrote forcing a non-English commentary
+    through the English model. The .srt files are the only thing this phase
+    writes, and their TOTAL is what is measured - a healthy supported-language
+    commentary is two of them, and their sum clears the bar either way. A film
+    whose length cannot be read is left alone: an existing transcript is not
+    thrown away over a figure that is not there.
+    """
+    seconds = durations.get(movie)
+    if seconds is None:
+        seconds = rules._duration_of(movie)
+        durations[movie] = seconds
+    minutes = seconds / 60.0
+    if minutes <= 0:
+        return False
+    directory, start = os.path.split(prefix)
+    directory = directory or "."
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return False
+    total = 0
+    found = False
+    for name in names:
+        if name.startswith(start) and name.endswith(".srt"):
+            found = True
+            try:
+                total += os.path.getsize(os.path.join(directory, name))
+            except OSError:
+                pass
+    if not found:
+        return False
+    return (total / 1024.0) < MIN_COMMENTARY_KB_PER_MINUTE * minutes
+
+
+def _commentary_only(program: str, script_dir: str, roots: list,
+                     fragments_file: str) -> int:
+    """The commentary transcription phase on its own.
+
+    What runs is exactly what the full run runs for this phase - the walk of
+    every folder given, the track test, the check for a transcript already
+    beside the film and the queue drained over the whisper workers - and what
+    does not is everything the full run runs around it: no subtitle
+    downloading, no renaming, no opus, no improved copies and no tagging. A
+    transcript that is written is written next to the film, and a second run
+    over the same library finds every commentary already has its sidecar and
+    does nothing, the way the phase does inside a full ingest.
+
+    A transcript already beside a film is skipped, except one too small to be
+    the film's real transcript: a real one runs to the order of a kilobyte per
+    minute of film, and a sidecar under half of that is the one an older run
+    wrote forcing a non-English commentary through the English model. That one
+    is discarded and the commentary is transcribed for real.
+
+    The transcription is the whole of the run, so its tools are the gate on it:
+    without ffsubsync and pipx there is no subtitle worth writing, and there is
+    nothing else to fall back to, so the warning they leave is the run.
+    """
+    # Which ffmpeg of the ones installed, before the preflight asks whether PATH
+    # can reach one.
+    ffmpegselect.select_ffmpeg()
+    ffmpegselect.report_ffmpeg_selection()
+
+    # The phase reads the tracks with mkvmerge, extracts with ffmpeg and probes
+    # with ffprobe; mkvpropedit and mediainfo belong to the phases this run does
+    # not do, and asking for them would refuse a host that is perfectly set up
+    # for what was asked.
+    if tooldeps.require_tools(program, ["ffmpeg", "ffprobe", "mkvmerge"]):
+        return 1
+
+    if not _settle_subtitle_work():
+        # The gate's warning says the rest of the run goes on anyway; this run
+        # has no rest, so say that the run is over.
+        log("Commentary-only has no other phase to run - nothing was done.")
+        return 0
+    ffsubsync_quality = _settle_ffsubsync_quality()
+
+    ramscratch.init_ram_base()
+    ram_root, status = ramscratch.ram_scratch_dir("ingestMovies")
+    if status != 0:
+        return 1
+    ramscratch.add_exit_cleanup([ram_root])
+
+    safety.init_abort_flag(os.path.join(ram_root, "abortRequested"))
+    safety.trap_run_abort()
+
+    # Done once, before anything is queued, so every worker inherits the
+    # answer instead of probing the GPU again.
+    from medialib.lib import whisper as whisper_lib
+    whisper = whisper_lib.init_whisper_model(str(runlog.cpu_count()),
+                                             ram_root, log)
+
+    state = Run(script_dir=script_dir, ram_root=ram_root,
+                skips=safety.RunSkipLog(), fragments_file=fragments_file,
+                whisper=whisper, ffsubsync_quality=ffsubsync_quality,
+                long_names=tmdblookup.LongNames())
+    jobs = whisper_lib.WHISPER_JOBS
+
+    try:
+        for root in roots:
+            if len(roots) > 1:
+                log('Transcribing commentary in "%s"' % root)
+            # Fresh per root: the movie paths handed down are relative to this
+            # root, so a cache keyed on them is only valid for it.
+            durations: dict[str, int] = {}
+            commentarytranscription.export_commentary(
+                root, rules.read_track_info, rules.is_bonus_folder,
+                lambda name: rules.rename(name, state.fragments_file),
+                rules.audio_stream_index, state.ram_root, state.whisper,
+                jobs, log,
+                lambda records, _queue: _drain_commentary(state, records,
+                                                          jobs),
+                rules.MAX_WHISPER_SYNC_OFFSET, state.ffsubsync_quality,
+                lambda prefix, movie, _durations=durations: _sidecar_too_small(
+                    prefix, movie, _durations))
+            safety.exit_if_aborted()
+    finally:
+        ramscratch.run_exit_cleanup()
+    return workerpool.exit_status(0)
 
 
 def _capitalise(text: str) -> str:

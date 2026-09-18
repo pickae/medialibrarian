@@ -220,8 +220,8 @@ def commentary_stem(movie_stem: str, track_id, name: str) -> str:
     return os.path.join(directory, base) if directory else base
 
 
-def _has_existing_output(prefix: str) -> bool:
-    """The resume check: whether this TRACK already has an output of any kind.
+def _existing_outputs(prefix: str) -> list:
+    """The outputs of this track already on disk.
 
     Asked of the track and not of today's exact stem: the stem is cut at a
     different place once anything about the name above it changes - a folder
@@ -229,12 +229,31 @@ def _has_existing_output(prefix: str) -> bool:
     transcript sitting right there and transcribe it a second time.
     """
     directory, start = os.path.split(prefix)
+    directory = directory or "."
     try:
-        names = os.listdir(directory or ".")
+        names = os.listdir(directory)
     except OSError:
-        return False
-    return any(name.startswith(start) and name.endswith((".opus", ".srt"))
-               for name in names)
+        return []
+    return [os.path.join(directory, name) for name in names
+            if name.startswith(start) and name.endswith((".opus", ".srt"))]
+
+
+def _has_existing_output(prefix: str) -> bool:
+    """The resume check: whether this TRACK already has an output of any kind."""
+    return bool(_existing_outputs(prefix))
+
+
+def _remove_sidecars(prefix: str) -> None:
+    """The track's transcripts, gone: the too-small sidecars a -c run discards
+    before re-transcribing. Only the .srt is removed - the .opus this phase never
+    writes to disk would belong to a run that did the opus pass, and is left
+    alone."""
+    for path in _existing_outputs(prefix):
+        if path.endswith(".srt"):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
 
 
 def transcribe_commentary(record: str, whisper: dict, max_sync_offset: str,
@@ -355,7 +374,8 @@ def _mkv_entries(top: str) -> list[str]:
 def export_commentary(directory: str, read_track_info, is_bonus_folder,
                       rename, audio_stream_index, ram_root: str,
                       whisper: dict, whisper_jobs: int, log, drain_queue,
-                      max_sync_offset: str, quality: str) -> None:
+                      max_sync_offset: str, quality: str,
+                      discard_existing=None) -> None:
     """Extract every commentary and drain the queue.
 
     ``read_track_info`` is the caller's track reader (the bash's
@@ -363,7 +383,10 @@ def export_commentary(directory: str, read_track_info, is_bonus_folder,
     ``is_bonus_folder``, ``rename`` and ``audio_stream_index`` the caller's
     helpers; ``drain_queue`` stands in for the bash's ``WHISPER_XARGS`` worker
     drain (the comparison runs the workers one record at a time through
-    :func:`transcribe_commentary`). Everything else is this run's own: the flat
+    :func:`transcribe_commentary`). ``discard_existing``, when given, is the
+    caller's verdict on a track that already has an output: True discards the
+    sidecar and transcribes for real, and absent an existing output is the
+    resume that skips the track. Everything else is this run's own: the flat
     queue spans every movie and every language wanted, so the workers stay busy
     to the last record.
     """
@@ -418,7 +441,15 @@ def export_commentary(directory: str, read_track_info, is_bonus_folder,
             # Script resume: a track that already has ANY output is skipped
             # before the extract.
             if _has_existing_output(prefix):
-                continue
+                if discard_existing is None or not discard_existing(prefix, file):
+                    continue
+                # The sidecar is too small to be this film's real transcript -
+                # the one a run wrote before it could tell a commentary's
+                # language, which forced a non-English commentary through the
+                # English model. Discard it and transcribe for real.
+                log("Discarding too-small commentary sidecar, re-transcribing "
+                    "(track {}) of: {}".format(i - 1, file))
+                _remove_sidecars(prefix)
 
             # mkvtools index the whole matroska while ffmpeg indexes each track
             # type separately and from zero

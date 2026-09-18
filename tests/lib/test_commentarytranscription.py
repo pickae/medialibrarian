@@ -173,7 +173,7 @@ def _leftover_mkas(ram):
 
 
 def _run_export(w, root, ram, tracks, detected, pipx_rc, quality="yes",
-                ffmpeg_rc="0"):
+                ffmpeg_rc="0", discard_existing=None):
     """The whole exportCommentary with its caller helpers stood in: build the
     queue and drain it one record at a time through transcribe_commentary."""
     logs = []
@@ -199,7 +199,8 @@ def _run_export(w, root, ram, tracks, detected, pipx_rc, quality="yes",
     try:
         ct.export_commentary(root, _read_track_info(tracks), _is_bonus_folder,
                              lambda name: name, _audio_stream_index, ram,
-                             WHISPER, 2, logs.append, drain, "10", quality)
+                             WHISPER, 2, logs.append, drain, "10", quality,
+                             discard_existing)
     finally:
         os.chdir(cwd)
     return logs, queue_records
@@ -703,6 +704,51 @@ class TestExportEdges:
         # failed), and the sweep leaves RAM clean of both extracts
         assert len(records) == 1
         assert _leftover_mkas(str(ram)) == []
+
+    def test_a_sidecar_the_caller_judges_too_small_is_discarded(self, w):
+        """The existing sidecar is the resume check's other answer: removed, and
+        the commentary is transcribed for real rather than skipped."""
+        root = w.tmp_path / "root"
+        root.mkdir()
+        (root / "movie.mkv").touch()
+        sidecar = root / "movie 0 Commentary.en.srt"
+        sidecar.write_bytes(b"x" * 100)
+        ram = w.tmp_path / "ram"
+        ram.mkdir()
+        tracks = {"movie": [("Commentary", "true", "audio", "eng")]}
+
+        discarded = []
+        logs, records = _run_export(
+            w, str(root), str(ram), tracks, _detected("English"), "0 0",
+            discard_existing=lambda prefix, movie: (discarded.append(prefix),
+                                                    True)[1])
+        assert len(discarded) == 1
+        assert discarded[0].endswith("movie 0 ")
+        assert not sidecar.exists()
+        assert len(records) == 1
+        assert any("Discarding" in line for line in logs)
+
+    def test_and_a_sidecar_the_caller_keeps_is_not_touched(self, w):
+        """The existing sidecar is the resume: asked about, and left alone -
+        nothing extracted, nothing queued."""
+        root = w.tmp_path / "root"
+        root.mkdir()
+        (root / "movie.mkv").touch()
+        sidecar = root / "movie 0 Commentary.en.srt"
+        sidecar.write_bytes(b"y" * 100000)
+        ram = w.tmp_path / "ram"
+        ram.mkdir()
+        tracks = {"movie": [("Commentary", "true", "audio", "eng")]}
+
+        asked = []
+        logs, records = _run_export(
+            w, str(root), str(ram), tracks, _detected("English"), "0 0",
+            discard_existing=lambda prefix, movie: (asked.append(prefix),
+                                                    False)[1])
+        assert len(asked) == 1
+        assert asked[0].endswith("movie 0 ")
+        assert sidecar.exists()
+        assert records == []
 
 
 class TestStem:
