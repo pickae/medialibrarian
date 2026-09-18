@@ -138,13 +138,18 @@ def would_hide(destination: str) -> bool:
     starting with a dot, which the shell and every file manager leave out of a
     listing.
 
+    A name that opens on an ellipsis - three dots, the way a catalogue writes a
+    title that begins with one - is a title, not a hidden file, so it is not
+    hidden: refusing it would strand a film whose very name leads that way.
+
     No rename here has a reason to do that. The scratch directories that ARE
     hidden are created under their own names and never renamed into, so a dot
     arriving at a rename target is a name that went wrong somewhere - and a
     film that vanishes out of its folder is worse than one whose name was left
     as it was.
     """
-    return os.path.basename(destination.rstrip("/")).startswith(".")
+    name = os.path.basename(destination.rstrip("/"))
+    return name.startswith(".") and not name.startswith("...")
 
 
 def safe_rename(source: str, destination: str, log: SkipLog | None = None) -> bool:
