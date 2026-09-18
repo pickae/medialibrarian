@@ -806,9 +806,17 @@ Feeding that list back is **`-i`**, the same tagging phase going on what you
 filled in — and a **dry run** too, unless `-w` is given. It prints what your ids
 would rename and writes nothing: not the lists, which are `-t`'s to write, and
 not the file you are still filling in. `-iw` carries the renames out and brings
-the file up to date. A row left blank is simply one still to do and is passed
-over; a row you filled in that names no folder in the library is an error naming
-that row, and the run carries on to the next.
+the file up to date.
+
+**An id you filled in is used, not checked.** TMDb is not asked to agree with a
+lookup you did by hand, because it is the one that failed to name the film in the
+first place. A row you left **blank** is not asked about again either, for that
+same reason — the run says how many there were, once, at the end, and nothing
+per film. A row you filled in that names no folder in the library is an error
+naming that row, and the run carries on to the next. And a `-i` file that
+**cannot be read stops the run**: counted as no ids at all, a path typed wrong
+would throw away every id in the real file and put the whole library back
+through the lookups that already failed on it.
 
 **`-w` on its own is refused.** Without `-t` or `-i` there is no dry run to
 carry out, and the run it would otherwise start is a full ingest.
