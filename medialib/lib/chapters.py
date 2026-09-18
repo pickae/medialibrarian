@@ -153,10 +153,18 @@ def _base_of(path: str) -> str:
 
 
 def _entry_path(entry: str) -> str:
-    """The path a concat line carries: every "file " and every quote gone,
-    the way the shell strips them - all occurrences of both, not just the
-    first, so a name that holds the words still lands where the shell lands."""
-    return entry.replace("file ", "").replace("'", "")
+    """The path a concat line carries: every "file " gone, the way the shell
+    strips it - all occurrences of the word, not just the first, so a name
+    that holds the word still lands where the shell lands - and the pair of
+    quotes AROUND the path gone. Only that pair: an apostrophe inside a name
+    is part of the file, and the probe it feeds must reach the file it names,
+    which is what keeps that file's chapter from collapsing to zero length."""
+    body = entry.replace("file ", "")
+    if body.startswith("'"):
+        body = body[1:]
+    if body.endswith("'"):
+        body = body[:-1]
+    return body
 
 
 def _printf_f3(text: str) -> str:

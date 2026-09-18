@@ -287,13 +287,45 @@ def _join_failed(result, output_file: str, existed_before: bool) -> bool:
     return True
 
 
+def _unsafe_in_concat_list(path: str) -> bool:
+    """Whether a name is spellable on a concat list line at all: the demuxer
+    ends the name at the next quote, and a backslash in the wrong place is
+    eaten on the way, so a name holding a quote, a backslash or a line break
+    is spelled through a stand-in link rather than in place. Nothing else in
+    a name is special, so the test is these three and no more."""
+    return any(ch in path for ch in ("'", "\\", "\n", "\r"))
+
+
+def _filtered_stderr(text: str) -> str:
+    """The join's ffmpeg stderr with the one line dropped that is not worth
+    printing: the mp3 muxer's 'non monotonically increasing dts' complaint,
+    which it says once per seam of a stream-copied join, where the copy
+    itself is fine. Every other line is a real error and stays."""
+    return "\n".join(line for line in text.splitlines()
+                     if "non monotonically increasing dts to muxer" not in line)
+
+
+def _reprint_stderr(stderr) -> None:
+    """The captured stderr of the join's ffmpeg back to the console, filtered:
+    a failure that still exits 0 is told only here, so nothing real is held."""
+    if not stderr:
+        return
+    text = stderr.decode("utf-8", "surrogateescape") \
+        if isinstance(stderr, (bytes, bytearray)) else str(stderr)
+    kept = _filtered_stderr(text)
+    if kept:
+        sys.stderr.write(kept + "\n")
+
+
 def concat_via_demuxer(folder: str, source_extension: str, output_file: str,
                        audio_codec: str, ffmpeg: str, run=_run,
-                       audio_only: bool = False) -> list:
+                       audio_only: bool = False, ram_dir: str = "") -> list:
     """ffmpeg's concat demuxer, for streams that already carry a container.
 
     Returns the ordered list of concat entries, so the chapter builder can reuse
-    the exact order the join used.
+    the exact order the join used. The entries are the REAL source paths, even
+    when the list ffmpeg was handed spelled a source through a stand-in link:
+    the chapters a book gets are the ones its tracks actually carry.
 
     `audio_only` maps the audio stream alone, for sources whose cover art rides
     along as a picture stream the output container will not take.
@@ -312,15 +344,33 @@ def concat_via_demuxer(folder: str, source_extension: str, output_file: str,
     # only 64 KiB, so a folder of some 600 tracks would deadlock the write.
     descriptor, list_file = tempfile.mkstemp(prefix="concatAudio.",
                                              suffix=".txt")
+    # A name the list format cannot spell is spelled through a stand-in link
+    # whose name it can, in a scratch directory of its own so parallel workers
+    # never reach for the same one. Only the list changes: the join, the
+    # duration check and the chapters all read the sources as they are.
+    entries = concat_list
+    links_dir = ""
+    if any(_unsafe_in_concat_list(path) for path in files):
+        links_dir = tempfile.mkdtemp(prefix="concatLinks.",
+                                     dir=ram_dir or None)
+        entries = []
+        for index, path in enumerate(files, start=1):
+            link = os.path.join(links_dir,
+                                "%08d.%s" % (index, source_extension))
+            os.symlink(os.path.abspath(path), link)
+            entries.append("file '%s'" % link)
     existed_before = os.path.exists(output_file)
     try:
         with os.fdopen(descriptor, "w") as handle:
-            handle.write("\n".join(concat_list) + "\n")
+            handle.write("\n".join(entries) + "\n")
         result = run([ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
                       "-safe", "0", "-f", "concat", "-i", list_file]
-                     + codec + [output_file])
+                     + codec + [output_file], stderr=subprocess.PIPE)
     finally:
         os.remove(list_file)
+        if links_dir:
+            shutil.rmtree(links_dir, ignore_errors=True)
+    _reprint_stderr(getattr(result, "stderr", None))
     # An empty list is what a caller reads as "nothing was joined", which is
     # the truth of a failed join as much as of an empty folder.
     if _join_failed(result, output_file, existed_before):
@@ -364,8 +414,9 @@ def concat_format(folder: str, base_name: str, fmt: str, ram_dir: str,
     output_file = "%s.%s" % (base_name, output_extension)
     if strategy in ("demuxer", "mp4Demuxer"):
         return concat_via_demuxer(folder, source_extension, output_file,
-                                  audio_codec, ffmpeg, run,
-                                  audio_only=strategy == "mp4Demuxer")
+                                   audio_codec, ffmpeg, run,
+                                   audio_only=strategy == "mp4Demuxer",
+                                   ram_dir=ram_dir)
     return concat_via_raw_remux(folder, base_name, source_extension,
                                 output_file, ram_dir, ffmpeg, run)
 

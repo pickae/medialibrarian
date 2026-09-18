@@ -278,13 +278,28 @@ def test_single_numbers_only_file_titles_by_number():
 
 # --- the entry the concat list carries ---------------------------------------
 
-def test_every_file_word_and_every_quote_is_stripped():
+def test_every_file_word_is_stripped():
     # The shell strips "file " everywhere, not just in front: a name that
     # holds the word still lands where the shell lands.
     lines = chapters.chapters_from_files(
         ["file '/work/my file one.flac'"],
         {"/work/my one.flac": "2.500"}.get)
     assert _name_of(lines, 1) == "my one"
+
+
+def test_an_apostrophe_in_a_name_reaches_its_probe():
+    """The path keeps what lies between the surrounding quotes. Stripping the
+    apostrophe was what made the probe miss the file and answer nothing: the
+    chapter after it then started where this one did, and the merge dropped
+    the zero-length one - a book missing a chapter for a name's sake."""
+    lines = chapters.chapters_from_files(
+        ["file '/work/one.mp3'", "file '/work/it's.mp3'",
+         "file '/work/two.mp3'"],
+        {"/work/one.mp3": "2.500", "/work/it's.mp3": "4.000",
+         "/work/two.mp3": "1.000"}.get)
+    assert _time_of(lines, 1) == "00:00:00.000"
+    assert _time_of(lines, 2) == "00:00:02.500"
+    assert _time_of(lines, 3) == "00:00:06.500"
 
 
 def test_base_name_is_taken_after_the_last_slash():

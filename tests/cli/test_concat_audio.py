@@ -166,18 +166,26 @@ class TestConcatViaDemuxer:
     class _Run:
         """A stand-in ffmpeg that reads the list it was handed and creates the
         output it was asked for, the way the real one does - the second half
-        being what tells a caller the join worked."""
+        being what tells a caller the join worked. It resolves the list's
+        entries at the same moment, because the real demuxer reads them while
+        it is there and they may be gone by the time the join returns."""
 
         def __init__(self):
             self.argv = []
             self.listing = ""
             self.text = ""
+            self.resolved = []
+            self.is_links = []
 
         def __call__(self, argv, **kwargs):
             self.argv = list(argv)
             self.listing = argv[argv.index("-i") + 1]
             with open(self.listing) as handle:
                 self.text = handle.read()
+            self.resolved = [os.path.realpath(line[6:-1])
+                             for line in self.text.splitlines() if line]
+            self.is_links = [os.path.islink(line[6:-1])
+                             for line in self.text.splitlines() if line]
             open(argv[-1], "w").close()
             return None
 
@@ -232,3 +240,67 @@ class TestConcatViaDemuxer:
         run = self._Run()
         self._concat(self._folder(tmp_path, 2), run)
         assert "-map" not in run.argv
+
+    def test_a_name_the_list_cannot_spell_is_joined_through_a_stand_in(
+            self, tmp_path):
+        """The demuxer ends a name at the next quote, so a source holding one
+        cannot be spelled in the list at all: the list is handed stand-in links
+        instead, and the entries that come back are still the real names, so
+        the chapters a book gets are the ones its tracks actually carry."""
+        run = self._Run()
+        plain = tmp_path / "01 - fine.mp3"
+        quoted = tmp_path / "12 - It's a Chapter.mp3"
+        plain.write_text("")
+        quoted.write_text("")
+        entries = self._concat(str(tmp_path), run)
+        assert "It's" not in run.text
+        assert run.is_links == [True, True]
+        assert run.resolved == [os.path.realpath(str(plain)),
+                                os.path.realpath(str(quoted))]
+        assert entries == ["file '%s'" % str(plain),
+                           "file '%s'" % str(quoted)]
+
+    def test_the_stand_ins_do_not_outlive_the_join(self, tmp_path):
+        run = self._Run()
+        (tmp_path / "01 - fine.mp3").write_text("")
+        (tmp_path / "02 - it's.mp3").write_text("")
+        self._concat(str(tmp_path), run)
+        links = [line[6:-1] for line in run.text.splitlines() if line]
+        assert links
+        assert all(not os.path.exists(link) for link in links)
+        assert not os.path.exists(os.path.dirname(links[0]))
+
+    def test_the_dts_complaint_is_not_reprinted(self, tmp_path, capsys):
+        """The mp3 muxer says it once per seam of a stream-copied join and
+        says nothing wrong, so it does not reach the console; a real error in
+        the same stderr does."""
+        spam = (b"[mp3 @ 0x600aa2373dc0] Application provided invalid, non "
+                b"monotonically increasing dts to muxer in stream 0: "
+                b"60597164781 >= 60597075188\n"
+                b"[in#0/concat @ 0x5c06c069a840] Impossible to open "
+                b"'/a/missing.mp3'\n")
+
+        class _Result:
+            returncode = 0
+            stderr = spam
+
+        def _join(argv, **_kwargs):
+            open(argv[-1], "w").close()
+            return _Result()
+
+        folder = self._folder(tmp_path, 2)
+        entries = ca.concat_via_demuxer(folder, "mp3", folder + "/out.mp3",
+                                         "copy", "ffmpeg", run=_join)
+        printed = capsys.readouterr().err
+        assert entries
+        assert "non monotonically increasing dts" not in printed
+        assert "Impossible to open" in printed
+
+    def test_the_filter_drops_only_the_dts_lines(self):
+        spam = ("[mp3 @ 0x1] Application provided invalid, non monotonically "
+                "increasing dts to muxer in stream 0: 6 >= 5\n"
+                "[mp3 @ 0x2] Application provided invalid, non monotonically "
+                "increasing dts to muxer in stream 0: 7 >= 6\n")
+        real = "[in#0/concat @ 0x3] Impossible to open 'x'"
+        assert ca._filtered_stderr(spam + real + "\n") == real
+        assert ca._filtered_stderr("") == ""
