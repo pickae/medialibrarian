@@ -75,7 +75,7 @@ def ingested(monkeypatch):
                           max_quality_offset, ffsubsync_quality, log):
             seen["download"] = ffsubsync_quality
 
-        def export_commentary(directory, *args):
+        def export_commentary(directory, *args, **_kw):
             seen["commentary"] = args[-1]
 
         monkeypatch.setattr(run_module.subtitlefiles, "download_subs",

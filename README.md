@@ -838,6 +838,13 @@ minute of film, and a sidecar under half of that is the one an older run wrote
 forcing a non-English commentary through the English model. That one is
 discarded and the commentary is transcribed for real.
 
+A transcript an older run wrote numbered for the track it then stood under,
+when the film's tracks have since moved and that number no longer names this
+commentary, is renumbered to the track's current number rather than
+transcribed again — where the rest of the name still says which commentary it
+is. The srt itself is left untouched, and the renumbered sidecar is judged by
+the size rule like any other.
+
 A dry run also writes down every rename it *would* have made, beside the other
 two lists — a library of any size prints thousands of those lines, and the point
 of a dry run is to be able to read them.

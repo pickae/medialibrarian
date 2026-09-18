@@ -256,6 +256,104 @@ def _remove_sidecars(prefix: str) -> None:
                 pass
 
 
+# What a commentary's output puts after the film it belongs to: the track's
+# number, then the track's own name - the same shape the cut keeps, asked here
+# to read a name the check above does not match on its number.
+_STALE_TAIL = re.compile(r"^([0-9]+) (\S.*)$", re.S)
+
+# The language the transcription writes between a commentary's name and its
+# extension, read the way the append reads it: two or three letters, and nothing
+# a track name would end on.
+_LANGUAGE_SUFFIX = re.compile(r"^\.[A-Za-z]{2,3}$")
+
+
+def _named_part(tail: str) -> str:
+    """The name a commentary output was named for, with whatever the
+    transcription hung on the end taken off: the ".srt", and the language code
+    an aligned transcript carries between the name and it. A transcript an
+    older version wrote carries no language at all, and its name is the whole
+    of what is left of it."""
+    named, _extension = os.path.splitext(tail)
+    head, language = os.path.splitext(named)
+    return head if _LANGUAGE_SUFFIX.match(language) else named
+
+
+def _renumber_stale_transcripts(file_stem: str, track_id, name: str,
+                                siblings: list, same_commentary_name,
+                                log) -> bool:
+    """The near miss the resume check cannot see: the transcript is beside the
+    film, of the right film and the right commentary, but numbered for a track
+    that no longer stands where the run that wrote it numbered it - the film's
+    track layout changed under the name, or an older run numbered tracks a
+    different way.
+
+    Asked of the film and the track the way the check above asks of them: the
+    film is the stem no cut may reach, and the commentary the name, which may
+    be the one the file was written under or one of the film's commentary
+    names cut short - a cut file name is the front of the name it was cut
+    from. The caller's ``same_commentary_name`` is the rule that says whether
+    a name names this commentary, the one the append uses to match a
+    transcript to its track, and a name it answers no for is left for the
+    track it is of rather than spent on the one it is not.
+
+    Renumbered to the track's own number, the file is what the check above
+    would have skipped on, and is asked the same questions it would have asked:
+    a -c run still discards one too small to be the film's real transcript.
+    The rest of the name is left as it was written, and the srt itself
+    untouched - what is spent is the rename, not the transcription.
+
+    Whether a single transcript came home renumbered.
+    """
+    directory, stem_base = os.path.split(file_stem)
+    directory = directory or "."
+    try:
+        entries = os.listdir(directory)
+    except OSError:
+        return False
+
+    found = []
+    for entry in entries:
+        if not (entry.startswith(stem_base + " ")
+                and entry.endswith(".srt")):
+            continue
+        tail = _STALE_TAIL.match(entry[len(stem_base) + 1:])
+        if not tail or int(tail.group(1)) == track_id:
+            continue
+        # The number is the one thing the rule may not agree on; the name is
+        # asked of the film's commentaries the way the append asks it.
+        if not same_commentary_name(_named_part(tail.group(2)), name, siblings):
+            continue
+        found.append((entry, tail.group(2)))
+    if not found:
+        return False
+
+    # Two copies under one name are one transcript twice over: the one that
+    # lost least of the name to the cut is what the append would keep, and it
+    # takes the number, the rest dropped rather than left to disagree about
+    # which copy is the transcript.
+    found.sort(key=lambda pair: len(pair[1]), reverse=True)
+    kept = 0
+    for entry, rest in found:
+        target = "{} {} {}".format(stem_base, track_id, rest)
+        if os.path.exists(os.path.join(directory, target)):
+            log("WARNING: dropping a second transcript of the same "
+                "commentary: {}".format(entry))
+            try:
+                os.remove(os.path.join(directory, entry))
+            except OSError:
+                pass
+            continue
+        try:
+            os.rename(os.path.join(directory, entry),
+                      os.path.join(directory, target))
+        except OSError:
+            continue
+        kept += 1
+        log("Renumbered the track's transcript from a stale track number "
+            "(track {}): {} -> {}".format(track_id, entry, target))
+    return kept > 0
+
+
 def transcribe_commentary(record: str, whisper: dict, max_sync_offset: str,
                           quality: str, ram_root: str, log) -> None:
     """One queued transcription - a worker entry point.
@@ -375,7 +473,7 @@ def export_commentary(directory: str, read_track_info, is_bonus_folder,
                       rename, audio_stream_index, ram_root: str,
                       whisper: dict, whisper_jobs: int, log, drain_queue,
                       max_sync_offset: str, quality: str,
-                      discard_existing=None) -> None:
+                      discard_existing=None, same_commentary_name=None) -> None:
     """Extract every commentary and drain the queue.
 
     ``read_track_info`` is the caller's track reader (the bash's
@@ -386,9 +484,13 @@ def export_commentary(directory: str, read_track_info, is_bonus_folder,
     :func:`transcribe_commentary`). ``discard_existing``, when given, is the
     caller's verdict on a track that already has an output: True discards the
     sidecar and transcribes for real, and absent an existing output is the
-    resume that skips the track. Everything else is this run's own: the flat
-    queue spans every movie and every language wanted, so the workers stay busy
-    to the last record.
+    resume that skips the track. ``same_commentary_name``, when given, is the
+    caller's rule for whether a name names a commentary, and it is what lets a
+    transcript an older run numbered for a track that no longer stands where it
+    numbered it be renumbered to the track's own number rather than transcribed
+    a second time. Everything else is this run's own: the flat queue spans
+    every movie and every language wanted, so the workers stay busy to the last
+    record.
     """
     try:
         os.chdir(directory)
@@ -411,6 +513,14 @@ def export_commentary(directory: str, read_track_info, is_bonus_folder,
             continue
         (names, _codecs, _channels, comments, types, langs) = \
             read_track_info(file)
+        # What every commentary of the film is called, which is what says
+        # whether a name that lost its number still points at one of them and
+        # at no other.
+        commentary_names = [
+            rename(n.replace("/", "").replace("&", "and"))
+            for n, c, t in zip(names, comments, types, strict=True)
+            if "audio" in t and (c == "true"
+                                 or languages.is_commentary_name(n))]
         for i in range(1, len(comments) + 1):
             comment = comments[i - 1]
             type_ = types[i - 1]
@@ -426,8 +536,9 @@ def export_commentary(directory: str, read_track_info, is_bonus_folder,
             # determine name of file to export
             name = names[i - 1].replace("/", "").replace("&", "and")
             name = rename(name)
-            prefix = commentary_prefix(_strip_last_ext(file), i - 1)
-            base = commentary_stem(_strip_last_ext(file), i - 1, name)
+            file_stem = _strip_last_ext(file)
+            prefix = commentary_prefix(file_stem, i - 1)
+            base = commentary_stem(file_stem, i - 1, name)
             # final outputs stay on disk next to the movie
             opus = base + ".opus"
             # the large temp audio extract goes to RAM, mirroring the absolute
@@ -439,8 +550,16 @@ def export_commentary(directory: str, read_track_info, is_bonus_folder,
                                         base[2:] if base.startswith("./") else base)
 
             # Script resume: a track that already has ANY output is skipped
-            # before the extract.
-            if _has_existing_output(prefix):
+            # before the extract. A transcript an older run numbered for a
+            # track that no longer stands there is renumbered to the track's
+            # own number first, so the check finds it rather than spending a
+            # second transcription on the same commentary.
+            existing = _has_existing_output(prefix)
+            if not existing and same_commentary_name is not None:
+                existing = _renumber_stale_transcripts(
+                    file_stem, i - 1, name, commentary_names,
+                    same_commentary_name, log)
+            if existing:
                 if discard_existing is None or not discard_existing(prefix, file):
                     continue
                 # The sidecar is too small to be this film's real transcript -

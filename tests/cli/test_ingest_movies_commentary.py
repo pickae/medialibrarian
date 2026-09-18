@@ -40,7 +40,8 @@ def ingested(monkeypatch):
 
         def export_commentary(directory, read_track_info, is_bonus_folder,
                               rename, audio_stream_index, ram_root, whisper,
-                              whisper_jobs, log, drain_queue, *rest):
+                              whisper_jobs, log, drain_queue, *rest,
+                              **_kw):
             seen["jobs"] = whisper_jobs
             seen["drain"] = drain_queue
 
