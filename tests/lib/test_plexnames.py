@@ -416,6 +416,28 @@ class TestBringingANameOntoTheFoldersOwn:
                                                                    wanted):
         assert plexnames.onto_base(BASE, name) == wanted
 
+    @pytest.mark.parametrize("code", ["de", "en", "es", "fr", "it", "nl"])
+    def test_and_the_language_survives_a_year_the_spelling_disagrees_about(
+            self, code):
+        """A sidecar may have to give its language up to be RECOGNISED as this
+        film - the reading that folds the year away folds a ".de" after it away
+        too - and what is recognised away is not thereby renamed away. The
+        language is the one thing the file says that no sibling says, and a
+        ".de.srt" that comes back ".srt" is a subtitle Plex can no longer tell
+        the language of.
+        """
+        base = "Val-Mont: Part II (1968)"
+        name = "Val-Mont Part II (1968).%s.srt" % code
+        assert plexnames.onto_base(base, name) == base + ".%s.srt" % code
+
+    def test_but_only_a_language_is_put_back(self):
+        """Not every short dotted tail is a language. A roman numeral sitting
+        where one would sit is part of the title, and carrying it through would
+        write it twice."""
+        assert plexnames.onto_base(
+            "Falkenauge II (1979)",
+            "falkenauge.II.mkv") == "Falkenauge II (1979).mkv"
+
     @pytest.mark.parametrize("name", [
         "Some Other Film.mkv",
         "The Lord of Val-Mont (1961).mkv",

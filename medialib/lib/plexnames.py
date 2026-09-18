@@ -21,7 +21,7 @@ that is mostly already named.
 import os
 import re
 
-from medialib.lib import titlematch
+from medialib.lib import languages, titlematch
 from medialib.lib.enums import PART_WORDS, SOURCE_PART_WORDS, shell_lower
 
 # A film's id tag, anywhere in the name. Plex reads the tag whether it sits on
@@ -539,7 +539,7 @@ def onto_base(base: str, name: str, also=(), typos: bool = False) -> str:
         for spelling in (base,) + tuple(also):
             if _names_this_film(spelling, head, typos) or _names_this_film(
                     spelling, titlematch.strip_duplicate_marker(head), typos):
-                return base + name[cut:]
+                return base + _suffix_kept(head, name[cut:])
     return ""
 
 
@@ -583,6 +583,22 @@ def _boundaries(name: str) -> list:
     ends = [] if os.path.splitext(name)[1] else [len(name)]
     return ends + [index for index in range(len(name) - 1, 0, -1)
                    if name[index] in " ."]
+
+
+def _suffix_kept(head: str, tail: str) -> str:
+    """``tail`` with any language suffix the cut swallowed put back in front.
+
+    A cut may fall either side of a sidecar's ".xx", because giving the language
+    up is sometimes the only way the name can be RECOGNISED as this film - see
+    :func:`_boundaries`. What is recognised away is not thereby renamed away:
+    the language is the one thing the file says that no other file in the folder
+    says, and a ".en.srt" that comes back ".srt" is a subtitle Plex can no longer
+    tell the language of.
+    """
+    dot = head.rfind(".")
+    if dot < 0 or not languages.code_from_tag(head[dot + 1:]):
+        return tail
+    return head[dot:] + tail
 
 
 def _names_this_film(base: str, head: str, typos: bool = False) -> bool:
