@@ -194,6 +194,27 @@ def crop_commentary(wanted: str, tail: str) -> str:
     return stem + suffix
 
 
+def _untagged_tail(tail: str) -> str:
+    """What is left over after a stem, with any id tag taken out of it.
+
+    :func:`plex_stem` is the one place an id is written, so a leftover that
+    still carries one has it written twice. It happens where the stem a file
+    matched stops SHORT of the file's own tag - a sidecar beside a film whose
+    stem carries an edition matches the folder's bare name, and everything from
+    its own tag onwards is leftover.
+
+    The space the tag stood in goes with it, or a ".en.srt" comes back
+    " .en.srt"; a leftover that goes on to say something keeps the one space
+    that holds it off the stem.
+    """
+    if not ID_TAG_RE.search(tail):
+        return tail
+    cleaned = re.sub(r"\s+", " ", ID_TAG_RE.sub("", tail))
+    if cleaned.startswith(" ") and cleaned[1:2] == ".":
+        return cleaned[1:]
+    return cleaned.rstrip() if cleaned.strip() else cleaned.strip()
+
+
 def _fits_or_crops(name: str, wanted: str, tail: str,
                    cropped: list | None, over_limit: list | None) -> str:
     """The name one file should take once the length limit has had its say, or
@@ -827,8 +848,8 @@ def folder_renames(base: str, tag: str, names, aliases=(),
             continue
         own, part = read_stem(base, stem)
         wanted = plex_stem(base, tag, own or edition, part)
-        target = _fits_or_crops(name, wanted, spelled[len(stem):],
-                                cropped, over_limit)
+        target = _fits_or_crops(name, wanted, _untagged_tail(
+            spelled[len(stem):]), cropped, over_limit)
         if target and target != name:
             plan.append((name, target))
     return plan
@@ -990,6 +1011,42 @@ def untagged_base(folder: str) -> tuple:
 def is_movie_file(name: str) -> bool:
     """A playable film in a movie folder - not the copy an improvement kept."""
     return name.lower().endswith(".mkv") and not is_kept_copy(name)
+
+
+def films_own_spelling(base: str, names) -> tuple:
+    """(the title the folder's films spell, how many of its files said so),
+    where that differs from the folder's own by a single slip - ("", 0)
+    otherwise.
+
+    The single-slip reading is a guess, and it reads a folder and a file as one
+    name without saying which of the two got it right. Nothing in the two
+    strings can say. What can is how many names each spelling has behind it: a
+    folder is one name written once, and the files under it are what somebody
+    was handed, so a spelling every file agrees on and the folder does not is
+    the folder's slip rather than theirs.
+
+    The spelling is taken from the MOVIE files, which carry no language suffix
+    to read around; the count is every file that goes on to say it, sidecars
+    included, because each is a name that would have to be wrong too.
+
+    ("", 0) where the films do not agree among themselves: an edition or a
+    stacking token puts more than the title between the two names, and which
+    part of that the slip is in is not a thing to guess at.
+    """
+    spellings = {re.sub(r"\s+", " ",
+                        ID_TAG_RE.sub("", os.path.splitext(name)[0])).strip()
+                 for name in names if is_movie_file(name)}
+    if len(spellings) != 1:
+        return "", 0
+    theirs = spellings.pop()
+    if not theirs or theirs == base or titlematch.equivalent(theirs, base):
+        return "", 0
+    if not titlematch.one_typo_apart(theirs, base):
+        return "", 0
+    said = sum(1 for name in names
+               if re.sub(r"\s+", " ",
+                         ID_TAG_RE.sub("", name)).strip().startswith(theirs))
+    return theirs, said
 
 
 def one_film_in(base: str, names) -> list:
