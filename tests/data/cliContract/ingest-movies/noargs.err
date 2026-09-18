@@ -32,10 +32,13 @@ Usage:
                   ingest: there is no dry run to carry out.
     -i, --ids <file>
                   the hand-written id list filled in and read BACK: tagging and
-                  nothing else, like -t, but going on what is in this file. It
-                  is read before TMDb is asked, so a film someone has already
-                  looked up is named from it rather than guessed at again. A
-                  DRY RUN unless -w is given, and a quieter one than -t's: it
+                  nothing else, like -t, but going on what is in this file. An
+                  id in it is simply used - TMDb is not asked to agree with a
+                  lookup someone did because it had already failed. A row still
+                  BLANK is not asked about either, for the same reason, and all
+                  that is said of those is how many there were. A file that
+                  cannot be read STOPS the run rather than counting as no ids.
+                  A DRY RUN unless -w is given, and a quieter one than -t's: it
                   prints what those ids would rename and writes NOTHING - not
                   the lists, which are -t's to write, and not the file it was
                   handed, which is still being filled in. -w carries the

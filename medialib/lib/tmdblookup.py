@@ -1269,26 +1269,38 @@ def write_alias_list(path: str, folders, root: str,
     return True
 
 
-def read_id_list(path: str) -> dict:
-    """A hand-filled id list as {folder name: tag}.
+def read_id_list(path: str, blank: list | None = None) -> dict | None:
+    """A hand-filled id list as {folder name: tag}, or None if it cannot be
+    read at all.
 
-    A line with no id yet is skipped rather than refused - the file is meant to
-    be filled in over several sittings, and the ones still blank are simply the
-    ones still to do.
+    None rather than nothing, because the two are not the same answer and the
+    caller acts on them differently: a file with no ids in it yet is a morning's
+    work not started, and a file that is not there is a path typed wrong - which
+    read as "no ids" would throw away every id in the real file and ask the
+    catalogue all the questions it has already failed.
+
+    ``blank`` collects the rows with no id yet. They are neither refused nor
+    dropped: the file is filled in over several sittings, and a row still blank
+    is a film the catalogue could not name and nobody has looked up, which is
+    the one thing worth knowing about it.
     """
     found: dict[str, str] = {}
     try:
         with open(path, encoding="utf-8", errors="surrogateescape") as handle:
             lines = handle.read().splitlines()
     except OSError:
-        return found
+        return None
     for line in lines:
         if not line.strip() or line.lstrip().startswith(_ID_COMMENT):
             continue
         name, _tab, written = line.partition("\t")
         tag = id_tag_for(written)
-        if name.strip() and tag:
+        if not name.strip():
+            continue
+        if tag:
             found[name.strip()] = tag
+        elif blank is not None:
+            blank.append(name.strip())
     return found
 
 
@@ -1495,6 +1507,7 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
                  near_misses: list | None = None,
                  aliases: list | None = None,
                  seen: set | None = None,
+                 skip: set | None = None,
                  long_names: LongNames | None = None) -> int:
     """Name each confidently-matched movie folder, its films and their sidecars
     the way Plex reads them: the folder and every file carry the id tag, an
@@ -1544,6 +1557,13 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
     same base, so whatever is not in here is not on disk. Collected for every
     folder rather than only the ones that consulted the list, because a film
     already carrying its id never asks for one and is still there.
+
+    ``skip`` are folder base names not to ask the catalogue about at all. They
+    are the rows a hand-written list carries with no id filled in: the pass that
+    wrote that list is the one that already failed to name them, and asking the
+    same question of the same catalogue is a network round trip whose answer is
+    known. They still reach ``unmatched``, so a list rewritten from this run
+    keeps the rows someone has yet to work through.
 
     ``long_names`` collects what the file name limit did - the commentary
     outputs cut back to fit it and the folders left alone because nothing in
@@ -1609,6 +1629,12 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
             # not worth asking an API that has already failed to name it.
             tag = (ids or {}).get(base, "")
             by_hand = bool(tag)
+            if not tag and base in (skip or ()):
+                # Listed by hand and left blank: nothing is asked, and the row
+                # is kept so it is still there to fill in.
+                if unmatched is not None:
+                    unmatched.append(base)
+                continue
             if not tag:
                 notes: list = []
                 found, year, also = _settle_the_year(

@@ -687,6 +687,18 @@ def _tags_only(program: str, roots: list, names: list, write: bool,
     named after it. Under -i the one file someone named holds them all and is
     read once for every folder.
     """
+    # First, being about what was typed rather than about the environment: a -i
+    # file that cannot be read STOPS the run, the way a -f one does. Read as an
+    # empty list it would throw away every id in the file someone meant and put
+    # the whole library back through the lookups that already failed on it,
+    # which is the one outcome -i exists to avoid.
+    blank: list = []
+    ids = tmdblookup.read_id_list(id_list, blank) if id_list else {}
+    if ids is None:
+        sys.stderr.write('The id list "%s" cannot be read.\nNothing was '
+                         "changed.\n" % id_list)
+        return 1
+
     if not os.environ.get("tmdbApiKey"):
         sys.stderr.write("tmdbApiKey is not set, so there is nothing to tag "
                          "with.\n")
@@ -694,9 +706,9 @@ def _tags_only(program: str, roots: list, names: list, write: bool,
     if tooldeps.require_tools(program, ["curl"]):
         return 1
 
-    ids = tmdblookup.read_id_list(id_list) if id_list else {}
-    if ids:
-        log("Read %d hand-written id(s) from %s" % (len(ids), id_list))
+    if id_list:
+        log("Read %d hand-written id(s) from %s, and %d row(s) still blank"
+            % (len(ids), id_list, len(blank)))
 
     skips = safety.RunSkipLog()
     long_names = tmdblookup.LongNames()
@@ -726,7 +738,7 @@ def _tags_only(program: str, roots: list, names: list, write: bool,
                                 ambiguous=ambiguous, planned=planned,
                                 near_misses=near_misses,
                                 aliases=alias_titles, seen=seen,
-                                long_names=long_names)
+                                skip=set(blank), long_names=long_names)
         if id_list:
             shared += unmatched
             continue
@@ -786,9 +798,14 @@ def _tags_only(program: str, roots: list, names: list, write: bool,
         if tmdblookup.write_id_list(id_list, shared, ids, log) and shared:
             log('%d film(s) could not be identified - listed in "%s" to fill '
                 "in by hand" % (len(shared), id_list))
-    elif id_list and shared:
-        log('%d film(s) in "%s" are still unnamed - fill them in, or pass -w '
-            "to write them back" % (len(shared), id_list))
+
+    # Once, at the end, rather than a line per film: a row left blank was never
+    # asked about, so there is nothing per film to say about it.
+    if id_list:
+        unasked = len(set(blank) & (seen or set()))
+        if unasked:
+            log("%d film(s) had no id filled in and were not asked about"
+                % unasked)
 
     if not write:
         log("Dry run: nothing was renamed. Pass -w to carry these out.")

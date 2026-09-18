@@ -142,15 +142,18 @@ class TestTheListsEachFolderLeaves:
         monkeypatch.setattr(run.tooldeps, "require_tools",
                             lambda *_a, **_k: False)
         asked = []
+        not_asked = self.not_asked = []
 
         def fake_tag(root, _log, _skips, dry_run=False, ids=None,
                      unmatched=None, recursive=False, ambiguous=None,
                      planned=None, near_misses=None, aliases=None,
-                     seen=None, long_names=None):
+                     seen=None, skip=None, long_names=None):
             asked.append(root)
             name = root.rsplit("/", 1)[-1]
             if seen is not None:
                 seen.add("The Movie (1999)")
+                seen.update(skip or ())
+            not_asked.extend(skip or ())
             if aliases is not None:
                 aliases += [(root + "/Il buono (1966)", "Il buono (1966)",
                              "{imdb-tt0060196}",
@@ -161,7 +164,9 @@ class TestTheListsEachFolderLeaves:
                                  "no confident TMDb match",
                                  ['asked "A film": 0 result(s)'])]
             if unmatched is not None:
-                unmatched += ["%s film (1999)" % name]
+                # As the real one does: a row skipped for being blank is still
+                # a row to fill in, so it stays on the list.
+                unmatched += ["%s film (1999)" % name] + list(skip or ())
             if ambiguous is not None:
                 ambiguous += [(root + "/Double (1999)",
                                "holds a film that is not its own",
@@ -309,6 +314,50 @@ class TestTheListsEachFolderLeaves:
         listing.write_text("The Movie (1999)\ttt0000001\n", encoding="utf-8")
         _library(tmp_path, "Films")
         assert run.main(["-i", str(listing), str(tmp_path / "Films")]) == 0
+
+    def test_but_a_list_that_cannot_be_read_stops_the_run(self, monkeypatch,
+                                                          tmp_path, capsys):
+        """The whole point of -i is the afternoon someone spent looking films
+        up. A path typed wrong read as "no ids" throws all of it away and puts
+        the library back through the lookups that already failed - quietly,
+        which is the worst way to lose it."""
+        monkeypatch.chdir(tmp_path)
+        self._tagging(monkeypatch)
+        _library(tmp_path, "Films")
+        assert run.main(["-i", str(tmp_path / "typo.tsv"),
+                         str(tmp_path / "Films")]) == 1
+        assert "cannot be read" in capsys.readouterr().err
+
+    def test_and_a_row_left_blank_is_never_asked_about_again(
+            self, monkeypatch, tmp_path, capsys):
+        """The pass that wrote the row is the one that already failed to name
+        it. Asking the same catalogue the same question is a round trip whose
+        answer is known, and the count at the end is all there is to say."""
+        monkeypatch.chdir(tmp_path)
+        self._tagging(monkeypatch)
+        listing = tmp_path / "by-hand.tsv"
+        listing.write_text("The Movie (1999)\ttt0000001\n"
+                           "Nobody Looked This Up (1988)\t\n",
+                           encoding="utf-8")
+        _library(tmp_path, "Films")
+        assert run.main(["-i", str(listing), str(tmp_path / "Films")]) == 0
+        assert self.not_asked == ["Nobody Looked This Up (1988)"]
+        out = capsys.readouterr().err
+        assert "1 film(s) had no id filled in and were not asked about" in out
+
+    def test_and_a_blank_row_survives_the_rewrite(self, monkeypatch, tmp_path):
+        """It is the work still to do. A run that dropped it would hand back a
+        shorter list every time until there was nothing left to fill in."""
+        monkeypatch.chdir(tmp_path)
+        self._tagging(monkeypatch)
+        listing = tmp_path / "by-hand.tsv"
+        listing.write_text("Nobody Looked This Up (1988)\t\n",
+                           encoding="utf-8")
+        _library(tmp_path, "Films")
+        assert run.main(["-i", str(listing), "-w",
+                         str(tmp_path / "Films")]) == 0
+        assert "Nobody Looked This Up (1988)\t" in listing.read_text(
+            encoding="utf-8")
 
     def test_and_writes_nothing_at_all_until_w(self, monkeypatch, tmp_path):
         """The lists are -t's: -t is the pass that has only TMDb to go on and

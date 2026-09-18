@@ -939,11 +939,20 @@ class TestTheIdList:
         path = tmp_path / "ids.tsv"
         path.write_text("# a comment\n\nDone (1999)\ttt0000001\n"
                         "Not Yet (2001)\t\n", encoding="utf-8")
-        assert tmdblookup.read_id_list(str(path)) == {
+        blank: list = []
+        assert tmdblookup.read_id_list(str(path), blank) == {
             "Done (1999)": "{imdb-tt0000001}"}
+        assert blank == ["Not Yet (2001)"]
 
-    def test_a_missing_file_is_simply_no_ids(self, tmp_path):
-        assert tmdblookup.read_id_list(str(tmp_path / "nothing.tsv")) == {}
+    def test_but_a_file_that_cannot_be_read_is_not_an_empty_one(self,
+                                                                tmp_path):
+        """The two are different answers. Read as "no ids", a path typed wrong
+        throws away every id in the real file and asks the catalogue all the
+        questions it has already failed."""
+        assert tmdblookup.read_id_list(str(tmp_path / "nothing.tsv")) is None
+        path = tmp_path / "empty.tsv"
+        path.write_text("# nothing filled in yet\n", encoding="utf-8")
+        assert tmdblookup.read_id_list(str(path)) == {}
 
     def test_what_was_filled_in_survives_being_rewritten(self, tmp_path):
         """The ids someone looked up by hand are the only record of them
@@ -978,6 +987,46 @@ class TestTheIdList:
         assert (tmp_path / "Unknown Film (2010) {imdb-tt0000002}").is_dir()
         assert logs == ['  from the id list: "Unknown Film (2010)" -> '
                         "{imdb-tt0000002}"]
+
+    def test_and_a_row_left_blank_never_reaches_it_either(self, monkeypatch,
+                                                          tmp_path):
+        """The pass that put the row on the list is the one that already failed
+        to name it: the same question of the same catalogue has a known answer
+        and is not worth a round trip. The row stays, being the work to do."""
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("Unknown Film (2010)", ["Unknown Film (2010).mkv"]))
+        monkeypatch.setenv("tmdbApiKey", "apikey")
+        calls = []
+        monkeypatch.setattr(tmdblookup, "_curl",
+                            lambda url, params: calls.append(url))
+        logs = []
+        unmatched: list = []
+        tmdblookup.tag_plex_ids(
+            ".", logs.append, SkipLog(), unmatched=unmatched,
+            skip={"Unknown Film (2010)"})
+        assert calls == []
+        assert unmatched == ["Unknown Film (2010)"]
+        assert (tmp_path / "Unknown Film (2010)").is_dir()
+        assert logs == []
+
+    def test_but_an_id_beats_a_blank_row_of_the_same_name(self, monkeypatch,
+                                                          tmp_path):
+        """Filling the row in is what makes it answer. The two collections are
+        read in the one order that leaves no way to fill in a row and have it
+        skipped for being blank."""
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("Unknown Film (2010)", ["Unknown Film (2010).mkv"]))
+        monkeypatch.setenv("tmdbApiKey", "apikey")
+        monkeypatch.setattr(tmdblookup, "_curl",
+                            lambda url, params: None)
+        unmatched: list = []
+        tmdblookup.tag_plex_ids(
+            ".", lambda _line: None, SkipLog(), unmatched=unmatched,
+            ids={"Unknown Film (2010)": "{imdb-tt0000002}"},
+            skip={"Unknown Film (2010)"})
+        assert unmatched == []
+        assert (tmp_path / "Unknown Film (2010) {imdb-tt0000002}").is_dir()
+
 
 
 class TestTheRateLimit:

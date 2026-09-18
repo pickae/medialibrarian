@@ -90,6 +90,21 @@ class TestWhichFilesAreMuxed:
         muxer.run()
         assert len(muxer.calls) == 1
 
+    def test_a_film_that_cannot_be_read_is_reported_not_remuxed(
+            self, muxer, monkeypatch, capsys):
+        """A file nothing can open is not a file that needs remuxing. Read as
+        one, an unreadable film is rewritten and its original deleted on the
+        strength of a container test that never ran."""
+        muxer.film("A Film (2020).mkv", MATROSKA)
+
+        def refuse(*_a, **_k):
+            raise OSError(5, "Input/output error")
+
+        monkeypatch.setattr("builtins.open", refuse)
+        muxer.run()
+        assert muxer.calls == []
+        assert "could not be read at all" in capsys.readouterr().err
+
     def test_a_non_video_is_not_opened(self, muxer):
         muxer.film("A Film (2020).en.srt", b"1\n")
         muxer.run()

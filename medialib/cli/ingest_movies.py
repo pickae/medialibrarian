@@ -73,10 +73,13 @@ w |  | with -t or -i, actually perform the renames instead of printing
                   them. On its own it is a usage error rather than a full
                   ingest: there is no dry run to carry out.
 i | <file> | the hand-written id list filled in and read BACK: tagging and
-                  nothing else, like -t, but going on what is in this file. It
-                  is read before TMDb is asked, so a film someone has already
-                  looked up is named from it rather than guessed at again. A
-                  DRY RUN unless -w is given, and a quieter one than -t's: it
+                  nothing else, like -t, but going on what is in this file. An
+                  id in it is simply used - TMDb is not asked to agree with a
+                  lookup someone did because it had already failed. A row still
+                  BLANK is not asked about either, for the same reason, and all
+                  that is said of those is how many there were. A file that
+                  cannot be read STOPS the run rather than counting as no ids.
+                  A DRY RUN unless -w is given, and a quieter one than -t's: it
                   prints what those ids would rename and writes NOTHING - not
                   the lists, which are -t's to write, and not the file it was
                   handed, which is still being filled in. -w carries the
@@ -733,9 +736,14 @@ def mkv_mux(root: str) -> None:
     otherwise skip this pass and fail every mkvtoolnix call after it.
     """
     for path in _files_below(root, matches=_could_need_mux):
-        if _is_matroska(path):
+        matroska = _is_matroska(path)
+        if matroska:
             continue
         relative = os.path.relpath(path, root)
+        if matroska is None:
+            log("WARNING: could not be read at all, left as it is: ./"
+                + relative)
+            continue
         log("Muxing into Matroska: ./" + relative)
 
         # A remux writes the whole film out again, and a 4K release is tens of
@@ -758,7 +766,7 @@ def mkv_mux(root: str) -> None:
             # exits 1 on warnings having written the file, so only 2 and above
             # is a failure.
             if _run(["mkvmerge", "-q", "-o", target, path]) < 2 \
-                    and _is_matroska(target):
+                    and _is_matroska(target) is True:
                 as_mkv = os.path.splitext(path)[0] + ".mkv"
                 _remove(path)
                 _rename_quiet(target, as_mkv)
@@ -776,12 +784,19 @@ def _could_need_mux(name: str) -> bool:
     return extension in enums.SOURCE_VIDEO_EXTENSIONS or extension == "mkv"
 
 
-def _is_matroska(path: str) -> bool:
+def _is_matroska(path: str) -> bool | None:
+    """Whether the file starts with EBML's magic, or None when it could not be
+    read at all.
+
+    None rather than False: a file nothing can open is not a file that needs
+    remuxing, and reading it as one is how an unreadable film gets rewritten
+    rather than reported.
+    """
     try:
         with open(path, "rb") as handle:
             return handle.read(len(MATROSKA_MAGIC)) == MATROSKA_MAGIC
     except OSError:
-        return False
+        return None
 
 
 def update_tags(root: str) -> None:
