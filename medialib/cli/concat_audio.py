@@ -296,6 +296,27 @@ def _unsafe_in_concat_list(path: str) -> bool:
     return any(ch in path for ch in ("'", "\\", "\n", "\r"))
 
 
+def _filtered_stderr(text: str) -> str:
+    """The join's ffmpeg stderr with the one line dropped that is not worth
+    printing: the mp3 muxer's 'non monotonically increasing dts' complaint,
+    which it says once per seam of a stream-copied join, where the copy
+    itself is fine. Every other line is a real error and stays."""
+    return "\n".join(line for line in text.splitlines()
+                     if "non monotonically increasing dts to muxer" not in line)
+
+
+def _reprint_stderr(stderr) -> None:
+    """The captured stderr of the join's ffmpeg back to the console, filtered:
+    a failure that still exits 0 is told only here, so nothing real is held."""
+    if not stderr:
+        return
+    text = stderr.decode("utf-8", "surrogateescape") \
+        if isinstance(stderr, (bytes, bytearray)) else str(stderr)
+    kept = _filtered_stderr(text)
+    if kept:
+        sys.stderr.write(kept + "\n")
+
+
 def concat_via_demuxer(folder: str, source_extension: str, output_file: str,
                        audio_codec: str, ffmpeg: str, run=_run,
                        audio_only: bool = False, ram_dir: str = "") -> list:
@@ -344,11 +365,12 @@ def concat_via_demuxer(folder: str, source_extension: str, output_file: str,
             handle.write("\n".join(entries) + "\n")
         result = run([ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
                       "-safe", "0", "-f", "concat", "-i", list_file]
-                     + codec + [output_file])
+                     + codec + [output_file], stderr=subprocess.PIPE)
     finally:
         os.remove(list_file)
         if links_dir:
             shutil.rmtree(links_dir, ignore_errors=True)
+    _reprint_stderr(getattr(result, "stderr", None))
     # An empty list is what a caller reads as "nothing was joined", which is
     # the truth of a failed join as much as of an empty folder.
     if _join_failed(result, output_file, existed_before):
