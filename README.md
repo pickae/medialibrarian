@@ -802,6 +802,17 @@ An id is read however you have it to hand (`tt0000002`, `imdb-tt0000002`, a bare
 TMDb number), answers before the network is asked, and stays in the file so the
 lookup you did by hand is not lost. Requests to TMDb are paced to ten a second.
 
+Feeding that list back is **`-i`**, the same tagging phase going on what you
+filled in — and a **dry run** too, unless `-w` is given. It prints what your ids
+would rename and writes nothing: not the lists, which are `-t`'s to write, and
+not the file you are still filling in. `-iw` carries the renames out and brings
+the file up to date. A row left blank is simply one still to do and is passed
+over; a row you filled in that names no folder in the library is an error naming
+that row, and the run carries on to the next.
+
+**`-w` on its own is refused.** Without `-t` or `-i` there is no dry run to
+carry out, and the run it would otherwise start is a full ingest.
+
 A dry run also writes down every rename it *would* have made, beside the other
 two lists — a library of any size prints thousands of those lines, and the point
 of a dry run is to be able to read them.
@@ -832,7 +843,7 @@ next is started, in the order they were typed. Each leaves lists of its own,
 named after it — `ingest-movies-unmatched-Films.tsv`,
 `ingest-movies-ambiguous-Films.txt` — so two libraries' worklists never land in
 one file. An `-i` list you named yourself is the exception: it is read for every
-folder and written back once, holding them all. Two folders of the same name are
+folder and, under `-iw`, written back once, holding them all. Two folders of the same name are
 refused before anything is touched, since their lists would be written to one
 path.
 

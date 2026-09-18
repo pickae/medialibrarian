@@ -509,6 +509,21 @@ def main(argv: list, program: str = "ingest-movies",
         sys.stderr.write(clioptions.no_args_text(declaration))
         return 1
 
+    # -w turns a dry run into renames, and without -t or -i there is none to
+    # turn. Refused rather than ignored: a -tw typed as -w would otherwise be a
+    # full ingest, hours of converting and remuxing, on a library asked for
+    # nothing but its names.
+    if result.values.get("writeTags") and not (result.values.get("tagsOnly")
+                                               or result.values.get("idList")):
+        sys.stderr.write(clioptions.usage_error_text(
+            declaration,
+            "-w on its own does nothing to carry out: it is what turns the dry "
+            "run of -t or\n-i into real renames, and neither was given. "
+            "Without one of them this is a FULL\nINGEST - converting, "
+            "transcribing and remuxing - which -w has no part in.\n\n"
+            "Did you mean -tw, or -iw?"))
+        return 1
+
     script_dir = script_dir or commands.script_dir()
 
     # This is a long run, so its log lines carry a wall-clock stamp.
@@ -528,7 +543,9 @@ def main(argv: list, program: str = "ingest-movies",
     if roots is None:
         return 1
 
-    if result.values.get("tagsOnly"):
+    # An id list is only ever read by the tagging phase, so asking for one asks
+    # for that phase.
+    if result.values.get("tagsOnly") or result.values.get("idList"):
         return _tags_only(program, roots, names,
                           bool(result.values.get("writeTags")),
                           result.values.get("idList") or "")
@@ -658,9 +675,17 @@ def _tags_only(program: str, roots: list, names: list, write: bool,
     the RAM scratch, the whisper model, the ffmpeg it picked - belongs to work
     this mode does not do, so none of it is built.
 
-    Every folder given is tagged in turn, each with a list of its own named
-    after it - except under -i, where the one file someone named holds them all
-    and is read once for every folder.
+    Two modes share this, and what they write is what tells them apart. -t is
+    the pass that has nothing to go on but TMDb: it tags what it can and writes
+    down everything it could not, one set of lists per folder, for someone to
+    read and fill in. -i is the pass that reads a filled-in list back, and it
+    writes no lists at all - they are -t's, and a run that rewrote them from a
+    partial answer would lose the question. What -i shows is what those
+    hand-written ids would do, on screen, and -iw is what carries it out.
+
+    Under -t every folder given is tagged in turn, each with a list of its own
+    named after it. Under -i the one file someone named holds them all and is
+    read once for every folder.
     """
     if not os.environ.get("tmdbApiKey"):
         sys.stderr.write("tmdbApiKey is not set, so there is nothing to tag "
@@ -681,24 +706,31 @@ def _tags_only(program: str, roots: list, names: list, write: bool,
     # that mode collects them: without -i each folder's are written as its own
     # folder is finished.
     shared: list = []
+    # Every film folder the walk considered, across all the folders given: a row
+    # in the id list is checked against the whole run rather than against each
+    # folder in turn, or the one that named a film in the second library would
+    # be called missing by the first.
+    seen: set | None = set() if id_list else None
     for root, name in zip(roots, names, strict=True):
         if len(roots) > 1:
             log('Tagging "%s"' % root)
         unmatched: list = []
-        ambiguous: list = []
-        planned: list = []
-        near_misses: list = []
-        alias_titles: list = []
+        ambiguous: list | None = None if id_list else []
+        planned: list | None = None if id_list else []
+        alias_titles: list | None = None if id_list else []
+        near_misses: list | None = None if id_list or write else []
         # Recursive here and only here: this mode is pointed at a library, where
         # a full ingest is pointed at the folder that holds the films.
         tmdblookup.tag_plex_ids(root, log, skips, dry_run=not write, ids=ids,
                                 unmatched=unmatched, recursive=True,
                                 ambiguous=ambiguous, planned=planned,
-                                near_misses=near_misses if not write else None,
-                                aliases=alias_titles, long_names=long_names)
+                                near_misses=near_misses,
+                                aliases=alias_titles, seen=seen,
+                                long_names=long_names)
         if id_list:
             shared += unmatched
-        elif unmatched:
+            continue
+        if unmatched:
             listing = UNMATCHED_LIST % name
             if tmdblookup.write_id_list(listing, unmatched, None, log):
                 log('%d film(s) in "%s" could not be identified - listed in '
@@ -731,14 +763,32 @@ def _tags_only(program: str, roots: list, names: list, write: bool,
     for line in long_names.report():
         sys.stderr.write(line + "\n")
 
-    # The file is rewritten whenever there is one to keep current, and the ids
-    # already in it are written back: they are the only record anywhere of a
-    # lookup someone did by hand, and dropping them would un-identify the film
-    # on the very next run.
-    if id_list:
+    # A row someone filled in that names no folder here. Said per row, and the
+    # run carries on to the next: the other ids are somebody's afternoon of
+    # looking things up, and one stale line is not a reason to drop them. A row
+    # still BLANK is not this - those are simply the ones still to do.
+    stale = sorted(set(ids) - (seen or set())) if id_list else []
+    if stale:
+        sys.stderr.write(
+            "\nERROR: %d row(s) in %s carry an id but name no film folder "
+            "that is here.\nThe id was not applied to anything. Check the "
+            "name against the library, or\ndrop the row:\n"
+            % (len(stale), id_list))
+        for base in stale:
+            sys.stderr.write('  "%s"\t%s\n' % (base, ids[base]))
+
+    # The ids already in the file are written back beside what is still unnamed:
+    # they are the only record anywhere of a lookup someone did by hand, and
+    # dropping them would un-identify the film on the very next run. Only -iw
+    # rewrites it, because -i is read while the file is being filled in and a
+    # dry run has no business editing the document it was handed.
+    if id_list and write:
         if tmdblookup.write_id_list(id_list, shared, ids, log) and shared:
             log('%d film(s) could not be identified - listed in "%s" to fill '
                 "in by hand" % (len(shared), id_list))
+    elif id_list and shared:
+        log('%d film(s) in "%s" are still unnamed - fill them in, or pass -w '
+            "to write them back" % (len(shared), id_list))
 
     if not write:
         log("Dry run: nothing was renamed. Pass -w to carry these out.")
