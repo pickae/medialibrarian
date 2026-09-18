@@ -956,7 +956,7 @@ def _commentary_only(program: str, script_dir: str, roots: list,
                 log('Transcribing commentary in "%s"' % root)
             # Fresh per root: the movie paths handed down are relative to this
             # root, so a cache keyed on them is only valid for it.
-            durations = {}
+            durations: dict[str, int] = {}
             commentarytranscription.export_commentary(
                 root, rules.read_track_info, rules.is_bonus_folder,
                 lambda name: rules.rename(name, state.fragments_file),
