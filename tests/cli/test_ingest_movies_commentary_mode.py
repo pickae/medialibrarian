@@ -87,10 +87,13 @@ class TestThePhaseRunsAndNothingElse:
 
         def export_commentary(directory, read_track_info, is_bonus_folder,
                               rename, audio_stream_index, ram_root, whisper,
-                              whisper_jobs, log, drain_queue, *rest):
+                              whisper_jobs, log, drain_queue, *rest,
+                              **kw):
             exports.append({"directory": directory, "whisper": whisper,
                             "jobs": whisper_jobs, "drain": drain_queue,
-                            "ram_root": ram_root, "rest": rest})
+                            "ram_root": ram_root, "rest": rest,
+                            "same_commentary_name":
+                                kw.get("same_commentary_name")})
 
         monkeypatch.setattr(run.commentarytranscription,
                             "export_commentary", export_commentary)
@@ -182,6 +185,17 @@ class TestThePhaseRunsAndNothingElse:
         assert discard_existing("P ", "M") is True
         assert seen["prefix"] == "P "
         assert seen["movie"] == "M"
+
+    def test_the_name_rule_is_handed_to_the_phase_to_renumber_stale_transcripts(
+            self, monkeypatch, tmp_path):
+        """A transcript an older run numbered for a track that no longer stands
+        where it numbered it is renumbered rather than transcribed again, and
+        whether a name names the commentary is the run's own rule, handed down
+        to the phase."""
+        exports, _settled, _scratch = self._stubbed(monkeypatch, tmp_path)
+        films = _library(tmp_path, "Films")
+        assert run.main(["-c", str(films)]) == 0
+        assert exports[0]["same_commentary_name"] is run.rules._same_commentary
 
     def test_without_ffsubsync_and_pipx_the_warning_is_the_run(
             self, monkeypatch, tmp_path):

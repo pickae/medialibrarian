@@ -25,6 +25,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from medialib.cli import ingest_movies as rules
 from medialib.lib import commentarytranscription as ct
 from tests import blackbox
 
@@ -173,7 +174,8 @@ def _leftover_mkas(ram):
 
 
 def _run_export(w, root, ram, tracks, detected, pipx_rc, quality="yes",
-                ffmpeg_rc="0", discard_existing=None):
+                ffmpeg_rc="0", discard_existing=None,
+                same_commentary_name=rules._same_commentary):
     """The whole exportCommentary with its caller helpers stood in: build the
     queue and drain it one record at a time through transcribe_commentary."""
     logs = []
@@ -200,7 +202,7 @@ def _run_export(w, root, ram, tracks, detected, pipx_rc, quality="yes",
         ct.export_commentary(root, _read_track_info(tracks), _is_bonus_folder,
                              lambda name: name, _audio_stream_index, ram,
                              WHISPER, 2, logs.append, drain, "10", quality,
-                             discard_existing)
+                             discard_existing, same_commentary_name)
     finally:
         os.chdir(cwd)
     return logs, queue_records
@@ -749,6 +751,237 @@ class TestExportEdges:
         assert asked[0].endswith("movie 0 ")
         assert sidecar.exists()
         assert records == []
+
+
+class TestStaleNumber:
+    """A transcript an older run numbered for a track that no longer stands
+    where it numbered it: the resume check finds nothing under the track's own
+    number, and the near miss is that a second transcription is spent on a
+    transcript that is beside the film. Renumbered to the track's own number,
+    the file is what the check skips on - and is judged by the size rule like
+    any other sidecar once renumbered."""
+
+    TRACKS = {"movie": [("Video", "false", "video", ""),
+                        ("Main", "false", "audio", "eng"),
+                        ("Commentary", "true", "audio", "eng")]}
+
+    def _fixture(self, w, tracks=None):
+        root = w.tmp_path / "root"
+        root.mkdir()
+        (root / "movie.mkv").touch()
+        ram = w.tmp_path / "ram"
+        ram.mkdir()
+        return root, ram, tracks or self.TRACKS
+
+    def test_a_transcript_numbered_for_a_stale_track_is_renumbered(self, w):
+        """The track's own number is what no cut may reach, and the one thing
+        a rerun may not have kept: the film's track layout changed under the
+        name, so the transcript is renumbered rather than transcribed again."""
+        root, ram, tracks = self._fixture(w)
+        stale = root / "movie 1 Commentary.en.srt"
+        stale.write_bytes(b"1\n00:00:00,000 --> 00:00:01,000\nstale\n")
+
+        logs, records = _run_export(
+            w, str(root), str(ram), tracks, _detected("English"), "0 0")
+
+        # renumbered to the track's own number, the rest of the name as
+        # written, and the srt itself untouched
+        assert not stale.exists()
+        renumbered = root / "movie 2 Commentary.en.srt"
+        assert renumbered.read_bytes() == \
+            b"1\n00:00:00,000 --> 00:00:01,000\nstale\n"
+        # and nothing extracted, detected or transcribed on top of it
+        assert records == []
+        assert w.calls() == []
+        assert sum("Renumbered" in line for line in logs) == 1
+
+    def test_and_a_name_an_older_run_cut_short_is_the_same_commentary(self, w):
+        """Not an identical name: a name an older run cut at a different place
+        still points at the commentary, where nothing else of the film's it
+        could be of."""
+        root, ram, tracks = self._fixture(
+            w, {"movie": [("Video", "false", "video", ""),
+                          ("Main", "false", "audio", "eng"),
+                          ("Director Commentary by John Smith", "true",
+                           "audio", "eng")]})
+        stale = root / "movie 1 Director Commentary by John.en.srt"
+        stale.write_bytes(b"cut short\n")
+
+        logs, records = _run_export(
+            w, str(root), str(ram), tracks, _detected("English"), "0 0")
+
+        assert not stale.exists()
+        assert (root / "movie 2 Director Commentary by John.en.srt").is_file()
+        assert records == []
+
+    def test_but_not_the_one_the_film_s_other_commentary_also_fits(self, w):
+        """A name cut back to a point two of the film's commentaries both fit
+        points at no particular one, which is what the number there is for:
+        neither track renumbers it, and the film's commentaries are
+        transcribed for real."""
+        tracks = {"movie": [("Video", "false", "video", ""),
+                            ("Main", "false", "audio", "eng"),
+                            ("Audio Commentary", "true", "audio", "eng"),
+                            ("Audio Commentary German", "true", "audio",
+                             "ger")]}
+        root, ram, _ = self._fixture(w)
+        # cut to a point both commentaries' names still start with, so it fits
+        # two of them and says no
+        stale = root / "movie 1 Audio Comment.en.srt"
+        stale.write_bytes(b"ambiguous\n")
+
+        _logs, records = _run_export(
+            w, str(root), str(ram), tracks, _detected("English"),
+            "0 0 0 0", ffmpeg_rc="0 0 0")
+
+        # the stub is still beside the film, untouched by either track
+        assert stale.exists()
+        assert stale.read_bytes() == b"ambiguous\n"
+        # and both commentaries were transcribed for real
+        assert len(records) == 3
+
+    def test_a_stale_number_of_the_other_commentary_is_its_own(self, w):
+        """A transcript that fits exactly ONE of the film's commentaries is
+        that commentary's whatever number it stands under: renumbered by the
+        track it is of, and not reached for by the one it is not."""
+        tracks = {"movie": [("Video", "false", "video", ""),
+                            ("Main", "false", "audio", "eng"),
+                            ("Audio Commentary", "true", "audio", "eng"),
+                            ("Audio Commentary German", "true", "audio",
+                             "ger")]}
+        root, ram, _ = self._fixture(w)
+        stale = root / "movie 1 Audio Commentary German.en.srt"
+        stale.write_bytes(b"german\n")
+
+        logs, records = _run_export(
+            w, str(root), str(ram), tracks, _detected("English"),
+            "0 0", ffmpeg_rc="0 0")
+
+        # the German commentary's track renumbered it, and skipped
+        assert not stale.exists()
+        renumbered = root / "movie 3 Audio Commentary German.en.srt"
+        assert renumbered.read_bytes() == b"german\n"
+        # the other commentary has no transcript, and was transcribed
+        assert len(records) == 1
+        assert records[0].split("\x1f")[1].endswith(
+            "movie 2 Audio Commentary.en.srt")
+        assert sum("Renumbered" in line for line in logs) == 1
+
+    def test_a_transcript_an_older_version_named_without_a_language(self, w):
+        """One written before the language went into the name carries no
+        suffix at all, and is renumbered the same way."""
+        root, ram, tracks = self._fixture(w)
+        stale = root / "movie 1 Commentary.srt"
+        stale.write_bytes(b"old style\n")
+
+        logs, records = _run_export(
+            w, str(root), str(ram), tracks, _detected("English"), "0 0")
+
+        assert not stale.exists()
+        assert (root / "movie 2 Commentary.srt").read_bytes() \
+            == b"old style\n"
+        assert records == []
+
+    def test_but_a_stale_sidecar_the_caller_judges_too_small_is_discarded(
+            self, w):
+        """Renumbered, the sidecar is asked the same questions the check asks:
+        one too small to be the film's real transcript is discarded at the
+        track's own number, and the commentary is transcribed for real."""
+        root, ram, tracks = self._fixture(w)
+        stale = root / "movie 1 Commentary.en.srt"
+        stale.write_bytes(b"x" * 100)
+
+        discarded = []
+        logs, records = _run_export(
+            w, str(root), str(ram), tracks, _detected("English"), "0 0",
+            ffmpeg_rc="0 0",
+            discard_existing=lambda prefix, movie: (discarded.append(prefix),
+                                                     True)[1])
+        assert len(discarded) == 1
+        assert discarded[0].endswith("movie 2 ")
+        assert not stale.exists()
+        assert len(records) == 1
+        assert any("Discarding" in line for line in logs)
+
+    def test_and_a_stale_sidecar_the_caller_keeps_is_renumbered_not_touched(
+            self, w):
+        """The size rule says keep, and the rest says the same: renumbered to
+        the track's own number and left alone - nothing extracted, nothing
+        queued."""
+        root, ram, tracks = self._fixture(w)
+        stale = root / "movie 1 Commentary.en.srt"
+        stale.write_bytes(b"y" * 100000)
+
+        asked = []
+        logs, records = _run_export(
+            w, str(root), str(ram), tracks, _detected("English"), "0 0",
+            discard_existing=lambda prefix, movie: (asked.append(prefix),
+                                                     False)[1])
+        assert len(asked) == 1
+        assert asked[0].endswith("movie 2 ")
+        assert not stale.exists()
+        renumbered = root / "movie 2 Commentary.en.srt"
+        assert renumbered.read_bytes() == b"y" * 100000
+        assert records == []
+
+    def test_an_opus_numbered_for_a_stale_track_is_not_renumbered(self, w):
+        """This phase writes the .srt, and the .opus an older run may have
+        left is judged by the pass that owns it: a stale-numbered one counts
+        for nothing here, and is left exactly where it stands."""
+        root, ram, tracks = self._fixture(w)
+        stale = root / "movie 1 Commentary.opus"
+        stale.write_bytes(b"\x01opus\x80")
+
+        logs, records = _run_export(
+            w, str(root), str(ram), tracks, _detected("English"), "0 0",
+            ffmpeg_rc="0 0")
+
+        assert stale.exists()
+        assert stale.read_bytes() == b"\x01opus\x80"
+        assert not (root / "movie 2 Commentary.opus").exists()
+        assert len(records) == 1
+        assert not any("Renumbered" in line for line in logs)
+
+    def test_two_stale_copies_of_one_transcript_keep_the_one_written(self, w):
+        """Two copies under one name are one transcript twice over: the number
+        goes to one of them, and the other is dropped rather than left to
+        disagree about which copy is the transcript."""
+        root, ram, tracks = self._fixture(w)
+        (root / "movie 1 Commentary.en.srt").write_bytes(b"first\n")
+        (root / "movie 0 Commentary.en.srt").write_bytes(b"second\n")
+
+        logs, records = _run_export(
+            w, str(root), str(ram), tracks, _detected("English"), "0 0")
+
+        assert records == []
+        assert sorted(p.name for p in root.iterdir()
+                      if p.name.endswith(".srt")) == ["movie 2 Commentary.en.srt"]
+        assert sum("Renumbered" in line for line in logs) == 1
+        assert sum("dropping a second transcript" in line for line in logs) \
+            == 1
+
+    def test_a_stale_number_of_another_film_in_the_same_folder(self, w):
+        """A film whose name is the front of this one's name sits in the same
+        folder, and its transcript must not read as this film's: the number
+        has to be a number, and the film is the stem no cut may reach."""
+        tracks = {"movie": self.TRACKS["movie"],
+                  "movie extended": self.TRACKS["movie"]}
+        root, ram, _ = self._fixture(w, tracks)
+        (root / "movie extended.mkv").touch()
+        # the other film's transcript, under its own current number
+        other = root / "movie extended 2 Commentary.en.srt"
+        other.write_bytes(b"theirs\n")
+        # and this film's, under a stale one
+        stale = root / "movie 1 Commentary.en.srt"
+        stale.write_bytes(b"ours\n")
+
+        logs, records = _run_export(
+            w, str(root), str(ram), tracks, _detected("English"), "0 0")
+
+        assert records == []
+        assert other.read_bytes() == b"theirs\n"
+        assert not stale.exists()
+        assert (root / "movie 2 Commentary.en.srt").read_bytes() == b"ours\n"
 
 
 class TestStem:

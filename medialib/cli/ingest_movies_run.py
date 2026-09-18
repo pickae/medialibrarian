@@ -906,6 +906,12 @@ def _commentary_only(program: str, script_dir: str, roots: list,
     wrote forcing a non-English commentary through the English model. That one
     is discarded and the commentary is transcribed for real.
 
+    A transcript an older run numbered for a track that no longer stands where
+    it numbered it is renumbered to the track's own number rather than
+    transcribed a second time, when the name still says which commentary it is
+    of - and once renumbered it is judged by the size rule like any other
+    sidecar.
+
     The transcription is the whole of the run, so its tools are the gate on it:
     without ffsubsync and pipx there is no subtitle worth writing, and there is
     nothing else to fall back to, so the warning they leave is the run.
@@ -966,7 +972,8 @@ def _commentary_only(program: str, script_dir: str, roots: list,
                                                           jobs),
                 rules.MAX_WHISPER_SYNC_OFFSET, state.ffsubsync_quality,
                 lambda prefix, movie, _durations=durations: _sidecar_too_small(
-                    prefix, movie, _durations))
+                    prefix, movie, _durations),
+                same_commentary_name=rules._same_commentary)
             safety.exit_if_aborted()
     finally:
         ramscratch.run_exit_cleanup()
@@ -1127,7 +1134,8 @@ def _ingest(state, root: str, subtitle_work: bool) -> None:
             rules.audio_stream_index, state.ram_root, state.whisper,
             jobs, log,
             lambda records, _queue: _drain_commentary(state, records, jobs),
-            rules.MAX_WHISPER_SYNC_OFFSET, state.ffsubsync_quality)
+            rules.MAX_WHISPER_SYNC_OFFSET, state.ffsubsync_quality,
+            same_commentary_name=rules._same_commentary)
         safety.exit_if_aborted()
     else:
         log("Phase: extracting and transcribing commentary tracks - SKIPPED "
