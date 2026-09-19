@@ -1062,7 +1062,8 @@ def gather_commentary_transcripts(base: str, tracks: list) -> list:
 def _source_title(track) -> str:
     """The title a commentary track's transcript is appended under: the track's
     own name, or the word itself for a track that has none."""
-    return track.name if track.name and track.name != "null" else "Commentary"
+    return track.name if track.name and track.name != "null" \
+        else commentarytranscription.COMMENTARY_NO_NAME
 
 
 def _identifies_one(title: str, siblings: list) -> bool:

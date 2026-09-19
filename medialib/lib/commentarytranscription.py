@@ -37,6 +37,7 @@ __all__ = [
     "COMMENTARY_DETECT_SECONDS",
     "COMMENTARY_DETECT_MIN_PROBABILITY",
     "SYNC_SETTLE_SECONDS",
+    "COMMENTARY_NO_NAME",
     "commentary_prefix",
     "commentary_stem",
     "detect_commentary_language",
@@ -53,6 +54,13 @@ __all__ = [
 NAME_MAX_BYTES = plexnames.NAME_MAX_BYTES
 COMMENTARY_SUFFIX_BYTES = plexnames.COMMENTARY_SUFFIX_BYTES
 COMMENTARY_STEM_MAX_BYTES = plexnames.COMMENTARY_STEM_MAX_BYTES
+
+# The word a nameless commentary is known by, in its file name and in the
+# matching that asks of a film's commentaries which one a name names. The rare
+# track that carries no name of its own is read as the shell's "null", and the
+# empty string is no name at all; both become the word, so a nameless transcript
+# is named after the word rather than "null".
+COMMENTARY_NO_NAME = "Commentary"
 
 # How long a commentary excerpt is, cut from the MIDDLE of the track (commentaries
 # open on the film's music or silence, and whisper only looks at the first 30 s),
@@ -218,6 +226,16 @@ def commentary_stem(movie_stem: str, track_id, name: str) -> str:
     directory, base = os.path.split(stem)
     base = plexnames.cut_to_bytes(base, COMMENTARY_STEM_MAX_BYTES)
     return os.path.join(directory, base) if directory else base
+
+
+def _display_name(raw: str) -> str:
+    """A commentary's own name, or the word a nameless one is known by.
+
+    Asked of the raw track name before the cleaning that follows it: the absent
+    name is the shell's "null" and the empty string is no name at all, and both
+    are the word rather than a "null" spelled into the file name.
+    """
+    return raw if raw and raw != "null" else COMMENTARY_NO_NAME
 
 
 def _existing_outputs(prefix: str) -> list:
@@ -492,7 +510,8 @@ def export_commentary(directory: str, read_track_info, is_bonus_folder,
                       rename, audio_stream_index, ram_root: str,
                       whisper: dict, log, drain_queue,
                       max_sync_offset: str, quality: str,
-                      discard_existing=None, same_commentary_name=None) -> None:
+                      discard_existing=None, same_commentary_name=None,
+                      orphans=None) -> None:
     """Extract every commentary, and hand the queue to the drain to run.
 
     ``read_track_info`` is the caller's track reader (the bash's
@@ -512,8 +531,11 @@ def export_commentary(directory: str, read_track_info, is_bonus_folder,
     for whether a name names a commentary, and it is what lets a transcript an
     older run numbered for a track that no longer stands where it numbered it
     be renumbered to the track's own number rather than transcribed a second
-    time. Everything else is this run's own: the queue spans every movie and
-    every language wanted, so the workers stay busy to the last record.
+    time. ``orphans``, when given, is a list the walk fills with a transcript
+    that names a track the film no longer numbers a commentary for; the -c run
+    is the one that hands it one, so it can leave the list in a file.
+    Everything else is this run's own: the queue spans every movie and every
+    language wanted, so the workers stay busy to the last record.
     """
     try:
         os.chdir(directory)
@@ -537,10 +559,34 @@ def export_commentary(directory: str, read_track_info, is_bonus_folder,
             # whether a name that lost its number still points at one of them
             # and at no other.
             commentary_names = [
-                rename(n.replace("/", "").replace("&", "and"))
+                rename(_display_name(n).replace("/", "").replace("&", "and"))
                 for n, c, t in zip(names, comments, types, strict=True)
                 if "audio" in t and (c == "true"
                                      or languages.is_commentary_name(n))]
+            # A transcript that names a track number the film no longer numbers
+            # a commentary for is one the film has outlived: reported, not
+            # transcribed and not silently kept. The walk only asks when the
+            # run wants the list.
+            if orphans is not None:
+                movie_base = os.path.basename(_strip_last_ext(file))
+                start = movie_base + " "
+                commentary_numbers = {
+                    i - 1 for i in range(1, len(comments) + 1)
+                    if "audio" in types[i - 1] and (
+                        comments[i - 1] == "true"
+                        or languages.is_commentary_name(names[i - 1]))}
+                try:
+                    entries = os.listdir(dir_name)
+                except OSError:
+                    entries = []
+                for entry in entries:
+                    if not (entry.startswith(start)
+                            and entry.endswith((".srt", ".opus"))):
+                        continue
+                    tail = _STALE_TAIL.match(entry[len(start):])
+                    if not tail or int(tail.group(1)) in commentary_numbers:
+                        continue
+                    orphans.append(os.path.join(dir_name, entry))
             for i in range(1, len(comments) + 1):
                 comment = comments[i - 1]
                 type_ = types[i - 1]
@@ -554,8 +600,11 @@ def export_commentary(directory: str, read_track_info, is_bonus_folder,
                         not languages.is_commentary_name(names[i - 1]):
                     continue
 
-                # determine name of file to export
-                name = names[i - 1].replace("/", "").replace("&", "and")
+                # determine name of file to export; a nameless track is the
+                # rare one, and the shell's "null" would be spelled into the
+                # name as-is
+                name = _display_name(names[i - 1])
+                name = name.replace("/", "").replace("&", "and")
                 name = rename(name)
                 file_stem = _strip_last_ext(file)
                 prefix = commentary_prefix(file_stem, i - 1)

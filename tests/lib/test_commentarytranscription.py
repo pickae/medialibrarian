@@ -175,7 +175,7 @@ def _leftover_mkas(ram):
 
 def _run_export(w, root, ram, tracks, detected, pipx_rc, quality="yes",
                 ffmpeg_rc="0", discard_existing=None,
-                same_commentary_name=rules._same_commentary):
+                same_commentary_name=rules._same_commentary, orphans=None):
     """The whole exportCommentary with its caller helpers stood in: the walk
     prepares one commentary at a time, and the drain runs each prepared record
     through transcribe_commentary as it comes."""
@@ -204,8 +204,9 @@ def _run_export(w, root, ram, tracks, detected, pipx_rc, quality="yes",
     try:
         ct.export_commentary(root, _read_track_info(tracks), _is_bonus_folder,
                              lambda name: name, _audio_stream_index, ram,
-                             WHISPER, logs.append, drain, "10", quality,
-                             discard_existing, same_commentary_name)
+                              WHISPER, logs.append, drain, "10", quality,
+                              discard_existing, same_commentary_name,
+                              orphans)
     finally:
         os.chdir(cwd)
     return logs, queue_records, queue_sizes
@@ -391,6 +392,96 @@ class TestQueue:
         assert sync_call[1] == mka
         assert sync_call[2:5] == ["-i", srt, "-o"]
         assert _flag(sync_call, "--max-offset-seconds") == "10"
+
+
+class TestNameless:
+    """The rare commentary track that carries no name of its own: the shell
+    reads the absent track name as "null", and that must not be spelled into
+    the transcript's file name - the word a nameless commentary is known by
+    stands in for it, the way the subtitle the append gives it does."""
+
+    def _fixture(self, w):
+        root = w.tmp_path / "root"
+        (root / "Film2020").mkdir(parents=True)
+        (root / "Film2020" / "Film2020.mkv").touch()
+        ram = w.tmp_path / "ram"
+        ram.mkdir()
+        # one plain audio track and one commentary the flag says so but that
+        # has no name of its own: the shell's "null" for an absent track name
+        tracks = {"Film2020": [
+            ("MainAudio", "false", "audio", "eng"),
+            ("null", "true", "audio", "eng"),
+        ]}
+        return str(root), str(ram), tracks
+
+    def test_a_nameless_commentary_is_named_after_the_word_not_null(self, w):
+        root, ram, tracks = self._fixture(w)
+        _logs, records, _sizes = _run_export(
+            w, root, ram, tracks, _detected("English"),
+            "0 1", ffmpeg_rc="0 0")
+        # the nameless track is the film's second, numbered 1, and its srt is
+        # named after the word the nameless track is known by - never "null"
+        assert len(records) == 1
+        _mka, srt, _task, lang, _siblings = records[0].split("\x1f")
+        assert lang == "en"
+        name = os.path.basename(srt)
+        assert name == "Film2020 1 Commentary.en.srt"
+        assert "null" not in name
+
+    def test_the_word_is_the_one_the_matching_asks_about(self, w):
+        """A transcript that says nothing more than the word still names the
+        film's one commentary, so the rerun finds it where it left it."""
+        root, ram, tracks = self._fixture(w)
+        folder = w.tmp_path / "root" / "Film2020"
+        (folder / "Film2020 1 Commentary.en.srt").touch()
+        _logs, records, _sizes = _run_export(
+            w, root, ram, tracks, _detected("English"),
+            "0 1", ffmpeg_rc="0 0")
+        # the transcript the word names already stands beside the film, so the
+        # rerun re-transcribes nothing
+        assert records == []
+
+
+class TestOrphans:
+    """A transcript that names a track its film no longer numbers a commentary
+    for is one the film has outlived. The -c run collects them as it sweeps,
+    and leaves them in a file rather than losing them or acting on them: a
+    transcript the film still numbers a commentary for is left alone."""
+
+    def _fixture(self, w):
+        root = w.tmp_path / "root"
+        (root / "Film2020").mkdir(parents=True)
+        (root / "Film2020" / "Film2020.mkv").touch()
+        ram = w.tmp_path / "ram"
+        ram.mkdir()
+        # one plain audio track and one commentary: the film numbers track 1 a
+        # commentary, and nothing else
+        tracks = {"Film2020": [
+            ("MainAudio", "false", "audio", "eng"),
+            ("DirectorCommentary", "true", "audio", "eng"),
+        ]}
+        return str(root), str(ram), tracks
+
+    def test_a_transcript_of_a_track_the_film_no_longer_numbers_is_reported(
+            self, w):
+        root, ram, tracks = self._fixture(w)
+        folder = w.tmp_path / "root" / "Film2020"
+        # the film still numbers track 1 a commentary, and no longer numbers
+        # track 5 one: its old transcript is the orphan
+        (folder / "Film2020 1 DirectorCommentary.en.srt").touch()
+        (folder / "Film2020 5 OldCommentary.en.srt").touch()
+        orphans = []
+        _run_export(w, root, ram, tracks, _detected("English"),
+                    "0 1", ffmpeg_rc="0 0", orphans=orphans)
+        assert orphans == ["./Film2020/Film2020 5 OldCommentary.en.srt"]
+
+    def test_nothing_is_collected_when_the_run_wants_no_list(self, w):
+        root, ram, tracks = self._fixture(w)
+        folder = w.tmp_path / "root" / "Film2020"
+        (folder / "Film2020 5 OldCommentary.en.srt").touch()
+        # the full run hands no list, so the walk does not collect
+        _run_export(w, root, ram, tracks, _detected("English"),
+                    "0 1", ffmpeg_rc="0 0")
 
 
 class TestState:

@@ -888,6 +888,21 @@ def _sidecar_too_small(prefix: str, movie: str, durations: dict) -> bool:
     return (total / 1024.0) < MIN_COMMENTARY_KB_PER_MINUTE * minutes
 
 
+def _write_commentary_orphans(script_dir: str, orphans: list) -> None:
+    """The transcripts a -c run found that name a track their film no longer
+    numbers a commentary for, one absolute path per line. An empty run writes
+    nothing, so a run with nothing to report leaves no file behind."""
+    if not orphans:
+        return
+    path = os.path.join(script_dir, "logs", "commentaryOrphans.txt")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as handle:
+        for orphan in orphans:
+            handle.write(orphan + "\n")
+    log("Commentary transcript(s) with no matching track in the film, "
+        "written to %s" % path)
+
+
 def _commentary_only(program: str, script_dir: str, roots: list,
                      fragments_file: str) -> int:
     """The commentary transcription phase on its own.
@@ -912,6 +927,10 @@ def _commentary_only(program: str, script_dir: str, roots: list,
     transcribed a second time, when the name still says which commentary it is
     of - and once renumbered it is judged by the size rule like any other
     sidecar.
+
+    A transcript that names a track its film no longer numbers a commentary for
+    is one the film has outlived; the walk reports every one it finds, and the
+    run leaves them in a file rather than losing them or acting on them.
 
     The transcription is the whole of the run, so its tools are the gate on it:
     without ffsubsync and pipx there is no subtitle worth writing, and there is
@@ -957,6 +976,11 @@ def _commentary_only(program: str, script_dir: str, roots: list,
                 long_names=tmdblookup.LongNames())
     jobs = whisper_lib.WHISPER_JOBS
 
+    # The transcripts the walk finds that name a track their film no longer
+    # numbers a commentary for, gathered across every folder and left in a
+    # file at the end: the -c run is the one that reports them, and it is the
+    # whole of this run.
+    orphans: list[str] = []
     try:
         for root in roots:
             if len(roots) > 1:
@@ -964,6 +988,7 @@ def _commentary_only(program: str, script_dir: str, roots: list,
             # Fresh per root: the movie paths handed down are relative to this
             # root, so a cache keyed on them is only valid for it.
             durations: dict[str, int] = {}
+            root_orphans: list[str] = []
             commentarytranscription.export_commentary(
                 root, rules.read_track_info, rules.is_bonus_folder,
                 lambda name: rules.rename(name, state.fragments_file),
@@ -973,10 +998,15 @@ def _commentary_only(program: str, script_dir: str, roots: list,
                 rules.MAX_WHISPER_SYNC_OFFSET, state.ffsubsync_quality,
                 lambda prefix, movie, _durations=durations: _sidecar_too_small(
                     prefix, movie, _durations),
-                same_commentary_name=rules._same_commentary)
+                same_commentary_name=rules._same_commentary,
+                orphans=root_orphans)
+            for relative in root_orphans:
+                orphans.append(os.path.normpath(
+                    os.path.join(root, relative)))
             safety.exit_if_aborted()
     finally:
         ramscratch.run_exit_cleanup()
+    _write_commentary_orphans(script_dir, orphans)
     return workerpool.exit_status(0)
 
 
