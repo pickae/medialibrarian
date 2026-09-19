@@ -44,7 +44,7 @@ class Outcome:
         return not self.failed
 
 
-def _label(item) -> str:
+def label(item) -> str:
     """The name a worker is given, which is what a failure is reported BY.
 
     A pair or a record is named by its first field: the commands hand this
@@ -199,7 +199,7 @@ def run(items, jobs: int, target, arguments) -> Outcome:
             item = pending.popleft()
             worker = multiprocessing.Process(target=target,
                                              args=arguments(item),
-                                             name=_label(item))
+                                             name=label(item))
             worker.start()
             running.append(worker)
         if not running:

@@ -176,14 +176,17 @@ def _leftover_mkas(ram):
 def _run_export(w, root, ram, tracks, detected, pipx_rc, quality="yes",
                 ffmpeg_rc="0", discard_existing=None,
                 same_commentary_name=rules._same_commentary, orphans=None):
-    """The whole exportCommentary with its caller helpers stood in: build the
-    queue and drain it one record at a time through transcribe_commentary."""
+    """The whole exportCommentary with its caller helpers stood in: the walk
+    prepares one commentary at a time, and the drain runs each prepared record
+    through transcribe_commentary as it comes."""
     logs = []
     queue_records = []
+    queue_sizes = []
 
-    def drain(records, queue):
-        queue_records.extend(records)
-        for record in records:
+    def drain(producer):
+        for record, size in producer:
+            queue_records.append(record)
+            queue_sizes.append(size)
             ct.transcribe_commentary(record, WHISPER, "10", quality, ram,
                                      logs.append)
 
@@ -201,12 +204,12 @@ def _run_export(w, root, ram, tracks, detected, pipx_rc, quality="yes",
     try:
         ct.export_commentary(root, _read_track_info(tracks), _is_bonus_folder,
                              lambda name: name, _audio_stream_index, ram,
-                             WHISPER, 2, logs.append, drain, "10", quality,
-                             discard_existing, same_commentary_name,
-                             orphans)
+                              WHISPER, logs.append, drain, "10", quality,
+                              discard_existing, same_commentary_name,
+                              orphans)
     finally:
         os.chdir(cwd)
-    return logs, queue_records
+    return logs, queue_records, queue_sizes
 
 
 class TestQueue:
@@ -233,7 +236,7 @@ class TestQueue:
         # three tracks give whisper nothing but their excerpt to work with,
         # and the excerpt is cut from the MIDDLE of a feature-length track:
         # ffprobe says 7200 s, so it starts at (7200-120)/2
-        logs, records = _run_export(
+        logs, records, sizes = _run_export(
             w, root, ram, tracks, _detected("English"),
             "0 0 0 1 1 1 1 1 1 1 1 1",
             ffmpeg_rc="0 0 0 0 0 0 0 0 0")
@@ -297,10 +300,11 @@ class TestQueue:
             mka, srt, _task, _lang, siblings = record.split("\x1f")
             assert srt in siblings
 
-        # and the queue file is exactly those NUL terminated records
-        with open(os.path.join(ram, "commentaryQueue"), "rb") as handle:
-            data = handle.read()
-        assert data == "".join(r + "\0" for r in records).encode("utf-8")
+        # the queue is a producer: every record yields with a size estimate,
+        # the extract's bytes, so the queue keeps the longest to the end
+        assert len(sizes) == len(records)
+        for size in sizes:
+            assert isinstance(size, int) and size >= 0
 
 # each run got the right task, language and model: anything that is not
         # an English transcription goes to the multilingual model, and the
@@ -334,10 +338,6 @@ class TestQueue:
         assert _flag(foreign[0], "--language") == "en"
         assert _flag(foreign[0], "--model") == MODEL
 
-        # the queue spans every film: one drain, after every extract
-        assert "Transcribing 9 queued commentary subtitle(s) on 2 " \
-            "worker(s)" in logs
-
         # the transcriptions failed, so the workers left every extract to the
         # sweep at the end of the export - and it swept
         assert _leftover_mkas(ram) == []
@@ -352,7 +352,7 @@ class TestQueue:
         before = sorted(str(p.relative_to(root)) for p in
                         (w.tmp_path / "root").rglob("*") if p.is_file())
         w.clear()
-        logs2, records2 = _run_export(
+        logs2, records2, _sizes2 = _run_export(
             w, root, ram, tracks, _detected("English"),
             "0 0 0 1 1 1 1 1 1 1 1 1",
             ffmpeg_rc="0 0 0 0 0 0 0 0 0")
@@ -416,7 +416,7 @@ class TestNameless:
 
     def test_a_nameless_commentary_is_named_after_the_word_not_null(self, w):
         root, ram, tracks = self._fixture(w)
-        _logs, records = _run_export(
+        _logs, records, _sizes = _run_export(
             w, root, ram, tracks, _detected("English"),
             "0 1", ffmpeg_rc="0 0")
         # the nameless track is the film's second, numbered 1, and its srt is
@@ -434,7 +434,7 @@ class TestNameless:
         root, ram, tracks = self._fixture(w)
         folder = w.tmp_path / "root" / "Film2020"
         (folder / "Film2020 1 Commentary.en.srt").touch()
-        _logs, records = _run_export(
+        _logs, records, _sizes = _run_export(
             w, root, ram, tracks, _detected("English"),
             "0 1", ffmpeg_rc="0 0")
         # the transcript the word names already stands beside the film, so the
@@ -678,7 +678,7 @@ class TestExportEdges:
             quality=quality, ffmpeg_rc=ffmpeg_rc)
 
     def test_an_inconclusive_detection_assumes_english(self, w):
-        logs, records = self._one_track(
+        logs, records, _sizes = self._one_track(
             w, ("Commentary", "true", "audio", "und"),
             _detected("Dutch", "0.3"), "0 1", ffmpeg_rc="0 0")
         assert "WARNING: could not tell the language of commentary " \
@@ -689,7 +689,7 @@ class TestExportEdges:
         assert fields[1].endswith("movie 0 Commentary.en.srt")
 
     def test_a_failed_probe_assumes_english(self, w):
-        logs, records = self._one_track(
+        logs, records, _sizes = self._one_track(
             w, ("Commentary", "true", "audio", "und"),
             _detected("Dutch"), "0", ffmpeg_rc="0 7")
         # the excerpt cannot be made, so whisper is never ASKED what language this is
@@ -704,7 +704,7 @@ class TestExportEdges:
         assert fields[3] == "en"
 
     def test_a_failed_extract_is_skipped(self, w):
-        logs, records = self._one_track(
+        logs, records, _sizes = self._one_track(
             w, ("Commentary", "true", "audio", "eng"),
             _detected("English"), "0 0", ffmpeg_rc="7")
         # the extract failed, so nothing was queued ...
@@ -721,7 +721,7 @@ class TestExportEdges:
         (root / "Extras" / "Bonus.mkv").touch()
         ram = w.tmp_path / "ram"
         ram.mkdir()
-        logs, records = _run_export(
+        logs, records, _sizes = _run_export(
             w, str(root), str(ram),
             {"Bonus": [("Commentary", "true", "audio", "eng")]},
             _detected("English"), "0 0")
@@ -741,7 +741,7 @@ class TestExportEdges:
         (root / kept).touch()
         ram = w.tmp_path / "ram"
         ram.mkdir()
-        logs, records = _run_export(
+        logs, records, _sizes = _run_export(
             w, str(root), str(ram),
             {os.path.splitext(kept)[0]: [("Commentary", "true", "audio",
                                           "eng")]},
@@ -771,7 +771,7 @@ class TestExportEdges:
         stem = ct.commentary_stem("movie", 0, name)
         (root / (stem[:-10] + ".en.srt")).touch()
 
-        logs, records = _run_export(w, str(root), str(ram), tracks,
+        logs, records, _sizes = _run_export(w, str(root), str(ram), tracks,
                                     _detected("English"), "0 0")
         assert records == []
         assert w.calls() == []
@@ -788,7 +788,7 @@ class TestExportEdges:
         (root / "other.mkv").touch()
         ram = w.tmp_path / "ram"
         ram.mkdir()
-        logs, records = _run_export(
+        logs, records, _sizes = _run_export(
             w, str(root), str(ram),
             {"movie": [("Commentary", "true", "audio", "eng")],
              "other": [("Commentary", "true", "audio", "eng")]},
@@ -811,7 +811,7 @@ class TestExportEdges:
         tracks = {"movie": [("Commentary", "true", "audio", "eng")]}
 
         discarded = []
-        logs, records = _run_export(
+        logs, records, _sizes = _run_export(
             w, str(root), str(ram), tracks, _detected("English"), "0 0",
             discard_existing=lambda prefix, movie: (discarded.append(prefix),
                                                     True)[1])
@@ -834,7 +834,7 @@ class TestExportEdges:
         tracks = {"movie": [("Commentary", "true", "audio", "eng")]}
 
         asked = []
-        logs, records = _run_export(
+        logs, records, _sizes = _run_export(
             w, str(root), str(ram), tracks, _detected("English"), "0 0",
             discard_existing=lambda prefix, movie: (asked.append(prefix),
                                                     False)[1])
@@ -872,7 +872,7 @@ class TestStaleNumber:
         stale = root / "movie 1 Commentary.en.srt"
         stale.write_bytes(b"1\n00:00:00,000 --> 00:00:01,000\nstale\n")
 
-        logs, records = _run_export(
+        logs, records, _sizes = _run_export(
             w, str(root), str(ram), tracks, _detected("English"), "0 0")
 
         # renumbered to the track's own number, the rest of the name as
@@ -898,7 +898,7 @@ class TestStaleNumber:
         stale = root / "movie 1 Director Commentary by John.en.srt"
         stale.write_bytes(b"cut short\n")
 
-        logs, records = _run_export(
+        logs, records, _sizes = _run_export(
             w, str(root), str(ram), tracks, _detected("English"), "0 0")
 
         assert not stale.exists()
@@ -921,7 +921,7 @@ class TestStaleNumber:
         stale = root / "movie 1 Audio Comment.en.srt"
         stale.write_bytes(b"ambiguous\n")
 
-        _logs, records = _run_export(
+        _logs, records, _sizes = _run_export(
             w, str(root), str(ram), tracks, _detected("English"),
             "0 0 0 0", ffmpeg_rc="0 0 0")
 
@@ -944,7 +944,7 @@ class TestStaleNumber:
         stale = root / "movie 1 Audio Commentary German.en.srt"
         stale.write_bytes(b"german\n")
 
-        logs, records = _run_export(
+        logs, records, _sizes = _run_export(
             w, str(root), str(ram), tracks, _detected("English"),
             "0 0", ffmpeg_rc="0 0")
 
@@ -965,7 +965,7 @@ class TestStaleNumber:
         stale = root / "movie 1 Commentary.srt"
         stale.write_bytes(b"old style\n")
 
-        logs, records = _run_export(
+        logs, records, _sizes = _run_export(
             w, str(root), str(ram), tracks, _detected("English"), "0 0")
 
         assert not stale.exists()
@@ -983,7 +983,7 @@ class TestStaleNumber:
         stale.write_bytes(b"x" * 100)
 
         discarded = []
-        logs, records = _run_export(
+        logs, records, _sizes = _run_export(
             w, str(root), str(ram), tracks, _detected("English"), "0 0",
             ffmpeg_rc="0 0",
             discard_existing=lambda prefix, movie: (discarded.append(prefix),
@@ -1004,7 +1004,7 @@ class TestStaleNumber:
         stale.write_bytes(b"y" * 100000)
 
         asked = []
-        logs, records = _run_export(
+        logs, records, _sizes = _run_export(
             w, str(root), str(ram), tracks, _detected("English"), "0 0",
             discard_existing=lambda prefix, movie: (asked.append(prefix),
                                                      False)[1])
@@ -1023,7 +1023,7 @@ class TestStaleNumber:
         stale = root / "movie 1 Commentary.opus"
         stale.write_bytes(b"\x01opus\x80")
 
-        logs, records = _run_export(
+        logs, records, _sizes = _run_export(
             w, str(root), str(ram), tracks, _detected("English"), "0 0",
             ffmpeg_rc="0 0")
 
@@ -1041,7 +1041,7 @@ class TestStaleNumber:
         (root / "movie 1 Commentary.en.srt").write_bytes(b"first\n")
         (root / "movie 0 Commentary.en.srt").write_bytes(b"second\n")
 
-        logs, records = _run_export(
+        logs, records, _sizes = _run_export(
             w, str(root), str(ram), tracks, _detected("English"), "0 0")
 
         assert records == []
@@ -1066,7 +1066,7 @@ class TestStaleNumber:
         stale = root / "movie 1 Commentary.en.srt"
         stale.write_bytes(b"ours\n")
 
-        logs, records = _run_export(
+        logs, records, _sizes = _run_export(
             w, str(root), str(ram), tracks, _detected("English"), "0 0")
 
         assert records == []

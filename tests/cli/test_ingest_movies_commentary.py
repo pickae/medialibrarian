@@ -1,9 +1,9 @@
 """The commentary queue's drain: who runs the queued transcriptions.
 
-exportCommentary fills the queue and hands it back to the run to drain, so a run
-that hands it nothing transcribes nothing however full the queue is. The width is
-whisper's rather than the core count, one run already spanning the GPU or every
-CPU thread.
+exportCommentary prepares the commentary one at a time and hands the queue to
+the run to drain, so a run that hands it nothing transcribes nothing however
+full the queue is. The width is whisper's rather than the core count, one run
+already spanning the GPU or every CPU thread.
 """
 
 import pytest
@@ -17,8 +17,8 @@ pytestmark = pytest.mark.pure
 
 @pytest.fixture
 def ingested(monkeypatch):
-    """One ingest with every phase stubbed out, reporting the width and the
-    drain exportCommentary was handed."""
+    """One ingest with every phase stubbed out, reporting the drain
+    exportCommentary was handed."""
     def run():
         seen = {}
         for name in ("cleanup", "mkv_mux", "movies_into_subfolders",
@@ -40,9 +40,7 @@ def ingested(monkeypatch):
 
         def export_commentary(directory, read_track_info, is_bonus_folder,
                               rename, audio_stream_index, ram_root, whisper,
-                              whisper_jobs, log, drain_queue, *rest,
-                              **_kw):
-            seen["jobs"] = whisper_jobs
+                              log, drain_queue, *rest, **_kw):
             seen["drain"] = drain_queue
 
         monkeypatch.setattr(run_module.commentarytranscription,
@@ -61,8 +59,12 @@ def test_the_queue_is_handed_a_drain_and_not_none(ingested):
     assert callable(ingested()["drain"])
 
 
-def test_the_width_is_whisper_s_and_not_the_core_count(ingested):
-    assert ingested()["jobs"] == whisper_lib.WHISPER_JOBS
+def test_the_width_is_whisper_s_and_not_the_core_count(ingested, monkeypatch):
+    widths = []
+    monkeypatch.setattr(run_module.dynamicqueue, "run",
+                        lambda producer, jobs, *a, **k: widths.append(jobs))
+    ingested()["drain"](iter(()))
+    assert widths == [whisper_lib.WHISPER_JOBS]
 
 
 def test_every_queued_record_reaches_the_transcription(monkeypatch):
@@ -74,7 +76,7 @@ def test_every_queued_record_reaches_the_transcription(monkeypatch):
                            fragments_file="", whisper={"model": "m"},
                            ffsubsync_quality="yes")
     # Width one, so the records run in this process and no worker is forked.
-    run_module._drain_commentary(state, ["one", "two"], 1)
+    run_module._drain_commentary(state, iter([("one", 1), ("two", 2)]), 1)
     assert [record for record, _args in seen] == ["one", "two"]
 
 
@@ -86,7 +88,7 @@ def test_the_transcription_is_handed_this_run_s_settings(monkeypatch):
     state = run_module.Run(script_dir="", ram_root="/ram", skips=None,
                            fragments_file="", whisper={"model": "m"},
                            ffsubsync_quality="no")
-    run_module._drain_commentary(state, ["one"], 1)
+    run_module._drain_commentary(state, iter([("one", 0)]), 1)
     assert seen == [({"model": "m"}, run_module.rules.MAX_WHISPER_SYNC_OFFSET,
                      "no", "/ram", run_module.log)]
 
@@ -99,5 +101,6 @@ def test_an_abort_stops_the_drain_where_it_is(monkeypatch):
     monkeypatch.setattr(run_module.safety, "abort_requested", lambda: True)
     state = run_module.Run(script_dir="", ram_root="/ram", skips=None,
                            fragments_file="", whisper={}, ffsubsync_quality="")
-    run_module._drain_commentary(state, ["one", "two"], 1)
+    run_module._drain_commentary(
+        state, iter([("one", 0), ("two", 0)]), 1)
     assert seen == []
