@@ -20,6 +20,7 @@ from medialib.lib import (
     commentarytranscription,
     dolbyvision,
     durationcheck,
+    dynamicqueue,
     enums,
     ffmpegselect,
     plexnames,
@@ -967,9 +968,8 @@ def _commentary_only(program: str, script_dir: str, roots: list,
                 root, rules.read_track_info, rules.is_bonus_folder,
                 lambda name: rules.rename(name, state.fragments_file),
                 rules.audio_stream_index, state.ram_root, state.whisper,
-                jobs, log,
-                lambda records, _queue: _drain_commentary(state, records,
-                                                          jobs),
+                log,
+                lambda producer: _drain_commentary(state, producer, jobs),
                 rules.MAX_WHISPER_SYNC_OFFSET, state.ffsubsync_quality,
                 lambda prefix, movie, _durations=durations: _sidecar_too_small(
                     prefix, movie, _durations),
@@ -1132,8 +1132,8 @@ def _ingest(state, root: str, subtitle_work: bool) -> None:
             root, rules.read_track_info, rules.is_bonus_folder,
             lambda name: rules.rename(name, state.fragments_file),
             rules.audio_stream_index, state.ram_root, state.whisper,
-            jobs, log,
-            lambda records, _queue: _drain_commentary(state, records, jobs),
+            log,
+            lambda producer: _drain_commentary(state, producer, jobs),
             rules.MAX_WHISPER_SYNC_OFFSET, state.ffsubsync_quality,
             same_commentary_name=rules._same_commentary)
         safety.exit_if_aborted()
@@ -1175,19 +1175,27 @@ def _in_transcribe_worker(state, record: str) -> None:
     _transcribe_one(state, record)
 
 
-def _drain_commentary(state, records: list, jobs: int) -> None:
-    """The queue exportCommentary filled, at ``jobs`` workers - a width that is
-    whisper's and not the core count, one run already spanning the GPU or every
-    CPU thread."""
+def _drain_commentary(state, producer, jobs: int) -> None:
+    """The queue exportCommentary prepared, at ``jobs`` workers - a width that
+    is whisper's and not the core count, one run already spanning the GPU or
+    every CPU thread.
+
+    ``producer`` yields ``(record, size)`` as it prepares the commentary, so
+    the preparation runs beside the transcription rather than in front of it.
+    At width one there is nothing to interleave with, so the records are
+    prepared and run in this process one at a time; wider than that the dynamic
+    queue runs them, keeping an adequate buffer of prepared items and giving a
+    freed slot the next longest one.
+    """
     if jobs <= 1:
-        for record in records:
+        for record, _size in producer:
             if safety.abort_requested():
                 return
             _transcribe_one(state, record)
         return
 
-    workerpool.run(records, jobs, _in_transcribe_worker,
-                   lambda record: (state, record))
+    dynamicqueue.run(producer, jobs, _in_transcribe_worker,
+                     lambda record: (state, record), log=log)
 
 
 def _transcode_opus(state, root: str) -> None:

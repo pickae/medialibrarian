@@ -243,6 +243,19 @@ def _has_existing_output(prefix: str) -> bool:
     return bool(_existing_outputs(prefix))
 
 
+def _size_of(path: str) -> int:
+    """The bytes a file holds, 0 where it cannot be read.
+
+    The queue's estimate of how long a transcription of this extract will
+    take: the queue sorts from the largest of its items to the smallest, and
+    a transcription runs as long as the audio it transcribes.
+    """
+    try:
+        return os.path.getsize(path)
+    except OSError:
+        return 0
+
+
 def _remove_sidecars(prefix: str) -> None:
     """The track's transcripts, gone: the too-small sidecars a -c run discards
     before re-transcribing. Only the .srt is removed - the .opus this phase never
@@ -439,7 +452,13 @@ def transcribe_commentary(record: str, whisper: dict, max_sync_offset: str,
     # pass the check: the extract goes anyway.
     siblings_list = siblings.split("\x1e") if siblings else []
     if all(os.path.isfile(s) for s in siblings_list):
-        os.remove(mka)
+        # The last run of an extract frees it, and two runs of one extract can
+        # finish at the same time: both see every sibling on disk, and the one
+        # that loses the removal is not a failure but the extract already free.
+        try:
+            os.remove(mka)
+        except OSError:
+            pass
 
 
 def _mkv_entries(top: str) -> list[str]:
@@ -471,170 +490,176 @@ def _mkv_entries(top: str) -> list[str]:
 
 def export_commentary(directory: str, read_track_info, is_bonus_folder,
                       rename, audio_stream_index, ram_root: str,
-                      whisper: dict, whisper_jobs: int, log, drain_queue,
+                      whisper: dict, log, drain_queue,
                       max_sync_offset: str, quality: str,
                       discard_existing=None, same_commentary_name=None) -> None:
-    """Extract every commentary and drain the queue.
+    """Extract every commentary, and hand the queue to the drain to run.
 
     ``read_track_info`` is the caller's track reader (the bash's
     ``readTrackInfo``), returning the six per-track arrays for a movie;
     ``is_bonus_folder``, ``rename`` and ``audio_stream_index`` the caller's
-    helpers; ``drain_queue`` stands in for the bash's ``WHISPER_XARGS`` worker
-    drain (the comparison runs the workers one record at a time through
-    :func:`transcribe_commentary`). ``discard_existing``, when given, is the
-    caller's verdict on a track that already has an output: True discards the
-    sidecar and transcribes for real, and absent an existing output is the
-    resume that skips the track. ``same_commentary_name``, when given, is the
-    caller's rule for whether a name names a commentary, and it is what lets a
-    transcript an older run numbered for a track that no longer stands where it
-    numbered it be renumbered to the track's own number rather than transcribed
-    a second time. Everything else is this run's own: the flat queue spans
-    every movie and every language wanted, so the workers stay busy to the last
-    record.
+    helpers. ``drain_queue`` is handed the queue itself - the generator below -
+    and runs it: the walk prepares one commentary at a time - the resume check,
+    the extract, the language, the wanted subtitles - and yields ``(record,
+    size)`` for every transcription it queues, the size being the extract the
+    transcription runs on, so the queue it is fed can keep the longest of them
+    to the end. The preparation is a job of its own and runs beside the
+    transcription rather than in front of it, which is why the queue is a
+    producer and not a list. ``discard_existing``, when given, is the caller's
+    verdict on a track that already has an output: True discards the sidecar
+    and transcribes for real, and absent an existing output is the resume that
+    skips the track. ``same_commentary_name``, when given, is the caller's rule
+    for whether a name names a commentary, and it is what lets a transcript an
+    older run numbered for a track that no longer stands where it numbered it
+    be renumbered to the track's own number rather than transcribed a second
+    time. Everything else is this run's own: the queue spans every movie and
+    every language wanted, so the workers stay busy to the last record.
     """
     try:
         os.chdir(directory)
     except OSError:
         return
-    files = _mkv_entries(".")
-    queue = os.path.join(ram_root, "commentaryQueue")
-    with open(queue, "w", encoding="ascii") as handle:
-        handle.write("")
 
-    queue_records = []
-    for file in files:
-        dir_name = os.path.dirname(file)
-        # a commentary is a film's, so bonus material is passed over
-        if is_bonus_folder(dir_name):
-            continue
-        # and so is the "(old)" copy an improved remux kept: its commentary is
-        # the same audio as its living sibling's, already being transcribed.
-        if plexnames.is_kept_copy(file):
-            continue
-        (names, _codecs, _channels, comments, types, langs) = \
-            read_track_info(file)
-        # What every commentary of the film is called, which is what says
-        # whether a name that lost its number still points at one of them and
-        # at no other.
-        commentary_names = [
-            rename(n.replace("/", "").replace("&", "and"))
-            for n, c, t in zip(names, comments, types, strict=True)
-            if "audio" in t and (c == "true"
-                                 or languages.is_commentary_name(n))]
-        for i in range(1, len(comments) + 1):
-            comment = comments[i - 1]
-            type_ = types[i - 1]
-
-            # only audio tracks that are identified as commentaries - by their
-            # flag or, for a file that only says it there, by their name.
-            if "audio" not in type_:
+    def prepare():
+        for file in _mkv_entries("."):
+            dir_name = os.path.dirname(file)
+            # a commentary is a film's, so bonus material is passed over
+            if is_bonus_folder(dir_name):
                 continue
-            if comment != "true" and \
-                    not languages.is_commentary_name(names[i - 1]):
+            # and so is the "(old)" copy an improved remux kept: its commentary
+            # is the same audio as its living sibling's, already being
+            # transcribed.
+            if plexnames.is_kept_copy(file):
                 continue
+            (names, _codecs, _channels, comments, types, langs) = \
+                read_track_info(file)
+            # What every commentary of the film is called, which is what says
+            # whether a name that lost its number still points at one of them
+            # and at no other.
+            commentary_names = [
+                rename(n.replace("/", "").replace("&", "and"))
+                for n, c, t in zip(names, comments, types, strict=True)
+                if "audio" in t and (c == "true"
+                                     or languages.is_commentary_name(n))]
+            for i in range(1, len(comments) + 1):
+                comment = comments[i - 1]
+                type_ = types[i - 1]
 
-            # determine name of file to export
-            name = names[i - 1].replace("/", "").replace("&", "and")
-            name = rename(name)
-            file_stem = _strip_last_ext(file)
-            prefix = commentary_prefix(file_stem, i - 1)
-            base = commentary_stem(file_stem, i - 1, name)
-            # final outputs stay on disk next to the movie
-            opus = base + ".opus"
-            # the large temp audio extract goes to RAM, mirroring the absolute
-            # disk path so the outputs end up next to the movie. The bash builds
-            # this as the literal string "$ramRoot/$(pwd -P)/...", keeping BOTH
-            # halves - os.path.join would drop the first at an absolute part.
-            mka = "{}/{}/{}.mka".format(ram_root,
-                                        os.path.realpath(directory),
-                                        base[2:] if base.startswith("./") else base)
-
-            # Script resume: a track that already has ANY output is skipped
-            # before the extract. A transcript an older run numbered for a
-            # track that no longer stands there is renumbered to the track's
-            # own number first, so the check finds it rather than spending a
-            # second transcription on the same commentary.
-            existing = _has_existing_output(prefix)
-            if not existing and same_commentary_name is not None:
-                existing = _renumber_stale_transcripts(
-                    file_stem, i - 1, name, commentary_names,
-                    same_commentary_name, log)
-            if existing:
-                if discard_existing is None or not discard_existing(prefix, file):
+                # only audio tracks that are identified as commentaries - by
+                # their flag or, for a file that only says it there, by their
+                # name.
+                if "audio" not in type_:
                     continue
-                # The sidecar is too small to be this film's real transcript -
-                # the one a run wrote before it could tell a commentary's
-                # language, which forced a non-English commentary through the
-                # English model. Discard it and transcribe for real.
-                log("Discarding too-small commentary sidecar, re-transcribing "
-                    "(track {}) of: {}".format(i - 1, file))
-                _remove_sidecars(prefix)
+                if comment != "true" and \
+                        not languages.is_commentary_name(names[i - 1]):
+                    continue
 
-            # mkvtools index the whole matroska while ffmpeg indexes each track
-            # type separately and from zero
-            log("Extracting commentary track {}: {}".format(i - 1, file))
-            os.makedirs(os.path.dirname(mka), exist_ok=True)
-            index = audio_stream_index(i, types)
-            # the bash leaves this ffmpeg's stderr on the script's stderr
-            try:
-                made = subprocess.run(["ffmpeg", "-y", "-loglevel", "error",
-                                       "-nostats", "-i", file, "-vn",
-                                       "-map", "0:a:{}".format(index),
-                                       "-acodec", "copy", mka],
-                                      stdin=subprocess.DEVNULL)
-                made_ok = made.returncode == 0
-            except OSError:
-                # a missing ffmpeg is the bash's 127: a failed extract
-                made_ok = False
-            if not made_ok:
-                log("WARNING: commentary extract failed (track {}): {}".format(
-                    i - 1, file))
-                if os.path.exists(mka):
-                    os.remove(mka)
-                continue
+                # determine name of file to export
+                name = names[i - 1].replace("/", "").replace("&", "and")
+                name = rename(name)
+                file_stem = _strip_last_ext(file)
+                prefix = commentary_prefix(file_stem, i - 1)
+                base = commentary_stem(file_stem, i - 1, name)
+                # the large temp audio extract goes to RAM, mirroring the
+                # absolute disk path so the outputs end up next to the movie.
+                # The bash builds this as the literal string
+                # "$ramRoot/$(pwd -P)/...", keeping BOTH halves - os.path.join
+                # would drop the first at an absolute part.
+                mka = "{}/{}/{}.mka".format(ram_root,
+                                            os.path.realpath(directory),
+                                            base[2:]
+                                            if base.startswith("./")
+                                            else base)
 
-            # what language it is in decides which subtitles are wanted
-            spec, code = commentary_language(name, langs[i - 1], mka,
-                                             ram_root, whisper, log)
-            if not spec:
-                # neither the file nor whisper could tell: English is both the
-                # likeliest answer and what this script assumed before
-                log("WARNING: could not tell the language of commentary "
-                    "track {}, assuming English: {}".format(i - 1, file))
-                spec, code = "en", "en"
+                # Script resume: a track that already has ANY output is
+                # skipped before the extract. A transcript an older run
+                # numbered for a track that no longer stands there is
+                # renumbered to the track's own number first, so the check
+                # finds it rather than spending a second transcription on the
+                # same commentary.
+                existing = _has_existing_output(prefix)
+                if not existing and same_commentary_name is not None:
+                    existing = _renumber_stale_transcripts(
+                        file_stem, i - 1, name, commentary_names,
+                        same_commentary_name, log)
+                if existing:
+                    if (discard_existing is None
+                            or not discard_existing(prefix, file)):
+                        continue
+                    # The sidecar is too small to be this film's real
+                    # transcript - the one a run wrote before it could tell a
+                    # commentary's language, which forced a non-English
+                    # commentary through the English model. Discard it and
+                    # transcribe for real.
+                    log("Discarding too-small commentary sidecar, "
+                        "re-transcribing (track {}) of: {}".format(i - 1,
+                                                                   file))
+                    _remove_sidecars(prefix)
 
-            # the three cases of the table at the top of this section
-            job_task = []
-            job_lang = []
-            job_srt = []
-            if code == "en":
-                job_task.append("transcribe")
-                job_lang.append(spec)
-                job_srt.append(base + ".en.srt")
-            else:
-                if code:
+                # mkvtools index the whole matroska while ffmpeg indexes each
+                # track type separately and from zero
+                log("Extracting commentary track {}: {}".format(i - 1, file))
+                os.makedirs(os.path.dirname(mka), exist_ok=True)
+                index = audio_stream_index(i, types)
+                # the bash leaves this ffmpeg's stderr on the script's stderr
+                try:
+                    made = subprocess.run(
+                        ["ffmpeg", "-y", "-loglevel", "error", "-nostats",
+                         "-i", file, "-vn",
+                         "-map", "0:a:{}".format(index),
+                         "-acodec", "copy", mka],
+                        stdin=subprocess.DEVNULL)
+                    made_ok = made.returncode == 0
+                except OSError:
+                    # a missing ffmpeg is the bash's 127: a failed extract
+                    made_ok = False
+                if not made_ok:
+                    log("WARNING: commentary extract failed (track {}): {}"
+                        .format(i - 1, file))
+                    if os.path.exists(mka):
+                        os.remove(mka)
+                    continue
+
+                # what language it is in decides which subtitles are wanted
+                spec, code = commentary_language(name, langs[i - 1], mka,
+                                                 ram_root, whisper, log)
+                if not spec:
+                    # neither the file nor whisper could tell: English is both
+                    # the likeliest answer and what this script assumed before
+                    log("WARNING: could not tell the language of commentary "
+                        "track {}, assuming English: {}".format(i - 1, file))
+                    spec, code = "en", "en"
+
+                # the three cases of the table at the top of this section
+                job_task = []
+                job_lang = []
+                job_srt = []
+                if code == "en":
                     job_task.append("transcribe")
                     job_lang.append(spec)
-                    job_srt.append("{}.{}.srt".format(base, code))
-                job_task.append("translate")
-                job_lang.append(spec)
-                job_srt.append(base + ".en.srt")
+                    job_srt.append(base + ".en.srt")
+                else:
+                    if code:
+                        job_task.append("transcribe")
+                        job_lang.append(spec)
+                        job_srt.append("{}.{}.srt".format(base, code))
+                    job_task.append("translate")
+                    job_lang.append(spec)
+                    job_srt.append(base + ".en.srt")
 
-            # the sibling list all runs of this extract share
-            siblings = "\x1e".join(job_srt)
-            for j in range(len(job_srt)):
-                log("Queued: {} {} -> {}".format(
-                    job_task[j], job_lang[j], os.path.basename(job_srt[j])))
-                record = "\x1f".join([mka, job_srt[j], job_task[j],
-                                      job_lang[j], siblings])
-                queue_records.append(record)
-                with open(queue, "ab") as handle:
-                    handle.write(record.encode("utf-8") + b"\0")
+                # the size the queue sorts on: the extract's bytes, and the
+                # transcription's length runs with them
+                size = _size_of(mka)
+                # the sibling list all runs of this extract share
+                siblings = "\x1e".join(job_srt)
+                for j in range(len(job_srt)):
+                    log("Queued: {} {} -> {}".format(
+                        job_task[j], job_lang[j], os.path.basename(job_srt[j])))
+                    record = "\x1f".join([mka, job_srt[j], job_task[j],
+                                          job_lang[j], siblings])
+                    yield (record, size)
 
-    if queue_records:
-        log("Transcribing {} queued commentary subtitle(s) on {} worker(s)"
-            .format(len(queue_records), whisper_jobs))
-        drain_queue(queue_records, queue)
+    drain_queue(prepare())
 
     # Extracts whose transcription never finished are left behind by the
     # workers, so sweep tmpfs clean here.

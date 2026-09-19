@@ -87,10 +87,9 @@ class TestThePhaseRunsAndNothingElse:
 
         def export_commentary(directory, read_track_info, is_bonus_folder,
                               rename, audio_stream_index, ram_root, whisper,
-                              whisper_jobs, log, drain_queue, *rest,
-                              **kw):
+                              log, drain_queue, *rest, **kw):
             exports.append({"directory": directory, "whisper": whisper,
-                            "jobs": whisper_jobs, "drain": drain_queue,
+                            "drain": drain_queue,
                             "ram_root": ram_root, "rest": rest,
                             "same_commentary_name":
                                 kw.get("same_commentary_name")})
@@ -130,7 +129,6 @@ class TestThePhaseRunsAndNothingElse:
                            "ram_root": str(scratch)}
         entry = exports[0]
         assert entry["whisper"]["model"] == "base.en"
-        assert entry["jobs"] == whisper_lib.WHISPER_JOBS
         assert callable(entry["drain"])
         # The phase syncs whisper transcripts with the tight offset and this
         # run's ffsubsync answer, and the last thing it is handed is the
@@ -149,15 +147,16 @@ class TestThePhaseRunsAndNothingElse:
         monkeypatch.setattr(run.commentarytranscription,
                             "transcribe_commentary",
                             lambda record, *a: seen.append((record, a)))
-        # The width is whisper's, so the pool is what runs the records: run
-        # them in this process, one at a time, to see what a worker would get.
-        def fake_pool(items, jobs, target, arguments):
+        # The width is whisper's, so the dynamic queue is what runs the
+        # records: run them in this process, one at a time, to see what a
+        # worker would get.
+        def fake_queue(producer, jobs, target, arguments, log=None):
             assert jobs == whisper_lib.WHISPER_JOBS
-            for item in items:
-                target(*arguments(item))
+            for record, _size in producer:
+                target(*arguments(record))
 
-        monkeypatch.setattr(run.workerpool, "run", fake_pool)
-        exports[0]["drain"](["record"], "")
+        monkeypatch.setattr(run.dynamicqueue, "run", fake_queue)
+        exports[0]["drain"](iter([("record", 0)]))
         assert [record for record, _args in seen] == ["record"]
         whisper, offset, quality, ram_root, _log = seen[0][1]
         assert whisper["model"] == "base.en"
