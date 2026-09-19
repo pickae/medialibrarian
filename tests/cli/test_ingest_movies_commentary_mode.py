@@ -327,3 +327,100 @@ class TestTheTooSmallSidecar:
         assert run._sidecar_too_small(prefix, movie, cache) is True
         assert reads == [1]
         assert movie in cache
+
+
+class TestTheOrphanReport:
+    """The transcripts the walk finds that name a track their film no longer
+    numbers a commentary for. The -c run is the one that collects them and
+    leaves them in a file, one absolute path per line, and it leaves no file
+    at all for a run that found nothing."""
+
+    def _stubbed(self, monkeypatch, tmp_path, export_commentary):
+        script_dir = tmp_path / "script"
+        monkeypatch.setenv("CLI_SCRIPT_DIR", str(script_dir))
+        scratch = tmp_path / "ram"
+        scratch.mkdir()
+        monkeypatch.setattr(run.ffmpegselect, "select_ffmpeg",
+                            lambda: None)
+        monkeypatch.setattr(run.ffmpegselect, "report_ffmpeg_selection",
+                            lambda: None)
+        monkeypatch.setattr(run.tooldeps, "require_tools",
+                            lambda *_a, **_k: False)
+        monkeypatch.setattr(run, "_settle_subtitle_work", lambda: True)
+        monkeypatch.setattr(run, "_settle_ffsubsync_quality",
+                            lambda: "yes")
+        monkeypatch.setattr(run.ramscratch, "init_ram_base",
+                            lambda: None)
+        monkeypatch.setattr(run.ramscratch, "ram_scratch_dir",
+                            lambda _name: (str(scratch), 0))
+        monkeypatch.setattr(run.ramscratch, "add_exit_cleanup",
+                            lambda _p: None)
+        monkeypatch.setattr(run.ramscratch, "run_exit_cleanup",
+                            lambda: None)
+        monkeypatch.setattr(run.safety, "trap_run_abort", lambda: None)
+        monkeypatch.setattr(run.workerpool, "exit_status",
+                            lambda status: status)
+        monkeypatch.setattr(run, "log", lambda *a, **k: None)
+
+        def fake_init(cores, ram_root, log):
+            return {"device": "cpu", "computeType": "int8",
+                    "model": "base.en", "modelMulti": "base", "threads": "4"}
+
+        monkeypatch.setattr(whisper_lib, "init_whisper_model", fake_init)
+        for name in ("_transcode_opus", "improve_main_movies", "check_folders",
+                     "_ingest"):
+            monkeypatch.setattr(run, name, _never)
+        monkeypatch.setattr(run.commentarytranscription,
+                            "export_commentary", export_commentary)
+        return script_dir
+
+    def test_a_run_that_found_nothing_writes_no_file(self, tmp_path):
+        run._write_commentary_orphans(str(tmp_path), [])
+        assert not (tmp_path / "logs" / "commentaryOrphans.txt").exists()
+
+    def test_the_orphans_are_written_one_absolute_path_per_line(
+            self, tmp_path, monkeypatch):
+        logs = []
+        monkeypatch.setattr(run, "log", logs.append)
+        run._write_commentary_orphans(
+            str(tmp_path),
+            ["/root/Films/The Movie (1999)/The Movie (1999) 5 "
+             "OldCommentary.en.srt"])
+        report = tmp_path / "logs" / "commentaryOrphans.txt"
+        assert report.read_text() == \
+            "/root/Films/The Movie (1999)/The Movie (1999) 5 " \
+            "OldCommentary.en.srt\n"
+        assert any("commentaryOrphans.txt" in line for line in logs)
+
+    def test_the_run_leaves_the_orphans_it_found_in_a_file(
+            self, monkeypatch, tmp_path):
+        """The walk collects the transcript, and the run hands it to the
+        report with the folder it stood beside made absolute."""
+        def export_commentary(directory, read_track_info, is_bonus_folder,
+                              rename, audio_stream_index, ram_root, whisper,
+                              whisper_jobs, log, drain_queue, *rest, **kw):
+            orphans = kw.get("orphans")
+            if orphans is not None:
+                orphans.append(
+                    "./The Movie (1999)/The Movie (1999) 5 "
+                    "OldCommentary.en.srt")
+
+        script_dir = self._stubbed(monkeypatch, tmp_path, export_commentary)
+        films = _library(tmp_path, "Films")
+        assert run.main(["-c", str(films)]) == 0
+        report = script_dir / "logs" / "commentaryOrphans.txt"
+        expected = str(films / "The Movie (1999)" /
+                       "The Movie (1999) 5 OldCommentary.en.srt") + "\n"
+        assert report.read_text() == expected
+
+    def test_the_run_leaves_no_file_when_the_walk_found_nothing(
+            self, monkeypatch, tmp_path):
+        def export_commentary(directory, read_track_info, is_bonus_folder,
+                              rename, audio_stream_index, ram_root, whisper,
+                              whisper_jobs, log, drain_queue, *rest, **kw):
+            return
+
+        script_dir = self._stubbed(monkeypatch, tmp_path, export_commentary)
+        films = _library(tmp_path, "Films")
+        assert run.main(["-c", str(films)]) == 0
+        assert not (script_dir / "logs" / "commentaryOrphans.txt").exists()
