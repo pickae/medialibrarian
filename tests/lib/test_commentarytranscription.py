@@ -175,7 +175,8 @@ def _leftover_mkas(ram):
 
 def _run_export(w, root, ram, tracks, detected, pipx_rc, quality="yes",
                 ffmpeg_rc="0", discard_existing=None,
-                same_commentary_name=rules._same_commentary, orphans=None):
+                same_commentary_name=rules._same_commentary, orphans=None,
+                unfixed=None):
     """The whole exportCommentary with its caller helpers stood in: the walk
     prepares one commentary at a time, and the drain runs each prepared record
     through transcribe_commentary as it comes."""
@@ -204,9 +205,9 @@ def _run_export(w, root, ram, tracks, detected, pipx_rc, quality="yes",
     try:
         ct.export_commentary(root, _read_track_info(tracks), _is_bonus_folder,
                              lambda name: name, _audio_stream_index, ram,
-                              WHISPER, logs.append, drain, "10", quality,
-                              discard_existing, same_commentary_name,
-                              orphans)
+                             WHISPER, logs.append, drain, "10", quality,
+                             discard_existing, same_commentary_name,
+                             orphans, unfixed)
     finally:
         os.chdir(cwd)
     return logs, queue_records, queue_sizes
@@ -482,6 +483,50 @@ class TestOrphans:
         # the full run hands no list, so the walk does not collect
         _run_export(w, root, ram, tracks, _detected("English"),
                     "0 1", ffmpeg_rc="0 0")
+
+
+class TestUnfixed:
+    """A movie whose name carries no dot before its extension has no stem to
+    read the transcript's name from: built from the empty stem it would be
+    written in the library's root rather than the film's folder. The walk
+    leaves it untranscribed - no extract, nothing queued - and hands the name
+    over, the way it spells it, to the caller's list."""
+
+    def _fixture(self, w):
+        root = w.tmp_path / "root"
+        (root / "FilmA2020").mkdir(parents=True)
+        # the one name that started this: the year said a second time, and the
+        # dot before the mkv never written
+        (root / "FilmA2020" / "FilmA2020 2020mkv").touch()
+        ram = w.tmp_path / "ram"
+        ram.mkdir()
+        # a plain audio track and a commentary, so that without the guard the
+        # walk would have queued a transcription
+        tracks = {"FilmA2020 2020": [
+            ("MainAudio", "false", "audio", "eng"),
+            ("DirectorCommentary", "true", "audio", "eng"),
+        ]}
+        return str(root), str(ram), tracks
+
+    def test_a_name_with_no_dot_before_the_extension_is_left_untranscribed(
+            self, w):
+        root, ram, tracks = self._fixture(w)
+        unfixed = []
+        logs, records, _sizes = _run_export(
+            w, root, ram, tracks, _detected("English"), "0",
+            ffmpeg_rc="0", unfixed=unfixed)
+        # nothing is extracted or queued, and the name is handed over the way
+        # the walk spells it: relative to the root, under the film's folder
+        assert records == []
+        assert _leftover_mkas(ram) == []
+        assert unfixed == ["./FilmA2020/FilmA2020 2020mkv"]
+        # and the warning says what is wrong with the name
+        assert any("no dot before the extension" in line for line in logs)
+
+    def test_nothing_is_handed_over_when_the_run_wants_no_list(self, w):
+        root, ram, tracks = self._fixture(w)
+        _run_export(w, root, ram, tracks, _detected("English"), "0",
+                    ffmpeg_rc="0")
 
 
 class TestState:

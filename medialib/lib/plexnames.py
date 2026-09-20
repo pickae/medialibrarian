@@ -20,6 +20,7 @@ that is mostly already named.
 
 import os
 import re
+from collections import Counter
 
 from medialib.lib import languages, titlematch
 from medialib.lib.enums import PART_WORDS, SOURCE_PART_WORDS, shell_lower
@@ -43,6 +44,10 @@ STACK_RE = re.compile(r"^(?:" + _WORDS + r")\.?[0-9]+$", re.I)
 # but nothing else in the name is in question, so it is a spelling this module
 # corrects rather than a folder it gives up on.
 _LOOSE_PART = re.compile(r"^(" + _WORDS + r")[\s._-]*$", re.I)
+
+# The number a trailing word ends in, read to tell a stacking token ("Part2")
+# from a year grown onto one ("Part1981"): a part is never a date.
+_NUMBER_TAIL = re.compile(r"[0-9]+$")
 
 # A word that is nothing but separator, which is what stands between the keyword
 # and its number when someone wrote "Part - 6".
@@ -796,6 +801,69 @@ def ids_in(names) -> set:
     return {match.group(0)
             for name in names if is_movie_file(name)
             for match in [ID_TAG_RE.search(name)] if match}
+
+
+def _word_counter(words) -> Counter:
+    """A name's words as a multiset, compared the way titles are compared:
+    case folded, and the brackets a year often wears stripped away, so a
+    "(1981)" and a bare "1981" are the same word."""
+    return Counter(word.casefold().strip("()[]") for word in words)
+
+
+def conform_to_folder(base: str, tag: str, stem: str) -> tuple:
+    """A mangled movie name brought back to the FOLDER's own spelling, or a
+    verdict that it cannot be.
+
+    ``base`` is the folder's name without its id tag, ``tag`` the tag the folder
+    carries, and ``stem`` the file's name with its extension off - a name that
+    never got the dot before its "mkv", read as the words it is. The file is
+    accepted as the folder's own film only if it carries that folder's tag, and
+    once the tag and a trailing stacking token are taken off what is left must
+    be the folder's own words plus nothing but a year said a second time. Then
+    the name is rebuilt the way Plex spells it - the film, its id, and the
+    token last - and handed back.
+
+    What comes back is ``(new stem, unfixable)``. ``("", False)`` is not the
+    folder's film to conform - it carries no tag, or a DIFFERENT tag, so the
+    caller leaves it to the phases that match films to folders. ``(stem, True)``
+    is a film the folder's spelling does not account for: a word of its own
+    (an edition, a release marker) or one of the folder's words missing, and the
+    caller reports it rather than guess at what it is.
+    """
+    if not tag:
+        return "", False
+    match = ID_TAG_RE.search(stem)
+    if not match or match.group(0) != tag:
+        return "", False
+    words = ID_TAG_RE.sub(" ", stem).split()
+
+    # The stacking token sits last in a name and is read off before the rest is
+    # judged. A number of three digits or more is a year, never a part, so a
+    # token carrying one is not read as a token at all - it stays in place, and
+    # a word that is not a number makes the name unfixable below.
+    part = ""
+    if words and STACK_RE.match(words[-1]):
+        number = _NUMBER_TAIL.search(words[-1])
+        if number is not None and len(number.group(0)) < 3:
+            part = words[-1]
+            words.pop()
+    elif (len(words) >= 2 and words[-1].isdigit() and len(words[-1]) < 3
+          and _LOOSE_PART.match(words[-2])):
+        part = _LOOSE_PART.match(words[-2]).group(1) + words[-1]
+        del words[-2:]
+
+    have = _word_counter(words)
+    folder = _word_counter(base.split())
+    if folder - have:
+        # A word the folder says that the film never did: not the folder's film
+        # misspelt, but a different name, and the caller is not here to guess.
+        return "", True
+    if any(not word.isdigit() for word in have - folder):
+        # A real word left over once the folder's are accounted for - an
+        # edition, a release marker - the spelling the folder gives does not
+        # cover, and cannot be rebuilt from it.
+        return "", True
+    return plex_stem(base, tag, "", part), False
 
 
 def folder_renames(base: str, tag: str, names, aliases=(),

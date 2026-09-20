@@ -216,8 +216,8 @@ class TestThePhaseRunsAndNothingElse:
 
 class TestTheCombosItRefuses:
     def test_w_combined_with_c_is_refused(self, monkeypatch, tmp_path, capsys):
-        """-w turns the dry run of -t or -i into real renames, and -c writes
-        no names at all, so there is no dry run of its for -w to carry out."""
+        """-w turns the dry run of -t or -i into real renames, and -c is the
+        transcription, not a dry run, so there is nothing for -w to carry out."""
         _library(tmp_path, "Films")
         assert run.main(["-c", "-w", str(tmp_path / "Films")]) == 1
         errors = capsys.readouterr().err
@@ -423,3 +423,122 @@ class TestTheOrphanReport:
         films = _library(tmp_path, "Films")
         assert run.main(["-c", str(films)]) == 0
         assert not (script_dir / "logs" / "commentaryOrphans.txt").exists()
+
+
+class TestTheUnfixedReport:
+    """The movies the walk left untranscribed because their name carried no dot
+    before its extension. The -c run is the one that collects them and leaves
+    them in a file, one absolute path per line, and it leaves no file at all for
+    a run that found nothing. A mangled name the folder's spelling does answer
+    is conformed before the walk, so it is transcribed and not reported."""
+
+    def _stubbed(self, monkeypatch, tmp_path, export_commentary):
+        script_dir = tmp_path / "script"
+        monkeypatch.setenv("CLI_SCRIPT_DIR", str(script_dir))
+        scratch = tmp_path / "ram"
+        scratch.mkdir()
+        monkeypatch.setattr(run.ffmpegselect, "select_ffmpeg",
+                            lambda: None)
+        monkeypatch.setattr(run.ffmpegselect, "report_ffmpeg_selection",
+                            lambda: None)
+        monkeypatch.setattr(run.tooldeps, "require_tools",
+                            lambda *_a, **_k: False)
+        monkeypatch.setattr(run, "_settle_subtitle_work", lambda: True)
+        monkeypatch.setattr(run, "_settle_ffsubsync_quality",
+                            lambda: "yes")
+        monkeypatch.setattr(run.ramscratch, "init_ram_base",
+                            lambda: None)
+        monkeypatch.setattr(run.ramscratch, "ram_scratch_dir",
+                            lambda _name: (str(scratch), 0))
+        monkeypatch.setattr(run.ramscratch, "add_exit_cleanup",
+                            lambda _p: None)
+        monkeypatch.setattr(run.ramscratch, "run_exit_cleanup",
+                            lambda: None)
+        monkeypatch.setattr(run.safety, "trap_run_abort", lambda: None)
+        monkeypatch.setattr(run.workerpool, "exit_status",
+                            lambda status: status)
+        monkeypatch.setattr(run, "log", lambda *a, **k: None)
+
+        def fake_init(cores, ram_root, log):
+            return {"device": "cpu", "computeType": "int8",
+                    "model": "base.en", "modelMulti": "base", "threads": "4"}
+
+        monkeypatch.setattr(whisper_lib, "init_whisper_model", fake_init)
+        for name in ("_transcode_opus", "improve_main_movies", "check_folders",
+                     "_ingest"):
+            monkeypatch.setattr(run, name, _never)
+        monkeypatch.setattr(run.commentarytranscription,
+                            "export_commentary", export_commentary)
+        return script_dir
+
+    def test_a_run_that_found_nothing_writes_no_file(self, tmp_path):
+        run._write_unfixed_movies(str(tmp_path), [])
+        assert not (tmp_path / "logs" / "unfixedMovies.txt").exists()
+
+    def test_the_unfixed_movies_are_written_one_absolute_path_per_line(
+            self, tmp_path, monkeypatch):
+        logs = []
+        monkeypatch.setattr(run, "log", logs.append)
+        run._write_unfixed_movies(
+            str(tmp_path),
+            ["/root/Films/Hollow Ridge (1981) {imdb-tt0000001}/"
+             "Hollow Ridge (1981) {imdb-tt0000001} 1981mkv"])
+        report = tmp_path / "logs" / "unfixedMovies.txt"
+        assert report.read_text() == \
+            "/root/Films/Hollow Ridge (1981) {imdb-tt0000001}/" \
+            "Hollow Ridge (1981) {imdb-tt0000001} 1981mkv\n"
+        assert any("unfixedMovies.txt" in line for line in logs)
+
+    def test_the_run_leaves_the_unfixed_movies_it_found_in_a_file(
+            self, monkeypatch, tmp_path):
+        """The walk collects the movie, and the run hands it to the report with
+        the folder it stood beside made absolute."""
+        def export_commentary(directory, read_track_info, is_bonus_folder,
+                              rename, audio_stream_index, ram_root, whisper,
+                              log, drain_queue, *rest, **kw):
+            unfixed = kw.get("unfixed")
+            if unfixed is not None:
+                unfixed.append(
+                    "./Hollow Ridge (1981) {imdb-tt0000001}/"
+                    "Hollow Ridge (1981) {imdb-tt0000001} 1981mkv")
+
+        script_dir = self._stubbed(monkeypatch, tmp_path, export_commentary)
+        films = _library(tmp_path, "Films")
+        assert run.main(["-c", str(films)]) == 0
+        report = script_dir / "logs" / "unfixedMovies.txt"
+        expected = (str(films / "Hollow Ridge (1981) {imdb-tt0000001}" /
+                        "Hollow Ridge (1981) {imdb-tt0000001} 1981mkv")
+                    + "\n")
+        assert report.read_text() == expected
+
+    def test_the_run_leaves_no_file_when_the_walk_found_nothing(
+            self, monkeypatch, tmp_path):
+        def export_commentary(directory, read_track_info, is_bonus_folder,
+                              rename, audio_stream_index, ram_root, whisper,
+                              log, drain_queue, *rest, **kw):
+            return
+
+        script_dir = self._stubbed(monkeypatch, tmp_path, export_commentary)
+        films = _library(tmp_path, "Films")
+        assert run.main(["-c", str(films)]) == 0
+        assert not (script_dir / "logs" / "unfixedMovies.txt").exists()
+
+    def test_a_mangled_name_the_folder_answers_is_conformed_not_reported(
+            self, monkeypatch, tmp_path):
+        """The conform runs before the walk reads the tracks, so a mangled name
+        the folder's spelling answers is put right on disk and never reaches the
+        report - what is reported is only what the conform could not answer."""
+        def export_commentary(directory, read_track_info, is_bonus_folder,
+                              rename, audio_stream_index, ram_root, whisper,
+                              log, drain_queue, *rest, **kw):
+            return
+
+        script_dir = self._stubbed(monkeypatch, tmp_path, export_commentary)
+        folder = (tmp_path / "Films" / "Hollow Ridge (1981) {imdb-tt0000001}")
+        folder.mkdir(parents=True)
+        mangled = folder / "Hollow Ridge (1981) {imdb-tt0000001} 1981mkv"
+        mangled.touch()
+        assert run.main(["-c", str(tmp_path / "Films")]) == 0
+        assert not mangled.exists()
+        assert (folder / "Hollow Ridge (1981) {imdb-tt0000001}.mkv").is_file()
+        assert not (script_dir / "logs" / "unfixedMovies.txt").exists()
