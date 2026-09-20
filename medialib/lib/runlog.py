@@ -113,15 +113,22 @@ def log(*message: object, stream=None) -> None:
     (sys.stderr if stream is None else stream).write(line)
 
 
-def counted_prefix(count: int, total: int) -> str:
+def counted_prefix(count: int, total: int | None) -> str:
     """``countedPrefix``: the "[n/total] " a progress line carries, or nothing.
 
     Nothing without flock: the count is shared between workers through a lock
     file, and a host that cannot take the lock has no honest number to print -
     so it prints none rather than one per worker that each start at 1.
+
+    A total of None is a run that has not finished counting its own queue - the
+    dynamic queue does not know how many jobs it will hand out until the last of
+    them is planned - and such a run prints the position without a denominator
+    rather than one it would have to promise.
     """
     if not have_flock():
         return ""
+    if total is None:
+        return "[%d] " % count
     return "[%d/%d] " % (count, total)
 
 

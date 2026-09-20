@@ -128,6 +128,21 @@ class TestTheListsThemselves:
         assert set(enums.AUDIO_CODEC_EXTENSIONS.values()) <= set(
             enums.AUDIO_EXTENSIONS)
 
+    def test_the_max_bitrate_table_covers_every_audio_extension(self):
+        # The table is convert-audio's probe-free "shortest this file can be"
+        # figure, and an extension missing from it would fall to the default -
+        # the smallest plausible rate - which routes a format to probing that
+        # the table already settled.
+        assert set(enums.AUDIO_EXTENSIONS) <= set(enums.AUDIO_MAX_KBPS)
+
+    def test_the_max_bitrate_table_is_a_ceiling(self):
+        # Every entry is a rate the format is PLAUSIBLY at, never a census:
+        # flac at its 500 and opus at its 120, and the default the smallest of
+        # them all, so an unknown format errs toward probing.
+        assert all(rate > 0 for rate in enums.AUDIO_MAX_KBPS.values())
+        assert enums.AUDIO_MAX_KBPS["flac"] > enums.AUDIO_MAX_KBPS["opus"]
+        assert min(enums.AUDIO_MAX_KBPS.values()) >= enums.AUDIO_MAX_KBPS_DEFAULT
+
     def test_alac_is_absent_from_the_lossless_extensions_but_present_in_the_codecs(self):
         # It arrives as .m4a, an extension that is lossy far more often than not,
         # so it is caught by probing rather than by name.

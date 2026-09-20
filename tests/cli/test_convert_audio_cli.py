@@ -66,8 +66,11 @@ class TestTheProgressCounter:
 
     It read "[45/4]" once: the chunk encoder kept a local total of a file's
     chunks and the progress line printed that, so a chunk's line carried the
-    file's chunk count as its denominator. Cores and the split threshold are
-    pinned so the job counts do not depend on the host's CPU count.
+    file's chunk count as its denominator. The denominator is absent for as long
+    as the queue is still being planned - a line printed before the total is
+    known carries the count alone - so a line's denominator, where it has one,
+    is what this asserts on. Cores and the split threshold are pinned so the job
+    counts do not depend on the host's CPU count.
     """
 
     @pytest.fixture
@@ -86,10 +89,15 @@ class TestTheProgressCounter:
         outputs = tmp_path / "out"
         inputs.mkdir()
         for name in names:
-            (inputs / name).write_text("")
+            # The split is settled from the file's size, not a probe: a "long"
+            # file must be big enough to be PAST the threshold at its format's
+            # largest plausible rate, and a short one inside it.
+            size = 400_000 if name.startswith("long") else 100_000
+            (inputs / name).write_bytes(b"\0" * size)
         done = convert.run("convert-audio", "-j", 4, "-s", 10, inputs, outputs)
-        return [(int(n), int(total)) for n, total in re.findall(
-            r"^\[(\d+)/(\d+)\] Converting:", done.stdout, re.M)]
+        return [(int(n), int(total) if total else None) for n, total in
+                re.findall(r"^\[(\d+)(?:/(\d+))?\] Converting:", done.stdout,
+                           re.M)]
 
     @pytest.mark.parametrize("names,jobs", [
         # three short files stay whole
@@ -102,10 +110,12 @@ class TestTheProgressCounter:
     def test_every_line_counts_the_same_queue(self, convert, tmp_path, names,
                                               jobs):
         lines = self._lines(convert, tmp_path, names)
-        assert {total for _, total in lines} == {jobs}
         assert len(lines) == jobs
-        assert max(n for n, _ in lines) == jobs
-        assert not [n for n, total in lines if n > total]
+        assert max(n for n, _total in lines) == jobs
+        denominators = {total for _n, total in lines if total is not None}
+        assert denominators <= {jobs}
+        assert not [n for n, total in lines
+                    if total is not None and n > total]
 
 
 class TestRelativePaths:

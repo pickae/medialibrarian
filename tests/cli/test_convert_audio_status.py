@@ -25,12 +25,24 @@ def counters(tmp_path, monkeypatch):
     monkeypatch.setenv("HAVE_FLOCK", "1")
     progress = tmp_path / "progress"
     duration = tmp_path / "duration"
+    total = tmp_path / "total"
     progress.write_text("12\n")
     duration.write_text(ENCODED + "\n")
-    made = ca.Counters(str(progress), str(duration), 80, NOW - ELAPSED)
+    total.write_text("80\n")
+    made = ca.Counters(str(progress), str(duration), str(total),
+                       NOW - ELAPSED)
     made.progress = progress
     made.duration = duration
+    made.total = total
     return made
+
+
+@pytest.fixture
+def still_loading(counters, tmp_path, monkeypatch):
+    """The same run with its queue still loading: the total is not written yet,
+    so nothing may claim a position in it."""
+    monkeypatch.setattr(counters, "total_file", str(tmp_path / "total-later"))
+    return counters
 
 
 class TestStatusRow:
@@ -57,6 +69,15 @@ class TestStatusRow:
             "  encoding 80 jobs: elapsed 3:07  encoded 3:14:08"
             "  62.3x realtime")
 
+    def test_a_queue_still_loading_counts_without_a_denominator(
+            self, still_loading):
+        """While the run is still planning, the total it would divide by does not
+        exist yet, so the only honest position is the one the counter has
+        counted so far."""
+        assert still_loading.status_text() == (
+            "  encoding 12 jobs: elapsed 3:07  encoded 3:14:08"
+            "  62.3x realtime")
+
     def test_a_duration_caught_mid_rewrite_reads_as_zero(self, counters):
         """The counters are read live, while the workers are rewriting them, so a
         value caught mid-write must read as nothing rather than break the row."""
@@ -69,6 +90,15 @@ class TestStatusRow:
         counters.progress.write_text("")
         assert counters.status_text() == (
             "  encoding 0/80 jobs: elapsed 3:07  encoded 3:14:08"
+            "  62.3x realtime")
+
+    def test_a_total_caught_mid_rewrite_reads_as_not_counted_yet(self,
+                                                                 counters):
+        """An empty total is the queue still loading, not zero jobs: a run with
+        zero jobs would never draw a row."""
+        open(counters.total_file, "w").close()
+        assert counters.status_text() == (
+            "  encoding 12 jobs: elapsed 3:07  encoded 3:14:08"
             "  62.3x realtime")
 
     def test_a_row_drawn_at_the_start_divides_by_no_elapsed_time(
@@ -94,6 +124,14 @@ class TestPerFileLine:
         counters.progress.write_text("11\n")
         counters.report_progress("track12.m4a")
         assert counters.progress.read_text() == "12\n"
+
+    def test_a_queue_still_loading_prints_the_count_without_a_denominator(
+            self, still_loading, capsys):
+        """The total is not a promise until the last file is planned, so a line
+        printed before then carries the count alone."""
+        still_loading.progress.write_text("11\n")
+        still_loading.report_progress("track12.m4a")
+        assert capsys.readouterr().out == "[12] Converting: track12.m4a\n"
 
     def test_the_row_is_erased_for_the_line_and_re_pinned_underneath_it(
             self, counters, capsys, monkeypatch):
