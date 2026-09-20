@@ -47,7 +47,9 @@ def ingested(monkeypatch):
                             "export_commentary", export_commentary)
 
         state = run_module.Run(script_dir="", ram_root="/ram", skips=None,
-                               fragments_file="", whisper={"model": "m"},
+                               fragments_file="",
+                               whisper={"model": "m",
+                                        "jobs": whisper_lib.WHISPER_JOBS},
                                ffsubsync_quality="yes",
                                long_names=tmdblookup.LongNames(),
                                unfixed_movies=[])

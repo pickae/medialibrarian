@@ -45,18 +45,23 @@ Each input gets one transcript in <outputDir>, in the same sub-folder structure:
     <inputDir>/b/movie.mkv    ->   <outputDir>/b/movie.txt
 
 The whisper model is picked for this host automatically (the GPU when whisper can
-really run on it, otherwise the CPU), so there is nothing to configure.
+really run on it, otherwise the CPU), and so is how wide it runs, so there is
+nothing to configure.
 
 Options:"""
 
 FORMATS = ("txt", "srt", "vtt", "tsv")
+
+# The formats whose output is CUED, and which a batched run has to be asked to
+# cut into subtitle-shaped lines rather than one block per speech run.
+CUED_FORMATS = ("srt", "vtt")
 
 OPT_SPEC = """
 h |  | Print this help page.
 f | <format> | Transcript format: txt, srt, vtt or tsv.
                     Default txt
 j | <jobs> | Run up to <jobs> transcriptions in parallel.
-                    Default 2
+                    Default: what the card can hold
 """
 
 # The format has to be one whisper-ctranslate2 knows, or it would only surface as
@@ -137,6 +142,16 @@ class Run:
         self.ram_root = ram_root
         self.progress_file = progress_file
         self.total = total
+        # Nought slots is the unbatched path. Only the cued formats want the
+        # line flags: a transcript that is read has no cues to spoil.
+        slots = model.get("batchSlots", 0)
+        self.batch_args = (["--batched", "True", "--batch_size", str(slots)]
+                           if slots else [])
+        if slots and fmt in CUED_FORMATS:
+            self.batch_args += [
+                "--word_timestamps", "True",
+                "--max_line_width", str(whisper.WHISPER_LINE_WIDTH),
+                "--max_line_count", str(whisper.WHISPER_LINE_COUNT)]
 
     def report_progress(self, label: str) -> None:
         """Increment the shared counter and print one clean progress line.
@@ -208,7 +223,7 @@ class Run:
                  "--device", self.model["device"],
                  "--compute_type", self.model["computeType"],
                  "--threads", str(self.model["threads"]),
-                 "--vad_filter", "True"],
+                 "--vad_filter", "True", *self.batch_args],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             if done.returncode == 0 and os.path.isfile(whisper_out):
                 os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
@@ -282,7 +297,9 @@ def main(argv: list, program: str = "transcribe-audio") -> int:
         output_dir = os.path.join(os.getcwd(), output_dir)
 
     fmt = result.values["fmt"] or "txt"
-    jobs = int(result.values["whisperJobs"] or whisper.WHISPER_JOBS)
+    # Nought stands for "not overridden": the settlement that fills it in
+    # cannot run until the scratch its probe writes into exists.
+    jobs = int(result.values["whisperJobs"] or 0)
 
     runlog.settle_flock()
     ffmpegselect.select_ffmpeg()
@@ -319,6 +336,7 @@ def main(argv: list, program: str = "transcribe-audio") -> int:
 
         cores = str(runlog.cpu_count())
         model = whisper.init_whisper_model(cores, ram_root, log)
+        jobs = jobs or model["jobs"]
 
         started = time.time()
 

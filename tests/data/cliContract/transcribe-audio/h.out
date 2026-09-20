@@ -10,7 +10,8 @@ Each input gets one transcript in <outputDir>, in the same sub-folder structure:
     <inputDir>/b/movie.mkv    ->   <outputDir>/b/movie.txt
 
 The whisper model is picked for this host automatically (the GPU when whisper can
-really run on it, otherwise the CPU), so there is nothing to configure.
+really run on it, otherwise the CPU), and so is how wide it runs, so there is
+nothing to configure.
 
 Options:
     -h, --help      Print this help page.
@@ -19,5 +20,5 @@ Options:
                     Default txt
     -j, --jobs <jobs>
                     Run up to <jobs> transcriptions in parallel.
-                    Default 2
+                    Default: what the card can hold
 

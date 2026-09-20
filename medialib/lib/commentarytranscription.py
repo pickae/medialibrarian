@@ -19,6 +19,7 @@ import tempfile
 import time
 
 from medialib.lib import languages, plexnames
+from medialib.lib import whisper as whisper_lib
 from medialib.lib.census import printf_f0
 from medialib.lib.enums import shell_lower
 from medialib.lib.formatting import awk_number
@@ -420,6 +421,15 @@ def transcribe_commentary(record: str, whisper: dict, max_sync_offset: str,
         prompt_args = (["--initial_prompt", "Hello."]
                        if task == "translate" or lang == "en" else [])
         lang_args = ["--language", lang] if lang else []
+        # Nought slots is the unbatched path. The line flags ride with the
+        # batch because batching segments on the voice detection alone, which
+        # writes one cue per speech run.
+        slots = whisper.get("batchSlots", 0)
+        batch_args = (["--batched", "True", "--batch_size", str(slots),
+                       "--word_timestamps", "True",
+                       "--max_line_width", str(whisper_lib.WHISPER_LINE_WIDTH),
+                       "--max_line_count", str(whisper_lib.WHISPER_LINE_COUNT)]
+                      if slots else [])
 
         srt_dir = os.path.dirname(srt)
         if srt_dir:
@@ -429,7 +439,7 @@ def transcribe_commentary(record: str, whisper: dict, max_sync_offset: str,
                         "--output_dir", out_dir, "--model", model,
                         "--task", task, *lang_args,
                         "--compute_type", whisper["computeType"],
-                        "--vad_filter", "True", *prompt_args,
+                        "--vad_filter", "True", *prompt_args, *batch_args,
                         "--output_format", "srt", "--device", whisper["device"],
                         "--threads", whisper["threads"]],
                        stdout=subprocess.DEVNULL)
