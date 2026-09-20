@@ -847,10 +847,11 @@ def conform_to_folder(base: str, tag: str, stem: str) -> tuple:
         if number is not None and len(number.group(0)) < 3:
             part = words[-1]
             words.pop()
-    elif (len(words) >= 2 and words[-1].isdigit() and len(words[-1]) < 3
-          and _LOOSE_PART.match(words[-2])):
-        part = _LOOSE_PART.match(words[-2]).group(1) + words[-1]
-        del words[-2:]
+    elif len(words) >= 2 and words[-1].isdigit() and len(words[-1]) < 3:
+        loose = _LOOSE_PART.match(words[-2])
+        if loose is not None:
+            part = loose.group(1) + words[-1]
+            del words[-2:]
 
     have = _word_counter(words)
     folder = _word_counter(base.split())
