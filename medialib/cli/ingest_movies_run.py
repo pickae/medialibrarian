@@ -1023,7 +1023,7 @@ def _commentary_only(program: str, script_dir: str, roots: list,
                 skips=safety.RunSkipLog(), fragments_file=fragments_file,
                 whisper=whisper, ffsubsync_quality=ffsubsync_quality,
                 long_names=tmdblookup.LongNames())
-    jobs = whisper_lib.WHISPER_JOBS
+    jobs = whisper["jobs"]
 
     # The transcripts the walk finds that name a track their film no longer
     # numbers a commentary for, gathered across every folder and left in a
@@ -1226,8 +1226,7 @@ def _ingest(state, root: str, subtitle_work: bool) -> None:
 
     if subtitle_work:
         log("Phase: extracting and transcribing commentary tracks")
-        from medialib.lib import whisper as whisper_lib
-        jobs = whisper_lib.WHISPER_JOBS
+        jobs = state.whisper["jobs"]
         commentarytranscription.export_commentary(
             root, rules.read_track_info, rules.is_bonus_folder,
             lambda name: rules.rename(name, state.fragments_file),

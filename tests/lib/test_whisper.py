@@ -102,13 +102,19 @@ class TestConstants:
 
     def test_the_gpu_table_best_first(self):
         assert whisper.WHISPER_GPU_MODELS == (
-            ("large-v3", 5500, "large-v3"),
-            ("large-v3-turbo", 4000, "large-v3-turbo"),
-            ("distil-large-v3.5", 3000, "medium"),
-            ("medium.en", 3000, "medium"),
-            ("small.en", 1500, "small"),
-            ("base.en", 1000, "base"),
+            ("large-v3", "large-v3", 4122, 349),
+            ("large-v3-turbo", "large-v3-turbo", 2522, 133),
+            ("distil-large-v3.5", "medium", 2468, 203),
+            ("medium.en", "medium", 2370, 203),
+            ("small.en", "small", 1125, 82),
+            ("base.en", "base", 907, 56),
         )
+
+    def test_a_slot_is_never_dearer_than_the_run_it_widens(self):
+        """Every row's fixed cost outweighs a slot's by a wide margin, which is
+        why the plan fills slots before it starts a second run."""
+        for _model, _multi, fixed, per_slot in whisper.WHISPER_GPU_MODELS:
+            assert fixed > per_slot * 4
 
 
 class TestMultilingual:
@@ -183,6 +189,52 @@ class TestWorks:
         assert w.calls() == [_ffmpeg_call(w.ram)]
 
 
+class TestPlan:
+    """settleGpuPlan: how many runs at once and how many batch slots each, for
+    a card of a given size. A slot is the cheap parallelism and a run the dear
+    one, so the slots are filled first and a second run only taken when both
+    can still be filled half way."""
+
+    LARGE_V3 = (4122, 349)
+
+    @pytest.mark.parametrize("free,expected", [
+        # The cards this is sized for, by the free VRAM each leaves a desktop.
+        ("30800", (2, 16)),   # 32 GB: two runs, both full
+        ("22900", (2, 16)),   # 24 GB: still two
+        ("14900", (1, 16)),   # 16 GB: one full run beats two narrow ones
+        ("10900", (1, 14)),   # 12 GB: one run, as wide as it fits
+        ("7000", (1, 5)),     #  8 GB: narrower still
+        ("5671", (1, 2)),     # the narrowest batched run there is
+        ("5670", (0, 0)),     # and a MiB below it, nothing
+    ])
+    def test_the_plan_for_a_card(self, free, expected):
+        assert whisper.settle_gpu_plan(free, *self.LARGE_V3) == expected
+
+    def test_a_second_run_is_passed_over_when_it_would_starve_both(self):
+        """14900 MiB holds two runs of six slots, and one of sixteen. The
+        second run is not worth twelve of the slots it costs."""
+        fixed, per_slot = self.LARGE_V3
+        usable = 14900 * whisper.WHISPER_VRAM_SHARE // 100
+        assert (usable // 2 - fixed) // per_slot == 6
+        assert whisper.settle_gpu_plan("14900", fixed, per_slot) == (1, 16)
+
+    def test_a_plan_never_claims_more_than_its_share(self):
+        for free in range(1200, 40000, 97):
+            for _m, _multi, fixed, per_slot in whisper.WHISPER_GPU_MODELS:
+                jobs, slots = whisper.settle_gpu_plan(str(free), fixed,
+                                                      per_slot)
+                claimed = jobs * (fixed + slots * per_slot)
+                assert claimed <= free * whisper.WHISPER_VRAM_SHARE // 100
+
+    @pytest.mark.parametrize("free", ["", "N/A", None])
+    def test_a_figure_the_arithmetic_cannot_read_is_no_room(self, free):
+        assert whisper.settle_gpu_plan(free, *self.LARGE_V3) == (0, 0)
+
+    def test_a_model_with_no_slot_cost_is_no_room_either(self):
+        """A row whose costs were never measured must not divide by zero."""
+        assert whisper.settle_gpu_plan("30800", 4122, 0) == (0, 0)
+
+
 class TestSettlement:
     def _run(self, w, logs, cores, nvidia=None, ffmpeg=None, pipx=None,
              install=()):
@@ -203,7 +255,8 @@ class TestSettlement:
         assert calls == []
         assert answer == {"device": "cpu", "computeType": "int8",
                           "model": "base.en", "modelMulti": "base",
-                          "threads": "4"}
+                          "threads": "4", "jobs": whisper.WHISPER_JOBS,
+                          "batchSlots": 0}
         assert logs == [
             "Transcribing on the CPU (int8, 4 threads) with base.en, 2 at a time",
             "Non-English work (detection, foreign transcripts, translations) "
@@ -216,28 +269,60 @@ class TestSettlement:
         assert calls == [_nvidia_listing()]
         assert answer["device"] == "cpu"
 
-    def test_a_card_that_holds_large_v3(self, w):
+    def test_a_card_that_holds_large_v3_twice_over(self, w):
         logs = []
         answer, calls = self._run(
-            w, logs, "8", nvidia=_nvidia_stdout("11000"),
+            w, logs, "8", nvidia=_nvidia_stdout("30800"),
             ffmpeg="0 0 0 0 0 0", pipx="0 0 0 0 0 0",
             install=("nvidia-smi", "ffmpeg", "pipx"))
         assert answer == {"device": "cuda", "computeType": "float16",
                           "model": "large-v3", "modelMulti": "large-v3",
-                          "threads": "4"}
+                          "threads": "4", "jobs": 2,
+                          "batchSlots": whisper.WHISPER_BATCH_SLOTS}
         assert logs == [
-            "GPU found with 11000 MiB free, looking for the best whisper model "
+            "GPU found with 30800 MiB free, looking for the best whisper model "
             "it can run ...",
-            "Transcribing on the GPU (cuda, float16) with large-v3, 2 at a time",
+            "Transcribing on the GPU (cuda, float16) with large-v3, 2 at a "
+            "time, 16 batch slots each",
         ]
         assert calls == [_nvidia_listing(), _nvidia_query(),
                          _ffmpeg_call(w.ram),
                          _pipx_call(w.ram, "large-v3", "cuda", "float16", "4")]
 
+    def test_a_card_that_holds_it_once_runs_one_wide_batch(self, w):
+        """The slots are worth more than a second run, so a card that cannot
+        fill two gives all of them to one."""
+        logs = []
+        answer, _ = self._run(
+            w, logs, "8", nvidia=_nvidia_stdout("14900"),
+            ffmpeg="0 0 0 0 0 0", pipx="0 0 0 0 0 0",
+            install=("nvidia-smi", "ffmpeg", "pipx"))
+        assert answer["model"] == "large-v3"
+        assert (answer["jobs"], answer["batchSlots"]) == (1, 16)
+
+    def test_a_card_that_cannot_fill_even_one_narrows_the_batch(self, w):
+        logs = []
+        answer, _ = self._run(
+            w, logs, "8", nvidia=_nvidia_stdout("10900"),
+            ffmpeg="0 0 0 0 0 0", pipx="0 0 0 0 0 0",
+            install=("nvidia-smi", "ffmpeg", "pipx"))
+        assert answer["model"] == "large-v3"
+        assert (answer["jobs"], answer["batchSlots"]) == (1, 14)
+
+    def test_the_narrowest_large_v3_a_card_can_hold(self, w):
+        logs = []
+        answer, _ = self._run(
+            w, logs, "8", nvidia=_nvidia_stdout("5671"),
+            ffmpeg="0 0 0 0 0 0", pipx="0 0 0 0 0 0",
+            install=("nvidia-smi", "ffmpeg", "pipx"))
+        assert answer["model"] == "large-v3"
+        assert (answer["jobs"], answer["batchSlots"]) == (
+            1, whisper.WHISPER_BATCH_MIN_SLOTS)
+
     def test_but_one_mib_less_cannot_hold_it(self, w):
         logs = []
         answer, calls = self._run(
-            w, logs, "8", nvidia=_nvidia_stdout("10999"),
+            w, logs, "8", nvidia=_nvidia_stdout("5670"),
             ffmpeg="0 0 0 0 0 0", pipx="0 0 0 0 0 0",
             install=("nvidia-smi", "ffmpeg", "pipx"))
         assert answer["model"] == "large-v3-turbo"
@@ -246,20 +331,14 @@ class TestSettlement:
                          _ffmpeg_call(w.ram),
                          _pipx_call(w.ram, "large-v3-turbo", "cuda", "float16", "4")]
 
-    def test_the_budget_is_doubled_inclusively(self, w):
-        logs = []
-        answer, _ = self._run(
-            w, logs, "8", nvidia=_nvidia_stdout("8000"),
-            ffmpeg="0 0 0 0 0 0", pipx="0 0 0 0 0 0",
-            install=("nvidia-smi", "ffmpeg", "pipx"))
-        # 8000 holds exactly 2 x 4000 (turbo) but not 2 x 5500 (large-v3).
-        assert answer["model"] == "large-v3-turbo"
-
     def test_an_english_only_winner_gets_its_counterpart_probed(self, w):
+        # 4000 MiB rules large-v3 out, and the probe refuses turbo, which
+        # leaves the first English-only row to win and have its counterpart
+        # asked for as well.
         logs = []
         answer, calls = self._run(
-            w, logs, "8", nvidia=_nvidia_stdout("7999"),
-            ffmpeg="0 0 0 0 0 0", pipx="0 0",
+            w, logs, "8", nvidia=_nvidia_stdout("4000"),
+            ffmpeg="0 0 0 0 0 0", pipx="7 0 0",
             install=("nvidia-smi", "ffmpeg", "pipx"))
         assert answer["model"] == "distil-large-v3.5"
         assert answer["modelMulti"] == "medium"
@@ -267,6 +346,8 @@ class TestSettlement:
             "runs on medium" in logs
         assert calls == [
             _nvidia_listing(), _nvidia_query(),
+            _ffmpeg_call(w.ram),
+            _pipx_call(w.ram, "large-v3-turbo", "cuda", "float16", "4"),
             _ffmpeg_call(w.ram),
             _pipx_call(w.ram, "distil-large-v3.5", "cuda", "float16", "4"),
             _ffmpeg_call(w.ram),
@@ -276,7 +357,7 @@ class TestSettlement:
     def test_the_smaller_english_only_rows_settle_the_same_way(self, w):
         logs = []
         answer, calls = self._run(
-            w, logs, "8", nvidia=_nvidia_stdout("2000"),
+            w, logs, "8", nvidia=_nvidia_stdout("1400"),
             ffmpeg="0 0 0 0 0 0", pipx="0 0",
             install=("nvidia-smi", "ffmpeg", "pipx"))
         assert answer["model"] == "base.en"
@@ -286,7 +367,7 @@ class TestSettlement:
     def test_a_card_that_holds_nothing_falls_back_with_a_warning(self, w):
         logs = []
         answer, calls = self._run(
-            w, logs, "8", nvidia=_nvidia_stdout("1999"),
+            w, logs, "8", nvidia=_nvidia_stdout("1198"),
             install=("nvidia-smi",))
         assert answer["device"] == "cpu"
         assert "WARNING: the GPU cannot run whisper at all (missing CUDA " \
@@ -344,8 +425,8 @@ class TestSettlement:
     def test_a_counterpart_the_gpu_cannot_run_falls_back_to_base(self, w):
         logs = []
         answer, calls = self._run(
-            w, logs, "8", nvidia=_nvidia_stdout("6000"),
-            ffmpeg="0 0 0 0 0 0", pipx="0 7",
+            w, logs, "8", nvidia=_nvidia_stdout("4000"),
+            ffmpeg="0 0 0 0 0 0", pipx="7 0 7",
             install=("nvidia-smi", "ffmpeg", "pipx"))
         assert answer["model"] == "distil-large-v3.5"
         assert answer["modelMulti"] == "base"

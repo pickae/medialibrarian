@@ -27,6 +27,7 @@ import pytest
 
 from medialib.cli import ingest_movies as rules
 from medialib.lib import commentarytranscription as ct
+from medialib.lib import whisper as whisper_lib
 from tests import blackbox
 
 pytestmark = pytest.mark.stubbed
@@ -44,7 +45,11 @@ THREADS = "4"
 MODEL = "base.en"          # English-only, so the two are told apart
 MODEL_MULTI = "large-v3"
 WHISPER = {"device": DEVICE, "computeType": COMPUTE, "model": MODEL,
-           "modelMulti": MODEL_MULTI, "threads": THREADS}
+           "modelMulti": MODEL_MULTI, "threads": THREADS,
+           "jobs": 2, "batchSlots": 0}
+# the same settlement on a GPU, where the runs decode a batch of windows at once
+WHISPER_BATCHED = dict(WHISPER, device="cuda", computeType="float16",
+                       batchSlots=16)
 
 # the fixture's commentary tracks: every route through commentaryLanguage
 FILM_A = [
@@ -532,7 +537,7 @@ class TestUnfixed:
 class TestState:
     def _direct(self, w, mka, srt, task, lang, siblings, pipx_rc,
                 pipx_write="-", ffsubsync_rc="0", ffsubsync_out=
-                "synced fine\n", quality="no"):
+                "synced fine\n", quality="no", whisper=WHISPER):
         ram = w.tmp_path / "ram"
         ram.mkdir()
         os.makedirs(os.path.dirname(mka), exist_ok=True)
@@ -547,7 +552,7 @@ class TestState:
         w.writes("ffsubsync", ["${--log-dir-path}/ffsubsync.log"])
         logs = []
         record = "\x1f".join([mka, srt, task, lang, siblings])
-        ct.transcribe_commentary(record, WHISPER, "10", quality, str(ram),
+        ct.transcribe_commentary(record, whisper, "10", quality, str(ram),
                                  logs.append)
         return logs
 
@@ -580,6 +585,49 @@ class TestState:
         assert os.path.isfile(srt)
         assert logs == ["Transcribing commentary (nl, {}): {}".format(
             MODEL_MULTI, os.path.basename(srt))]
+
+    def test_an_unbatched_settlement_asks_for_no_batch(self, w):
+        root = w.tmp_path / "root"
+        root.mkdir()
+        mka = str(w.tmp_path / "ram" / "extract.mka")
+        srt = str(root / "out.en.srt")
+        self._direct(w, mka, srt, "transcribe", "en", srt, "0",
+                     "${--output_dir}/extract.srt")
+        call = _srt_calls(w.calls(), mka)[0]
+        for flag in ("--batched", "--batch_size", "--word_timestamps",
+                     "--max_line_width", "--max_line_count"):
+            assert flag not in call
+
+    def test_a_batched_settlement_asks_for_its_slots_and_its_lines(self, w):
+        """The slots are what fills the GPU, and the line flags are what keeps
+        a batched run's cues readable: left off, it writes one cue per speech
+        run - half a minute of talk in a single block."""
+        root = w.tmp_path / "root"
+        root.mkdir()
+        mka = str(w.tmp_path / "ram" / "extract.mka")
+        srt = str(root / "out.en.srt")
+        self._direct(w, mka, srt, "transcribe", "en", srt, "0",
+                     "${--output_dir}/extract.srt", whisper=WHISPER_BATCHED)
+        call = _srt_calls(w.calls(), mka)[0]
+        assert _flag(call, "--batched") == "True"
+        assert _flag(call, "--batch_size") == "16"
+        assert _flag(call, "--word_timestamps") == "True"
+        assert _flag(call, "--max_line_width") == str(
+            whisper_lib.WHISPER_LINE_WIDTH)
+        assert _flag(call, "--max_line_count") == str(
+            whisper_lib.WHISPER_LINE_COUNT)
+
+    def test_a_batched_translation_is_batched_too(self, w):
+        root = w.tmp_path / "root"
+        root.mkdir()
+        mka = str(w.tmp_path / "ram" / "extract.mka")
+        srt = str(root / "out.en.srt")
+        self._direct(w, mka, srt, "translate", "nl", srt, "0",
+                     "${--output_dir}/extract.srt", whisper=WHISPER_BATCHED)
+        call = _srt_calls(w.calls(), mka)[0]
+        assert _flag(call, "--task") == "translate"
+        assert _flag(call, "--batch_size") == "16"
+        assert _flag(call, "--initial_prompt") == "Hello."
 
     def test_a_sync_that_dies_discards_the_transcript(self, w):
         root = w.tmp_path / "root"

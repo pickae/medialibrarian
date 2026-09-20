@@ -68,7 +68,8 @@ class TestThePhaseRunsAndNothingElse:
             settled["cores"] = cores
             settled["ram_root"] = ram_root
             return {"device": "cpu", "computeType": "int8",
-                    "model": "base.en", "modelMulti": "base", "threads": "4"}
+                    "model": "base.en", "modelMulti": "base", "threads": "4",
+                    "jobs": whisper_lib.WHISPER_JOBS, "batchSlots": 0}
 
         monkeypatch.setattr(whisper_lib, "init_whisper_model", fake_init)
 
@@ -363,7 +364,8 @@ class TestTheOrphanReport:
 
         def fake_init(cores, ram_root, log):
             return {"device": "cpu", "computeType": "int8",
-                    "model": "base.en", "modelMulti": "base", "threads": "4"}
+                    "model": "base.en", "modelMulti": "base", "threads": "4",
+                    "jobs": whisper_lib.WHISPER_JOBS, "batchSlots": 0}
 
         monkeypatch.setattr(whisper_lib, "init_whisper_model", fake_init)
         for name in ("_transcode_opus", "improve_main_movies", "check_folders",
@@ -461,7 +463,8 @@ class TestTheUnfixedReport:
 
         def fake_init(cores, ram_root, log):
             return {"device": "cpu", "computeType": "int8",
-                    "model": "base.en", "modelMulti": "base", "threads": "4"}
+                    "model": "base.en", "modelMulti": "base", "threads": "4",
+                    "jobs": whisper_lib.WHISPER_JOBS, "batchSlots": 0}
 
         monkeypatch.setattr(whisper_lib, "init_whisper_model", fake_init)
         for name in ("_transcode_opus", "improve_main_movies", "check_folders",

@@ -11,6 +11,7 @@ import pytest
 
 from medialib.cli import ingest_movies_run as run_module
 from medialib.lib import tmdblookup
+from medialib.lib import whisper as whisper_lib
 
 pytestmark = pytest.mark.pure
 
@@ -84,7 +85,8 @@ def ingested(monkeypatch):
                             "export_commentary", export_commentary)
 
         state = run_module.Run(script_dir="", ram_root="", skips=None,
-                               fragments_file="", whisper={},
+                               fragments_file="",
+                               whisper={"jobs": whisper_lib.WHISPER_JOBS},
                                ffsubsync_quality=quality,
                                long_names=tmdblookup.LongNames(),
                                unfixed_movies=[])
