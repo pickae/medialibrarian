@@ -54,8 +54,8 @@ def time_from_cue_string(text: str) -> int:
     formatted = " ".join(formatted.split())
     # Everything up to the FIRST space, when there is one. A tail that is all
     # time and no prefix - which is what a >99-minute field leaves once the ten
-    # characters are taken - has none, and bash's ${x#* } leaves such a string
-    # alone rather than emptying it.
+    # characters are taken - has none, and such a string is left alone rather
+    # than emptied.
     head, space, tail = formatted.partition(" ")
     formatted = tail if space else head
 

@@ -62,9 +62,9 @@ UNKNOWN_TIER = "unknown"
 def _dimension(value: object) -> int | None:
     """A dimension, or None when it is not a non-negative integer.
 
-    bash tests ``^[0-9]+$`` against the argument as text, so "1920" counts and
-    "1920.0", "-1" and "" do not. A dimension that fails counts as ABSENT rather
-    than as an error, which is what lets a half-probed size still be classified by
+    Tested against the argument as text, so "1920" counts and "1920.0", "-1"
+    and "" do not. A dimension that fails counts as ABSENT rather than as an
+    error, which is what lets a half-probed size still be classified by
     whichever axis was readable.
     """
     text = "" if value is None else str(value)
@@ -173,10 +173,9 @@ def capped(width: object, height: object, tier_name: str) -> tuple[object, objec
     if h > limit_h and limit_h / h < factor:
         factor = limit_h / h
     if factor >= 1:
-        # The caller's own text, not the parsed number. bash hands the size to awk,
-        # which prints an unused -v assignment exactly as it was given, so a size
-        # that is not scaled comes back spelled as it arrived - "0720" stays
-        # "0720". Unchanged means unchanged.
+        # The caller's own text, not the parsed number: a size that is not
+        # scaled comes back spelled as it arrived - "0720" stays "0720".
+        # Unchanged means unchanged.
         return width, height
     return max(int(w * factor / 2 + 0.5) * 2, 2), max(int(h * factor / 2 + 0.5) * 2, 2)
 

@@ -106,7 +106,7 @@ def _grant_tree_access(path: str) -> None:
     does it - a directory missing its write or execute bit cannot have its
     entries reached until it has them. Symlinks are passed over rather than
     followed, which is chmod's own rule, and an entry that refuses is passed
-    over too: the shell's chmod had its errors sent to /dev/null.
+    over too, its error swallowed.
     """
     def grant(target: str) -> None:
         try:
@@ -257,9 +257,9 @@ def emit_output(source: str, destination: str) -> None:
             candidate = safety.unique_suffix_path(candidate)
         try:
             # Claim the name atomically: two workers emitting at once must not
-            # both find it free, which is what `mv -n` buys the shell. The
-            # workspace is in RAM and the library on disk, so this is a copy
-            # either way - a rename across filesystems is one too.
+            # both find it free. The workspace is in RAM and the library on
+            # disk, so this is a copy either way - a rename across filesystems
+            # is one too.
             handle = os.open(candidate,
                              os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
         except FileExistsError:

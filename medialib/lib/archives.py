@@ -4,8 +4,7 @@ The archive extension list (:mod:`medialib.lib.enums`) becomes a set of
 questions: is this an archive, what is it called without its suffix, which tool
 opens it, and does a folder of its name sit beside it. The two ``extractArchive``
 functions are the ones that unpack: zip, rar and 7z go to the host's real
-unpacker with the same arguments the bash did, and the tar family is read by
-:mod:`tarfile`.
+unpacker, and the tar family is read by :mod:`tarfile`.
 
 ONE POLICY FOR WHAT MAY BE WRITTEN, and it is applied BEFORE anything is
 unpacked. tarfile states it as ``filter="tar"``: a member spelled absolutely or
@@ -48,8 +47,8 @@ __all__ = [
     "prune_irregular",
 ]
 
-# The extractors, the way ``archiveToolSpecs`` names them: one line per suffix,
-# and ``7z`` asks for any of the three binary names the host may carry.
+# The extractors: one line per suffix, and ``7z`` asks for any of the three
+# binary names the host may carry.
 _TOOL_SPECS = {
     "zip": "unzip",
     "rar": "unrar",
@@ -72,9 +71,10 @@ def archive_extension_of(name: str) -> str:
     dot, or ``""`` when it ends in none of them.
 
     The LONGEST match wins - ``Book.tar.gz`` is a ``tar.gz`` and not a ``tar`` or
-    a ``gz`` - and the match is case-insensitive, using the shell's per-character
-    fold. The pattern requires at least one character before the dot, so a name
-    that is nothing but ``.zip`` is not an archive with an empty name.
+    a ``gz`` - and the match is case-insensitive, using ``shell_lower``'s
+    per-character fold. The pattern requires at least one character before the
+    dot, so a name that is nothing but ``.zip`` is not an archive with an empty
+    name.
     """
     base = name.rsplit("/", 1)[-1]
     lower = shell_lower(base)
@@ -152,9 +152,8 @@ def archive_shadowed_by_folder(file: str, base: str = "") -> bool:
 
 
 def _run(command) -> int:
-    """Run a tool the way the bash does: stdout dropped, stderr kept (it is the
-    one message an archive that will not open is worth), the tool's exit status
-    returned."""
+    """Run a tool with stdout dropped, stderr kept (it is the one message an
+    archive that will not open is worth), and the tool's exit status returned."""
     return subprocess.run(command, stdout=subprocess.DEVNULL).returncode
 
 

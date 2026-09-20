@@ -54,8 +54,7 @@ Runner = Callable[..., "subprocess.CompletedProcess"]
 def _run(argv: Sequence[str], quiet: bool = False) -> subprocess.CompletedProcess:
     """The real runner: the tool on PATH.
 
-    A call the shell version sends to /dev/null does the same here (quiet);
-    the rest inherits the streams, the way the unredirected shell calls do.
+    A quiet call sends its streams to /dev/null; the rest inherits them.
     """
     if quiet:
         return subprocess.run(list(argv), stdout=subprocess.DEVNULL,
@@ -64,7 +63,7 @@ def _run(argv: Sequence[str], quiet: bool = False) -> subprocess.CompletedProces
 
 
 def _log(message: str) -> None:
-    """log: the one line the module prints, to stderr, the way the shell's log does."""
+    """log: the one line the module prints, to stderr."""
     if os.environ.get("LOG_TIMESTAMPS"):
         sys.stderr.write(f"[{time.strftime('%H:%M:%S')}] {message}\n")
     else:
@@ -74,9 +73,9 @@ def _log(message: str) -> None:
 def _iname(name: str, pattern: str) -> bool:
     """find -iname: case-folded wildcard match on the basename.
 
-    The fold is the C library's, the way the shell's is: shell_lower, not
-    str.lower - the two differ on U+0130, which lower-cases to a bare "i"
-    through the C library and to "i" plus a combining dot in Python.
+    The fold is the C library's: shell_lower, not str.lower - the two differ
+    on U+0130, which lower-cases to a bare "i" through the C library and to
+    "i" plus a combining dot in Python.
     """
     return fnmatch.fnmatchcase(shell_lower(name), shell_lower(pattern))
 
@@ -129,9 +128,8 @@ def _remove_quiet(path: str) -> None:
 
 
 def _move_over(src: str, dst: str) -> int:
-    """``mv -f``: ``src`` takes ``dst``'s place, and a move that lands on
-    nothing is the failure the shell's mv left behind - its status, and its one
-    line about why.
+    """``mv -f``: ``src`` takes ``dst``'s place; a move that lands on nothing
+    fails, answered with its status and its one line about why.
 
     shutil.move rather than os.replace, because the source is in the RAM
     scratch and the destination on disk: a rename across filesystems.
@@ -180,10 +178,9 @@ def extract_thumbnail(input_path: str, file_name: str, dpi: int,
     """Downscale/convert the chosen image for embedding, into <file_name>.jpg.
 
     From the booklet PDF if there is one (and poppler to read it), else from
-    the cover embedded in one of the audio files. Returns the shell function's
-    exit status: pdftoppm's own when the PDF was read, 0 otherwise - every
-    other branch ends in a call the shell version shields with || true, or
-    in an if the shell leaves without an else, and both end at zero.
+    the cover embedded in one of the audio files. Returns pdftoppm's own exit
+    status when the PDF was read, 0 otherwise - every other branch ends at
+    zero.
     """
     pdf = _first_file(input_path,
                       lambda b: _iname(b, "*scan*") and _iname(b, "*.pdf"))
@@ -272,8 +269,8 @@ def embed_thumbnail(input_path: str, file_name: str, image_size_limit: int,
         else:
             shutil.copyfile(thumb_file, output_thumb)
 
-    # The if the shell leaves without an else ends at zero, whatever branch
-    # it took or skipped - only a move that lands on nothing fails it.
+    # The block ends at zero, whatever branch it took or skipped - only a
+    # move that lands on nothing fails it.
     if os.path.isfile(output_thumb):
         if os.path.isfile(opus_file):
             mutagentags.embed_cover(opus_file, output_thumb)
@@ -308,7 +305,7 @@ def apply_cover(track: str, target: str | None, cover_threshold: int,
                 run: Runner = _run) -> int:
     """Let a sidecar cover override the source's, then embed it in <target>.
 
-    <target> defaults to <opus>, the way the shell's ${2:-$opus} does.
+    <target> defaults to <opus>.
     """
     if not target:
         target = opus
@@ -338,8 +335,7 @@ def apply_cover(track: str, target: str | None, cover_threshold: int,
     else:
         shutil.copyfile(temp_cover, cover)
 
-    # The last command the shell function leaves is an if without an else,
-    # so whatever the embed did the status is zero; only a successful embed
+    # Whatever the embed did, the status is zero; only a successful embed
     # drops the now-redundant sidecar copies in the output folder.
     if mutagentags.embed_cover(target, cover) == 0:
         _remove_quiet(disk_cover)

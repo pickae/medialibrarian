@@ -10,9 +10,9 @@ have reached them in), each with what it is for and how to install it.
 
 A spec is a command name (``"ffmpeg"``) or a set of alternatives written with
 ``|`` (``"7z|7zz|7za"``), satisfied by any one of them. The refusal is a
-return value, not an exception: the shell's ``exit 1`` is
-``sys.exit(require_tools(...))`` at the call site, and the message goes to
-stderr so the stdout the run would have produced stays clean.
+return value, not an exception: ``sys.exit(require_tools(...))`` at the call
+site, and the message goes to stderr so the stdout the run would have
+produced stays clean.
 """
 
 from __future__ import annotations
@@ -156,16 +156,15 @@ def tool_present(spec: str) -> bool:
     """True when <spec> is satisfied: a command name, or a set of ``|``
     alternatives any one of which is present.
 
-    The presence test is the shell's ``command -v``, and its two faces differ.
-    A bare name is looked up on PATH, and bash's PATH scan does not test the
-    executable bit - a non-executable file, and even a fifo, read as present -
-    so the rule is: some PATH directory holds a non-directory entry by that
-    name. A name with a slash is a direct path (the callers that resolve a
-    binary themselves), present only when it is accessible for execution - a
-    non-executable file reads as absent. An empty alternative (the middle of
-    ``a||b``) never satisfies. Shell builtins are not on a PATH and are not
-    present: this module is about tools a run would reach for, and a builtin
-    is nothing a script would install.
+    The presence test has two faces. A bare name is looked up on PATH, and
+    the PATH scan does not test the executable bit - a non-executable file,
+    and even a fifo, read as present - so the rule is: some PATH directory
+    holds a non-directory entry by that name. A name with a slash is a direct
+    path (the callers that resolve a binary themselves), present only when it
+    is accessible for execution - a non-executable file reads as absent. An
+    empty alternative (the middle of ``a||b``) never satisfies. Shell builtins
+    are not on a PATH and are not present: this module is about tools a run
+    would reach for, and a builtin is nothing a script would install.
     """
     for candidate in spec.split("|"):
         if os.sep in candidate:
@@ -174,8 +173,7 @@ def tool_present(spec: str) -> bool:
             continue
         for directory in os.environ.get("PATH", "").split(os.pathsep):
             if not directory:
-                # An empty PATH element is the current directory, the way the
-                # shell treats it.
+            # An empty PATH element is the current directory.
                 directory = os.curdir
             try:
                 info = os.stat(os.path.join(directory, candidate))
@@ -202,8 +200,8 @@ def tool_note(tool: str, platform: str | None = None) -> str:
 
 
 def _pad_bytes(text: str, width: int) -> str:
-    """``printf %-*s``: the field is counted in BYTES, so a multibyte name
-    earns fewer spaces than a character count would give."""
+    """The field is counted in BYTES, so a multibyte name earns fewer spaces
+    than a character count would give."""
     return text + " " * max(0, width - len(text.encode("utf-8")))
 
 
@@ -229,9 +227,9 @@ def require_tools(what: str, specs: Sequence[str], *,
         return 0
 
     # Column widths from the longest entry actually being printed - in
-    # CHARACTERS, the way ${#name} counts them - while the padding below is
-    # printf's, in BYTES: a multibyte name that is the widest one pads nothing,
-    # and the names beside it pad to its character width, not its byte width.
+    # CHARACTERS - while the padding below is in BYTES: a multibyte name that
+    # is the widest one pads nothing, and the names beside it pad to its
+    # character width, not its byte width.
     names: list[str] = []
     roles: list[str] = []
     hints: list[str] = []
@@ -278,9 +276,9 @@ def require_python_module(module: str, what: str, role: str = "used by this scri
     exactly the same kind as a binary here.
 
     The module is imported rather than looked for on disk, on the same
-    interpreter the helpers actually run on (a fresh process, the way
-    ``pythonRun -c "import $module"`` does), because a package can be
-    installed for a different interpreter than the one the run will use.
+    interpreter the helpers actually run on (in a fresh process, not this
+    one), because a package can be installed for a different interpreter than
+    the one the run will use.
 
     That interpreter is ``sys.executable`` and not whatever ``python3`` PATH
     resolves to, so the callers do NOT ask ``require_tools`` for python3 first

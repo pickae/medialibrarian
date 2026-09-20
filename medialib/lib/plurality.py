@@ -24,8 +24,7 @@ from collections.abc import Sequence
 def plurality_group_indices(mode: str, extensions: Sequence[str]) -> list[int]:
     """Return the indices of the siblings that form the group.
 
-    ``mode`` is "files" or anything else, which means folders - matching the bash
-    original, whose test is ``!= files``.
+    ``mode`` is "files" or anything else, which means folders.
     """
     if mode != "files":
         return list(range(len(extensions)))

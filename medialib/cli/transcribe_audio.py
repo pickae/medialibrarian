@@ -104,8 +104,8 @@ def _input_extensions():
 def _tracks(input_dir: str):
     """Every input, largest first, as paths relative to the input folder.
 
-    Ties keep the order the walk found them in, which is what a stable sort over
-    the size does - the shell's ``sort -k1,1nr`` says nothing about them either.
+    Ties keep the order the walk found them in, which is what a stable sort
+    over the size does.
     """
     wanted = {e.lower() for e in _input_extensions()}
     found = []
@@ -143,7 +143,7 @@ class Run:
 
         The counter is a FILE under a lock because the workers are separate
         processes; without flock it is not taken at all and the line comes out
-        unnumbered, which is what the shell does too.
+        unnumbered.
         """
         with open(self.progress_file + ".lock", "w") as handle, runlog.take_lock(handle):
             try:

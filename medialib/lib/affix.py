@@ -17,12 +17,12 @@ from collections.abc import Sequence
 
 __all__ = ["align_affix_to_run_boundary", "affix_char_class"]
 
-# Everything bash's ``_affixCharClass`` calls "other": the space, the control
-# characters, and every ASCII punctuation mark. Anything not here and not an ASCII
-# digit is a letter - which deliberately includes accented and other non-ASCII
-# letters, and, less deliberately, every non-ASCII symbol. An en dash is a letter
-# to this function. That is the bash behaviour and the separator vocabulary the
-# name cleaners run over contains one, so it is reproduced rather than corrected.
+# Everything this function calls "other": the space, the control characters,
+# and every ASCII punctuation mark. Anything not here and not an ASCII digit
+# is a letter - which deliberately includes accented and other non-ASCII
+# letters, and, less deliberately, every non-ASCII symbol. An en dash is a
+# letter to this function, and the separator vocabulary the name cleaners run
+# over contains one, so it is kept rather than corrected.
 _OTHER = (
     frozenset(" ")
     | frozenset(chr(c) for c in range(0x20))
@@ -46,8 +46,7 @@ def affix_char_class(char: str) -> str:
 def align_affix_to_run_boundary(side: str, affix: str, names: Sequence[str]) -> str:
     """The affix, shrunk until removing it splits no same-class run in any name.
 
-    ``side`` is "prefix" or, for anything else, "suffix" - matching the bash
-    original, which tests ``== prefix``.
+    ``side`` is "prefix" or, for anything else, "suffix".
     """
     if not affix:
         return affix
@@ -88,7 +87,7 @@ def align_affix_to_run_boundary(side: str, affix: str, names: Sequence[str]) -> 
     #
     # The run is ASCII only, while the class test above is not: an affix ending in
     # an accented letter is class L, finds a split, and then retreats past nothing,
-    # because "é" is not in [A-Za-z]. bash does exactly this, so the port does too.
+    # because "é" is not in [A-Za-z].
     run = _ASCII_LETTERS if cls == "L" else frozenset("0123456789")
     if is_prefix:
         while affix and affix[-1] in run:

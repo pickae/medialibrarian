@@ -227,9 +227,9 @@ class Run:
             # it did not - a video track cannot be larger than the file it is in.
             size = job["stream_size"]
             need += int(size) if str(size).isdigit() else need
-        # The byte count travels as text, the way the shell hands it over: an
-        # unreadable size is the empty string rather than a number, and that is
-        # what tells the scratch it has nothing to size itself against.
+        # The byte count travels as text: an unreadable size is the empty
+        # string rather than a number, and that is what tells the scratch it
+        # has nothing to size itself against.
         path, on_disk, status = ramscratch.ram_scratch_dir_for(
             str(need) if need else "", "improveMovie",
             os.path.dirname(movie))
@@ -253,8 +253,8 @@ class Run:
         if job["action"] == "convert":
             log("  Normalising Dolby Vision profile 7 -> 8.1 (%s, %s): %s"
                 % (info["PROFILE"] or info["SETTINGS"], job["fps"], movie))
-            # Both report a shell STATUS, where 0 is the success: the bash
-            # callers read them with `&&`, and 0 is falsy here.
+            # Both report a status, where 0 is the success. 0 is falsy here,
+            # so the == 0 is what makes the boolean.
             done = dolbyvision.convert_to_profile81(movie, hevc, log=log) == 0
         else:
             # Say which of the two outcomes this is, since that is the whole
@@ -1074,7 +1074,7 @@ def _commentary_only(program: str, script_dir: str, roots: list,
 
 
 def _capitalise(text: str) -> str:
-    """bash's ``${var^}``: the first character upper-cased, the rest untouched."""
+    """The first character upper-cased, the rest untouched."""
     return text[:1].upper() + text[1:]
 
 

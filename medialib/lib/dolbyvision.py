@@ -1,12 +1,11 @@
 """The Dolby Vision normalisation helpers.
 
-The readers return their results in memory as a dict with the DV_* names (like
-the bash RET_* pair) so a caller needs no subshell and no second probe; the
-three pure gates judge the fields the readers settle; and the two pipelines -
-profile 7 -> 8.1, and the video-stream copy that drops a false claim - run the
-same ffmpeg and dovi_tool commands the bash copy spells, through a fakeable
-``run`` (one tool) or ``pipe`` (two of them joined) so the white box can drive
-them with stubs.
+The readers return their results in memory as a dict with the DV_* names so a
+caller needs no second probe; the three pure gates judge the fields the
+readers settle; and the two pipelines - profile 7 -> 8.1, and the
+video-stream copy that drops a false claim - run the same ffmpeg and
+dovi_tool commands, through a fakeable ``run`` (one tool) or ``pipe`` (two of
+them joined) so the white box can drive them with stubs.
 """
 
 import contextlib
@@ -23,8 +22,8 @@ _FPS = re.compile(r"^[0-9]+([.][0-9]+)?$")
 
 # The NTSC rates mediainfo reports rounded ("23.976"), mapped back to the exact
 # fraction mkvmerge's --default-duration takes - the rounding error alone
-# drifts by ~0.1s over a feature-length film. Matched as a prefix, the way the
-# bash case's "23.976*" glob matches, so "23.9765" lands where "23.976" does.
+# drifts by ~0.1s over a feature-length film. Matched as a prefix, so
+# "23.9765" lands where "23.976" does.
 _NTSC = (
     ("23.976", "24000/1001fps"),
     ("29.97", "30000/1001fps"),
@@ -42,9 +41,8 @@ _FIELDS = ("HDR_Format_Profile", "HDR_Format_Settings", "HDR_Format",
 def _field(value):
     """One field as the reader's ``(.X // "") | tostring`` prints it: null and
     false read as empty, a string as itself, a number as its digits (an integer
-    or the decimal form the document carried - a port of jq's literal-preserving
-    numbers, which is the domain mediainfo's fields live in), and anything else
-    as its JSON."""
+    or the decimal form the document carried - the domain mediainfo's fields
+    live in), and anything else as its JSON."""
     if value is None or value is False:
         return ""
     if value is True:
@@ -94,9 +92,9 @@ def _first_video_track(data):
 def _fps_spec(fps, fps_num, fps_den):
     """The frame rate as an mkvmerge --default-duration value: the exact
     numerator/denominator mediainfo reports when it gives both (compared as
-    strings, the way the bash test does - so a denominator of "00" stands and
-    one of "0" does not), else the rounded decimal mapped back to its NTSC
-    fraction, else the decimal as given, else nothing at all."""
+    strings - so a denominator of "00" stands and one of "0" does not), else
+    the rounded decimal mapped back to its NTSC fraction, else the decimal as
+    given, else nothing at all."""
     if _INT.match(fps_num) and _INT.match(fps_den) and fps_den != "0":
         return "%s/%sfps" % (fps_num, fps_den)
     if _FPS.match(fps):
@@ -127,10 +125,10 @@ def _captured(handle):
 def _subprocess_pipe(first_argv, second_argv, second_stdout=None,
                      capture_stderr=False):
     """The real runner for the two pipelines: ``first | second`` joined by an
-    OS pipe, the way the shell joins them, so the second tool consumes the
-    first one's output WHILE it is still being produced - a reader that starts
-    only once the writer has finished blocks forever on the first pipeful, and
-    both these streams are far past a pipe's 64 KiB capacity.
+    OS pipe, so the second tool consumes the first one's output WHILE it is
+    still being produced - a reader that starts only once the writer has
+    finished blocks forever on the first pipeful, and both these streams are
+    far past a pipe's 64 KiB capacity.
 
     Returns (first status, second status, first stderr, second stderr), the
     two byte strings empty unless capture_stderr asked for them - and captured
@@ -257,9 +255,9 @@ def is_hdr(transfer, formats):
 def is_profile8(path, run=_subprocess_run):
     """dvIsProfile8: true when <path> reports Dolby Vision profile 8 - the
     check a finished remux passes before anything on disk is touched. The
-    probe runs in a subshell on the bash side so it cannot clobber the
-    caller's DV_* values; what it saw is the second return (DV_SEEN_PROFILE)
-    so a rejection can say what the file actually claimed. Matched as a
+    probe cannot clobber the caller's DV_* values; what it saw is the second
+    return (DV_SEEN_PROFILE) so a rejection can say what the file actually
+    claimed. Matched as a
     substring, not a prefix: mediainfo renders one field per HDR format
     joined with " / ", and nothing guarantees Dolby Vision is the first
     entry."""
@@ -283,8 +281,8 @@ def is_dolby_vision_free(path, source_hdr, run=_subprocess_run):
 
 
 def _pipeline_status(first, second):
-    """The status of ``first | second`` under the callers' pipefail: the
-    rightmost non-zero exit, zero when both pass."""
+    """The status of ``first | second``: the rightmost non-zero exit, zero
+    when both pass."""
     return second if second else first
 
 
@@ -292,8 +290,8 @@ def stream_has_rpu(path, pipe=_subprocess_pipe, tmpdir=None):
     """dvStreamHasRpu: true when dovi_tool can actually FIND Dolby Vision RPU
     data in the video bitstream - the claim the container makes is checked
     against the 48 frames it can get cheaply, a fraction of a second even on a
-    4.5 GB film. ``tmpdir`` is the ${TMPDIR:-/tmp} the probe name is made
-    under."""
+    4.5 GB film. ``tmpdir`` is the directory the probe name is made under
+    ($TMPDIR or /tmp when unset)."""
     probe_dir = tmpdir if tmpdir is not None else (os.environ.get("TMPDIR") or "/tmp")
     fd, probe = tempfile.mkstemp(prefix="dvRpuProbe.", dir=probe_dir)
     os.close(fd)
@@ -312,7 +310,6 @@ def stream_has_rpu(path, pipe=_subprocess_pipe, tmpdir=None):
 
 
 def _mkdirs_parent(path):
-    """The module's ``mkdir -p "$(dirname "$out")"``."""
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
 
 
@@ -331,9 +328,8 @@ def _unlink(path):
 
 
 def _reason(*streams):
-    """What the shell's ``err=$( { ...; } 2>&1 )`` hands back: the captured
-    bytes with their trailing newlines stripped, "<no output>" when there was
-    none to capture."""
+    """The captured bytes with their trailing newlines stripped, "<no
+    output>" when there was none to capture."""
     text = b"".join(streams).decode("utf-8", "replace").rstrip("\n")
     return text if text else "<no output>"
 
@@ -494,9 +490,8 @@ def read_config_level(path, run=_subprocess_run):
         data = json.loads(text)
     except ValueError:
         return empty
-    # Everything below models one jq program, whose every failure is the same
-    # answer: jq prints nothing, the shell's one `read` gets nothing, and all
-    # five fields stay empty.
+    # Every failure in the navigation below is the same answer: the empty
+    # result.
     try:
         streams = data.get("streams") if isinstance(data, dict) else None
         if streams is None:

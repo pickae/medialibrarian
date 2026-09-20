@@ -105,9 +105,8 @@ OPUS_COPY_BITRATE = "120"
 # list shorter than this holds no complete chapter.
 LINES_PER_CHAPTER = 2
 
-# The stray video containers remuxed into Matroska. Matched on the bare suffix
-# the way the shell's `-name '*avi'` patterns are, which also catch a name
-# ending in those letters without a dot.
+# The stray video containers remuxed into Matroska. Matched on the bare suffix,
+# which also catches a name ending in those letters without a dot.
 STRAY_VIDEO_SUFFIXES = ("avi", "mp4", "m4v", "flv", "flv2", "m3u8", "mov",
                         "webm", "mpg")
 
@@ -136,9 +135,9 @@ def is_lossless_codec(codec: str) -> bool:
 def chapter_time_ms(timestamp: str) -> int:
     """``chapterTimeMs``: an OGM "H:MM:SS.mmm" timestamp as whole milliseconds.
 
-    The shell reads each field with a base-10 prefix, because "08" is not octal
-    here, and computes with its own unit factors rather than the matching ones in
-    the cue library - the value must not depend on an ambient global.
+    Each field is read as base-10, because "08" is not octal here, and the
+    value is computed with its own unit factors rather than the matching ones
+    in the cue library - it must not depend on an ambient global.
     """
     hours, _, rest = timestamp.partition(":")
     minutes, _, seconds_and_ms = rest.rpartition(":")
@@ -150,7 +149,7 @@ def chapter_time_ms(timestamp: str) -> int:
 
 
 def _base_ten(field: str) -> int:
-    """The shell's ``10#$field`` over one timestamp field."""
+    """One timestamp field as a base-10 integer, 0 if it is not one."""
     try:
         return int(field, 10)
     except ValueError:
@@ -398,8 +397,7 @@ def resolve_through_ancestors(wanted: str, became: dict, ambiguous: set) -> str:
 
 
 def _download_folders(download_dir: str) -> list:
-    """"." and every folder below the download tree, the way the shell's
-    ``find -mindepth 1 -type d`` prints them: relative, parents first."""
+    """"." and every folder below the download tree: relative, parents first."""
     folders = ["."]
     for parent, dirs, _names in os.walk(download_dir):
         dirs.sort()
@@ -747,8 +745,7 @@ class Run:
                                "no flac written: " + relative)
 
     def _already_ingested(self, relative: str) -> bool:
-        """The shell's ``grep -qzxF``: one whole NUL-terminated record equal to
-        this path."""
+        """One whole NUL-terminated record in the file equal to this path."""
         try:
             with open(self.ingested_sources, "rb") as handle:
                 records = handle.read().split(b"\0")
@@ -973,15 +970,15 @@ class Run:
                     + _relative_to(new_folder, self.download_dir))
 
 
-# --- the small shells this run runs out to ------------------------------------
+# --- the small commands this run runs out to ----------------------------------
 
 def _bytes(text: str) -> bytes:
     return text.encode("utf-8", "surrogateescape")
 
 
 def _run(argv: list) -> int:
-    """One tool, its own output silenced the way the shell silences it. A tool
-    that is not there is the shell's 127 rather than an exception."""
+    """One tool, its own output silenced. A tool that is not there is a 127
+    rather than an exception."""
     try:
         done = subprocess.run(argv, stdin=subprocess.DEVNULL,
                               stdout=subprocess.DEVNULL,
@@ -1002,9 +999,7 @@ def _probe(argv: list) -> str:
 
 
 def _duration_seconds(path: str) -> int:
-    """The shell's ``ffprobe -show_format | sed -n 's/duration=//p' | xargs
-    printf %.0f``: the duration rounded to whole seconds, 0 for a file it cannot
-    read."""
+    """The duration rounded to whole seconds, 0 for a file it cannot read."""
     text = _probe(["ffprobe", "-i", path, "-show_format", "-v", "quiet"])
     for line in text.splitlines():
         if line.startswith("duration="):
@@ -1020,8 +1015,8 @@ def _duration_ms(path: str) -> int:
 
 
 def _codec_and_rate(path: str) -> tuple:
-    """The first stream's codec name and sample rate, as the shell reads them
-    back through jq - an absent field answering the literal "null"."""
+    """The first stream's codec name and sample rate - an absent field
+    answering the literal "null"."""
     import json
     text = _probe(["ffprobe", "-loglevel", "0", "-print_format", "json",
                    "-show_format", "-show_streams", path])
@@ -1077,8 +1072,8 @@ def _remove_tree(path: str) -> bool:
 
 
 def _force_rename(source: str, target: str) -> None:
-    """``mv -f``, which is deliberately not the safe rename: these two names are
-    the same cue sheet and the shell overwrites."""
+    """Deliberately not the safe rename: these two names are the same cue sheet,
+    and the overwrite is intended."""
     try:
         os.replace(source, target)
     except OSError:
@@ -1097,8 +1092,8 @@ def _move_no_clobber(source: str, folder: str) -> None:
 
 
 def _relative_to(path: str, root: str) -> str:
-    """The shell's ``${path#"$root/"}``, which leaves a path that does not start
-    there exactly as it is."""
+    """The path with the leading ``root/`` removed, or exactly as it is when it
+    does not start there."""
     prefix = root.rstrip("/") + "/"
     return path[len(prefix):] if path.startswith(prefix) else path
 
@@ -1607,8 +1602,7 @@ def _rsync_help() -> str:
 
 
 def _record_count(path: str) -> int:
-    """The shell's ``grep -zc ''``: how many NUL-terminated records a file
-    holds."""
+    """How many NUL-terminated records a file holds."""
     try:
         with open(path, "rb") as handle:
             return handle.read().count(b"\0")

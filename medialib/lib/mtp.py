@@ -2,7 +2,7 @@
 
 A folder on a phone mounted over MTP has two spellings: the ``mtp://`` URI a
 file manager puts on the clipboard, and the gvfs FUSE path that is the only
-one of the two a directory. The port translates the first into the second,
+one of the two a directory. This module translates the first into the second,
 and probes whether a mount will take a rename - the two judgements
 ``clean-folder-structure`` makes before it trusts a phone with a rename.
 """
@@ -18,8 +18,7 @@ def mtp_mount_root() -> str:
     """Where gvfs puts its mounts: ``$CFS_GVFS_ROOT``, else
     ``$XDG_RUNTIME_DIR/gvfs``, else ``/run/user/<uid>/gvfs``.
 
-    The first that is set and non-empty wins, the way the bash's nested
-    ``:-`` defaults read it.
+    The first that is set and non-empty wins.
     """
     root = os.environ.get("CFS_GVFS_ROOT")
     if root:
@@ -39,22 +38,16 @@ def mtp_mount_root() -> str:
 
 
 def percent_decode(name: str) -> str:
-    """The bash's ``_percentDecode``: each ``%XX`` becomes the byte it names,
+    """``_percentDecode``: each ``%XX`` becomes the byte it names,
     everything else - including a backslash - stays.
 
-    The bash does this in bytes, its strings being byte strings, so a
-    multi-byte character spelled as escapes is one character in the answer,
-    and the port decodes bytes the same way and reads them back in the
-    filesystem's encoding. The bash's own doubling of backslashes and its
-    ``printf %b`` cancel out: a doubled pair prints as one backslash, and the
-    backslash the ``%XX``-to-``\\xXX`` rewrite inserts is always the one the
-    ``%b`` pairs the escape with, so the composition is a plain percent
-    decode. The corpus pins it with names that hold backslashes next to
-    escapes.
+    The decode is in bytes, so a multi-byte character spelled as escapes is
+    one character in the answer, and the bytes are read back in the
+    filesystem's encoding. The corpus pins it with names that hold
+    backslashes next to escapes.
 
-    A ``%00`` cannot survive into the bash's value, because the answer is a
-    command substitution and one drops null bytes; the port drops them the
-    same way. No name on a phone ever holds one.
+    A ``%00`` cannot survive into the answer: null bytes are dropped, and no
+    name on a phone ever holds one.
     """
     raw = name.encode("utf-8", "surrogateescape")
     out = bytearray()
@@ -75,7 +68,7 @@ def percent_decode(name: str) -> str:
 
 
 def mtp_mount_can_rename(directory: str) -> bool:
-    """The bash's ``mtpMountCanRename``: whether renames can be applied on
+    """``mtpMountCanRename``: whether renames can be applied on
     this mount, answered by doing one - a scratch folder is created inside
     ``directory``, renamed and removed again.
 
@@ -98,7 +91,8 @@ def mtp_mount_can_rename(directory: str) -> bool:
 
 
 def _remove_quietly(path: str) -> None:
-    """The bash's ``rmdir x 2>/dev/null || rm -rf x 2>/dev/null``."""
+    """Remove ``path``, swallowing any failure: an empty directory first,
+    then with its contents when it is not empty."""
     try:
         os.rmdir(path)
     except OSError:
@@ -106,11 +100,11 @@ def _remove_quietly(path: str) -> None:
 
 
 def resolve_mtp_uri(uri: str) -> tuple[str, str]:
-    """The bash's ``resolveMtpUri``: the gvfs path of the folder a ``mtp://``
+    """``resolveMtpUri``: the gvfs path of the folder a ``mtp://``
     URI names, or the one-line reason there is none.
 
     Returns ``(path, error)``: on success the path and an empty error, on
-    failure an empty path and the reason the bash leaves in ``RET_MTP_ERROR``.
+    failure an empty path and the reason.
     """
     rest = uri[6:] if uri.startswith("mtp://") else uri
     host, slash, rel = rest.partition("/")

@@ -399,8 +399,8 @@ class Track:
               "commentary", "default", "forced")
 
     # FIELDS is what __init__ sets; these declare what it sets them TO. Every
-    # one is text, because mkvmerge's JSON is read as the shell reads it and an
-    # absent field is the empty string rather than a missing attribute.
+    # one is text, and an absent field is the empty string rather than a
+    # missing attribute.
     id: str
     type: str
     codec: str
@@ -440,10 +440,10 @@ class Track:
 def _identify(movie: str) -> list:
     """``mkvmerge -J``, read into tracks.
 
-    mkvmerge exits 1 on non-fatal WARNINGS while still printing valid JSON, and
-    the shell guards every call for that reason: an unguarded non-zero there
-    aborts the whole ingest mid-phase. A genuine parse failure yields no tracks,
-    which every caller already treats as nothing to do.
+    mkvmerge exits 1 on non-fatal WARNINGS while still printing valid JSON, so
+    the exit is not checked: an unguarded non-zero there would abort the whole
+    ingest mid-phase. A genuine parse failure yields no tracks, which every
+    caller already treats as nothing to do.
     """
     import json
     try:
@@ -476,8 +476,8 @@ def _identify(movie: str) -> list:
 
 
 def _as_text(value) -> str:
-    """jq's ``tostring``, which renders a null-valued property as the literal
-    "null" - what every comparison in the shell is written against."""
+    """The value as text, a null-valued property rendered as the literal "null"
+    - what every comparison here is written against."""
     if value is None:
         return "null"
     if value is True:
@@ -1316,7 +1316,7 @@ def _duration_of(path: str) -> int:
     return int(round(formatting.awk_number(text.strip() or 0)))
 
 
-# --- the small shells ---------------------------------------------------------
+# --- the small commands -------------------------------------------------------
 
 def _run(argv: list) -> int:
     try:

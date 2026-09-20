@@ -149,15 +149,9 @@ _MEASURE_SQL = {
 
 
 # --- the page's own text -------------------------------------------------------
-# The two halves of the page either side of its per-tab data, exactly as
-# The shell's heredocs produced them, with the three values it
-# substitutes left as sentinels: @@TITLE@@ (already HTML-escaped), @@BASE@@ and
-# @@VER@@.
-#
-# Derived from the shell by running it, not transcribed from it: the first heredoc
-# is UNQUOTED, so bash expands into a page full of $, % and CSS percentages, and
-# hand-applying those expansions is a mistake waiting somewhere in the middle of
-# 9.5KB. What was run is what is here.
+# The two halves of the page either side of its per-tab data, with the three
+# values the page substitutes left as sentinels: @@TITLE@@ (already
+# HTML-escaped), @@BASE@@ and @@VER@@.
 
 _PAGE_HEAD = """<!DOCTYPE html>
 <html lang="en">
@@ -393,10 +387,9 @@ def viewer_base64(path):
     """The file as one unwrapped base64 line, or None for a file that cannot be
     read.
 
-    The shell is ``base64 -w0 -- "$1" 2>/dev/null || base64 -- "$1" | tr -d``,
-    whose fallback answers the same thing for a base64 that does not know -w0 -
-    and whose STATUS is how the two cases are told apart, because an empty file
-    and an unreadable one both base64 to nothing.
+    None marks a file that cannot be read: an empty file base64-encodes to the
+    empty string, so the two are told apart by the read raising, not by the
+    length of the answer.
     """
     try:
         with open(path, "rb") as handle:
@@ -526,9 +519,8 @@ def viewer_column_type(column):
 def viewer_schema(content):
     """That export's columns and their types, as JSON.
 
-    A type this module does not know answers "{}" rather than refusing: the shell
-    reads its columns through a command substitution, which swallows the refusal,
-    so the loop runs over nothing and the empty object is printed. The caller that
+    A type this module does not know answers "{}" rather than refusing: the loop
+    then runs over nothing and the empty object is printed. The caller that
     matters - the page - embeds whatever this says, and an empty schema is a tab
     Perspective will reject on its own rather than a page that was never written.
     """

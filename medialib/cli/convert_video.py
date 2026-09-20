@@ -871,7 +871,7 @@ def sum_encode_progress(directory: str) -> tuple:
 
 
 def _as_int(value: str) -> int:
-    """awk's numeric read: a field it cannot parse is 0."""
+    """A numeric read: a field it cannot parse is 0."""
     try:
         return int(float(value))
     except ValueError:
@@ -971,9 +971,9 @@ def conversion_worthwhile(relative: str, width, height, enc_width, enc_height,
 class Settings:
     """What this run decided once, at startup, and every file is encoded with.
 
-    The shell exports each of these, because the parallel chunk workers build
-    their own argument strings in their own shells and have to agree with the rest
-    of the file. Here they travel as one object, which is what a worker is handed.
+    The parallel chunk workers build their own argument strings in their own
+    processes and have to agree with the rest of the file, so each of these
+    travels to them as one object, which is what a worker is handed.
     """
 
     def __init__(self, **values) -> None:

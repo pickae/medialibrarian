@@ -69,9 +69,9 @@ def _declared_program() -> str:
 def current_program() -> str:
     """What this process calls itself, for an asker with no module to name it by.
 
-    The handed-down name when there is one, else ``argv[0]``'s basename - the
-    shell's ``${0##*/}``, which for an installed command is the command. The
-    package's own name is the last resort, for a process with no argv at all.
+    The handed-down name when there is one, else ``argv[0]``'s basename, which
+    for an installed command is the command. The package's own name is the last
+    resort, for a process with no argv at all.
     """
     return _declared_program() or os.path.basename(sys.argv[0]) or "medialib"
 

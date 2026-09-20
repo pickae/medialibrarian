@@ -52,12 +52,12 @@ COLUMNS = {
 
 
 
-# --- what "%.3f" means in the shell ---------------------------------------------
-# bash's printf reads its argument with strtold and formats it with long double, so
-# the value it rounds is the nearest 80-bit float - 64 bits of mantissa - and not
+# --- what "%.3f" means ----------------------------------------------------------
+# printf reads its argument with strtold and formats it with long double, so the
+# value it rounds is the nearest 80-bit float - 64 bits of mantissa - and not
 # the nearest double Python would parse the same text into. On a value sitting on
 # the boundary the two disagree, and in BOTH directions, so neither rounding the
-# exact decimal nor rounding through a Python float reproduces the shell.
+# exact decimal nor rounding through a Python float reproduces printf.
 #
 # So the 80-bit value is computed exactly, with fractions, and rounded from there.
 # Exact rather than approximated because an approximation is the whole problem: the
@@ -93,23 +93,22 @@ def _as_long_double(text: str) -> Fraction:
 
 
 def three_decimals(text: str) -> str:
-    """``printf '%.3f'`` of that decimal string, as the shell would print it.
+    """``printf '%.3f'`` of that decimal string.
 
-    The rule is shared, not a census detail: anything the shell formats with
+    The rule is shared, not a census detail: anything this repo formats with
     ``%.3f`` - the census durations and the chapter probe lengths alike -
-    rounds the value the way long double does, so the rounding lives here once.
+    rounds the way long double does, so the rounding lives here once.
     """
     thousandths = _round_half_even(_as_long_double(text) * 1000)
     return f"{thousandths // 1000}.{thousandths % 1000:03d}"
 
 
 def printf_f0(text: str) -> str:
-    """``printf '%.0f'`` of that decimal string, as the shell would print it.
+    """``printf '%.0f'`` of that decimal string.
 
-    The same 80-bit parse as ``three_decimals`` - bash's printf reads its
-    argument with ``strtold`` and formats with long double - rounded to zero
-    places instead of three. A string the parse cannot read raises, the way the
-    shell's ``printf`` errors and its caller's ``||`` default settles.
+    The same 80-bit parse as ``three_decimals`` - printf reads its argument with
+    ``strtold`` and formats with long double - rounded to zero places instead of
+    three. A string the parse cannot read raises.
     """
     return str(_round_half_even(_as_long_double(text)))
 
@@ -118,8 +117,8 @@ def extension_in(extension: str, candidates: Iterable[str]) -> bool:
     """Is this suffix one of those, compared lower-case on both sides?
 
     Every suffix in the census is matched case-insensitively, so a ``.MP3`` and a
-    ``.Mp3`` are one thing. Lower-cased the way the shell does it rather than the
-    way Python does - the two disagree about exactly one codepoint, and a census
+    ``.Mp3`` are one thing. Lower-cased with ``shell_lower`` rather than Python's
+    own ``lower`` - the two disagree about exactly one codepoint, and a census
     that met it would file the same extension under two names.
     """
     folded = shell_lower(extension)
@@ -142,8 +141,7 @@ class Joined(str):
     """A joined row that also remembers whether joining had to alter a field.
 
     A plain string with one attribute rather than a tuple, because every caller
-    wants the line and only the run's ending wants the flag - the shell says the
-    same thing with a global that the caller reads once at the end.
+    wants the line and only the run's ending wants the flag.
     """
 
     sanitised: bool = False
@@ -199,9 +197,9 @@ def to_chapters(value: str) -> str:
     """
     if not _WHOLE.fullmatch(value):
         return ""
-    # The shell tests 10#$value and leaves the TEXT alone, so "007" stays "007"
-    # while "000" becomes 1. Reading it as decimal is what stops a leading zero
-    # being taken for octal, not a decision to normalise the column.
+    # The value is tested as a decimal and the text left alone, so "007" stays
+    # "007" while "000" becomes 1. Reading it as decimal is what stops a leading
+    # zero being taken for octal, not a decision to normalise the column.
     return value if int(value, 10) > 0 else "1"
 
 
@@ -224,10 +222,10 @@ def to_frame_rate(value: str) -> str:
     rounding of 24000/1001, not the other way round. A column meant to be compared
     against a threshold cannot hold a fraction, so the division happens here.
 
-    Done in integers, the way the shell does it: the numerator is scaled by a
-    thousand and divided with rounding, which is exact for every rate a container
-    can state. A rate of 0/0 - what ffprobe prints for a stream whose rate it could
-    not work out - is not a number and empties like every other unknown.
+    Done in integers: the numerator is scaled by a thousand and divided with
+    rounding, which is exact for every rate a container can state. A rate of 0/0 -
+    what ffprobe prints for a stream whose rate it could not work out - is not a
+    number and empties like every other unknown.
     """
     rational = _RATIONAL.fullmatch(value)
     if rational:

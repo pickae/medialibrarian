@@ -1,18 +1,15 @@
 """The shared RAM-backed scratch helpers.
 
-The shell module keeps three pieces of state per shell: the exported
-``ramBase`` (this run's scratch root), the ``EXIT_CLEANUP_PATHS`` list the EXIT
-trap releases, and the EXIT trap itself - and ``export -f`` lets a child
-process re-enter the same functions against the inherited base. The port keeps
-the same three in a per-process ``_State``, which a test resets with
-``reset_state``, and the functions read the environment the way the shell
-functions read ``$ramScratchBase`` and friends.
+The module keeps three pieces of state in a per-process ``_State``: this run's
+scratch root, the list of paths the exit cleanup releases, and the exit cleanup
+itself. A test resets it with ``reset_state``, and the functions read
+``ramScratchBase`` and friends from the environment.
 
 Nothing here shells out: the module picks a base, measures free space and
-releases its trees itself, because the coreutils the shell reached for are not
-on a default Windows PATH and each has a standard-library equivalent. What no
-library can supply there is a RAM disk, so on Windows the base lands in the
-temporary directory, on disk.
+releases its trees itself, because the coreutils are not on a default Windows
+PATH and each has a standard-library equivalent. What no library can supply
+there is a RAM disk, so on Windows the base lands in the temporary directory,
+on disk.
 
 macOS lands there too, and for the same reason: it has no ``/dev/shm`` and no
 tmpfs of its own, so the ladder below falls through to ``$TMPDIR`` - which on a
@@ -48,31 +45,26 @@ MOUNTS = "/proc/self/mounts"
 
 # How much of a tmpfs one intermediate may occupy, and the headroom below
 # which even a fresh scratch root goes to disk, when the environment does not
-# say otherwise (the shell's ${ramScratchMaxPercent:-50} and
-# ${ramScratchMinFreeBytes:-1073741824}).
+# say otherwise (``ramScratchMaxPercent`` and ``ramScratchMinFreeBytes``).
 DEFAULT_MAX_PERCENT = 50
 DEFAULT_MIN_FREE = 1073741824
 
 
 class _State:
     def __init__(self, script=""):
-        # The exported ramBase: this run's scratch root, or None while the run
-        # has not chosen one.
+        # This run's scratch root, or None while the run has not chosen one.
         self.ram_base = None
-        # EXIT_CLEANUP_PATHS: what the EXIT trap must hand back. One list per
-        # shell is the whole point of the shell design - a sourced script's
-        # trap replaces the wrapper's, and a child process starts with none -
-        # and the port keeps both halves of that: the list is per-process and
-        # a fresh process starts with an empty one.
+        # What the exit cleanup must hand back. The list is per-process and a
+        # fresh process starts with an empty one.
         self.cleanup = []
-        # The EXIT trap's command, or None while nothing has claimed EXIT.
+        # The exit cleanup's command, or None while nothing has claimed exit.
         self.trap = None
         # Every parent this run has made scratch under: the run directory and,
         # when the tmpfs filled up, whichever disk parent it spilled to. The
         # cleanup acts on nothing outside them.
         self.bases = []
-        # ${0##*/}: the name the run directory is named after, or "" while
-        # nobody has said and the command's own name answers.
+        # The name the run directory is named after, or "" while nobody has said
+        # and the command's own name answers.
         self.script = script
 
 
@@ -93,10 +85,9 @@ def reset_state(script=""):
 def _mkdtemp(parent, prefix):
     """A fresh directory under ``parent``, or "" when one cannot be made.
 
-    The shell read mktemp's exit status and so do the callers here, through the
-    empty name: which errno it was is not something any of them can act on, and
-    a parent that has filled up or gone away is the ordinary case rather than
-    an exceptional one.
+    The callers read a failure as the empty name: which errno it was is not
+    something any of them can act on, and a parent that has filled up or gone
+    away is the ordinary case rather than an exceptional one.
     """
     try:
         return tempfile.mkdtemp(prefix=prefix, dir=parent)
@@ -126,12 +117,11 @@ def init_ram_base(override="", state=_STATE):
     ONE DIRECTORY PER RUN, named after the script, so a leftover says which
     run abandoned it.
 
-    Already having a usable base is not overridden - a sourced script
-    re-initialising or a child process that inherited it works inside the run
-    directory that exists instead of making a second one. Only the shell that
-    CREATED the directory registers it for cleanup, and the EXIT trap is
-    installed only when nothing has claimed it yet, so a wrapper's own trap
-    survives.
+    Already having a usable base is not overridden - a caller re-initialising or
+    a child process that inherited it works inside the run directory that exists
+    instead of making a second one. Only the process that CREATED the directory
+    registers it for cleanup, and the exit cleanup is installed only when
+    nothing has claimed it yet, so a caller's own cleanup survives.
     """
     if state.ram_base and ram_base_usable(state.ram_base):
         return
@@ -170,12 +160,12 @@ def ram_base(state=_STATE):
 
 
 def adopt_ram_base(base, state=_STATE):
-    """Work inside a base a PARENT settled, the way a child shell inherits the
-    exported ``ramBase`` and ``initRamBase`` returns early on it. A worker
-    process shares no module state, so without this it settles a base of its own
-    and leaves a second run directory behind.
+    """Work inside a base a PARENT settled: ``init_ram_base`` returns early on
+    one already set, so the worker works inside the run directory that exists.
+    A worker process shares no module state, so without this it settles a base
+    of its own and leaves a second run directory behind.
 
-    Registers no cleanup, for the reason the shell does not either: only the
+    Registers no cleanup, for the reason its creator does not either: only the
     process that CREATED a directory hands it back.
     """
     if base:
@@ -324,13 +314,13 @@ def ram_disk_base():
 
 
 def ram_scratch_dir(label, state=_STATE, log=print):
-    """A fresh scratch DIRECTORY under $ramBase, echoed (returned with its
-    status, the way the shell function's stdout and exit are). The label
-    becomes the name's prefix, so a leftover names the purpose it belonged to.
+    """A fresh scratch DIRECTORY under the run's base, returned with its
+    status. The label becomes the name's prefix, so a leftover names the
+    purpose it belonged to.
 
     A scratch root asked for while the tmpfs is already out of usable room
-    goes to disk instead and says so in the log, having no other channel:
-    every caller reads this through a command substitution.
+    goes to disk instead and says so in the log rather than in the return
+    value.
     """
     if not state.ram_base:
         init_ram_base("", state=state)
@@ -366,15 +356,14 @@ def ram_scratch_file(label, state=_STATE):
 
 def ram_scratch_dir_for(byte_count, label, disk_parent="", state=_STATE):
     """A fresh scratch directory that can actually hold <byte_count> bytes -
-    under $ramBase when the tmpfs can take it, otherwise a hidden one under
-    <diskParent>, or under the cache spill base when the caller names none.
+    under the run's base when the tmpfs can take it, otherwise a hidden one
+    under <diskParent>, or under the cache spill base when the caller names
+    none.
 
     Returns (directory, on_disk, status): on_disk is 1 when that is the disk
-    fallback, the second half of what a shell function whose answer is only
-    its stdout cannot also report (RAM_SCRATCH_DIR / RAM_SCRATCH_ON_DISK).
-    An unusable disk parent falls back to RAM rather than failing: a write
-    that then runs out of space is a failure the callers already handle by
-    leaving their input alone.
+    fallback, so the caller can tell the two apart. An unusable disk parent
+    falls back to RAM rather than failing: a write that then runs out of space
+    is a failure the callers already handle by leaving their input alone.
     """
     if not state.ram_base:
         init_ram_base("", state=state)
@@ -398,11 +387,10 @@ def _paths(paths):
     """The registry takes a LIST, and a bare string is refused rather than
     iterated.
 
-    The shell's addExitCleanup is varargs, so `addExitCleanup "$dir"` registers
-    one path; the same call written against this signature registers one path
-    PER CHARACTER, and one of those characters is "/". What follows is
-    `chmod -R u+rwX /` and then an attempted `rm -rf /`. A TypeError at the call
-    site is the only acceptable answer to that.
+    A bare string written against this signature would register one path PER
+    CHARACTER instead of one, and one of those characters is "/". What follows
+    is `chmod -R u+rwX /` and then an attempted `rm -rf /`. A TypeError at the
+    call site is the only acceptable answer to that.
     """
     if isinstance(paths, (str, bytes, os.PathLike)):
         raise TypeError(
@@ -448,7 +436,7 @@ def _refuses(path, state=_STATE) -> bool:
 
 
 def add_exit_cleanup(paths, state=_STATE):
-    """Release these when this shell exits, however it exits."""
+    """Release these when this process exits, however it exits."""
     state.cleanup.extend(_paths(paths))
 
 
@@ -457,9 +445,8 @@ def _grant_owner_access(path, is_dir):
     something already has it - which for a directory is always, because a
     directory needs it before its own entries can be reached at all.
 
-    Symlinks are left alone, the way ``chmod -R`` leaves them: POSIX has no
-    mode on the link itself, and following one would change a file outside the
-    tree being released.
+    Symlinks are left alone: POSIX has no mode on the link itself, and
+    following one would change a file outside the tree being released.
     """
     try:
         mode = os.stat(path, follow_symlinks=False).st_mode
@@ -526,7 +513,7 @@ def _release(path):
 
 
 def run_exit_cleanup(state=_STATE):
-    """Release everything registered, once. Belongs in the EXIT trap."""
+    """Release everything registered, once. Belongs at the end of the run."""
     if not state.cleanup:
         return 0
     for path in state.cleanup:
@@ -539,9 +526,9 @@ def run_exit_cleanup(state=_STATE):
 
 
 def release_exit_cleanup(targets, state=_STATE):
-    """Hand back just these, now, and take them off the list so the EXIT trap
-    does not go looking for them again. For the scripts a wrapper SOURCES:
-    releasing the whole list at the end of each of them would take the
+    """Hand back just these, now, and take them off the list so the exit
+    cleanup does not go looking for them again. For the sub-runs a wrapper
+    runs: releasing the whole list at the end of each of them would take the
     wrapper's own scratch with it - and that scratch is the very tree the next
     sub-folder is read from."""
     for target in _paths(targets):

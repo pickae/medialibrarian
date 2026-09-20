@@ -1,9 +1,9 @@
 """A book to plain text, and the count of it.
 
-The port drives the same converters the bash does rather than reading the
-formats itself: poppler's ``pdftotext`` for a PDF, Calibre's ``ebook-convert``
-for everything else. A machine without poppler falls through to Calibre exactly
-as the bash does, so this is an optimisation and never a new dependency.
+The formats are converted rather than read: poppler's ``pdftotext`` for a PDF,
+Calibre's ``ebook-convert`` for everything else. A machine without poppler
+falls through to Calibre, so this is an optimisation and never a new
+dependency.
 """
 
 import re
@@ -12,7 +12,7 @@ import subprocess
 
 __all__ = ["book_to_text", "book_to_text_fast", "book_text_counts"]
 
-# The answers the shell gives for a converter that is not there or will not run.
+# The answers for a converter that is not there, or that will not run.
 _MISSING = 127
 _UNRUNNABLE = 126
 
@@ -22,9 +22,9 @@ _A_NUMBER = re.compile(r"[0-9]+")
 def _converter(argv: list[str]) -> int:
     """Run a converter with its output silenced and answer with its status.
 
-    The silence is deliberate, as it is in the bash: the converter's progress
-    and warnings are not the caller's to interleave, and the status is the only
-    outcome a caller can act on.
+    The silence is deliberate: the converter's progress and warnings are not
+    the caller's to interleave, and the status is the only outcome a caller can
+    act on.
     """
     try:
         proc = subprocess.run(
@@ -38,12 +38,12 @@ def _converter(argv: list[str]) -> int:
 
 
 def _is_pdf(src: str) -> bool:
-    """The bash's ``[[ "${src,,}" == *.pdf ]]``: the suffix, case folded.
+    """The suffix, case folded.
 
-    The fold is Python's own rather than the shell's per-character one, and
-    that is faithful for the suffix: it is the ASCII ``.pdf`` that is being
-    tested, and a code point the two folds treat differently (U+0130) can sit
-    in the stem without changing whether the name ENDS with ``.pdf``.
+    The fold is Python's own, and that is faithful for the suffix: it is the
+    ASCII ``.pdf`` that is being tested, and a code point the fold expands to
+    more than itself (U+0130) can sit in the stem without changing whether the
+    name ENDS with ``.pdf``.
     """
     return src.lower().endswith(".pdf")
 

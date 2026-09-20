@@ -126,9 +126,8 @@ def aliases_of(name: str) -> str | None:
     """The ffprobe spellings that mean ``name``, space separated - for a caller
     listing what it accepts, or building a match of its own.
 
-    None when the name is not a family, the way the shell function returns 1
-    with no answer: a name that is not a family has none to give, and the
-    absence of an empty line is part of the contract.
+    None when the name is not a family: a name that is not a family has none to
+    give.
     """
     row = _row(name)
     return " ".join(row[2]) if row is not None else None
@@ -142,13 +141,13 @@ def families() -> list[str]:
 def _case_sql(expression: str, column: str) -> str:
     """The shared builder behind the two SQL emitters.
 
-    One WHEN per row in table order - first match wins in SQL exactly as it does
-    in the bash scan - with the values lower-cased and the family itself deduped
-    out of its alias list, and the answer whatever column the row holds for it.
-    The expression is pasted in verbatim, and the NULL/empty arm comes first so
-    a file that probed to nothing lands in ``unknown`` rather than in the ELSE,
-    matched lower-cased and trimmed the way the bash lookups match, so a report
-    spelling "H265" and one spelling "hevc" land in the same bucket.
+    One WHEN per row in table order - first match wins in SQL - with the values
+    lower-cased and the family itself deduped out of its alias list, and the
+    answer whatever column the row holds for it. The expression is pasted in
+    verbatim, and the NULL/empty arm comes first so a file that probed to nothing
+    lands in ``unknown`` rather than in the ELSE, matched lower-cased and
+    trimmed, so a report spelling "H265" and one spelling "hevc" land in the
+    same bucket.
     """
     if column not in ("family", "era"):
         raise ValueError(f"column must be 'family' or 'era', not {column!r}")
@@ -200,9 +199,8 @@ def encoder_codec(ffmpeg_encoder: str) -> str:
     AV1 encoders make AV1). Matched on substrings, in order, because every
     ffmpeg encoder for a codec carries that codec's name or number somewhere in
     it - and the order is part of the answer: a name that mentions two codecs is
-    the first rule's, and the matching is case-sensitive, as the shell's case
-    is, so a name handed over in upper case is an encoder this repo does not
-    use.
+    the first rule's, and the matching is case-sensitive, so a name handed over
+    in upper case is an encoder this repo does not use.
     """
     if "av1" in ffmpeg_encoder:
         return "av1"

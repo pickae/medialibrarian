@@ -130,9 +130,9 @@ grain_synthesis_bitrate_gain = 0.25
 # because a source's encoder is not knowable from the file.
 hardware_bitrate_penalty = 1.15
 
-# A grain level a caller has not measured: the word the shell's heaviness awk
-# rejects with ``^[0-9]+(\.[0-9]+)?$`` and answers as none, so a missing probe
-# cannot silently raise or lower a verdict.
+# A grain level a caller has not measured: a word the number test rejects,
+# answered as none, so a missing probe cannot silently raise or lower a
+# verdict.
 _GRAIN_NUMBER = re.compile(r"[0-9]+(\.[0-9]+)?")
 
 
@@ -294,8 +294,8 @@ def bitrate_verdict(kbit: str, adequate: str) -> str:
 
 
 def _num(x) -> float | None:
-    """A value as the stats filter's ``num`` reads it: the whole string as a
-    number, or nothing - never a numeric PREFIX, and never a non-finite one.
+    """A value as a number: the whole string, or nothing - never a numeric
+    PREFIX, and never a non-finite one.
     """
     if x is None:
         return None
@@ -307,11 +307,11 @@ def _num(x) -> float | None:
 
 
 def _num_or_raise(x) -> float:
-    """The same reading that raises instead of answering nothing: the filter's
-    spots where jq itself would die on the arithmetic (a channels that is a
-    string it cannot coerce, a frame rate whose numerator is not a number) are
-    spots where the WHOLE filter fails and states nothing, and that is what an
-    exception out of :func:`stats_from_json` means.
+    """The same reading that raises instead of answering nothing: the spots
+    where the arithmetic dies (a channels that is a string it cannot coerce,
+    a frame rate whose numerator is not a number) are spots where the WHOLE
+    read fails and states nothing, and that is what an exception out of
+    :func:`stats_from_json` means.
     """
     value = _num(x)
     if value is None:
@@ -325,8 +325,7 @@ def _bps(stream: dict) -> object:
     Matroska states no per-stream bitrate; mkvmerge writes a per-track "BPS" tag
     (and "BPS-eng" and friends, one per language) instead, whose suffix spelling
     is not fixed, so it is matched on the prefix alone. The first such tag's
-    value is the answer even when it is null: jq's ``[0]`` takes the first
-    match, and the ``// null`` behind it only covers the no-match case.
+    value is the answer even when it is null.
     """
     tags = stream.get("tags") or {}
     for key, value in tags.items():
@@ -336,12 +335,12 @@ def _bps(stream: dict) -> object:
 
 
 def _frame_rate(r) -> float | None:
-    """A frame-rate field as a number, the way the filter's ``rate`` reads it.
+    """A frame-rate field as a number.
 
     "num/den" divided when the denominator is positive; anything else, the
-    field read as a number, or nothing. A division jq cannot make - a
-    denominator it parsed as positive but a numerator it could not - raises,
-    the way jq's arithmetic error kills the whole filter.
+    field read as a number, or nothing. A division that cannot be made - a
+    denominator parsed as positive but a numerator that is not a number -
+    raises, and the exception fails the whole read.
     """
     if not isinstance(r, str):
         return None
@@ -353,8 +352,8 @@ def _frame_rate(r) -> float | None:
 
 
 def _number_text(value: float) -> str:
-    """A number the way the filter's ``tostring`` prints it: a whole number as
-    an integer, anything else at its shortest round-trip form.
+    """A number's printed form: a whole number as an integer, anything else
+    at its shortest round-trip form.
     """
     if value == int(value):
         return str(int(value))
@@ -362,9 +361,9 @@ def _number_text(value: float) -> str:
 
 
 def stats_from_json(data: dict) -> str:
-    """The four fields ``"<codec> <fps> <kbit/s> <origin>"`` the stats filter
-    reads out of a ffprobe ``-show_streams -show_format`` document, space
-    joined, each empty when it could not be read.
+    """The four fields ``"<codec> <fps> <kbit/s> <origin>"`` read out of a
+    ffprobe ``-show_streams -show_format`` document, space joined, each empty
+    when it could not be read.
 
     The bitrate is the VIDEO stream's, never the container's, and getting it
     takes three tries: a per-stream ``bit_rate`` (MP4 states one, and it is the
@@ -373,10 +372,9 @@ def stats_from_json(data: dict) -> str:
     labelled as one, that is the video's own to within a few percent on the
     files that need it.
     """
-    # jq indexes null's .streams as null, which the // [] settles to no
-    # streams - the filter completes with every field empty. Every other
-    # non-object top level is a hard index error, which fails the filter and
-    # states nothing.
+    # A null document settles to no streams - the read completes with every
+    # field empty. Every other non-object top level is a hard error, which
+    # fails the read and states nothing.
     if data is None:
         data = {}
     elif not isinstance(data, dict):
@@ -457,8 +455,8 @@ def video_bitrate_stats(input: str) -> str:
         data = json.loads(out)
         return stats_from_json(data)
     except (ValueError, AttributeError, TypeError, KeyError):
-        # The document is not JSON, or it reaches a spot the filter cannot
-        # read - a streams field that is not a list of objects, a stream that
-        # is not one - the way jq's own error fails the whole filter and
-        # states nothing: an unreadable file.
+        # The document is not JSON, or it reaches a spot the read cannot
+        # handle - a streams field that is not a list of objects, a stream
+        # that is not one - which fails the whole read and states nothing:
+        # an unreadable file.
         return ""

@@ -6,12 +6,6 @@ transcription runs. The shared whisper settlement lives in
 :mod:`medialib.lib.whisper`, the languages table and its lookups in
 :mod:`medialib.lib.languages`, and the alignment in
 :mod:`medialib.lib.subtitlefiles` - sourced once rather than re-implemented.
-
-The bash keeps its caller-provided helpers (``readTrackInfo``,
-``isBonusFolder``, ``rename``, ``audioStreamIndex``) and the whisper
-settlement as functions and environment globals. Here they are parameters: a
-function takes what the caller would hand it, the way the bash says "expected
-from the caller".
 """
 
 from __future__ import annotations
@@ -57,9 +51,9 @@ COMMENTARY_STEM_MAX_BYTES = plexnames.COMMENTARY_STEM_MAX_BYTES
 
 # The word a nameless commentary is known by, in its file name and in the
 # matching that asks of a film's commentaries which one a name names. The rare
-# track that carries no name of its own is read as the shell's "null", and the
-# empty string is no name at all; both become the word, so a nameless transcript
-# is named after the word rather than "null".
+# track that carries no name of its own is read as "null", and the empty
+# string is no name at all; both become the word, so a nameless transcript is
+# named after the word rather than "null".
 COMMENTARY_NO_NAME = "Commentary"
 
 # How long a commentary excerpt is, cut from the MIDDLE of the track (commentaries
@@ -68,7 +62,7 @@ COMMENTARY_NO_NAME = "Commentary"
 COMMENTARY_DETECT_SECONDS = 120
 COMMENTARY_DETECT_MIN_PROBABILITY = 0.5
 
-# The pause the bash took between landing a finished transcript and aligning it.
+# The pause between landing a finished transcript and aligning it.
 SYNC_SETTLE_SECONDS = 1
 
 # whisper's "Detected language 'Dutch' with probability 0.987654" line.
@@ -76,8 +70,8 @@ _DETECT = re.compile(r"Detected language '([^']+)' with probability ([0-9.]+)")
 
 
 def _run(args, **kwargs) -> subprocess.CompletedProcess:
-    """A tool call with the bash's silence: stderr and (where noted) stdout
-    swallowed, stdin from /dev/null, an absent tool the call's own failure."""
+    """A tool call run in silence: stderr and (where noted) stdout swallowed,
+    stdin from /dev/null, an absent tool the call's own failure."""
     kwargs.setdefault("stdin", subprocess.DEVNULL)
     kwargs.setdefault("stderr", subprocess.DEVNULL)
     return subprocess.run(args, **kwargs)
@@ -106,7 +100,7 @@ def detect_commentary_language(mka: str, ram_root: str, whisper: dict,
         dur_raw = proc.stdout.decode("utf-8", "replace").rstrip("\n")
     except OSError:
         dur_raw = ""
-    # printf '%.0f' with the bash's "|| dur=0": an unreadable figure is zero.
+    # An unreadable figure is zero.
     try:
         dur = int(printf_f0(dur_raw if dur_raw else "0"))
     except ValueError:
@@ -124,8 +118,8 @@ def detect_commentary_language(mka: str, ram_root: str, whisper: dict,
                      "-c:a", "pcm_s16le", excerpt])
     except OSError:
         made = None
-    # the bash's `|| return 0`: an excerpt that cannot be made (or a missing
-    # ffmpeg) is a no-answer, not an error
+    # an excerpt that cannot be made (or a missing ffmpeg) is a no-answer,
+    # not an error
     if made is None or made.returncode != 0:
         return ""
     try:
@@ -137,7 +131,7 @@ def detect_commentary_language(mka: str, ram_root: str, whisper: dict,
                     "--device", whisper["device"],
                     "--threads", whisper["threads"]],
                    stdout=subprocess.PIPE)
-        # the bash's `out=$(...) || out=""`: a failed probe drops its output too
+        # a failed probe drops its output too
         out = ran.stdout.decode("utf-8", "replace") if ran.returncode == 0 else ""
     except OSError:
         out = ""
@@ -148,8 +142,8 @@ def detect_commentary_language(mka: str, ram_root: str, whisper: dict,
     match = _DETECT.search(out)
     if not match:
         return ""
-    # The bash's awk compares with its own numeric coercion, so a probability
-    # the parse cannot read is the awk's zero, not an error.
+    # The comparison uses awk's numeric coercion, so a probability the parse
+    # cannot read is its zero, not an error.
     if awk_number(match.group(2)) < awk_number(str(COMMENTARY_DETECT_MIN_PROBABILITY)):
         return ""
     return match.group(1)
@@ -167,7 +161,7 @@ def commentary_language(name: str, tag: str, mka: str, ram_root: str,
 
     Asked in order of cost and reliability: a language word in the track's own
     name, then the mkv language tag (``eng`` excepted - the default
-    ``updateTags`` stamps, not evidence), then whisper on a short excerpt.
+    ``update_tags`` stamps, not evidence), then whisper on a short excerpt.
     """
     name = shell_lower(name)
     tag = shell_lower(tag)
@@ -197,7 +191,7 @@ def commentary_language(name: str, tag: str, mka: str, ram_root: str,
 
 
 def _strip_last_ext(path: str) -> str:
-    """The bash's ``${path%.*}``: drop the shortest ``.*`` suffix, or nothing."""
+    """Drop the shortest ``.*`` suffix, or nothing."""
     dot = path.rfind(".")
     return path[:dot] if dot != -1 else path
 
@@ -232,8 +226,8 @@ def _display_name(raw: str) -> str:
     """A commentary's own name, or the word a nameless one is known by.
 
     Asked of the raw track name before the cleaning that follows it: the absent
-    name is the shell's "null" and the empty string is no name at all, and both
-    are the word rather than a "null" spelled into the file name.
+    name is "null" and the empty string is no name at all, and both are the
+    word rather than a "null" spelled into the file name.
     """
     return raw if raw and raw != "null" else COMMENTARY_NO_NAME
 
@@ -441,7 +435,7 @@ def transcribe_commentary(record: str, whisper: dict, max_sync_offset: str,
                        stdout=subprocess.DEVNULL)
             ran_ok = ran.returncode == 0
         except OSError:
-            # a missing pipx is the bash's 127: a failed run, logged as such
+            # a missing pipx is a failed run, logged as such
             ran_ok = False
         if ran_ok and os.path.isfile(whisper_srt):
             shutil.move(whisper_srt, srt)
@@ -466,8 +460,8 @@ def transcribe_commentary(record: str, whisper: dict, max_sync_offset: str,
     # Free the extract from RAM as soon as no other queued run still needs it.
     # Whoever finishes last sees every sibling on disk; a run that failed leaves
     # its srt missing and its extract to the sweep.
-    # An empty sibling list reads as zero fields in the bash, and zero fields
-    # pass the check: the extract goes anyway.
+    # An empty sibling list reads as zero fields, and zero fields pass the
+    # check: the extract goes anyway.
     siblings_list = siblings.split("\x1e") if siblings else []
     if all(os.path.isfile(s) for s in siblings_list):
         # The last run of an extract frees it, and two runs of one extract can
@@ -480,14 +474,13 @@ def transcribe_commentary(record: str, whisper: dict, max_sync_offset: str,
 
 
 def _mkv_entries(top: str) -> list[str]:
-    """``find <top> -name '*mkv' -print0``: every entry under ``top`` whose name
-    ends the way the pattern does, spelled from ``top`` the way find spells it.
+    """Every entry under ``top`` whose name ends in "mkv", spelled from
+    ``top``.
 
-    In find's own order, which is the filesystem's: each directory's entries in
-    readdir order, and a subdirectory descended into where it stands rather than
-    after its siblings. The pattern carries no dot, so it is what the bash
-    matched - any name ending in "mkv" - and it is tested against directories
-    too, because find tests every entry it walks and not only the files.
+    In the filesystem's own order: each directory's entries in readdir order,
+    and a subdirectory descended into where it stands rather than after its
+    siblings. The pattern carries no dot - any name ending in "mkv" - and it
+    is tested against directories too, not only the files.
     """
     found: list[str] = []
 
@@ -514,8 +507,8 @@ def export_commentary(directory: str, read_track_info, is_bonus_folder,
                       orphans=None, unfixed=None) -> None:
     """Extract every commentary, and hand the queue to the drain to run.
 
-    ``read_track_info`` is the caller's track reader (the bash's
-    ``readTrackInfo``), returning the six per-track arrays for a movie;
+    ``read_track_info`` is the caller's track reader, returning the six
+    per-track arrays for a movie;
     ``is_bonus_folder``, ``rename`` and ``audio_stream_index`` the caller's
     helpers. ``drain_queue`` is handed the queue itself - the generator below -
     and runs it: the walk prepares one commentary at a time - the resume check,
@@ -619,8 +612,8 @@ def export_commentary(directory: str, read_track_info, is_bonus_folder,
                     continue
 
                 # determine name of file to export; a nameless track is the
-                # rare one, and the shell's "null" would be spelled into the
-                # name as-is
+                # rare one, and the "null" it carries would be spelled into
+                # the name as-is
                 name = _display_name(names[i - 1])
                 name = name.replace("/", "").replace("&", "and")
                 name = rename(name)
@@ -629,9 +622,8 @@ def export_commentary(directory: str, read_track_info, is_bonus_folder,
                 base = commentary_stem(file_stem, i - 1, name)
                 # the large temp audio extract goes to RAM, mirroring the
                 # absolute disk path so the outputs end up next to the movie.
-                # The bash builds this as the literal string
-                # "$ramRoot/$(pwd -P)/...", keeping BOTH halves - os.path.join
-                # would drop the first at an absolute part.
+                # Both halves are kept - os.path.join would drop the first at
+                # an absolute part.
                 mka = "{}/{}/{}.mka".format(ram_root,
                                             os.path.realpath(directory),
                                             base[2:]
@@ -668,7 +660,7 @@ def export_commentary(directory: str, read_track_info, is_bonus_folder,
                 log("Extracting commentary track {}: {}".format(i - 1, file))
                 os.makedirs(os.path.dirname(mka), exist_ok=True)
                 index = audio_stream_index(i, types)
-                # the bash leaves this ffmpeg's stderr on the script's stderr
+                # this ffmpeg's stderr is left on the script's stderr
                 try:
                     made = subprocess.run(
                         ["ffmpeg", "-y", "-loglevel", "error", "-nostats",
@@ -678,7 +670,7 @@ def export_commentary(directory: str, read_track_info, is_bonus_folder,
                         stdin=subprocess.DEVNULL)
                     made_ok = made.returncode == 0
                 except OSError:
-                    # a missing ffmpeg is the bash's 127: a failed extract
+                    # a missing ffmpeg is a failed extract
                     made_ok = False
                 if not made_ok:
                     log("WARNING: commentary extract failed (track {}): {}"

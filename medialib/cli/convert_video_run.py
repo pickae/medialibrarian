@@ -1077,9 +1077,8 @@ class Run:
 def _audio_worker(relative: str, directory: str, settings) -> None:
     """The audio pass, in a process of its own so it overlaps the video.
 
-    Its own interrupt handling, for the reason the shell installs one too: an
-    asynchronous child of a non-interactive shell inherits SIGINT ignored, so
-    without a handler it would survive Ctrl+C outright.
+    Its own interrupt handling: an asynchronous child inherits SIGINT
+    ignored, so without a handler it would survive Ctrl+C outright.
     """
     safety.trap_worker_abort()
     ramscratch.adopt_ram_base(getattr(settings, "ram_base", ""))
@@ -1120,9 +1119,9 @@ def main(argv: list, program: str = "convert-video",
     declaration = rules.spec(program)
     # -t is the one option with a side effect beyond its assignment: the flag
     # itself switches the test on, and the percentage it may carry is a second
-    # value. getopts cannot express an optional argument, so the flag is declared
-    # bare and the word after it is claimed only when it is a number - which is
-    # what this hook is handed.
+    # value. The option parser cannot express an optional argument, so the
+    # flag is declared bare and the word after it is claimed only when it is
+    # a number - which is what this hook is handed.
     saving = [rules.DEFAULT_BITRATE_SAVING]
 
     def on_option(letter: str, value: str) -> None:

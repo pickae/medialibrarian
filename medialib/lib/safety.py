@@ -12,11 +12,9 @@ The other functions here are the ones built on that promise, plus the two
 read-only questions their callers ask first (:func:`is_empty_folder`,
 :func:`clean_input_path`).
 
-Second-resolution dates, deliberately: bash captures them with ``date -r ...
-+%Y%m%d%H%M.%S`` and restores them with ``touch -t``, a format with no room for
-anything finer, so a file that survives a rename here comes out rounded down to
-the whole second. Keeping the nanoseconds would be an improvement and would also
-be a divergence, so it waits for the fixes-after-the-port pass.
+Second-resolution dates, deliberately: a file that survives a rename here comes
+out rounded down to the whole second. Keeping the nanoseconds would be an
+improvement and would also be a divergence, so it waits for a later pass.
 """
 
 import atexit
@@ -49,12 +47,11 @@ __all__ = [
 class SkipLog:
     """The renames that were refused to avoid an overwrite, in the order refused.
 
-    bash keeps this in a file whose path is exported, because its callers fan out
-    into parallel ``xargs -P`` workers and a skip recorded in a child has to reach
-    the report printed by the parent. Nothing here forks, so it is a list - but it
-    is still a collaborator passed in rather than a global, because "was this
-    rename refused?" is the only way a caller can tell a refusal from a rename
-    that was never needed.
+    Its callers fan out into parallel ``xargs -P`` workers, and a skip recorded
+    in a child has to reach the report printed by the parent. Nothing here forks,
+    so it is a list - but it is still a collaborator passed in rather than a
+    global, because "was this rename refused?" is the only way a caller can tell
+    a refusal from a rename that was never needed.
     """
 
     def __init__(self) -> None:
@@ -64,7 +61,7 @@ class SkipLog:
         self.skips.append((source, destination))
 
     def report(self) -> list[str]:
-        """The lines bash prints on stderr, in order, including the count line."""
+        """The lines printed on stderr, in order, including the count line."""
         lines = [f"Safety: skipped {len(self.skips)} rename(s) to avoid overwrite"]
         if self.skips:
             lines.append("Safety skip details:")
@@ -75,9 +72,9 @@ class SkipLog:
 class RunSkipLog(SkipLog):
     """``recordSafetySkip``: the run-level log, which is a FILE.
 
-    The report a run prints is read back from $SAFETY_LOG, and phases that are
-    still bash append to that same file - so a skip recorded only in memory
-    would be counted by nobody.
+    The report a run prints is read back from $SAFETY_LOG, and other phases
+    append to that same file - so a skip recorded only in memory would be
+    counted by nobody.
     """
 
     def record(self, source: str, destination: str) -> None:
@@ -113,9 +110,8 @@ def _dirname(path: str) -> str:
 def _mtime(path: str) -> int | None:
     """The whole-second modification time, or None for a path that cannot be read.
 
-    bash's capture is a ``date -r`` whose failure is an empty string, and an empty
-    capture simply skips that restore. A path that vanishes between the capture
-    and the restore is therefore not an error, here or there.
+    A capture that cannot read the path simply skips that restore, so a path
+    that vanishes between the capture and the restore is not an error.
     """
     try:
         return int(os.stat(path).st_mtime)
@@ -124,7 +120,7 @@ def _mtime(path: str) -> int | None:
 
 
 def _restore_mtime(path: str, when: int | None) -> None:
-    """Best-effort ``touch -m -t``. A failure never changes a rename's verdict."""
+    """Best-effort mtime restore. A failure never changes a rename's verdict."""
     if when is None:
         return
     try:
@@ -135,8 +131,7 @@ def _restore_mtime(path: str, when: int | None) -> None:
 
 def would_hide(destination: str) -> bool:
     """Whether renaming something to ``destination`` would hide it: a basename
-    starting with a dot, which the shell and every file manager leave out of a
-    listing.
+    starting with a dot, which listings leave out.
 
     A name that opens on an ellipsis - three dots, the way a catalogue writes a
     title that begins with one - is a title, not a hidden file, so it is not
@@ -211,7 +206,7 @@ def safe_rename(source: str, destination: str, log: SkipLog | None = None) -> bo
 
 
 def _split_extension(base: str) -> tuple[str, str]:
-    """``base`` as (stem, extension-with-its-dot), by the rule the shell uses.
+    """``base`` as (stem, extension-with-its-dot).
 
     A leading dot does not open an extension: ``.gitignore`` is all stem. Any
     later dot does, and it is the last one that counts.
@@ -270,7 +265,7 @@ def _files_below(directory: str) -> Iterator[str]:
     """Every regular file in the tree, at any depth, symlinks excluded.
 
     ``find -type f`` is false for a symlink however it resolves, so following one
-    here would rename files the shell version never touches.
+    here would rename files outside the tree.
     """
     for parent, _, names in os.walk(directory):
         for name in names:
@@ -312,9 +307,9 @@ def is_empty_folder(path: str) -> bool:
         return False
 
 
-# The characters the shell splits a name on. Not str.split(), which also splits on
-# a carriage return, a form feed and every Unicode space - and a name is renamed to
-# whatever this returns.
+# The characters a name is split on. Not str.split(), which also splits on a
+# carriage return, a form feed and every Unicode space - and a name is renamed
+# to whatever this returns.
 _BLANKS = " \t\n"
 
 # mktemp draws its X placeholders from this set.
@@ -408,9 +403,8 @@ def abort_requested() -> bool:
 def request_abort() -> None:
     """``requestAbort``: record an interrupt for the whole run.
 
-    Never raises, for the reason the shell's always returns 0: it runs inside a
-    signal handler, where a failure would take down the run it exists to end
-    tidily.
+    Never raises: it runs inside a signal handler, where a failure would take
+    down the run it exists to end tidily.
     """
     flag = os.environ.get("ABORT_FLAG", "")
     if not flag:
@@ -448,7 +442,7 @@ def fail_no_relevant_input(path: str, what: str,
 # own item: xargs abandons the rest of the queue on 255, and nothing else does.
 XARGS_STOP_EXIT_STATUS = 255
 
-# The closing report of a run, named by the shell that owns it so a run stopped
+# The closing report of a run, named by the process that owns it so a run stopped
 # halfway still recaps the figures it has. It is per-process on purpose: a worker
 # that inherited the name would print the parent's report on its own way out.
 _FOOTER: dict[str, Any] = {"report": None, "owner": None, "printed": False}
@@ -466,7 +460,7 @@ def print_run_footer() -> None:
 
     Best effort rather than another thing that can end the run: a failing line in
     the report - a counter a phase never got to write - still leaves the rest of
-    it printed, which is what the shell's ``|| true`` buys.
+    it printed.
     """
     report = _FOOTER["report"]
     if report is None or _FOOTER["owner"] != os.getpid() or _FOOTER["printed"]:
@@ -658,8 +652,8 @@ def report_safety_skips(stream=None) -> None:
     lines = []
     if log_path and os.path.isfile(log_path):
         with open(log_path, encoding="utf-8", errors="surrogateescape") as fh:
-            # wc -l counts NEWLINES, so a final line with none is not counted -
-            # and the report walks the same lines it counted.
+            # A final line with no newline is not counted - and the report walks
+            # the same lines it counted.
             lines = fh.read().split("\n")[:-1]
     out.write("Safety: skipped %d rename(s) to avoid overwrite\n" % len(lines))
     if lines:

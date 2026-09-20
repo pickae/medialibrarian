@@ -964,8 +964,8 @@ def _read(result, program: str, script_dir: str, in_path: str, out_path: str,
                                 clioptions.page(spec(program))))
             return 1
         # The log is passed, not defaulted: preparing the samples is where a
-        # file that names no language is reported, and the shell says that
-        # through the run's own log rather than swallowing it.
+        # file that names no language is reported, and that report goes through
+        # the run's own log rather than being swallowed.
         voice_map = booknarration.prepare_voice_samples(voice_sample, temp_path,
                                                         log)
         if not voice_map:

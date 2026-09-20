@@ -47,12 +47,11 @@ def census_union(extensions):
     """The given extensions, lower-cased, de-duplicated, in the order first seen -
     one space-separated string, which is the shape the central lists have.
 
-    The accumulator is a STRING and not a list, because the shell's is: membership
-    is tested by splitting it on whitespace, so an EMPTY word is never a member of
-    it and every empty word takes the "not seen yet" branch again. Appending
-    nothing to a non-empty string still appends the separator, so ``jpg ""``
-    answers "jpg " and ``jpg "" png`` answers "jpg  png" - which a list-and-join
-    would have tidied into something the shell never says.
+    The accumulator is a STRING and not a list: membership is tested by splitting
+    it on whitespace, so an EMPTY word is never a member of it and every empty
+    word takes the "not seen yet" branch again. Appending nothing to a non-empty
+    string still appends the separator, so ``jpg ""`` answers "jpg " and ``jpg ""
+    png`` answers "jpg  png" - which a list-and-join would have tidied away.
     """
     out = ""
     for extension in extensions:
@@ -104,9 +103,8 @@ def census_init(adequacy_wanted=False):
     so and goes on. The ones whose absence would cost a whole content type are
     asked for through ``requireTools`` by the command instead.
 
-    The settled values are left in the environment the way the shell's own
-    assignments leave them, so the row builders read one answer rather than
-    probing again.
+    The settled values are left in the environment, so the row builders read one
+    answer rather than probing again.
     """
     os.environ["CENSUS_ADEQUACY"] = "1" if adequacy_wanted else ""
     os.environ["censusVideoExtensions"] = census_video_extensions()
@@ -138,8 +136,7 @@ def census_init(adequacy_wanted=False):
 
 def _missing_pdf_tools():
     """What ``comicPdfMissingTools`` prints - the tools it cannot find, or
-    nothing. The shell reads it with ``[[ -z "$(...)" ]]``, so what matters is
-    only whether anything was printed."""
+    nothing. What matters is only whether anything was printed."""
     captured = io.StringIO()
     with contextlib.redirect_stdout(captured):
         comicpdf.comic_pdf_missing_tools()
@@ -151,9 +148,8 @@ def census_classify(path):
     "comics", or "" for a suffix no list claims - and the PDF probe's numbers
     alongside it, as ``(type, stats)``.
 
-    Both are returned together for the reason the shell leaves them in globals: a
-    caller that took only the type would have to run the probe again to get the
-    page count the row builder needs.
+    Both are returned together: a caller that took only the type would have to run
+    the probe again to get the page count the row builder needs.
 
     Without poppler the PDF question cannot be asked at all, and every PDF is
     counted as a book - the more conservative half, since a book row's page count
@@ -170,7 +166,7 @@ def census_classify(path):
         if not os.environ.get("CENSUS_HAVE_POPPLER", ""):
             return "books", ""
         # isComicPdf PRINTS its stats whichever way it votes, precisely so one
-        # probe answers both questions; the shell captures that print.
+        # probe answers both questions; the print is captured here.
         captured = io.StringIO()
         with contextlib.redirect_stdout(captured):
             status = comicpdf.is_comic_pdf(path)

@@ -42,16 +42,15 @@ __all__ = [
 
 Runner = Callable[..., "subprocess.CompletedProcess"]
 
-# The units the chapter rows are built from, the way the shell names them.
+# The units the chapter rows are built from.
 _MS_PER_SECOND = 1000
 _MS_PER_MINUTE = 60 * _MS_PER_SECOND
 _MS_PER_HOUR = 60 * _MS_PER_MINUTE
 
-# The leading numeric slice glibc's strtod takes out of a duration string:
-# bash's printf '%.3f' parses exactly this prefix, whatever follows it. The
-# hex-float spelling strtod would also take (0x1p3) is not in this class -
-# ffprobe never prints one, and the port declines to parse it rather than
-# carry a second strtod, the way the census declines the 2^63 spellings.
+# The leading numeric slice glibc's strtod takes out of a duration string.
+# The hex-float spelling strtod would also take (0x1p3) is not in this class -
+# ffprobe never prints one, and it is declined rather than carry a second
+# strtod, the way the census declines the 2^63 spellings.
 _STRTOD_PREFIX = re.compile(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?")
 
 # The leading word strtod takes out for the infinities and the not-a-number,
@@ -62,20 +61,18 @@ _STRTOD_WORDS = ("nan", "infinity", "inf")
 # The whitespace strtod skips before the number: the C isspace set.
 _STRTOD_WS = " \t\n\v\f\r"
 
-# The file the error line names. The shell's printf named the script and the
-# line it sat on; this names the file that does the formatting now, and no
+# The file the error line names: the one that does the formatting, and no
 # line, because there is one place here rather than one per call site.
 _SOURCE = os.path.abspath(__file__)
 
-# The leading numeric slice awk's `p[3] + 0` takes out of a chapter index.
+# The leading numeric slice of a chapter index.
 _INT_PREFIX = re.compile(r"[+-]?\d+")
 
 
 def _run(argv: Sequence[str], quiet: bool = False) -> subprocess.CompletedProcess:
     """The real runner: the tool on PATH.
 
-    A call the shell version sends to /dev/null does the same here (quiet);
-    the rest inherits the streams, the way the unredirected shell calls do.
+    ``quiet`` sends both streams to /dev/null; the rest inherits them.
     """
     if quiet:
         return subprocess.run(list(argv), stdout=subprocess.DEVNULL,
@@ -84,7 +81,7 @@ def _run(argv: Sequence[str], quiet: bool = False) -> subprocess.CompletedProces
 
 
 def _log(message: str) -> None:
-    """log: the one line the module prints, to stderr, the way the shell's log does."""
+    """The one line the module prints, to stderr."""
     if os.environ.get("LOG_TIMESTAMPS"):
         sys.stderr.write(f"[{time.strftime('%H:%M:%S')}] {message}\n")
     else:
@@ -92,7 +89,7 @@ def _log(message: str) -> None:
 
 
 def _remove_quiet(path: str) -> None:
-    """rm -rf on a file: gone or never there, and both are a success."""
+    """A quiet removal: gone or never there, and both are a success."""
     try:
         os.remove(path)
     except OSError:
@@ -100,8 +97,8 @@ def _remove_quiet(path: str) -> None:
 
 
 def _remove_status(path: str) -> int:
-    """The same removal where the status is the answer: gone, or never there, is
-    the success it is for rm too, and only something in the way is the failure.
+    """The same removal where the status is the answer: gone, or never there,
+    is the success, and only something in the way is the failure.
     """
     try:
         os.remove(path)
@@ -113,16 +110,16 @@ def _remove_status(path: str) -> int:
 
 
 def _stem_of(name: str) -> str:
-    """${name%.*}: the shortest dot-led suffix stripped, or the whole name."""
+    """The shortest dot-led suffix stripped, or the whole name."""
     dot = name.rfind(".")
     return name[:dot] if dot >= 0 else name
 
 
 def _ram_temp() -> str:
-    """mktemp on the RAM filesystem when the host has one, with the fall-back
-    the shell takes when it does not. The shell's mktemp names its result
-    tmp.<random> in whichever directory it used, and the recorded calls
-    rewrite that name, so the port's temp is named the same way."""
+    """A temp file on the RAM filesystem when the host has one, in the
+    default temp directory when it does not. It is named tmp.<random> in
+    whichever directory it used, because the recorded calls rewrite that
+    name."""
     try:
         descriptor, path = tempfile.mkstemp(prefix="tmp.", dir="/dev/shm")
     except OSError:
@@ -132,7 +129,7 @@ def _ram_temp() -> str:
 
 
 def _c_div(a: int, b: int) -> int:
-    """Shell arithmetic division: truncation toward zero, not Python's floor."""
+    """Division with truncation toward zero, not Python's floor."""
     quotient = a // b
     if a % b and (a < 0) != (b < 0):
         quotient += 1
@@ -140,7 +137,7 @@ def _c_div(a: int, b: int) -> int:
 
 
 def _c_rem(a: int, b: int) -> int:
-    """Shell arithmetic remainder: the C sign (the dividend's), not Python's."""
+    """Remainder with the C sign (the dividend's), not Python's."""
     remainder = a % b
     if remainder and (a < 0) != (b < 0):
         remainder -= b
@@ -148,17 +145,17 @@ def _c_rem(a: int, b: int) -> int:
 
 
 def _base_of(path: str) -> str:
-    """${path##*/}: the longest slash-led prefix stripped."""
+    """The longest slash-led prefix stripped."""
     return path.rsplit("/", 1)[-1]
 
 
 def _entry_path(entry: str) -> str:
-    """The path a concat line carries: every "file " gone, the way the shell
-    strips it - all occurrences of the word, not just the first, so a name
-    that holds the word still lands where the shell lands - and the pair of
-    quotes AROUND the path gone. Only that pair: an apostrophe inside a name
-    is part of the file, and the probe it feeds must reach the file it names,
-    which is what keeps that file's chapter from collapsing to zero length."""
+    """The path a concat line carries: every "file " gone - all occurrences of
+    the word, not just the first, so a name that holds the word still lands on
+    the right file - and the pair of quotes AROUND the path gone. Only that
+    pair: an apostrophe inside a name is part of the file, and the probe it
+    feeds must reach the file it names, which is what keeps that file's chapter
+    from collapsing to zero length."""
     body = entry.replace("file ", "")
     if body.startswith("'"):
         body = body[1:]
@@ -168,18 +165,17 @@ def _entry_path(entry: str) -> str:
 
 
 def _printf_f3(text: str) -> str:
-    """bash's printf '%.3f' on a probe's duration string.
+    """A probe's duration string to three decimals.
 
     glibc's strtod skips the leading whitespace and takes the longest prefix
     it can parse - a number, or the inf and nan words with their sign - and
-    bash reports whatever is left behind: "printf: <arg>: invalid number" on
+    whatever is left behind is reported: "printf: <arg>: invalid number" on
     stderr, the argument verbatim, and the formatted prefix all the same (zero
     the way it formats nothing when the prefix consumed nothing). The value it
     rounds is the nearest 80-bit float the prefix parses to, not the nearest
     double, so the rounding is the census' rule. The error line names the file
-    it came from, the way the shell's did. A word that survives to the base-ten
-    re-read below is the shell's 10# arithmetic error that kills its run, and
-    the int() of a word is the port's.
+    it came from. A word that survives to the base-ten re-read below is the
+    int() of a word, and that is where the run dies.
     """
     body = text.lstrip(_STRTOD_WS)
     match = _STRTOD_PREFIX.match(body)
@@ -209,9 +205,9 @@ def _invalid_number(text: str) -> None:
 
 
 def _duration_ms(text: str) -> int:
-    """A probe's duration to integer milliseconds: the shell idiom of
-    printf '%.3f', the dot stripped, and the whole thing re-read in base
-    ten - 10# of which also drops the leading zeros the format leaves."""
+    """A probe's duration to integer milliseconds: three decimals, the dot
+    stripped, and the whole thing re-read in base ten, which also drops the
+    leading zeros the format leaves."""
     value = _printf_f3(text if text else "0")
     return int(value.replace(".", ""))
 
@@ -219,9 +215,9 @@ def _duration_ms(text: str) -> int:
 def _time_stamp(ms: int) -> str:
     """Flat milliseconds to the OGM stamp HH:MM:SS.mmm.
 
-    The division and remainder chains are the shell's - truncation toward
-    zero, not floor - so a length the arithmetic takes negative still
-    lands where the shell's printf %02d would print it.
+    The division and remainder chains truncate toward zero, not floor, so a
+    length the arithmetic takes negative still lands where the zero-padded
+    format puts it.
     """
     hours = _c_div(ms, _MS_PER_HOUR)
     minutes = _c_div(_c_rem(ms, _MS_PER_HOUR), _MS_PER_MINUTE)
@@ -234,9 +230,9 @@ def _time_stamp(ms: int) -> str:
 
 def _clean_collectively(names: list[str],
                         prefixes: list[str]) -> tuple[list[str], list[str]]:
-    """The collective pass, with the shell's single-name guard: with one name
-    there is nothing to compare it against, and the whole of it both leads
-    and trails the set, so the pass would leave the chapter unnamed."""
+    """The collective pass, with the single-name guard: with one name there is
+    nothing to compare it against, and the whole of it both leads and trails
+    the set, so the pass would leave the chapter unnamed."""
     if len(names) > 1:
         return (clean_names_collectively(names),
                 clean_names_collectively(prefixes))
@@ -254,10 +250,9 @@ def _chapter_name(prefix: str, clean_name: str) -> str:
 
 
 def _probe_duration(path: str) -> str:
-    """The duration a probe of this path answers: the ffprobe the shell runs,
-    quiet, one field - and its output as the command substitution saw it,
-    the trailing newlines gone, and nothing at all when the probe fails, the
-    way the shell's || true leaves the substitution empty."""
+    """The duration a probe of this path answers: ffprobe, quiet, one field -
+    and its output with the trailing newlines gone, and nothing at all when
+    the probe fails."""
     try:
         proc = subprocess.run(["ffprobe", "-v", "quiet", "-show_entries",
                                "format=duration", "-of", "default=nk=1:nw=1",
@@ -272,9 +267,8 @@ def chapters_from_files(concat_list: Sequence[str],
                         probe: Callable[[str], str] = _probe_duration) -> list[str]:
     """The concat list's OGM rows, in the list's own order.
 
-    ``probe`` takes each entry's full path - the path, not the base name,
-    the way the shell hands the file to the probe - and answers the probe's
-    output as the command substitution saw it, trailing newlines gone.
+    ``probe`` takes each entry's full path - the path, not the base name -
+    and answers the probe's output with the trailing newlines gone.
     """
     lines: list[str] = []
     names: list[str] = []
@@ -416,7 +410,7 @@ def embed_chapters(chapter_file: str, chapter_lines: Sequence[str],
     title = _stem_of(os.path.basename(chapter_file))
 
     # One of the four should exist; every step below acts on that single
-    # file, and the opus-before-flac order is the one the shell checks.
+    # file, and the opus-before-flac order is the priority.
     audio_file = ""
     for candidate in (opus_file, mp3_file, m4b_file, flac_file):
         if os.path.isfile(candidate):
@@ -483,7 +477,7 @@ def embed_chapters(chapter_file: str, chapter_lines: Sequence[str],
 
 
 def _unquote(value: str) -> str:
-    """The awk's two subs: one leading quote and one trailing quote off."""
+    """One leading quote and one trailing quote off."""
     if value.startswith('"'):
         value = value[1:]
     if value.endswith('"'):
@@ -492,9 +486,7 @@ def _unquote(value: str) -> str:
 
 
 def _flat_time(value: str) -> str:
-    """The awk's fmt: a seconds string to HH:MM:SS.mmm through the C
-    library's float, the way awk's sprintf %f parses it - a value it cannot
-    parse is zero, the way awk's non-numeric is."""
+    """A seconds string to HH:MM:SS.mmm; a value it cannot parse is zero."""
     try:
         seconds = float(value)
     except ValueError:
@@ -507,10 +499,9 @@ def _flat_time(value: str) -> str:
 
 
 def _chapters_from_flat(text: str) -> list[str]:
-    """The flat -show_chapters stream to OGM rows: the shell's awk, line
-    for line - the dotted chapter keys, the quotes off the values, the
-    rows in index order from the lowest index to the highest that carries
-    a start time."""
+    """The flat -show_chapters stream to OGM rows - the dotted chapter keys,
+    the quotes off the values, the rows in index order from the lowest index
+    to the highest that carries a start time."""
     start: dict[int, str] = {}
     title: dict[int, str] = {}
     max_index = -1
@@ -541,9 +532,8 @@ def _chapters_from_flat(text: str) -> list[str]:
 
 
 def _flat_chapters(src: str) -> str:
-    """The source's flat chapter stream: the ffprobe the shell runs, stderr
-    to /dev/null. A source the probe cannot read answers nothing, the way
-    the pipeline's left side does."""
+    """The source's flat chapter stream: ffprobe, stderr to /dev/null. A
+    source the probe cannot read answers nothing."""
     try:
         proc = subprocess.run(["ffprobe", "-v", "quiet", "-show_chapters",
                                "-of", "flat", src],
@@ -557,8 +547,8 @@ def extract_chapters(src: str, out: str,
                      probe: Callable[[str], str] = _flat_chapters) -> int:
     """The source's chapters (if any) into <out> as OGM rows.
 
-    Non-zero - leaving <out> empty, the way the shell's redirect leaves it
-    - when the source has no chapters, so the caller can skip the embed.
+    Non-zero - leaving <out> empty - when the source has no chapters, so the
+    caller can skip the embed.
     """
     lines = _chapters_from_flat(probe(src))
     with open(out, "w", encoding="utf-8") as handle:

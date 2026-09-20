@@ -40,10 +40,9 @@ __all__ = [
 ]
 
 # The stop-word table: the few dozen words that make up a large share of any
-# text in each supported language, one entry per language, scalar on purpose -
-# the same shape the bash keeps, because the words are what the scoring reads.
-# Adding a language means adding its row here, its codes to _CODE_MAP, and the
-# engine's own support for it.
+# text in each supported language, one entry per language, scalar on purpose,
+# because the words are what the scoring reads. Adding a language means adding
+# its row here, its codes to _CODE_MAP, and the engine's own support for it.
 STOP_WORDS = (
     "eng:the,and,of,to,that,is,it,was,for,with,this,but,his,are,from,have,not,you,they,what;"
     "deu:der,die,das,und,ist,nicht,sich,ein,eine,auch,aber,wurde,werden,oder,wenn,doch,schon,noch,nur,mehr;"
@@ -101,11 +100,11 @@ _CODE_MAP = {
     "zh": "zho", "zho": "zho", "chi": "zho", "cmn": "zho", "chinese": "zho",
 }
 
-# The table parsed the way the awk reads it: the languages in their table order
-# (which is the tie order of the stop-word decision), and each stop word with
-# the languages it belongs to - one word can belong to several, and each of
-# them scores it. A word repeated in one row stays repeated: the awk scores it
-# once per occurrence in the row.
+# The parsed table: the languages in their table order (which is the tie order
+# of the stop-word decision), and each stop word with the languages it belongs
+# to - one word can belong to several, and each of them scores it. A word
+# repeated in one row stays repeated: the scoring counts it once per occurrence
+# in the row.
 _LANG_ORDER: list[str] = []
 _STOP_LANGS: dict[str, list[str]] = {}
 for _entry in STOP_WORDS.split(";"):
@@ -115,9 +114,8 @@ for _entry in STOP_WORDS.split(";"):
         _STOP_LANGS.setdefault(_word, []).append(_lang)
 del _entry, _lang, _sep, _words, _word
 
-# A letter, the way [[:alpha:]] means it in the UTF-8 locale the bash runs
-# under: the letter CATEGORIES of Unicode, as code-point ranges the scorer can
-# walk without asking the classifier for every character of a 300 KB sample.
+# A letter: the letter CATEGORIES of Unicode, as code-point ranges the scorer
+# can walk without asking the classifier for every character of a 300 KB sample.
 def _letter_class():
     code_points = [c for c in range(0x110000)
                    if unicodedata.category(chr(c))[0] == "L"]
@@ -137,11 +135,11 @@ def _letter_class():
 _LETTER_BODY = _letter_class()
 _A_WORD = re.compile(f"[{_LETTER_BODY}]+")
 
-# The scripts of their own, as the awk's literal character ranges: a range
-# spans the code points between its ends, which is exactly "everything in this
-# block" - except the awk's kana ends are the literal ぁ-ヿ, so the block's own
-# first two characters (、 and 。) do NOT count, and are kept out here. The
-# blocks are disjoint, so one walk counts them all.
+# The scripts of their own, as literal character ranges: a range spans the code
+# points between its ends, which is exactly "everything in this block" - except
+# the kana ends are ぁ-ヿ, so the block's own first two characters (、 and 。)
+# do NOT count, and are kept out here. The blocks are disjoint, so one walk
+# counts them all.
 _SCRIPT_BLOCKS = (
     (0x3042, 0x30FF, "jpn"),     # kana: Japanese always carries it, so it is
     (0xAC00, 0xD7A3, "kor"),     #   checked before the han block it shares with
@@ -168,9 +166,9 @@ def book_language_code(raw: str) -> str:
 
 
 def _first_opf_language(opf: str) -> str:
-    """The first dc:language element of an OPF, the way the pipe reads it:
-    the newlines out, the first ``<language...>value`` (with or without the
-    dc: prefix), the value out of it."""
+    """The first dc:language element of an OPF: the newlines out, the first
+    ``<language...>value`` (with or without the dc: prefix), the value out of
+    it."""
     opf = opf.replace("\r", "").replace("\n", "")
     match = re.search(r"<(dc:)?language[^>]*>[^<]*", opf)
     if not match:
@@ -180,14 +178,13 @@ def _first_opf_language(opf: str) -> str:
 
 
 def _first_metadata_language(meta: str) -> str:
-    """The first ``Languages:`` field of Calibre's output, as the awk reads it:
-    the field after the first colon of the line, its leading whitespace off.
+    """The first ``Languages:`` field of Calibre's output: the field after the
+    first colon of the line, its leading whitespace off.
     Calibre lists several when a book claims several; the first is the one the
     text is actually in often enough, and no engine speaks two at once - the
     comma cut is the caller's, here rather than in the metadata function."""
     for line in meta.split("\n"):
-        # [[:space:]] of the awk's match: every blank but the line break the
-        # split already consumed.
+        # Every blank but the line break the split already consumed.
         if re.match(r"^Languages?[ \t\v\f\r]*:", line):
             fields = line.split(":")
             return (fields[1] if len(fields) > 1 else "").lstrip(" \t")
@@ -329,12 +326,12 @@ def book_text_language(src: str, ram_base: str | None = None,
                 with open(text_path, "rb") as handle:
                     data = handle.read()
             except OSError:
-                # [[ -s $text ]]: a converter that finished without a file is
-                # an empty answer, not an error.
+                # A converter that finished without a file is an empty answer,
+                # not an error.
                 data = b""
             if data:
-                # tail -c +SKIP is the sample past the front matter; a book
-                # shorter than the skip reads from the top instead.
+                # The sample starts past the front matter; a book shorter than
+                # the skip reads from the top instead.
                 sample = data[SKIP_BYTES - 1:][:SAMPLE_BYTES]
                 code = detect_text_language(
                     sample.decode("utf-8", "replace"))

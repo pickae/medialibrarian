@@ -1,11 +1,10 @@
 """The shared Opus target bitrates, one row per channel configuration.
 
-The shell held it as a string, because bash cannot export an array into the
-``bash -c`` workers that read it. Here it is a mapping, and the only copy.
+It is a mapping, and the only copy.
 
-Channel counts are strings, not numbers, because the shell compares them as text:
-a track reported as "01" channels finds no row, and neither does one reported as
-"2.0". Reading them as numbers here would answer where the shell declines to.
+Channel counts are strings, not numbers, and matched as text: a track reported
+as "01" channels finds no row, and neither does one reported as "2.0". Reading
+them as numbers would answer where a string lookup declines.
 """
 
 __all__ = ["COLUMNS", "audio_bitrate", "audio_opus_layout"]
@@ -44,7 +43,7 @@ def audio_bitrate(channels: str, column: str) -> str | None:
 
     None covers all three ways of having no answer - a channel count with no row,
     a column that is not one of :data:`COLUMNS`, and a row whose column is unset -
-    because the shell prints nothing and succeeds for each of them alike.
+    because the callers read all three alike: as no answer, not as an error.
     """
     row = _TABLE.get(channels)
     if row is None or column not in COLUMNS:
@@ -54,7 +53,7 @@ def audio_bitrate(channels: str, column: str) -> str | None:
 
 
 def audio_opus_layout(channels: str) -> str | None:
-    """``audioOpusLayout``: the layout to hand the encoder, or None.
+    """The layout to hand the encoder, or None.
 
     The caller must also make sure the SOURCE carries no LFE - 3.0 for three
     channels, 4.0 or quad for four - or a 2.1 / 3.1 source's LFE would be

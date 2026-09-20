@@ -307,9 +307,8 @@ def source_audio_bitrate(src: str) -> int:
         document = json.loads(raw or "{}")
     except ValueError:
         return 0
-    # jq's `.streams[]?` yields nothing for anything that is not an object, and
-    # the chain falls through to 0 - so a probe that answered a bare number, or a
-    # list, is "nothing stated it" rather than an error.
+    # Anything that is not an object - a bare number, or a list - is "nothing
+    # stated it" rather than an error, and the lookup falls through to 0.
     if not isinstance(document, dict):
         return 0
 

@@ -205,10 +205,8 @@ def grain_probe_level(input: str, media_duration, video_dimensions,
     the coded size first, and ``jobs_per_core`` settles how many samples decode
     at once.
 
-    Returns the line the bash function prints - ``<level> <sigma>`` newline
-    apart, or just ``0`` when nothing could be measured - without the trailing
-    newline, which is the caller's to add (a ``read`` of the bash output only
-    succeeds on a newline-terminated last line).
+    Returns ``<level> <sigma>`` newline apart, or just ``0`` when nothing could be
+    measured, without the trailing newline, which is the caller's to add.
     """
     dur = media_duration(input)
     dims = video_dimensions(input).split()
@@ -234,8 +232,8 @@ def grain_probe_level(input: str, media_duration, video_dimensions,
                 return grain_probe_sample(input, t, cols, rows,
                                           decode_accel_args)
             except Exception:
-                # A worker that dies mid-sample is a SKIPPED sample, the way a
-                # bash -c worker that aborts contributes nothing to the list.
+                # A worker that dies mid-sample is a SKIPPED sample: it contributes
+                # nothing to the list.
                 return ""
         for sigma in pool.map(one, times):
             # A sample that measures nothing is SKIPPED, not fatal: the rest
@@ -255,9 +253,7 @@ def grain_probe_level(input: str, media_duration, video_dimensions,
     level = 20 + GRAIN_PROBE_SLOPE * math.log(median / GRAIN_PROBE_MID) / math.log(2)
     # Rounded UP rather than to nearest: where the reading is uncertain the
     # cheaper mistake is synthesising slightly too much grain, since what is
-    # denoised away at encode time cannot be recovered afterwards. (The truncating
-    # int() is bash's ``int(level)``: for a negative level that is the rung above,
-    # which the floor below then answers for.)
+    # denoised away at encode time cannot be recovered afterwards.
     level = int(level) if level == int(level) else int(level) + 1
     if level < 0:
         level = 0
@@ -272,8 +268,7 @@ def grain_level_for(input: str, label, media_duration, video_dimensions,
 
     Asking for the probe (``-g 0``) is asking to be told what the SOURCE has, so
     the measurement stands as measured and nothing caps it. An unmeasurable
-    source synthesises none. Returns the level and logs one line to stderr, the
-    way the bash function does.
+    source synthesises none. Returns the level and logs one line to stderr.
     """
     label = label or input
     line = grain_probe_level(input, media_duration, video_dimensions,

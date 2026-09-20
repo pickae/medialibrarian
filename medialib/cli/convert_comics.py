@@ -832,8 +832,8 @@ def main(argv: list, program: str = "convert-comics",
     try:
         return _run(result, declaration, program, script_dir, counter_dir)
     finally:
-        # The shell's `trap 'runExitCleanup' EXIT`: both RAM work trees and the
-        # counter dir go back to the tmpfs however this run ends.
+        # Both RAM work trees and the counter dir go back to the tmpfs however
+        # this run ends.
         ramscratch.run_exit_cleanup()
 
 
