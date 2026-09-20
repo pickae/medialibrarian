@@ -582,7 +582,7 @@ def main(argv: list, program: str = "ingest-movies",
     # An id list is only ever read by the tagging phase, so asking for one asks
     # for that phase.
     if result.values.get("tagsOnly") or result.values.get("idList"):
-        return _tags_only(program, roots, names,
+        return _tags_only(program, script_dir, roots, names,
                           bool(result.values.get("writeTags")),
                           result.values.get("idList") or "")
 
@@ -669,9 +669,9 @@ def main(argv: list, program: str = "ingest-movies",
 
 
 # Where the films TMDb could not identify are listed when -i named no file of
-# its own. In the current directory and not in the library: a run over the
-# library deletes stray .txt files as junk, and this is a worklist rather than
-# part of the collection.
+# its own. In the script directory's logs/ folder and not in the library: a run
+# over the library deletes stray .txt files as junk, and this is a worklist
+# rather than part of the collection.
 #
 # One file per folder given, named after it, because the lists are worked
 # through by hand: two libraries' unnamed films in one file would be a worklist
@@ -700,8 +700,8 @@ NEAR_MISS_LIST = "ingest-movies-nearmisses-%s.txt"
 ALIAS_LIST = "ingest-movies-othertitles-%s.txt"
 
 
-def _tags_only(program: str, roots: list, names: list, write: bool,
-               id_list: str) -> int:
+def _tags_only(program: str, script_dir: str, roots: list, names: list,
+               write: bool, id_list: str) -> int:
     """The naming phase on its own: the id, the editions and a split film's
     stacking token, and not one thing else.
 
@@ -779,28 +779,28 @@ def _tags_only(program: str, roots: list, names: list, write: bool,
             shared += unmatched
             continue
         if unmatched:
-            listing = UNMATCHED_LIST % name
+            listing = commands.logs_file(script_dir, UNMATCHED_LIST % name)
             if tmdblookup.write_id_list(listing, unmatched, None, log):
                 log('%d film(s) in "%s" could not be identified - listed in '
                     '"%s" to fill in by hand' % (len(unmatched), root, listing))
         if ambiguous:
-            listing = AMBIGUOUS_LIST % name
+            listing = commands.logs_file(script_dir, AMBIGUOUS_LIST % name)
             if tmdblookup.write_ambiguous_list(listing, ambiguous, root, log):
                 log('%d folder(s) in "%s" hold more than one film - listed in '
                     '"%s"' % (len(ambiguous), root, listing))
         if planned:
-            listing = RENAMES_LIST % name
+            listing = commands.logs_file(script_dir, RENAMES_LIST % name)
             if tmdblookup.write_rename_list(listing, planned, root, log):
                 log('%d rename(s) in "%s" would be made - listed in "%s"'
                     % (len(planned), root, listing))
         if alias_titles:
-            listing = ALIAS_LIST % name
+            listing = commands.logs_file(script_dir, ALIAS_LIST % name)
             if tmdblookup.write_alias_list(listing, alias_titles, root, log):
                 log('%d folder(s) in "%s" hold one film under several of its '
                     'titles - listed in "%s"'
                     % (len(alias_titles), root, listing))
         if near_misses:
-            listing = NEAR_MISS_LIST % name
+            listing = commands.logs_file(script_dir, NEAR_MISS_LIST % name)
             if tmdblookup.write_near_miss_list(listing, near_misses, root, log):
                 log('%d folder(s) in "%s" were left alone - what was asked and '
                     'what came back is in "%s"'
@@ -894,8 +894,7 @@ def _write_commentary_orphans(script_dir: str, orphans: list) -> None:
     nothing, so a run with nothing to report leaves no file behind."""
     if not orphans:
         return
-    path = os.path.join(script_dir, "logs", "commentaryOrphans.txt")
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    path = commands.logs_file(script_dir, "commentaryOrphans.txt")
     with open(path, "w", encoding="utf-8") as handle:
         for orphan in orphans:
             handle.write(orphan + "\n")

@@ -1489,8 +1489,7 @@ def _ingest(program: str, script_dir: str, download_dir: str, ingest_dir: str,
     # ~/.config/beets, and beets runs from inside the library so its
     # "directory: ." resolves there.
     log("Tagging and organising with beets")
-    beets_log = os.path.join(script_dir, "logs", "beets.log")
-    os.makedirs(os.path.dirname(beets_log), exist_ok=True)
+    beets_log = commands.logs_file(script_dir, "beets.log")
     _run_in(ingest_dir, ["beet", "-c",
                          os.path.join(commands.config_dir(), "beets.yaml"),
                          "import", "-Ciq", "-l", beets_log, "."])

@@ -7,7 +7,10 @@ Usage:
                     -i, the parent of the staging and the library trees
     <archiveFile>   yt-dlp's download archive: the record of what has already
                     been fetched, so a re-run only picks up what is new. It is
-                    created if it does not exist.
+                    created if it does not exist. A name with no path in it is
+                    kept in the script directory's logs/ folder, the home of
+                    the records a run keeps about itself; a path is taken as
+                    given.
     <dateRange>     optional upload-date filter, applied to every feed:
                         20260607             everything since that day
                         20260607..20260707   a window

@@ -17,8 +17,9 @@ import os
 import subprocess
 import sys
 
-__all__ = ["COMMANDS", "MODULES", "exec_command", "module_for", "package_root",
-           "program_name", "run_command", "script_dir"]
+__all__ = ["COMMANDS", "MODULES", "config_dir", "exec_command", "logs_file",
+           "module_for", "package_root", "program_name", "run_command",
+           "script_dir"]
 
 COMMANDS = {
     "clean-folder-structure": "medialib.cli.clean_folder_structure",
@@ -113,6 +114,19 @@ def config_dir() -> str:
     code - the podcast tables, `logs/` - stays with :func:`script_dir`.
     """
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "config")
+
+
+def logs_file(script_dir: str, filename: str) -> str:
+    """One of the reports a run keeps about itself, by name.
+
+    Their home is ONE place on every host - `logs/` under the script directory,
+    made if it is not there yet - and not the library a report is about nor the
+    directory a command was started from, which a cron run does not even have.
+    The one spelling of that home, so it cannot drift between commands.
+    """
+    path = os.path.join(script_dir, "logs", filename)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    return path
 
 
 def module_for(command: str) -> str:

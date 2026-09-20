@@ -134,11 +134,13 @@ class TestTheListsEachFolderLeaves:
     file would be a worklist nobody could tell apart, and each folder
     overwriting the last one's would be worse."""
 
-    def _tagging(self, monkeypatch, unmatched=(), ambiguous=()):
+    def _tagging(self, monkeypatch, tmp_path, unmatched=(), ambiguous=()):
         """The tagging itself stood down: what a folder's films ARE is
         `tests/lib/test_tmdblookup.py`, and what is here is where what it could
-        not name is written."""
+        not name is written. The lists are the script directory's to keep, so
+        a script directory is stood in for the checkout."""
         monkeypatch.setenv("tmdbApiKey", "apikey")
+        monkeypatch.setenv("CLI_SCRIPT_DIR", str(tmp_path / "script"))
         monkeypatch.setattr(run.tooldeps, "require_tools",
                             lambda *_a, **_k: False)
         asked = []
@@ -181,58 +183,57 @@ class TestTheListsEachFolderLeaves:
         return asked
 
     def test_each_folder_gets_a_list_of_its_own(self, monkeypatch, tmp_path):
-        monkeypatch.chdir(tmp_path)
-        self._tagging(monkeypatch)
+        self._tagging(monkeypatch, tmp_path)
         _library(tmp_path, "Films")
         _library(tmp_path, "Documentaries")
         assert run.main(["-t", str(tmp_path / "Films"),
                          str(tmp_path / "Documentaries")]) == 0
-        assert (tmp_path / "ingest-movies-unmatched-Films.tsv").is_file()
-        assert (tmp_path / "ingest-movies-unmatched-Documentaries.tsv").is_file()
+        logs = tmp_path / "script" / "logs"
+        assert (logs / "ingest-movies-unmatched-Films.tsv").is_file()
+        assert (logs / "ingest-movies-unmatched-Documentaries.tsv").is_file()
         assert "Films film (1999)" in (
-            tmp_path / "ingest-movies-unmatched-Films.tsv").read_text()
+            logs / "ingest-movies-unmatched-Films.tsv").read_text()
         assert "Documentaries film (1999)" in (
-            tmp_path / "ingest-movies-unmatched-Documentaries.tsv").read_text()
+            logs / "ingest-movies-unmatched-Documentaries.tsv").read_text()
 
     def test_and_so_does_each_folder_holding_more_than_one_film(
             self, monkeypatch, tmp_path):
-        monkeypatch.chdir(tmp_path)
-        self._tagging(monkeypatch)
+        self._tagging(monkeypatch, tmp_path)
         _library(tmp_path, "Films")
         _library(tmp_path, "Documentaries")
         run.main(["-t", str(tmp_path / "Films"),
                   str(tmp_path / "Documentaries")])
-        assert (tmp_path / "ingest-movies-ambiguous-Films.txt").is_file()
-        assert (tmp_path / "ingest-movies-ambiguous-Documentaries.txt").is_file()
+        logs = tmp_path / "script" / "logs"
+        assert (logs / "ingest-movies-ambiguous-Films.txt").is_file()
+        assert (logs / "ingest-movies-ambiguous-Documentaries.txt").is_file()
 
     def test_and_a_dry_run_writes_down_what_it_would_have_renamed(
             self, monkeypatch, tmp_path):
         """A library of any size prints thousands of those lines: the file is
         where they can be read through rather than scrolled past."""
-        monkeypatch.chdir(tmp_path)
-        self._tagging(monkeypatch)
+        self._tagging(monkeypatch, tmp_path)
         _library(tmp_path, "Films")
         _library(tmp_path, "Documentaries")
         run.main(["-t", str(tmp_path / "Films"),
                   str(tmp_path / "Documentaries")])
-        listing = tmp_path / "ingest-movies-renames-Films.txt"
+        logs = tmp_path / "script" / "logs"
+        listing = logs / "ingest-movies-renames-Films.txt"
         assert listing.is_file()
         body = [line for line in listing.read_text(encoding="utf-8").splitlines()
                 if line and not line.startswith("#")]
         assert body == ["A film (1999)/A film (1999).mkv",
                         "    -> A film (1999)/A film (1999) {imdb-tt0000001}.mkv"]
-        assert (tmp_path / "ingest-movies-renames-Documentaries.txt").is_file()
+        assert (logs / "ingest-movies-renames-Documentaries.txt").is_file()
 
     def test_and_how_close_the_folders_it_left_alone_came(
             self, monkeypatch, tmp_path):
         """The list that says whether the other two are the right length: a
         page of candidates that are plainly the film is a reading the matching
         does not have yet."""
-        monkeypatch.chdir(tmp_path)
-        self._tagging(monkeypatch)
+        self._tagging(monkeypatch, tmp_path)
         _library(tmp_path, "Films")
         run.main(["-t", str(tmp_path / "Films")])
-        listing = tmp_path / "ingest-movies-nearmisses-Films.txt"
+        listing = tmp_path / "script" / "logs" / "ingest-movies-nearmisses-Films.txt"
         assert listing.is_file()
         body = [line for line in listing.read_text(encoding="utf-8").splitlines()
                 if line and not line.startswith("#")]
@@ -243,11 +244,10 @@ class TestTheListsEachFolderLeaves:
             self, monkeypatch, tmp_path):
         """Nothing is renamed for those, so no other list mentions them: this
         is the only way to see the recognition working."""
-        monkeypatch.chdir(tmp_path)
-        self._tagging(monkeypatch)
+        self._tagging(monkeypatch, tmp_path)
         _library(tmp_path, "Films")
         run.main(["-t", str(tmp_path / "Films")])
-        listing = tmp_path / "ingest-movies-othertitles-Films.txt"
+        listing = tmp_path / "script" / "logs" / "ingest-movies-othertitles-Films.txt"
         assert listing.is_file()
         body = [line for line in listing.read_text(encoding="utf-8").splitlines()
                 if line and not line.startswith("#")]
@@ -260,30 +260,30 @@ class TestTheListsEachFolderLeaves:
     def test_and_a_real_run_leaves_it_too(self, monkeypatch, tmp_path):
         """Unlike the near-miss list: this one records what HAPPENED, and is
         worth having after the renaming as much as before it."""
-        monkeypatch.chdir(tmp_path)
-        self._tagging(monkeypatch)
+        self._tagging(monkeypatch, tmp_path)
         _library(tmp_path, "Films")
         run.main(["-t", "-w", str(tmp_path / "Films")])
-        assert (tmp_path / "ingest-movies-othertitles-Films.txt").is_file()
+        assert (tmp_path / "script" / "logs"
+                / "ingest-movies-othertitles-Films.txt").is_file()
 
     def test_but_a_real_run_leaves_no_near_miss_list(self, monkeypatch,
                                                      tmp_path):
         """It is a dry run's question. Once the renames have happened, the
         answer to "should this have matched?" is the library itself."""
-        monkeypatch.chdir(tmp_path)
-        self._tagging(monkeypatch)
+        self._tagging(monkeypatch, tmp_path)
         _library(tmp_path, "Films")
         run.main(["-t", "-w", str(tmp_path / "Films")])
-        assert not (tmp_path / "ingest-movies-nearmisses-Films.txt").exists()
+        assert not (tmp_path / "script" / "logs"
+                    / "ingest-movies-nearmisses-Films.txt").exists()
 
     def test_but_a_real_run_writes_no_such_list(self, monkeypatch, tmp_path):
         """There is nothing to preview once it has happened, and the renames
         that DID happen are the library itself."""
-        monkeypatch.chdir(tmp_path)
-        self._tagging(monkeypatch)
+        self._tagging(monkeypatch, tmp_path)
         _library(tmp_path, "Films")
         run.main(["-t", "-w", str(tmp_path / "Films")])
-        assert not (tmp_path / "ingest-movies-renames-Films.txt").exists()
+        assert not (tmp_path / "script" / "logs"
+                    / "ingest-movies-renames-Films.txt").exists()
 
     def test_w_on_its_own_is_refused_rather_than_ignored(self, monkeypatch,
                                                          tmp_path, capsys):
@@ -291,7 +291,6 @@ class TestTheListsEachFolderLeaves:
         no dry run to carry out. A run meant to be -tw and typed as -w would
         otherwise start a full ingest - hours of converting and remuxing - on a
         library it was asked to do nothing but name."""
-        monkeypatch.chdir(tmp_path)
         _library(tmp_path, "Films")
         assert run.main(["-w", str(tmp_path / "Films")]) == 1
         errors = capsys.readouterr().err
@@ -303,8 +302,7 @@ class TestTheListsEachFolderLeaves:
         """The list is only ever read by the tagging phase, so naming one names
         that phase: a run given -i alone used to fall through to the full
         ingest and remux films while the list went unread."""
-        monkeypatch.chdir(tmp_path)
-        self._tagging(monkeypatch)
+        self._tagging(monkeypatch, tmp_path)
 
         def no_ingest(*_a, **_k):
             raise AssertionError("the full ingest ran")
@@ -319,10 +317,9 @@ class TestTheListsEachFolderLeaves:
                                                           tmp_path, capsys):
         """The whole point of -i is the afternoon someone spent looking films
         up. A path typed wrong read as "no ids" throws all of it away and puts
-        the library back through the lookups that already failed - quietly,
+        the         library back through the lookups that already failed - quietly,
         which is the worst way to lose it."""
-        monkeypatch.chdir(tmp_path)
-        self._tagging(monkeypatch)
+        self._tagging(monkeypatch, tmp_path)
         _library(tmp_path, "Films")
         assert run.main(["-i", str(tmp_path / "typo.tsv"),
                          str(tmp_path / "Films")]) == 1
@@ -333,8 +330,7 @@ class TestTheListsEachFolderLeaves:
         """The pass that wrote the row is the one that already failed to name
         it. Asking the same catalogue the same question is a round trip whose
         answer is known, and the count at the end is all there is to say."""
-        monkeypatch.chdir(tmp_path)
-        self._tagging(monkeypatch)
+        self._tagging(monkeypatch, tmp_path)
         listing = tmp_path / "by-hand.tsv"
         listing.write_text("The Movie (1999)\ttt0000001\n"
                            "Nobody Looked This Up (1988)\t\n",
@@ -348,8 +344,7 @@ class TestTheListsEachFolderLeaves:
     def test_and_a_blank_row_survives_the_rewrite(self, monkeypatch, tmp_path):
         """It is the work still to do. A run that dropped it would hand back a
         shorter list every time until there was nothing left to fill in."""
-        monkeypatch.chdir(tmp_path)
-        self._tagging(monkeypatch)
+        self._tagging(monkeypatch, tmp_path)
         listing = tmp_path / "by-hand.tsv"
         listing.write_text("Nobody Looked This Up (1988)\t\n",
                            encoding="utf-8")
@@ -365,22 +360,20 @@ class TestTheListsEachFolderLeaves:
         back. Rewriting them from a half-filled answer would lose the question,
         and the file being filled in is the last thing to edit underneath
         someone."""
-        monkeypatch.chdir(tmp_path)
-        self._tagging(monkeypatch)
+        self._tagging(monkeypatch, tmp_path)
         listing = tmp_path / "by-hand.tsv"
         written = "The Movie (1999)\ttt0000001\n"
         listing.write_text(written, encoding="utf-8")
         _library(tmp_path, "Films")
         assert run.main(["-i", str(listing), str(tmp_path / "Films")]) == 0
-        assert not list(tmp_path.glob("ingest-movies-*"))
+        assert not list((tmp_path / "script").glob("**/ingest-movies-*"))
         assert listing.read_text(encoding="utf-8") == written
 
     def test_and_w_is_what_brings_the_file_up_to_date(self, monkeypatch,
                                                       tmp_path):
         """-i and -iw stand to each other as -t and -tw do, and -w is the only
         thing that renames anything or touches the list."""
-        monkeypatch.chdir(tmp_path)
-        self._tagging(monkeypatch)
+        self._tagging(monkeypatch, tmp_path)
         listing = tmp_path / "by-hand.tsv"
         listing.write_text("The Movie (1999)\ttt0000001\n", encoding="utf-8")
         _library(tmp_path, "Films")
@@ -389,15 +382,14 @@ class TestTheListsEachFolderLeaves:
         rewritten = listing.read_text(encoding="utf-8")
         assert "The Movie (1999)\t{imdb-tt0000001}" in rewritten
         assert "Films film (1999)\t" in rewritten
-        assert not list(tmp_path.glob("ingest-movies-*"))
+        assert not list((tmp_path / "script").glob("**/ingest-movies-*"))
 
     def test_and_a_row_naming_no_folder_here_is_an_error_it_carries_on_past(
             self, monkeypatch, tmp_path, capsys):
         """The other ids are somebody's afternoon of looking things up. One row
         that names nothing on disk is worth saying loudly and is not worth
         dropping them over."""
-        monkeypatch.chdir(tmp_path)
-        self._tagging(monkeypatch)
+        self._tagging(monkeypatch, tmp_path)
         listing = tmp_path / "by-hand.tsv"
         listing.write_text("The Movie (1999)\ttt0000001\n"
                            "Not here (1901)\ttt0000002\n", encoding="utf-8")
@@ -412,8 +404,7 @@ class TestTheListsEachFolderLeaves:
             self, monkeypatch, tmp_path, capsys):
         """The file is filled in over several sittings. A blank line is the
         work remaining, not a mistake to report."""
-        monkeypatch.chdir(tmp_path)
-        self._tagging(monkeypatch)
+        self._tagging(monkeypatch, tmp_path)
         listing = tmp_path / "by-hand.tsv"
         listing.write_text("Not here (1901)\t\n", encoding="utf-8")
         _library(tmp_path, "Films")
@@ -424,8 +415,7 @@ class TestTheListsEachFolderLeaves:
                                                           tmp_path):
         """Someone who named a file meant that file: it is read once for every
         folder and written once at the end, so the ids in it survive."""
-        monkeypatch.chdir(tmp_path)
-        self._tagging(monkeypatch)
+        self._tagging(monkeypatch, tmp_path)
         listing = tmp_path / "by-hand.tsv"
         listing.write_text("Old film (1970)\ttt0000001\n", encoding="utf-8")
         _library(tmp_path, "Films")
@@ -436,4 +426,4 @@ class TestTheListsEachFolderLeaves:
         assert "Old film (1970)\t{imdb-tt0000001}" in written
         assert "Films film (1999)\t" in written
         assert "Documentaries film (1999)\t" in written
-        assert not list(tmp_path.glob("ingest-movies-unmatched-*.tsv"))
+        assert not list((tmp_path / "script").glob("**/ingest-movies-*"))

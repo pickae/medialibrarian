@@ -403,6 +403,28 @@ class TestTheDateRange:
         assert list(ytdlp.calls.glob("call*")) == []
 
 
+class TestTheArchiveFile:
+    """Where the run's record of what has already been fetched is read from and
+    written to: a bare NAME is the script directory's logs/ folder, and a name
+    carrying a path is taken as given - both halves the same answer, so the
+    archive a run leaves is the one the next run finds."""
+
+    def test_a_bare_name_is_kept_in_the_script_directory_logs(self, ytdlp,
+                                                               tmp_path):
+        script = tmp_path / "script"
+        ytdlp.ytdlp("-t", ytdlp.table, "-m", "latent", ytdlp.library,
+                    "archive.log",
+                    env=dict(ytdlp.env, CLI_SCRIPT_DIR=str(script)))
+        assert _option(ytdlp.argv(1), "--download-archive") == str(
+            script / "logs" / "archive.log")
+        assert (script / "logs").is_dir()
+
+    def test_a_name_with_a_path_in_it_is_taken_as_given(self, ytdlp, tmp_path):
+        archive = tmp_path / "somewhere" / "archive.log"
+        ytdlp.ytdlp("-t", ytdlp.table, "-m", "latent", ytdlp.library, archive)
+        assert _option(ytdlp.argv(1), "--download-archive") == str(archive)
+
+
 class TestTheFlags:
     def test_all_fetches_the_paused_feed_too(self, ytdlp):
         ytdlp.ytdlp("-t", ytdlp.table, "-a", "-m", "paused", ytdlp.library,
