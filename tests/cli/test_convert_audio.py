@@ -733,21 +733,21 @@ class TestABookTooLongForOnePipe:
 
 
 class TestTheQueueOrder:
-    """The encode queue ordered on what each JOB is worth, not on the file it
-    came from.
+    """What the encode queue is handed, and what each job is worth.
 
-    The queue was sorted before the planner ran, so a huge book's chunks all
-    inherited its place at the very front and every other file waited behind a
-    pile of small jobs. A chunk is worth its own share of the file's bytes, and
-    takes that place instead; nothing here depends on the chunks staying
-    adjacent, because the re-concatenation is a pass of its own after the whole
-    queue has drained.
+    The queue keeps its buffer from the biggest of what it holds to the
+    smallest, and it is the producer that decides what a job is worth: a chunk
+    is worth its own share of the file's bytes, not the book's. So a book cut
+    into eight hands the queue eight jobs smaller than the file beside it, and
+    that file leads instead of waiting behind all of them. Nothing here depends
+    on the chunks staying adjacent, because the re-concatenation is a pass of
+    its own after the whole queue has drained.
     """
 
-    def _queue(self, tmp_path, sizes, chunked):
-        """`_build_queue` with the planning stubbed out: every track's jobs are
-        written as the planner would write them, so what is under test is the
-        weighing and the order alone."""
+    def _producer(self, tmp_path, sizes, chunked, threshold):
+        """The encode producer with the planning stubbed out: every candidate's
+        jobs are written as the planner would write them, so what is under test
+        is the size settle, the weighing and the handover alone."""
         import types
 
         inputs = tmp_path / "in"
@@ -761,16 +761,7 @@ class TestTheQueueOrder:
             def __init__(self, state, jobs):
                 pass
 
-            def classify(self, track):
-                base = ca.segments.plan_file_for(str(plans), track)
-                if track in chunked:
-                    return
-                ca._write_jobs(base, [track])
-
-            def window_jobs(self, tracks):
-                return [track for track in tracks if track in chunked], []
-
-            def write_chunk_jobs_for(self, track):
+            def plan_candidate(self, track):
                 total = chunked[track]
                 length = sizes[track] / float(total)
                 ca._write_jobs(
@@ -781,49 +772,80 @@ class TestTheQueueOrder:
 
         state = types.SimpleNamespace(
             tracks=sorted(sizes, key=lambda track: -sizes[track]),
-            input_dir=str(inputs), plan_root=str(plans))
-        original = ca.Planner
-        ca.Planner = _Planner
-        try:
-            return ca._build_queue(state, 1)[0]
-        finally:
-            ca.Planner = original
-
-    def _names(self, queue):
-        return [token.split(ca.UNIT)[0] for token in queue]
+            input_dir=str(inputs), plan_root=str(plans),
+            split_threshold=threshold, codec="opus")
+        preload, candidates = ca._settle_preload(state, _Planner(state, 1))
+        total_file = str(tmp_path / "total")
+        return (ca._encode_producer(state, _Planner(state, 1), preload,
+                                    candidates, total_file),
+                total_file)
 
     def test_a_chunk_queues_at_its_own_size_and_not_the_books(self, tmp_path):
         """The book is five times the size of the whole file beside it, but cut
         into eight it is eight jobs SMALLER than that file - so the file leads
         instead of waiting behind all of them."""
-        queue = self._queue(tmp_path, {"book.m4b": 800, "track.m4a": 150},
-                            {"book.m4b": 8})
-        assert self._names(queue)[0] == "track.m4a"
-        assert self._names(queue).count("book.m4b") == 8
+        producer, _total_file = self._producer(
+            tmp_path, {"book.m4b": 800, "track.m4a": 150}, {"book.m4b": 8},
+            0.01)
+        items = list(producer)
+        names = [token.split(ca.UNIT)[0] for token, _size in items]
+        assert names[0] == "track.m4a"
+        assert names.count("book.m4b") == 8
+        assert [size for _token, size in items[1:]] == [100.0] * 8
 
     def test_the_chunks_of_one_file_are_still_all_there_and_in_order(
             self, tmp_path):
         """Interleaving is free, losing a piece is not: every index the planner
-        wrote is in the queue, and they keep their order among themselves so the
+        wrote is handed over, and they keep their order among themselves so the
         run is reproducible."""
-        queue = self._queue(tmp_path,
-                            {"book.m4b": 400, "a.m4a": 100, "b.m4a": 100},
-                            {"book.m4b": 4})
-        indexes = [token.split(ca.UNIT)[1] for token in queue
+        producer, _total_file = self._producer(
+            tmp_path, {"book.m4b": 400, "a.m4a": 100, "b.m4a": 100},
+            {"book.m4b": 4}, 0.01)
+        items = list(producer)
+        indexes = [token.split(ca.UNIT)[1] for token, _size in items
                    if ca.UNIT in token]
         assert indexes == ["0", "1", "2", "3"]
 
-    def test_whole_files_still_run_largest_first(self, tmp_path):
-        queue = self._queue(tmp_path,
-                            {"small.m4a": 10, "big.m4a": 900, "mid.m4a": 100},
-                            {})
-        assert self._names(queue) == ["big.m4a", "mid.m4a", "small.m4a"]
+    def test_the_preload_is_handed_over_largest_first(self, tmp_path):
+        """The queue orders what it holds by the size it is told, so the
+        producer owes it the scan's order - largest file first - and no more."""
+        producer, _total_file = self._producer(
+            tmp_path, {"small.m4a": 10, "big.m4a": 900, "mid.m4a": 100}, {},
+            0.03)
+        items = list(producer)
+        assert [token for token, _size in items] == \
+            ["big.m4a", "mid.m4a", "small.m4a"]
 
-    def test_a_book_cut_into_pieces_no_smaller_stays_at_the_front(self,
-                                                                 tmp_path):
+    def test_a_book_cut_into_pieces_no_smaller_leads_the_buffer(self,
+                                                                tmp_path):
         """The order follows the sizes and nothing else: two chunks of a file
         ten times the size of its neighbours are still the two biggest jobs."""
-        queue = self._queue(tmp_path,
-                            {"book.m4b": 2000, "a.m4a": 100, "b.m4a": 100},
-                            {"book.m4b": 2})
-        assert self._names(queue)[:2] == ["book.m4b", "book.m4b"]
+        producer, _total_file = self._producer(
+            tmp_path, {"book.m4b": 2000, "a.m4a": 100, "b.m4a": 100},
+            {"book.m4b": 2}, 0.01)
+        items = list(producer)
+        names = [token.split(ca.UNIT)[0]
+                 for token, _size in sorted(items, key=lambda item: -item[1])]
+        assert names[:2] == ["book.m4b", "book.m4b"]
+
+    def test_the_total_is_written_when_the_last_candidate_is_planned(
+            self, tmp_path):
+        """The queue's lines count without a denominator until the producer
+        knows the queue's own length, which is when its last candidate is
+        planned - and it writes it then, before the last of the preloads."""
+        producer, total_file = self._producer(
+            tmp_path, {"book.m4b": 800, "track.m4a": 150}, {"book.m4b": 8},
+            0.01)
+        items = list(producer)
+        with open(total_file) as handle:
+            assert handle.read() == "%d\n" % len(items)
+
+    def test_a_queue_with_nothing_to_plan_is_counted_from_the_start(
+            self, tmp_path):
+        """With no candidates the length is known before the first job is
+        handed over, so the first line the run prints may already carry it."""
+        producer, total_file = self._producer(
+            tmp_path, {"a.m4a": 100, "b.m4a": 200}, {}, 0.03)
+        next(producer)
+        with open(total_file) as handle:
+            assert handle.read() == "2\n"

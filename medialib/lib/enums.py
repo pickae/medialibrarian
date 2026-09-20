@@ -68,6 +68,33 @@ AUDIO_CODEC_EXTENSIONS = {
     "xheaac": "m4a",
 }
 ALWAYS_TRANSCODE_EXTENSIONS = ("m4a", "m4b", "mka",)
+# The largest plausible kbps a track of each AUDIO_EXTENSIONS format encodes at.
+#
+# A file's size divided by its format's ceiling is the shortest that file can
+# possibly be: a real track is at or above its plausible rate, never below it, so
+# this division is a LOWER bound on duration. convert-audio's dynamic queue uses
+# exactly that bound - a file whose minimum possible duration is still past the
+# split threshold is a definite chunking candidate, and one whose is not is
+# preloaded. It is deliberately a ceiling, not a census: a file that reads as
+# plausibly short is encoded whole at worst - the chunking it would have got is
+# an optimization the run gives up, not a decision it gets wrong.
+AUDIO_MAX_KBPS = {
+    "m4a": 256,
+    "m4b": 256,
+    "aac": 256,
+    "mp3": 320,
+    "mpga": 320,
+    "opus": 120,
+    "flac": 500,
+    "ogg": 256,
+    "ogx": 256,
+    "mka": 256,
+}
+# An extension the table above has no entry for: the smallest of the table's
+# rates. The division a rate feeds is the file's SHORTEST possible duration, so
+# the smallest rate is the longest that figure can be, and an unknown format is
+# routed to probing rather than assumed short.
+AUDIO_MAX_KBPS_DEFAULT = 120
 VIDEO_EXTENSIONS = (
     "mp4", "mkv", "avi", "mov", "webm", "m4v", "flv", "mpg", "mpeg", "wmv", "ts",
 )
