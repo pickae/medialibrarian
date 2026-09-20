@@ -286,7 +286,10 @@ The three arguments are the things that change between runs — where the librar
 goes, where the "already have it" record lives, and optionally an upload-date
 filter (`20260607`, `20260607..20260707`, `..20260707`, or a relative date such
 as `today-2weeks`). A rolling window is just a relative end: `..today-10days` is
-"nothing newer than ten days". Everything else lives in the tables.
+"nothing newer than ten days". An archive given as a bare name is kept in the
+script directory's `logs/` folder — the home of the records a run keeps about
+itself, and of `ingest-music`'s `beets.log` — and is read back from there on the
+next run; a path is taken as given. Everything else lives in the tables.
 
 **One table, both systems.** A table (`data/podcasts/*.tsv`) holds one row per
 podcast — its folder, its file-name template, how many entries back to walk (`0`
@@ -792,7 +795,8 @@ whose films answer to two ids is a folder holding two films.
 **`-t` does only this phase** — no conversion, no remux, no downloads, no
 transcription — and does it as a **dry run** unless `-w` is given, printing
 every rename it would make. The films TMDb could not name confidently are
-written to a list to fill in by hand and feed back with `-i`:
+written to a list to fill in by hand and feed back with `-i`, in the script
+directory's `logs/` folder:
 
 ```
 Your Film (1975)	tt0000002

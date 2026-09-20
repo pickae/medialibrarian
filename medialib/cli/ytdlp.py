@@ -45,7 +45,10 @@ USAGE_HEAD = """Usage:
                     -i, the parent of the staging and the library trees
     <archiveFile>   yt-dlp's download archive: the record of what has already
                     been fetched, so a re-run only picks up what is new. It is
-                    created if it does not exist.
+                    created if it does not exist. A name with no path in it is
+                    kept in the script directory's logs/ folder, the home of
+                    the records a run keeps about itself; a path is taken as
+                    given.
     <dateRange>     optional upload-date filter, applied to every feed:
                         20260607             everything since that day
                         20260607..20260707   a window
@@ -480,6 +483,20 @@ def _feed_worker(state, index, subdir, row, provider, root) -> None:
     state.run_feed(index, subdir, row, provider, root)
 
 
+def _archive_location(archive_file: str, script_dir: str) -> str:
+    """Where the run's archive is read from and written to.
+
+    A name carrying a path in it is taken as given; a bare NAME goes to the
+    home of the records a run keeps about itself - the script directory's
+    logs/ folder - and is read back from the same place on the next run,
+    which is the whole of what the archive is for: a re-run checks it
+    before fetching.
+    """
+    if os.path.dirname(archive_file):
+        return archive_file
+    return commands.logs_file(script_dir, archive_file)
+
+
 def _default_tables(script_dir: str):
     """The one table that has always been there, so the common call stays as
     short as it was. Looked for in data/podcasts first, which is where the
@@ -650,7 +667,7 @@ def main(argv: list, program: str = "ytdlp", script_dir: str = "") -> int:
         return 1
 
     output_path = result.positionals[0].rstrip("/")
-    archive_file = result.positionals[1]
+    archive_file = _archive_location(result.positionals[1], script_dir)
     date_range = result.positionals[2] if len(result.positionals) > 2 else ""
 
     options = {
