@@ -773,6 +773,33 @@ def _uname() -> str:
         return ""
 
 
+def _cygpath(path: str, platform: str) -> str | None:
+    """What ``cygpath -m -- <path>`` prints, or None when it cannot say.
+
+    None for a host that is not windows, for a tool that is absent, and for a
+    call that failed or refused; otherwise what it printed, "" included.
+    """
+    if platform != "windows" or shutil.which("cygpath") is None:
+        return None
+    try:
+        proc = subprocess.run(["cygpath", "-m", "--", path],
+                              stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL,
+                              text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    return proc.stdout.strip()
+
+
+def _native_path(path: str, platform: str) -> str:
+    """``path`` as the yt-dlp about to be run will read it.
+
+    One place pairs a path with its own conversion, because handing over
+    another path's is silent.
+    """
+    return podcastfeeds.native_path(path, platform, _cygpath(path, platform))
 
 
 def _plan_ingest(output_path: str, profiles, script_dir: str):
@@ -860,15 +887,12 @@ def _run(options, tables, profiles, jobs_of, rows_of, feed_count, output_path,
             for kind in ingest["kinds"]:
                 os.makedirs(ingest["staging"][kind], exist_ok=True)
 
-    native_output = podcastfeeds.native_path(output_path, platform,
-                                             shutil.which("cygpath"))
-    native_archive = podcastfeeds.native_path(archive_file, platform,
-                                              shutil.which("cygpath"))
+    native_output = _native_path(output_path, platform)
+    native_archive = _native_path(archive_file, platform)
     staging_for_profile = {}
     if ingest:
         for profile, staging in ingest["forProfile"].items():
-            staging_for_profile[profile] = podcastfeeds.native_path(
-                staging, platform, shutil.which("cygpath"))
+            staging_for_profile[profile] = _native_path(staging, platform)
 
     manifest_dir = native_manifest_dir = status_dir = counter_file = ""
     try:
@@ -883,8 +907,7 @@ def _run(options, tables, profiles, jobs_of, rows_of, feed_count, output_path,
                 return 1
             ramscratch.add_exit_cleanup([manifest_dir, status_dir])
             counter_file = os.path.join(status_dir, "episodeCounter")
-            native_manifest_dir = podcastfeeds.native_path(
-                manifest_dir, platform, shutil.which("cygpath"))
+            native_manifest_dir = _native_path(manifest_dir, platform)
             if "%" in native_manifest_dir:
                 # yt-dlp reads this path as an OUTPUT TEMPLATE, so a "%" would
                 # be read as a field name and fail every call. The statistics
