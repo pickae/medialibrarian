@@ -460,6 +460,26 @@ def test_sponsorblock_settled_absent_takes_flag_and_value_out():
     assert "--sponsorblock-mark" not in call
 
 
+def test_the_settled_ffmpeg_is_named_to_the_tool_that_muxes_with_it():
+    call = _call(ffmpeg_location="/opt/ffmpeg/bin")
+    assert "--ffmpeg-location" in call
+    assert call[call.index("--ffmpeg-location") + 1] == "/opt/ffmpeg/bin"
+
+
+def test_no_location_leaves_yt_dlp_to_find_its_own():
+    assert "--ffmpeg-location" not in _call()
+    assert "--ffmpeg-location" not in _call(ffmpeg_location="")
+
+
+def test_a_feed_can_still_name_a_build_of_its_own():
+    """yt-dlp keeps the last one it is given, so the row's has to come after."""
+    call = pf.podcast_call("/library", "a.log", "x", "", "",
+                           "--ffmpeg-location /usr/bin", "https://u",
+                           ytdlp_command=["yt-dlp"],
+                           ffmpeg_location="/opt/ffmpeg/bin")
+    assert call.index("/usr/bin") > call.index("/opt/ffmpeg/bin")
+
+
 def test_a_feed_s_own_no_sponsorblock_is_a_different_option():
     call = pf.podcast_call("/library", "a.log", "x", "", "",
                            "--no-sponsorblock", "https://u",

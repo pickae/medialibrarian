@@ -309,6 +309,26 @@ class TestOneDecision:
         assert ffmpegselect._STATE.selected == stub
 
 
+# --- naming the choice to somebody else -----------------------------------------
+
+class TestTheSettledBinary:
+    """For the caller that has to hand the build to a tool which finds its own
+    by a rule of its own - yt-dlp's ``--ffmpeg-location``."""
+
+    def test_nothing_settled_yet_is_the_empty_string(self, world, monkeypatch):
+        world.enter(monkeypatch)
+        assert ffmpegselect.selected_ffmpeg() == ""
+
+    def test_the_build_the_run_settled_on_is_the_real_path(self, world, monkeypatch):
+        chosen = world.stub(world.home / ".local" / "bin", "ffmpeg", "the local one")
+        world.enter(monkeypatch)
+        ffmpegselect.select_ffmpeg()
+        # The real binary, not the run's symlink to it: the symlink says
+        # nothing about which build this is.
+        assert ffmpegselect.selected_ffmpeg() == chosen
+        assert shutil.which("ffmpeg") != chosen
+
+
 # --- the line itself ------------------------------------------------------------
 
 class TestReport:
