@@ -5,21 +5,21 @@ and every ffmpeg here runs with ``-nostdin`` so a worker cannot eat the console'
 input. So the pause is the operating system's, not the encoder's: SIGSTOP takes a
 job off the run queue wherever it is, SIGCONT puts it back, and nothing between has
 to be encoder-aware. One keystroke reaches every encoder of a chunked file because
-the state is FILES in the run's scratch, not shell variables - a worker in another
-process cannot write back into the shell reading the keyboard, but it can read the
-same flag and register itself in the same directory.
+the state is FILES in the run's scratch - a worker in another process cannot
+write back into the process reading the keyboard, but it can read the same flag
+and register itself in the same directory.
 
 The two orderings that keep the flag and the registry agreeing without a lock:
 ``pause_jobs`` writes the flag BEFORE it walks the registry, and a job registers
 itself BEFORE it looks at the flag. Whichever goes first, the other sees it - so a
 job that starts exactly while the run is paused stops itself instead of running on.
 
-The state lives in the environment the way the shell's globals do: ``PAUSE_JOBS``
-a directory holding one empty file per running pausable job (named by its pid),
-``PAUSE_FLAG`` a file that exists while the run is paused and holds the epoch second
-the pause began, and ``PAUSE_ACCUM`` the seconds already spent paused. ``init``
-arms them; a caller that never armed a pause finds them unset and every question
-here answers "no, none, zero" rather than erroring.
+The state lives in the environment: ``PAUSE_JOBS`` a directory holding one empty
+file per running pausable job (named by its pid), ``PAUSE_FLAG`` a file that
+exists while the run is paused and holds the epoch second the pause began, and
+``PAUSE_ACCUM`` the seconds already spent paused. ``init`` arms them; a caller
+that never armed a pause finds them unset and every question here answers "no,
+none, zero" rather than erroring.
 """
 
 import glob
@@ -52,9 +52,9 @@ __all__ = [
     "PAUSE_ANNOUNCE_RESUME",
 ]
 
-# The two lines the key reader says, the way the shell spells them. The resume line
-# is a FORMAT - "$spent" is filled with the time banked so far - because what was
-# spent depends on when the pause began and ended, which the reader measures.
+# The two lines the key reader says. The resume line is a FORMAT - "$spent" is
+# filled with the time banked so far - because what was spent depends on when the
+# pause began and ended, which the reader measures.
 PAUSE_ANNOUNCE_PAUSE = (
     'Paused - the video encode is stopped and the CPU/GPU is free; press "r" '
     'to resume (its memory is still held, and Ctrl+C still ends the run).'
@@ -165,10 +165,10 @@ def pause_requested() -> bool:
 
 
 def pausable_job_pids() -> list[int]:
-    """Every pid this run has registered as pausable, in the registry's own order -
-    the way the shell's glob lists them, which is the directory's sorted order.
-    Entries whose process is gone, or that this run does not own, are dropped as
-    they are found, so a stale or recycled pid is never signalled."""
+    """Every pid this run has registered as pausable, in the registry's own order,
+    which is the directory's sorted order. Entries whose process is gone, or that
+    this run does not own, are dropped as they are found, so a stale or recycled
+    pid is never signalled."""
     jobs = _jobs_dir()
     if not jobs or not os.path.isdir(jobs):
         return []
@@ -198,9 +198,9 @@ def pausable_job_pids() -> list[int]:
 
 
 def _kill_zero(pid: int) -> bool:
-    """The ``kill -0`` liveness the shell falls back to off /proc: true when the
-    pid is alive and signalable, false when it has gone. A pid we cannot signal for
-    any other reason reads the same as one that is gone, the way the shell's does."""
+    """The ``kill -0`` liveness, the fallback off /proc: true when the pid is alive
+    and signalable, false when it has gone. A pid we cannot signal for any other
+    reason reads the same as one that is gone."""
     try:
         os.kill(pid, 0)
     except OSError:
@@ -210,9 +210,7 @@ def _kill_zero(pid: int) -> bool:
 
 def process_tree(pid: int) -> list[int]:
     """That pid and every descendant of it, parents first - the tree and not the pid
-    alone, because what gets registered is the shell's background child, and whether
-    that child IS the encoder or a subshell that forked it depends on an optimisation
-    in bash. Stopping the tree takes down the helper processes too (a stderr filter,
+    alone. Stopping the tree takes down the helper processes too (a stderr filter,
     a decoder feeding a pipe) that would otherwise spin on a pipe nobody is
     draining."""
     if not str(pid).isdigit():
@@ -226,8 +224,8 @@ def process_tree(pid: int) -> list[int]:
 
 def _children(pid: int) -> list[int]:
     """The direct children of a pid, in the order the kernel reports them. /proc's
-    per-thread ``children`` files where there is one (the shell's own reading
-    order, glob-sorted), ``pgrep -P`` where there is not."""
+    per-thread ``children`` files where there is one (glob-sorted), ``pgrep -P``
+    where there is not."""
     task = "/proc/{}/task".format(pid)
     kids: list[int] = []
     if os.path.isdir(task):
@@ -322,15 +320,14 @@ def unregister_pausable_job(pid: int) -> None:
 
 def run_pausable(command, keep=None) -> int:
     """Run one job so that p and r can stop and continue it, and return exactly what
-    it returned. The job is run in the BACKGROUND and waited for rather than in the
-    foreground, for the one reason that a foreground child's pid is not something the
-    caller can learn: a pause has to know what to signal.
+    it returned. The job is run in the background and waited for, because a pause
+    has to know what to signal.
 
     ``keep`` is an optional line predicate. Given one, the job's stderr is read here
-    and only the lines it accepts are passed on - the shell's ``2> >(grep -v ...)``,
-    kept in this process so that the filter is not one more thing a pause has to
-    stop. A job whose stderr is being read stays readable while it is stopped: it
-    simply writes nothing until it is continued.
+    and only the lines it accepts are passed on, with the filtering kept in this
+    process so that the filter is not one more thing a pause has to stop. A job
+    whose stderr is being read stays readable while it is stopped: it simply
+    writes nothing until it is continued.
     """
     import subprocess as _sp
     import sys
@@ -395,8 +392,8 @@ def resume_jobs(now: int) -> None:
 
 
 def _read_number(path: str) -> int | None:
-    """A file's whole number, the way ``<file`` and the shell's arithmetic read it:
-    a value that is not all digits settles to None rather than being passed on."""
+    """A file's whole number: a value that is not all digits settles to None rather
+    than being passed on."""
     if not path or not os.path.isfile(path):
         return None
     try:
@@ -425,9 +422,8 @@ def wait_while_paused() -> None:
     """Block the caller for as long as the run is paused - for the points BETWEEN
     pausable jobs, so that pausing holds the whole run off rather than only the
     encoder that happened to be running. The wait is a series of short sleeps rather
-    than one long one so that an interrupt is noticed promptly: a shell blocked in a
-    foreground sleep runs no traps until it returns, and a paused run is exactly when
-    somebody decides to stop it instead."""
+    than one long one so that an interrupt is noticed promptly: a paused run is
+    exactly when somebody decides to stop it instead."""
     import time
 
     while pause_requested():
@@ -438,8 +434,8 @@ def wait_while_paused() -> None:
 
 def kill_pausable_jobs() -> None:
     """Continue every job and then take it down. What an interrupt handler calls: it
-    is the only thing that reaches the encoders of a paused run, whose own shells
-    have already been stopped or have gone.
+    is the only thing that reaches the encoders of a paused run, which have already
+    been stopped or have gone.
 
     The CONT is not politeness: a stopped process cannot act on the TERM that
     follows it - the signal queues up behind the SIGSTOP - so a job that is not
@@ -493,12 +489,11 @@ def restore_pause_terminal() -> None:
 def pause_key_reader(stream, now: int, error=None) -> None:
     """The key reader itself, run against a key stream: ``p`` holds the run off,
     ``r`` lets it carry on, and anything else is ignored rather than acted on. The
-    read has a timeout in the shell so the loop comes up for air - it is how a reader
-    notices that the run has been interrupted and stops reading a console it no
-    longer owns; a stream that ends for any other reason means there is no console to
-    read from any more, and the reader leaves quietly and the run carries on without
-    the keys, which is the same thing that happens when there was no terminal to
-    begin with."""
+    loop comes up for air each turn - it is how a reader notices that the run has
+    been interrupted and stops reading a console it no longer owns; a stream that
+    ends for any other reason means there is no console to read from any more, and
+    the reader leaves quietly and the run carries on without the keys, which is the
+    same thing that happens when there was no terminal to begin with."""
     from medialib.lib import formatting
 
     while True:

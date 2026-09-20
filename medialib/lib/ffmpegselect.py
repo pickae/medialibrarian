@@ -5,16 +5,13 @@ resolves them to, which is two different answers on one machine: the build the
 interactive shell finds, and - on the stripped PATH a cron job, a systemd unit
 or a file-manager action runs with - often none at all. This settles it once
 per run, and puts the chosen pair where every later call finds it: the
-script's own, the shared libraries', and the ones inside the exported
-functions the parallel workers run, none of which have to know a choice was
-made. The decision travels to every child in the one thing children already
-inherit - PATH - so nothing here is exported as a name.
+script's own, the shared libraries', and the parallel workers', none of which
+have to know a choice was made. The decision travels to every child in the one
+thing children already inherit - PATH - so nothing here is exported as a name.
 
-The state the shell keeps per run - ``selectedFfmpeg``, ``selectedFfmpegFull``,
-``ffmpegPinnedOnPath`` - is a per-process ``_State``, which a test resets with
-:func:`reset_state`. ``ffmpegOverride`` and ``usage``
-are read from the environment the way the shell reads the caller's variables,
-and the scratch the chosen pair is reached through is the one
+The state kept per run is a per-process ``_State``, which a test resets with
+:func:`reset_state`. ``ffmpegOverride`` and ``usage`` are read from the
+environment, and the scratch the chosen pair is reached through is the one
 :mod:`medialib.lib.ramscratch` claims.
 """
 
@@ -64,9 +61,9 @@ def reset_state():
 
 
 def _executable(path: str) -> bool:
-    """The shell's ``-x``: the execute bit resolves. A DIRECTORY with the bit
-    set passes - which is exactly the shape ``command -v`` itself refuses, so
-    the two checks are not the same check."""
+    """The execute bit resolves. A DIRECTORY with the bit set passes - which
+    is exactly the shape ``_command_v`` itself refuses, so the two checks are
+    not the same check."""
     try:
         return os.access(path, os.X_OK)
     except (OSError, ValueError):
@@ -74,11 +71,11 @@ def _executable(path: str) -> bool:
 
 
 def _command_v(name: str, path: str) -> str | None:
-    """The shell's ``command -v <name>``: the first PATH entry holding a file
-    by that name - a REGULAR file, a link to one, whether or not it is
-    executable; a directory wearing the name and a broken link are not
-    commands. An empty entry is the current directory, and its answer is the
-    relative spelling the shell prints. ``""`` when nothing is found."""
+    """The first PATH entry holding a file by that name - a REGULAR file, a
+    link to one, whether or not it is executable; a directory wearing the name
+    and a broken link are not commands. An empty entry is the current
+    directory, and its answer is the relative ``./`` spelling. ``""`` when
+    nothing is found."""
     for entry in path.split(os.pathsep):
         if entry:
             candidate = entry + "/" + name
@@ -132,11 +129,11 @@ def select_ffmpeg(probe=None) -> int:
     ffprobe call reach it.
 
     ``probe`` is a callable taking a candidate binary and answering true when
-    that build can do what this run needs of it - the shell's probe
-    FUNCTION, by value. Candidates are tried in order and the first that
-    satisfies it wins; without one, the first that exists wins, which on any
-    machine with an ffmpeg on PATH is that one - the ladder then only
-    decides the case where PATH has none. A build that is too old in the
+    that build can do what this run needs of it. Candidates are tried in
+    order and the first that satisfies it wins; without one, the first that
+    exists wins, which on any machine with an ffmpeg on PATH is that one -
+    the ladder then only decides the case where PATH has none. A build that
+    is too old in the
     quiet way - an encoder parameter it logs once and ignores - looks
     exactly like one that applies everything, so the caller that cares asks
     the encoder rather than the version number.
@@ -199,8 +196,8 @@ def select_ffmpeg(probe=None) -> int:
 
 
 def selected_full(state=_STATE) -> int:
-    """``selectedFfmpegFull``: 1 when the chosen build satisfied the caller's
-    probe - and 1 when there was no probe to satisfy.
+    """1 when the chosen build satisfied the caller's probe - and 1 when
+    there was no probe to satisfy.
 
     A caller that asks for more than a distribution's package can do wants to say
     so once, at startup: a build that silently drops half a parameter string
@@ -213,9 +210,9 @@ def selected_full(state=_STATE) -> int:
 def _pin_on_path(selected: str, path: str) -> bool:
     """Put the chosen pair where every later call finds it: a directory of
     this run's own holding just those two names, at the front of PATH - in
-    the script, in the shared libraries, in the exported functions the
-    workers run, none of which have to know a choice was made, and nothing
-    else on PATH is shadowed because the directory holds nothing else.
+    the script, in the shared libraries, in the workers, none of which have
+    to know a choice was made, and nothing else on PATH is shadowed because
+    the directory holds nothing else.
 
     Skipped entirely when the winner is already what PATH resolves to - the
     common case - and the environment is left untouched. Answers True when
@@ -246,9 +243,9 @@ def _pin_on_path(selected: str, path: str) -> bool:
 
 def ffmpeg_version(binary: str) -> str:
     """The build's version field: the third word of the first line of
-    ``-hide_banner -version`` - the shell's ``head -n1 | cut -d' ' -f3``,
-    which, cut having no ``-s``, hands the whole line back when it holds
-    fewer than three words: the tell a stub or a broken build gives."""
+    ``-hide_banner -version`` - and when the line holds fewer than three
+    words the whole line is handed back: the tell a stub or a broken build
+    gives."""
     try:
         proc = subprocess.run(
             [binary, "-hide_banner", "-version"],

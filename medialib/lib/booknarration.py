@@ -9,11 +9,10 @@ ffmpeg, ffprobe, the venv python) are called through the process boundary, so a
 test stands the shared tool stub in for each and asserts on the dispatch: which
 tool, with which arguments, and what the module made of the answer.
 
-The state the shell keeps in exported globals (narrationHome, narrationPython,
-narrationDevice, narrationEnvReady) lives in the environment here, and the
-configuration the shell sets at source time is read from the environment with its
-source-time default, so a caller that never initialised anything still gets the
-answers the module would have given.
+The state (narrationHome, narrationPython, narrationDevice, narrationEnvReady)
+lives in the environment, and the configuration is read from the environment
+with its built-in default, so a caller that never initialised anything still
+gets the answers the module would have given.
 """
 
 import os
@@ -56,9 +55,9 @@ __all__ = [
     "voice_sample_for",
 ]
 
-# The engine's language table, as one scalar string so the parallel workers inherit
-# it the way the shell's export does. One row per engine whose set is known; an
-# engine with no row is not second-guessed - app.py owns that answer.
+# The engine's language table, as one scalar string so the parallel workers
+# inherit it. One row per engine whose set is known; an engine with no row is
+# not second-guessed - app.py owns that answer.
 _ENGINE_LANGUAGES = (
     "xtts:ara,ces,deu,eng,fra,hin,hun,ita,jpn,kor,nld,pol,por,rus,spa,tur,zho"
 )
@@ -69,9 +68,8 @@ _TORCHCODEC_PAIRS = "2.9:0.9 2.10:0.10 2.11:0.11"
 # The mark that recognises this repo's own sitecustomize.py.
 _SOUNDFILE_MARK = "_load_with_soundfile_fallback"
 
-# The text the sitecustomize.py is written with, exactly as the shell heredoc
-# spells it - the mark above is in it, and the removal searches the whole file for
-# it rather than only the head.
+# The text the sitecustomize.py is written with - the mark above is in it, and
+# the removal searches the whole file for it rather than only the head.
 _SITECUSTOMIZE = '''# Auto-imported by Python at startup for every script run in this venv.
 #
 # torchaudio >= 2.9's torchaudio.load() routes unconditionally through
@@ -138,9 +136,9 @@ _NORMALIZE_VERSION = r"""        def _normalize_version(v:str)->tuple:
 # Where that definition goes: the next helper down in the same scope.
 _NORMALIZE_ANCHOR = "        def version_classify("
 
-# The script narrationPackageSeries feeds the venv python on stdin, exactly as the
-# shell heredoc does: the package's version from its METADATA, never by importing
-# it - torchcodec is asked about precisely because importing it is what fails.
+# The script narrationPackageSeries feeds the venv python on stdin: the
+# package's version from its METADATA, never by importing it - torchcodec is
+# asked about precisely because importing it is what fails.
 _PACKAGE_SERIES = """import sys
 from importlib.metadata import version, PackageNotFoundError
 
@@ -162,14 +160,13 @@ _PROGRESS_BAR = "%|"
 _SESSION_ID = frozenset(
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-")
 
-# The whitespace the shell's [[:space:]] names in the C locale.
+# The whitespace of the C locale.
 _C_SPACE = " \t\n\r\f\v"
 
 
 def _config(name, default):
-    """A configuration value, read from the environment with its source-time
-    default - the shell sets these at source time, and a caller that never set
-    them gets the module's own answer."""
+    """A configuration value, read from the environment with its default - a
+    caller that never set it gets the module's own answer."""
     return os.environ.get(name, default)
 
 
@@ -181,13 +178,13 @@ def _noop(*_args):
 
 
 def _command_v(name):
-    """The shell's ``command -v <name>``: the path it resolves to, or None.
+    """The path a name resolves to, or None.
 
     A name with a slash is found when it is executable - a directory with the
-    bit set passes, the way this shell's command -v answers it. A bare name is
-    the first PATH entry holding a file by that name, whether or not executable
-    (a directory and a broken link are not commands), an empty entry meaning the
-    current directory and its answer the relative spelling.
+    bit set passes. A bare name is the first PATH entry holding a file by that
+    name, whether or not executable (a directory and a broken link are not
+    commands), an empty entry meaning the current directory and its answer the
+    relative spelling.
     """
     if os.sep in name:
         return name if os.access(name, os.X_OK) else None
@@ -200,10 +197,9 @@ def _command_v(name):
 
 
 def _run(argv, **kwargs):
-    """A tool call through the process boundary, with the shell's silence on
-    stdin; stdout and stderr go where the caller points them, the way the
-    shell's redirects do. An absent tool is the call's own failure, the
-    shell's 127."""
+    """A tool call through the process boundary, with stdin silenced; stdout
+    and stderr go where the caller points them. An absent tool is the call's
+    own failure."""
     if "input" not in kwargs:
         kwargs.setdefault("stdin", subprocess.DEVNULL)
     try:
@@ -213,31 +209,30 @@ def _run(argv, **kwargs):
 
 
 def _silenced(argv):
-    """A call the shell runs with ``>/dev/null 2>&1``: only its status is asked
-    of it."""
+    """A call with stdout and stderr silenced: only its status is asked of
+    it."""
     proc = _run(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return proc is not None and proc.returncode == 0
 
 
 def _console(argv):
-    """A call the shell runs with no redirects at all: its output goes to the
-    console as the shell's would, and only its status is asked of it."""
+    """A call with no redirection at all: its output goes to the console, and
+    only its status is asked of it."""
     proc = _run(argv)
     return proc is not None and proc.returncode == 0
 
 
 def _python_ok(python, args):
-    """``"$python" <args...> >/dev/null 2>&1`` - true when it exits 0."""
+    """A silenced python call - true when it exits 0."""
     return _silenced([python] + list(args))
 
 
 def _python_stdout(python, args):
-    """The call's stdout, or None when it does not exit 0 - the shell's
-    ``out="$(... 2>/dev/null)" || ...``.
+    """The call's stdout, or None when it does not exit 0.
 
-    Only TRAILING newlines come off, because that is all command substitution
-    removes: a leading space would still be part of the answer, and the readers
-    of this go on to split what they are handed on its first dot.
+    Only TRAILING newlines come off: a leading space would still be part of the
+    answer, and the readers of this go on to split what they are handed on its
+    first dot.
     """
     proc = _run([python] + list(args), stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL)
@@ -247,10 +242,10 @@ def _python_stdout(python, args):
 
 
 def _pyenv_root():
-    """``pyenv root 2>/dev/null || true``: what it PRINTED, whatever it exited
-    with. The shell swallows that status deliberately - a pyenv that names its
-    root and then fails has still named it - so a reader that required success
-    would walk past every interpreter that root holds."""
+    """What ``pyenv root`` printed, whatever it exited with. The status is
+    swallowed deliberately - a pyenv that names its root and then fails has
+    still named it - so a reader that required success would walk past every
+    interpreter that root holds."""
     proc = _run(["pyenv", "root"], stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL)
     if proc is None:
@@ -271,7 +266,7 @@ def narration_supports_language(code, engine=None):
     if engine is None:
         engine = _config("narrationEngine", "xtts")
     engine = shell_lower(engine)
-    # The shell splits the table on semicolons and then on whitespace.
+    # The table is split on semicolons and then on whitespace.
     for row in _config("narrationEngineLanguages", _ENGINE_LANGUAGES).replace(";", " ").split():
         name, _sep, codes = row.partition(":")
         if name != engine:
@@ -286,7 +281,7 @@ def narration_language_list(engine=None):
     if engine is None:
         engine = _config("narrationEngine", "xtts")
     engine = shell_lower(engine)
-    # The shell splits the table on semicolons and then on whitespace.
+    # The table is split on semicolons and then on whitespace.
     for row in _config("narrationEngineLanguages", _ENGINE_LANGUAGES).replace(";", " ").split():
         name, _sep, codes = row.partition(":")
         if name == engine:
@@ -362,7 +357,7 @@ def narration_base_python():
     pyenv's own versions are looked at before PATH, because a machine with pyenv
     usually has its supported interpreters there and only the unsupported system
     one on PATH. Returns the path the first qualifying candidate resolves to, or
-    None when nothing qualifies - the shell's ``return 1``.
+    None when nothing qualifies.
     """
     min_minor = int(awk_number(_config("narrationPythonMinMinor", "10")))
     max_minor = int(awk_number(_config("narrationPythonMaxMinor", "12")))
@@ -414,7 +409,7 @@ def _pyenv_versions_bare():
 def narration_ensure_venv(log=None):
     """The checkout's own interpreter, creating the plain venv when it is not
     there yet. Returns the interpreter path, or None when no base python can be
-    found - the refusal the shell prints and the ``return 1``."""
+    found, having printed the refusal."""
     if log is None:
         log = _noop
     home = os.environ.get("narrationHome", "")
@@ -452,8 +447,8 @@ def narration_ensure_venv(log=None):
 
 def narration_package_series(distribution):
     """The "<major>.<minor>" of an installed package, from its METADATA rather
-    than by importing it. Returns the series, or None when it is not installed
-    - the shell's ``SystemExit(1)``."""
+    than by importing it. Returns the series, or None when it is not
+    installed."""
     python = os.environ.get("narrationPython", "")
     if not python:
         return None
@@ -636,8 +631,7 @@ def init_book_narration(checkout=None, device=None, log=None):
     """Settle everything about HOW this run narrates, once, before any book is
     read: which checkout, which interpreter, which device - and apply the
     preparations to that checkout. Returns 0 on success, 1 on a refusal. The
-    settled values are left in the environment the way the shell's exports
-    leave them."""
+    settled values are left in the environment."""
     if log is None:
         log = _noop
     checkout = checkout or os.environ.get("narrationHome", "")
@@ -658,8 +652,7 @@ def init_book_narration(checkout=None, device=None, log=None):
             "was changed.\n")
         return 1
 
-    # cd -- dir && pwd settles the path the way the shell does: absolute, the
-    # symlinks still standing.
+    # The checkout is settled to an absolute path, the symlinks still standing.
     os.environ["narrationHome"] = os.path.abspath(os.path.expanduser(checkout))
 
     narration_fix_device_detection(log)
@@ -738,8 +731,8 @@ def narrate_book(book, out_dir, voice="", language=None, log_file=None):
     home = os.environ.get("narrationHome", "")
     if not python or not home:
         return None
-    # The venv's own bin first, exactly as activating the env would - the
-    # shell's ${narrationPython%/*}, a name without a slash staying itself.
+    # The venv's own bin first, exactly as activating the env would - a name
+    # without a slash staying itself.
     slash = python.rfind("/")
     head = python[:slash] if slash >= 0 else python
     narration_env = dict(os.environ)
@@ -772,9 +765,8 @@ def narrate_book(book, out_dir, voice="", language=None, log_file=None):
 
 def _tee_run(argv, log_file, cwd, env):
     """The verbose engine call: its output goes to the log and to the console
-    stderr at once, the shell's ``{ ...; } | tee -- log >&2``. The console side
-    is file descriptor 2 itself, the way ``>&2`` names it, so it survives the
-    test's swap of sys.stderr."""
+    stderr at once. The console side is file descriptor 2 itself, so it
+    survives the test's swap of sys.stderr."""
     with open(log_file, "wb") as handle:
         console = os.fdopen(2, "wb", closefd=False)
         proc = subprocess.Popen(list(argv), cwd=cwd, env=env,
@@ -795,13 +787,13 @@ def _media_duration(path):
     file ffprobe cannot read a duration from, so arithmetic on the result never
     trips.
 
-    The shell is ``ffprobe ... 2>/dev/null || echo 0``, and the ``|| echo 0``
-    APPENDS: a probe that prints something and then fails hands back what it
-    printed AND the zero, on the same stream. So a probe that prints "3600.0"
-    with no newline of its own and exits 1 answers "3600.00", and one that
-    prints a whole line answers two lines - neither of which is the "0" a
-    caller reading only the status would expect, and both of which the
-    arithmetic downstream reads differently (see awk_gt).
+    On failure a "0" is APPENDED to whatever the probe printed, on the same
+    stream: a probe that prints something and then fails hands back what it
+    printed AND the zero. So a probe that prints "3600.0" with no newline of
+    its own and exits 1 answers "3600.00", and one that prints a whole line
+    answers two lines - neither of which is the "0" a caller reading only the
+    status would expect, and both of which the arithmetic downstream reads
+    differently (see awk_gt).
     """
     proc = _run(["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
                  "-of", "default=nk=1:nw=1", path],
@@ -865,8 +857,8 @@ def narration_lossless_master(log_file, audiobook=None):
     except OSError:
         return None
 
-    # The sed: the leading run of non-slashes must name a Completed, and the
-    # candidate is what the line is from its first slash on.
+    # The leading run of non-slashes must name a Completed, and the candidate
+    # is what the line is from its first slash on.
     candidates = []
     for line in lines:
         slash = line.find("/")
@@ -883,19 +875,18 @@ def narration_lossless_master(log_file, audiobook=None):
             continue
         if "/chapters/" in candidate:
             continue
-        # awk -v r="$reference" '... !(r > 0)': a reference that does not look
-        # like a number is compared as text, and "N/A" > "0" holds - so an
-        # audiobook whose duration could not be read still asks for the check.
+        # A reference that does not look like a number is compared as text, and
+        # "N/A" > "0" holds - so an audiobook whose duration could not be read
+        # still asks for the check.
         if awk_gt(reference, 0):
             duration = _media_duration(candidate)
             ref_number = awk_number(reference)
             diff = awk_number(duration) - ref_number
             if diff < 0:
                 diff = -diff
-            # The inner awk is `b > 0 && d / b <= tol` over that SAME reference:
-            # the gate holds by the string comparison and the division then
-            # divides by zero, which is fatal in awk - and the shell's
-            # `|| continue` reads that death as "not this candidate".
+            # The gate can hold by the string comparison while the reference
+            # divides to zero, where the division that would follow is
+            # undefined - so a zero reference is read as "not this candidate".
             if ref_number == 0:
                 continue
             if diff / ref_number > tolerance:
@@ -973,16 +964,16 @@ def voice_sample_window(src, duration):
     out."""
     duration_number = awk_number(duration)
     search_seconds = awk_number(_config("voiceSampleSearchSeconds", "180"))
-    # start = d / 2 - s / 2, clamped at 0, as awk's double printf %.3f prints it.
+    # start = d / 2 - s / 2, clamped at 0, to three decimals.
     start = duration_number / 2 - search_seconds / 2
     if start < 0:
         start = 0
     search_start = "%.3f" % start
-    # len = s, clamped so the window does not run past the end of the file. The
-    # awk is `if (st + len > d)`, and d is the raw duration: a duration that does
-    # not look like a number is compared as TEXT against the window's own length,
-    # so an unreadable file is not clamped to nothing - the whole search window is
-    # probed, which is what the arm above has already decided to do.
+    # len = s, clamped so the window does not run past the end of the file,
+    # against the RAW duration: a duration that does not look like a number is
+    # compared as TEXT against the window's own length, so an unreadable file is
+    # not clamped to nothing - the whole search window is probed, which is what
+    # the arm above has already decided to do.
     length = search_seconds
     if awk_gt(awk_number(search_start) + length, duration):
         length = duration_number - awk_number(search_start)
@@ -1005,7 +996,7 @@ def voice_sample_window(src, duration):
 def _select_window(silence_text, search_start, search_length):
     """The window selection over the silence lines the silencedetect probe
     printed: the gaps, the stretches between the long ones, the best stretch,
-    and the edges nudged out of any short pause - the whole awk END block."""
+    and the edges nudged out of any short pause."""
     win_start = awk_number(search_start)
     win_len = awk_number(search_length)
     want = awk_number(_config("voiceSampleSeconds", "45"))
@@ -1098,8 +1089,7 @@ def _select_window(silence_text, search_start, search_length):
 
 
 def _probe_codec(src):
-    """The file's first audio codec name, or "" when there is none - the
-    shell's ``ffprobe -select_streams a:0 ... | head -n1``."""
+    """The file's first audio codec name, or "" when there is none."""
     proc = _run(["ffprobe", "-v", "quiet", "-select_streams", "a:0",
                  "-show_entries", "stream=codec_name", "-of",
                  "default=nk=1:nw=1", src],
@@ -1126,10 +1116,9 @@ def prepare_voice_sample(src, scratch_dir, log=None):
     extension = lower_extension_of(src)
 
     cut_args = []
-    # awk -v d="$duration" -v m="$voiceSampleMaxSeconds" '... !(d > m)': both
-    # sides are strnums, so a duration that does not LOOK like a number is
-    # compared as text - and an unreadable file ("N/A", or a probe that printed a
-    # word and failed) reads as OVER-LONG rather than as empty.
+    # A duration that does not LOOK like a number is compared as text - and an
+    # unreadable file ("N/A", or a probe that printed a word and failed) reads
+    # as OVER-LONG rather than as empty.
     if awk_gt(duration, _config("voiceSampleMaxSeconds", "60")):
         window = voice_sample_window(src, duration)
         parts = window.split()
@@ -1214,8 +1203,7 @@ def prepare_voice_samples(given, scratch_dir, log=None):
     if not os.path.isdir(given):
         return None
 
-    # Every file directly in the directory, in sorted order - the shell's
-    # find -maxdepth 1 -type f | sort -z.
+    # Every file directly in the directory, in sorted order.
     try:
         names = []
         for name in os.listdir(given):

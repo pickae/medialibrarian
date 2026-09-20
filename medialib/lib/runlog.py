@@ -19,14 +19,13 @@ __all__ = ["log", "counted_prefix", "cpu_count", "can_lock", "have_flock",
 def can_lock() -> bool:
     """Whether this host can serialise the shared counters at all.
 
-    Two ways, and either will do. ``flock(1)`` on PATH is the shell's own
-    answer and stays the first one asked, so a Linux box that has had the tool
+    Two ways, and either will do. ``flock(1)`` on PATH stays the first one
+    asked, so a Linux box that has had the tool
     taken off it still reads as it always did. Failing that, the C library's
     own ``flock`` - which is what :func:`take_lock` actually calls - and that
     is the rung macOS lands on: it has never shipped the util-linux command
     line tool, but the system call has been there all along, so refusing to
-    count on a Mac would have been the port declining a facility it was
-    already using.
+    count on a Mac would have declined a facility it was already using.
 
     Windows reaches neither and answers no, which is the honest answer there:
     ``fcntl`` is a POSIX module and is not built into that interpreter.
@@ -78,8 +77,7 @@ def take_lock(handle):
     locked while its siblings printed the countless progress line would count
     correctly and say something else. The variable is the whole run's one
     answer, so a parent that settled "no" is obeyed here even on a host that
-    could lock. Never raises, the way the shell's always returns 0, so the
-    block's body runs either way.
+    could lock. Never raises, so the block's body runs either way.
     """
     locked = False
     if have_flock():
@@ -103,7 +101,7 @@ def take_lock(handle):
 def log(*message: object, stream=None) -> None:
     """``log``: one line on stderr, timestamped only when the run asked for it.
 
-    The arguments are joined with spaces, the way ``"$*"`` joins them.
+    The arguments are joined with spaces.
     """
     text = " ".join(str(part) for part in message)
     if os.environ.get("LOG_TIMESTAMPS", ""):

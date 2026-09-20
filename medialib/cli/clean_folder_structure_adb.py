@@ -278,11 +278,10 @@ def read_mapping(mirror: str):
 def replay(device: Device, device_root: str, mapping, plan: Plan) -> None:
     """Print the plan and, unless this is a preview, apply it.
 
-    In SORTED order, not the mapping's own. A bash associative array iterates in
-    hash order, so without this the plan came out shuffled and an A -> B, B -> C
-    chain resolved differently from run to run. Sorting does not untangle such a
-    chain - it makes the outcome the same every time and the plan readable,
-    which is what a plan is for.
+    In SORTED order, not the mapping's own: without a fixed order, an A -> B,
+    B -> C chain could resolve differently from run to run. Sorting does not
+    untangle such a chain - it makes the outcome the same every time and the
+    plan readable, which is what a plan is for.
     """
     ensured = {"."}
     for old in sorted(mapping, key=os.fsencode):

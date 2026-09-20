@@ -57,10 +57,9 @@ def whisper_works(device: str, compute_type: str, model: str,
     """The functional probe of one device/compute/model combo.
 
     Makes half a second of silence in ``ram_root`` with ffmpeg, then asks
-    whisper-ctranslate2 to transcribe it with exactly the arguments the bash
-    does. Returns the probe's own exit status: 0 when it transcribed, 1 when
-    the probe audio could not be made (whisper is never asked), the
-    transcription tool's own status otherwise.
+    whisper-ctranslate2 to transcribe it. Returns the probe's own exit status:
+    0 when it transcribed, 1 when the probe audio could not be made (whisper
+    is never asked), the transcription tool's own status otherwise.
     """
     probe = os.path.join(ram_root, "whisperProbe.wav")
     try:
@@ -70,8 +69,7 @@ def whisper_works(device: str, compute_type: str, model: str,
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL)
     except OSError:
-        # An ffmpeg the host does not have is a failed probe, the bash's
-        # ``ffmpeg ... || return 1`` on a 127.
+        # An ffmpeg the host does not have is a failed probe.
         return 1
     if made.returncode != 0:
         return 1
@@ -83,15 +81,15 @@ def whisper_works(device: str, compute_type: str, model: str,
              "--compute_type", compute_type, "--threads", threads],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except OSError:
-        # The bash's last command is the pipx itself, so an absent pipx answers
-        # the shell's own 127, which the function passes straight back.
+        # An absent pipx answers 127, which the function passes straight
+        # back.
         return 127
     return ran.returncode
 
 
 def _nvidia_smi(args) -> str:
     """nvidia-smi's stdout for these arguments, or ``""`` when the tool is
-    absent - the bash's ``2>/dev/null`` on a command that cannot run."""
+    absent."""
     try:
         proc = subprocess.run(["nvidia-smi"] + list(args),
                               stdout=subprocess.PIPE,
@@ -102,11 +100,12 @@ def _nvidia_smi(args) -> str:
 
 
 def _fits(free_vram: str, model_vram: int) -> bool:
-    """The bash's ``((freeVram >= modelVram * whisperJobs))``.
+    """True when the free VRAM is at least the model's figure times
+    ``WHISPER_JOBS``.
 
     A numeric figure is compared; anything the arithmetic cannot read - a
     query that printed a word instead of a number - is a failed comparison,
-    the way bash's arithmetic reports it, and the row is skipped.
+    and the row is skipped.
     """
     try:
         return int(free_vram) >= model_vram * WHISPER_JOBS
@@ -119,18 +118,16 @@ def init_whisper_model(cores: str, ram_root: str, log) -> dict:
 
     ``cores`` is the CPU core count whisper's thread count is capped against,
     ``ram_root`` the scratch the probe writes its silence into, ``log`` the
-    caller's log -
-    a one-argument callable, the way the bash expects it. The settled values
-    come back as a dict the way the bash's exports leave them: ``device``,
-    ``computeType``, ``model`` (the best overall), ``modelMulti`` (the best
-    MULTILINGUAL one - English-only models cannot do detection or translation)
-    and ``threads``.
+    caller's log - a one-argument callable. The settled values come back as a
+    dict: ``device``, ``computeType``, ``model`` (the best overall),
+    ``modelMulti`` (the best MULTILINGUAL one - English-only models cannot do
+    detection or translation) and ``threads``.
     """
     # whisper's thread count: the core count capped at 4, where whisper's own
     # default proved fastest on the CPU - int8 transcription is
     # memory-bandwidth bound, so a run does not get faster with more
-    # intra-threads and in practice runs slower with them. The shell caps in
-    # $(( )), which reads a word it cannot parse as 0.
+    # intra-threads and in practice runs slower with them. A core count that
+    # cannot be parsed reads as 0.
     try:
         count = int(cores)
     except (TypeError, ValueError):
@@ -143,9 +140,8 @@ def init_whisper_model(cores: str, ram_root: str, log) -> dict:
 
     listing = _nvidia_smi(["-L"])
     if any(line.startswith("GPU") for line in listing.splitlines()):
-        # First line of the memory query, the way the bash's ``head -n1``
-        # reads it, with the bash's ``:-0`` default for a query that printed
-        # nothing.
+        # First line of the memory query, with a 0 default for a query that
+        # printed nothing.
         query = _nvidia_smi(
             ["--query-gpu=memory.free", "--format=csv,noheader,nounits"])
         lines = query.splitlines()

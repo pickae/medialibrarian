@@ -9,10 +9,7 @@ exactly ONE member - the first page in natural sort order, the order the comic
 conversion numbers pages in - to a pipe, never to disk.
 
 Both row builders answer with a row, or with a reason the file could not be read
-as what its suffix claims. The shell leaves those in ``CENSUS_ROW`` and
-``CENSUS_SKIP_REASON`` because its caller must not run the builders in a
-subshell; here they are the return value, and the caller's own globals are the
-environment the way the shell's exports are.
+as what its suffix claims.
 """
 
 import os
@@ -49,7 +46,7 @@ def _config(name, default):
 
 
 def _flag(name):
-    """A CENSUS_HAVE_* answer, which the shell tests with ``[[ -n ]]``."""
+    """A CENSUS_HAVE_* answer: whether the named tool is present."""
     return os.environ.get(name, "") != ""
 
 
@@ -58,9 +55,8 @@ def _extensions(name, default):
 
 
 def extension_list(extensions):
-    """``"jpg jpeg png"`` -> ``".jpg / .jpeg / .png"`` - the shell's
-    ``extensionList``, which the no-page skip reason spells the looked-for
-    suffixes with."""
+    """``"jpg jpeg png"`` -> ``".jpg / .jpeg / .png"`` - which the no-page skip
+    reason spells the looked-for suffixes with."""
     out = ""
     for extension in extensions:
         out += (" / " if out else "") + "." + extension
@@ -68,21 +64,20 @@ def extension_list(extensions):
 
 
 def _first_word(text):
-    """The first whitespace-separated word, the way ``read -r first _ _`` takes
-    it off a here-string: an empty string when there is none."""
+    """The first whitespace-separated word, or an empty string when there is
+    none."""
     fields = text.split()
     return fields[0] if fields else ""
 
 
 def _capture(argv):
-    """A tool's stdout WHATEVER it exited with - the shell's ``tool | ...`` and
-    its ``tool ... || true``.
+    """A tool's stdout WHATEVER it exited with - the status is discarded on
+    purpose, because a pipeline's status is only its last stage's.
 
-    Both of those discard the status deliberately: a pipeline's status is its
-    last stage's, and the ``|| true`` says so outright. pdfimages exiting
-    non-zero on a PDF it still described, and an extractor that wrote the page
-    and then complained, are both read for what they printed. An absent tool is
-    the empty answer, which is the shell's 127 with nothing on stdout.
+    A tool that exits non-zero yet still printed its answer is read for what it
+    printed: pdfimages exiting non-zero on a PDF it still described, and an
+    extractor that wrote the page and then complained, both count. An absent
+    tool is the empty answer.
     """
     try:
         proc = subprocess.run(list(argv), stdout=subprocess.PIPE,
@@ -94,8 +89,7 @@ def _capture(argv):
 
 
 def _capture_or_empty(argv):
-    """A tool's stdout, or b"" when it failed - the shell's
-    ``out="$(tool ... 2>/dev/null)" || out=""``, where the status is what decides
+    """A tool's stdout, or b"" when it failed - the status is what decides
     whether the archive opened at all."""
     try:
         proc = subprocess.run(list(argv), stdout=subprocess.PIPE,
@@ -218,8 +212,8 @@ def _pdf_first_page(file):
             continue
         if fields[2] not in ("image", "stencil"):
             continue
-        # awk's %d, which TRUNCATES toward zero - not the shell printf's %.0f,
-        # which rounds half to even. A width of "12.7" is 12 columns here.
+        # Truncated toward zero rather than rounded half to even. A width of
+        # "12.7" is 12 columns here.
         width = int(awk_number(fields[3]))
         height = int(awk_number(fields[4]))
         return "%dx%d" % (width, height), shell_lower(fields[8])
@@ -311,9 +305,9 @@ def _identify(file, extension, member):
     """ImageMagick's format and pixel size for that one member, as
     ``(codec, WxH)``.
 
-    The format is ``%m %wx%h\\n`` - a backslash and an n, because the shell
-    writes it inside single quotes and it is identify that turns them into a line
-    break. Passing a real newline would be a different argument.
+    The format is ``%m %wx%h\\n`` - a backslash and an n, which ``identify``
+    turns into a line break. Passing a real newline would be a different
+    argument.
 
     The member is extracted to a PIPE, so nothing is decoded past the first page
     and nothing is written into the library being censused. The carriage returns
@@ -357,7 +351,7 @@ def census_zip_pattern(name):
     itself.
 
     unzip has no "literal name" option - every name on its command line is a
-    shell pattern - so a page called "01 [scan].jpg" would be asked for as a
+    glob pattern - so a page called "01 [scan].jpg" would be asked for as a
     character class and not found. The three metacharacters are each wrapped in a
     one-element class, which is unzip's own way of quoting them, and "[" goes
     first because the replacements for "*" and "?" introduce brackets of their

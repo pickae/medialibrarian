@@ -5,11 +5,11 @@ Everything that gets a movie its ``.xx.srt`` files and keeps them in sync: a
 names a language are renamed to the ``<movie>.<xx>.srt`` convention, a fetched
 sidecar is aligned to the audio, and a subtitle that cannot be aligned is
 thrown out rather than kept out of step. ``sync_subtitle`` is the one function
-the parallel commentary workers run (bash exports it for them), so its three
-outcomes - synced, died, refused - are reported as a status rather than an
-exception: ffsubsync exits 0 both when it applied an alignment and when its
-quality check refused one, so the verdict comes from the log file, never from
-stderr (which rich hard-wraps wherever COLUMNS is unset).
+the parallel commentary workers run, so its three outcomes - synced, died,
+refused - are reported as a status rather than an exception: ffsubsync exits 0
+both when it applied an alignment and when its quality check refused one, so
+the verdict comes from the log file, never from stderr (which rich hard-wraps
+wherever COLUMNS is unset).
 """
 
 from __future__ import annotations
@@ -31,20 +31,18 @@ __all__ = [
     "download_subs",
 ]
 
-# The folder names downloadSubs leaves alone: the extras that live beside a
-# movie, matched as a substring of the movie folder's path, the way bash's
-# ``$dir == *"Featurettes"*`` does.
+# The folder names download_subs leaves alone: the extras that live beside a
+# movie, matched as a substring of the movie folder's path.
 EXTRAS_WORDS = ("Featurettes", "Other", "Scenes", "Interviews",
                 "Shorts", "Trailers", "Extras")
 
 
 def _move(source: str, destination: str) -> None:
-    """``mv -- source destination || true``, with mv's destination rule: a
-    destination that is a directory receives the source under its own name, and
-    the kernel's rename then decides what an existing name of that shape allows
-    - a file is replaced, a folder replaces an empty folder of its own name,
-    and a file onto a folder or a folder onto a non-empty one is left where it
-    is rather than failing the run."""
+    """A destination that is a directory receives the source under its own
+    name, and the kernel's rename then decides what an existing name of that
+    shape allows - a file is replaced, a folder replaces an empty folder of
+    its own name, and a file onto a folder or a folder onto a non-empty one is
+    left where it is rather than failing the run."""
     if os.path.isdir(destination):
         destination = os.path.join(destination, os.path.basename(source))
     if safety.would_hide(destination):
@@ -58,14 +56,12 @@ def _move(source: str, destination: str) -> None:
 def move_subs(directory: str) -> None:
     """Lift the content of every ``*Subs`` folder exactly one level down.
 
-    bash's ``find -maxdepth 2 -mindepth 2 -type d -name '*Subs'``: the folder
-    is two levels below the one handed in (a movie's own ``Subs``), the name
-    match is case-sensitive, and an entry whose name is taken at the level
-    above (by a non-empty folder, or by a file when the entry is one) is left
-    where it is rather than failing the run. The match is ``find -P -type d``:
-    a symlink is a link, so neither a linked movie folder is descended into
-    nor a linked ``*Subs`` lifted, while a link INSIDE the lifted folder moves
-    as a link.
+    The folder is two levels below the one handed in (a movie's own ``Subs``),
+    the name match is case-sensitive, and an entry whose name is taken at the
+    level above (by a non-empty folder, or by a file when the entry is one) is
+    left where it is rather than failing the run. A symlink is a link, so
+    neither a linked movie folder is descended into nor a linked ``*Subs``
+    lifted, while a link INSIDE the lifted folder moves as a link.
     """
     for entry in os.listdir(directory):
         movie_dir = os.path.join(directory, entry)
@@ -78,8 +74,8 @@ def move_subs(directory: str) -> None:
                     or not subs_name.endswith("Subs"):
                 continue
             for name in os.listdir(subs_dir):
-                # the folder itself, the way `mv -- "$entry" ../` hands mv a
-                # directory and lets its destination rule name the entry in it
+                # the folder itself: _move's destination rule names the entry
+                # in it
                 _move(os.path.join(subs_dir, name), movie_dir)
 
 
@@ -87,21 +83,19 @@ def rename_subs(directory: str, skip_log: SkipLog | None = None) -> None:
     """Rename sidecars whose name names a language to ``<movie>.<xx>.srt``.
 
     For every movie folder and every language of the table, a sidecar matching
-    ``*<SubWord>.srt`` case-insensitively (bash's ``-iname``) is renamed to the
-    movie's own name with the language's code2. A sidecar nested one level down
-    still names the movie it belongs to. A target that already exists is
-    skipped - and the skip is recorded, the way ``recordSafetySkip`` does -
-    rather than overwriting the subtitle that got there first. The walk is
-    ``find -P``: a linked movie folder is not a movie, a linked sidecar is not
-    a file, and a linked subfolder is not descended into.
+    ``*<SubWord>.srt`` case-insensitively is renamed to the movie's own name
+    with the language's code2. A sidecar nested one level down still names the
+    movie it belongs to. A target that already exists is skipped - and the
+    skip is recorded - rather than overwriting the subtitle that got there
+    first. A linked movie folder is not a movie, a linked sidecar is not a
+    file, and a linked subfolder is not descended into.
     """
     for movie in os.listdir(directory):
         movie_dir = os.path.join(directory, movie)
         if os.path.islink(movie_dir) or not os.path.isdir(movie_dir):
             continue
-        # The shell's order: one find per language, the way the safety-skip
-        # report it produces reads - a movie's skips come back language by
-        # language, not file by file.
+        # One pass per language: the safety-skip report it produces reads a
+        # movie's skips language by language, not file by file.
         for row in languages.LANGUAGES:
             suffix = row.sub_word.lower() + ".srt"
             target = "{}/{}.{}".format(movie, movie, row.code2) + ".srt"
@@ -112,9 +106,9 @@ def rename_subs(directory: str, skip_log: SkipLog | None = None) -> None:
                     source = os.path.join(dirpath, filename)
                     if os.path.islink(source):
                         continue
-                    # The two spellings bash compares: the find output keeps
-                    # the "./" the walk started from, the target is built from
-                    # it with the "./" stripped.
+                    # The two spellings compared: subtitle keeps the "./" the
+                    # walk started from; the target is the same path without
+                    # it.
                     subtitle = "./" + os.path.relpath(source, directory)
                     if os.path.exists(os.path.join(directory, target)) \
                             and subtitle != target:
@@ -140,8 +134,8 @@ def sync_subtitle(reference: str, srt: str, max_offset: str,
     if quality == "yes":
         quality_args = ["--skip-sync-on-low-quality",
                         "--quality-max-offset-seconds", quality_offset]
-    # mktemp -d honours TMPDIR; the explicit dir keeps this call on the same
-    # directory without consulting tempfile's cached resolution of it
+    # The explicit dir honours TMPDIR without consulting tempfile's cached
+    # resolution of it
     try:
         log_dir = tempfile.mkdtemp(dir=os.environ.get("TMPDIR"))
     except OSError:
@@ -267,9 +261,9 @@ def download_subs(directory: str, user: str, password: str,
     throttled.
     """
     def spell(rel):
-        # the way find spells a path under the start point it was given: a bare
-        # "." writes "./name", a trailing slash is not doubled, and anything
-        # else joins with a single slash
+        # how a path under the start point is spelled: a bare "." writes
+        # "./name", a trailing slash is not doubled, and anything else joins
+        # with a single slash
         if directory == ".":
             return "./" + rel
         if directory.endswith("/"):

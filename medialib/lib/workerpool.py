@@ -1,7 +1,7 @@
 """The worker pool every parallel command shares.
 
-``wait -n``, which is what a queue needs: hand each worker an item, then block
-until ANY ONE of them finishes and give that slot the next item straight away.
+What a queue needs: hand each worker an item, then block until ANY ONE of them
+finishes and give that slot the next item straight away.
 On a folder of unevenly sized files the difference is most of the machine for
 most of the run - a queue that instead waits for the LONGEST job of a set keeps
 three idle workers for as long as the fourth lasts.
@@ -177,9 +177,8 @@ def run(items, jobs: int, target, arguments) -> Outcome:
     what differs between the commands - the loop around it does not.
 
     An interrupt stops the DISPATCH, not the workers: nothing further is handed
-    out, and the ones already running are waited for. That is the shell's
-    behaviour, and it is why a half-written output never outlives the run that
-    was making it.
+    out, and the ones already running are waited for, so a half-written output
+    never outlives the run that was making it.
 
     The Outcome is what the run ended up with: the workers that died and whether
     the queue drained. Ignoring it is how a command comes to print "Done" over

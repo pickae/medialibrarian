@@ -39,12 +39,12 @@ _IMAGE_EXTENSIONS = frozenset(
 def _candidates(directory: str) -> list[str]:
     """The immediate image files, in natural order.
 
-    Natural order of the FULL path, because that is what the shell sorts, and the
-    difference is load-bearing: a version sort treats a leading dot specially
-    only at the start of the line, so ".cover.jpg" sorts before its siblings on
-    its own and among them once a directory is in front of it. A hidden file
-    reaches this sort - ".cover.jpg" has an extension, even though ".cover" does
-    not - so sorting the bare names would pick a different winner.
+    Natural order of the FULL path, and the difference is load-bearing: a version
+    sort treats a leading dot specially only at the start of the line, so
+    ".cover.jpg" sorts before its siblings on its own and among them once a
+    directory is in front of it. A hidden file reaches this sort - ".cover.jpg"
+    has an extension, even though ".cover" does not - so sorting the bare names
+    would pick a different winner.
     """
     try:
         names = [
@@ -104,11 +104,11 @@ def choose_cover(directory: str) -> str | None:
 def rename_cover_to_folder(directory: str, log: SkipLog | None = None) -> str | None:
     """Promote the folder's best cover image to ``folder.<ext>``.
 
-    Returns the message the shell logs when a rename happened, and None when
-    nothing did - which covers a folder with no candidate, a winner that is
-    already called ``folder.<ext>``, and a rename refused because a different
-    ``folder.<ext>`` is in the way. The last of those is recorded in ``log``;
-    the other two are not events at all.
+    Returns the message logged when a rename happened, and None when nothing did
+    - which covers a folder with no candidate, a winner that is already called
+    ``folder.<ext>``, and a rename refused because a different ``folder.<ext>``
+    is in the way. The last of those is recorded in ``log``; the other two are
+    not events at all.
     """
     if not os.path.isdir(directory):
         return None

@@ -134,8 +134,7 @@ def normalize_title(title: str) -> str:
             ["iconv", "-f", "UTF-8", "-t", "ASCII//TRANSLIT"],
             input=title.encode("utf-8"), capture_output=True)
         if proc.returncode != 0:
-            # iconv gave up somewhere: the original stands, exactly as the
-            # shell's `|| s="$1"` does.
+            # iconv gave up somewhere: the original stands.
             folded = title
         else:
             folded = proc.stdout.decode("utf-8", "replace")

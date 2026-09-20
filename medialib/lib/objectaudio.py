@@ -40,8 +40,8 @@ _AC3_LADDER = {
     ("6", False): 50,
 }
 
-# The digits the shell's [0-9] matches, which is not what str.isdigit() accepts -
-# that one also takes superscripts and other numerals the shell would refuse.
+# The digits [0-9] matches, which is not what str.isdigit() accepts - that one
+# also takes superscripts and other numerals the pattern would refuse.
 _DIGITS = re.compile(r"[0-9]+")
 
 # What a track's own name says, when mediainfo parsed no metadata at all.
@@ -104,7 +104,6 @@ def audio_ladder_score(codec_id: str, channels: str, object_flag: str,
     # that bed - and it says nothing next to objects, which outrank it anyway.
     objects = object_flag == "1"
     ex = ex_flag == "1" and not objects and channels == "6"
-    # A_EAC3 first, the way the shell's case arms are ordered.
     if codec.startswith("A_EAC3"):
         score = _EAC3_LADDER.get((channels, objects, ex))
     elif codec.startswith("A_AC3"):

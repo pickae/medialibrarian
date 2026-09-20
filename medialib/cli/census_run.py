@@ -42,12 +42,12 @@ class Refusal(Exception):
 
 
 def _capitalise(text: str) -> str:
-    """bash's ``${var^}``: the first character upper-cased, the rest untouched."""
+    """The first character upper-cased, the rest untouched."""
     return text[:1].upper() + text[1:]
 
 
 def _absolute(path: str) -> str:
-    """The path as ``cd -- "$path" && pwd`` prints it: physical, no symlinks."""
+    """The physical path, symlinks resolved."""
     return os.path.realpath(path)
 
 
@@ -99,7 +99,7 @@ def resolve_input_paths(arguments):
 
 
 def _folders_at_depth(root: str, depth: int):
-    """``find "$root" -mindepth N -maxdepth N -type d -print0 | sort -z``."""
+    """The folders at exactly <depth> levels below <root>, bytewise-sorted."""
     level = [root]
     for _ in range(depth):
         below: list[str] = []
@@ -236,9 +236,8 @@ def collect_files(lib_paths, extensions):
     and the tool preflight, which asks only for the tools the types actually
     present in THESE trees need.
 
-    One flat list with the per-library ranges beside it, sorted the way
-    ``find | sort -z`` sorts, so the run is deterministic and the reports diff
-    against the last one.
+    One flat list with the per-library ranges beside it, bytewise-sorted, so
+    the run is deterministic and the reports diff against the last one.
     """
     wanted = {extension.lower() for extension in extensions}
     files, totals, starts = [], [], []
@@ -398,8 +397,7 @@ class Run:
 
     A class rather than a pile of arguments because a worker is a separate
     process that inherits this whole state at fork and then may only speak back
-    through files - the same shape the shell has, where a background subshell
-    can read every variable and change none of them.
+    through files.
     """
 
     def __init__(self, lib_paths, lib_names, lib_roots, lib_out_dirs,
@@ -662,8 +660,8 @@ class Run:
 
 
 def _skip_entry(path, reason):
-    """One skip as the shell writes it: "<path>: <reason>" and a NUL, so a name
-    holding a newline survives the round trip."""
+    """One skip entry: "<path>: <reason>" and a NUL, so a name holding a
+    newline survives the round trip."""
     return os.fsencode("%s: %s" % (path, reason)) + b"\0"
 
 
@@ -742,8 +740,8 @@ def run(arguments, depth, out_dir, run_bi, separator, extension,
         warn_optional_tools(seen)
 
         ramscratch.init_ram_base(os.environ.get("censusRamBase", ""))
-        # The scratch helpers answer the way the shell functions do - what they
-        # printed, and the status beside it.
+        # The scratch helpers answer with what they printed, and the status
+        # beside it.
         scratch, status = ramscratch.ram_scratch_dir("contentCensus")
         if status != 0 or not scratch:
             raise Refusal("\nError: no scratch directory could be made for "

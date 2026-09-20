@@ -31,8 +31,7 @@ __all__ = [
 
 # The numbering separators: dash, point, underscore, comma, semicolon, and the
 # multi-byte em dash. The en dash is NOT one of them - it is a letter to
-# affix_char_class and passes through the cleaner untouched, exactly as the
-# bash original treats it.
+# affix_char_class and passes through the cleaner untouched.
 _SEP_CLASS = r"([-._,;]|\u2014)"
 
 # The bracket treatment here: an OPENING bracket hugs the number to its RIGHT
@@ -46,8 +45,7 @@ _CBRK_CLASS = r"[)\]}>]"
 # the anchors are the first two of num/alpha/obrk/cbrk, in order of appearance.
 _TOKEN = {
     "num": (r"([0-9])", False, True, True, False),
-    # bash's [[:alpha:]] under C.UTF-8: a Unicode letter, which is \w minus
-    # digits and underscore.
+    # A Unicode letter, which is \w minus digits and underscore.
     "alpha": (r"([^\W\d_])", False, True, True, False),
     "obrk": (_OBRK_CLASS, True, True, True, True),
     "cbrk": (_CBRK_CLASS, True, True, True, True),
@@ -190,9 +188,9 @@ def normalize_number_separator(s: str) -> str:
     return _tighten_number_range(s)
 
 
-# The punctuation passes, in the exact order the original applies them: the
-# " - " replacement runs before the yt-dlp "｜" one, and the apostrophe is
-# wiped before any later pass could see it.
+# The punctuation passes, in this exact order: the " - " replacement runs
+# before the yt-dlp "｜" one, and the apostrophe is wiped before any later
+# pass could see it.
 _PUNCT = (
     (".", " "),
     (" - ", " "),
@@ -207,16 +205,15 @@ _PUNCT = (
     ("\n", ""),
     ("\uff5c", " - "),
     ("\uff1a", " - "),
-    # The other colon a Windows-safe renamer writes, beyond the original: "∶" is
-    # not ASCII punctuation, so affix_char_class would call it a letter and a
-    # shared "∶ Title" suffix would stop one character short of it.
+    # The other colon a Windows-safe renamer writes: "∶" is not ASCII
+    # punctuation, so affix_char_class would call it a letter and a shared
+    # "∶ Title" suffix would stop one character short of it.
     ("\u2236", " - "),
     ("\u29f8", "-"),
     ("#", "Ep."),
     ("\uff02", " "),
     ("\uff1f", " "),
-    # the original also replaces the apostrophe with a space here; the wipe
-    # above already took them all, so this is a faithful no-op.
+    # A no-op: the wipe above already took all the apostrophes.
     ("'", " "),
     ("\uff0a", " "),
     ("\u2022", " "),
@@ -225,7 +222,7 @@ _PUNCT = (
 
 
 def _read_fragments(path: str) -> list[str]:
-    """The fragments file as bash's mapfile reads it: lines, no trailing newlines."""
+    """The fragments file as lines, no trailing newlines."""
     with open(path, encoding="utf-8", errors="surrogateescape") as handle:
         lines = handle.read().split("\n")
     if lines and lines[-1] == "":
@@ -239,11 +236,11 @@ def _remove_fragments(name: str, fragments_file: str) -> str:
     The occurrence is located on lower-cased copies of both sides and stripped
     from the original, which assumes the lowercasing keeps the fragment's length
     - true for the ASCII and accented Latin the names carry; U+0130 folds to a
-    letter plus a mark in Python and to one letter in the shell. An occurrence
-    is removed only if neither edge sits in the middle of a run of letters
-    (including accented ones) or digits - the shared alignAffixToRunBoundary
-    rule - otherwise it is stepped over, not mangled ("cat" out of
-    "concatenate" would leave a stray word behind).
+    letter plus a mark in Python. An occurrence is removed only if neither
+    edge sits in the middle of a run of letters (including accented ones) or
+    digits - the shared align_affix_to_run_boundary rule - otherwise it is
+    stepped over, not mangled ("cat" out of "concatenate" would leave a stray
+    word behind).
     """
     for raw in _read_fragments(fragments_file):
         fragment = raw[:-1] if raw.endswith("\r") else raw
@@ -270,7 +267,7 @@ def _remove_fragments(name: str, fragments_file: str) -> str:
 
 
 def _is_digit(ch: str) -> bool:
-    """Whether bash's [0-9] matches - ASCII digits only, never Unicode forms."""
+    """ASCII digits only, never Unicode forms."""
     return "0" <= ch <= "9"
 
 

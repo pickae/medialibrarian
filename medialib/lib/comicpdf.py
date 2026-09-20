@@ -1,10 +1,9 @@
 """A comic book that arrives as a PDF.
 
-The port drives the same poppler tools the bash does: ``pdfinfo`` for the page
-count and the page sizes, ``pdfimages -list`` for what each page holds and how
-large its image is drawn, ``pdftoppm`` for the render. The judgement itself -
-one image per page, drawn across the page - is the awk program the bash feeds
-the tools' combined output to, reimplemented line for line below.
+Drives the poppler tools: ``pdfinfo`` for the page count and the page sizes,
+``pdfimages -list`` for what each page holds and how large its image is drawn,
+``pdftoppm`` for the render. The judgement itself - one image per page, drawn
+across the page - is made over the tools' combined output.
 """
 
 import os
@@ -22,7 +21,7 @@ __all__ = [
     "comic_pdf_has_pages",
 ]
 
-# The answers the shell gives for a tool that is not there or will not run.
+# The conventional exit statuses for a tool that is not there or will not run.
 _MISSING = 127
 _UNRUNNABLE = 126
 
@@ -31,16 +30,16 @@ _PAGE = re.compile(r"^Page +[0-9]+ +size:")
 
 
 def _knob(name: str, default: str) -> float:
-    """An exported knob as awk's ``-v`` would read it: ``value + 0``."""
+    """An exported knob, read as a number: ``value + 0``."""
     return awk_number(os.environ.get(name, default))
 
 
 def _run(argv: list[str]) -> int:
     """Run a tool with its output silenced and answer with its status.
 
-    The silence is the bash's ``2>/dev/null || true``: the tool's complaints
-    are not the caller's to interleave, and a tool that is missing is a state
-    the caller already handles.
+    The silence is deliberate: the tool's complaints are not the caller's to
+    interleave, and a tool that is missing is a state the caller already
+    handles.
     """
     try:
         proc = subprocess.run(
@@ -65,11 +64,9 @@ def _capture(argv: list[str]) -> bytes:
 
 
 def _awk_number_printed(value: float) -> str:
-    """The number as awk's ``print value`` would render it: an integer value
-    with no point, anything else through CONVFMT.
+    """An integer value with no point, anything else in the ``%.6g`` form.
 
-    The page count is awk's ``$2 + 0`` the way the bash prints it, and it is
-    the PRINTED form that the ``^[0-9]+$`` test runs against.
+    It is the PRINTED form that the ``^[0-9]+$`` test runs against.
     """
     if value == int(value):
         return str(int(value))
@@ -77,8 +74,8 @@ def _awk_number_printed(value: float) -> str:
 
 
 def _page_count(info: bytes) -> str:
-    """The bash's first call: ``pdfinfo`` on its own, for the range the per-page
-    listings must be asked for.
+    """``pdfinfo`` on its own, for the range the per-page listings must be
+    asked for.
 
     The first ``Pages:`` line, its second field as a number; the empty string
     when the line is not there, which is the "page count cannot even be read"
@@ -103,8 +100,8 @@ def _stats_line(pdf: str, max_height_px: str) -> tuple[str, int]:
         return "0 0 0", 1
     pages_n = int(pages)
 
-    # The two listings piped into one awk in the bash, so their bytes go into
-    # one stream in the same order, no newline between them added or removed.
+    # The two listings go into one stream in the same order, no newline
+    # between them added or removed.
     stream = (
         _capture(["pdfinfo", "-f", "1", "-l", str(pages_n), pdf])
         + _capture(["pdfimages", "-list", "-f", "1", "-l", str(pages_n), pdf])
@@ -244,8 +241,8 @@ def is_comic_pdf(pdf: str, max_height_px: str = "0") -> int:
 
 
 def comic_pdf_has_pages(directory: str) -> bool:
-    """Did the render put anything in ``directory``? -print -quit in the bash,
-    so a 400-page book is not walked to answer it.
+    """Did the render put anything in ``directory``? The scan stops at the
+    first page, so a 400-page book is not walked to answer it.
     """
     try:
         with os.scandir(directory) as entries:

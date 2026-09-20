@@ -15,9 +15,8 @@ __all__ = ["awk_number", "awk_looks_numeric", "awk_gt", "fmt_hms",
 # How awk reads a string as a number: optional space, optional sign, digits with an
 # optional fraction and exponent, and everything from the first character that does
 # not fit is ignored - so "12abc" is 12 and "abc" is 0. Notably NOT hexadecimal
-# ("0x10" is 0) and notably not octal either: "0720" is 720 here, while the same
-# text inside bash's (( )) is 464. Two coercions, one shell, and the difference
-# has been a bug here before.
+# ("0x10" is 0) and notably not octal either: "0720" is 720 here, not the 464 an
+# octal reading would give.
 _AWK_NUMBER = re.compile(r"[ \t\n]*[-+]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][-+]?[0-9]+)?")
 
 
@@ -79,12 +78,12 @@ def awk_gt(left: object, right: object) -> bool:
     awk compares numerically only when BOTH sides read as numbers; otherwise it
     compares them as STRINGS, byte by byte. That is not a detail worth glossing:
     a duration ffprobe could not read comes back as "N/A", and ``"N/A" > "60"``
-    holds because "N" sorts after "6" - so the shell treats a file it could not
-    read as an over-long one, where a port that coerced both sides to numbers
-    would treat it as a file of no length at all and take a completely different
-    branch. The string comparison is byte order, which is what the callers run
-    under (their seam pins LC_ALL=C) and what Python's own ``>`` on str gives for
-    the ASCII these values are.
+    holds because "N" sorts after "6" - so a file it could not read is treated as
+    an over-long one, where coercing both sides to numbers would treat it as a
+    file of no length at all and take a completely different branch. The string
+    comparison is byte order, which is what the callers run under (their seam
+    pins LC_ALL=C) and what Python's own ``>`` on str gives for the ASCII these
+    values are.
     """
     numeric = ((isinstance(left, (int, float)) or awk_looks_numeric(left))
                and (isinstance(right, (int, float))

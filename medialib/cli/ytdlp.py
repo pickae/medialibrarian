@@ -319,10 +319,9 @@ class Run:
         """Run one call, reporting its episodes AS THEY ARRIVE, and answer with
         its status and whether a Cloudflare challenge refused it.
 
-        The shell pipes yt-dlp straight into the reporter, so a feed's lines
-        appear while it downloads rather than when it finishes; the reporter is
-        stateless between lines - everything it counts lives in files - so it is
-        fed one complete line at a time and the liveness survives the port.
+        A feed's lines are reported while it downloads rather than when it
+        finishes; the reporter is stateless between lines - everything it counts
+        lives in files - so it is fed one complete line at a time.
 
         ``retriable`` says a second call with impersonation is available. Only
         then is the challenge held back from the reporter: it is about to be
@@ -343,7 +342,7 @@ class Run:
             for raw in stream:
                 line = raw.decode("utf-8", "replace")
                 if not line.endswith("\n"):
-                    # The shell's `read` does not deliver a final partial line.
+                    # A final line without a newline is a partial one: not reported.
                     break
                 if retriable and podcastfeeds.is_cloudflare_challenge(line):
                     if not podcastfeeds.cloudflare_wants_dependency(line):
@@ -474,10 +473,8 @@ def _spawn(target, args) -> "Process":
 def _feed_worker(state, index, subdir, row, provider, root) -> None:
     """One feed, in a worker process.
 
-    bash sets SIGINT to ignored in the background jobs of a non-interactive
-    shell, so the shell's own worker has to ask for it back; here the handler is
-    installed for the same reason - recording the flag is what stops the REST of
-    the run.
+    The handler is installed here because recording the flag is what stops the
+    REST of the run.
     """
     safety.trap_worker_abort()
     state.run_feed(index, subdir, row, provider, root)
@@ -788,8 +785,7 @@ def _plan_ingest(output_path: str, profiles, script_dir: str):
     """
     base = output_path if output_path.startswith("/") else os.path.join(
         os.getcwd(), output_path)
-    # Heterogeneous on purpose: it is the shell's associative arrays, one run's
-    # worth of them, carried together.
+    # Heterogeneous on purpose: one run's worth of mixed state, carried together.
     plan: dict[str, Any] = {
         "base": base,
         "root": os.path.join(base, "Ingested"),
@@ -902,8 +898,7 @@ def _run(options, tables, profiles, jobs_of, rows_of, feed_count, output_path,
         # RECORDS the interrupt and carries on, rather than leaving on it: this
         # run's summary is written by the code below, and a handler that exited
         # would take "Downloaded N file(s)" and the blocked-provider warnings
-        # with it. The shell's trap here is `requestAbort` alone for the same
-        # reason, where the other scripts use trapRunAbort.
+        # with it.
         _trap_record_only()
         runlog.settle_flock()
 

@@ -10,7 +10,7 @@ to the one whose first file comes first.
 Already-numbered folders are detected and left completely alone, so a second run
 does nothing and no file is touched needlessly.
 
-The order is ``sort -V`` over the paths ``find`` printed, which is why this needs
+The order is version sort over the full paths, which is why this needs
 ``versionsort`` - and why it needs the directory, not just the names. See
 ``plan_numbering``.
 """
@@ -48,11 +48,11 @@ def plan_numbering(directory: str, names: Sequence[str]) -> Numbering:
     """Decide the renames for one folder, without performing any of them.
 
     ``directory`` is joined to each name **for ordering only**, and it changes the
-    answer. bash sorts the full paths that ``find`` prints, and version sort puts a
-    name beginning with a dot before everything else - which a path beginning with
-    a slash never triggers. So a folder holding ".cover" and "a10" orders them one
-    way by basename and the other way by path, and the path is what ships. Passing
-    the directory is how that stays true instead of being a bug found twice.
+    answer. Version sort puts a name beginning with a dot before everything else
+    - which a path beginning with a slash never triggers. So a folder holding
+    ".cover" and "a10" orders them one way by basename and the other way by path,
+    and the path is what ships. Passing the directory is how that stays true
+    instead of being a bug found twice.
 
     The renames are empty when there is nothing to do: an empty folder, a plurality
     group of one, or a folder already numbered exactly this way. That last is what
@@ -68,9 +68,7 @@ def plan_numbering(directory: str, names: Sequence[str]) -> Numbering:
     for name in ordered:
         counts[_key(name)] = counts.get(_key(name), 0) + 1
 
-    # Walk the files, not the tally: a tie is settled by first appearance. bash
-    # used to walk an associative array, which is hash order and reproducible in
-    # no other language; the rule was made explicit on both sides instead.
+    # Walk the files, not the tally: a tie is settled by first appearance.
     plurality, count = NO_EXTENSION, 0
     for name in ordered:
         if counts[_key(name)] > count:

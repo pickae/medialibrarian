@@ -164,9 +164,7 @@ def embed_chapters(audio: str, chapter_file: str, title: str = "",
     only the title is then written.
 
     **Keeping is not a failure.** The status is 0 whether the chapters were
-    written or the existing ones won - which is what the callers have always
-    seen, because the script this replaces discarded that distinction on its way
-    to `exit 0`. Only an error is non-zero.
+    written or the existing ones won. Only an error is non-zero.
     """
     error = error if error is not None else sys.stderr
     try:

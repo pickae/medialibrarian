@@ -14,8 +14,7 @@ video stream whose disposition is attached_pic, a picture and not a track, and i
 is filtered out before any of that is judged.
 
 The two jq programs are modelled here rather than shelled out to, and where jq's
-own evaluation DIES or produces an empty stream this module raises: the shell
-reads the filter's output with one ``read`` and swallows its status, so a filter
+own evaluation DIES or produces an empty stream this module raises: a filter
 that says nothing leaves every field empty - which the gates below then read as
 "no audio stream" or "no video track". Those are not the same thing as an
 unreadable file, and the difference is a skip reason.
@@ -68,8 +67,8 @@ _EMPTY = object()
 
 class _NoOutput(Exception):
     """The filter stated nothing - jq died on the arithmetic, or a binding was
-    handed an empty stream. Either way stdout is empty and every field the shell
-    reads out of it stays unset."""
+    handed an empty stream. Either way every field it would have produced stays
+    empty."""
 
 def _alt(left, right):
     """jq's ``left // right``: the left unless it is null, false or empty."""
@@ -269,8 +268,8 @@ def census_probe_json(path):
             stdin=subprocess.DEVNULL)
     except (OSError, ValueError):
         return ""
-    # `|| true`: the status is discarded, so a probe that printed something and
-    # then failed is read for what it printed.
+    # The status is discarded, so a probe that printed something and then failed
+    # is read for what it printed.
     return proc.stdout.decode("utf-8", "replace")
 
 

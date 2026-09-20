@@ -2,11 +2,6 @@
 
 Ask an external API what a film is, and only rename when the answer is certain.
 
-The id lookup shells out to ``curl`` exactly the way the bash does. What is
-rewritten is the glue - the JSON navigation (``json`` instead of ``jq``), the
-certainty rule, and the folder rename - which is where a port can drift from
-the original.
-
 What counts as the same title is :mod:`medialib.lib.titlematch`, which folds a
 written title to the keys it may be matched by; this module asks whether a
 candidate's keys meet the folder's.
@@ -236,8 +231,8 @@ def _curl(url: str, params) -> str | None:
 def _as_json(text: str | None):
     """A TMDb body as a dict, or an empty dict when it is not valid JSON.
 
-    The bash pipes every body through ``jq`` with a ``?``/``//`` guard, which
-    reads a non-object as "nothing"; an empty dict is the same here.
+    A body that is valid JSON but not an object reads as "nothing" too: an
+    empty dict.
     """
     if not text:
         return {}
@@ -709,8 +704,8 @@ def _says(candidate: _Candidate) -> str:
 
 
 def _written(candidate: _Candidate) -> list:
-    """The titles a candidate actually carries, without jq's word for the ones
-    it does not."""
+    """The titles a candidate actually carries, without the literal word
+    "null" for the ones it does not."""
     return [t for t in candidate.spellings if t and t != "null"]
 
 
@@ -959,8 +954,8 @@ def _candidate(api_key: str, row: dict) -> _Candidate:
 
 def _row_titles(row: dict) -> list:
     """A search result's own two titles. A missing one is the literal word
-    "null" the way ``jq -r`` prints it, so it is compared - and missed - like
-    any other title rather than skipped."""
+    "null", so it is compared - and missed - like any other title rather than
+    skipped."""
     titles = []
     for field in ("title", "original_title"):
         value = row.get(field)
@@ -972,7 +967,7 @@ def _detail_titles(detail: dict) -> list:
     """A film document's titles: its own two, and every alternative it carries.
 
     An alternative with no title is skipped rather than read as "null", which
-    is the one place the two differ - ``.title // empty`` in the shell.
+    is the one place the two differ.
 
     The ORIGINAL title leads, because this order is also the order a spelling to
     rename onto is picked in: a film's own name is the one to keep where the
@@ -1051,8 +1046,8 @@ def _settled_by_runtime(candidates: list, seconds: float):
 
 
 def _id_token(value):
-    """The id the way ``jq -r`` spells it in a URL: a missing id is the literal
-    word "null", not nothing - the bash builds its path from what jq printed.
+    """The id as a URL path segment: a missing id is the literal word "null",
+    not nothing.
 
     Digits or that word, and nothing else. The value comes out of the API's own
     JSON and is spliced into a URL PATH, where a "/" or a "#" in it asks for
@@ -1066,9 +1061,8 @@ def _id_token(value):
 
 
 def _folder_spelling(directory: str, name: str) -> str:
-    """The way ``find`` spells a child of ``directory``: a bare "." writes
-    "./name", a trailing slash is not doubled, anything else joins with one
-    slash."""
+    """The path of a child of ``directory``: a bare "." writes "./name", a
+    trailing slash is not doubled, anything else joins with one slash."""
     if directory == ".":
         return "./" + name
     if directory.endswith("/"):
@@ -1476,8 +1470,7 @@ def _holds_a_folder(path: str) -> bool:
 
 def _film_folders(directory: str) -> list:
     """Every film folder at or below ``directory``, in the filesystem's own
-    order - the order the shell's ``find`` walks, so the lines they each log
-    come out in the same sequence.
+    order, so the lines they each log come out in the same sequence.
 
     Everything that is not one is descended through, which is what finds the
     films in a library that keeps them a level down, in an "Unsorted" or a box

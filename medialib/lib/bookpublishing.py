@@ -46,9 +46,8 @@ def _config(name, default):
 
 
 def _probe_field(path, entry):
-    """One ffprobe field of the first audio stream, or "" - the shell's
-    ``ffprobe ... | head -n1``, whose status is the pipeline's and so is never
-    what decides."""
+    """One ffprobe field of the first audio stream, or "" - the probe's
+    status is never what decides."""
     try:
         proc = subprocess.run(
             ["ffprobe", "-v", "quiet", "-select_streams", "a:0",
@@ -63,8 +62,8 @@ def _probe_field(path, entry):
 
 
 def _run_quiet(argv):
-    """A call the shell runs with everything redirected away: only its status is
-    asked of it."""
+    """A call with everything redirected away: only its status is asked of
+    it."""
     try:
         proc = subprocess.run(list(argv), stdout=subprocess.DEVNULL,
                               stderr=subprocess.DEVNULL,
@@ -157,8 +156,8 @@ def audiobook_lossless(master, tagged, work_dir, script_dir=None,
 
 
 def _python_bin():
-    """The interpreter the shell's ``pythonRun`` resolves, which is what runs
-    the helper script below - so a stub on PATH stays in charge of it."""
+    """The interpreter that runs the helper script below - so a stub on PATH
+    stays in charge of it."""
     from medialib.lib import runlog
     return runlog.python_bin()
 
@@ -171,13 +170,12 @@ def audiobook_to_opus(audiobook, work_dir, bitrate, jobs, log_file,
     The work is done by ``convert-audio`` over a directory holding this one
     book, so it needs no per-file mode of its own.
 
-    The child's environment is stripped of SAFETY_LOG and ABORT_FLAG. Both are
-    inherited by design when one of these scripts wraps another in the same
-    shell - but this one is a separate process INSIDE a parallel worker, and the
-    tail of convert-audio removes the two files it was given on the way out,
-    which would take the whole run's skip log and interrupt flag with it. The
-    child makes its own instead; a Ctrl+C still reaches it, because it sits in
-    the same process group as everything else in the run.
+    The child's environment is stripped of SAFETY_LOG and ABORT_FLAG. This one
+    is a separate process INSIDE a parallel worker, and the tail of
+    convert-audio removes the two files it was given on the way out, which
+    would take the whole run's skip log and interrupt flag with it. The child
+    makes its own instead; a Ctrl+C still reaches it, because it sits in the
+    same process group as everything else in the run.
     """
     if script_dir is None:
         script_dir = commands.script_dir()

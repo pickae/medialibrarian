@@ -6,14 +6,11 @@ embed, the description, the metadata sidecar, the subtitles it converted - and,
 when a download was interrupted, the half of a fragment it was in the middle of.
 
 This module is told WHICH files a run produced, so it removes the sidecars of
-THOSE episodes rather than every ``.jpg`` under the library root: from a
-"find -name '*.jpg' -delete", a leftover thumbnail and a folder's cover art are
-indistinguishable.
+THOSE episodes rather than every ``.jpg`` under the library root, where a
+leftover thumbnail and a folder's cover art are indistinguishable.
 
-The functions return their result rather than setting globals, the way the shell
-version sets ``CLEANED_PATH`` / ``CLEANED_SIDECARS`` / ``CLEANED_REMUXED`` /
-``SWEPT_PARTIALS`` / ``PRUNED_FOLDERS``; a return value, not an exit status, is
-how a Python caller learns what happened.
+The functions return their result rather than setting globals; a return value,
+not an exit status, is how a Python caller learns what happened.
 """
 
 from __future__ import annotations
@@ -61,7 +58,7 @@ DOWNLOAD_AUDIO_KEPT: tuple[str, ...] = (
 
 # A multi-fragment download leaves a file per fragment, named by yt-dlp while it
 # is in flight; the one that is not one of DOWNLOAD_PARTIALS but is never part of
-# a finished episode. Matched on the basename the way find -name would.
+# a finished episode. Matched on the basename.
 _FRAGMENT_PATTERN = "*-Frag[0-9]*"
 
 # A converted subtitle carries its language between the stem and the extension
@@ -74,8 +71,7 @@ Runner = Callable[[Sequence[str]], "subprocess.CompletedProcess"]
 def _run(argv: Sequence[str]) -> subprocess.CompletedProcess:
     """The real runner: the tool on PATH, its output discarded.
 
-    Only the exit status is read, the way the shell version sends the tool's
-    stdout and stderr to /dev/null and tests the status.
+    Only the exit status is read.
     """
     return subprocess.run(list(argv), stdout=subprocess.DEVNULL,
                           stderr=subprocess.DEVNULL)
@@ -107,9 +103,9 @@ def _is_video(extension: str) -> bool:
 
 
 def _stem_of(path: str) -> str:
-    """The stem the shell gets from ``${path%.*}``: what is left of the last dot,
-    or the whole path when it has no dot at all - so an extensionless name keeps
-    its own name as the stem rather than becoming empty."""
+    """The stem: what is left of the last dot, or the whole path when it has no
+    dot at all - so an extensionless name keeps its own name as the stem rather
+    than becoming empty."""
     head, dot, _ = path.rpartition(".")
     return head if dot else path
 
@@ -164,10 +160,9 @@ def _remove_download_sidecars(path: str) -> int:
 
     # A converted subtitle carries its language between the stem and the
     # extension ("Episode.en.srt"), so it is not found by the loop above. The
-    # pattern is matched the way the original's find would: on the stem's
-    # basename at the depth the file sits at, regular files only - so a stem
-    # with glob characters behaves here as it does in the find, and a link
-    # wearing a subtitle's name is left alone the way -type f leaves it.
+    # pattern is matched on the stem's basename, at the depth the file sits at,
+    # regular files only - so a stem with glob characters is matched as a
+    # glob, and a link wearing a subtitle's name is left alone.
     directory = os.path.dirname(path) or "."
     stem_base = os.path.basename(stem)
     if os.path.isdir(directory):
@@ -245,7 +240,7 @@ def sweep_partial_downloads(directory: str) -> int:
     for parent, _dirs, names in os.walk(directory):
         for name in names:
             full = os.path.join(parent, name)
-            # find -type f is false for a symlink however it resolves, so a link
+            # A symlink is not a regular file however it resolves, so a link
             # to a partial is not swept (its target is not in this tree).
             if not stat.S_ISREG(os.lstat(full).st_mode):
                 continue
@@ -263,8 +258,7 @@ def prune_empty_folders(directory: str) -> int:
     if not os.path.isdir(directory):
         return 0
     directories = [d for d, _dirs, _files in os.walk(directory) if d != directory]
-    # Deepest first: a parent is only empty once its empty children are gone, and
-    # find -depth is the original's guarantee that the children go first.
+    # Deepest first: a parent is only empty once its empty children are gone.
     directories.sort(key=lambda d: d.count(os.sep), reverse=True)
     pruned = 0
     for folder in directories:

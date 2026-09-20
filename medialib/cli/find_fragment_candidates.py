@@ -194,9 +194,9 @@ def _collation_key(token: str):
 
     ``sort -k2,2`` compares with the locale's collation, so the order a report
     comes out in is a property of the host and not of the code: under C.UTF-8
-    it is byte order, and under en_US.UTF-8 - a perfectly ordinary interactive
-    shell - it is dictionary order, which puts "überproper" somewhere else
-    entirely. The suite pins C.UTF-8 and would never have shown it.
+    it is byte order, and under en_US.UTF-8 it is dictionary order, which puts
+    "überproper" somewhere else entirely. The suite pins C.UTF-8 and would
+    never have shown it.
 
     So the same C library is asked here as is asked what a letter is: what is
     INSTALLED decides.
@@ -300,7 +300,7 @@ def main(argv: list, program: str = "find-fragment-candidates") -> int:
     try:
         tree_file, report = resolve_paths(result.positionals[0], program)
     except SystemExit as exit_request:
-        # Both raises carry a status, and both are a shell exit code.
+        # Both raises carry a status, and both are exit codes.
         return int(exit_request.code or 0)
 
     if result.values["outOverride"]:

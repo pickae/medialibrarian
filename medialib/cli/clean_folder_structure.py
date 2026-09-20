@@ -100,7 +100,7 @@ def spec(program: str) -> clioptions.Spec:
 
 
 def _extension_of(base: str, mode: str) -> tuple[str, str]:
-    """(name, extension) for one sibling, by the rule the shell splits on.
+    """(name, extension) for one sibling.
 
     Folders never have one, and a dotfile's leading dot begins a NAME rather than
     an extension.
@@ -112,11 +112,7 @@ def _extension_of(base: str, mode: str) -> tuple[str, str]:
 
 
 def siblings(directory: str, mode: str) -> list[str]:
-    """The immediate children of one kind, in the order `sort -V` puts them.
-
-    The PATHS are sorted rather than the names, because that is what `find`
-    prints and hands to `sort`.
-    """
+    """The immediate children of one kind, in version-sorted order."""
     want_dir = mode == "folders"
     found = []
     try:
@@ -320,7 +316,7 @@ def fix_date_prefixes(root: str, skips: safety.SkipLog) -> None:
 
 
 def _files_below(root: str) -> list[str]:
-    """Every file under <root>, at any depth: what `find -type f` lists."""
+    """Every file under <root>, at any depth."""
     found = []
     for parent, _dirs, names in os.walk(root):
         for name in names:
@@ -329,7 +325,7 @@ def _files_below(root: str) -> list[str]:
 
 
 def _directories(root: str, deepest_first: bool) -> list[str]:
-    """<root> and every directory below it, in `find`'s order or `-depth`'s."""
+    """<root> and every directory below it, top-down or deepest first."""
     found = []
     for parent, _dirs, _names in os.walk(root, topdown=not deepest_first):
         found.append(parent)

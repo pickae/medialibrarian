@@ -197,7 +197,7 @@ def input_holds_a_book(in_path: str, sub_folders: bool) -> bool:
 
 
 def _at_depth(root: str, depth: int, want_dirs: bool):
-    """What `find -mindepth N -maxdepth N` lists, sorted the way `sort -z` does."""
+    """The entries at exactly <depth> levels below <root>, bytewise-sorted."""
     level = [root]
     for _ in range(depth - 1):
         below = []
@@ -298,9 +298,8 @@ def _stop_if_interrupted() -> None:
 def _run_phase(command: str, argv, script_dir: str = "") -> None:
     """One phase that is another command, as a CHILD.
 
-    A phase that refuses ends this run rather than being skipped, which is what
-    the shell's `set -e` did when these were sourced - so a non-zero status is
-    raised here rather than returned.
+    A phase that refuses ends this run rather than being skipped, so a
+    non-zero status is raised here rather than returned.
     """
     if commands.run_command(command, argv,
                             script_dir=script_dir).returncode != 0:
@@ -314,8 +313,7 @@ def _run_phase(command: str, argv, script_dir: str = "") -> None:
 def _copy_cue_files(source: str, destination: str) -> None:
     """The cue sheets, into the transcoded tree beside the audio they describe.
 
-    Only the .cue files and the directories on the way to them, which is what
-    `rsync -rm --include='*/' --include='*.cue' --exclude='*'` copies.
+    Only the .cue files and the directories on the way to them.
     """
     for parent, _dirs, names in os.walk(source):
         for name in names:
@@ -397,12 +395,10 @@ def main(argv: list, program: str = "convert-and-concat",
             ramscratch.add_exit_cleanup([temp_path])
         safety.init_abort_flag()
         # RECORDS the interrupt; the phase that is running finishes and is
-        # stopped at the next boundary. bash defers a trap until the foreground
-        # command returns, so a sourced - or spawned - phase always got to
-        # finish, print its own closing report and hand its scratch back. A
-        # handler that left immediately would strand the child mid-write and
-        # leak its scratch, which is exactly what the interrupt contract asserts
-        # against.
+        # stopped at the next boundary - it always gets to finish, print its
+        # own closing report and hand its scratch back. A handler that left
+        # immediately would strand the child mid-write and leak its scratch,
+        # which is exactly what the interrupt contract asserts against.
         _trap_record_only()
         runlog.settle_flock()
 

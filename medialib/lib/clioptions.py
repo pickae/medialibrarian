@@ -1,14 +1,14 @@
 """The declarative CLI option spec: option string, help page, checks, parse loop.
 
 The spec is a value and the parse returns one. Not a byte of what reaches a
-terminal may change, so every rendering rule below is kept exactly as the
-recorded pages have it, including the ones that look like accidents - the help
-field trimmed at the front but not the back, the option block that ends without
-a line break, the page that leads with credits only sometimes.
+terminal may change, so every rendering rule below is kept exact, including
+the ones that look like accidents - the help field trimmed at the front but
+not the back, the option block that ends without a line break, the page that
+leads with credits only sometimes.
 
 ``getopts`` has no standard-library equivalent worth the name: ``getopt`` and
 ``argparse`` both disagree with it about clustering, attached arguments and what
-happens at ``--``. So it is reimplemented here, in silent mode.
+happens at ``--``. So it is implemented here, in silent mode.
 """
 
 from __future__ import annotations
@@ -17,13 +17,12 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-# What bash's [[:space:]] matches in the C locale. Python's str.strip() with no
-# argument strips a great deal more than this, and a spec field is allowed to
-# hold any of it.
+# The C-locale [[:space:]] set. Python's str.strip() with no argument strips a
+# great deal more than this, and a spec field is allowed to hold any of it.
 _SPACE = " \t\n\v\f\r"
 
-# The sentinel _cliSpecField swaps in for an escaped pipe while it splits a line.
-# Chosen the same way bash chose it: a control character no help text carries.
+# The sentinel spec_field swaps in for an escaped pipe while it splits a line.
+# A control character no help text carries.
 _PIPE_HOLD = "\x01"
 
 _ENTRY = re.compile(r"[a-zA-Z][ \t\n\v\f\r]*\|")
@@ -36,7 +35,7 @@ class UsageError(Exception):
     """A refusal that ends the run: message, then the page, then the trailer.
 
     Raised rather than exited so a caller can render it on the stream the script
-    used. ``message`` empty is the bare-page form content-census-bi printed.
+    used. ``message`` empty is the bare-page form content-census-bi prints.
     """
 
     def __init__(self, message: str = "") -> None:
@@ -49,7 +48,7 @@ class HelpRequested(Exception):
 
 @dataclass
 class Spec:
-    """One script's declaration, the seven globals plus the four settings."""
+    """One script's declaration, the seven fields plus the four settings."""
 
     head: str = ""
     options: str = ""
@@ -87,12 +86,10 @@ class Result:
 
 
 def _lines(block: str) -> list[str]:
-    """The lines bash's ``while read`` sees in a here-string of this value.
+    """The lines of this value, split at the newlines.
 
-    A here-string appends a newline, so an empty block is one empty line and a
-    block already ending in one gains a trailing empty line - which is exactly
-    what ``split`` produces. The loop's ``|| [[ -n "$line" ]]`` only matters for
-    a final line with no newline, and a here-string never leaves one.
+    An empty block is one empty line and a block already ending in a newline
+    gains a trailing empty line - which is exactly what ``split`` produces.
     """
     return block.split("\n")
 
@@ -100,8 +97,8 @@ def _lines(block: str) -> list[str]:
 def _entry_letter(line: str) -> str | None:
     """The option letter of a spec line, or None when the line is not an entry.
 
-    The bash test is ``^([a-zA-Z])[[:space:]]*\\|`` - anchored at the front only,
-    so anything at all may follow the pipe.
+    The match is anchored at the front only, so anything at all may follow the
+    pipe.
     """
     match = _ENTRY.match(line)
     return line[0] if match else None
@@ -110,10 +107,9 @@ def _entry_letter(line: str) -> str | None:
 def spec_field(line: str, which: int) -> str:
     """Field 2 (the placeholder) or 3 (the help) of a ``letter | arg | help`` line.
 
-    Field 3 is the whole remainder, pipes and all, because bash's ``read`` puts
-    what is left into the last variable. It is trimmed at the FRONT only - the
-    help of a wrapped entry ends where the spec says it ends, trailing spaces
-    included - while field 2 is trimmed at both.
+    Field 3 is the whole remainder, pipes and all. It is trimmed at the FRONT
+    only - the help of a wrapped entry ends where the spec says it ends,
+    trailing spaces included - while field 2 is trimmed at both.
     """
     held = line.replace("\\|", _PIPE_HOLD)
     parts = held.split("|", 2)
@@ -126,7 +122,7 @@ def spec_field(line: str, which: int) -> str:
 
 
 def flag_tables(spec: Spec, tables: Tables | None = None) -> Tables:
-    """``cliOptFlags`` and the spec's placeholders, read into the parse tables."""
+    """The spec's flags and placeholders, read into the parse tables."""
     tables = tables or Tables()
     tables.arg_flag = {}
     tables.repeat = {}
@@ -162,11 +158,11 @@ def flag_tables(spec: Spec, tables: Tables | None = None) -> Tables:
 
 
 def check_tables(spec: Spec, tables: Tables | None = None) -> Tables:
-    """``cliOptChecks`` read into the kind and label tables.
+    """The spec's checks read into the kind and label tables.
 
-    A letter named twice keeps the LAST entry, unlike the placeholder scan above
-    which keeps the first. Neither script does it; both are preserved because
-    which one wins is not this port's decision to make.
+    A letter named twice keeps the LAST entry, unlike the placeholder scan
+    above which keeps the first; both rules stand because which one wins is
+    not a decision this module makes.
     """
     tables = tables or Tables()
     tables.check_kind = {}
@@ -204,7 +200,7 @@ def long_tables(spec: Spec, tables: Tables | None = None) -> Tables:
 
 
 def build_tables(spec: Spec) -> Tables:
-    """Both halves, in the order cliParse builds them."""
+    """Both halves, in the order the parse builds them."""
     tables = Tables()
     flag_tables(spec, tables)
     check_tables(spec, tables)
@@ -240,8 +236,8 @@ def validate(letter: str, value: str, tables: Tables) -> None:
     elif kind.startswith("int:") and ":" in kind[len("int:"):]:
         rest = kind[len("int:"):]
         low, _, high = rest.partition(":")
-        # bash's (( )) reads the bounds as arithmetic; the spec writes them, so a
-        # bound that is not a number is a typo in the spec rather than input.
+        # The bounds are read as arithmetic; the spec writes them, so a bound
+        # that is not a number is a typo in the spec rather than input.
         if _ANY_INT.fullmatch(value) and _in_range(value, low, high):
             return
         wanted = f"a whole number between {low} and {high}"
@@ -263,8 +259,8 @@ def validate(letter: str, value: str, tables: Tables) -> None:
 def _enum_choices(choices: str) -> list[str]:
     """The accepted words of an ``enum:`` kind.
 
-    An empty kind accepts nothing at all - bash's loop is ``while [[ -n ... ]]``,
-    so it never runs - and that is not the same as accepting the empty string.
+    An empty kind accepts nothing at all, and that is not the same as
+    accepting the empty string.
     """
     if not choices:
         return []
@@ -374,10 +370,9 @@ def page(spec: Spec) -> str:
 
 
 def usage_error_text(spec: Spec, message: str = "") -> str:
-    """What ``cliUsageError`` writes to stderr, byte for byte.
+    """The usage error, to stderr, byte for byte.
 
-    With no message it is the page led by one blank line - the shape a refused
-    flag printed before there was a library to print it.
+    With no message it is the page led by one blank line.
     """
     lead = f"{message}\n\n" if message else "\n"
     return f"{lead}{page(spec)}\n\nNothing was changed.\n"
@@ -403,20 +398,19 @@ def missing_dir_text(spec: Spec, directory: str) -> str:
 def args_out_of_range(count: int, minimum: int, maximum: int | None) -> bool:
     """The post-parse gate: is this positional count outside [min, max]?
 
-    ``maximum`` None is no upper limit, which is how the bash gate reads an empty
-    third argument.
+    ``maximum`` None is no upper limit.
     """
     return count < minimum or (maximum is not None and count > maximum)
 
 
 class _Getopts:
-    """bash's ``getopts`` in silent mode, over one list of words.
+    """``getopts`` in silent mode, over one list of words.
 
     Silent mode is the leading colon in the option string: an unknown letter
     comes back as ``?`` and a missing argument as ``:``, both with the offending
     letter in OPTARG, and nothing is printed. The character offset inside a
-    cluster is state bash keeps privately and resets whenever OPTIND is assigned,
-    so it lives here beside OPTIND rather than being derived from it.
+    cluster is state getopts keeps privately and resets whenever OPTIND is
+    assigned, so it lives here beside OPTIND rather than being derived from it.
     """
 
     def __init__(self, optstring: str, args: list[str]) -> None:
@@ -436,15 +430,15 @@ class _Getopts:
             self._known.add(letter)
 
     def _done(self) -> None:
-        """What bash does to OPTIND on the call that finds no more options.
+        """What getopts does to OPTIND on the call that finds no more options.
 
         It CLAMPS it to one past the last argument. That is not housekeeping: the
         optional-argument branch advances OPTIND by hand to claim the word it
         took, and when that word was the last one the claim would put OPTIND two
         past the end - where the next getopts pulls it back. The whole parse
-        depends on it, because the loop then shifts by OPTIND-1 and a shift
-        larger than $# would silently do nothing and leave the option word to be
-        collected a second time, as a positional.
+    depends on it, because the loop then shifts by OPTIND-1 and a shift
+    larger than the argument count would silently do nothing and leave the
+    option word to be collected a second time, as a positional.
         """
         self.optind = min(self.optind, len(self.args) + 1)
 
@@ -487,7 +481,7 @@ class _Getopts:
         return (letter, optarg)
 
     def peek(self) -> str:
-        """``${!OPTIND}``: the word OPTIND names now, empty when it names none.
+        """The word OPTIND names now, empty when it names none.
 
         Mid-cluster this is the cluster's own word, because OPTIND has not moved
         off it yet - which is what makes ``-th`` claim ``-th`` as -t's optional
@@ -581,7 +575,7 @@ def parse(
     argv: list[str],
     on_opt: Callable[[str, str], None] | None = None,
 ) -> Result:
-    """``cliParse``: the one parse loop, over a copy of the command line.
+    """The one parse loop, over a copy of the command line.
 
     getopts on its own stops at the first word that is not an option, so the
     options would have to come first. Nobody types a command that way once they
@@ -593,11 +587,11 @@ def parse(
     tables = build_tables(spec)
     optstring = build_opt_string(spec, tables)
     result = Result()
-    # Every target exists before the loop runs, empty, the way the shell declares
-    # them: a repeat option appends to an array that has to be there already, and a
-    # scalar the command line never mentions still has to be readable afterwards.
-    # The FIRST pair naming a variable decides whether it is a list, which is the
-    # same rule the assignment below follows.
+    # Every target exists before the loop runs, empty: a repeat option appends
+    # to an array that has to be there already, and a scalar the command line
+    # never mentions still has to be readable afterwards. The FIRST pair naming
+    # a variable decides whether it is a list, which is the same rule the
+    # assignment below follows.
     for letter, name in var_pairs(spec):
         if name not in result.values:
             result.values[name] = [] if letter in tables.repeat else ""
@@ -666,7 +660,7 @@ def _one_option(spec, tables, result, state, got, on_opt) -> None:
 
 
 def var_pairs(spec: Spec) -> list[tuple]:
-    """The ``letter:var`` pairs of cliOptVars, in the order they are written."""
+    """The ``letter:var`` pairs of the spec's vars, in the order they are written."""
     out = []
     for pair in spec.vars.split():
         letter, sep, name = pair.partition(":")

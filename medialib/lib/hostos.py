@@ -53,6 +53,6 @@ def is_windows(platform: str | None = None) -> bool:
 
 
 def is_posix(platform: str | None = None) -> bool:
-    """Linux and macOS both: a host with the POSIX facilities the ports of the
-    shell functions assume - signals, file locking, an execute bit."""
+    """Linux and macOS both: a host with the POSIX facilities the package
+    assumes - signals, file locking, an execute bit."""
     return host_kind(platform) != "windows"

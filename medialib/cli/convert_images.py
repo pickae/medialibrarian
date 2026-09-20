@@ -382,7 +382,7 @@ class Run:
         if len(parts) < 2:
             return None
         try:
-            # The shell truncates at the dot, so 39.9 is 39 and not 40.
+            # Truncated at the dot: 39.9 is 39 and not 40.
             return parts[0], int(parts[1].split(".")[0])
         except ValueError:
             return None
@@ -640,8 +640,7 @@ def main(argv: list, program: str = "convert-images") -> int:
         _mirror_folders(input_dir, output_dir)
 
         os.chdir(input_dir)
-        # Lower-cased above, so the search is case-sensitive from here on - the
-        # way the shell's second find drops its -iname.
+        # Lower-cased above, so the search is case-sensitive from here on.
         work = _images_under(".", extensions, lowercase_only=True)
         total = len(work)
         # Belt and braces: the probe refused an empty input, but the preparation

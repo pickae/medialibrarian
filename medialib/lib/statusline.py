@@ -38,18 +38,18 @@ __all__ = [
     "shorten_path",
 ]
 
-# The columns at the end of the row that no text may occupy: bash's
-# ``export statusRowMargin=1``. A terminal that wraps on its final column would put
-# the cursor on a row of its own choosing, so the row keeps off the last column.
+# The columns at the end of the row that no text may occupy. A terminal that
+# wraps on its final column would put the cursor on a row of its own choosing,
+# so the row keeps off the last column.
 STATUS_ROW_MARGIN = 1
 
 
 class _State:
-    """The settled row, the way bash holds it in shell globals.
+    """The settled row.
 
-    ``row`` is ``STATUS_ROW`` (empty off a terminal, ``"1"`` on one), ``cols`` is
-    ``STATUS_COLS``, ``interval`` is ``statusInterval`` seconds between refreshes,
-    and ``mon_pid`` is ``STATUS_MON_PID`` - the background refresher's handle.
+    ``row`` is empty off a terminal and ``"1"`` on one, ``cols`` is the width,
+    ``interval`` is the seconds between refreshes, and ``mon_pid`` is the
+    background refresher's handle.
     """
 
     def __init__(self):
@@ -73,11 +73,9 @@ def _is_tty() -> bool:
 def _stty_cols() -> str:
     """The columns field of ``stty size``, or "" when stty cannot answer.
 
-    bash asks ``stty size 2>/dev/null <&2``; in that redirection order stty's stdin
-    is ``/dev/null`` (the ``2>/dev/null`` lands first), so this reads ``/dev/null``
-    the same way - which is why a real stty comes up empty and the width falls to
-    ``tput``, while a stub on PATH still answers its knob. The answer is
-    ``rows cols``; only the columns are wanted.
+    stty's stdin is ``/dev/null``, which is why a real stty comes up empty and the
+    width falls to ``tput``, while a stub on PATH still answers its knob. The
+    answer is ``rows cols``; only the columns are wanted.
     """
     try:
         with open(os.devnull, "rb") as devnull:
@@ -88,7 +86,7 @@ def _stty_cols() -> str:
     if ran.returncode != 0:
         return ""
     size = ran.stdout.decode("utf-8", "replace").rstrip("\n")
-    # bash's ${size##* } : everything after the last space ("" when there is none)
+    # Everything after the last space ("" when there is none)
     return size.rsplit(" ", 1)[-1]
 
 
@@ -177,7 +175,6 @@ def end_status() -> int:
 def repin_status(render) -> int:
     """Put the row back, right after a scrolling line was printed over it.
 
-    ``render`` yields the row's text the way the bash render function prints it.
     Deliberately a no-op off a terminal: there the row is an occasional heartbeat
     rather than a fixed row, and re-printing it after every line would drown the log.
     """
@@ -215,8 +212,8 @@ def adopt_status_geometry(geometry) -> int:
 
 @contextlib.contextmanager
 def _take_lock(lock_file: str):
-    """bash's ``takeLock`` on the row's console lock: serialise against the parallel
-    workers' own printing. A no-op where flock is not in play.
+    """Take the row's console lock: serialise against the parallel workers' own
+    printing. A no-op where flock is not in play.
 
     Held for the whole block: closing the descriptor drops the lock, and a refresh
     drawn without it lands between a worker's erase and the line that erase made
@@ -256,8 +253,8 @@ def status_tick(lock_file: str, render) -> int:
 
 
 def status_monitor(lock_file: str, render, stop_event: threading.Event):
-    """bash's ``statusMonitor``: refresh every ``state.interval`` seconds until
-    ``stop_event`` is set.
+    """Refresh the row every ``state.interval`` seconds until ``stop_event`` is
+    set.
 
     The first refresh comes after an interval, not immediately - the caller has
     already drawn the row once. Stopping is a signal in the ordinary course of things

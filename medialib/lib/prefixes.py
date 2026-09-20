@@ -26,10 +26,10 @@ _DATE_PREFIX = re.compile(DATE_PREFIX_PATTERN)
 
 
 def _is_digits(value: str) -> bool:
-    """Whether bash's ``^[0-9]+$`` would match - ASCII digits only.
+    """Whether ``^[0-9]+$`` would match - ASCII digits only.
 
     ``str.isdigit`` is not that test: it accepts superscripts and other Unicode
-    digit forms that bash's bracket expression rejects, and a media filename can
+    digit forms that the bracket expression rejects, and a media filename can
     contain them.
     """
     return value != "" and all("0" <= c <= "9" for c in value)

@@ -206,8 +206,7 @@ class Scan:
     """What one sub-folder holds, from ONE directory walk instead of four.
 
     The case sensitivity differs per extension and is deliberate: the audio
-    extensions match exactly, as `-name` did, while a cue matches either case, as
-    `-iname` did.
+    extensions match exactly, while a cue matches either case.
     """
 
     def __init__(self, root: str) -> None:
@@ -230,7 +229,7 @@ class Scan:
 
 
 def _sorted_by_extension(folder: str, extension: str) -> list:
-    """The folder's files of one extension, in the order `sort -V` puts them."""
+    """The folder's files of one extension, in version sort order."""
     found = []
     for parent, _dirs, names in os.walk(folder):
         for name in names:
@@ -811,8 +810,8 @@ def main(argv: list, program: str = "concat-audio",
         return _run_with_scratch(ram_dir, input_dir, output_dir, pretreat,
                                  verbose, program, script_dir, have_mkvtoolnix)
     finally:
-        # The shell's `trap 'runExitCleanup' EXIT`: however this run ends, the
-        # scratch goes back to the tmpfs rather than staying there.
+        # However this run ends, the scratch goes back to the tmpfs rather
+        # than staying there.
         ramscratch.run_exit_cleanup()
 
 

@@ -195,7 +195,7 @@ def podcast_platform(platform_env: str, uname_s: str, os_env: str) -> str:
 
     ``platform_env`` is PODCAST_PLATFORM (the host saying which other host it
     wants the calls for), ``uname_s`` what ``uname -s`` printed ("" when it
-    failed), ``os_env`` the OS variable as the shell saw it.
+    failed), ``os_env`` the OS variable.
     """
     if platform_env:
         return platform_env
@@ -230,7 +230,7 @@ def native_path(path: str, platform: str, cygpath: str | None) -> str:
         rest = match.group(2) or "/"
         return f"{drive}:{rest}"
     # A relative path, or one under the emulated root with no Windows
-    # equivalent: passed through unchanged, the way the shell version does it.
+    # equivalent: passed through unchanged.
     return path
 
 
@@ -365,8 +365,7 @@ def read_podcast_table(file: str, stderr=None) -> tuple[list[str], str,
 
     Everything is validated before anything is downloaded, and every fault is
     reported at once: the rows are returned as they were read (a malformed row
-    is among them, the way the shell's PODCAST_ROWS is on a refusal), and the
-    status is 1 when any line is malformed.
+    is among them), and the status is 1 when any line is malformed.
     """
     if stderr is None:
         stderr = sys.stderr
@@ -494,8 +493,7 @@ def is_ytdlp_date(value: str) -> bool:
     """Whether the date shape is one yt-dlp itself accepts."""
     if _DATE_RE.match(value):
         return True
-    # The two alternatives of the bash regex, kept as one test each the way
-    # bash's || chain tests them.
+    # The two alternatives, kept as one test each.
     if re.match(r"^(now|today|yesterday)$", value):
         return True
     return re.match(
@@ -517,9 +515,7 @@ def parse_date_range(spec: str, stderr=None) -> tuple[str, str] | None:
         return ("", "")
 
     if ".." in spec:
-        # ${spec%%..*} strips the longest ".." suffix, which starts at the FIRST
-        # "..", and ${spec#*..} the shortest prefix, which ends at the first:
-        # a spec with more than one ".." is cut at the first, and whatever is
+        # A spec with more than one ".." is cut at the first, and whatever is
         # left in the before end fails the date test and is named as such.
         after, before = spec.split("..", 1)
     else:
@@ -705,13 +701,10 @@ def podcast_impersonate_dependency_warning(stderr=None) -> None:
 
 
 def _read_counter(counter_file: str) -> int:
-    """``read -r n <file``: one variable takes the WHOLE line, so a second line
-    does not reach the arithmetic, and neither does a second field - the run
-    writes a single integer, and that is what this reads. A first line that is
-    not a number is fatal in the shell under the set -u the module runs in -
-    an unbound variable in the arithmetic, with the crash naming the bash file
-    and line - so the corpus stops short of it; this answers with the idiom's
-    nounset value, the variable by that name, unset of which is zero."""
+    """One variable takes the WHOLE first line, so a second line does not reach
+    the arithmetic, and neither does a second field - the run writes a single
+    integer, and that is what this reads. A first line that is not a number
+    answers with zero."""
     try:
         with open(counter_file, encoding="utf-8") as handle:
             line = handle.readline()
@@ -720,8 +713,7 @@ def _read_counter(counter_file: str) -> int:
     try:
         return int(line.strip()) if line.strip() else 0
     except ValueError:
-        # The shell's arithmetic takes the value of a variable by that name,
-        # unset of which is zero: garbage in the file still counts from one.
+        # Garbage in the file still counts from one.
         return 0
 
 
@@ -759,10 +751,9 @@ def report_episodes(stream: str, counter_file: str, manifest_file: str,
     episode, numbered across the whole run.
 
     ``stream`` is yt-dlp's output as read from its pipe: a line without a
-    trailing newline at the very end is not read, the way the shell's
-    ``read`` leaves it. Reads on a bot block stop where they happen - the
-    remaining lines are the block deepening, and the function returns 0 there
-    the way the shell's does.
+    trailing newline at the very end is not read. Reads on a bot block stop
+    where they happen - the remaining lines are the block deepening, and the
+    function returns 0 there.
     """
     lines = stream.split("\n")[:-1]
 
@@ -782,8 +773,8 @@ def report_episodes(stream: str, counter_file: str, manifest_file: str,
                             counter_file, "ok", podcast, episode,
                             fmt_bytes(size))
         elif line.startswith("ERROR:"):
-            # ${line#ERROR: } strips the literal prefix only when it is there;
-            # a line that starts with the marker but not the space keeps it.
+            # The literal prefix is stripped only when it is there; a line that
+            # starts with the marker but not the space keeps it.
             detail = line[len("ERROR: "):] if line.startswith("ERROR: ") else line
             if block_flag and is_bot_block(line):
                 # Record it for the rest of the run, say so where it happened,
@@ -793,8 +784,8 @@ def report_episodes(stream: str, counter_file: str, manifest_file: str,
                     with open(block_flag, "w", encoding="utf-8"):
                         pass
                 except OSError:
-                    # `: >"$blockFlag" 2>/dev/null || true`: a flag that cannot
-                    # be written (its folder missing) still stops the run.
+                    # A flag that cannot be written (its folder missing) still
+                    # stops the run.
                     pass
                 if have_flock:
                     _locked(_emit_line, f"{counter_file}.lock", counter_file,
@@ -852,18 +843,15 @@ def podcast_download_stats(manifest_dir: str) -> tuple[int, int]:
     if not os.path.isdir(manifest_dir):
         return (0, 0)
 
-    # The shell's glob is the locale's collation order; under the C locale that
-    # is byte order, and UTF-8 byte order is code point order, so a plain sort
-    # walks the same sequence.
     for name in sorted(os.listdir(manifest_dir)):
         if name.startswith("."):
-            continue  # the shell's * glob never names a dotfile
+            continue  # hidden files are not manifests
         manifest = os.path.join(manifest_dir, name)
         if not os.path.isfile(manifest):
             continue
         with open(manifest, encoding="utf-8") as handle:
             content = handle.read()
-        # read || [[ -n ]]: a final line without its newline is read too.
+        # A final line without its newline is read too.
         paths = content.split("\n")
         if paths and paths[-1] == "":
             paths = paths[:-1]
