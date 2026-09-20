@@ -26,12 +26,13 @@ rest of the machine idles nor keeps the whole run waiting behind it. The
 cuts are nudged to the nearest quiet spot, so the seam between separately encoded
 chunks is inaudible.
 
-Planning is not a phase in front of the encode: the queue loads naively first
-with the files that need no planning, largest first, and the rest are planned
-while the queue runs, one file at a time. Each interior cut becomes a small
-silencedetect job, and a file's chunk jobs enter the queue as soon as they are
-planned - so a lone three-hour file spreads its search over its own cut windows
-while the rest of the tree encodes.
+Planning is not a phase in front of the encode: the queue is seeded naively with
+a buffer's worth of the largest files that need no planning, and the whole plan
+is then made beside that seed while it encodes. Each interior cut becomes a small
+silencedetect job and they all run in one flat pool, so a lone three-hour file
+spreads its search over its own cut windows instead of one core decoding the
+whole thing. What the plan settles joins the files the seed did not cover, and
+the queue takes the two as one run ordered largest job first.
 """
 
 import os
@@ -147,6 +148,10 @@ COVER_QUALITY = 75
 
 # Files longer than this many seconds are cut into one chunk per logical core.
 DEFAULT_SPLIT_THRESHOLD = 10000
+# The encode queue's buffer, in multiples of the worker pool. It is also the
+# size of the naive seed the queue starts on, because the seed exists to carry
+# the pool through the planning and a buffer's worth is what the pool can hold.
+QUEUE_BUFFER_FACTOR = 2
 SILENCE_NOISE = "-30dB"
 SILENCE_MIN_DUR = "0.3"
 
@@ -1103,16 +1108,16 @@ def _touch_from(source: str, target: str) -> None:
 
 
 class Planner:
-    """One track's expansion into its queue jobs, done while the queue runs.
+    """The expansion of the split candidates into their queue jobs.
 
-    Most tracks are never planned at all: the queue loads them naively, largest
-    first. The rest are candidates, and each is planned on its own - cheap probes
-    first (classify: whole, skipped, or still a split candidate), then the
-    candidate's interior cuts turned into small silencedetect WINDOW jobs and run
-    in one flat pool, and finally its gathered midpoints turned into chunk jobs,
-    which is cheap. A lone three-hour file thus spreads its search over its own
-    cut windows instead of one core decoding the whole thing, and it is done
-    while the queue encodes what is already loaded rather than in front of it.
+    Most tracks are never planned at all: the size settle finds no planning owed
+    on them and the queue seeds itself with them. The rest are candidates, and
+    they are planned together, in one pass that runs while that seed encodes -
+    cheap probes first (classify: whole, skipped, or still a split candidate),
+    then every candidate's interior cuts turned into small silencedetect WINDOW
+    jobs and run in one flat pool, and finally the gathered midpoints turned into
+    chunk jobs, which is cheap. A lone three-hour file thus spreads its search
+    over its own cut windows instead of one core decoding the whole thing.
     """
 
     def __init__(self, state: Run, jobs: int) -> None:
@@ -1122,7 +1127,7 @@ class Planner:
     def classify(self, track: str) -> None:
         """ONE track, cheap probes only. A whole or skipped track is fully
         resolved here; a split candidate drops just its duration, and the
-        expensive boundary search is deferred to :meth:`plan_candidate`."""
+        expensive boundary search is deferred to :meth:`plan_all`."""
         state = self.state
         base = segments.plan_file_for(state.plan_root, track)
         source = os.path.join(state.input_dir, track)
@@ -1136,25 +1141,39 @@ class Planner:
              "-of", "default=nk=1:nw=1", source])))
         self._still_candidate(track, base, source, duration)
 
-    def plan_candidate(self, track: str) -> None:
-        """ONE candidate's whole plan, the expensive half included.
+    def plan_all(self, tracks: list) -> None:
+        """EVERY candidate's plan, in one pass beside the queue.
 
-        Called while the queue encodes what is already loaded, so it owes the
-        track whatever is still unsettled: its duration if it was never probed,
-        the cheap settle, and - still a candidate - the window search and the
-        chunk jobs it settles into.
+        The queue is already encoding its seed while this runs. Whatever the size
+        settle never classified is settled cheaply first, then every candidate's
+        interior cuts go into ONE flat window pool - all the candidates at once
+        is what fills it, since a single file has only its own cuts to give - and
+        the midpoints they gather become chunk jobs.
         """
         state = self.state
-        base = segments.plan_file_for(state.plan_root, track)
-        if os.path.isfile(base + ".meta"):
-            self._window_phase(track, base)
-            return
-        source = os.path.join(state.input_dir, track)
-        duration = round(formatting.awk_number(_probe(
-            ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
-             "-of", "default=nk=1:nw=1", source])))
-        if self._still_candidate(track, base, source, duration):
-            self._window_phase(track, base)
+        # The xHE-AAC settle has already classified every track it handed over,
+        # so only a track nothing has looked at yet is classified here.
+        unsettled = []
+        for track in tracks:
+            base = segments.plan_file_for(state.plan_root, track)
+            if not (os.path.isfile(base + ".meta")
+                    or os.path.isfile(base + ".jobs")):
+                unsettled.append(track)
+        if unsettled:
+            _run_pool(self, "classify", unsettled, self.jobs)
+            safety.exit_if_aborted()
+
+        candidates, windows = self.window_jobs(tracks)
+        if windows:
+            _run_pool(_Detector(), "detect", windows, self.jobs)
+            safety.exit_if_aborted()
+        # The shared seek copies have served every window probe; that RAM goes
+        # back before the chunk jobs, which need only the gathered midpoints.
+        for track in candidates:
+            _remove(segments.plan_file_for(state.plan_root, track)
+                    + ".seek.mka")
+        for track in candidates:
+            self.write_chunk_jobs_for(track)
 
     def _still_candidate(self, track: str, base: str, source: str,
                          duration: int) -> bool:
@@ -1208,25 +1227,8 @@ class Planner:
             handle.write(str(duration))
         return True
 
-    def _window_phase(self, track: str, base: str) -> None:
-        """The expensive half of one candidate's plan: the window search, and
-        the chunk jobs it settles into.
-
-        It runs while the encode queue is running, so its window pool runs at
-        the run's own width beside the encode pool rather than in its place.
-        """
-        candidates, windows = self.window_jobs([track])
-        if windows:
-            _run_pool(_Detector(), "detect", windows, self.jobs)
-            safety.exit_if_aborted()
-            # This candidate's seek copy has served its window probes; that RAM
-            # goes back before the next step.
-            _remove(base + ".seek.mka")
-        if track in candidates:
-            self.write_chunk_jobs_for(track)
-
     def window_jobs(self, tracks: list) -> tuple:
-        """One candidate's interior cuts, as a flat queue of window probes."""
+        """The candidates' interior cuts, as one flat queue of window probes."""
         state = self.state
         candidates, queue = [], []
         for track in tracks:
@@ -1727,6 +1729,12 @@ def _convert(program: str, script_dir: str, input_dir: str, output_dir: str,
 
     planner = Planner(state, jobs)
     preload, candidates = _settle_preload(state, planner)
+    # What the queue starts on while the plan is made: a buffer's worth of the
+    # largest tracks that need no planning, which is the most encoding the pool
+    # can be given before the plan has to be ready anyway. At width 1 there is
+    # nothing for the planning to run beside, so nothing is seeded and the whole
+    # queue is ordered instead.
+    seed = jobs * QUEUE_BUFFER_FACTOR if jobs > 1 else 0
 
     progress_file = os.path.join(plan_root, "progress")
     duration_file = os.path.join(plan_root, "duration")
@@ -1750,7 +1758,7 @@ def _convert(program: str, script_dir: str, input_dir: str, output_dir: str,
         statusline.start_status_monitor(progress_file + ".lock",
                                         state.counters.status_text)
         producer = _encode_producer(state, planner, preload, candidates,
-                                    total_file)
+                                    total_file, seed)
         if jobs <= 1:
             # Nothing to interleave the planning with, so it and the encode run
             # one after the other in this process.
@@ -1762,7 +1770,7 @@ def _convert(program: str, script_dir: str, input_dir: str, output_dir: str,
             geometry = statusline.status_geometry()
             dynamicqueue.run(producer, jobs, _in_worker,
                              lambda token: (state, "encode", token, geometry),
-                             log=log)
+                             buffer_factor=QUEUE_BUFFER_FACTOR, log=log)
         statusline.stop_status_monitor()
         safety.exit_if_aborted()
     state.conv_end = time.time()
@@ -1871,34 +1879,47 @@ def _write_total(path: str, total: int) -> None:
         handle.write("%d\n" % total)
 
 
-def _encode_producer(state, planner, preload, candidates, total_file):
+def _encode_producer(state, planner, preload, candidates, total_file, seed):
     """The encode queue as it is planned, one generator the queue consumes.
 
     Yields (token, size) - the token a worker encodes, the size the queue keeps
-    it by - one at a time, interleaved with the planning the run owes: one
-    preload out, the next candidate planned and its jobs handed over, and so on.
-    The buffer is thus a mix of the two rather than one or the other, a large
-    file's chunks enter it within the first planning step, and the total is
-    written the moment the last candidate is planned, which is when the queue
-    first knows its own length.
+    it by. The SEED goes first and naively: the largest of the tracks the size
+    settle found no planning owed on, just enough of them to fill the buffer, so
+    the pool is working from the first second. Only then is the plan made, every
+    candidate at once and while that seed encodes. What it settles joins the
+    tracks the seed did not cover, and the two are handed over as ONE queue
+    ordered largest job first - so a run whose candidates all turn out to need no
+    chunking is still encoded largest to smallest, seed aside.
     """
-    total = len(preload)
-    remaining = iter(preload)
+    head, tail = preload[:seed], preload[seed:]
+    if not candidates:
+        # Nothing to plan, so the queue knows its own length before it hands
+        # over its first job and its very first line can carry it.
+        _write_total(total_file, len(preload))
+    for item in head:
+        if safety.abort_requested():
+            return
+        yield item
+    if candidates:
+        if safety.abort_requested():
+            return
+        planner.plan_all(candidates)
+        if safety.abort_requested():
+            return
+
+    weighed = [(float(size), track) for track, size in tail]
     for track in candidates:
-        item = next(remaining, None)
-        if item is not None:
-            yield item
-        if safety.abort_requested():
-            return
-        planner.plan_candidate(track)
-        if safety.abort_requested():
-            return
-        for weight, token in _handover(state, track):
-            total += 1
-            yield token, weight
-    _write_total(total_file, total)
-    for token, size in remaining:
-        yield token, size
+        weighed += _handover(state, track)
+    # Biggest job first, settled only now the chunking is known: a split file's
+    # pieces are each worth one chunk and take a chunk's place in the queue,
+    # rather than the whole file's at the very front. Position in the walk breaks
+    # ties, so the order is reproducible.
+    ordered = sorted(enumerate(weighed),
+                     key=lambda entry: (-entry[1][0], entry[0]))
+    if candidates:
+        _write_total(total_file, len(head) + len(ordered))
+    for _seq, (weight, token) in ordered:
+        yield token, weight
 
 
 def _weigh_jobs(state: Run, track: str, tokens: list) -> list:

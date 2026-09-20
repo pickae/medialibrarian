@@ -744,7 +744,7 @@ class TestTheQueueOrder:
     its own after the whole queue has drained.
     """
 
-    def _producer(self, tmp_path, sizes, chunked, threshold):
+    def _producer(self, tmp_path, sizes, chunked, threshold, seed=0):
         """The encode producer with the planning stubbed out: every candidate's
         jobs are written as the planner would write them, so what is under test
         is the size settle, the weighing and the handover alone."""
@@ -761,14 +761,22 @@ class TestTheQueueOrder:
             def __init__(self, state, jobs):
                 pass
 
-            def plan_candidate(self, track):
-                total = chunked[track]
-                length = sizes[track] / float(total)
-                ca._write_jobs(
-                    ca.segments.plan_file_for(str(plans), track),
-                    [ca.UNIT.join([track, str(index), str(total), "0",
-                                   "%.9f" % length])
-                     for index in range(total)])
+            def plan_all(self, tracks):
+                for track in tracks:
+                    total = chunked[track]
+                    if total < 2:
+                        # What the planner writes for a candidate it settled
+                        # whole after all: one job, the file itself.
+                        ca._write_jobs(
+                            ca.segments.plan_file_for(str(plans), track),
+                            [track])
+                        continue
+                    length = sizes[track] / float(total)
+                    ca._write_jobs(
+                        ca.segments.plan_file_for(str(plans), track),
+                        [ca.UNIT.join([track, str(index), str(total), "0",
+                                       "%.9f" % length])
+                         for index in range(total)])
 
         state = types.SimpleNamespace(
             tracks=sorted(sizes, key=lambda track: -sizes[track]),
@@ -777,7 +785,7 @@ class TestTheQueueOrder:
         preload, candidates = ca._settle_preload(state, _Planner(state, 1))
         total_file = str(tmp_path / "total")
         return (ca._encode_producer(state, _Planner(state, 1), preload,
-                                    candidates, total_file),
+                                    candidates, total_file, seed),
                 total_file)
 
     def test_a_chunk_queues_at_its_own_size_and_not_the_books(self, tmp_path):
@@ -792,6 +800,29 @@ class TestTheQueueOrder:
         assert names[0] == "track.m4a"
         assert names.count("book.m4b") == 8
         assert [size for _token, size in items[1:]] == [100.0] * 8
+
+    def test_the_whole_queue_is_largest_first_when_nothing_is_chunked(
+            self, tmp_path):
+        """The size settle sends the long files off to be planned and they come
+        back needing no chunking after all. They are still the biggest jobs in
+        the run, so they lead it - the queue is ordered on what the planning
+        settled, not on which side of the settle a file came from."""
+        sizes = {"long%d.m4b" % n: 900 - n for n in range(4)}
+        sizes.update({"short%d.m4a" % n: 300 - n for n in range(6)})
+        producer, _total_file = self._producer(
+            tmp_path, sizes, {track: 1 for track in sizes}, 0.02)
+        order = [token for token, _size in producer]
+        assert order == sorted(sizes, key=lambda track: -sizes[track])
+
+    def test_the_seed_is_the_largest_of_what_needs_no_planning(self, tmp_path):
+        """The seed carries the pool through the planning, so it is handed over
+        before the plan is made and it is the LARGEST of the tracks the settle
+        asked nothing of - the most encoding the pool can be given up front."""
+        sizes = {"book.m4b": 900, "a.m4a": 300, "b.m4a": 200, "c.m4a": 100}
+        producer, _total_file = self._producer(
+            tmp_path, sizes, {"book.m4b": 1}, 0.02, seed=2)
+        order = [token for token, _size in producer]
+        assert order == ["a.m4a", "b.m4a", "book.m4b", "c.m4a"]
 
     def test_the_chunks_of_one_file_are_still_all_there_and_in_order(
             self, tmp_path):
@@ -828,11 +859,10 @@ class TestTheQueueOrder:
                  for token, _size in sorted(items, key=lambda item: -item[1])]
         assert names[:2] == ["book.m4b", "book.m4b"]
 
-    def test_the_total_is_written_when_the_last_candidate_is_planned(
-            self, tmp_path):
+    def test_the_total_is_written_when_the_planning_is_done(self, tmp_path):
         """The queue's lines count without a denominator until the producer
-        knows the queue's own length, which is when its last candidate is
-        planned - and it writes it then, before the last of the preloads."""
+        knows the queue's own length, which is when the plan is made - and it
+        writes it then, before the first job the plan settled."""
         producer, total_file = self._producer(
             tmp_path, {"book.m4b": 800, "track.m4a": 150}, {"book.m4b": 8},
             0.01)
