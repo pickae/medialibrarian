@@ -28,6 +28,8 @@ __all__ = [
     "reset_state",
     "ffmpeg_candidates",
     "select_ffmpeg",
+    "selected_ffmpeg",
+    "selected_full",
     "report_ffmpeg_selection",
     "ffmpeg_version",
 ]
@@ -193,6 +195,16 @@ def select_ffmpeg(probe=None) -> int:
     if _pin_on_path(_STATE.selected, path):
         _STATE.pinned = 1
     return 0
+
+
+def selected_ffmpeg(state=_STATE) -> str:
+    """The binary the run settled on, "" before anything has been settled.
+
+    For the caller that has to NAME the build rather than just run it: a tool
+    that searches for an ffmpeg by a rule of its own, and so has to be told
+    which one this run chose.
+    """
+    return state.selected
 
 
 def selected_full(state=_STATE) -> int:

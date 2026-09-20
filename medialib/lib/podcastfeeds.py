@@ -541,12 +541,19 @@ def podcast_call(output_root: str, archive_file: str, subdir: str,
                  url: str, *, ytdlp_command: Sequence[str],
                  profile: str = "", date_after: str = "",
                  date_before: str = "", verbose: str = "",
-                 sponsorblock: str | None = None) -> list[str] | None:
+                 sponsorblock: str | None = None,
+                 ffmpeg_location: str = "") -> list[str] | None:
     """The complete argv for one feed, or None when the profile is unknown.
 
     ``sponsorblock`` carries the caller's settled answer as three states: None
     for never asked (the flags stay), "" for settled absent (they come out), a
     non-empty string for settled present (they stay).
+
+    ``ffmpeg_location`` is the directory holding the ffmpeg and ffprobe the run
+    settled on, "" to leave yt-dlp to find its own. Every profile asks yt-dlp
+    for work it does through ffmpeg - extracting the audio, merging the two
+    streams into mkv, embedding the thumbnail, the metadata and the chapters -
+    and it searches PATH for that ffmpeg by a rule of its own.
     """
     output_root = output_root.removesuffix("/")
     subdir = subdir.removesuffix("/")
@@ -566,6 +573,10 @@ def podcast_call(output_root: str, archive_file: str, subdir: str,
     if playlist_end != str(PODCAST_UNLIMITED_PLAYLIST_END):
         call += ["--playlist-end", playlist_end]
     call += list(profile_args)
+    # Ahead of the row's extraArgs, which is what lets a feed name a build of
+    # its own: yt-dlp keeps the LAST --ffmpeg-location it is given.
+    if ffmpeg_location:
+        call += ["--ffmpeg-location", ffmpeg_location]
     if date_after:
         call += ["--dateafter", date_after]
     if date_before:

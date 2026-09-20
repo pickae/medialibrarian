@@ -235,7 +235,8 @@ class Run:
 
     def __init__(self, options, ytdlp_command, platform, native_output,
                  native_archive, manifest_dir, native_manifest_dir, status_dir,
-                 counter_file, counters, staging_for_profile, script_dir):
+                 counter_file, counters, staging_for_profile, script_dir,
+                 ffmpeg_location):
         self.options = options
         self.ytdlp_command = ytdlp_command
         self.platform = platform
@@ -248,6 +249,7 @@ class Run:
         self.counters = counters
         self.staging_for_profile = staging_for_profile
         self.script_dir = script_dir
+        self.ffmpeg_location = ffmpeg_location
         self.have_flock = runlog.have_flock()
 
     # --- what stops a run -------------------------------------------------
@@ -278,7 +280,8 @@ class Run:
             date_after=os.environ.get("PODCAST_DATE_AFTER", ""),
             date_before=os.environ.get("PODCAST_DATE_BEFORE", ""),
             verbose=os.environ.get("PODCAST_VERBOSE", ""),
-            sponsorblock=os.environ.get("PODCAST_SPONSORBLOCK"))
+            sponsorblock=os.environ.get("PODCAST_SPONSORBLOCK"),
+            ffmpeg_location=self.ffmpeg_location)
         if argv is None:
             return
 
@@ -423,7 +426,8 @@ class Run:
                     date_after=os.environ.get("PODCAST_DATE_AFTER", ""),
                     date_before=os.environ.get("PODCAST_DATE_BEFORE", ""),
                     verbose=os.environ.get("PODCAST_VERBOSE", ""),
-                    sponsorblock=os.environ.get("PODCAST_SPONSORBLOCK"))
+                    sponsorblock=os.environ.get("PODCAST_SPONSORBLOCK"),
+                    ffmpeg_location=self.ffmpeg_location)
                 if argv is not None:
                     print(podcastfeeds.render_call(argv, self.platform))
                 continue
@@ -502,6 +506,38 @@ def _default_tables(script_dir: str):
     if os.path.isfile(first):
         return [first]
     return [os.path.join(script_dir, "podcasts.tsv")]
+
+
+def _ffmpeg_pair(binary: str) -> str:
+    """The directory holding that ffmpeg and an ffprobe beside it, "" when the
+    two are not together.
+
+    A directory because that is what yt-dlp is told, and both names because
+    given a location it stops searching PATH altogether: a directory holding
+    only ffmpeg would leave it without an ffprobe it could otherwise reach.
+    """
+    if not binary:
+        return ""
+    directory = os.path.dirname(os.path.abspath(binary))
+    if os.access(os.path.join(directory, "ffprobe"), os.X_OK):
+        return directory
+    return ""
+
+
+def _ffmpeg_serves_ytdlp(binary: str) -> bool:
+    """Whether the ladder should stop at this build: it runs.
+
+    The execute bit is all a candidate has had to pass so far, which a static
+    build missing a shared library and a wrapper pointing at a deleted prefix
+    both pass; the version is the cheapest question only a build that really
+    runs can answer.
+
+    An ffprobe of its own is deliberately not asked for: an ffmpeg-only build
+    someone put on PATH works today against whatever ffprobe PATH holds, and
+    rejecting it over a second binary would walk the run down to the distro's
+    package for a reason that is not about what the build can do.
+    """
+    return bool(ffmpegselect.ffmpeg_version(binary))
 
 
 def _resolve_ytdlp(platform: str, script_dir: str):
@@ -706,8 +742,10 @@ def main(argv: list, program: str = "ytdlp", script_dir: str = "") -> int:
     if bad:
         return 2
 
+    uname, os_env = _uname(), os.environ.get("OS", "")
+    host_platform = podcastfeeds.podcast_platform("", uname, os_env)
     platform = podcastfeeds.podcast_platform(
-        os.environ.get("PODCAST_PLATFORM", ""), _uname(), os.environ.get("OS", ""))
+        os.environ.get("PODCAST_PLATFORM", ""), uname, os_env)
     ytdlp_command = _resolve_ytdlp(platform, script_dir)
     skip_preflight = bool(os.environ.get("SKIP_TOOL_PREFLIGHT", ""))
     if ytdlp_command is None:
@@ -718,8 +756,14 @@ def main(argv: list, program: str = "ytdlp", script_dir: str = "") -> int:
         # resolve to the plain name so the run has a defined command.
         ytdlp_command = ["yt-dlp"]
 
-    ffmpegselect.select_ffmpeg()
-    ffmpegselect.report_ffmpeg_selection()
+    # The build is named in the startup summary rather than here, with the rest
+    # of what this run settled.
+    ffmpegselect.select_ffmpeg(_ffmpeg_serves_ytdlp)
+    # Not for the OTHER machine's calls: "-s windows" from Linux prints a
+    # command line to run over there, where this directory does not exist.
+    ffmpeg_location = ""
+    if platform == host_platform:
+        ffmpeg_location = _ffmpeg_pair(ffmpegselect.selected_ffmpeg())
     if tooldeps.require_tools("the podcast downloads", ["ffmpeg"],
                               skip_preflight=skip_preflight):
         return 1
@@ -750,7 +794,8 @@ def main(argv: list, program: str = "ytdlp", script_dir: str = "") -> int:
             return 1
 
     return _run(options, tables, profiles, jobs_of, rows_of, feed_count,
-                output_path, archive_file, ytdlp_command, platform, script_dir)
+                output_path, archive_file, ytdlp_command, platform, script_dir,
+                ffmpeg_location)
 
 
 def _on_opt(letter: str, value: str) -> None:
@@ -872,7 +917,8 @@ def _holds_a_file(directory: str) -> bool:
 
 
 def _run(options, tables, profiles, jobs_of, rows_of, feed_count, output_path,
-         archive_file, ytdlp_command, platform, script_dir) -> int:
+         archive_file, ytdlp_command, platform, script_dir,
+         ffmpeg_location) -> int:
     ingest = None
     if options["ingest"]:
         # No preflight for the two commands the library copy runs: they are
@@ -889,6 +935,11 @@ def _run(options, tables, profiles, jobs_of, rows_of, feed_count, output_path,
 
     native_output = _native_path(output_path, platform)
     native_archive = _native_path(archive_file, platform)
+    # Guarded, because "" is not a path to convert: cygpath answers it with the
+    # working directory, which is not where this run's ffmpeg is.
+    native_ffmpeg = ""
+    if ffmpeg_location:
+        native_ffmpeg = _native_path(ffmpeg_location, platform)
     staging_for_profile = {}
     if ingest:
         for profile, staging in ingest["forProfile"].items():
@@ -929,7 +980,7 @@ def _run(options, tables, profiles, jobs_of, rows_of, feed_count, output_path,
         state = Run(options, ytdlp_command, platform, native_output,
                     native_archive, manifest_dir, native_manifest_dir,
                     status_dir, counter_file, counters, staging_for_profile,
-                    script_dir)
+                    script_dir, native_ffmpeg)
         state.rows_of = rows_of
 
         started = time.time()
@@ -973,9 +1024,30 @@ def _lane_worker(state, lane_tables, tables, profiles, jobs_of) -> None:
     state.run_lane(lane_tables, tables, profiles, jobs_of)
 
 
+def _announce_ffmpeg(state) -> None:
+    """Which ffmpeg the downloads mux through, and whether yt-dlp was told.
+
+    The build is yt-dlp's as much as this script's and the two find one by
+    different rules, so the summary says whether they were made to agree.
+    """
+    binary = ffmpegselect.selected_ffmpeg()
+    if not binary:
+        log("ffmpeg: none found - yt-dlp will look for its own")
+        return
+    version = ffmpegselect.ffmpeg_version(binary) or "version not reported"
+    if state.ffmpeg_location:
+        log("ffmpeg: %s (%s), handed to yt-dlp" % (binary, version))
+    else:
+        # No directory to name, so yt-dlp is left to the PATH search - which
+        # this run has already pointed at the pair it chose.
+        log("ffmpeg: %s (%s), reached by yt-dlp through PATH"
+            % (binary, version))
+
+
 def _announce(state, tables, feed_count, ingest, native_output) -> None:
     log("yt-dlp: %s (%s call style)" % (" ".join(state.ytdlp_command),
                                         state.platform))
+    _announce_ffmpeg(state)
     log("Output: " + native_output)
     log("Archive: " + state.native_archive)
     if ingest:

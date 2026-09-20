@@ -272,7 +272,10 @@ def ytdlp(sandbox, tmp_path):
     """The stub, its call log, and a run pinned to the linux call style."""
     calls = tmp_path / "calls"
     calls.mkdir()
-    sandbox.with_tool("ffmpeg", ":")
+    # A pair, and one that answers -version: the run walks its ladder past a
+    # build that will not say what it is, and past the sandbox is the host's own.
+    sandbox.with_tool("ffmpeg", 'echo "ffmpeg version 7.1 stub"')
+    sandbox.with_tool("ffprobe", ":")
     sandbox.with_tool("yt-dlp", _STUB)
 
     environment = dict(os.environ, CALL_LOG=str(calls), YTDLP="yt-dlp")
@@ -501,6 +504,56 @@ class TestTheWindowsCallStyle:
                           "latent", ytdlp.library,
                           ytdlp.library / "archive.log")
         assert "%s/AI/latent space" % ytdlp.library in log, log
+
+
+class TestTheFfmpegTheDownloadsMuxThrough:
+    """Every profile has yt-dlp doing ffmpeg work - extracting the audio,
+    merging into mkv, embedding the thumbnail - and yt-dlp searches PATH for
+    that ffmpeg itself, so the run has to name the one it settled on."""
+
+    def test_the_settled_pair_is_named_in_every_call(self, ytdlp):
+        ytdlp.ytdlp("-t", ytdlp.table, "-m", "latent", ytdlp.library,
+                    ytdlp.library / "archive.log")
+        assert _option(ytdlp.argv(1), "--ffmpeg-location") == str(ytdlp.bin)
+
+    def test_the_summary_names_the_build_and_not_the_runs_symlink_to_it(self, ytdlp):
+        log = ytdlp.ytdlp("-t", ytdlp.table, "-m", "latent", ytdlp.library,
+                          ytdlp.library / "archive.log")
+        assert "ffmpeg: %s/ffmpeg (7.1)" % ytdlp.bin in log, log
+
+    def test_a_build_with_no_ffprobe_beside_it_is_not_named_to_yt_dlp(self, ytdlp):
+        """A directory holding only ffmpeg would cost yt-dlp the ffprobe it can
+        already reach: given a location it stops searching PATH for both."""
+        (ytdlp.bin / "ffprobe").unlink()
+        ytdlp.ytdlp("-t", ytdlp.table, "-m", "latent", ytdlp.library,
+                    ytdlp.library / "archive.log")
+        assert _option(ytdlp.argv(1), "--ffmpeg-location") is None
+
+    def test_a_hand_installed_build_is_reached_when_the_one_on_path_will_not_run(
+            self, ytdlp, tmp_path):
+        """The case the ladder is walked for: a static build under
+        ``~/.local/bin`` is on some machines the only ffmpeg that works, and
+        the execute bit alone does not tell it apart from one that does not."""
+        ytdlp.with_tool("ffmpeg", "exit 1")
+        home = tmp_path / "home"
+        local = home / ".local" / "bin"
+        local.mkdir(parents=True)
+        for name in ("ffmpeg", "ffprobe"):
+            tool = local / name
+            tool.write_text('#!/usr/bin/env bash\necho "ffmpeg version 7.2 hand"\n')
+            tool.chmod(0o755)
+
+        ytdlp.ytdlp("-t", ytdlp.table, "-m", "latent", ytdlp.library,
+                    ytdlp.library / "archive.log",
+                    env=dict(ytdlp.env, HOME=str(home)))
+        assert _option(ytdlp.argv(1), "--ffmpeg-location") == str(local)
+
+    def test_the_other_machines_calls_are_not_given_this_ones_directory(self, ytdlp):
+        """`-s windows` from Linux prints a command line to run over there, and
+        this host's ffmpeg directory is not a path that exists there."""
+        log = ytdlp.ytdlp("-t", ytdlp.table, "-n", "-s", "windows", "-m",
+                          "latent", ytdlp.library, ytdlp.library / "archive.log")
+        assert "--ffmpeg-location" not in log, log
 
 
 class TestSeveralTablesAndWhatMayRunAlongsideWhat:

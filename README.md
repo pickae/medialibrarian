@@ -144,7 +144,9 @@ same build, and a choice that is **not** what your own shell would have run is s
 in the output; the ordinary case is silent.
 
 [`convert-video`](#convert-video) goes one step further and asks each candidate
-whether it can do what the chosen preset needs (see below).
+whether it can do what the chosen preset needs (see below), and
+[`ytdlp`](#ytdlp) asks each one whether it runs at all, then names the winner to
+yt-dlp, which would otherwise search `PATH` for a build of its own.
 
 > **Windows:** [`ytdlp`](#ytdlp) is the one that cares where it runs: it
 > recognises a Windows-style host and translates the paths it hands yt-dlp, and
@@ -313,6 +315,14 @@ time:
   distro install is left to its package manager), and a failed upgrade is a
   warning rather than the end of the run. `SKIP_YTDLP_UPGRADE=1` turns the
   check off, and a dry run (`-n`) never upgrades.
+- **which ffmpeg**: yt-dlp does its own muxing through ffmpeg — extracting the
+  audio, merging the two streams into Matroska, embedding the thumbnail and the
+  chapters — and finds one by searching `PATH` itself. So the run walks the
+  [ladder](#which-ffmpeg-a-run-uses) past any build that will not run and names
+  the winner to yt-dlp, which on a machine whose only working ffmpeg is a
+  hand-installed build under `/opt/ffmpeg` or `~/.local/bin` is the difference
+  between the muxing working and not. A feed's own `--ffmpeg-location` still
+  wins, since yt-dlp keeps the last one it is given.
 - **which paths**: under Git Bash or Cygwin the output and archive paths are
   translated to their drive-letter form, since a native `yt-dlp.exe` does not
   know where the emulated root is mounted.

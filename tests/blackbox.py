@@ -129,8 +129,14 @@ _STUBS = {
     # For every call in these commands that PRODUCES a file, the output path is
     # the last argument. An analysis-only call does not produce one: it ends in
     # the "-" of "-f null -", where "-" is stdout and not a file - and writing to
-    # it anyway made a file literally called "-" in the working directory.
-    "ffmpeg": 'out="${!#}"; [[ "$out" == "-" ]] || : > "$out"',
+    # it anyway made a file literally called "-" in the working directory. The
+    # questions asked ABOUT the build end the same way, in a flag, and answering
+    # them is what keeps a file called "-version" out of the run's output folder.
+    "ffmpeg": ('if [[ "${!#}" == -* ]]; then\n'
+               '    [[ "${!#}" == "-version" ]] && echo "ffmpeg version 7.1 stub"\n'
+               '    exit 0\n'
+               'fi\n'
+               ': > "${!#}"'),
     "ffprobe": 'echo "123.456"',
     "mkvmerge": 'prev=""; for a in "$@"; do [[ "$prev" == "-o" ]] && : > "$a"; prev="$a"; done',
     "mkvpropedit": ":",
