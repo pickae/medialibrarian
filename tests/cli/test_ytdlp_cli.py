@@ -241,6 +241,13 @@ printf '%s\n' "$*" >> "$ATTACH_LOG"
 exit 0
 """
 
+# A cygpath that records what it was asked and answers with a recognisable
+# conversion.
+_CYGPATH_STUB = r"""
+printf '%s\n' "$@" >> "$CYGPATH_LOG"
+printf 'Z:/native%s\n' "${@: -1}"
+"""
+
 _TABLE = (
     "# a comment\n\n"
     "1\tAI/latent space\t\t40\t\thttps://example.test/latent\n"
@@ -449,6 +456,51 @@ class TestTheFlags:
     def test_a_missing_table_is_refused(self, ytdlp, tmp_path):
         ytdlp.ytdlp("-t", tmp_path / "nope.tsv", ytdlp.library,
                     ytdlp.library / "archive.log", expect=2)
+
+
+class TestTheWindowsCallStyle:
+    """Every path a Windows host's yt-dlp is handed is the CONVERSION cygpath
+    prints, and not the location of cygpath itself."""
+
+    @pytest.fixture
+    def converted(self, ytdlp, tmp_path):
+        """A cygpath that answers, and records what it was asked."""
+        asked = tmp_path / "cygpathCalls"
+        ytdlp.with_tool("cygpath", _CYGPATH_STUB)
+        log = ytdlp.ytdlp("-t", ytdlp.table, "-n", "-s", "windows", "-m",
+                          "latent", ytdlp.library,
+                          ytdlp.library / "archive.log",
+                          env=dict(ytdlp.env, CYGPATH_LOG=str(asked)))
+        return ytdlp, log, asked
+
+    def test_the_conversion_is_what_the_call_carries(self, converted):
+        _, log, _ = converted
+        assert "Z:/native" in log, log
+
+    def test_and_not_the_tools_own_path(self, converted):
+        ytdlp, log, _ = converted
+        assert str(ytdlp.bin / "cygpath") not in log, log
+
+    def test_the_output_root_and_the_archive_are_both_converted(self, converted):
+        ytdlp, log, _ = converted
+        assert "Z:/native%s/AI/latent space" % ytdlp.library in log, log
+        assert "Z:/native%s/archive.log" % ytdlp.library in log, log
+
+    def test_each_path_is_asked_about_as_itself(self, converted):
+        """``-m --`` and the path last: a conversion asked for with other flags
+        is a different answer."""
+        ytdlp, _, asked = converted
+        calls = asked.read_text().splitlines()
+        assert calls[:3] == ["-m", "--", str(ytdlp.library)], calls
+        assert str(ytdlp.library / "archive.log") in calls, calls
+
+    def test_without_cygpath_the_manual_shapes_stand(self, ytdlp):
+        """No cygpath on the host, so the path is the one native_path works
+        out for itself."""
+        log = ytdlp.ytdlp("-t", ytdlp.table, "-n", "-s", "windows", "-m",
+                          "latent", ytdlp.library,
+                          ytdlp.library / "archive.log")
+        assert "%s/AI/latent space" % ytdlp.library in log, log
 
 
 class TestSeveralTablesAndWhatMayRunAlongsideWhat:
