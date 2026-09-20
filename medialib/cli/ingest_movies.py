@@ -18,6 +18,7 @@ the video turns out to carry no Dolby Vision behind the container's claim, that
 claim is dropped.
 """
 
+import fnmatch
 import os
 import re
 import shutil
@@ -60,9 +61,13 @@ f | <file> | read the name fragments to remove from <file> (one per line,
 c |  | commentary only: the transcription phase and nothing else - the given
                   folders are walked the way -t walks them, and every commentary
                   track that does not already have its transcript beside the film
-                  is transcribed next to it, in the language it is spoken in. No
-                  subtitles are downloaded, nothing is renamed, converted, remuxed
-                  or tagged, and the transcripts are left beside the films rather
+                  is transcribed next to it, in the language it is spoken in. A
+                  movie whose name never got the dot before its mkv is first
+                  conformed to the spelling its folder spells it, and one that
+                  cannot be conformed is left untranscribed and reported at the
+                  end. No subtitles are downloaded, and nothing is converted,
+                  remuxed or tagged - and no title is renamed beyond that
+                  conforming. The transcripts are left beside the films rather
                   than muxed into them.
 t |  | tags only: the Plex/Jellyfin naming and nothing else - the IMDb id,
                   the editions a folder's several versions become, and a split
@@ -680,6 +685,70 @@ def rename_movies(root: str, fragments_file: str, skips) -> int:
             else:
                 _rename_quiet(source, target)
     return renamed
+
+
+def conform_movie_names(root: str, skips) -> int:
+    """``conformMovieNames``: a movie whose name never got the dot before its
+    mkv is renamed to the spelling its folder spells it, so the name is a proper
+    ``.mkv`` again and the transcription can read the film's stem off it.
+
+    The folder is the anchor, and a file is only ever the folder's own film when
+    it carries the folder's own id tag. It is conformed only when nothing is left
+    of it once the folder's words, a year said a second time, and a stacking token
+    are accounted for - which is to say only when the mangle can be undone without
+    a guess. A name that says more than that (a word of its own, a year the folder
+    does not carry) is left where it is, for the phase that reads the tracks to
+    report as left untranscribed rather than renamed to a guess. A sidecar that
+    goes by the film's old stem is moved along with the film.
+    """
+    conformed = 0
+    for folder in _folders_below(root):
+        if is_bonus_folder(folder):
+            continue
+        base, tag = plexnames.untagged_base(os.path.basename(folder))
+        if not tag or not plexnames.year_of(base):
+            continue
+        for name in sorted(_names_in(folder)):
+            if not fnmatch.fnmatchcase(name, "*mkv"):
+                continue
+            path = os.path.join(folder, name)
+            if not os.path.isfile(path) or plexnames.is_kept_copy(name):
+                continue
+            stem = name[:-4] if name.endswith(".mkv") else name[:-3]
+            target, _unfixable = plexnames.conform_to_folder(base, tag, stem)
+            if not target or target + ".mkv" == name:
+                continue
+            if not safety.safe_rename(
+                    path, os.path.join(folder, target + ".mkv"), skips):
+                continue
+            conformed += 1
+            log("Conformed the movie's name to its folder's: ./"
+                + os.path.relpath(os.path.join(folder, target + ".mkv"), root))
+            _follow_sidecars(folder, stem, target, skips)
+    return conformed
+
+
+def _follow_sidecars(folder: str, old_stem: str, new_stem: str, skips) -> None:
+    """A renamed film's sidecars, moved with it.
+
+    A transcript and a subtitle are named by the film's stem, so every sibling
+    that goes by the film's old stem is renamed to go by its new one, the tail
+    unchanged. Movies are not sidecars and are left to the phases that rename
+    them.
+    """
+    for entry in sorted(_names_in(folder)):
+        if fnmatch.fnmatchcase(entry, "*mkv"):
+            continue
+        if not (entry.startswith(old_stem + " ")
+                or entry.startswith(old_stem + ".")
+                or entry.startswith(old_stem + "_")):
+            continue
+        path = os.path.join(folder, entry)
+        if not os.path.isfile(path):
+            continue
+        safety.safe_rename(path,
+                           os.path.join(folder, new_stem + entry[len(old_stem):]),
+                           skips)
 
 
 def extras_into_subfolders(root: str, skips) -> None:

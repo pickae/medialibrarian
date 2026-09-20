@@ -63,6 +63,7 @@ class Run:
     whisper: dict
     ffsubsync_quality: str
     long_names: tmdblookup.LongNames
+    unfixed_movies: list
 
     def __init__(self, **settings) -> None:
         self.__dict__.update(settings)
@@ -525,12 +526,12 @@ def main(argv: list, program: str = "ingest-movies",
     if result.values.get("writeTags") and not (result.values.get("tagsOnly")
                                                or result.values.get("idList")):
         if result.values.get("commentaryOnly"):
-            # -c writes transcripts, not names, so there is no dry run of its
+            # -c is the transcription and not a dry run, so there is nothing
             # for -w to turn into real renames.
             sys.stderr.write(clioptions.usage_error_text(
                 declaration,
                 "-w has no part in -c: it turns the dry run of -t or -i into "
-                "real renames, and\n-c writes none. Drop the -w."))
+                "real renames, and -c\nis not a dry run. Drop the -w."))
             return 1
         sys.stderr.write(clioptions.usage_error_text(
             declaration,
@@ -634,6 +635,12 @@ def main(argv: list, program: str = "ingest-movies",
     long_names = tmdblookup.LongNames()
     safety.init_abort_flag(os.path.join(ram_root, "abortRequested"))
     safety.trap_run_abort()
+    # The movies a transcription was skipped for because their name carried no
+    # dot before its extension, gathered across every folder and reported at the
+    # end: the name says the film cannot be told from its folder, and the film
+    # is what someone has to look at.
+    unfixed_movies: list = []
+
     # Named above the phases a Ctrl+C can cut short, so an ingest stopped halfway
     # still recaps the renames it held back instead of leaving them buried in
     # output that scrolled away hours ago.
@@ -642,6 +649,7 @@ def main(argv: list, program: str = "ingest-movies",
         durationcheck.report()
         for line in long_names.report():
             sys.stderr.write(line + "\n")
+        _report_unfixed_movies(unfixed_movies)
 
     safety.set_run_footer(recap)
 
@@ -658,7 +666,8 @@ def main(argv: list, program: str = "ingest-movies",
 
     state = Run(script_dir=script_dir, ram_root=ram_root, skips=skips,
                 fragments_file=fragments_file, whisper=whisper,
-                ffsubsync_quality=ffsubsync_quality, long_names=long_names)
+                ffsubsync_quality=ffsubsync_quality, long_names=long_names,
+                unfixed_movies=unfixed_movies)
 
     try:
         for root in ingestable:
@@ -902,6 +911,36 @@ def _write_commentary_orphans(script_dir: str, orphans: list) -> None:
         "written to %s" % path)
 
 
+def _report_unfixed_movies(movies: list) -> None:
+    """The movies a transcription was skipped for because their name carried no
+    dot before its extension, named on stderr at the end of a full ingest. The
+    full run has no logs/ folder of its own to leave them in - the screen is
+    where the rest of its end-of-run report goes - and an empty list prints
+    nothing, so a run with nothing to report is silent."""
+    if not movies:
+        return
+    sys.stderr.write(
+        "\nLeft untranscribed: no dot before the extension in the name, so the\n"
+        "film's stem could not be read. Conform the name to the folder's or\n"
+        "fix it by hand, then run the ingest again.\n")
+    for movie in movies:
+        sys.stderr.write("  " + movie + "\n")
+
+
+def _write_unfixed_movies(script_dir: str, movies: list) -> None:
+    """The movies a -c run left untranscribed because their name carried no dot
+    before its extension, one absolute path per line. An empty run writes
+    nothing, so a run with nothing to report leaves no file behind."""
+    if not movies:
+        return
+    path = commands.logs_file(script_dir, "unfixedMovies.txt")
+    with open(path, "w", encoding="utf-8") as handle:
+        for movie in movies:
+            handle.write(movie + "\n")
+    log("Movie(s) left untranscribed - no dot before the extension in the "
+        "name, written to %s" % path)
+
+
 def _commentary_only(program: str, script_dir: str, roots: list,
                      fragments_file: str) -> int:
     """The commentary transcription phase on its own.
@@ -910,7 +949,11 @@ def _commentary_only(program: str, script_dir: str, roots: list,
     every folder given, the track test, the check for a transcript already
     beside the film and the queue drained over the whisper workers - and what
     does not is everything the full run runs around it: no subtitle
-    downloading, no renaming, no opus, no improved copies and no tagging. A
+    downloading, no renaming of titles, no opus, no improved copies and no
+    tagging. The one exception is conforming a mangled movie's name to its
+    folder's spelling, which IS done: a movie whose name never got the dot
+    before its mkv has no stem a transcript can be named from, and it must be
+    put right or reported before anything is transcribed. A
     transcript that is written is written next to the film, and a second run
     over the same library finds every commentary already has its sidecar and
     does nothing, the way the phase does inside a full ingest.
@@ -930,6 +973,13 @@ def _commentary_only(program: str, script_dir: str, roots: list,
     A transcript that names a track its film no longer numbers a commentary for
     is one the film has outlived; the walk reports every one it finds, and the
     run leaves them in a file rather than losing them or acting on them.
+
+    A movie whose name carries no dot before its extension has no stem a
+    transcript can be named from: built from the empty stem it would be written
+    in the library's root rather than the film's folder. The ones whose name
+    can be restored to the folder's spelling are conformed before the walk, and
+    the ones that cannot are left untranscribed and left in a file at the end,
+    the same way the orphaned transcripts are.
 
     The transcription is the whole of the run, so its tools are the gate on it:
     without ffsubsync and pipx there is no subtitle worth writing, and there is
@@ -980,14 +1030,24 @@ def _commentary_only(program: str, script_dir: str, roots: list,
     # file at the end: the -c run is the one that reports them, and it is the
     # whole of this run.
     orphans: list[str] = []
+    # And the movies the walk could not transcribe because their name carried
+    # no dot before its extension, gathered the same way: conformed before the
+    # walk where the folder's spelling gave the answer, reported where it did
+    # not.
+    unfixed: list[str] = []
     try:
         for root in roots:
             if len(roots) > 1:
                 log('Transcribing commentary in "%s"' % root)
+            # A mangled name put right before the walk reads the tracks, so the
+            # film is transcribed under the name its folder spells it rather
+            # than left with no stem to read.
+            rules.conform_movie_names(root, state.skips)
             # Fresh per root: the movie paths handed down are relative to this
             # root, so a cache keyed on them is only valid for it.
             durations: dict[str, int] = {}
             root_orphans: list[str] = []
+            root_unfixed: list[str] = []
             commentarytranscription.export_commentary(
                 root, rules.read_track_info, rules.is_bonus_folder,
                 lambda name: rules.rename(name, state.fragments_file),
@@ -998,14 +1058,18 @@ def _commentary_only(program: str, script_dir: str, roots: list,
                 lambda prefix, movie, _durations=durations: _sidecar_too_small(
                     prefix, movie, _durations),
                 same_commentary_name=rules._same_commentary,
-                orphans=root_orphans)
+                orphans=root_orphans, unfixed=root_unfixed)
             for relative in root_orphans:
                 orphans.append(os.path.normpath(
+                    os.path.join(root, relative)))
+            for relative in root_unfixed:
+                unfixed.append(os.path.normpath(
                     os.path.join(root, relative)))
             safety.exit_if_aborted()
     finally:
         ramscratch.run_exit_cleanup()
     _write_commentary_orphans(script_dir, orphans)
+    _write_unfixed_movies(script_dir, unfixed)
     return workerpool.exit_status(0)
 
 
@@ -1132,6 +1196,13 @@ def _ingest(state, root: str, subtitle_work: bool) -> None:
         if rules.rename_movies(root, state.fragments_file, state.skips) == 0:
             break
 
+    # Once the names have settled, a movie whose name never got the dot before
+    # its mkv can be conformed to the spelling its folder spells it - where the
+    # folder already carries the id the file is matched against. Folders that
+    # gain their id from the tagging below are conformed again after it.
+    log("Phase: conforming mangled movie names to their folders'")
+    rules.conform_movie_names(root, state.skips)
+
     log("Phase: moving and renaming pre-existing subtitles")
     subtitlefiles.move_subs(root)
     subtitlefiles.rename_subs(root, state.skips)
@@ -1164,7 +1235,8 @@ def _ingest(state, root: str, subtitle_work: bool) -> None:
             log,
             lambda producer: _drain_commentary(state, producer, jobs),
             rules.MAX_WHISPER_SYNC_OFFSET, state.ffsubsync_quality,
-            same_commentary_name=rules._same_commentary)
+            same_commentary_name=rules._same_commentary,
+            unfixed=state.unfixed_movies)
         safety.exit_if_aborted()
     else:
         log("Phase: extracting and transcribing commentary tracks - SKIPPED "
@@ -1180,6 +1252,14 @@ def _ingest(state, root: str, subtitle_work: bool) -> None:
     log("Phase: tagging movies with IMDb ids (Plex/Jellyfin naming)")
     tmdblookup.tag_plex_ids(root, log, state.skips,
                             long_names=state.long_names)
+
+    # The tagging gave every folder its id, and a mangled name that the first
+    # pass could not anchor on a tag can now be conformed. The transcription is
+    # already done - what a name still mangled then was left untranscribed and
+    # is reported as such - but the name is right for the phases that follow and
+    # for the next run.
+    log("Phase: conforming mangled movie names to their folders'")
+    rules.conform_movie_names(root, state.skips)
 
     rules.cleanup(root)
     log("Phase: checking for folders without a movie")

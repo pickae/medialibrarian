@@ -86,7 +86,8 @@ def ingested(monkeypatch):
         state = run_module.Run(script_dir="", ram_root="", skips=None,
                                fragments_file="", whisper={},
                                ffsubsync_quality=quality,
-                               long_names=tmdblookup.LongNames())
+                               long_names=tmdblookup.LongNames(),
+                               unfixed_movies=[])
         run_module._ingest(state, "/x", subtitle_work)
         return seen
     return run

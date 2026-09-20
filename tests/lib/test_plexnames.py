@@ -965,3 +965,80 @@ class TestTheFileNameLimit:
                                        stray], cropped, over_limit)
         assert [name for name, _target in cropped] == [commentary]
         assert [name for name, _target in over_limit] == [stray]
+
+
+class TestConformToFolder:
+    """A name that never got the dot before its mkv, brought back to the
+    folder's own spelling - and the names that are not the folder's film at all
+    left for the caller to report."""
+
+    BASE = "Hollow Ridge (1981)"
+    TAG = "{imdb-tt0000001}"
+
+    def test_a_doubled_year_is_the_only_leftover_that_passes(self):
+        # The one name in the wild that started this: the year said a second
+        # time, the dot before the mkv never written.
+        stem = "Hollow Ridge (1981) {imdb-tt0000001} 1981"
+        assert plexnames.conform_to_folder(self.BASE, self.TAG, stem) == \
+            ("Hollow Ridge (1981) {imdb-tt0000001}", False)
+
+    def test_the_repaired_name_is_the_folder_spelling_with_the_tag(self):
+        assert plexnames.conform_to_folder(
+            self.BASE, self.TAG, "Hollow Ridge (1981) {imdb-tt0000001} 1981") == \
+            ("Hollow Ridge (1981) {imdb-tt0000001}", False)
+
+    def test_the_doubled_year_is_read_bracketed_or_bare(self):
+        assert plexnames.conform_to_folder(
+            "Film (2020)", self.TAG, "Film 2020 {imdb-tt0000001} 2020") == \
+            ("Film (2020) {imdb-tt0000001}", False)
+
+    def test_an_already_conformed_name_comes_back_unchanged(self):
+        stem = "Hollow Ridge (1981) {imdb-tt0000001}"
+        assert plexnames.conform_to_folder(self.BASE, self.TAG, stem) == \
+            (stem, False)
+
+    def test_a_stacking_token_is_read_off_and_kept_last(self):
+        assert plexnames.conform_to_folder(
+            "Film (2020)", self.TAG, "Film (2020) {imdb-tt0000001} cd2") == \
+            ("Film (2020) {imdb-tt0000001} cd2", False)
+
+    def test_a_loose_stacking_token_is_written_back_tight(self):
+        assert plexnames.conform_to_folder(
+            "Film (2020)", self.TAG, "Film (2020) {imdb-tt0000001} Part 2") == \
+            ("Film (2020) {imdb-tt0000001} Part2", False)
+
+    def test_a_doubled_year_and_a_part_are_both_accounted_for(self):
+        assert plexnames.conform_to_folder(
+            "Film (2020)", self.TAG, "Film (2020) {imdb-tt0000001} 2020 cd2") == \
+            ("Film (2020) {imdb-tt0000001} cd2", False)
+
+    def test_a_word_of_its_own_is_unfixable(self):
+        # An edition the folder's spelling does not name: the caller reports
+        # it rather than guess at what the word is for.
+        assert plexnames.conform_to_folder(
+            "Film (2020)", self.TAG, "Film (2020) {imdb-tt0000001} Remastered") \
+            == ("", True)
+
+    def test_a_word_the_folder_never_said_is_unfixable(self):
+        assert plexnames.conform_to_folder(
+            "The Grey and Winding Marsh (1981)", self.TAG,
+            "The Grey Marsh (1981) {imdb-tt0000001}") == ("", True)
+
+    def test_a_year_grown_onto_a_part_word_is_not_read_as_a_part(self):
+        assert plexnames.conform_to_folder(
+            "Film (1981)", self.TAG, "Film (1981) {imdb-tt0000001} Part1981") \
+            == ("", True)
+
+    def test_a_name_with_no_tag_is_not_conformed(self):
+        assert plexnames.conform_to_folder(
+            self.BASE, self.TAG, "Hollow Ridge (1981) 1981") == ("", False)
+
+    def test_a_name_with_another_tag_is_not_conformed(self):
+        assert plexnames.conform_to_folder(
+            self.BASE, self.TAG,
+            "Hollow Ridge (1981) {tmdb-9} 1981") == ("", False)
+
+    def test_a_folder_with_no_tag_conforms_nothing(self):
+        assert plexnames.conform_to_folder(
+            "Hollow Ridge (1981)", "",
+            "Hollow Ridge (1981) 1981") == ("", False)

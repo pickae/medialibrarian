@@ -511,7 +511,7 @@ def export_commentary(directory: str, read_track_info, is_bonus_folder,
                       whisper: dict, log, drain_queue,
                       max_sync_offset: str, quality: str,
                       discard_existing=None, same_commentary_name=None,
-                      orphans=None) -> None:
+                      orphans=None, unfixed=None) -> None:
     """Extract every commentary, and hand the queue to the drain to run.
 
     ``read_track_info`` is the caller's track reader (the bash's
@@ -534,6 +534,11 @@ def export_commentary(directory: str, read_track_info, is_bonus_folder,
     time. ``orphans``, when given, is a list the walk fills with a transcript
     that names a track the film no longer numbers a commentary for; the -c run
     is the one that hands it one, so it can leave the list in a file.
+    ``unfixed``, when given, is a list the walk fills with a movie whose name
+    carries no dot before its extension: the film's stem cannot be read off a
+    name like that, and a transcript written from it would land without a
+    directory, so the film is left untranscribed and handed over to be
+    reported.
     Everything else is this run's own: the queue spans every movie and every
     language wanted, so the workers stay busy to the last record.
     """
@@ -552,6 +557,19 @@ def export_commentary(directory: str, read_track_info, is_bonus_folder,
             # is the same audio as its living sibling's, already being
             # transcribed.
             if plexnames.is_kept_copy(file):
+                continue
+            # A name that carries no dot before its extension has no stem to
+            # read the transcript's name from: built from the empty stem it
+            # would be written without a directory, in the library's root
+            # rather than the film's folder. The film is left untranscribed and
+            # handed over to be reported.
+            if not os.path.isfile(file):
+                continue
+            if not os.path.basename(file).endswith(".mkv"):
+                log("WARNING: no dot before the extension in the movie's "
+                    "name, left untranscribed: " + file)
+                if unfixed is not None:
+                    unfixed.append(file)
                 continue
             (names, _codecs, _channels, comments, types, langs) = \
                 read_track_info(file)

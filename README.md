@@ -824,17 +824,17 @@ through the lookups that already failed on it.
 
 **`-w` on its own is refused.** Without `-t` or `-i` there is no dry run to
 carry out, and the run it would otherwise start is a full ingest. `-c` refuses
-it as well: it writes transcripts and renames nothing, so there is no dry run
-of its for `-w` to carry out.
+it as well: it is the transcription and not a dry run, so there is nothing for
+`-w` to carry out.
 
 **`-c` does only the commentary phase.** The given folders are walked the way
 `-t` walks them, and every commentary track that does not already have its
 transcript beside the film is transcribed next to it — in the language it is
 spoken in, on the GPU when whisper can use it, on every CPU thread otherwise —
-and nothing else: no subtitle downloading, no renaming, no conversion, no
-remux, no tagging. The transcripts stay beside the films rather than muxed into
-them, and a rerun over the same library finds every commentary already
-transcribed and does nothing.
+and nothing else: no subtitle downloading, no renaming of titles, no
+conversion, no remux, no tagging. The transcripts stay beside the films rather
+than muxed into them, and a rerun over the same library finds every commentary
+already transcribed and does nothing.
 
 A transcript already beside a film is left alone, unless it is too small to be
 the film's real transcript: a real one runs to the order of a kilobyte per

@@ -18,9 +18,13 @@ Usage:
                   commentary only: the transcription phase and nothing else - the given
                   folders are walked the way -t walks them, and every commentary
                   track that does not already have its transcript beside the film
-                  is transcribed next to it, in the language it is spoken in. No
-                  subtitles are downloaded, nothing is renamed, converted, remuxed
-                  or tagged, and the transcripts are left beside the films rather
+                  is transcribed next to it, in the language it is spoken in. A
+                  movie whose name never got the dot before its mkv is first
+                  conformed to the spelling its folder spells it, and one that
+                  cannot be conformed is left untranscribed and reported at the
+                  end. No subtitles are downloaded, and nothing is converted,
+                  remuxed or tagged - and no title is renamed beyond that
+                  conforming. The transcripts are left beside the films rather
                   than muxed into them.
     -t, --tags-only
                   tags only: the Plex/Jellyfin naming and nothing else - the IMDb id,
