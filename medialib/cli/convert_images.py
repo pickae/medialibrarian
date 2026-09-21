@@ -43,7 +43,7 @@ USAGE_HEAD = """Usage:
     {program} [options] <inputDir> <outputDir>
 Options:"""
 
-# -o writes the first of enums.IMAGE_CODECS unless it is told another one. Which
+# -e writes the first of enums.IMAGE_CODECS unless it is told another one. Which
 # format that is belongs to the list rather than to this line: the list is in
 # preference order, so the default follows a change to it.
 DEFAULT_FORMAT = enums.IMAGE_CODECS[0]
@@ -80,8 +80,8 @@ c |  | crop excessive whitespace
 a |  | convert every image, including one whose file size says it is
                     already starved. Without it such an image is left alone: see
                     below.
-r |  | reverse: convert the -o format back to jpeg
-o | <format> | output format: {formats}, default {default}
+r |  | reverse: convert the -e format back to jpeg
+e | <format> | output encoding: {formats}, default {default}
 j | <jobs> | Run up to <jobs> encoder processes in parallel.
                     Only needed when RAM is short, otherwise a good guess is made.
 q | <quality> | quality level of the output images
@@ -99,14 +99,14 @@ f | <fuzz> | when trimming, how many percent color difference gets still trimmed
 # literal pipe of my own". Written with a bare pipe, the kind ends at the first
 # codec and every other one is refused.
 OPT_CHECKS = """
-o | enum:{formats} | output format
+e | enum:{formats} | output encoding
 s | int:0:{top} | speed preset
 """.format(formats="\\|".join(enums.IMAGE_CODECS), top=MAX_SPEED)
 
-OPT_VARS = ("c:crop a:alwaysConvert r:reverse o:outputFormat j:jobs q:quality "
+OPT_VARS = ("c:crop a:alwaysConvert r:reverse e:outputFormat j:jobs q:quality "
             "s:speedPreset m:maxRes f:fuzz")
 OPT_COLUMN = 20
-OPT_LONG = ("h:help c:crop a:always r:reverse o:format j:jobs q:quality s:speed "
+OPT_LONG = ("h:help c:crop a:always r:reverse e:encoding j:jobs q:quality s:speed "
             "m:max-resolution f:fuzz")
 
 # One conversion spans about this many threads, so the pool is the cores divided

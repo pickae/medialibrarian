@@ -31,7 +31,7 @@ Options:
     -j, --jobs <jobs>
                     Cap how many feeds any one table may fetch at once. Lower
                     only; a table asking for less keeps its own number.
-    -n, --dry-run   Dry run: print the yt-dlp call each feed would get and
+    -p, --preview   Preview: print the yt-dlp call each feed would get and
                     download nothing.
     -v, --verbose   Verbose: print yt-dlp's own output as well. Without it the
                     run prints exactly one line per episode and nothing else.
@@ -63,7 +63,7 @@ Options:
                     (case-insensitive).
     -s, --system <system>
                     Build the calls for "windows" or "linux" instead of for
-                    this host. Only useful with -n, to read off what the other
+                    this host. Only useful with -p, to read off what the other
                     machine would run.
 
 A table says what it is with a "#!profile <name>" line, one of:

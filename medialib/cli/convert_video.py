@@ -67,7 +67,7 @@ q | <level> | Constant-quality level to encode at, overriding the one the
                   file. Only valid for the constant-quality profiles - the
                   av1Constrained* rows target an average bitrate instead and have
                   no quality level to override.
-r | <tier> | Resolution ceiling: scale every video down to at most this tier,
+m | <tier> | Resolution ceiling: scale every video down to at most this tier,
                   keeping its aspect ratio. A tier is named either by its line
                   count (720p ... 4320p) or by a marketing name (fullHD, 2K, 4K,
                   UltraHD, 8K, ...), in any case. A source already at or below the
@@ -79,7 +79,7 @@ c |  | Crop the black bands off the picture. The source is measured
                   changes shape partway through, an IMAX sequence in a scope
                   feature, keeps every pixel of its widest scenes. The crop is
                   always symmetric: the same lines off the top and the bottom, the
-                  same columns off each side. Off by default, and the -r ceiling
+                  same columns off each side. Off by default, and the -m ceiling
                   then applies to what is left.
 f | <1\|2> | Fast-decode level to encode with, trading a little compression
                   for a cheaper decode on weak playback hardware (2 is cheaper to
@@ -110,7 +110,7 @@ t | [percent] | Test each source before encoding it, and convert only the ones
 """
 
 OPT_LONG = ("h:help j:cores p:profile a:audio-profile b:audio-bitrate "
-            "e:nvenc-engines q:quality r:max-resolution c:crop "
+            "e:nvenc-engines q:quality m:max-resolution c:crop "
             "f:fast-decode g:grain t:test")
 
 USAGE_TAIL = r"""
@@ -238,7 +238,7 @@ def spec(program: str) -> "clioptions.Spec":
         long=OPT_LONG,
         vars="j:CORES p:videoProfile a:audioProfile b:customAudioBitrate "
              "e:nvencEnginesOverride q:videoQuality f:videoFastDecode "
-             "g:videoGrain r:maxVideoResolution",
+             "g:videoGrain m:maxVideoResolution",
         flags="optionalArg:t:^[0-9]+$",
         column=18,
         tail=USAGE_TAIL,
@@ -343,7 +343,7 @@ def apply_video_quality(args: str, width="", height="", given: bool = False,
 
     The -q value when one was given, or the profile's own level moved by the
     resolution bias when it was not. The two dimensions are the size the file is
-    ENCODED at, not the size it arrived at: with -r in play those differ, and it is
+    ENCODED at, not the size it arrived at: with -m in play those differ, and it is
     the encoded frame that decides whether a level is generous or mean. A profile
     with no quality flag comes back untouched.
     """
@@ -489,7 +489,7 @@ def cropped_size(width, height, crop: str) -> tuple:
 
 def video_filter_args(width, height, ceiling: str, crop: str = "") -> str:
     """``videoFilterArgs``: the filter chain a file is encoded through - the
-    measured crop, then the -r downscale - or nothing when it needs neither.
+    measured crop, then the -m downscale - or nothing when it needs neither.
 
     In that order, because the ceiling is a ceiling on the PICTURE: a scope film
     stored in a 16:9 frame is 1080p once its bands are off, and scaling first
@@ -760,7 +760,7 @@ def build_video_args(base: str, path: str, settings) -> str:
     any of those per-run or per-file decisions is applied.
     """
     # The source's coded size, read ONCE and used for both decisions that depend
-    # on it: the -r downscale filter, and the resolution bias on the quality
+    # on it: the -m downscale filter, and the resolution bias on the quality
     # level. Reading it once is what keeps the bias describing the frame the scale
     # filter actually produces rather than the one that arrived. The bias is taken
     # from the CROPPED frame for the same reason: black bands cost an encoder
@@ -883,7 +883,7 @@ def _as_int(value: str) -> int:
 # bitrate says about it - is medialib/lib/videobitrate.py. What is here is the
 # DECISION this run takes with the model's answers, which depends on the run's own
 # state: the codec its profile encodes to, whether it synthesises grain, whether it
-# encodes on NVENC, how far -r lowers the frame, and how much -t insists on saving.
+# encodes on NVENC, how far -m lowers the frame, and how much -t insists on saving.
 #
 # Three questions, and a file has to get past all of them: is the source at least
 # adequate for what it is (a starved one cannot be improved by encoding it again,
@@ -931,7 +931,7 @@ def conversion_worthwhile(relative: str, width, height, enc_width, enc_height,
         return False
 
     # The output side: the profile's codec at the size this file is ENCODED at
-    # (which -r may have lowered), at the same frame rate, with grain synthesised
+    # (which -m may have lowered), at the same frame rate, with grain synthesised
     # whenever this run synthesises any.
     out_codec = codecs.encoder_codec(settings.encoder)
     out_synth = "1" if int(settings.grain_level or 0) > 0 else "0"

@@ -32,8 +32,8 @@ Usage:
             specify bitrate
     -i, --clean-input
             clean input folders
-    -o, --codec <codec>
-            output codec of the transcoding phase, handed to
+    -e, --encoding <codec>
+            output encoding of the transcoding phase, handed to
             convert-audio: opus or xheaac. xheaac needs an external encoder and
             is written as .m4a, which the concatenating phase joins into
             an .m4b.

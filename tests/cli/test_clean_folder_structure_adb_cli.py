@@ -123,7 +123,7 @@ class TestThePreview:
         device = adb.device()
         _write(device / "Another_Show" / "Some_File.mp4", "untouched")
         before = blackbox.tree_of(device)
-        log = adb.run_dev("clean-folder-structure-adb", "-s", device)
+        log = adb.run_dev("clean-folder-structure-adb", "-p", device)
         return adb, device, before, log
 
     def test_the_device_is_not_touched(self, run):
@@ -212,7 +212,7 @@ class TestThePlanIsDeterministic:
                      "foxtrot", "golf", "hotel"):
             _write(device / "Some_Folder" / ("%s_file.mp4" % name), "x")
         return [_plan_sources(
-            adb.run_dev("clean-folder-structure-adb", "-s", device))
+            adb.run_dev("clean-folder-structure-adb", "-p", device))
             for _ in range(5)]
 
     def test_the_plan_names_every_file(self, plans):
@@ -354,7 +354,7 @@ class TestTheDelegationToThisHelper:
         the two tree files it is documented to write there."""
         folder = mount.at("Card", "Pics")
         _write(folder / "Some_Folder" / "Some_Pic.jpg", "p")
-        log = mount.run_dev("clean-folder-structure", "-s", folder,
+        log = mount.run_dev("clean-folder-structure", "-p", folder,
                             CFS_MTP_FORCE_ADB="1")
         assert "Snapshotting device tree" not in log
         assert (folder / "Some_Folder" / "Some_Pic.jpg").is_file()

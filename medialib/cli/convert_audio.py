@@ -74,7 +74,7 @@ Options:"""
 
 CREDITS_LINE = "ingest spoken word audio files"
 
-# -o writes the first of enums.AUDIO_CODECS unless it is told another one. Which
+# -e writes the first of enums.AUDIO_CODECS unless it is told another one. Which
 # codec that is belongs to the list rather than to this line: the list is in
 # preference order, so the default follows a change to it.
 DEFAULT_CODEC = enums.AUDIO_CODECS[0]
@@ -103,7 +103,7 @@ a |  | Adaptive mode: decide channels and bitrate per file rather
 k |  | Keep temporary files.
                     Default false
 c |  | Copy non transcoded files from <inputDir> into <outputDir>
-o | <codec> | Output codec: {codecs}.
+e | <codec> | Output encoding: {codecs}.
                     xheaac needs an external encoder ({encoders}) and is
                     written as .m4a.
                     Default {codec}
@@ -119,10 +119,10 @@ s | <seconds> | Split files longer than <seconds> into one chunk per logical
            encoders=xheaac.ENCODER_SPEC,
            codec=DEFAULT_CODEC)
 
-OPT_VARS = ("m:mono a:adaptive c:copy k:keep o:outputCodec b:bitrate j:jobs "
+OPT_VARS = ("m:mono a:adaptive c:copy k:keep e:outputCodec b:bitrate j:jobs "
             "s:splitThreshold")
 OPT_COLUMN = 20
-OPT_LONG = ("h:help m:mono a:adaptive k:keep c:copy-others o:codec b:bitrate "
+OPT_LONG = ("h:help m:mono a:adaptive k:keep c:copy-others e:encoding b:bitrate "
             "j:jobs s:split-threshold")
 
 # The codec has to be one this command can write, or a typo would only surface
@@ -131,7 +131,7 @@ OPT_LONG = ("h:help m:mono a:adaptive k:keep c:copy-others o:codec b:bitrate "
 # one: `\\|` is how a field says "a literal pipe of my own". Written with a bare
 # pipe, the kind ends at the first codec and every other one is refused.
 OPT_CHECKS = """
-o | enum:{codecs} | output codec
+e | enum:{codecs} | output encoding
 """.format(codecs="\\|".join(enums.AUDIO_CODECS))
 
 DEFAULT_BITRATE = 46
@@ -1579,7 +1579,7 @@ def main(argv: list, program: str = "convert-audio",
         return 1
     # Having ffmpeg is not having an xHE-AAC encoder: ffmpeg cannot produce the
     # codec at all, so that back-end is a separate binary this host has or has
-    # not got. Asked up front, and only when -o asked for the codec, so an Opus
+    # not got. Asked up front, and only when -e asked for the codec, so an Opus
     # run neither pays for the probe nor is blocked by it.
     if codec == "xheaac":
         skip_preflight = bool(os.environ.get("SKIP_TOOL_PREFLIGHT", ""))

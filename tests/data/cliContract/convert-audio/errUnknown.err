@@ -21,8 +21,8 @@ Options:
                     Default false
     -c, --copy-others
                     Copy non transcoded files from <inputDir> into <outputDir>
-    -o, --codec <codec>
-                    Output codec: opus or xheaac.
+    -e, --encoding <codec>
+                    Output encoding: opus or xheaac.
                     xheaac needs an external encoder (exhale) and is
                     written as .m4a.
                     Default opus

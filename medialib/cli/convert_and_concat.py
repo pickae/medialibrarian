@@ -6,7 +6,7 @@ phases, with the bulk of the work in RAM.
     3  transcode                 (convert-audio)
     4  concatenate               (concat-audio)
 
-The transcode writes whichever codec -o names, Opus by default and xHE-AAC
+The transcode writes whichever codec -e names, Opus by default and xHE-AAC
 otherwise; the two differ in the container the concatenating phase then joins,
 .opus against the .m4a that becomes an .m4b.
 
@@ -45,7 +45,7 @@ from medialib.lib.runlog import log
 CREDITS = "convert-and-concat 0.1"
 
 # The transcoding phase is convert-audio, so the codecs on offer and the one
-# taken when -o is not given are that command's - read from the shared list
+# taken when -e is not given are that command's - read from the shared list
 # rather than restated, so the two pages cannot come to disagree.
 DEFAULT_CODEC = enums.AUDIO_CODECS[0]
 
@@ -78,7 +78,7 @@ s |  | iterate through different input subfolders independently
 c |  | only concat
 b |  | specify bitrate
 i |  | clean input folders
-o | <codec> | output codec of the transcoding phase, handed to
+e | <codec> | output encoding of the transcoding phase, handed to
             convert-audio: {codecs}. xheaac needs an external encoder and
             is written as .m4a, which the concatenating phase joins into
             an .m4b.
@@ -86,16 +86,16 @@ o | <codec> | output codec of the transcoding phase, handed to
 """.format(codecs=" or ".join(enums.AUDIO_CODECS), codec=DEFAULT_CODEC)
 
 OPT_VARS = ("m:mono s:subFolders c:onlyConcat b:bitrate i:inputClean "
-            "o:outputCodec")
+            "e:outputCodec")
 OPT_FLAGS = "arg:b"
 OPT_COLUMN = 12
 OPT_LONG = ("m:mono s:sub-folders c:only-concat b:bitrate i:clean-input "
-            "o:codec")
+            "e:encoding")
 
 # Checked here and not left to the child: the transcode is the THIRD phase, so
 # a typo would surface only after the cleaning and unpacking have run.
 OPT_CHECKS = """
-o | enum:{codecs} | output codec
+e | enum:{codecs} | output encoding
 """.format(codecs="\\|".join(enums.AUDIO_CODECS))
 
 
@@ -429,7 +429,7 @@ def main(argv: list, program: str = "convert-and-concat",
         # phase, which is the THIRD of four - by then the input has been cleaned
         # and the archives unpacked into RAM for a run that cannot finish.
         if not only_concat and codec == "xheaac" and xheaac.require_encoder(
-                "%s (-o %s)" % (program, codec), skip_preflight=skip):
+                "%s (-e %s)" % (program, codec), skip_preflight=skip):
             return 1
         runlog.warn_uncounted_progress()
         _settle_mkvtoolnix()
@@ -582,7 +582,7 @@ def _transcode_phase(in_path, temp_path, stage, only_concat, mono, bitrate,
     # Always passed, never only when it differs from the default: a run that
     # SAYS which codec it is using must not leave the choice to be settled
     # somewhere else.
-    options += ["-o", codec]
+    options += ["-e", codec]
 
     # One transcoded tree, fed from up to two input trees: the input as given,
     # and the unpacked archives. Each is handed over only when it holds

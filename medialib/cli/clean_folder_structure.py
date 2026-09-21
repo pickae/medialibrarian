@@ -64,7 +64,7 @@ f | <file> | Read the name fragments to remove from <file> (one per line,
                     data/fragments.txt beside this script. Without this option that
                     file is used when it is there, and names are cleaned without any
                     fragment removal when it is not.
-s |  | Simulate: do not touch the input at all. Mirror its structure
+p |  | Preview: do not touch the input at all. Mirror its structure
                     into a sandbox, run the full cleaning there, and write
                     "before.tree" and "after.tree" into the input folder so the
                     result can be reviewed and tested risk-free. Combines with the
@@ -72,10 +72,10 @@ s |  | Simulate: do not touch the input at all. Mirror its structure
 h |  | Print this help page.
 """
 
-OPT_VARS = ("y:sortIntoYears d:fixDates n:numberFiles s:simulate "
+OPT_VARS = ("y:sortIntoYears d:fixDates n:numberFiles p:simulate "
             "f:fragmentsOverride")
 OPT_COLUMN = 20
-OPT_LONG = ("y:sort-into-years d:fix-dates n:number-files f:fragments s:simulate "
+OPT_LONG = ("y:sort-into-years d:fix-dates n:number-files f:fragments p:preview "
             "h:help")
 
 # A file is sorted into a year folder by the first four digits of an eight-digit
@@ -462,7 +462,7 @@ def main(argv: list, program: str = "clean-folder-structure",
     sort_into_years = "y" in result.given
     fix_dates = "d" in result.given
     number_files = "n" in result.given
-    simulate = "s" in result.given
+    simulate = "p" in result.given
     fragments_override = result.values["fragmentsOverride"]
 
     script_dir = script_dir or commands.script_dir()
@@ -487,7 +487,7 @@ def main(argv: list, program: str = "clean-folder-structure",
     # - also content-free, at the price of USB debugging. Which of the two is
     # settled by TRYING a rename rather than by assuming.
     #
-    # -s never renames on the device, so it skips the probe and stays local. The
+    # -p never renames on the device, so it skips the probe and stays local. The
     # helper re-invokes this script on a purely local mirror, so there is no
     # recursion back into this path either way.
     if "/gvfs/mtp:host=" in input_path and not simulate:

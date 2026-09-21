@@ -35,13 +35,13 @@ Options:
                     only the lossless file.
                     Default 36
     -o, --opus-only Only the Opus: do not keep the lossless file beside it.
-    -e, --checkout <dir>
+    -c, --checkout <dir>
                     The ebook2audiobook checkout to drive.
                     Default $narrationHome, else ~/ebook2audiobook
     -d, --device <device>
                     Where the model runs: cpu, cuda, mps, rocm, xpu, jetson.
                     Default cuda when an NVIDIA GPU is present, cpu otherwise
-    -t, --engine <engine>
+    -e, --engine <engine>
                     TTS engine: xtts, bark, vits, fairseq, tacotron, yourtts.
                     Voice cloning (-v) needs one that supports it.
                     Default xtts

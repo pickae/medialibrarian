@@ -22,7 +22,7 @@ Options:
                     data/fragments.txt beside this script. Without this option that
                     file is used when it is there, and names are cleaned without any
                     fragment removal when it is not.
-    -s, --simulate  Simulate: do not touch the input at all. Mirror its structure
+    -p, --preview   Preview: do not touch the input at all. Mirror its structure
                     into a sandbox, run the full cleaning there, and write
                     "before.tree" and "after.tree" into the input folder so the
                     result can be reviewed and tested risk-free. Combines with the

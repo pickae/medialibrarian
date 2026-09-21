@@ -8,9 +8,9 @@ Options:
     -a, --always    convert every image, including one whose file size says it is
                     already starved. Without it such an image is left alone: see
                     below.
-    -r, --reverse   reverse: convert the -o format back to jpeg
-    -o, --format <format>
-                    output format: avif, webp or jxl, default avif
+    -r, --reverse   reverse: convert the -e format back to jpeg
+    -e, --encoding <format>
+                    output encoding: avif, webp or jxl, default avif
     -j, --jobs <jobs>
                     Run up to <jobs> encoder processes in parallel.
                     Only needed when RAM is short, otherwise a good guess is made.

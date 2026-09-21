@@ -69,7 +69,7 @@ t | <table> | A feed table to read. May be given more than once, and each
                     below). Default: podcasts.tsv beside this script.
 j | <jobs> | Cap how many feeds any one table may fetch at once. Lower
                     only; a table asking for less keeps its own number.
-n |  | Dry run: print the yt-dlp call each feed would get and
+p |  | Preview: print the yt-dlp call each feed would get and
                     download nothing.
 v |  | Verbose: print yt-dlp's own output as well. Without it the
                     run prints exactly one line per episode and nothing else.
@@ -98,14 +98,14 @@ i |  | Build the phone's library from the run instead of leaving the
 m | <match> | Only the feeds whose subdir or URL contains <match>
                     (case-insensitive).
 s | <system> | Build the calls for "windows" or "linux" instead of for
-                    this host. Only useful with -n, to read off what the other
+                    this host. Only useful with -p, to read off what the other
                     machine would run.
 """
 
 # -t is the one repeatable option here: every occurrence appends, so several
 # tables can be read in one run. The rest assign once, last flag winning.
 OPT_FLAGS = "repeat:t"
-OPT_VARS = "t:tables j:jobCap n:dryRun a:includeInactive c:cleanUp i:ingest m:match"
+OPT_VARS = "t:tables j:jobCap p:dryRun a:includeInactive c:cleanUp i:ingest m:match"
 
 # -j caps a table's own parallelism and 0 means "no cap", so zero belongs in the
 # range; -s is the one option whose accepted values are words rather than a
@@ -117,7 +117,7 @@ s | enum:windows\\|linux\\|auto | system
 """
 
 OPT_COLUMN = 20
-OPT_LONG = ("h:help t:table j:jobs n:dry-run v:verbose a:include-inactive "
+OPT_LONG = ("h:help t:table j:jobs p:preview v:verbose a:include-inactive "
             "c:clean-up i:ingest m:match s:system")
 
 USAGE_TAIL = """

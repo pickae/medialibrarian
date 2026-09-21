@@ -53,7 +53,7 @@ _EMPTY = [
     ("ingest-movies", (), 1),
     ("clean-folder-structure", (), 1),
     ("clean-folder-structure", ("-n",), 1),
-    ("clean-folder-structure", ("-s",), 1),
+    ("clean-folder-structure", ("-p",), 1),
     ("find-fragment-candidates", (), 1),
 ]
 

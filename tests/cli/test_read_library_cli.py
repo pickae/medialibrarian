@@ -133,7 +133,7 @@ def library(sandbox, tmp_path, private_workspace):
                 STUB_LOG=str(calls), STUB_FFMPEG_LOG=str(ffmpeg_log))
 
     def read(*args, expect=0, cwd=None, **switches):
-        done = sandbox.run("read-library", "-e", checkout, "-d", "cpu", *args,
+        done = sandbox.run("read-library", "-c", checkout, "-d", "cpu", *args,
                            cwd=cwd, env=dict(base, **switches), timeout=900)
         assert done.returncode == expect, done.stdout + done.stderr
         return done.stdout + done.stderr
@@ -386,7 +386,7 @@ class TestTheRefusalsThatComeBeforeAnyWork:
 
     def test_a_missing_checkout_names_what_to_clone(self, sandbox, library,
                                                    tmp_path):
-        done = sandbox.run("read-library", "-e", tmp_path / "nowhere",
+        done = sandbox.run("read-library", "-c", tmp_path / "nowhere",
                            library.source, tmp_path / "out.none")
         log = done.stdout + done.stderr
         assert done.returncode == 1, log
