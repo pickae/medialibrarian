@@ -392,7 +392,7 @@ class TestSimulation:
         preview = tmp_path / "sim" / "data"
         self._fixture(preview)
         before = treefiles.snapshot(preview)
-        cleaner.clean(preview, "-s")
+        cleaner.clean(preview, "-p")
         return cleaner, preview, before
 
     def test_both_artifacts_are_written_into_the_folder_it_was_given(
@@ -432,7 +432,7 @@ class TestSimulation:
             return root
 
         preview = album(tmp_path / "simn" / "album")
-        cleaner.clean(preview, "-s", "-n")
+        cleaner.clean(preview, "-p", "-n")
         real = album(tmp_path / "realn" / "album")
         cleaner.clean(real, "-n")
 
@@ -447,7 +447,7 @@ class TestSimulation:
         cleaner, preview, _ = simulated
         first = ((preview / "before.tree").read_text(encoding="utf-8"),
                  (preview / "after.tree").read_text(encoding="utf-8"))
-        cleaner.clean(preview, "-s")
+        cleaner.clean(preview, "-p")
         assert ((preview / "before.tree").read_text(encoding="utf-8"),
                 (preview / "after.tree").read_text(encoding="utf-8")) == first
 

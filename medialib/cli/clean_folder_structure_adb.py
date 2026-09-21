@@ -40,13 +40,13 @@ y |  | Sort \"YYYYMMDD ...\" files into YYYY/ subfolders.
 d |  | Normalise leading date prefixes to \"YYYYMMDD \".
 n |  | Number files by plurality filetype instead of cleaning names.
 f | <file> | Read the name fragments to remove from this file.
-s |  | Preview only: print the planned renames and DO NOT touch the device.
+p |  | Preview only: print the planned renames and DO NOT touch the device.
 h |  | Print this help page.
 """
 
 OPT_VARS = "f:fragmentsFile"
 OPT_COLUMN = 16
-OPT_LONG = ("y:sort-into-years d:fix-dates n:number-files f:fragments s:simulate "
+OPT_LONG = ("y:sort-into-years d:fix-dates n:number-files f:fragments p:preview "
             "h:help")
 
 # The roots a phone's primary storage is usually reachable at, tried in order
@@ -222,7 +222,7 @@ class Plan:
         self._printed = True
         if self.dry_run:
             log("Preview: %d rename(s) planned on device (nothing changed). "
-                "Drop -s to apply." % self.planned)
+                "Drop -p to apply." % self.planned)
         else:
             log("Done: %d rename(s) applied on device, %d skipped, of %d "
                 "planned" % (self.moves, self.skips, self.planned))
@@ -339,7 +339,7 @@ def main(argv: list, program: str = "clean-folder-structure-adb",
             forward.append("-" + letter)
     if result.values["fragmentsFile"]:
         forward += ["-f", result.values["fragmentsFile"]]
-    dry_run = "s" in result.given
+    dry_run = "p" in result.given
 
     script_dir = script_dir or commands.script_dir()
 

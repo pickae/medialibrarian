@@ -79,11 +79,11 @@ b | <kbps> | Bitrate of the Opus listening copy. 0 writes none, leaving
                     only the lossless file.
                     Default 36
 o |  | Only the Opus: do not keep the lossless file beside it.
-e | <dir> | The ebook2audiobook checkout to drive.
+c | <dir> | The ebook2audiobook checkout to drive.
                     Default $narrationHome, else ~/ebook2audiobook
 d | <device> | Where the model runs: cpu, cuda, mps, rocm, xpu, jetson.
                     Default cuda when an NVIDIA GPU is present, cpu otherwise
-t | <engine> | TTS engine: xtts, bark, vits, fairseq, tacotron, yourtts.
+e | <engine> | TTS engine: xtts, bark, vits, fairseq, tacotron, yourtts.
                     Voice cloning (-v) needs one that supports it.
                     Default xtts
 l | <language> | Language of the books, ISO 639-3 (eng, deu, ita, ...). Given,
@@ -92,8 +92,8 @@ l | <language> | Language of the books, ISO 639-3 (eng, deu, ita, ...). Given,
                     or from its text when the metadata says nothing.
                     Default: detected per book"""
 
-OPT_VARS = ("j:jobs v:voiceSample b:opusBitrate e:narrationCheckout "
-            "d:narrationDeviceArg t:narrationEngine l:languageArg")
+OPT_VARS = ("j:jobs v:voiceSample b:opusBitrate c:narrationCheckout "
+            "d:narrationDeviceArg e:narrationEngine l:languageArg")
 
 # -j left out is the device's own answer, which is why only a value somebody
 # typed is checked. -b takes 0 as "write no Opus at all", so zero belongs in its
@@ -105,8 +105,8 @@ b | nonNegInt | bitrate in kbps
 """
 
 OPT_COLUMN = 20
-OPT_LONG = ("h:help j:jobs v:voice b:opus-bitrate o:opus-only e:checkout d:device "
-            "t:engine l:language")
+OPT_LONG = ("h:help j:jobs v:voice b:opus-bitrate o:opus-only c:checkout d:device "
+            "e:engine l:language")
 
 # The listening copy and the archival one. 36 kbps of mono Opus is transparent
 # for one synthetic voice; 0 writes no Opus at all.

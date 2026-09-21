@@ -64,7 +64,7 @@ class TestTheCodecReachesTheTranscoder:
 
     def test_the_chosen_codec_is_handed_over(self, phases, tmp_path):
         argv = _transcode(phases, tmp_path, codec="xheaac")
-        assert argv[argv.index("-o") + 1] == "xheaac"
+        assert argv[argv.index("-e") + 1] == "xheaac"
 
     def test_the_default_is_handed_over_just_as_explicitly(self, phases,
                                                            tmp_path):
@@ -72,13 +72,13 @@ class TestTheCodecReachesTheTranscoder:
         default: a run that SAYS which codec it is using in its summary must
         not have the actual choice settled somewhere else."""
         argv = _transcode(phases, tmp_path, codec="opus")
-        assert argv[argv.index("-o") + 1] == "opus"
+        assert argv[argv.index("-e") + 1] == "opus"
 
     def test_it_rides_alongside_the_other_pass_through_options(self, phases,
                                                               tmp_path):
         argv = _transcode(phases, tmp_path, codec="xheaac", mono=True,
                           bitrate="64")
-        assert argv[:6] == ["-m", "-c", "-b", "64", "-o", "xheaac"]
+        assert argv[:6] == ["-m", "-c", "-b", "64", "-e", "xheaac"]
 
     def test_only_concat_starts_no_transcoder_at_all(self, phases, tmp_path):
         cac._transcode_phase(str(tmp_path / "in"), str(tmp_path / "temp"),
@@ -88,7 +88,7 @@ class TestTheCodecReachesTheTranscoder:
 
 class TestTheOptionPage:
     def test_the_codecs_offered_are_the_ones_convert_audio_writes(self):
-        """One list, so the two pages cannot come to disagree about what -o
+        """One list, so the two pages cannot come to disagree about what -e
         takes."""
         page = cac.OPT_SPEC
         for codec in enums.AUDIO_CODECS:
@@ -99,6 +99,6 @@ class TestTheOptionPage:
         assert cac.DEFAULT_CODEC == convert_audio.DEFAULT_CODEC
 
     def test_the_token_is_spelled_without_a_hyphen(self):
-        """The page names what -o actually takes: `xhe-aac` is the codec's
+        """The page names what -e actually takes: `xhe-aac` is the codec's
         name, and a reader who types it gets a refusal."""
         assert "xhe-aac" not in cac.OPT_SPEC

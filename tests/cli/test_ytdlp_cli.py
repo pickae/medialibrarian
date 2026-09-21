@@ -442,7 +442,7 @@ class TestTheFlags:
         assert len(list(ytdlp.calls.glob("call*"))) == 1
 
     def test_a_dry_run_runs_nothing_and_prints_the_whole_call(self, ytdlp):
-        log = ytdlp.ytdlp("-t", ytdlp.table, "-n", ytdlp.library,
+        log = ytdlp.ytdlp("-t", ytdlp.table, "-p", ytdlp.library,
                           ytdlp.library / "archive.log")
         assert list(ytdlp.calls.glob("call*")) == []
         assert "--sponsorblock-remove all" in log
@@ -452,7 +452,7 @@ class TestTheFlags:
                                                                  system):
         """Which is what makes one table serve both machines, so it is checked
         rather than assumed."""
-        log = ytdlp.ytdlp("-t", ytdlp.table, "-n", "-s", system, "-m", "latent",
+        log = ytdlp.ytdlp("-t", ytdlp.table, "-p", "-s", system, "-m", "latent",
                           ytdlp.library, ytdlp.library / "archive.log")
         assert re.search(r"'[^']*AI/latent space[^']*'", log), log
 
@@ -470,7 +470,7 @@ class TestTheWindowsCallStyle:
         """A cygpath that answers, and records what it was asked."""
         asked = tmp_path / "cygpathCalls"
         ytdlp.with_tool("cygpath", _CYGPATH_STUB)
-        log = ytdlp.ytdlp("-t", ytdlp.table, "-n", "-s", "windows", "-m",
+        log = ytdlp.ytdlp("-t", ytdlp.table, "-p", "-s", "windows", "-m",
                           "latent", ytdlp.library,
                           ytdlp.library / "archive.log",
                           env=dict(ytdlp.env, CYGPATH_LOG=str(asked)))
@@ -500,7 +500,7 @@ class TestTheWindowsCallStyle:
     def test_without_cygpath_the_manual_shapes_stand(self, ytdlp):
         """No cygpath on the host, so the path is the one native_path works
         out for itself."""
-        log = ytdlp.ytdlp("-t", ytdlp.table, "-n", "-s", "windows", "-m",
+        log = ytdlp.ytdlp("-t", ytdlp.table, "-p", "-s", "windows", "-m",
                           "latent", ytdlp.library,
                           ytdlp.library / "archive.log")
         assert "%s/AI/latent space" % ytdlp.library in log, log
@@ -551,7 +551,7 @@ class TestTheFfmpegTheDownloadsMuxThrough:
     def test_the_other_machines_calls_are_not_given_this_ones_directory(self, ytdlp):
         """`-s windows` from Linux prints a command line to run over there, and
         this host's ffmpeg directory is not a path that exists there."""
-        log = ytdlp.ytdlp("-t", ytdlp.table, "-n", "-s", "windows", "-m",
+        log = ytdlp.ytdlp("-t", ytdlp.table, "-p", "-s", "windows", "-m",
                           "latent", ytdlp.library, ytdlp.library / "archive.log")
         assert "--ffmpeg-location" not in log, log
 
@@ -606,7 +606,7 @@ class TestSeveralTablesAndWhatMayRunAlongsideWhat:
                        _feed(1, "RSS/a", "https://example.test/r1"),
                        profile="rssAudio")
         library = tmp_path / "library4"
-        log = ytdlp.ytdlp("-n", "-j", "3", "-t", table, library,
+        log = ytdlp.ytdlp("-p", "-j", "3", "-t", table, library,
                           library / "archive.log")
         assert "profile rssAudio, 3 at a time" in log, log
 
@@ -976,9 +976,9 @@ class TestTheNightlyUpgrade:
         assert len(list(library.rglob("episode*.opus"))) == 1
 
     def test_a_dry_run_leaves_the_install_where_it_found_it(self, nightly):
-        # -n prints the calls a run WOULD make; it must not move the install
+        # -p prints the calls a run WOULD make; it must not move the install
         # that would have made them.
-        log, argv, _ = nightly("2026.08.30.232658", "2026.08.31.010203", "-n")
+        log, argv, _ = nightly("2026.08.30.232658", "2026.08.31.010203", "-p")
         assert "is a nightly" not in log, log
         assert argv is None
 

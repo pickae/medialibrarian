@@ -1,6 +1,6 @@
 """The white box for medialib/cli/convert_audio.py.
 
-Its small helpers, and the decisions -o makes: where a track's output lands,
+Its small helpers, and the decisions -e makes: where a track's output lands,
 which sources are already what a run produces, and what the run tells the reader
 about the encoder it picked. The planning arithmetic beside them - the chunk plan
 and the boundary nudging - belongs to `medialib/lib/segments.py` and is pinned
@@ -197,7 +197,7 @@ class TestTheOutputCodec:
     def test_the_page_offers_exactly_the_codecs_the_check_accepts(self):
         """Both are generated from the one list. Written out by hand they drift,
         and the page ends up advertising a codec -o refuses."""
-        offered = ca.OPT_SPEC.split("Output codec: ")[1].split(".")[0]
+        offered = ca.OPT_SPEC.split("Output encoding: ")[1].split(".")[0]
         assert offered.split(" or ") == list(enums.AUDIO_CODECS)
         accepted = ca.OPT_CHECKS.split("enum:")[1].split(" |")[0]
         assert accepted.split("\\|") == list(enums.AUDIO_CODECS)

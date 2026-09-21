@@ -45,7 +45,7 @@ Options:
                   file. Only valid for the constant-quality profiles - the
                   av1Constrained* rows target an average bitrate instead and have
                   no quality level to override.
-    -r, --max-resolution <tier>
+    -m, --max-resolution <tier>
                   Resolution ceiling: scale every video down to at most this tier,
                   keeping its aspect ratio. A tier is named either by its line
                   count (720p ... 4320p) or by a marketing name (fullHD, 2K, 4K,
@@ -58,7 +58,7 @@ Options:
                   changes shape partway through, an IMAX sequence in a scope
                   feature, keeps every pixel of its widest scenes. The crop is
                   always symmetric: the same lines off the top and the bottom, the
-                  same columns off each side. Off by default, and the -r ceiling
+                  same columns off each side. Off by default, and the -m ceiling
                   then applies to what is left.
     -f, --fast-decode <1|2>
                   Fast-decode level to encode with, trading a little compression

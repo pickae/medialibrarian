@@ -155,7 +155,7 @@ def converted(tmp_path_factory):
     opus = _video_with_audio(source / "opus.mkv", SECONDS,
                              ["-c:a", "libopus", "-b:a", "128k"])
 
-    done = blackbox.run("convert-audio", "-o", "xheaac", "-s", "5",
+    done = blackbox.run("convert-audio", "-e", "xheaac", "-s", "5",
                         source, out, cwd=tmp, timeout=1800)
     return {"source": source, "out": out, "done": done,
             "made": {"chaptered": chaptered, "aac": aac, "opus": opus}}
@@ -283,7 +283,7 @@ class TestABookTooLongForOneWave:
         # Past the 48 kHz stereo ceiling, and not much past it: the fixture
         # has to cost seconds, not minutes.
         made = _hours_of_silence(source / "book.m4b", 22700)
-        done = blackbox.run("convert-audio", "-o", "xheaac", source, out,
+        done = blackbox.run("convert-audio", "-e", "xheaac", source, out,
                             cwd=tmp, timeout=3600)
         return {"out": out, "done": done, "source": made,
                 "seconds": _seconds(made)}

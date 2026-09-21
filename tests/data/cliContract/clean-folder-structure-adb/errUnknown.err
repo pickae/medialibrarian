@@ -13,7 +13,7 @@ Options:
                 Number files by plurality filetype instead of cleaning names.
     -f, --fragments <file>
                 Read the name fragments to remove from this file.
-    -s, --simulate
+    -p, --preview
                 Preview only: print the planned renames and DO NOT touch the device.
     -h, --help  Print this help page.
 

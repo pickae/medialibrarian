@@ -164,7 +164,7 @@ touched when pretreatment is opted into.
 ### `convert-audio`
 
 Transcodes spoken-word audio to Opus at a low bitrate, optionally forcing mono,
-and carries over chapters and cover art. `-o` picks the codec: Opus by default,
+and carries over chapters and cover art. `-e` picks the codec: Opus by default,
 or xHE-AAC written as `.m4a` (see below). **Video files** are ingested too: their
 audio stream is extracted and converted like any other input — and a video whose
 soundtrack is *already* a small enough Opus is stream-copied out of its container
@@ -179,11 +179,11 @@ anything in a format the output should not keep at all (`m4a`/`m4b`/`mka`), and
 any video whose audio has to come out of its container. Everything else is small
 enough already and is copied verbatim (`-c`) or left alone.
 
-**xHE-AAC** (`-o xheaac`) is the one output codec ffmpeg cannot produce — it
+**xHE-AAC** (`-e xheaac`) is the one output codec ffmpeg cannot produce — it
 decodes the codec and has no encoder for it — so the audio goes out over a pipe
 to [exhale](https://gitlab.com/ecodis/exhale), which reads WAVE on stdin and
 writes a finished `.m4a`. No distribution packages it, so a run that asks for
-this codec without it says where to build it from and offers `-o opus` instead.
+this codec without it says where to build it from and offers `-e opus` instead.
 
 Two consequences worth knowing before using it. exhale takes a *preset* about 12
 kbps apart rather than a bitrate, so a `-b` lands on the nearest rung and the run
@@ -206,7 +206,7 @@ Wrapper that ingests (`convert-audio`) and then concatenates
 (`concat-audio`), keeping the intermediate tree entirely in RAM, so only
 the finished books are ever written to disk — which is why the output folder is
 given rather than derived: it usually lives on a different disk than the source.
-`-o` picks the codec that tree is written in and is handed straight to
+`-e` picks the codec that tree is written in and is handed straight to
 `convert-audio`: Opus by default, or xHE-AAC as `.m4a`, which the concatenating
 phase then joins into an `.m4b`.
 
@@ -314,7 +314,7 @@ time:
   for a pipx venv, `-U --update-to nightly` for a downloaded binary; a pip or
   distro install is left to its package manager), and a failed upgrade is a
   warning rather than the end of the run. `SKIP_YTDLP_UPGRADE=1` turns the
-  check off, and a dry run (`-n`) never upgrades.
+  check off, and a preview (`-p`) never upgrades.
 - **which ffmpeg**: yt-dlp does its own muxing through ffmpeg — extracting the
   audio, merging the two streams into Matroska, embedding the thumbnail and the
   chapters — and finds one by searching `PATH` itself. So the run walks the
@@ -326,7 +326,7 @@ time:
 - **which paths**: under Git Bash or Cygwin the output and archive paths are
   translated to their drive-letter form, since a native `yt-dlp.exe` does not
   know where the emulated root is mounted.
-- **which quoting**: `-n` prints the calls instead of running them, quoted for
+- **which quoting**: `-p` prints the calls instead of running them, quoted for
   the shell of the host it is printed on. `-s windows` / `-s linux` prints the
   *other* machine's calls from the same table.
 
@@ -459,7 +459,7 @@ software profiles, and missing hardware falls back gracefully to software.
 encoder, so files are processed one at a time and cut into chunks that are
 re-concatenated transparently.
 
-**Resolution is a ceiling, not a target.** `-r` caps the output at a resolution
+**Resolution is a ceiling, not a target.** `-m` caps the output at a resolution
 tier — named either by its line count (`720p` … `4320p`) or by a marketing name
 (`fullHD`, `2K`, `4K`, `UltraHD`, `8K`, …), in any case — and everything above it
 is scaled down to fit with its aspect ratio kept, so a 2.39:1 scope film capped at
@@ -481,7 +481,7 @@ uncertainty resolves towards keeping pixels: a moment that could not be read is
 skipped, a file too few of whose moments could be read is not cropped, and a band
 too thin to be letterboxing is left on. A file keeping its Dolby Vision RPU is never
 cropped — that RPU describes where the picture sits in the frame it was graded in.
-`-r` then caps what is left, so a scope film stored in a 2160-line frame is judged
+`-m` then caps what is left, so a scope film stored in a 2160-line frame is judged
 on its picture rather than on its bands.
 
 **A newer ffmpeg is preferred if the preset needs one.** The AV1 presets ask for
@@ -498,7 +498,7 @@ preset asks.
 states one quality level, and that level is then moved by the tier the file is
 *encoded* at — a 2160p file two levels softer, an SD file two levels harder — since
 the same number does not buy the same visible quality across the ladder. A source
-capped by `-r` is judged by the size it comes out at, not the one it arrived at.
+capped by `-m` is judged by the size it comes out at, not the one it arrived at.
 `-q` names a level yourself and turns the bias off.
 
 **Film grain follows the source.** Every preset that synthesises grain measures each

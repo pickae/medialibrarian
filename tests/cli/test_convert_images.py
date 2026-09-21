@@ -12,12 +12,12 @@ recognising an already-converted file).
 
 The helper is Python, so these are asserted against it directly.
 
-The other half is -o, the output format. AVIF, WebP and JPEG XL agree about
+The other half is -e, the output encoding. AVIF, WebP and JPEG XL agree about
 nothing - the bit depth each can carry, and the name AND the direction of each
 one's encoder effort setting - so what is pinned below is that the one -s knob
 still means "slower" in all three, that each format's number stays inside the
-range its encoder accepts, and that the default -o avif call is byte for byte
-the call this command made before there was an -o at all.
+range its encoder accepts, and that the default -e avif call is byte for byte
+the call this command made before there was an -e at all.
 """
 
 
@@ -143,7 +143,7 @@ def _run(image_format="avif", speed=5, quality=60, max_res=ci.UNBOUNDED_EDGE):
 
 
 class TestTheFormatTable:
-    """The three formats -o takes, and the -s knob translated into each one."""
+    """The three formats -e takes, and the -s knob translated into each one."""
 
     def test_avif_is_still_the_default(self):
         assert ci.DEFAULT_FORMAT == "avif"
@@ -192,7 +192,7 @@ class TestTheFormatTable:
 
 class TestEncodeArguments:
     def test_the_default_run_is_the_avif_call_it_has_always_been(self):
-        """The one case that must not have moved: -o defaults to avif, so a
+        """The one case that must not have moved: -e defaults to avif, so a
         command line that predates the option converts exactly as it did."""
         assert _run()._encode_arguments("page.jpg", "/out/page.avif") == [
             "-format", "avif", "-depth", "10", "-quality", "60",
@@ -238,7 +238,7 @@ class TestEncodeArguments:
 
 
 class TestTheFormatReachesTheOutputName:
-    """disambiguated_output is called with whatever -o settled on, and the
+    """disambiguated_output is called with whatever -e settled on, and the
     collision set has to know every one of those extensions."""
 
     @pytest.mark.parametrize("name", sorted(ci.FORMATS))
@@ -346,12 +346,12 @@ class TestTheOptionsAreSettledUpFront:
 
     @pytest.mark.parametrize("name", sorted(enums.IMAGE_CODECS))
     def test_each_offered_format_is_accepted(self, name):
-        assert self._parse("-o", name, "in", "out").values["outputFormat"] \
+        assert self._parse("-e", name, "in", "out").values["outputFormat"] \
             == name
 
     def test_a_format_no_encoder_here_writes_is_refused(self):
         with pytest.raises(clioptions.UsageError) as refusal:
-            self._parse("-o", "gif", "in", "out")
+            self._parse("-e", "gif", "in", "out")
         assert ", ".join(enums.IMAGE_CODECS) in refusal.value.message
 
     def test_the_page_advertises_exactly_what_the_check_accepts(self):
@@ -360,7 +360,7 @@ class TestTheOptionsAreSettledUpFront:
             assert codec in ci.OPT_SPEC
 
     def test_the_long_form_is_the_same_option(self):
-        assert self._parse("--format=jxl", "in", "out").values["outputFormat"] \
+        assert self._parse("--encoding=jxl", "in", "out").values["outputFormat"] \
             == "jxl"
 
     def test_the_starved_skip_is_on_unless_a_flag_turns_it_off(self):
