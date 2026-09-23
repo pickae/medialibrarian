@@ -104,6 +104,13 @@ def ffmpeg_takes_profile(binary: str, args: str) -> bool:
         wanted, " -tune %s " % rules.NVENC_TUNE_FALLBACK))
 
 
+def svt_av1_hdr_works(binary: str) -> bool:
+    """True when that build's libsvtav1 is SVT-AV1-HDR: it parses a key only the
+    fork has. A build without libsvtav1 at all fails the encode, and a mainline
+    one logs the key as unparsed - both answer False."""
+    return ffmpeg_takes_args(binary, rules.SVT_AV1_HDR_PROBE)
+
+
 def nvenc_works(encoder: str) -> bool:
     """True when a one-frame test encode succeeds: GPU present, driver up, that
     codec's NVENC block available."""
@@ -1149,7 +1156,7 @@ def main(argv: list, program: str = "convert-video",
         input_dir=result.positionals[0],
         output_dir=result.positionals[1],
         cores=int(result.values["CORES"] or runlog.cpu_count()),
-        video_profile=result.values["videoProfile"] or "av1Grain",
+        video_profile=result.values["videoProfile"] or "av1BluRay",
         audio_profile=result.values["audioProfile"] or "opus",
         custom_audio_bitrate=result.values["customAudioBitrate"] or "",
         quality=result.values["videoQuality"] or "",
@@ -1194,9 +1201,12 @@ def main(argv: list, program: str = "convert-video",
 
     # This script asks ffmpeg for things a distribution's package is often too old
     # to do, so the shared ladder is given a probe that answers "can this build do
-    # what THIS run's profile asks".
+    # what THIS run's profile asks" - and, among the builds that can, prefers one
+    # linked against SVT-AV1-HDR. A machine without one settles where it always
+    # did.
     ffmpegselect.select_ffmpeg(
-        lambda binary: ffmpeg_takes_profile(binary, video_args))
+        lambda binary: ffmpeg_takes_profile(binary, video_args),
+        prefer=svt_av1_hdr_works)
     if tooldeps.require_tools(program, ["ffmpeg", "ffprobe"]):
         return 1
     os.makedirs(settings.output_dir, exist_ok=True)
@@ -1208,6 +1218,13 @@ def main(argv: list, program: str = "convert-video",
         return safety.fail_no_relevant_input(settings.input_dir,
                                              "videos (.mkv / .mp4)")
 
+    settings.svt_av1_hdr = (settings.encoder == "libsvtav1"
+                            and ffmpegselect.selected_preferred() == 1)
+    # An explicit -g is a request for synthesis (or for none), which the grain
+    # tune does not do - so asking for it is also opting out of the tune.
+    settings.grain_tune = (settings.svt_av1_hdr and not grain
+                           and settings.video_profile
+                           == rules.SVT_AV1_HDR_GRAIN_PROFILE)
     settings.grain_level, settings.grain_probe_wanted = _settle_grain(
         settings, grain, video_args)
     _detect_hardware(settings, video_args, engines_override)
@@ -1299,6 +1316,10 @@ def _settle_grain(settings, grain: str, video_args: str) -> tuple:
     says, because asking for the probe is asking to be told what the source has.
     """
     software_av1 = settings.encoder == "libsvtav1"
+    # The source's own grain is kept, so there is none to synthesise and nothing
+    # to measure for it; -t still measures a source it tests, on its own.
+    if settings.grain_tune:
+        return "0", False
     if grain == "":
         default = videograin.grain_default_for(settings.video_profile)
         if default != "probe":
@@ -1439,6 +1460,17 @@ def _summarise(settings, video_args: str, grain: str) -> None:
         rules.apply_video_quality(video_args, given=settings.quality_given,
                                   quality=settings.quality),
         settings.nvenc_tune)
+    if settings.svt_av1_hdr:
+        settled = rules.svt_av1_hdr_args(settled, settings.grain_tune)
+        log("SVT-AV1-HDR: this ffmpeg's libsvtav1 is SVT-AV1-HDR, so the "
+            "profile is given to it without qm-min=0 (the fork's own minimum "
+            "is kept), and a PQ source gets its PQ variance-boost curve. The "
+            "quality levels are still the ones tuned for mainline SVT-AV1, "
+            "which spends bits differently - sizes will not match a mainline "
+            "encode.")
+    elif settings.encoder == "libsvtav1":
+        log("SVT-AV1-HDR: not found, encoding with this ffmpeg's own "
+            "libsvtav1.")
     log("Video profile: %s -> %s" % (settings.video_profile, settled))
 
     if settings.crop_wanted:
@@ -1543,6 +1575,12 @@ def _summarise_grain(settings, grain: str) -> None:
     if settings.encoder != "libsvtav1":
         log("Film grain: not available with %s, none synthesised."
             % settings.encoder)
+    elif settings.grain_tune:
+        log("Film grain: KEPT - %s on SVT-AV1-HDR encodes the source's own "
+            "grain with the fork's film grain tune (tune 6) rather than "
+            "denoising it and synthesising it again; nothing is measured for "
+            "it (-g puts the profile back on synthesis)."
+            % settings.video_profile)
     elif settings.grain_probe_wanted and grain:
         log("Film grain: -g 0 - measured per file and synthesised as measured "
             "(lossy: the source grain is denoised away and re-generated at "
