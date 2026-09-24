@@ -31,7 +31,8 @@ import shutil
 import subprocess
 import sys
 
-__all__ = ["convert_argv", "identify_argv", "format_modes", "require_format",
+__all__ = ["convert_argv", "identify_argv", "compare_argv", "format_modes",
+           "require_format",
            "CONVERT_SPEC", "IDENTIFY_SPEC", "DELEGATES"]
 
 # What the preflight asks for: either spelling satisfies it. The v6 name comes
@@ -52,6 +53,11 @@ def identify_argv(arguments) -> list[str]:
     its own in v7, and dropping it would run the conversion instead.
     """
     return _argv("identify", arguments)
+
+
+def compare_argv(arguments) -> list[str]:
+    """One ``compare`` call, spelled the way this host takes it."""
+    return _argv("compare", arguments)
 
 
 # What a build has to have been compiled against to handle each of these. A

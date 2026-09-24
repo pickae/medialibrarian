@@ -39,7 +39,11 @@ import time
 from typing import Any
 
 from medialib import commands
-from medialib.cli.convert_images import CHROMAS
+from medialib.cli.convert_images import (
+    CHROMAS,
+    MAX_SPEED,
+    threads_per_conversion,
+)
 from medialib.lib import (
     adequacy,
     archives,
@@ -99,8 +103,9 @@ f | <fuzz> | when trimming, how many percent color difference gets still trimmed
 # Checked here rather than left to convert-images, where a bad value would be
 # refused once per book, deep into the run.
 OPT_CHECKS = """
+s | int:0:{top} | speed preset
 u | enum:{chromas} | chroma
-""".format(chromas="\\|".join(CHROMAS))
+""".format(chromas="\\|".join(CHROMAS), top=MAX_SPEED)
 
 OPT_VARS = "q:quality u:chroma s:speedPreset m:maxRes f:fuzz"
 OPT_COLUMN = 20
@@ -120,9 +125,14 @@ MIN_PAGE_SIZE = 10 * 1024
 # because a book whose pages are half AVIF and half JPEG is worse than either.
 STARVED_PAGE_PERCENT = 80
 
-# ImageMagick spends about this many threads on one page whatever we do; four
-# pages convert at once inside a book, fixed.
-THREADS_PER_CONVERSION = 4
+# Two files under one page name are one page only below this RMSE, as a share
+# of full scale. A scan's JPEG export against its own PSD measured 0.011, two
+# neighbouring pages of the same book 0.43.
+SAME_PICTURE_RMSE = 0.03
+
+# Pages converting at once inside one book, when there are books enough to keep
+# the host busy; fewer books than workers each get a wider share. What one page
+# costs in threads is convert-images' figure, which moves with -s.
 IMAGES_PER_BOOK = 4
 # Deliberate oversubscription: a book worker is not converting the whole time -
 # it unpacks at the start and zips at the end, and those stretches are I/O rather
@@ -146,7 +156,12 @@ def spec(program: str) -> clioptions.Spec:
     )
 
 
-def book_workers(threads: int) -> int:
+def page_slots(threads: int, speed: int) -> int:
+    """How many pages the whole run converts at once, across every book."""
+    return int(threads * OVERSUBSCRIBE / threads_per_conversion("avif", speed))
+
+
+def book_workers(threads: int, speed: int = DEFAULT_SPEED_PRESET) -> int:
     """How many books convert at once.
 
     Books, not pages, is what scales with the host, because that is the axis that
@@ -155,8 +170,18 @@ def book_workers(threads: int) -> int:
     single worker there is no second book to convert through the first one's
     unpacking and zipping, which is half the point.
     """
-    workers = threads * OVERSUBSCRIBE // (THREADS_PER_CONVERSION * IMAGES_PER_BOOK)
-    return max(2, workers)
+    return max(2, page_slots(threads, speed) // IMAGES_PER_BOOK)
+
+
+def pages_per_book(threads: int, speed: int, books: int) -> int:
+    """How many pages one book converts at once.
+
+    IMAGES_PER_BOOK while the pool is full. A run with fewer books than workers
+    leaves slots no book would fill, so the books that are running share them:
+    one book alone on a 32-thread host would otherwise hold half of it.
+    """
+    running = max(1, min(books, book_workers(threads, speed)))
+    return max(IMAGES_PER_BOOK, page_slots(threads, speed) // running)
 
 
 def _files_matching(root: str, extensions, exact_case: bool = False) -> list:
@@ -303,6 +328,10 @@ def extract(archive: str, destination: str, max_res: int) -> None:
     # walks the tree: a page that is a link is somebody else's file.
     archives.prune_irregular(destination)
     _flatten(destination)
+    if os.path.isdir(destination):
+        for name in drop_alternate_formats(destination):
+            log('  "%s": dropped %s, the same picture is also there in '
+                "another format" % (os.path.basename(archive), name))
 
 
 def _flatten(destination: str) -> None:
@@ -341,6 +370,82 @@ def _flatten(destination: str) -> None:
             os.rmdir(parent)
         except OSError:
             pass
+
+
+def same_picture(first: str, second: str) -> bool:
+    """Whether two page files hold the same picture, as far as can be shown.
+
+    The same size in pixels, and a root-mean-square difference under
+    SAME_PICTURE_RMSE of full scale. Anything that cannot be measured is a
+    difference, so a page is only ever dropped on evidence.
+    """
+    sizes = set()
+    for path in (first, second):
+        done = subprocess.run(
+            imagemagick.identify_argv(["-format", "%w %h", path + "[0]"]),
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        if done.returncode != 0 or not done.stdout.strip():
+            return False
+        sizes.add(done.stdout.strip())
+    if len(sizes) != 1:
+        return False
+    # compare answers 0 for identical, 1 for different and 2 for failed, and
+    # prints the metric on stderr as "absolute (normalised)".
+    done = subprocess.run(
+        imagemagick.compare_argv(["-metric", "RMSE", first + "[0]",
+                                  second + "[0]", "null:"]),
+        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    if done.returncode not in (0, 1):
+        return False
+    text = done.stderr.decode("utf-8", "replace")
+    try:
+        normalised = float(text[text.index("(") + 1:text.index(")")])
+    except ValueError:
+        return False
+    return normalised < SAME_PICTURE_RMSE
+
+
+def drop_alternate_formats(book_dir: str) -> list[str]:
+    """The second copy dropped of every page the book holds in two formats, and
+    the names dropped returned.
+
+    A scanner's working file left beside its export - 015.psd next to 015.jpg -
+    is the same page twice, and a reader opening the archive shows the one it can
+    read. Converted, both become pages and the book repeats itself. Only a
+    shared NAME makes two files candidates, and only same_picture() makes them
+    duplicates: two different pictures under one name are both kept. The copy
+    kept is the one in the format most of the book's pages are in, because that
+    is the book's own; a tie goes to the earlier format in enums.IMAGE_EXTENSIONS.
+    """
+    pages = [entry.name for entry in os.scandir(book_dir) if entry.is_file()]
+    by_stem: dict[str, list[str]] = {}
+    tally: dict[str, int] = {}
+    for name in pages:
+        stem, extension = os.path.splitext(name)
+        by_stem.setdefault(stem.casefold(), []).append(name)
+        tally[extension] = tally.get(extension, 0) + 1
+    order = ["." + extension for extension in enums.IMAGE_EXTENSIONS]
+
+    def rank(name: str) -> tuple:
+        extension = os.path.splitext(name)[1]
+        return (-tally[extension],
+                order.index(extension) if extension in order else len(order))
+
+    dropped = []
+    for names in by_stem.values():
+        if len(names) < 2:
+            continue
+        kept, *others = sorted(names, key=rank)
+        for name in others:
+            path = os.path.join(book_dir, name)
+            if not same_picture(os.path.join(book_dir, kept), path):
+                continue
+            try:
+                os.remove(path)
+            except OSError:
+                continue
+            dropped.append(name)
+    return sorted(dropped)
 
 
 def starved_pages(book_dir: str) -> tuple[int, int]:
@@ -445,6 +550,7 @@ class Run:
     quality: str
     chroma: str
     speed_preset: str
+    pages_per_book: int
     max_res: int
     fuzz: str
     # The books already packaged, so a resumed run skips them.
@@ -595,7 +701,7 @@ class Run:
                 # loose pictures and the wrong one inside a book - the decision
                 # was already taken above, for the WHOLE book, and a book that
                 # got this far is one being converted.
-                ["-c", "-a", "-u", self.chroma, "-j", IMAGES_PER_BOOK,
+                ["-c", "-a", "-u", self.chroma, "-j", self.pages_per_book,
                  "-m", self.max_res, "-q", self.quality, "-s", self.speed_preset,
                  "-f", self.fuzz, book_temp, book_avif],
                 script_dir=self.script_dir,
@@ -867,6 +973,7 @@ def _run(result, declaration, program: str, script_dir: str,
     quality = result.values["quality"] or DEFAULT_QUALITY
     chroma = result.values["chroma"] or DEFAULT_CHROMA
     speed_preset = result.values["speedPreset"] or DEFAULT_SPEED_PRESET
+    speed = int(speed_preset)
     max_res = int(result.values["maxRes"] or DEFAULT_MAX_RES)
     fuzz = result.values["fuzz"] or DEFAULT_FUZZ
 
@@ -912,7 +1019,7 @@ def _run(result, declaration, program: str, script_dir: str,
         in_path=in_path, out_path=out_path, script_dir=script_dir,
         temp_path=temp_path, avif_path=avif_path, counters=counters,
         quality=quality, chroma=chroma, speed_preset=speed_preset,
-        max_res=max_res, fuzz=fuzz,
+        pages_per_book=IMAGES_PER_BOOK, max_res=max_res, fuzz=fuzz,
         converted=set(), input_list=os.path.join(counter_dir, "inputs"),
         stats_file=os.path.join(counter_dir, "pageStats"),
         phase_start=None, phase_end=None, total=0,
@@ -985,7 +1092,8 @@ def _run(result, declaration, program: str, script_dir: str,
         # PDF's page and image tables is a short burst of parsing, not a book's
         # worth of work, and none of it is held in RAM afterwards.
         _run_pool(state, "vet_pdf", pdfs,
-                  max(1, runlog.cpu_count() // THREADS_PER_CONVERSION))
+                  max(1, int(runlog.cpu_count()
+                             / threads_per_conversion("avif", speed))))
         safety.exit_if_aborted()
         print("")
         print("%d of %d PDF(s) taken as comic book(s)"
@@ -1044,8 +1152,10 @@ def _run(result, declaration, program: str, script_dir: str,
     os.makedirs(out_path, exist_ok=True)
     state.phase_start = time.time()
 
+    state.pages_per_book = pages_per_book(runlog.cpu_count(), speed,
+                                          len(book_list))
     _run_pool(state, "process_book", book_list,
-              book_workers(runlog.cpu_count()))
+              book_workers(runlog.cpu_count(), speed))
     safety.exit_if_aborted()
     state.phase_end = time.time()
 
