@@ -64,7 +64,7 @@ option can never change what a command you already type means.
 - Python 3.11.4+, and one package with it: `mutagen`, which the install brings in
 - A UTF-8 locale (accented/multibyte filenames are handled character-wise)
 - Per-tool external dependencies (see each command's `-h` output). Across the set:
-  `ffmpeg`, `mkvtoolnix`, `dovi_tool`, `mediainfo`, `ImageMagick`, `rsync`,
+  `ffmpeg`, `mkvtoolnix`, `dovi_tool`, `hdr10plus_tool`, `mediainfo`, `ImageMagick`, `rsync`,
   `yt-dlp`, `fdupes`, `unrar`/`unzip`/`7z`/`tar`/`zstd`, `zip`, poppler-utils (`pdftoppm`,
   `pdfinfo`, `pdfimages`, `pdftotext`),
   `whisper-ctranslate2`, `ffsubsync`, `tree`, `beets`, Calibre's `ebook-convert`,
@@ -97,6 +97,7 @@ worth refusing over. The rest say what they cannot do and the run goes on:
 | Missing | What happens instead |
 | --- | --- |
 | `dovi_tool` (or `mkvmerge`) | the Dolby Vision file is left exactly as it came in, and a dual-layer profile 7 source is re-encoded as plain HDR10 |
+| `hdr10plus_tool` (or `mkvmerge`) | an HDR10+ source is re-encoded as plain HDR10, with a warning naming the missing tool |
 | poppler (`pdfinfo`/`pdfimages`/`pdftoppm`) | the PDFs that therefore cannot be inspected are reported |
 | `nvidia-smi` | commentary is transcribed, and books are narrated, on the CPU |
 | `flock` | progress is printed one line per item, without its `[n of total]` position |
@@ -494,6 +495,16 @@ the preset's own arguments, and the first that takes all of them is used. The ru
 says which build it settled on and warns when that build cannot do everything the
 preset asks.
 
+**An SVT-AV1-HDR build is preferred where there is one.**
+[SVT-AV1-HDR](https://github.com/juliobbv-p/svt-av1-hdr) is SVT-AV1 with
+perceptual tuning of its own, shipped inside community ffmpeg builds rather than as
+an encoder of its own. Among the builds that take the whole preset, one whose SVT-AV1
+is SVT-AV1-HDR wins; without one, the choice is the one it always was. On it the AV1
+presets leave the fork's own quantisation-matrix floor alone, and a PQ source gets
+its PQ-specific curve by itself. The quality levels are still the ones tuned for
+mainline SVT-AV1, and the fork spends bits differently, so sizes differ from a
+mainline encode of the same preset.
+
 **How hard each file is encoded is decided per file, not per preset.** A preset
 states one quality level, and that level is then moved by the tier the file is
 *encoded* at — a 2160p file two levels softer, an SD file two levels harder — since
@@ -504,7 +515,10 @@ capped by `-m` is judged by the size it comes out at, not the one it arrived at.
 **Film grain follows the source.** Every preset that synthesises grain measures each
 file and synthesises what it measured, so a clean digital master and a 16mm blow-up
 are not handed the same number; `av1Animation` synthesises none, which is the one case
-where grain is actively wrong. `-g` names a level yourself and nothing caps it, and
+where grain is actively wrong. `av1BluRay` is the default; `av1Grain` is the opt-in
+for grainy sources: on an SVT-AV1-HDR build it **keeps the real grain**, with the
+fork's film grain tune, instead of synthesising it, and without one it synthesises
+it like `av1BluRay` at a lower quality level. `-g` names a level yourself and nothing caps it, and
 `-g off` turns it off. This is **lossy and irreversible**: the grain is denoised out of
 the stored picture and a player re-generates a similar-looking one, so what comes back
 is an imitation of it.
@@ -534,6 +548,17 @@ beforehand; that needs `dovi_tool` and `mkvmerge`. Where DV cannot be kept (a
 hardware profile, or a normalisation that could not run) the reason is reported
 and the HDR10 layer is preserved, so such a file comes out as plain HDR10 rather
 than losing its high dynamic range.
+
+**HDR10+** is kept on the HEVC profiles. No encoder carries it through an encode,
+so the source's dynamic metadata is read out before the encode and written back
+into the finished video after it � the video is not re-encoded for it, and it
+works with whichever ffmpeg the run settles on. It needs `hdr10plus_tool` and
+`mkvmerge`. A source carrying both Dolby Vision and HDR10+ keeps both, profile 7
+included. Where HDR10+ cannot be kept the reason is reported and the file comes
+out as plain HDR10: on the AV1 profiles, which it cannot be written back into
+yet; when a tool is missing, with a warning; and when the encode does not have
+exactly the source's frames, or is cropped or scaled while the metadata places
+windows in the original frame.
 
 **The video encode is never lost to a failure of the cheap steps.** It costs
 orders of magnitude more than everything else, so if the audio or the mux fails
@@ -980,6 +1005,14 @@ hold one large image per page — into a tree of `.cbz` archives of AVIF pages.
   one image covering (nearly) the whole page. A magazine, a manual or a text
   e-book therefore does not get rasterised page by page into a large, unreadable
   `.cbz`: it is reported with the numbers it was judged on and left alone.
+- **Pages keep their colour at full resolution** (4:4:4). The usual 4:2:0 stores
+  colour at a quarter of the picture's resolution, which is invisible on a photo
+  but puts a coloured fringe on thin inked lines and lettering. 4:4:4 costs
+  about a quarter more per page, which the slower default speed (`-s 4`) and
+  lower default quality (`-q 45`) pay back, so books come out about the size
+  they did at 4:2:0. `-u 420` goes back to 4:2:0 for smaller books. 4:4:4 is
+  AV1's High profile: software decoders read it, but some hardware decoders in
+  phones and tablets do not, so check your reader app.
 - Each finished folder of pages is zipped back into one **stored** (level 0 —
   AVIF does not compress further) `.cbz` in its mirrored parent folder.
 - Pages and AVIFs are intermediate and never leave RAM: the `.cbz` files are the
@@ -1023,6 +1056,10 @@ is lost by pointing a run at one.
   its most forgiving. An image nothing could measure is converted, not skipped.
 - `-r` never asks: converting back to JPEG is about what can open the file, and a
   source too small to improve is exactly as unopenable as a large one.
+- `-u 444` writes AVIF with colour at full resolution instead of a quarter of
+  it: sharper coloured lines and lettering, files about a quarter larger. AVIF
+  only, because WebP has no lossy 4:4:4 and JPEG XL does not subsample colour
+  anyway. [`convert-comics`](#convert-comics) asks for it by default.
 
 ## Names and folder structure
 

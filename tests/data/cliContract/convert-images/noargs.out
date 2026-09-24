@@ -11,6 +11,10 @@ Options:
     -r, --reverse   reverse: convert the -e format back to jpeg
     -e, --encoding <format>
                     output encoding: avif, webp or jxl, default avif
+    -u, --chroma <chroma>
+                    AVIF chroma: 420 or 444. 444 keeps colour at full resolution,
+                    420 at a quarter of it; 444 gives sharper coloured lines and
+                    larger files. Default 420. AVIF only.
     -j, --jobs <jobs>
                     Run up to <jobs> encoder processes in parallel.
                     Only needed when RAM is short, otherwise a good guess is made.

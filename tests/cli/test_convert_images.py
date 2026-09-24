@@ -124,7 +124,8 @@ _SLOWEST_SPEED = 0
 _FASTEST_SPEED = ci.MAX_SPEED
 
 
-def _run(image_format="avif", speed=5, quality=60, max_res=ci.UNBOUNDED_EDGE):
+def _run(image_format="avif", speed=5, quality=60, max_res=ci.UNBOUNDED_EDGE,
+         chroma=ci.DEFAULT_CHROMA):
     """A Run carrying the options main() would have settled for these flags.
 
     Only the encoder arguments are asked of it, so the directories and the
@@ -134,6 +135,7 @@ def _run(image_format="avif", speed=5, quality=60, max_res=ci.UNBOUNDED_EDGE):
         "crop": False,
         "skipStarved": False,
         "format": image_format,
+        "chroma": chroma,
         "quality": quality,
         "effortLevel": ci.FORMATS[image_format].level(speed),
         "fuzzCommand": "10%",
@@ -229,6 +231,30 @@ class TestEncodeArguments:
         argv = _run(name)._encode_arguments("page.jpg", "/out/page." + name)
         assert argv[argv.index("-define") + 1] == define
 
+    def test_full_chroma_is_asked_of_the_encoder(self):
+        argv = _run(chroma="444")._encode_arguments("page.jpg",
+                                                    "/out/page.avif")
+        at = argv.index("heic:chroma=444")
+        assert argv[at - 1] == "-define"
+
+    def test_the_chroma_is_a_setting_not_an_operation(self):
+        """A define read after the source would still apply, but it belongs
+        with the other encoder settings, ahead of anything done to the
+        image."""
+        argv = _run(chroma="444")._encode_arguments("page.jpg",
+                                                    "/out/page.avif")
+        assert argv.index("heic:chroma=444") < argv.index("page.jpg")
+
+    def test_the_encoder_s_own_default_is_not_named(self):
+        """-u 420 is what libheif writes anyway, so it is the same call as no
+        -u at all."""
+        assert _run(chroma="420")._encode_arguments(
+            "page.jpg", "/out/page.avif") == _run()._encode_arguments(
+            "page.jpg", "/out/page.avif")
+        assert not any(word.startswith("heic:chroma")
+                       for word in _run()._encode_arguments("page.jpg",
+                                                            "/out/page.avif"))
+
     def test_the_border_sits_between_the_source_and_the_resize(self):
         """Where the crop's restored margin has to go: an operation on the
         loaded image is applied after it is read and before it is scaled."""
@@ -290,6 +316,7 @@ class TestTheStarvedSkip:
             "crop": False,
             "skipStarved": skip_starved,
             "format": "avif",
+            "chroma": ci.DEFAULT_CHROMA,
             "quality": 60,
             "effortLevel": 5,
             "fuzzCommand": "10%",
@@ -396,6 +423,39 @@ class TestTheOptionsAreSettledUpFront:
     def test_the_top_of_the_range_is_accepted(self):
         assert self._parse("-s", str(ci.MAX_SPEED), "in",
                            "out").values["speedPreset"] == str(ci.MAX_SPEED)
+
+    @pytest.mark.parametrize("chroma", ["420", "444"])
+    def test_each_chroma_is_accepted(self, chroma):
+        assert self._parse("-u", chroma, "in", "out").values["chroma"] == chroma
+        assert self._parse("--chroma=" + chroma, "in",
+                           "out").values["chroma"] == chroma
+
+    @pytest.mark.parametrize("chroma", ["422", "full", "4:4:4"])
+    def test_any_other_chroma_is_refused(self, chroma):
+        with pytest.raises(clioptions.UsageError):
+            self._parse("-u", chroma, "in", "out")
+
+    def test_the_chroma_default_is_the_encoder_s_own(self):
+        assert ci.DEFAULT_CHROMA == "420"
+        assert self._parse("in", "out").values["chroma"] == ""
+
+    @pytest.mark.parametrize("argv,named", [
+        (["-u", "444", "-e", "webp"], "webp"),
+        (["-u", "420", "-e", "jxl"], "jxl"),
+        (["-u", "444", "-r"], "jpeg"),
+    ])
+    def test_full_chroma_is_refused_where_there_is_no_avif_to_write(
+            self, tmp_path, capsys, argv, named):
+        """Accepted and ignored, it would read as a run that did what it was
+        asked. The refusal names what the run would have written instead."""
+        source, target = tmp_path / "in", tmp_path / "out"
+        source.mkdir()
+        (source / "page.jpg").write_bytes(b"not looked at")
+        assert ci.main([*argv, str(source), str(target)]) == 1
+        error = capsys.readouterr().err
+        assert "-u only applies when writing avif, not %s." % named in error
+        assert "Nothing was changed." in error
+        assert not target.exists()
 
     def test_no_format_given_leaves_the_default_to_the_run(self):
         assert self._parse("in", "out").values["outputFormat"] == ""

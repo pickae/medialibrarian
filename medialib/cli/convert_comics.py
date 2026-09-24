@@ -39,6 +39,7 @@ import time
 from typing import Any
 
 from medialib import commands
+from medialib.cli.convert_images import CHROMAS
 from medialib.lib import (
     adequacy,
     archives,
@@ -67,27 +68,43 @@ that hold one large image per page; a PDF that is not shaped like a scanned comi
 
 Options:"""
 
-# The spec is DATA, and the page it renders is compared byte for byte against the
-# recorded contract under tests/data/cliContract.
-OPT_SPEC = """
-h |  | Print this help page.
-q | <quality> | quality level of the output images
-s | <speed> | av1 speed preset, lower is slower, default 5
-m | <maxRes> | maximum resolution (height) to keep
-f | <fuzz> | when trimming, how many percent color difference gets still trimmed
-"""
-
-OPT_VARS = "q:quality s:speedPreset m:maxRes f:fuzz"
-OPT_COLUMN = 20
-OPT_LONG = "h:help q:quality s:speed m:max-resolution f:fuzz"
-
-DEFAULT_QUALITY = 50
+# Pages are written 4:4:4, which keeps coloured line art and lettering sharp but
+# costs about a quarter more per page at the same quality. The slower speed and
+# the lower quality below are what pay for it: on a flat-coloured, inked page,
+# 4:4:4 at speed 4 and quality 45 came out the size 4:2:0 at speed 5 and quality
+# 50 did.
+DEFAULT_CHROMA = "444"
+DEFAULT_QUALITY = 45
 # Height ceiling for a converted page, in pixels: the long edge of the display
 # these are read on. A page is shown fitted to that edge, so pixels past it are
 # ones the screen cannot put anywhere - they only cost bytes in every book.
 DEFAULT_MAX_RES = 2960
-DEFAULT_SPEED_PRESET = 5
+DEFAULT_SPEED_PRESET = 4
 DEFAULT_FUZZ = 10
+
+# The spec is DATA, and the page it renders is compared byte for byte against the
+# recorded contract under tests/data/cliContract.
+OPT_SPEC = """
+h |  | Print this help page.
+q | <quality> | quality level of the output images, default {quality}
+u | <chroma> | page chroma: {chromas}. 444 keeps colour at full resolution,
+                    420 at a quarter of it, for smaller books with colour
+                    fringes on thin lines and lettering. Default {chroma}.
+s | <speed> | av1 speed preset, lower is slower, default {speed}
+m | <maxRes> | maximum resolution (height) to keep
+f | <fuzz> | when trimming, how many percent color difference gets still trimmed
+""".format(quality=DEFAULT_QUALITY, chromas=" or ".join(CHROMAS),
+           chroma=DEFAULT_CHROMA, speed=DEFAULT_SPEED_PRESET)
+
+# Checked here rather than left to convert-images, where a bad value would be
+# refused once per book, deep into the run.
+OPT_CHECKS = """
+u | enum:{chromas} | chroma
+""".format(chromas="\\|".join(CHROMAS))
+
+OPT_VARS = "q:quality u:chroma s:speedPreset m:maxRes f:fuzz"
+OPT_COLUMN = 20
+OPT_LONG = "h:help q:quality u:chroma s:speed m:max-resolution f:fuzz"
 
 # The smallest an AVIF page can plausibly be, in bytes. A conversion that
 # produced less than this produced no picture - a truncated or empty encode - and
@@ -124,6 +141,7 @@ def spec(program: str) -> clioptions.Spec:
         options=OPT_SPEC,
         long=OPT_LONG,
         vars=OPT_VARS,
+        checks=OPT_CHECKS,
         column=OPT_COLUMN,
     )
 
@@ -425,6 +443,7 @@ class Run:
     avif_path: str
     counters: "Counters"
     quality: str
+    chroma: str
     speed_preset: str
     max_res: int
     fuzz: str
@@ -576,8 +595,8 @@ class Run:
                 # loose pictures and the wrong one inside a book - the decision
                 # was already taken above, for the WHOLE book, and a book that
                 # got this far is one being converted.
-                ["-c", "-a", "-j", IMAGES_PER_BOOK, "-m", self.max_res,
-                 "-q", self.quality, "-s", self.speed_preset,
+                ["-c", "-a", "-u", self.chroma, "-j", IMAGES_PER_BOOK,
+                 "-m", self.max_res, "-q", self.quality, "-s", self.speed_preset,
                  "-f", self.fuzz, book_temp, book_avif],
                 script_dir=self.script_dir,
                 stdout=handle, stderr=subprocess.STDOUT)
@@ -846,6 +865,7 @@ def _run(result, declaration, program: str, script_dir: str,
     out_path = result.positionals[1].rstrip("/")
 
     quality = result.values["quality"] or DEFAULT_QUALITY
+    chroma = result.values["chroma"] or DEFAULT_CHROMA
     speed_preset = result.values["speedPreset"] or DEFAULT_SPEED_PRESET
     max_res = int(result.values["maxRes"] or DEFAULT_MAX_RES)
     fuzz = result.values["fuzz"] or DEFAULT_FUZZ
@@ -891,7 +911,8 @@ def _run(result, declaration, program: str, script_dir: str,
     state = Run(
         in_path=in_path, out_path=out_path, script_dir=script_dir,
         temp_path=temp_path, avif_path=avif_path, counters=counters,
-        quality=quality, speed_preset=speed_preset, max_res=max_res, fuzz=fuzz,
+        quality=quality, chroma=chroma, speed_preset=speed_preset,
+        max_res=max_res, fuzz=fuzz,
         converted=set(), input_list=os.path.join(counter_dir, "inputs"),
         stats_file=os.path.join(counter_dir, "pageStats"),
         phase_start=None, phase_end=None, total=0,

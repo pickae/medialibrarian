@@ -152,11 +152,12 @@ def _jxl_bit_depth(data: bytes):
     return False, bits.u32(8, 10, 12, (6, 1))
 
 
-def _run(image_format, speed=ci.DEFAULT_SPEED):
+def _run(image_format, speed=ci.DEFAULT_SPEED, chroma=ci.DEFAULT_CHROMA):
     """A Run whose options main() would have settled for these flags."""
     return ci.Run("/in", "/out", "/counters", {
         "crop": False,
         "format": image_format,
+        "chroma": chroma,
         "quality": 55,
         "effortLevel": ci.FORMATS[image_format].level(speed),
         "fuzzCommand": "10%",
@@ -257,6 +258,37 @@ class TestTheTopOfTheRangeIsWhereItIs:
             str(source), str(out)])
         left_behind = out.stat().st_size if out.exists() else 0
         assert code != 0 or left_behind == 0
+
+
+def _av1_subsampling(path) -> tuple[int, int]:
+    """(subsampling x, subsampling y) as the file's av1C box states them - the
+    encoder's own record of what it wrote, which ImageMagick does not report.
+    The two flags are bits 3 and 2 of the third byte after the box's type.
+
+    The profile is deliberately not read: it follows the bit depth as well as
+    the chroma, and the depth written follows the source."""
+    data = path.read_bytes()
+    flags = data[data.index(b"av1C") + 6]
+    return (flags >> 3) & 1, (flags >> 2) & 1
+
+
+class TestFullChromaIsWhatGetsWritten:
+    """-u only matters if the file really comes out 4:4:4 - a define the
+    encoder does not know is ignored without a word."""
+
+    def test_the_default_is_four_two_zero(self, source, tmp_path):
+        _needs("avif")
+        out = tmp_path / "subsampled.avif"
+        assert _encode(source, out, _run("avif")._encode_arguments(
+            str(source), str(out))) == 0
+        assert _av1_subsampling(out) == (1, 1)
+
+    def test_full_chroma_is_four_four_four(self, source, tmp_path):
+        _needs("avif")
+        out = tmp_path / "full.avif"
+        assert _encode(source, out, _run("avif", chroma="444")
+                       ._encode_arguments(str(source), str(out))) == 0
+        assert _av1_subsampling(out) == (0, 0)
 
 
 class TestTheDelegateProbeAgreesWithTheTool:

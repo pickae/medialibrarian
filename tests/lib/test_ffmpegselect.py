@@ -284,6 +284,83 @@ class TestProbe:
         assert ffmpegselect._STATE.full == 0
 
 
+# --- a caller's preference, among the builds its probe accepts -----------------
+
+def says(announcement):
+    """A preference for the one build that announces itself so."""
+    def prefers(candidate):
+        said = subprocess.run([candidate], stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL)
+        return said.stdout.decode().strip() == announcement
+    return prefers
+
+
+class TestPreference:
+    def test_a_preferred_build_wins_over_the_one_on_path(self, world, monkeypatch):
+        world.stub(world.root / "pathBin", "ffmpeg", "the one on PATH")
+        world.path_dirs.append(str(world.root / "pathBin"))
+        preferred = world.stub(world.home / ".local" / "bin", "ffmpeg",
+                               "the preferred one")
+        world.enter(monkeypatch)
+        ffmpegselect.select_ffmpeg(takes_everything,
+                                   prefer=says("the preferred one"))
+        assert ffmpegselect._STATE.selected == preferred
+        assert reaches() == "the preferred one"
+        assert ffmpegselect.selected_preferred() == 1
+
+    def test_without_a_preferred_build_the_choice_is_the_usual_one(self, world, monkeypatch):
+        chosen = world.stub(world.root / "pathBin", "ffmpeg", "the one on PATH")
+        world.path_dirs.append(str(world.root / "pathBin"))
+        world.stub(world.home / ".local" / "bin", "ffmpeg",
+                   "the hand-installed one")
+        world.enter(monkeypatch)
+        ffmpegselect.select_ffmpeg(takes_everything,
+                                   prefer=says("the preferred one"))
+        assert ffmpegselect._STATE.selected == chosen
+        assert ffmpegselect._STATE.pinned == 0
+        assert ffmpegselect.selected_preferred() == 0
+
+    def test_a_preferred_build_the_probe_rejects_is_not_offered(self, world, monkeypatch):
+        chosen = world.stub(world.root / "pathBin", "ffmpeg", "the one on PATH")
+        world.path_dirs.append(str(world.root / "pathBin"))
+        world.stub(world.home / ".local" / "bin", "ffmpeg", "the too-old one")
+        world.enter(monkeypatch)
+        ffmpegselect.select_ffmpeg(takes_everything,
+                                   prefer=says("the too-old one"))
+        assert ffmpegselect._STATE.selected == chosen
+        assert ffmpegselect.selected_preferred() == 0
+
+    def test_each_candidate_is_probed_once_across_both_walks(self, world, monkeypatch):
+        world.stub(world.root / "pathBin", "ffmpeg", "the one on PATH")
+        world.path_dirs.append(str(world.root / "pathBin"))
+        world.stub(world.home / ".local" / "bin", "ffmpeg",
+                   "the hand-installed one")
+        world.enter(monkeypatch)
+        probed = []
+
+        def counting(candidate):
+            probed.append(candidate)
+            return takes_everything(candidate)
+        ffmpegselect.select_ffmpeg(counting, prefer=says("the preferred one"))
+        assert len(probed) == len(set(probed))
+
+    def test_an_override_is_only_asked_whether_it_is_preferred(self, world, monkeypatch):
+        pinned = world.stub(world.root / "pinned", "ffmpeg", "the pinned one")
+        world.stub(world.home / ".local" / "bin", "ffmpeg", "the preferred one")
+        world.enter(monkeypatch, override=pinned)
+        ffmpegselect.select_ffmpeg(takes_everything,
+                                   prefer=says("the preferred one"))
+        assert ffmpegselect._STATE.selected == pinned
+        assert ffmpegselect.selected_preferred() == 0
+
+    def test_an_override_that_is_preferred_says_so(self, world, monkeypatch):
+        pinned = world.stub(world.root / "pinned", "ffmpeg", "the pinned one")
+        world.enter(monkeypatch, override=pinned)
+        ffmpegselect.select_ffmpeg(takes_everything,
+                                   prefer=says("the pinned one"))
+        assert ffmpegselect.selected_preferred() == 1
+
+
 # --- one decision per run ------------------------------------------------------
 
 class TestOneDecision:

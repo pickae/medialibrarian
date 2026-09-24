@@ -194,6 +194,22 @@ class TestVideoFilterArgs:
             " -vf crop=1920:1080:0:180")
 
 
+class TestWithChunkEnd:
+
+    def test_a_file_without_filters_gets_a_trim_of_its_own(self):
+        assert cv.with_chunk_end("-c:v libx265 -crf 24", "40.000") == (
+            "-c:v libx265 -crf 24 -vf trim=end=40.000")
+
+    def test_the_trim_goes_first_in_an_existing_chain(self):
+        """One -vf only: ffmpeg keeps the last of several, which would drop the
+        crop or the trim."""
+        args = "-c:v libx265 -pix_fmt yuv420p10le -vf crop=1920:800:0:140"
+        merged = cv.with_chunk_end(args, "40.000")
+        assert merged == ("-c:v libx265 -pix_fmt yuv420p10le "
+                          "-vf trim=end=40.000,crop=1920:800:0:140")
+        assert merged.count("-vf") == 1
+
+
 class TestEqualBoundaries:
 
     def test_three_chunks_are_two_equal_cuts(self):
@@ -524,6 +540,34 @@ class TestBuildVideoArgs:
         built = build("-c:v hevc_nvenc -cq 24", grain_level="12",
                       fast_decode="2")
         assert "film-grain" not in built and "fast-decode" not in built
+
+    ROW = ("-c:v libsvtav1 -crf 30 -svtav1-params tune=0:enable-qm=1:"
+           "qm-min=0:qm-max=15")
+
+    def test_svt_av1_hdr_keeps_its_own_quantisation_matrix_floor(self, build):
+        built = build(self.ROW, svt_av1_hdr=True)
+        assert "qm-min" not in built
+        assert "tune=0:enable-qm=1:qm-max=15" in built
+
+    def test_mainline_gets_the_row_as_written(self, build):
+        """No SVT-AV1-HDR build: the status quo, key for key."""
+        assert "qm-min=0" in build(self.ROW)
+
+    def test_the_grain_tune_keeps_the_grain_rather_than_synthesising_it(
+            self, build):
+        built = build(self.ROW, svt_av1_hdr=True, grain_tune=True)
+        assert "tune=6" in built and "tune=0" not in built
+        assert "film-grain" not in built
+
+    def test_the_grain_tune_means_nothing_without_svt_av1_hdr(self, build):
+        """Settled only on SVT-AV1-HDR, and a mainline build would refuse the
+        tune outright."""
+        assert "tune=0" in build(self.ROW, grain_tune=True)
+
+    def test_neither_touches_an_encoder_that_is_not_svtav1(self, build):
+        assert build("-c:v libx265 -crf 20", svt_av1_hdr=True,
+                     grain_tune=True) == \
+            "-c:v libx265 -crf 20 -pix_fmt yuv420p10le"
 
     def test_the_downscale_filter_is_appended_last(self, build):
         assert build("-c:v libsvtav1 -crf 30", dimensions=("3840", "2160"),

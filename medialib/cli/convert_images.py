@@ -59,6 +59,18 @@ DEFAULT_FORMAT = enums.IMAGE_CODECS[0]
 MAX_SPEED = 9
 DEFAULT_SPEED = 5
 
+# -u, the AVIF chroma subsampling. libheif's own default is 4:2:0, which stores
+# colour at half the width and half the height of the picture: invisible on a
+# photograph, a coloured fringe on the thin lines and lettering of a comic page.
+# 4:4:4 is AV1's High profile - every software decoder reads it, some hardware
+# ones do not. WebP has no lossy 4:4:4 to ask for, and JPEG XL does not
+# subsample colour in the first place, so there is nothing for -u to change in
+# either and it is refused rather than accepted and ignored.
+CHROMAS = ("420", "444")
+DEFAULT_CHROMA = "420"
+CHROMA_DEFINE = "heic:chroma"
+CHROMA_FORMAT = "avif"
+
 
 def _spoken_list(words) -> str:
     """The formats the way a sentence reads them - "avif, webp or jxl".
@@ -82,6 +94,9 @@ a |  | convert every image, including one whose file size says it is
                     below.
 r |  | reverse: convert the -e format back to jpeg
 e | <format> | output encoding: {formats}, default {default}
+u | <chroma> | AVIF chroma: {chromas}. 444 keeps colour at full resolution,
+                    420 at a quarter of it; 444 gives sharper coloured lines and
+                    larger files. Default {chroma}. AVIF only.
 j | <jobs> | Run up to <jobs> encoder processes in parallel.
                     Only needed when RAM is short, otherwise a good guess is made.
 q | <quality> | quality level of the output images
@@ -89,7 +104,8 @@ s | <speed> | av1 speed preset {speeds}, lower is slower, default {speed}
 m | <maxRes> | maximum resolution (height) to keep
 f | <fuzz> | when trimming, how many percent color difference gets still trimmed
 """.format(formats=_spoken_list(enums.IMAGE_CODECS), default=DEFAULT_FORMAT,
-           speeds="0-%d" % MAX_SPEED, speed=DEFAULT_SPEED)
+           speeds="0-%d" % MAX_SPEED, speed=DEFAULT_SPEED,
+           chromas=" or ".join(CHROMAS), chroma=DEFAULT_CHROMA)
 
 # The format has to be one this command can write, or a typo would only surface
 # as a per-image failure deep into the run; the speed preset has to be a number,
@@ -101,13 +117,15 @@ f | <fuzz> | when trimming, how many percent color difference gets still trimmed
 OPT_CHECKS = """
 e | enum:{formats} | output encoding
 s | int:0:{top} | speed preset
-""".format(formats="\\|".join(enums.IMAGE_CODECS), top=MAX_SPEED)
+u | enum:{chromas} | chroma
+""".format(formats="\\|".join(enums.IMAGE_CODECS), top=MAX_SPEED,
+           chromas="\\|".join(CHROMAS))
 
-OPT_VARS = ("c:crop a:alwaysConvert r:reverse e:outputFormat j:jobs q:quality "
-            "s:speedPreset m:maxRes f:fuzz")
+OPT_VARS = ("c:crop a:alwaysConvert r:reverse e:outputFormat u:chroma "
+            "j:jobs q:quality s:speedPreset m:maxRes f:fuzz")
 OPT_COLUMN = 20
-OPT_LONG = ("h:help c:crop a:always r:reverse e:encoding j:jobs q:quality s:speed "
-            "m:max-resolution f:fuzz")
+OPT_LONG = ("h:help c:crop a:always r:reverse e:encoding u:chroma j:jobs "
+            "q:quality s:speed m:max-resolution f:fuzz")
 
 # One conversion spans about this many threads, so the pool is the cores divided
 # by it.
@@ -312,10 +330,15 @@ class Run:
         of the image being written, whatever the source was.
         """
         chosen = FORMATS[self.options["format"]]
+        # Named only when it is not the encoder's own default, so a run that
+        # does not ask is the call it always was.
+        chroma = (["-define", "%s=%s" % (CHROMA_DEFINE, self.options["chroma"])]
+                  if self.options["chroma"] != DEFAULT_CHROMA else [])
         return ["-format", self.options["format"],
                 "-quality", str(self.options["quality"]),
                 "-define", "%s=%d" % (chosen.effort,
                                       self.options["effortLevel"]),
+                *chroma,
                 source, *extra,
                 "-resize", self.options["maxResCommand"],
                 "-depth", str(chosen.depth), out]
@@ -550,6 +573,13 @@ def main(argv: list, program: str = "convert-images") -> int:
     always = "a" in result.given
     reverse = "r" in result.given
     image_format = result.values["outputFormat"] or DEFAULT_FORMAT
+    chroma = result.values["chroma"] or DEFAULT_CHROMA
+    # -r writes JPEG whatever -e says, so -u has nothing to act on there either.
+    if result.values["chroma"] and (reverse or image_format != CHROMA_FORMAT):
+        sys.stderr.write(clioptions.usage_error_text(
+            declaration, "-u only applies when writing %s, not %s."
+            % (CHROMA_FORMAT, "jpeg" if reverse else image_format)))
+        return 1
     speed = int(result.values["speedPreset"] or DEFAULT_SPEED)
     # -r never asks: converting back to JPEG is about what can open the file, not
     # about what it would cost to store, so the check would only refuse a
@@ -559,6 +589,7 @@ def main(argv: list, program: str = "convert-images") -> int:
         "crop": crop,
         "skipStarved": skip_starved,
         "format": image_format,
+        "chroma": chroma,
         "quality": int(result.values["quality"] or 60),
         # Derived once, here: it is the same number for every conversion of the
         # run, and the workers that read it are separate processes.
