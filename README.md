@@ -64,7 +64,7 @@ option can never change what a command you already type means.
 - Python 3.11.4+, and one package with it: `mutagen`, which the install brings in
 - A UTF-8 locale (accented/multibyte filenames are handled character-wise)
 - Per-tool external dependencies (see each command's `-h` output). Across the set:
-  `ffmpeg`, `mkvtoolnix`, `dovi_tool`, `mediainfo`, `ImageMagick`, `rsync`,
+  `ffmpeg`, `mkvtoolnix`, `dovi_tool`, `hdr10plus_tool`, `mediainfo`, `ImageMagick`, `rsync`,
   `yt-dlp`, `fdupes`, `unrar`/`unzip`/`7z`/`tar`/`zstd`, `zip`, poppler-utils (`pdftoppm`,
   `pdfinfo`, `pdfimages`, `pdftotext`),
   `whisper-ctranslate2`, `ffsubsync`, `tree`, `beets`, Calibre's `ebook-convert`,
@@ -97,6 +97,7 @@ worth refusing over. The rest say what they cannot do and the run goes on:
 | Missing | What happens instead |
 | --- | --- |
 | `dovi_tool` (or `mkvmerge`) | the Dolby Vision file is left exactly as it came in, and a dual-layer profile 7 source is re-encoded as plain HDR10 |
+| `hdr10plus_tool` (or `mkvmerge`) | an HDR10+ source is re-encoded as plain HDR10, with a warning naming the missing tool |
 | poppler (`pdfinfo`/`pdfimages`/`pdftoppm`) | the PDFs that therefore cannot be inspected are reported |
 | `nvidia-smi` | commentary is transcribed, and books are narrated, on the CPU |
 | `flock` | progress is printed one line per item, without its `[n of total]` position |
@@ -534,6 +535,17 @@ beforehand; that needs `dovi_tool` and `mkvmerge`. Where DV cannot be kept (a
 hardware profile, or a normalisation that could not run) the reason is reported
 and the HDR10 layer is preserved, so such a file comes out as plain HDR10 rather
 than losing its high dynamic range.
+
+**HDR10+** is kept on the HEVC profiles. No encoder carries it through an encode,
+so the source's dynamic metadata is read out before the encode and written back
+into the finished video after it — the video is not re-encoded for it, and it
+works with whichever ffmpeg the run settles on. It needs `hdr10plus_tool` and
+`mkvmerge`. A source carrying both Dolby Vision and HDR10+ keeps both, profile 7
+included. Where HDR10+ cannot be kept the reason is reported and the file comes
+out as plain HDR10: on the AV1 profiles, which it cannot be written back into
+yet; when a tool is missing, with a warning; and when the encode does not have
+exactly the source's frames, or is cropped or scaled while the metadata places
+windows in the original frame.
 
 **The video encode is never lost to a failure of the cheap steps.** It costs
 orders of magnitude more than everything else, so if the audio or the mux fails

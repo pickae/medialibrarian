@@ -102,7 +102,11 @@ Dependencies:
     detected at runtime - an older build just converts without it. A dual-layer
     Dolby Vision profile 7 source is normalised to single-layer profile 8.1 before
     it is encoded, which additionally needs dovi_tool and mkvmerge (mkvtoolnix),
-    both optional too: without them such a file is encoded as plain HDR10. The
+    both optional too: without them such a file is encoded as plain HDR10.
+    Keeping HDR10+ on the HEVC profiles needs hdr10plus_tool and mkvmerge: the
+    source's dynamic metadata is read out before the encode and written back
+    after it, with any ffmpeg. Without them, and on the AV1 profiles, such a
+    file is encoded as plain HDR10, with a warning when a tool is missing. The
     finished file's Dolby Vision level - the capability claim a player checks
     before it decodes anything - is corrected if it overstates the video, which
     needs python3 and is skipped with a warning without it.
