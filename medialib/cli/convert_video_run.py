@@ -16,6 +16,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import time
 
 from medialib import commands
@@ -825,6 +826,49 @@ def write_video_only(relative: str, directory: str, reason: str,
 
 # --- one file -----------------------------------------------------------------
 
+class Plan:
+    """One file, prepared: everything settled about it before its encode starts.
+
+    The file after the one encoding is prepared while that one runs, so what
+    varies from file to file cannot live on the run's Settings - a chunk worker
+    of the file encoding would read the NEXT file's crop and grain. Each file is
+    handed a Settings of its own instead, and that copy is what its workers get.
+    """
+
+    def __init__(self, relative: str, settings) -> None:
+        self.relative = relative
+        self.settings = settings
+        self.source = os.path.join(settings.input_dir, relative)
+        self.output = os.path.join(settings.output_dir,
+                                   os.path.splitext(relative)[0] + ".mkv")
+        self.directory = segments.chunk_dir_for(settings.chunk_root, relative)
+        self.duration = 0.0
+        self.replacing = False
+        self.size_text = ""
+        # The chunk boundaries, start to end, or [] for a file encoded whole.
+        self.bounds: list = []
+        # The scratch holding a Dolby Vision intermediate, and whether this file
+        # holds the run's one slot for it.
+        self.scratch = ""
+        self.holds_dv_slot = False
+        self.source_dv_profile = ""
+        # The source's HDR10+ metadata read out for the encode to be given back,
+        # or "" when this file does not keep it.
+        self.hdr10plus_metadata = ""
+
+
+def chunk_bounds(duration: float, count: int) -> list:
+    """Where a file of <duration> is cut for <count> chunks, from 0 to the end,
+    or [] when it is encoded whole."""
+    if int(duration) < 2 or count <= 1:
+        return []
+    # Never make sub-second chunks.
+    count = min(count, int(duration))
+    bounds = (["0"] + rules.equal_boundaries(duration, count)
+              + ["%.3f" % duration])
+    return bounds if len(bounds) > 2 else []
+
+
 class Run:
     """The run's mutable state: what the closing report is read out of."""
 
@@ -836,45 +880,52 @@ class Run:
         self.failed = 0
         self.frames = 0
         self.video_seconds = 0.0
-        # Per file: the source's HDR10+ metadata read out for the encode to be
-        # given back, or "" when this file does not keep it.
-        self.hdr10plus_metadata = ""
+        # A Dolby Vision intermediate is most of a film's video stream, and the
+        # file prepared ahead must not hold a second one beside the encoding
+        # file's: whoever converts one takes this, and the encode that is done
+        # reading it hands it back.
+        self.dv_slot = threading.Semaphore(1)
 
-    def convert_file(self, relative: str) -> int:
-        """ONE video: resume-skip an up-to-date output, ask -t whether it is worth
-        converting, then produce the result in three overlapping parts and mux
-        them.
+    def next_plan(self, sources) -> "Plan | None":
+        """The next file of <sources> that is to be converted, prepared, or None
+        once there is none - the files it passes over were skipped."""
+        for relative in sources:
+            if safety.abort_requested():
+                return None
+            plan = self.prepare(relative)
+            if plan is not None:
+                return plan
+        return None
 
-        VIDEO is cut into chunks - one per NVENC engine for a hardware encode, or
-        resolution-driven for a software one - and encoded in parallel. AUDIO is
-        transcoded in software alongside it, because with hardware video work the
-        CPU is otherwise idle and even for a software encode the few tracks are
-        cheap. Then the MUX.
+    def prepare(self, relative: str) -> "Plan | None":
+        """ONE video's preparation: resume-skip an up-to-date output, ask -t
+        whether it is worth converting, and settle the grain, the Dolby Vision
+        mode, the crop, the HDR10+ and the chunk boundaries. None for a file
+        that is not converted.
         """
-        settings = self.settings
-        source = os.path.join(settings.input_dir, relative)
-        output = os.path.join(settings.output_dir,
-                              os.path.splitext(relative)[0] + ".mkv")
+        settings = rules.Settings(**self.settings.__dict__)
+        plan = Plan(relative, settings)
+        source = plan.source
 
-        # A pause holds the NEXT file off too: between two files this script
-        # probes the source, and those probes are ffmpeg runs of their own that
-        # would otherwise start up on a machine whose CPU was just handed back.
+        # A pause holds the NEXT file off too: preparing it is ffmpeg runs of
+        # its own that would otherwise start up on a machine whose CPU was just
+        # handed back.
         pausecontrol.wait_while_paused()
 
-        duration = _media_duration(source)
+        plan.duration = duration = _media_duration(source)
         # An output already here is the out-of-date result of an earlier run, and
         # replacing it is the whole point of converting this file again. Remembered
         # now, because after the encode a file at that path is no longer
         # distinguishable from one that turned up while the encode ran.
-        replacing = os.path.isfile(output)
-        if replacing:
-            out_duration = _media_duration(output)
+        plan.replacing = os.path.isfile(plan.output)
+        if plan.replacing:
+            out_duration = _media_duration(plan.output)
             if duration > 0 and out_duration >= duration:
                 log("Up to date, skipping: " + relative)
                 self.skipped += 1
-                return 0
+                return None
 
-        directory = segments.chunk_dir_for(settings.chunk_root, relative)
+        directory = plan.directory
         os.makedirs(directory, exist_ok=True)
 
         # The source's coded size, and the size it will actually be ENCODED at -
@@ -883,9 +934,6 @@ class Run:
         # file's worth of encoding work. Settled a second time once -c has
         # measured the file, since a crop moves it too.
         width, height, _order, sar = rules.video_dimensions(source)
-        # Whatever the file before this one was cropped to has nothing to say
-        # about this one, and every argument string built from here on reads it.
-        settings.crop = ""
         enc_width, enc_height = resolutions.capped(width, height,
                                                    settings.max_resolution)
 
@@ -893,6 +941,7 @@ class Run:
         # never had and a grainy one gets as much as it actually has.
         source_grain = ""
         if settings.grain_probe_wanted:
+            pausecontrol.wait_while_paused()
             settings.grain_level = videograin.grain_level_for(
                 source, relative, _media_duration, _dimensions_line,
                 runlog.jobs_per_core, settings.decode_accel)
@@ -900,6 +949,7 @@ class Run:
 
         if settings.test_source_bitrate:
             if not source_grain:
+                pausecontrol.wait_while_paused()
                 source_grain = videograin.source_grain_for(
                     source, relative, _media_duration, _dimensions_line,
                     runlog.jobs_per_core, settings.decode_accel)
@@ -908,28 +958,28 @@ class Run:
                                                source_grain, settings):
                 shutil.rmtree(directory, ignore_errors=True)
                 self.skipped += 1
-                return 0
+                return None
 
         rules.warn_source_geometry(
             relative, rules.interlace_verdict(source, settings.decode_accel),
             sar)
 
-        scratch = self._settle_dolby_vision(relative, source)
+        self._settle_dolby_vision(plan)
 
         # After the Dolby Vision decision, because a file that keeps its RPU
         # cannot be cropped, and after the -t test, so a source this run is not
         # going to convert is not measured for a crop it will never use.
-        settings.crop = self._settle_crop(relative, source)
+        settings.crop = self._settle_crop(relative, source, settings)
         crop_width, crop_height = rules.cropped_size(width, height,
                                                      settings.crop)
         enc_width, enc_height = resolutions.capped(crop_width, crop_height,
                                                    settings.max_resolution)
-        size_text = self._size_text(width, height, crop_width, crop_height,
-                                    enc_width, enc_height)
+        plan.size_text = self._size_text(width, height, crop_width,
+                                         crop_height, enc_width, enc_height)
 
         # After the crop, because whether the metadata survives it depends on
         # what the frame it describes turns into.
-        self.hdr10plus_metadata = prepare_hdr10plus(
+        plan.hdr10plus_metadata = prepare_hdr10plus(
             relative, source, directory, settings,
             reframed=bool(settings.crop) or (str(enc_width), str(enc_height))
             != (str(width), str(height)))
@@ -940,6 +990,26 @@ class Run:
         count = (settings.nvenc_engines if settings.hardware_encode
                  else rules.chunk_count_for(enc_width, enc_height,
                                             settings.cores))
+        plan.bounds = chunk_bounds(duration, count)
+        return plan
+
+    def convert(self, plan: Plan) -> int:
+        """ONE prepared video, produced in three overlapping parts and muxed.
+
+        VIDEO is cut into chunks - one per NVENC engine for a hardware encode, or
+        resolution-driven for a software one - and encoded in parallel. AUDIO is
+        transcoded in software alongside it, because with hardware video work the
+        CPU is otherwise idle and even for a software encode the few tracks are
+        cheap. Then the MUX.
+        """
+        try:
+            return self._convert(plan)
+        finally:
+            self._release_dv(plan)
+
+    def _convert(self, plan: Plan) -> int:
+        settings = plan.settings
+        relative, directory = plan.relative, plan.directory
 
         # The audio starts NOW so it runs alongside the video pass: with hardware
         # video decode and encode the CPU is otherwise idle, and even for a
@@ -950,16 +1020,14 @@ class Run:
             target=_audio_worker, args=(relative, directory, settings))
         audio.start()
 
-        self._encode(relative, directory, duration, count, size_text)
+        self._encode(settings, relative, directory, plan.duration, plan.bounds,
+                     plan.size_text)
         frames, micros = rules.sum_encode_progress(directory)
 
         # The intermediate has been read for the last time - everything left reads
         # the ORIGINAL. Handed back per file because it is a whole film's video
-        # stream: a run over a folder of profile 7 films would otherwise hold one
-        # per file until the run ended.
-        if scratch:
-            ramscratch.release_exit_cleanup([scratch])
-            settings.dolby_vision_source = ""
+        # stream, and the file prepared ahead may be waiting to convert its own.
+        self._release_dv(plan)
 
         # Video is done: stop the row and leave it behind on its own console
         # line, then wait for the audio before muxing.
@@ -968,8 +1036,9 @@ class Run:
         if safety.abort_requested():
             return safety.INTERRUPTED_EXIT_STATUS
 
-        if self.finish(relative, directory, duration, audio.exitcode or 0,
-                       replacing=replacing) != 0:
+        if self.finish(relative, directory, plan.duration,
+                       audio.exitcode or 0, replacing=plan.replacing,
+                       plan=plan) != 0:
             return 1
 
         # Only a file that came out complete counts towards the stats: a skipped
@@ -979,6 +1048,23 @@ class Run:
         self.frames += frames
         self.video_seconds += micros / 1000000
         return 0
+
+    def _release_dv(self, plan: Plan) -> None:
+        if plan.scratch:
+            ramscratch.release_exit_cleanup([plan.scratch])
+            plan.scratch = ""
+            plan.settings.dolby_vision_source = ""
+        if plan.holds_dv_slot:
+            plan.holds_dv_slot = False
+            self.dv_slot.release()
+
+    def _take_dv_slot(self) -> bool:
+        """The run's one Dolby Vision slot, waited for while the file encoding
+        holds it; False when the run is interrupted first."""
+        while not self.dv_slot.acquire(timeout=1):
+            if safety.abort_requested():
+                return False
+        return True
 
     def _size_text(self, width, height, crop_width, crop_height,
                    enc_width, enc_height) -> str:
@@ -1000,7 +1086,7 @@ class Run:
             text += " -> %sx%s" % (enc_width, enc_height)
         return text
 
-    def _settle_dolby_vision(self, relative: str, source: str) -> str:
+    def _settle_dolby_vision(self, plan: Plan) -> None:
         """The per-file Dolby Vision decision, which every chunk then inherits.
 
         A dual-layer profile 7 source is the one flavour that can be MADE
@@ -1008,33 +1094,39 @@ class Run:
         asked of the user as a separate ingest pass. Only worth it for an encoder
         that can code an RPU at all: with NVENC the result would be dropped again
         by the encode this is preparing for.
+
+        The conversion waits for the run's Dolby Vision slot, so a file prepared
+        while another encodes from its own intermediate is prepared once that
+        encode is done with it, not beside it.
         """
-        settings = self.settings
+        settings = plan.settings
         settings.dolby_vision_source = ""
-        profile, enhancement = rules.dolby_vision_profile(source)
-        scratch = ""
-        if enhancement == "1" and settings.dv_encoder_support:
-            prepared, scratch = normalise_dolby_vision(relative, settings,
-                                                       settings.output_dir)
+        profile, enhancement = rules.dolby_vision_profile(plan.source)
+        if (enhancement == "1" and settings.dv_encoder_support
+                and self._take_dv_slot()):
+            pausecontrol.wait_while_paused()
+            prepared, scratch = normalise_dolby_vision(
+                plan.relative, settings, settings.output_dir)
             if prepared:
                 settings.dolby_vision_source = prepared
+                plan.scratch = scratch
+                plan.holds_dv_slot = True
                 # Re-classified rather than assumed, so the mode is decided from
                 # the file that will actually be encoded.
                 profile, enhancement = rules.dolby_vision_profile(prepared)
+            else:
+                self.dv_slot.release()
         settings.dolby_vision_mode = dolby_vision_mode_for(
-            relative, profile, enhancement, settings)
-        self.source_dv_profile = profile
+            plan.relative, profile, enhancement, settings)
+        plan.source_dv_profile = profile
 
         # The conversion was preparation for an encode that carries the RPU.
         # Where that turns out to be impossible anyway, the intermediate buys
         # nothing: its base layer is the same HDR10 the source already has.
-        if scratch and settings.dolby_vision_mode != "1":
-            ramscratch.release_exit_cleanup([scratch])
-            settings.dolby_vision_source = ""
-            return ""
-        return scratch
+        if plan.scratch and settings.dolby_vision_mode != "1":
+            self._release_dv(plan)
 
-    def _settle_crop(self, relative: str, source: str) -> str:
+    def _settle_crop(self, relative: str, source: str, settings) -> str:
         """The per-file crop -c asks for, which every chunk then inherits, or ""
         for a file that keeps its whole frame.
 
@@ -1045,7 +1137,6 @@ class Run:
         graded in - cut the bands off and the metadata is measuring a frame that no
         longer exists, which is a worse outcome than a few coded rows of black.
         """
-        settings = self.settings
         if not settings.crop_wanted:
             return ""
         if settings.dolby_vision_mode == "1":
@@ -1053,19 +1144,20 @@ class Run:
                 "through the encode, and the RPU describes the uncropped frame: "
                 "%s" % relative)
             return ""
+        pausecontrol.wait_while_paused()
         return videocrop.crop_for(source, relative, _media_duration,
                                   _dimensions_line, runlog.jobs_per_core,
                                   settings.decode_accel)
 
-    def _encode(self, relative: str, directory: str, duration: float,
-                count: int, size_text: str) -> int:
-        """The video pass, whole or chunked, with the status row pinned under it.
+    def _encode(self, settings, relative: str, directory: str,
+                duration: float, bounds: list, size_text: str) -> int:
+        """The video pass, whole or cut at <bounds>, with the status row pinned
+        under it.
 
         A failing pass is deliberately not fatal: the completeness check is the
         single arbiter of whether there is a usable video, so a broken encode skips
         that ONE file instead of aborting the whole run.
         """
-        settings = self.settings
         started = int(time.time())
         paused_at_start = pausecontrol.paused_seconds(started)
         statusline.start_status_monitor(
@@ -1075,22 +1167,14 @@ class Run:
                 paused_now=pausecontrol.paused_seconds(int(time.time())),
                 now=int(time.time())))
 
-        whole = int(duration) < 2 or count <= 1
-        if not whole:
-            # Never make sub-second chunks.
-            count = min(count, int(duration))
-            interior = rules.equal_boundaries(duration, count)
-            bounds = ["0"] + interior + ["%.3f" % duration]
-            total = len(bounds) - 1
-            whole = total < 2
-
         statusline.clear_status()
-        if whole:
+        if not bounds:
             log("Encoding whole %s (%s)..." % (relative, size_text))
             encode_video_whole(relative, directory, settings)
             return 0
 
-        log("Chunking %s (%s) into %d parts..." % (relative, size_text, count))
+        total = len(bounds) - 1
+        log("Chunking %s (%s) into %d parts..." % (relative, size_text, total))
         tokens = []
         for index in range(total):
             start, end = bounds[index], bounds[index + 1]
@@ -1100,7 +1184,7 @@ class Run:
                 [relative, str(index), str(total), start, span]))
         # -P is the CHUNK count, not the core count: the count is already sized to
         # fill the encoder, so this is the one place video parallelism lives.
-        _run_chunk_pool(settings, tokens, count)
+        _run_chunk_pool(settings, tokens, total)
         # An interrupt must not fall through into the re-concatenation of a
         # half-encoded chunk set.
         if safety.abort_requested():
@@ -1109,7 +1193,8 @@ class Run:
         return 0
 
     def finish(self, relative: str, directory: str, duration: float,
-               audio_status: int, replacing: bool = False) -> int:
+               audio_status: int, replacing: bool = False,
+               plan: "Plan | None" = None) -> int:
         """Everything after both encodes: keep or discard the video, mux the final
         file, and confirm what came out.
 
@@ -1121,7 +1206,9 @@ class Run:
         can have outlived.
         """
         from medialib.lib import dolbyvision, hdr10plus
-        settings = self.settings
+        settings = plan.settings if plan else self.settings
+        hdr10plus_metadata = plan.hdr10plus_metadata if plan else ""
+        source_dv_profile = plan.source_dv_profile if plan else ""
 
         if not rules.video_intermediate_complete(directory, duration):
             log("Video encoding failed (no complete encoded video to keep), "
@@ -1137,8 +1224,8 @@ class Run:
 
         # Written into the video before the mux rather than into the finished
         # file, so a failure here costs nothing but the HDR10+ itself.
-        kept_hdr10plus = bool(self.hdr10plus_metadata) and restore_hdr10plus(
-            relative, directory, self.hdr10plus_metadata, settings)
+        kept_hdr10plus = bool(hdr10plus_metadata) and restore_hdr10plus(
+            relative, directory, hdr10plus_metadata, settings)
 
         output = output_path_for(relative, settings, replacing)
         if mux_final(relative, directory, settings, output) != 0:
@@ -1176,7 +1263,7 @@ class Run:
             out_profile, _el = rules.dolby_vision_profile(output)
             if out_profile:
                 log("Dolby Vision preserved: profile %s -> profile %s: %s"
-                    % (self.source_dv_profile, out_profile, relative))
+                    % (source_dv_profile, out_profile, relative))
             else:
                 log("WARNING: Dolby Vision was encoded but the output does not "
                     "signal it: " + relative)
@@ -1777,9 +1864,52 @@ def _summarise_grain(settings, grain: str) -> None:
         log("Film grain: off (-g off), none synthesised.")
 
 
+class _HeldOutput:
+    """The run's stderr, holding back what the look-ahead says while a file
+    encodes.
+
+    The next file is prepared on a thread of its own while the current one
+    encodes, and what that preparation logs would otherwise land on top of the
+    pinned status row and between the lines of a file it has nothing to do
+    with. So its lines are held while the run is busy, and let through - the
+    held ones first - once the run is waiting on the preparation itself, which
+    is also where they would have appeared had the file been prepared after the
+    one before it.
+    """
+
+    def __init__(self, stream) -> None:
+        self._stream = stream
+        self._lock = threading.Lock()
+        self._held: list = []
+        self._live = True
+        self.ahead = None
+
+    def write(self, text: str) -> int:
+        with self._lock:
+            if not self._live and threading.get_ident() == self.ahead:
+                self._held.append(text)
+                return len(text)
+            return self._stream.write(text)
+
+    def live(self, on: bool) -> None:
+        with self._lock:
+            self._live = on
+            if on and self._held:
+                self._stream.write("".join(self._held))
+                self._stream.flush()
+                self._held = []
+
+    def __getattr__(self, name: str):
+        return getattr(self._stream, name)
+
+
 def _run_all(settings) -> int:
     """The walk: one file at a time, because the chunk count already saturates the
-    encoder and encoding files in parallel would oversubscribe it."""
+    encoder and encoding files in parallel would oversubscribe it. The one thing
+    that runs beside a file's encode is the NEXT file's preparation - its probes,
+    grain and crop measurements and chunk boundaries - so that work is not spent
+    in front of the next encode."""
+    import concurrent.futures
     statusline.init_status_line()
 
     # The pause state lives in the RAM scratch because the encoders a keypress has
@@ -1819,21 +1949,45 @@ def _run_all(settings) -> int:
                 os.path.relpath(os.path.join(parent, name),
                                 settings.input_dir)), exist_ok=True)
 
+    output = _HeldOutput(sys.stderr)
+    sys.stderr = output
+    ahead = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+
+    def prepare_next(sources):
+        output.ahead = threading.get_ident()
+        return run.next_plan(sources)
+
+    sources = iter(_sources(settings.input_dir))
     try:
-        for relative in _sources(settings.input_dir):
+        pending = ahead.submit(prepare_next, sources)
+        while True:
+            output.live(True)
+            plan = pending.result()
             # An interrupt stops the walk instead of counting every remaining
             # file as a failure. The report still goes out, covering the files
             # that did convert.
             if safety.abort_requested():
+                if plan is not None:
+                    run._release_dv(plan)
                 sys.stderr.write("\nInterrupted - stopping.\n")
                 safety.print_run_footer()
                 return safety.INTERRUPTED_EXIT_STATUS
+            if plan is None:
+                break
+            output.live(False)
+            pending = ahead.submit(prepare_next, sources)
             # One file that cannot be finished must not cost the rest of the run:
             # it has already said what went wrong, and kept its video encode
             # where it could.
-            if run.convert_file(relative) != 0:
+            if run.convert(plan) != 0:
                 run.failed += 1
     finally:
+        # Waited for, so nothing it registers lands after the scratch cleanup:
+        # its probes were interrupted with the rest, and it checks for an
+        # interrupt between files.
+        ahead.shutdown(wait=True, cancel_futures=True)
+        output.live(True)
+        sys.stderr = output._stream
         statusline.stop_status_monitor()
         pausecontrol.stop_pause_keys()
         pausecontrol.kill_pausable_jobs()
