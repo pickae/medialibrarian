@@ -10,10 +10,13 @@ Unlike an archive, though, a PDF does not announce that it is a comic: a
 magazine and a manual are also stacks of pages. So every PDF is inspected first
 and only the ones shaped like a scan are taken.
 
-ONE BOOK at a time is in RAM, not one collection: each book is taken through
-extract -> convert -> number -> zip by a single worker which then frees that
-book's two RAM folders, so peak RAM is the number of workers times ONE book
-however many thousands of archives the run was handed.
+A few books at a time are in RAM, not one collection. The run's own process
+prepares the next book - unpacks it into RAM, drops its duplicate pages, judges
+whether it is starved - while the workers encode the books prepared before it,
+and a worker takes one prepared book through convert -> number -> zip and then
+frees that book's two RAM folders. One prepared book waits per worker, so peak
+RAM is twice the number of workers times ONE book however many thousands of
+archives the run was handed.
 
 What cannot be decided one book at a time is the collective NAME cleaning, which
 strips the affixes sibling books share and so has to see all of them together.
@@ -49,6 +52,7 @@ from medialib.lib import (
     archives,
     clioptions,
     comicpdf,
+    dynamicqueue,
     enums,
     imagebitrate,
     imagemagick,
@@ -135,10 +139,15 @@ SAME_PICTURE_RMSE = 0.03
 # costs in threads is convert-images' figure, which moves with -s.
 IMAGES_PER_BOOK = 4
 # Deliberate oversubscription: a book worker is not converting the whole time -
-# it unpacks at the start and zips at the end, and those stretches are I/O rather
-# than arithmetic - so sizing the pool to the bare thread count would leave the
-# CPU idling through them.
+# it zips at the end, and the encoder winds down over a book's last pages - so
+# sizing the pool to the bare thread count would leave the CPU idling through
+# those stretches.
 OVERSUBSCRIBE = 2
+
+# Prepared books waiting for a worker, per worker. Each one is a whole book
+# unpacked in RAM, so the buffer is kept to what a freed worker needs to start
+# again at once.
+BOOKS_BUFFERED_PER_WORKER = 1
 
 # The record separator between a book and the output path it is destined for: a
 # comic's name may contain anything else.
@@ -168,7 +177,7 @@ def book_workers(threads: int, speed: int = DEFAULT_SPEED_PRESET) -> int:
     costs RAM: one more book worker is one more book resident, while a fifth page
     inside an already-unpacked book would cost none. Two is the floor - with a
     single worker there is no second book to convert through the first one's
-    unpacking and zipping, which is half the point.
+    zipping.
     """
     return max(2, page_slots(threads, speed) // IMAGES_PER_BOOK)
 
@@ -565,8 +574,11 @@ class Run:
     def __init__(self, **settings) -> None:
         self.__dict__.update(settings)
 
-    def process_book(self, record: str) -> None:
-        """One book, end to end: unpack into RAM, convert, number, zip, free.
+    def prepare_book(self, record: str):
+        """One book's preparation, in the RUN's process: the skip checks, the
+        unpacking into RAM and the starved verdict, while the workers encode the
+        books prepared before it. ``(item, size)`` for the queue, or None for a
+        book that ends here - already on disk, or holding no page.
 
         Exactly one COUNTED line per book, reported at its START rather than when
         it finishes: with several books converting at once and a big one taking
@@ -574,9 +586,7 @@ class Run:
         it was busiest.
         """
         partial_path, _, out_rel = record.partition(UNIT)
-        rel = partial_path
-        book_temp = os.path.join(self.temp_path, rel)
-        book_avif = os.path.join(self.avif_path, rel)
+        book_temp = os.path.join(self.temp_path, partial_path)
 
         # Resume on PROVENANCE rather than on names: every .cbz records the
         # archive it was made from, which is what survives the collective naming
@@ -585,7 +595,7 @@ class Run:
             self.counters.progress("Skip (exists): %s"
                                    % os.path.basename(out_rel))
             self.counters.bump("packaged")
-            return
+            return None
         # And the same check by name, for archives converted before provenance was
         # recorded: no comment to go by, but a matching name is still a finished
         # book.
@@ -593,7 +603,7 @@ class Run:
             self.counters.progress("Skip (exists): %s"
                                    % os.path.basename(out_rel))
             self.counters.bump("packaged")
-            return
+            return None
 
         # The whole path as the user gave it, not just the file name: a collection
         # has several "01.cbz" in different series folders, and with parallel
@@ -604,15 +614,32 @@ class Run:
         extract(os.path.join(self.in_path, partial_path), book_temp,
                 self.max_res)
 
-        file_name = os.path.basename(partial_path)
         if not os.path.isdir(book_temp):
-            self.counters.note("Skip (no pages): %s" % file_name)
-            return
+            self.counters.note("Skip (no pages): %s"
+                               % os.path.basename(partial_path))
+            return None
         self.counters.bump("pagesFound")
 
         # Judged before a single page is encoded, because the answer decides
         # whether any of them are.
         starved, measured = starved_pages(book_temp)
+        if book_is_starved(starved, measured):
+            # Last in the buffer: repackaging is a zip, not an encode.
+            return (record, starved, measured), 0
+        # The unpacked bytes stand in for how long the encode takes: the queue
+        # only needs the ORDER right, and a book's bytes follow its pixels.
+        size = sum(entry.stat().st_size for entry in os.scandir(book_temp)
+                   if entry.is_file())
+        return (record, starved, measured), size
+
+    def finish_book(self, item: tuple) -> None:
+        """One prepared book, in a worker: convert, number, zip, free."""
+        record, starved, measured = item
+        partial_path, _, out_rel = record.partition(UNIT)
+        book_temp = os.path.join(self.temp_path, partial_path)
+        book_avif = os.path.join(self.avif_path, partial_path)
+        file_name = os.path.basename(partial_path)
+
         if book_is_starved(starved, measured):
             self._repackage_book(book_temp, out_rel, partial_path, file_name,
                                  starved, measured)
@@ -759,6 +786,16 @@ def _run_pool(state: Run, method: str, items: list, jobs: int) -> None:
         return
 
     workerpool.run(items, jobs, _in_worker, lambda item: (state, method, item))
+
+
+def _prepared_books(state: Run, book_list: list):
+    """The queue's producer: every book that still needs a worker, prepared."""
+    for record in book_list:
+        if safety.abort_requested():
+            return
+        prepared = state.prepare_book(record)
+        if prepared is not None:
+            yield prepared
 
 
 def _page_stats(stats_file: str) -> tuple:
@@ -1120,7 +1157,7 @@ def _run(result, declaration, program: str, script_dir: str,
 
     # What is already converted, read out of the archives themselves rather than
     # guessed from their names. Only .cbz written by a version that records it are
-    # listed; older ones fall back to the name check in process_book.
+    # listed; older ones fall back to the name check in prepare_book.
     if os.path.isdir(out_path):
         for existing in _files_matching(out_path, ("cbz",)):
             done = subprocess.run(["unzip", "-z", "-qq", "--", existing],
@@ -1154,8 +1191,13 @@ def _run(result, declaration, program: str, script_dir: str,
 
     state.pages_per_book = pages_per_book(runlog.cpu_count(), speed,
                                           len(book_list))
-    _run_pool(state, "process_book", book_list,
-              book_workers(runlog.cpu_count(), speed))
+    # One prepared book waiting per worker: enough that a freed worker starts
+    # its next book at once, and no more, because every book waiting is a book
+    # held in RAM.
+    dynamicqueue.run(_prepared_books(state, book_list),
+                     book_workers(runlog.cpu_count(), speed), _in_worker,
+                     lambda item: (state, "finish_book", item),
+                     buffer_factor=BOOKS_BUFFERED_PER_WORKER, log=log)
     safety.exit_if_aborted()
     state.phase_end = time.time()
 

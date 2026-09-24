@@ -304,11 +304,12 @@ size=12288
 class TestStreamingBookByBook:
     """The RAM ceiling, which is invisible in the output.
 
-    A worker unpacks one book, converts it, zips it to disk and frees that book's
-    two RAM folders before the next is unpacked into them - so peak RAM is
-    (workers x one book) rather than (the whole collection). That is what makes a
-    thousand-archive run survivable, and the packaging assertions above cannot
-    see it at all.
+    The run unpacks the next book while the workers convert, and a worker zips
+    its book to disk and frees that book's two RAM folders before it is handed
+    another - with one unpacked book waiting per worker, peak RAM is
+    (2 x workers x one book) rather than (the whole collection). That is what
+    makes a thousand-archive run survivable, and the packaging assertions above
+    cannot see it at all.
 
     The fixture is sized from the host's pool: the queue has to be LONGER than the
     pool for any of this to be observable, because with fewer books than workers
@@ -336,7 +337,7 @@ class TestStreamingBookByBook:
         comics.with_tool("convert", _CONVERT_STAMPING)
         comics.with_tool("fdupes", "exit 0")
         workers = self._pool()
-        books = workers * 2 + 2
+        books = workers * 3 + 2
         for number in range(1, books + 1):
             _cbz(comics.inputs, "Weekly Comic - Issue %d.cbz" % number,
                  {"0%d.jpg" % page: "book %d page %d" % (number, page)
@@ -380,31 +381,38 @@ class TestStreamingBookByBook:
             stop.set()
             sampler.join(timeout=5)
         assert done.returncode == 0, done.stdout + done.stderr
-        return comics, samples, workers, books
+        return comics, samples, workers, books, done.stdout + done.stderr
 
     def test_every_book_in_one_archive_each_out(self, run):
-        comics, _, _, books = run
+        comics, _, _, books, _ = run
         assert len(list(comics.outputs.rglob("*.cbz"))) == books
 
     def test_the_books_resident_at_once_stay_within_the_pool(self, run):
-        """Two folders per book at most - its pages and its AVIFs - so the peak
-        is bounded by twice the pool. The fixture holds more than twice the
-        pool's worth of books, so keeping every book resident would blow
-        straight through it."""
-        _, samples, workers, _ = run
+        """Two folders per book a worker holds - its pages and its AVIFs - and
+        one per prepared book waiting for a worker, one of those per worker: the
+        peak is bounded by three times the pool. The fixture holds more than
+        that in books, so unpacking every book up front would blow straight
+        through it."""
+        _, samples, workers, _, _ = run
         peak = max((resident for resident, _ in samples), default=0)
-        assert peak <= 2 * workers, "peak %d, pool %d" % (peak, workers)
+        assert peak <= 3 * workers, "peak %d, pool %d" % (peak, workers)
+
+    def test_the_books_went_through_the_prep_queue(self, run):
+        """The queue's own line: the books were prepared ahead of the workers
+        rather than each unpacked by the worker that converts it."""
+        _, _, _, _, log = run
+        assert "Queue: buffer loaded" in log
 
     def test_and_the_sampler_did_see_something(self, run):
         """A sampler that observed nothing would make the bound above pass for
         the wrong reason."""
-        _, samples, _, _ = run
+        _, samples, _, _, _ = run
         assert max((resident for resident, _ in samples), default=0) >= 1
 
     def test_an_archive_is_on_disk_while_another_book_is_still_in_ram(self, run):
         """If packaging only began once every book was converted, no sample could
         show both at once."""
-        _, samples, _, _ = run
+        _, samples, _, _, _ = run
         assert [1 for resident, on_disk in samples if resident and on_disk]
 
     def test_nothing_is_left_in_the_ram_base(self, run):
@@ -414,7 +422,7 @@ class TestStreamingBookByBook:
     def test_the_collective_naming_pass_still_ran(self, run):
         """Every book was alone in RAM, so the shared prefix can only have been
         stripped by the second pass over the finished archives on disk."""
-        comics, _, _, books = run
+        comics, _, _, books, _ = run
         names = sorted(p.name for p in comics.outputs.glob("*.cbz"))
         assert len(names) == books
         assert not [n for n in names if n.startswith("Weekly Comic - ")]
@@ -423,7 +431,7 @@ class TestStreamingBookByBook:
     def test_the_pages_inside_are_still_numbered_per_book(self, run):
         """The numbering happens in the worker; the second pass must not have
         disturbed it."""
-        comics, _, _, _ = run
+        comics, _, _, _, _ = run
         first = sorted(comics.outputs.glob("*.cbz"))[0]
         assert _entries(first) == ["1.avif", "2.avif", "3.avif"]
 
@@ -431,7 +439,7 @@ class TestStreamingBookByBook:
         """A book's NAME depends on which other books were in the run, so a
         resume check on names alone is not enough - each archive records the
         input it came from in its zip comment, and that is what is matched."""
-        comics, _, _, books = run
+        comics, _, _, books, _ = run
         before = blackbox.tree_of(comics.outputs)
         again = comics.run("convert-comics", comics.inputs, comics.outputs)
         assert again.returncode == 0, again.stderr
@@ -449,7 +457,7 @@ class TestStreamingBookByBook:
         collective rules strip, so this run would call the converted books
         something else than they are called on disk. The alternative to
         recognising them is a second copy of every book in the library."""
-        comics, _, _, books = run
+        comics, _, _, books, _ = run
         existing = sorted(p.name for p in comics.outputs.glob("*.cbz"))
         _cbz(comics.inputs, "Special Annual 2024.cbz",
              {"0%d.jpg" % page: "annual %d" % page for page in (1, 2, 3)})
