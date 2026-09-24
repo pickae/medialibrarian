@@ -149,7 +149,9 @@ class Format(NamedTuple):
 #
 # AVIF and JPEG XL are written 10-bit even from 8-bit sources: at these quality
 # levels the extra headroom costs almost nothing and keeps flat gradients from
-# banding. WebP has no more than 8 bits to be written at.
+# banding. WebP has no more than 8 bits to be written at. The JPEG XL header
+# records 16 rather than 10: ImageMagick's JXL writer only offers integer
+# samples of 8 or 16 bits, so it stores any depth above 8 as 16.
 #
 # The effort setting is where they disagree most, in name AND in direction.
 # AVIF counts a SPEED, so its slowest end is 0; WebP's method and JPEG XL's
@@ -300,15 +302,23 @@ class Run:
 
         <extra> goes between the source and the resize, which is where an
         operation on the loaded image has to sit.
+
+        -depth is the one setting that must come AFTER the source. Placed before
+        it, it is a read setting: it tells the decoder how to read the source
+        and the image keeps the source's own depth. The encoder then writes
+        whatever the source had. An 8-bit JPEG came out as 8-bit AVIF, and a
+        16-bit PNG came out as 12-bit AVIF, which is profile 2 and which many
+        decoders cannot play. Placed just before the output, it sets the depth
+        of the image being written, whatever the source was.
         """
         chosen = FORMATS[self.options["format"]]
         return ["-format", self.options["format"],
-                "-depth", str(chosen.depth),
                 "-quality", str(self.options["quality"]),
                 "-define", "%s=%d" % (chosen.effort,
                                       self.options["effortLevel"]),
                 source, *extra,
-                "-resize", self.options["maxResCommand"], out]
+                "-resize", self.options["maxResCommand"],
+                "-depth", str(chosen.depth), out]
 
     def crop_convert(self, relative: str) -> None:
         """The -c path: trim, then decide from HOW MUCH came off what the trim

@@ -191,13 +191,23 @@ class TestTheFormatTable:
 
 
 class TestEncodeArguments:
-    def test_the_default_run_is_the_avif_call_it_has_always_been(self):
-        """The one case that must not have moved: -e defaults to avif, so a
-        command line that predates the option converts exactly as it did."""
+    def test_the_default_run_is_the_avif_call(self):
+        """-e defaults to avif, so this is the call a bare command line makes."""
         assert _run()._encode_arguments("page.jpg", "/out/page.avif") == [
-            "-format", "avif", "-depth", "10", "-quality", "60",
+            "-format", "avif", "-quality", "60",
             "-define", "heic:speed=5", "page.jpg",
-            "-resize", "10000x10000>", "/out/page.avif"]
+            "-resize", "10000x10000>", "-depth", "10", "/out/page.avif"]
+
+    @pytest.mark.parametrize("name", sorted(ci.FORMATS))
+    def test_the_depth_is_set_on_the_image_and_not_on_the_read(self, name):
+        """Before the source, -depth only changes how the source is read, and
+        the file is written at the source's own depth. It has to come after
+        every operation on the loaded image and just before the output."""
+        argv = _run(name)._encode_arguments(
+            "miff:trimmed", "/out/page." + name,
+            ["-bordercolor", "white", "-border", "7"])
+        assert argv.index("-resize") < argv.index("-depth") \
+            == len(argv) - 3
 
     @pytest.mark.parametrize("name,depth", [("avif", "10"), ("webp", "8"),
                                             ("jxl", "10")])

@@ -78,6 +78,80 @@ def _identify(path, spec="%m %z"):
     return done.stdout.decode("utf-8", "replace").strip()
 
 
+def _av1c(data: bytes):
+    """The AV1 profile and bit depth an AVIF file declares in its av1C box.
+
+    The byte after the box type is the marker and version. The next one holds
+    the profile in its top three bits. The one after that holds high_bitdepth
+    (0x40) and twelve_bit (0x20).
+    """
+    at = data.find(b"av1C")
+    assert at >= 0, "no av1C box"
+    profile = data[at + 5] >> 5
+    flags = data[at + 6]
+    bits = 12 if flags & 0x60 == 0x60 else 10 if flags & 0x40 else 8
+    return profile, bits
+
+
+class _Bits:
+    """The JPEG XL codestream's bit order: least significant bit first."""
+
+    def __init__(self, data: bytes):
+        self.data, self.at = data, 0
+
+    def u(self, n: int) -> int:
+        value = 0
+        for i in range(n):
+            byte = self.data[self.at >> 3]
+            value |= ((byte >> (self.at & 7)) & 1) << i
+            self.at += 1
+        return value
+
+    def u32(self, *choices) -> int:
+        """A U32 field: two bits choose one of four distributions, each a
+        plain value or (bit count, offset)."""
+        chosen = choices[self.u(2)]
+        if isinstance(chosen, tuple):
+            return self.u(chosen[0]) + chosen[1]
+        return chosen
+
+    def size_header(self) -> None:
+        div8 = self.u(1)
+        edge = ((9, 1), (13, 1), (18, 1), (30, 1))
+        self.u(5) if div8 else self.u32(*edge)
+        if self.u(3) == 0:
+            self.u(5) if div8 else self.u32(*edge)
+
+
+def _jxl_bit_depth(data: bytes):
+    """(float_sample, bits_per_sample) from a JPEG XL file's image header.
+
+    Only as much of the header is parsed as ImageMagick writes: a preview or an
+    animation header ahead of the bit depth fails the assertion here rather
+    than being misread.
+    """
+    if data[:2] != b"\xff\x0a":
+        # The ISO BMFF container: the codestream is in a jxlc box, or split
+        # across jxlp boxes, each with a 4-byte sequence number first.
+        at = data.find(b"jxlc")
+        at = at + 4 if at >= 0 else data.find(b"jxlp") + 8
+        data = data[at:]
+    assert data[:2] == b"\xff\x0a", "no JPEG XL codestream"
+    bits = _Bits(data[2:])
+    bits.size_header()
+    if bits.u(1):                      # all_default
+        return False, 8
+    if bits.u(1):                      # extra_fields
+        bits.u(3)                      # orientation
+        if bits.u(1):
+            bits.size_header()         # intrinsic size
+        assert not bits.u(1), "preview header not parsed"
+        assert not bits.u(1), "animation header not parsed"
+    if bits.u(1):                      # float_sample
+        return True, bits.u32(32, 16, 24, (6, 1))
+    return False, bits.u32(8, 10, 12, (6, 1))
+
+
 def _run(image_format, speed=ci.DEFAULT_SPEED):
     """A Run whose options main() would have settled for these flags."""
     return ci.Run("/in", "/out", "/counters", {
@@ -102,21 +176,41 @@ class TestEveryFormatReallyEncodes:
         assert out.is_file() and out.stat().st_size > 0
         assert _identify(out, "%m").lower() == image_format
 
+    @pytest.mark.parametrize("source_depth", [8, 16])
     @pytest.mark.parametrize("image_format", sorted(ci.FORMATS),
                              ids=sorted(ci.FORMATS))
-    def test_the_depth_asked_for_is_the_depth_carried(self, image_format,
-                                                      source, tmp_path):
-        """WebP has 8 bits and no more; the other two are asked for 10 so flat
-        gradients do not band, and must come back with more than 8."""
+    def test_the_depth_asked_for_is_the_depth_carried(
+            self, image_format, source_depth, source, tmp_path):
+        """The depth is read from the written file's own header, and not
+        from identify's %z, which is the depth the decoder gave back.
+
+        Both source depths are tried because each one exposed the bug in a
+        different way. With -depth set before the source, an 8-bit source came
+        out 8-bit, and a 16-bit one came out as 12-bit AVIF, which is profile 2
+        and which many decoders cannot play. A check for "more than 8" passes
+        on that 12-bit file.
+        """
         _needs(image_format)
+        src = tmp_path / ("src%d.png" % source_depth)
+        subprocess.run(imagemagick.convert_argv(
+            [str(source), "-depth", str(source_depth), str(src)]), check=True)
         out = tmp_path / ("depth." + image_format)
-        argv = _run(image_format)._encode_arguments(str(source), str(out))
-        assert _encode(source, out, argv) == 0
-        depth = int(_identify(out, "%z") or 0)
-        if ci.FORMATS[image_format].depth == 8:
-            assert depth == 8
+        argv = _run(image_format)._encode_arguments(str(src), str(out))
+        assert _encode(src, out, argv) == 0
+        asked = ci.FORMATS[image_format].depth
+        data = out.read_bytes()
+        if image_format == "avif":
+            profile, bits = _av1c(data)
+            assert bits == asked
+            # Main (4:2:0) or High (4:4:4). Never Professional, which is what a
+            # 12-bit or 4:2:2 stream needs.
+            assert profile in (0, 1)
+        elif image_format == "jxl":
+            # ImageMagick's JXL writer only offers integer samples of 8 or 16
+            # bits, so any depth above 8 is stored as 16.
+            assert _jxl_bit_depth(data) == (False, 8 if asked == 8 else 16)
         else:
-            assert depth > 8
+            assert int(_identify(out, "%z") or 0) == asked == 8
 
 
 class TestEverySpeedTheMappingCanEmit:
