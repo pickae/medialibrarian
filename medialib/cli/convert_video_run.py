@@ -463,7 +463,7 @@ def encode_video_chunk(settings, token: str) -> int:
     """
     safety.trap_worker_abort()
     ramscratch.adopt_ram_base(getattr(settings, "ram_base", ""))
-    relative, index, _total, start, duration = token.split(rules.UNIT)
+    relative, index, total, start, duration = token.split(rules.UNIT)
 
     source = rules.video_source_for(relative, settings.input_dir,
                                     settings.dolby_vision_source)
@@ -474,11 +474,15 @@ def encode_video_chunk(settings, token: str) -> int:
     args = rules.build_video_args(
         rules.profile_args(rules.VIDEO_PROFILES, settings.video_profile),
         source, settings)
+    # The last chunk runs to the end of the stream rather than to the container's
+    # duration, so a final frame past that rounded figure is not lost.
+    if int(index) < int(total) - 1:
+        args = rules.with_chunk_end(args, duration)
     argv = (["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
              "-nostats", "-progress",
              os.path.join(directory, "prog.%04d" % int(index)), "-y"]
             + settings.decode_accel.split()
-            + ["-ss", start, "-t", duration, "-i", source, "-an", "-sn",
+            + ["-ss", start, "-i", source, "-an", "-sn",
                "-map", "0:v:0"] + args.split() + ["-f", "matroska", out])
     return run_quiet_encode(argv)
 

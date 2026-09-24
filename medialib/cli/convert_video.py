@@ -510,6 +510,25 @@ def video_filter_args(width, height, ceiling: str, crop: str = "") -> str:
     return " -vf " + ",".join(chain)
 
 
+def with_chunk_end(args: str, span: str) -> str:
+    """``withChunkEnd``: the video arguments of a chunk that stops ``span``
+    seconds after its -ss, as the first filter of the file's chain.
+
+    Not -t, because -t counts from the chunk's first FRAME, while -ss drops
+    frames by the seek point: every chunk after the first then reaches past the
+    next cut by up to a frame, and so does the first when the video starts after
+    the container (an AAC track's priming leaves it a few ms late). Each such
+    frame is encoded twice and the joined video runs a frame long per seam.
+    trim's end is measured from the seek point like -ss, so the chunks tile the
+    source exactly. First in the chain, so it drops frames before they are
+    cropped or scaled.
+    """
+    trim = "trim=end=" + span
+    if " -vf " in args:
+        return args.replace(" -vf ", " -vf %s," % trim, 1)
+    return "%s -vf %s" % (args, trim)
+
+
 def video_only_path_for(relative: str, output_dir: str) -> str:
     """``videoOnlyPathFor``: where the failsafe copy of a finished video encode
     lands - the normal output path with a marker before the extension.

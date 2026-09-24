@@ -169,3 +169,40 @@ class TestTheHardwareDecodeLadder:
                             lambda: probed.append(1) or True)
         flags, _said = run_module._decode_accel()
         assert (flags, probed) == ("", [])
+
+
+class TestTheArgumentsOfOneChunk:
+    """Where a chunk starts and stops. The frames each argv selects are asserted
+    against real video in `test_convert_video_chunks_media.py`; this pins the
+    argv itself."""
+
+    @pytest.fixture
+    def chunk_argv(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(rules, "build_video_args",
+                            lambda base, path, settings: "-c:v libx265")
+        monkeypatch.setattr(run_module.safety, "trap_worker_abort",
+                            lambda: None)
+        seen = []
+        monkeypatch.setattr(run_module, "run_quiet_encode",
+                            lambda argv: seen.append(argv) or 0)
+        settings = rules.Settings(input_dir=str(tmp_path / "in"),
+                                  chunk_root=str(tmp_path / "chunks"))
+
+        def run(index, total, start, span):
+            run_module.encode_video_chunk(settings, rules.UNIT.join(
+                ["film.mkv", str(index), str(total), start, span]))
+            return seen[-1]
+        return run
+
+    def test_a_chunk_is_cut_by_trim_and_not_by_minus_t(self, chunk_argv):
+        argv = chunk_argv(1, 3, "40.000", "40.000")
+        assert "-t" not in argv
+        assert argv[argv.index("-ss") + 1] == "40.000"
+        assert argv.index("-ss") < argv.index("-i")
+        assert argv[argv.index("-vf") + 1] == "trim=end=40.000"
+
+    def test_the_last_chunk_runs_to_the_end_of_the_stream(self, chunk_argv):
+        argv = chunk_argv(2, 3, "80.000", "40.000")
+        assert "-t" not in argv
+        assert "-vf" not in argv
+        assert argv[argv.index("-ss") + 1] == "80.000"
