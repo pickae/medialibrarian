@@ -194,6 +194,22 @@ class TestVideoFilterArgs:
             " -vf crop=1920:1080:0:180")
 
 
+class TestWithChunkEnd:
+
+    def test_a_file_without_filters_gets_a_trim_of_its_own(self):
+        assert cv.with_chunk_end("-c:v libx265 -crf 24", "40.000") == (
+            "-c:v libx265 -crf 24 -vf trim=end=40.000")
+
+    def test_the_trim_goes_first_in_an_existing_chain(self):
+        """One -vf only: ffmpeg keeps the last of several, which would drop the
+        crop or the trim."""
+        args = "-c:v libx265 -pix_fmt yuv420p10le -vf crop=1920:800:0:140"
+        merged = cv.with_chunk_end(args, "40.000")
+        assert merged == ("-c:v libx265 -pix_fmt yuv420p10le "
+                          "-vf trim=end=40.000,crop=1920:800:0:140")
+        assert merged.count("-vf") == 1
+
+
 class TestEqualBoundaries:
 
     def test_three_chunks_are_two_equal_cuts(self):
