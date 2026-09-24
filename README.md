@@ -551,7 +551,7 @@ than losing its high dynamic range.
 
 **HDR10+** is kept on the HEVC profiles. No encoder carries it through an encode,
 so the source's dynamic metadata is read out before the encode and written back
-into the finished video after it — the video is not re-encoded for it, and it
+into the finished video after it â€” the video is not re-encoded for it, and it
 works with whichever ffmpeg the run settles on. It needs `hdr10plus_tool` and
 `mkvmerge`. A source carrying both Dolby Vision and HDR10+ keeps both, profile 7
 included. Where HDR10+ cannot be kept the reason is reported and the file comes
