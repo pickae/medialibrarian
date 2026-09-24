@@ -162,6 +162,28 @@ def test_register_pausable_job_runs_on_unpaused(pause_state):
     assert _signals(pause_state["kill_log"]) == []
 
 
+def test_a_job_registered_after_an_interrupt_takes_itself_down(pause_state,
+                                                              tmp_path,
+                                                              monkeypatch):
+    """The interrupt walked the registry before this job was in it, so nothing
+    else will ever continue it: stopped and left, its worker waits on it and the
+    run waits on the worker."""
+    pause_state["flag"].write_text("100\n", encoding="ascii")
+    abort = tmp_path / "abort"
+    abort.write_text("")
+    monkeypatch.setenv("ABORT_FLAG", str(abort))
+    pc.register_pausable_job(4242)
+    assert _signals(pause_state["kill_log"]) == [
+        ("STOP", ["4242"]), ("CONT", ["4242"]), ("TERM", ["4242"])]
+
+
+def test_an_unarmed_abort_flag_leaves_a_new_job_alone(pause_state,
+                                                      tmp_path, monkeypatch):
+    monkeypatch.setenv("ABORT_FLAG", str(tmp_path / "abort"))
+    pc.register_pausable_job(4242)
+    assert _signals(pause_state["kill_log"]) == []
+
+
 def test_unregister_pausable_job_drops_the_entry(pause_state):
     _register(pause_state["jobs"], 4242)
     pc.unregister_pausable_job(4242)

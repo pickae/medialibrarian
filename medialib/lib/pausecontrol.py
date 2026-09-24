@@ -13,6 +13,10 @@ The two orderings that keep the flag and the registry agreeing without a lock:
 ``pause_jobs`` writes the flag BEFORE it walks the registry, and a job registers
 itself BEFORE it looks at the flag. Whichever goes first, the other sees it - so a
 job that starts exactly while the run is paused stops itself instead of running on.
+The interrupt is the same pair again: the run records the abort BEFORE
+``kill_pausable_jobs`` walks the registry, and a job looks at the abort AFTER it
+has registered and stopped itself - so a job the walk never saw takes itself
+down rather than staying stopped for ever under a worker waiting on it.
 
 The state lives in the environment: ``PAUSE_JOBS`` a directory holding one empty
 file per running pausable job (named by its pid), ``PAUSE_FLAG`` a file that
@@ -308,6 +312,9 @@ def register_pausable_job(pid: int) -> None:
         pass
     if pause_requested():
         signal_job_tree("STOP", pid)
+    if abort_requested():
+        signal_job_tree("CONT", pid)
+        signal_job_tree("TERM", pid)
 
 
 def unregister_pausable_job(pid: int) -> None:

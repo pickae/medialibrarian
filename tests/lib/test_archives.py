@@ -706,7 +706,7 @@ class TestAnArchiveThatAsksForTooMuchIsNotUnpacked:
         self._dest(tmp_path, monkeypatch)
         archives.extract_archive("Book.rar", "out")
 
-        assert asked[0] == ["unrar", "vt", "-idq", "--", "Book.rar"]
+        assert asked[0] == ["unrar", "vt", "-idc", "--", "Book.rar"]
 
     def test_a_refused_archive_leaves_the_destination_empty(self, tmp_path,
                                                             monkeypatch):

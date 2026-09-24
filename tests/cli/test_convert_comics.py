@@ -169,6 +169,110 @@ class TestBookWorkers:
         assert cc.book_workers(threads) == 2
 
 
+class TestPagesPerBook:
+    """The run keeps the same number of pages converting whatever the number of
+    books: fewer books than workers each take a wider share of it."""
+
+    @pytest.mark.parametrize("books,expected", [
+        (1, 16), (2, 8), (3, 5), (4, 4), (100, 4),
+    ])
+    def test_the_slots_are_shared_by_the_books_there_are(self, books,
+                                                          expected):
+        assert cc.pages_per_book(32, 4, books) == expected
+
+    def test_never_fewer_than_a_full_pool_s_share(self):
+        assert cc.pages_per_book(4, 4, 1) == cc.IMAGES_PER_BOOK
+
+    def test_a_faster_speed_holds_fewer_cores_so_more_books_run(self):
+        """At -s 9 a page keeps 2.5 cores busy, not 4."""
+        assert cc.book_workers(32, 9) == 6
+        assert cc.book_workers(32, 9) > cc.book_workers(32, 4)
+
+
+# identify answers a page's first line as its size; compare calls two pages the
+# same picture when their second lines match. Either fails outright on a page
+# whose first line is "fail".
+_IDENTIFY = """
+page="${@: -1}"; page="${page%\\[0\\]}"
+size="$(head -n1 "$page")"
+[[ "$size" == fail ]] && exit 1
+printf "%s" "$size"
+"""
+_COMPARE = """
+printf "%s\n" "$*" >> "$(dirname "$0")/compare.log"
+a="${3%\\[0\\]}"; b="${4%\\[0\\]}"
+if [[ "$(sed -n 2p "$a")" == "$(sed -n 2p "$b")" ]]; then
+    printf "655 (0.01)" >&2
+else
+    printf "28277 (0.43)" >&2
+fi
+exit 1
+"""
+
+
+class TestDropAlternateFormats:
+    """A page the book holds twice, in two formats, is kept once - but only on
+    evidence that the two files are the same picture."""
+
+    @pytest.fixture
+    def pages(self, tmp_path, stub_bin):
+        _stub(str(stub_bin), "identify", _IDENTIFY)
+        _stub(str(stub_bin), "compare", _COMPARE)
+        book = tmp_path / "book"
+        book.mkdir()
+
+        def write(name, size="2560 3473", picture=None):
+            (book / name).write_text("%s\n%s\n" % (size, picture or name))
+
+        return book, write
+
+    def test_the_psd_beside_its_export_is_dropped(self, pages):
+        book, write = pages
+        write("014.jpg")
+        write("015.jpg", picture="p15")
+        write("015.psd", picture="p15")
+        write("016.jpg")
+        assert cc.drop_alternate_formats(str(book)) == ["015.psd"]
+        assert sorted(os.listdir(str(book))) == ["014.jpg", "015.jpg",
+                                                 "016.jpg"]
+
+    def test_the_copy_kept_is_in_the_book_s_own_format(self, pages):
+        book, write = pages
+        write("01.png")
+        write("02.png", picture="p2")
+        write("02.jpg", picture="p2")
+        assert cc.drop_alternate_formats(str(book)) == ["02.jpg"]
+
+    def test_two_different_pictures_under_one_name_are_both_kept(self, pages):
+        book, write = pages
+        write("015.jpg", picture="p15")
+        write("015.psd", picture="a different page")
+        assert cc.drop_alternate_formats(str(book)) == []
+        assert len(os.listdir(str(book))) == 2
+
+    def test_a_different_size_is_a_different_page_uncompared(self, pages,
+                                                             stub_bin):
+        book, write = pages
+        write("015.jpg", picture="p15")
+        write("015.psd", size="1280 1736", picture="p15")
+        assert cc.drop_alternate_formats(str(book)) == []
+        assert not (stub_bin / "compare.log").exists()
+
+    def test_a_page_that_cannot_be_measured_is_kept(self, pages):
+        book, write = pages
+        write("015.jpg", picture="p15")
+        write("015.psd", size="fail", picture="p15")
+        assert cc.drop_alternate_formats(str(book)) == []
+
+    def test_a_book_without_shared_names_is_not_compared(self, pages,
+                                                         stub_bin):
+        book, write = pages
+        write("01.jpg")
+        write("02.jpg")
+        assert cc.drop_alternate_formats(str(book)) == []
+        assert not (stub_bin / "compare.log").exists()
+
+
 class TestTheStarvedShare:
     """Whether a book is converted at all, which is decided once for the WHOLE
     book: a .cbz whose pages are half AVIF and half JPEG is worse than either."""
@@ -240,6 +344,7 @@ class TestTheChromaReachesTheConversion:
             or cc.subprocess.CompletedProcess(argv, 0))
         state = cc.Run(counters=cc.Counters(str(tmp_path)), script_dir="",
                        quality="45", chroma=chroma, speed_preset="4",
+                       pages_per_book=4,
                        max_res=2960, fuzz="10")
         state._convert_pages(str(tmp_path / "pages"), str(tmp_path / "avif"),
                              "book.cbz")

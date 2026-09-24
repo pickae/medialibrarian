@@ -129,7 +129,19 @@ OPT_LONG = ("h:help c:crop a:always r:reverse e:encoding u:chroma j:jobs "
 
 # One conversion spans about this many threads, so the pool is the cores divided
 # by it.
-THREADS_PER_CONVERSION = 4
+THREADS_PER_CONVERSION = 4.0
+# Except where AVIF's speed moves it, measured on a 2560x3473 scan with
+# ImageMagick 7.1.2 and libheif's aom: the fast end spends less of each page in
+# the encoder's threaded search, so each conversion holds fewer cores. Chroma
+# made no difference worth a column.
+AVIF_THREADS_BY_SPEED = {9: 2.5, 8: 3.5, 7: 3.5, 5: 4.5}
+
+
+def threads_per_conversion(image_format: str, speed: int) -> float:
+    """How many cores one conversion keeps busy at this -s."""
+    if image_format != "avif":
+        return THREADS_PER_CONVERSION
+    return AVIF_THREADS_BY_SPEED.get(speed, THREADS_PER_CONVERSION)
 
 # The width half of every -resize geometry. Only the height is ever capped (-m),
 # so the width is given a value no page can reach: "no limit" and "cap the height
@@ -598,7 +610,9 @@ def main(argv: list, program: str = "convert-images") -> int:
         "maxResCommand": "%dx%s>" % (UNBOUNDED_EDGE,
                                      result.values["maxRes"] or UNBOUNDED_EDGE),
     }
-    jobs = int(result.values["jobs"] or runlog.jobs_per_core(THREADS_PER_CONVERSION))
+    jobs = int(result.values["jobs"]
+               or max(1, int(runlog.cpu_count()
+                             / threads_per_conversion(image_format, speed))))
 
     runlog.settle_flock()
     tools = [imagemagick.CONVERT_SPEC] + (
