@@ -397,6 +397,7 @@ class TestRamDiskBase:
             os.path.join(str(tmp_path / "cache"), "ramScratchOverflow")
 
     def test_the_cache_home_when_there_is_no_xdg(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(ramscratch.hostos, "is_macos", lambda *_a: False)
         monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
         monkeypatch.setenv("HOME", str(tmp_path / "home"))
         monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
@@ -422,6 +423,7 @@ class TestRamDiskBase:
 
     def test_and_the_posix_one_is_the_xdg_default(self, monkeypatch, tmp_path):
         monkeypatch.setattr(ramscratch.os, "name", "posix")
+        monkeypatch.setattr(ramscratch.hostos, "is_macos", lambda *_a: False)
         monkeypatch.setenv("HOME", str(tmp_path / "home"))
         # expanduser reads USERPROFILE first on Windows, and this case is about
         # the branch rather than about the platform running it.

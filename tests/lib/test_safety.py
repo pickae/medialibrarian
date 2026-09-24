@@ -17,6 +17,7 @@ import sys
 import pytest
 
 from medialib.lib import safety
+from tests import conftest
 
 pytestmark = pytest.mark.pure
 
@@ -373,9 +374,7 @@ class TestLowerCasingExtensions:
         safety.lower_case_extensions(str(tmp_path / "x.MP3"))
         assert (tmp_path / "x.MP3").exists()
 
-    @pytest.mark.skipif(sys.platform == "win32",
-                        reason="needs a case-sensitive filesystem; on Windows "
-                               "x.MP3 and x.Mp3 are one file")
+    @conftest.needs_case_sensitive_fs
     def test_which_of_two_colliding_names_wins_does_not_depend_on_the_filesystem(
         self, tmp_path
     ):

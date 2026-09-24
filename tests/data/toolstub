@@ -226,7 +226,10 @@ fi
 # argument with every occurrence of the root removed.
 last="${@: -1}"
 if [[ -n "${TOOLSTUB_OUT:-}" && "$TOOLSTUB_OUT" == */* ]]; then
-	last="${last//"${TOOLSTUB_OUT%/*}"/}"
+	# Through a variable: bash 3.2 (macOS's /bin/bash) cannot parse the slash
+	# of a nested ${TOOLSTUB_OUT%/*} inside the pattern of a ${last//...}.
+	root="${TOOLSTUB_OUT%/*}"
+	last="${last//"$root"/}"
 fi
 if [[ $# -gt 0 && "$last" == *ok* ]]; then
 	exit 0
