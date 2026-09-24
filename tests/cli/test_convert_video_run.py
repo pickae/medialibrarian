@@ -1,4 +1,4 @@
-"""The per-file measurements ``convert_file`` takes before it encodes anything.
+"""The per-file measurements ``prepare`` takes before it encodes anything.
 
 The grain probe is measured HERE rather than once per run, because a clean file
 must not be given grain it never had; the bitrate test asks the same measurement
@@ -19,7 +19,7 @@ pytestmark = pytest.mark.fs
 
 @pytest.fixture
 def measured(monkeypatch, tmp_path):
-    """One file through ``convert_file``, stopping at the bitrate test's verdict.
+    """One file through ``prepare``, stopping at the bitrate test's verdict.
 
     A refused conversion returns before any encode, which leaves the two grain
     measurements as the whole of what the call did.
@@ -39,10 +39,12 @@ def measured(monkeypatch, tmp_path):
         monkeypatch.setattr(run_module, "log", lambda *a, **k: None)
 
         judged = []
+        measured_with = []
 
         def worthwhile(relative, width, height, enc_width, enc_height,
                        source_grain, settings):
             judged.append(source_grain)
+            measured_with.append(settings)
             return False
 
         monkeypatch.setattr(rules, "conversion_worthwhile", worthwhile)
@@ -56,25 +58,28 @@ def measured(monkeypatch, tmp_path):
         )
         os.makedirs(settings.output_dir, exist_ok=True)
         state = run_module.Run(settings)
-        status = state.convert_file("film.mkv")
-        return settings, judged, status
+        plan = state.prepare("film.mkv")
+        # The file's own settings are the ones measured; the run's are left
+        # alone, since the next file prepared would otherwise inherit them.
+        assert settings.grain_level == "0"
+        return measured_with[0], judged, plan
     return run
 
 
 def test_the_grain_probe_measures_the_source_it_is_given(measured):
-    settings, judged, status = measured(grain_probe_wanted=True)
-    assert status == 0
+    settings, judged, plan = measured(grain_probe_wanted=True)
+    assert plan is None
     assert settings.grain_level == "12"
     assert judged == ["12"]
 
 
 def test_an_unmeasurable_source_synthesises_none(measured):
-    settings, _judged, _status = measured(grain_probe_wanted=True, probe="0")
+    settings, _judged, _plan = measured(grain_probe_wanted=True, probe="0")
     assert settings.grain_level == "0"
 
 
 def test_the_bitrate_test_measures_the_source_on_its_own(measured):
-    settings, judged, _status = measured()
+    settings, judged, _plan = measured()
     # Nothing is being synthesised, so the run's own level is left alone and
     # only the verdict sees the measurement.
     assert judged == ["12"]
@@ -82,7 +87,7 @@ def test_the_bitrate_test_measures_the_source_on_its_own(measured):
 
 
 def test_an_unmeasurable_source_is_judged_clean_by_the_bitrate_test(measured):
-    _settings, judged, _status = measured(probe="0")
+    _settings, judged, _plan = measured(probe="0")
     assert judged == ["0"]
 
 

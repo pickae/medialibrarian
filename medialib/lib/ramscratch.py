@@ -27,6 +27,7 @@ import re
 import shutil
 import stat as stat_module
 import tempfile
+import threading
 
 from medialib import commands
 from medialib.lib import hostos, safety
@@ -69,6 +70,9 @@ class _State:
 
 
 _STATE = _State()
+
+# A run can register and release scratch from more than one thread at once.
+_CLEANUP_LOCK = threading.Lock()
 
 
 def reset_state(script=""):
@@ -437,7 +441,8 @@ def _refuses(path, state=_STATE) -> bool:
 
 def add_exit_cleanup(paths, state=_STATE):
     """Release these when this process exits, however it exits."""
-    state.cleanup.extend(_paths(paths))
+    with _CLEANUP_LOCK:
+        state.cleanup.extend(_paths(paths))
 
 
 def _grant_owner_access(path, is_dir):
@@ -537,5 +542,6 @@ def release_exit_cleanup(targets, state=_STATE):
         if target and os.path.exists(target):
             _release(target)
     gone = set(targets)
-    state.cleanup = [p for p in state.cleanup if p not in gone]
+    with _CLEANUP_LOCK:
+        state.cleanup = [p for p in state.cleanup if p not in gone]
     return 0

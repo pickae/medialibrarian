@@ -79,7 +79,8 @@ def chunked(request, tmp_path_factory, monkeypatch_module):
     directory = segments.chunk_dir_for(settings.chunk_root, "clip.mkv")
     os.makedirs(directory, exist_ok=True)
     duration = run_module._media_duration(str(source))
-    run_module.Run(settings)._encode("clip.mkv", directory, duration, 3, "")
+    run_module.Run(settings)._encode(settings, "clip.mkv", directory, duration,
+                                     run_module.chunk_bounds(duration, 3), "")
     return request.param, source, directory
 
 
