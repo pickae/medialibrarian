@@ -796,10 +796,13 @@ class Run:
 
         self.counters.progress("Cover to AVIF (%s): %s"
                                % (formatting.fmt_bytes(size), relative))
+        # -depth goes after the source. Before it, it is a read setting, and the
+        # AVIF keeps the source's own depth: 8-bit from an 8-bit JPEG, and
+        # 12-bit (profile 2, which many decoders cannot play) from a 16-bit PNG.
         argv = imagemagick.convert_argv(
-            ["-format", "avif", "-depth", COVER_AVIF_DEPTH,
-             "-quality", COVER_AVIF_QUALITY,
-             "-define", "heic:speed=" + COVER_AVIF_SPEED, source, output])
+            ["-format", "avif", "-quality", COVER_AVIF_QUALITY,
+             "-define", "heic:speed=" + COVER_AVIF_SPEED, source,
+             "-depth", COVER_AVIF_DEPTH, output])
         # Counted by what the image ENDED UP as, not by what was attempted: the
         # fall-back copy is a copy, and a tally that called it an AVIF would say
         # the library holds art it does not.
