@@ -312,8 +312,11 @@ def _rar_members(file: str) -> list:
     The technical listing is the only one that names a member's TYPE, which is
     the whole question here. A target is never printed, so a link is a link this
     cannot check - and is refused on that ground.
+
+    ``-idc`` and not ``-idq``: unrar 7 counts the listing itself as the noise
+    ``-idq`` silences, and answers an empty page with status 0.
     """
-    text = _capture(["unrar", "vt", "-idq", "--", file])
+    text = _capture(["unrar", "vt", "-idc", "--", file])
     members = []
     name = ""
     for line in text.split("\n"):
