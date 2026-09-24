@@ -224,3 +224,37 @@ class TestCountingTheStarvedPages:
             lambda path: answers[os.path.basename(path)])
         assert cc.starved_pages(str(tmp_path)) == (1, 2)
 
+
+
+class TestTheChromaReachesTheConversion:
+    """-u is convert-images' to act on; this command settles the default -
+    4:4:4, which convert-images does not have - and hands the value on to every
+    book."""
+
+    @staticmethod
+    def _argv(tmp_path, monkeypatch, chroma):
+        calls = []
+        monkeypatch.setattr(
+            cc.commands, "run_command",
+            lambda name, argv, **kwargs: calls.append((name, argv))
+            or cc.subprocess.CompletedProcess(argv, 0))
+        state = cc.Run(counters=cc.Counters(str(tmp_path)), script_dir="",
+                       quality="45", chroma=chroma, speed_preset="4",
+                       max_res=2960, fuzz="10")
+        state._convert_pages(str(tmp_path / "pages"), str(tmp_path / "avif"),
+                             "book.cbz")
+        [(name, argv)] = calls
+        assert name == "convert-images"
+        return argv
+
+    @pytest.mark.parametrize("chroma", ["420", "444"])
+    def test_the_chroma_is_passed_on(self, tmp_path, monkeypatch, chroma):
+        argv = self._argv(tmp_path, monkeypatch, chroma)
+        assert argv[argv.index("-u") + 1] == chroma
+
+    def test_the_value_is_checked_before_any_book(self):
+        """convert-images would refuse it too, but once per book and deep
+        into the run."""
+        with pytest.raises(cc.clioptions.UsageError):
+            cc.clioptions.parse(cc.spec("convert-comics"),
+                                ["-u", "422", "in", "out"])
