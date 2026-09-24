@@ -45,6 +45,8 @@ _TOOL_NOTES = {
     "mediainfo": "reading HDR/Dolby Vision stream properties|apt install mediainfo",
     "dovi_tool": "Dolby Vision RPU extraction and conversion"
                  "|https://github.com/quietvoid/dovi_tool (release binary)",
+    "hdr10plus_tool": "HDR10+ metadata extraction and injection"
+                      "|https://github.com/quietvoid/hdr10plus_tool (release binary)",
     "jq": "reading the JSON that ffprobe and mkvmerge print|apt install jq",
     "curl": "the TheMovieDB lookups|apt install curl",
     "rsync": "copying side-car files across trees|apt install rsync",
@@ -106,6 +108,7 @@ _MACOS_HINTS = {
     "mkvextract": "brew install mkvtoolnix",
     "mediainfo": "brew install mediainfo",
     "dovi_tool": "brew install dovi_tool",
+    "hdr10plus_tool": "brew install hdr10plus_tool",
     "jq": "brew install jq",
     "curl": "ships with macOS",
     # The bundled rsync is 2.6.9 (or openrsync on 14+), and ingest-music reads

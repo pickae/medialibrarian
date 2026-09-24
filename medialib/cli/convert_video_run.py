@@ -401,6 +401,134 @@ def dolby_vision_mode_for(relative: str, profile: str, enhancement: str,
     return "0"
 
 
+# --- the HDR10+ round trip ----------------------------------------------------
+
+def prepare_hdr10plus(relative: str, source: str, directory: str, settings,
+                      reframed: bool) -> str:
+    """The source's HDR10+ metadata, read out to a JSON in <directory> so it can
+    be written back into the encode, or "" for a file that does not keep it.
+
+    No encoder here carries HDR10+ through an encode, so it is kept AROUND the
+    encode instead, which works the same with every ffmpeg the run can settle
+    on. Read from the ORIGINAL even when the video is encoded from a Dolby
+    Vision intermediate: the profile 8.1 conversion drops HDR10+ from the stream
+    it writes, and the original still has every frame of it. ``reframed`` is
+    true when the encode is cropped or scaled - which the metadata survives
+    unless it describes processing windows placed in the frame it was graded
+    in.
+
+    Every reason not to keep it is said, and none of them fails the file: what
+    comes out instead is the plain HDR10 the source carries alongside.
+    """
+    from medialib.lib import hdr10plus
+    if not hdr10plus.stream_has_hdr10plus(source):
+        return ""
+    codec = codecs.encoder_codec(settings.encoder)
+    if codec != "hevc":
+        log("HDR10+: the source carries it, but %s writes %s, which it cannot "
+            "be written back into yet - keeping HDR10 only: %s"
+            % (settings.encoder, codec.upper() or "a codec", relative))
+        return ""
+    source_codec = rules._probe(["ffprobe", "-v", "error", "-select_streams",
+                                 "v:0", "-show_entries", "stream=codec_name",
+                                 "-of", "default=nk=1:nw=1", source]).strip()
+    if source_codec != "hevc":
+        log("HDR10+: the source carries it in %s, and it can only be read out "
+            "of HEVC - keeping HDR10 only: %s"
+            % (source_codec.upper() or "an unknown codec", relative))
+        return ""
+    missing = [name for name in ("hdr10plus_tool", "mkvmerge")
+               if not _has_tool(name)]
+    if missing:
+        log("WARNING: HDR10+: the source carries it and %s could keep it, but "
+            "that needs %s - install it to keep HDR10+. Keeping HDR10 only: %s"
+            % (settings.encoder, " and ".join(
+                "mkvmerge (mkvtoolnix)" if name == "mkvmerge" else name
+                for name in missing), relative))
+        return ""
+    if not rules.video_frame_rate(source):
+        log("HDR10+: ffprobe reports no usable frame rate, and the stream it is "
+            "written back into has to be given one - keeping HDR10 only: %s"
+            % relative)
+        return ""
+
+    metadata = os.path.join(directory, "hdr10plus.json")
+    log("HDR10+: reading the source's dynamic metadata, to write it back into "
+        "the encode: %s" % relative)
+    if hdr10plus.extract_metadata(source, metadata, log=log) != 0:
+        log("HDR10+: the metadata could not be read out of the source, keeping "
+            "HDR10 only: %s" % relative)
+        return ""
+    if reframed and hdr10plus.metadata_windows(metadata) > 1:
+        _remove(metadata)
+        log("HDR10+: the metadata places processing windows in the frame it "
+            "was graded in, and this encode is cropped or scaled - keeping "
+            "HDR10 only: %s" % relative)
+        return ""
+    return metadata
+
+
+def restore_hdr10plus(relative: str, directory: str, metadata: str,
+                      settings) -> bool:
+    """The source's HDR10+ <metadata> written into the finished video-only
+    intermediate, in place, without re-encoding it. True when the intermediate
+    now carries it.
+
+    The rewritten video is checked before it replaces anything - as long as
+    the encode, and signalling HDR10+ - so every failure leaves the plain HDR10
+    encode exactly as it was.
+    """
+    from medialib.lib import hdr10plus
+    video = os.path.join(directory, "video.mkv")
+    source = os.path.join(settings.input_dir, relative)
+
+    # The raw stream the metadata is written into, and the Matroska mkvmerge
+    # writes around it, are each about the size of the encode, and the first is
+    # gone before the second is finished - so twice the encode is an upper
+    # bound.
+    try:
+        need = str(os.path.getsize(video) * 2)
+    except OSError:
+        need = ""
+    scratch, _on_disk, status = ramscratch.ram_scratch_dir_for(
+        need, "convertVideoHdr10plus", settings.output_dir)
+    if status != 0:
+        log("HDR10+: no scratch directory could be created, keeping HDR10 "
+            "only: %s" % relative)
+        return False
+    ramscratch.add_exit_cleanup([scratch])
+
+    statusline.clear_status()
+    log("HDR10+: writing the source's dynamic metadata back into the encode "
+        "(the video is not re-encoded): %s" % relative)
+    injected = os.path.join(scratch, "video.mkv")
+    reason = ""
+    if hdr10plus.inject_metadata(video, metadata, injected,
+                                 rules.video_frame_rate(source), scratch,
+                                 log=log) != 0:
+        reason = "it could not be written into the stream"
+    elif _media_duration(injected) < _media_duration(video) - 1:
+        reason = "the rewritten video came out shorter than the encode"
+    elif not hdr10plus.stream_has_hdr10plus(injected):
+        reason = "the rewritten video does not signal it"
+    else:
+        # Moved in beside the encode first and only then renamed over it, so
+        # there is no moment at which neither is there.
+        staged = video + ".hdr10plus"
+        try:
+            shutil.move(injected, staged)
+            os.replace(staged, video)
+        except OSError as error:
+            _remove(staged)
+            reason = "the rewritten video could not replace the encode (%s)" \
+                % error
+    ramscratch.release_exit_cleanup([scratch])
+    if reason:
+        log("HDR10+: %s, keeping HDR10 only: %s" % (reason, relative))
+        return False
+    return True
+
+
 def svt_chatter(line: str) -> bool:
     """True for a line libsvtav1 wrote about itself rather than about a failure -
     its banner, the configuration it resolved and its warnings. Its errors are left
@@ -697,6 +825,9 @@ class Run:
         self.failed = 0
         self.frames = 0
         self.video_seconds = 0.0
+        # Per file: the source's HDR10+ metadata read out for the encode to be
+        # given back, or "" when this file does not keep it.
+        self.hdr10plus_metadata = ""
 
     def convert_file(self, relative: str) -> int:
         """ONE video: resume-skip an up-to-date output, ask -t whether it is worth
@@ -784,6 +915,13 @@ class Run:
                                                    settings.max_resolution)
         size_text = self._size_text(width, height, crop_width, crop_height,
                                     enc_width, enc_height)
+
+        # After the crop, because whether the metadata survives it depends on
+        # what the frame it describes turns into.
+        self.hdr10plus_metadata = prepare_hdr10plus(
+            relative, source, directory, settings,
+            reframed=bool(settings.crop) or (str(enc_width), str(enc_height))
+            != (str(width), str(height)))
 
         # A hardware encode uses one chunk per NVENC engine so the GPU's engines
         # all stay busy; a software encode uses the resolution-driven count that
@@ -971,7 +1109,7 @@ class Run:
         only now: the output folder and the output name are both things the encode
         can have outlived.
         """
-        from medialib.lib import dolbyvision
+        from medialib.lib import dolbyvision, hdr10plus
         settings = self.settings
 
         if not rules.video_intermediate_complete(directory, duration):
@@ -985,6 +1123,11 @@ class Run:
                              settings)
             shutil.rmtree(directory, ignore_errors=True)
             return 1
+
+        # Written into the video before the mux rather than into the finished
+        # file, so a failure here costs nothing but the HDR10+ itself.
+        kept_hdr10plus = bool(self.hdr10plus_metadata) and restore_hdr10plus(
+            relative, directory, self.hdr10plus_metadata, settings)
 
         output = output_path_for(relative, settings, replacing)
         if mux_final(relative, directory, settings, output) != 0:
@@ -1026,6 +1169,17 @@ class Run:
             else:
                 log("WARNING: Dolby Vision was encoded but the output does not "
                     "signal it: " + relative)
+
+        # The same check for HDR10+, whose messages the mux copies along with
+        # the frames they sit in front of.
+        if kept_hdr10plus:
+            if hdr10plus.stream_has_hdr10plus(output):
+                log("HDR10+ preserved%s: %s"
+                    % (" alongside Dolby Vision"
+                       if settings.dolby_vision_mode == "1" else "", relative))
+            else:
+                log("WARNING: HDR10+ was written into the encode but the "
+                    "output does not signal it: " + relative)
 
         # Whatever produced the record, the LEVEL in it has to describe the video
         # that is actually here: a level that overstates the file is refused by a
@@ -1510,6 +1664,19 @@ def _summarise(settings, video_args: str, grain: str) -> None:
     else:
         log("Dolby Vision: dropped, %s cannot code an RPU (HDR10 signalling is "
             "still preserved)." % settings.encoder)
+
+    if codecs.encoder_codec(settings.encoder) != "hevc":
+        log("HDR10+: dropped, it cannot be written back into %s output yet "
+            "(HDR10 signalling is still preserved)."
+            % (codecs.encoder_codec(settings.encoder).upper()
+               or settings.encoder))
+    elif _has_tool("hdr10plus_tool") and _has_tool("mkvmerge"):
+        log("HDR10+: kept where the source carries it - read out of the source "
+            "before the encode and written back into it after (no video "
+            "re-encode), alongside Dolby Vision where that is kept too.")
+    else:
+        log("HDR10+: a source carrying it is encoded as plain HDR10 - keeping "
+            "it needs hdr10plus_tool and mkvmerge, and one of them is missing.")
 
     if settings.audio_profile == "passthrough":
         log("Audio profile: passthrough (source audio copied through, not "
