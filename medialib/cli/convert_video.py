@@ -422,10 +422,10 @@ def equal_boundaries(duration, count: int) -> list:
     """``equalBoundaries``: the count-1 interior cut points that split a file into
     equal chunks, and nothing at all for fewer than two.
 
-    Equal-length because the chunks re-join with a stream copy and every encoder
-    opens a chunk with a keyframe, so the seam is exact at any boundary: there is
-    nothing to gain from nudging cuts to quiet moments, which only ever mattered
-    for an audio seam.
+    Equal-length is where the cuts start from, not where they end up: the seam
+    is exact at any boundary, because every chunk opens with a keyframe, but a
+    keyframe mid-shot is wasted, so each one is then moved onto the nearest
+    change of picture (`medialib/lib/scenecuts.py`).
     """
     from medialib.lib import formatting
     total = formatting.awk_number(duration)
