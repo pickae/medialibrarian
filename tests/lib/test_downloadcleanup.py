@@ -11,6 +11,7 @@ import pytest
 
 from medialib.lib import downloadcleanup
 from medialib.lib.safety import SkipLog
+from tests import conftest
 
 pytestmark = pytest.mark.stubbed
 
@@ -89,6 +90,7 @@ class TestCleanDownloadedFile:
         assert (folder / "20260601 Older.opus").is_file()
         assert (folder / "20260601 Older.jpg").is_file()
 
+    @conftest.needs_case_sensitive_fs
     def test_uppercase_extension_is_lowercased_first(self, tmp_path):
         folder = tmp_path
         _write(folder, "Shouty.OPUS")
@@ -103,6 +105,7 @@ class TestCleanDownloadedFile:
         assert not (folder / "Shouty.jpg").exists()
         assert (sidecars, remuxed) == (1, False)
 
+    @conftest.needs_case_sensitive_fs
     def test_lowercasing_collision_keeps_the_uppercase_and_records_a_skip(
             self, tmp_path):
         folder = tmp_path

@@ -19,7 +19,7 @@ import shutil
 
 import pytest
 
-from tests import blackbox
+from tests import blackbox, conftest
 
 pytestmark = pytest.mark.stubbed
 
@@ -124,8 +124,9 @@ def music(sandbox, tmp_path):
     """One release holding one of everything the phases count."""
     for tool in _TOOLS:
         if shutil.which(tool) is None:
-            pytest.fail("the host has no %s: the command needs it to report what "
-                        "is asserted here" % tool)
+            conftest.missing_host_tool(
+                "the host has no %s: the command needs it to report what is "
+                "asserted here" % tool)
     sandbox.with_tool("ffprobe", _FFPROBE)
     sandbox.with_tool("ffmpeg", _FFMPEG)
     sandbox.with_tool("convert", _CONVERT)

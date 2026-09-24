@@ -16,9 +16,9 @@ Heavy intermediate work is kept in RAM (`/dev/shm` / tmpfs) wherever possible, s
 only final outputs are written back to disk. Each run gets a scratch directory of
 its own in there, so several can run at once without sharing one.
 
-> **Platform:** these target **Linux**. **macOS** is supported on a
-> best-effort basis — everything is written to work there. But no macOS machine
-> has run it yet, so treat it as untested rather than as broken (see
+> **Platform:** these target **Linux**. **macOS** support is **aspirational**:
+> everything is written to work there, but no macOS machine has run it yet, so
+> treat it as untested rather than as broken (see
 > [Running on a Mac](#running-on-a-mac)). On a Windows machine **WSL2** is the
 > way to run them. Native Windows is **experimental for now**: the tool-free
 > cases import and run there, but the commands that drive the media tools and
@@ -116,7 +116,8 @@ transcription together, and everything else runs normally.
 ### Running on a Mac
 
 Everything here is written to work on macOS and nothing is written *only* for
-it. This is best-effort — report anything that does not hold.
+it. This is aspirational — no Mac has run it — so report anything that does
+not hold.
 
 Three things are **not** solved and will bite:
 

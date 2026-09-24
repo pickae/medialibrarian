@@ -30,6 +30,7 @@ ran is the suite the repository holds.
 import locale
 import os
 import pathlib
+import sys
 
 import pytest
 
@@ -104,6 +105,25 @@ def _pin_locale() -> str | None:
 
 
 PINNED_LOCALE = _pin_locale()
+
+# --- macOS -------------------------------------------------------------------
+# macOS support is aspirational: nobody has a Mac to run it on, so the CI job
+# there reports rather than gates. What a Mac host cannot do - a tool the case
+# links that it does not ship, a filesystem that folds case - is skipped there
+# rather than failed, so the job's red is left for what is actually wrong.
+ON_MACOS = sys.platform == "darwin"
+
+needs_case_sensitive_fs = pytest.mark.skipif(
+    ON_MACOS or sys.platform == "win32",
+    reason="needs a case-sensitive filesystem; macOS and Windows fold case")
+
+
+def missing_host_tool(message: str) -> None:
+    """Fail on a missing host tool - the Linux job installs every one - but
+    skip on a Mac, which does not ship them all."""
+    if ON_MACOS:
+        pytest.skip(message)
+    pytest.fail(message)
 
 # Every environment variable that names somewhere to WORK or somewhere to record
 # state. A test that leaves one of these inherited is asserting about the host.
@@ -260,8 +280,8 @@ def sandbox(tmp_path):
             for name in names:
                 found = shutil.which(name)
                 if found is None:
-                    pytest.fail("the host has no %s, so this PATH cannot be "
-                                "built" % name)
+                    missing_host_tool("the host has no %s, so this PATH "
+                                      "cannot be built" % name)
                 (bin_dir / name).symlink_to(found)
             return self
 

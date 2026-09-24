@@ -181,6 +181,11 @@ rather than dropping them, so `normalize_title` folds in Python (one case holds
 the two paths to the same answers); and the codepoints that make `iconv` *give
 up*, which two cases ask this host about before asserting on.
 
+What a Mac cannot do *skips* there rather than fails: a case that links a host
+tool macOS does not ship (`flock`, `timeout`), and the handful that need a
+case-sensitive filesystem (`conftest.needs_case_sensitive_fs`). On Linux a
+missing tool still fails, because that job installs every one.
+
 It has no `/proc` either, and the package never assumed one — `pausecontrol`
 reads it where there is one and falls back to `kill -0` and `pgrep -P`. Five
 *cases* did assume one, and they are the reason to say so here rather than treat

@@ -99,7 +99,7 @@ jobs:
       # before `-n` has finished starting its workers.
       - run: python -m pytest tests/lib/test_ramscratch.py
 
-  # macOS, which is a supported platform with nobody's machine behind it. The
+  # macOS, whose support is aspirational: nobody's machine is behind it. The
   # job is the whole default suite, not a tier of it: a Mac IS a POSIX host, so
   # the stubbed tier's bash stubs and symlinks work there, and what is actually
   # being asked is whether the BSD-flavoured tooling underneath answers the same

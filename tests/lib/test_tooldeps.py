@@ -16,6 +16,16 @@ from medialib.lib import tooldeps
 pytestmark = pytest.mark.fs
 
 
+@pytest.fixture(autouse=True)
+def linux_host(monkeypatch):
+    """Answer for Linux unless a case names a platform, so the apt wording
+    pinned below holds on a Mac too; the macOS cases pass "darwin" or patch
+    is_macos themselves."""
+    is_macos = tooldeps.hostos.is_macos
+    monkeypatch.setattr(tooldeps.hostos, "is_macos",
+                        lambda platform=None: is_macos(platform or "linux"))
+
+
 @pytest.fixture
 def pathdir(tmp_path, monkeypatch):
     """A scratch directory on PATH; the test builds whatever the case needs in

@@ -26,6 +26,7 @@ from types import SimpleNamespace
 import pytest
 
 from medialib.lib import archives
+from tests import conftest
 
 pytestmark = pytest.mark.fs
 
@@ -199,6 +200,7 @@ class TestShadowedByFolder:
         (tmp_path / "Some Book.zip").write_bytes(b"")
         assert not archives.archive_shadowed_by_folder("Some Book.zip")
 
+    @conftest.needs_case_sensitive_fs
     def test_compared_as_spelled(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         # The extractors take the name from the archive, so the unpacked copy
