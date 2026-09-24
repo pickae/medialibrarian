@@ -33,6 +33,7 @@ from medialib.lib import (
     resolutions,
     runlog,
     safety,
+    scenecuts,
     segments,
     statusline,
     tooldeps,
@@ -845,8 +846,10 @@ class Plan:
         self.duration = 0.0
         self.replacing = False
         self.size_text = ""
-        # The chunk boundaries, start to end, or [] for a file encoded whole.
+        # The chunk boundaries, start to end, or [] for a file encoded whole,
+        # and what each interior one was moved onto.
         self.bounds: list = []
+        self.cut_kinds: list = []
         # The scratch holding a Dolby Vision intermediate, and whether this file
         # holds the run's one slot for it.
         self.scratch = ""
@@ -991,6 +994,14 @@ class Run:
                  else rules.chunk_count_for(enc_width, enc_height,
                                             settings.cores))
         plan.bounds = chunk_bounds(duration, count)
+        # Last, because it reads the video the encode will: the Dolby Vision
+        # intermediate where there is one.
+        if plan.bounds:
+            pausecontrol.wait_while_paused()
+            plan.bounds, plan.cut_kinds = scenecuts.aligned_bounds(
+                rules.video_source_for(relative, settings.input_dir,
+                                       settings.dolby_vision_source),
+                plan.bounds, settings.decode_accel)
         return plan
 
     def convert(self, plan: Plan) -> int:
@@ -1021,7 +1032,7 @@ class Run:
         audio.start()
 
         self._encode(settings, relative, directory, plan.duration, plan.bounds,
-                     plan.size_text)
+                     plan.size_text, scenecuts.describe(plan.cut_kinds))
         frames, micros = rules.sum_encode_progress(directory)
 
         # The intermediate has been read for the last time - everything left reads
@@ -1150,7 +1161,8 @@ class Run:
                                   settings.decode_accel)
 
     def _encode(self, settings, relative: str, directory: str,
-                duration: float, bounds: list, size_text: str) -> int:
+                duration: float, bounds: list, size_text: str,
+                cuts: str = "") -> int:
         """The video pass, whole or cut at <bounds>, with the status row pinned
         under it.
 
@@ -1174,7 +1186,8 @@ class Run:
             return 0
 
         total = len(bounds) - 1
-        log("Chunking %s (%s) into %d parts..." % (relative, size_text, total))
+        log("Chunking %s (%s) into %d parts%s..."
+            % (relative, size_text, total, " (cut %s)" % cuts if cuts else ""))
         tokens = []
         for index in range(total):
             start, end = bounds[index], bounds[index + 1]
