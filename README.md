@@ -980,6 +980,14 @@ hold one large image per page — into a tree of `.cbz` archives of AVIF pages.
   one image covering (nearly) the whole page. A magazine, a manual or a text
   e-book therefore does not get rasterised page by page into a large, unreadable
   `.cbz`: it is reported with the numbers it was judged on and left alone.
+- **Pages keep their colour at full resolution** (4:4:4). The usual 4:2:0 stores
+  colour at a quarter of the picture's resolution, which is invisible on a photo
+  but puts a coloured fringe on thin inked lines and lettering. 4:4:4 costs
+  about a quarter more per page, which the slower default speed (`-s 4`) and
+  lower default quality (`-q 45`) pay back, so books come out about the size
+  they did at 4:2:0. `-u 420` goes back to 4:2:0 for smaller books. 4:4:4 is
+  AV1's High profile: software decoders read it, but some hardware decoders in
+  phones and tablets do not, so check your reader app.
 - Each finished folder of pages is zipped back into one **stored** (level 0 —
   AVIF does not compress further) `.cbz` in its mirrored parent folder.
 - Pages and AVIFs are intermediate and never leave RAM: the `.cbz` files are the
@@ -1023,6 +1031,10 @@ is lost by pointing a run at one.
   its most forgiving. An image nothing could measure is converted, not skipped.
 - `-r` never asks: converting back to JPEG is about what can open the file, and a
   source too small to improve is exactly as unopenable as a large one.
+- `-u 444` writes AVIF with colour at full resolution instead of a quarter of
+  it: sharper coloured lines and lettering, files about a quarter larger. AVIF
+  only, because WebP has no lossy 4:4:4 and JPEG XL does not subsample colour
+  anyway. [`convert-comics`](#convert-comics) asks for it by default.
 
 ## Names and folder structure
 
