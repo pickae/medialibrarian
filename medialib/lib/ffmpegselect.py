@@ -30,6 +30,7 @@ __all__ = [
     "select_ffmpeg",
     "selected_ffmpeg",
     "selected_full",
+    "selected_preferred",
     "report_ffmpeg_selection",
     "ffmpeg_version",
 ]
@@ -51,6 +52,9 @@ class _State:
         self.selected = ""
         self.full = 0
         self.pinned = 0
+        # 1 when the chosen build also satisfied the caller's PREFERENCE -
+        # which is only ever asked of a build that passed the probe.
+        self.preferred = 0
 
 
 _STATE = _State()
@@ -60,6 +64,7 @@ def reset_state():
     _STATE.selected = ""
     _STATE.full = 0
     _STATE.pinned = 0
+    _STATE.preferred = 0
 
 
 def _executable(path: str) -> bool:
@@ -126,7 +131,7 @@ def ffmpeg_candidates(path: str | None = None, home: str | None = None) -> list[
     return seen
 
 
-def select_ffmpeg(probe=None) -> int:
+def select_ffmpeg(probe=None, prefer=None) -> int:
     """Settle on the build this run uses, and make every later ffmpeg and
     ffprobe call reach it.
 
@@ -140,6 +145,15 @@ def select_ffmpeg(probe=None) -> int:
     exactly like one that applies everything, so the caller that cares asks
     the encoder rather than the version number.
 
+    ``prefer`` is a second callable of the same shape, for a build that is
+    better than merely able: the candidates are walked once for one that
+    satisfies the probe AND the preference, and only when none does is the
+    walk above taken as it is, so a machine without a preferred build settles
+    exactly where it would have without one. A preference never wins over the
+    probe - a preferred build that cannot do the run's work is not offered -
+    and never over ``ffmpegOverride``, which is only asked whether it happens
+    to satisfy it.
+
     The chosen pair is reached through a scratch directory holding just
     those two names, at the front of PATH, skipped entirely when the winner
     is already what PATH resolves to. Raises
@@ -152,11 +166,14 @@ def select_ffmpeg(probe=None) -> int:
     if _STATE.selected:
         if probe is not None:
             _STATE.full = 1 if probe(_STATE.selected) else 0
+        if prefer is not None:
+            _STATE.preferred = 1 if _STATE.full and prefer(_STATE.selected) else 0
         return 0
 
     _STATE.selected = ""
     _STATE.full = 0
     _STATE.pinned = 0
+    _STATE.preferred = 0
 
     override = os.environ.get("ffmpegOverride", "")
     if override:
@@ -175,12 +192,33 @@ def select_ffmpeg(probe=None) -> int:
         _STATE.selected = override
         if probe is None or probe(override):
             _STATE.full = 1
+            if prefer is not None and prefer(override):
+                _STATE.preferred = 1
     else:
+        candidates = ffmpeg_candidates()
+        # Each candidate's probe answer is kept, so the second walk costs no
+        # encode the first one already paid for.
+        fits = {}
+
+        def fit(candidate):
+            if candidate not in fits:
+                fits[candidate] = probe is None or bool(probe(candidate))
+            return fits[candidate]
+
+        if prefer is not None:
+            for candidate in candidates:
+                if fit(candidate) and prefer(candidate):
+                    _STATE.selected = candidate
+                    _STATE.full = 1
+                    _STATE.preferred = 1
+                    break
         first_working = ""
-        for candidate in ffmpeg_candidates():
+        for candidate in candidates:
+            if _STATE.selected:
+                break
             if not first_working:
                 first_working = candidate
-            if probe is None or probe(candidate):
+            if fit(candidate):
                 _STATE.selected = candidate
                 _STATE.full = 1
                 break
@@ -217,6 +255,12 @@ def selected_full(state=_STATE) -> int:
     for.
     """
     return state.full
+
+
+def selected_preferred(state=_STATE) -> int:
+    """1 when the chosen build satisfied the caller's preference as well as
+    its probe, and 0 when there was no preference to satisfy."""
+    return state.preferred
 
 
 def _pin_on_path(selected: str, path: str) -> bool:

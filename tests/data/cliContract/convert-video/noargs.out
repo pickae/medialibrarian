@@ -23,8 +23,11 @@ Options:
                   chunking one file at a time, not from encoding files in
                   parallel, so this scales the chunk count up or down.
     -p, --profile <profile>
-                  Video encoding profile to use (default: av1Grain). Selecting a
+                  Video encoding profile to use (default: av1BluRay). Selecting a
                   *Nvenc profile (hevcNvenc, av1Nvenc) encodes on the GPU.
+                  With an SVT-AV1-HDR ffmpeg, av1Grain KEEPS the source's own
+                  grain (SVT-AV1-HDR's film grain tune) instead of synthesising
+                  it; without one it synthesises it like av1BluRay.
     -a, --audio-profile <profile>
                   Audio encoding profile to use (default: opus).
     -b, --audio-bitrate <kbit/s>
@@ -68,7 +71,9 @@ Options:
     -g, --grain <level|0|off>
                   How much film grain to synthesise, in libsvtav1's 0-50 scale.
                   Left out, every grain-synthesising profile MEASURES each source
-                  and synthesises what it measured (av1Animation synthesises none).
+                  and synthesises what it measured (av1Animation synthesises none,
+                  and av1Grain on an SVT-AV1-HDR ffmpeg keeps the real grain - any
+                  -g puts it back on synthesis).
                   A number replaces that outright for every file - it is capped by
                   nothing, so 35 means 35. A level of 0 asks for that same per-source
                   probe explicitly, on a profile that would not otherwise run it;
@@ -116,6 +121,8 @@ Dependencies:
     and a too-old libsvtav1 DROPS an unknown parameter silently rather than
     failing. So a newer build installed beside the packaged one is looked for and
     preferred when it accepts more: PATH first, then $HOME/.local/bin,
-    /opt/homebrew/bin, /usr/local/bin and /opt/ffmpeg/bin. Set ffmpegOverride to
-    name one outright.
+    /opt/homebrew/bin, /usr/local/bin and /opt/ffmpeg/bin. Of the builds that
+    accept everything, one whose libsvtav1 is SVT-AV1-HDR is preferred; without
+    one the choice is the same as it always was. Set ffmpegOverride to name one
+    outright.
     The startup summary says which build was used and what it could not do.

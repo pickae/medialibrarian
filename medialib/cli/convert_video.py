@@ -49,8 +49,11 @@ j | <cores> | Logical-core count to size the per-file chunking for
                   (default: the number of CPU cores). Parallelism comes from
                   chunking one file at a time, not from encoding files in
                   parallel, so this scales the chunk count up or down.
-p | <profile> | Video encoding profile to use (default: av1Grain). Selecting a
+p | <profile> | Video encoding profile to use (default: av1BluRay). Selecting a
                   *Nvenc profile (hevcNvenc, av1Nvenc) encodes on the GPU.
+                  With an SVT-AV1-HDR ffmpeg, av1Grain KEEPS the source's own
+                  grain (SVT-AV1-HDR's film grain tune) instead of synthesising
+                  it; without one it synthesises it like av1BluRay.
 a | <profile> | Audio encoding profile to use (default: opus).
 b | <kbit/s> | Opus bitrate applied to every audio track, overriding the
                   per-channel table. Implies -a opusCustom when no audio profile
@@ -87,7 +90,9 @@ f | <1\|2> | Fast-decode level to encode with, trading a little compression
                   software profiles - x265 and the *Nvenc ones have no such setting.
 g | <level\|0\|off> | How much film grain to synthesise, in libsvtav1's 0-50 scale.
                   Left out, every grain-synthesising profile MEASURES each source
-                  and synthesises what it measured (av1Animation synthesises none).
+                  and synthesises what it measured (av1Animation synthesises none,
+                  and av1Grain on an SVT-AV1-HDR ffmpeg keeps the real grain - any
+                  -g puts it back on synthesis).
                   A number replaces that outright for every file - it is capped by
                   nothing, so 35 means 35. A level of 0 asks for that same per-source
                   probe explicitly, on a profile that would not otherwise run it;
@@ -141,8 +146,10 @@ Dependencies:
     and a too-old libsvtav1 DROPS an unknown parameter silently rather than
     failing. So a newer build installed beside the packaged one is looked for and
     preferred when it accepts more: PATH first, then $HOME/.local/bin,
-    /opt/homebrew/bin, /usr/local/bin and /opt/ffmpeg/bin. Set ffmpegOverride to
-    name one outright.
+    /opt/homebrew/bin, /usr/local/bin and /opt/ffmpeg/bin. Of the builds that
+    accept everything, one whose libsvtav1 is SVT-AV1-HDR is preferred; without
+    one the choice is the same as it always was. Set ffmpegOverride to name one
+    outright.
     The startup summary says which build was used and what it could not do."""
 
 SVT_PSY_PARAMS = 'tune=0:enable-variance-boost=1:variance-boost-strength=2:variance-octile=6:qp-scale-compress-strength=1:enable-dlf=2:sharpness=1:enable-qm=1:qm-min=0:qm-max=15:keyint=10s:irefresh-type=2'
@@ -163,6 +170,16 @@ av1ConstrainedBluRay|-c:v libsvtav1 -b:v 25000k -qmin 26 -preset 5 -svtav1-param
 hevcNvenc|-c:v hevc_nvenc -preset p7 -tune uhq -rc vbr -cq 24 -b:v 0 -profile:v main10 -spatial-aq 1 -aq-strength 8 -temporal-aq 1 -b_ref_mode middle -g 240 -forced-idr 1 -split_encode_mode disabled
 av1Nvenc|-c:v av1_nvenc -preset p7 -tune uhq -rc vbr -cq 28 -b:v 0 -spatial-aq 1 -aq-strength 8 -temporal-aq 1 -b_ref_mode middle -g 240 -forced-idr 1 -split_encode_mode disabled
 """
+
+# The libsvtav1 key only SVT-AV1-HDR has - not mainline SVT-AV1, and not
+# SVT-AV1-PSY either, whose keys it inherited - so a build that parses it without
+# complaint is linked against SVT-AV1-HDR. The value is the fork's documented
+# "useful" setting, and the probe encode is all it is used for.
+SVT_AV1_HDR_PROBE = "-c:v libsvtav1 -svtav1-params cdef-scaling=10"
+
+# The profile that keeps the source's real grain on SVT-AV1-HDR, with the fork's
+# film grain tune, instead of denoising it away and synthesising it again.
+SVT_AV1_HDR_GRAIN_PROFILE = "av1Grain"
 
 AUDIO_PROFILES = """
 opus|-c:a libopus
@@ -769,6 +786,26 @@ def interlace_verdict(path: str, decode_accel: str = "") -> str:
     return "unknown"
 
 
+def svt_av1_hdr_args(args: str, grain_tune: bool = False) -> str:
+    """``svtAv1HdrArgs``: a libsvtav1 row as SVT-AV1-HDR is given it.
+
+    The row minus the one key that overrules a deliberate SVT-AV1-HDR default:
+    qm-min=0 undoes the fork's minimum quantisation matrix of 6, chosen there for
+    more consistent quality. The rest of the row is either the fork's own default
+    already or a tuning of ours worth keeping. Nothing is ADDED for HDR: the fork
+    switches a PQ source to its PQ variance-boost curve by itself, from the
+    transfer the colour signalling already hands it.
+
+    ``grain_tune`` swaps tune=0 for the fork's film grain tune, which keeps the
+    source's grain by turning its temporal filter, CDEF and restoration off -
+    what a run does instead of the denoise-and-synthesise, not on top of it.
+    """
+    args = args.replace("qm-min=0:", "").replace(":qm-min=0", "")
+    if grain_tune:
+        args = args.replace("tune=0", "tune=6", 1)
+    return args
+
+
 def build_video_args(base: str, path: str, settings) -> str:
     """``buildVideoArgs``: the COMPLETE video output-argument string for a file.
 
@@ -797,6 +834,8 @@ def build_video_args(base: str, path: str, settings) -> str:
                                settings.quality_given, settings.quality)
     base = apply_nvenc_tune(base, settings.nvenc_tune)
     encoder = encoder_of(base)
+    if encoder == "libsvtav1" and settings.svt_av1_hdr:
+        base = svt_av1_hdr_args(base, settings.grain_tune)
 
     # The two libsvtav1 settings the profile row deliberately leaves out, merged
     # in here rather than written into the row so the row cannot carry a stale
@@ -1003,7 +1042,7 @@ class Settings:
         self.input_dir = ""
         self.output_dir = ""
         self.cores = 1
-        self.video_profile = "av1Grain"
+        self.video_profile = "av1BluRay"
         self.audio_profile = "opus"
         self.custom_audio_bitrate = ""
         self.encoder = ""
@@ -1022,6 +1061,11 @@ class Settings:
         self.nvenc_master_display = False
         self.decode_accel = ""
         self.dv_encoder_support = False
+        # The chosen ffmpeg's libsvtav1 is SVT-AV1-HDR, and - on the av1Grain
+        # profile with no -g - that the fork's film grain tune keeps the
+        # source's grain in place of synthesising it.
+        self.svt_av1_hdr = False
+        self.grain_tune = False
         # Per file, not per run: the Dolby Vision decision this file was given,
         # the profile 8.1 intermediate prepared for it, if any, and the crop -c
         # measured on it, as ffmpeg's crop filter takes it.

@@ -495,6 +495,16 @@ the preset's own arguments, and the first that takes all of them is used. The ru
 says which build it settled on and warns when that build cannot do everything the
 preset asks.
 
+**An SVT-AV1-HDR build is preferred where there is one.**
+[SVT-AV1-HDR](https://github.com/juliobbv-p/svt-av1-hdr) is SVT-AV1 with
+perceptual tuning of its own, shipped inside community ffmpeg builds rather than as
+an encoder of its own. Among the builds that take the whole preset, one whose SVT-AV1
+is SVT-AV1-HDR wins; without one, the choice is the one it always was. On it the AV1
+presets leave the fork's own quantisation-matrix floor alone, and a PQ source gets
+its PQ-specific curve by itself. The quality levels are still the ones tuned for
+mainline SVT-AV1, and the fork spends bits differently, so sizes differ from a
+mainline encode of the same preset.
+
 **How hard each file is encoded is decided per file, not per preset.** A preset
 states one quality level, and that level is then moved by the tier the file is
 *encoded* at — a 2160p file two levels softer, an SD file two levels harder — since
@@ -505,7 +515,10 @@ capped by `-m` is judged by the size it comes out at, not the one it arrived at.
 **Film grain follows the source.** Every preset that synthesises grain measures each
 file and synthesises what it measured, so a clean digital master and a 16mm blow-up
 are not handed the same number; `av1Animation` synthesises none, which is the one case
-where grain is actively wrong. `-g` names a level yourself and nothing caps it, and
+where grain is actively wrong. `av1BluRay` is the default; `av1Grain` is the opt-in
+for grainy sources: on an SVT-AV1-HDR build it **keeps the real grain**, with the
+fork's film grain tune, instead of synthesising it, and without one it synthesises
+it like `av1BluRay` at a lower quality level. `-g` names a level yourself and nothing caps it, and
 `-g off` turns it off. This is **lossy and irreversible**: the grain is denoised out of
 the stored picture and a player re-generates a similar-looking one, so what comes back
 is an imitation of it.

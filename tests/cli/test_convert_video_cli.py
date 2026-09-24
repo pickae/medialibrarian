@@ -77,6 +77,65 @@ class TestTheNvencEngineCount:
         assert log.count("across 3 engine(s) (from -e)") == 1
 
 
+class TestSvtAv1Hdr:
+    """An ffmpeg linked against SVT-AV1-HDR parses a key mainline SVT-AV1 logs as
+    unparsed and ignores. The stub is either build: it accepts every probe, and
+    the mainline one complains about the fork's key the way libsvtav1 does."""
+
+    MAINLINE = ('case "$*" in *cdef-scaling*) echo "[libsvtav1 @ 0x1] Error '
+                'parsing option cdef-scaling: 10." >&2;; esac; exit 0')
+
+    @pytest.fixture
+    def video(self, sandbox, tmp_path):
+        sandbox.with_tool("ffprobe", "echo 1.0")
+        sandbox.inputs = tmp_path / "in"
+        sandbox.inputs.mkdir()
+        (sandbox.inputs / "clip.mkv").write_text("")
+        sandbox.counter = [0]
+        return sandbox
+
+    def _run(self, video, ffmpeg, *options):
+        video.with_tool("ffmpeg", ffmpeg)
+        video.linking(*_ORDINARY).narrow()
+        video.counter[0] += 1
+        outputs = video.work / ("out%d" % video.counter[0])
+        done = video.run("convert-video", *options, video.inputs, outputs,
+                         timeout=180)
+        return done.stdout + done.stderr
+
+    def test_the_fork_is_named_and_given_its_own_matrix_floor(self, video):
+        log = self._run(video, "exit 0")
+        assert log.count("SVT-AV1-HDR: this ffmpeg's libsvtav1 is "
+                         "SVT-AV1-HDR") == 1
+        assert "qm-min=0" not in log.split("Video profile:")[1].splitlines()[0]
+
+    def test_without_it_the_profile_is_the_one_it_always_was(self, video):
+        log = self._run(video, self.MAINLINE)
+        assert log.count("SVT-AV1-HDR: not found") == 1
+        assert "qm-min=0" in log.split("Video profile:")[1].splitlines()[0]
+
+    def test_av1Grain_on_the_fork_keeps_the_grain(self, video):
+        log = self._run(video, "exit 0", "-p", "av1Grain")
+        assert "Film grain: KEPT - av1Grain on SVT-AV1-HDR" in log
+        assert "tune=6" in log
+
+    def test_av1Grain_on_mainline_synthesises_as_before(self, video):
+        log = self._run(video, self.MAINLINE, "-p", "av1Grain")
+        assert ("Film grain: measured per file and synthesised as measured, "
+                "the av1Grain default") in log
+        assert "tune=6" not in log
+
+    def test_a_grain_level_puts_av1Grain_back_on_synthesis(self, video):
+        log = self._run(video, "exit 0", "-p", "av1Grain", "-g", 20)
+        assert "Film grain: level 20 for every file (-g)" in log
+        assert "tune=6" not in log
+
+    def test_the_default_profile_synthesises_on_the_fork_too(self, video):
+        log = self._run(video, "exit 0")
+        assert ("Film grain: measured per file and synthesised as measured, "
+                "the av1BluRay default") in log
+
+
 @pytest.fixture
 def video_cli(sandbox, tmp_path):
     """The host's own PATH, because every claim below fires before the first file
@@ -188,9 +247,12 @@ class TestFlagsOnlySomeProfilesCanUse:
         # never mentioned grain looks like, and an x265 run has to start.
         (["-p", "x265Fast"],
          "Film grain: not available with libx265, none synthesised."),
-        (["-p", "av1Grain"],
+        # The run with no -p: av1BluRay is the default, and it synthesises
+        # whatever build the host has. av1Grain's own default depends on the
+        # build, so it has cases of its own with the build stubbed.
+        ([],
          "Film grain: measured per file and synthesised as measured, the "
-         "av1Grain default"),
+         "av1BluRay default"),
         (["-p", "av1Grain", "-g", 35],
          "Film grain: level 35 for every file (-g), regardless of source or "
          "profile"),
