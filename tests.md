@@ -40,7 +40,10 @@ Two rules keep the suite safe to run concurrently, and neither is left to
 review: `tests/conftest.py` points every environment knob that names a place to
 work at the test's own directory, and `tests/test_self_containment.py` walks the
 syntax tree of every test file and fails one that creates something under a
-shared root.
+shared root. The same fixture points `ffmpegLadder` at an empty directory, so
+the builds the host keeps in `/opt/ffmpeg/bin`, `/usr/local/bin`, `/usr/bin` or
+`~/.local/bin` are never the answer to which ffmpeg a case runs: only the one on
+the case's own `PATH` is.
 
 `-n auto` needs `pytest-xdist`, and it is worth it: most of the wall clock is
 starting child processes — the ~1460 cases under `tests/cli` each start a
