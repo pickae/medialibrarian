@@ -79,6 +79,9 @@ option can never change what a command you already type means.
   a Python 3.10–3.12 to build its environment from; everything inside that
   environment is installed by the checkout itself (see
   [`read-library`](#read-library)).
+- `convert-video -u` additionally needs an NVIDIA GPU and a VapourSynth +
+  TensorRT environment of its own, one piece of which has to be built (see
+  [`convert-video`](#convert-video)).
 
 ### Missing tools are refused up front
 
@@ -466,8 +469,59 @@ tier — named either by its line count (`720p` … `4320p`) or by a marketing n
 (`fullHD`, `2K`, `4K`, `UltraHD`, `8K`, …), in any case — and everything above it
 is scaled down to fit with its aspect ratio kept, so a 2.39:1 scope film capped at
 1080p comes out 1920x800 rather than letterboxed. Anything already at or below the
-tier is encoded at its own size: **nothing is ever scaled up.** The tiers are the
-same ones `content-census-bi` reports a library by.
+tier is encoded at its own size: **`-m` never scales anything up.** The tiers are
+the same ones `content-census-bi` reports a library by.
+
+**`-u` upscales what is smaller, and only when asked.** `-u 1080p` enlarges every
+picture smaller than 1080p to fill it, with a neural upscaler on the GPU rather
+than a resize, and leaves the rest alone, so `-m 2160p -u 1080p` caps the 4K files
+and brings the DVDs up in one run. The target is worked out from the shape a
+picture is *displayed* at, after any `-c` crop, so an anamorphic DVD comes out
+with square pixels at its real shape: a 16:9 disc becomes 1920x1080, a 4:3 one
+1440x1080, and a letterboxed film inside a 4:3 frame is cropped first and fills
+the width. A picture already filling the tier on one side, or short of it by less
+than a tenth, is not touched.
+
+- **A source whose fields are woven is skipped, not upscaled.** The network
+  would enlarge the combing into the picture, and a telecined film is combed in
+  two frames of every five, which the ordinary interlace warning's majority
+  verdict calls progressive. So `-u` asks for nearly every measured frame to be
+  progressive. What fails it is left out of the run (not converted at all) so a
+  later run that can deinterlace still gets to it.
+- **An HDR source keeps its own size**: no upscaling network is trained on HDR.
+- **Nothing degrades quietly.** Without a working upscaler `-u` is refused
+  before anything is written, naming what is missing. Encoding the small files at
+  their own size instead would leave outputs that every later run skips as
+  finished.
+- **The upscaled frame is judged at its new size**: the quality bias, the chunk
+  count and `-t`'s adequacy test all go by the size it is enlarged to, and its
+  colour signalling is the 709 matrix the upscaler hands it over in.
+
+The upscaler is [VapourSynth](https://www.vapoursynth.com/) with
+[vs-mlrt](https://github.com/AmusementClub/vs-mlrt)'s TensorRT plugin, driven
+from an environment of its own under `upscaleHome` (default `~/vapoursynth`),
+the way `read-library` drives its narration checkout. The default network is
+[2xLiveActionV1_SPAN](https://openmodeldb.info/models/2x-LiveActionV1-SPAN), a
+2x model trained on the damage real SD and HD video carries (compression,
+chroma subsampling, scaling blur, halos) and deliberately not on noise, so it
+keeps grain. `upscaleModel` names another `.onnx` in `models/`. On an RTX 5090
+it runs at about 350 fps on DVD frames, so an SD-to-1080p run is as fast as the
+encode alone. TensorRT compiles an engine per frame size the first time it
+meets one, in seconds, and keeps it in `engines/`. Setting it up:
+
+```bash
+python3 -m venv ~/vapoursynth/venv
+~/vapoursynth/venv/bin/pip install vapoursynth==79 vapoursynth-bestsource==21.0 onnx onnxconverter-common
+~/vapoursynth/venv/bin/pip install --extra-index-url https://pypi.nvidia.com tensorrt-cu13
+~/vapoursynth/venv/bin/vapoursynth config
+```
+
+then build vs-mlrt's `vstrt` plugin against that TensorRT (vs-mlrt publishes no
+Linux binary) into `~/vapoursynth/plugins/libvstrt.so`, and put the network's
+`.onnx` in `~/vapoursynth/models/`. VapourSynth stays at R79 because R80 dropped
+the plugin interface `vstrt` is written against, and bestsource 21 is the last
+release that accepts R79. The network is non-commercial (CC BY-NC-SA 4.0), which
+is why it is fetched rather than shipped.
 
 **`-c` crops the black bands off.** They are picture as far as an encoder is
 concerned — scaled, filtered and coded like everything else — and a player that has
@@ -536,7 +590,8 @@ not, it is skipped too, with the figures it was judged on. `-t 30` is a looser r
 
 **Interlaced and anamorphic sources are reported, not corrected** — such a file
 gets a warning and is encoded exactly as it arrived. Deinterlace or un-squeeze
-upstream if you want that done.
+upstream if you want that done. The one exception is an anamorphic file that
+`-u` enlarges, which comes out with square pixels.
 
 **HDR and Dolby Vision.** HDR10 metadata is preserved when present, and DV is
 carried through wherever the encoder can code an RPU — the software encoders can,

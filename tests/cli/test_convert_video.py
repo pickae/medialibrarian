@@ -581,6 +581,79 @@ class TestBuildVideoArgs:
         assert built.startswith("-c:v libsvtav1 -crf 30 ")
 
 
+    def test_an_upscaled_file_has_no_scale_or_crop_left_for_ffmpeg(self,
+                                                                    build):
+        """The upscaler crops and sizes the frames itself; what is left is the
+        new picture's signalling, stamped onto the frames as well."""
+        built = build("-c:v libx265 -crf 20", dimensions=("720", "480"),
+                      colour=" -colorspace smpte170m", max_resolution="720p",
+                      crop="720:360:0:60", upscale_size="1920x1080")
+        assert "scale=" not in built and "crop=" not in built
+        assert built == (
+            "-c:v libx265 -crf 20 -pix_fmt yuv420p10le -color_primaries bt709 "
+            "-color_trc bt709 -colorspace bt709 -color_range tv -vf setparams="
+            "color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv")
+
+    def test_and_is_biased_as_the_tier_it_is_enlarged_to(self, build):
+        """An SD source coded at 1080p is a 1080p encode: no SD bias."""
+        assert "-crf 26 " in build("-c:v libsvtav1 -crf 26",
+                                   dimensions=("720", "480"),
+                                   upscale_size="1920x1080")
+        assert "-crf 24 " in build("-c:v libsvtav1 -crf 26",
+                                   dimensions=("720", "480"))
+
+
+class TestUpscaledColour:
+    """The upscaler hands its frames over in the 709 matrix at limited range,
+    whatever the source was in."""
+
+    def test_the_matrix_and_range_are_stated_the_rest_kept(self):
+        assert cv.upscaled_color_args(
+            " -color_primaries smpte170m -color_trc smpte170m "
+            "-colorspace smpte170m -color_range pc") == (
+            " -color_primaries smpte170m -color_trc smpte170m "
+            "-colorspace bt709 -color_range tv")
+
+    def test_a_source_that_named_nothing_gets_709_throughout(self):
+        assert cv.upscaled_color_args("") == (
+            " -color_primaries bt709 -color_trc bt709 -colorspace bt709 "
+            "-color_range tv")
+
+    def test_the_filter_carries_the_same_values_in_its_own_spelling(self):
+        assert cv.color_setparams(
+            " -color_primaries bt470bg -color_trc bt709 -colorspace bt709 "
+            "-color_range tv") == ("setparams=color_primaries=bt470bg:"
+                                   "color_trc=bt709:colorspace=bt709:range=tv")
+
+
+class TestTheFields:
+    """The warning goes by the majority; an upscale needs nearly all of it."""
+
+    @pytest.mark.parametrize("counts,verdict", [
+        ((0, 0, 500), "progressive"), ((300, 0, 200), "interlaced"),
+        ((0, 250, 250), "unknown"), ((0, 0, 0), "unknown"), (None, "unknown"),
+    ])
+    def test_the_verdict_is_the_majority_of_the_classified(self, counts,
+                                                           verdict):
+        assert cv.interlace_verdict_of(counts) == verdict
+
+    def test_a_clean_progressive_source_may_be_upscaled(self):
+        assert cv.upscale_blocked_by_fields((0, 0, 500)) == ""
+        assert cv.upscale_blocked_by_fields((10, 5, 485)) == ""
+
+    def test_a_telecined_one_is_not_though_the_majority_says_progressive(self):
+        """Two woven frames in every five: 40%, and a progressive verdict."""
+        counts = (200, 0, 300)
+        assert cv.interlace_verdict_of(counts) == "progressive"
+        assert "40% of its measured frames" in cv.upscale_blocked_by_fields(
+            counts)
+
+    @pytest.mark.parametrize("counts", [None, (0, 0, 0)])
+    def test_nor_one_whose_fields_could_not_be_measured(self, counts):
+        assert cv.upscale_blocked_by_fields(counts) == (
+            "its fields could not be measured")
+
+
 class TestTheVideoOnlyFailsafe:
     """The intermediate is kept under the source's name plus a marker, and only
     when the video pass really produced a COMPLETE encode."""

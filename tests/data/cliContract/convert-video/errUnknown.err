@@ -53,8 +53,18 @@ Options:
                   keeping its aspect ratio. A tier is named either by its line
                   count (720p ... 4320p) or by a marketing name (fullHD, 2K, 4K,
                   UltraHD, 8K, ...), in any case. A source already at or below the
-                  tier is encoded at its own size - nothing is ever scaled UP.
+                  tier is encoded at its own size - -m never scales UP (-u does).
                   Default: no ceiling, every source keeps its resolution.
+    -u, --upscale <tier>
+                  Upscale: a video whose picture is SMALLER than this tier is
+                  enlarged to fill it by a neural upscaler, keeping the shape
+                  it is displayed at - an anamorphic DVD comes out with square
+                  pixels. Tiers as for -m, and not above -m. Needs the
+                  upscaler installed under $upscaleHome (default
+                  ~/vapoursynth), and is refused up front without a working
+                  one. An interlaced or telecined source is skipped instead
+                  (it needs deinterlacing first, which this does not do), and
+                  an HDR one is encoded at its own size. Default: off.
     -c, --crop    Crop the black bands off the picture. The source is measured
                   at moments spread across its whole running time, and only the
                   SMALLEST bands any of them found come off - so a film that
@@ -115,6 +125,13 @@ Dependencies:
     finished file's Dolby Vision level - the capability claim a player checks
     before it decodes anything - is corrected if it overstates the video, which
     needs python3 and is skipped with a warning without it.
+
+    -u needs an NVIDIA GPU and a Python environment of its own under
+    $upscaleHome (default ~/vapoursynth): venv/ with VapourSynth,
+    vapoursynth-bestsource, TensorRT, onnx and onnxconverter-common,
+    plugins/libvstrt.so (vs-mlrt's TensorRT plugin) and the network in
+    models/ ($upscaleModel names another). The engines TensorRT builds for each
+    frame size are kept in engines/ there.
 
     The AV1 profiles ask for psychovisual SVT-AV1 parameters, and the *Nvenc ones
     for NVENC's uhq tuning, that a distribution's ffmpeg is often too old for -
