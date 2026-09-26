@@ -199,6 +199,16 @@ def private_workspace(tmp_path_factory, monkeypatch):
     for name in _STATE_KNOBS:
         monkeypatch.delenv(name, raising=False)
 
+    # The ffmpeg ladder's rungs past PATH are absolute paths into the MACHINE -
+    # /opt/ffmpeg/bin, /usr/local/bin, /usr/bin, $HOME/.local/bin - and a caller
+    # with a preference walks all of them, so a case that stubs a mainline
+    # ffmpeg on its sandbox PATH would be answered by an SVT-AV1-HDR build the
+    # host happens to keep in /opt/ffmpeg. An empty directory
+    # of the test's own stands in for the lot: PATH, which the case does set,
+    # is then the only place an ffmpeg can come from. The ladder's own white
+    # box takes the knob back off to look at the real rungs.
+    monkeypatch.setenv("ffmpegLadder", str(tmp_path_factory.mktemp("ffmpegladder")))
+
     # The module keeps the base it settled on in module state, so clearing the
     # environment alone would leave a previous test's directory in force.
     from medialib.lib import ramscratch

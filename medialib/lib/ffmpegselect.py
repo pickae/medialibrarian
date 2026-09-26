@@ -10,9 +10,9 @@ have to know a choice was made. The decision travels to every child in the one
 thing children already inherit - PATH - so nothing here is exported as a name.
 
 The state kept per run is a per-process ``_State``, which a test resets with
-:func:`reset_state`. ``ffmpegOverride`` and ``usage`` are read from the
-environment, and the scratch the chosen pair is reached through is the one
-:mod:`medialib.lib.ramscratch` claims.
+:func:`reset_state`. ``ffmpegOverride``, ``ffmpegLadder`` and ``usage`` are
+read from the environment, and the scratch the chosen pair is reached through
+is the one :mod:`medialib.lib.ramscratch` claims.
 """
 
 from __future__ import annotations
@@ -108,6 +108,17 @@ def ffmpeg_candidates(path: str | None = None, home: str | None = None) -> list[
     two ways is offered once - a duplicate costs a whole extra probe encode
     per repeat.
 
+    ``ffmpegLadder`` replaces every rung after PATH's - ``$HOME/.local/bin``
+    included - with the directories it names, separated the way PATH is; set
+    to nothing, it is not set, and the ladder is the one below. It exists for
+    the test suite rather than for a run: the rungs are absolute paths into
+    the MACHINE, so a case that stubs a mainline ffmpeg on its own PATH and
+    asks for something better would otherwise be answered by whatever build
+    the host happens to keep in ``/opt/ffmpeg`` - and a caller with a
+    preference walks every rung, which is exactly how it reaches one. PATH is
+    left out of it on purpose: PATH is already the case's to set, and a
+    ladder that could reorder it would be a second ``ffmpegOverride``.
+
     ``/opt/homebrew/bin`` is in the list for the same reason the others are:
     it is Homebrew's prefix on Apple Silicon, and a run started from a
     launchd job or a Finder action gets a PATH without it. Intel Macs need no
@@ -119,13 +130,17 @@ def ffmpeg_candidates(path: str | None = None, home: str | None = None) -> list[
         path = os.environ.get("PATH", "")
     if home is None:
         home = os.environ.get("HOME", "")
+    named = os.environ.get("ffmpegLadder", "")
+    if named:
+        rungs = [entry for entry in named.split(os.pathsep) if entry]
+    else:
+        rungs = [home + "/.local/bin",
+                 "/opt/homebrew/bin",
+                 "/usr/local/bin",
+                 "/opt/ffmpeg/bin",
+                 "/usr/bin"]
     seen = []
-    for c in (_command_v("ffmpeg", path),
-              home + "/.local/bin/ffmpeg",
-              "/opt/homebrew/bin/ffmpeg",
-              "/usr/local/bin/ffmpeg",
-              "/opt/ffmpeg/bin/ffmpeg",
-              "/usr/bin/ffmpeg"):
+    for c in [_command_v("ffmpeg", path)] + [r + "/ffmpeg" for r in rungs]:
         if c and _executable(c) and c not in seen:
             seen.append(c)
     return seen

@@ -543,9 +543,13 @@ class TestTheFfmpegTheDownloadsMuxThrough:
             tool.write_text('#!/usr/bin/env bash\necho "ffmpeg version 7.2 hand"\n')
             tool.chmod(0o755)
 
+        # The real ladder, not conftest's empty stand-in for it: the rung under
+        # test is the home one, and it comes before every fixed location of
+        # the host's, so what the host keeps there cannot decide the answer.
+        env = dict(ytdlp.env, HOME=str(home))
+        env.pop("ffmpegLadder", None)
         ytdlp.ytdlp("-t", ytdlp.table, "-m", "latent", ytdlp.library,
-                    ytdlp.library / "archive.log",
-                    env=dict(ytdlp.env, HOME=str(home)))
+                    ytdlp.library / "archive.log", env=env)
         assert _option(ytdlp.argv(1), "--ffmpeg-location") == str(local)
 
     def test_the_other_machines_calls_are_not_given_this_ones_directory(self, ytdlp):

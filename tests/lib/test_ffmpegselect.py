@@ -13,6 +13,10 @@ announce in the "the ... one" shape the probe below keys on, and the probe
 accepts only announcements it was told about, which is what keeps the
 host's own builds - the ladder's real absolute rungs - from deciding the
 outcome on whichever host this runs on.
+
+The rest of the suite never sees those rungs: conftest points
+``ffmpegLadder`` at an empty directory. This file is the one that takes it
+back off, because the ladder is what it is about.
 """
 
 import os
@@ -65,7 +69,11 @@ class _World:
         path.write_text("x")
         return str(path)
 
-    def enter(self, monkeypatch, override=None, usage=None):
+    def enter(self, monkeypatch, override=None, usage=None, ladder=None):
+        if ladder is None:
+            monkeypatch.delenv("ffmpegLadder", raising=False)
+        else:
+            monkeypatch.setenv("ffmpegLadder", os.pathsep.join(ladder))
         monkeypatch.setenv("PATH",
                            os.pathsep.join(self.path_dirs + [str(self.tools)]))
         monkeypatch.setenv("HOME", str(self.home))
@@ -207,6 +215,47 @@ class TestCandidates:
         world.path_dirs.append(str(world.root / "pathBin"))
         world.enter(monkeypatch)
         assert ffmpegselect.ffmpeg_candidates()[-1] == "/usr/bin/ffmpeg"
+
+
+# --- ffmpegLadder names the rungs after PATH ----------------------------------
+
+class TestLadderOverride:
+    def test_the_named_directories_replace_every_rung_after_path(self, world, monkeypatch):
+        on_path = world.stub(world.root / "pathBin", "ffmpeg", "the one on PATH")
+        named = world.stub(world.root / "named", "ffmpeg", "the named one")
+        world.stub(world.home / ".local" / "bin", "ffmpeg",
+                   "the hand-installed one")
+        world.path_dirs.append(str(world.root / "pathBin"))
+        world.enter(monkeypatch, ladder=[str(world.root / "named")])
+        # $HOME/.local/bin is one of the rungs replaced, and no fixed location
+        # of the host's is offered at all.
+        assert ffmpegselect.ffmpeg_candidates() == [on_path, named]
+
+    def test_they_are_taken_in_the_order_named(self, world, monkeypatch):
+        second = world.stub(world.root / "b", "ffmpeg", "the second one")
+        first = world.stub(world.root / "a", "ffmpeg", "the first one")
+        world.enter(monkeypatch, ladder=[str(world.root / "b"),
+                                         str(world.root / "a")])
+        assert ffmpegselect.ffmpeg_candidates() == [second, first]
+
+    def test_a_preference_cannot_reach_past_them(self, world, monkeypatch):
+        world.stub(world.root / "pathBin", "ffmpeg", "the one on PATH")
+        world.path_dirs.append(str(world.root / "pathBin"))
+        world.enter(monkeypatch, ladder=[str(world.root / "empty")])
+        # The preference is for anything that is NOT this case's own - which
+        # is what an SVT-AV1-HDR build in the host's /opt/ffmpeg was to the
+        # cases that stub a mainline one. Without the knob a host holding any
+        # ffmpeg at all would win here.
+        ffmpegselect.select_ffmpeg(
+            prefer=lambda candidate: not candidate.startswith(str(world.root)))
+        assert reaches() == "the one on PATH"
+        assert ffmpegselect._STATE.preferred == 0
+
+    def test_set_to_nothing_it_is_the_ladder_it_always_was(self, world, monkeypatch):
+        chosen = world.stub(world.home / ".local" / "bin", "ffmpeg",
+                            "the hand-installed one")
+        world.enter(monkeypatch, ladder=[])
+        assert ffmpegselect.ffmpeg_candidates()[0] == chosen
 
 
 # --- ffmpegOverride is an instruction, not a preference ------------------------
