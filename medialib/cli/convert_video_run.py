@@ -920,10 +920,19 @@ class Run:
         # replacing it is the whole point of converting this file again. Remembered
         # now, because after the encode a file at that path is no longer
         # distinguishable from one that turned up while the encode ran.
+        #
+        # Up to date means as long as the source, give or take the same slack
+        # the video intermediate was allowed before it was muxed: compared with
+        # no slack at all, an output whose audio ends a few milliseconds before
+        # the source's does is "short", and every rerun encodes the whole
+        # library again. It is only ever SHORT slack - a longer output is not
+        # this check's business - and small enough that an output cut short
+        # still counts as not done.
         plan.replacing = os.path.isfile(plan.output)
         if plan.replacing:
             out_duration = _media_duration(plan.output)
-            if duration > 0 and out_duration >= duration:
+            if duration > 0 and out_duration >= (
+                    duration - rules.LENGTH_SLACK_SECONDS):
                 log("Up to date, skipping: " + relative)
                 self.skipped += 1
                 return None

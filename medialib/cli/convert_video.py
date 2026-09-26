@@ -879,14 +879,34 @@ def build_video_args(base: str, path: str, settings) -> str:
                                                      settings.crop))
 
 
+# How far short of its source an encode may measure and still be the WHOLE of it.
+#
+# Two containers' stated durations, compared: neither is a count of the frames,
+# and they disagree by milliseconds for reasons that have nothing to do with what
+# was lost. A re-join states the sum of its chunks, each rounded to its own
+# timebase; a muxed output states whichever stream ends LAST, and an Opus track
+# drops the priming an AAC one carried, so it ends a few milliseconds before the
+# source's audio did. Neither comes near a second. What this is here to catch
+# does: a chunk that died is a whole chunk's worth of film, and an output whose
+# mux was killed stops wherever the kill landed.
+#
+# A second, not durationcheck's larger "one second or one percent". The percent
+# is for an audio source that only ESTIMATES its length; a video source states
+# its own, and one percent of a film is over a minute - room for a mux killed
+# near its end to pass for finished. Nothing this tool completed needs it: the
+# intermediate has to clear this bar before it is muxed at all, and the mux copies
+# that video stream into an output at least as long.
+LENGTH_SLACK_SECONDS = 1.0
+
+
 def video_intermediate_complete(directory: str, source_duration) -> bool:
     """``videoIntermediateComplete``: is the video-only intermediate a COMPLETE
     encode of the source?
 
     A missing, empty or short video.mkv means the video pass itself failed - a
     chunk that died leaves a short re-join - and half a video is not worth keeping.
-    The one-second tolerance absorbs the rounding between a container's duration
-    and the sum of the chunks.
+    Short by more than ``LENGTH_SLACK_SECONDS``, that is: less than that is the
+    rounding between a container's duration and the sum of the chunks.
     """
     from medialib.lib import formatting
     path = os.path.join(directory, "video.mkv")
@@ -898,7 +918,8 @@ def video_intermediate_complete(directory: str, source_duration) -> bool:
     out = formatting.awk_number(_probe([
         "ffprobe", "-v", "error", "-show_entries", "format=duration",
         "-of", "default=nk=1:nw=1", path]).strip() or 0)
-    return out > 0 and out >= formatting.awk_number(source_duration) - 1
+    return out > 0 and out >= (formatting.awk_number(source_duration)
+                               - LENGTH_SLACK_SECONDS)
 
 
 def sum_encode_progress(directory: str) -> tuple:
