@@ -211,3 +211,65 @@ class TestTheArgumentsOfOneChunk:
         assert "-t" not in argv
         assert "-vf" not in argv
         assert argv[argv.index("-ss") + 1] == "80.000"
+
+
+class TestTheResumeSkip:
+    """An output already in place is skipped when it spans its source - measured
+    with the slack the intermediate was allowed, so a finished file whose audio
+    ends a few milliseconds early is recognised, and one cut short is not."""
+
+    SOURCE = 40.023
+
+    class Encoded(Exception):
+        """``prepare`` got past the resume check and on to the encode's own
+        measurements - raised there so nothing else has to be stubbed."""
+
+    @pytest.fixture
+    def resume(self, monkeypatch, tmp_path):
+        def run(output_seconds):
+            (tmp_path / "in").mkdir()
+            (tmp_path / "in" / "clip.mkv").write_text("")
+            (tmp_path / "out").mkdir()
+            (tmp_path / "out" / "clip.mkv").write_text("")
+
+            monkeypatch.setattr(run_module.pausecontrol, "wait_while_paused",
+                                lambda *a, **k: None)
+            monkeypatch.setattr(
+                run_module, "_media_duration",
+                lambda path: self.SOURCE if "/in/" in path else output_seconds)
+
+            def encoded(path):
+                raise self.Encoded()
+
+            monkeypatch.setattr(rules, "video_dimensions", encoded)
+            lines = []
+            monkeypatch.setattr(run_module, "log", lines.append)
+
+            state = run_module.Run(rules.Settings(
+                input_dir=str(tmp_path / "in"), output_dir=str(tmp_path / "out"),
+                chunk_root=str(tmp_path / "chunks"), cores=1))
+            try:
+                state.prepare("clip.mkv")
+            except self.Encoded:
+                return False
+            assert state.skipped == 1
+            assert lines == ["Up to date, skipping: clip.mkv"]
+            return True
+        return run
+
+    def test_an_output_as_long_as_its_source_is_skipped(self, resume):
+        assert resume(self.SOURCE)
+
+    def test_an_opus_track_ending_milliseconds_early_is_still_up_to_date(
+            self, resume):
+        # The case that was re-encoded on every run: 40.008 against 40.023.
+        assert resume(40.008)
+
+    def test_up_to_the_slack_short_is_still_up_to_date(self, resume):
+        assert resume(self.SOURCE - rules.LENGTH_SLACK_SECONDS)
+
+    def test_an_output_cut_short_is_converted_again(self, resume):
+        assert not resume(self.SOURCE - rules.LENGTH_SLACK_SECONDS - 0.1)
+
+    def test_a_truncated_output_is_converted_again(self, resume):
+        assert not resume(self.SOURCE / 2)
