@@ -681,3 +681,53 @@ class TestNormalisingDolbyVisionProfile7:
         log = dv.convert("noDoviTool", drop_dovi_tool=True)
         self._fell_back(dv, "noDoviTool", log)
         assert "without dovi_tool" in log
+
+
+class TestUpscale:
+    """-u is refused up front - before the output folder exists - whenever it
+    cannot be done, rather than degrading to a run that encodes the small files at
+    their own size: a finished output is never converted again."""
+
+    @pytest.fixture
+    def video(self, sandbox, tmp_path):
+        sandbox.with_tool("ffmpeg", "exit 0")
+        sandbox.with_tool("ffprobe", "echo 1.0")
+        sandbox.linking(*_ORDINARY).narrow()
+        sandbox.inputs = tmp_path / "in"
+        sandbox.inputs.mkdir()
+        (sandbox.inputs / "clip.mkv").write_text("")
+        return sandbox
+
+    def _run(self, video, *options):
+        outputs = video.work / "out"
+        done = video.run("convert-video", *options, video.inputs, outputs,
+                         timeout=180)
+        return done, outputs
+
+    def test_an_unknown_tier_is_refused_with_the_valid_ones(self, video):
+        done, outputs = self._run(video, "-u", "huge")
+        assert done.returncode == 1
+        assert 'Cannot upscale to resolution tier "huge". Valid -u tiers: ' \
+            '720p' in done.stderr
+        assert not outputs.exists()
+
+    def test_a_tier_above_the_ceiling_is_refused(self, video):
+        done, outputs = self._run(video, "-m", "1080p", "-u", "4K")
+        assert done.returncode == 1
+        assert "The -u upscale tier (2160p) is above the -m ceiling (1080p)" \
+            in done.stderr
+        assert not outputs.exists()
+
+    def test_no_upscaler_installed_is_refused_naming_what_is_missing(self,
+                                                                     video):
+        done, outputs = self._run(video, "-u", "1080p")
+        assert done.returncode == 1
+        assert "-u 1080p needs a working upscaler, and the upscaler is not " \
+            "installed under" in done.stderr
+        assert "libvstrt.so" in done.stderr
+        assert not outputs.exists()
+
+    def test_without_it_the_summary_says_nothing_is_enlarged(self, video):
+        done, _outputs = self._run(video)
+        assert (done.stdout + done.stderr).count(
+            "Upscale: off, nothing is enlarged") == 1

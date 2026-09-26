@@ -23,7 +23,14 @@ import os
 import re
 import subprocess
 
-from medialib.lib import bitrates, clioptions, codecs, resolutions, videobitrate
+from medialib.lib import (
+    bitrates,
+    clioptions,
+    codecs,
+    resolutions,
+    upscale,
+    videobitrate,
+)
 from medialib.lib.runlog import log
 
 USAGE_HEAD = r"""Usage:
@@ -74,8 +81,17 @@ m | <tier> | Resolution ceiling: scale every video down to at most this tier,
                   keeping its aspect ratio. A tier is named either by its line
                   count (720p ... 4320p) or by a marketing name (fullHD, 2K, 4K,
                   UltraHD, 8K, ...), in any case. A source already at or below the
-                  tier is encoded at its own size - nothing is ever scaled UP.
+                  tier is encoded at its own size - -m never scales UP (-u does).
                   Default: no ceiling, every source keeps its resolution.
+u | <tier> | Upscale: a video whose picture is SMALLER than this tier is
+                  enlarged to fill it by a neural upscaler, keeping the shape
+                  it is displayed at - an anamorphic DVD comes out with square
+                  pixels. Tiers as for -m, and not above -m. Needs the
+                  upscaler installed under $upscaleHome (default
+                  ~/vapoursynth), and is refused up front without a working
+                  one. An interlaced or telecined source is skipped instead
+                  (it needs deinterlacing first, which this does not do), and
+                  an HDR one is encoded at its own size. Default: off.
 c |  | Crop the black bands off the picture. The source is measured
                   at moments spread across its whole running time, and only the
                   SMALLEST bands any of them found come off - so a film that
@@ -115,7 +131,7 @@ t | [percent] | Test each source before encoding it, and convert only the ones
 """
 
 OPT_LONG = ("h:help j:cores p:profile a:audio-profile b:audio-bitrate "
-            "e:nvenc-engines q:quality m:max-resolution c:crop "
+            "e:nvenc-engines q:quality m:max-resolution u:upscale c:crop "
             "f:fast-decode g:grain t:test")
 
 USAGE_TAIL = r"""
@@ -140,6 +156,13 @@ Dependencies:
     finished file's Dolby Vision level - the capability claim a player checks
     before it decodes anything - is corrected if it overstates the video, which
     needs python3 and is skipped with a warning without it.
+
+    -u needs an NVIDIA GPU and a Python environment of its own under
+    $upscaleHome (default ~/vapoursynth): venv/ with VapourSynth,
+    vapoursynth-bestsource, TensorRT, onnx and onnxconverter-common,
+    plugins/libvstrt.so (vs-mlrt's TensorRT plugin) and the network in
+    models/ ($upscaleModel names another). The engines TensorRT builds for each
+    frame size are kept in engines/ there.
 
     The AV1 profiles ask for psychovisual SVT-AV1 parameters, and the *Nvenc ones
     for NVENC's uhq tuning, that a distribution's ffmpeg is often too old for -
@@ -215,6 +238,11 @@ REFERENCE_CORES = 32
 # seconds against an encode measured in minutes.
 INTERLACE_PROBE_FRAMES = "500"
 
+# The share of idet's classified frames that may be interlaced before a source is
+# not upscaled. Not zero: idet calls the odd fast pan or cross-fade on real film
+# interlaced, and a telecined source sits at forty percent, nowhere near this.
+UPSCALE_INTERLACE_TOLERANCE = 0.05
+
 # The same constant-quality level does not buy the same visible quality across the
 # ladder: at 2160p a frame's detail is spread over four times the pixels of 1080p,
 # so a couple of levels are invisible there and pay for themselves in size, while at
@@ -259,7 +287,7 @@ def spec(program: str) -> "clioptions.Spec":
         long=OPT_LONG,
         vars="j:CORES p:videoProfile a:audioProfile b:customAudioBitrate "
              "e:nvencEnginesOverride q:videoQuality f:videoFastDecode "
-             "g:videoGrain m:maxVideoResolution",
+             "g:videoGrain m:maxVideoResolution u:upscaleResolution",
         flags="optionalArg:t:^[0-9]+$",
         column=18,
         tail=USAGE_TAIL,
@@ -669,6 +697,61 @@ def video_color_args(path: str) -> str:
     return out
 
 
+def upscaled_color_args(color_args: str) -> str:
+    """``upscaledColorArgs``: the colour signalling of an UPSCALED picture.
+
+    The upscaler hands over its frames in the 709 matrix at limited range
+    whatever the source was in, so those two are stated rather than copied - an
+    SD source's 601 tag on an HD frame would be read as the wrong matrix. The
+    primaries and the transfer describe the source's colours, which the
+    upscaler does not touch, so they stay the source's; a source that named none
+    gets 709, which is what a player assumes of an HD frame anyway, stated so it
+    does not have to.
+    """
+    fields = color_args.split()
+    stated = dict(zip(fields[::2], fields[1::2], strict=False))
+    stated["-colorspace"] = "bt709"
+    stated["-color_range"] = "tv"
+    stated.setdefault("-color_primaries", "bt709")
+    stated.setdefault("-color_trc", "bt709")
+    return "".join(" %s %s" % (flag, stated[flag]) for flag in (
+        "-color_primaries", "-color_trc", "-colorspace", "-color_range"))
+
+
+def color_setparams(color_args: str) -> str:
+    """``colorSetparams``: the same signalling as a filter that stamps it onto
+    every frame.
+
+    For frames that arrive with none, the way y4m out of the upscaler does: an
+    ffmpeg that takes its colour description from the frames writes primaries
+    and transfer from them even when the output options say otherwise, so on
+    their own the options would come out as "unknown"."""
+    names = {"-color_primaries": "color_primaries", "-color_trc": "color_trc",
+             "-colorspace": "colorspace", "-color_range": "range"}
+    fields = color_args.split()
+    stated = dict(zip(fields[::2], fields[1::2], strict=False))
+    return "setparams=" + ":".join("%s=%s" % (names[flag], stated[flag])
+                                   for flag in names if flag in stated)
+
+
+def video_color_space(path: str) -> tuple:
+    """The first video stream's (colour space, range, transfer) as ffprobe names
+    them, any it does not state left empty."""
+    import json
+    text = _probe(["ffprobe", "-v", "error", "-select_streams", "v:0",
+                   "-show_entries", "stream=color_space,color_range,color_transfer",
+                   "-of", "json", path])
+    try:
+        streams = json.loads(text).get("streams") or [{}]
+    except (ValueError, AttributeError):
+        return "", "", ""
+    first = streams[0] if isinstance(streams[0], dict) else {}
+    values = [_field(first, name)
+              for name in ("color_space", "color_range", "color_transfer")]
+    return tuple("" if value in ("unknown", "N/A") else value
+                 for value in values)
+
+
 def hdr_master_display(path: str) -> str:
     """``hdrMasterDisplay``: "<master-display> <maxCLL,maxFALL>" for a source that
     carries mastering-display metadata, and nothing otherwise.
@@ -752,15 +835,15 @@ def dolby_vision_profile(path: str) -> tuple:
     return "", ""
 
 
-def interlace_verdict(path: str, decode_accel: str = "") -> str:
-    """``interlaceVerdict``: whether this source is interlaced, MEASURED from its
-    own frames rather than read from the container's field-order flag, which this
-    library's files carry wrong on progressive material.
+def interlace_counts(path: str, decode_accel: str = "") -> tuple | None:
+    """``interlaceCounts``: how ffmpeg's idet filter classified the head of this
+    source, as (top field first, bottom field first, progressive) frame counts,
+    or None when it could not be measured.
 
-    ffmpeg's idet filter classifies each frame, and the verdict is the MAJORITY of
-    the DETERMINED ones - flat fades and title cards, which idet cannot tell apart
-    either way, do not vote. A tie, or a sample it could not classify at all, is
-    unknown; a source that cannot be decoded is unknown too rather than an error,
+    MEASURED from the frames rather than read from the container's field-order
+    flag, which this library's files carry wrong on progressive material. Flat
+    fades and title cards, which idet cannot tell apart either way, are in none
+    of the three. A source that cannot be decoded is None rather than an error,
     because the encode that follows is what reports a broken file.
     """
     argv = ["ffmpeg", "-nostdin", "-hide_banner"] + decode_accel.split()
@@ -772,18 +855,56 @@ def interlace_verdict(path: str, decode_accel: str = "") -> str:
                               stderr=subprocess.PIPE)
         text = done.stderr.decode("utf-8", "surrogateescape")
     except OSError:
-        return "unknown"
+        return None
 
     counts = re.findall(r"Multi frame detection: TFF:\s*(\d+)\s+BFF:\s*(\d+)"
                         r"\s+Progressive:\s*(\d+)", text)
     if not counts:
-        return "unknown"
+        return None
     tff, bff, progressive = (int(value) for value in counts[-1])
+    return tff, bff, progressive
+
+
+def interlace_verdict_of(counts: tuple | None) -> str:
+    """The verdict the counts make: the MAJORITY of the frames idet could
+    classify. A tie, or nothing it could classify at all, is unknown."""
+    if not counts:
+        return "unknown"
+    tff, bff, progressive = counts
     if tff + bff > progressive:
         return "interlaced"
     if progressive > tff + bff:
         return "progressive"
     return "unknown"
+
+
+def interlace_verdict(path: str, decode_accel: str = "") -> str:
+    """``interlaceVerdict``: whether this source is interlaced, measured from its
+    own frames - :func:`interlace_counts` read by :func:`interlace_verdict_of`."""
+    return interlace_verdict_of(interlace_counts(path, decode_accel))
+
+
+def upscale_blocked_by_fields(counts: tuple | None) -> str:
+    """Why the fields of this source rule an upscale out, or "" when they do not.
+
+    A much stricter question than the warning's majority. A telecined film is
+    progressive in three frames out of five and woven from two films' fields in
+    the other two - a majority verdict calls it progressive, and the network would
+    then enlarge the combing in two frames of every five into the picture. So an
+    upscale wants the frames idet could classify to be progressive nearly without
+    exception, and a source it could not classify at all is not taken on trust.
+    """
+    if not counts:
+        return "its fields could not be measured"
+    tff, bff, progressive = counts
+    classified = tff + bff + progressive
+    if classified == 0:
+        return "its fields could not be measured"
+    woven = (tff + bff) / classified
+    if woven > UPSCALE_INTERLACE_TOLERANCE:
+        return ("%.0f%% of its measured frames are interlaced or telecined"
+                % (woven * 100))
+    return ""
 
 
 def svt_av1_hdr_args(args: str, grain_tune: bool = False) -> str:
@@ -829,6 +950,10 @@ def build_video_args(base: str, path: str, settings) -> str:
     crop_width, crop_height = cropped_size(width, height, settings.crop)
     enc_width, enc_height = resolutions.capped(crop_width, crop_height,
                                                settings.max_resolution)
+    # An upscaled file is encoded at the size it was enlarged to, and it is that
+    # frame the bias has to describe.
+    if settings.upscale_size:
+        enc_width, enc_height = settings.upscale_size.split("x")
 
     base = apply_video_quality(base, enc_width, enc_height,
                                settings.quality_given, settings.quality)
@@ -873,6 +998,12 @@ def build_video_args(base: str, path: str, settings) -> str:
             base += " -master_display %s -max_cll %s" % (display, light)
 
     base = dolby_vision_args(base, settings.dolby_vision_mode)
+    # The upscaler has cropped and sized the frames already, so the only filter
+    # left for ffmpeg is the one putting the new picture's signalling on them.
+    if settings.upscale_size:
+        color_args = upscaled_color_args(color_args)
+        return "%s -pix_fmt %s%s -vf %s" % (base, pix_fmt_for(base), color_args,
+                                            color_setparams(color_args))
     return "%s -pix_fmt %s%s%s" % (base, pix_fmt_for(base), color_args,
                                    video_filter_args(width, height,
                                                      settings.max_resolution,
@@ -1093,6 +1224,21 @@ class Settings:
         self.dolby_vision_mode = ""
         self.dolby_vision_source = ""
         self.crop = ""
+        # -u: the tier to enlarge to and the upscaler proven to work, for the
+        # run; and per file, the "WxH" this one is enlarged to ("" for a file
+        # that is not), the engine for its frame size, its bestsource index, the
+        # "left,right,top,bottom" crop the upscaler cuts, the matrix and range it
+        # is decoded with, and the "num/den" rate its frames are read at.
+        self.upscale_resolution = ""
+        self.upscale_stack: upscale.Stack | None = None
+        self.upscale_script = ""
+        self.upscale_size = ""
+        self.upscale_engine = ""
+        self.upscale_index = ""
+        self.upscale_crop = "0,0,0,0"
+        self.upscale_matrix = ""
+        self.upscale_range = "limited"
+        self.upscale_fps = ""
         self.__dict__.update(values)
 
 

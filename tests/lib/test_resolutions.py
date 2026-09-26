@@ -132,6 +132,55 @@ class TestCapping:
         assert res.capped("0720", "0480", "1080p") == ("0720", "0480")
 
 
+class TestEnlarged:
+    """The other half of the cap: the size a smaller picture is enlarged to, from
+    the shape it is DISPLAYED at, so an anamorphic source comes out square."""
+
+    @pytest.mark.parametrize("width,height,sar,tier,expected", [
+        (720, 480, "32:27", "1080p", (1920, 1080)),   # NTSC 16:9 DVD
+        (720, 480, "8:9", "1080p", (1440, 1080)),     # NTSC 4:3 DVD
+        (720, 576, "64:45", "1080p", (1920, 1080)),   # PAL 16:9 DVD
+        (720, 576, "16:15", "1080p", (1440, 1080)),   # PAL 4:3 DVD
+        (1280, 720, "1:1", "1080p", (1920, 1080)),
+        (1280, 720, "", "2160p", (3840, 2160)),
+        (720, 360, "8:9", "1080p", (1920, 1080)),     # letterbox cropped off
+        (1280, 544, "", "1080p", (1920, 816)),        # a scope rip
+    ])
+    def test_a_smaller_picture_fills_the_box_at_its_shown_shape(
+            self, width, height, sar, tier, expected):
+        assert res.enlarged(width, height, tier, sar) == expected
+
+    @pytest.mark.parametrize("width,height", [(1920, 800), (1440, 1080),
+                                              (1920, 1080), (3840, 2160)])
+    def test_one_that_fills_it_on_either_side_already_is_not(self, width,
+                                                              height):
+        assert res.enlarged(width, height, "1080p") is None
+
+    def test_nor_one_short_of_it_by_too_little_to_see(self):
+        """1776x1000 is 8% short, under the threshold; 1600x900 is 20%."""
+        assert res.enlarged(1776, 1000, "1080p") is None
+        assert res.enlarged(1600, 900, "1080p") == (1920, 1080)
+
+    @pytest.mark.parametrize("sar", ["0:1", "N/A", "", None, "1:0", "x"])
+    def test_an_unstated_sample_aspect_means_square_pixels(self, sar):
+        assert res.enlarged(1280, 720, "1080p", sar) == (1920, 1080)
+
+    @pytest.mark.parametrize("width,height,tier", [
+        ("", 480, "1080p"), (720, "", "1080p"), (0, 480, "1080p"),
+        (720, 480, ""), (720, 480, "SD"), (720, 480, "nope"),
+    ])
+    def test_nothing_readable_to_enlarge_to_is_None(self, width, height, tier):
+        assert res.enlarged(width, height, tier) is None
+
+    @pytest.mark.parametrize("width,height,sar", [
+        (711, 479, "10:11"), (704, 480, "40:33"), (352, 240, "8:9"),
+    ])
+    def test_the_result_is_even_and_inside_the_box(self, width, height, sar):
+        out_w, out_h = res.enlarged(width, height, "1080p", sar)
+        assert out_w % 2 == 0 and out_h % 2 == 0
+        assert out_w <= 1920 and out_h <= 1080
+
+
 class TestTheSqlIsGeneratedFromTheSameTable:
     def test_every_tier_appears(self):
         sql = res.tier_sql("w", "h")

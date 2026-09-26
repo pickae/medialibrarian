@@ -138,6 +138,9 @@ _SCRATCH_KNOBS = (
     "comicsRamBase",
     "musicRamBase",
     "readLibraryRamBase",
+    # Not scratch but the upscaler's home, where it also builds its engines: an
+    # empty one, so no test finds - or builds into - the host's real install.
+    "upscaleHome",
 )
 
 # State a run records outside its own scratch, which two tests sharing a machine
@@ -152,6 +155,8 @@ _STATE_KNOBS = (
     "LENGTH_LOG",
     "ABORT_FLAG",
     "UNCOUNTED_PROGRESS_WARNED",
+    # Which network the upscaler uses, which a host may have pointed elsewhere.
+    "upscaleModel",
     # ingest-music exports this so its children stamp their lines the same way,
     # and exporting it means SETTING it in this process - after which every
     # later test in the same worker reads a timestamp where it expects "==>".

@@ -24,6 +24,8 @@ __all__ = [
     "named",
     "ceiling",
     "capped",
+    "enlarged",
+    "MIN_ENLARGEMENT",
     "tier_sql",
     "width_sql",
 ]
@@ -178,6 +180,54 @@ def capped(width: object, height: object, tier_name: str) -> tuple[object, objec
         # Unchanged means unchanged.
         return width, height
     return max(int(w * factor / 2 + 0.5) * 2, 2), max(int(h * factor / 2 + 0.5) * 2, 2)
+
+
+# How much bigger a picture has to get before enlarging it is worth doing. A frame
+# a few percent short of the tier - 1776x1000, a 1904x1072 rip - would go through
+# the whole upscaler for a difference nobody can see.
+MIN_ENLARGEMENT = 1.1
+
+
+def _aspect(sar: object) -> float:
+    """A sample aspect ratio as the width one coded pixel is DISPLAYED at, 1 for
+    anything that does not state one - ffprobe's "0:1" and "N/A" included."""
+    num, _sep, den = str(sar or "").partition(":")
+    if not (num.isdigit() and den.isdigit()) or not int(num) or not int(den):
+        return 1.0
+    return int(num) / int(den)
+
+
+def enlarged(width: object, height: object, tier_name: str,
+             sar: object = "") -> tuple[int, int] | None:
+    """The size a picture is enlarged to so it fills the tier, or None for one
+    that already does.
+
+    The other half of :func:`capped`, and deliberately not the same function: a
+    cap may only shrink, so asking for one can never cost a bigger file, while an
+    enlargement is a separate, explicit request. It fits the picture into the
+    tier's box the way a cap does - the side that reaches the box first decides -
+    but from the size the picture is DISPLAYED at, so an anamorphic DVD comes out
+    with square pixels at its real shape: 720x480 at 32:27 is 16:9 and becomes
+    1920x1080, the same frame at 8:9 is 4:3 and becomes 1440x1080.
+
+    A picture that fills the box already on one side - a 1920x800 scope film, a
+    1440x1080 4:3 master - has nothing to gain and answers None, as does one short
+    of it by less than ``MIN_ENLARGEMENT``. Both results are even, for the same
+    4:2:0 reason as the cap, and never outside the box.
+    """
+    w, h = _dimension(width), _dimension(height)
+    if not tier_name or not w or not h:
+        return None
+    limits = ceiling(tier_name)
+    if limits is None:
+        return None
+    limit_w, limit_h = limits
+    shown_w = w * _aspect(sar)
+    factor = min(limit_w / shown_w, limit_h / h)
+    if factor < MIN_ENLARGEMENT:
+        return None
+    return (min(max(int(shown_w * factor / 2 + 0.5) * 2, 2), limit_w),
+            min(max(int(h * factor / 2 + 0.5) * 2, 2), limit_h))
 
 
 # --- the same ladder, as SQL --------------------------------------------------

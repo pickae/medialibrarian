@@ -37,6 +37,7 @@ from medialib.lib import (
     segments,
     statusline,
     tooldeps,
+    upscale,
     videocrop,
     videograin,
     workerpool,
@@ -554,6 +555,12 @@ def _remove(path: str) -> None:
 
 # --- the encodes --------------------------------------------------------------
 
+def vspipe_chatter(line: str) -> bool:
+    """vspipe's closing tally ("Output 959 frames in 35.76 seconds ..."), which
+    it prints once per chunk whatever it is told."""
+    return line.startswith("Output ") and " frames in " in line
+
+
 def run_quiet_encode(argv: list) -> int:
     """One video encode, with the encoder library's own chatter stripped and the
     p/r keys able to stop and continue it.
@@ -568,7 +575,8 @@ def run_quiet_encode(argv: list) -> int:
     Every video encode goes through here, whole file or chunk, software or NVENC,
     which is what makes one keypress reach all of them at once.
     """
-    return pausecontrol.run_pausable(argv, keep=lambda line: not svt_chatter(line))
+    return pausecontrol.run_pausable(
+        argv, keep=lambda line: not (svt_chatter(line) or vspipe_chatter(line)))
 
 
 def encode_video_whole(relative: str, directory: str, settings) -> int:
@@ -583,12 +591,46 @@ def encode_video_whole(relative: str, directory: str, settings) -> int:
     args = rules.build_video_args(
         rules.profile_args(rules.VIDEO_PROFILES, settings.video_profile),
         source, settings)
+    out = os.path.join(directory, "video.mkv")
+    progress = os.path.join(directory, "prog.0000")
+    if settings.upscale_size:
+        return run_upscaled_encode(settings, source, args, progress, out, 0, -1)
     argv = (["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
-             "-nostats", "-progress", os.path.join(directory, "prog.0000"),
+             "-nostats", "-progress", progress,
              "-y"] + settings.decode_accel.split()
             + ["-i", source, "-an", "-sn", "-map", "0:v:0"] + args.split()
-            + ["-f", "matroska", os.path.join(directory, "video.mkv")])
+            + ["-f", "matroska", out])
     return run_quiet_encode(argv)
+
+
+def run_upscaled_encode(settings, source: str, args: str, progress: str,
+                        out: str, start: int, end: int) -> int:
+    """Frames <start> up to <end> (-1: to the last) of <source> upscaled and
+    encoded into <out>.
+
+    The upscaler reads the source itself, so there is no -ss and no trim here:
+    it is handed frame numbers, and its crop and resize replace ffmpeg's filter
+    chain. A failure removes what was written, because the ffmpeg at the end of
+    the pipe finishes cleanly on whatever it was given, and a chunk that stopped
+    a few frames short would otherwise pass for a whole one.
+    """
+    encode = (["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
+               "-nostats", "-progress", progress, "-y",
+               "-f", "yuv4mpegpipe", "-i", "pipe:0"] + args.split()
+              + ["-f", "matroska", out])
+    width, height = settings.upscale_size.split("x")
+    fps_num, _sep, fps_den = settings.upscale_fps.partition("/")
+    values = {"source": source, "cache": settings.upscale_index,
+              "fpsnum": fps_num, "fpsden": fps_den or "1",
+              "start": str(start), "end": str(end),
+              "crop": settings.upscale_crop, "matrix": settings.upscale_matrix,
+              "range": settings.upscale_range, "engine": settings.upscale_engine,
+              "width": width, "height": height}
+    status = run_quiet_encode(upscale.pipeline_argv(
+        settings.upscale_stack, settings.upscale_script, values, encode))
+    if status != 0:
+        _remove(out)
+    return status
 
 
 def encode_video_chunk(settings, token: str) -> int:
@@ -611,13 +653,23 @@ def encode_video_chunk(settings, token: str) -> int:
     args = rules.build_video_args(
         rules.profile_args(rules.VIDEO_PROFILES, settings.video_profile),
         source, settings)
+    progress = os.path.join(directory, "prog.%04d" % int(index))
+    if settings.upscale_size:
+        # The same boundaries in frames: each chunk ends at the frame the next
+        # one starts at, and the last one runs to the end of the stream.
+        first = upscale.frame_at(start, settings.upscale_fps)
+        last = (upscale.frame_at(formatting.awk_number(start)
+                                 + formatting.awk_number(duration),
+                                 settings.upscale_fps)
+                if int(index) < int(total) - 1 else -1)
+        return run_upscaled_encode(settings, source, args, progress, out,
+                                   first, last)
     # The last chunk runs to the end of the stream rather than to the container's
     # duration, so a final frame past that rounded figure is not lost.
     if int(index) < int(total) - 1:
         args = rules.with_chunk_end(args, duration)
     argv = (["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
-             "-nostats", "-progress",
-             os.path.join(directory, "prog.%04d" % int(index)), "-y"]
+             "-nostats", "-progress", progress, "-y"]
             + settings.decode_accel.split()
             + ["-ss", start, "-i", source, "-an", "-sn",
                "-map", "0:v:0"] + args.split() + ["-f", "matroska", out])
@@ -948,6 +1000,12 @@ class Run:
         width, height, _order, sar = rules.video_dimensions(source)
         enc_width, enc_height = resolutions.capped(width, height,
                                                    settings.max_resolution)
+        # With -u the -t test judges the size the file would be enlarged to.
+        # The crop is not measured yet, so this is the uncropped picture's.
+        enlarged = resolutions.enlarged(width, height,
+                                        settings.upscale_resolution, sar)
+        if enlarged:
+            enc_width, enc_height = enlarged
 
         # Film grain: measure THIS source, so a clean file is not given grain it
         # never had and a grainy one gets as much as it actually has.
@@ -972,9 +1030,7 @@ class Run:
                 self.skipped += 1
                 return None
 
-        rules.warn_source_geometry(
-            relative, rules.interlace_verdict(source, settings.decode_accel),
-            sar)
+        fields = rules.interlace_counts(source, settings.decode_accel)
 
         self._settle_dolby_vision(plan)
 
@@ -986,8 +1042,27 @@ class Run:
                                                      settings.crop)
         enc_width, enc_height = resolutions.capped(crop_width, crop_height,
                                                    settings.max_resolution)
+        # After the crop, because it is the picture left inside the bands that
+        # is enlarged, and the engine is built for exactly that frame.
+        if settings.upscale_stack is not None:
+            if not self._settle_upscale(plan, width, height, sar, crop_width,
+                                        crop_height, fields):
+                self._release_dv(plan)
+                shutil.rmtree(directory, ignore_errors=True)
+                self.skipped += 1
+                return None
+            if settings.upscale_size:
+                enc_width, enc_height = (
+                    int(side) for side in settings.upscale_size.split("x"))
+        # An upscaled file is not encoded as-is, so neither warning would be
+        # true of it: its fields were checked to be progressive, and its pixels
+        # come out square.
+        if not settings.upscale_size:
+            rules.warn_source_geometry(
+                relative, rules.interlace_verdict_of(fields), sar)
         plan.size_text = self._size_text(width, height, crop_width,
-                                         crop_height, enc_width, enc_height)
+                                         crop_height, enc_width, enc_height,
+                                         upscaled=bool(settings.upscale_size))
 
         # After the crop, because whether the metadata survives it depends on
         # what the frame it describes turns into.
@@ -1087,7 +1162,7 @@ class Run:
         return True
 
     def _size_text(self, width, height, crop_width, crop_height,
-                   enc_width, enc_height) -> str:
+                   enc_width, enc_height, upscaled: bool = False) -> str:
         """The sizes this file passes through, in the order the filters change
         them: what it arrived as, what the crop left, and what is encoded.
 
@@ -1103,7 +1178,8 @@ class Run:
         if (crop_width, crop_height) != (width, height):
             text += " -> cropped %sx%s" % (crop_width, crop_height)
         if (enc_width, enc_height) != (crop_width, crop_height):
-            text += " -> %sx%s" % (enc_width, enc_height)
+            text += " -> %s%sx%s" % ("upscaled " if upscaled else "",
+                                     enc_width, enc_height)
         return text
 
     def _settle_dolby_vision(self, plan: Plan) -> None:
@@ -1168,6 +1244,72 @@ class Run:
         return videocrop.crop_for(source, relative, _media_duration,
                                   _dimensions_line, runlog.jobs_per_core,
                                   settings.decode_accel)
+
+    def _settle_upscale(self, plan: Plan, width, height, sar, crop_width,
+                        crop_height, fields) -> bool:
+        """The -u decision for one file, which every chunk then inherits: False
+        for a file that is not converted at all, True otherwise - with
+        ``upscale_size`` set when it is enlarged, and left empty when it keeps
+        its own size.
+
+        Kept at its own size: a picture that fills the tier already, and an HDR
+        one, because no upscaling network is trained on HDR and a PQ picture
+        fed to one comes back with its tones wrong. Skipped: a source whose
+        fields are woven, since the network would enlarge the combing into the
+        picture, and one the upscaler cannot be set up for. Skipped rather than
+        encoded as-is, because a finished output is never converted again, and
+        these are files a later run - one that can deinterlace, or once the
+        problem is fixed - should still get to.
+        """
+        settings = plan.settings
+        relative = plan.relative
+        target = resolutions.enlarged(crop_width, crop_height,
+                                      settings.upscale_resolution, sar)
+        if target is None:
+            return True
+        color_space, color_range, transfer = rules.video_color_space(
+            plan.source)
+        if transfer in ("smpte2084", "arib-std-b67"):
+            log("Upscale: not for an HDR source - no upscaling network is "
+                "trained on HDR - so it keeps its own size: %s" % relative)
+            return True
+        blocked = rules.upscale_blocked_by_fields(fields)
+        if blocked:
+            log("Upscale: skipping %s - %s. An interlaced or telecined picture "
+                "has to be deinterlaced before it is enlarged, which this run "
+                "does not do." % (relative, blocked))
+            return False
+        fps = rules.video_frame_rate(plan.source)
+        if not fps:
+            log("Upscale: skipping %s - its frame rate could not be read, and "
+                "the upscaler reads it frame by frame." % relative)
+            return False
+
+        pausecontrol.wait_while_paused()
+        stack = settings.upscale_stack
+        engine, problem = upscale.engine_for(stack, int(crop_width),
+                                             int(crop_height))
+        if not engine:
+            log("Upscale: skipping %s - no TensorRT engine could be built for "
+                "its %sx%s picture: %s" % (relative, crop_width, crop_height,
+                                           problem))
+            return False
+        # Indexed here, once, so the chunks opening it in parallel read the
+        # index instead of each decoding the whole film to make its own.
+        index = os.path.join(plan.directory, "bestsource")
+        if not upscale.index_source(stack, plan.source, index, fps):
+            log("Upscale: skipping %s - the upscaler's source filter could not "
+                "read it." % relative)
+            return False
+
+        settings.upscale_size = "%dx%d" % target
+        settings.upscale_engine = engine
+        settings.upscale_index = index
+        settings.upscale_fps = fps
+        settings.upscale_crop = upscale.crop_edges(settings.crop, width, height)
+        settings.upscale_matrix = upscale.source_matrix(color_space, height)
+        settings.upscale_range = "full" if color_range == "pc" else "limited"
+        return True
 
     def _encode(self, settings, relative: str, directory: str,
                 duration: float, bounds: list, size_text: str,
@@ -1429,6 +1571,7 @@ def main(argv: list, program: str = "convert-video",
         quality=result.values["videoQuality"] or "",
         quality_given="q" in result.given,
         max_resolution=result.values["maxVideoResolution"] or "",
+        upscale_resolution=result.values["upscaleResolution"] or "",
         crop_wanted="c" in result.given,
         fast_decode=result.values["videoFastDecode"] or "",
         test_source_bitrate="t" in result.given,
@@ -1476,6 +1619,16 @@ def main(argv: list, program: str = "convert-video",
         prefer=svt_av1_hdr_works)
     if tooldeps.require_tools(program, ["ffmpeg", "ffprobe"]):
         return 1
+    # Refused rather than degraded, and before the output folder exists: a run
+    # that encoded the small files at their own size instead would leave outputs
+    # that every later run skips as finished, upscaler or not.
+    if settings.upscale_resolution:
+        stack, problem = upscale.settle(_gpu_name())
+        if stack is None:
+            sys.stderr.write("%s: -u %s needs a working upscaler, and %s.\n"
+                             % (program, settings.upscale_resolution, problem))
+            return 1
+        settings.upscale_stack = stack
     os.makedirs(settings.output_dir, exist_ok=True)
     ramscratch.init_ram_base()
 
@@ -1536,6 +1689,20 @@ def _validate(settings, video_args: str, grain: str,
             return ('Cannot scale to resolution tier "%s". Valid -r tiers: %s.'
                     % (settings.max_resolution, resolutions.spellings()))
         settings.max_resolution = named
+
+    if settings.upscale_resolution:
+        named = resolutions.named(settings.upscale_resolution)
+        if not named or not resolutions.ceiling(named):
+            return ('Cannot upscale to resolution tier "%s". Valid -u tiers: %s.'
+                    % (settings.upscale_resolution, resolutions.spellings()))
+        settings.upscale_resolution = named
+        cap_box = resolutions.ceiling(settings.max_resolution or "")
+        upscale_box = resolutions.ceiling(named)
+        if cap_box and upscale_box:
+            if upscale_box[0] > cap_box[0] or upscale_box[1] > cap_box[1]:
+                return ("The -u upscale tier (%s) is above the -m ceiling (%s): "
+                        "a file enlarged to it would only be scaled back down."
+                        % (named, settings.max_resolution))
 
     saving = str(settings.required_saving)
     if not (saving.isdigit() and len(saving) <= 2):
@@ -1761,6 +1928,18 @@ def _summarise(settings, video_args: str, grain: str) -> None:
         log("Resolution: unchanged, every source is encoded at its own size "
             "(-r caps it).")
 
+    if settings.upscale_stack is not None:
+        target = resolutions.ceiling(settings.upscale_resolution) or (0, 0)
+        log("Upscale: a picture smaller than %s (%dx%d) is enlarged to fill it "
+            "with %s, at the shape it is displayed at and with square pixels. "
+            "An interlaced or telecined source is skipped, and an HDR one keeps "
+            "its own size."
+            % (settings.upscale_resolution, target[0], target[1],
+               settings.upscale_stack.describe()))
+    else:
+        log("Upscale: off, nothing is enlarged (-u enlarges a smaller picture "
+            "to a tier).")
+
     # Where the quality level comes from, stated because the bias is otherwise
     # invisible: the profile row above shows the unbiased level, not the one a
     # 2160p file will get.
@@ -1955,6 +2134,8 @@ def _run_all(settings) -> int:
     ramscratch.add_exit_cleanup([chunk_root])
     settings.chunk_root = chunk_root
     settings.ram_base = ramscratch.ram_base()
+    if settings.upscale_stack is not None:
+        settings.upscale_script = upscale.write_script(chunk_root)
 
     run = Run(settings)
     safety.set_run_footer(run.footer)
