@@ -1088,15 +1088,17 @@ def check_audio_tracks(movie: str, root: str) -> None:
 
 # --- the improved copy --------------------------------------------------------
 
-def gather_commentary_transcripts(base: str, tracks: list) -> list:
+def gather_commentary_transcripts(base: str, tracks: list,
+                                  say=None) -> list:
     """``gatherCommentaryTranscripts``: the transcripts to append as commentary
     subtitle tracks, as (srt, language, title) triples.
 
     A transcript the movie already carries as a subtitle track is left out, or
     every run would pile another identical track on top of what the last one
     left - and only that one: the commentaries the file is missing are appended
-    beside it.
+    beside it. ``say`` is where that is said, the run's log when not given.
     """
+    say = say or log
     found = []
     # What every commentary of this film is called, which is what says whether a
     # cropped title still points at one of them and at no other.
@@ -1149,7 +1151,7 @@ def gather_commentary_transcripts(base: str, tracks: list) -> list:
                 # Nothing to match this one on but the count.
                 already = _take_unplaced(unplaced, language)
             if already:
-                log("  Commentary transcript already a subtitle track in the "
+                say("  Commentary transcript already a subtitle track in the "
                     "file, not appending it again: " + title)
                 continue
             # Appended under the track's own name whole, never the cut one: a

@@ -367,8 +367,9 @@ def main(argv: list, program: str = "transcribe-audio") -> int:
 
         state = Run(input_dir, output_dir, fmt, model, ram_root, progress_file,
                     len(tracks))
-        sys.stdout.write("Transcribing %d file(s) on %s worker(s)...\n"
-                         % (len(tracks), jobs))
+        # The pool is never wider than the work.
+        sys.stdout.write("Transcribing %d file(s) on %d worker(s)...\n"
+                         % (len(tracks), min(int(jobs), len(tracks))))
         _run_queue(state, tracks, jobs)
         safety.exit_if_aborted()
         sys.stdout.write("Done.\n")

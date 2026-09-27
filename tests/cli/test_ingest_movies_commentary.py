@@ -50,7 +50,7 @@ def ingested(monkeypatch):
                                fragments_file="",
                                whisper={"model": "m",
                                         "jobs": whisper_lib.WHISPER_JOBS},
-                               ffsubsync_quality="yes",
+                               whisper_said=[], ffsubsync_quality="yes",
                                long_names=tmdblookup.LongNames(),
                                unfixed_movies=[])
         run_module._ingest(state, "/x", True)
@@ -77,7 +77,7 @@ def test_every_queued_record_reaches_the_transcription(monkeypatch):
                         lambda record, *a: seen.append((record, a)))
     state = run_module.Run(script_dir="", ram_root="/ram", skips=None,
                            fragments_file="", whisper={"model": "m"},
-                           ffsubsync_quality="yes")
+                           whisper_said=[], ffsubsync_quality="yes")
     # Width one, so the records run in this process and no worker is forked.
     run_module._drain_commentary(state, iter([("one", 1), ("two", 2)]), 1)
     assert [record for record, _args in seen] == ["one", "two"]
@@ -90,7 +90,7 @@ def test_the_transcription_is_handed_this_run_s_settings(monkeypatch):
                         lambda record, *a: seen.append(a))
     state = run_module.Run(script_dir="", ram_root="/ram", skips=None,
                            fragments_file="", whisper={"model": "m"},
-                           ffsubsync_quality="no")
+                           whisper_said=[], ffsubsync_quality="no")
     run_module._drain_commentary(state, iter([("one", 0)]), 1)
     assert seen == [({"model": "m"}, run_module.rules.MAX_WHISPER_SYNC_OFFSET,
                      "no", "/ram", run_module.log)]
@@ -103,7 +103,27 @@ def test_an_abort_stops_the_drain_where_it_is(monkeypatch):
                         lambda record, *a: seen.append(record))
     monkeypatch.setattr(run_module.safety, "abort_requested", lambda: True)
     state = run_module.Run(script_dir="", ram_root="/ram", skips=None,
-                           fragments_file="", whisper={}, ffsubsync_quality="")
+                           fragments_file="", whisper={}, whisper_said=[],
+                           ffsubsync_quality="")
     run_module._drain_commentary(
         state, iter([("one", 0), ("two", 0)]), 1)
     assert seen == []
+
+
+def test_the_whisper_plan_is_said_with_the_first_commentary(monkeypatch):
+    """Settling whisper is done up front, but what it found is only worth
+    saying once there is a commentary to transcribe - and a folder without one
+    never hears of it."""
+    said = []
+    monkeypatch.setattr(run_module, "log", said.append)
+    monkeypatch.setattr(run_module.commentarytranscription,
+                        "transcribe_commentary",
+                        lambda record, *a: said.append("ran " + record))
+    state = run_module.Run(script_dir="", ram_root="/ram", skips=None,
+                           fragments_file="", whisper={"model": "m"},
+                           whisper_said=["Transcribing on the GPU"],
+                           ffsubsync_quality="yes")
+    run_module._drain_commentary(state, iter(()), 1)
+    assert said == []
+    run_module._drain_commentary(state, iter([("one", 0), ("two", 0)]), 1)
+    assert said == ["Transcribing on the GPU", "ran one", "ran two"]

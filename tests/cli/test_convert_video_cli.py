@@ -286,8 +286,7 @@ class TestTheBitrateTest:
         (["-t"], "would still be adequate on 50% less bitrate"),
         (["-t", 30], "would still be adequate on 30% less bitrate"),
         (["-t", 0], "would still be adequate on 0% less bitrate"),
-        (["-p", "av1Grain"],
-         "Bitrate test: off, every source is converted"),
+        (["-p", "av1Grain"], "bitrate test (-t)."),
     ], ids=["-t alone", "the default saving", "a percentage", "-t 0",
             "without -t"])
     def test_what_the_summary_reports(self, video_cli, options, summary):
@@ -304,6 +303,35 @@ class TestTheBitrateTest:
                 '(got "100").') in log
 
 
+class TestTheSummaryOnlySpeaksOfWhatApplies:
+    """The startup summary is read before every run, so a row about something
+    the run cannot meet is one the reader learns to skip - along with the rows
+    that matter."""
+
+    def test_what_depends_on_the_source_is_left_to_the_files(self, video_cli):
+        """Whether Dolby Vision or HDR10+ survive is a per-file question, and a
+        file carrying either says so when it is prepared."""
+        _, log = video_cli.start()
+        assert "Dolby Vision" not in log
+        assert "HDR10+" not in log
+
+    def test_what_is_off_shares_one_row(self, video_cli):
+        _, log = video_cli.start()
+        assert ("Off: crop (-c), resolution ceiling (-m), upscale (-u), "
+                "fast decode (-f), bitrate test (-t).") in log
+
+    def test_a_setting_the_encoder_lacks_is_not_called_off(self, video_cli):
+        _, log = video_cli.start("-p", "x265Fast")
+        assert "Off: crop (-c)" in log
+        assert "fast decode" not in log
+
+    def test_a_ceiling_with_nothing_to_enlarge_mentions_smaller_sources(
+            self, video_cli):
+        _, log = video_cli.start("-m", "1080p")
+        assert ("Resolution: capped at 1080p (1920x1080), aspect ratio kept; a "
+                "smaller source keeps its own size.") in log
+
+
 class TestTheCrop:
     """-c is a bare flag: a crop is measured per file, so there is nothing for a
     run to settle beyond whether it measures at all."""
@@ -313,7 +341,7 @@ class TestTheCrop:
         (["-c"], "only the smallest black bands any of them found come off"),
         (["-c", "--"], "Crop: on (-c)"),
         (["--crop"], "Crop: on (-c)"),
-        ([], "Crop: off, every source is encoded with the whole frame"),
+        ([], "Off: crop (-c), "),
     ], ids=["-c alone", "what it says it does", "after --", "the long name",
             "without -c"])
     def test_what_the_summary_reports(self, video_cli, options, summary):
@@ -344,7 +372,11 @@ class TestWhereTheQualityLevelComesFrom:
         (["-p", "av1Constrained"],
          "Video quality: none to set - av1Constrained targets an average "
          "bitrate, not a quality level."),
-    ], ids=["the bias ladder", "-q turns it off", "a bitrate-capped profile"])
+        # A tier above the -m ceiling is one no file is encoded at.
+        (["-p", "av1Grain", "-m", "1080p"],
+         "(1080p 0, 720p -1, SD -2, unknown 0; override with -q)"),
+    ], ids=["the bias ladder", "-q turns it off", "a bitrate-capped profile",
+            "under a ceiling"])
     def test_the_summary_states_it(self, video_cli, options, summary):
         _, log = video_cli.start(*options)
         assert summary in log
@@ -727,7 +759,8 @@ class TestUpscale:
         assert "libvstrt.so" in done.stderr
         assert not outputs.exists()
 
-    def test_without_it_the_summary_says_nothing_is_enlarged(self, video):
+    def test_without_it_the_summary_names_it_among_what_is_off(self, video):
         done, _outputs = self._run(video)
-        assert (done.stdout + done.stderr).count(
-            "Upscale: off, nothing is enlarged") == 1
+        log = done.stdout + done.stderr
+        assert "Upscale:" not in log
+        assert log.count("upscale (-u)") == 1

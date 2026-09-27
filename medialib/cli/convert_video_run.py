@@ -1491,14 +1491,16 @@ class Run:
         out.write("Files converted:   %d\n" % self.converted)
         out.write("Files skipped:     %d\n" % self.skipped)
         out.write("Files failed:      %d\n" % self.failed)
-        out.write("Total duration:    %.0f s (%s)\n"
-                  % (self.video_seconds,
-                     formatting.fmt_hms("%.3f" % self.video_seconds)))
-        out.write("Frames encoded:    %d\n" % self.frames)
+        # A run that converted nothing has no encode to measure, and a row of
+        # zeros would only read like one that went badly.
         if self.converted > 0:
+            out.write("Total duration:    %.0f s (%s)\n"
+                      % (self.video_seconds,
+                         formatting.fmt_hms("%.3f" % self.video_seconds)))
+            out.write("Frames encoded:    %d\n" % self.frames)
             out.write("Time per file:     %.2f s\n"
                       % (encoding / self.converted))
-        if encoding > 0:
+        if self.converted > 0 and encoding > 0:
             out.write("Average fps:       %.1f\n" % (self.frames / encoding))
             out.write("Real-time speedup: %sx\n" % formatting.fmt_ratio(
                 "%.6f" % (self.video_seconds / encoding)))
@@ -1825,15 +1827,17 @@ def _detect_hardware(settings, video_args: str, engines_override: str) -> None:
         else:
             name = _gpu_name()
             settings.nvenc_engines = rules.nvenc_engines_for(name)
-            if not name:
+            if name:
+                log('Hardware encode: %s on NVENC across %d engine(s) (guessed '
+                    'for "%s"; override with -e).'
+                    % (settings.encoder, settings.nvenc_engines, name))
+            else:
                 log("WARNING: nvidia-smi is unavailable - the NVENC engine "
                     "count is a blind guess of %d." % settings.nvenc_engines)
                 log("         Use -e <count> to size the parallelism for your "
                     "card.")
-            log('Hardware encode: %s on NVENC across %d engine(s) (guessed for '
-                '"%s"; override with -e).'
-                % (settings.encoder, settings.nvenc_engines,
-                   name or "unknown GPU"))
+                log("Hardware encode: %s on NVENC across %d engine(s) (the "
+                    "guess above)." % (settings.encoder, settings.nvenc_engines))
         if settings.nvenc_tune == rules.NVENC_TUNE_WANTED:
             log("NVENC tuning: -tune %s, which enables lookahead and the "
                 "temporal filter by itself." % settings.nvenc_tune)
@@ -1913,36 +1917,41 @@ def _summarise(settings, video_args: str, grain: str) -> None:
     if settings.svt_av1_hdr:
         settled = rules.svt_av1_hdr_args(settled, settings.grain_tune)
         log("SVT-AV1-HDR: this ffmpeg's libsvtav1 is SVT-AV1-HDR, so the "
-            "profile is given to it without qm-min=0 (the fork's own minimum "
-            "is kept), and a PQ source gets its PQ variance-boost curve. The "
-            "quality levels are still the ones tuned for mainline SVT-AV1, "
-            "which spends bits differently - sizes will not match a mainline "
+            "profile runs without qm-min=0 (the fork keeps its own minimum) and "
+            "a PQ source gets its PQ variance-boost curve. The quality levels "
+            "are tuned for mainline SVT-AV1, so sizes will not match a mainline "
             "encode.")
     elif settings.encoder == "libsvtav1":
         log("SVT-AV1-HDR: not found, encoding with this ffmpeg's own "
             "libsvtav1.")
     log("Video profile: %s -> %s" % (settings.video_profile, settled))
 
+    # What the run leaves alone is named on one row, with the flag that turns
+    # each on: a row apiece would bury the few that change the encode.
+    off = []
+
     if settings.crop_wanted:
         log("Crop: on (-c) - each source is measured at %d moments across its "
             "running time and only the smallest black bands any of them found "
-            "come off, symmetrically. A file keeping its Dolby Vision RPU is "
-            "left whole." % videocrop.CROP_PROBE_SAMPLES)
+            "come off, symmetrically.%s"
+            % (videocrop.CROP_PROBE_SAMPLES,
+               " A file keeping its Dolby Vision RPU is left whole."
+               if settings.dv_encoder_support else ""))
     else:
-        log("Crop: off, every source is encoded with the whole frame it was "
-            "stored in, black bands and all (-c crops them).")
+        off.append("crop (-c)")
 
     ceiling = (resolutions.ceiling(settings.max_resolution)
                if settings.max_resolution else None)
     # The validation refused a tier with no ceiling long before this, so the
     # guard is here to keep that true rather than because it can fail today.
     if ceiling:
-        log("Resolution: capped at %s (%dx%d), aspect ratio kept; a smaller "
-            "source keeps its own size."
-            % (settings.max_resolution, ceiling[0], ceiling[1]))
+        # With -u a smaller source is enlarged instead, which its own row says.
+        log("Resolution: capped at %s (%dx%d), aspect ratio kept%s."
+            % (settings.max_resolution, ceiling[0], ceiling[1],
+               "" if settings.upscale_stack is not None
+               else "; a smaller source keeps its own size"))
     else:
-        log("Resolution: unchanged, every source is encoded at its own size "
-            "(-r caps it).")
+        off.append("resolution ceiling (-m)")
 
     if settings.upscale_stack is not None:
         target = resolutions.ceiling(settings.upscale_resolution) or (0, 0)
@@ -1953,8 +1962,7 @@ def _summarise(settings, video_args: str, grain: str) -> None:
             % (settings.upscale_resolution, target[0], target[1],
                settings.upscale_stack.describe()))
     else:
-        log("Upscale: off, nothing is enlarged (-u enlarges a smaller picture "
-            "to a tier).")
+        off.append("upscale (-u)")
 
     # Where the quality level comes from, stated because the bias is otherwise
     # invisible: the profile row above shows the unbiased level, not the one a
@@ -1969,15 +1977,17 @@ def _summarise(settings, video_args: str, grain: str) -> None:
     else:
         log("Video quality: the %s profile default above, biased per file by "
             "the tier it is ENCODED at (%s; override with -q)."
-            % (settings.video_profile, rules.quality_bias_spellings()))
+            % (settings.video_profile,
+               rules.quality_bias_spellings(settings.max_resolution)))
 
     _summarise_grain(settings, grain)
 
     if settings.fast_decode:
         log("Fast decode: level %s, trading some compression for a cheaper "
             "decode." % settings.fast_decode)
-    else:
-        log("Fast decode: off (the encoder default; -f 1 or -f 2 asks for it).")
+    # The one encoder that has the setting; for the others it is not "off".
+    elif settings.encoder == "libsvtav1":
+        off.append("fast decode (-f)")
 
     if settings.test_source_bitrate:
         log("Bitrate test: on (-t) - each source is measured first, and only a "
@@ -1987,36 +1997,15 @@ def _summarise(settings, video_args: str, grain: str) -> None:
             % (codecs.encoder_codec(settings.encoder),
                settings.required_saving))
     else:
-        log("Bitrate test: off, every source is converted (-t converts only "
-            "the ones with room to save).")
+        off.append("bitrate test (-t)")
 
-    if settings.dv_encoder_support:
-        log("Dolby Vision: kept where the source carries a single-layer RPU "
-            "(%s can code one)." % settings.encoder)
-        if _has_tool("dovi_tool") and _has_tool("mkvmerge"):
-            log("Dolby Vision: a dual-layer profile 7 source is normalised to "
-                "single-layer profile 8.1 first (no video re-encode), so it "
-                "keeps its DV without being ingested first.")
-        else:
-            log("Dolby Vision: a dual-layer profile 7 source is encoded as "
-                "plain HDR10 - normalising it to single-layer profile 8.1 "
-                "needs dovi_tool and mkvmerge, and one of them is missing.")
-    else:
-        log("Dolby Vision: dropped, %s cannot code an RPU (HDR10 signalling is "
-            "still preserved)." % settings.encoder)
+    if off:
+        log("Off: %s." % ", ".join(off))
 
-    if codecs.encoder_codec(settings.encoder) != "hevc":
-        log("HDR10+: dropped, it cannot be written back into %s output yet "
-            "(HDR10 signalling is still preserved)."
-            % (codecs.encoder_codec(settings.encoder).upper()
-               or settings.encoder))
-    elif _has_tool("hdr10plus_tool") and _has_tool("mkvmerge"):
-        log("HDR10+: kept where the source carries it - read out of the source "
-            "before the encode and written back into it after (no video "
-            "re-encode), alongside Dolby Vision where that is kept too.")
-    else:
-        log("HDR10+: a source carrying it is encoded as plain HDR10 - keeping "
-            "it needs hdr10plus_tool and mkvmerge, and one of them is missing.")
+    # Dolby Vision and HDR10+ are not summarised here: whether they can be kept
+    # depends on what a source carries, so each file that has either says on
+    # its own line what happens to it, and a run of files without them says
+    # nothing about them at all.
 
     if settings.audio_profile == "passthrough":
         log("Audio profile: passthrough (source audio copied through, not "
@@ -2028,19 +2017,20 @@ def _summarise(settings, video_args: str, grain: str) -> None:
     else:
         log("Audio profile: %s (per-channel Opus bitrate from the shared "
             "table, surround downmixed to stereo)" % settings.audio_profile)
-    log("Audio parallelism: one software process per audio track, run "
-        "alongside the video encode.")
 
     if settings.hardware_encode:
+        engines = settings.nvenc_engines
         log("Video parallelism: hardware - %d NVENC engine(s), so %d chunk(s) "
             "per file (files run one at a time), with split encode disabled so "
             "the engines are not also striping single frames."
-            % (settings.nvenc_engines, settings.nvenc_engines))
+            % (engines, engines))
         # Said up front so an allocation failure reads as a memory ceiling
-        # rather than a broken profile.
-        log("Note: %d encode session(s) run at once, so GPU memory is the "
-            "ceiling on 4K sources - a driver allocation failure there means "
-            "lowering -e, not a broken profile." % settings.nvenc_engines)
+        # rather than a broken profile - and only where there is both more than
+        # one session and a 4K encode for them to run out on.
+        if engines > 1 and (not ceiling or ceiling[1] >= 2160):
+            log("Note: %d encode session(s) run at once, so GPU memory is the "
+                "ceiling on 4K sources - a driver allocation failure there "
+                "means lowering -e, not a broken profile." % engines)
     else:
         log("Video parallelism: software - resolution-driven chunks per file, "
             "scaled to %d core(s) (files run one at a time)." % settings.cores)
@@ -2140,9 +2130,11 @@ def _run_all(settings) -> int:
             ramscratch.add_exit_cleanup([directory])
     pausecontrol.start_pause_keys()
     if pausecontrol.pause_keys_active():
-        log('Pause: press "p" to pause the video encoding (the CPU/GPU is '
-            "freed, the encoders keep their memory and the audio keeps going) "
-            'and "r" to carry on. Only for as long as this shell runs.')
+        log('Pause: press "p" to pause the video encoding (the %s freed, the '
+            "encoders keep their memory and the audio keeps going) and \"r\" to "
+            "carry on. Only for as long as this shell runs."
+            % ("NVENC engines are" if settings.hardware_encode
+               else "CPU is"))
 
     chunk_root, status = ramscratch.ram_scratch_dir("convertVideo.chunks")
     if status != 0:

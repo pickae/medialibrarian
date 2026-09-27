@@ -173,7 +173,7 @@ def warn_uncounted_progress() -> None:
     os.environ["UNCOUNTED_PROGRESS_WARNED"] = "1"
     log("WARNING: flock not installed (it ships in util-linux) - progress lines "
         "will be printed one per item")
-    log('         without their "[n of total]" position, and the run\'s closing '
+    log('         without their "[n/total]" position, and the run\'s closing '
         "counts may read low. The")
-    log("         conversion itself is unaffected; nothing is skipped and "
+    log("         work itself is unaffected; nothing is skipped and "
         "nothing is at risk.")

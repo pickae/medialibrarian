@@ -660,8 +660,12 @@ class TestABookTooLongForOnePipe:
         monkeypatch.setattr(ca, "source_channels", lambda src: 1)
         return calls
 
-    def _run(self):
-        return ca.Run(codec="xheaac", extension="m4a", output_dir="out")
+    def _run(self, **settings):
+        # A run that is chunking past the ceiling, as a default one is: the
+        # refusal then only ever meets a file the planner could not cut.
+        return ca.Run(**dict(dict(codec="xheaac", extension="m4a",
+                                  output_dir="out", adaptive=False,
+                                  chunk_over_ceiling=True), **settings))
 
     # 83:41:50 of mono at 44.1 kHz: the file this was written for.
     TOO_LONG = 301309.7
@@ -681,7 +685,32 @@ class TestABookTooLongForOnePipe:
         said = capsys.readouterr().err
         assert "too long for exhale to encode whole" in said
         assert "83:41:50" in said and "book.m4b" in said
-        assert "-o opus" in said
+        assert "-e opus" in said
+
+    def _way_out(self, spawned, tmp_path, capsys, **settings):
+        self._run(**settings)._encode_xheaac(
+            "book.m4b", str(tmp_path / "book.m4a"), mono=True, bitrate=18,
+            duration=self.TOO_LONG)
+        return capsys.readouterr().err
+
+    def test_a_run_that_was_cutting_is_not_told_to_cut(self, spawned,
+                                                       tmp_path, capsys):
+        said = self._way_out(spawned, tmp_path, capsys)
+        assert "-s 0" not in said and "-a" not in said.replace("-aac", "")
+
+    def test_with_s_0_the_way_out_is_to_drop_it(self, spawned, tmp_path,
+                                                capsys):
+        """The run could have cut this file had it been chunking, so the
+        option that stopped it is the first thing to name."""
+        said = self._way_out(spawned, tmp_path, capsys,
+                             chunk_over_ceiling=False)
+        assert "drop -s 0" in said
+
+    def test_under_a_it_is_adaptive_mode_that_stopped_the_cut(
+            self, spawned, tmp_path, capsys):
+        said = self._way_out(spawned, tmp_path, capsys, adaptive=True,
+                             chunk_over_ceiling=False)
+        assert "drop -a" in said and "-s 0" not in said
 
     def test_a_book_inside_the_ceiling_is_encoded_as_it_always_was(
             self, spawned, tmp_path):
@@ -879,3 +908,20 @@ class TestTheQueueOrder:
         next(producer)
         with open(total_file) as handle:
             assert handle.read() == "2\n"
+
+
+class TestTheMissingMkvtoolnixWarning:
+    """Said only to a tree it costs something: convert-audio asks mkvtoolnix for
+    the cover of a Matroska AUDIO source and for nothing else."""
+
+    def test_a_tree_with_an_mka_is_warned(self, capsys):
+        ca._warn_mkvtoolnix(["a.mp3", "sub/b.mka"])
+        said = capsys.readouterr().err
+        assert "mkvtoolnix not found" in said and "sidecar images" in said
+
+    @pytest.mark.parametrize("tracks", [["a.mp3", "b.m4a"], ["film.mkv"]],
+                             ids=["no Matroska", "a Matroska video"])
+    def test_a_tree_without_one_is_not(self, capsys, tracks):
+        """A .mkv is a video, whose picture is never taken as a cover."""
+        ca._warn_mkvtoolnix(tracks)
+        assert capsys.readouterr().err == ""

@@ -262,15 +262,22 @@ class TestCropFor:
                                  probes.dimensions, probes.jobs_per_core)
         return got, capsys.readouterr().err
 
-    def test_a_crop_reports_both_shapes_and_both_bands(self, monkeypatch,
-                                                       capsys):
+    def test_a_crop_reports_both_shapes_and_the_bands_it_removes(
+            self, monkeypatch, capsys):
         got, said = self._run(monkeypatch, capsys,
                               videocrop.Crop(1920, 800, 0, 140))
         assert got == "1920:800:0:140"
         assert "1920x1080 (1.78:1) -> 1920x800 (2.39:1)" in said
-        assert "140 line(s) off the top and the bottom" in said
-        assert "0 column(s) off each side" in said
+        assert "140 line(s) off the top and the bottom -" in said
+        # A letterbox has no side bands, so none are spoken of.
+        assert "column" not in said
         assert "A Film.mkv" in said
+
+    def test_a_crop_on_both_axes_names_both(self, monkeypatch, capsys):
+        _got, said = self._run(monkeypatch, capsys,
+                               videocrop.Crop(1800, 800, 60, 140))
+        assert ("140 line(s) off the top and the bottom and 60 column(s) off "
+                "each side") in said
 
     def test_a_frame_with_no_bands_says_so_and_crops_nothing(self, monkeypatch,
                                                              capsys):

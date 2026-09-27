@@ -941,13 +941,17 @@ class Run:
         # Silenced, like every other fdupes call in this repo: it prints a
         # paragraph per duplicate set it deletes, before the run has said what it
         # is doing at all.
-        log("  De-duplicating byte-identical files (fdupes)")
+        log("De-duplicating byte-identical files (fdupes)")
         _run(["fdupes", "-q", "-rdN", root])
 
         for path in _find_files(root, lambda name: name.endswith(".flac.cue")):
             _force_rename(path, os.path.splitext(os.path.splitext(path)[0])[0]
                           + ".cue")
 
+        # The heading waits for the first disc it is about: most releases are a
+        # single image or plain tracks, and a heading for a split that never
+        # happens would be the only thing the run said about them here.
+        announced = False
         for cue in _find_files(root, lambda name:
                                enums.lower_extension_of(name) == "cue"):
             folder = os.path.dirname(cue)
@@ -958,6 +962,9 @@ class Run:
                             for extension in image_extensions)
             if cue_count < 2 or not has_image:
                 continue
+            if not announced:
+                log("Splitting multi-disc CUE images into subfolders")
+                announced = True
             for duplicate in _one_level(
                     folder,
                     lambda name: enums.lower_extension_of(name) == "cue"):
@@ -1190,13 +1197,15 @@ def footer(state) -> None:
         _stat_row("Encoding time", "%s s (%s)" % (
             "%.2f" % encode_seconds,
             formatting.fmt_hms("%.2f" % encode_seconds)))
-        _stat_row("Audio encoded", "%d s (%s)" % (
-            round(audio_seconds), formatting.fmt_hms(audio_seconds)))
         # Per track and the speed-up both divide by what was ENCODED, not by what
         # was found: a re-run that skipped 90 of 100 tracks did the work of ten,
         # and dividing by a hundred would report a machine ten times faster than
-        # it is.
+        # it is. The audio figure goes with them: a re-run that found every track
+        # up to date encoded none, and "0 s" of it says nothing the rows above
+        # have not.
         if encoded > 0:
+            _stat_row("Audio encoded", "%d s (%s)" % (
+                round(audio_seconds), formatting.fmt_hms(audio_seconds)))
             _stat_row("Time per track",
                       "%.2f s" % (encode_seconds / encoded))
             _stat_row("Real-time speedup", "%sx" % formatting.fmt_ratio(
@@ -1365,7 +1374,6 @@ def _ingest(program: str, script_dir: str, download_dir: str, ingest_dir: str,
     safety.set_run_footer(lambda: footer(state))
 
     # Put CD images that need splitting in separate folders if needed.
-    log("Splitting multi-disc CUE images into subfolders")
     state.split_disc_images(download_dir)
 
     # Before anything reads the tree: an ALAC .m4a is a lossless source wearing a
@@ -1421,8 +1429,9 @@ def _ingest(program: str, script_dir: str, download_dir: str, ingest_dir: str,
     _copy_the_rest(state, download_dir, ingest_dir, counters)
 
     if lossless_tracks:
-        log("Encoding %d lossless track(s) to FLAC (up to %d in parallel)"
-            % (state.lossless_total, jobs))
+        log("Encoding %d lossless track(s) to FLAC%s"
+            % (state.lossless_total,
+               _in_parallel(jobs, state.lossless_total)))
         # Only stamped where there is encoding to time, so the closing report can
         # tell a run that encoded nothing from one that was stopped while
         # encoding.
@@ -1444,14 +1453,13 @@ def _ingest(program: str, script_dir: str, download_dir: str, ingest_dir: str,
         lambda name: enums.lower_extension_of(name)
         in enums.COVER_IMAGE_EXTENSIONS)
     if cover_images:
-        log("Converting %d cover image(s), the large ones to AVIF (up to %d "
-            "in parallel)" % (len(cover_images), image_jobs))
+        log("Converting %d cover image(s), the large ones to AVIF%s"
+            % (len(cover_images),
+               _in_parallel(image_jobs, len(cover_images))))
         counters.start_phase("converting", "images", len(cover_images))
         _run_pool(state, "convert_image", cover_images, image_jobs)
         counters.end_phase()
         safety.exit_if_aborted()
-    else:
-        log("No cover image to convert")
 
     stray_videos = _find_files(
         ingest_dir,
@@ -1602,6 +1610,14 @@ def _rsync_help() -> str:
     except OSError:
         return "--out-format"
     return done.stdout.decode("utf-8", "replace")
+
+
+def _in_parallel(jobs: int, items: int) -> str:
+    """The heading's " (up to N in parallel)", with N no larger than the number
+    of items - and nothing at all when that leaves one at a time, which is not
+    parallel."""
+    width = min(jobs, items)
+    return " (up to %d in parallel)" % width if width > 1 else ""
 
 
 def _record_count(path: str) -> int:

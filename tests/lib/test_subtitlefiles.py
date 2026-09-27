@@ -667,6 +667,31 @@ class TestDownloadSubs:
         assert w.calls() == []
         assert logs == []
 
+    def test_without_credentials_it_says_so_once_for_the_folder(self, w,
+                                                                 monkeypatch):
+        """Once, with the count, rather than once per film and language."""
+        tree = _tree(w, "One.mkv", "Two.mkv", "Two.en.srt")
+        monkeypatch.chdir(tree)
+        w.install("pipx")
+        logs = []
+        subtitlefiles.download_subs(str(tree), "", "", "600", "60", "yes",
+                                    logs.append)
+        assert w.calls() == []
+        missing = 2 * len(languages.LANGUAGES) - 1
+        assert logs == ["WARNING: openSubtitlesUser/openSubtitlesPassword "
+                        "not set, skipping subtitle download (%d missing)"
+                        % missing]
+
+    def test_without_credentials_and_nothing_missing_it_is_silent(
+            self, w, monkeypatch):
+        tree = _tree(w, "Movie.mkv", *["Movie.%s.srt" % row.code2
+                                       for row in languages.LANGUAGES])
+        monkeypatch.chdir(tree)
+        logs = []
+        subtitlefiles.download_subs(str(tree), "", "", "600", "60", "yes",
+                                    logs.append)
+        assert logs == []
+
     def test_the_movie_match_is_case_sensitive(self, w, monkeypatch):
         tree = _tree(w, "Movie.MKV")
         monkeypatch.chdir(tree)

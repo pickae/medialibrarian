@@ -240,12 +240,8 @@ def rename_siblings_until_stable(directory: str, mode: str,
     name that only settles after two passes from being left half-cleaned.
     """
     count = len(siblings(directory, mode))
-    # Silent when there is nothing of this kind here, so no directory without
-    # work is ever announced.
     if not count:
         return
-
-    log('  "%s": cleaning %d %s' % (os.path.basename(directory), count, mode))
 
     # Only the iterations that CHANGED something are counted: an already stable
     # directory reports 0, one change followed by a clean pass reports 1.
@@ -255,6 +251,12 @@ def rename_siblings_until_stable(directory: str, mode: str,
         if not changed:
             break
         iterations += 1
+        # Said once the first pass has renamed something, so a directory whose
+        # names were already clean - every one of them, on a re-run - is never
+        # announced. What the later passes do is the stabilising line's.
+        if iterations == 1:
+            log('  "%s": renamed %d of %d %s'
+                % (os.path.basename(directory), changed, count, mode))
 
     if iterations >= 2:
         log("    Stabilised after %d iteration(s)" % iterations)
@@ -339,8 +341,6 @@ def remove_empty_subfolders(root: str) -> None:
     puts its parent's back - a folder that merely lost an empty child should not
     show a fresh date.
     """
-    log("Removing empty sub-folders")
-
     # Gathered up front, deepest-first, so a folder that only becomes empty once
     # its own empty children are gone is still removed in this single pass.
     directories = [d for d in _directories(root, deepest_first=True)
@@ -372,7 +372,10 @@ def remove_empty_subfolders(root: str) -> None:
             except OSError:
                 pass
 
-    log("  Removed %d empty sub-folder(s)" % removed)
+    # Only when there were some: this step runs on every clean, asked for or
+    # not, and a tree that had no empty folder has nothing to hear about it.
+    if removed:
+        log("Removed %d empty sub-folder(s)" % removed)
 
 
 # --- simulation mode ---------------------------------------------------------
@@ -583,7 +586,9 @@ def main(argv: list, program: str = "clean-folder-structure",
         # "folder.<ext>". Independent of -n, -d and -y.
         log("Normalising cover art to folder.<ext> (all levels)")
         for directory in _directories(input_path, deepest_first=False):
-            cover.rename_cover_to_folder(directory, skips)
+            renamed = cover.rename_cover_to_folder(directory, skips)
+            if renamed:
+                log(renamed)
 
         # After the name cleaning, so the "YYYYMMDD ..." prefixes are already in
         # their final form.

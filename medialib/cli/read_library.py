@@ -681,15 +681,18 @@ def footer(state: Run) -> None:
     print("Failed:            %d" % counters.read("failed"))
     print("Total time:        %.2f s (%s)"
           % (total_seconds, formatting.fmt_hms("%.2f" % total_seconds)))
-    print("Audio produced:    %.0f s (%s)"
-          % (audio_seconds, formatting.fmt_hms("%.2f" % audio_seconds)))
+    # The rows about the audio only once there is some: a run that skipped or
+    # failed every book produced none, and "0 s" at "0x" says nothing the counts
+    # above have not.
     if narrated > 0:
+        print("Audio produced:    %.0f s (%s)"
+              % (audio_seconds, formatting.fmt_hms("%.2f" % audio_seconds)))
         per_book = total_seconds / narrated
         print("Time per book:     %.2f s (%s)"
               % (per_book, formatting.fmt_hms("%.2f" % per_book)))
-    if total_seconds > 0:
-        print("Real-time speedup: %sx" % formatting.fmt_ratio(
-            "%.6f" % (audio_seconds / total_seconds)))
+        if total_seconds > 0:
+            print("Real-time speedup: %sx" % formatting.fmt_ratio(
+                "%.6f" % (audio_seconds / total_seconds)))
 
     sys.stdout.flush()
     safety.report_safety_skips()
@@ -817,7 +820,7 @@ def main(argv: list, program: str = "read-library",
             "writes the chapter marks and the cover art into the audiobooks"):
         return 1
     runlog.warn_uncounted_progress()
-    _settle_mkvtoolnix()
+    _settle_mkvtoolnix(opus_bitrate != 0)
 
     narration_engine = result.values["narrationEngine"] or "xtts"
     narration_language = ""
@@ -849,7 +852,14 @@ def main(argv: list, program: str = "read-library",
     if not scan:
         return safety.fail_no_relevant_input(in_path, book_what)
 
-    if not narration_language and not tooldeps.tool_present("ebook-convert"):
+    # A PDF's text is read by poppler when it is there, so a library of nothing
+    # but PDFs loses nothing to a missing Calibre on this count.
+    text_needs_calibre = (
+        not tooldeps.tool_present("pdftotext")
+        or any(not relative.lower().endswith(".pdf")
+               for _size, relative in scan))
+    if (not narration_language and text_needs_calibre
+            and not tooldeps.tool_present("ebook-convert")):
         log("WARNING: Calibre's ebook-convert is not installed (apt install "
             "calibre) - a book whose")
         log("         metadata does not state its language cannot have it read "
@@ -1068,7 +1078,8 @@ def _order_the_queue(state: Run, scan: list, total: int) -> list:
                 "by file size instead,")
             log("         which reads an illustrated book or a scanned PDF as "
                 "though it were long.")
-    if weigh and not tooldeps.tool_present("pdftotext"):
+    has_pdf = any(relative.lower().endswith(".pdf") for _size, relative in scan)
+    if weigh and has_pdf and not tooldeps.tool_present("pdftotext"):
         log("NOTE: poppler-utils is not installed (apt install poppler-utils), "
             "so the PDFs are")
         log("      measured with Calibre instead, which is much slower at it. "
@@ -1133,15 +1144,21 @@ def _announce(state: Run, jobs: int, jobs_from: str, device: str,
     print("")
 
 
-def _settle_mkvtoolnix() -> None:
+def _settle_mkvtoolnix(opus_wanted: bool) -> None:
     """Settled once and shared with the encoder children this run spawns, so the
-    warning is said once by this run rather than by every book's encoder."""
+    warning is said once by this run rather than by every book's encoder.
+
+    Said at all only when it can cost something: what mkvtoolnix reaches here is
+    the cover attached to a Matroska file, and the only file this run hands the
+    Opus encoder is the engine's own audiobook - an m4b unless the engine was
+    told otherwise, and nothing at all without an Opus copy."""
     if os.environ.get("HAVE_MKVTOOLNIX") is not None:
         return
     present = all(tooldeps.tool_present(tool) for tool in
                   ("mkvmerge", "mkvpropedit", "mkvextract"))
     os.environ["HAVE_MKVTOOLNIX"] = "1" if present else ""
-    if not present:
+    narrated_as = os.environ.get("narrationFormat", "m4b").lower()
+    if not present and opus_wanted and narrated_as in ("mka", "mkv"):
         log("WARNING: mkvtoolnix not found (apt install mkvtoolnix) - cover art "
             "embedded in Matroska sources")
         log("         will not be extracted for the Opus listening copies; "

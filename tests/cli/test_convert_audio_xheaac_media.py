@@ -1,4 +1,4 @@
-"""Tier D for `convert-audio -o xheaac`: the real external encoder, end to end.
+"""Tier D for `convert-audio -e xheaac`: the real external encoder, end to end.
 
 Everything about this codec that can be checked without running it is checked in
 tests/lib/test_xheaac.py and tests/cli/test_convert_audio.py - the back-end
@@ -322,5 +322,5 @@ class TestABookTooLongForOneWave:
         assert _seconds(made) == pytest.approx(long_book["seconds"], abs=0.01)
 
     def test_and_it_is_reported_as_converted_rather_than_short(self, long_book):
-        assert "did not convert to their full length" not in (
+        assert "did not convert to" not in (
             long_book["done"].stdout + long_book["done"].stderr)
