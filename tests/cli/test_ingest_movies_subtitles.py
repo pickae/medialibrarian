@@ -110,3 +110,14 @@ def test_both_sync_call_sites_are_handed_the_one_probed_answer(ingested):
 
 def test_the_answer_is_the_probe_s_and_not_a_constant(ingested):
     assert ingested(quality="yes") == {"download": "yes", "commentary": "yes"}
+
+
+def test_a_full_ingest_never_asks_for_the_imdb_lists(ingested, monkeypatch):
+    """They are the tagging pass's: a full ingest is pointed at a download,
+    and fetching most of a gigabyte to name it is not what it is for."""
+    prepared = []
+    monkeypatch.setattr(run_module.imdbdata, "prepare",
+                        lambda *arguments: prepared.append(arguments) or "db")
+    ingested()
+    assert prepared == []
+

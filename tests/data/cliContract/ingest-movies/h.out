@@ -38,9 +38,12 @@ Usage:
                   made to a list beside the other two, and how close every folder it
                   left alone came to matching, to a fourth. Walks the whole tree, so it can be
                   pointed at a library rather than at the folder holding the
-                  films. A film TMDb could not name, and a folder holding a
-                  film that is not its own, are both left exactly as they are
-                  and written to a list to read.
+                  films. Where TMDb cannot name a film it asks a local copy of
+                  IMDb's own title lists last, kept in the checkout's
+                  data/imdb (about 750 MB fetched the first time, refreshed
+                  monthly, and skipped without duckdb). A film neither could
+                  name, and a folder holding a film that is not its own, are
+                  both left exactly as they are and written to a list to read.
     -s, --subtitles-only
                   subtitles only: the six languages' subtitles and nothing else -
                   walks the whole tree the way -t does, and tests every
@@ -89,6 +92,10 @@ Usage:
     only when ONE film carries that title and was released that year in some
     country - and where that leaves several or none, only when the film's own
     length fits one of them and rules out every other
+    looks up a folder with no year too, names it only when the length picks
+    one film out, and gives the folder that film's year
+    tags a film IMDb never catalogued - a television special, a concert disc -
+    with TMDb's own number instead, "{tmdb-NNNN}"
     recognises a file that is the same film named in another language by the
     titles TMDb holds it under, and leaves its name alone - only the id is
     added, and the folder is listed in a file of its own; a language written

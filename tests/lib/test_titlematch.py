@@ -998,3 +998,95 @@ class TestTheHeadingAPrefixMightBe:
 
     def test_and_a_title_with_no_break_has_no_heading(self):
         assert titlematch.leading_segment("Falcons Forever") == ("", "")
+
+
+class TestTheUmlautsWrittenBack:
+    """What a search that cannot fold "ue" into "ü" is asked instead."""
+
+    @pytest.mark.parametrize("spelled,written", [
+        ("Moosroeschen", "Moosröschen"),
+        ("Drei Kiesel fuer Grünwald",
+         "Drei Kiesel für Grünwald"),
+        ("Ueberfall", "Überfall"),
+        ("Die neuen Laeden", "Die neuen Läden"),
+    ])
+    def test_each_spelled_out_umlaut_is_written_back(self, spelled, written):
+        assert titlematch._accented(spelled) == written
+        assert written in titlematch.search_titles(spelled)
+
+    @pytest.mark.parametrize("title", ["Feuer", "Abenteuer", "Quelle",
+                                       "Trauer", "Rivertown", "Michael",
+                                       "Raphael Vane", "Michaela"])
+    def test_a_ue_that_is_no_umlaut_is_not_a_query(self, title):
+        assert titlematch._accented(title) == ""
+        assert titlematch.search_titles(title) == [title]
+
+    def test_a_name_ending_in_ael_is_no_umlaut_but_a_word_going_on_is(self):
+        assert titlematch._accented("Faelle") == "Fälle"
+
+
+class TestTheTrailingLive:
+    """The "Live" a recording of a stage show carries on its end."""
+
+    def test_it_is_a_label_on_the_end(self):
+        assert titlematch.equivalent("Kestrel Vane Lanterns Live",
+                                     "Kestrel Vane: Lanterns")
+        assert "Kestrel Vane Lanterns" in titlematch.search_titles(
+            "Kestrel Vane Lanterns Live")
+
+    def test_the_separator_before_it_goes_with_it(self):
+        assert titlematch.search_titles("Kestrel Vane - Live")[-1] \
+            == "Kestrel Vane"
+
+    @pytest.mark.parametrize("title", ["Moss Live", "Live and Let Moss",
+                                       "We Live in Harbours"])
+    def test_anywhere_else_it_is_a_word_of_the_title(self, title):
+        assert not titlematch.equivalent(title, title.replace("Live", "")
+                                         .strip())
+
+
+class TestTheScriptATitleIsIn:
+    @pytest.mark.parametrize("title,latin", [
+        ("Moss Harbour", True),
+        ("H\u00e4xan", True),
+        ("1917", True),
+        # one letter from the wrong keyboard does not make a title Cyrillic
+        ("\u0422empest - Rising", True),
+        ("\u6bbb\u6a5f\u52d5ARISE: Pyrophoric Cult", True),
+        ("\u041a\u043e\u0440\u0430\u0431\u043b\u044c", False),
+        ("\u0e14\u0e23\u0e32\u0e01\u0e49\u0e2d\u0e19 09", False),
+    ])
+    def test_most_of_its_letters_decide(self, title, latin):
+        assert titlematch.in_latin_script(title) is latin
+
+
+class TestNumbersSpelledOutInEachLanguage:
+    @pytest.mark.parametrize("one,other", [
+        ("Die 7 Mühlsteine", "Die sieben Mühlsteine"),
+        ("Der Mann mit den 3 grünen Schuhen",
+         "Der Mann mit den drei grünen Schuhen"),
+        ("Les 4 Lanternes", "Les quatre Lanternes"),
+        ("De 12 Molens", "De twaalf Molens"),
+        ("Los 5 Faroles", "Los cinco Faroles"),
+        ("I 5 Lampioni", "I cinque Lampioni"),
+        ("Die 5 Laternen", "Die Fünf Laternen"),
+        ("Die 5 Laternen", "Die Fuenf Laternen"),
+    ])
+    def test_the_word_and_the_figure_are_one_title(self, one, other):
+        assert titlematch.equivalent(one, other)
+
+    @pytest.mark.parametrize("word", ["Elf", "Once", "Due", "Seize", "Onze",
+                                      "Sei", "Otto", "Ein", "Un", "Uno"])
+    def test_a_word_that_is_also_a_word_is_not_a_number(self, word):
+        assert word.lower() not in titlematch.NUMBER_WORDS
+
+    def test_no_number_word_is_also_a_roman_numeral(self):
+        """The roman reading is asked first, so a word that is both would never
+        be read as the number it is."""
+        assert [word for word in titlematch.NUMBER_WORDS
+                if titlematch._ROMAN.match(word)] == []
+
+    def test_no_number_word_is_an_article(self):
+        assert [word for word in titlematch.NUMBER_WORDS
+                if word in titlematch.ARTICLES] == []
+

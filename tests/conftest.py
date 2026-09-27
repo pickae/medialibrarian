@@ -187,6 +187,20 @@ def length_checks_need_real_media(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_imdb_lists(request, monkeypatch):
+    """Nothing in the suite fetches IMDb's lists: they are most of a gigabyte,
+    and a tagging pass run by a CLI case would fetch them into its script
+    directory. The pass then runs as it does on a host without DuckDB - on
+    TMDb alone - and the cases about the lists themselves ask for them with
+    the ``imdb_lists`` marker.
+    """
+    if request.node.get_closest_marker("imdb_lists"):
+        return
+    from medialib.lib import imdbdata
+    monkeypatch.setattr(imdbdata, "prepare", lambda _where, _log: "")
+
+
+@pytest.fixture(autouse=True)
 def private_workspace(tmp_path_factory, monkeypatch):
     """Point everything that names a place to work at this test's own directory.
 
