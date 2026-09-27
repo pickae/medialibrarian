@@ -5,7 +5,7 @@ Usage:
 
     movieDir      directory holding the movies to ingest. Several may be given:
                   each is worked through in full, one after the other, in the
-                  order they were typed. With -t each gets a list of its own,
+                  order they were typed. With -t each gets lists of its own,
                   named after it.
 
     Options
@@ -34,16 +34,20 @@ Usage:
                   film's stacking token kept last. Nothing is converted,
                   remuxed, downloaded or transcribed. A DRY RUN unless -w is
                   given: it asks TMDb, prints every rename it would make, and
-                  changes nothing on disk, writing the renames it would have
-                  made to a list beside the other two, and how close every folder it
-                  left alone came to matching, to a fourth. Walks the whole tree, so it can be
+                  changes nothing on disk. Walks the whole tree, so it can be
                   pointed at a library rather than at the folder holding the
                   films. Where TMDb cannot name a film it asks a local copy of
                   IMDb's own title lists last, kept in the checkout's
                   data/imdb (about 750 MB fetched the first time, refreshed
                   monthly, and skipped without duckdb). A film neither could
                   name, and a folder holding a film that is not its own, are
-                  both left exactly as they are and written to a list to read.
+                  both left exactly as they are. Every folder given leaves
+                  these lists in logs/movie-tagging/, named after the folder:
+                    unmatched    films not identified - fill in ids for -i
+                    ambiguous    folders holding more than one film
+                    othertitles  folders holding one film under several titles
+                    renames      every rename it would make (dry run only)
+                    nearmisses   how close the first two came (dry run only)
     -s, --subtitles-only
                   subtitles only: the six languages' subtitles and nothing else -
                   walks the whole tree the way -t does, and tests every
