@@ -1156,7 +1156,10 @@ def _tool_help(name: str) -> str:
 
 
 def _settle_ffsubsync_quality() -> str:
-    """Whether this ffsubsync knows ``--skip-sync-on-low-quality``.
+    """Which check this ffsubsync can make of an alignment: "confidence" when
+    the confidence helper can watch it (and it knows
+    ``--skip-sync-on-low-quality``), "yes" when it knows only the flag, "no"
+    when it knows neither - see :func:`subtitlefiles.sync_subtitle`.
 
     Probed once here rather than per subtitle: an older ffsubsync handed an
     option it does not know fails argparse and exits non-zero, which BOTH sync
@@ -1167,12 +1170,18 @@ def _settle_ffsubsync_quality() -> str:
     """
     if not _has_tool("ffsubsync"):
         return "no"
-    if "--skip-sync-on-low-quality" in (_tool_help("ffsubsync") or ""):
-        return "yes"
-    log("WARNING: this ffsubsync has no --skip-sync-on-low-quality, so a bad "
-        "alignment gets applied instead of rejected - upgrade ffsubsync to "
-        "enable the check")
-    return "no"
+    if "--skip-sync-on-low-quality" not in (_tool_help("ffsubsync") or ""):
+        log("WARNING: this ffsubsync has no --skip-sync-on-low-quality, so a "
+            "bad alignment gets applied instead of rejected - upgrade "
+            "ffsubsync to enable the check")
+        return "no"
+    if subtitlefiles.can_measure_confidence():
+        return "confidence"
+    log("WARNING: this ffsubsync cannot be asked how sure an alignment is, so "
+        "a downloaded subtitle is believed only within %ss of where it "
+        "started - which throws out right subtitles found further off, and "
+        "keeps wrong ones that land close" % rules.MAX_SYNC_QUALITY_OFFSET)
+    return "yes"
 
 
 def _ingest(state, root: str, subtitle_work: bool) -> None:
@@ -1209,16 +1218,6 @@ def _ingest(state, root: str, subtitle_work: bool) -> None:
     log("Phase: moving and renaming pre-existing subtitles")
     subtitlefiles.move_subs(root)
     subtitlefiles.rename_subs(root, state.skips)
-    if subtitle_work:
-        log("Phase: downloading missing subtitles")
-        subtitlefiles.download_subs(
-            root, os.environ.get("openSubtitlesUser", ""),
-            os.environ.get("openSubtitlesPassword", ""),
-            rules.MAX_SYNC_OFFSET, rules.MAX_SYNC_QUALITY_OFFSET,
-            state.ffsubsync_quality, log)
-    else:
-        log("Phase: downloading missing subtitles - SKIPPED (no "
-            "ffsubsync/pipx, see the warning at startup)")
 
     log("Phase: refreshing mkv tags and track flags")
     rules.update_tags(root)
@@ -1262,6 +1261,19 @@ def _ingest(state, root: str, subtitle_work: bool) -> None:
     # for the next run.
     log("Phase: conforming mangled movie names to their folders'")
     rules.conform_movie_names(root, state.skips)
+
+    # After the tagging, so a film is searched for by the id its name now
+    # carries rather than by a title a remake or a namesake also answers to.
+    if subtitle_work:
+        log("Phase: downloading missing subtitles")
+        subtitlefiles.download_subs(
+            root, os.environ.get("openSubtitlesUser", ""),
+            os.environ.get("openSubtitlesPassword", ""),
+            rules.MAX_SYNC_OFFSET, rules.MAX_SYNC_QUALITY_OFFSET,
+            state.ffsubsync_quality, log)
+    else:
+        log("Phase: downloading missing subtitles - SKIPPED (no "
+            "ffsubsync/pipx, see the warning at startup)")
 
     rules.cleanup(root)
     log("Phase: checking for folders without a movie")

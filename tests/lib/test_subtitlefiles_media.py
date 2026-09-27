@@ -227,3 +227,51 @@ class TestEndToEndThroughTheRealWrapper:
         assert subtitlefiles.sync_subtitle(
             str(_FIXTURES / "matched.reference.srt"), str(subtitle),
             "600", "60", "yes") == 0
+
+
+class TestTheConfidenceHelperWatchesTheRealAlignment:
+    """The helper reads ffsubsync's agreement curves from the inside, so it
+    depends on more of ffsubsync than its command line: that the aligner still
+    has the method it watches, and that the curve it sees is the one the kept
+    alignment came from. The two pairings pin both ends of the measure."""
+
+    @pytest.fixture(scope="class")
+    def synced(self, tmp_path_factory):
+        def run(name):
+            work = tmp_path_factory.mktemp(name)
+            subtitle = work / "s.srt"
+            shutil.copyfile(_FIXTURES / (name + ".subtitle.srt"), subtitle)
+            python = subtitlefiles.ffsubsync_python()
+            done = subprocess.run(
+                [*python, subtitlefiles.helpers.path_of("ffsubsync_confidence.py"),
+                 str(_FIXTURES / (name + ".reference.srt")), "-i", str(subtitle),
+                 "-o", str(subtitle), "--max-offset-seconds", "600",
+                 "--skip-sync-on-low-quality", "--quality-max-offset-seconds",
+                 "600", "--log-dir-path", str(work)],
+                capture_output=True, text=True, stdin=subprocess.DEVNULL)
+            return work, done
+        return run
+
+    def test_this_ffsubsync_can_be_watched(self):
+        assert subtitlefiles.can_measure_confidence()
+
+    def test_the_right_film_stands_out(self, synced):
+        work, done = synced("matched")
+        assert done.returncode == 0, done.stderr
+        assert _logged(work, "offset seconds") == "0.670"
+        assert float(_logged(work, "alignment confidence")) \
+            > 4 * subtitlefiles.MIN_SYNC_CONFIDENCE
+
+    def test_the_wrong_one_does_not(self, synced):
+        work, done = synced("mismatched")
+        assert done.returncode == 0, done.stderr
+        assert float(_logged(work, "alignment confidence")) \
+            < subtitlefiles.MIN_SYNC_CONFIDENCE
+
+    @pytest.mark.parametrize("name,want", [("matched", 0), ("mismatched", 2)])
+    def test_the_verdict_the_download_acts_on(self, tmp_path, name, want):
+        subtitle = tmp_path / "s.srt"
+        shutil.copyfile(_FIXTURES / (name + ".subtitle.srt"), subtitle)
+        assert subtitlefiles.sync_subtitle(
+            str(_FIXTURES / (name + ".reference.srt")), str(subtitle), "600",
+            "60", "confidence") == want

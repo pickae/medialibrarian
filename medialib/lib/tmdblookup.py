@@ -306,6 +306,18 @@ def tmdb_imdb_id(title: str, year: str,
     return identify(title, year, runtime).imdb
 
 
+def imdb_of_tmdb(tmdb_id: str) -> str:
+    """The IMDb id TMDb records for one of its films, or "" - for a name whose
+    tag is TMDb's own number, when what is being asked only knows IMDb's."""
+    api_key = os.environ.get("tmdbApiKey", "")
+    if not api_key or not tmdb_id.isdigit():
+        return ""
+    detail = _as_json(_curl(_BASE + "/movie/" + tmdb_id + "/external_ids",
+                            [("api_key", api_key)]))
+    imdb = detail.get("imdb_id")
+    return imdb if isinstance(imdb, str) and imdb.startswith("tt") else ""
+
+
 def identify(title: str, year: str,
              runtime: Callable[[], float] | None = None,
              notes: list | None = None, also: tuple = ()) -> Match:

@@ -15,18 +15,23 @@ wherever COLUMNS is unset).
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import tempfile
 from collections.abc import Callable
 
-from medialib.lib import languages, plexnames, safety
+from medialib import helpers
+from medialib.lib import languages, plexnames, safety, tmdblookup
 from medialib.lib.safety import SkipLog
 
 __all__ = [
     "move_subs",
     "rename_subs",
+    "ffsubsync_python",
+    "can_measure_confidence",
     "sync_subtitle",
+    "film_imdb_id",
     "download_srt",
     "download_subs",
 ]
@@ -35,6 +40,21 @@ __all__ = [
 # movie, matched as a substring of the movie folder's path.
 EXTRAS_WORDS = ("Featurettes", "Other", "Scenes", "Interviews",
                 "Shorts", "Trailers", "Extras")
+
+# How far an alignment's best offset must stand out from every offset more than
+# two seconds away from it - in spreads of the agreement across the search
+# window, see medialib/helpers/ffsubsync_confidence.py - to be believed. Over a
+# library's worth of pairings another film's subtitle never measured above 0.7,
+# and a film's own - out of step by two minutes, or at another frame rate - never
+# below 1.25. A subtitle for a different CUT measures low as well, rightly: its
+# scenes sit at two offsets, and no one shift puts both in step.
+MIN_SYNC_CONFIDENCE = 1.0
+
+_CONFIDENCE = re.compile(r"^alignment confidence: (-?[0-9.]+)$", re.M)
+
+# The two id tags a Plex name carries, read for the number in them.
+_IMDB_TAG = re.compile(r"\{imdb-(tt[0-9]+)\}", re.I)
+_TMDB_TAG = re.compile(r"\{tmdb-([0-9]+)\}", re.I)
 
 
 def _move(source: str, destination: str) -> None:
@@ -118,20 +138,76 @@ def rename_subs(directory: str, skip_log: SkipLog | None = None) -> None:
                     _move(source, os.path.join(directory, target))
 
 
+def ffsubsync_python() -> list | None:
+    """The interpreter the installed ffsubsync runs under, as the argv that
+    starts it, or None when there is no ffsubsync or it cannot be told.
+
+    Its own script's ``#!`` line says, for a pipx or pip install alike; a
+    script whose ``#!`` is a shell wrapper (pip writes one for a path too long
+    for the kernel) still has its venv's ``python`` beside it.
+    """
+    script = shutil.which("ffsubsync")
+    if not script:
+        return None
+    try:
+        with open(script, "rb") as handle:
+            first = handle.readline().decode("utf-8", "replace").strip()
+    except OSError:
+        return None
+    if first.startswith("#!"):
+        argv = first[2:].split()
+        if argv and "python" in os.path.basename(argv[-1]):
+            return argv
+    beside = os.path.join(os.path.dirname(os.path.realpath(script)), "python")
+    return [beside] if os.access(beside, os.X_OK) else None
+
+
+def can_measure_confidence() -> bool:
+    """Whether the installed ffsubsync is one the confidence helper can watch."""
+    python = ffsubsync_python()
+    if python is None:
+        return False
+    try:
+        probe = subprocess.run(
+            [*python, helpers.path_of("ffsubsync_confidence.py"), "--probe"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError:
+        return False
+    return probe.returncode == 0
+
+
 def sync_subtitle(reference: str, srt: str, max_offset: str,
                   quality_offset: str, quality: str) -> int:
     """Align one subtitle to its reference, and say which of three things
     happened: 0 the subtitle was synced, 1 ffsubsync died outright (bad
-    arguments, a missing dependency), 2 ffsubsync refused the alignment as too
-    poor to trust and left the subtitle unmodified.
+    arguments, a missing dependency) or caught its own failure, 2 the
+    alignment was refused as too poor to trust.
+
+    ``quality`` is what the installed ffsubsync can be asked, settled once per
+    run. "confidence": run through the confidence helper, and refuse an
+    alignment that does not stand out from every other offset by
+    :data:`MIN_SYNC_CONFIDENCE` - which is what tells the film's own subtitle
+    from another film's, where no offset limit can; ffsubsync's own check still
+    refuses the absurd, but with the whole search window as its offset limit,
+    since a right subtitle found far away is still right. "yes": ffsubsync's
+    own check alone, with ``quality_offset`` as the furthest offset believed.
+    Anything else: no check at all.
 
     Telling 2 from 0 needs the log file read, because ffsubsync exits 0 for
     both. The log is read from ``--log-dir-path`` and not from stderr, because
     stderr is rendered by rich, which hard-wraps to 80 columns whenever COLUMNS
     is unset and thereby splits the very message being matched across lines.
     """
+    command = ["ffsubsync"]
     quality_args = []
-    if quality == "yes":
+    if quality == "confidence":
+        python = ffsubsync_python()
+        if python is None:
+            return 1
+        command = [*python, helpers.path_of("ffsubsync_confidence.py")]
+        quality_args = ["--skip-sync-on-low-quality",
+                        "--quality-max-offset-seconds", max_offset]
+    elif quality == "yes":
         quality_args = ["--skip-sync-on-low-quality",
                         "--quality-max-offset-seconds", quality_offset]
     # The explicit dir honours TMPDIR without consulting tempfile's cached
@@ -143,7 +219,7 @@ def sync_subtitle(reference: str, srt: str, max_offset: str,
     try:
         try:
             ran = subprocess.run(
-                ["ffsubsync", reference, "-i", srt, "-o", srt,
+                [*command, reference, "-i", srt, "-o", srt,
                  "--max-offset-seconds", max_offset, *quality_args,
                  "--log-dir-path", log_dir],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -156,10 +232,35 @@ def sync_subtitle(reference: str, srt: str, max_offset: str,
                       encoding="utf-8", errors="replace") as handle:
                 log_text = handle.read()
         except OSError:
+            return 1 if quality == "confidence" else 0
+        if "low-quality alignment" in log_text:
+            return 2
+        if quality != "confidence":
             return 0
-        return 2 if "low-quality alignment" in log_text else 0
+        measured = _CONFIDENCE.search(log_text)
+        if not measured:
+            return 1
+        return 0 if float(measured.group(1)) >= MIN_SYNC_CONFIDENCE else 2
     finally:
         shutil.rmtree(log_dir, ignore_errors=True)
+
+
+def film_imdb_id(file: str) -> str:
+    """The IMDb id a film's name carries, or "" when it carries none.
+
+    Read off the file's own name first and its folder's after it, since the
+    tagging names both. A TMDb tag is looked up for the IMDb id it stands for,
+    which is the only id OpenSubtitles is searched by.
+    """
+    for name in (os.path.basename(file),
+                 os.path.basename(os.path.dirname(os.path.abspath(file)))):
+        imdb = _IMDB_TAG.search(name)
+        if imdb:
+            return imdb.group(1).lower()
+        tmdb = _TMDB_TAG.search(name)
+        if tmdb:
+            return tmdblookup.imdb_of_tmdb(tmdb.group(1))
+    return ""
 
 
 def download_srt(file: str, language_code: str, user: str, password: str,
@@ -171,10 +272,13 @@ def download_srt(file: str, language_code: str, user: str, password: str,
     A sidecar that already exists is left in place - that is the resume
     check, and it looks for exactly the name the deletions below remove, so
     the next run re-downloads what this one threw out. Without credentials
-    the download is skipped cleanly. A sidecar some provider labelled ``.srt``
-    but that ffprobe names as another format is converted to real SubRip first,
-    and a subtitle that cannot be synced is discarded rather than kept out of
-    step - whether ffsubsync failed outright or refused the alignment it found.
+    the download is skipped cleanly. A film whose name carries its id is
+    searched for BY that id, and only a subtitle filed under that film is
+    taken; one without is searched for by the title its name reads as. A
+    sidecar some provider labelled ``.srt`` but that ffprobe names as another
+    format is converted to real SubRip first, and a subtitle that cannot be
+    synced is discarded rather than kept out of step - whether ffsubsync failed
+    outright or the alignment it found was refused.
     """
     dot = file.rfind(".")
     stem = file[:dot] if dot != -1 else file
@@ -186,11 +290,15 @@ def download_srt(file: str, language_code: str, user: str, password: str,
             "skipping subtitle download")
         return
     log("Downloading {} subtitles: {}".format(language_code, file))
+    # The credentials travel in the environment, where argv would show them to
+    # every account on the machine.
+    env = dict(os.environ, openSubtitlesUser=user,
+               openSubtitlesPassword=password)
     try:
         subprocess.run(
-            ["pipx", "run", "subliminal", "--opensubtitles", user, password,
-             "download", "-p", "opensubtitles", "-l", language_code, file],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            ["pipx", "run", helpers.path_of("subliminal_download.py"),
+             language_code, film_imdb_id(file), file],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
     except OSError:
         pass
     if not os.path.isfile(srt):

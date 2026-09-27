@@ -307,6 +307,45 @@ class TestTmdbImdbId:
         assert calls[-1] == _detail_url(1)
 
 
+class TestImdbOfTmdb:
+    def _install(self, monkeypatch, body, key="apikey"):
+        if key:
+            monkeypatch.setenv("tmdbApiKey", key)
+        else:
+            monkeypatch.delenv("tmdbApiKey", raising=False)
+        calls = []
+
+        def fake_curl(url, params):
+            calls.append((url, list(params)))
+            return body
+
+        monkeypatch.setattr(tmdblookup, "_curl", fake_curl)
+        return calls
+
+    def test_the_external_ids_are_asked_for_that_film(self, monkeypatch):
+        calls = self._install(monkeypatch, '{"imdb_id": "tt0000003"}')
+        assert tmdblookup.imdb_of_tmdb("12345") == "tt0000003"
+        assert calls == [(_BASE + "/movie/12345/external_ids",
+                          [("api_key", "apikey")])]
+
+    def test_no_key_asks_nothing(self, monkeypatch):
+        calls = self._install(monkeypatch, '{"imdb_id": "tt0000003"}', key="")
+        assert tmdblookup.imdb_of_tmdb("12345") == ""
+        assert calls == []
+
+    @pytest.mark.parametrize("body", [
+        None, "", "not json", '{"imdb_id": null}', '{"imdb_id": ""}',
+        '{"imdb_id": "nm0000001"}'])
+    def test_no_usable_answer_is_no_id(self, monkeypatch, body):
+        self._install(monkeypatch, body)
+        assert tmdblookup.imdb_of_tmdb("12345") == ""
+
+    def test_a_number_that_is_not_one_is_never_put_in_the_url(self, monkeypatch):
+        calls = self._install(monkeypatch, '{"imdb_id": "tt0000003"}')
+        assert tmdblookup.imdb_of_tmdb("../search") == ""
+        assert calls == []
+
+
 class TestWhatTheLengthSettles:
     """The rule past the plain one: what a release year elsewhere answers for,
     and what the film's own length is - and is not - allowed to decide."""

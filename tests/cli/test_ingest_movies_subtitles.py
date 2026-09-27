@@ -19,8 +19,10 @@ pytestmark = pytest.mark.pure
 @pytest.fixture
 def probe(monkeypatch):
     """The probe, against an ffsubsync whose help page the case writes."""
-    def run(help_text=None):
+    def run(help_text=None, watchable=True):
         logs: list[str] = []
+        monkeypatch.setattr(run_module.subtitlefiles, "can_measure_confidence",
+                            lambda: watchable)
         monkeypatch.setattr(run_module, "log", logs.append)
         monkeypatch.setattr(run_module, "_has_tool",
                             lambda name: help_text is not None)
@@ -29,10 +31,17 @@ def probe(monkeypatch):
     return run
 
 
-def test_an_ffsubsync_that_knows_the_flag_is_asked_for_the_check(probe):
+def test_an_ffsubsync_the_helper_can_watch_is_asked_for_its_confidence(probe):
     answer, logs = probe("  --skip-sync-on-low-quality  reject bad alignments")
-    assert answer == "yes"
+    assert answer == "confidence"
     assert logs == []
+
+
+def test_one_it_cannot_watch_falls_back_to_the_offset_limit_and_says_so(probe):
+    answer, logs = probe("  --skip-sync-on-low-quality  reject bad alignments",
+                         watchable=False)
+    assert answer == "yes"
+    assert any("cannot be asked how sure" in line for line in logs)
 
 
 def test_an_older_ffsubsync_is_not_handed_a_flag_it_would_refuse(probe):

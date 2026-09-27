@@ -451,9 +451,13 @@ def transcribe_commentary(record: str, whisper: dict, max_sync_offset: str,
             shutil.move(whisper_srt, srt)
             time.sleep(SYNC_SETTLE_SECONDS)
             # A transcript that could not be synced is thrown out rather than
-            # kept out of step: both ways of failing are the discard.
+            # kept out of step: both ways of failing are the discard. Not by
+            # confidence, though, which needs a search wide enough to have
+            # somewhere else to look: in a window of a few seconds every offset
+            # is near the right one, and a transcript made from this very audio
+            # scores no differently from another commentary's.
             status = sync_subtitle(mka, srt, max_sync_offset, max_sync_offset,
-                                   quality)
+                                   "yes" if quality == "confidence" else quality)
             if status == 1:
                 log("WARNING: transcript sync failed, discarding: {}".format(
                     os.path.basename(srt)))
