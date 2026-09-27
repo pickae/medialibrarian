@@ -700,35 +700,36 @@ def main(argv: list, program: str = "ingest-movies",
 
 
 # Where the films TMDb could not identify are listed when -i named no file of
-# its own. In the script directory's logs/ folder and not in the library: a run
-# over the library deletes stray .txt files as junk, and this is a worklist
-# rather than part of the collection.
+# its own. In a folder of their own under the script directory's logs/ and not
+# in the library: a run over the library deletes stray .txt files as junk, and
+# this is a worklist rather than part of the collection.
 #
 # One file per folder given, named after it, because the lists are worked
 # through by hand: two libraries' unnamed films in one file would be a worklist
 # nobody could tell apart, and each folder overwriting the last one's file
 # would be worse.
-UNMATCHED_LIST = "ingest-movies-unmatched-%s.tsv"
+TAGGING_LOGS = "movie-tagging"
+UNMATCHED_LIST = os.path.join(TAGGING_LOGS, "ingest-movies-unmatched-%s.tsv")
 
 # And the folders holding more than one film, which no id can settle - named
 # the same way and for the same reason.
-AMBIGUOUS_LIST = "ingest-movies-ambiguous-%s.txt"
+AMBIGUOUS_LIST = os.path.join(TAGGING_LOGS, "ingest-movies-ambiguous-%s.txt")
 
 # And what a dry run WOULD have renamed. A library of any size prints thousands
 # of those lines, and a file is where they can be read through rather than
 # scrolled past.
-RENAMES_LIST = "ingest-movies-renames-%s.txt"
+RENAMES_LIST = os.path.join(TAGGING_LOGS, "ingest-movies-renames-%s.txt")
 
 # And how close the folders in the first two lists came - what TMDb was asked,
 # what it offered, and why none of it was certain. A dry run only: it is what
 # says whether the two lists above are the right length, and the answer is only
 # worth having before anything has been renamed.
-NEAR_MISS_LIST = "ingest-movies-nearmisses-%s.txt"
+NEAR_MISS_LIST = os.path.join(TAGGING_LOGS, "ingest-movies-nearmisses-%s.txt")
 
 # And the folders holding one film under several of its own titles, which is
 # the one outcome nothing else records: no name changed, so the rename list is
 # silent about them, and they are not a problem, so the other two are too.
-ALIAS_LIST = "ingest-movies-othertitles-%s.txt"
+ALIAS_LIST = os.path.join(TAGGING_LOGS, "ingest-movies-othertitles-%s.txt")
 
 # And the subtitles a -s run found out of step with their film, or could not
 # test at all: the worklist of a dry run, and under -w the record of what was

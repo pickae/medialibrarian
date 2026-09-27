@@ -288,6 +288,7 @@ new. Sponsor segments are cut out, a thumbnail and metadata are embedded, and
 Opus is preferred over m4a.
 
     ytdlp [options] <outputPath> <archiveFile> [<dateRange>]
+    ytdlp -l <archiveFile> <archiveFile>...
 
 The three arguments are the things that change between runs — where the library
 goes, where the "already have it" record lives, and optionally an upload-date
@@ -297,6 +298,13 @@ as `today-2weeks`). A rolling window is just a relative end: `..today-10days` is
 script directory's `logs/` folder — the home of the records a run keeps about
 itself, and of `ingest-music`'s `beets.log` — and is read back from there on the
 next run; a path is taken as given. Everything else lives in the tables.
+
+**Merging archives (`-l`).** When the same tables are run on more than one
+computer, each machine's archive `.log` drifts apart, and each would re-fetch what
+the other already has. `-l` takes two or more `.log` files and nothing else, and
+writes every line of all of them — sorted, duplicates dropped, Windows line
+endings folded in — into the first, creating it if it is not there. Nothing is
+downloaded.
 
 **One table, both systems.** A table (`data/podcasts/*.tsv`) holds one row per
 podcast — its folder, its file-name template, how many entries back to walk (`0`
@@ -893,9 +901,37 @@ whose films answer to two ids is a folder holding two films.
 
 **`-t` does only this phase** — no conversion, no remux, no downloads, no
 transcription — and does it as a **dry run** unless `-w` is given, printing
-every rename it would make. The films TMDb could not name confidently are
-written to a list to fill in by hand and feed back with `-i`, in the script
-directory's `logs/` folder:
+every rename it would make. It walks the whole tree, so it can be pointed at a
+library; a full ingest reads the one level it always did. Nothing is renamed
+for a film TMDb could not name, nor for a folder holding a film that is not its
+own. Instead each folder given gets these lists, in the script directory's
+`logs/movie-tagging/` folder:
+
+| List | What is in it | Written |
+|---|---|---|
+| `ingest-movies-unmatched-<folder>.tsv` | films TMDb could not name — fill in their ids and feed the file back with `-i` | always |
+| `ingest-movies-ambiguous-<folder>.txt` | folders holding more than one film, which no id can settle — give the files names that say which release each one is | always |
+| `ingest-movies-othertitles-<folder>.txt` | folders holding one film under several of its titles (above) | always |
+| `ingest-movies-renames-<folder>.txt` | every rename the run would make | dry run only |
+| `ingest-movies-nearmisses-<folder>.txt` | for each folder in the first two: what TMDb was asked, what it offered, and why each offer was refused | dry run only |
+
+A folder is on the unmatched list or the ambiguous one, never both. Under each
+name, the ambiguous list says what it *reads as* once the spelling is folded
+away: two lines that read the same are a reading the matching does not have
+yet — worth reporting; two that read differently are two different films. Read
+the near-miss list before trusting either: a page of candidates that are
+plainly the film means the matching is too narrow; a page of films that merely
+share a word means it is working.
+
+**A film kept twice is warned about.** When two separate folders carry the
+same id, whether it was already on them or the run gives it to them, `-t`
+names both at the end of the run rather than in a list: side by side, in
+different corners of the library, or in two of the folders given (two disks,
+say). That is nearly always one film kept twice by accident, so which copy to
+keep is left to you. The several files inside one folder are its versions and
+are never counted.
+
+A line of the unmatched list, filled in:
 
 ```
 Your Film (1975)	tt0000002
@@ -969,38 +1005,6 @@ commentary, is renumbered to the track's current number rather than
 transcribed again — where the rest of the name still says which commentary it
 is. The srt itself is left untouched, and the renumbered sidecar is judged by
 the size rule like any other.
-
-A dry run also writes down every rename it *would* have made, beside the other
-two lists — a library of any size prints thousands of those lines, and the point
-of a dry run is to be able to read them.
-
-And a fourth list, `ingest-movies-nearmisses-<folder>.txt`, says **how close the
-films it could not name came**: what TMDb was asked, which films it offered
-under each query, and why every one of them was refused — a title that did not
-meet, a year that did not, a length that ruled nothing out.
-
-The lists do not overlap. Each folder appears in exactly one of them, because a
-folder read twice is a folder looked at twice. The ambiguous list carries its
-own diagnosis instead: under each name, what it *reads as* once the spelling is
-folded away. Two lines that read the same are a reading the matching does not
-have yet — worth reporting; two that read differently are two different films. It is the list to read
-before trusting the other two. A page of candidates that are plainly the film
-means the matching is too narrow; a page of films that merely share a word means
-it is working. Dry run only — once the renames have happened, the library is the
-answer.
-
-Nothing is renamed for a film TMDb could not name, nor for a folder holding a
-film that is not its own and no id to go on. Both are listed to read: the first
-to fill an id in, the second to give the files names that say which release each
-one is. `-t` walks the whole tree, so it can be pointed at a library; a full
-ingest reads the one level it always did.
-
-**A film kept twice is warned about.** When two separate folders carry the
-same id, whether it was already on them or the run gives it to them, `-t`
-names both at the end: side by side, in different corners of the library, or in
-two of the folders given (two disks, say). That is nearly always one film kept
-twice by accident, so which copy to keep is left to you. The several files
-inside one folder are its versions and are never counted.
 
 **Several folders may be given**, and each is worked through in full before the
 next is started, in the order they were typed. Each leaves lists of its own,

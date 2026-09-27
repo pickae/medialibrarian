@@ -193,7 +193,7 @@ class TestTheListsEachFolderLeaves:
         _library(tmp_path, "Documentaries")
         assert run.main(["-t", str(tmp_path / "Films"),
                          str(tmp_path / "Documentaries")]) == 0
-        logs = tmp_path / "script" / "logs"
+        logs = tmp_path / "script" / "logs" / "movie-tagging"
         assert (logs / "ingest-movies-unmatched-Films.tsv").is_file()
         assert (logs / "ingest-movies-unmatched-Documentaries.tsv").is_file()
         assert "Films film (1999)" in (
@@ -221,7 +221,7 @@ class TestTheListsEachFolderLeaves:
         _library(tmp_path, "Documentaries")
         run.main(["-t", str(tmp_path / "Films"),
                   str(tmp_path / "Documentaries")])
-        logs = tmp_path / "script" / "logs"
+        logs = tmp_path / "script" / "logs" / "movie-tagging"
         assert (logs / "ingest-movies-ambiguous-Films.txt").is_file()
         assert (logs / "ingest-movies-ambiguous-Documentaries.txt").is_file()
 
@@ -234,7 +234,7 @@ class TestTheListsEachFolderLeaves:
         _library(tmp_path, "Documentaries")
         run.main(["-t", str(tmp_path / "Films"),
                   str(tmp_path / "Documentaries")])
-        logs = tmp_path / "script" / "logs"
+        logs = tmp_path / "script" / "logs" / "movie-tagging"
         listing = logs / "ingest-movies-renames-Films.txt"
         assert listing.is_file()
         body = [line for line in listing.read_text(encoding="utf-8").splitlines()
@@ -251,7 +251,8 @@ class TestTheListsEachFolderLeaves:
         self._tagging(monkeypatch, tmp_path)
         _library(tmp_path, "Films")
         run.main(["-t", str(tmp_path / "Films")])
-        listing = tmp_path / "script" / "logs" / "ingest-movies-nearmisses-Films.txt"
+        listing = (tmp_path / "script" / "logs" / "movie-tagging"
+                   / "ingest-movies-nearmisses-Films.txt")
         assert listing.is_file()
         body = [line for line in listing.read_text(encoding="utf-8").splitlines()
                 if line and not line.startswith("#")]
@@ -265,7 +266,8 @@ class TestTheListsEachFolderLeaves:
         self._tagging(monkeypatch, tmp_path)
         _library(tmp_path, "Films")
         run.main(["-t", str(tmp_path / "Films")])
-        listing = tmp_path / "script" / "logs" / "ingest-movies-othertitles-Films.txt"
+        listing = (tmp_path / "script" / "logs" / "movie-tagging"
+                   / "ingest-movies-othertitles-Films.txt")
         assert listing.is_file()
         body = [line for line in listing.read_text(encoding="utf-8").splitlines()
                 if line and not line.startswith("#")]
@@ -281,7 +283,7 @@ class TestTheListsEachFolderLeaves:
         self._tagging(monkeypatch, tmp_path)
         _library(tmp_path, "Films")
         run.main(["-t", "-w", str(tmp_path / "Films")])
-        assert (tmp_path / "script" / "logs"
+        assert (tmp_path / "script" / "logs" / "movie-tagging"
                 / "ingest-movies-othertitles-Films.txt").is_file()
 
     def test_but_a_real_run_leaves_no_near_miss_list(self, monkeypatch,
@@ -291,7 +293,7 @@ class TestTheListsEachFolderLeaves:
         self._tagging(monkeypatch, tmp_path)
         _library(tmp_path, "Films")
         run.main(["-t", "-w", str(tmp_path / "Films")])
-        assert not (tmp_path / "script" / "logs"
+        assert not (tmp_path / "script" / "logs" / "movie-tagging"
                     / "ingest-movies-nearmisses-Films.txt").exists()
 
     def test_but_a_real_run_writes_no_such_list(self, monkeypatch, tmp_path):
@@ -300,7 +302,7 @@ class TestTheListsEachFolderLeaves:
         self._tagging(monkeypatch, tmp_path)
         _library(tmp_path, "Films")
         run.main(["-t", "-w", str(tmp_path / "Films")])
-        assert not (tmp_path / "script" / "logs"
+        assert not (tmp_path / "script" / "logs" / "movie-tagging"
                     / "ingest-movies-renames-Films.txt").exists()
 
     def test_a_film_in_the_folders_of_two_disks_is_warned_about(
