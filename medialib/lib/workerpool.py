@@ -136,22 +136,27 @@ def exit_status(status: int = 0) -> int:
     return status
 
 
-def reap_one(running: list) -> list:
+def reap_one(running: list, wake=None, timeout=None) -> list:
     """Block until one of the started workers has finished, and return the rest.
 
     The finished one is joined here, so a caller never has to remember to: an
     unjoined child stays a zombie for as long as the run lasts. Its exit is
     classified here for the same reason - the join is the only moment the status
     exists, and a caller that skipped it would lose the crash with it.
+
+    <wake>, a readable file descriptor, and <timeout> end the wait early too,
+    with every worker still running handed back; draining <wake> is the
+    caller's.
     """
     import multiprocessing.connection
 
-    if not running:
+    if not running and wake is None:
         return []
     # Taken once, up front: a worker's sentinel is not worth reading again
     # once it has been joined.
     sentinels = [worker.sentinel for worker in running]
-    ready = set(multiprocessing.connection.wait(sentinels))
+    waited = sentinels + ([wake] if wake is not None else [])
+    ready = set(multiprocessing.connection.wait(waited, timeout))
     alive = []
     for worker, sentinel in zip(running, sentinels, strict=True):
         if sentinel in ready or not worker.is_alive():

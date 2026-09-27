@@ -23,6 +23,8 @@ import struct
 import subprocess
 import sys
 
+from medialib.lib import safety
+
 __all__ = [
     "GRAIN_PROBE_SAMPLES",
     "GRAIN_PROBE_FRAMES",
@@ -228,6 +230,10 @@ def grain_probe_level(input: str, media_duration, video_dimensions,
     sigmas = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
         def one(t):
+            # Ctrl+C kills only the samples decoding at that moment; the pool
+            # would start every one still queued and wait for it.
+            if safety.abort_requested():
+                return ""
             try:
                 return grain_probe_sample(input, t, cols, rows,
                                           decode_accel_args)

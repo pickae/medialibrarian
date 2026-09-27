@@ -9,7 +9,7 @@ what is left, and a worker that goes idle on an empty buffer is said out loud.
 The workers are real processes, because that is what the queue waits on: the
 sentinel a fork leaves behind is the whole mechanism, and a thread or a stub
 would test something else. The producer is a plain generator in this process,
-the way the run that feeds it runs.
+the way the run that feeds it runs, consumed on the queue's own thread.
 """
 
 import os
@@ -170,6 +170,39 @@ def test_preparation_is_interleaved_with_the_run(tmp_path):
                      lambda name: (directory, name, 0.1))
 
     assert (tmp_path / "interleaved").exists()
+
+
+def test_a_slow_preparation_does_not_hold_back_the_buffer(tmp_path):
+    """The items already in the buffer run while the producer is stuck on the
+    next one - convert-audio planning its chunked files behind its seed - rather
+    than waiting for that one pull to return."""
+    directory = str(tmp_path)
+
+    def producer():
+        yield "first", 0
+        yield "second", 0
+        if _wait_for(os.path.join(directory, "done.second"), timeout=5.0):
+            _mark(directory, "not-held-back")
+        yield "third", 0
+
+    dynamicqueue.run(producer(), 1, _done_after,
+                     lambda name: (directory, name, 0.1))
+
+    assert (tmp_path / "not-held-back").exists(), (
+        "the buffered item waited for the producer: the dispatch is blocked "
+        "inside the pull")
+    assert (tmp_path / "done.third").exists()
+
+
+def _raise_in_producer():
+    yield "a", 0
+    raise RuntimeError("the producer's own bug")
+
+
+def test_what_the_producer_raises_is_raised_by_the_run(tmp_path):
+    with pytest.raises(RuntimeError, match="producer's own bug"):
+        dynamicqueue.run(_raise_in_producer(), 1, _mark,
+                         lambda item: (str(tmp_path), item))
 
 
 # --- what the queue ends with --------------------------------------------------

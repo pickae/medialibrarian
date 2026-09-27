@@ -312,8 +312,11 @@ class Run:
             opus_fid[track.id] = next_fid
             next_fid += 1
             extra += ["--language", "0:" + (track.language or "und")]
-            if track.name and track.name != "null":
-                extra += ["--track-name", "0:" + track.name]
+            # Always given, even empty: an opus left by an older run can still
+            # carry the movie's title, which mkvmerge would otherwise take as
+            # the name of a track that had none.
+            name = track.name if track.name and track.name != "null" else ""
+            extra += ["--track-name", "0:" + name]
             extra += ["--default-track-flag",
                       "0:1" if track.default == "true" else "0:0"]
             if track.forced == "true":

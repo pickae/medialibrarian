@@ -182,8 +182,8 @@ SVT_PSY_PARAMS_ANIMATION = 'tune=0:enable-variance-boost=1:variance-boost-streng
 VIDEO_PROFILES = """
 x265BluRay|-c:v libx265 -crf 20 -preset slow -x265-params profile=main10
 x265Fast|-c:v libx265 -crf 24 -preset medium -x265-params profile=main10
-av1BluRay|-c:v libsvtav1 -crf 26 -preset 5 -svtav1-params tune=0:enable-variance-boost=1:variance-boost-strength=2:variance-octile=6:qp-scale-compress-strength=1:enable-dlf=2:sharpness=1:enable-qm=1:qm-min=0:qm-max=15:keyint=10s:irefresh-type=2
-av1Grain|-c:v libsvtav1 -crf 30 -preset 6 -svtav1-params tune=0:enable-variance-boost=1:variance-boost-strength=2:variance-octile=6:qp-scale-compress-strength=1:enable-dlf=2:sharpness=1:enable-qm=1:qm-min=0:qm-max=15:keyint=10s:irefresh-type=2
+av1BluRay|-c:v libsvtav1 -crf 24 -preset 5 -svtav1-params tune=0:enable-variance-boost=1:variance-boost-strength=2:variance-octile=6:qp-scale-compress-strength=1:enable-dlf=2:sharpness=1:enable-qm=1:qm-min=0:qm-max=15:keyint=10s:irefresh-type=2
+av1Grain|-c:v libsvtav1 -crf 26 -preset 6 -svtav1-params tune=0:enable-variance-boost=1:variance-boost-strength=2:variance-octile=6:qp-scale-compress-strength=1:enable-dlf=2:sharpness=1:enable-qm=1:qm-min=0:qm-max=15:keyint=10s:irefresh-type=2
 av1Animation|-c:v libsvtav1 -crf 30 -preset 5 -svtav1-params tune=0:enable-variance-boost=1:variance-boost-strength=1:variance-octile=6:qp-scale-compress-strength=1:enable-dlf=2:sharpness=2:enable-qm=1:qm-min=8:qm-max=15:keyint=10s:irefresh-type=2
 av1Fast|-c:v libsvtav1 -crf 30 -preset 8 -svtav1-params tune=0:enable-variance-boost=1:variance-boost-strength=2:variance-octile=6:qp-scale-compress-strength=1:enable-dlf=2:sharpness=1:enable-qm=1:qm-min=0:qm-max=15:keyint=10s:irefresh-type=2
 av1Constrained|-c:v libsvtav1 -b:v 3000k -qmin 30 -preset 8 -svtav1-params tune=0:enable-variance-boost=1:variance-boost-strength=2:variance-octile=6:qp-scale-compress-strength=1:enable-dlf=2:sharpness=1:enable-qm=1:qm-min=0:qm-max=15:keyint=10s:irefresh-type=2
