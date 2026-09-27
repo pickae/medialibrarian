@@ -288,6 +288,7 @@ new. Sponsor segments are cut out, a thumbnail and metadata are embedded, and
 Opus is preferred over m4a.
 
     ytdlp [options] <outputPath> <archiveFile> [<dateRange>]
+    ytdlp -l <archiveFile> <archiveFile>...
 
 The three arguments are the things that change between runs — where the library
 goes, where the "already have it" record lives, and optionally an upload-date
@@ -297,6 +298,13 @@ as `today-2weeks`). A rolling window is just a relative end: `..today-10days` is
 script directory's `logs/` folder — the home of the records a run keeps about
 itself, and of `ingest-music`'s `beets.log` — and is read back from there on the
 next run; a path is taken as given. Everything else lives in the tables.
+
+**Merging archives (`-l`).** When the same tables are run on more than one
+computer, each machine's archive `.log` drifts apart, and each would re-fetch what
+the other already has. `-l` takes two or more `.log` files and nothing else, and
+writes every line of all of them — sorted, duplicates dropped, Windows line
+endings folded in — into the first, creating it if it is not there. Nothing is
+downloaded.
 
 **One table, both systems.** A table (`data/podcasts/*.tsv`) holds one row per
 podcast — its folder, its file-name template, how many entries back to walk (`0`

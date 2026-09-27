@@ -40,6 +40,7 @@ from medialib.lib.runlog import log
 
 USAGE_HEAD = """Usage:
     {program} [options] <outputPath> <archiveFile> [<dateRange>]
+    {program} -l <archiveFile> <archiveFile>...
 
     <outputPath>    the library root every feed's subdir hangs under - or, with
                     -i, the parent of the staging and the library trees
@@ -100,12 +101,21 @@ m | <match> | Only the feeds whose subdir or URL contains <match>
 s | <system> | Build the calls for "windows" or "linux" instead of for
                     this host. Only useful with -p, to read off what the other
                     machine would run.
+l |  | Consolidate archives instead of downloading: every line of
+                    every <archiveFile> given, sorted and with duplicates
+                    dropped, is written into the FIRST one, which is created if
+                    it does not exist. Takes two or more .log files and nothing
+                    else. This is what keeps an archive portable when the same
+                    tables are run on more than one computer and each one's
+                    .log has diverged: merged, every machine skips what any
+                    of them already fetched.
 """
 
 # -t is the one repeatable option here: every occurrence appends, so several
 # tables can be read in one run. The rest assign once, last flag winning.
 OPT_FLAGS = "repeat:t"
-OPT_VARS = "t:tables j:jobCap p:dryRun a:includeInactive c:cleanUp i:ingest m:match"
+OPT_VARS = ("t:tables j:jobCap p:dryRun a:includeInactive c:cleanUp i:ingest m:match "
+            "l:consolidate")
 
 # -j caps a table's own parallelism and 0 means "no cap", so zero belongs in the
 # range; -s is the one option whose accepted values are words rather than a
@@ -118,7 +128,7 @@ s | enum:windows\\|linux\\|auto | system
 
 OPT_COLUMN = 20
 OPT_LONG = ("h:help t:table j:jobs p:preview v:verbose a:include-inactive "
-            "c:clean-up i:ingest m:match s:system")
+            "c:clean-up i:ingest m:match s:system l:consolidate")
 
 USAGE_TAIL = """
 
@@ -692,6 +702,9 @@ def main(argv: list, program: str = "ytdlp", script_dir: str = "") -> int:
                                                      error.message))
         return 1
 
+    if result.values["consolidate"]:
+        return _consolidate(declaration, result)
+
     script_dir = script_dir or commands.script_dir()
 
     tables = result.values["tables"] or _default_tables(script_dir)
@@ -796,6 +809,60 @@ def main(argv: list, program: str = "ytdlp", script_dir: str = "") -> int:
     return _run(options, tables, profiles, jobs_of, rows_of, feed_count,
                 output_path, archive_file, ytdlp_command, platform, script_dir,
                 ffmpeg_location)
+
+
+def _consolidate(declaration: clioptions.Spec, result) -> int:
+    """-l: the archives merged into the first one, and nothing else.
+
+    The paths are taken as typed - no logs/ lookup for a bare name - because
+    the files being merged are usually ones copied over from another machine.
+    Line endings are normalised, so a Windows archive merges with a Linux one
+    rather than beside it.
+    """
+    files = result.positionals
+    fault = ""
+    if result.given != ["l"]:
+        fault = "-l takes no other option: %s" % " ".join(
+            "-" + letter for letter in result.given if letter != "l")
+    elif len(files) < 2:
+        fault = "-l needs two or more .log files"
+    else:
+        for index, path in enumerate(files):
+            if not path.endswith(".log"):
+                fault = "Not a .log file: %s" % path
+            elif index > 0 and not os.path.isfile(path):
+                fault = "No such file: %s" % path
+            elif index == 0 and os.path.exists(path) and not os.path.isfile(path):
+                fault = "Not a file: %s" % path
+            if fault:
+                break
+    if fault:
+        sys.stderr.write(clioptions.usage_error_text(declaration, fault))
+        return 1
+
+    lines = set()
+    for path in files:
+        if not os.path.exists(path):
+            continue
+        with open(path, encoding="utf-8", errors="surrogateescape",
+                  newline="") as handle:
+            for line in handle.read().splitlines():
+                if line.strip():
+                    lines.add(line.rstrip())
+    target = files[0]
+    directory = os.path.dirname(target)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    # Written beside the target and moved over it, because the target is one
+    # of the inputs: a run cut short leaves the old archive, never half of one.
+    temporary = target + ".consolidating"
+    with open(temporary, "w", encoding="utf-8", errors="surrogateescape",
+              newline="\n") as handle:
+        handle.writelines(line + "\n" for line in sorted(lines))
+    os.replace(temporary, target)
+    log("Consolidated %d file(s) into %s: %d line(s)"
+        % (len(files), target, len(lines)))
+    return 0
 
 
 def _on_opt(letter: str, value: str) -> None:

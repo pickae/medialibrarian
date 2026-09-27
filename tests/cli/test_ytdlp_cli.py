@@ -1046,3 +1046,52 @@ class TestTheSponsorBlockProbe:
         log, argv, _ = probe("big")
         assert "no SponsorBlock support" not in log, log
         assert "--sponsorblock-remove" in argv
+
+
+class TestConsolidatingArchives:
+    """-l merges archives into the first one and does nothing else - run through
+    the sandbox directly, since the fixture's own -s would be an option mixed in."""
+
+    @pytest.fixture
+    def consolidate(self, ytdlp):
+        def run(*args, expect=0):
+            done = ytdlp.run("ytdlp", "-l", *args, env=ytdlp.env)
+            assert done.returncode == expect, done.stdout + done.stderr
+            return done.stdout + done.stderr
+        return run
+
+    def test_every_line_sorted_and_deduplicated_lands_in_the_first(
+            self, ytdlp, consolidate, tmp_path):
+        first = tmp_path / "a.log"
+        first.write_text("youtube b\nyoutube a\n")
+        # A Windows machine's archive, so its lines are not kept beside the others.
+        (tmp_path / "b.log").write_bytes(b"youtube c\r\nyoutube a\r\n\r\n")
+        consolidate(first, tmp_path / "b.log")
+        assert first.read_bytes() == b"youtube a\nyoutube b\nyoutube c\n"
+        assert list(ytdlp.calls.glob("call*")) == []
+
+    def test_a_first_file_that_is_not_there_is_created(self, consolidate,
+                                                       tmp_path):
+        (tmp_path / "b.log").write_text("youtube z\n")
+        (tmp_path / "c.log").write_text("youtube y\nyoutube z\n")
+        target = tmp_path / "new" / "a.log"
+        consolidate(target, tmp_path / "b.log", tmp_path / "c.log")
+        assert target.read_text() == "youtube y\nyoutube z\n"
+
+    @pytest.mark.parametrize("case", ["one", "notLog", "missing", "option"])
+    def test_anything_but_two_or_more_log_files_is_refused(self, ytdlp,
+                                                           consolidate,
+                                                           tmp_path, case):
+        first = tmp_path / "a.log"
+        first.write_text("youtube a\n")
+        (tmp_path / "b.log").write_text("youtube b\n")
+        (tmp_path / "b.txt").write_text("youtube b\n")
+        args = {
+            "one": [first],
+            "notLog": [first, tmp_path / "b.txt"],
+            "missing": [first, tmp_path / "nope.log"],
+            "option": ["-p", first, tmp_path / "b.log"],
+        }[case]
+        log = consolidate(*args, expect=1)
+        assert "Nothing was changed." in log
+        assert first.read_text() == "youtube a\n"
