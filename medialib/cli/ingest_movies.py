@@ -163,6 +163,9 @@ USAGE_TAIL = """
     them into one film with a named picker: \"<film> {imdb-id} {edition-Colorized}\"
     keeps a split film's \"Part1\" / \"cd1\" token LAST, which is where Plex reads it
     renames only, at the end of the run, with every sidecar following its own film
+    warns of a film whose id two separate folders carry - in different places,
+    or in different folders given - as one kept twice (a folder's own several
+    files are its versions, and never counted)
 
     Languages & subtitles
     ---------------------

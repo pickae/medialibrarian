@@ -149,7 +149,8 @@ class TestTheListsEachFolderLeaves:
         def fake_tag(root, _log, _skips, dry_run=False, ids=None,
                      unmatched=None, recursive=False, ambiguous=None,
                      planned=None, near_misses=None, aliases=None,
-                     seen=None, skip=None, long_names=None, imdb=""):
+                     seen=None, skip=None, long_names=None, imdb="",
+                     tagged=None):
             asked.append(root)
             self.imdb = imdb
             name = root.rsplit("/", 1)[-1]
@@ -174,6 +175,9 @@ class TestTheListsEachFolderLeaves:
                 ambiguous += [(root + "/Double (1999)",
                                "holds a film that is not its own",
                                ["One.mkv", "Two.mkv"])]
+            if tagged is not None:
+                tagged.setdefault("{imdb-tt0000009}", []).append(
+                    root + "/Kept Twice (1999) {imdb-tt0000009}")
             if planned is not None and dry_run:
                 planned += [(root + "/A film (1999)/A film (1999).mkv",
                              root + "/A film (1999)/A film (1999) "
@@ -300,6 +304,29 @@ class TestTheListsEachFolderLeaves:
         run.main(["-t", "-w", str(tmp_path / "Films")])
         assert not (tmp_path / "script" / "logs" / "movie-tagging"
                     / "ingest-movies-renames-Films.txt").exists()
+
+    def test_a_film_in_the_folders_of_two_disks_is_warned_about(
+            self, monkeypatch, tmp_path, capsys):
+        """The folders given are read as one library: the same film on two
+        disks is the copy most easily forgotten."""
+        self._tagging(monkeypatch, tmp_path)
+        _library(tmp_path, "Films")
+        _library(tmp_path, "Documentaries")
+        run.main(["-t", str(tmp_path / "Films"),
+                  str(tmp_path / "Documentaries")])
+        errors = capsys.readouterr().err
+        assert "1 film(s) are kept in more than one folder" in errors
+        assert '"%s/Films/Kept Twice (1999) {imdb-tt0000009}"' % tmp_path \
+            in errors
+        assert '"%s/Documentaries/Kept Twice (1999) {imdb-tt0000009}"' \
+            % tmp_path in errors
+
+    def test_but_one_folder_holding_it_is_not(self, monkeypatch, tmp_path,
+                                              capsys):
+        self._tagging(monkeypatch, tmp_path)
+        _library(tmp_path, "Films")
+        run.main(["-t", str(tmp_path / "Films")])
+        assert "more than one folder" not in capsys.readouterr().err
 
     def test_w_on_its_own_is_refused_rather_than_ignored(self, monkeypatch,
                                                          tmp_path, capsys):

@@ -923,6 +923,14 @@ the near-miss list before trusting either: a page of candidates that are
 plainly the film means the matching is too narrow; a page of films that merely
 share a word means it is working.
 
+**A film kept twice is warned about.** When two separate folders carry the
+same id, whether it was already on them or the run gives it to them, `-t`
+names both at the end of the run rather than in a list: side by side, in
+different corners of the library, or in two of the folders given (two disks,
+say). That is nearly always one film kept twice by accident, so which copy to
+keep is left to you. The several files inside one folder are its versions and
+are never counted.
+
 A line of the unmatched list, filled in:
 
 ```

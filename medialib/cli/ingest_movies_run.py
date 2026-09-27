@@ -801,6 +801,9 @@ def _tags_only(program: str, script_dir: str, roots: list, names: list,
     # folder in turn, or the one that named a film in the second library would
     # be called missing by the first.
     seen: set | None = set() if id_list else None
+    # Every folder's id across all the folders given, since the same film kept
+    # twice is as likely to be on two disks as in two corners of one.
+    tagged: dict = {}
     for root, name in zip(roots, names, strict=True):
         if len(roots) > 1:
             log('Tagging "%s"' % root)
@@ -817,7 +820,7 @@ def _tags_only(program: str, script_dir: str, roots: list, names: list,
                                 near_misses=near_misses,
                                 aliases=alias_titles, seen=seen,
                                 skip=set(blank), long_names=long_names,
-                                imdb=imdb)
+                                imdb=imdb, tagged=tagged)
         if id_list:
             shared += unmatched
             continue
@@ -853,6 +856,7 @@ def _tags_only(program: str, script_dir: str, roots: list, names: list,
         sys.stderr.write(line + "\n")
     for line in long_names.report():
         sys.stderr.write(line + "\n")
+    _report_duplicate_films(tmdblookup.duplicate_films(tagged))
 
     # A row someone filled in that names no folder here. Said per row, and the
     # run carries on to the next: the other ids are somebody's afternoon of
@@ -889,6 +893,20 @@ def _tags_only(program: str, script_dir: str, roots: list, names: list,
     if not write:
         log("Dry run: nothing was renamed. Pass -w to carry these out.")
     return 0
+
+
+def _report_duplicate_films(duplicates: list) -> None:
+    """The films the library holds in more than one folder, which is nearly
+    always one kept twice by accident. Said and nothing more: which copy to
+    keep is not a thing a name can tell."""
+    if not duplicates:
+        return
+    sys.stderr.write("\nWARNING: %d film(s) are kept in more than one folder:\n"
+                     % len(duplicates))
+    for tag, folders in duplicates:
+        sys.stderr.write("  %s\n" % tag)
+        for folder in folders:
+            sys.stderr.write('    "%s"\n' % folder)
 
 
 def _subtitles_only(program: str, script_dir: str, roots: list, names: list,
