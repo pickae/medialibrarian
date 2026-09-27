@@ -1,11 +1,12 @@
-"""The README against the package it describes.
+"""The README and docs/ against the package they describe.
 
 Item 8.1's verify, kept as a test because the three things it asks are the three
-that rot silently: a command that is renamed, an anchor that stops resolving, and
+that rot silently: a command that is renamed, a link that stops resolving, and
 a requirements list that disagrees with the install.
 """
 
 import re
+from pathlib import Path
 
 import pytest
 
@@ -15,10 +16,16 @@ from tests import blackbox
 pytestmark = pytest.mark.pure
 
 _README = (blackbox.REPO / "README.md").read_text(encoding="utf-8")
+_PAGES = [blackbox.REPO / "README.md", *sorted((blackbox.REPO / "docs").rglob("*.md"))]
+_COMMAND_PAGES = sorted((blackbox.REPO / "docs" / "commands").glob("*.md"))
 
 
-def _headings() -> list[str]:
-    return re.findall(r"^#+ (.+)$", _README, re.MULTILINE)
+def _text(page: Path) -> str:
+    return page.read_text(encoding="utf-8")
+
+
+def _headings(page: Path) -> list[str]:
+    return re.findall(r"^#+ (.+)$", _text(page), re.MULTILINE)
 
 
 def _anchor(heading: str) -> str:
@@ -28,20 +35,30 @@ def _anchor(heading: str) -> str:
 
 
 def test_no_entry_script_is_named():
-    """The eighteen .sh files were deleted at item 6.3; a README that still names
+    """The eighteen .sh files were deleted at item 6.3; a page that still names
     one is telling a reader to run something that is not there."""
-    assert ".sh" not in _README
+    assert [p.name for p in _PAGES if ".sh" in _text(p)] == []
 
 
-def test_every_command_heading_is_a_command_the_package_installs():
-    named = [h.strip("`") for h in _headings() if h.startswith("`")]
-    assert named, "the per-command sections are gone"
-    assert [n for n in named if n not in commands.COMMANDS] == []
+def test_every_command_page_is_a_command_the_package_installs():
+    assert _COMMAND_PAGES, "the per-command pages are gone"
+    assert [p.stem for p in _COMMAND_PAGES if p.stem not in commands.COMMANDS] == []
+    assert [p.name for p in _COMMAND_PAGES if _headings(p)[0] != f"`{p.stem}`"] == []
 
 
-def test_every_in_page_link_reaches_a_heading():
-    anchors = {_anchor(h) for h in _headings()}
-    assert [a for a in re.findall(r"\]\(#([^)]+)\)", _README) if a not in anchors] == []
+def test_every_link_reaches_a_file_and_heading():
+    broken = []
+    for page in _PAGES:
+        for target in re.findall(r"\]\(([^)]+)\)", _text(page)):
+            if target.startswith(("http://", "https://")):
+                continue
+            path, _, fragment = target.partition("#")
+            dest = (page.parent / path).resolve() if path else page
+            if not dest.exists():
+                broken.append(f"{page.name}: {target}")
+            elif fragment and fragment not in {_anchor(h) for h in _headings(dest)}:
+                broken.append(f"{page.name}: {target}")
+    assert broken == []
 
 
 def test_the_requirements_agree_with_the_install():
