@@ -522,27 +522,28 @@ def main(argv: list, program: str = "ingest-movies",
         sys.stderr.write(clioptions.no_args_text(declaration))
         return 1
 
-    # -w turns a dry run into renames, and without -t or -i there is none to
-    # turn. Refused rather than ignored: a -tw typed as -w would otherwise be a
-    # full ingest, hours of converting and remuxing, on a library asked for
-    # nothing but its names.
-    if result.values.get("writeTags") and not (result.values.get("tagsOnly")
-                                               or result.values.get("idList")):
+    # -w carries out a dry run, and without -t, -i or -s there is none to
+    # carry out. Refused rather than ignored: a -tw typed as -w would otherwise
+    # be a full ingest, hours of converting and remuxing, on a library asked
+    # for nothing but its names.
+    if result.values.get("writeTags") and not (
+            result.values.get("tagsOnly") or result.values.get("idList")
+            or result.values.get("subtitlesOnly")):
         if result.values.get("commentaryOnly"):
             # -c is the transcription and not a dry run, so there is nothing
-            # for -w to turn into real renames.
+            # for -w to carry out.
             sys.stderr.write(clioptions.usage_error_text(
                 declaration,
-                "-w has no part in -c: it turns the dry run of -t or -i into "
-                "real renames, and -c\nis not a dry run. Drop the -w."))
+                "-w has no part in -c: it carries out the dry run of -t, -i or "
+                "-s, and -c\nis not a dry run. Drop the -w."))
             return 1
         sys.stderr.write(clioptions.usage_error_text(
             declaration,
             "-w on its own does nothing to carry out: it is what turns the dry "
-            "run of -t or\n-i into real renames, and neither was given. "
-            "Without one of them this is a FULL\nINGEST - converting, "
+            "run of -t,\n-i or -s into the real thing, and none was given. "
+            "Without one of them this is a\nFULL INGEST - converting, "
             "transcribing and remuxing - which -w has no part in.\n\n"
-            "Did you mean -tw, or -iw?"))
+            "Did you mean -tw, -iw or -sw?"))
         return 1
 
     # -c is the commentary phase on its own and -t and -i the tagging phase:
@@ -556,6 +557,19 @@ def main(argv: list, program: str = "ingest-movies",
             "-c transcribes the commentary tracks and nothing else, and -t and "
             "-i tag and nothing\nelse: they are two runs, not one. Give the "
             "folders to each of them in turn."))
+        return 1
+
+    # -s the same, against both: the subtitles are searched for by the id the
+    # tagging gives a film's name, so the order matters and is not guessed.
+    if result.values.get("subtitlesOnly") and (
+            result.values.get("commentaryOnly")
+            or result.values.get("tagsOnly") or result.values.get("idList")):
+        sys.stderr.write(clioptions.usage_error_text(
+            declaration,
+            "-s tests and fetches subtitles and nothing else, and -c, -t and -i "
+            "each do a\nphase of their own: they are two runs, not one. Tag "
+            "first (-tw), so the\nsubtitles are searched for by the ids it "
+            "gives, then run -s."))
         return 1
 
     script_dir = script_dir or commands.script_dir()
@@ -582,6 +596,10 @@ def main(argv: list, program: str = "ingest-movies",
     # run around them.
     if result.values.get("commentaryOnly"):
         return _commentary_only(program, script_dir, roots, fragments_file)
+
+    if result.values.get("subtitlesOnly"):
+        return _subtitles_only(program, script_dir, roots, names,
+                               bool(result.values.get("writeTags")))
 
     # An id list is only ever read by the tagging phase, so asking for one asks
     # for that phase.
@@ -710,6 +728,11 @@ NEAR_MISS_LIST = "ingest-movies-nearmisses-%s.txt"
 # the one outcome nothing else records: no name changed, so the rename list is
 # silent about them, and they are not a problem, so the other two are too.
 ALIAS_LIST = "ingest-movies-othertitles-%s.txt"
+
+# And the subtitles a -s run found out of step with their film, or could not
+# test at all: the worklist of a dry run, and under -w the record of what was
+# deleted.
+SUBTITLES_LIST = "ingest-movies-subtitles-%s.txt"
 
 
 def _tags_only(program: str, script_dir: str, roots: list, names: list,
@@ -858,6 +881,106 @@ def _tags_only(program: str, script_dir: str, roots: list, names: list,
     if not write:
         log("Dry run: nothing was renamed. Pass -w to carry these out.")
     return 0
+
+
+def _subtitles_only(program: str, script_dir: str, roots: list, names: list,
+                    write: bool) -> int:
+    """The subtitle phase on its own, and a test of the subtitles already there.
+
+    Every ``<movie>.xx.srt`` beside a film anywhere under each folder given is
+    put to the test a downloaded one is kept by - the alignment ffsubsync finds
+    has to stand out from every other offset - and, like -t, this is a DRY RUN
+    unless asked otherwise: a subtitle thrown out is gone. The dry run tests a
+    copy, says what each would come to and lists the ones out of step; -w syncs
+    the ones in step, deletes the rest, and then downloads what is missing the
+    way a full ingest does, which puts each download to the same test. A
+    subtitle thrown out here is therefore fetched again in the same run.
+
+    Nothing else the full run does is set up: no RAM scratch, no whisper, no
+    renaming, and no commentary - its transcripts are named after their track
+    and are never one of the sidecars tested.
+    """
+    # Which ffmpeg of the ones installed, before the preflight asks whether PATH
+    # can reach one.
+    ffmpegselect.select_ffmpeg()
+    ffmpegselect.report_ffmpeg_selection()
+
+    # ffsubsync reads the film's speech with ffmpeg, and ffprobe says which
+    # subtitle needs converting to SubRip first. pipx runs the downloads, which
+    # only -w makes.
+    tools = ["ffmpeg", "ffprobe", "ffsubsync"] + (["pipx"] if write else [])
+    if tooldeps.require_tools(program, tools):
+        return 1
+
+    # The test IS ffsubsync's refusal, so an ffsubsync that cannot refuse has
+    # nothing to test with: every subtitle would pass, and -w would call a
+    # library of wrong ones in step.
+    ffsubsync_quality = _settle_ffsubsync_quality()
+    if ffsubsync_quality == "no":
+        sys.stderr.write("This ffsubsync cannot refuse an alignment, so every "
+                         "subtitle would pass the test.\nUpgrade ffsubsync. "
+                         "Nothing was changed.\n")
+        return 1
+
+    user = os.environ.get("openSubtitlesUser", "")
+    password = os.environ.get("openSubtitlesPassword", "")
+    download = write and bool(user and password)
+    if write and not download:
+        # Said once here rather than once per film and language.
+        log("WARNING: openSubtitlesUser/openSubtitlesPassword not set - the "
+            "subtitles already here are tested, and none is downloaded.")
+
+    totals = {"kept": 0, "discarded": 0, "untested": 0}
+    for root, name in zip(roots, names, strict=True):
+        log('Phase: testing the subtitles already beside the films in "%s"'
+            % root + ("" if write else " - DRY RUN, nothing will be changed"))
+        verdicts = subtitlefiles.check_subs(
+            root, rules.MAX_SYNC_OFFSET, rules.MAX_SYNC_QUALITY_OFFSET,
+            ffsubsync_quality, write, log)
+        for verdict, found in verdicts.items():
+            totals[verdict] += len(found)
+        _write_subtitle_list(commands.logs_file(script_dir,
+                                                SUBTITLES_LIST % name),
+                             root, verdicts, write)
+        if download:
+            log('Phase: downloading missing subtitles in "%s"' % root)
+            subtitlefiles.download_subs(
+                root, user, password, rules.MAX_SYNC_OFFSET,
+                rules.MAX_SYNC_QUALITY_OFFSET, ffsubsync_quality, log)
+
+    log("%d subtitle(s) in step, %d out of step, %d could not be tested"
+        % (totals["kept"], totals["discarded"], totals["untested"]))
+    if not write:
+        log("Dry run: nothing was changed. Pass -w to sync the subtitles in "
+            "step, throw out the rest and download what is missing.")
+    return 0
+
+
+def _write_subtitle_list(listing: str, root: str, verdicts: dict,
+                         write: bool) -> None:
+    """The subtitles of one folder found out of step, and the ones that could
+    not be tested, one path per line under a heading each. A folder with none
+    of either leaves no list - and removes the one an earlier run left, which
+    would otherwise read as still standing."""
+    out, untested = verdicts["discarded"], verdicts["untested"]
+    if not out and not untested:
+        try:
+            os.remove(listing)
+        except OSError:
+            pass
+        return
+    with open(listing, "w", encoding="utf-8") as handle:
+        if out:
+            handle.write("# Out of step with their film - %s:\n"
+                         % ("thrown out" if write else "would be thrown out"))
+            for srt in out:
+                handle.write(srt + "\n")
+        if untested:
+            handle.write("# Could not be tested - left alone:\n")
+            for srt in untested:
+                handle.write(srt + "\n")
+    log('%d subtitle(s) in "%s" out of step and %d untested - listed in "%s"'
+        % (len(out), root, len(untested), listing))
 
 
 def _sidecar_too_small(prefix: str, movie: str, durations: dict) -> bool:
