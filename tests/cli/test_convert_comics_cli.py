@@ -160,6 +160,21 @@ class TestThePackaging:
         assert blackbox.tree_of(comics.outputs) == before
         assert "Skip (exists)" in again.stdout + again.stderr
 
+    def test_a_rerun_counts_the_finished_books_apart(self, run):
+        """A book already on disk took no time and was not converted by this
+        run, so it is neither in the converted count nor in the time per book,
+        and the output folder is not said to have been written."""
+        comics, first, _ = run
+        assert "Converted and packaged 2 of 2 book(s) in " in first
+        assert "Wrote 2 cbz file(s) to %s" % comics.outputs in first
+        assert "already packaged" not in first
+        again = comics.run("convert-comics", comics.inputs, comics.outputs)
+        log = again.stdout + again.stderr
+        assert "Converted and packaged 0 of 2 book(s) in " in log
+        assert "2 already packaged by an earlier run, skipped" in log
+        assert "seconds per book" not in log
+        assert "%s now holds 2 cbz file(s)" % comics.outputs in log
+
     def test_no_ram_work_directory_is_left_behind(self, run):
         """Including the per-book folders a worker frees as soon as its book is
         zipped. The base is this test's own, so anything in it is this run's."""
@@ -296,7 +311,7 @@ size=12288
         assert again.returncode == 0, again.stderr
         log = again.stdout + again.stderr
         assert "Converting:" not in log
-        assert "page(s) in" not in log
+        assert "pages in" not in log
         assert not [line for line in log.splitlines()
                     if re.match(r"^    .*: *\d+/\d+ \(\d+\.?\d*%\)$", line)]
 

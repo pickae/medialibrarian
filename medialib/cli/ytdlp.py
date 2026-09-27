@@ -647,13 +647,17 @@ def _upgrade_nightly(ytdlp_command) -> None:
             log("         %s" % line)
 
 
-def _probe_sponsorblock(ytdlp_command) -> None:
+def _probe_sponsorblock(ytdlp_command, warn: bool = True) -> None:
     """Whether this yt-dlp knows the SponsorBlock flags.
 
     Captured rather than piped into a match: a matcher that stops at its first
     hit leaves the help page's next write hitting a closed pipe, and pipefail
     then reads that SIGPIPE as the probe's answer - a yt-dlp that HAS the flags
     read as one that has not.
+
+    ``warn`` is whether a missing answer costs this run anything: only the
+    YouTube profiles ask for SponsorBlock, so a run of other tables has no
+    segment to keep that would otherwise have gone.
     """
     try:
         proc = subprocess.run(list(ytdlp_command) + ["--help"],
@@ -666,6 +670,8 @@ def _probe_sponsorblock(ytdlp_command) -> None:
         os.environ["PODCAST_SPONSORBLOCK"] = "1"
         return
     os.environ["PODCAST_SPONSORBLOCK"] = ""
+    if not warn:
+        return
     log("WARNING: this yt-dlp has no SponsorBlock support - the YouTube feeds "
         "keep their sponsor")
     log("         and ad segments, which newer yt-dlp releases would cut out. "
@@ -781,7 +787,12 @@ def main(argv: list, program: str = "ytdlp", script_dir: str = "") -> int:
                               skip_preflight=skip_preflight):
         return 1
 
-    if not skip_preflight and not tooldeps.tool_present("AtomicParsley"):
+    # Only the audio profiles arrive as m4a; a video table's episodes are
+    # Matroska, and lose nothing to a missing AtomicParsley.
+    fetches_audio = any(podcastfeeds.podcast_profile_media(profile) == "audio"
+                        for profile in profiles)
+    if (not skip_preflight and fetches_audio
+            and not tooldeps.tool_present("AtomicParsley")):
         log("WARNING: AtomicParsley not installed (apt install atomicparsley) "
             "- the feeds that offer no Opus")
         log("         are fetched as m4a and will arrive without embedded "
@@ -793,7 +804,10 @@ def main(argv: list, program: str = "ytdlp", script_dir: str = "") -> int:
             and not os.environ.get("SKIP_YTDLP_UPGRADE", "")):
         _upgrade_nightly(ytdlp_command)
     if not skip_preflight:
-        _probe_sponsorblock(ytdlp_command)
+        _probe_sponsorblock(
+            ytdlp_command,
+            warn=any(podcastfeeds.podcast_profile_provider(profile) == "youtube"
+                     for profile in profiles))
 
     if options["cleanUp"] and not options["dryRun"]:
         kind = "audio"
@@ -1212,8 +1226,13 @@ def _report(state, ingest, started, feed_count) -> int:
         rate = ""
         if elapsed > 0 and byte_count > 0:
             rate = " at %s/s" % fmt_bytes(byte_count // elapsed)
-        log("Downloaded %d file(s), %s, in %s%s"
-            % (files, fmt_bytes(byte_count), fmt_hms(elapsed), rate))
+        if files:
+            log("Downloaded %d file(s), %s, in %s%s"
+                % (files, fmt_bytes(byte_count), fmt_hms(elapsed), rate))
+        else:
+            # Every feed up to date - the ordinary night - rather than a
+            # "0 file(s), 0 B" that reads like something went wrong.
+            log("Nothing new downloaded, ran for " + fmt_hms(elapsed))
     else:
         log("Ran for " + fmt_hms(elapsed))
 
@@ -1295,10 +1314,28 @@ def _tidy_up(state) -> None:
 
     swept = downloadcleanup.sweep_partial_downloads(state.options["outputPath"])
     pruned = downloadcleanup.prune_empty_folders(state.options["outputPath"])
-    log("Tidied %d episode(s): %d remuxed into Matroska, %d sidecar(s) "
-        "removed," % (files, remuxed, sidecars))
-    log("        %d interrupted download(s) swept, %d empty folder(s) removed"
-        % (swept, pruned))
+    log(tidy_summary(files, remuxed, sidecars, swept, pruned))
+
+
+def tidy_summary(files: int, remuxed: int, sidecars: int, swept: int,
+                 pruned: int) -> str:
+    """What the tidy-up did, in the figures that are not nought.
+
+    An audio run never remuxes anything and most nights leave no interrupted
+    download behind, so a sentence carrying every figure would mostly be a row
+    of zeroes about work there was no call for.
+    """
+    done = []
+    if remuxed:
+        done.append("%d remuxed into Matroska" % remuxed)
+    if sidecars:
+        done.append("%d sidecar(s) removed" % sidecars)
+    if swept:
+        done.append("%d interrupted download(s) swept" % swept)
+    if pruned:
+        done.append("%d empty folder(s) removed" % pruned)
+    line = "Tidied %d episode(s)" % files
+    return line + (": " + ", ".join(done) if done else ", nothing to remove")
 
 
 def _build_library(state, ingest):

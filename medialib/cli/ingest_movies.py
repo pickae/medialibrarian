@@ -58,17 +58,17 @@ f | <file> | read the name fragments to remove from <file> (one per line,
                   data/fragments.txt beside this script. Without it that file is
                   used when it is there, and names are cleaned without any fragment
                   removal when it is not.
-c |  | commentary only: the transcription phase and nothing else - the given
-                  folders are walked the way -t walks them, and every commentary
-                  track that does not already have its transcript beside the film
-                  is transcribed next to it, in the language it is spoken in. A
-                  movie whose name never got the dot before its mkv is first
-                  conformed to the spelling its folder spells it, and one that
-                  cannot be conformed is left untranscribed and reported at the
-                  end. No subtitles are downloaded, and nothing is converted,
-                  remuxed or tagged - and no title is renamed beyond that
-                  conforming. The transcripts are left beside the films rather
-                  than muxed into them.
+a |  | audio commentary only: the transcription phase and nothing
+                  else - the given folders are walked the way -t walks them, and
+                  every commentary track that does not already have its
+                  transcript beside the film is transcribed next to it, in the
+                  language it is spoken in. A movie whose name never got the dot
+                  before its mkv is first conformed to the spelling its folder
+                  spells it, and one that cannot be conformed is left
+                  untranscribed and reported at the end. No subtitles are
+                  downloaded, and nothing is converted, remuxed or tagged - and
+                  no title is renamed beyond that conforming. The transcripts
+                  are left beside the films rather than muxed into them.
 t |  | tags only: the Plex/Jellyfin naming and nothing else - the IMDb id,
                   the editions a folder's several versions become, and a split
                   film's stacking token kept last. Nothing is converted,
@@ -117,7 +117,20 @@ n |  | commentary names only: a film whose commentary tracks are only
                   every folder given leaves a list in
                   logs/ingest-movies-commentarynames-<folder>.txt of what was
                   named and of every film left alone, with the reason. Best
-                  run after -c, which writes the transcripts.
+                  run after -a, which writes the transcripts.
+c |  | chapters only: the chapter lookup and nothing else - walks the
+                  whole tree the way -t does, and gives every tagged film that
+                  has no chapters the chapters the ChapterDB archive holds for
+                  the disc it was ripped from. A set is taken only when it runs
+                  as long as the film to within two seconds, starts at the
+                  start and reaches past the middle. A film's numbered chapters
+                  are replaced only by a named set whose every chapter starts
+                  where the film's own do - the same marks, given names - and a
+                  film whose chapters have names is not looked up at all.
+                  Written in place with mkvpropedit, replacing whatever chapters
+                  the film had; the film is never remuxed. Not a dry run, and
+                  -w has no part in it. Best run after -tw: an untagged
+                  folder's title is only a guess.
 w |  | with -t or -i, actually perform the renames instead of printing
                   them; with -s, sync, throw out and download; with -n, name
                   the commentaries. On its own it is a usage error rather than
@@ -136,11 +149,11 @@ i | <file> | the hand-written id list filled in and read BACK: tagging and
                   renames out and brings the file up to date, every folder
                   given into that one file."""
 
-OPT_VARS = ("f:fragmentsOverride c:commentaryOnly t:tagsOnly s:subtitlesOnly "
-            "n:commentaryNames w:writeTags i:idList")
+OPT_VARS = ("f:fragmentsOverride a:commentaryOnly t:tagsOnly s:subtitlesOnly "
+            "n:commentaryNames c:chaptersOnly w:writeTags i:idList")
 OPT_COLUMN = 18
-OPT_LONG = ("f:fragments c:commentary t:tags-only s:subtitles-only "
-            "n:commentary-names w:write i:ids")
+OPT_LONG = ("f:fragments a:commentary t:tags-only s:subtitles-only "
+            "n:commentary-names c:chapters w:write i:ids")
 
 USAGE_TAIL = """
 
@@ -192,6 +205,23 @@ USAGE_TAIL = """
     renames pre-existing subtitles to the .xx.srt convention
     downloads missing subtitles and embeds the language tags
 
+    Chapters
+    --------
+    -c does this phase and nothing else
+    after the tagging, looks each tagged film up in the ChapterDB archive
+    (chapterdb.plex.tv) by the title its folder now carries
+    takes a set only when it runs as long as the film to within two seconds -
+    which is what tells the disc a film was ripped from from every other cut
+    and transfer - starts at the start, has at least three chapters in order
+    and reaches past the middle of the film
+    a film with no chapters gets the best named set, or else a numbered one
+    a film with only numbered chapters gets them REPLACED by a named set only
+    when that set has the same chapters starting within a second of the
+    film's own - the same marks, given names; otherwise they are kept
+    a film whose chapters have names is left alone
+    writes them in place with mkvpropedit, replacing every chapter the film
+    had, so a film never carries two sets - and is never remuxed for them
+
     Tags & commentary
     ------------------
     reads the track layout once and refreshes the mkv tags from it
@@ -228,7 +258,7 @@ USAGE_TAIL = """
     Dependencies
     ------------
     Required: ffmpeg, mkvtoolnix, mediainfo (and curl, once tmdbApiKey is set,
-    and for -n).
+    for -n or for the chapter lookup).
     Optional, each skipped with a warning when absent: pipx + ffsubsync (together
     they enable subtitle downloading and commentary transcription - without either,
     BOTH are skipped, since neither subtitle is worth keeping unaligned), dovi_tool
@@ -1112,15 +1142,17 @@ def check_audio_tracks(movie: str, root: str) -> None:
 
 # --- the improved copy --------------------------------------------------------
 
-def gather_commentary_transcripts(base: str, tracks: list) -> list:
+def gather_commentary_transcripts(base: str, tracks: list,
+                                  say=None) -> list:
     """``gatherCommentaryTranscripts``: the transcripts to append as commentary
     subtitle tracks, as (srt, language, title) triples.
 
     A transcript the movie already carries as a subtitle track is left out, or
     every run would pile another identical track on top of what the last one
     left - and only that one: the commentaries the file is missing are appended
-    beside it.
+    beside it. ``say`` is where that is said, the run's log when not given.
     """
+    say = say or log
     found = []
     # What every commentary of this film is called, which is what says whether a
     # cropped title still points at one of them and at no other.
@@ -1173,7 +1205,7 @@ def gather_commentary_transcripts(base: str, tracks: list) -> list:
                 # Nothing to match this one on but the count.
                 already = _take_unplaced(unplaced, language)
             if already:
-                log("  Commentary transcript already a subtitle track in the "
+                say("  Commentary transcript already a subtitle track in the "
                     "file, not appending it again: " + title)
                 continue
             # Appended under the track's own name whole, never the cut one: a

@@ -90,11 +90,16 @@ def plan_numbering(directory: str, names: Sequence[str]) -> Numbering:
     return Numbering(plurality, count, renames)
 
 
-def number_files_in_folder(directory: str, files) -> None:
+def number_files_in_folder(directory: str, files,
+                           announce: bool = True) -> None:
     """``numberFilesInFolder``: the plurality filetype of one folder, numbered.
 
     ``files`` are the folder's own files, in the order `sort -V` puts them - the
     caller lists them, because what counts as a sibling is the caller's rule.
+
+    ``announce`` is off for a caller numbering a folder of its OWN making, such
+    as the pages of a book being packaged: the user named no such folder, and a
+    line per book about it says nothing they could act on.
     """
     names = [os.path.basename(path) for path in files]
     plan = plan_numbering(directory, names)

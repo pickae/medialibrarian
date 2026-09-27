@@ -106,8 +106,7 @@ class TestTheReplay:
 
     def test_the_run_reports_the_tally_it_applied(self, run):
         _, log = run
-        assert ("Done: 1 rename(s) applied on device, 0 skipped, of 1 planned"
-                in log)
+        assert "Done: 1 rename(s) applied on device\n" in log
 
     def test_the_run_says_how_much_it_snapshotted(self, run):
         _, log = run
@@ -183,7 +182,14 @@ class TestATreeThatNeedsNothing:
         before = blackbox.tree_of(device)
         log = adb.run_dev("clean-folder-structure-adb", device)
         assert blackbox.tree_of(device) == before
-        assert "of 0 planned" in log
+        assert "Done: nothing to rename on device" in log
+
+    def test_a_preview_of_it_offers_nothing_to_apply(self, adb):
+        device = adb.device()
+        _write(device / "Clean Name" / "Clean File.mp4", "c")
+        log = adb.run_dev("clean-folder-structure-adb", "-p", device)
+        assert "Preview: nothing to rename on device" in log
+        assert "Drop -p" not in log
 
 
 class TestTheMirrorSandbox:

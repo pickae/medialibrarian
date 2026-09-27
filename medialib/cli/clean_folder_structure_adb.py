@@ -220,12 +220,21 @@ class Plan:
         if self._printed:
             return
         self._printed = True
+        # A tree whose names were already clean has no plan to apply, and the
+        # "skipped, of planned" half is only said when something fell short.
         if self.dry_run:
-            log("Preview: %d rename(s) planned on device (nothing changed). "
-                "Drop -p to apply." % self.planned)
+            if not self.planned:
+                log("Preview: nothing to rename on device (nothing changed).")
+            else:
+                log("Preview: %d rename(s) planned on device (nothing changed). "
+                    "Drop -p to apply." % self.planned)
+        elif not self.planned:
+            log("Done: nothing to rename on device")
+        elif self.moves == self.planned:
+            log("Done: %d rename(s) applied on device" % self.moves)
         else:
-            log("Done: %d rename(s) applied on device, %d skipped, of %d "
-                "planned" % (self.moves, self.skips, self.planned))
+            log("Done: %d rename(s) applied on device, %d skipped, of %d planned"
+                % (self.moves, self.skips, self.planned))
 
 
 def build_mirror(device: Device, device_root: str, mirror: str):

@@ -263,3 +263,32 @@ class TestWordCount:
 
     def test_a_file_that_is_not_there_counts_zero(self, tmp_path):
         assert ib._word_count(str(tmp_path / "gone.txt")) == 0
+
+
+class TestDiscardSummary:
+    """The run's one line about -d names only what -d touches in THIS input: a
+    PDF gives up its images, every other book its fonts, junk images and
+    illustration resolution."""
+
+    def test_d_over_a_mixed_input_names_both_halves(self):
+        line = ib.discard_summary(True, "1920x1080", True, True)
+        assert "fonts" in line and "1920x1080" in line and "PDF" in line
+
+    def test_d_over_pdfs_alone_says_nothing_of_fonts_or_illustrations(self):
+        line = ib.discard_summary(True, "1920x1080", True, False)
+        assert line == "-d: PDF images stripped"
+
+    def test_d_without_a_pdf_says_nothing_of_pdfs(self):
+        line = ib.discard_summary(True, "", False, True)
+        assert "PDF" not in line
+        assert "the default tier" in line
+
+    @pytest.mark.parametrize("has_pdf,has_reflowable,present,absent", [
+        (True, False, "PDF", "fonts"),
+        (False, True, "fonts", "PDF"),
+    ])
+    def test_the_default_hint_names_what_d_would_touch_here(
+            self, has_pdf, has_reflowable, present, absent):
+        line = ib.discard_summary(False, "", has_pdf, has_reflowable)
+        assert line.startswith("Every book kept whole")
+        assert present in line and absent not in line

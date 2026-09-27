@@ -1,8 +1,8 @@
-"""The commentary-only run (-c): the transcription phase, and nothing else.
+"""The commentary-only run (-a): the transcription phase, and nothing else.
 
 The full run's commentary phase is a phase of its own - the walk of every
 folder given, the track test, the sidecar check and the queue drained over the
-whisper workers - and -c exists to run it without the run around it. What is
+whisper workers - and -a exists to run it without the run around it. What is
 pinned here is the boundary: the phase runs, per folder and in the order given,
 with the run's own whisper settlement and drain, and no other phase of the run
 touches the library.
@@ -30,13 +30,13 @@ def _library(root, name: str, film: str = "The Movie (1999)"):
 
 
 def _never(*_args, **_kwargs):
-    raise AssertionError("a phase of the full run ran that -c refuses")
+    raise AssertionError("a phase of the full run ran that -a refuses")
 
 
 class TestThePhaseRunsAndNothingElse:
     def _stubbed(self, monkeypatch, tmp_path):
         """Everything a run sets up around the phase, stood down - and every
-        other phase of the run refused, so a -c that starts the opus pass or
+        other phase of the run refused, so a -a that starts the opus pass or
         the remux fails the moment it crosses the line it exists to hold."""
         scratch = tmp_path / "ram"
         scratch.mkdir()
@@ -46,9 +46,9 @@ class TestThePhaseRunsAndNothingElse:
                             lambda: None)
         monkeypatch.setattr(run.tooldeps, "require_tools",
                             lambda *_a, **_k: False)
-        monkeypatch.setattr(run, "_settle_subtitle_work", lambda: True)
+        monkeypatch.setattr(run, "_settle_subtitle_work", lambda **_k: True)
         monkeypatch.setattr(run, "_settle_ffsubsync_quality",
-                            lambda: "yes")
+                            lambda **_k: "yes")
         monkeypatch.setattr(run.ramscratch, "init_ram_base",
                             lambda: None)
         monkeypatch.setattr(run.ramscratch, "ram_scratch_dir",
@@ -104,26 +104,26 @@ class TestThePhaseRunsAndNothingElse:
         exports, _settled, _scratch = self._stubbed(monkeypatch, tmp_path)
         films = _library(tmp_path, "Films")
         docs = _library(tmp_path, "Documentaries")
-        assert run.main(["-c", str(films), str(docs)]) == 0
+        assert run.main(["-a", str(films), str(docs)]) == 0
         assert [entry["directory"] for entry in exports] \
             == [str(films), str(docs)]
 
     def test_a_folder_with_nothing_in_it_is_walked_not_refused(
             self, monkeypatch, tmp_path):
-        """-c is pointed at a library the way -t is: a walk that finds no film
+        """-a is pointed at a library the way -t is: a walk that finds no film
         does nothing, and is not the wrong-path refusal a full ingest gives a
         folder with no movies in it."""
         exports, _settled, _scratch = self._stubbed(monkeypatch, tmp_path)
         empty = tmp_path / "Empty"
         empty.mkdir()
-        assert run.main(["-c", str(empty)]) == 0
+        assert run.main(["-a", str(empty)]) == 0
         assert [entry["directory"] for entry in exports] == [str(empty)]
 
     def test_the_whisper_settlement_is_done_once_and_handed_to_the_phase(
             self, monkeypatch, tmp_path):
         exports, settled, scratch = self._stubbed(monkeypatch, tmp_path)
         films = _library(tmp_path, "Films")
-        assert run.main(["-c", str(films)]) == 0
+        assert run.main(["-a", str(films)]) == 0
         # The GPU-to-CPU ladder runs, against the run's RAM scratch, and the
         # settled models are what the phase and its queue are handed.
         assert settled == {"cores": str(runlog.cpu_count()),
@@ -142,7 +142,7 @@ class TestThePhaseRunsAndNothingElse:
             self, monkeypatch, tmp_path):
         exports, _settled, scratch = self._stubbed(monkeypatch, tmp_path)
         films = _library(tmp_path, "Films")
-        assert run.main(["-c", str(films)]) == 0
+        assert run.main(["-a", str(films)]) == 0
 
         seen = []
         monkeypatch.setattr(run.commentarytranscription,
@@ -172,7 +172,7 @@ class TestThePhaseRunsAndNothingElse:
         it or discard and re-transcribe."""
         exports, _settled, _scratch = self._stubbed(monkeypatch, tmp_path)
         films = _library(tmp_path, "Films")
-        assert run.main(["-c", str(films)]) == 0
+        assert run.main(["-a", str(films)]) == 0
         discard_existing = exports[0]["rest"][2]
         seen = {}
 
@@ -194,7 +194,7 @@ class TestThePhaseRunsAndNothingElse:
         to the phase."""
         exports, _settled, _scratch = self._stubbed(monkeypatch, tmp_path)
         films = _library(tmp_path, "Films")
-        assert run.main(["-c", str(films)]) == 0
+        assert run.main(["-a", str(films)]) == 0
         assert exports[0]["same_commentary_name"] is run.rules._same_commentary
 
     def test_without_ffsubsync_and_pipx_the_warning_is_the_run(
@@ -202,7 +202,7 @@ class TestThePhaseRunsAndNothingElse:
         """There is nothing else in this run to fall back to, so the gate's
         warning is the whole of it: nothing is walked and nothing is queued."""
         _exports, _settled, _scratch = self._stubbed(monkeypatch, tmp_path)
-        monkeypatch.setattr(run, "_settle_subtitle_work", lambda: False)
+        monkeypatch.setattr(run, "_settle_subtitle_work", lambda **_k: False)
         exports = []
 
         def no_export(*_a, **_k):
@@ -211,33 +211,33 @@ class TestThePhaseRunsAndNothingElse:
         monkeypatch.setattr(run.commentarytranscription,
                             "export_commentary", no_export)
         films = _library(tmp_path, "Films")
-        assert run.main(["-c", str(films)]) == 0
+        assert run.main(["-a", str(films)]) == 0
         assert exports == []
 
 
 class TestTheCombosItRefuses:
-    def test_w_combined_with_c_is_refused(self, monkeypatch, tmp_path, capsys):
-        """-w turns the dry run of -t or -i into real renames, and -c is the
+    def test_w_combined_with_a_is_refused(self, monkeypatch, tmp_path, capsys):
+        """-w turns the dry run of -t or -i into real renames, and -a is the
         transcription, not a dry run, so there is nothing for -w to carry out."""
         _library(tmp_path, "Films")
-        assert run.main(["-c", "-w", str(tmp_path / "Films")]) == 1
+        assert run.main(["-a", "-w", str(tmp_path / "Films")]) == 1
         errors = capsys.readouterr().err
-        assert "-w has no part in -c" in errors
+        assert "-w has no part in -a" in errors
         assert "Nothing was changed." in errors
 
-    def test_t_combined_with_c_is_refused(self, monkeypatch, tmp_path,
+    def test_t_combined_with_a_is_refused(self, monkeypatch, tmp_path,
                                           capsys):
         """Two phases asked of the same folders at once would have to guess an
         order, and neither of them is answerable for the other's names."""
         _library(tmp_path, "Films")
-        assert run.main(["-c", "-t", str(tmp_path / "Films")]) == 1
+        assert run.main(["-a", "-t", str(tmp_path / "Films")]) == 1
         errors = capsys.readouterr().err
         assert "two runs, not one" in errors
         assert "Nothing was changed." in errors
 
-    def test_i_combined_with_c_is_refused(self, monkeypatch, tmp_path, capsys):
+    def test_i_combined_with_a_is_refused(self, monkeypatch, tmp_path, capsys):
         _library(tmp_path, "Films")
-        assert run.main(["-c", "-i", str(tmp_path / "nope.tsv"),
+        assert run.main(["-a", "-i", str(tmp_path / "nope.tsv"),
                          str(tmp_path / "Films")]) == 1
         errors = capsys.readouterr().err
         assert "two runs, not one" in errors
@@ -331,7 +331,7 @@ class TestTheTooSmallSidecar:
 
 class TestTheOrphanReport:
     """The transcripts the walk finds that name a track their film no longer
-    numbers a commentary for. The -c run is the one that collects them and
+    numbers a commentary for. The -a run is the one that collects them and
     leaves them in a file, one absolute path per line, and it leaves no file
     at all for a run that found nothing."""
 
@@ -346,9 +346,9 @@ class TestTheOrphanReport:
                             lambda: None)
         monkeypatch.setattr(run.tooldeps, "require_tools",
                             lambda *_a, **_k: False)
-        monkeypatch.setattr(run, "_settle_subtitle_work", lambda: True)
+        monkeypatch.setattr(run, "_settle_subtitle_work", lambda **_k: True)
         monkeypatch.setattr(run, "_settle_ffsubsync_quality",
-                            lambda: "yes")
+                            lambda **_k: "yes")
         monkeypatch.setattr(run.ramscratch, "init_ram_base",
                             lambda: None)
         monkeypatch.setattr(run.ramscratch, "ram_scratch_dir",
@@ -408,7 +408,7 @@ class TestTheOrphanReport:
 
         script_dir = self._stubbed(monkeypatch, tmp_path, export_commentary)
         films = _library(tmp_path, "Films")
-        assert run.main(["-c", str(films)]) == 0
+        assert run.main(["-a", str(films)]) == 0
         report = script_dir / "logs" / "commentaryOrphans.txt"
         expected = str(films / "The Movie (1999)" /
                        "The Movie (1999) 5 OldCommentary.en.srt") + "\n"
@@ -423,13 +423,13 @@ class TestTheOrphanReport:
 
         script_dir = self._stubbed(monkeypatch, tmp_path, export_commentary)
         films = _library(tmp_path, "Films")
-        assert run.main(["-c", str(films)]) == 0
+        assert run.main(["-a", str(films)]) == 0
         assert not (script_dir / "logs" / "commentaryOrphans.txt").exists()
 
 
 class TestTheUnfixedReport:
     """The movies the walk left untranscribed because their name carried no dot
-    before its extension. The -c run is the one that collects them and leaves
+    before its extension. The -a run is the one that collects them and leaves
     them in a file, one absolute path per line, and it leaves no file at all for
     a run that found nothing. A mangled name the folder's spelling does answer
     is conformed before the walk, so it is transcribed and not reported."""
@@ -445,9 +445,9 @@ class TestTheUnfixedReport:
                             lambda: None)
         monkeypatch.setattr(run.tooldeps, "require_tools",
                             lambda *_a, **_k: False)
-        monkeypatch.setattr(run, "_settle_subtitle_work", lambda: True)
+        monkeypatch.setattr(run, "_settle_subtitle_work", lambda **_k: True)
         monkeypatch.setattr(run, "_settle_ffsubsync_quality",
-                            lambda: "yes")
+                            lambda **_k: "yes")
         monkeypatch.setattr(run.ramscratch, "init_ram_base",
                             lambda: None)
         monkeypatch.setattr(run.ramscratch, "ram_scratch_dir",
@@ -507,7 +507,7 @@ class TestTheUnfixedReport:
 
         script_dir = self._stubbed(monkeypatch, tmp_path, export_commentary)
         films = _library(tmp_path, "Films")
-        assert run.main(["-c", str(films)]) == 0
+        assert run.main(["-a", str(films)]) == 0
         report = script_dir / "logs" / "unfixedMovies.txt"
         expected = (str(films / "Hollow Ridge (1981) {imdb-tt0000001}" /
                         "Hollow Ridge (1981) {imdb-tt0000001} 1981mkv")
@@ -523,7 +523,7 @@ class TestTheUnfixedReport:
 
         script_dir = self._stubbed(monkeypatch, tmp_path, export_commentary)
         films = _library(tmp_path, "Films")
-        assert run.main(["-c", str(films)]) == 0
+        assert run.main(["-a", str(films)]) == 0
         assert not (script_dir / "logs" / "unfixedMovies.txt").exists()
 
     def test_a_mangled_name_the_folder_answers_is_conformed_not_reported(
@@ -541,7 +541,7 @@ class TestTheUnfixedReport:
         folder.mkdir(parents=True)
         mangled = folder / "Hollow Ridge (1981) {imdb-tt0000001} 1981mkv"
         mangled.touch()
-        assert run.main(["-c", str(tmp_path / "Films")]) == 0
+        assert run.main(["-a", str(tmp_path / "Films")]) == 0
         assert not mangled.exists()
         assert (folder / "Hollow Ridge (1981) {imdb-tt0000001}.mkv").is_file()
         assert not (script_dir / "logs" / "unfixedMovies.txt").exists()

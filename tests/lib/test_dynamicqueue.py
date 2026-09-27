@@ -314,3 +314,19 @@ def test_the_queue_says_its_prefill_its_start_and_a_buffer_that_ran_dry(
         "Queue: buffer loaded, starting 2 worker(s) on 2 item(s)",
         "Queue: buffer ran dry, 1 worker(s) waiting for preparation",
     ]
+
+
+def test_a_queue_smaller_than_its_buffer_says_it_was_prepared_whole(tmp_path):
+    """Two items for a buffer of four: the preparation ends before the buffer
+    fills, so the start says the whole queue is ready rather than that a buffer
+    was loaded."""
+    directory = str(tmp_path)
+    lines = []
+
+    dynamicqueue.run(iter([("a", 0), ("b", 0)]), 2, _mark,
+                     lambda item: (directory, item), log=lines.append)
+
+    assert lines == [
+        "Queue: pre-filling the buffer of 4 item(s) ...",
+        "Queue: all 2 item(s) prepared, starting 2 worker(s)",
+    ]

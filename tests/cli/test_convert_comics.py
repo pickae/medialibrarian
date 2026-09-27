@@ -363,3 +363,100 @@ class TestTheChromaReachesTheConversion:
         with pytest.raises(cc.clioptions.UsageError):
             cc.clioptions.parse(cc.spec("convert-comics"),
                                 ["-u", "422", "in", "out"])
+
+
+class TestTheClosingReport:
+    """What the footer says follows what the run did: books an earlier run
+    packaged are counted apart, and a single repackaged book is one book."""
+
+    def _footer(self, tmp_path, capsys, monkeypatch, **counts):
+        monkeypatch.setattr(cc.safety, "report_safety_skips", lambda: None)
+        counters = tmp_path / "counters"
+        counters.mkdir()
+        for name, count in counts.items():
+            (counters / name).write_text(str(count))
+        stats = counters / "pageStats"
+        stats.write_text("")
+        state = cc.Run(counters=cc.Counters(str(counters)),
+                       out_path=str(tmp_path / "absent"), total=4,
+                       stats_file=str(stats), phase_start=0.0, phase_end=8.0)
+        cc.footer(state)
+        return capsys.readouterr().out
+
+    def test_the_books_an_earlier_run_packaged_are_counted_apart(
+            self, tmp_path, capsys, monkeypatch):
+        out = self._footer(tmp_path, capsys, monkeypatch, packaged=4,
+                           existing=2, repackaged=1)
+        assert "Converted and packaged 2 of 4 book(s) in 8.00 seconds" in out
+        assert "4.00 seconds per book" in out
+        assert "1 of those were repackaged with their own pages: more than " \
+            "80% of each was" in out
+        assert out.rstrip().endswith(
+            "2 already packaged by an earlier run, skipped")
+
+    def test_a_run_with_nothing_found_done_does_not_mention_it(
+            self, tmp_path, capsys, monkeypatch):
+        out = self._footer(tmp_path, capsys, monkeypatch, packaged=4)
+        assert "Converted and packaged 4 of 4 book(s)" in out
+        assert "already packaged" not in out
+        assert "repackaged" not in out
+
+
+class TestThePdfVerdictLine:
+    """The numbers a verdict was reached on, and none where there were none."""
+
+    @pytest.fixture
+    def vet(self, tmp_path, capsys, monkeypatch):
+        def run(verdict):
+            monkeypatch.setattr(cc.comicpdf, "comic_pdf_verdict",
+                                lambda *_: verdict)
+            counters = tmp_path / "counters"
+            counters.mkdir(exist_ok=True)
+            state = cc.Run(in_path=str(tmp_path), max_res=2960,
+                           counters=cc.Counters(str(counters)),
+                           input_list=str(counters / "inputs"))
+            state.vet_pdf("Book.pdf")
+            return capsys.readouterr().out
+        return run
+
+    def test_a_comic_gives_its_share_and_its_dpi(self, vet):
+        assert vet((True, 24, 23, 300)) == (
+            "Comic: Book.pdf (23 of 24 page(s) hold one full-page image, "
+            "rendering at 300 dpi)\n")
+
+    def test_one_page_holding_an_image_holds_it(self, vet):
+        assert vet((False, 80, 1, 0)) == (
+            "Not a comic, skipped: Book.pdf (1 of 80 page(s) hold one "
+            "full-page image)\n")
+
+    def test_a_pdf_whose_pages_could_not_be_read_says_so(self, vet):
+        assert vet((False, 0, 0, 0)) == (
+            "Not a comic, skipped: Book.pdf (its pages could not be read)\n")
+
+
+class TestTheDroppedDuplicatesAreSaidOncePerBook:
+    """One line per page dropped would be one line per page of a book whose
+    scanner left its working files beside every export."""
+
+    @pytest.fixture
+    def extract(self, tmp_path, monkeypatch):
+        archive = tmp_path / "book.cbz"
+        with zipfile.ZipFile(str(archive), "w") as packed:
+            packed.writestr("01.jpg", "x")
+        logged = []
+        monkeypatch.setattr(cc, "log", logged.append)
+
+        def run(dropped):
+            monkeypatch.setattr(cc, "drop_alternate_formats",
+                                lambda _folder: dropped)
+            cc.extract(str(archive), str(tmp_path / "work" / "book.cbz"), 2960)
+            return logged
+        return run
+
+    def test_several_are_one_line_naming_them_all(self, extract):
+        assert extract(["01.psd", "02.psd"]) == [
+            '  "book.cbz": dropped 2 page(s), the same picture(s) also there '
+            "in another format: 01.psd, 02.psd"]
+
+    def test_none_is_silence(self, extract):
+        assert extract([]) == []

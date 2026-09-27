@@ -302,6 +302,13 @@ class TestABookThatProducesNothing:
         assert "Failed:            2" in log, log
         assert list(library.outputs.rglob("*.opus")) == []
 
+    def test_the_closing_block_has_no_audio_rows_about_no_audio(self, library):
+        """Nothing was read, so there is no "0 s" produced at "0x" real time."""
+        log = library.read("-l", "deu", library.source, library.outputs,
+                           STUB_PRODUCES_NOTHING="1")
+        assert "Audio produced:" not in log, log
+        assert "Real-time speedup:" not in log, log
+
 
 class TestANarrationThatDiedPartWay:
     """A file WAS written and the engine still failed. It must not be published:
@@ -445,3 +452,45 @@ class TestRelativeDirectories:
             self, library, tmp_path):
         library.read("-l", "deu", "books", "books/out", cwd=tmp_path, expect=1)
         assert not (library.source / "out").exists()
+
+
+class TestTheMkvtoolnixWarning:
+    """What mkvtoolnix reaches in this run is the cover attached to a Matroska
+    file, and the one file handed to the Opus encoder is the engine's own
+    audiobook - so a missing mkvtoolnix costs nothing unless that audiobook is
+    Matroska AND an Opus copy is being made. The settled answer is shared with
+    the children either way."""
+
+    @pytest.fixture
+    def settle(self, monkeypatch):
+        from medialib.cli import read_library
+        logged = []
+        monkeypatch.setattr(read_library, "log", logged.append)
+        monkeypatch.setattr(read_library.tooldeps, "tool_present",
+                            lambda tool: False)
+        # Set before it is deleted, so the undo takes away what the function
+        # under test writes rather than leaving it for the next case.
+        for name in ("HAVE_MKVTOOLNIX", "narrationFormat"):
+            monkeypatch.setenv(name, "")
+            monkeypatch.delenv(name)
+
+        def run(opus_wanted, narrated_as=None):
+            if narrated_as is None:
+                monkeypatch.delenv("narrationFormat", raising=False)
+            else:
+                monkeypatch.setenv("narrationFormat", narrated_as)
+            read_library._settle_mkvtoolnix(opus_wanted)
+            return logged
+        return run
+
+    def test_an_m4b_narration_loses_nothing_and_is_not_warned_about(
+            self, settle):
+        assert settle(True) == []
+        assert os.environ["HAVE_MKVTOOLNIX"] == ""
+
+    def test_no_opus_copy_is_not_warned_about(self, settle):
+        assert settle(False, "mka") == []
+
+    def test_a_matroska_narration_with_an_opus_copy_is(self, settle):
+        assert any("mkvtoolnix not found" in line
+                   for line in settle(True, "mka"))

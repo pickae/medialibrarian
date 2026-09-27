@@ -338,9 +338,13 @@ def extract(archive: str, destination: str, max_res: int) -> None:
     archives.prune_irregular(destination)
     _flatten(destination)
     if os.path.isdir(destination):
-        for name in drop_alternate_formats(destination):
-            log('  "%s": dropped %s, the same picture is also there in '
-                "another format" % (os.path.basename(archive), name))
+        # One line per book rather than per page: a scanner's working files
+        # left beside every export would otherwise be a line for every page.
+        dropped = drop_alternate_formats(destination)
+        if dropped:
+            log('  "%s": dropped %d page(s), the same picture(s) also there in '
+                "another format: %s" % (os.path.basename(archive),
+                                        len(dropped), ", ".join(dropped)))
 
 
 def _flatten(destination: str) -> None:
@@ -506,6 +510,7 @@ def package_book(book_dir: str, out_path: str, out_rel: str,
     # any conversion started, which is what makes the check meaningful.
     if os.path.exists(cbz):
         counters.note("Skip (exists): %s.cbz" % book_name)
+        counters.bump("existing")
         return True
 
     try:
@@ -595,6 +600,7 @@ class Run:
             self.counters.progress("Skip (exists): %s"
                                    % os.path.basename(out_rel))
             self.counters.bump("packaged")
+            self.counters.bump("existing")
             return None
         # And the same check by name, for archives converted before provenance was
         # recorded: no comment to go by, but a matching name is still a finished
@@ -603,6 +609,7 @@ class Run:
             self.counters.progress("Skip (exists): %s"
                                    % os.path.basename(out_rel))
             self.counters.bump("packaged")
+            self.counters.bump("existing")
             return None
 
         # The whole path as the user gave it, not just the file name: a collection
@@ -681,7 +688,7 @@ class Run:
         numbering.number_files_in_folder(
             book_avif,
             sorted((entry.path for entry in os.scandir(book_avif)
-                    if entry.is_file()), key=version_key))
+                    if entry.is_file()), key=version_key), announce=False)
 
         if package_book(book_avif, self.out_path, out_rel, partial_path,
                         self.avif_path, self.counters):
@@ -707,7 +714,7 @@ class Run:
         numbering.number_files_in_folder(
             book_temp,
             sorted((entry.path for entry in os.scandir(book_temp)
-                    if entry.is_file()), key=version_key))
+                    if entry.is_file()), key=version_key), announce=False)
         if package_book(book_temp, self.out_path, out_rel, partial_path,
                         self.temp_path, self.counters):
             self.counters.bump("packaged")
@@ -754,16 +761,20 @@ class Run:
             os.path.join(self.in_path, relative), str(self.max_res))
         with open(os.path.join(self.counters.dir, "pdfList.lock"), "w") as lock, \
                 runlog.take_lock(lock):
+            share = "%d of %d page(s) hold one full-page image" % (good, pages)
             if comic:
                 with open(self.input_list, "a") as handle:
                     handle.write(relative + "\0")
-                sys.stdout.write(
-                    "Comic: %s (%d of %d page(s) hold one full-page image, "
-                    "rendering at %d dpi)\n" % (relative, good, pages, dpi))
+                sys.stdout.write("Comic: %s (%s, rendering at %d dpi)\n"
+                                 % (relative, share, dpi))
+            elif pages <= 0:
+                # No page count at all - a damaged file, or the poppler tools
+                # missing, which was said above - so there is no share to give.
+                sys.stdout.write("Not a comic, skipped: %s (its pages could not "
+                                 "be read)\n" % relative)
             else:
-                sys.stdout.write(
-                    "Not a comic, skipped: %s (%d of %d page(s) hold one "
-                    "full-page image)\n" % (relative, good, pages))
+                sys.stdout.write("Not a comic, skipped: %s (%s)\n"
+                                 % (relative, share))
             sys.stdout.flush()
         self.counters.bump("pdf.comic" if comic else "pdf.other")
 
@@ -841,7 +852,12 @@ def footer(state: Run) -> None:
     # before that phase began has only the safety recap to give, and says so by
     # printing nothing rather than a page of zeroes about work that never began.
     if state.phase_start is not None:
-        packaged = counters.read("packaged")
+        # A book an earlier run already packaged counts as packaged - it is
+        # what lets a resumed run of a finished library refuse nothing - but it
+        # took no time here, so it is kept out of the books this run converted
+        # and out of the time per book.
+        existing = counters.read("existing")
+        packaged = counters.read("packaged") - existing
         end = state.phase_end if state.phase_end is not None else time.time()
         runtime = end - state.phase_start
         print("")
@@ -854,6 +870,9 @@ def footer(state: Run) -> None:
             print("%d of those were repackaged with their own pages: more than "
                   "%d%% of each was" % (repackaged, STARVED_PAGE_PERCENT))
             print("already starved, so re-encoding could only have cost them.")
+        # Last, so the "of those" above cannot be read as being about these.
+        if existing > 0:
+            print("%d already packaged by an earlier run, skipped" % existing)
 
         # A book is a coarse unit to judge a run by - collections hold 20-page
         # floppies and 300-page omnibuses in the same folder - so seconds per PAGE
@@ -886,9 +905,13 @@ def footer(state: Run) -> None:
                     except OSError:
                         pass
             print("")
-            print("Wrote %d cbz file(s) to %s"
-                  % (len(_files_matching(state.out_path, ("cbz",))),
-                     state.out_path))
+            written = len(_files_matching(state.out_path, ("cbz",)))
+            # With books from an earlier run among them, the count is what the
+            # folder holds now rather than what this run wrote.
+            if existing > 0:
+                print("%s now holds %d cbz file(s)" % (state.out_path, written))
+            else:
+                print("Wrote %d cbz file(s) to %s" % (written, state.out_path))
 
     # The recap goes to stderr and everything above it to stdout, so the two are
     # only in the order they were written if this one is flushed first - a log
@@ -1133,9 +1156,13 @@ def _run(result, declaration, program: str, script_dir: str,
                              / threads_per_conversion("avif", speed))))
         safety.exit_if_aborted()
         print("")
-        print("%d of %d PDF(s) taken as comic book(s)"
-              % (counters.read("pdf.comic"), len(pdfs)))
-        print("")
+        # A single PDF's verdict is its own line above; the tally only adds
+        # something once there are several.
+        if len(pdfs) > 1:
+            comic_count = counters.read("pdf.comic")
+            print("%d of %d PDF(s) taken as comic book(s)"
+                  % (comic_count, len(pdfs)))
+            print("")
 
     books_found = _records(state.input_list)
     # Everything found is a PDF and none of them is a comic. Refused here with
@@ -1175,7 +1202,8 @@ def _run(result, declaration, program: str, script_dir: str,
     print("")
     state.total = len(book_list)
     counters.total = state.total
-    for name in ("current", "pagesFound", "packaged", "pagesBroken"):
+    for name in ("current", "pagesFound", "packaged", "existing",
+                 "pagesBroken"):
         with open(os.path.join(counter_dir, name), "w") as handle:
             handle.write("0")
     # Where each book's page counters are collected: the converter appends one

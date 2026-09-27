@@ -11,7 +11,7 @@ pipeline produces, the run's own codec below the threshold, which happens all th
 time inside a video pulled off the web: encoding 46 kbps Opus into 46 kbps Opus
 changes nothing except to spend another lossy generation on it.
 
--o picks the codec from enums.AUDIO_CODECS, and Opus is the first of them and so
+-e picks the codec from enums.AUDIO_CODECS, and Opus is the first of them and so
 the default. The other is xHE-AAC, which is a different KIND of encode: ffmpeg
 cannot produce it, so it goes out over a pipe to an external encoder that
 medialib finds and reports for itself (medialib/lib/xheaac.py), and the finished
@@ -521,7 +521,10 @@ class Counters:
             return None
         return value if value > 0 else None
 
-    def report_progress(self, label: str) -> None:
+    def report_progress(self, label: str, verb: str = "Converting") -> None:
+        """One job's counted line. Every job counts, whatever it turns out to
+        do, so the position stays a position in the queue's own total - only
+        the verb says whether this one is encoded, copied or passed over."""
         with open(self.progress_file + ".lock", "w") as lock, \
                 runlog.take_lock(lock):
             try:
@@ -531,8 +534,8 @@ class Counters:
             with open(self.progress_file, "w") as handle:
                 handle.write("%d\n" % current)
             statusline.clear_status()
-            sys.stdout.write("%sConverting: %s\n" % (
-                runlog.counted_prefix(current, self._total()), label))
+            sys.stdout.write("%s%s: %s\n" % (
+                runlog.counted_prefix(current, self._total()), verb, label))
             sys.stdout.flush()
             statusline.repin_status(self.status_text)
 
@@ -619,6 +622,9 @@ class Run:
     chunk_root: str
     plan_root: str
     counters: "Counters"
+    # How many split files the post-conversion phase joined back together, so
+    # the closing report times that phase only when it had work.
+    rejoined: int
     # The four phase clocks, unset until the phase they time has begun.
     pre_start: float
     conv_start: float | None
@@ -704,8 +710,6 @@ class Run:
         self.counters.tally_duration(duration)
 
     def encode_whole(self, relative: str) -> None:
-        self.counters.report_progress(relative)
-
         source = os.path.join(self.input_dir, relative)
         out = self.output_path(relative)
 
@@ -734,6 +738,7 @@ class Run:
         source_bitrate = source_audio_bitrate(source)
 
         if os.path.isfile(out) and input_duration <= output_duration:
+            self.counters.report_progress(relative, "Up to date, skipping")
             self._reapply_sidecar_cover(relative, source, out)
             return
 
@@ -745,15 +750,45 @@ class Run:
             if not self.adaptive and bitrate == DEFAULT_BITRATE:
                 bitrate = MONO_BITRATE
 
+        # Only a video ever reaches the lift-out question: a PLAIN file whose
+        # audio is already finished never got past the first one - it is its own
+        # output already, and copying it verbatim is what -c is.
+        lift_out = video and source_audio_is_finished(source, source_bitrate,
+                                                      threshold, self.codec)
+        self.counters.report_progress(
+            relative, self._what_happens(relative, video, lift_out,
+                                         source_bitrate, threshold))
+
         tmp_dir, status = ramscratch.ram_scratch_dir("convertAudio")
         if status != 0 or not tmp_dir:
             return
         try:
             self._produce(relative, source, out, video, mono, bitrate,
                           threshold, source_bitrate, tmp_dir,
-                          input_duration_raw, channels)
+                          input_duration_raw, channels, lift_out)
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def _what_happens(self, relative: str, video: bool, lift_out: bool,
+                      source_bitrate: int, threshold: int) -> str:
+        """The verb of a whole file's counted line: what this job is about to do
+        to it, decided by the same tests `_produce` then acts on.
+
+        Said rather than left as "Converting" throughout, because most of a
+        re-run over a finished tree is files nothing is done to, and a line that
+        says it is converting them reads as work being repeated.
+        """
+        if lift_out:
+            return "Already %s, extracting as is" % CODEC_NAMES[self.codec]
+        if video or always_transcode_file(relative) \
+                or source_bitrate >= threshold:
+            return "Converting"
+        action = "copying" if self.copy else "skipping"
+        # 0 is "nothing stated it", which the run keeps as it would a small
+        # file - so the line says it did not know rather than naming a rate.
+        if source_bitrate <= 0:
+            return "Bitrate unknown, %s" % action
+        return "Under %d kbps, %s" % (threshold // 1000, action)
 
     def _remux(self, source: str, out: str) -> None:
         """The lift-out: the source's own audio stream into the output container
@@ -857,8 +892,7 @@ class Run:
                    formatting.fmt_hms("%.3f" % ceiling), rate,
                    "mono" if channels == 1 else "%d channels" % channels))
             log("       %s" % os.path.basename(source))
-            log("       Encode it as Opus (-o opus), or split the source into "
-                "shorter files first.")
+            log("       %s" % self._ceiling_way_out())
             return False
 
         # Both spawns are guarded, the way every other tool call in this module
@@ -896,15 +930,29 @@ class Run:
         decode.wait()
         return True
 
+    def _ceiling_way_out(self) -> str:
+        """What to do about a file too long for one xHE-AAC encode.
+
+        A run that is chunking would normally have cut such a file up, so the
+        refusal reaching it at all means one of two things. The run turned the
+        chunking off - and then turning it back on is the first way out, named
+        by the option that turned it off. Or the planner could not place the
+        pieces, and then only the other codec or shorter sources remain.
+        """
+        if self.adaptive:
+            instead = "drop -a, which turns off the splitting that would cut it"
+        elif not self.chunk_over_ceiling:
+            instead = "drop -s 0, so the run can cut it into chunks"
+        else:
+            return ("Encode it as Opus (-e opus), or split the source into "
+                    "shorter files first.")
+        return ("Encode it as Opus (-e opus), %s, or split the source into "
+                "shorter files first." % instead)
+
     def _produce(self, relative: str, source: str, out: str, video: bool,
                  mono: bool, bitrate: int, threshold: int, source_bitrate: int,
                  tmp_dir: str, input_duration_raw: str,
-                 channels: int = 0) -> None:
-        # Only a video ever reaches the lift-out question: a PLAIN file whose
-        # audio is already finished never got past the first one - it is its own
-        # output already, and copying it verbatim is what -c is.
-        lift_out = video and source_audio_is_finished(source, source_bitrate,
-                                                      threshold, self.codec)
+                 channels: int = 0, lift_out: bool = False) -> None:
         cover_target = ""
 
         if video or always_transcode_file(relative) \
@@ -1425,21 +1473,28 @@ def footer(state: Run) -> None:
         with open(state.duration_file) as handle:
             audio_seconds = formatting.awk_number(handle.read())
 
+    # Post-conversion is the re-joining of split files and nothing else, so a
+    # run that split nothing has no such phase to time.
+    phases = [("Pre-conversion", pre_seconds), ("Conversion", conv_seconds)]
+    if state.rejoined:
+        phases.append(("Post-conversion", post_seconds))
+    phases.append(("Total time", total_seconds))
+
     print("")
     print("Stats")
     print("=====")
-    for label, seconds in (("Pre-conversion", pre_seconds),
-                           ("Conversion", conv_seconds),
-                           ("Post-conversion", post_seconds),
-                           ("Total time", total_seconds)):
+    for label, seconds in phases:
         print("%-18s %.2f s (%s)"
               % (label + ":", seconds, formatting.fmt_hms("%.2f" % seconds)))
     print("Files:             %d" % file_count)
-    print("Total duration:    %.0f s (%s)"
-          % (audio_seconds, formatting.fmt_hms("%.2f" % audio_seconds)))
+    # Both are about audio this run encoded, and a run that found everything
+    # up to date encoded none: a 0 s and a 0x would only say so twice.
+    if audio_seconds > 0:
+        print("Total duration:    %.0f s (%s)"
+              % (audio_seconds, formatting.fmt_hms("%.2f" % audio_seconds)))
     if file_count > 0:
         print("Time per file:     %.2f s" % (total_seconds / file_count))
-    if total_seconds > 0:
+    if total_seconds > 0 and audio_seconds > 0:
         print("Real-time speedup: %sx" % formatting.fmt_ratio(
             "%.6f" % (audio_seconds / total_seconds)))
 
@@ -1583,12 +1638,12 @@ def main(argv: list, program: str = "convert-audio",
     # run neither pays for the probe nor is blocked by it.
     if codec == "xheaac":
         skip_preflight = bool(os.environ.get("SKIP_TOOL_PREFLIGHT", ""))
-        if xheaac.require_encoder("%s (-o %s)" % (program, codec),
+        if xheaac.require_encoder("%s (-e %s)" % (program, codec),
                                   skip_preflight=skip_preflight):
             return 1
         _report_encoder(codec, bitrate, mono, adaptive)
     runlog.warn_uncounted_progress()
-    _settle_mkvtoolnix()
+    mkvtoolnix_unsaid = _settle_mkvtoolnix()
 
     # Nothing to encode? Said before the output folder is built up and before
     # pretreatment renames anything. Video containers count as input too: their
@@ -1612,7 +1667,8 @@ def main(argv: list, program: str = "convert-audio",
     try:
         return _convert(program, script_dir, input_dir, output_dir, probe_what,
                         skips, mono, adaptive, copy, keep, bitrate, jobs,
-                        split_threshold, codec, chunk_over_ceiling)
+                        split_threshold, codec, chunk_over_ceiling,
+                        mkvtoolnix_unsaid)
     finally:
         statusline.stop_status_monitor()
         ramscratch.run_exit_cleanup()
@@ -1656,7 +1712,8 @@ def _convert(program: str, script_dir: str, input_dir: str, output_dir: str,
              probe_what: str, skips, mono: bool, adaptive: bool, copy: bool,
              keep: bool, bitrate: int, jobs: int, split_threshold: int,
              codec: str = DEFAULT_CODEC,
-             chunk_over_ceiling: bool = False) -> int:
+             chunk_over_ceiling: bool = False,
+             mkvtoolnix_unsaid: bool = False) -> int:
     pre_start = time.time()
 
     state = Run(
@@ -1672,7 +1729,7 @@ def _convert(program: str, script_dir: str, input_dir: str, output_dir: str,
         ram_base=ramscratch.ram_base(), tracks=[], pre_start=pre_start,
         conv_start=None, conv_end=None,
         post_start=None, post_end=None, duration_file="", counters=None,
-        chunk_root="", plan_root="",
+        chunk_root="", plan_root="", rejoined=0,
     )
     safety.set_run_footer(lambda: footer(state))
 
@@ -1701,6 +1758,8 @@ def _convert(program: str, script_dir: str, input_dir: str, output_dir: str,
     # the probe and leave the queue empty here.
     if not state.tracks:
         return safety.fail_no_relevant_input(input_dir, probe_what)
+    if mkvtoolnix_unsaid:
+        _warn_mkvtoolnix(state.tracks)
 
     # With a backlog this large the cores stay saturated on the many small files
     # no matter what, so a handful of large ones each blocking one thread costs
@@ -1709,8 +1768,12 @@ def _convert(program: str, script_dir: str, input_dir: str, output_dir: str,
     if split_threshold > 0:
         skip_at = jobs * 50
         if len(state.tracks) >= skip_at:
+            # A codec with a whole-file ceiling still cuts what is past it - that
+            # survives this on purpose - so the line does not claim otherwise.
             print("Many input files (%d >= %d threads x 50): skipping long-file "
-                  "chunking." % (len(state.tracks), skip_at))
+                  "chunking%s." % (len(state.tracks), skip_at,
+                                   ", except for files too long to encode whole"
+                                   if chunk_over_ceiling else ""))
             split_threshold = 0
             state.split_threshold = 0
 
@@ -1960,22 +2023,36 @@ def _pretreat_input(input_dir: str, skips) -> None:
                                    skips)
 
 
-def _settle_mkvtoolnix() -> None:
+def _settle_mkvtoolnix() -> bool:
     """Settled once and shared with the workers and with any wrapper's children,
     so the warning is said exactly once per run by whichever script settled
-    first."""
+    first.
+
+    True when this run settled it as ABSENT, which leaves the warning owed -
+    said by `_warn_mkvtoolnix` once the scan has shown whether it applies.
+    """
     if os.environ.get("HAVE_MKVTOOLNIX") is not None:
-        return
+        return False
     present = all(tooldeps.tool_present(tool) for tool in
                   ("mkvmerge", "mkvpropedit", "mkvextract"))
     os.environ["HAVE_MKVTOOLNIX"] = "1" if present else ""
-    if not present:
-        log("WARNING: mkvtoolnix not found (apt install mkvtoolnix) - cover art "
-            "embedded in Matroska sources")
-        log("         will not be extracted; sidecar images and the other cover "
-            "sources still work. The")
-        log("         chapters are written by mutagen and do not need it - "
-            "nothing else is lost.")
+    return not present
+
+
+def _warn_mkvtoolnix(tracks: list) -> None:
+    """The missing mkvtoolnix, said only for a tree it matters to.
+
+    The one thing this command asks it for is the cover art attached to a
+    Matroska AUDIO source - a .mkv is a video, whose picture is never taken as a
+    cover - so a tree without an .mka loses nothing by its absence, and a
+    warning there would be about a file the run does not have.
+    """
+    if not any(enums.lower_extension_of(track) == "mka" for track in tracks):
+        return
+    log("WARNING: mkvtoolnix not found (apt install mkvtoolnix) - cover art "
+        "embedded in Matroska sources")
+    log("         will not be extracted; sidecar images and the other cover "
+        "sources still work.")
 
 
 def cli(argv: list | None = None) -> int:

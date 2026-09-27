@@ -1032,6 +1032,19 @@ class TestTheSponsorBlockProbe:
         assert "-x" in argv
         assert "251/140/bestaudio/best" in argv
 
+    def test_a_run_with_no_youtube_table_is_not_warned(self, ytdlp, tmp_path):
+        """Only the YouTube profiles ask for SponsorBlock, so an RSS run has no
+        segment to keep that a newer yt-dlp would have cut."""
+        ytdlp.with_tool("yt-dlp", _STUB_SPONSORBLOCK)
+        table = _table(tmp_path / "rss.tsv",
+                       _feed(1, "RSS/plain", "https://example.test/rss"),
+                       profile="rssAudio")
+        library = tmp_path / "library-rss"
+        log = ytdlp.ytdlp("-t", table, library, library / "archive.log",
+                          env=dict(ytdlp.env, SB_HELP="0",
+                                   SKIP_TOOL_PREFLIGHT=""))
+        assert "no SponsorBlock support" not in log, log
+
     def test_with_the_flags_nothing_changes(self, probe):
         log, argv, _ = probe(1)
         assert "no SponsorBlock support" not in log, log
@@ -1095,3 +1108,25 @@ class TestConsolidatingArchives:
         log = consolidate(*args, expect=1)
         assert "Nothing was changed." in log
         assert first.read_text() == "youtube a\n"
+
+
+class TestTheTidySummary:
+    """The tidy-up's line carries the figures that are not nought: an audio run
+    never remuxes, and most nights leave nothing interrupted behind."""
+
+    def test_the_noughts_are_left_out(self):
+        from medialib.cli import ytdlp
+        assert ytdlp.tidy_summary(3, 0, 5, 0, 0) \
+            == "Tidied 3 episode(s): 5 sidecar(s) removed"
+
+    def test_every_figure_that_happened_is_named(self):
+        from medialib.cli import ytdlp
+        assert ytdlp.tidy_summary(1, 1, 1, 1, 2) == (
+            "Tidied 1 episode(s): 1 remuxed into Matroska, 1 sidecar(s) "
+            "removed, 1 interrupted download(s) swept, 2 empty folder(s) "
+            "removed")
+
+    def test_a_tidy_up_with_nothing_to_do_says_so(self):
+        from medialib.cli import ytdlp
+        assert ytdlp.tidy_summary(2, 0, 0, 0, 0) \
+            == "Tidied 2 episode(s), nothing to remove"

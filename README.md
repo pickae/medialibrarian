@@ -649,7 +649,8 @@ and what they move is the operating system's stop/continue signal.
 
 Sorts loose movie files into per-movie subfolders (Plex layout), cleans
 folder/movie/subtitle names, renames/downloads subtitles for six languages,
-refreshes mkv tags, transcodes audio to Opus, and transcribes commentary tracks.
+refreshes mkv tags, transcodes audio to Opus, transcribes commentary tracks,
+and gives films without named chapters the ones their disc had.
 
 Subtitles are downloaded after the films are tagged with their IMDb ids, and a
 tagged film is searched for by its id, so only a subtitle catalogued under that
@@ -966,9 +967,9 @@ would throw away every id in the real file and put the whole library back
 through the lookups that already failed on it.
 
 **`-w` on its own is refused.** Without `-t`, `-i`, `-s` or `-n` there is no dry run
-to carry out, and the run it would otherwise start is a full ingest. `-c`
-refuses it as well: it is the transcription and not a dry run, so there is
-nothing for `-w` to carry out.
+to carry out, and the run it would otherwise start is a full ingest. `-a` and
+`-c` refuse it as well: the transcription and the chapter lookup are not dry
+runs, so there is nothing for `-w` to carry out.
 
 **`-s` does only the subtitles.** The given folders are walked the way `-t`
 walks them, and every `<movie>.xx.srt` already beside a film is put to the test
@@ -1006,7 +1007,7 @@ It names a film only when it is sure:
   are, and each track's opening minutes have to introduce one listed
   commentary's people and nobody else's, in one way of pairing them only. One
   commentary whose people never introduce themselves may take the track that
-  is left over. Run `-c` first, so the transcripts are there.
+  is left over. Run `-a` first, so the transcripts are there.
 
 The disc's own subtitles for a commentary (`English (Commentary #2)`), the
 transcripts the ingest appended to the film, and the transcripts and extracts
@@ -1016,7 +1017,35 @@ named — or would be — and every film left alone, with the reason. The pages
 asked for are kept in the checkout's `data/dvdcompare`, and the site is asked
 no more than once every few seconds.
 
-**`-c` does only the commentary phase.** The given folders are walked the way
+**`-c` does only the chapters.** Every tagged film under the given folders that
+has no chapters, or only numbered ones (`Chapter 01`, `Kapitel 3`, a bare
+number or time), is looked up in the read-only
+[ChapterDB archive](https://chapterdb.plex.tv/): chapter times read off DVDs and
+Blu-rays, mostly with the names from the disc's menu. The full ingest does the
+same lookup right after the tagging, since a film is looked up by the title
+its folder now carries — an untagged folder is never looked up.
+
+- **A set must be the disc the film was ripped from.** It has to run as long as
+  the film to within **two seconds**, which rules out every other cut and every
+  PAL transfer. It also has to have at least three chapters, start at the
+  start, be in order, and reach past the middle of the film.
+- **Names win, but only for the same marks.** A film with no chapters gets the
+  best named set, or a numbered one when that is all there is. A film with
+  numbered chapters gets them **replaced** only by a named set with the same
+  number of chapters, each starting within a second of the film's own: the
+  same marks, now with names. Numbered chapters at other times — a different
+  authoring, or marks a muxer put every five minutes — are kept, since there
+  is no point dropping marks the film already has. A film whose chapters have
+  names is not looked up at all. Among sets that fit, English names win, then
+  the set more people confirmed.
+- **Written in place, never remuxed.** `mkvpropedit --chapters` replaces every
+  chapter the film had, so it never ends up carrying two sets.
+
+It writes as it goes: there is no dry run, and no `-w`. The archive takes no
+new sets, so a recent film will not be in it; if it stops answering, the rest of the run does
+without it. Needs `curl`.
+
+**`-a` does only the audio commentary phase.** The given folders are walked the way
 `-t` walks them, and every commentary track that does not already have its
 transcript beside the film is transcribed next to it — in the language it is
 spoken in, on the GPU when whisper can use it, on every CPU thread otherwise —

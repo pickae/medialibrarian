@@ -38,7 +38,7 @@ def stubbed(monkeypatch, tmp_path):
     monkeypatch.setattr(run.tooldeps, "require_tools",
                         lambda _program, specs: tools.append(specs) or 0)
     monkeypatch.setattr(run, "_settle_ffsubsync_quality",
-                        lambda: "confidence")
+                        lambda **_k: "confidence")
     monkeypatch.setenv("openSubtitlesUser", "u")
     monkeypatch.setenv("openSubtitlesPassword", "p")
     logs: list = []
@@ -127,7 +127,8 @@ class TestThePhaseRunsAndNothingElse:
 
     def test_an_ffsubsync_that_cannot_refuse_has_nothing_to_test_with(
             self, stubbed, tmp_path, monkeypatch, capsys):
-        monkeypatch.setattr(run, "_settle_ffsubsync_quality", lambda: "no")
+        monkeypatch.setattr(run, "_settle_ffsubsync_quality",
+                            lambda **_k: "no")
         films = _library(tmp_path, "Films")
         assert _main(stubbed, "-sw", str(films)) == 1
         assert stubbed["calls"] == []
@@ -179,8 +180,52 @@ class TestTheList:
         assert not listing.exists()
 
 
+class TestWhatItSaysAtTheEnd:
+    """The closing count and the dry run's hint, cut to what was found."""
+
+    def test_a_folder_without_subtitles_says_so_rather_than_three_zeros(
+            self, stubbed, tmp_path):
+        _main(stubbed, "-s", str(_library(tmp_path, "Films")))
+        assert "No subtitle found beside any film" in stubbed["logs"]
+        assert stubbed["logs"][-1] == ("Dry run: nothing was changed. Pass -w "
+                                       "to download what is missing.")
+
+    def test_all_in_step_leaves_out_the_untested_count_and_the_throwing_out(
+            self, stubbed, tmp_path):
+        stubbed["verdicts"]["kept"] = ["/Films/a.en.srt"]
+        _main(stubbed, "-s", str(_library(tmp_path, "Films")))
+        assert "1 subtitle(s) in step, 0 out of step" in stubbed["logs"]
+        assert stubbed["logs"][-1] == (
+            "Dry run: nothing was changed. Pass -w to sync the subtitles in "
+            "step and download what is missing.")
+
+    def test_every_verdict_is_counted_and_every_step_named(self, stubbed,
+                                                           tmp_path):
+        stubbed["verdicts"]["kept"] = ["/Films/a.en.srt"]
+        stubbed["verdicts"]["discarded"] = ["/Films/b.de.srt"]
+        stubbed["verdicts"]["untested"] = ["/Films/c.fr.srt"]
+        _main(stubbed, "-s", str(_library(tmp_path, "Films")))
+        assert ("1 subtitle(s) in step, 1 out of step, 1 could not be tested"
+                in stubbed["logs"])
+        assert stubbed["logs"][-1] == (
+            "Dry run: nothing was changed. Pass -w to sync the subtitles in "
+            "step, throw out the ones out of step and download what is "
+            "missing.")
+
+    def test_the_list_line_names_only_what_the_list_holds(self, stubbed,
+                                                          tmp_path):
+        films = _library(tmp_path, "Films")
+        stubbed["verdicts"]["discarded"] = ["/Films/b.de.srt"]
+        _main(stubbed, "-s", str(films))
+        listed = [line for line in stubbed["logs"] if "listed in" in line]
+        assert len(listed) == 1
+        assert listed[0].startswith("1 subtitle(s) in ")
+        assert '" out of step - listed in ' in listed[0]
+        assert "untested" not in listed[0]
+
+
 class TestTheCombosItRefuses:
-    @pytest.mark.parametrize("other", [["-t"], ["-c"], ["-i", "ids.tsv"]])
+    @pytest.mark.parametrize("other", [["-t"], ["-a"], ["-i", "ids.tsv"]])
     def test_s_with_another_phase_is_refused(self, tmp_path, capsys, other):
         films = _library(tmp_path, "Films")
         assert run.main(["-s", *other, str(films)]) == 1

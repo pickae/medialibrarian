@@ -16,6 +16,7 @@ never be concatenated.
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 
@@ -92,6 +93,12 @@ def _assert_no_leak(wrapper):
         "scratch left in the RAM base"
 
 
+def _counted(log: str, book: str) -> int:
+    """How many of the transcode's counted per-file lines name a track of
+    <book>, whatever each says it does with the file."""
+    return len(re.findall(r"^\[\d+/\d+\] [^:\n]*: %s/" % re.escape(book), log,
+                          re.MULTILINE))
+
 class TestAnArchiveIsOneOfTheInputsOwnSubfolders:
     """The input holds, side by side: a plain folder, an archive packed with its
     own top folder, one packed flat, one shadowed by a folder of its name, and two
@@ -135,14 +142,14 @@ class TestAnArchiveIsOneOfTheInputsOwnSubfolders:
         _, source, _, log = run
         assert '"Hard Times" is already a folder here' in log, log
         assert (source / "Hard Times.zip").is_file()
-        assert log.count("Converting: Hard Times/") == 1, log
+        assert _counted(log, "Hard Times") == 1, log
 
     def test_two_archives_claiming_one_name_are_never_mixed(self, run):
         """The second is reported and skipped, so one folder never ends up
         holding half of each."""
         _, _, _, log = run
         assert 'already stands in for "Little Dorrit"' in log, log
-        assert log.count("Converting: Little Dorrit/") == 2, log
+        assert _counted(log, "Little Dorrit") == 2, log
 
     def test_the_input_keeps_its_archives(self, run):
         """Nothing here consumes them."""
@@ -211,14 +218,14 @@ class TestTheNameAnArchiveIsUnpackedUnder:
         _, source, _, log = run
         assert '"Hard Times" is already a folder here' in log, log
         assert (source / "dl-9999.zip").is_file()
-        assert log.count("Converting: Hard Times/") == 1, log
+        assert _counted(log, "Hard Times") == 1, log
 
     def test_two_archives_holding_one_name_are_never_mixed(self, run):
         """Their file names differ, so only the name from inside catches this
         pair before they unpack into a single folder."""
         _, _, _, log = run
         assert 'already stands in for "Little Dorrit"' in log, log
-        assert log.count("Converting: Little Dorrit/") == 2, log
+        assert _counted(log, "Little Dorrit") == 2, log
 
     def test_the_unpacking_scratch_is_handed_back(self, run):
         wrapper, _, _, _ = run
