@@ -4066,3 +4066,64 @@ class TestASlipAwayInTheImdbLists:
             _imdb_row("tt0000101", "Moss Harbour: The Tale", 2019, 90)])
         assert tmdblookup.identify("Moss Harbour", "2019", imdb="db").imdb == ""
 
+
+
+class TestTheSameFilmKeptTwice:
+    """A film whose id two separate folders carry is kept twice, nearly always
+    by accident; the files inside one folder are its versions, and never
+    counted."""
+
+    def test_two_folders_in_different_places_are_a_duplicate(
+            self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path,
+              ("Disk1/The Movie (1999) {imdb-tt0000001}",
+               ["The Movie (1999) {imdb-tt0000001}.mkv"]),
+              ("Disk2/Unsorted/The Movie (1999)", ["The Movie (1999).mkv"]))
+        _stub_network(monkeypatch, {"The Movie": "tt0000001"})
+        tagged: dict = {}
+        tmdblookup.tag_plex_ids(".", [].append, SkipLog(), dry_run=True,
+                                recursive=True, tagged=tagged)
+        assert tmdblookup.duplicate_films(tagged) == [(
+            "{imdb-tt0000001}",
+            [str(tmp_path / "Disk1/The Movie (1999) {imdb-tt0000001}"),
+             str(tmp_path / "Disk2/Unsorted/The Movie (1999)")])]
+
+    def test_and_across_the_folders_of_separate_walks(self, monkeypatch,
+                                                      tmp_path):
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path,
+              ("A/The Movie (1999) {imdb-tt0000001}", ["x.mkv"]),
+              ("B/The Movie (1999) {imdb-tt0000001}", ["y.mkv"]))
+        _stub_network(monkeypatch, {})
+        tagged: dict = {}
+        for root in ("A", "B"):
+            tmdblookup.tag_plex_ids(root, [].append, SkipLog(), dry_run=True,
+                                    tagged=tagged)
+        assert [tag for tag, _ in tmdblookup.duplicate_films(tagged)] == [
+            "{imdb-tt0000001}"]
+
+    def test_several_versions_in_one_folder_are_not(self, monkeypatch,
+                                                    tmp_path):
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("The Movie (1999) {imdb-tt0000001}", [
+            "The Movie (1999) {imdb-tt0000001} {edition-Extended}.mkv",
+            "The Movie (1999) {imdb-tt0000001} {edition-Theatrical}.mkv"]))
+        _stub_network(monkeypatch, {})
+        tagged: dict = {}
+        tmdblookup.tag_plex_ids(".", [].append, SkipLog(), dry_run=True,
+                                tagged=tagged)
+        assert tagged == {"{imdb-tt0000001}": [
+            "./The Movie (1999) {imdb-tt0000001}"]}
+        assert tmdblookup.duplicate_films(tagged) == []
+
+    def test_a_folder_inside_the_films_own_is_not(self):
+        tagged = {"{imdb-tt1}": ["/lib/Film (1999) {imdb-tt1}",
+                                 "/lib/Film (1999) {imdb-tt1}/Film (1999) 3D",
+                                 "/lib/Film (1999) {imdb-tt1}"]}
+        assert tmdblookup.duplicate_films(tagged) == []
+
+    def test_different_films_are_not(self):
+        tagged = {"{imdb-tt1}": ["/a/One (1999)"],
+                  "{imdb-tt2}": ["/b/Two (1999)"]}
+        assert tmdblookup.duplicate_films(tagged) == []

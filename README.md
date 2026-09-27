@@ -995,6 +995,13 @@ to fill an id in, the second to give the files names that say which release each
 one is. `-t` walks the whole tree, so it can be pointed at a library; a full
 ingest reads the one level it always did.
 
+**A film kept twice is warned about.** When two separate folders carry the
+same id, whether it was already on them or the run gives it to them, `-t`
+names both at the end: side by side, in different corners of the library, or in
+two of the folders given (two disks, say). That is nearly always one film kept
+twice by accident, so which copy to keep is left to you. The several files
+inside one folder are its versions and are never counted.
+
 **Several folders may be given**, and each is worked through in full before the
 next is started, in the order they were typed. Each leaves lists of its own,
 named after it — `ingest-movies-unmatched-Films.tsv`,

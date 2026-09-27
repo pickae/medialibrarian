@@ -2090,7 +2090,8 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
                  seen: set | None = None,
                  skip: set | None = None,
                  long_names: LongNames | None = None,
-                 imdb: str = "") -> int:
+                 imdb: str = "",
+                 tagged: dict | None = None) -> int:
     """Name each confidently-matched movie folder, its films and their sidecars
     the way Plex reads them: the folder and every file carry the id tag, an
     edition carries its own, and a split film keeps its stacking token last.
@@ -2158,6 +2159,11 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
 
     ``imdb`` is the local IMDb database each lookup ends on - see
     :mod:`medialib.lib.imdbdata` - or "" for TMDb alone.
+
+    ``tagged`` collects {id tag: [folder path, ...]} for every film folder this
+    walk knows the id of - the one it already carried and the one it was (or,
+    on a dry run, would be) given alike - so that a caller can tell the same
+    film kept in two folders. See :func:`duplicate_films`.
     """
     skip_log = skip_log if skip_log is not None else safety.SkipLog()
     long_names = long_names if long_names is not None else LongNames()
@@ -2276,6 +2282,7 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
                 settled, byfile = _named_by_its_files(base, year, folder.path,
                                                       names, notes, imdb)
                 if settled:
+                    _claim(tagged, settled, folder.path)
                     _flag_alias(aliases, folder.path, base, settled, byfile)
                     _tag_only(folder, names, settled, skip_log, dry_run, log,
                               None, functools.partial(
@@ -2332,6 +2339,7 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
         known = plexnames.named_by_catalogue(strays, found.aliases, base) \
             if tag and strays else {}
         if strays and len(known) == len(strays):
+            _claim(tagged, tag, folder.path)
             _flag_alias(aliases, folder.path, base, tag, known)
             # The FOLDER still takes the catalogue's spelling, the way every
             # other match here does - it was matched on its own name. Only the
@@ -2349,11 +2357,16 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
             # folder nothing could rename, and whether it REALLY could not is
             # the thing a person has to look at - an id going on quietly is
             # what would keep it off the list it belongs on.
-            tagged = _tag_and_leave(folder, names, had_tag, skip_log, dry_run,
+            anyway = _tag_and_leave(folder, names, had_tag, skip_log, dry_run,
                                     log, None, long_names)
-            reason = trouble[0] + (TAGGED_ANYWAY if tagged else "")
+            reason = trouble[0] + (TAGGED_ANYWAY if anyway else "")
             _flag(ambiguous, folder.path, reason, left)
-            if not tagged:
+            if anyway:
+                # _tag_and_leave only tags a folder whose ids are all one.
+                _claim(tagged, (plexnames.ids_in(names)
+                                | ({had_tag} if had_tag else set())).pop(),
+                       folder.path)
+            else:
                 log('  "{}" {} - left as it is'.format(base, trouble[2]))
             continue
 
@@ -2370,6 +2383,9 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
         # renaming the files under a folder that cannot take its name leaves
         # them spelled for a folder they are not in, beside the folder they are
         # spelled for.
+        # Which film this folder is, whatever becomes of its name below: a
+        # rename refused for landing on its tagged twin is that very duplicate.
+        _claim(tagged, tag, folder.path)
         wanted = plexnames.folder_name(base, tag)
         target = _folder_spelling(os.path.dirname(folder.path) or ".", wanted)
         if wanted != folder.name and os.path.exists(target):
@@ -2405,6 +2421,31 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
                          log, planned, found.aliases,
                          corrected, long_names, edition, announce)
     return 0
+
+
+def _claim(tagged: dict | None, tag: str, path: str) -> None:
+    """Note that the folder at ``path`` is the film ``tag`` names."""
+    if tagged is not None and tag:
+        tagged.setdefault(tag.lower(), []).append(path)
+
+
+def duplicate_films(tagged: dict) -> list:
+    """The films held in more than one folder, as [(tag, [folder, ...])].
+
+    Only separate folders count: the several files INSIDE one folder are its
+    versions, and a folder inside another film's folder belongs to it. Two
+    folders anywhere else - beside each other, in different parts of the tree,
+    on different disks - are the same film kept twice.
+    """
+    found = []
+    for tag in sorted(tagged):
+        folders = sorted({os.path.abspath(path) for path in tagged[tag]})
+        apart = [path for path in folders
+                 if not any(path.startswith(other + os.sep)
+                            for other in folders if other != path)]
+        if len(apart) > 1:
+            found.append((tag, apart))
+    return found
 
 
 # What can be wrong with a folder that no id settles, as
