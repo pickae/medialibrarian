@@ -81,9 +81,22 @@ t |  | tags only: the Plex/Jellyfin naming and nothing else - the IMDb id,
                   films. A film TMDb could not name, and a folder holding a
                   film that is not its own, are both left exactly as they are
                   and written to a list to read.
+s |  | subtitles only: the six languages' subtitles and nothing else -
+                  walks the whole tree the way -t does, and tests every
+                  "<movie>.xx.srt" already beside a film (never a commentary
+                  transcript) by the alignment a download is kept by. A DRY
+                  RUN unless -w is given: it says which would be kept and
+                  which thrown out, lists the ones out of step, and changes
+                  nothing on disk. With -w the ones in step are synced, the
+                  ones out of step are deleted, and every subtitle still
+                  missing is downloaded, synced and tested the way a full
+                  ingest does it. One ffsubsync cannot align at all is left
+                  alone either way. Best run after -tw, so films are searched
+                  for by their ids.
 w |  | with -t or -i, actually perform the renames instead of printing
-                  them. On its own it is a usage error rather than a full
-                  ingest: there is no dry run to carry out.
+                  them; with -s, sync, throw out and download. On its own it
+                  is a usage error rather than a full ingest: there is no dry
+                  run to carry out.
 i | <file> | the hand-written id list filled in and read BACK: tagging and
                   nothing else, like -t, but going on what is in this file. An
                   id in it is simply used - TMDb is not asked to agree with a
@@ -98,9 +111,10 @@ i | <file> | the hand-written id list filled in and read BACK: tagging and
                   renames out and brings the file up to date, every folder
                   given into that one file."""
 
-OPT_VARS = "f:fragmentsOverride c:commentaryOnly t:tagsOnly w:writeTags i:idList"
+OPT_VARS = ("f:fragmentsOverride c:commentaryOnly t:tagsOnly s:subtitlesOnly "
+            "w:writeTags i:idList")
 OPT_COLUMN = 18
-OPT_LONG = "f:fragments c:commentary t:tags-only w:write i:ids"
+OPT_LONG = "f:fragments c:commentary t:tags-only s:subtitles-only w:write i:ids"
 
 USAGE_TAIL = """
 

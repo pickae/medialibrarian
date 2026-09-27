@@ -33,7 +33,10 @@ __all__ = [
     "sync_subtitle",
     "film_imdb_id",
     "download_srt",
+    "subtitle_movies",
     "download_subs",
+    "check_srt",
+    "check_subs",
 ]
 
 # The folder names download_subs leaves alone: the extras that live beside a
@@ -263,47 +266,18 @@ def film_imdb_id(file: str) -> str:
     return ""
 
 
-def download_srt(file: str, language_code: str, user: str, password: str,
-                 max_sync_offset: str, max_sync_quality_offset: str,
-                 ffsubsync_quality: str,
-                 log: Callable[[str], None]) -> None:
-    """Fetch one missing subtitle for one movie and one language.
-
-    A sidecar that already exists is left in place - that is the resume
-    check, and it looks for exactly the name the deletions below remove, so
-    the next run re-downloads what this one threw out. Without credentials
-    the download is skipped cleanly. A film whose name carries its id is
-    searched for BY that id, and only a subtitle filed under that film is
-    taken; one without is searched for by the title its name reads as. A
-    sidecar some provider labelled ``.srt`` but that ffprobe names as another
-    format is converted to real SubRip first, and a subtitle that cannot be
-    synced is discarded rather than kept out of step - whether ffsubsync failed
-    outright or the alignment it found was refused.
-    """
+def _sidecar(file: str, language_code: str) -> str:
+    """The ``<movie>.<xx>.srt`` a film's subtitle in one language is named."""
     dot = file.rfind(".")
     stem = file[:dot] if dot != -1 else file
-    srt = "{}.{}.srt".format(stem, language_code)
-    if os.path.isfile(srt):
-        return
-    if not user or not password:
-        log("WARNING: openSubtitlesUser/openSubtitlesPassword not set, "
-            "skipping subtitle download")
-        return
-    log("Downloading {} subtitles: {}".format(language_code, file))
-    # The credentials travel in the environment, where argv would show them to
-    # every account on the machine.
-    env = dict(os.environ, openSubtitlesUser=user,
-               openSubtitlesPassword=password)
-    try:
-        subprocess.run(
-            ["pipx", "run", helpers.path_of("subliminal_download.py"),
-             language_code, film_imdb_id(file), file],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
-    except OSError:
-        pass
-    if not os.path.isfile(srt):
-        return
+    return "{}.{}.srt".format(stem, language_code)
 
+
+def _to_subrip(srt: str, language_code: str, file: str,
+               log: Callable[[str], None]) -> None:
+    """A sidecar some provider labelled ``.srt`` but that ffprobe names as
+    another format, converted to real SubRip in place. One that cannot be
+    converted is left as it was."""
     try:
         probe = subprocess.run(
             ["ffprobe", "-v", "error", "-select_streams", "s:0",
@@ -335,6 +309,48 @@ def download_srt(file: str, language_code: str, user: str, password: str,
             except OSError:
                 pass
 
+
+def download_srt(file: str, language_code: str, user: str, password: str,
+                 max_sync_offset: str, max_sync_quality_offset: str,
+                 ffsubsync_quality: str,
+                 log: Callable[[str], None]) -> None:
+    """Fetch one missing subtitle for one movie and one language.
+
+    A sidecar that already exists is left in place - that is the resume
+    check, and it looks for exactly the name the deletions below remove, so
+    the next run re-downloads what this one threw out. Without credentials
+    the download is skipped cleanly. A film whose name carries its id is
+    searched for BY that id, and only a subtitle filed under that film is
+    taken; one without is searched for by the title its name reads as. A
+    sidecar some provider labelled ``.srt`` but that ffprobe names as another
+    format is converted to real SubRip first, and a subtitle that cannot be
+    synced is discarded rather than kept out of step - whether ffsubsync failed
+    outright or the alignment it found was refused.
+    """
+    srt = _sidecar(file, language_code)
+    if os.path.isfile(srt):
+        return
+    if not user or not password:
+        log("WARNING: openSubtitlesUser/openSubtitlesPassword not set, "
+            "skipping subtitle download")
+        return
+    log("Downloading {} subtitles: {}".format(language_code, file))
+    # The credentials travel in the environment, where argv would show them to
+    # every account on the machine.
+    env = dict(os.environ, openSubtitlesUser=user,
+               openSubtitlesPassword=password)
+    try:
+        subprocess.run(
+            ["pipx", "run", helpers.path_of("subliminal_download.py"),
+             language_code, film_imdb_id(file), file],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
+    except OSError:
+        pass
+    if not os.path.isfile(srt):
+        return
+
+    _to_subrip(srt, language_code, file, log)
+
     log("Syncing {} subtitles: {}".format(language_code, file))
     status = sync_subtitle(file, srt, max_sync_offset,
                            max_sync_quality_offset, ffsubsync_quality)
@@ -354,19 +370,15 @@ def download_srt(file: str, language_code: str, user: str, password: str,
             pass
 
 
-def download_subs(directory: str, user: str, password: str,
-                  max_sync_offset: str, max_sync_quality_offset: str,
-                  ffsubsync_quality: str,
-                  log: Callable[[str], None]) -> None:
-    """Do the one-language download for every movie and every language.
+def subtitle_movies(directory: str) -> list:
+    """Every movie under the tree that gets subtitles of its own.
 
     A movie is anything named ``*mkv`` (case-sensitively) anywhere under the
     tree, and one is NOT a movie when its folder's path carries one of the
     extras words - Featurettes, Other, Scenes, Interviews, Shorts, Trailers,
     Extras - the folders that hold the material a film comes with, nor when it
     is the "(old)" copy an improved remux kept: its living sibling is getting
-    these same subtitles. Sequential by design: rapid-fire downloads get
-    throttled.
+    these same subtitles.
     """
     def spell(rel):
         # how a path under the start point is spelled: a bare "." writes
@@ -386,6 +398,7 @@ def download_subs(directory: str, user: str, password: str,
             if entry.is_dir(follow_symlinks=False):
                 yield from walk(entry.path, rel + "/")
 
+    movies = []
     for movie in walk(directory, ""):
         slash = movie.rfind("/")
         folder = movie[:slash] if slash != -1 else movie
@@ -393,6 +406,107 @@ def download_subs(directory: str, user: str, password: str,
             continue
         if plexnames.is_kept_copy(movie):
             continue
+        movies.append(movie)
+    return movies
+
+
+def download_subs(directory: str, user: str, password: str,
+                  max_sync_offset: str, max_sync_quality_offset: str,
+                  ffsubsync_quality: str,
+                  log: Callable[[str], None]) -> None:
+    """Do the one-language download for every movie of
+    :func:`subtitle_movies` and every language. Sequential by design:
+    rapid-fire downloads get throttled.
+    """
+    for movie in subtitle_movies(directory):
         for row in languages.LANGUAGES:
             download_srt(movie, row.code2, user, password, max_sync_offset,
                          max_sync_quality_offset, ffsubsync_quality, log)
+
+
+def check_srt(file: str, srt: str, language_code: str, max_sync_offset: str,
+              max_sync_quality_offset: str, ffsubsync_quality: str,
+              write: bool, log: Callable[[str], None]) -> str:
+    """Judge one subtitle already beside its film by the alignment a download
+    is judged by, and say what it came to: "kept", "discarded" or "untested".
+
+    With ``write`` the verdict is carried out the way :func:`download_srt`
+    carries it out - converted to SubRip, synced in place, and thrown out when
+    the alignment is refused. Without it the same test runs on a copy, and the
+    sidecar is not touched. One ffsubsync could not align at all is left alone
+    either way: unlike a download it may be a subtitle that cannot be fetched
+    again, and a tool that failed says nothing about whether it is in step.
+    """
+    if write:
+        _to_subrip(srt, language_code, file, log)
+        status = sync_subtitle(file, srt, max_sync_offset,
+                               max_sync_quality_offset, ffsubsync_quality)
+    else:
+        status = _test_copy(file, srt, language_code, max_sync_offset,
+                            max_sync_quality_offset, ffsubsync_quality)
+
+    if status == 1:
+        log("WARNING: subtitle could not be tested ({}), left alone: {}"
+            .format(language_code, srt))
+        return "untested"
+    if status == 2:
+        if not write:
+            log("Subtitle out of step ({}), would be thrown out: {}".format(
+                language_code, srt))
+            return "discarded"
+        log("WARNING: subtitle sync rejected as low-quality ({}), "
+            "discarding: {}".format(language_code, srt))
+        try:
+            os.remove(srt)
+        except OSError:
+            pass
+        return "discarded"
+    log("Subtitle in step ({}), {}: {}".format(
+        language_code, "synced and kept" if write else "would be kept", srt))
+    return "kept"
+
+
+def _test_copy(file: str, srt: str, language_code: str, max_sync_offset: str,
+               max_sync_quality_offset: str, ffsubsync_quality: str) -> int:
+    """:func:`sync_subtitle`'s status for a copy of the sidecar, made the way
+    the real one would be synced - converted to SubRip first - so the dry run
+    gives the verdict the real run would, and leaves the sidecar as it was."""
+    try:
+        scratch = tempfile.mkdtemp(dir=os.environ.get("TMPDIR"))
+    except OSError:
+        return 1
+    try:
+        copy = os.path.join(scratch, os.path.basename(srt))
+        try:
+            shutil.copyfile(srt, copy)
+        except OSError:
+            return 1
+        _to_subrip(copy, language_code, file, lambda _line: None)
+        return sync_subtitle(file, copy, max_sync_offset,
+                             max_sync_quality_offset, ffsubsync_quality)
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+def check_subs(directory: str, max_sync_offset: str,
+               max_sync_quality_offset: str, ffsubsync_quality: str,
+               write: bool, log: Callable[[str], None]) -> dict:
+    """:func:`check_srt` for every ``<movie>.<xx>.srt`` beside every movie of
+    :func:`subtitle_movies`, in every language of the table - the sidecars a
+    download would have written, and so never a commentary transcript, whose
+    name carries the track number after the movie's.
+
+    Returns the sidecars by verdict: ``{"kept": [...], "discarded": [...],
+    "untested": [...]}``.
+    """
+    verdicts: dict = {"kept": [], "discarded": [], "untested": []}
+    for movie in subtitle_movies(directory):
+        for row in languages.LANGUAGES:
+            srt = _sidecar(movie, row.code2)
+            if os.path.islink(srt) or not os.path.isfile(srt):
+                continue
+            verdict = check_srt(movie, srt, row.code2, max_sync_offset,
+                                max_sync_quality_offset, ffsubsync_quality,
+                                write, log)
+            verdicts[verdict].append(srt)
+    return verdicts
