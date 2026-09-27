@@ -1674,6 +1674,60 @@ def write_rename_list(path: str, renames, root: str,
     return True
 
 
+def write_conflict_list(path: str, skips, root: str,
+                        log: Callable[[str], None] | None = None) -> bool:
+    """The renames held back because something already had the name.
+
+    Nothing was overwritten and nothing was renamed: each pair is a folder or
+    file still under its old name, beside the one that holds the new name -
+    most often the same film already tagged.
+    """
+    lines = [
+        _ID_COMMENT + " Renames the tagging held back because the name it",
+        _ID_COMMENT + " wanted was already taken. Nothing was overwritten and",
+        _ID_COMMENT + " nothing here was renamed. The name already there is",
+        _ID_COMMENT + " most often the same film, tagged before - compare the",
+        _ID_COMMENT + " two and keep one.",
+        "",
+    ]
+    for source, target in skips:
+        lines.append(os.path.relpath(source, root))
+        lines.append("    -> " + os.path.relpath(target, root))
+    return _write_lines(path, lines, log)
+
+
+def write_duplicate_list(path: str, duplicates,
+                         log: Callable[[str], None] | None = None) -> bool:
+    """The films kept in more than one folder, as [(tag, [folder, ...])].
+
+    Full paths, since the folders may be under different ones of those given.
+    Said and nothing more: which copy to keep is not a thing a name can tell.
+    """
+    lines = [
+        _ID_COMMENT + " Films kept in more than one folder - nearly always one",
+        _ID_COMMENT + " kept twice by accident. Nothing was changed; which",
+        _ID_COMMENT + " copy to keep is yours to decide.",
+        "",
+    ]
+    for tag, folders in duplicates:
+        lines.append(tag)
+        lines.extend('    "%s"' % folder for folder in folders)
+    return _write_lines(path, lines, log)
+
+
+def _write_lines(path: str, lines: list,
+                 log: Callable[[str], None] | None) -> bool:
+    try:
+        with open(path, "w", encoding="utf-8",
+                  errors="surrogateescape") as handle:
+            handle.write("\n".join(lines) + "\n")
+    except OSError as error:
+        if log is not None:
+            log("WARNING: could not write %s: %s" % (path, error))
+        return False
+    return True
+
+
 def write_ambiguous_list(path: str, folders, root: str,
                          log: Callable[[str], None] | None = None) -> bool:
     """The folders holding more than one film, as a report to read and act on.

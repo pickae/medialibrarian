@@ -145,7 +145,7 @@ class TestThePhaseRunsAndNothingElse:
 class TestTheList:
     def _listing(self, stubbed):
         from pathlib import Path
-        return Path(stubbed["script"]) / "logs" / \
+        return Path(stubbed["script"]) / "logs" / "ingest-movies" / \
             "ingest-movies-subtitles-Films.txt"
 
     def test_the_ones_out_of_step_and_untested_are_listed(self, stubbed,

@@ -82,12 +82,16 @@ t |  | tags only: the Plex/Jellyfin naming and nothing else - the IMDb id,
                   monthly, and skipped without duckdb). A film neither could
                   name, and a folder holding a film that is not its own, are
                   both left exactly as they are. Every folder given leaves
-                  these lists in logs/movie-tagging/, named after the folder:
+                  these lists in logs/ingest-movies/, named after the folder:
                     unmatched    films not identified - fill in ids for -i
                     ambiguous    folders holding more than one film
                     othertitles  folders holding one film under several titles
+                    conflicts    renames held back, the name already taken
                     renames      every rename it would make (dry run only)
                     nearmisses   how close the first two came (dry run only)
+                  The films kept in more than one folder, across all of those
+                  given, are listed once in
+                  logs/ingest-movies/ingest-movies-duplicates.txt.
 s |  | subtitles only: the six languages' subtitles and nothing else -
                   walks the whole tree the way -t does, and tests every
                   "<movie>.xx.srt" already beside a film (never a commentary
@@ -114,8 +118,8 @@ n |  | commentary names only: a film whose commentary tracks are only
                   minutes. The subtitles of a commentary and its transcripts
                   beside the film are renamed with it. A DRY RUN unless -w is
                   given. The pages asked for are kept in data/dvdcompare, and
-                  every folder given leaves a list in
-                  logs/ingest-movies-commentarynames-<folder>.txt of what was
+                  every folder given leaves a list in logs/ingest-movies/
+                  ingest-movies-commentarynames-<folder>.txt of what was
                   named and of every film left alone, with the reason. Best
                   run after -a, which writes the transcripts.
 c |  | chapters only: the chapter lookup and nothing else - walks the
