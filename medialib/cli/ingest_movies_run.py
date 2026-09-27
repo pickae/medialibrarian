@@ -776,46 +776,57 @@ def main(argv: list, program: str = "ingest-movies",
     return workerpool.exit_status(1 if durationcheck.failures() else 0)
 
 
+# Every file this command leaves behind about a run goes in one folder of its
+# own under the script directory's logs/, and not in the library: a run over the
+# library deletes stray .txt files as junk, and these are worklists rather than
+# part of the collection.
+LOGS = "ingest-movies"
+
 # Where the films TMDb could not identify are listed when -i named no file of
-# its own. In a folder of their own under the script directory's logs/ and not
-# in the library: a run over the library deletes stray .txt files as junk, and
-# this is a worklist rather than part of the collection.
-#
-# One file per folder given, named after it, because the lists are worked
-# through by hand: two libraries' unnamed films in one file would be a worklist
-# nobody could tell apart, and each folder overwriting the last one's file
-# would be worse.
-TAGGING_LOGS = "movie-tagging"
-UNMATCHED_LIST = os.path.join(TAGGING_LOGS, "ingest-movies-unmatched-%s.tsv")
+# its own. One file per folder given, named after it, because the lists are
+# worked through by hand: two libraries' unnamed films in one file would be a
+# worklist nobody could tell apart, and each folder overwriting the last one's
+# file would be worse.
+UNMATCHED_LIST = os.path.join(LOGS, "ingest-movies-unmatched-%s.tsv")
 
 # And the folders holding more than one film, which no id can settle - named
 # the same way and for the same reason.
-AMBIGUOUS_LIST = os.path.join(TAGGING_LOGS, "ingest-movies-ambiguous-%s.txt")
+AMBIGUOUS_LIST = os.path.join(LOGS, "ingest-movies-ambiguous-%s.txt")
 
 # And what a dry run WOULD have renamed. A library of any size prints thousands
 # of those lines, and a file is where they can be read through rather than
 # scrolled past.
-RENAMES_LIST = os.path.join(TAGGING_LOGS, "ingest-movies-renames-%s.txt")
+RENAMES_LIST = os.path.join(LOGS, "ingest-movies-renames-%s.txt")
 
 # And how close the folders in the first two lists came - what TMDb was asked,
 # what it offered, and why none of it was certain. A dry run only: it is what
 # says whether the two lists above are the right length, and the answer is only
 # worth having before anything has been renamed.
-NEAR_MISS_LIST = os.path.join(TAGGING_LOGS, "ingest-movies-nearmisses-%s.txt")
+NEAR_MISS_LIST = os.path.join(LOGS, "ingest-movies-nearmisses-%s.txt")
 
 # And the folders holding one film under several of its own titles, which is
 # the one outcome nothing else records: no name changed, so the rename list is
 # silent about them, and they are not a problem, so the other two are too.
-ALIAS_LIST = os.path.join(TAGGING_LOGS, "ingest-movies-othertitles-%s.txt")
+ALIAS_LIST = os.path.join(LOGS, "ingest-movies-othertitles-%s.txt")
+
+# And the renames held back because their target was already there - per folder,
+# like the rest, since the fix for each is made in that folder.
+CONFLICTS_LIST = os.path.join(LOGS, "ingest-movies-conflicts-%s.txt")
+
+# And the films kept in more than one folder. One file for the whole run rather
+# than one per folder: the two copies are as likely to be in two of the folders
+# given as in one.
+DUPLICATES_LIST = os.path.join(LOGS, "ingest-movies-duplicates.txt")
 
 # And the subtitles a -s run found out of step with their film, or could not
 # test at all: the worklist of a dry run, and under -w the record of what was
 # deleted.
-SUBTITLES_LIST = "ingest-movies-subtitles-%s.txt"
+SUBTITLES_LIST = os.path.join(LOGS, "ingest-movies-subtitles-%s.txt")
 
 # And the commentary tracks a -n run named, or would name, and the films it
 # left alone with the reason for each.
-COMMENTARY_NAMES_LIST = "ingest-movies-commentarynames-%s.txt"
+COMMENTARY_NAMES_LIST = os.path.join(LOGS,
+                                     "ingest-movies-commentarynames-%s.txt")
 
 
 def _tags_only(program: str, script_dir: str, roots: list, names: list,
@@ -833,9 +844,11 @@ def _tags_only(program: str, script_dir: str, roots: list, names: list,
     the pass that has nothing to go on but TMDb: it tags what it can and writes
     down everything it could not, one set of lists per folder, for someone to
     read and fill in. -i is the pass that reads a filled-in list back, and it
-    writes no lists at all - they are -t's, and a run that rewrote them from a
-    partial answer would lose the question. What -i shows is what those
-    hand-written ids would do, on screen, and -iw is what carries it out.
+    writes none of those lists - they are -t's, and a run that rewrote them
+    from a partial answer would lose the question. The conflicts and the
+    duplicates are written by both, being a record of the run and not a
+    question. What -i shows is what those hand-written ids would do, on
+    screen, and -iw is what carries it out.
 
     Under -t every folder given is tagged in turn, each with a list of its own
     named after it. Under -i the one file someone named holds them all and is
@@ -864,7 +877,6 @@ def _tags_only(program: str, script_dir: str, roots: list, names: list,
         log("Read %d hand-written id(s) from %s" % (len(ids), id_list)
             + (", and %d row(s) still blank" % len(blank) if blank else ""))
 
-    skips = safety.RunSkipLog()
     long_names = tmdblookup.LongNames()
     # This pass and not the full ingest: it is the one run over a library
     # someone is sitting in front of, where the films TMDb cannot name are
@@ -893,6 +905,7 @@ def _tags_only(program: str, script_dir: str, roots: list, names: list,
         planned: list | None = None if id_list else []
         alias_titles: list | None = None if id_list else []
         near_misses: list | None = None if id_list or write else []
+        skips = safety.RunSkipLog()
         # Recursive here and only here: this mode is pointed at a library, where
         # a full ingest is pointed at the folder that holds the films.
         tmdblookup.tag_plex_ids(root, log, skips, dry_run=not write, ids=ids,
@@ -902,6 +915,13 @@ def _tags_only(program: str, script_dir: str, roots: list, names: list,
                                 aliases=alias_titles, seen=seen,
                                 skip=set(blank), long_names=long_names,
                                 imdb=imdb, tagged=tagged)
+        # Under -i as well: this is not one of -t's worklists but a record of
+        # what the run did, and a -iw run refuses renames like any other.
+        if skips.skips:
+            listing = commands.logs_file(script_dir, CONFLICTS_LIST % name)
+            if tmdblookup.write_conflict_list(listing, skips.skips, root, log):
+                log('%d rename(s) in "%s" were held back, the name already '
+                    'taken - listed in "%s"' % (len(skips.skips), root, listing))
         if id_list:
             shared += unmatched
             continue
@@ -933,11 +953,14 @@ def _tags_only(program: str, script_dir: str, roots: list, names: list,
                     'what came back is in "%s"'
                     % (len(near_misses), root, listing))
 
-    for line in skips.report():
-        sys.stderr.write(line + "\n")
     for line in long_names.report():
         sys.stderr.write(line + "\n")
-    _report_duplicate_films(tmdblookup.duplicate_films(tagged))
+    duplicates = tmdblookup.duplicate_films(tagged)
+    if duplicates:
+        listing = commands.logs_file(script_dir, DUPLICATES_LIST)
+        if tmdblookup.write_duplicate_list(listing, duplicates, log):
+            log('WARNING: %d film(s) are kept in more than one folder - listed '
+                'in "%s"' % (len(duplicates), listing))
 
     # A row someone filled in that names no folder here. Said per row, and the
     # run carries on to the next: the other ids are somebody's afternoon of
@@ -974,20 +997,6 @@ def _tags_only(program: str, script_dir: str, roots: list, names: list,
     if not write:
         log("Dry run: nothing was renamed. Pass -w to carry these out.")
     return 0
-
-
-def _report_duplicate_films(duplicates: list) -> None:
-    """The films the library holds in more than one folder, which is nearly
-    always one kept twice by accident. Said and nothing more: which copy to
-    keep is not a thing a name can tell."""
-    if not duplicates:
-        return
-    sys.stderr.write("\nWARNING: %d film(s) are kept in more than one folder:\n"
-                     % len(duplicates))
-    for tag, folders in duplicates:
-        sys.stderr.write("  %s\n" % tag)
-        for folder in folders:
-            sys.stderr.write('    "%s"\n' % folder)
 
 
 def _subtitles_only(program: str, script_dir: str, roots: list, names: list,
@@ -1401,7 +1410,8 @@ def _write_commentary_orphans(script_dir: str, orphans: list) -> None:
     nothing, so a run with nothing to report leaves no file behind."""
     if not orphans:
         return
-    path = commands.logs_file(script_dir, "commentaryOrphans.txt")
+    path = commands.logs_file(script_dir,
+                              os.path.join(LOGS, "commentaryOrphans.txt"))
     with open(path, "w", encoding="utf-8") as handle:
         for orphan in orphans:
             handle.write(orphan + "\n")
@@ -1431,7 +1441,8 @@ def _write_unfixed_movies(script_dir: str, movies: list) -> None:
     nothing, so a run with nothing to report leaves no file behind."""
     if not movies:
         return
-    path = commands.logs_file(script_dir, "unfixedMovies.txt")
+    path = commands.logs_file(script_dir,
+                              os.path.join(LOGS, "unfixedMovies.txt"))
     with open(path, "w", encoding="utf-8") as handle:
         for movie in movies:
             handle.write(movie + "\n")

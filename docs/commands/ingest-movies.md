@@ -9,7 +9,7 @@ commentaries and the chapters the disc had.
 | At a glance | |
 | --- | --- |
 | **Takes** | one or more folders of films |
-| **Writes** | in place: the improved `.mkv`, `.srt` sidecars, and lists under `logs/` |
+| **Writes** | in place: the improved `.mkv`, `.srt` sidecars, and lists under `logs/ingest-movies/` |
 | **Input** | changed — that is the job; each remuxed original is kept as `<name> (old).mkv` |
 | **Reruns** | a no-op: a folder that already carries an `(old)` backup is skipped whole |
 | **Network** | TMDb, OpenSubtitles, IMDb's title lists, ChapterDB, and dvdcompare.net under `-n` |
@@ -39,11 +39,11 @@ pointed at a library. A full ingest reads only the one level it always did.
 
 | Flag | Does only | By default | With `-w` | Leaves behind | Run it after |
 | --- | --- | --- | --- | --- | --- |
-| [`-t`](#naming-films--t) | the Plex naming: IMDb id, editions, stacking token | dry run: prints every rename | carries the renames out | [lists](#the-lists--t-writes) in `logs/movie-tagging/` | — |
-| [`-i <file>`](#feeding-ids-back--i) | the same naming, from the id list you filled in | dry run: prints, writes nothing at all | renames, and brings the file up to date | — | `-t` |
-| [`-s`](#subtitles--s) | testing the subtitles already there | dry run: says which would be kept | syncs, deletes the out-of-step ones, downloads the missing | `logs/ingest-movies-subtitles-<folder>.txt` | `-tw` |
+| [`-t`](#naming-films--t) | the Plex naming: IMDb id, editions, stacking token | dry run: prints every rename | carries the renames out | [lists](#the-lists--t-writes) in `logs/ingest-movies/` | — |
+| [`-i <file>`](#feeding-ids-back--i) | the same naming, from the id list you filled in | dry run: prints, writes only the conflicts and duplicates lists | renames, and brings the file up to date | — | `-t` |
+| [`-s`](#subtitles--s) | testing the subtitles already there | dry run: says which would be kept | syncs, deletes the out-of-step ones, downloads the missing | `logs/ingest-movies/ingest-movies-subtitles-<folder>.txt` | `-tw` |
 | [`-a`](#commentary-transcripts--a) | transcribing commentary tracks | writes as it goes | refused | transcripts beside the films | — |
-| [`-n`](#commentary-names--n) | naming numbered commentary tracks | dry run | names the tracks | `logs/ingest-movies-commentarynames-<folder>.txt` | `-a` |
+| [`-n`](#commentary-names--n) | naming numbered commentary tracks | dry run | names the tracks | `logs/ingest-movies/ingest-movies-commentarynames-<folder>.txt` | `-a` |
 | [`-c`](#chapters--c) | chapters from the ChapterDB archive | writes as it goes | refused | — | `-tw` |
 
 **`-w` on its own is refused.** Without `-t`, `-i`, `-s` or `-n` there is no dry
@@ -347,13 +347,14 @@ whose films answer to two ids is a folder holding two films.
 ### The lists `-t` writes
 
 Each folder given gets these lists, in the script directory's
-`logs/movie-tagging/` folder:
+`logs/ingest-movies/` folder:
 
 | List | What is in it | Written |
 |---|---|---|
 | `ingest-movies-unmatched-<folder>.tsv` | films TMDb could not name — fill in their ids and feed the file back with `-i` | always |
 | `ingest-movies-ambiguous-<folder>.txt` | folders holding more than one film, which no id can settle — give the files names that say which release each one is | always |
 | `ingest-movies-othertitles-<folder>.txt` | folders holding one film under several of its titles ([above](#folders-whose-names-cannot-agree)) | always |
+| `ingest-movies-conflicts-<folder>.txt` | renames held back because the name was already taken — most often by the same film, tagged before | always, `-i` too |
 | `ingest-movies-renames-<folder>.txt` | every rename the run would make | dry run only |
 | `ingest-movies-nearmisses-<folder>.txt` | for each folder in the first two: what TMDb was asked, what it offered, and why each offer was refused | dry run only |
 
@@ -367,9 +368,9 @@ share a word means it is working.
 
 **A film kept twice is warned about.** When two separate folders carry the
 same id, whether it was already on them or the run gives it to them, `-t`
-names both at the end of the run rather than in a list: side by side, in
-different corners of the library, or in two of the folders given (two disks,
-say). That is nearly always one film kept twice by accident, so which copy to
+lists both in `ingest-movies-duplicates.txt` — one file for the whole run, since
+they may be side by side, in different corners of the library, or in two of the
+folders given (two disks, say). That is nearly always one film kept twice by accident, so which copy to
 keep is left to you. The several files inside one folder are its versions and
 are never counted.
 
@@ -387,8 +388,9 @@ lookup you did by hand is not lost.
 
 Feeding that list back is **`-i`**, the same tagging phase going on what you
 filled in — and a **dry run** too, unless `-w` is given. It prints what your ids
-would rename and writes nothing: not the lists, which are `-t`'s to write, and
-not the file you are still filling in. `-iw` carries the renames out and brings
+would rename and writes neither `-t`'s worklists nor the file you are still
+filling in. Only the conflicts and duplicates lists are left, since they record
+what the run found rather than asking you anything. `-iw` carries the renames out and brings
 the file up to date.
 
 | Row in the file | What happens |
@@ -409,7 +411,7 @@ subtitles or languages outside the six.
 | | Dry run (`-s`) | `-sw` |
 | --- | --- | --- |
 | subtitle in step | said to be kept | synced |
-| subtitle out of step | listed in `logs/ingest-movies-subtitles-<folder>.txt` | deleted |
+| subtitle out of step | listed in `logs/ingest-movies/ingest-movies-subtitles-<folder>.txt` | deleted |
 | subtitle missing | — | downloaded, synced and tested, exactly as a full ingest does — so one thrown out is fetched again in the same run |
 | subtitle ffsubsync cannot align at all | left alone | left alone, since it may be one that cannot be fetched again |
 
@@ -468,7 +470,7 @@ It names a film only when it is sure:
 The disc's own subtitles for a commentary (`English (Commentary #2)`), the
 transcripts the ingest appended to the film, and the transcripts and extracts
 beside it (`… 2 Commentary 1.en.srt`) are renamed along with the track. Every
-folder given leaves `logs/ingest-movies-commentarynames-<folder>.txt`: what was
+folder given leaves `logs/ingest-movies/ingest-movies-commentarynames-<folder>.txt`: what was
 named — or would be — and every film left alone, with the reason. The pages
 asked for are kept in the checkout's `data/dvdcompare`, and the site is asked
 no more than once every few seconds.

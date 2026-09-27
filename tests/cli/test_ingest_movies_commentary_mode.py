@@ -377,7 +377,7 @@ class TestTheOrphanReport:
 
     def test_a_run_that_found_nothing_writes_no_file(self, tmp_path):
         run._write_commentary_orphans(str(tmp_path), [])
-        assert not (tmp_path / "logs" / "commentaryOrphans.txt").exists()
+        assert not (tmp_path / "logs" / "ingest-movies" / "commentaryOrphans.txt").exists()
 
     def test_the_orphans_are_written_one_absolute_path_per_line(
             self, tmp_path, monkeypatch):
@@ -387,7 +387,7 @@ class TestTheOrphanReport:
             str(tmp_path),
             ["/root/Films/The Movie (1999)/The Movie (1999) 5 "
              "OldCommentary.en.srt"])
-        report = tmp_path / "logs" / "commentaryOrphans.txt"
+        report = tmp_path / "logs" / "ingest-movies" / "commentaryOrphans.txt"
         assert report.read_text() == \
             "/root/Films/The Movie (1999)/The Movie (1999) 5 " \
             "OldCommentary.en.srt\n"
@@ -409,7 +409,7 @@ class TestTheOrphanReport:
         script_dir = self._stubbed(monkeypatch, tmp_path, export_commentary)
         films = _library(tmp_path, "Films")
         assert run.main(["-a", str(films)]) == 0
-        report = script_dir / "logs" / "commentaryOrphans.txt"
+        report = script_dir / "logs" / "ingest-movies" / "commentaryOrphans.txt"
         expected = str(films / "The Movie (1999)" /
                        "The Movie (1999) 5 OldCommentary.en.srt") + "\n"
         assert report.read_text() == expected
@@ -424,7 +424,7 @@ class TestTheOrphanReport:
         script_dir = self._stubbed(monkeypatch, tmp_path, export_commentary)
         films = _library(tmp_path, "Films")
         assert run.main(["-a", str(films)]) == 0
-        assert not (script_dir / "logs" / "commentaryOrphans.txt").exists()
+        assert not (script_dir / "logs" / "ingest-movies" / "commentaryOrphans.txt").exists()
 
 
 class TestTheUnfixedReport:
@@ -476,7 +476,7 @@ class TestTheUnfixedReport:
 
     def test_a_run_that_found_nothing_writes_no_file(self, tmp_path):
         run._write_unfixed_movies(str(tmp_path), [])
-        assert not (tmp_path / "logs" / "unfixedMovies.txt").exists()
+        assert not (tmp_path / "logs" / "ingest-movies" / "unfixedMovies.txt").exists()
 
     def test_the_unfixed_movies_are_written_one_absolute_path_per_line(
             self, tmp_path, monkeypatch):
@@ -486,7 +486,7 @@ class TestTheUnfixedReport:
             str(tmp_path),
             ["/root/Films/Hollow Ridge (1981) {imdb-tt0000001}/"
              "Hollow Ridge (1981) {imdb-tt0000001} 1981mkv"])
-        report = tmp_path / "logs" / "unfixedMovies.txt"
+        report = tmp_path / "logs" / "ingest-movies" / "unfixedMovies.txt"
         assert report.read_text() == \
             "/root/Films/Hollow Ridge (1981) {imdb-tt0000001}/" \
             "Hollow Ridge (1981) {imdb-tt0000001} 1981mkv\n"
@@ -508,7 +508,7 @@ class TestTheUnfixedReport:
         script_dir = self._stubbed(monkeypatch, tmp_path, export_commentary)
         films = _library(tmp_path, "Films")
         assert run.main(["-a", str(films)]) == 0
-        report = script_dir / "logs" / "unfixedMovies.txt"
+        report = script_dir / "logs" / "ingest-movies" / "unfixedMovies.txt"
         expected = (str(films / "Hollow Ridge (1981) {imdb-tt0000001}" /
                         "Hollow Ridge (1981) {imdb-tt0000001} 1981mkv")
                     + "\n")
@@ -524,7 +524,7 @@ class TestTheUnfixedReport:
         script_dir = self._stubbed(monkeypatch, tmp_path, export_commentary)
         films = _library(tmp_path, "Films")
         assert run.main(["-a", str(films)]) == 0
-        assert not (script_dir / "logs" / "unfixedMovies.txt").exists()
+        assert not (script_dir / "logs" / "ingest-movies" / "unfixedMovies.txt").exists()
 
     def test_a_mangled_name_the_folder_answers_is_conformed_not_reported(
             self, monkeypatch, tmp_path):
@@ -544,4 +544,4 @@ class TestTheUnfixedReport:
         assert run.main(["-a", str(tmp_path / "Films")]) == 0
         assert not mangled.exists()
         assert (folder / "Hollow Ridge (1981) {imdb-tt0000001}.mkv").is_file()
-        assert not (script_dir / "logs" / "unfixedMovies.txt").exists()
+        assert not (script_dir / "logs" / "ingest-movies" / "unfixedMovies.txt").exists()

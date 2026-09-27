@@ -18,6 +18,14 @@ from medialib.cli.ingest_movies import spec
 pytestmark = pytest.mark.fs
 
 
+def _worklists(tmp_path):
+    """-t's lists in the logs folder. The conflicts and duplicates are not
+    among them: those record what any tagging run did, -i included."""
+    return [path for path in (tmp_path / "script").glob("**/ingest-movies-*")
+            if "-conflicts-" not in path.name
+            and "-duplicates" not in path.name]
+
+
 def _library(root, name: str, film: str = "The Movie (1999)"):
     """A folder holding one film, which is what makes it worth ingesting."""
     folder = root / name / film
@@ -146,13 +154,15 @@ class TestTheListsEachFolderLeaves:
         asked = []
         not_asked = self.not_asked = []
 
-        def fake_tag(root, _log, _skips, dry_run=False, ids=None,
+        def fake_tag(root, _log, skips, dry_run=False, ids=None,
                      unmatched=None, recursive=False, ambiguous=None,
                      planned=None, near_misses=None, aliases=None,
                      seen=None, skip=None, long_names=None, imdb="",
                      tagged=None):
             asked.append(root)
             self.imdb = imdb
+            skips.record(root + "/Name In Use (1999)",
+                         root + "/Name In Use (1999) {imdb-tt0000002}")
             name = root.rsplit("/", 1)[-1]
             if seen is not None:
                 seen.add("The Movie (1999)")
@@ -193,7 +203,7 @@ class TestTheListsEachFolderLeaves:
         _library(tmp_path, "Documentaries")
         assert run.main(["-t", str(tmp_path / "Films"),
                          str(tmp_path / "Documentaries")]) == 0
-        logs = tmp_path / "script" / "logs" / "movie-tagging"
+        logs = tmp_path / "script" / "logs" / "ingest-movies"
         assert (logs / "ingest-movies-unmatched-Films.tsv").is_file()
         assert (logs / "ingest-movies-unmatched-Documentaries.tsv").is_file()
         assert "Films film (1999)" in (
@@ -221,7 +231,7 @@ class TestTheListsEachFolderLeaves:
         _library(tmp_path, "Documentaries")
         run.main(["-t", str(tmp_path / "Films"),
                   str(tmp_path / "Documentaries")])
-        logs = tmp_path / "script" / "logs" / "movie-tagging"
+        logs = tmp_path / "script" / "logs" / "ingest-movies"
         assert (logs / "ingest-movies-ambiguous-Films.txt").is_file()
         assert (logs / "ingest-movies-ambiguous-Documentaries.txt").is_file()
 
@@ -234,7 +244,7 @@ class TestTheListsEachFolderLeaves:
         _library(tmp_path, "Documentaries")
         run.main(["-t", str(tmp_path / "Films"),
                   str(tmp_path / "Documentaries")])
-        logs = tmp_path / "script" / "logs" / "movie-tagging"
+        logs = tmp_path / "script" / "logs" / "ingest-movies"
         listing = logs / "ingest-movies-renames-Films.txt"
         assert listing.is_file()
         body = [line for line in listing.read_text(encoding="utf-8").splitlines()
@@ -251,7 +261,7 @@ class TestTheListsEachFolderLeaves:
         self._tagging(monkeypatch, tmp_path)
         _library(tmp_path, "Films")
         run.main(["-t", str(tmp_path / "Films")])
-        listing = (tmp_path / "script" / "logs" / "movie-tagging"
+        listing = (tmp_path / "script" / "logs" / "ingest-movies"
                    / "ingest-movies-nearmisses-Films.txt")
         assert listing.is_file()
         body = [line for line in listing.read_text(encoding="utf-8").splitlines()
@@ -266,7 +276,7 @@ class TestTheListsEachFolderLeaves:
         self._tagging(monkeypatch, tmp_path)
         _library(tmp_path, "Films")
         run.main(["-t", str(tmp_path / "Films")])
-        listing = (tmp_path / "script" / "logs" / "movie-tagging"
+        listing = (tmp_path / "script" / "logs" / "ingest-movies"
                    / "ingest-movies-othertitles-Films.txt")
         assert listing.is_file()
         body = [line for line in listing.read_text(encoding="utf-8").splitlines()
@@ -283,7 +293,7 @@ class TestTheListsEachFolderLeaves:
         self._tagging(monkeypatch, tmp_path)
         _library(tmp_path, "Films")
         run.main(["-t", "-w", str(tmp_path / "Films")])
-        assert (tmp_path / "script" / "logs" / "movie-tagging"
+        assert (tmp_path / "script" / "logs" / "ingest-movies"
                 / "ingest-movies-othertitles-Films.txt").is_file()
 
     def test_but_a_real_run_leaves_no_near_miss_list(self, monkeypatch,
@@ -293,7 +303,7 @@ class TestTheListsEachFolderLeaves:
         self._tagging(monkeypatch, tmp_path)
         _library(tmp_path, "Films")
         run.main(["-t", "-w", str(tmp_path / "Films")])
-        assert not (tmp_path / "script" / "logs" / "movie-tagging"
+        assert not (tmp_path / "script" / "logs" / "ingest-movies"
                     / "ingest-movies-nearmisses-Films.txt").exists()
 
     def test_but_a_real_run_writes_no_such_list(self, monkeypatch, tmp_path):
@@ -302,7 +312,7 @@ class TestTheListsEachFolderLeaves:
         self._tagging(monkeypatch, tmp_path)
         _library(tmp_path, "Films")
         run.main(["-t", "-w", str(tmp_path / "Films")])
-        assert not (tmp_path / "script" / "logs" / "movie-tagging"
+        assert not (tmp_path / "script" / "logs" / "ingest-movies"
                     / "ingest-movies-renames-Films.txt").exists()
 
     def test_a_film_in_the_folders_of_two_disks_is_warned_about(
@@ -315,11 +325,39 @@ class TestTheListsEachFolderLeaves:
         run.main(["-t", str(tmp_path / "Films"),
                   str(tmp_path / "Documentaries")])
         errors = capsys.readouterr().err
+        listing = (tmp_path / "script" / "logs" / "ingest-movies"
+                   / "ingest-movies-duplicates.txt")
         assert "1 film(s) are kept in more than one folder" in errors
-        assert '"%s/Films/Kept Twice (1999) {imdb-tt0000009}"' % tmp_path \
+        assert str(listing) in errors
+        # The screen says how many and where; the folders are in the file.
+        assert "Kept Twice" not in errors
+        body = [line for line in listing.read_text(encoding="utf-8").splitlines()
+                if line and not line.startswith("#")]
+        assert body == [
+            "{imdb-tt0000009}",
+            '    "%s/Documentaries/Kept Twice (1999) {imdb-tt0000009}"'
+            % tmp_path,
+            '    "%s/Films/Kept Twice (1999) {imdb-tt0000009}"' % tmp_path]
+
+    def test_renames_refused_for_a_taken_name_are_listed_per_folder(
+            self, monkeypatch, tmp_path, capsys):
+        self._tagging(monkeypatch, tmp_path)
+        _library(tmp_path, "Films")
+        _library(tmp_path, "Documentaries")
+        run.main(["-t", str(tmp_path / "Films"),
+                  str(tmp_path / "Documentaries")])
+        errors = capsys.readouterr().err
+        logs = tmp_path / "script" / "logs" / "ingest-movies"
+        listing = logs / "ingest-movies-conflicts-Films.txt"
+        assert '1 rename(s) in "%s" were held back' % (tmp_path / "Films") \
             in errors
-        assert '"%s/Documentaries/Kept Twice (1999) {imdb-tt0000009}"' \
-            % tmp_path in errors
+        assert str(listing) in errors
+        assert "Safety skip details" not in errors
+        body = [line for line in listing.read_text(encoding="utf-8").splitlines()
+                if line and not line.startswith("#")]
+        assert body == ["Name In Use (1999)",
+                        "    -> Name In Use (1999) {imdb-tt0000002}"]
+        assert (logs / "ingest-movies-conflicts-Documentaries.txt").is_file()
 
     def test_but_one_folder_holding_it_is_not(self, monkeypatch, tmp_path,
                                               capsys):
@@ -409,7 +447,7 @@ class TestTheListsEachFolderLeaves:
         listing.write_text(written, encoding="utf-8")
         _library(tmp_path, "Films")
         assert run.main(["-i", str(listing), str(tmp_path / "Films")]) == 0
-        assert not list((tmp_path / "script").glob("**/ingest-movies-*"))
+        assert not _worklists(tmp_path)
         assert listing.read_text(encoding="utf-8") == written
 
     def test_and_w_is_what_brings_the_file_up_to_date(self, monkeypatch,
@@ -425,7 +463,7 @@ class TestTheListsEachFolderLeaves:
         rewritten = listing.read_text(encoding="utf-8")
         assert "The Movie (1999)\t{imdb-tt0000001}" in rewritten
         assert "Films film (1999)\t" in rewritten
-        assert not list((tmp_path / "script").glob("**/ingest-movies-*"))
+        assert not _worklists(tmp_path)
 
     def test_and_a_row_naming_no_folder_here_is_an_error_it_carries_on_past(
             self, monkeypatch, tmp_path, capsys):
@@ -469,4 +507,4 @@ class TestTheListsEachFolderLeaves:
         assert "Old film (1970)\t{imdb-tt0000001}" in written
         assert "Films film (1999)\t" in written
         assert "Documentaries film (1999)\t" in written
-        assert not list((tmp_path / "script").glob("**/ingest-movies-*"))
+        assert not _worklists(tmp_path)
