@@ -270,7 +270,7 @@ def _size_of(path: str) -> int:
 
 
 def _remove_sidecars(prefix: str) -> None:
-    """The track's transcripts, gone: the too-small sidecars a -c run discards
+    """The track's transcripts, gone: the too-small sidecars a -a run discards
     before re-transcribing. Only the .srt is removed - the .opus this phase never
     writes to disk would belong to a run that did the opus pass, and is left
     alone."""
@@ -324,7 +324,7 @@ def _renumber_stale_transcripts(file_stem: str, track_id, name: str,
 
     Renumbered to the track's own number, the file is what the check above
     would have skipped on, and is asked the same questions it would have asked:
-    a -c run still discards one too small to be the film's real transcript.
+    a -a run still discards one too small to be the film's real transcript.
     The rest of the name is left as it was written, and the srt itself
     untouched - what is spent is the rename, not the transcription.
 
@@ -539,7 +539,7 @@ def export_commentary(directory: str, read_track_info, is_bonus_folder,
     older run numbered for a track that no longer stands where it numbered it
     be renumbered to the track's own number rather than transcribed a second
     time. ``orphans``, when given, is a list the walk fills with a transcript
-    that names a track the film no longer numbers a commentary for; the -c run
+    that names a track the film no longer numbers a commentary for; the -a run
     is the one that hands it one, so it can leave the list in a file.
     ``unfixed``, when given, is a list the walk fills with a movie whose name
     carries no dot before its extension: the film's stem cannot be read off a

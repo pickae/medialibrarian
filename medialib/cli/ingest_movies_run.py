@@ -15,6 +15,7 @@ from medialib import commands
 from medialib.cli import ingest_movies as rules
 from medialib.cli.ingest_movies import log
 from medialib.lib import (
+    chapterdb,
     cleannamesindividually,
     clioptions,
     commentarytranscription,
@@ -48,7 +49,7 @@ MAX_RENAME_PASSES = 10
 # film's length. A sidecar that comes in under half of that is the transcript a
 # version of the script wrote before it could tell a commentary's language, which
 # forced a non-English commentary through the English model and came back almost
-# empty. Below it, a -c run discards the sidecar and re-transcribes.
+# empty. Below it, a -a run discards the sidecar and re-transcribes.
 MIN_COMMENTARY_KB_PER_MINUTE = 0.5
 
 
@@ -530,14 +531,16 @@ def main(argv: list, program: str = "ingest-movies",
     if result.values.get("writeTags") and not (
             result.values.get("tagsOnly") or result.values.get("idList")
             or result.values.get("subtitlesOnly")):
-        if result.values.get("commentaryOnly"):
-            # -c is the transcription and not a dry run, so there is nothing
-            # for -w to carry out.
-            sys.stderr.write(clioptions.usage_error_text(
-                declaration,
-                "-w has no part in -c: it carries out the dry run of -t, -i or "
-                "-s, and -c\nis not a dry run. Drop the -w."))
-            return 1
+        for letter, key in (("a", "commentaryOnly"), ("c", "chaptersOnly")):
+            if result.values.get(key):
+                # The transcription and the chapter lookup are not dry runs,
+                # so there is nothing for -w to carry out.
+                sys.stderr.write(clioptions.usage_error_text(
+                    declaration,
+                    "-w has no part in -%s: it carries out the dry run of -t, "
+                    "-i or -s, and -%s\nis not a dry run. Drop the -w."
+                    % (letter, letter)))
+                return 1
         sys.stderr.write(clioptions.usage_error_text(
             declaration,
             "-w on its own does nothing to carry out: it is what turns the dry "
@@ -547,7 +550,7 @@ def main(argv: list, program: str = "ingest-movies",
             "Did you mean -tw, -iw or -sw?"))
         return 1
 
-    # -c is the commentary phase on its own and -t and -i the tagging phase:
+    # -a is the commentary phase on its own and -t and -i the tagging phase:
     # two runs over the same folders, neither knowing what the other would do
     # to the names, so they are refused together rather than run in a guessed
     # order.
@@ -555,7 +558,7 @@ def main(argv: list, program: str = "ingest-movies",
                                                 or result.values.get("idList")):
         sys.stderr.write(clioptions.usage_error_text(
             declaration,
-            "-c transcribes the commentary tracks and nothing else, and -t and "
+            "-a transcribes the commentary tracks and nothing else, and -t and "
             "-i tag and nothing\nelse: they are two runs, not one. Give the "
             "folders to each of them in turn."))
         return 1
@@ -567,10 +570,24 @@ def main(argv: list, program: str = "ingest-movies",
             or result.values.get("tagsOnly") or result.values.get("idList")):
         sys.stderr.write(clioptions.usage_error_text(
             declaration,
-            "-s tests and fetches subtitles and nothing else, and -c, -t and -i "
+            "-s tests and fetches subtitles and nothing else, and -a, -t and -i "
             "each do a\nphase of their own: they are two runs, not one. Tag "
             "first (-tw), so the\nsubtitles are searched for by the ids it "
             "gives, then run -s."))
+        return 1
+
+    # -c the same, against every other phase of its own: the chapters are
+    # looked up by the title the tagging gives a folder.
+    if result.values.get("chaptersOnly") and (
+            result.values.get("commentaryOnly") or result.values.get("tagsOnly")
+            or result.values.get("idList")
+            or result.values.get("subtitlesOnly")):
+        sys.stderr.write(clioptions.usage_error_text(
+            declaration,
+            "-c looks up chapters and nothing else, and -a, -t, -i and -s each "
+            "do a phase\nof their own: they are two runs, not one. Tag first "
+            "(-tw), so the chapters are\nlooked up by the titles it gives, "
+            "then run -c."))
         return 1
 
     script_dir = script_dir or commands.script_dir()
@@ -601,6 +618,9 @@ def main(argv: list, program: str = "ingest-movies",
     if result.values.get("subtitlesOnly"):
         return _subtitles_only(program, script_dir, roots, names,
                                bool(result.values.get("writeTags")))
+
+    if result.values.get("chaptersOnly"):
+        return _chapters_only(program, roots)
 
     # An id list is only ever read by the tagging phase, so asking for one asks
     # for that phase.
@@ -982,6 +1002,40 @@ def _subtitles_only(program: str, script_dir: str, roots: list, names: list,
     return 0
 
 
+def _chapters_only(program: str, roots: list) -> int:
+    """The chapter phase on its own: every tagged film under each folder given
+    that has no chapters, or numbered ones a named set can replace, looked up
+    in the ChapterDB archive and written in place."""
+    if tooldeps.require_tools(program, ["ffprobe", "curl", "mkvpropedit"]):
+        return 1
+    totals: dict = {}
+    for root in roots:
+        log('Phase: looking up chapters for the films in "%s"' % root)
+        for verdict, films in chapterdb.add_chapters(root, log).items():
+            totals[verdict] = totals.get(verdict, 0) + len(films)
+    _report_chapters(totals)
+    return 0
+
+
+def _chapter_phase(root: str) -> None:
+    """The full ingest's chapter lookup, which needs curl and nothing that
+    would stop the rest of the run without it."""
+    if not _has_tool("curl"):
+        log("Phase: looking up chapters - SKIPPED (curl is not installed)")
+        return
+    log("Phase: looking up chapters for films without named ones")
+    outcome = chapterdb.add_chapters(root, log)
+    _report_chapters({verdict: len(films)
+                      for verdict, films in outcome.items()})
+
+
+def _report_chapters(totals: dict) -> None:
+    log("Chapters: %d film(s) given chapters, %d had numbered ones replaced, "
+        "%d already named, %d with no set that fits, %d untagged, %d failed"
+        % tuple(totals.get(verdict, 0) for verdict in (
+            "added", "replaced", "kept", "unmatched", "untagged", "failed")))
+
+
 def _write_subtitle_list(listing: str, root: str, verdicts: dict,
                          write: bool) -> None:
     """The subtitles of one folder found out of step, and the ones that could
@@ -1050,7 +1104,7 @@ def _sidecar_too_small(prefix: str, movie: str, durations: dict) -> bool:
 
 
 def _write_commentary_orphans(script_dir: str, orphans: list) -> None:
-    """The transcripts a -c run found that name a track their film no longer
+    """The transcripts a -a run found that name a track their film no longer
     numbers a commentary for, one absolute path per line. An empty run writes
     nothing, so a run with nothing to report leaves no file behind."""
     if not orphans:
@@ -1080,7 +1134,7 @@ def _report_unfixed_movies(movies: list) -> None:
 
 
 def _write_unfixed_movies(script_dir: str, movies: list) -> None:
-    """The movies a -c run left untranscribed because their name carried no dot
+    """The movies a -a run left untranscribed because their name carried no dot
     before its extension, one absolute path per line. An empty run writes
     nothing, so a run with nothing to report leaves no file behind."""
     if not movies:
@@ -1179,7 +1233,7 @@ def _commentary_only(program: str, script_dir: str, roots: list,
 
     # The transcripts the walk finds that name a track their film no longer
     # numbers a commentary for, gathered across every folder and left in a
-    # file at the end: the -c run is the one that reports them, and it is the
+    # file at the end: the -a run is the one that reports them, and it is the
     # whole of this run.
     orphans: list[str] = []
     # And the movies the walk could not transcribe because their name carried
@@ -1410,6 +1464,11 @@ def _ingest(state, root: str, subtitle_work: bool) -> None:
     # for the next run.
     log("Phase: conforming mangled movie names to their folders'")
     rules.conform_movie_names(root, state.skips)
+
+    # After the tagging too, so a film is looked up by the title TMDb gave its
+    # folder - and after the remux, whose copy the chapters are written into
+    # in place rather than carried through another one.
+    _chapter_phase(root)
 
     # After the tagging, so a film is searched for by the id its name now
     # carries rather than by a title a remake or a namesake also answers to.
