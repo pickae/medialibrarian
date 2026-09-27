@@ -38,7 +38,6 @@ running are waited for, the way :func:`workerpool.run` ends.
 """
 
 import heapq
-import multiprocessing
 import os
 import threading
 
@@ -188,11 +187,8 @@ def run(producer, jobs: int, target, arguments, buffer_factor: int = 2,
                 # has left nothing unseen.
                 empty, finished = not heap, done
             for item in taken:
-                worker = multiprocessing.Process(target=target,
-                                                 args=arguments(item),
-                                                 name=workerpool.label(item))
-                worker.start()
-                running.append(worker)
+                running.append(workerpool.start_worker(
+                    target, arguments(item), workerpool.label(item)))
             if (empty and not finished and len(running) < jobs and started
                     and not dry_waiting and not safety.abort_requested()):
                 dry_waiting = jobs - len(running)
