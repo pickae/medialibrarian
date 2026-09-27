@@ -677,3 +677,148 @@ class TestDownloadSubs:
                                     logs.append)
         assert w.calls() == []
         assert not (tree / "Movie.en.srt").exists()
+
+
+class TestCheckSubs:
+    """The subtitles already beside a film, put to the test a download is kept
+    by. A dry run tests a copy and leaves the sidecar exactly as it was; a real
+    one syncs the sidecar in place and throws out the one that was refused. One
+    ffsubsync could not align at all is left alone either way."""
+
+    _SRT = "Films/Movie/Movie.en.srt"
+
+    def _library(self, w, monkeypatch, *entries, rc="0", log=_GOOD_LOG,
+                 calls=1):
+        tree = _tree(w, "Films/Movie/Movie.mkv", *entries)
+        monkeypatch.setenv("TMPDIR", str(w.tmp_path))
+        w.install("ffsubsync")
+        # the stub's lists are consumed one entry per call
+        w.rc("ffsubsync", " ".join([rc] * calls))
+        w.say("ffsubsync", log)
+        w.write("ffsubsync",
+                " ".join(["${--log-dir-path}/ffsubsync.log"] * calls))
+        return tree
+
+    def _check(self, tree, write):
+        logs = []
+        verdicts = subtitlefiles.check_subs(str(tree), "600", "60", "yes",
+                                            write, logs.append)
+        return verdicts, logs
+
+    def _synced(self, w):
+        return [argv[3] for argv in w.calls() if argv[0] == "ffsubsync"]
+
+    def test_the_dry_run_tests_a_copy_and_touches_nothing(self, w, monkeypatch):
+        tree = self._library(w, monkeypatch, self._SRT, log=_BAD_LOG)
+        srt = str(tree / self._SRT)
+        (tree / self._SRT).write_text("1\n")
+        verdicts, logs = self._check(tree, write=False)
+        assert verdicts["discarded"] == [srt]
+        assert (tree / self._SRT).read_text() == "1\n"
+        (tested,) = self._synced(w)
+        assert tested != srt
+        assert os.path.basename(tested) == "Movie.en.srt"
+        assert not os.path.exists(os.path.dirname(tested))
+        assert logs == ["Subtitle out of step (en), would be thrown out: "
+                        + srt]
+
+    def test_the_dry_run_says_which_would_be_kept(self, w, monkeypatch):
+        tree = self._library(w, monkeypatch, self._SRT)
+        srt = str(tree / self._SRT)
+        verdicts, logs = self._check(tree, write=False)
+        assert verdicts == {"kept": [srt], "discarded": [], "untested": []}
+        assert logs == ["Subtitle in step (en), would be kept: " + srt]
+
+    def test_w_syncs_the_one_in_step_in_place(self, w, monkeypatch):
+        tree = self._library(w, monkeypatch, self._SRT)
+        srt = str(tree / self._SRT)
+        verdicts, logs = self._check(tree, write=True)
+        assert verdicts["kept"] == [srt]
+        assert self._synced(w) == [srt]
+        assert (tree / self._SRT).is_file()
+        assert logs == ["Subtitle in step (en), synced and kept: " + srt]
+
+    def test_w_throws_out_the_one_out_of_step(self, w, monkeypatch):
+        tree = self._library(w, monkeypatch, self._SRT, log=_BAD_LOG)
+        srt = str(tree / self._SRT)
+        verdicts, logs = self._check(tree, write=True)
+        assert verdicts["discarded"] == [srt]
+        assert not (tree / self._SRT).exists()
+        assert logs == ["WARNING: subtitle sync rejected as low-quality (en), "
+                        "discarding: " + srt]
+
+    @pytest.mark.parametrize("write", [False, True])
+    def test_one_ffsubsync_could_not_align_is_left_alone(self, w, monkeypatch,
+                                                         write):
+        """Unlike a download, it may be a subtitle nobody can fetch again, and
+        a tool that failed says nothing about whether it is in step."""
+        tree = self._library(w, monkeypatch, self._SRT, rc="1")
+        verdicts, logs = self._check(tree, write=write)
+        assert verdicts["untested"] == [str(tree / self._SRT)]
+        assert (tree / self._SRT).is_file()
+        assert logs == ["WARNING: subtitle could not be tested (en), left "
+                        "alone: " + str(tree / self._SRT)]
+
+    def test_every_language_and_nothing_but_the_movie_s_own_sidecars(
+            self, w, monkeypatch):
+        """A commentary transcript carries the track after the movie's name,
+        and a forced subtitle or one in a language outside the table is not
+        one a download would write, so none of them is tested. Nor is a
+        subtitle in an extras folder, nor one beside the copy an improvement
+        kept."""
+        own = ["Films/Movie/Movie.%s.srt" % row.code2
+               for row in languages.LANGUAGES]
+        tree = self._library(
+            w, monkeypatch, *own,
+            "Films/Movie/Movie 2 Audio Commentary.en.srt",
+            "Films/Movie/Movie.en.forced.srt",
+            "Films/Movie/Movie.pt.srt",
+            "Films/Movie/Featurettes/Clip.mkv",
+            "Films/Movie/Featurettes/Clip.en.srt",
+            "Films/Movie/Movie (old).mkv",
+            "Films/Movie/Movie (old).en.srt",
+            calls=len(own))
+        verdicts, _logs = self._check(tree, write=False)
+        assert verdicts["kept"] == [str(tree / path) for path in own]
+        assert len(self._synced(w)) == len(own)
+
+    def test_the_walk_reaches_a_nested_library(self, w, monkeypatch):
+        nested = "Films/Westerns/Classics/Old/Old"
+        tree = self._library(w, monkeypatch, nested + ".mkv",
+                             nested + ".de.srt")
+        verdicts, _logs = self._check(tree, write=False)
+        assert verdicts["kept"] == [str(tree / (nested + ".de.srt"))]
+
+    def test_a_linked_sidecar_is_not_tested(self, w, monkeypatch):
+        tree = self._library(w, monkeypatch, "elsewhere.srt")
+        (tree / self._SRT).symlink_to(tree / "elsewhere.srt")
+        verdicts, _logs = self._check(tree, write=True)
+        assert verdicts == {"kept": [], "discarded": [], "untested": []}
+        assert w.calls() == []
+
+    def _mislabelled(self, w):
+        w.install("ffprobe")
+        w.say("ffprobe", "webvtt")
+        w.install("ffmpeg")
+        w.rc("ffmpeg", "0")
+        w.write("ffmpeg", "$LAST")
+
+    def test_the_dry_run_converts_only_its_copy_and_says_nothing(
+            self, w, monkeypatch):
+        tree = self._library(w, monkeypatch, self._SRT)
+        (tree / self._SRT).write_text("WEBVTT\n")
+        self._mislabelled(w)
+        _verdicts, logs = self._check(tree, write=False)
+        (ffmpeg,) = [a for a in w.calls() if a[0] == "ffmpeg"]
+        assert ffmpeg[6] != str(tree / self._SRT)
+        assert (tree / self._SRT).read_text() == "WEBVTT\n"
+        assert not any("Converting" in line for line in logs)
+
+    def test_w_converts_the_sidecar_itself(self, w, monkeypatch):
+        tree = self._library(w, monkeypatch, self._SRT)
+        self._mislabelled(w)
+        _verdicts, logs = self._check(tree, write=True)
+        (ffmpeg,) = [a for a in w.calls() if a[0] == "ffmpeg"]
+        assert ffmpeg[6] == str(tree / self._SRT)
+        assert logs[0] == ("Converting en subtitle from webvtt to subrip: "
+                           + str(tree / "Films/Movie/Movie.mkv"))

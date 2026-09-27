@@ -44,9 +44,23 @@ Usage:
                   monthly, and skipped without duckdb). A film neither could
                   name, and a folder holding a film that is not its own, are
                   both left exactly as they are and written to a list to read.
+    -s, --subtitles-only
+                  subtitles only: the six languages' subtitles and nothing else -
+                  walks the whole tree the way -t does, and tests every
+                  "<movie>.xx.srt" already beside a film (never a commentary
+                  transcript) by the alignment a download is kept by. A DRY
+                  RUN unless -w is given: it says which would be kept and
+                  which thrown out, lists the ones out of step, and changes
+                  nothing on disk. With -w the ones in step are synced, the
+                  ones out of step are deleted, and every subtitle still
+                  missing is downloaded, synced and tested the way a full
+                  ingest does it. One ffsubsync cannot align at all is left
+                  alone either way. Best run after -tw, so films are searched
+                  for by their ids.
     -w, --write   with -t or -i, actually perform the renames instead of printing
-                  them. On its own it is a usage error rather than a full
-                  ingest: there is no dry run to carry out.
+                  them; with -s, sync, throw out and download. On its own it
+                  is a usage error rather than a full ingest: there is no dry
+                  run to carry out.
     -i, --ids <file>
                   the hand-written id list filled in and read BACK: tagging and
                   nothing else, like -t, but going on what is in this file. An

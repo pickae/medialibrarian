@@ -929,10 +929,24 @@ naming that row, and the run carries on to the next. And a `-i` file that
 would throw away every id in the real file and put the whole library back
 through the lookups that already failed on it.
 
-**`-w` on its own is refused.** Without `-t` or `-i` there is no dry run to
-carry out, and the run it would otherwise start is a full ingest. `-c` refuses
-it as well: it is the transcription and not a dry run, so there is nothing for
-`-w` to carry out.
+**`-w` on its own is refused.** Without `-t`, `-i` or `-s` there is no dry run
+to carry out, and the run it would otherwise start is a full ingest. `-c`
+refuses it as well: it is the transcription and not a dry run, so there is
+nothing for `-w` to carry out.
+
+**`-s` does only the subtitles.** The given folders are walked the way `-t`
+walks them, and every `<movie>.xx.srt` already beside a film is put to the test
+a downloaded subtitle is kept by: its best alignment with the film's speech has
+to stand out from every other. Commentary transcripts are never tested — they
+are named after their track — and neither are forced subtitles or languages
+outside the six. It is a **dry run** unless `-w` is given: each subtitle is
+tested on a copy, the run says which would be kept and which thrown out, and
+the ones out of step are listed in `logs/ingest-movies-subtitles-<folder>.txt`.
+`-sw` syncs the ones in step, deletes the ones that are not, and then downloads,
+syncs and tests every subtitle still missing, exactly as a full ingest does — so
+one thrown out is fetched again in the same run. A subtitle ffsubsync cannot
+align at all is left alone either way, since it may be one that cannot be
+fetched again. Run it after `-tw`, so that films are searched for by their ids.
 
 **`-c` does only the commentary phase.** The given folders are walked the way
 `-t` walks them, and every commentary track that does not already have its
