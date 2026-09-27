@@ -344,17 +344,41 @@ def warn_optional_tools(seen):
         log("         told apart, but an HDR10+ film reads as the HDR10 it "
             "also is.")
 
-    calibre_books = _books_needing_calibre()
-    if (not os.environ.get("CENSUS_HAVE_EBOOK_CONVERT", "")
-            and any_seen(calibre_books)):
+    # Only the formats this input holds: the rest lose nothing it would see.
+    calibre_books = [extension for extension in _books_needing_calibre()
+                     if extension in seen]
+    if not os.environ.get("CENSUS_HAVE_EBOOK_CONVERT", "") and calibre_books:
         log("WARNING: ebook-convert is not installed (it ships in Calibre), so "
             "the books")
         log("         report's word and character counts will be empty for %s."
             % enums.extension_list(calibre_books))
         log("         Every book is still listed with its path and size.")
 
-    if not os.environ.get("CENSUS_HAVE_PDFTOTEXT", "") and any_seen(comic_pdf):
-        if os.environ.get("CENSUS_HAVE_EBOOK_CONVERT", ""):
+    if not any_seen(comic_pdf):
+        return
+    have_pdftotext = os.environ.get("CENSUS_HAVE_PDFTOTEXT", "")
+    have_calibre = os.environ.get("CENSUS_HAVE_EBOOK_CONVERT", "")
+    # Both halves missing is poppler-utils missing, which is one package and
+    # so one warning, saying everything its absence costs.
+    if not os.environ.get("CENSUS_HAVE_POPPLER", ""):
+        log("WARNING: poppler-utils is not installed, so no PDF can be "
+            "examined: every one")
+        log("         of them is counted as a book (never as a comic) and "
+            "without a page count.")
+        if have_pdftotext:
+            return
+        if have_calibre:
+            log("         Their text is read by Calibre instead - the same word "
+                "count by a much")
+            log("         slower route, so expect this run to take considerably "
+                "longer.")
+        else:
+            log("         With no Calibre either, their word and character "
+                "counts will be empty.")
+        return
+
+    if not have_pdftotext:
+        if have_calibre:
             log("WARNING: pdftotext is not installed (it ships in "
                 "poppler-utils), so every PDF")
             log("         is read by Calibre instead. That is the same word "
@@ -368,12 +392,6 @@ def warn_optional_tools(seen):
                 "counts will be")
             log("         empty for PDFs. Every one is still listed with its "
                 "path and size.")
-
-    if not os.environ.get("CENSUS_HAVE_POPPLER", "") and any_seen(comic_pdf):
-        log("WARNING: poppler-utils is not installed, so no PDF can be "
-            "examined: every one")
-        log("         of them is counted as a book (never as a comic) and "
-            "without a page count.")
 
 
 def census_subject(in_paths, run_bi, program):
@@ -774,7 +792,7 @@ def run(arguments, depth, out_dir, run_bi, separator, extension,
                 log("WARNING: flock is not installed (it ships in util-linux), "
                     "so the progress lines")
                 log("         of the libraries being read side by side carry "
-                    'no "[n of total]"')
+                    'no "[n/total]"')
                 log("         position. The census itself and its closing "
                     "counts are unaffected.")
             log("Censusing %d libraries from the %d folders given, one worker "

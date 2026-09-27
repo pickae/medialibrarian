@@ -492,9 +492,7 @@ def _settle_mkvtoolnix() -> None:
         "images still work); in the")
     log("         concatenating phase, chapters and titles cannot be embedded "
         "in MP3 output (Opus and")
-    log("         FLAC go through mutagen, m4b through ffmpeg) and cover art "
-        "embedded in opus sources is")
-    log("         left unextracted.")
+    log("         FLAC go through mutagen, m4b through ffmpeg).")
     log("         The encoding and concatenation themselves are unaffected.")
 
 

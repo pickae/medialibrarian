@@ -527,6 +527,32 @@ def _text_mode_report(state, books, out_path, temp_path, all_txt,
     return report
 
 
+def discard_summary(discard_extras: bool, image_resolution: str,
+                    has_pdf: bool, has_reflowable: bool) -> str:
+    """The run's one line about -d, naming only what it touches in THIS input.
+
+    A PDF loses its images and nothing else; every other book loses its fonts
+    and junk images and has its illustrations downscaled. An input of only PDFs
+    or of no PDF at all has only one of those two to talk about.
+    """
+    if discard_extras:
+        parts = []
+        if has_reflowable:
+            parts.append("fonts and junk images dropped, illustrations "
+                         "downscaled to %s"
+                         % (image_resolution or "the default tier"))
+        if has_pdf:
+            parts.append("PDF images stripped")
+        return "-d: " + ", ".join(parts)
+    if not has_reflowable:
+        return "Every book kept whole (-d strips a PDF's images)"
+    if not has_pdf:
+        return ("Every book kept whole (-d discards fonts, junk images and "
+                "image resolution)")
+    return ("Every book kept whole (-d discards fonts, junk images, image "
+            "resolution and a PDF's images)")
+
+
 def main(argv: list, program: str = "ingest-books",
          script_dir: str = "") -> int:
     declaration = spec(program)
@@ -613,10 +639,11 @@ def main(argv: list, program: str = "ingest-books",
                     list(enums.BOOK_INPUT_EXTENSIONS)))
 
         os.makedirs(out_path, exist_ok=True)
+        image_resolution = imagesizes.geometry() or ""
         options = {
             "textMode": text_mode,
             "discardExtras": discard_extras,
-            "imageResolution": imagesizes.geometry() or "",
+            "imageResolution": image_resolution,
         }
         state = Run(os.path.abspath(in_path), os.path.abspath(out_path),
                     counter_dir, temp_path, options, total, run_marker)
@@ -646,13 +673,12 @@ def main(argv: list, program: str = "ingest-books",
         else:
             print("Ingesting %d book(s)" % total)
             print("========================")
-            if discard_extras:
-                print("-d: fonts, junk images and PDF images dropped, "
-                      "illustrations downscaled to %s"
-                      % (options["imageResolution"] or "the default tier"))
-            else:
-                print("Every book kept whole (-d discards fonts, junk images "
-                      "and image resolution)")
+            has_pdf = any(enums.lower_extension_of(relative) == "pdf"
+                          for relative in books)
+            has_reflowable = any(enums.lower_extension_of(relative) != "pdf"
+                                 for relative in books)
+            print(discard_summary(discard_extras, image_resolution,
+                                  has_pdf, has_reflowable))
             print("")
             _run_pool(state, books, jobs)
             safety.exit_if_aborted()

@@ -417,7 +417,19 @@ def download_subs(directory: str, user: str, password: str,
     """Do the one-language download for every movie of
     :func:`subtitle_movies` and every language. Sequential by design:
     rapid-fire downloads get throttled.
+
+    Without credentials nothing can be downloaded, which is said once for the
+    folder - with how many subtitles that leaves missing - rather than once per
+    film and language, and not at all where none is missing.
     """
+    if not user or not password:
+        missing = sum(1 for movie in subtitle_movies(directory)
+                      for row in languages.LANGUAGES
+                      if not os.path.isfile(_sidecar(movie, row.code2)))
+        if missing:
+            log("WARNING: openSubtitlesUser/openSubtitlesPassword not set, "
+                "skipping subtitle download ({} missing)".format(missing))
+        return
     for movie in subtitle_movies(directory):
         for row in languages.LANGUAGES:
             download_srt(movie, row.code2, user, password, max_sync_offset,

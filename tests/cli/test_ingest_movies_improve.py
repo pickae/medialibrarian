@@ -438,6 +438,51 @@ class TestIdempotency:
         assert len(remux["calls"]) == before
 
 
+class TestWhatAFilmSays:
+    """The heading is held back until there is something to put under it."""
+
+    @pytest.fixture
+    def improve(self, tmp_path, monkeypatch):
+        def run(tracks, level_line=""):
+            movie = str(tmp_path / "Film (2020).mkv")
+            open(movie, "w").close()
+            monkeypatch.setattr(rules, "_identify", lambda path: tracks)
+            monkeypatch.setattr(rules, "_object_flags", lambda *a: None)
+            monkeypatch.setattr(run_module.dolbyvision, "read_video_info",
+                                lambda path: {"PROFILE": "", "SETTINGS": "",
+                                              "HDR": "", "TRANSFER": "",
+                                              "FPS_SPEC": "",
+                                              "STREAM_SIZE": ""})
+
+            def level(path, log, **_k):
+                if level_line:
+                    log(level_line)
+                return 0
+            monkeypatch.setattr(run_module.dolbyvision,
+                                "normalise_config_level", level)
+            logs: list = []
+            monkeypatch.setattr(run_module, "log", logs.append)
+            run_module.Run(script_dir="").improve_main_movie(movie)
+            return movie, logs
+        return run
+
+    def _plain(self):
+        return [rules.Track(id="0", type="video", codec="V_MPEG4/ISO/AVC"),
+                rules.Track(id="1", type="audio", codec="A_AC3", channels="6",
+                            language="eng", name="AC3 5.1",
+                            default="true")]
+
+    def test_a_film_that_needs_nothing_is_one_line(self, improve):
+        movie, logs = improve(self._plain())
+        assert logs == ["No improvements needed: " + movie]
+
+    def test_one_with_something_to_say_is_headed_first(self, improve):
+        movie, logs = improve(self._plain(), "  Corrected the level")
+        assert logs == ["Improving main movie: " + movie,
+                        "  Corrected the level",
+                        "  No improvements needed: " + movie]
+
+
 class TestFromARealIdentificationDocument:
     """The same decisions, driven from a genuine ``mkvmerge -J`` document rather
     than from a canned track list.

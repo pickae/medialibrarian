@@ -3,8 +3,9 @@
 `mkvmerge` and its siblings are not requirements of `convert-audio`,
 `concat-audio` or `convert-and-concat`. A run can do everything but a few things
 without them - the MP3 chapter-and-title detour, which routes that one format
-through Matroska, the opus-source cover extraction, and pulling cover art out of
-a Matroska source - so their absence is a startup warning rather than a refusal.
+through Matroska, and pulling cover art out of a Matroska source - so their
+absence is a startup warning rather than a refusal, and one said only to a run
+whose input holds what it would cost.
 
 The state is settled once at startup and travels in the environment, which is what
 makes both halves of this testable on any host:
@@ -164,12 +165,27 @@ class TestTheSettlementOnAPathWithoutThem:
         assert log.count("chapters and titles cannot be embedded") == 1, log
         assert log.count("chapters and title not embedded") == 1, log
 
-    def test_convert_audio_warns_once_and_the_run_goes_on(self, absent,
-                                                          tmp_path):
+    def test_concat_audio_warns_nothing_to_a_tree_without_mp3(self, absent,
+                                                              tmp_path):
+        """An opus book writes its chapters through mutagen, and ffmpeg copies
+        its embedded cover out when mkvextract is not there to."""
+        source = _album(tmp_path / "oin", "01 - first.opus", "02 - second.opus")
+        outputs = tmp_path / "oout"
+        log = absent.absent("concat-audio", "-v", source, outputs)
+        assert (outputs / "Album.opus").is_file()
+        assert "mkvtoolnix not found" not in log, log
+
+    def test_convert_audio_warns_nothing_to_a_tree_it_costs_nothing(
+            self, absent, tmp_path):
         """`-c`, because without it a source the encoder would not improve is
         deliberately left where it is and there is no output to count - and with
         it the mp3 is carried over verbatim, which is what the wrapper's
-        transcoding phase does."""
+        transcoding phase does.
+
+        The one thing convert-audio asks mkvtoolnix for is the cover of a
+        Matroska audio source, so a tree with none goes on without being warned
+        about a file it does not have. The warning itself, for a tree that does
+        hold one, is `tests/cli/test_convert_audio.py`'s."""
         source = tmp_path / "cin"
         source.mkdir()
         (source / "01 - first.mp3").touch()
@@ -177,8 +193,7 @@ class TestTheSettlementOnAPathWithoutThem:
         outputs = tmp_path / "cout"
         log = absent.absent("convert-audio", "-c", source, outputs)
         assert len(list(outputs.rglob("*.mp3"))) == 2
-        assert log.count("mkvtoolnix not found") == 1, log
-        assert "sidecar images" in log, log
+        assert "mkvtoolnix not found" not in log, log
 
     def test_the_wrapper_warns_once_for_the_whole_run(self, absent, tmp_path):
         """Not once per command it drives. Its own settlement runs first and sets

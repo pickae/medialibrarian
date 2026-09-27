@@ -63,6 +63,9 @@ class Run:
     skips: safety.RunSkipLog
     fragments_file: str
     whisper: dict
+    # What settling ``whisper`` said, still to be printed: held back until
+    # there is a commentary to transcribe, and empty once it has been.
+    whisper_said: list
     ffsubsync_quality: str
     long_names: tmdblookup.LongNames
     unfixed_movies: list
@@ -77,27 +80,41 @@ class Run:
         beside it as "<name> (old).mkv" - so nothing is ever lost and a second
         run is a no-op, the "(old)" sibling being what makes the folder skip
         itself."""
-        log("Improving main movie: " + movie)
+        # The heading is held back until there is something to put under it,
+        # so a film that needs nothing done is one line rather than two naming
+        # it twice.
+        headed: list[bool] = []
+
+        def heading() -> None:
+            if not headed:
+                log("Improving main movie: " + movie)
+                headed.append(True)
+
+        def say(line: str) -> None:
+            heading()
+            log(line)
+
         base = os.path.splitext(movie)[0]
 
         tracks = rules._identify(movie)
         if not tracks:
-            log("  Skipping (no tracks read): " + movie)
+            say("  Skipping (no tracks read): " + movie)
             return
         rules._object_flags(movie, tracks)
 
         changed = rules.decide_actions(tracks, base)
         for position, winner in rules.apply_surround_ladder(tracks):
             changed = True
-            log("  Surround ladder: dropping audio track %s (%s, %s) in favour "
+            say("  Surround ladder: dropping audio track %s (%s, %s) in favour "
                 "of %s" % (tracks[position].id, tracks[position].name,
                            tracks[position].language, tracks[winner].name))
 
-        transcripts = rules.gather_commentary_transcripts(base, tracks)
+        transcripts = rules.gather_commentary_transcripts(base, tracks,
+                                                          say=say)
         if transcripts:
             changed = True
 
-        job = self.decide_dolby_vision_job(movie, tracks)
+        job = self.decide_dolby_vision_job(movie, tracks, say=say)
 
         # An overstated Dolby Vision LEVEL, corrected in place. This is not part
         # of the remux and must not wait for one: the level is a container
@@ -105,22 +122,27 @@ class Run:
         # whose level is the only thing wrong with it needs nothing else done -
         # it would otherwise return just below, uncorrected.
         dolbyvision.normalise_config_level(movie, script_dir=self.script_dir,
-                                           log=log)
+                                           log=say)
 
         if not changed and not job["wanted"]:
-            log("  No improvements needed: " + movie)
+            log(("  No improvements needed: " if headed
+                 else "No improvements needed: ") + movie)
             return
 
+        heading()
         self.remux(movie, base, tracks, transcripts, job)
 
-    def decide_dolby_vision_job(self, movie: str, tracks: list) -> dict:
+    def decide_dolby_vision_job(self, movie: str, tracks: list,
+                                say=None) -> dict:
         """``decideDolbyVisionJob``: which Dolby Vision job this file needs, if
         any - converting a real dual-layer profile 7 to 8.1, or dropping a claim
         of ANY profile that the video does not back up with an RPU.
 
         Only the cheap probes and the eligibility checks happen here; the work on
         the stream is deferred until it is certain the remux runs at all.
+        ``say`` is where its warnings go, the run's log when not given.
         """
+        say = say or log
         video_indexes = [position for position, track in enumerate(tracks)
                          if track.is_video]
         info = dolbyvision.read_video_info(movie)
@@ -140,7 +162,7 @@ class Run:
             # Worth a word only for profile 7, the case with a known conversion
             # to miss.
             if is_profile7:
-                log("  WARNING: dovi_tool not installed, leaving Dolby Vision "
+                say("  WARNING: dovi_tool not installed, leaving Dolby Vision "
                     "profile 7 as is: " + movie)
         elif dolbyvision.stream_has_rpu(movie):
             # Real Dolby Vision. Only dual-layer profile 7 has anything to gain;
@@ -166,11 +188,11 @@ class Run:
                        if job["action"] == "convert"
                        else "dropping the false Dolby Vision claim")
         if job["video_count"] != 1:
-            log("  WARNING: %s needs exactly one video track, this has %d, "
+            say("  WARNING: %s needs exactly one video track, this has %d, "
                 "leaving as is: %s" % (description, job["video_count"], movie))
             job["action"] = ""
         elif not info["FPS_SPEC"]:
-            log("  WARNING: %s needs a frame rate, which mediainfo does not "
+            say("  WARNING: %s needs a frame rate, which mediainfo does not "
                 "report, leaving as is: %s" % (description, movie))
             job["action"] = ""
         else:
@@ -643,7 +665,9 @@ def main(argv: list, program: str = "ingest-movies",
         return 1
 
     subtitle_work = _settle_subtitle_work()
-    ffsubsync_quality = _settle_ffsubsync_quality()
+    # Only the subtitle work syncs anything, so with it off there is no
+    # alignment to check and nothing to warn about how well it would be.
+    ffsubsync_quality = _settle_ffsubsync_quality() if subtitle_work else "no"
 
     # Asked of each folder before any of them is set up for, and a folder with
     # nothing to ingest is dropped rather than ending the run: the others were
@@ -696,18 +720,23 @@ def main(argv: list, program: str = "ingest-movies",
     safety.set_run_footer(recap)
 
     whisper = {}
+    whisper_said: list = []
     if subtitle_work:
         # Done once, before anything is queued, so every worker inherits the
         # answer instead of probing the GPU again. Skipped when the subtitle work
         # is off: the probe IS a whisper run, so without pipx it would spend the
         # startup failing its way down the whole table to reach a conclusion
-        # nothing will use.
+        # nothing will use. What it found is only said once there is a
+        # commentary to transcribe with it: most films have none, and a
+        # library without one would otherwise open on the GPU's plan for work
+        # it never gets.
         from medialib.lib import whisper as whisper_lib
         whisper = whisper_lib.init_whisper_model(
-            str(runlog.cpu_count()), ram_root, log)
+            str(runlog.cpu_count()), ram_root, whisper_said.append)
 
     state = Run(script_dir=script_dir, ram_root=ram_root, skips=skips,
                 fragments_file=fragments_file, whisper=whisper,
+                whisper_said=whisper_said,
                 ffsubsync_quality=ffsubsync_quality, long_names=long_names,
                 unfixed_movies=unfixed_movies)
 
@@ -800,8 +829,8 @@ def _tags_only(program: str, script_dir: str, roots: list, names: list,
         return 1
 
     if id_list:
-        log("Read %d hand-written id(s) from %s, and %d row(s) still blank"
-            % (len(ids), id_list, len(blank)))
+        log("Read %d hand-written id(s) from %s" % (len(ids), id_list)
+            + (", and %d row(s) still blank" % len(blank) if blank else ""))
 
     skips = safety.RunSkipLog()
     long_names = tmdblookup.LongNames()
@@ -960,8 +989,10 @@ def _subtitles_only(program: str, script_dir: str, roots: list, names: list,
 
     # The test IS ffsubsync's refusal, so an ffsubsync that cannot refuse has
     # nothing to test with: every subtitle would pass, and -w would call a
-    # library of wrong ones in step.
-    ffsubsync_quality = _settle_ffsubsync_quality()
+    # library of wrong ones in step. The refusal below says so itself, so the
+    # probe's own warning about it would only say it twice.
+    ffsubsync_quality = _settle_ffsubsync_quality(judged="a subtitle",
+                                                  say_unchecked=False)
     if ffsubsync_quality == "no":
         sys.stderr.write("This ffsubsync cannot refuse an alignment, so every "
                          "subtitle would pass the test.\nUpgrade ffsubsync. "
@@ -994,12 +1025,34 @@ def _subtitles_only(program: str, script_dir: str, roots: list, names: list,
                 root, user, password, rules.MAX_SYNC_OFFSET,
                 rules.MAX_SYNC_QUALITY_OFFSET, ffsubsync_quality, log)
 
-    log("%d subtitle(s) in step, %d out of step, %d could not be tested"
-        % (totals["kept"], totals["discarded"], totals["untested"]))
+    log(_subtitle_totals(totals))
     if not write:
-        log("Dry run: nothing was changed. Pass -w to sync the subtitles in "
-            "step, throw out the rest and download what is missing.")
+        # What -w would do to THESE subtitles: syncing the ones in step and
+        # throwing out the rest are each only promised where there are some.
+        steps = []
+        if totals["kept"]:
+            steps.append("sync the subtitles in step")
+        if totals["discarded"]:
+            steps.append("throw out the ones out of step")
+        steps.append("download what is missing")
+        log("Dry run: nothing was changed. Pass -w to %s."
+            % (", ".join(steps[:-1]) + " and " + steps[-1] if len(steps) > 1
+               else steps[0]))
     return 0
+
+
+def _subtitle_totals(totals: dict) -> str:
+    """The -s run's closing count. The in-step and out-of-step figures are
+    always given, a zero being the answer to the question the run was asked;
+    the untested one only when some could not be tested, and a run that found
+    no subtitle at all says that rather than three zeros."""
+    if not any(totals.values()):
+        return "No subtitle found beside any film"
+    line = "%d subtitle(s) in step, %d out of step" % (totals["kept"],
+                                                      totals["discarded"])
+    if totals["untested"]:
+        line += ", %d could not be tested" % totals["untested"]
+    return line
 
 
 def _chapters_only(program: str, roots: list) -> int:
@@ -1029,11 +1082,26 @@ def _chapter_phase(root: str) -> None:
                       for verdict, films in outcome.items()})
 
 
+# How each verdict of the chapter lookup is counted in its closing line.
+_CHAPTER_VERDICTS = (("added", "given chapters"),
+                     ("replaced", "had numbered ones replaced"),
+                     ("kept", "already named"),
+                     ("unmatched", "with no set that fits"),
+                     ("untagged", "untagged"), ("failed", "failed"))
+
+
 def _report_chapters(totals: dict) -> None:
-    log("Chapters: %d film(s) given chapters, %d had numbered ones replaced, "
-        "%d already named, %d with no set that fits, %d untagged, %d failed"
-        % tuple(totals.get(verdict, 0) for verdict in (
-            "added", "replaced", "kept", "unmatched", "untagged", "failed")))
+    """The chapter lookup's closing count: only the verdicts some film came
+    to, and a run that found no film at all says that rather than six
+    zeros."""
+    parts = [(totals[verdict], said)
+             for verdict, said in _CHAPTER_VERDICTS if totals.get(verdict)]
+    if not parts:
+        log("Chapters: no film found")
+        return
+    log("Chapters: " + ", ".join(
+        ("%d film(s) %s" if index == 0 else "%d %s") % part
+        for index, part in enumerate(parts)))
 
 
 def _write_subtitle_list(listing: str, root: str, verdicts: dict,
@@ -1059,8 +1127,15 @@ def _write_subtitle_list(listing: str, root: str, verdicts: dict,
             handle.write("# Could not be tested - left alone:\n")
             for srt in untested:
                 handle.write(srt + "\n")
-    log('%d subtitle(s) in "%s" out of step and %d untested - listed in "%s"'
-        % (len(out), root, len(untested), listing))
+    # Only the heading or headings the list actually has.
+    if out and untested:
+        what = "%d subtitle(s) in \"%s\" out of step and %d untested" % (
+            len(out), root, len(untested))
+    elif out:
+        what = '%d subtitle(s) in "%s" out of step' % (len(out), root)
+    else:
+        what = '%d subtitle(s) in "%s" untested' % (len(untested), root)
+    log('%s - listed in "%s"' % (what, listing))
 
 
 def _sidecar_too_small(prefix: str, movie: str, durations: dict) -> bool:
@@ -1203,12 +1278,14 @@ def _commentary_only(program: str, script_dir: str, roots: list,
     if tooldeps.require_tools(program, ["ffmpeg", "ffprobe", "mkvmerge"]):
         return 1
 
-    if not _settle_subtitle_work():
-        # The gate's warning says the rest of the run goes on anyway; this run
-        # has no rest, so say that the run is over.
+    if not _settle_subtitle_work(commentary_only=True):
+        # This run has no other phase to go on to, so say that it is over.
         log("Commentary-only has no other phase to run - nothing was done.")
         return 0
-    ffsubsync_quality = _settle_ffsubsync_quality()
+    # A transcript is judged by its own tight offset and never by the
+    # confidence, so what a confidence-blind ffsubsync costs the downloads is
+    # nothing this run would feel.
+    ffsubsync_quality = _settle_ffsubsync_quality(judged="")
 
     ramscratch.init_ram_base()
     ram_root, status = ramscratch.ram_scratch_dir("ingestMovies")
@@ -1227,7 +1304,8 @@ def _commentary_only(program: str, script_dir: str, roots: list,
 
     state = Run(script_dir=script_dir, ram_root=ram_root,
                 skips=safety.RunSkipLog(), fragments_file=fragments_file,
-                whisper=whisper, ffsubsync_quality=ffsubsync_quality,
+                whisper=whisper, whisper_said=[],
+                ffsubsync_quality=ffsubsync_quality,
                 long_names=tmdblookup.LongNames())
     jobs = whisper["jobs"]
 
@@ -1321,7 +1399,7 @@ def _resolve_roots(declaration, arguments: list):
     return roots, names
 
 
-def _settle_subtitle_work() -> bool:
+def _settle_subtitle_work(commentary_only: bool = False) -> bool:
     """The subtitle work is all-or-nothing, and that is not the same as optional.
 
     Neither source of subtitles is worth muxing in unaligned: a downloaded one is
@@ -1331,20 +1409,39 @@ def _settle_subtitle_work() -> bool:
     the choice is between muxing subtitles nobody checked and not producing them
     at all - and both phases are skipped together, said once here rather than as
     a surprise per movie.
+
+    ``commentary_only`` is the -a run, which has the transcription and nothing
+    else: the warning names only what that run loses, and does not promise the
+    rest of a full ingest it is not going to do.
     """
     if os.environ.get("SKIP_TOOL_PREFLIGHT"):
         return True
     missing = [name for name in ("ffsubsync", "pipx") if not _has_tool(name)]
     if not missing:
         return True
-    log("WARNING: %s not installed - skipping subtitle downloading AND "
-        "commentary transcription for this run." % " ".join(missing))
-    log("         Both produce a subtitle that only ffsubsync can prove is in "
-        "step with the audio, and an unverified")
-    log("         subtitle track is worse than none. Everything else (naming, "
-        "tags, opus, Dolby Vision, remuxing) runs.")
-    log("         To enable them: pipx install ffsubsync, and apt install "
-        "pipx.")
+    if commentary_only:
+        log("WARNING: %s not installed - skipping commentary transcription."
+            % " ".join(missing))
+        log("         Only ffsubsync can prove a transcript is in step with "
+            "the audio, and an unverified subtitle")
+        log("         track is worse than none.")
+    else:
+        log("WARNING: %s not installed - skipping subtitle downloading AND "
+            "commentary transcription for this run." % " ".join(missing))
+        log("         Both produce a subtitle that only ffsubsync can prove is "
+            "in step with the audio, and an unverified")
+        log("         subtitle track is worse than none. Everything else "
+            "(naming, tags, opus, Dolby Vision, remuxing) runs.")
+    # Only the step that is missing: a host with pipx already on it has no use
+    # for the apt line, and one with ffsubsync already installed for the other.
+    if missing == ["pipx"]:
+        steps = "apt install pipx"
+    elif missing == ["ffsubsync"]:
+        steps = "pipx install ffsubsync"
+    else:
+        steps = "apt install pipx, then pipx install ffsubsync"
+    log("         To enable %s: %s." % ("it" if commentary_only else "them",
+                                        steps))
     return False
 
 
@@ -1358,7 +1455,8 @@ def _tool_help(name: str) -> str:
     return done.stdout or ""
 
 
-def _settle_ffsubsync_quality() -> str:
+def _settle_ffsubsync_quality(judged: str = "a downloaded subtitle",
+                              say_unchecked: bool = True) -> str:
     """Which check this ffsubsync can make of an alignment: "confidence" when
     the confidence helper can watch it (and it knows
     ``--skip-sync-on-low-quality``), "yes" when it knows only the flag, "no"
@@ -1370,20 +1468,28 @@ def _settle_ffsubsync_quality() -> str:
     good subtitle. Captured whole rather than piped into a matcher, because a
     matcher that stops at its first hit can SIGPIPE the tool and turn a yes into
     a no.
+
+    ``judged`` is what the run puts to the confidence test, for the warning a
+    confidence-blind ffsubsync gets - and "" for a run that puts nothing to
+    it, which is told nothing. ``say_unchecked`` False is for the caller that
+    refuses the run over a "no" in words of its own.
     """
     if not _has_tool("ffsubsync"):
         return "no"
     if "--skip-sync-on-low-quality" not in (_tool_help("ffsubsync") or ""):
-        log("WARNING: this ffsubsync has no --skip-sync-on-low-quality, so a "
-            "bad alignment gets applied instead of rejected - upgrade "
-            "ffsubsync to enable the check")
+        if say_unchecked:
+            log("WARNING: this ffsubsync has no --skip-sync-on-low-quality, "
+                "so a bad alignment gets applied instead of rejected - "
+                "upgrade ffsubsync to enable the check")
         return "no"
     if subtitlefiles.can_measure_confidence():
         return "confidence"
-    log("WARNING: this ffsubsync cannot be asked how sure an alignment is, so "
-        "a downloaded subtitle is believed only within %ss of where it "
-        "started - which throws out right subtitles found further off, and "
-        "keeps wrong ones that land close" % rules.MAX_SYNC_QUALITY_OFFSET)
+    if judged:
+        log("WARNING: this ffsubsync cannot be asked how sure an alignment "
+            "is, so %s is believed only within %ss of where it started - "
+            "which throws out right subtitles found further off, and keeps "
+            "wrong ones that land close"
+            % (judged, rules.MAX_SYNC_QUALITY_OFFSET))
     return "yes"
 
 
@@ -1518,6 +1624,7 @@ def _drain_commentary(state, producer, jobs: int) -> None:
     queue runs them, keeping an adequate buffer of prepared items and giving a
     freed slot the next longest one.
     """
+    producer = _announcing_whisper(state, producer)
     if jobs <= 1:
         for record, _size in producer:
             if safety.abort_requested():
@@ -1527,6 +1634,16 @@ def _drain_commentary(state, producer, jobs: int) -> None:
 
     dynamicqueue.run(producer, jobs, _in_transcribe_worker,
                      lambda record: (state, record), log=log)
+
+
+def _announcing_whisper(state, producer):
+    """The records of ``producer``, with what settling whisper said printed in
+    front of the first of them - the first moment it is about work this run
+    will do."""
+    for item in producer:
+        while state.whisper_said:
+            log(state.whisper_said.pop(0))
+        yield item
 
 
 def _transcode_opus(state, root: str) -> None:

@@ -46,9 +46,9 @@ class TestThePhaseRunsAndNothingElse:
                             lambda: None)
         monkeypatch.setattr(run.tooldeps, "require_tools",
                             lambda *_a, **_k: False)
-        monkeypatch.setattr(run, "_settle_subtitle_work", lambda: True)
+        monkeypatch.setattr(run, "_settle_subtitle_work", lambda **_k: True)
         monkeypatch.setattr(run, "_settle_ffsubsync_quality",
-                            lambda: "yes")
+                            lambda **_k: "yes")
         monkeypatch.setattr(run.ramscratch, "init_ram_base",
                             lambda: None)
         monkeypatch.setattr(run.ramscratch, "ram_scratch_dir",
@@ -202,7 +202,7 @@ class TestThePhaseRunsAndNothingElse:
         """There is nothing else in this run to fall back to, so the gate's
         warning is the whole of it: nothing is walked and nothing is queued."""
         _exports, _settled, _scratch = self._stubbed(monkeypatch, tmp_path)
-        monkeypatch.setattr(run, "_settle_subtitle_work", lambda: False)
+        monkeypatch.setattr(run, "_settle_subtitle_work", lambda **_k: False)
         exports = []
 
         def no_export(*_a, **_k):
@@ -346,9 +346,9 @@ class TestTheOrphanReport:
                             lambda: None)
         monkeypatch.setattr(run.tooldeps, "require_tools",
                             lambda *_a, **_k: False)
-        monkeypatch.setattr(run, "_settle_subtitle_work", lambda: True)
+        monkeypatch.setattr(run, "_settle_subtitle_work", lambda **_k: True)
         monkeypatch.setattr(run, "_settle_ffsubsync_quality",
-                            lambda: "yes")
+                            lambda **_k: "yes")
         monkeypatch.setattr(run.ramscratch, "init_ram_base",
                             lambda: None)
         monkeypatch.setattr(run.ramscratch, "ram_scratch_dir",
@@ -445,9 +445,9 @@ class TestTheUnfixedReport:
                             lambda: None)
         monkeypatch.setattr(run.tooldeps, "require_tools",
                             lambda *_a, **_k: False)
-        monkeypatch.setattr(run, "_settle_subtitle_work", lambda: True)
+        monkeypatch.setattr(run, "_settle_subtitle_work", lambda **_k: True)
         monkeypatch.setattr(run, "_settle_ffsubsync_quality",
-                            lambda: "yes")
+                            lambda **_k: "yes")
         monkeypatch.setattr(run.ramscratch, "init_ram_base",
                             lambda: None)
         monkeypatch.setattr(run.ramscratch, "ram_scratch_dir",

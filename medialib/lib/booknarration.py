@@ -1124,8 +1124,10 @@ def prepare_voice_sample(src, scratch_dir, log=None):
         parts = window.split()
         if len(parts) == 2 and parts[0] and parts[1]:
             start, take = parts
-            log("Voice sample is %s long: taking %s of speech from %s"
-                % (fmt_clock(duration), fmt_clock(take), fmt_clock(start)))
+            # Named, because a folder of samples says this once per sample.
+            log('Voice sample "%s" is %s long: taking %s of speech from %s'
+                % (os.path.basename(src), fmt_clock(duration), fmt_clock(take),
+                   fmt_clock(start)))
             cut_args = ["-ss", start, "-t", take]
     elif extension == "wav" and codec == _config("voiceSampleCodec", "pcm_s16le"):
         return src

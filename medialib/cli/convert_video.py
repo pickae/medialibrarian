@@ -371,13 +371,19 @@ def quality_bias_for(width, height) -> int:
     return 0
 
 
-def quality_bias_spellings() -> str:
+def quality_bias_spellings(max_resolution: str = "") -> str:
     """The table as "2160p +2, 1080p 0, ..." for the startup summary, generated
-    from it so the run cannot describe a bias it will not apply."""
+    from it so the run cannot describe a bias it will not apply - and without
+    the tiers above a -m <max_resolution> ceiling, which no file of the run is
+    encoded at."""
+    cap = resolutions.ceiling(max_resolution) if max_resolution else None
     parts = []
     for row in QUALITY_BIAS_TABLE.split("\n"):
         fields = row.split()
         if len(fields) != 2:
+            continue
+        box = resolutions.ceiling(fields[0])
+        if cap and box and (box[0] > cap[0] or box[1] > cap[1]):
             continue
         bias = int(fields[1])
         # +2 / -1 say "moved" where a bare 2 would read as the level itself; 0 is

@@ -780,7 +780,7 @@ def main(argv: list, program: str = "concat-audio",
         return 1
     runlog.warn_uncounted_progress()
 
-    have_mkvtoolnix = _settle_mkvtoolnix()
+    have_mkvtoolnix = _settle_mkvtoolnix(input_dir)
 
     # Checked before the output folder is made and before pretreatment, which
     # would otherwise rename an input this run is about to refuse - and before
@@ -858,7 +858,11 @@ def _run_with_scratch(ram_dir: str, input_dir: str, output_dir: str,
         handle.write("0\n")
 
     jobs = max(1, runlog.cpu_count() // JOBS_PER_CORE)
-    log("Concatenating %d subfolder(s), up to %d at a time" % (total, jobs))
+    # "Up to N at a time" only where more than one really can run: the pool is
+    # never wider than the work, and at one wide there is no "at a time" to say.
+    width = min(jobs, total)
+    log("Concatenating %d subfolder(s)%s"
+        % (total, ", up to %d at a time" % width if width > 1 else ""))
 
     state = Run(
         verbose=verbose,
@@ -915,10 +919,16 @@ def _run_with_scratch(ram_dir: str, input_dir: str, output_dir: str,
     return workerpool.exit_status(1 if failed else 0)
 
 
-def _settle_mkvtoolnix() -> bool:
+def _settle_mkvtoolnix(input_dir: str) -> bool:
     """Settled once and shared with the workers through the environment; a
     wrapper's own settlement, which its run reached first, is inherited rather
-    than said again."""
+    than said again.
+
+    Warned about only for an input holding MP3: the chapter-and-title detour is
+    the one thing this script asks the trio for. Every other output writes its
+    chapters without it, and an opus source's embedded cover is copied out by
+    ffmpeg when mkvextract is not there to do it.
+    """
     inherited = os.environ.get("HAVE_MKVTOOLNIX")
     if inherited is not None:
         return bool(inherited)
@@ -926,15 +936,20 @@ def _settle_mkvtoolnix() -> bool:
     present = all(tooldeps.tool_present(tool) for tool in
                   ("mkvmerge", "mkvpropedit", "mkvextract"))
     os.environ["HAVE_MKVTOOLNIX"] = "1" if present else ""
-    if not present:
+    if not present and _holds_mp3(input_dir):
         log("WARNING: mkvtoolnix not found (apt install mkvtoolnix) - chapters "
             "and titles cannot be embedded in")
-        log("         MP3 output (Opus and FLAC go through mutagen, m4b through "
-            "ffmpeg), and cover")
-        log("         art embedded in opus sources is left unextracted (sidecar "
-            "images still work). The")
-        log("         concatenation itself is unaffected.")
+        log("         MP3 output. The concatenation itself is unaffected.")
     return present
+
+
+def _holds_mp3(input_dir: str) -> bool:
+    """Either case, because the extensions are only lower-cased by -p, after
+    this is asked."""
+    for _parent, _dirs, names in os.walk(input_dir):
+        if any(name.lower().endswith(".mp3") for name in names):
+            return True
+    return False
 
 
 def cli(argv: list | None = None) -> int:

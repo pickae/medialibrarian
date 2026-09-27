@@ -563,3 +563,53 @@ class TestTheTransferNamingFlag:
 
         monkeypatch.setattr(im.subprocess, "run", absent)
         assert im._transfer_format() == "--out-format=%n"
+
+
+# --- what the headings say ----------------------------------------------------
+
+class TestTheSplitHeading:
+    """Said only once there is a disc to split: most downloads are a single image
+    or plain tracks, and a heading about a split that never happens would be the
+    only thing the run said about them there."""
+
+    @pytest.fixture
+    def split(self, tmp_path, monkeypatch):
+        logged = []
+        monkeypatch.setattr(im, "log", logged.append)
+        # fdupes is not what is under test, and the real one would delete the
+        # same-content placeholders below as duplicates of each other.
+        monkeypatch.setattr(im, "_run", lambda argv: 0)
+
+        def run():
+            im.Run(download_dir=str(tmp_path), skips=None,
+                   counters=_Counters()).split_disc_images(str(tmp_path))
+            return logged
+        return run
+
+    def test_a_single_image_release_has_no_split_heading(self, split,
+                                                          tmp_path):
+        _touch(str(tmp_path / "Album" / "disc.flac"),
+               str(tmp_path / "Album" / "disc.cue"))
+        logged = split()
+        assert not any("Splitting" in line for line in logged), logged
+        assert any("fdupes" in line for line in logged), logged
+
+    def test_two_images_in_one_folder_are_announced_once(self, split,
+                                                         tmp_path):
+        album = tmp_path / "Album"
+        _touch(str(album / "one.flac"), str(album / "one.cue"),
+               str(album / "two.flac"), str(album / "two.cue"))
+        logged = split()
+        assert sum("Splitting" in line for line in logged) == 1, logged
+        assert sum("Disc moved" in line for line in logged) == 2, logged
+
+
+class TestTheParallelWidth:
+    @pytest.mark.parametrize("jobs,items,expected", [
+        (8, 20, " (up to 8 in parallel)"),
+        # Never wider than the queue it is about.
+        (8, 3, " (up to 3 in parallel)"),
+        # One at a time is not parallel, whichever of the two made it so.
+        (8, 1, ""), (1, 20, "")])
+    def test_the_width_is_what_the_queue_can_use(self, jobs, items, expected):
+        assert im._in_parallel(jobs, items) == expected

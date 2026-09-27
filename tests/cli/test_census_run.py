@@ -242,3 +242,37 @@ class TestBuildCubes:
         record = self._fake_bi(fake_command, tmp_path)
         census_run._build_cubes([], 0, False, "")
         assert not record.exists()
+
+
+class TestTheOptionalToolWarnings:
+    """Each warning is about files the input holds, and a package that is
+    missing is one warning however many of its tools the census reads with."""
+
+    @pytest.fixture
+    def warn(self, monkeypatch):
+        for name in ("CENSUS_HAVE_MEDIAINFO", "CENSUS_HAVE_POPPLER",
+                     "CENSUS_HAVE_EBOOK_CONVERT", "CENSUS_HAVE_PDFTOTEXT"):
+            monkeypatch.setenv(name, "")
+        said = []
+        monkeypatch.setattr(census_run, "log", said.append)
+
+        def run(seen, **present):
+            for name in present:
+                monkeypatch.setenv(name, "1")
+            census_run.warn_optional_tools(set(seen))
+            return "\n".join(said)
+        return run
+
+    def test_a_missing_poppler_is_one_warning(self, warn):
+        said = warn(["pdf"], CENSUS_HAVE_EBOOK_CONVERT="1")
+        assert said.count("WARNING") == 1
+        assert "poppler-utils is not installed" in said
+        assert "read by Calibre instead" in said
+
+    def test_the_calibre_formats_named_are_the_ones_there(self, warn):
+        said = warn(["epub"], CENSUS_HAVE_POPPLER="1",
+                    CENSUS_HAVE_PDFTOTEXT="1")
+        assert "empty for .epub." in said
+
+    def test_an_input_without_pdfs_hears_nothing_of_poppler(self, warn):
+        assert "poppler" not in warn(["mp3"])
