@@ -67,6 +67,7 @@ markers = [
     "fs: real directories, empty files, no tools",
     "stubbed: a real pipeline against stubbed external tools",
     "media: the real heavy tools; opt-in, never in a default run",
+    "imdb_lists: lets a case reach imdbdata.prepare, which the suite stands down",
 ]
 addopts = "-m 'not media'"
 

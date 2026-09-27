@@ -352,6 +352,14 @@ LABEL_WORDS = frozenset((
     "docu", "documentaire", "documental", "documentario",
 ))
 
+# The label a recording of a stage show carries on its END: a library's
+# "Kestrel Vane Lanterns Live" against a catalogue's "Kestrel Vane: Lanterns",
+# and the other way about. Kept apart from the labels above because it is a
+# word of plenty of titles anywhere else in them - wherever it is a verb -
+# and only the last word of a name is where it says what kind of
+# recording this is.
+TRAILING_LABELS = frozenset(("live",))
+
 # The word that says nothing the NUMBER beside it does not already say. A
 # catalogue writes "Part 2" where a folder writes "2", and either of them
 # writes "Teil II" - what tells which film of a series this is is the figure,
@@ -379,12 +387,48 @@ NUMBER_LABELS = frozenset((
 # It stops at twenty because that is as far as a film title counts. Past it the
 # words are two and three tokens long - "twenty five" - and reading those would
 # be arithmetic rather than a reading.
+#
+# In every language the library's audio is recognised in - the six of
+# :data:`medialib.lib.languages.LANGUAGES` - written as the fold leaves them:
+# accents dropped, and German's umlauts spelled out as well. A few are left out
+# on purpose. The ones are the articles of their languages ("ein", "un", "een",
+# "uno"), and :data:`ARTICLES` has them. And a word that is also an ordinary
+# word or a name somewhere else is not a number there: "once", "elf", "due" and
+# "seize" are English, "onze" is Dutch for "our", "sei" German for "be", and
+# "Otto" is a first name. French "dix" is a roman
+# numeral spelled correctly - DIX is 509 - and the roman reading comes first.
 NUMBER_WORDS = {
+    # English
     "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
     "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11,
     "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15,
     "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19,
     "twenty": 20,
+    # German
+    "eins": 1, "zwei": 2, "drei": 3, "vier": 4, "funf": 5, "fuenf": 5,
+    "sechs": 6, "sieben": 7, "acht": 8, "neun": 9, "zehn": 10, "zwolf": 12,
+    "zwoelf": 12, "dreizehn": 13, "vierzehn": 14, "funfzehn": 15,
+    "fuenfzehn": 15, "sechzehn": 16, "siebzehn": 17, "achtzehn": 18,
+    "neunzehn": 19, "zwanzig": 20,
+    # French
+    "deux": 2, "trois": 3, "quatre": 4, "cinq": 5, "sept": 7, "huit": 8,
+    "neuf": 9, "douze": 12, "treize": 13, "quatorze": 14,
+    "quinze": 15, "vingt": 20,
+    # Dutch
+    "twee": 2, "drie": 3, "vijf": 5, "zes": 6, "zeven": 7, "negen": 9,
+    "tien": 10, "twaalf": 12, "dertien": 13, "veertien": 14, "vijftien": 15,
+    "zestien": 16, "zeventien": 17, "achttien": 18, "negentien": 19,
+    "twintig": 20,
+    # Spanish
+    "dos": 2, "tres": 3, "cuatro": 4, "cinco": 5, "seis": 6, "siete": 7,
+    "ocho": 8, "nueve": 9, "diez": 10, "doce": 12, "trece": 13,
+    "catorce": 14, "quince": 15, "dieciseis": 16, "diecisiete": 17,
+    "dieciocho": 18, "diecinueve": 19, "veinte": 20,
+    # Italian
+    "tre": 3, "quattro": 4, "cinque": 5, "sette": 7, "nove": 9, "dieci": 10,
+    "undici": 11, "dodici": 12, "tredici": 13, "quattordici": 14,
+    "quindici": 15, "sedici": 16, "diciassette": 17, "diciotto": 18,
+    "diciannove": 19, "venti": 20,
 }
 
 # The letters a language spells OUT when it cannot write the accent, rather than
@@ -431,7 +475,7 @@ _ROMAN_VALUES = (("m", 1000), ("cm", 900), ("d", 500), ("cd", 400),
 MAX_KEYS = 128
 
 
-def _spelled_out(title: str) -> str:
+def spelled_out(title: str) -> str:
     """``title`` with every accent a language writes out written out."""
     for accented, spelling in SPELLED_OUT:
         title = title.replace(accented, spelling)
@@ -545,6 +589,8 @@ def _without_the_label(words: list[str]) -> list[str]:
     """
     kept = [word for index, word in enumerate(words)
             if not (index > 0 and word in LABEL_WORDS)]
+    if len(kept) > 2 and kept[-1] in TRAILING_LABELS:
+        kept = kept[:-1]
     return kept if len(kept) > 1 else words
 
 
@@ -592,8 +638,8 @@ def _arabic_numerals(words: list[str]) -> list[str]:
     and the small ones a title spells out.
 
     One direction and not both: a number has exactly one roman spelling and one
-    English word, so folding those ONTO the figure makes "Part II", "Part Two"
-    and "Part 2" one key, while folding the other way would have to pick a
+    word in each language, so folding those ONTO the figure makes "Part II",
+    "Part Two" and "Part 2" one key, while folding the other way would have to pick a
     spelling and would meet nothing that was not already met.
     """
     return [_as_a_figure(word) for word in words]
@@ -611,8 +657,8 @@ def _figure(word: str):
 
     The roman reading is asked first because it is the stricter of the two -
     :data:`_ROMAN` accepts one spelling of each number and nothing else - and
-    because the two never disagree: no roman numeral is also an English number
-    word.
+    because the two never disagree: no roman numeral is also a number word in
+    any of the languages :data:`NUMBER_WORDS` holds.
     """
     if word and _ROMAN.match(word):
         return _roman_value(word)
@@ -720,7 +766,7 @@ def _up_to_the_subtitle(title: str) -> str:
     keeping it is what lets a file that spells the subtitle out meet a folder
     that does not.
 
-    A string rather than a word list, like :func:`_spelled_out` and unlike the
+    A string rather than a word list, like :func:`spelled_out` and unlike the
     readings below it, because the separator it turns on is the one thing the
     fold takes away.
     """
@@ -768,7 +814,7 @@ def title_keys(title: str) -> frozenset:
     introduced by - so neither could be asked once the title is a word list.
     """
     forms: list = []
-    for spelling in (title, _spelled_out(title)):
+    for spelling in (title, spelled_out(title)):
         for written in (spelling, _up_to_the_subtitle(spelling)):
             words = _tokens(written)
             if words not in forms:
@@ -788,6 +834,24 @@ def title_keys(title: str) -> frozenset:
             break
     keys.discard("")
     return frozenset(keys)
+
+
+def in_latin_script(title: str) -> bool:
+    """Whether most of the letters a title is written in are Latin ones.
+
+    The fold only reads the Latin alphabet. Anything else it drops - or, for
+    the letters that are the SHAPE of a Latin one, reads as that letter - so a
+    Thai title comes out as the one number in it, and a Cyrillic one as the
+    handful of its letters that look Latin: "100 and a opo" is what a real
+    Russian title folds to. Those keys meet a title written in the same script,
+    which is what they are for, and nothing written in Latin letters that they
+    should. A title with no letters at all is not in any other script, and
+    counts as Latin.
+    """
+    letters = [character for character in title if character.isalpha()]
+    latin = sum(1 for character in letters
+                if "LATIN" in unicodedata.name(character, ""))
+    return 2 * latin >= len(letters)
 
 
 def equivalent(one: str, other: str) -> bool:
@@ -1120,7 +1184,7 @@ def search_titles(title: str) -> list:
     stripped = _filler_stripped(title) or title
     found = [title]
     folds = {normalize_title(title)}
-    for spelling in (stripped, _last_segment(stripped),
+    for spelling in (stripped, _accented(stripped), last_segment(stripped),
                      _unlabelled(stripped),
                      _arabic_spelling(stripped), _unnumbered(stripped),
                      normalize_title(title)):
@@ -1129,6 +1193,34 @@ def search_titles(title: str) -> list:
             found.append(spelling)
             folds.add(folded)
     return found[:MAX_QUERIES]
+
+
+# The umlauts a German title spells out, as it spells them. A "ue" after an
+# "a", an "e" or a "q" is not one of them: the "au" of "Trauer", the "eu" of
+# "Feuer" and "neuen", the "qu" of "Quelle". Nor is the "ael" a name ends in -
+# "Michael", "Raphael", "Michaela" - where the "Fälle" a keyboard spells
+# "Faelle" goes on past it.
+_SPELLED_UMLAUT = re.compile(
+    r"[Aa]e(?!la?\b)|[Oo]e|(?<![AaEeQqÄä])[Uu]e")
+_UMLAUTS = {spelling: accented for accented, spelling in SPELLED_OUT[:6]}
+
+
+def _accented(title: str) -> str:
+    """``title`` with the umlauts it spelled out written back, or "".
+
+    The fold reads "Moosroeschen" and "Moosröschen" as one word, but a
+    catalogue's search does not: asked for "Drei Kiesel fuer
+    Grünwald" it answers nothing at all, and asked for "für" it answers the
+    film. So the search is asked under the letter a German keyboard would have
+    written - which is only a way of reaching the film, never a reading of it:
+    the answer is still held to the folder's own keys, and those meet the
+    catalogue's "ö" through the spelling-out :data:`SPELLED_OUT` already does.
+
+    A pair that is no umlaut comes back wrong now and then - an "ae" in a name
+    like "Michael" - and what that costs is one query that finds nothing.
+    """
+    written = _SPELLED_UMLAUT.sub(lambda pair: _UMLAUTS[pair.group(0)], title)
+    return written if written != title else ""
 
 
 def _filler_stripped(title: str) -> str:
@@ -1147,7 +1239,7 @@ def leading_segment(title: str) -> tuple:
     """``title`` as (what stands before its FIRST " - " or ": ", what stands
     after it), or ("", "") when it has no such break.
 
-    The other end of :func:`_last_segment`, and for a caller that needs to know
+    The other end of :func:`last_segment`, and for a caller that needs to know
     what the prefix SAID rather than only that there was one: what is worth
     dropping off the front of a title is the franchise, the artist or the
     collection somebody repeated, and the only thing that can say a prefix is
@@ -1159,7 +1251,7 @@ def leading_segment(title: str) -> tuple:
     return title[:match.start()].strip(), title[match.end():].strip()
 
 
-def _last_segment(title: str) -> str:
+def last_segment(title: str) -> str:
     """What stands after the LAST " - " or ": " in ``title``.
 
     The franchise someone repeated on every film in it - "Agent Ward - Blackfeather",
@@ -1190,7 +1282,8 @@ def _only_a_number(title: str) -> bool:
 
 def _unlabelled(title: str) -> str:
     """``title`` without the "the Movie" or the "Documentary" somebody wrote
-    into it, for a catalogue that holds the film without it.
+    into it, or the "Live" on the end of it, for a catalogue that holds the
+    film without it.
 
     "" when the title carries no such label, which is what keeps this from
     being a query: a spelling is only worth asking about where the thing it
@@ -1204,6 +1297,12 @@ def _unlabelled(title: str) -> str:
                 kept.pop()
             continue
         kept.append(word)
+    if len(kept) > 2 and normalize_title(kept[-1]) in TRAILING_LABELS:
+        kept.pop()
+        while kept and not kept[-1].strip(" -:–—|"):
+            kept.pop()
+        if kept:
+            kept[-1] = kept[-1].rstrip(" -:–—|")
     return " ".join(kept) if kept != words and len(kept) > 1 else ""
 
 

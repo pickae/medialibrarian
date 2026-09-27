@@ -23,6 +23,7 @@ from medialib.lib import (
     dynamicqueue,
     enums,
     ffmpegselect,
+    imdbdata,
     plexnames,
     ramscratch,
     runlog,
@@ -760,6 +761,11 @@ def _tags_only(program: str, script_dir: str, roots: list, names: list,
 
     skips = safety.RunSkipLog()
     long_names = tmdblookup.LongNames()
+    # This pass and not the full ingest: it is the one run over a library
+    # someone is sitting in front of, where the films TMDb cannot name are
+    # the whole point of running it - and the copy is most of a gigabyte to
+    # fetch the first time.
+    imdb = imdbdata.prepare(imdbdata.directory(script_dir), log)
     log("Phase: tagging movies with IMDb ids (Plex/Jellyfin naming)"
         + ("" if write else " - DRY RUN, nothing will be renamed"))
     # Every folder's unnamed films together, for the one file -i named. Only
@@ -786,7 +792,8 @@ def _tags_only(program: str, script_dir: str, roots: list, names: list,
                                 ambiguous=ambiguous, planned=planned,
                                 near_misses=near_misses,
                                 aliases=alias_titles, seen=seen,
-                                skip=set(blank), long_names=long_names)
+                                skip=set(blank), long_names=long_names,
+                                imdb=imdb)
         if id_list:
             shared += unmatched
             continue

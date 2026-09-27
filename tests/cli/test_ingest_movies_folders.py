@@ -149,8 +149,9 @@ class TestTheListsEachFolderLeaves:
         def fake_tag(root, _log, _skips, dry_run=False, ids=None,
                      unmatched=None, recursive=False, ambiguous=None,
                      planned=None, near_misses=None, aliases=None,
-                     seen=None, skip=None, long_names=None):
+                     seen=None, skip=None, long_names=None, imdb=""):
             asked.append(root)
+            self.imdb = imdb
             name = root.rsplit("/", 1)[-1]
             if seen is not None:
                 seen.add("The Movie (1999)")
@@ -195,6 +196,19 @@ class TestTheListsEachFolderLeaves:
             logs / "ingest-movies-unmatched-Films.tsv").read_text()
         assert "Documentaries film (1999)" in (
             logs / "ingest-movies-unmatched-Documentaries.tsv").read_text()
+
+    def test_the_tagging_pass_is_handed_the_imdb_lists(self, monkeypatch,
+                                                         tmp_path):
+        """Prepared under the checkout's data folder, once for the run."""
+        self._tagging(monkeypatch, tmp_path)
+        prepared = []
+        monkeypatch.setattr(run.imdbdata, "prepare",
+                            lambda where, _log: prepared.append(where)
+                            or "the lists")
+        _library(tmp_path, "Films")
+        assert run.main(["-t", str(tmp_path / "Films")]) == 0
+        assert prepared == [str(tmp_path / "script" / "data" / "imdb")]
+        assert self.imdb == "the lists"
 
     def test_and_so_does_each_folder_holding_more_than_one_film(
             self, monkeypatch, tmp_path):

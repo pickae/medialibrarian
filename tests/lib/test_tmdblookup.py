@@ -220,7 +220,7 @@ class TestTmdbImdbId:
         assert url == _detail_url(1)
         assert params == [("api_key", "apikey"),
                           ("append_to_response",
-                           "alternative_titles,external_ids,release_dates")]
+                           "alternative_titles,translations,external_ids,release_dates")]
 
     def test_a_single_match_returns_the_id(self, monkeypatch):
         search = json.dumps({"results": [
@@ -587,6 +587,11 @@ class TestTheYearNothingCanRead:
         left where the name put it."""
         assert tmdblookup.repair_year("The Movie -  (1999)") \
             == "The Movie - (1999)"
+
+    @pytest.mark.parametrize("broken", ["The Movie (1999 )", "The Movie ( 1999)",
+                                        "The Movie  ( 1999 )"])
+    def test_a_space_inside_the_brackets(self, broken):
+        assert tmdblookup.repair_year(broken) == "The Movie (1999)"
 
     @pytest.mark.parametrize("broken", ["The Movie (1999", "The Movie 1999)"])
     def test_a_year_missing_half_its_brackets(self, broken):
@@ -1423,13 +1428,21 @@ class TestTagPlexIds:
         assert logs == []
         assert (tmp_path / "The Movie (1999) {imdb-tt0000000}").is_dir()
 
-    def test_a_folder_without_a_year_is_left_alone(self, monkeypatch, tmp_path):
+    def test_a_folder_without_a_year_is_asked_about_and_reported(
+            self, monkeypatch, tmp_path):
+        """Not passed over in silence: with nothing on the disk to measure, the
+        one candidate carrying its title is not certain enough - and the
+        folder is SAID to be unmatched, rather than never appearing at all."""
         monkeypatch.chdir(tmp_path)
         _tree(tmp_path, ("Just A Movie", ["Just A Movie.mkv"]))
         self._env(monkeypatch, {"Just A Movie": "tt0120737"})
         logs = []
-        tmdblookup.tag_plex_ids(".", logs.append, SkipLog())
-        assert logs == []
+        unmatched: list = []
+        tmdblookup.tag_plex_ids(".", logs.append, SkipLog(),
+                                unmatched=unmatched)
+        assert logs == ['  no confident TMDb match: "Just A Movie" - left as '
+                        "it is"]
+        assert unmatched == ["Just A Movie"]
         assert (tmp_path / "Just A Movie/Just A Movie.mkv").is_file()
 
     def test_the_films_it_could_not_name_are_collected(self, monkeypatch,
@@ -3446,3 +3459,610 @@ class TestANameThatWillNotFit:
         assert (tmp_path / self.FOLDER).is_dir()
         assert [why for _folder, _name, why in long_names.refused] \
             == ["[Errno 36] File name too long"]
+
+
+# --- a folder that says no year ----------------------------------------------
+
+
+def _catalogue(monkeypatch, films, found_under=None):
+    """Stand TMDb in with ``films``: {id: (title, date, minutes, imdb,
+    translations)}. Every search answers every film - or, where
+    ``found_under`` is given, only a query it names - and each film's document
+    carries its runtime, its id and its translated titles."""
+    monkeypatch.setenv("tmdbApiKey", "apikey")
+    calls = []
+
+    def fake_curl(url, params):
+        calls.append((url, dict(params)))
+        if url == _BASE + "/search/movie":
+            query = dict(params)["query"]
+            if found_under is not None and query not in found_under:
+                return json.dumps({"results": []})
+            return json.dumps({"results": [
+                _row(rid, title, date=date)
+                for rid, (title, date, _m, _i, _t) in films.items()]})
+        match = re.match(r"^" + re.escape(_BASE) + r"/movie/(\d+)$", url)
+        if not match:
+            return None
+        title, date, minutes, imdb, translations = films[int(match.group(1))]
+        return json.dumps({
+            "title": title, "original_title": title, "release_date": date,
+            "runtime": minutes, "external_ids": {"imdb_id": imdb},
+            "translations": {"translations": [
+                {"iso_639_1": "de", "data": {"title": one}}
+                for one in translations]}})
+    monkeypatch.setattr(tmdblookup, "_curl", fake_curl)
+    return calls
+
+
+class TestAFolderThatSaysNoYear:
+    """A film whose folder nobody dated: "Moss Harbour" holding "Moss Harbour.mkv".
+
+    The year is what most of the rule narrows on. With none, the length of the
+    film on the disk has to pick one candidate out and rule every other out,
+    and the folder takes the year the catalogue dates that one to.
+    """
+
+    def _measured(self, monkeypatch, minutes):
+        monkeypatch.setattr(tmdblookup.durationcheck, "total_duration",
+                            lambda _paths: minutes * 60.0)
+
+    def test_the_length_picks_it_out_and_the_catalogue_dates_it(
+            self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("Moss Harbour", ["Moss Harbour.mkv",
+                                          "Moss Harbour.de.srt"]))
+        _catalogue(monkeypatch, {
+            1: ("Moss Harbour", "1953-03-01", 80, "tt0000101", ()),
+            2: ("Moss Harbour", "2008-03-01", 58, "tt0000102", ())})
+        self._measured(monkeypatch, 79)
+        logs = []
+        tmdblookup.tag_plex_ids(".", logs.append, SkipLog())
+        folder = tmp_path / "Moss Harbour (1953) {imdb-tt0000101}"
+        assert sorted(p.name for p in folder.iterdir()) == [
+            "Moss Harbour (1953) {imdb-tt0000101}.de.srt",
+            "Moss Harbour (1953) {imdb-tt0000101}.mkv"]
+        assert logs[0] == ('  "Moss Harbour" says no year, and TMDb dates it '
+                           '1953 - renaming it "Moss Harbour (1953)"')
+
+    def test_a_length_several_candidates_fit_names_none(self, monkeypatch,
+                                                         tmp_path):
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("Moss Harbour", ["Moss Harbour.mkv"]))
+        _catalogue(monkeypatch, {
+            1: ("Moss Harbour", "1953-03-01", 80, "tt0000101", ()),
+            2: ("Moss Harbour", "1978-03-01", 78, "tt0000102", ())})
+        self._measured(monkeypatch, 79)
+        unmatched: list = []
+        tmdblookup.tag_plex_ids(".", [].append, SkipLog(), unmatched=unmatched)
+        assert unmatched == ["Moss Harbour"]
+        assert (tmp_path / "Moss Harbour" / "Moss Harbour.mkv").is_file()
+
+    def test_a_candidate_nobody_can_measure_is_not_ruled_out(
+            self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("Moss Harbour", ["Moss Harbour.mkv"]))
+        _catalogue(monkeypatch, {
+            1: ("Moss Harbour", "1953-03-01", 80, "tt0000101", ()),
+            2: ("Moss Harbour", "1978-03-01", None, "tt0000102", ())})
+        self._measured(monkeypatch, 79)
+        tmdblookup.tag_plex_ids(".", [].append, SkipLog())
+        assert (tmp_path / "Moss Harbour").is_dir()
+
+    def test_a_candidate_the_budget_never_reached_is_not_ruled_out(
+            self, monkeypatch):
+        """A title a dozen films share is exactly where the one that was not
+        asked about is as likely as the one that fitted."""
+        films = {rid: ("Moss Harbour", "%d-03-01" % (1950 + rid),
+                       80 if rid == 1 else 20, "tt00001%02d" % rid, ())
+                 for rid in range(1, tmdblookup.MAX_CANDIDATES + 2)}
+        _catalogue(monkeypatch, films)
+        notes: list = []
+        assert tmdblookup.identify("Moss Harbour", "", lambda: 79 * 60.0,
+                                   notes).imdb == ""
+        assert any("never asked about" in note for note in notes)
+
+    def test_the_year_its_film_carries_is_the_folders(self, monkeypatch,
+                                                      tmp_path):
+        """No length is needed where the file says the year the folder did
+        not: it is looked up as though the folder had said it."""
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("Moss Harbour", ["Moss Harbour (1978).mkv"]))
+        _catalogue(monkeypatch, {
+            1: ("Moss Harbour", "1953-03-01", 80, "tt0000101", ()),
+            2: ("Moss Harbour", "1978-03-01", None, "tt0000102", ())})
+        tmdblookup.tag_plex_ids(".", [].append, SkipLog())
+        folder = tmp_path / "Moss Harbour (1978) {imdb-tt0000102}"
+        assert (folder / "Moss Harbour (1978) {imdb-tt0000102}.mkv").is_file()
+
+    def test_a_folder_holding_another_film_is_not_asked_about(
+            self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("Moss Harbour", ["Something Else.mkv"]))
+        calls = _catalogue(monkeypatch, {
+            1: ("Moss Harbour", "1953-03-01", 80, "tt0000101", ())})
+        self._measured(monkeypatch, 80)
+        tmdblookup.tag_plex_ids(".", [].append, SkipLog())
+        assert calls == []
+
+    def test_a_folder_of_film_folders_is_still_walked_into(
+            self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("Shelf/Moss Harbour (1953)",
+                         ["Moss Harbour (1953).mkv"]))
+        _catalogue(monkeypatch, {
+            1: ("Moss Harbour", "1953-03-01", 80, "tt0000101", ())})
+        tmdblookup.tag_plex_ids(".", [].append, SkipLog(), recursive=True)
+        assert (tmp_path / "Shelf" / "Moss Harbour (1953) {imdb-tt0000101}"
+                ).is_dir()
+
+    def test_a_folder_already_tagged_is_left_as_it_was(self, monkeypatch,
+                                                      tmp_path):
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("Moss Harbour {imdb-tt0000101}",
+                         ["Moss Harbour.mkv"]))
+        calls = _catalogue(monkeypatch, {
+            1: ("Moss Harbour", "1953-03-01", 80, "tt0000101", ())})
+        tmdblookup.tag_plex_ids(".", [].append, SkipLog())
+        assert calls == []
+        assert (tmp_path / "Moss Harbour {imdb-tt0000101}").is_dir()
+
+
+class TestTheTranslatedTitles:
+    """TMDb's search reads a film's translations, and so must its document:
+    a film found under its German title may hold that title nowhere else."""
+
+    def test_the_document_asks_for_them(self, monkeypatch):
+        calls = _catalogue(monkeypatch, {
+            1: ("Moss Harbour", "1953-03-01", 80, "tt0000101", ())})
+        tmdblookup.identify("Moss Harbour", "1953")
+        assert "translations" in calls[1][1]["append_to_response"].split(",")
+
+    def test_a_title_only_a_translation_carries_is_the_films(
+            self, monkeypatch):
+        _catalogue(monkeypatch, {
+            1: ("The Pebble Prince", "1983-03-01", 85, "tt0000101",
+                ("Der Kieselprinz",))})
+        settled = tmdblookup.identify("Der Kieselprinz", "1983")
+        assert (settled.imdb, settled.title) == ("tt0000101", "Der Kieselprinz")
+
+    def test_an_empty_translation_says_nothing(self):
+        detail = {"translations": {"translations": [
+            {"data": {"title": ""}}, {"data": {}}, {}, "junk",
+            {"data": {"title": "Der Kieselprinz"}}]}}
+        assert tmdblookup._translated_titles(detail) == ["Der Kieselprinz"]
+
+
+class TestTheUmlautsWrittenBack:
+    """A search that does not fold "oe" into "ö" is asked under the "ö"."""
+
+    def test_the_spelled_out_title_is_asked_again_with_its_umlauts(
+            self, monkeypatch):
+        _catalogue(monkeypatch, {
+            1: ("Moosröschen", "1971-03-01", 70, "tt0000101", ())},
+            found_under={"Moosröschen"})
+        assert tmdblookup.identify("Moosroeschen", "1971").imdb == "tt0000101"
+
+
+class TestTheYearTheCatalogueGives:
+    """Where the folder's year and the catalogue's disagree by more than a
+    festival's worth, and something else vouches for the film."""
+
+    def test_a_year_written_into_the_title_is_the_title(self, monkeypatch):
+        _catalogue(monkeypatch, {
+            1: ("Kestrel Vane 2017", "2017-03-01", 60, "tt0000101", ())})
+        settled = tmdblookup.identify("Kestrel Vane", "2017")
+        assert (settled.imdb, settled.title) == ("tt0000101",
+                                                 "Kestrel Vane 2017")
+
+    def test_a_concert_named_for_its_night_is_dated_by_it(self, monkeypatch):
+        """Released decades after it was recorded, and named for the night -
+        which is the year the folder carries."""
+        _catalogue(monkeypatch, {
+            1: ("Moss Harbour: Live at the Pier 1970", "2009-03-01", 60,
+                "tt0000101", ()),
+            2: ("Moss Harbour: Live at the Pier", "1971-03-01", 60,
+                "tt0000102", ())})
+        assert tmdblookup.identify("Moss Harbour Live at the Pier",
+                                   "1970").imdb == "tt0000101"
+
+    def test_a_length_vouches_for_a_year_further_out(self, monkeypatch,
+                                                     tmp_path):
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("Moss Harbour (2021)", ["Moss Harbour (2021).mkv"]))
+        _catalogue(monkeypatch, {
+            1: ("Moss Harbour", "2018-03-01", 64, "tt0000101", ())})
+        monkeypatch.setattr(tmdblookup.durationcheck, "total_duration",
+                            lambda _paths: 64 * 60.0)
+        logs = []
+        tmdblookup.tag_plex_ids(".", logs.append, SkipLog())
+        folder = tmp_path / "Moss Harbour (2018) {imdb-tt0000101}"
+        assert (folder / "Moss Harbour (2018) {imdb-tt0000101}.mkv").is_file()
+        assert logs[0] == ('  "Moss Harbour (2021)" is dated 2018 by TMDb, and '
+                           'its length agrees - renaming it "Moss Harbour '
+                           '(2018)"')
+
+    @pytest.mark.parametrize("minutes", [0, 90])
+    def test_without_a_length_that_fits_the_far_year_is_no_answer(
+            self, monkeypatch, minutes):
+        _catalogue(monkeypatch, {
+            1: ("Moss Harbour", "2018-03-01", 64, "tt0000101", ())})
+        assert tmdblookup.identify("Moss Harbour", "2021",
+                                   lambda: minutes * 60.0).imdb == ""
+
+    def test_further_out_than_that_is_no_answer_at_all(self, monkeypatch):
+        _catalogue(monkeypatch, {
+            1: ("Moss Harbour", "2010-03-01", 64, "tt0000101", ())})
+        assert tmdblookup.identify("Moss Harbour", "2021",
+                                   lambda: 64 * 60.0).imdb == ""
+
+
+class TestOnePartOfTheName:
+    """A catalogue name that is the folder's title with a subtitle after it or
+    a heading in front of it."""
+
+    @pytest.mark.parametrize("catalogued", [
+        "Minimal Rooms: A Film About Empty Shelves",
+        "The Harbour Opera: Minimal Rooms",
+        "Minimal Rooms - Das Märchen von der Tür"])
+    def test_a_whole_segment_is_the_title(self, monkeypatch, catalogued):
+        _catalogue(monkeypatch, {
+            1: (catalogued, "2015-03-01", 60, "tt0000101", ())})
+        settled = tmdblookup.identify("Minimal Rooms", "2015")
+        # the folder keeps the name it was found under
+        assert (settled.imdb, settled.title) == ("tt0000101", "")
+
+    def test_words_somewhere_inside_are_not_a_segment(self, monkeypatch):
+        _catalogue(monkeypatch, {
+            1: ("Beyond Minimal Rooms Forever", "2015-03-01", 60, "tt0000101",
+                ())})
+        assert tmdblookup.identify("Minimal Rooms", "2015").imdb == ""
+
+    def test_a_film_carrying_the_title_whole_comes_first(self, monkeypatch):
+        _catalogue(monkeypatch, {
+            1: ("Minimal Rooms: The Sequel", "2015-03-01", 60, "tt0000101", ()),
+            2: ("Minimal Rooms", "2015-03-01", 60, "tt0000102", ())})
+        assert tmdblookup.identify("Minimal Rooms", "2015").imdb == "tt0000102"
+
+    def test_two_films_with_it_as_half_their_name_are_two(self, monkeypatch):
+        _catalogue(monkeypatch, {
+            1: ("Minimal Rooms: The First", "2015-03-01", 60, "tt0000101", ()),
+            2: ("Minimal Rooms: The Second", "2015-03-01", 60, "tt0000102",
+                ())})
+        assert tmdblookup.identify("Minimal Rooms", "2015").imdb == ""
+
+
+class TestAFilmImdbNeverCatalogued:
+    """TMDb knows it and IMDb does not: a television special, a concert disc.
+    It is named by TMDb's own number."""
+
+    def test_it_is_tagged_with_tmdbs_id(self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("Moss Harbour (2009)", ["Moss Harbour (2009).mkv"]))
+        _catalogue(monkeypatch, {
+            7: ("Moss Harbour", "2009-03-01", 60, None, ())})
+        tmdblookup.tag_plex_ids(".", [].append, SkipLog())
+        folder = tmp_path / "Moss Harbour (2009) {tmdb-7}"
+        assert (folder / "Moss Harbour (2009) {tmdb-7}.mkv").is_file()
+
+    def test_one_imdb_did_catalogue_is_still_preferred(self, monkeypatch):
+        _catalogue(monkeypatch, {
+            7: ("Moss Harbour", "2009-03-01", 60, None, ()),
+            8: ("Moss Harbour", "2009-03-01", 60, "tt0000108", ())})
+        assert tmdblookup.identify("Moss Harbour", "2009").tag \
+            == "{imdb-tt0000108}"
+
+    def test_a_match_says_which_tag_it_is(self):
+        assert tmdblookup.Match(imdb="tt1").tag == "{imdb-tt1}"
+        assert tmdblookup.Match(tmdb="7").tag == "{tmdb-7}"
+        assert tmdblookup.Match(imdb="tt1", tmdb="7").tag == "{imdb-tt1}"
+        assert tmdblookup.Match().tag == ""
+
+
+class TestOnePartOfTheNameAnchored:
+    """The other two shapes a name holding the folder's title can have: running
+    on from it or leading up to it, and sharing its subtitle."""
+
+    def test_a_name_running_on_from_the_whole_title_carries_it(
+            self, monkeypatch):
+        _catalogue(monkeypatch, {
+            1: ("Harbour Tales: Giant Tin Soldier of the Clock Castle",
+                "2006-03-01", 90, "tt0000101", ())})
+        assert tmdblookup.identify("Harbour Tales Giant Tin Soldier",
+                                   "2006").imdb == "tt0000101"
+
+    def test_a_name_leading_up_to_the_whole_title_carries_it(
+            self, monkeypatch):
+        _catalogue(monkeypatch, {
+            1: ("Vane and the Giant Kettle", "2011-03-01", 60, "tt0000101", ())})
+        assert tmdblookup.identify("Giant Kettle", "2011").imdb == "tt0000101"
+
+    def test_an_article_is_not_a_word_to_anchor_on(self, monkeypatch):
+        """ "The Alps" is one word that says anything, and a horror film ending
+        in it is not the documentary."""
+        _catalogue(monkeypatch, {
+            1: ("Moss Curse of the Alps", "2011-03-01", 90, "tt0000101", ())})
+        assert tmdblookup.identify("The Alps", "2011").imdb == ""
+
+    def test_the_folders_subtitle_under_another_heading_of_the_franchise(
+            self, monkeypatch):
+        _catalogue(monkeypatch, {
+            1: ("Turn Harbour II: Moonlight Wake", "2002-03-01", 90,
+                "tt0000101", ())})
+        assert tmdblookup.identify("MSH - Turn Harbour - Movie 02 - "
+                                   "Moonlight Wake", "2002").imdb == "tt0000101"
+
+    def test_the_same_subtitle_under_another_band_is_another_night(
+            self, monkeypatch):
+        _catalogue(monkeypatch, {
+            1: ("Kestrel Vane - Live at the Pier", "1970-03-01", 90, None, ())})
+        assert tmdblookup.identify("The Moss - Live at the Pier",
+                                   "1970").tag == ""
+
+
+    def test_not_where_a_narrower_query_found_films_carrying_it_whole(
+            self, monkeypatch):
+        """Two films carrying the title is an answer of "not certain", and a
+        wider query that reaches past both of them is not a title nothing
+        carries."""
+        monkeypatch.setenv("tmdbApiKey", "apikey")
+
+        def fake_curl(url, params):
+            if url == _BASE + "/search/movie":
+                if dict(params)["query"] == "Moss Harbour Two":
+                    return json.dumps({"results": [
+                        _row(1, "Moss Harbour Two", date="2019-01-01"),
+                        _row(2, "Moss Harbour Two", date="2019-01-01")]})
+                return json.dumps({"results": [
+                    _row(3, "From Zero to Moss Harbour Two",
+                         date="2019-01-01")]})
+            rid = int(url.rsplit("/", 1)[1])
+            return json.dumps({"external_ids": {"imdb_id": "tt000010%d" % rid}})
+        monkeypatch.setattr(tmdblookup, "_curl", fake_curl)
+        monkeypatch.setattr(tmdblookup.titlematch, "search_titles",
+                            lambda title: [title, "Moss Harbour 2"])
+        assert tmdblookup.identify("Moss Harbour Two", "2019").imdb == ""
+
+
+class TestTitlesInAnotherScript:
+    """For a folder named in Latin letters, a title in another script is no
+    evidence: what it folds to is the digits and the Latin-shaped letters."""
+
+    def test_a_title_that_folds_to_its_number_does_not_name_the_film(
+            self, monkeypatch):
+        _catalogue(monkeypatch, {
+            1: ("\u0e14\u0e23\u0e32\u0e01\u0e49\u0e2d\u0e19 09: "
+                "\u0e1d\u0e48\u0e32", "1993-03-01", 50, "tt0000101", ())})
+        assert tmdblookup.identify("Movie 09 - Moss Unbound", "1993").imdb \
+            == ""
+
+    def test_nor_is_it_the_spelling_the_folder_is_renamed_onto(
+            self, monkeypatch):
+        _catalogue(monkeypatch, {
+            1: ("Moss Unbound", "1993-03-01", 50, "tt0000101",
+                ("\u0e14\u0e23\u0e32 09",))})
+        settled = tmdblookup.identify("Moss Unbound", "1993")
+        assert (settled.imdb, settled.title) == ("tt0000101", "Moss Unbound")
+        assert all(titlematch.in_latin_script(one) for one in settled.aliases)
+
+    def test_a_folder_in_that_script_still_meets_it(self, monkeypatch):
+        cyrillic = "\u041a\u043e\u0440\u0430\u0431\u043b\u044c"
+        _catalogue(monkeypatch, {
+            1: (cyrillic, "1993-03-01", 50, "tt0000101", ())})
+        assert tmdblookup.identify(cyrillic, "1993").imdb == "tt0000101"
+
+
+def _imdb_row(tconst, title, year, minutes, kind="movie", akas=()):
+    return {"tconst": tconst, "kind": kind, "year": year, "minutes": minutes,
+            "primary_title": title, "original_title": title,
+            "titles": [title, *akas]}
+
+
+class TestTheLocalImdbLists:
+    """The last question, asked only where TMDb could not answer under any
+    spelling, and settled by the same rule."""
+
+    def _lists(self, monkeypatch, rows):
+        asked = []
+
+        def titles_under(database, keys):
+            asked.append((database, set(keys)))
+            return rows
+        monkeypatch.setattr(tmdblookup.imdbdata, "titles_under", titles_under)
+        return asked
+
+    def test_what_tmdb_cannot_find_the_lists_can(self, monkeypatch):
+        _catalogue(monkeypatch, {}, found_under=set())
+        asked = self._lists(monkeypatch, [
+            _imdb_row("tt0000101", "Moss Harbour", 2016, 177)])
+        settled = tmdblookup.identify("Moss Harbour", "2016", imdb="db")
+        assert (settled.imdb, settled.title) == ("tt0000101", "Moss Harbour")
+        assert asked[0][0] == "db" and "mossharbour" in asked[0][1]
+
+    def test_the_lists_are_not_asked_when_tmdb_answers(self, monkeypatch):
+        _catalogue(monkeypatch, {
+            1: ("Moss Harbour", "2016-03-01", 90, "tt0000101", ())})
+        asked = self._lists(monkeypatch, [])
+        assert tmdblookup.identify("Moss Harbour", "2016",
+                                   imdb="db").imdb == "tt0000101"
+        assert asked == []
+
+    def test_nor_without_a_database(self, monkeypatch):
+        _catalogue(monkeypatch, {}, found_under=set())
+        asked = self._lists(monkeypatch, [
+            _imdb_row("tt0000101", "Moss Harbour", 2016, 177)])
+        assert tmdblookup.identify("Moss Harbour", "2016").imdb == ""
+        assert asked == []
+
+    def test_their_runtimes_settle_a_folder_with_no_year(self, monkeypatch):
+        _catalogue(monkeypatch, {}, found_under=set())
+        self._lists(monkeypatch, [
+            _imdb_row("tt0000101", "Moss Harbour", 1954, 90),
+            _imdb_row("tt0000102", "Moss Harbour", 2008, 58)])
+        settled = tmdblookup.identify("Moss Harbour", "", lambda: 57 * 60.0,
+                                      imdb="db")
+        assert (settled.imdb, settled.year) == ("tt0000102", "2008")
+
+    def test_a_short_stating_no_runtime_is_not_a_feature(self, monkeypatch):
+        _catalogue(monkeypatch, {}, found_under=set())
+        self._lists(monkeypatch, [
+            _imdb_row("tt0000101", "Moss Harbour", 1954, 90),
+            _imdb_row("tt0000102", "Moss Harbour", 1925, None, kind="short")])
+        assert tmdblookup.identify("Moss Harbour", "", lambda: 88 * 60.0,
+                                   imdb="db").imdb == "tt0000101"
+
+    def test_but_it_still_stands_beside_a_short_on_the_disk(self,
+                                                            monkeypatch):
+        _catalogue(monkeypatch, {}, found_under=set())
+        self._lists(monkeypatch, [
+            _imdb_row("tt0000101", "Moss Harbour", 1954, 20),
+            _imdb_row("tt0000102", "Moss Harbour", 1925, None, kind="short")])
+        assert tmdblookup.identify("Moss Harbour", "", lambda: 20 * 60.0,
+                                   imdb="db").imdb == ""
+
+
+class TestNotAfterTheFile:
+    """A film cannot have been written to disk before it came out."""
+
+    def test_a_film_newer_than_the_file_is_set_aside(self, monkeypatch):
+        _catalogue(monkeypatch, {
+            1: ("Moss Harbour", "1952-03-01", 94, "tt0000101", ()),
+            2: ("Moss Harbour", "2024-03-01", 84, "tt0000102", ())})
+        notes: list = []
+        assert tmdblookup.identify("Moss Harbour", "", lambda: 85 * 60.0,
+                                   notes, written=lambda: "2020").imdb == ""
+        assert any("came out after 2020" in note for note in notes)
+
+    def test_without_a_date_the_length_decides_as_before(self, monkeypatch):
+        _catalogue(monkeypatch, {
+            1: ("Moss Harbour", "1952-03-01", 94, "tt0000101", ()),
+            2: ("Moss Harbour", "2024-03-01", 84, "tt0000102", ())})
+        assert tmdblookup.identify("Moss Harbour", "", lambda: 85 * 60.0,
+                                   written=lambda: "").imdb == "tt0000102"
+
+    @pytest.mark.parametrize("stamp,year", [
+        ("2020-08-13T11:52:14.000000Z", "2020"),
+        # a container dated before Matroska existed was not dated at all
+        ("1970-01-01T00:00:00.000000Z", ""),
+        ("", ""),
+    ])
+    def test_the_containers_own_date_is_the_year(self, monkeypatch, stamp,
+                                                 year):
+        class Done:
+            stdout = stamp.encode()
+        monkeypatch.setattr(tmdblookup.subprocess, "run",
+                            lambda *_a, **_k: Done())
+        assert tmdblookup._written_year(["film.mkv"]) == year
+
+    def test_the_earliest_of_several_files_is_the_one(self, monkeypatch):
+        stamps = iter([b"2021-01-01T00:00:00Z", b"2019-05-01T00:00:00Z"])
+
+        class Done:
+            def __init__(self):
+                self.stdout = next(stamps)
+        monkeypatch.setattr(tmdblookup.subprocess, "run",
+                            lambda *_a, **_k: Done())
+        assert tmdblookup._written_year(["a.mkv", "b.mkv"]) == "2019"
+
+
+class TestTheSpellingToRenameOnto:
+    """Of the catalogue's titles that met the folder, the one written most
+    like it - or the folder's own, where none is written like it at all."""
+
+    def test_the_one_written_like_the_folder_wins(self):
+        assert tmdblookup._nearest_spelling(
+            ["Harbour Tales 6: Wishmoth, Mestre dos Desejos",
+             "Harbour Tales 6: Wishmoth Wish Keeper"],
+            frozenset({"harbour tales 6 wishmoth wish keeper"})) \
+            == "Harbour Tales 6: Wishmoth Wish Keeper"
+
+    @pytest.mark.parametrize("spelling,folder", [
+        ("Die Mühlwiese", "die muehlwiese"),
+        ("New York", "newyork"),
+    ])
+    def test_another_keyboards_spelling_is_still_the_folders(self, spelling,
+                                                             folder):
+        assert tmdblookup._nearest_spelling([spelling], frozenset({folder})) \
+            == spelling
+
+    def test_none_written_like_the_folder_keeps_the_folders_name(self):
+        assert tmdblookup._nearest_spelling(
+            ["Harbour Tales 6: Wishmoth, o efhopoios"],
+            frozenset({"harbour tales 6 wishmoth le gardien des voeux"})) == ""
+
+
+class TestASlipAwayInTheImdbLists:
+    """The typo reading, handed the near misses TMDb's search never returned:
+    one slip exactly, and only where nothing anywhere carries the title."""
+
+    def _lists(self, monkeypatch, under=(), near=()):
+        asked = []
+
+        def titles_under(_database, keys):
+            asked.append("under")
+            return list(under)
+
+        def titles_near(_database, keys):
+            asked.append(("near", frozenset(keys)))
+            return list(near)
+        monkeypatch.setattr(tmdblookup.imdbdata, "titles_under", titles_under)
+        monkeypatch.setattr(tmdblookup.imdbdata, "titles_near", titles_near)
+        return asked
+
+    def test_a_slip_nothing_found_is_reached_and_corrected(self, monkeypatch):
+        _catalogue(monkeypatch, {}, found_under=set())
+        asked = self._lists(monkeypatch, near=[
+            _imdb_row("tt0000101", "Kestrelmoor", 2006, 111)])
+        settled = tmdblookup.identify("Kestelmoor", "2006", imdb="db")
+        assert (settled.imdb, settled.title) == ("tt0000101", "Kestrelmoor")
+        assert ("near", frozenset({"kestelmoor", "kestelmoor2006"})) \
+            in asked
+
+    def test_not_where_tmdb_found_films_carrying_the_title(self, monkeypatch):
+        _catalogue(monkeypatch, {
+            1: ("Moss Harbour", "2019-03-01", 90, "tt0000101", ()),
+            2: ("Moss Harbour", "2019-03-01", 90, "tt0000102", ())})
+        asked = self._lists(monkeypatch, near=[
+            _imdb_row("tt0000103", "Moss Harbours", 2019, 90)])
+        assert tmdblookup.identify("Moss Harbour", "2019", imdb="db").imdb == ""
+        assert not any(isinstance(one, tuple) for one in asked)
+
+    def test_nor_where_the_lists_carry_it_under_its_own_keys(self, monkeypatch):
+        _catalogue(monkeypatch, {}, found_under=set())
+        asked = self._lists(
+            monkeypatch,
+            under=[_imdb_row("tt0000101", "Moss Harbour", 2019, 90),
+                   _imdb_row("tt0000102", "Moss Harbour", 2019, 90)],
+            near=[_imdb_row("tt0000103", "Moss Harbours", 2019, 90)])
+        assert tmdblookup.identify("Moss Harbour", "2019", imdb="db").imdb == ""
+        assert not any(isinstance(one, tuple) for one in asked)
+
+    def test_a_digit_is_never_a_slip(self, monkeypatch):
+        _catalogue(monkeypatch, {}, found_under=set())
+        self._lists(monkeypatch, near=[
+            _imdb_row("tt0000101", "Harbour Tales 3", 2019, 90)])
+        assert tmdblookup.identify("Harbour Tales 2", "2019",
+                                   imdb="db").imdb == ""
+
+    def test_two_near_misses_are_two(self, monkeypatch):
+        _catalogue(monkeypatch, {}, found_under=set())
+        self._lists(monkeypatch, near=[
+            _imdb_row("tt0000101", "Joseph Harbour", 2018, 90),
+            _imdb_row("tt0000102", "Joseph Harbour", 2018, 95)])
+        assert tmdblookup.identify("Joesph Harbour", "2018",
+                                   imdb="db").imdb == ""
+
+    def test_and_the_year_still_has_to_agree(self, monkeypatch):
+        _catalogue(monkeypatch, {}, found_under=set())
+        self._lists(monkeypatch, near=[
+            _imdb_row("tt0000101", "Kestrelmoor", 1980, 111)])
+        assert tmdblookup.identify("Kestelmoor", "2006", imdb="db").imdb == ""
+
+    def test_a_slip_is_not_also_read_as_part_of_a_name(self, monkeypatch):
+        """One guess per candidate: a title reached a slip away is not then
+        weighed as holding the folder's title as half its name as well."""
+        _catalogue(monkeypatch, {}, found_under=set())
+        self._lists(monkeypatch, near=[
+            _imdb_row("tt0000101", "Moss Harbour: The Tale", 2019, 90)])
+        assert tmdblookup.identify("Moss Harbour", "2019", imdb="db").imdb == ""
+

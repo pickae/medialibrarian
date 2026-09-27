@@ -16,7 +16,7 @@ import time
 from collections.abc import Callable
 from typing import NamedTuple
 
-from medialib.lib import durationcheck, plexnames, safety, titlematch
+from medialib.lib import durationcheck, imdbdata, plexnames, safety, titlematch
 from medialib.lib.titlematch import normalize_title, title_keys
 
 # The TMDb endpoint everything is relative to.
@@ -32,7 +32,7 @@ _BASE = "https://api.themoviedb.org/3"
 # folder of some other shape.
 _YEAR_RE = re.compile(r"^(.+) \(([12][0-9]{3})\)(.*)$")
 
-# The four ways a folder writes a year that no reader here can see - or that it
+# The five ways a folder writes a year that no reader here can see - or that it
 # reads as half of the title. None of them is a matching question: each is a
 # name that is wrong on the disk, and the folder is renamed onto the right one
 # before anything is looked up.
@@ -40,15 +40,17 @@ _YEAR_RE = re.compile(r"^(.+) \(([12][0-9]{3})\)(.*)$")
 # The space before the bracket written as some other separator -
 # "The Movie-(1999)" - which stops the name being a film folder at all; or
 # written as several spaces, which leaves the title carrying a trailing one into
-# everything it is asked under. Then one of the brackets lost, to a rename that
-# cut the name short or to a filesystem that would not take it. Both halves are
-# repaired, and only ever where a bracket is still THERE: a trailing number with
-# no bracket at all is as likely to be part of the title as a year, and
-# "The Movie 2049" is not a film from the year 2049.
+# everything it is asked under. Then a space written INSIDE the brackets,
+# "(1999 )". Then one of the brackets lost, to a rename that cut the name short
+# or to a filesystem that would not take it. Each is repaired, and only ever
+# where a bracket is still THERE: a trailing number with no bracket at all is
+# as likely to be part of the title as a year, and "The Movie 2049" is not a
+# film from the year 2049.
 _SEPARATOR_RUN = "[" + re.escape(plexnames.SEPARATORS.replace(" ", "")) + "]+"
 _BROKEN_YEAR = (
     re.compile(r"^(.+?)" + _SEPARATOR_RUN + r"\(([12][0-9]{3})\)$"),
     re.compile(r"^(.+?)\s{2,}\(([12][0-9]{3})\)$"),
+    re.compile(r"^(.+?)\s*\((?:\s+([12][0-9]{3})\s*|([12][0-9]{3})\s+)\)$"),
     re.compile(r"^(.+?)\s*\(\s*([12][0-9]{3})\s*$"),
     re.compile(r"^(.+?)\s+([12][0-9]{3})\s*\)\s*$"),
 )
@@ -121,7 +123,8 @@ def repair_year(base: str) -> str:
     for pattern in _BROKEN_YEAR:
         match = pattern.match(base)
         if match:
-            return "%s (%s)" % (match.group(1).rstrip(), match.group(2))
+            return "%s (%s)" % (match.group(1).rstrip(),
+                                match.group(2) or match.group(3))
     return base
 
 
@@ -257,16 +260,25 @@ RUNTIME_TOLERANCE_FRACTION = 0.07
 # written where a release year was meant, and no further.
 NEAR_YEARS = 1
 
+# How far it may be when nothing carrying the title came out within those: a
+# stage show dated by its recording and released years later, a film dated by
+# a re-release, a digit typed wrong. Only ever answered by a length - a
+# candidate this far out is the film where the file's length fits it and rules
+# out every other that carries the title, and the folder then takes the year
+# the catalogue has it under.
+FAR_YEARS = 3
+
 # How many of the search results are worth asking about in detail. They arrive
 # most popular first, and a film that is not in the first handful of answers to
 # its own title is not one a certainty rule is going to settle - while every
 # one of them costs a request.
 MAX_CANDIDATES = 8
 
-# The three documents a candidate is judged on, asked for with the candidate
+# The four documents a candidate is judged on, asked for with the candidate
 # itself so that a candidate costs one request: its alternative titles, its
-# IMDb id, and every country's release date.
-_APPENDED = "alternative_titles,external_ids,release_dates"
+# title in every language it has been translated into, its IMDb id, and every
+# country's release date.
+_APPENDED = "alternative_titles,translations,external_ids,release_dates"
 
 
 class _Candidate(NamedTuple):
@@ -278,6 +290,8 @@ class _Candidate(NamedTuple):
     own: frozenset          # its own two titles alone, folded - see _the_best_evidence
     runtime: float          # minutes, 0.0 when TMDb does not say
     imdb: str               # "" when it has no usable IMDb id
+    released: str = ""      # the year of its primary release date, or ""
+    tmdb: str = ""          # TMDb's own number for it
 
 
 class Match(NamedTuple):
@@ -297,6 +311,21 @@ class Match(NamedTuple):
     # other way to know they are one film: the names have nothing in common,
     # and the catalogue is the only thing that says they are the same.
     aliases: tuple = ()
+    # The year the catalogue dates the matched film to, where the folder's own
+    # is not the one to keep: it carried none, or one the catalogue does not
+    # have the film anywhere near.
+    year: str = ""
+    # TMDb's own number for the film, which is what it is tagged with when
+    # IMDb has never catalogued it - a television special, a concert disc.
+    tmdb: str = ""
+
+    @property
+    def tag(self) -> str:
+        """The id tag this match names a folder with, or "" for no match:
+        IMDb's where there is one, and TMDb's own where there is not."""
+        if self.imdb:
+            return "{imdb-" + self.imdb + "}"
+        return "{tmdb-" + self.tmdb + "}" if self.tmdb else ""
 
 
 def tmdb_imdb_id(title: str, year: str,
@@ -320,7 +349,9 @@ def imdb_of_tmdb(tmdb_id: str) -> str:
 
 def identify(title: str, year: str,
              runtime: Callable[[], float] | None = None,
-             notes: list | None = None, also: tuple = ()) -> Match:
+             notes: list | None = None, also: tuple = (),
+             imdb: str = "",
+             written: Callable[[], str] | None = None) -> Match:
     """A film's id and catalogue spelling, ONLY when the match is unambiguous.
 
     Returns an empty :class:`Match` (never a half-certain id) when it is not
@@ -371,26 +402,177 @@ def identify(title: str, year: str,
     They count both ways: each is asked about in its own right, and a candidate
     that carries one of them carries this film's title. The folder's own comes
     first either way, so a film findable under its own name never pays for them.
+
+    ``imdb`` is the local IMDb database, asked last where TMDb could not answer
+    under any spelling - see :func:`_in_the_imdb_lists`. "" asks TMDb alone.
+
+    ``written`` is asked - like ``runtime``, only once candidates have to be
+    weighed - for the year the film on the disk was written, or "": a film
+    that came out after that is not the film. See :func:`_not_after_the_file`.
     """
     api_key = os.environ.get("tmdbApiKey", "")
     if not api_key:
         return Match()
     reading = _each_title((title,) + tuple(other for other in also if other))
-    want = frozenset().union(*(title_keys(one) for one in reading))
+    # A catalogue that writes the year INTO the title - "Kestrel Vane 2017" for
+    # a special a folder calls "Kestrel Vane (2017)" - holds this title too, and
+    # says the year while it is at it: a concert released decades after it
+    # was recorded is named for the night, and so is the folder.
+    titled = frozenset().union(*(title_keys(one) for one in reading))
+    named_for_the_year = frozenset().union(
+        *(title_keys("%s %s" % (one, year)) for one in reading if year)) \
+        - titled
+    want = titled | named_for_the_year
     if not want:
         return Match()
 
-    plainly = frozenset(normalize_title(one) for one in reading) - {""}
+    latin = all(titlematch.in_latin_script(one) for one in reading)
+    subtitles = tuple((title_keys(tail), _heading_words(one, tail))
+                      for one, tail in ((one, titlematch.last_segment(one))
+                                        for one in reading)
+                      if _several_words(normalize_title(tail)))
+    plainly = (frozenset(normalize_title(one) for one in reading)
+               | frozenset(normalize_title("%s %s" % (one, year))
+                           for one in reading if year)) - {""}
+    # Whether any query so far was answered by a film carrying the title in
+    # some reading. The readings that say the folder is wrong or short are for
+    # a title nothing carries, and a wider query reaching past two films that
+    # DO carry it - which is why the first query did not settle - is not that.
+    carried: list = []
+    runtime = _measured_once(runtime)
+    written = _measured_once(written)
     for query in _queries(reading):
-        found = _under(api_key, query, want, year, runtime, notes, plainly)
-        if found.imdb:
+        found = _under(api_key, query, want, year, runtime, notes, plainly,
+                       named_for_the_year, latin, subtitles, carried, written)
+        if found.tag:
             return found
+    if imdb:
+        return _in_the_imdb_lists(imdb, want, year, runtime, notes, plainly,
+                                  named_for_the_year, latin, written,
+                                  bool(carried))
     return Match()
+
+
+def _measured_once(measure: Callable | None):
+    """``measure``, asked of the disk at most once however often it is
+    wanted."""
+    if measure is None:
+        return None
+    return functools.lru_cache(maxsize=1)(measure)
+
+
+# How long a short can be - IMDb's own line is 45 minutes - with room for the
+# credits and logos a release adds.
+SHORT_MINUTES = 50
+
+
+def _in_the_imdb_lists(database: str, want: frozenset, year: str,
+                       runtime: Callable[[], float] | None,
+                       notes: list | None = None,
+                       plainly: frozenset = frozenset(),
+                       named_for_the_year: frozenset = frozenset(),
+                       latin: bool = False,
+                       written: Callable[[], str] | None = None,
+                       carried: bool = False) -> Match:
+    """The certainty rule over what the local IMDb lists hold under this
+    title, where TMDb has already been asked under every spelling and could
+    not answer - see :mod:`medialib.lib.imdbdata`.
+
+    The last question, because it is the one that reaches past a catalogue's
+    search: TMDb has to FIND a film before the rule can weigh it, and a
+    romanisation its search does not tokenise the same way - or an umlaut it
+    does not fold - finds nothing at all. The lists are looked up by the same
+    folded keys the rule itself compares, and they carry the runtimes TMDb
+    so often does not, which is what a folder with no year is settled on.
+
+    Every title they hold under the keys is a candidate, so nothing is ever
+    over the budget. A short that states no runtime is not the answer for a
+    feature on the disk: that it is a short says how long it is.
+
+    Where nothing anywhere carries the title - not TMDb's answers under any
+    spelling (``carried``), and not the lists under its keys - they are asked
+    once more for the titles a single slip away, and those go to the one
+    reading a slip has, :func:`_misspelt`, under the same rule. The only
+    widening is in what is REACHED: TMDb's search answers nothing at all for
+    a folder spelled a letter wrong, and the typo reading can only recognise a
+    near miss somebody has handed it.
+    """
+    rows = imdbdata.titles_under(database, {key.replace(" ", "")
+                                            for key in want})
+    _note(notes, "asked the local IMDb lists: %d title(s)" % len(rows))
+    found: list = []
+    if rows:
+        # The weaker readings are for a title nothing carries, and these are
+        # the titles its own keys reach.
+        settled = _settle(_imdb_candidates(rows, latin, runtime), [], want,
+                          year, runtime, notes, plainly, named_for_the_year, (),
+                          [True], written, found)
+        if settled.tag or found:
+            return settled
+    if carried:
+        return Match()
+    rows = imdbdata.titles_near(database, {plain.replace(" ", "")
+                                           for plain in plainly})
+    _note(notes, "asked the local IMDb lists a slip away: %d title(s)"
+          % len(rows))
+    if not rows:
+        return Match()
+    return _settle(_imdb_candidates(rows, latin, runtime), [], want, year,
+                   runtime, notes, plainly, named_for_the_year, (), [], written,
+                   part_of_name=False)
+
+
+def _imdb_candidates(rows: list, latin: bool,
+                     runtime: Callable[[], float] | None) -> list:
+    """The lists' titles as candidates, less the shorts that state no runtime
+    where the disk holds a feature."""
+    candidates = []
+    for row in rows:
+        candidate = _imdb_candidate(row, latin)
+        if row.get("kind") == "short" and not candidate.runtime \
+                and runtime is not None and runtime() > SHORT_MINUTES * 60:
+            continue
+        candidates.append(candidate)
+    return candidates
+
+
+def _imdb_candidate(row: dict, latin: bool = False) -> _Candidate:
+    """One title of the local IMDb lists, read into what the rule asks.
+
+    Its year is the one IMDb has - the year it came out, where TMDb has every
+    country's - so a festival year and a release year a year apart are the
+    runtime's to settle, as they are for any candidate outside the year.
+    """
+    lead = [str(row.get(field) or "") for field in ("original_title",
+                                                    "primary_title")]
+    written: list = []
+    for text in lead + [str(t) for t in row.get("titles") or []]:
+        if text and text not in written and \
+                (not latin or titlematch.in_latin_script(text)):
+            written.append(text)
+    folded: set = set()
+    for text in written:
+        folded |= title_keys(text)
+    year = str(row.get("year") or "")
+    tconst = str(row.get("tconst") or "")
+    return _Candidate(
+        years=frozenset({year}) if year.isdigit() else frozenset(),
+        titles=frozenset(key for key in folded if key),
+        spellings=tuple(written),
+        own=frozenset(normalize_title(text) for text in lead
+                      if text and (not latin
+                                   or titlematch.in_latin_script(text)))
+        - {""},
+        runtime=_minutes(row.get("minutes")),
+        imdb=tconst if re.match(r"^tt[0-9]+$", tconst) else "",
+        released=year if year.isdigit() else "")
 
 
 def _settle_the_year(title: str, year: str, others: list,
                      runtime: Callable[[], float] | None = None,
-                     notes: list | None = None, also: tuple = ()) -> tuple:
+                     notes: list | None = None, also: tuple = (),
+                     imdb: str = "",
+                     written: Callable[[], str] | None = None) -> tuple:
     """A film looked up where its folder and its files disagree about the year
     by one, as (the match, the year it is really under, the further spellings
     of the folder's name that settling it justified).
@@ -416,17 +598,17 @@ def _settle_the_year(title: str, year: str, others: list,
     The third is why this returns a year at all: everything downstream writes
     the folder from it.
     """
-    found = identify(title, year, runtime, notes, also)
+    found = identify(title, year, runtime, notes, also, imdb, written)
     for other in [one for one in others if one != year and _near(one, year)]:
         _note(notes, 'its files are dated %s where the folder says %s: '
               "asking under that year too" % (other, year))
-        second = identify(title, other, runtime, notes, also)
-        if found.imdb and second.imdb and found.imdb != second.imdb:
+        second = identify(title, other, runtime, notes, also, imdb, written)
+        if found.tag and second.tag and found.tag != second.tag:
             _note(notes, "    %s and %s are two different films" % (year, other))
             continue
-        if found.imdb:
+        if found.tag:
             return found, year, ("%s (%s)" % (title, other),)
-        if second.imdb:
+        if second.tag:
             return second, other, ("%s (%s)" % (title, year),)
     return found, year, ()
 
@@ -482,7 +664,12 @@ def _queries(reading: tuple) -> list:
 def _under(api_key: str, query: str, want: frozenset, year: str,
            runtime: Callable[[], float] | None,
            notes: list | None = None,
-           plainly: frozenset = frozenset()) -> Match:
+           plainly: frozenset = frozenset(),
+           named_for_the_year: frozenset = frozenset(),
+           latin: bool = False,
+           subtitles: tuple = (),
+           carried: list | None = None,
+           written: Callable[[], str] | None = None) -> Match:
     """The certainty rule over one query's results.
 
     ``query`` is what TMDb is asked; ``want`` stays the folder's own keys
@@ -492,6 +679,19 @@ def _under(api_key: str, query: str, want: frozenset, year: str,
     ``plainly`` is the folder's title folded and nothing more - no reading, no
     widening - and it is what tells a strong match from a weak one. See
     :func:`_the_best_evidence`.
+
+    ``named_for_the_year`` are the keys of the title with the folder's year
+    written after it. A candidate carrying one of those is dated in that year
+    by its own name, whatever year it was released in.
+
+    ``latin`` says the folder is named in Latin letters, and the candidates'
+    titles in other scripts are no evidence either way - see
+    :func:`_candidate`. ``subtitles`` are what stands after the last break in
+    the folder's name - its keys, and the words of what stands in front of it
+    - for :func:`_one_part_of_the_name`. ``carried`` is shared by every
+    query one folder is asked under, and says whether any of them was answered
+    by a film carrying its title: once one has, the two last readings are not
+    asked again under a wider one.
     """
     rows = _search(api_key, query, year)
     if rows is None:
@@ -508,14 +708,49 @@ def _under(api_key: str, query: str, want: frozenset, year: str,
     worth = _worth_asking(rows, year, want, plainly)
     asking, over_budget = worth[:MAX_CANDIDATES], worth[MAX_CANDIDATES:]
     _note_the_passed_over(notes, rows, asking, over_budget)
-    candidates = [_candidate(api_key, row) for row in asking]
+    candidates = [_candidate(api_key, row, latin) for row in asking]
+    return _settle(candidates, over_budget, want, year, runtime, notes,
+                   plainly, named_for_the_year, subtitles, carried, written)
+
+
+def _settle(candidates: list, over_budget: list, want: frozenset, year: str,
+            runtime: Callable[[], float] | None,
+            notes: list | None = None,
+            plainly: frozenset = frozenset(),
+            named_for_the_year: frozenset = frozenset(),
+            subtitles: tuple = (),
+            carried: list | None = None,
+            written: Callable[[], str] | None = None,
+            found: list | None = None,
+            part_of_name: bool = True) -> Match:
+    """The certainty rule over one set of candidates, wherever they came from.
+
+    ``over_budget`` are the search results that were never made candidates,
+    which a folder with no year cannot be certain without. ``found``, when a
+    list is passed, is told whether any candidate carried the title, as
+    ``carried`` is. ``part_of_name`` is off for candidates reached a slip
+    away, which have had the one guess they are allowed. The rest are
+    :func:`_under`'s.
+    """
     named = [row for row in candidates if want & row.titles]
-    if not named:
+    carried = carried if carried is not None else []
+    if named:
+        carried.append(True)
+        if found is not None:
+            found.append(True)
+    if not named and not carried:
         named = _misspelt(candidates, plainly, notes)
+    if not named and not carried and part_of_name:
+        named = _one_part_of_the_name(candidates, want, plainly, subtitles,
+                                      notes)
     _note_the_unnamed(notes, candidates, named)
+    named = _not_after_the_file(named, written, notes)
     named = _that_can_answer(named, notes)
     named = _the_best_evidence(named, plainly, notes)
-    dated = _not_a_rerelease([row for row in named if year in row.years],
+    if not year:
+        return _undated(named, over_budget, want, plainly, runtime, notes)
+    dated = _not_a_rerelease([row for row in named if year in row.years
+                              or row.titles & named_for_the_year],
                              year, notes)
     if len(dated) == 1:
         return _matched(dated[0], want, plainly, notes)
@@ -526,6 +761,9 @@ def _under(api_key: str, query: str, want: frozenset, year: str,
     contenders = dated or [row for row in named
                            if any(_near(y, year) for y in row.years)]
     if not contenders:
+        redated = _redated_by_runtime(named, year, runtime, notes)
+        if redated is not None:
+            return _matched(redated, want, plainly, notes, redate=True)
         for row in named:
             _note(notes, "    %s - carries the title, but came out %s, not %s"
                   % (_says(row), ", ".join(sorted(row.years)) or "nowhere",
@@ -540,6 +778,123 @@ def _under(api_key: str, query: str, want: frozenset, year: str,
         _note_the_lengths(notes, contenders, seconds)
         return Match()
     return _matched(settled, want, plainly, notes)
+
+
+# The year Matroska was first released. A container dated earlier than that was
+# not dated by whoever wrote it - a missing clock, a default - and says nothing
+# about when the file was made.
+FIRST_WRITTEN_YEAR = 2002
+
+
+def _not_after_the_file(named: list, written: Callable[[], str] | None,
+                        notes: list | None = None) -> list:
+    """The candidates that had come out by the time the film on the disk was
+    written.
+
+    A container records when it was written, and a film cannot have been
+    written to disk before it existed. A folder with no year was offered a
+    fairy tale from 1952 and one from 2024, and its length fitted the new one
+    better - on a file written in 2020. Only ever one way: a remux or a copy
+    makes the date LATER, so the date can rule a film out and never in.
+    """
+    year = written() if written is not None and named else ""
+    if not year:
+        return named
+    kept = [row for row in named if not row.years or min(row.years) <= year]
+    for row in named:
+        if row not in kept:
+            _note(notes, "    %s - set aside: it came out after %s, when the "
+                  "film on the disk was written" % (_says(row), year))
+    return kept
+
+
+def _written_year(paths) -> str:
+    """The earliest year any of these files' containers say they were written
+    in, or "" when none says one worth believing."""
+    years = []
+    for path in paths:
+        try:
+            done = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries",
+                 "format_tags=creation_time", "-of", "default=nk=1:nw=1",
+                 path], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        except OSError:
+            continue
+        stamp = done.stdout.decode("utf-8", "replace").strip()[:4]
+        if stamp.isdigit() and int(stamp) >= FIRST_WRITTEN_YEAR:
+            years.append(stamp)
+    return min(years) if years else ""
+
+
+def _redated_by_runtime(named: list, year: str,
+                        runtime: Callable[[], float] | None,
+                        notes: list | None = None):
+    """The one candidate carrying the title that came out up to
+    :data:`FAR_YEARS` from the folder's year and that the file's length picks
+    out, or None.
+
+    Only asked where nothing carrying the title came out near the year at all,
+    so it never stands between two candidates the year could tell apart. The
+    length has to fit it AND rule out every other candidate this far out, which
+    is the same test a length is put to everywhere here.
+    """
+    far = [row for row in named
+           if any(_near(y, year, FAR_YEARS) for y in row.years)]
+    if not far:
+        return None
+    seconds = runtime() if runtime is not None else 0.0
+    settled = _settled_by_runtime(far, seconds)
+    if settled is None or not settled.released:
+        _note(notes, "    nothing carrying the title came out near %s, and the "
+              "length has to vouch for one further out:" % year)
+        _note_the_lengths(notes, far, seconds)
+        return None
+    _note(notes, "    %s - came out %s, not %s, and the length picks it out"
+          % (_says(settled), settled.released, year))
+    return settled
+
+
+def _undated(named: list, over_budget: list, want: frozenset,
+             plainly: frozenset,
+             runtime: Callable[[], float] | None,
+             notes: list | None = None) -> Match:
+    """The certainty rule for a folder that says no year at all.
+
+    The year is what most of the rule narrows on, and with none the length of
+    the film on the disk is the whole of the evidence left: a candidate is the
+    answer only where it carries the title, the file's length fits it, and it
+    RULES OUT every other candidate carrying the title - the same test the
+    length is put to everywhere else here, over every year at once.
+
+    A search result carrying the title that the budget never reached is one
+    nobody measured, and so is not ruled out: the answer stays "not certain"
+    rather than being the best of the ones that happened to be asked about. A
+    title a dozen films share - the fairy tale filmed once a decade - is
+    exactly where that happens, and where naming one of them by its length
+    alone would be a guess.
+    """
+    if not named:
+        return Match()
+    unasked = [row for row in over_budget
+               if any(title_keys(str(t)) & want for t in _row_titles(row))]
+    if unasked:
+        _note(notes, "    no year to narrow on, and %d more result(s) carrying "
+              "the title were never asked about" % len(unasked))
+        return Match()
+    seconds = runtime() if runtime is not None else 0.0
+    settled = _settled_by_runtime(named, seconds)
+    if settled is None:
+        _note(notes, "    no year to narrow on, so the length has to pick one "
+              "out:")
+        _note_the_lengths(notes, named, seconds)
+        return Match()
+    if not settled.released:
+        _note(notes, "    %s - the length picks it out, and TMDb has no date "
+              "for it to name the folder with" % _says(settled))
+        return Match()
+    _note(notes, "    %s - no year to narrow on, and the length picks it out"
+          % _says(settled))
+    return _matched(settled, want, plainly, notes, redate=True)
 
 
 def _misspelt(candidates: list, plainly: frozenset,
@@ -579,24 +934,106 @@ def _misspelt(candidates: list, plainly: frozenset,
     return near
 
 
-def _that_can_answer(named: list, notes: list | None = None) -> list:
-    """The candidates that could BE the answer: the ones carrying an IMDb id.
+# How many words a name has to have before one catalogue title running on from
+# it, or leading up to it, says anything: "Island" begins and ends a great many,
+# and so does "The Alps" - the article is not a word of it that says anything.
+_SEVERAL_WORDS = 2
 
-    What is being asked for is an IMDb id, so a candidate that has none was
-    never a possible answer to it - settling on one returns nothing, and the
-    only thing it can do is stand beside a candidate that does have one and
-    make the pair of them look uncertain. A folder called "Re Made" was offered
-    the film it is and an idol video with no id, both lengths fitting, and was
-    told the question could not be settled.
+
+def _several_words(folded: str) -> bool:
+    """Whether a folded name has enough words besides its articles to be
+    anchored on."""
+    return len([word for word in folded.split()
+                if word not in titlematch.ARTICLES]) >= _SEVERAL_WORDS
+
+
+def _heading_words(title: str, tail: str) -> frozenset:
+    """The words of what stands in front of ``tail`` in ``title`` - the whole
+    of ``title`` where there is no ``tail`` - that could say which film it is.
+
+    Not an article, and not a word that only says what kind of thing the file
+    is: "Movie" in front of two subtitles is not the two sharing a heading.
+    """
+    head = title[:len(title) - len(tail)] if tail else title
+    return frozenset(word for word in normalize_title(head).split()
+                     if word not in titlematch.ARTICLES
+                     and word not in titlematch.FILLER_WORDS
+                     and word not in titlematch.LABEL_WORDS
+                     and word not in titlematch.TRAILING_LABELS)
+
+
+def _one_part_of_the_name(candidates: list, want: frozenset,
+                          plainly: frozenset = frozenset(),
+                          subtitles: tuple = (),
+                          notes: list | None = None) -> list:
+    """The candidates whose name holds the folder's title as one part of it,
+    and only where nothing carries it at all.
+
+    A folder carries a documentary's short name - "Minimal Rooms" - where a
+    catalogue carries the long one, "Minimal Rooms: A Film About Empty
+    Shelves"; a folder carries an opera's name where the catalogue
+    carries the house's, "The Harbour Opera: Moss Rooms"; a franchise's
+    folder carries "Harbour Tales - Movie 02 - Moonlight Wake" where the
+    catalogue has "Harbour Tales II: Moonlight Wake". Nothing a fold does
+    reaches from one to the other, because the part left out is words of the
+    title. Three shapes count, and each is anchored:
+
+    * a whole segment of the catalogue's name - what stands before its first
+      " - " or ": ", or after its last - that is the folder's title;
+    * the catalogue's name beginning or ending with the whole of the folder's
+      title, where that title is more than a word: a subtitle cut short, or a
+      franchise written in front with no break before it;
+    * the catalogue's last segment - or its whole name, where it has no break
+      - being the folder's own last segment, where the folder has one of more
+      than a word, and what the two have in front of it sharing a word: the
+      franchise and the number are written two ways, and still written. What
+      stands in front of a concert's "Live at the Pier" is the band, and a
+      different band in front of it is a different night.
+
+    Never words somewhere in the middle. Like the misspelling, it is asked
+    only where no candidate carries the title in any reading, and the rules
+    below still have to settle on exactly one: two films that each have the
+    folder's title as half their name are two, and are answered by naming
+    neither.
+    """
+    anchored = [plain for plain in plainly if _several_words(plain)]
+    near = []
+    for row in candidates:
+        for spelling in row.spellings:
+            head, _rest = titlematch.leading_segment(spelling)
+            tail = titlematch.last_segment(spelling)
+            whole = normalize_title(spelling)
+            heading = _heading_words(spelling, tail)
+            if any(part and title_keys(part) & want for part in (head, tail)) \
+                    or any(title_keys(tail or spelling) & keys
+                           and heading & words for keys, words in subtitles) \
+                    or any(whole.startswith(plain + " ")
+                           or whole.endswith(" " + plain)
+                           for plain in anchored):
+                near.append(row)
+                break
+    for row in near:
+        _note(notes, "    %s - carries this title as one part of its name, and "
+              "nothing carries it whole" % _says(row))
+    return near
+
+
+def _that_can_answer(named: list, notes: list | None = None) -> list:
+    """The candidates likeliest to BE the answer: the ones carrying an IMDb id,
+    wherever any of them does.
+
+    An entry IMDb never catalogued, standing beside one it did, is far likelier
+    a stray - an idol video, a fan upload, a second entry for a release - than
+    the film, and all it can do there is make the pair look uncertain. A folder
+    called "Re Made" was offered the film it is and an idol video with no id,
+    both lengths fitting, and was told the question could not be settled.
 
     Worse than standing beside a fit: a candidate TMDb states no runtime for is
     never ruled OUT by a length either, so one that could not have been the
     answer kept the answer at "not certain" all by itself.
 
-    Removing something that could not have been the answer is not choosing
-    between films. Where NO candidate has an id there is nothing to answer with
-    either way, and they all stand so that the reports still say what was
-    offered.
+    Where NO candidate has an IMDb id they all stand, and whichever the rules
+    settle on is named by TMDb's own number.
     """
     answerable = [row for row in named if row.imdb]
     if not answerable or len(answerable) == len(named):
@@ -788,7 +1225,7 @@ def _note_the_lengths(notes: list | None, contenders: list,
 
 def _matched(candidate: _Candidate, want: frozenset,
              plainly: frozenset = frozenset(),
-             notes: list | None = None) -> Match:
+             notes: list | None = None, redate: bool = False) -> Match:
     """A settled candidate as (id, the spelling to write it under).
 
     The spelling is the first of the candidate's own titles that the folder's
@@ -807,26 +1244,71 @@ def _matched(candidate: _Candidate, want: frozenset,
     slip was made in. Which is the whole point of naming it: the
     folder is spelt the way the catalogue spells it, and the slip goes away.
 
-    A candidate with no IMDb id is settled on all the same, and is still no
-    answer: an id is what was asked for. It is SAID here, because an empty
-    result is indistinguishable from a query that found nothing - so the lookup
-    goes on asking under the wider spellings, and the report shows only the
-    nonsense those turned up rather than the film that was already found.
+    ``redate`` is for a match the folder's own year did not make - it had
+    none, or one too far out - and hands back the year the catalogue dates the
+    film to, for the folder to be named with.
+
+    A candidate with no IMDb id is named by TMDb's own number instead - the
+    German television special and the concert disc IMDb never catalogued are
+    still films TMDb knows, and Plex reads a "{tmdb-...}" tag as readily as an
+    IMDb one. It is SAID here, so the report shows which folders carry the
+    weaker of the two tags.
     """
     if not candidate.imdb:
         _note(notes, "    %s - this is the film, and TMDb holds no IMDb id for "
-              "it, so there is nothing to answer with" % _says(candidate))
-    for spelling in candidate.spellings:
-        if title_keys(spelling) & want:
-            return Match(candidate.imdb,
-                         spelling if _nameable(spelling) else "",
-                         candidate.spellings)
+              "it, so it is named by TMDb's own" % _says(candidate))
+    year = candidate.released if redate else ""
+    tmdb = candidate.tmdb
+    meeting = [spelling for spelling in candidate.spellings
+               if title_keys(spelling) & want]
+    if meeting:
+        spelling = _nearest_spelling(meeting, plainly)
+        return Match(candidate.imdb, spelling if _nameable(spelling) else "",
+                     candidate.spellings, year, tmdb)
     for spelling in candidate.spellings:
         if any(titlematch.one_typo_apart(spelling, plain) for plain in plainly):
             return Match(candidate.imdb,
                          spelling if _nameable(spelling) else "",
-                         candidate.spellings)
-    return Match(candidate.imdb, "", candidate.spellings)
+                         candidate.spellings, year, tmdb)
+    return Match(candidate.imdb, "", candidate.spellings, year, tmdb)
+
+
+# How much of a catalogue spelling has to be the folder's own words for the
+# folder to be renamed onto it.
+LIKE_THE_FOLDER = 0.5
+
+
+def _nearest_spelling(meeting: list, plainly: frozenset) -> str:
+    """Of the spellings that met the folder's keys, the one written most like
+    the folder - the catalogue's order where they are equally like it.
+
+    A key a whole franchise shares - the "Harbour Tales 6" in front of every
+    market's title for the sixth film - meets the folder through the
+    Portuguese title as readily as through the one the folder was written
+    in, and the first of them in the catalogue's order is not the one to
+    rename a folder onto.
+
+    "" where none of them is written much like the folder at all - fewer than
+    half their words in common. The folder is named in a language neither
+    catalogue holds the film under, which is not a thing to correct: it keeps
+    its name, and gains the id.
+    """
+    wanted = [set(plain.split()) for plain in plainly]
+    squeezed = {plain.replace(" ", "") for plain in plainly}
+
+    def likeness(spelling: str) -> tuple:
+        # Written with its umlauts, and with them spelled out: "Mühlwiese"
+        # is the folder's "Muehlwiese" written by another keyboard.
+        folds = {normalize_title(spelling),
+                 normalize_title(titlematch.spelled_out(spelling))}
+        exact = any(fold.replace(" ", "") in squeezed for fold in folds)
+        shared = max((len(words & plain) / len(words | plain)
+                      for words in (set(fold.split()) for fold in folds)
+                      for plain in wanted if words | plain), default=0.0)
+        return (exact, shared)
+    best = max(meeting, key=likeness)
+    exact, shared = likeness(best)
+    return best if exact or shared >= LIKE_THE_FOLDER else ""
 
 
 def _nameable(title: str) -> bool:
@@ -856,7 +1338,10 @@ def _worth_asking(rows, year: str, want: frozenset,
     a title that already matches, or a primary release year near the wanted
     one. The second is the ordinary candidate - the film whose only release
     near this year is in a country the primary date is not, and whose full
-    document is the one thing that can say so.
+    document is the one thing that can say so. A folder with no year has no
+    year for a result to be near, and every result is that ordinary candidate:
+    the search found it under something, and the title it carries may be one
+    only its translations hold.
 
     The first comes ahead of it, and that ordering is the whole point of the
     function. TMDb answers most popular first, and a common word of a title
@@ -888,7 +1373,7 @@ def _worth_asking(rows, year: str, want: frozenset,
         if any(title_keys(str(t)) & want for t in _row_titles(row)):
             seen.add(row.get("id"))
             titled.append(row)
-        elif _near(release[:4], year):
+        elif _near(release[:4], year) or not year:
             seen.add(row.get("id"))
             dated.append(row)
     wanted = [one.split() for one in plainly]
@@ -941,15 +1426,26 @@ def _how_near_the_name_is(row: dict, wanted: list) -> tuple:
     return best
 
 
-def _candidate(api_key: str, row: dict) -> _Candidate:
-    """One search result and its own document, read into what the rule asks."""
+def _candidate(api_key: str, row: dict, latin: bool = False) -> _Candidate:
+    """One search result and its own document, read into what the rule asks.
+
+    ``latin`` is for a folder named in Latin letters, and leaves out every
+    title the catalogue has written in another script: what those fold to is
+    the digits and the Latin-shaped letters in them, and a Thai title reduced
+    to "09" met a folder called "Movie 09 - ..." on nothing but the number -
+    and would have been the spelling the folder was renamed onto.
+    """
     detail = _as_json(_curl(_BASE + "/movie/" + _id_token(row.get("id")),
                             [("api_key", api_key),
                              ("append_to_response", _APPENDED)]))
+    readable = (lambda text: titlematch.in_latin_script(text)) if latin \
+        else (lambda _text: True)
     folded: set = set()
     written: list = []
     for t in _detail_titles(detail) + _row_titles(row):
         text = str(t)
+        if not readable(text):
+            continue
         folded |= title_keys(text)
         if text not in written:
             written.append(text)
@@ -959,9 +1455,21 @@ def _candidate(api_key: str, row: dict) -> _Candidate:
         titles=frozenset(t for t in folded if t),
         spellings=tuple(written),
         own=frozenset(normalize_title(str(t))
-                      for t in _row_titles(detail) + _row_titles(row)) - {""},
+                      for t in _row_titles(detail) + _row_titles(row)
+                      + _translated_titles(detail)
+                      if readable(str(t))) - {""},
         runtime=_minutes(detail.get("runtime")),
-        imdb=imdb if isinstance(imdb, str) and imdb.startswith("tt") else "")
+        imdb=imdb if isinstance(imdb, str) and imdb.startswith("tt") else "",
+        released=_primary_year(detail) or _primary_year(row),
+        tmdb=_id_token(row.get("id")).replace("null", ""))
+
+
+def _primary_year(document: dict) -> str:
+    """The year of the release date a TMDb document leads with, or ""."""
+    date = document.get("release_date")
+    if isinstance(date, str) and len(date) >= 4 and date[:4].isdigit():
+        return date[:4]
+    return ""
 
 
 def _row_titles(row: dict) -> list:
@@ -990,6 +1498,26 @@ def _detail_titles(detail: dict) -> list:
     for entry in alternatives:
         if isinstance(entry, dict) and entry.get("title") is not None:
             titles.append(entry["title"])
+    return titles + _translated_titles(detail)
+
+
+def _translated_titles(detail: dict) -> list:
+    """The film's title in each language TMDb has a translation for.
+
+    Not the same list as the alternative titles, and the one the search reads:
+    a Czech fairy tale is found under its German title because that title is
+    its German translation, while its alternatives hold only the English and
+    Slovak ones - so the search hands back the film and nothing in the document
+    said why. A translation that leaves the title empty keeps the original, and
+    says nothing.
+    """
+    translations = (detail.get("translations") or {}).get("translations") or []
+    titles = []
+    for entry in translations:
+        data = entry.get("data") if isinstance(entry, dict) else None
+        title = data.get("title") if isinstance(data, dict) else None
+        if isinstance(title, str) and title.strip():
+            titles.append(title)
     return titles
 
 
@@ -1024,11 +1552,12 @@ def _minutes(value) -> float:
     return float(value) if value > 0 else 0.0
 
 
-def _near(year: str, wanted: str) -> bool:
-    """Whether two years are the same or next door, and both are years."""
+def _near(year: str, wanted: str, apart: int = NEAR_YEARS) -> bool:
+    """Whether two years are the same or next door - or no more than ``apart``
+    from each other - and both are years."""
     if not (year.isdigit() and wanted.isdigit()):
         return False
-    return abs(int(year) - int(wanted)) <= NEAR_YEARS
+    return abs(int(year) - int(wanted)) <= apart
 
 
 def _runtime_agrees(seconds: float, minutes: float):
@@ -1424,13 +1953,60 @@ def is_film_folder(entry) -> bool:
     Which the disk says two ways, and both have to hold: the film is here, and
     nothing is under this folder that is not this film's own. See
     :func:`_holds_one_films_material`.
+
+    A folder that says no year at all is a film too, where the disk says so
+    the same way and the film in it is named for the folder - see
+    :func:`read_undated_folder`.
     """
     base, _tag, _title, _year, edition = read_folder(entry.name)
     if not base:
-        return False
+        return bool(read_undated_folder(entry)[0])
     if not edition:
         return True
     return _holds_one_films_material(entry.path)
+
+
+def read_undated_folder(entry) -> tuple:
+    """A folder with no year in its name read as :func:`read_folder` reads one
+    that has one, or five empties when it is not a film's folder.
+
+    "Moss Harbour" holding "Moss Harbour.mkv" and its subtitles is a film whose
+    folder nobody dated - the commonest shape a documentary, a concert, a
+    special or a television fairy tale arrives in. Read as anything else it
+    is walked into, found to hold no film folders, and never asked about or
+    reported at all: from the outside that looks like a catalogue with no
+    answer, when nothing was asked.
+
+    Only where the disk leaves no doubt: the film is here, nothing is here
+    that is not this film's own material, and every film file in it is named
+    for the folder. A folder of films, or a folder holding some other film,
+    is still the shelf it looks like. A folder already carrying an id tag is
+    left as it has always been - it has its answer - and so is one whose year
+    is there and only written where nothing can read it, which is
+    :func:`repair_year`'s to put right.
+
+    The year comes back empty unless the film files themselves all carry the
+    one year, in which case that is the year and the folder is read as though
+    it had said so.
+    """
+    title, tag = plexnames.untagged_base(entry.name)
+    title = title.strip()
+    if not title or tag or _YEAR_RE.match(title) \
+            or repair_year(title) != title \
+            or plexnames.is_bonus_folder_name(title) \
+            or not _holds_one_films_material(entry.path):
+        return "", "", "", "", ""
+    try:
+        names = [item.name for item in os.scandir(entry.path)
+                 if item.is_file(follow_symlinks=False)]
+    except OSError:
+        return "", "", "", "", ""
+    if plexnames.strays_in(title, names):
+        return "", "", "", "", ""
+    years = plexnames.years_disagreeing(title, names)
+    if len(years) == 1:
+        return "%s (%s)" % (title, years[0]), "", title, years[0], ""
+    return title, "", title, "", ""
 
 
 def _holds_one_films_material(path: str) -> bool:
@@ -1513,7 +2089,8 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
                  aliases: list | None = None,
                  seen: set | None = None,
                  skip: set | None = None,
-                 long_names: LongNames | None = None) -> int:
+                 long_names: LongNames | None = None,
+                 imdb: str = "") -> int:
     """Name each confidently-matched movie folder, its films and their sidecars
     the way Plex reads them: the folder and every file carry the id tag, an
     edition carries its own, and a split film keeps its stacking token last.
@@ -1578,6 +2155,9 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
     ``recursive`` walks the whole tree rather than the one level the phase reads
     inside a full ingest, where the caller is pointed at the folder that holds
     the films and the phases around this one read that same one level.
+
+    ``imdb`` is the local IMDb database each lookup ends on - see
+    :mod:`medialib.lib.imdbdata` - or "" for TMDb alone.
     """
     skip_log = skip_log if skip_log is not None else safety.SkipLog()
     long_names = long_names if long_names is not None else LongNames()
@@ -1588,6 +2168,8 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
     _repair_year_names(directory, recursive, skip_log, dry_run, log)
     for folder in _candidates(directory, recursive):
         base, tag, title, year, edition = read_folder(folder.name)
+        if not base:
+            base, tag, title, year, edition = read_undated_folder(folder)
         if not base or not is_film_folder(folder):
             continue
         if seen is not None:
@@ -1629,6 +2211,7 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
         # the same film, and the name it was written under before the catalogue
         # respelled it. Both are collected here and read in one place below.
         also: tuple = ()
+        redated = False
         if asked:
             # The hand-written id first: a film someone has already looked up is
             # not worth asking an API that has already failed to name it.
@@ -1648,8 +2231,18 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
                                       respelled, on_disk, edition),
                     notes if near_misses is not None else None,
                     (_with_the_folder_above(directory, folder, title),
-                     _without_the_folder_above(directory, folder, title)))
-                tag = "{imdb-" + found.imdb + "}" if found.imdb else ""
+                     _without_the_folder_above(directory, folder, title)),
+                    imdb,
+                    functools.partial(_written_year, [
+                        os.path.join(folder.path, name) for name in names
+                        if plexnames.is_movie_file(name)]))
+                tag = found.tag
+                # A folder that said no year, or one the catalogue has the film
+                # nowhere near, takes the year the catalogue dates it to: it
+                # is the one the match was made in.
+                redated = bool(tag and found.year and year
+                               and found.year != year)
+                year = found.year or year
                 # The catalogue's own spelling of whichever title matched is
                 # what the whole folder is written under from here: it is the
                 # one spelling of the several that is known to be right, and
@@ -1681,7 +2274,7 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
                 # reported for holding films that are not its own and never
                 # gets this far.
                 settled, byfile = _named_by_its_files(base, year, folder.path,
-                                                      names, notes)
+                                                      names, notes, imdb)
                 if settled:
                     _flag_alias(aliases, folder.path, base, settled, byfile)
                     _tag_only(folder, names, settled, skip_log, dry_run, log,
@@ -1789,7 +2382,13 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
         # then what would happen to it. Only a folder this run ASKED about says
         # anything: one already tagged would repeat its line for the rest of
         # the library's life.
-        if asked and base != read_folder(folder.name)[0]:
+        if asked and not read_folder(folder.name)[0]:
+            log('  "{}" says no year, and TMDb dates it {} - renaming it "{}"'
+                .format(folder.name, year, base))
+        elif asked and redated:
+            log('  "{}" is dated {} by TMDb, and its length agrees - renaming '
+                'it "{}"'.format(folder.name, year, base))
+        elif asked and base != read_folder(folder.name)[0]:
             log('  TMDb spells it "{}" - renaming "{}" onto it'.format(
                 base.rsplit(" (", 1)[0], folder.name))
         if asked:
@@ -2049,7 +2648,7 @@ def _reads_as(stem: str) -> str:
 
 
 def _named_by_its_files(base: str, year: str, path: str, names: list,
-                        notes: list | None = None) -> tuple:
+                        notes: list | None = None, imdb: str = "") -> tuple:
     """The id every film in this folder answers to, and what each answered
     under - or ("", {}) when they do not agree, or cannot all be named.
 
@@ -2083,14 +2682,16 @@ def _named_by_its_files(base: str, year: str, path: str, names: list,
         _note(notes, 'asked under its own file "%s":' % name)
         settled = identify(title, its_year,
                            functools.partial(_one_film_runtime, path, name),
-                           notes)
-        if not settled.imdb:
+                           notes, imdb=imdb,
+                           written=functools.partial(
+                               _written_year, [os.path.join(path, name)]))
+        if not settled.tag:
             return "", {}
-        ids.add(settled.imdb)
+        ids.add(settled.tag)
         found[name] = settled.title or title
     if len(ids) != 1 or not found:
         return "", {}
-    return "{imdb-" + ids.pop() + "}", found
+    return ids.pop(), found
 
 
 def _one_film_runtime(path: str, name: str) -> float:

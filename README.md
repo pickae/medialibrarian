@@ -905,6 +905,14 @@ An id is read however you have it to hand (`tt0000002`, `imdb-tt0000002`, a bare
 TMDb number), answers before the network is asked, and stays in the file so the
 lookup you did by hand is not lost. Requests to TMDb are paced to ten a second.
 
+**Where TMDb cannot name a film, `-t` asks a local copy of IMDb's own title
+lists** - the romanisations its search does not find, and the films it states
+no runtime for, which is what a folder with no year is settled on. The lists
+are fetched into the checkout's `data/imdb` the first time (about 750 MB),
+refreshed when they are a month old, and read with `duckdb`; without it the
+pass runs on TMDb alone. IMDb offers them for personal, non-commercial use
+only. A full ingest never asks them.
+
 Feeding that list back is **`-i`**, the same tagging phase going on what you
 filled in — and a **dry run** too, unless `-w` is given. It prints what your ids
 would rename and writes nothing: not the lists, which are `-t`'s to write, and
