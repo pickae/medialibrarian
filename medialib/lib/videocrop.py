@@ -33,7 +33,7 @@ import subprocess
 import sys
 from typing import NamedTuple
 
-from medialib.lib import aspectratios
+from medialib.lib import aspectratios, safety
 
 __all__ = [
     "CROP_PROBE_SAMPLES",
@@ -211,6 +211,10 @@ def crop_probe(input: str, media_duration, video_dimensions, jobs_per_core,
     with concurrent.futures.ThreadPoolExecutor(
             max_workers=max(1, jobs_per_core(2))) as pool:
         def one(t):
+            # Ctrl+C kills only the samples decoding at that moment; the pool
+            # would start every one still queued and wait for it.
+            if safety.abort_requested():
+                return None
             try:
                 return crop_probe_sample(input, t, decode_accel_args)
             except Exception:

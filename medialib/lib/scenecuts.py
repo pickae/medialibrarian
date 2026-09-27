@@ -25,7 +25,7 @@ import shlex
 import subprocess
 from typing import NamedTuple
 
-from medialib.lib import formatting
+from medialib.lib import formatting, safety
 
 __all__ = [
     "SCENE_WINDOW",
@@ -177,8 +177,11 @@ def aligned_bounds(source: str, bounds: list, decode_accel_args: str = "",
     out = [bounds[0]]
     kinds = []
     for target in values[1:-1]:
-        frames = frames_of(source, target - window, 2 * window,
-                           decode_accel_args)
+        # An interrupted run keeps the even cuts it has not looked at yet
+        # rather than decoding one more window.
+        frames = ([] if safety.abort_requested() else
+                  frames_of(source, target - window, 2 * window,
+                            decode_accel_args))
         cut = pick_cut(frames, target)
         if cut is None:
             out.append("%.3f" % target)

@@ -1040,6 +1040,9 @@ def check_audio_tracks(movie: str, root: str) -> None:
                "./" + os.path.relpath(movie, root)))
         if _run(["ffmpeg", "-y", "-loglevel", "error", "-nostats",
                  "-i", movie, "-vn", "-map", "0:a:%d" % index,
+                 # Without it the movie's title lands in the opus as a TITLE
+                 # comment, which mkvmerge takes as the track's name.
+                 "-map_metadata", "-1",
                  "-c:a", "libopus", "-b:a", bitrate + "k"]
                 + layout_args + [opus]) != 0:
             log("WARNING: opus transcode failed (track %d): %s"

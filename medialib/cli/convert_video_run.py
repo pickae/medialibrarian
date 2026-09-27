@@ -1030,9 +1030,19 @@ class Run:
                 self.skipped += 1
                 return None
 
+        # Checked between the probes, because Ctrl+C only kills the ffmpeg
+        # running at that moment: the run waits for this thread on its way out,
+        # and every probe started after the interrupt would run to its end.
+        if safety.abort_requested():
+            return None
         fields = rules.interlace_counts(source, settings.decode_accel)
 
+        if safety.abort_requested():
+            return None
         self._settle_dolby_vision(plan)
+        if safety.abort_requested():
+            self._release_dv(plan)
+            return None
 
         # After the Dolby Vision decision, because a file that keeps its RPU
         # cannot be cropped, and after the -t test, so a source this run is not
@@ -1066,6 +1076,9 @@ class Run:
 
         # After the crop, because whether the metadata survives it depends on
         # what the frame it describes turns into.
+        if safety.abort_requested():
+            self._release_dv(plan)
+            return None
         plan.hdr10plus_metadata = prepare_hdr10plus(
             relative, source, directory, settings,
             reframed=bool(settings.crop) or (str(enc_width), str(enc_height))
@@ -1080,6 +1093,9 @@ class Run:
         plan.bounds = chunk_bounds(duration, count)
         # Last, because it reads the video the encode will: the Dolby Vision
         # intermediate where there is one.
+        if plan.bounds and safety.abort_requested():
+            self._release_dv(plan)
+            return None
         if plan.bounds:
             pausecontrol.wait_while_paused()
             plan.bounds, plan.cut_kinds = scenecuts.aligned_bounds(

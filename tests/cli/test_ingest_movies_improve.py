@@ -10,6 +10,7 @@ survive both.
 """
 
 import os
+import sys
 
 import pytest
 
@@ -131,6 +132,23 @@ class TestTheSwap:
 
     def test_the_swapped_opus_is_a_remux_input(self, remux):
         assert remux["base"] + "_0.opus" in remux["argv"]
+
+    def test_the_swapped_opus_keeps_the_track_s_name(self, remux):
+        argv = remux["argv"]
+        at = argv.index(remux["base"] + "_0.opus")
+        assert argv[argv.index("--track-name", at - 12) + 1] == "0:TrueHD 7.1"
+
+    def test_a_nameless_track_stays_nameless(self, monkeypatch, request):
+        """Named empty rather than left unnamed: mkvmerge would otherwise take
+        a TITLE tag the opus still carries - the movie's own title - as the
+        track's name."""
+        nameless = FIXTURE[0][:5] + ("null",) + FIXTURE[0][6:]
+        monkeypatch.setattr(sys.modules[__name__], "FIXTURE",
+                            [nameless] + FIXTURE[1:])
+        remux = request.getfixturevalue("remux")
+        argv = remux["argv"]
+        at = argv.index(remux["base"] + "_0.opus")
+        assert argv[argv.index("--track-name", at - 12) + 1] == "0:"
 
 
 class TestWhatSurvives:

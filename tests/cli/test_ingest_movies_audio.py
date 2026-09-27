@@ -96,15 +96,15 @@ class TestTheEncoderCall:
         movie, base, calls = run
         assert calls[0] == [
             "ffmpeg", "-y", "-loglevel", "error", "-nostats", "-i", movie,
-            "-vn", "-map", "0:a:0", "-c:a", "libopus", "-b:a", "185k",
-            "-channel_layout", "quad", base + "_1.opus"]
+            "-vn", "-map", "0:a:0", "-map_metadata", "-1", "-c:a", "libopus",
+            "-b:a", "185k", "-channel_layout", "quad", base + "_1.opus"]
 
     def test_a_three_channel_source_with_no_LFE_converts_to_3_0(self, run):
         movie, base, calls = run
         assert calls[1] == [
             "ffmpeg", "-y", "-loglevel", "error", "-nostats", "-i", movie,
-            "-vn", "-map", "0:a:2", "-c:a", "libopus", "-b:a", "150k",
-            "-channel_layout", "3.0", base + "_3.opus"]
+            "-vn", "-map", "0:a:2", "-map_metadata", "-1", "-c:a", "libopus",
+            "-b:a", "150k", "-channel_layout", "3.0", base + "_3.opus"]
 
     @pytest.mark.parametrize("index,stream,bitrate,channels,suffix", [
         (2, "0:a:4", "220k", "5", "_5.opus"),
@@ -117,8 +117,8 @@ class TestTheEncoderCall:
         movie, base, calls = run
         assert calls[index] == [
             "ffmpeg", "-y", "-loglevel", "error", "-nostats", "-i", movie,
-            "-vn", "-map", stream, "-c:a", "libopus", "-b:a", bitrate,
-            "-ac", channels, base + suffix]
+            "-vn", "-map", stream, "-map_metadata", "-1", "-c:a", "libopus",
+            "-b:a", bitrate, "-ac", channels, base + suffix]
 
 
 class TestResume:

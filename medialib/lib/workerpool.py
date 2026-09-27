@@ -31,6 +31,33 @@ from medialib.lib import safety
 _FAILURES: list = []
 
 
+def start_worker(target, args: tuple, name: str):
+    """One worker process, started, from a forkserver where the platform's
+    default would FORK this process.
+
+    A fork copies every lock this process holds, and the thread that held one
+    does not come along to release it: a worker forked while another thread was
+    printing waits forever on the stream's lock the first time it prints. The
+    dynamic queue prepares its items on a thread of its own, and some of that
+    preparation runs worker pools of its own, so neither side may fork. A
+    forkserver's children are forked from a process with no other threads, and
+    it is what Python has defaulted to since 3.14; a platform that spawns
+    already starts clean.
+    """
+    import multiprocessing
+    import multiprocessing.process
+
+    worker: multiprocessing.process.BaseProcess
+    if (multiprocessing.get_context().get_start_method() == "fork"
+            and "forkserver" in multiprocessing.get_all_start_methods()):
+        worker = multiprocessing.get_context("forkserver").Process(
+            target=target, args=args, name=name)
+    else:
+        worker = multiprocessing.Process(target=target, args=args, name=name)
+    worker.start()
+    return worker
+
+
 class Outcome:
     """What one queue did: the workers that ended abnormally, and whether the
     dispatch was cut short before the queue drained."""
@@ -136,22 +163,27 @@ def exit_status(status: int = 0) -> int:
     return status
 
 
-def reap_one(running: list) -> list:
+def reap_one(running: list, wake=None, timeout=None) -> list:
     """Block until one of the started workers has finished, and return the rest.
 
     The finished one is joined here, so a caller never has to remember to: an
     unjoined child stays a zombie for as long as the run lasts. Its exit is
     classified here for the same reason - the join is the only moment the status
     exists, and a caller that skipped it would lose the crash with it.
+
+    <wake>, a readable file descriptor, and <timeout> end the wait early too,
+    with every worker still running handed back; draining <wake> is the
+    caller's.
     """
     import multiprocessing.connection
 
-    if not running:
+    if not running and wake is None:
         return []
     # Taken once, up front: a worker's sentinel is not worth reading again
     # once it has been joined.
     sentinels = [worker.sentinel for worker in running]
-    ready = set(multiprocessing.connection.wait(sentinels))
+    waited = sentinels + ([wake] if wake is not None else [])
+    ready = set(multiprocessing.connection.wait(waited, timeout))
     alive = []
     for worker, sentinel in zip(running, sentinels, strict=True):
         if sentinel in ready or not worker.is_alive():
@@ -184,8 +216,6 @@ def run(items, jobs: int, target, arguments) -> Outcome:
     the queue drained. Ignoring it is how a command comes to print "Done" over
     files it never made.
     """
-    import multiprocessing
-
     # A deque, because the dispatch takes from the FRONT: a list's pop(0) copies
     # what is left over on every item, which a queue of tens of thousands of
     # cheap items pays for quadratically.
@@ -196,11 +226,7 @@ def run(items, jobs: int, target, arguments) -> Outcome:
     while pending or running:
         while pending and len(running) < jobs and not safety.abort_requested():
             item = pending.popleft()
-            worker = multiprocessing.Process(target=target,
-                                             args=arguments(item),
-                                             name=label(item))
-            worker.start()
-            running.append(worker)
+            running.append(start_worker(target, arguments(item), label(item)))
         if not running:
             break
         running = reap_one(running)
