@@ -16,7 +16,7 @@ hold one large image per page — into a tree of `.cbz` archives of AVIF pages.
 ## How a book is converted
 
 1. Each book is extracted and flattened into a single folder of pages.
-2. The pages are converted to AVIF, and their names are cleaned and numbered.
+2. The pages are converted to AVIF, trimmed on the sides, skipped if empty, and their names are cleaned and numbered.
 3. The finished folder of pages is zipped back into one **stored** (level 0 —
    AVIF does not compress further) `.cbz` in its mirrored parent folder.
 
