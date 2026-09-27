@@ -100,6 +100,24 @@ s |  | subtitles only: the six languages' subtitles and nothing else -
                   ingest does it. One ffsubsync cannot align at all is left
                   alone either way. Best run after -tw, so films are searched
                   for by their ids.
+n |  | commentary names only: a film whose commentary tracks are only
+                  numbered - "Commentary 2", "Kommentar 1", "Audiosommentary
+                  3" - has them named after who speaks in each, the way the
+                  disc database dvdcompare.net lists the film's releases, and
+                  nothing else is done. Walks the whole tree the way -t does.
+                  A film is named only when it has exactly as many
+                  commentaries as a release of its kind of disc (4K, Blu-ray
+                  or DVD, told by the picture size) lists, every such release
+                  agrees on what they are, and - for two or more - the
+                  transcripts beside the film say which track is which, from
+                  the commentators saying who they are in the opening
+                  minutes. The subtitles of a commentary and its transcripts
+                  beside the film are renamed with it. A DRY RUN unless -w is
+                  given. The pages asked for are kept in data/dvdcompare, and
+                  every folder given leaves a list in
+                  logs/ingest-movies-commentarynames-<folder>.txt of what was
+                  named and of every film left alone, with the reason. Best
+                  run after -a, which writes the transcripts.
 c |  | chapters only: the chapter lookup and nothing else - walks the
                   whole tree the way -t does, and gives every tagged film that
                   has no chapters the chapters the ChapterDB archive holds for
@@ -114,9 +132,9 @@ c |  | chapters only: the chapter lookup and nothing else - walks the
                   -w has no part in it. Best run after -tw: an untagged
                   folder's title is only a guess.
 w |  | with -t or -i, actually perform the renames instead of printing
-                  them; with -s, sync, throw out and download. On its own it
-                  is a usage error rather than a full ingest: there is no dry
-                  run to carry out.
+                  them; with -s, sync, throw out and download; with -n, name
+                  the commentaries. On its own it is a usage error rather than
+                  a full ingest: there is no dry run to carry out.
 i | <file> | the hand-written id list filled in and read BACK: tagging and
                   nothing else, like -t, but going on what is in this file. An
                   id in it is simply used - TMDb is not asked to agree with a
@@ -132,10 +150,10 @@ i | <file> | the hand-written id list filled in and read BACK: tagging and
                   given into that one file."""
 
 OPT_VARS = ("f:fragmentsOverride a:commentaryOnly t:tagsOnly s:subtitlesOnly "
-            "c:chaptersOnly w:writeTags i:idList")
+            "n:commentaryNames c:chaptersOnly w:writeTags i:idList")
 OPT_COLUMN = 18
 OPT_LONG = ("f:fragments a:commentary t:tags-only s:subtitles-only "
-            "c:chapters w:write i:ids")
+            "n:commentary-names c:chapters w:write i:ids")
 
 USAGE_TAIL = """
 
@@ -240,7 +258,7 @@ USAGE_TAIL = """
     Dependencies
     ------------
     Required: ffmpeg, mkvtoolnix, mediainfo (and curl, once tmdbApiKey is set,
-    or for the chapter lookup).
+    for -n or for the chapter lookup).
     Optional, each skipped with a warning when absent: pipx + ffsubsync (together
     they enable subtitle downloading and commentary transcription - without either,
     BOTH are skipped, since neither subtitle is worth keeping unaligned), dovi_tool
@@ -456,7 +474,7 @@ class Track:
     """One track of a Matroska file, as mkvmerge reports it."""
 
     FIELDS = ("id", "type", "codec", "channels", "language", "name",
-              "commentary", "default", "forced")
+              "commentary", "default", "forced", "dimensions")
 
     # FIELDS is what __init__ sets; these declare what it sets them TO. Every
     # one is text, and an absent field is the empty string rather than a
@@ -470,6 +488,9 @@ class Track:
     commentary: str
     default: str
     forced: str
+    # A video track's "<width>x<height>", which is what says whether the file
+    # came off a DVD, a Blu-ray or a 4K disc.
+    dimensions: str
 
     def __init__(self, **fields) -> None:
         for field in self.FIELDS:
@@ -531,7 +552,8 @@ def _identify(movie: str) -> list:
             name=_as_text(properties.get("track_name")),
             commentary=_as_text(properties.get("flag_commentary")),
             default=_as_text(properties.get("default_track")),
-            forced=_as_text(properties.get("forced_track"))))
+            forced=_as_text(properties.get("forced_track")),
+            dimensions=_as_text(properties.get("pixel_dimensions"))))
     return tracks
 
 

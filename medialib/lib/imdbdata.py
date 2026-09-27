@@ -216,7 +216,7 @@ def titles_near(database: str, keys) -> list:
 
     Only a way of reaching a film the fold cannot: whether the two titles are
     really one title with a slip in it is
-    :func:`medialib.lib.titlematch.one_typo_apart`'s to say, and it says it
+    :func:`medialib.lib.titlematch.one_slip_apart`'s to say, and it says it
     over the titles as written, which is where a digit - never a slip - can
     still be seen.
 

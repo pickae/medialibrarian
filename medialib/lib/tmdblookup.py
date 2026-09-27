@@ -916,7 +916,7 @@ def _misspelt(candidates: list, plainly: frozenset,
       under any reading of it, means this is never reached - which is the whole
       of "no alternative that is closer";
     * what counts as misspelt is
-      :func:`medialib.lib.titlematch.one_typo_apart`, which refuses a short
+      :func:`medialib.lib.titlematch.one_slip_apart`, which refuses a short
       title and any difference touching a digit - so a year, a sequel's number
       and a series' roman numeral are never slips;
     * two candidates a slip away are still two, and the certainty rule below
@@ -926,7 +926,7 @@ def _misspelt(candidates: list, plainly: frozenset,
     misspelt query into the film, and this only lets the answer be recognised.
     """
     near = [row for row in candidates
-            if any(titlematch.one_typo_apart(spelling, plain)
+            if any(titlematch.one_slip_apart(spelling, plain)
                    for spelling in row.spellings for plain in plainly)]
     for row in near:
         _note(notes, "    %s - carries this title misspelt, and nothing "
@@ -1266,7 +1266,7 @@ def _matched(candidate: _Candidate, want: frozenset,
         return Match(candidate.imdb, spelling if _nameable(spelling) else "",
                      candidate.spellings, year, tmdb)
     for spelling in candidate.spellings:
-        if any(titlematch.one_typo_apart(spelling, plain) for plain in plainly):
+        if any(titlematch.one_slip_apart(spelling, plain) for plain in plainly):
             return Match(candidate.imdb,
                          spelling if _nameable(spelling) else "",
                          candidate.spellings, year, tmdb)
@@ -2660,7 +2660,7 @@ def _without_the_folder_above(root: str, folder, title: str) -> str:
     if not name or not rest:
         return ""
     return rest if titlematch.equivalent(heading, name) \
-        or titlematch.one_typo_apart(heading, name) else ""
+        or titlematch.one_slip_apart(heading, name) else ""
 
 
 def _how_close(base: str, names: list) -> list:
