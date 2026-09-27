@@ -29,7 +29,11 @@ its own in there, so several can run at once without sharing one.
 
 ## At a glance
 
-Each command has a page of its own under [`docs/commands/`](docs/commands/).
+Each command has a page of its own under [`docs/commands/`](docs/commands/), laid
+out the same way: what it does and its usage line, an *at a glance* table (what it
+takes and writes, whether it changes the input, what a rerun does, whether it
+reaches the network), then the details, and at the foot the shared rules that
+apply to it.
 
 ### Audio
 
@@ -75,7 +79,8 @@ Each command has a page of its own under [`docs/commands/`](docs/commands/).
 
 **Every command prints its arguments, options and defaults with `-h`** (or
 `--help`), which needs none of the media tools installed — so these pages are about
-what the commands do and the rules they all follow, not about their flags.
+what the commands do and the rules they all follow, and name a flag only where it
+changes what a command does.
 `cue-to-chapters` is the one exception: it takes two file names and no options,
 so any argument list but those two prints its usage and fails.
 
