@@ -1562,8 +1562,8 @@ class TestPrepareVoiceSample:
             "-i", str(src), "-map", "0:a:0", "-ac", "1", "-ar", "24000",
             "-c:a", "pcm_s16le", sample,
         ]]
-        assert logs == ["Voice sample is 1:00:00 long: taking 0:45 of speech "
-                        "from 30:23"]
+        assert logs == ['Voice sample "%s" is 1:00:00 long: taking 0:45 of '
+                        "speech from 30:23" % src.name]
 
     def test_a_duration_that_is_not_a_number_is_an_over_long_file(self, nb):
         """awk compares two strnums as TEXT when either is not a number, and

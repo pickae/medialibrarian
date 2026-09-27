@@ -92,6 +92,16 @@ class TestTheTable:
         assert status == 0
         assert (tmp_path / "deep" / "myFolder.fragmentCandidates.txt").exists()
         assert out.startswith("Wrote 4 candidate(s) to ")
+        assert "-m 1" not in out
+
+    def test_an_empty_report_names_the_floor_that_emptied_it(self, tmp_path):
+        tree = tmp_path / "myFolder.tree"
+        tree.write_text("myFolder\n|-- alpha.mkv\n|-- beta.mkv\n")
+        status, out, _ = _run([str(tree)])
+        assert status == 0
+        assert out.startswith("Wrote 0 candidate(s) to ")
+        assert "(none carried by 2 or more names; -m 1 lists every " \
+            "candidate)" in out
 
     def test_o_puts_the_report_where_it_says(self, tmp_path):
         tree = tmp_path / "myFolder.tree"

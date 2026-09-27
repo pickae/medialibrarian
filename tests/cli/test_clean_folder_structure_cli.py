@@ -88,6 +88,33 @@ class TestPlainNameCleaning:
         assert (run / "My Show" / "My Movie.mp4").is_file()
 
 
+class TestWhatTheRunSays:
+    """A directory is named in the log when something in it was renamed, and
+    only then: a re-run over a clean tree has nothing to report about any of
+    its folders."""
+
+    def test_a_folder_that_was_renamed_in_is_named_with_its_tally(
+            self, cleaner):
+        _tree(cleaner.folder, "My_Show/My_Movie.mp4", "My_Show/Clean.mp4")
+        done = cleaner.clean(cleaner.folder)
+        log = done.stdout + done.stderr
+        assert '"My Show": renamed 1 of 2 files' in log
+        assert '"root": renamed 1 of 1 folder' in log
+
+    def test_a_clean_tree_names_no_folder_and_no_empty_removal(self, cleaner):
+        _tree(cleaner.folder, "My Show/My Movie.mp4")
+        done = cleaner.clean(cleaner.folder)
+        log = done.stdout + done.stderr
+        assert ": renamed" not in log
+        assert "empty sub-folder" not in log
+
+    def test_an_emptied_folder_is_counted(self, cleaner):
+        (cleaner.folder / "Empty").mkdir()
+        _tree(cleaner.folder, "Kept/file.mp4")
+        done = cleaner.clean(cleaner.folder)
+        assert "Removed 1 empty sub-folder(s)\n" in done.stdout + done.stderr
+
+
 class TestNumbering:
     """`-n` renumbers a folder's plurality filetype and leaves everything else
     to the other passes. Eleven files, so the padding is two wide."""

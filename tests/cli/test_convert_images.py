@@ -22,6 +22,7 @@ the call this command made before there was an -e at all.
 
 
 import os
+import time
 
 import pytest
 
@@ -459,3 +460,39 @@ class TestTheOptionsAreSettledUpFront:
 
     def test_no_format_given_leaves_the_default_to_the_run(self):
         assert self._parse("in", "out").values["outputFormat"] == ""
+
+
+class TestTheFooter:
+    """The closing report counts what was encoded, and gives the breakdown only
+    when there is more to it than "all of them"."""
+
+    @pytest.fixture
+    def footer(self, tmp_path, capsys, monkeypatch):
+        # No stats file: that is the caller's record, not this report.
+        monkeypatch.delenv("imageStatsFile", raising=False)
+
+        def run(total, **counts):
+            for name, count in counts.items():
+                (tmp_path / name).write_text(str(count))
+            state = ci.Run("/in", OUT, str(tmp_path), {}, total)
+            ci._print_footer(state, time.time(), {}, False)
+            return capsys.readouterr().out
+        return run
+
+    def test_a_run_that_converted_everything_says_it_in_one_line(self, footer):
+        out = footer(3, converted=3)
+        assert "Converted 3 images in " in out
+        assert "seconds per image" in out
+        assert "converted: " not in out
+
+    def test_a_skip_makes_it_a_share_with_the_breakdown(self, footer):
+        out = footer(4, converted=2, trimmed=1, alreadyDone=1)
+        assert "Converted 3 of 4 images in " in out
+        assert "already done: 1 (25.0%)" in out
+        assert "trimmed: 1 (25.0%)" in out
+
+    def test_nothing_encoded_gives_no_time_per_image(self, footer):
+        out = footer(2, alreadyDone=2)
+        assert "Converted 0 of 2 images in " in out
+        assert "seconds per image" not in out
+        assert "already done: 2 (100.0%)" in out

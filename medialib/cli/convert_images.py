@@ -476,6 +476,8 @@ class Run:
         out = disambiguated_output(relative, "jpg", self.input_dir,
                                    self.output_dir)
         if os.path.isfile(out):
+            self.record("alreadyDone", "SKIP (already done)", relative,
+                        stream=sys.stderr)
             return
         quality = self.options["quality"] + JPEG_QUALITY_BONUS
         self.record("converted", "REV", relative)
@@ -723,20 +725,32 @@ def main(argv: list, program: str = "convert-images") -> int:
 def _print_footer(state, started, values, own_safety_log) -> None:
     runtime = time.time() - started
     total = state.total
+    # What was actually encoded - a trimmed image is converted too - which is
+    # what the time is spent on: an image skipped as already done or starved
+    # costs a stat or a header read, and averaging over those would flatter the
+    # encoder.
+    encoded = state.counter("converted") + state.counter("trimmed")
     print("")
-    print("Converted %d images in %.2f seconds" % (total, runtime))
-    if total > 0:
-        print("%.3f seconds per image" % (runtime / total))
+    if encoded == total:
+        print("Converted %d images in %.2f seconds" % (total, runtime))
+    else:
+        print("Converted %d of %d images in %.2f seconds"
+              % (encoded, total, runtime))
+    if encoded > 0:
+        print("%.3f seconds per image" % (runtime / encoded))
 
-    for label, name in (("input not found", "notFound"),
-                        ("already done", "alreadyDone"),
-                        ("blank", "blank"),
-                        ("starved, left alone", "starved"),
-                        ("converted", "converted"),
-                        ("trimmed", "trimmed")):
-        count = state.counter(name)
-        if count >= 1 and total > 0:
-            print("%s: %d (%.1f%%)" % (label, count, 100.0 * count / total))
+    # The breakdown only once there is one: a run in which every image was
+    # plainly converted has said all of it in the line above.
+    if total > 0 and state.counter("converted") < total:
+        for label, name in (("input not found", "notFound"),
+                            ("already done", "alreadyDone"),
+                            ("blank", "blank"),
+                            ("starved, left alone", "starved"),
+                            ("converted", "converted"),
+                            ("trimmed", "trimmed")):
+            count = state.counter(name)
+            if count >= 1:
+                print("%s: %d (%.1f%%)" % (label, count, 100.0 * count / total))
 
     # The same numbers again, machine-readable, for a caller that runs this
     # script once per unit of work and throws each child's output away. Under a

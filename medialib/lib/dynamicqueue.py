@@ -175,8 +175,17 @@ def run(producer, jobs: int, target, arguments, buffer_factor: int = 2,
                 if (heap and not started and len(running) < jobs
                         and not safety.abort_requested()):
                     started = True
-                    log("Queue: buffer loaded, starting %d worker(s) on "
-                        "%d item(s)" % (min(jobs, len(heap)), len(heap)))
+                    workers = min(jobs, len(heap))
+                    # A producer already finished before the first worker
+                    # starts has handed over the WHOLE queue, and that is the
+                    # more useful thing to say than that a buffer it never
+                    # filled was loaded.
+                    if done:
+                        log("Queue: all %d item(s) prepared, starting %d "
+                            "worker(s)" % (len(heap), workers))
+                    else:
+                        log("Queue: buffer loaded, starting %d worker(s) on "
+                            "%d item(s)" % (workers, len(heap)))
                 while (heap and len(running) + len(taken) < jobs
                        and not safety.abort_requested()):
                     taken.append(heapq.heappop(heap)[2])

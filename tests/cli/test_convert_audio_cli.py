@@ -60,6 +60,17 @@ exit 0
 '''
 
 
+def _stubbed(sandbox):
+    sandbox.with_tool("ffmpeg", _FFMPEG)
+    sandbox.with_tool("ffprobe", _FFPROBE)
+    # The bitrate lookup decides nothing here - .m4a is always transcoded - and
+    # no cover art or metadata is in play.
+    sandbox.with_tool("jq", "echo 0")
+    sandbox.with_tools("rsync", "mkvextract")
+    sandbox.with_tool("convert", 'out="${!#}"; out="${out%\\>}"; : > "$out"')
+    return sandbox
+
+
 class TestTheProgressCounter:
     """One flat denominator for every line - the job total, counting chunks as
     jobs - and a counter that reaches it exactly once.
@@ -74,15 +85,8 @@ class TestTheProgressCounter:
     """
 
     @pytest.fixture
-    def convert(self, sandbox, tmp_path):
-        sandbox.with_tool("ffmpeg", _FFMPEG)
-        sandbox.with_tool("ffprobe", _FFPROBE)
-        # The bitrate lookup decides nothing here - .m4a is always transcoded -
-        # and no cover art or metadata is in play.
-        sandbox.with_tool("jq", "echo 0")
-        sandbox.with_tools("rsync", "mkvextract")
-        sandbox.with_tool("convert", 'out="${!#}"; out="${out%\\>}"; : > "$out"')
-        return sandbox
+    def convert(self, sandbox):
+        return _stubbed(sandbox)
 
     def _lines(self, convert, tmp_path, names):
         inputs = tmp_path / "in"
@@ -96,7 +100,7 @@ class TestTheProgressCounter:
             (inputs / name).write_bytes(b"\0" * size)
         done = convert.run("convert-audio", "-j", 4, "-s", 10, inputs, outputs)
         return [(int(n), int(total) if total else None) for n, total in
-                re.findall(r"^\[(\d+)(?:/(\d+))?\] Converting:", done.stdout,
+                re.findall(r"^\[(\d+)(?:/(\d+))?\] [^:\n]+:", done.stdout,
                            re.M)]
 
     @pytest.mark.parametrize("names,jobs", [
@@ -116,6 +120,60 @@ class TestTheProgressCounter:
         assert denominators <= {jobs}
         assert not [n for n, total in lines
                     if total is not None and n > total]
+
+
+class TestWhatEachLineSays:
+    """A counted line says what its job does to the file, so a re-run over a
+    finished tree does not read as every file being converted again.
+
+    The stubbed probe states no bitrate at all, which the run keeps as it would
+    a small file - so an .mp3 here is one the run leaves alone, and an .m4a one
+    it always transcodes.
+    """
+
+    @pytest.fixture
+    def convert(self, sandbox):
+        return _stubbed(sandbox)
+
+    def _said(self, convert, tmp_path, *options):
+        inputs = tmp_path / "in"
+        inputs.mkdir(exist_ok=True)
+        for name in ("book.m4a", "spoken.mp3"):
+            (inputs / name).write_bytes(b"\0" * 1000)
+        done = convert.run("convert-audio", "-j", 1, *options, inputs,
+                           tmp_path / "out")
+        assert done.returncode == 0, done.stdout + done.stderr
+        return re.sub(r"^\[\d+(?:/\d+)?\] ", "", done.stdout, flags=re.M)
+
+    def test_a_file_that_is_encoded_is_converting(self, convert, tmp_path):
+        assert "\nConverting: book.m4a\n" in self._said(convert, tmp_path)
+
+    def test_one_left_alone_says_so_and_why(self, convert, tmp_path):
+        said = self._said(convert, tmp_path)
+        assert "\nBitrate unknown, skipping: spoken.mp3\n" in said
+        assert "Converting: spoken.mp3" not in said
+
+    def test_under_c_the_same_file_is_copying(self, convert, tmp_path):
+        said = self._said(convert, tmp_path, "-c")
+        assert "\nBitrate unknown, copying: spoken.mp3\n" in said
+
+    def test_a_rerun_over_its_own_output_is_up_to_date(self, convert,
+                                                       tmp_path):
+        self._said(convert, tmp_path)
+        said = self._said(convert, tmp_path)
+        assert "\nUp to date, skipping: book.m4a\n" in said
+        assert "Converting:" not in said
+
+    def test_and_its_footer_leaves_out_what_it_did_not_do(self, convert,
+                                                          tmp_path):
+        """Nothing was encoded and nothing split, so there is no audio to
+        total, no speed to give and no re-join to time."""
+        self._said(convert, tmp_path)
+        said = self._said(convert, tmp_path)
+        for row in ("Total duration:", "Real-time speedup:",
+                    "Post-conversion:"):
+            assert row not in said
+        assert "Files:" in said
 
 
 class TestRelativePaths:

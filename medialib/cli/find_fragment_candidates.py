@@ -308,7 +308,11 @@ def main(argv: list, program: str = "find-fragment-candidates") -> int:
 
     reported = write_report(report, tree_file,
                             tally(extract_names(tree_file), minimum), minimum)
-    print('Wrote %d candidate(s) to "%s".' % (reported, report))
+    # An empty report under the default floor may only mean that nothing
+    # recurs, so the one flag that lists the one-offs too is named with it.
+    hint = " (none carried by %d or more names; -m 1 lists every candidate)" \
+        % minimum if reported == 0 and minimum > 1 else ""
+    print('Wrote %d candidate(s) to "%s"%s.' % (reported, report, hint))
     return 0
 
 

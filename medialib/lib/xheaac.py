@@ -90,7 +90,7 @@ def require_encoder(what: str, *, present=None,
 
     The message is written here rather than handed to
     ``tooldeps.require_tools`` because no distribution packages exhale: the hint
-    has to name the source to build and the way out of the run (``-o opus``),
+    has to name the source to build and the way out of the run (``-e opus``),
     which the shared preflight has no room for.
 
     ``skip_preflight`` is the same escape hatch the tool preflight and the
@@ -113,7 +113,7 @@ def require_encoder(what: str, *, present=None,
         "      %s" % hint,
         "",
         "Install it (or put it on PATH) and run again, or encode Opus instead "
-        "(-o opus).",
+        "(-e opus).",
         "Nothing was changed.",
     ]) + "\n")
     return 1

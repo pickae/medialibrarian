@@ -65,21 +65,21 @@ class TestRefusing:
         a hint naming a package would send the reader to a command that fails.
         """
         buffer = _Buffer()
-        assert xheaac.require_encoder("convert-audio (-o xheaac)",
+        assert xheaac.require_encoder("convert-audio (-e xheaac)",
                                       present=having(), file=buffer) == 1
         assert xheaac.EXHALE in buffer.text
         assert "ecodis/exhale" in buffer.text
 
     def test_the_refusal_names_the_command_that_was_asked_for(self):
         buffer = _Buffer()
-        xheaac.require_encoder("convert-audio (-o xheaac)", present=having(),
+        xheaac.require_encoder("convert-audio (-e xheaac)", present=having(),
                                file=buffer)
-        assert "convert-audio (-o xheaac)" in buffer.text
+        assert "convert-audio (-e xheaac)" in buffer.text
 
     def test_the_refusal_offers_opus_as_the_way_out(self):
         buffer = _Buffer()
         xheaac.require_encoder("x", present=having(), file=buffer)
-        assert "-o opus" in buffer.text
+        assert "-e opus" in buffer.text
         assert "Nothing was changed." in buffer.text
 
     def test_the_preflight_can_be_skipped_like_every_other_one(self):
@@ -262,7 +262,7 @@ class TestTheCalls:
 
 class TestAgreementWithTheCodecList:
     def test_xhe_aac_is_a_codec_convert_audio_offers(self):
-        """This module is reached by `-o xheaac` and by nothing else, so a
+        """This module is reached by `-e xheaac` and by nothing else, so a
         rename in the list without one here leaves it unreachable."""
         assert "xheaac" in enums.AUDIO_CODECS
 

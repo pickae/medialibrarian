@@ -259,12 +259,18 @@ def crop_for(input: str, label, media_duration, video_dimensions, jobs_per_core,
                aspectratios.label_of(width, height), label))
         return ""
 
+    # Only the edges that lose something are named: a letterboxed film has no
+    # columns to speak of, and a pillarboxed one no lines.
+    edges = []
+    if crop.y:
+        edges.append("%d line(s) off the top and the bottom" % crop.y)
+    if crop.x:
+        edges.append("%d column(s) off each side" % crop.x)
     sys.stderr.write(
-        "Crop: %dx%d (%s) -> %dx%d (%s), %d line(s) off the top and the bottom "
-        "and %d column(s) off each side - the smallest bands at any of %d "
+        "Crop: %dx%d (%s) -> %dx%d (%s), %s - the smallest bands at any of %d "
         "moments: %s\n"
         % (width, height, aspectratios.label_of(width, height),
            crop.width, crop.height,
            aspectratios.label_of(crop.width, crop.height),
-           crop.y, crop.x, measured, label))
+           " and ".join(edges), measured, label))
     return crop.spec
