@@ -400,6 +400,31 @@ class TestQueue:
         assert _flag(sync_call, "--max-offset-seconds") == "10"
 
 
+    def test_a_confidence_run_still_syncs_a_transcript_by_ffsubsyncs_own_check(
+            self, w):
+        """A window of a few seconds leaves the confidence nowhere else to
+        look, so a transcript is held to ffsubsync's own check instead."""
+        root = w.tmp_path / "root"
+        root.mkdir()
+        ram = w.tmp_path / "ram"
+        ram.mkdir()
+        mka = os.path.join(ram, "extract.mka")
+        open(mka, "w").close()
+        srt = str(root / "out.en.srt")
+        record = "\x1f".join([mka, srt, "transcribe", "en", srt])
+        w.install("pipx")
+        w.install("ffsubsync")
+        w.rc("pipx", "0")
+        w.writes("pipx", ["${--output_dir}/extract.srt"])
+        w.rc("ffsubsync", "0")
+        w.say("ffsubsync", "synced fine\n")
+        w.writes("ffsubsync", ["${--log-dir-path}/ffsubsync.log"])
+        ct.transcribe_commentary(record, WHISPER, "5", "confidence", str(ram),
+                                 lambda _line: None)
+        assert os.path.isfile(srt)
+        sync_call = [c for c in w.calls() if c[0] == "ffsubsync"][0]
+        assert _flag(sync_call, "--quality-max-offset-seconds") == "5"
+
 class TestNameless:
     """The rare commentary track that carries no name of its own: the shell
     reads the absent track name as "null", and that must not be spelled into

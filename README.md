@@ -643,6 +643,14 @@ Sorts loose movie files into per-movie subfolders (Plex layout), cleans
 folder/movie/subtitle names, renames/downloads subtitles for six languages,
 refreshes mkv tags, transcodes audio to Opus, and transcribes commentary tracks.
 
+Subtitles are downloaded after the films are tagged with their IMDb ids, and a
+tagged film is searched for by its id, so only a subtitle catalogued under that
+very film is taken — never one for a remake or another film of the same name. A
+downloaded subtitle is kept only when it lines up with the film's speech at one
+offset far better than at any other, however far that offset is from where it
+started; a subtitle that fits nowhere in particular belongs to some other film
+or cut and is thrown away, to be tried again on the next run.
+
 A track counts as a commentary when its mkv commentary flag says so *or* when its
 name does — in any of the supported languages, so a German disc's
 "Audiokommentar" is picked up as readily as an "Audio Commentary". Commentary is

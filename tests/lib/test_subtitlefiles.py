@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from medialib import helpers
 from medialib.lib import languages, subtitlefiles
 from tests import blackbox
 
@@ -19,6 +20,8 @@ pytestmark = pytest.mark.stubbed
 _TOOLSTUB = blackbox.TOOLSTUB
 
 _PLUMBING = ("bash", "awk", "cat", "find", "grep", "mktemp", "mv", "rm")
+
+_HELPER = helpers.path_of("subliminal_download.py")
 
 # The log a sync that applied the alignment leaves, and one that refused it.
 _GOOD_LOG = "score: 44100.000\noffset seconds: 5.000\nwriting output"
@@ -309,6 +312,90 @@ class TestSyncSubtitle:
         assert not os.path.exists(argv[-1])
 
 
+class TestFfsubsyncPython:
+    def _script(self, w, first_line):
+        script = w.bin_dir / "ffsubsync"
+        script.write_text(first_line + "\nexit 0\n")
+        os.chmod(str(script), 0o755)
+        return script
+
+    def test_the_interpreter_its_own_line_names(self, w):
+        self._script(w, "#!/opt/venvs/ffsubsync/bin/python")
+        assert subtitlefiles.ffsubsync_python() == [
+            "/opt/venvs/ffsubsync/bin/python"]
+
+    def test_an_env_line_is_the_whole_argv(self, w):
+        self._script(w, "#!/usr/bin/env python3")
+        assert subtitlefiles.ffsubsync_python() == ["/usr/bin/env", "python3"]
+
+    def test_a_shell_wrapper_falls_back_to_the_python_beside_it(self, w):
+        self._script(w, "#!/bin/sh")
+        python = w.bin_dir / "python"
+        python.write_text("#!/bin/sh\n")
+        os.chmod(str(python), 0o755)
+        assert subtitlefiles.ffsubsync_python() == [str(python)]
+
+    def test_nothing_to_go_on_is_none(self, w):
+        self._script(w, "#!/bin/sh")
+        assert subtitlefiles.ffsubsync_python() is None
+
+    def test_no_ffsubsync_is_none(self, w):
+        assert subtitlefiles.ffsubsync_python() is None
+
+
+class TestSyncByConfidence:
+    """The confidence helper, run under the interpreter ffsubsync's own script
+    names - here a stub that records the call and writes the log the case
+    chooses."""
+
+    _HELPER = helpers.path_of("ffsubsync_confidence.py")
+
+    def _run(self, w, log, rc_code="0"):
+        script = w.bin_dir / "ffsubsync"
+        script.write_text("#!" + str(w.bin_dir / "fakepython") + "\n")
+        os.chmod(str(script), 0o755)
+        w.install("fakepython")
+        w.rc("fakepython", rc_code)
+        if log is not None:
+            w.say("fakepython", log)
+            w.write("fakepython", "${--log-dir-path}/ffsubsync.log")
+        return subtitlefiles.sync_subtitle("ref.mkv", "sub.srt", "600", "60",
+                                           "confidence")
+
+    def _log(self, confidence):
+        return _GOOD_LOG + "\nalignment confidence: %s" % confidence
+
+    def test_the_helper_is_handed_the_whole_window_as_the_offset_limit(self, w):
+        self._run(w, self._log("9.50"))
+        (argv,) = w.calls()
+        assert argv[:13] == ["fakepython", self._HELPER, "ref.mkv", "-i", "sub.srt", "-o",
+                             "sub.srt", "--max-offset-seconds", "600",
+                             "--skip-sync-on-low-quality",
+                             "--quality-max-offset-seconds", "600",
+                             "--log-dir-path"]
+
+    def test_a_confident_alignment_is_zero(self, w):
+        assert self._run(w, self._log(subtitlefiles.MIN_SYNC_CONFIDENCE)) == 0
+
+    def test_one_that_does_not_stand_out_is_refused(self, w):
+        assert self._run(w, self._log(
+            subtitlefiles.MIN_SYNC_CONFIDENCE - 0.01)) == 2
+
+    def test_ffsubsyncs_own_refusal_still_refuses(self, w):
+        assert self._run(w, _BAD_LOG + "\nalignment confidence: 9.00") == 2
+
+    def test_no_measurement_is_a_failure_not_a_pass(self, w):
+        assert self._run(w, _GOOD_LOG) == 1
+        assert self._run(w, None) == 1
+
+    def test_a_helper_that_failed_is_one(self, w):
+        assert self._run(w, self._log("9.50"), rc_code="1") == 1
+
+    def test_without_an_interpreter_to_run_it_under_it_is_one(self, w):
+        assert subtitlefiles.sync_subtitle("ref.mkv", "sub.srt", "600", "60",
+                                           "confidence") == 1
+
+
 class TestDownloadSrt:
     def _setup(self, w, tree, have=("pipx", "ffprobe", "ffmpeg", "ffsubsync"),
                pipx_write="-", ffprobe="-", ffmpeg_rc="-",
@@ -367,9 +454,7 @@ class TestDownloadSrt:
         by_tool = {}
         for argv in have_calls():
             by_tool.setdefault(argv[0], []).append(argv)
-        assert by_tool["pipx"] == [["pipx", "run", "subliminal",
-                                    "--opensubtitles", "u", "p", "download",
-                                    "-p", "opensubtitles", "-l", "en",
+        assert by_tool["pipx"] == [["pipx", "run", _HELPER, "en", "",
                                     "Movie.mkv"]]
         assert by_tool["ffprobe"] == [["ffprobe", "-v", "error",
                                        "-select_streams", "s:0",
@@ -458,6 +543,73 @@ class TestDownloadSrt:
         assert (tree / "Movie.en.srt").is_file()
 
 
+class TestFilmImdbId:
+    @pytest.mark.parametrize("path,want", [
+        ("Movie (1999) {imdb-tt0000003}.mkv", "tt0000003"),
+        ("Movie (1999) {IMDB-TT0000003} {edition-Extended}.mkv", "tt0000003"),
+        ("Movie (1999) {imdb-tt0000003}/Movie (1999).mkv", "tt0000003"),
+        ("Movie (1999)/Movie (1999).mkv", ""),
+        ("Movie (1999) {imdb-}.mkv", ""),
+    ])
+    def test_the_id_is_read_off_the_file_then_its_folder(self, path, want):
+        assert subtitlefiles.film_imdb_id(path) == want
+
+    def test_the_files_own_tag_wins_over_its_folders(self):
+        assert subtitlefiles.film_imdb_id(
+            "F {imdb-tt0000002}/F {imdb-tt0000001}.mkv") == "tt0000001"
+
+    def test_a_tmdb_tag_is_looked_up_for_its_imdb_id(self, monkeypatch):
+        asked = []
+
+        def fake(tmdb_id):
+            asked.append(tmdb_id)
+            return "tt0000003"
+
+        monkeypatch.setattr(subtitlefiles.tmdblookup, "imdb_of_tmdb", fake)
+        assert subtitlefiles.film_imdb_id("Movie (1999) {tmdb-12345}.mkv") \
+            == "tt0000003"
+        assert asked == ["12345"]
+
+
+class TestTheDownloadCall:
+    """What the helper is handed: the film's id, and credentials it reads from
+    its environment rather than from an argv every account can read."""
+
+    def _pipx_that_reports_its_environment(self, w):
+        report = w.tmp_path / "env"
+        pipx = w.bin_dir / "pipx"
+        pipx.write_text('#!/bin/bash\nprintf "%s\\n" "$*" '
+                        '"$openSubtitlesUser" "$openSubtitlesPassword" > '
+                        + str(report) + "\n")
+        os.chmod(str(pipx), 0o755)
+        return report
+
+    def test_the_id_and_the_credentials(self, w, monkeypatch):
+        tree = _tree(w, "Movie (1999) {imdb-tt0000003}.mkv")
+        monkeypatch.chdir(tree)
+        report = self._pipx_that_reports_its_environment(w)
+        subtitlefiles.download_srt("Movie (1999) {imdb-tt0000003}.mkv", "en",
+                                   "someone", "secret", "600", "60", "yes",
+                                   lambda _line: None)
+        argv, user, password = report.read_text().splitlines()
+        assert argv == ("run " + _HELPER + " en tt0000003 "
+                        "Movie (1999) {imdb-tt0000003}.mkv")
+        assert "secret" not in argv
+        assert (user, password) == ("someone", "secret")
+
+    def test_an_untagged_film_hands_an_empty_id(self, w, monkeypatch):
+        tree = _tree(w, "Movie.mkv")
+        monkeypatch.chdir(tree)
+        report = self._pipx_that_reports_its_environment(w)
+        subtitlefiles.download_srt("Movie.mkv", "nl", "u", "p", "600", "60",
+                                   "yes", lambda _line: None)
+        argv = report.read_text().splitlines()[0]
+        assert argv == "run " + _HELPER + " nl  Movie.mkv"
+
+    def test_the_helper_is_shipped(self):
+        assert os.path.isfile(_HELPER)
+
+
 class TestDownloadSubs:
     def test_every_movie_every_language_and_the_extras_alone(self, w, monkeypatch):
         tree = _tree(w, ("Featurettes", "d"), "Movie.mkv",
@@ -475,7 +627,7 @@ class TestDownloadSubs:
         assert (tree / "Movie.en.srt").is_file()
         assert not (tree / "Featurettes/Clip.en.srt").exists()
         pipx_calls = [a for a in w.calls() if a[0] == "pipx"]
-        assert [a[-2] for a in pipx_calls] == [
+        assert [a[3] for a in pipx_calls] == [
             row.code2 for row in languages.LANGUAGES]
         assert all(a[-1].endswith("/Movie.mkv") for a in pipx_calls)
         assert len(pipx_calls) == len(languages.LANGUAGES)
