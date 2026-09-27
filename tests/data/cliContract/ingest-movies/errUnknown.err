@@ -61,6 +61,25 @@ Usage:
                   ingest does it. One ffsubsync cannot align at all is left
                   alone either way. Best run after -tw, so films are searched
                   for by their ids.
+    -n, --commentary-names
+                  commentary names only: a film whose commentary tracks are only
+                  numbered - "Commentary 2", "Kommentar 1", "Audiosommentary
+                  3" - has them named after who speaks in each, the way the
+                  disc database dvdcompare.net lists the film's releases, and
+                  nothing else is done. Walks the whole tree the way -t does.
+                  A film is named only when it has exactly as many
+                  commentaries as a release of its kind of disc (4K, Blu-ray
+                  or DVD, told by the picture size) lists, every such release
+                  agrees on what they are, and - for two or more - the
+                  transcripts beside the film say which track is which, from
+                  the commentators saying who they are in the opening
+                  minutes. The subtitles of a commentary and its transcripts
+                  beside the film are renamed with it. A DRY RUN unless -w is
+                  given. The pages asked for are kept in data/dvdcompare, and
+                  every folder given leaves a list in
+                  logs/ingest-movies-commentarynames-<folder>.txt of what was
+                  named and of every film left alone, with the reason. Best
+                  run after -a, which writes the transcripts.
     -c, --chapters
                   chapters only: the chapter lookup and nothing else - walks the
                   whole tree the way -t does, and gives every tagged film that
@@ -76,9 +95,9 @@ Usage:
                   -w has no part in it. Best run after -tw: an untagged
                   folder's title is only a guess.
     -w, --write   with -t or -i, actually perform the renames instead of printing
-                  them; with -s, sync, throw out and download. On its own it
-                  is a usage error rather than a full ingest: there is no dry
-                  run to carry out.
+                  them; with -s, sync, throw out and download; with -n, name
+                  the commentaries. On its own it is a usage error rather than
+                  a full ingest: there is no dry run to carry out.
     -i, --ids <file>
                   the hand-written id list filled in and read BACK: tagging and
                   nothing else, like -t, but going on what is in this file. An
@@ -195,7 +214,7 @@ Usage:
     Dependencies
     ------------
     Required: ffmpeg, mkvtoolnix, mediainfo (and curl, once tmdbApiKey is set,
-    or for the chapter lookup).
+    for -n or for the chapter lookup).
     Optional, each skipped with a warning when absent: pipx + ffsubsync (together
     they enable subtitle downloading and commentary transcription - without either,
     BOTH are skipped, since neither subtitle is worth keeping unaligned), dovi_tool

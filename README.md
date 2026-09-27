@@ -966,7 +966,7 @@ naming that row, and the run carries on to the next. And a `-i` file that
 would throw away every id in the real file and put the whole library back
 through the lookups that already failed on it.
 
-**`-w` on its own is refused.** Without `-t`, `-i` or `-s` there is no dry run
+**`-w` on its own is refused.** Without `-t`, `-i`, `-s` or `-n` there is no dry run
 to carry out, and the run it would otherwise start is a full ingest. `-a` and
 `-c` refuse it as well: the transcription and the chapter lookup are not dry
 runs, so there is nothing for `-w` to carry out.
@@ -984,6 +984,38 @@ syncs and tests every subtitle still missing, exactly as a full ingest does — 
 one thrown out is fetched again in the same run. A subtitle ffsubsync cannot
 align at all is left alone either way, since it may be one that cannot be
 fetched again. Run it after `-tw`, so that films are searched for by their ids.
+
+**`-n` names numbered commentary tracks.** A rip often calls its commentaries
+`Commentary 1`, `Commentary 2` — the disc said which was which only in its
+menu. `-n` looks the film up on [dvdcompare.net](https://www.dvdcompare.net),
+which lists every release's commentaries by who speaks in them, and gives each
+track its real name: `Commentary by director …`. Only a film whose every
+commentary is still merely numbered is touched — in any of the six languages,
+and spelled a letter wrong or not (`Kommentar 2`, `Audiosommentary 3`) — and
+nothing else is done. It is a **dry run** unless `-w` is given.
+
+It names a film only when it is sure:
+
+- The **picture size says which kind of disc** the file came from — 4K,
+  Blu-ray or DVD — and only that kind's releases count (a Blu-ray is also looked
+  for among the Blu-ray discs of the 4K sets).
+- The file has **exactly as many commentaries** as such a release lists, and
+  every release that lists that many agrees on what they are.
+- For **two or more**, a listing's order is its menu's and says nothing about
+  the order of the disc's audio, so **the transcripts beside the film decide
+  which track is which**: commentators nearly always open by saying who they
+  are, and each track's opening minutes have to introduce one listed
+  commentary's people and nobody else's, in one way of pairing them only. One
+  commentary whose people never introduce themselves may take the track that
+  is left over. Run `-a` first, so the transcripts are there.
+
+The disc's own subtitles for a commentary (`English (Commentary #2)`), the
+transcripts the ingest appended to the film, and the transcripts and extracts
+beside it (`… 2 Commentary 1.en.srt`) are renamed along with the track. Every
+folder given leaves `logs/ingest-movies-commentarynames-<folder>.txt`: what was
+named — or would be — and every film left alone, with the reason. The pages
+asked for are kept in the checkout's `data/dvdcompare`, and the site is asked
+no more than once every few seconds.
 
 **`-c` does only the chapters.** Every tagged film under the given folders that
 has no chapters, or only numbered ones (`Chapter 01`, `Kapitel 3`, a bare

@@ -543,7 +543,7 @@ def onto_base(base: str, name: str, also=(), typos: bool = False) -> str:
     ``typos`` allows the last reading of all, a single slip of the hand, on a
     name every other reading has refused. A guess, so the caller only sets it
     where something has already vouched for the name being guessed AT - see
-    :func:`medialib.lib.titlematch.one_typo_apart`.
+    :func:`medialib.lib.titlematch.one_slip_apart`.
     """
     if is_kept_copy(name):
         return ""
@@ -641,9 +641,9 @@ def _names_this_film(base: str, head: str, typos: bool = False) -> bool:
     bare = untitled_base(base)
     if bare != base and titlematch.equivalent(bare, head):
         return True
-    return bool(typos) and (titlematch.one_typo_apart(base, head)
+    return bool(typos) and (titlematch.one_slip_apart(base, head)
                             or (bare != base
-                                and titlematch.one_typo_apart(bare, head)))
+                                and titlematch.one_slip_apart(bare, head)))
 
 
 def alias_renames(base: str, names, aliases) -> dict:
@@ -1120,7 +1120,7 @@ def films_own_spelling(base: str, names) -> tuple:
     theirs = spellings.pop()
     if not theirs or theirs == base or titlematch.equivalent(theirs, base):
         return "", 0
-    if not titlematch.one_typo_apart(theirs, base):
+    if not titlematch.one_slip_apart(theirs, base):
         return "", 0
     said = sum(1 for name in names
                if re.sub(r"\s+", " ",

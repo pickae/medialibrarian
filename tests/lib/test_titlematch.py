@@ -808,8 +808,8 @@ class TestOneSlipOfTheHand:
         ("Falcons Forevr", "Falcons Forever"),          # a dropped one
     ])
     def test_a_single_letter_is_read_as_a_slip(self, one, other):
-        assert titlematch.one_typo_apart(one, other)
-        assert titlematch.one_typo_apart(other, one)
+        assert titlematch.one_slip_apart(one, other)
+        assert titlematch.one_slip_apart(other, one)
 
     @pytest.mark.parametrize("one,other", [
         ("Thinner Tahn Air", "Thinner Than Air"),   # a hand at speed
@@ -819,8 +819,8 @@ class TestOneSlipOfTheHand:
     ])
     def test_and_so_are_two_letters_written_in_the_wrong_order(self, one,
                                                                other):
-        assert titlematch.one_typo_apart(one, other)
-        assert titlematch.one_typo_apart(other, one)
+        assert titlematch.one_slip_apart(one, other)
+        assert titlematch.one_slip_apart(other, one)
 
     @pytest.mark.parametrize("one,other", [
         ("Falcon sForever", "Falcons Forever"),     # the space struck late
@@ -830,8 +830,8 @@ class TestOneSlipOfTheHand:
     def test_and_a_letter_that_crossed_the_space_beside_it(self, one, other):
         """The likeliest crossing of all, because the space is the one key a
         thumb strikes while the fingers go on spelling."""
-        assert titlematch.one_typo_apart(one, other)
-        assert titlematch.one_typo_apart(other, one)
+        assert titlematch.one_slip_apart(one, other)
+        assert titlematch.one_slip_apart(other, one)
 
     @pytest.mark.parametrize("one,other", [
         ("Falcons Forevr", "Falcons Forever"),      # a letter never typed
@@ -839,8 +839,8 @@ class TestOneSlipOfTheHand:
         ("Marek HalvorSunfall", "Marek Halvor Sunfall"),
     ])
     def test_and_a_character_that_was_never_typed_at_all(self, one, other):
-        assert titlematch.one_typo_apart(one, other)
-        assert titlematch.one_typo_apart(other, one)
+        assert titlematch.one_slip_apart(one, other)
+        assert titlematch.one_slip_apart(other, one)
 
     @pytest.mark.parametrize("one,other", [
         ("Marekk Halvor Sunfall", "Marek Halvor Sunfall"),  # a key struck twice
@@ -853,8 +853,8 @@ class TestOneSlipOfTheHand:
         """The same reading as the one above and not a second one: a character
         too many in this title is a character too few in that one, and which
         way round somebody typed it is not known and does not matter."""
-        assert titlematch.one_typo_apart(one, other)
-        assert titlematch.one_typo_apart(other, one)
+        assert titlematch.one_slip_apart(one, other)
+        assert titlematch.one_slip_apart(other, one)
 
     @pytest.mark.parametrize("one,other", [
         ("Falcons  Forever", "Falcons Forever"),    # a doubled space
@@ -866,26 +866,26 @@ class TestOneSlipOfTheHand:
         """The fold collapses a run of spaces to one and strips the ends, so
         these are not two titles one slip apart - they are one title, and
         matched a rung earlier."""
-        assert not titlematch.one_typo_apart(one, other)
+        assert not titlematch.one_slip_apart(one, other)
         assert titlematch.equivalent(one, other)
 
     def test_and_not_a_digit_struck_twice(self):
         """"Falkenauge 1233" is not "Falkenauge 123" typed clumsily, it is
         another number - and nothing here guesses about numbers."""
-        assert not titlematch.one_typo_apart("Falkenauge 1233",
+        assert not titlematch.one_slip_apart("Falkenauge 1233",
                                              "Falkenauge 123")
         assert not titlematch.equivalent("Falkenauge 1233", "Falkenauge 123")
 
     def test_but_not_the_space_that_holds_two_numbers_apart(self):
         """Putting that one in, or leaving it out, is not a boundary between
         words - it is the boundary between two counts."""
-        assert not titlematch.one_typo_apart("Falkenauge 12 3",
+        assert not titlematch.one_slip_apart("Falkenauge 12 3",
                                              "Falkenauge 123")
 
     def test_and_not_a_space_that_became_a_letter(self):
         """That changes the letters of the title, which is a name spelled
         otherwise rather than a key struck wrongly."""
-        assert not titlematch.one_typo_apart("Falcon Sand", "FalconXSand")
+        assert not titlematch.one_slip_apart("Falcon Sand", "FalconXSand")
 
     @pytest.mark.parametrize("one,other", [
         ("Falkenauge 2", "Falkenauge 3"),      # the sequel
@@ -901,8 +901,8 @@ class TestOneSlipOfTheHand:
                                                 # different title, not a slip
     ])
     def test_and_nothing_else_is(self, one, other):
-        assert not titlematch.one_typo_apart(one, other)
-        assert not titlematch.one_typo_apart(other, one)
+        assert not titlematch.one_slip_apart(one, other)
+        assert not titlematch.one_slip_apart(other, one)
 
     def test_it_is_not_a_key_and_never_widens_a_fold(self):
         """A guess must not be able to make two titles equivalent - every

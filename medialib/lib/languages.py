@@ -7,8 +7,10 @@ whisper output - so supporting another language is a row here and nothing else.
 
 from __future__ import annotations
 
+import re
 from typing import NamedTuple
 
+from medialib.lib import titlematch
 from medialib.lib.enums import shell_lower
 
 
@@ -61,10 +63,41 @@ def is_real_language_tag(tag: str) -> bool:
     return shell_lower(tag) not in _NOT_A_LANGUAGE
 
 
+# The commentary words themselves, whole, in the languages discs carry - what a
+# track name spelled a letter wrong is measured against. "comment" is not among
+# them: a word that short is a letter from far too many others, and the keyword
+# above already finds it spelled right.
+COMMENTARY_WORDS = ("commentary", "commentaries", "kommentar", "kommentare",
+                    "commentaire", "commentaar", "comentario", "commento")
+
+# "audio" glued on in front, the way "Audiokommentar" is spelled.
+_AUDIO_PREFIX = "audio"
+
+
+def is_commentary_word(word: str) -> bool:
+    """Whether one word of a track name is a commentary word, spelled a letter
+    wrong or not: "Audiosommentary" and "Audiolkommentar" are.
+
+    A slip is what it is for a film's title - one key mistyped, struck twice
+    or missed, or two struck in the wrong order - and is read by the same
+    rule, :func:`titlematch.one_slip_apart`, so the library holds one idea of
+    a misspelling and not two.
+    """
+    word = shell_lower(word)
+    if word.startswith(_AUDIO_PREFIX) and len(word) > len(_AUDIO_PREFIX):
+        word = word[len(_AUDIO_PREFIX):]
+    return any(word == target or titlematch.one_slip_apart(word, target)
+               for target in COMMENTARY_WORDS)
+
+
 def is_commentary_name(name: str) -> bool:
-    """Does this track name mark it as a commentary? Lower-case substrings."""
+    """Does this track name mark it as a commentary? A keyword anywhere in it,
+    or a word of it that is a commentary word spelled a letter wrong."""
     folded = shell_lower(name)
-    return any(keyword in folded for keyword in COMMENTARY_KEYWORDS)
+    if any(keyword in folded for keyword in COMMENTARY_KEYWORDS):
+        return True
+    return any(is_commentary_word(word)
+               for word in re.findall(r"[^\W\d_]+", folded))
 
 
 def code_from_tag(tag: str) -> str:
