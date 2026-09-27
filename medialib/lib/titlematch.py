@@ -37,8 +37,9 @@ combinations:
 
 Two things here are not folds, and are kept apart from them for that reason.
 
-:func:`one_typo_apart` answers whether two titles are one title with a single
-slip of the hand in it: a letter wrong, a character too many or too few, or two
+:func:`one_slip_apart` answers whether two written names - two titles, or a
+word and the word it was meant to be - are one name with a single slip of the
+hand in it: a letter wrong, a character too many or too few, or two
 characters written in the wrong order - the space between two words counting as
 a character in the last two. A fold is a reading of what somebody wrote and
 cannot be wrong; a typo is the claim that they wrote it wrong, which is a guess
@@ -68,7 +69,7 @@ __all__ = [
     "normalize_title",
     "title_keys",
     "equivalent",
-    "one_typo_apart",
+    "one_slip_apart",
     "titles_written_together",
     "leading_segment",
     "search_titles",
@@ -869,8 +870,10 @@ def equivalent(one: str, other: str) -> bool:
 MIN_TYPO_LENGTH = 6
 
 
-def one_typo_apart(one: str, other: str) -> bool:
-    """Whether two written titles are one title with a single slip in it.
+def one_slip_apart(one: str, other: str) -> bool:
+    """Whether two written names are one name with a single slip in it: a
+    film's title and its title mistyped, or a track name's word and the word
+    it was meant to be (:func:`medialib.lib.languages.is_commentary_word`).
 
     The last thing asked and never the first. Every reading in this module says
     what somebody MIGHT have written and cannot be wrong about it; this says
@@ -917,10 +920,10 @@ def one_typo_apart(one: str, other: str) -> bool:
     * one slip exactly, and the titles are not already the same - a title that
       matches has been matched, and this was not asked.
     """
-    return _one_slip_apart(normalize_title(one), normalize_title(other))
+    return _folded_one_slip_apart(normalize_title(one), normalize_title(other))
 
 
-def _one_slip_apart(one: str, other: str) -> bool:
+def _folded_one_slip_apart(one: str, other: str) -> bool:
     """The comparison itself, over two titles already folded.
 
     Worked out from the ends rather than with an edit-distance table: what is
@@ -966,7 +969,7 @@ def _a_letter_mistyped(left: str, right: str) -> bool:
     """Whether the residue is one letter standing where another belongs.
 
     The oldest reading here and the one that earns the rung - see
-    :func:`one_typo_apart` for what it buys besides the plain slip.
+    :func:`one_slip_apart` for what it buys besides the plain slip.
 
     A space is neither of the two letters. A boundary that became a letter, or
     a letter that became a boundary, changes the letters of the title and is a

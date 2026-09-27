@@ -139,6 +139,21 @@ class TestRecognisingACommentary:
         assert lang.is_commentary_name("Director's Commentary Track 2")
         assert lang.is_commentary_name("xxcommentxx")
 
+    @pytest.mark.parametrize("name", [
+        "Audiosommentary 2", "Audiolkommentar", "Comentary", "Commmentary 3",
+        "Kommentra 1", "Commentray", "Audio Comentario", "Comento",
+    ])
+    def test_a_long_word_spelled_a_letter_wrong_still_says_it(self, name):
+        """A rip's track names are typed by hand, and a commentary missed here
+        is one never transcribed. The slip is the one a film's title may
+        have."""
+        assert lang.is_commentary_name(name)
+
+    @pytest.mark.parametrize("name", ["Documentary", "Momentary",
+                                      "Elementary", "Monetary", "Cmmntry"])
+    def test_a_word_two_letters_off_is_another_word(self, name):
+        assert not lang.is_commentary_name(name)
+
     @pytest.mark.parametrize("name", ["English", "Deutsch 5.1", "Original", "",
                                       "Isolated Score", "coment"])
     def test_a_name_that_marks_nothing(self, name):

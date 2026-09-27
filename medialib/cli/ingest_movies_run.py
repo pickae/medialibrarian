@@ -17,9 +17,11 @@ from medialib.cli.ingest_movies import log
 from medialib.lib import (
     cleannamesindividually,
     clioptions,
+    commentarynames,
     commentarytranscription,
     dolbyvision,
     durationcheck,
+    dvdcompare,
     dynamicqueue,
     enums,
     ffmpegselect,
@@ -529,7 +531,8 @@ def main(argv: list, program: str = "ingest-movies",
     # for nothing but its names.
     if result.values.get("writeTags") and not (
             result.values.get("tagsOnly") or result.values.get("idList")
-            or result.values.get("subtitlesOnly")):
+            or result.values.get("subtitlesOnly")
+            or result.values.get("commentaryNames")):
         if result.values.get("commentaryOnly"):
             # -c is the transcription and not a dry run, so there is nothing
             # for -w to carry out.
@@ -573,6 +576,21 @@ def main(argv: list, program: str = "ingest-movies",
             "gives, then run -s."))
         return 1
 
+    # -n the same, against every other: it names the tracks the transcription
+    # and the tagging name their files after, so the order matters and is not
+    # guessed.
+    if result.values.get("commentaryNames") and (
+            result.values.get("commentaryOnly")
+            or result.values.get("subtitlesOnly")
+            or result.values.get("tagsOnly") or result.values.get("idList")):
+        sys.stderr.write(clioptions.usage_error_text(
+            declaration,
+            "-n names the commentary tracks and nothing else, and -c, -s, -t "
+            "and -i each do a\nphase of their own: they are two runs, not "
+            "one. Transcribe first (-c), so the\ntranscripts are there to "
+            "tell the commentaries apart by, then run -n."))
+        return 1
+
     script_dir = script_dir or commands.script_dir()
 
     # This is a long run, so its log lines carry a wall-clock stamp.
@@ -597,6 +615,15 @@ def main(argv: list, program: str = "ingest-movies",
     # run around them.
     if result.values.get("commentaryOnly"):
         return _commentary_only(program, script_dir, roots, fragments_file)
+
+    if result.values.get("commentaryNames"):
+        write = bool(result.values.get("writeTags"))
+        if tooldeps.require_tools(program, ["curl", "mkvmerge"]
+                                  + (["mkvpropedit"] if write else [])):
+            return 1
+        site = dvdcompare.Site(dvdcompare.directory(script_dir), log)
+        return _commentary_names(roots, names, write, site.releases,
+                                 fragments_file, script_dir)
 
     if result.values.get("subtitlesOnly"):
         return _subtitles_only(program, script_dir, roots, names,
@@ -735,6 +762,10 @@ ALIAS_LIST = os.path.join(TAGGING_LOGS, "ingest-movies-othertitles-%s.txt")
 # test at all: the worklist of a dry run, and under -w the record of what was
 # deleted.
 SUBTITLES_LIST = "ingest-movies-subtitles-%s.txt"
+
+# And the commentary tracks a -n run named, or would name, and the films it
+# left alone with the reason for each.
+COMMENTARY_NAMES_LIST = "ingest-movies-commentarynames-%s.txt"
 
 
 def _tags_only(program: str, script_dir: str, roots: list, names: list,
@@ -1007,6 +1038,191 @@ def _write_subtitle_list(listing: str, root: str, verdicts: dict,
                 handle.write(srt + "\n")
     log('%d subtitle(s) in "%s" out of step and %d untested - listed in "%s"'
         % (len(out), root, len(untested), listing))
+
+
+def _commentary_names(roots: list, names: list, write: bool, lookup,
+                      fragments_file: str, script_dir: str) -> int:
+    """The commentary naming phase on its own: a film whose commentary tracks
+    are only numbered has them named after who is speaking in each, read from
+    the disc database - and nothing else is done.
+
+    A DRY RUN unless asked otherwise, like -t: a name put on the wrong track is
+    what this phase must never do, and the dry run is where its refusals are
+    read. Every folder given leaves a list of what was named and what was left
+    alone, and why. ``lookup`` is the database, asked ``(title, year, kind
+    of disc)`` and answering with the film's releases or None.
+    """
+    for root, name in zip(roots, names, strict=True):
+        log('Phase: naming numbered commentary tracks in "%s"' % root
+            + ("" if write else " - DRY RUN, nothing will be renamed"))
+        named: list = []
+        refused: list = []
+        for directory in [root] + rules._folders_below(root):
+            if rules.is_bonus_folder(directory):
+                continue
+            base, _tag = plexnames.untagged_base(os.path.basename(
+                directory.rstrip("/")))
+            entries = [entry for entry in rules._names_in(directory)
+                       if os.path.isfile(os.path.join(directory, entry))]
+            for film in plexnames.one_film_in(base, entries):
+                movie = os.path.join(directory, film)
+                done, why = _name_commentaries(movie, base, lookup, write,
+                                               fragments_file)
+                relative = "./" + os.path.relpath(movie, root)
+                if done:
+                    named.append((relative, done))
+                elif why:
+                    refused.append((relative, why))
+        _write_commentary_names_list(
+            commands.logs_file(script_dir, COMMENTARY_NAMES_LIST % name),
+            root, named, refused, write)
+    if not write:
+        log("Dry run: nothing was renamed. Pass -w to carry these out.")
+    return 0
+
+
+# The reasons a film is left alone that are not worth a line in the list: it
+# has nothing to name, or somebody already named it.
+_QUIET_REFUSALS = ("no commentary track", "a commentary track already has a name")
+
+
+def _name_commentaries(movie: str, base: str, lookup, write: bool,
+                       fragments_file: str) -> tuple:
+    """One film's commentary tracks named, or what would be: (the renames said
+    as lines, "") when there are any, ([], why not) when there are not - with
+    "" for the reasons nobody needs told."""
+    tracks = rules._identify(movie)
+    commentaries = [track for track in tracks
+                    if track.is_audio and track.is_commentary]
+    file_tracks = [commentarynames.FileCommentary(track.id, track.name)
+                   for track in commentaries]
+    ordered, why = commentarynames.order_file_commentaries(file_tracks)
+    if not ordered:
+        return [], "" if why in _QUIET_REFUSALS else why
+
+    year = plexnames.year_of(base)
+    title = plexnames.untitled_base(base, year).strip()
+    video = next((track for track in tracks if track.is_video), None)
+    width, _x, height = (video.dimensions if video else "").partition("x")
+    stem = os.path.splitext(movie)[0]
+    kind = commentarynames.disc_format(width, height)
+    decision = commentarynames.decide(
+        file_tracks, lookup(title, year, kind) if kind else None, kind,
+        _commentary_transcripts(stem, file_tracks), title)
+    if not decision.names:
+        return [], decision.reason
+
+    new = dict(decision.names)
+    old = {track.id: track.name for track in commentaries}
+    subtitles, why = commentarynames.subtitle_renames(
+        tracks, [(old[track_id], name) for track_id, name in decision.names])
+    if why:
+        return [], why
+
+    def clean(name: str) -> str:
+        return rules.rename(name.replace("/", "").replace("&", "and"),
+                            fragments_file)
+
+    directory = os.path.dirname(movie)
+    sidecars = commentarynames.sidecar_renames(
+        rules._names_in(directory), os.path.basename(stem),
+        [(track_id, old[track_id], name) for track_id, name in decision.names],
+        clean)
+
+    lines = ['track %s "%s" -> "%s"' % (track_id, old[track_id], name)
+             for track_id, name in decision.names]
+    subtitle_names = dict(subtitles)
+    lines += ['subtitle track %s "%s" -> "%s"'
+              % (track.id, track.name, subtitle_names[track.id])
+              for track in tracks if track.id in subtitle_names]
+    lines += ['"%s" -> "%s"' % pair for pair in sidecars]
+    lines.append("(listed by: %s)" % decision.source)
+    for line in lines:
+        log("  %s: %s" % (os.path.basename(movie), line))
+    if not write:
+        return lines, ""
+
+    arguments = []
+    for position, track in enumerate(tracks, start=1):
+        if track.id in new:
+            arguments += ["--edit", "track:%d" % position,
+                          "--set", "name=" + new[track.id],
+                          "--set", "flag-commentary=1"]
+        elif track.id in subtitle_names:
+            arguments += ["--edit", "track:%d" % position,
+                          "--set", "name=" + subtitle_names[track.id]]
+    try:
+        original = os.stat(movie).st_mtime
+    except OSError:
+        original = None
+    failure = rules._run_capture(["mkvpropedit", movie] + arguments)
+    if failure:
+        return [], "mkvpropedit could not rename the tracks: " + \
+            failure.replace("\n", " | ")
+    if original is not None:
+        try:
+            os.utime(movie, (original, original))
+        except OSError:
+            pass
+    skips = safety.RunSkipLog()
+    for old_name, new_name in sidecars:
+        if not safety.safe_rename(os.path.join(directory, old_name),
+                                  os.path.join(directory, new_name), skips):
+            log('  WARNING: sidecar not renamed, "%s" is in the way: %s'
+                % (new_name, old_name))
+    return lines, ""
+
+
+def _commentary_transcripts(stem: str, tracks: list) -> dict:
+    """Each commentary track's transcript beside the film, as text: every
+    ``.srt`` the transcription wrote for that track, in every language, run
+    together. A track with none is left out."""
+    directory, _name = os.path.split(stem)
+    entries = sorted(rules._names_in(directory or "."))
+    found = {}
+    for track in tracks:
+        prefix = os.path.basename(
+            commentarytranscription.commentary_prefix(stem, track.id))
+        texts = []
+        for entry in entries:
+            if not (entry.startswith(prefix) and entry.endswith(".srt")):
+                continue
+            try:
+                with open(os.path.join(directory or ".", entry),
+                          encoding="utf-8", errors="replace") as handle:
+                    texts.append(handle.read())
+            except OSError:
+                continue
+        if texts:
+            found[track.id] = "\n\n".join(texts)
+    return found
+
+
+def _write_commentary_names_list(listing: str, root: str, named: list,
+                                 refused: list, write: bool) -> None:
+    """What one folder's commentary naming did, or would do, and every film it
+    left alone with the reason. A folder with nothing to say of either leaves
+    no list - and removes one an earlier run left."""
+    if not named and not refused:
+        try:
+            os.remove(listing)
+        except OSError:
+            pass
+        return
+    with open(listing, "w", encoding="utf-8") as handle:
+        if named:
+            handle.write("# %s:\n" % ("Named" if write else "Would be named"))
+            for movie, lines in named:
+                handle.write(movie + "\n")
+                for line in lines:
+                    handle.write("    " + line + "\n")
+        if refused:
+            handle.write("# Left alone:\n")
+            for movie, why in refused:
+                handle.write("%s\n    %s\n" % (movie, why))
+    log('%d film(s) in "%s" %s and %d left alone - listed in "%s"'
+        % (len(named), root, "named" if write else "would be named",
+           len(refused), listing))
 
 
 def _sidecar_too_small(prefix: str, movie: str, durations: dict) -> bool:
