@@ -35,7 +35,7 @@ _FLAG = "  --skip-sync-on-low-quality  reject bad alignments"
 
 
 def test_a_run_that_puts_nothing_to_the_confidence_is_not_warned(probe):
-    """-c: a transcript is judged by its own offset, never the confidence."""
+    """-a: a transcript is judged by its own offset, never the confidence."""
     answer, logs = probe(_FLAG, watchable=False, judged="")
     assert answer == "yes"
     assert logs == []
@@ -132,7 +132,7 @@ def ingested(monkeypatch):
         monkeypatch.setattr(run_module.tmdblookup, "tag_plex_ids",
                             lambda *a, **k: None)
         for name in ("_transcode_opus", "improve_main_movies",
-                     "check_folders"):
+                     "_chapter_phase", "check_folders"):
             monkeypatch.setattr(run_module, name, lambda *a, **k: None)
         monkeypatch.setattr(run_module, "log", lambda *a, **k: None)
 

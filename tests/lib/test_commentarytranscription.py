@@ -475,7 +475,7 @@ class TestNameless:
 
 class TestOrphans:
     """A transcript that names a track its film no longer numbers a commentary
-    for is one the film has outlived. The -c run collects them as it sweeps,
+    for is one the film has outlived. The -a run collects them as it sweeps,
     and leaves them in a file rather than losing them or acting on them: a
     transcript the film still numbers a commentary for is left alone."""
 

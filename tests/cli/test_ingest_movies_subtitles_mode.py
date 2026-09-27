@@ -225,7 +225,7 @@ class TestWhatItSaysAtTheEnd:
 
 
 class TestTheCombosItRefuses:
-    @pytest.mark.parametrize("other", [["-t"], ["-c"], ["-i", "ids.tsv"]])
+    @pytest.mark.parametrize("other", [["-t"], ["-a"], ["-i", "ids.tsv"]])
     def test_s_with_another_phase_is_refused(self, tmp_path, capsys, other):
         films = _library(tmp_path, "Films")
         assert run.main(["-s", *other, str(films)]) == 1
