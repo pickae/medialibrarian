@@ -419,7 +419,7 @@ def chunk_start_offset(priming: int, rate: int) -> float:
     return max(0, priming) / rate
 
 
-def wav_argv(source: str, rate: int, mono: bool,
+def wav_argv(source: str, rate: int, downmix: int = 0,
              start: str = "", duration: str = "") -> list[str]:
     """ffmpeg decoding one source's first audio stream to WAVE on stdout.
 
@@ -429,6 +429,10 @@ def wav_argv(source: str, rate: int, mono: bool,
     cover are re-attached to the finished file from the ORIGINAL afterwards, the
     same way the Opus path does it, so carrying them through the intermediate
     would only give the encoder a WAVE header full of tags to ignore.
+
+    <downmix> is the channel count to fold the source down to - 1 for -m, 2
+    for a surround source the run is not keeping - and 0 for "as it is". The
+    encoder has no downmix of its own, so this is the only place one can happen.
 
     <start> and <duration> cut one time range out instead of taking the whole
     file, which is what makes this the chunk decoder as well as the whole-file
@@ -454,8 +458,8 @@ def wav_argv(source: str, rate: int, mono: bool,
     elif start:
         argv += ["-ss", start]
     argv += ["-i", source, "-map", "0:a:0", "-map_metadata", "-1"] + cut
-    if mono:
-        argv += ["-ac", "1"]
+    if downmix:
+        argv += ["-ac", str(downmix)]
     return argv + ["-ar", str(rate), "-c:a", "pcm_s16le", "-f", "wav", "-"]
 
 

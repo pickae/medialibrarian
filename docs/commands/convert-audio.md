@@ -33,10 +33,18 @@ how long counts as long, and `0` turns it off.
 
 | Mode | Channels | Bitrate |
 | --- | --- | --- |
-| default | as the source | 46 kbps |
+| default | as the source, but at most stereo — a surround source is downmixed | 46 kbps |
 | `-m` | forced mono | 32 kbps |
+| `-u` (surround) | the source's own count, up to 7.1 | 46 kbps scaled up with the channel count (106 for 5.1) |
 | `-b <kbps>` | — | that bitrate |
-| `-a` (adaptive) | the source's own count, decided per file | the slightly higher spoken-word figure for that channel count, allowing for sound-effects. Cannot be combined with `-m` or `-b`, and turns long-file splitting off |
+| `-a` (adaptive) | the source's own count, decided per file, capped at stereo unless `-u` | the slightly higher spoken-word figure for that channel count, allowing for sound-effects. Cannot be combined with `-m` or `-b`, and turns long-file splitting off |
+
+The output is meant for a phone, so stereo is the ceiling unless `-u` asks for
+more. With `-u`, Opus carries surround in only one fixed layout per channel
+count, so a source in any other layout (the 5.1(side) that EAC3 decodes to, or
+7.1(wide)) is re-labelled onto it. A 2.1 or 3.1 source is still downmixed to
+stereo rather than have its LFE played from a full-range speaker, and one wider
+than 7.1 is folded down to 7.1.
 
 ## xHE-AAC (`-e xheaac`)
 

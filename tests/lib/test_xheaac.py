@@ -192,29 +192,33 @@ class TestTheCalls:
     """The two argument lists, which are what the pipe is made of."""
 
     def test_the_decode_writes_wave_on_stdout(self):
-        argv = xheaac.wav_argv("a.mp3", 48000, mono=False)
+        argv = xheaac.wav_argv("a.mp3", 48000, downmix=0)
         assert argv[0] == "ffmpeg"
         assert argv[-5:] == ["-c:a", "pcm_s16le", "-f", "wav", "-"]
 
     def test_the_decode_takes_only_the_first_audio_stream(self):
         """A video source's picture must not reach the encoder, and neither must
         a second language track."""
-        argv = xheaac.wav_argv("a.mkv", 48000, mono=False)
+        argv = xheaac.wav_argv("a.mkv", 48000, downmix=0)
         assert argv[argv.index("-map") + 1] == "0:a:0"
 
     def test_the_decode_drops_the_source_metadata(self):
         # The chapters and the cover are re-attached from the original after the
         # encode, so carrying them through the WAVE would be pointless.
-        assert "-map_metadata" in xheaac.wav_argv("a.mp3", 48000, mono=False)
+        assert "-map_metadata" in xheaac.wav_argv("a.mp3", 48000, downmix=0)
 
     def test_forced_mono_is_the_decoder_s_job_not_the_encoder_s(self):
         """The encoders have no downmix: they encode the channels they are
         given, so -m has to be `-ac 1` here exactly as it is for Opus."""
-        assert "-ac" in xheaac.wav_argv("a.mp3", 48000, mono=True)
-        assert "-ac" not in xheaac.wav_argv("a.mp3", 48000, mono=False)
+        assert "-ac" in xheaac.wav_argv("a.mp3", 48000, downmix=1)
+        assert "-ac" not in xheaac.wav_argv("a.mp3", 48000, downmix=0)
+
+    def test_a_surround_source_is_folded_to_the_count_asked_for(self):
+        argv = xheaac.wav_argv("a.m4b", 48000, downmix=2)
+        assert argv[argv.index("-ac") + 1] == "2"
 
     def test_the_rate_reaches_the_decoder(self):
-        argv = xheaac.wav_argv("a.mp3", 44100, mono=False)
+        argv = xheaac.wav_argv("a.mp3", 44100, downmix=0)
         assert argv[argv.index("-ar") + 1] == "44100"
 
     def test_a_range_seeks_short_of_the_mark_and_cuts_in_the_filter_graph(self):
@@ -223,7 +227,7 @@ class TestTheCalls:
         after it was asked to is a hole in the joined book. So it seeks EARLY
         and the exact cut is a timestamp range in the filter graph.
         """
-        argv = xheaac.wav_argv("a.mp3", 48000, False, start="10",
+        argv = xheaac.wav_argv("a.mp3", 48000, 0, start="10",
                                duration="5")
         assert argv.index("-ss") < argv.index("-i")
         assert argv[argv.index("-ss") + 1] == "%.9f" % (10 - xheaac.SEEK_LEAD)
@@ -235,7 +239,7 @@ class TestTheCalls:
         """`atrim` cuts by timestamp, and without `-copyts` the decoder
         renumbers every seek from zero - so the range would name a moment in a
         file that does not exist."""
-        argv = xheaac.wav_argv("a.mp3", 48000, False, start="10",
+        argv = xheaac.wav_argv("a.mp3", 48000, 0, start="10",
                                duration="5")
         assert "-copyts" in argv
         assert argv.index("-copyts") < argv.index("-i")
@@ -243,15 +247,15 @@ class TestTheCalls:
     def test_the_cut_pieces_are_put_back_on_a_timeline_of_their_own(self):
         """`-copyts` would otherwise write a WAVE that claims to begin ten
         seconds in, and the encoder would be handed ten seconds of nothing."""
-        trim = xheaac.wav_argv("a.mp3", 48000, False, "10", "5")
+        trim = xheaac.wav_argv("a.mp3", 48000, 0, "10", "5")
         assert "asetpts=PTS-STARTPTS" in trim[trim.index("-af") + 1]
 
     def test_a_seek_never_goes_before_the_start_of_the_file(self):
-        argv = xheaac.wav_argv("a.mp3", 48000, False, start="1", duration="5")
+        argv = xheaac.wav_argv("a.mp3", 48000, 0, start="1", duration="5")
         assert argv[argv.index("-ss") + 1] == "%.9f" % 0.0
 
     def test_the_whole_file_decode_has_no_range_at_all(self):
-        argv = xheaac.wav_argv("a.mp3", 48000, False)
+        argv = xheaac.wav_argv("a.mp3", 48000, 0)
         assert "-ss" not in argv and "-af" not in argv and "-copyts" not in argv
 
     def test_exhale_is_given_two_arguments_so_it_reads_its_stdin(self):
@@ -341,7 +345,7 @@ class TestHowLongAWaveCanBe:
     def test_the_sample_width_is_the_one_the_decode_actually_writes(self):
         """The arithmetic and the ffmpeg call have to agree, or the ceiling
         describes a WAVE nobody writes: `pcm_s16le` is two bytes."""
-        argv = xheaac.wav_argv("in.m4b", 44100, True)
+        argv = xheaac.wav_argv("in.m4b", 44100, 1)
         assert "pcm_s16le" in argv
         assert xheaac.SAMPLE_BYTES == 2
 
