@@ -22,11 +22,20 @@ from collections.abc import Iterable
 from medialib.lib.formatting import awk_number
 
 __all__ = [
+    "SEEK_COPY_JOBS",
     "chunk_dir_for",
     "plan_file_for",
     "seg_plan",
     "select_boundaries",
 ]
+
+# How many candidates' seek copies the planner makes at once. A copy is its
+# own demux, one core's worth at most. Beside a full encode queue it slows to
+# several times its idle pace, so running a handful at once adds up nearly
+# one-for-one: four take about as long as one. Past a handful the disk becomes
+# the limit. A long book is most of a GB, and an HDD reading a few files at
+# once seeks between them instead of streaming.
+SEEK_COPY_JOBS = 4
 
 
 def _md5(text: str) -> str:

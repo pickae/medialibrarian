@@ -1102,3 +1102,93 @@ class TestTheMissingMkvtoolnixWarning:
         """A .mkv is a video, whose picture is never taken as a cover."""
         ca._warn_mkvtoolnix(tracks)
         assert capsys.readouterr().err == ""
+
+
+class TestSeekCopies:
+    """The copies the window probes seek into: made a few at a time before any
+    probe is queued, and only for the formats that cannot be seeked as they
+    are."""
+
+    def _planner(self, tmp_path, durations, monkeypatch, fails=()):
+        """A planner over candidates of <durations>, with the copies and the pool
+        they run in replaced by a record of what was asked."""
+        plans = tmp_path / "plans"
+        plans.mkdir()
+        for track, duration in durations.items():
+            base = ca.segments.plan_file_for(str(plans), track)
+            with open(base + ".meta", "w") as handle:
+                handle.write(str(duration))
+        planner = ca.Planner(ca.Run(input_dir="in", plan_root=str(plans)),
+                             jobs=8)
+        pools = []
+
+        def pool(state, method, items, jobs):
+            pools.append((method, list(items), jobs))
+            for item in items:
+                if item not in fails:
+                    open(ca.segments.plan_file_for(str(plans), item)
+                         + ".seek.mka", "w").close()
+
+        monkeypatch.setattr(ca, "_run_pool", pool)
+        return planner, pools, plans
+
+    @staticmethod
+    def _sources(queue):
+        return {token.split(ca.UNIT)[0] for token in queue}
+
+    def test_the_copies_run_in_one_pool_of_a_few(self, tmp_path, monkeypatch):
+        """All of them in one pool, and never wider than SEEK_COPY_JOBS however
+        many cores the window probes after them get."""
+        tracks = {"a.m4b": 40000, "b.m4b": 30000, "c.mp3": 20000}
+        planner, pools, _plans = self._planner(tmp_path, tracks, monkeypatch)
+        candidates, _queue = planner.window_jobs(list(tracks))
+        assert candidates == list(tracks)
+        assert pools == [("seek_copy", ["a.m4b", "b.m4b", "c.mp3"],
+                          ca.segments.SEEK_COPY_JOBS)]
+
+    def test_a_narrow_run_copies_no_wider_than_itself(self, tmp_path,
+                                                      monkeypatch):
+        planner, pools, _plans = self._planner(tmp_path, {"a.m4b": 40000},
+                                               monkeypatch)
+        planner.jobs = 2
+        planner.window_jobs(["a.m4b"])
+        assert pools[0][2] == 2
+
+    def test_the_probes_seek_into_the_copy(self, tmp_path, monkeypatch):
+        planner, _pools, plans = self._planner(tmp_path, {"a.m4b": 40000},
+                                               monkeypatch)
+        _candidates, queue = planner.window_jobs(["a.m4b"])
+        assert len(queue) == 7
+        assert self._sources(queue) == {
+            ca.segments.plan_file_for(str(plans), "a.m4b") + ".seek.mka"}
+
+    @pytest.mark.parametrize("track", ["a.ogg", "a.opus", "a.ogx"])
+    def test_a_seek_cheap_format_is_probed_as_it_is(self, tmp_path,
+                                                    monkeypatch, track):
+        """No copy, and so no pool at all when nothing needs one - even with a
+        copy an aborted run left behind, which may be of another file by
+        now."""
+        planner, pools, plans = self._planner(tmp_path, {track: 40000},
+                                              monkeypatch)
+        open(ca.segments.plan_file_for(str(plans), track) + ".seek.mka",
+             "w").close()
+        _candidates, queue = planner.window_jobs([track])
+        assert pools == []
+        assert self._sources(queue) == {os.path.join("in", track)}
+
+    def test_a_failed_copy_is_probed_in_the_source(self, tmp_path,
+                                                   monkeypatch):
+        """Slower, never wrong: the book is still planned."""
+        planner, _pools, _plans = self._planner(
+            tmp_path, {"a.m4b": 40000, "b.m4b": 30000}, monkeypatch,
+            fails=("b.m4b",))
+        _candidates, queue = planner.window_jobs(["a.m4b", "b.m4b"])
+        assert os.path.join("in", "b.m4b") in self._sources(queue)
+        assert os.path.join("in", "a.m4b") not in self._sources(queue)
+
+    @pytest.mark.parametrize("track, cheap", [
+        ("A.OGG", True), ("a.opus", True), ("a.ogx", True), ("a.flac", False),
+        ("a.mka", False), ("a.m4b", False), ("a.m4a", False), ("a.mp3", False), ("a.aac", False),
+        ("a.mkv", False), ("a.mp4", False)])
+    def test_which_formats_seek_cheaply(self, track, cheap):
+        assert ca.seek_cheap_file(track) is cheap

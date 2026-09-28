@@ -212,6 +212,13 @@ def is_video_file(path: str) -> bool:
     return enums.lower_extension_of(path) in enums.VIDEO_EXTENSIONS
 
 
+def seek_cheap_file(path: str) -> bool:
+    """Whether ffmpeg can seek into this track as it is, with no index to load
+    and nothing to read up to the seek point - so the planner's window probes
+    need no seek copy of it."""
+    return enums.lower_extension_of(path) in enums.SEEK_CHEAP_EXTENSIONS
+
+
 def always_transcode_file(path: str) -> bool:
     """Whether this is a format the output must not keep whatever its bitrate
     says - unwanted as a format, not as a size."""
@@ -1423,7 +1430,7 @@ class Planner:
     def window_jobs(self, tracks: list) -> tuple:
         """The candidates' interior cuts, as one flat queue of window probes."""
         state = self.state
-        candidates, queue = [], []
+        planned = []
         for track in tracks:
             base = segments.plan_file_for(state.plan_root, track)
             if not os.path.isfile(base + ".meta"):
@@ -1439,10 +1446,30 @@ class Planner:
                 _write_jobs(base, [track])
                 _remove(base + ".meta")
                 continue
-            segment, window = float(fields[1]), float(fields[2])
-            candidates.append(track)
+            planned.append((track, base, duration, count, float(fields[1]),
+                            float(fields[2])))
+        candidates = [track for track, *_rest in planned]
 
-            seek_source = self._seek_copy(track, base)
+        # Every copy is made before any window probe runs. The probes are
+        # only queued once they have a file to seek into. The copies run a
+        # few at a time rather than one after another: forty long books copied
+        # one by one beside a full encode queue took the better part of half an
+        # hour before the first chunk job was released. The formats that seek
+        # cheaply as they are get no copy at all.
+        copied = [track for track in candidates if not seek_cheap_file(track)]
+        if copied:
+            _run_pool(self, "seek_copy", copied,
+                      max(1, min(segments.SEEK_COPY_JOBS, self.jobs)))
+            safety.exit_if_aborted()
+
+        queue = []
+        for track, base, duration, count, segment, window in planned:
+            seek_source = base + ".seek.mka"
+            if seek_cheap_file(track) or not os.path.isfile(seek_source):
+                # Seek-cheap, or a copy that failed: the probes seek into the
+                # source itself, which is only slower, never wrong. Only a
+                # copy this pass made counts, not one an aborted run left.
+                seek_source = os.path.join(state.input_dir, track)
             # One probe window per interior cut, centred on the ideal boundary and
             # widened by the same half-segment nudge window, plus a 2s guard so a
             # silence sitting on a window edge is still seen whole.
@@ -1476,29 +1503,35 @@ class Planner:
         priming, frame = xheaac.encoder_timing(preset, rate, channels)
         return rate, priming, frame
 
-    def _seek_copy(self, track: str, base: str) -> str:
+    def seek_copy(self, track: str) -> None:
         """A RAM-backed, seek-cheap copy of just this candidate's audio stream.
 
         Containers like m4b keep a per-sample index that ffmpeg parses ENTIRELY
         into RAM on every open, even to seek a two-second window - so the interior
         probes, running in parallel, would each load that whole index and spike
-        memory to jobs x (full index) for one huge file. Stream-copying the audio
-        once into Matroska gives a sparse cue index instead, so every window probe
-        seeks into this one shared copy for almost no per-open RAM.
+        memory to jobs x (full index) for one huge file. An mp3 or a raw aac has
+        no index at all, and ffmpeg reads it from the start up to every seek
+        point, so the probes between them would read the file many times over.
+        Stream-copying the audio once into Matroska gives a sparse cue index
+        instead, so every window probe seeks into this one shared copy for almost
+        no per-open RAM or reading.
+
+        Runs in a pool, so it answers through the file system: the copy is left
+        in place when it succeeded and removed when it did not, and
+        :meth:`window_jobs` looks for it.
         """
         source = os.path.join(self.state.input_dir, track)
-        copy = base + ".seek.mka"
+        copy = segments.plan_file_for(self.state.plan_root, track) + ".seek.mka"
         try:
             done = subprocess.run(
                 ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
                  "-y", "-i", source, "-map", "0:a:0", "-c:a", "copy", copy],
                 stdin=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             if done.returncode == 0 and os.path.getsize(copy) > 0:
-                return copy
+                return
         except OSError:
             pass
         _remove(copy)
-        return source
 
     def write_chunk_jobs_for(self, track: str) -> None:
         """One candidate's gathered midpoints turned into its chunk jobs.
