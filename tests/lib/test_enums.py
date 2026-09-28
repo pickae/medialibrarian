@@ -72,7 +72,7 @@ class TestTheListsThemselves:
     lists, a suffix no report claims. Every member can be right and the set wrong."""
 
     def test_the_registry_holds_every_list(self):
-        assert len(enums.LISTS) == 18
+        assert len(enums.LISTS) == 19
 
     def test_no_list_is_empty(self):
         assert all(members for members in enums.LISTS.values())
@@ -86,6 +86,12 @@ class TestTheListsThemselves:
     def test_no_list_repeats_itself(self):
         for name, members in enums.LISTS.items():
             assert len(set(members)) == len(members), f"{name} has a duplicate"
+
+    def test_every_seek_cheap_extension_is_an_audio_one(self):
+        # What convert-audio's planner leaves uncopied must be a format it
+        # takes in at all: a name only here would be a typo that quietly sends
+        # that format through the seek copy after all.
+        assert set(enums.SEEK_CHEAP_EXTENSIONS) <= set(enums.AUDIO_EXTENSIONS)
 
     def test_the_comic_and_archive_lists_overlap_on_purpose(self):
         # A .cbz IS a zip. They are separate lists because a .cbz is a book and a

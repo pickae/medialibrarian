@@ -113,6 +113,17 @@ ARCHIVE_EXTENSIONS = (
     "tar.zst", "tzst",
 )
 LOSSLESS_AUDIO_EXTENSIONS = ("flac", "ape", "wav", "wv",)
+# The AUDIO_EXTENSIONS convert-audio's planner probes as they are, with no
+# seek copy first. Ogg bisects its pages, so a seek reads a few hundred kB and
+# the open holds no index, and a lossy low-rate book is few enough bytes that
+# thirty probes reading it from one HDD at once still come out ahead of copying
+# it first. The rest do not. MP4 parses its whole per-sample index into RAM on
+# every open, and mp3 and raw ADTS aac read the file from the start up to the
+# seek point. A seek near the end of a ten-hour mp3 reads all of it. FLAC seeks
+# cheaply, but it is so many bytes that the probes reading it at once make the
+# disk thrash between them: a 3 GB book took twenty times longer than one
+# sequential read. Matroska can hold FLAC too.
+SEEK_CHEAP_EXTENSIONS = ("opus", "ogg", "ogx",)
 LOSSLESS_CODECS = ("flac", "ape", "alac", "pcm_s16le", "pcm_s16be", "wavpack",)
 LOSSLESS_TRACK_CODECS = ("dts", "flac", "truehd", "wav", "ape", "pcm",)
 
