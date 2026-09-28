@@ -13,6 +13,7 @@ the way the run that feeds it runs, consumed on the queue's own thread.
 """
 
 import os
+import threading
 import time
 
 import pytest
@@ -283,29 +284,56 @@ def test_a_dead_worker_is_counted_and_named():
 # --- what the queue says -------------------------------------------------------
 
 
-def _sleeper(_directory: str, name: str) -> None:
-    # the second item outlasts the first by far more than the fork gap, so
-    # the dry slot is the first worker's and the count of waiters is one
-    time.sleep(0.5 if name == "b" else 0.1)
+def _hold_b(directory: str, name: str) -> None:
+    # "a" is done at once and frees its slot; "b" holds the other one until the
+    # producer is about to hand over "c", so the dry stretch is one slot wide
+    # however long the machine takes to start either of them
+    if name == "b":
+        _wait_for(os.path.join(directory, "c.ready"))
 
 
 def test_the_queue_says_its_prefill_its_start_and_a_buffer_that_ran_dry(
-        tmp_path):
-    """At a buffer of one per worker, the two workers finish before the next
-    item is ready, and the empty slot waits on the preparation: the queue says
-    so once, beside the pre-fill and the start it already said."""
+        tmp_path, monkeypatch):
+    """At a buffer of one per worker, one worker finishes before the next item
+    is ready, and the empty slot waits on the preparation: the queue says so
+    once, beside the pre-fill and the start it already said.
+
+    Nothing here is left to how fast the machine is. A producer that merely
+    slept before "c" assumed the workers had started, finished and been reaped
+    within that sleep, and a slow runner that spent it forking them saw "c"
+    arrive while both slots were still busy - no dry stretch, no line. The
+    producer instead holds "c" back until the dispatch has been seen waiting
+    on ONE worker: that wait comes only after "a" was reaped with the buffer
+    empty, which is the moment the queue counts the idle slot, so "c" is
+    certain to arrive into a stretch already counted. "b" holding its slot
+    until then is what keeps the count at one - a pool that had reaped both
+    would be waiting on none, and count two.
+    """
     directory = str(tmp_path)
     lines = []
+    waiting_on_one = threading.Event()
+    reap_one = workerpool.reap_one
+
+    def watched(running, *rest):
+        if len(running) == 1:
+            waiting_on_one.set()
+        return reap_one(running, *rest)
+
+    monkeypatch.setattr(workerpool, "reap_one", watched)
 
     def producer():
-        for name in ("a", "b", "c", "d"):
-            yield name, 0
-            if name == "b":
-                # long enough that the two workers are done - and their slot
-                # is empty - before the next item is ready
-                time.sleep(0.5)
+        yield "a", 0
+        yield "b", 0
+        # raised in the producer, which the run raises in turn: a dispatch
+        # that never got as far as the dry slot fails here, not as a hang
+        assert waiting_on_one.wait(LIMIT), (
+            "the dispatch never waited on the one worker left")
+        _mark(directory, "c.ready")
+        # the last item: one more after it could find a second dry stretch
+        # if "b" and "c" were both reaped before it was ready
+        yield "c", 0
 
-    dynamicqueue.run(producer(), 2, _sleeper,
+    dynamicqueue.run(producer(), 2, _hold_b,
                      lambda name: (directory, name),
                      buffer_factor=1, log=lines.append)
 
