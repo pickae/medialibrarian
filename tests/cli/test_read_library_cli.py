@@ -384,6 +384,36 @@ class TestOneVoicePerLanguage:
                     if re.search(r"--voice \S*/-/", c)]) == 2
 
 
+class TestChoosingTheEngine:
+    """-e is the engine every book is read with, and the one the language is
+    checked against."""
+
+    def test_every_book_is_read_with_the_engine_given(self, library):
+        library.read("-e", "bark", library.source, library.outputs)
+        calls = library.engine_calls()
+        assert len(calls) == 2, calls
+        assert all(re.search(r"--tts_engine bark\b", c) for c in calls), calls
+
+    def test_the_default_is_xtts(self, library):
+        library.read(library.source, library.outputs)
+        calls = library.engine_calls()
+        assert calls and all(re.search(r"--tts_engine xtts\b", c)
+                             for c in calls), calls
+
+    def test_the_language_is_checked_against_the_engine_given(self, library,
+                                                              tmp_path):
+        # A table in which the two engines disagree, so the refusal can only
+        # come from checking the one that was asked for.
+        target = tmp_path / "out.bark"
+        log = library.read("-e", "bark", "-l", "eng", library.source, target,
+                           expect=1,
+                           narrationEngineLanguages="xtts:eng,deu;bark:deu")
+        assert "with the bark engine" in log, log
+        assert "it speaks (ISO 639-3):  deu" in log, log
+        assert library.engine_calls() == []
+        assert not target.exists()
+
+
 class TestTheRefusalsThatComeBeforeAnyWork:
     def test_a_language_the_engine_cannot_speak(self, library, tmp_path):
         target = tmp_path / "out.swe"

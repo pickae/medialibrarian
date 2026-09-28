@@ -823,6 +823,10 @@ def main(argv: list, program: str = "read-library",
     _settle_mkvtoolnix(opus_bitrate != 0)
 
     narration_engine = result.values["narrationEngine"] or "xtts"
+    # The narration library reads the engine from the environment - for the
+    # language check just below as much as for the engine's own command line - so
+    # -e only selects anything once it is set there.
+    os.environ["narrationEngine"] = narration_engine
     narration_language = ""
     language_arg = result.values["languageArg"]
     if language_arg:

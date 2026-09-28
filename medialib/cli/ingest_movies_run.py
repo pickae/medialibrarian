@@ -7,9 +7,12 @@ the census is: the rules are worth reading on their own, and the run around them
 is mostly plumbing.
 """
 
+import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 
 from medialib import commands
 from medialib.cli import ingest_movies as rules
@@ -29,6 +32,7 @@ from medialib.lib import (
     imdbdata,
     plexnames,
     ramscratch,
+    research,
     runlog,
     safety,
     subtitlefiles,
@@ -663,7 +667,7 @@ def main(argv: list, program: str = "ingest-movies",
             return 1
         site = dvdcompare.Site(dvdcompare.directory(script_dir), log)
         return _commentary_names(roots, names, write, site.releases,
-                                 fragments_file, script_dir)
+                                 fragments_file, script_dir, queued=True)
 
     if result.values.get("subtitlesOnly"):
         return _subtitles_only(program, script_dir, roots, names,
@@ -768,9 +772,10 @@ def main(argv: list, program: str = "ingest-movies",
                 ffsubsync_quality=ffsubsync_quality, long_names=long_names,
                 unfixed_movies=unfixed_movies)
 
+    listed = dict(zip(roots, names, strict=True))
     try:
         for root in ingestable:
-            _ingest(state, root, subtitle_work)
+            _ingest(state, root, subtitle_work, listed[root])
     finally:
         ramscratch.run_exit_cleanup()
     return workerpool.exit_status(1 if durationcheck.failures() else 0)
@@ -1105,20 +1110,51 @@ def _chapters_only(program: str, roots: list) -> int:
     totals: dict = {}
     for root in roots:
         log('Phase: looking up chapters for the films in "%s"' % root)
-        for verdict, films in chapterdb.add_chapters(root, log).items():
+        for verdict, films in _queued_chapters(root).items():
             totals[verdict] = totals.get(verdict, 0) + len(films)
+        safety.exit_if_aborted()
     _report_chapters(totals)
     return 0
 
 
-def _chapter_phase(root: str) -> None:
+def _queued_chapters(root: str) -> dict:
+    """One folder's chapters, looked up and written at once: the lookup,
+    paced to the archive, is the producer of a dynamic queue, and each film
+    it has found a set for is written by a worker while it goes on to the
+    next - so the lookup, which is what the run waits for, never waits for a
+    write."""
+    outcome = chapterdb.empty_outcome()
+    found: list = []
+
+    def prepared():
+        for movie, verdict, existing, chosen in chapterdb.findings(root, log):
+            if verdict != "found":
+                outcome[verdict].append(movie)
+                continue
+            found.append(movie)
+            yield movie, (movie, existing, chosen)
+
+    verdicts = _apply_as_prepared(prepared(), _write_chapter_set)
+    for movie, verdict in zip(found, verdicts, strict=True):
+        outcome[verdict or "failed"].append(movie)
+    return outcome
+
+
+def _write_chapter_set(work: tuple) -> str:
+    movie, existing, chosen = work
+    return chapterdb.apply_set(movie, existing, chosen, log)
+
+
+def _chapter_phase(root: str, ahead: dict) -> None:
     """The full ingest's chapter lookup, which needs curl and nothing that
-    would stop the rest of the run without it."""
-    if not _has_tool("curl"):
+    would stop the rest of the run without it - asked of the pages its
+    research fetched while the run did everything else."""
+    if "chapters" not in ahead:
         log("Phase: looking up chapters - SKIPPED (curl is not installed)")
         return
     log("Phase: looking up chapters for films without named ones")
-    outcome = chapterdb.add_chapters(root, log)
+    ahead["chapters"].finish(log)
+    outcome = chapterdb.add_chapters(root, log, ahead["chapter pages"])
     _report_chapters({verdict: len(films)
                       for verdict, films in outcome.items()})
 
@@ -1180,7 +1216,8 @@ def _write_subtitle_list(listing: str, root: str, verdicts: dict,
 
 
 def _commentary_names(roots: list, names: list, write: bool, lookup,
-                      fragments_file: str, script_dir: str) -> int:
+                      fragments_file: str, script_dir: str,
+                      queued: bool = False) -> int:
     """The commentary naming phase on its own: a film whose commentary tracks
     are only numbered has them named after who is speaking in each, read from
     the disc database - and nothing else is done.
@@ -1189,35 +1226,89 @@ def _commentary_names(roots: list, names: list, write: bool, lookup,
     what this phase must never do, and the dry run is where its refusals are
     read. Every folder given leaves a list of what was named and what was left
     alone, and why. ``lookup`` is the database, asked ``(title, year, kind
-    of disc)`` and answering with the film's releases or None.
+    of disc)`` and answering with the film's releases or None. ``queued``
+    renames each film while the database is asked about the next.
     """
     for root, name in zip(roots, names, strict=True):
         log('Phase: naming numbered commentary tracks in "%s"' % root
             + ("" if write else " - DRY RUN, nothing will be renamed"))
-        named: list = []
-        refused: list = []
-        for directory in [root] + rules._folders_below(root):
-            if rules.is_bonus_folder(directory):
-                continue
-            base, _tag = plexnames.untagged_base(os.path.basename(
-                directory.rstrip("/")))
-            entries = [entry for entry in rules._names_in(directory)
-                       if os.path.isfile(os.path.join(directory, entry))]
-            for film in plexnames.one_film_in(base, entries):
-                movie = os.path.join(directory, film)
-                done, why = _name_commentaries(movie, base, lookup, write,
-                                               fragments_file)
-                relative = "./" + os.path.relpath(movie, root)
-                if done:
-                    named.append((relative, done))
-                elif why:
-                    refused.append((relative, why))
-        _write_commentary_names_list(
-            commands.logs_file(script_dir, COMMENTARY_NAMES_LIST % name),
-            root, named, refused, write)
+        _commentary_names_in(root, name, write, lookup, fragments_file,
+                             script_dir, queued)
+        safety.exit_if_aborted()
     if not write:
         log("Dry run: nothing was renamed. Pass -w to carry these out.")
     return 0
+
+
+def _commentary_names_in(root: str, name: str, write: bool, lookup,
+                         fragments_file: str, script_dir: str,
+                         queued: bool = False) -> None:
+    """One folder's commentary tracks named, or what would be, and its list
+    written.
+
+    Queued, the naming is a dynamic queue: working out each film's names -
+    the database asked at its polite pace - is the producer, and each film
+    whose names are settled is renamed by a worker while the producer goes on
+    to the next. The database is what the run waits for, and it is never kept
+    waiting for a rename. Unqueued, each film is renamed as it is settled: the
+    full ingest's way, whose research asked the database long before.
+    """
+    named: list = []
+    refused: list = []
+    planned: list = []
+
+    def plans():
+        for movie, base in _commentary_films(root):
+            plan, why = _plan_commentary_names(movie, base, lookup,
+                                               fragments_file)
+            relative = "./" + os.path.relpath(movie, root)
+            if plan is None:
+                if why:
+                    refused.append((relative, why))
+                continue
+            yield relative, plan
+
+    if not write:
+        named = [(relative, plan["lines"]) for relative, plan in plans()]
+    elif not queued:
+        for relative, plan in plans():
+            failure = _carry_out_commentary_names(plan)
+            if failure:
+                refused.append((relative, failure))
+            else:
+                named.append((relative, plan["lines"]))
+    else:
+        def prepared():
+            for relative, plan in plans():
+                planned.append((relative, plan))
+                yield plan["movie"], plan
+
+        failures = _apply_as_prepared(prepared(), _carry_out_commentary_names)
+        for (relative, plan), failure in zip(planned, failures, strict=True):
+            if failure is None:
+                refused.append((relative, "the rename was never carried out"))
+            elif failure:
+                refused.append((relative, failure))
+            else:
+                named.append((relative, plan["lines"]))
+    _write_commentary_names_list(
+        commands.logs_file(script_dir, COMMENTARY_NAMES_LIST % name),
+        root, named, refused, write)
+
+
+def _commentary_films(root: str):
+    """Every film under ``root`` whose commentaries could be named, as
+    ``(movie, the folder's name without its id)``: the one film of each folder
+    that is not bonus material."""
+    for directory in [root] + rules._folders_below(root):
+        if rules.is_bonus_folder(directory):
+            continue
+        base, _tag = plexnames.untagged_base(os.path.basename(
+            directory.rstrip("/")))
+        entries = [entry for entry in rules._names_in(directory)
+                   if os.path.isfile(os.path.join(directory, entry))]
+        for film in plexnames.one_film_in(base, entries):
+            yield os.path.join(directory, film), base
 
 
 # The reasons a film is left alone that are not worth a line in the list: it
@@ -1230,6 +1321,21 @@ def _name_commentaries(movie: str, base: str, lookup, write: bool,
     """One film's commentary tracks named, or what would be: (the renames said
     as lines, "") when there are any, ([], why not) when there are not - with
     "" for the reasons nobody needs told."""
+    plan, why = _plan_commentary_names(movie, base, lookup, fragments_file)
+    if plan is None:
+        return [], why
+    if write:
+        failure = _carry_out_commentary_names(plan)
+        if failure:
+            return [], failure
+    return plan["lines"], ""
+
+
+def _commentary_film(movie: str, base: str) -> tuple:
+    """What naming a film's commentaries starts from, the database not yet
+    asked: ((tracks, its commentaries, those as the naming reads them, title,
+    year, kind of disc), "") - or (None, why not), "" for the reasons nobody
+    needs told."""
     tracks = rules._identify(movie)
     commentaries = [track for track in tracks
                     if track.is_audio and track.is_commentary]
@@ -1237,19 +1343,42 @@ def _name_commentaries(movie: str, base: str, lookup, write: bool,
                    for track in commentaries]
     ordered, why = commentarynames.order_file_commentaries(file_tracks)
     if not ordered:
-        return [], "" if why in _QUIET_REFUSALS else why
+        return None, "" if why in _QUIET_REFUSALS else why
 
     year = plexnames.year_of(base)
     title = plexnames.untitled_base(base, year).strip()
     video = next((track for track in tracks if track.is_video), None)
     width, _x, height = (video.dimensions if video else "").partition("x")
-    stem = os.path.splitext(movie)[0]
     kind = commentarynames.disc_format(width, height)
+    return (tracks, commentaries, file_tracks, title, year, kind), ""
+
+
+def _commentary_questions(root: str, lookup) -> None:
+    """Every film under ``root`` with commentaries to name asked about, and
+    nothing else done: the full ingest's research, on a thread of its own."""
+    for movie, base in _commentary_films(root):
+        if safety.abort_requested():
+            return
+        film, _why = _commentary_film(movie, base)
+        if film is not None and film[5]:
+            lookup(*film[3:])
+
+
+def _plan_commentary_names(movie: str, base: str, lookup,
+                           fragments_file: str) -> tuple:
+    """How one film's commentary tracks are to be named, said and not yet
+    done: (the plan, "") - the renames as lines, and what carries them out -
+    or (None, why not)."""
+    film, why = _commentary_film(movie, base)
+    if film is None:
+        return None, why
+    tracks, commentaries, file_tracks, title, year, kind = film
+    stem = os.path.splitext(movie)[0]
     decision = commentarynames.decide(
         file_tracks, lookup(title, year, kind) if kind else None, kind,
         _commentary_transcripts(stem, file_tracks), title)
     if not decision.names:
-        return [], decision.reason
+        return None, decision.reason
 
     new = dict(decision.names)
     old = {track.id: track.name for track in commentaries}
@@ -1278,8 +1407,6 @@ def _name_commentaries(movie: str, base: str, lookup, write: bool,
     lines.append("(listed by: %s)" % decision.source)
     for line in lines:
         log("  %s: %s" % (os.path.basename(movie), line))
-    if not write:
-        return lines, ""
 
     arguments = []
     for position, track in enumerate(tracks, start=1):
@@ -1290,26 +1417,86 @@ def _name_commentaries(movie: str, base: str, lookup, write: bool,
         elif track.id in subtitle_names:
             arguments += ["--edit", "track:%d" % position,
                           "--set", "name=" + subtitle_names[track.id]]
+    return {"movie": movie, "lines": lines, "arguments": arguments,
+            "sidecars": sidecars}, ""
+
+
+def _carry_out_commentary_names(plan: dict) -> str:
+    """The renames a plan says, made: "" when they were, and why not when
+    mkvpropedit could not make them."""
+    movie = plan["movie"]
     try:
         original = os.stat(movie).st_mtime
     except OSError:
         original = None
-    failure = rules._run_capture(["mkvpropedit", movie] + arguments)
+    failure = rules._run_capture(["mkvpropedit", movie] + plan["arguments"])
     if failure:
-        return [], "mkvpropedit could not rename the tracks: " + \
+        return "mkvpropedit could not rename the tracks: " + \
             failure.replace("\n", " | ")
     if original is not None:
         try:
             os.utime(movie, (original, original))
         except OSError:
             pass
+    directory = os.path.dirname(movie)
     skips = safety.RunSkipLog()
-    for old_name, new_name in sidecars:
+    for old_name, new_name in plan["sidecars"]:
         if not safety.safe_rename(os.path.join(directory, old_name),
                                   os.path.join(directory, new_name), skips):
             log('  WARNING: sidecar not renamed, "%s" is in the way: %s'
                 % (new_name, old_name))
-    return lines, ""
+    return ""
+
+
+# The workers carrying out what a paced lookup has prepared. One is plenty: a
+# rename or a chapter write takes a moment, the lookup seconds a film. The
+# buffer is kept generous so a run of films the lookup settles from its kept
+# pages never has it wait on the worker.
+APPLY_JOBS = 1
+APPLY_BUFFER_FACTOR = 8
+
+
+def _apply_as_prepared(prepared, target) -> list:
+    """Every ``(label, work)`` the ``prepared`` generator yields handed to
+    ``target`` in a worker, while the generator goes on preparing the next -
+    the dynamic queue, with the preparation as its producer. ``target``'s
+    answers come back in the order prepared, None for one whose worker never
+    answered: it was stopped, or died."""
+    results = tempfile.mkdtemp(prefix="ingest-movies-results-")
+    count = [0]
+
+    def items():
+        for label, work in prepared:
+            count[0] += 1
+            yield (label, count[0] - 1, work, results), 1
+
+    try:
+        dynamicqueue.run(items(), APPLY_JOBS, _in_apply_worker,
+                         lambda item: (target, item),
+                         buffer_factor=APPLY_BUFFER_FACTOR, log=log)
+        answers: list = []
+        for index in range(count[0]):
+            try:
+                with open(os.path.join(results, "%d.json" % index),
+                          encoding="utf-8") as handle:
+                    answers.append(json.load(handle))
+            except (OSError, ValueError):
+                answers.append(None)
+        return answers
+    finally:
+        shutil.rmtree(results, ignore_errors=True)
+
+
+def _in_apply_worker(target, item: tuple) -> None:
+    """One prepared item carried out, in a worker PROCESS, its answer left
+    where :func:`_apply_as_prepared` reads it back."""
+    safety.trap_worker_abort()
+    _label, index, work, results = item
+    answer = target(work)
+    path = os.path.join(results, "%d.json" % index)
+    with open(path + ".part", "w", encoding="utf-8") as handle:
+        json.dump(answer, handle)
+    os.replace(path + ".part", path)
 
 
 def _commentary_transcripts(stem: str, tracks: list) -> dict:
@@ -1721,7 +1908,7 @@ def _settle_ffsubsync_quality(judged: str = "a downloaded subtitle",
     return "yes"
 
 
-def _ingest(state, root: str, subtitle_work: bool) -> None:
+def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
     log("Starting ingest: " + root)
 
     log("Phase: cleaning up junk files")
@@ -1759,6 +1946,12 @@ def _ingest(state, root: str, subtitle_work: bool) -> None:
     log("Phase: refreshing mkv tags and track flags")
     rules.update_tags(root)
     rules.cleanup(root)
+
+    # The names have settled and every film is a Matroska file, which is all
+    # the chapter archive and the disc database are asked by: they are asked
+    # now, at their polite pace, on threads of their own, and the answers wait
+    # for the phases at the end that use them.
+    ahead = _start_research(state, root)
 
     log("Phase: transcoding lossless audio to opus")
     _transcode_opus(state, root)
@@ -1799,10 +1992,10 @@ def _ingest(state, root: str, subtitle_work: bool) -> None:
     log("Phase: conforming mangled movie names to their folders'")
     rules.conform_movie_names(root, state.skips)
 
-    # After the tagging too, so a film is looked up by the title TMDb gave its
-    # folder - and after the remux, whose copy the chapters are written into
-    # in place rather than carried through another one.
-    _chapter_phase(root)
+    # Asked again, now that the tagging has given the rest of the folders the
+    # title they are looked up by: what was asked before is remembered, so this
+    # is only the films the tagging named.
+    _research_again(ahead, root)
 
     # After the tagging, so a film is searched for by the id its name now
     # carries rather than by a title a remake or a namesake also answers to.
@@ -1817,12 +2010,99 @@ def _ingest(state, root: str, subtitle_work: bool) -> None:
         log("Phase: downloading missing subtitles - SKIPPED (no "
             "ffsubsync/pipx, see the warning at startup)")
 
+    # Last of the work on the films, so the research has had the whole run to
+    # be asked: after the tagging, so a film is named and looked up by the
+    # title TMDb gave its folder; after the transcription, whose transcripts
+    # tell several commentaries apart; and after the remux, whose copy the
+    # names and the chapters are written into in place rather than carried
+    # through another one.
+    _commentary_name_phase(state, root, name, ahead)
+    _chapter_phase(root, ahead)
+
     rules.cleanup(root)
     log("Phase: checking for folders without a movie")
     check_folders(root)
 
     safety.print_run_footer()
     log("Ingest complete: " + root)
+
+
+def _start_research(state, root: str) -> dict:
+    """The chapter archive and the disc database asked about every film under
+    ``root`` that will want them, each on a thread of its own - or neither,
+    without curl to ask them with.
+
+    The chapters are remembered page by page rather than film by film: the
+    remux and the opus transcode can move a film's length by a few
+    milliseconds, and the lookup, asked again at the end, has to land on the
+    same pages whatever length it is handed.
+    """
+    if not _has_tool("curl"):
+        return {}
+    chapter_pages = research.Research(
+        "chapter", chapterdb.ask_archive, keep=lambda body: body is not None)
+
+    def fetch(path: str, params=()):
+        return chapter_pages(path, tuple(params))
+
+    said: list = []
+    site = dvdcompare.Site(dvdcompare.directory(state.script_dir),
+                           said.append)
+    ahead = {"chapters": chapter_pages, "chapter pages": fetch,
+             "names": research.Research("commentary name", site.releases),
+             "said": said}
+    _research_again(ahead, root)
+    return ahead
+
+
+def _research_again(ahead: dict, root: str) -> None:
+    """Every film under ``root`` handed to the research, again: a film already
+    asked about is answered from memory, so this only reaches the ones whose
+    question changed."""
+    if not ahead:
+        return
+    ahead["chapters"].ahead(lambda: _chapter_questions(root,
+                                                       ahead["chapter pages"]))
+    ahead["names"].ahead(lambda: _commentary_questions(root, ahead["names"]))
+
+
+def _chapter_questions(root: str, fetch) -> None:
+    """Every film under ``root`` without named chapters looked up, and
+    nothing written: the full ingest's research. Stops the first time the
+    archive does not answer, the way the lookup itself does."""
+    for movie in subtitlefiles.subtitle_movies(root):
+        if safety.abort_requested():
+            return
+        verdict, title, existing = chapterdb.examine(movie)
+        if verdict:
+            continue
+        _chosen, answered = chapterdb.find_set(title, existing, fetch)
+        if not answered:
+            return
+
+
+def _commentary_name_phase(state, root: str, name: str, ahead: dict) -> None:
+    """The full ingest's commentary naming: -n's, carried out rather than a
+    dry run, asked of what the research learnt while the run did everything
+    else."""
+    if not ahead:
+        log("Phase: naming numbered commentary tracks - SKIPPED (curl is not "
+            "installed)")
+        return
+    log("Phase: naming numbered commentary tracks")
+    ahead["names"].finish(log)
+    _say_what_was_said(ahead)
+    _commentary_names_in(root, name, True, ahead["names"],
+                         state.fragments_file, state.script_dir)
+    _say_what_was_said(ahead)
+
+
+def _say_what_was_said(ahead: dict) -> None:
+    """What the disc database had to say while it was asked, held back so it
+    is printed in the phase it belongs to rather than in whichever one the
+    thread happened to be asked in."""
+    while ahead["said"]:
+        log(ahead["said"].pop(0))
 
 
 def _transcribe_one(state, record: str) -> None:

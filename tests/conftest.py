@@ -228,10 +228,16 @@ def private_workspace(tmp_path_factory, monkeypatch):
     # box takes the knob back off to look at the real rungs.
     monkeypatch.setenv("ffmpegLadder", str(tmp_path_factory.mktemp("ffmpegladder")))
 
-    # The chapter archive the same way, at a port nothing listens on: a CLI
-    # case that runs a whole ingest over tagged folders would otherwise ask the
-    # real one about every film in its fixture.
+    # The chapter archive and the disc database the same way, at a port nothing
+    # listens on: a CLI case that runs a whole ingest over tagged folders would
+    # otherwise ask the real ones about every film in its fixture.
     monkeypatch.setenv("chapterDbSite", "http://127.0.0.1:9")
+    monkeypatch.setenv("dvdCompareSite", "http://127.0.0.1:9/")
+
+    # And every site's pacing from scratch, so a case does not wait out the gap
+    # the one before it left behind.
+    from medialib.lib import politepacing
+    politepacing.reset_all()
 
     # The module keeps the base it settled on in module state, so clearing the
     # environment alone would leave a previous test's directory in force.

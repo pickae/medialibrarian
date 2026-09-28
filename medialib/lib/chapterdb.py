@@ -38,16 +38,17 @@ import os
 import re
 import subprocess
 import tempfile
-import time
 import unicodedata
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from typing import NamedTuple
 
-from medialib.lib import plexnames, subtitlefiles, titlematch
+from medialib.lib import plexnames, politepacing, subtitlefiles, titlematch
 
-__all__ = ["SITE", "ChapterSet", "Existing", "add_chapters", "choose",
-           "existing_chapters", "film_title", "is_named", "parse_set",
+__all__ = ["SITE", "ChapterSet", "Existing", "add_chapters", "apply_set",
+           "ask_archive",
+           "choose", "empty_outcome", "examine", "existing_chapters",
+           "film_title", "find_set", "findings", "is_named", "parse_set",
            "parse_search", "plausible", "search", "write_chapters"]
 
 SITE = "https://chapterdb.plex.tv"
@@ -59,8 +60,9 @@ SITE_VARIABLE = "chapterDbSite"
 
 # The archive is one person's leftover server rather than a service with a
 # stated limit, so it is asked at the pace a person clicking through it would
-# ask, and no faster.
-MIN_REQUEST_INTERVAL = 1.0
+# ask, and no faster: a few seconds apart, give or take one.
+MIN_REQUEST_INTERVAL = 3.0
+REQUEST_JITTER = 1.0
 
 # How many rows a search page is asked for, and how many pages are read. A
 # short title matches a great deal - one common word is several hundred sets -
@@ -127,7 +129,7 @@ _ROW = re.compile(
     r'<td><a href="/browse/([0-9]+)">([^<]*)</a></td>\s*'
     r'<td[^>]*>\s*([0-9]+):([0-9]+)\.([0-9]+)\s*</td>')
 
-_LAST_REQUEST: list[float] = []
+_PACER = politepacing.Pacer(MIN_REQUEST_INTERVAL, REQUEST_JITTER)
 
 
 class Row(NamedTuple):
@@ -177,22 +179,16 @@ class Existing(NamedTuple):
 def reset_rate_limit() -> None:
     """Forget when the last request went out. For a test that would otherwise
     pay the interval."""
-    _LAST_REQUEST.clear()
+    _PACER.reset()
 
 
-def _fetch(path: str, params=()) -> str | None:
+def ask_archive(path: str, params=()) -> str | None:
     """One GET of the archive, or ``None`` when it did not answer.
 
     Nothing secret goes with it, so unlike the TMDb lookup the query rides in
     argv.
     """
-    now = time.monotonic()
-    if _LAST_REQUEST:
-        waiting = _LAST_REQUEST[0] + MIN_REQUEST_INTERVAL - now
-        if waiting > 0:
-            time.sleep(waiting)
-            now = time.monotonic()
-    _LAST_REQUEST[:] = [now]
+    _PACER.wait()
     site = os.environ.get(SITE_VARIABLE) or SITE
     argv = ["curl", "-fsSG", "--max-time", "30", site + path]
     for key, value in params:
@@ -222,7 +218,7 @@ def parse_search(page: str) -> list:
 def search(title: str, fetch: Callable | None = None) -> list | None:
     """Every row the archive holds under ``title``, or ``None`` when it could
     not be asked at all - which is not the same answer as no rows."""
-    fetch = fetch or _fetch
+    fetch = fetch or ask_archive
     rows: list = []
     for page in range(1, MAX_PAGES + 1):
         body = fetch("/browse", [("title", title), ("pageSize", PAGE_SIZE),
@@ -493,7 +489,7 @@ def _ascii(title: str) -> str:
 def find_set(title: str, existing: Existing,
              fetch: Callable | None = None) -> tuple:
     """(the set for this film or ``None``, whether the archive answered)."""
-    fetch = fetch or _fetch
+    fetch = fetch or ask_archive
     queries = [title] + ([_ascii(title)] if _ascii(title) != title else [])
     rows: list = []
     for query in queries:
@@ -514,50 +510,81 @@ def find_set(title: str, existing: Existing,
     return choose(sets, existing), True
 
 
-def add_chapters(directory: str, log: Callable[[str], None],
-                 fetch: Callable | None = None) -> dict:
-    """Give every tagged film under ``directory`` the chapters :func:`choose`
-    picks for it.
+def examine(movie: str) -> tuple:
+    """(verdict, title, existing) for one film, without asking the archive
+    anything: "untagged", "failed" or "kept" when it is not to be looked up,
+    and "" when it is - by ``title``, for a film with ``existing``."""
+    title = film_title(movie)
+    if not title:
+        return "untagged", "", None
+    existing = existing_chapters(movie)
+    if existing is None or existing.seconds <= 0:
+        return "failed", title, None
+    if existing.kind == "named":
+        return "kept", title, existing
+    return "", title, existing
 
-    Returns the films by what came of them. The first time the archive does
-    not answer, the rest of the films are not asked about: it is down, or it
-    has started refusing, and either way asking again per film only waits
-    out the timeout a few hundred times.
+
+def findings(directory: str, log: Callable[[str], None],
+             fetch: Callable | None = None):
+    """Every film under ``directory`` as ``(movie, verdict, existing, set)``:
+    the verdicts :func:`examine` comes to, "unmatched" for a film the archive
+    has no fitting set for, and "found" with the set it has.
+
+    ``fetch`` is how the archive is asked, :func:`ask_archive` unless a caller
+    has a way of its own - pages it asked for ahead of need. The first time the
+    archive does not answer, the rest of the films are not asked about: it is
+    down, or it has started refusing, and either way asking again per film
+    only waits out the timeout a few hundred times.
     """
-    outcome: dict = {"added": [], "replaced": [], "unmatched": [],
-                     "kept": [], "untagged": [], "failed": []}
     for movie in subtitlefiles.subtitle_movies(directory):
-        title = film_title(movie)
-        if not title:
-            outcome["untagged"].append(movie)
-            continue
-        existing = existing_chapters(movie)
-        if existing is None or existing.seconds <= 0:
-            outcome["failed"].append(movie)
+        verdict, title, existing = examine(movie)
+        if verdict == "failed":
             log("WARNING: could not read the length of, skipping: " + movie)
-            continue
-        if existing.kind == "named":
-            outcome["kept"].append(movie)
+        if verdict:
+            yield movie, verdict, existing, None
             continue
         chosen, answered = find_set(title, existing, fetch)
         if not answered:
             log("WARNING: the chapter archive at %s did not answer - no more "
                 "films are looked up this run"
                 % (os.environ.get(SITE_VARIABLE) or SITE))
-            break
-        if chosen is None:
-            outcome["unmatched"].append(movie)
-            continue
-        verdict = "replaced" if existing.kind == "numbered" else "added"
-        what = "%d %s chapters (set %s, %s, %d confirmation(s))" % (
-            len(chosen.chapters), "named" if chosen.named else "numbered",
-            chosen.set_id, chosen.source or "unknown source",
-            chosen.confirmations)
-        if write_chapters(movie, chosen):
-            log("Chapters %s, %s: %s" % (verdict, what, movie))
-            outcome[verdict].append(movie)
-        else:
-            log("WARNING: mkvpropedit could not write the chapters, left "
-                "as it was: " + movie)
-            outcome["failed"].append(movie)
+            return
+        yield (movie, "unmatched" if chosen is None else "found", existing,
+               chosen)
+
+
+def apply_set(movie: str, existing: Existing, chosen: ChapterSet,
+              log: Callable[[str], None]) -> str:
+    """Write the set a film was found, and say what came of it: "added",
+    "replaced" or "failed"."""
+    verdict = "replaced" if existing.kind == "numbered" else "added"
+    what = "%d %s chapters (set %s, %s, %d confirmation(s))" % (
+        len(chosen.chapters), "named" if chosen.named else "numbered",
+        chosen.set_id, chosen.source or "unknown source",
+        chosen.confirmations)
+    if write_chapters(movie, chosen):
+        log("Chapters %s, %s: %s" % (verdict, what, movie))
+        return verdict
+    log("WARNING: mkvpropedit could not write the chapters, left as it was: "
+        + movie)
+    return "failed"
+
+
+def empty_outcome() -> dict:
+    """The films by what came of them, before any has come to anything."""
+    return {"added": [], "replaced": [], "unmatched": [], "kept": [],
+            "untagged": [], "failed": []}
+
+
+def add_chapters(directory: str, log: Callable[[str], None],
+                 fetch: Callable | None = None) -> dict:
+    """Give every tagged film under ``directory`` the chapters :func:`choose`
+    picks for it, one film at a time, and return the films by what came of
+    them. ``fetch`` is :func:`findings`'."""
+    outcome = empty_outcome()
+    for movie, verdict, existing, chosen in findings(directory, log, fetch):
+        if verdict == "found":
+            verdict = apply_set(movie, existing, chosen, log)
+        outcome[verdict].append(movie)
     return outcome

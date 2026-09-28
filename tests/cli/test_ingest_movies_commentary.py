@@ -34,7 +34,9 @@ def ingested(monkeypatch):
         monkeypatch.setattr(run_module.tmdblookup, "tag_plex_ids",
                             lambda *a, **k: None)
         for name in ("_transcode_opus", "improve_main_movies",
-                     "_chapter_phase", "check_folders"):
+                     "_start_research", "_research_again",
+                     "_commentary_name_phase", "_chapter_phase",
+                     "check_folders"):
             monkeypatch.setattr(run_module, name, lambda *a, **k: None)
         monkeypatch.setattr(run_module, "log", lambda *a, **k: None)
 
@@ -53,7 +55,7 @@ def ingested(monkeypatch):
                                whisper_said=[], ffsubsync_quality="yes",
                                long_names=tmdblookup.LongNames(),
                                unfixed_movies=[])
-        run_module._ingest(state, "/x", True)
+        run_module._ingest(state, "/x", True, "x")
         return seen
     return run
 

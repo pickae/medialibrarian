@@ -12,7 +12,7 @@ commentaries and the chapters the disc had.
 | **Writes** | in place: the improved `.mkv`, `.srt` sidecars and `.opus` tracks; the sweeps also write lists under `logs/ingest-movies/` |
 | **Input** | changed — that is the job; each remuxed original is kept as `<name> (old).mkv` |
 | **Reruns** | a film that already has its `(old)` backup is not remuxed again |
-| **Network** | TMDb, OpenSubtitles, IMDb's title lists, ChapterDB, and dvdcompare.net under `-n` |
+| **Network** | TMDb, OpenSubtitles, IMDb's title lists, ChapterDB and dvdcompare.net — the last two a few seconds apart, with some jitter |
 
 ## Default behavior
 
@@ -24,7 +24,7 @@ given (one level deep, not the whole tree):
 - sorts loose films into a folder each, with extras where Plex looks for them
 - cleans folder, film and subtitle names
 - **transcodes lossless audio to Opus**, leaving lossy tracks as they are
-- transcribes commentary tracks with whisper
+- transcribes commentary tracks with whisper, and names numbered ones after who speaks in them (dvdcompare.net)
 - **remuxes each film once into an improved copy**, keeping the original as `<name> (old).mkv` ([details](#what-a-full-ingest-does))
 - tags names with the IMDb id (needs `tmdbApiKey`), looks up chapters, and downloads missing subtitles (needs the OpenSubtitles login)
 
@@ -84,7 +84,17 @@ ingest-movies -c  ~/Films     # chapters for the tagged films
 Sorts loose movie files into per-movie subfolders (Plex layout), cleans
 folder/movie/subtitle names, renames/downloads subtitles for six languages,
 refreshes mkv tags, transcodes lossless audio to Opus, transcribes commentary tracks,
-and gives films without named chapters the ones their disc had.
+names numbered commentary tracks after who speaks in them, and gives films
+without named chapters the ones their disc had.
+
+ChapterDB and dvdcompare.net are asked at a polite pace, a few seconds apart,
+so asking them about a whole library takes a while. The full ingest doesn't
+wait for that: once the names have settled, early in the run, each site is
+asked on a background thread about every film that will need it, while the
+run carries on with the transcoding, transcription and remux. The tagging
+names more folders, so those are handed over too. Commentary naming and
+chapters come last, after the subtitle downloads, and by then the answers are
+usually all in. If a thread is still going, the run says so and waits for it.
 
 ### Subtitles
 
@@ -489,8 +499,16 @@ transcripts the ingest appended to the film, and the transcripts and extracts
 beside it (`… 2 Commentary 1.en.srt`) are renamed along with the track. Every
 folder given leaves `logs/ingest-movies/ingest-movies-commentarynames-<folder>.txt`: what was
 named — or would be — and every film left alone, with the reason. The pages
-asked for are kept in the checkout's `data/dvdcompare`, and the site is asked
-no more than once every few seconds.
+asked for are kept in the checkout's `data/dvdcompare`. The site is asked about
+five seconds apart, give or take two, and after it fails to answer once it isn't
+asked again that run. With `-w`, each film is renamed while the next one is
+being looked up, so the lookup never waits on a rename.
+
+The full ingest does this too, and writes: after the transcription, which the
+transcripts come from, and after the tagging, so each film is looked up by the
+title TMDb gave its folder. The site was already asked in the background (see
+[What a full ingest does](#what-a-full-ingest-does)), and the same list is
+written.
 
 ## Chapters (`-c`)
 
@@ -499,8 +517,10 @@ has no chapters, or only numbered ones (`Chapter 01`, `Kapitel 3`, a bare
 number or time), is looked up in the read-only
 [ChapterDB archive](https://chapterdb.plex.tv/): chapter times read off DVDs and
 Blu-rays, mostly with the names from the disc's menu. The full ingest does the
-same lookup right after the tagging, since a film is looked up by the title
-its folder now carries — an untagged folder is never looked up.
+same lookup near its end, after the tagging, since a film is looked up by the
+title its folder now carries — an untagged folder is never looked up. The
+archive itself was already asked in the background (see
+[What a full ingest does](#what-a-full-ingest-does)).
 
 **A set must be the disc the film was ripped from.** It has to run as long as
 the film to within **two seconds**, which rules out every other cut and every
@@ -517,9 +537,11 @@ Among sets that fit, English names win, then the set more people confirmed.
 
 **Written in place, never remuxed.** `mkvpropedit --chapters` replaces every
 chapter the film had, so it never ends up carrying two sets. It writes as it
-goes: there is no dry run, and no `-w`. The archive takes no new sets, so a
-recent film will not be in it; if it stops answering, the rest of the run does
-without it. Needs `curl`.
+goes: there is no dry run, and no `-w`. Each film's set is written while the
+next film is looked up, so the lookup never waits on a write. The archive is
+asked about three seconds apart, give or take one. The archive takes no new
+sets, so a recent film will not be in it; if it stops answering, the rest of
+the run does without it. Needs `curl`.
 
 ## Several folders
 

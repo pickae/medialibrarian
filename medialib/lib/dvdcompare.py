@@ -13,8 +13,9 @@ set's other films, and a featurette's "with commentary", are not the film's
 commentary tracks and are not read.
 
 The site is asked the way its own search box asks it, one page at a time and
-never faster than :data:`MIN_INTERVAL` apart, and every page is kept under the
-checkout's ``data/dvdcompare`` so a second run over a library asks it nothing.
+:data:`MIN_INTERVAL` apart give or take :data:`JITTER`, and every page is kept
+under the checkout's ``data/dvdcompare`` so a second run over a library asks it
+nothing.
 """
 
 from __future__ import annotations
@@ -29,12 +30,14 @@ from collections.abc import Callable
 from html.parser import HTMLParser
 from typing import NamedTuple
 
-from medialib.lib import titlematch
+from medialib.lib import politepacing, titlematch
 from medialib.lib.commentarynames import Disc, Release
 
 __all__ = [
     "BASE",
+    "JITTER",
     "MIN_INTERVAL",
+    "PACER",
     "SearchEntry",
     "directory",
     "parse_film_page",
@@ -48,9 +51,18 @@ __all__ = [
 # slowly or not at all.
 BASE = "http://www.dvdcompare.net/comparisons/"
 
-# The least time between two requests. A library is thousands of films, and
-# the site is one volunteer-run server.
+# Where the site is asked instead, when set: the suite points it at a port
+# nothing listens on, so a CLI case that runs the whole ingest cannot reach the
+# real one.
+SITE_VARIABLE = "dvdCompareSite"
+
+# The time between two requests, give or take the jitter. A library is
+# thousands of films, and the site is one volunteer-run server.
 MIN_INTERVAL = 5.0
+JITTER = 2.0
+
+# Every request to the site, from whichever thread of the run asks it.
+PACER = politepacing.Pacer(MIN_INTERVAL, JITTER)
 
 # How long a kept page is believed. A film's page grows as releases are added;
 # a search is only a way of reaching it.
@@ -375,19 +387,21 @@ class Site:
     """The site, asked politely and remembered.
 
     ``fetch`` is handed a URL and the form fields to post (or None) and
-    answers with the page's text or None; the default is curl. ``now`` and
-    ``sleep`` are the clock, so a test waits for nothing.
+    answers with the page's text or None; the default is curl. ``pacer``
+    spaces the requests out, :data:`PACER` unless a test brings a clock of its
+    own. The first time the site does not answer, nothing more is asked of it
+    this run - it is down, or it has started refusing - and only the pages
+    already kept are read.
     """
 
     def __init__(self, where: str, log: Callable[[str], None],
-                 fetch: Callable | None = None, now=time.monotonic,
-                 sleep=time.sleep) -> None:
+                 fetch: Callable | None = None,
+                 pacer: politepacing.Pacer | None = None) -> None:
         self.where = where
         self.log = log
         self.fetch = fetch or _curl
-        self.now = now
-        self.sleep = sleep
-        self._last = None
+        self.pacer = pacer or PACER
+        self.down = False
         self._searches: dict = {}
 
     def releases(self, title: str, year: str, kind: str) -> list | None:
@@ -434,14 +448,14 @@ class Site:
                     return handle.read()
         except OSError:
             pass
-        if self._last is not None:
-            wait = MIN_INTERVAL - (self.now() - self._last)
-            if wait > 0:
-                self.sleep(wait)
-        self._last = self.now()
+        if self.down:
+            return None
+        self.pacer.wait()
         text = self.fetch(url, form)
         if text is None:
-            self.log("WARNING: dvdcompare did not answer for " + url)
+            self.down = True
+            self.log("WARNING: dvdcompare did not answer for %s - nothing more "
+                     "is asked of it this run" % url)
             return None
         try:
             os.makedirs(self.where, exist_ok=True)
@@ -456,6 +470,9 @@ class Site:
 def _curl(url: str, form) -> str | None:
     """One request, the site's own search form's way: a POST with the form's
     fields when there are any, a plain GET otherwise."""
+    site = os.environ.get(SITE_VARIABLE)
+    if site and url.startswith(BASE):
+        url = site + url[len(BASE):]
     argv = ["curl", "-fsS", "--max-time", "90", "-A", USER_AGENT]
     for field, value in (form or {}).items():
         argv += ["--data-urlencode", "%s=%s" % (field, value)]
