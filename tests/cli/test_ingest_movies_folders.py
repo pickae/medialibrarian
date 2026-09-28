@@ -102,7 +102,8 @@ class TestTheFullRunWorksThroughThemInTurn:
         monkeypatch.setattr(run.workerpool, "exit_status", lambda status: status)
         ingested = []
         monkeypatch.setattr(run, "_ingest",
-                            lambda _state, root, _subs: ingested.append(root))
+                            lambda _state, root, _subs, _name:
+                            ingested.append(root))
         return ingested
 
     def test_each_folder_is_ingested_in_the_order_it_was_typed(

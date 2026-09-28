@@ -10,7 +10,7 @@ a box set's other film.
 
 import pytest
 
-from medialib.lib import dvdcompare
+from medialib.lib import dvdcompare, politepacing
 from medialib.lib.commentarynames import Disc
 from tests import blackbox
 
@@ -132,8 +132,10 @@ class TestAskingTheSite:
             asked.append((url, form))
             return SEARCH if url.endswith("search.php") else FILM
 
-        made = dvdcompare.Site(str(tmp_path), lambda _line: None, fetch,
-                               clock.now, clock.sleep)
+        pacer = politepacing.Pacer(dvdcompare.MIN_INTERVAL, dvdcompare.JITTER,
+                                   now=clock.now, sleep=clock.sleep,
+                                   draw=lambda low, high: high)
+        made = dvdcompare.Site(str(tmp_path), lambda _line: None, fetch, pacer)
         return made, asked, clock
 
     def test_the_search_is_posted_the_way_the_site_s_form_posts_it(self, site):
@@ -154,7 +156,7 @@ class TestAskingTheSite:
     def test_requests_are_spaced_out(self, site):
         made, _asked, clock = site
         made.releases("Nightfall Harbour", "1987", "bluray")
-        assert clock.slept == [dvdcompare.MIN_INTERVAL] * 2
+        assert clock.slept == [dvdcompare.MIN_INTERVAL + dvdcompare.JITTER] * 2
 
     def test_a_page_asked_for_once_is_not_asked_for_again(self, site,
                                                           tmp_path):
@@ -173,3 +175,11 @@ class TestAskingTheSite:
         made = dvdcompare.Site(str(tmp_path), lambda _line: None,
                                lambda *a: None)
         assert made.releases("Nightfall Harbour", "1987", "dvd") is None
+
+    def test_a_site_that_does_not_answer_is_not_asked_again(self, tmp_path):
+        asked = []
+        made = dvdcompare.Site(str(tmp_path), lambda _line: None,
+                               lambda *a: asked.append(a))
+        made.releases("Nightfall Harbour", "1987", "dvd")
+        made.releases("Twin Harbour", "1995", "dvd")
+        assert len(asked) == 1

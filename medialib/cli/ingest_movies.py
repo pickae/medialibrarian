@@ -117,8 +117,10 @@ n |  | commentary names only: a film whose commentary tracks are only
                   the commentators saying who they are in the opening
                   minutes. The subtitles of a commentary and its transcripts
                   beside the film are renamed with it. A DRY RUN unless -w is
-                  given. The pages asked for are kept in data/dvdcompare, and
-                  every folder given leaves a list in logs/ingest-movies/
+                  given. The site is asked a few seconds apart, and with -w
+                  each film is renamed while the next is looked up. The pages
+                  asked for are kept in data/dvdcompare, and every folder
+                  given leaves a list in logs/ingest-movies/
                   ingest-movies-commentarynames-<folder>.txt of what was
                   named and of every film left alone, with the reason. Best
                   run after -a, which writes the transcripts.
@@ -132,9 +134,10 @@ c |  | chapters only: the chapter lookup and nothing else - walks the
                   where the film's own do - the same marks, given names - and a
                   film whose chapters have names is not looked up at all.
                   Written in place with mkvpropedit, replacing whatever chapters
-                  the film had; the film is never remuxed. Not a dry run, and
-                  -w has no part in it. Best run after -tw: an untagged
-                  folder's title is only a guess.
+                  the film had; the film is never remuxed. The archive is asked
+                  a few seconds apart, and each film is written while the next
+                  is looked up. Not a dry run, and -w has no part in it. Best
+                  run after -tw: an untagged folder's title is only a guess.
 w |  | with -t or -i, actually perform the renames instead of printing
                   them; with -s, sync, throw out and download; with -n, name
                   the commentaries. On its own it is a usage error rather than
@@ -212,8 +215,8 @@ USAGE_TAIL = """
     Chapters
     --------
     -c does this phase and nothing else
-    after the tagging, looks each tagged film up in the ChapterDB archive
-    (chapterdb.plex.tv) by the title its folder now carries
+    near the end, after the tagging, looks each tagged film up in the ChapterDB
+    archive (chapterdb.plex.tv) by the title its folder now carries
     takes a set only when it runs as long as the film to within two seconds -
     which is what tells the disc a film was ripped from from every other cut
     and transfer - starts at the start, has at least three chapters in order
@@ -231,6 +234,9 @@ USAGE_TAIL = """
     reads the track layout once and refreshes the mkv tags from it
     transcodes regular audio to opus at a per-channel target bitrate
     extracts commentary tracks, transcribes them and archives them
+    names commentary tracks that are only numbered after who speaks in each,
+    the way dvdcompare.net lists them - all that -n does, carried out
+    rather than a dry run
     takes a track for a commentary by its mkv flag or by its name, in any of the
     supported languages (\"Audiokommentar\" counts as much as \"Audio Commentary\")
     reads each commentary's language from its track name or mkv language tag, and
@@ -241,6 +247,14 @@ USAGE_TAIL = """
     transcription workers
     transcribes on the GPU when whisper can use it, picking the largest model
     the free VRAM fits, and falls back to all CPU threads on base.en if not
+
+    Asking the web politely
+    -----------------------
+    the ChapterDB archive and dvdcompare.net are asked a few seconds apart,
+    with some jitter
+    the full ingest asks both on background threads from early in the run,
+    once the names have settled, so the chapters and the commentary names at
+    its end are ready by the time it gets there
 
     Dolby Vision
     ------------

@@ -2,15 +2,20 @@
 
 What is pinned here is the boundary: the lookup runs per folder in the order
 given, writes as it goes with no -w to ask for it, and is refused beside every
-other phase of its own. Which set a film is given is pinned in
+other phase of its own - and that a set the lookup finds is written by a
+worker of the queue the lookup feeds. Which set a film is given is pinned in
 tests/lib/test_chapterdb.py.
 """
 
 from __future__ import annotations
 
+import shutil
+import subprocess
+
 import pytest
 
 from medialib.cli import ingest_movies_run as run
+from medialib.lib import chapterdb
 
 pytestmark = pytest.mark.fs
 
@@ -40,12 +45,11 @@ def stubbed(monkeypatch, tmp_path):
         monkeypatch.setattr(run, name, _never)
     calls: list = []
 
-    def add_chapters(directory, log):
+    def findings(directory, log):
         calls.append(directory)
-        return {"added": [directory], "replaced": [], "unmatched": [],
-                "kept": [], "untagged": [], "failed": []}
+        yield directory + "/film.mkv", "kept", None, None
 
-    monkeypatch.setattr(run.chapterdb, "add_chapters", add_chapters)
+    monkeypatch.setattr(run.chapterdb, "findings", findings)
     return {"calls": calls, "tools": tools, "logs": logs,
             "script": str(tmp_path / "script")}
 
@@ -62,7 +66,7 @@ class TestThePhaseRunsAndNothingElse:
         assert _main(stubbed, "-c", str(films), str(docs)) == 0
         assert stubbed["calls"] == [str(films), str(docs)]
         assert stubbed["tools"] == [["ffprobe", "curl", "mkvpropedit"]]
-        assert any("2 film(s) given chapters" in line
+        assert any("2 film(s) already named" in line
                    for line in stubbed["logs"])
 
 
@@ -81,3 +85,38 @@ class TestRefusedBesideAnotherPhase:
         assert _main(stubbed, "-cw", str(_library(tmp_path, "F"))) == 1
         assert "-w has no part in -c" in capsys.readouterr().err
         assert stubbed["calls"] == []
+
+
+@pytest.mark.media
+@pytest.mark.skipif(any(shutil.which(tool) is None for tool in
+                        ("ffmpeg", "ffprobe", "mkvmerge", "mkvpropedit")),
+                    reason="needs ffmpeg, ffprobe and mkvtoolnix")
+class TestTheQueueWritesWhatTheLookupFound:
+
+    def test_a_found_set_is_written_by_a_worker(self, tmp_path, monkeypatch):
+        folder = tmp_path / "Nordwind (1998) {imdb-tt0000001}"
+        folder.mkdir()
+        raw = tmp_path / "raw.mkv"
+        subprocess.run(
+            ["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi",
+             "-i", "anoisesrc=d=20:c=pink:r=48000", "-c:a", "libopus",
+             "-b:a", "32k", str(raw)], check=True, stdin=subprocess.DEVNULL)
+        movie = folder / (folder.name + ".mkv")
+        subprocess.run(["mkvmerge", "--quiet", "-o", str(movie), str(raw)],
+                       check=True, stdin=subprocess.DEVNULL)
+        existing = chapterdb.existing_chapters(str(movie))
+        chosen = chapterdb.ChapterSet(
+            "1", "Nordwind", "Blu-Ray", "eng", 5, 20,
+            ((0.0, "Opening"), (5.0, "Harbour"), (12.5, "Storm")))
+
+        def findings(directory, log):
+            yield str(movie), "found", existing, chosen
+            yield str(folder / "other.mkv"), "unmatched", existing, None
+
+        monkeypatch.setattr(run.chapterdb, "findings", findings)
+        monkeypatch.setattr(run, "log", lambda _line: None)
+        outcome = run._queued_chapters(str(tmp_path))
+        assert outcome["added"] == [str(movie)]
+        assert outcome["unmatched"] == [str(folder / "other.mkv")]
+        assert chapterdb.existing_chapters(str(movie)).names == (
+            "Opening", "Harbour", "Storm")
