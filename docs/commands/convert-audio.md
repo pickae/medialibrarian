@@ -37,8 +37,10 @@ What gets re-encoded is decided per file:
 | anything else | small enough already: copied verbatim with `-c`, otherwise left alone |
 
 **Long files** are split at quiet points into chunks that encode in parallel and
-are transparently re-joined, with the original's metadata re-attached; `-s` sets
-how long counts as long, and `0` turns it off.
+are transparently re-joined, with the original's metadata re-attached. Whether a
+run splits anything, and which files, it decides for itself from the file sizes:
+it splits only when that is expected to finish the whole run sooner than
+encoding every file whole, and prints what it expects to gain when it does.
 
 ## Channels and bitrate
 
@@ -71,8 +73,8 @@ Two consequences worth knowing before using it:
   run prints which — `-b 46` really encodes at 48.
 - **Long books are always split.** One pass through the pipe cannot carry more
   than about 13½ hours of mono at 44.1 kHz, or half that in stereo, because WAVE
-  states its length in 32 bits — so a book past that is split whatever `-s` says,
-  chunking being the only way to encode it at all.
+  states its length in 32 bits — so a book past that is always split, chunking
+  being the only way to encode it at all.
 
 Long files split here as they do for Opus, and a re-joined book is its source's
 length to the sample.

@@ -20,6 +20,7 @@ a sine wave costs an encoder almost nothing, so a re-encode and a copy would
 produce nearly the same file and the assertions would prove very little.
 """
 
+import os
 import shutil
 import subprocess
 
@@ -124,11 +125,29 @@ def _add_chapters(path, seconds):
 SECONDS = 20
 
 
+# A run decides for itself which files to cut, and no file this short would
+# ever be worth it. The run is handed a decision that cuts every track, planted
+# as a sitecustomize so the real command is otherwise untouched.
+_CUT_EVERYTHING = """
+from medialib.lib import chunkdecision
+
+
+def _cut_everything(tracks, *args, **kwargs):
+    return chunkdecision.Decision(frozenset(range(len(tracks))), 0.0, 0.0)
+
+
+chunkdecision.decide = _cut_everything
+"""
+
+
 @pytest.fixture(scope="module")
 def converted(tmp_path_factory):
-    """One run of the real command over four shapes, with -s set low enough
-    that a codec which DID split would visibly split."""
+    """One run of the real command over four shapes, every file cut into
+    chunks, so a codec which DID split visibly splits."""
     tmp = tmp_path_factory.mktemp("xheaac")
+    site = tmp / "site"
+    site.mkdir()
+    (site / "sitecustomize.py").write_text(_CUT_EVERYTHING)
     source, out = tmp / "in", tmp / "out"
     source.mkdir()
 
@@ -155,8 +174,9 @@ def converted(tmp_path_factory):
     opus = _video_with_audio(source / "opus.mkv", SECONDS,
                              ["-c:a", "libopus", "-b:a", "128k"])
 
-    done = blackbox.run("convert-audio", "-e", "xheaac", "-s", "5",
-                        source, out, cwd=tmp, timeout=1800)
+    done = blackbox.run("convert-audio", "-e", "xheaac", source, out, cwd=tmp,
+                        env=dict(os.environ, PYTHONPATH=str(site)),
+                        timeout=1800)
     return {"source": source, "out": out, "done": done,
             "made": {"chaptered": chaptered, "aac": aac, "opus": opus}}
 
@@ -222,7 +242,7 @@ class TestTheMetadataMp4CannotKeepAsATag:
 
 
 class TestSplittingHappensAndLeavesNoSeam:
-    """-s 5 over 20-second files chunks every one of them, which is the point:
+    """Every 20-second file cut into chunks, which is the point:
     the join has to survive being asked for far more seams than a real book
     would ever have."""
 

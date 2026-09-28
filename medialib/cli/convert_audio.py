@@ -19,12 +19,14 @@ file is an .m4a whose chapters are a track rather than a tag. It splits like any
 other codec, which takes three steps the Opus path does not need - see
 medialib/lib/xheaac.py.
 
-A file longer than the split threshold is cut into one chunk per core, and the
-chunks encode as independent queue jobs, each taking its own place in the queue
-at the size of one chunk - so one huge file neither pins a single core while the
-rest of the machine idles nor keeps the whole run waiting behind it. The
-cuts are nudged to the nearest quiet spot, so the seam between separately encoded
-chunks is inaudible.
+A long file can be cut into one chunk per core, and the chunks encode as
+independent queue jobs, each taking its own place in the queue at the size of one
+chunk - so one huge file neither pins a single core while the rest of the machine
+idles nor keeps the whole run waiting behind it. Which files are cut, if any, is
+decided up front from the file sizes alone, by weighing the expected wall clock
+of the run with and without it (medialib/lib/chunkdecision.py). The cuts are
+nudged to the nearest quiet spot, so the seam between separately encoded chunks
+is inaudible.
 
 Planning is not a phase in front of the encode: the queue is seeded naively with
 a buffer's worth of the largest files that need no planning, and the whole plan
@@ -46,6 +48,7 @@ from medialib import commands
 from medialib.lib import (
     bitrates,
     chapters,
+    chunkdecision,
     clioptions,
     durationcheck,
     dynamicqueue,
@@ -117,19 +120,15 @@ b | <bitrate> | Bitrate of the output files
                     surround source
 j | <jobs> | Run up to <jobs> encoder processes in parallel.
                     Default one per CPU thread
-s | <seconds> | Split files longer than <seconds> into one chunk per logical
-                    CPU core, which encode in parallel alongside the other files,
-                    then transparently re-concatenate. 0 disables splitting.
-                    Default 10000
 """.format(codecs=" or ".join(enums.AUDIO_CODECS),
            encoders=xheaac.ENCODER_SPEC,
            codec=DEFAULT_CODEC)
 
 OPT_VARS = ("m:mono u:surround a:adaptive c:copy k:keep e:outputCodec "
-            "b:bitrate j:jobs s:splitThreshold")
+            "b:bitrate j:jobs")
 OPT_COLUMN = 20
 OPT_LONG = ("h:help m:mono u:surround a:adaptive k:keep c:copy-others "
-            "e:encoding b:bitrate j:jobs s:split-threshold")
+            "e:encoding b:bitrate j:jobs")
 
 # The codec has to be one this command can write, or a typo would only surface
 # as a per-file failure deep into a run. The choices are joined with an ESCAPED
@@ -152,8 +151,6 @@ MONO_THRESHOLD = 50000
 COVER_THRESHOLD = 500000
 COVER_QUALITY = 75
 
-# Files longer than this many seconds are cut into one chunk per logical core.
-DEFAULT_SPLIT_THRESHOLD = 10000
 # The encode queue's buffer, in multiples of the worker pool. It is also the
 # size of the naive seed the queue starts on, because the seed exists to carry
 # the pool through the planning and a buffer's worth is what the pool can hold.
@@ -427,7 +424,7 @@ def too_long_for_one_encode(source: str, duration: float,
     """Whether this file is past what one encode of it could carry, so that
     chunking it is the only way to convert it at all.
 
-    Asked of every file under -s once a run is chunking for the ceiling, so the
+    Asked of every file not already chosen for chunking, so the
     cheap half comes first: below the shortest ceiling the band can produce - the
     top rate at the widest layout, about an hour and a half - no file can be too
     long, and nothing is probed. Only what survives that pays for the two probes
@@ -713,12 +710,13 @@ class Run:
     keep: bool
     bitrate: int
     threshold: int
-    split_threshold: int
-    # Whether a file too long to encode in one go is cut up even where -s would
-    # not have bothered. Settled from what the RUN asked for, not from what it
-    # later decided: a run that stops chunking because it has thousands of files
-    # is saying chunking is pointless, not that a book it cannot otherwise encode
-    # should be skipped.
+    # The tracks the run decided to cut into chunks, for being long enough
+    # against the rest of the queue that cutting them shortens the run.
+    chunked: frozenset
+    # Whether a file too long to encode in one go is cut up even where the
+    # decision above would not have bothered. Settled from what the RUN asked
+    # for, not from what it later decided: a run that finds chunking pointless is
+    # not saying that a book it cannot otherwise encode should be skipped.
     chunk_over_ceiling: bool
     # The output codec, the extension it is written under, and - for a codec
     # that needs one - the external encoder settled before the run started.
@@ -1084,21 +1082,18 @@ class Run:
     def _ceiling_way_out(self) -> str:
         """What to do about a file too long for one xHE-AAC encode.
 
-        A run that is chunking would normally have cut such a file up, so the
-        refusal reaching it at all means one of two things. The run turned the
-        chunking off - and then turning it back on is the first way out, named
-        by the option that turned it off. Or the planner could not place the
-        pieces, and then only the other codec or shorter sources remain.
+        A run would normally have cut such a file up, so the refusal reaching
+        it at all means one of two things. Adaptive mode turned the chunking
+        off - and then dropping -a is the first way out. Or the planner could
+        not place the pieces, and then only the other codec or shorter sources
+        remain.
         """
         if self.adaptive:
-            instead = "drop -a, which turns off the splitting that would cut it"
-        elif not self.chunk_over_ceiling:
-            instead = "drop -s 0, so the run can cut it into chunks"
-        else:
-            return ("Encode it as Opus (-e opus), or split the source into "
+            return ("Encode it as Opus (-e opus), drop -a, which turns off the "
+                    "splitting that would cut it, or split the source into "
                     "shorter files first.")
-        return ("Encode it as Opus (-e opus), %s, or split the source into "
-                "shorter files first." % instead)
+        return ("Encode it as Opus (-e opus), or split the source into "
+                "shorter files first.")
 
     def _produce(self, relative: str, source: str, out: str, video: bool,
                  mono: bool, bitrate: int, threshold: int, source_bitrate: int,
@@ -1331,7 +1326,7 @@ class Planner:
         base = segments.plan_file_for(state.plan_root, track)
         source = os.path.join(state.input_dir, track)
 
-        if state.split_threshold <= 0 and not state.chunk_over_ceiling:
+        if track not in state.chunked and not state.chunk_over_ceiling:
             _write_jobs(base, [track])
             return
 
@@ -1383,12 +1378,12 @@ class Planner:
         expensive half of the plan is still owed.
         """
         state = self.state
-        # Two reasons to cut a file up, and they are not the same reason. Past -s
-        # it is worth doing: one huge file would otherwise pin one core while the
-        # rest of the machine idles. Past what the encoder can take in one go it
-        # is the only way to encode the file at all, which is why that one
-        # survives a run that has turned chunking off as pointless.
-        worth_splitting = 0 < state.split_threshold < duration
+        # Two reasons to cut a file up, and they are not the same reason. Chosen
+        # by the run's decision it is worth doing: one huge file would otherwise
+        # pin one core while the rest of the machine idles. Past what the encoder
+        # can take in one go it is the only way to encode the file at all, which
+        # is why that one survives a run that has found chunking pointless.
+        worth_splitting = track in state.chunked
         if not worth_splitting and not (
                 state.chunk_over_ceiling
                 and too_long_for_one_encode(source, duration, state.mono,
@@ -1759,26 +1754,22 @@ def main(argv: list, program: str = "convert-audio",
     bitrate = int(result.values["bitrate"] or DEFAULT_BITRATE)
     codec = result.values["outputCodec"] or DEFAULT_CODEC
     jobs = int(result.values["jobs"] or runlog.cpu_count())
-    split_threshold = int(result.values["splitThreshold"]
-                          or DEFAULT_SPLIT_THRESHOLD)
 
     # Adaptive mode owns the channel and bitrate decision per file, so a global
     # -m or -b would contradict it. It also keeps files whole: the split queue
     # threads the global settings through its chunk jobs, whereas adaptive needs a
     # per-file decision.
-    if adaptive:
-        if mono or bitrate_set:
-            sys.stderr.write("%s\n\nerror: -a (adaptive) cannot be combined "
-                             "with -m or -b.\n\n%s\n"
-                             % (declaration.credits,
-                                clioptions.page(declaration)))
-            return 1
-        split_threshold = 0
+    if adaptive and (mono or bitrate_set):
+        sys.stderr.write("%s\n\nerror: -a (adaptive) cannot be combined "
+                         "with -m or -b.\n\n%s\n"
+                         % (declaration.credits,
+                            clioptions.page(declaration)))
+        return 1
 
     # A codec with a whole-file ceiling cuts past it even where chunking would
-    # otherwise be skipped - but only if this run is chunking at all. `-s 0` and
-    # adaptive mode have both said no by here, and they are answers, not defaults.
-    chunk_over_ceiling = codec == "xheaac" and split_threshold > 0
+    # otherwise be skipped - but only if this run may chunk at all. Adaptive
+    # mode has said no by here, and that is an answer, not a default.
+    chunk_over_ceiling = codec == "xheaac" and not adaptive
 
     if clioptions.args_out_of_range(len(result.positionals), 2, None):
         sys.stdout.write(clioptions.no_args_text(declaration))
@@ -1847,8 +1838,8 @@ def main(argv: list, program: str = "convert-audio",
     try:
         return _convert(program, script_dir, input_dir, output_dir, probe_what,
                         skips, mono, adaptive, copy, keep, bitrate, jobs,
-                        split_threshold, codec, chunk_over_ceiling,
-                        mkvtoolnix_unsaid, surround)
+                        codec, chunk_over_ceiling, mkvtoolnix_unsaid,
+                        surround)
     finally:
         statusline.stop_status_monitor()
         ramscratch.run_exit_cleanup()
@@ -1890,7 +1881,7 @@ def _holds_input(input_dir: str) -> bool:
 
 def _convert(program: str, script_dir: str, input_dir: str, output_dir: str,
              probe_what: str, skips, mono: bool, adaptive: bool, copy: bool,
-             keep: bool, bitrate: int, jobs: int, split_threshold: int,
+             keep: bool, bitrate: int, jobs: int,
              codec: str = DEFAULT_CODEC,
              chunk_over_ceiling: bool = False,
              mkvtoolnix_unsaid: bool = False,
@@ -1900,7 +1891,7 @@ def _convert(program: str, script_dir: str, input_dir: str, output_dir: str,
     state = Run(
         input_dir=input_dir, output_dir=output_dir, script_dir=script_dir,
         mono=mono, surround=surround, adaptive=adaptive, copy=copy, keep=keep,
-        bitrate=bitrate, threshold=THRESHOLD, split_threshold=split_threshold,
+        bitrate=bitrate, threshold=THRESHOLD, chunked=frozenset(),
         codec=codec, extension=enums.AUDIO_CODEC_EXTENSIONS[codec],
         chunk_over_ceiling=chunk_over_ceiling,
         # The table's default: a cover that rides along in every transcoded
@@ -1942,21 +1933,7 @@ def _convert(program: str, script_dir: str, input_dir: str, output_dir: str,
     if mkvtoolnix_unsaid:
         _warn_mkvtoolnix(state.tracks)
 
-    # With a backlog this large the cores stay saturated on the many small files
-    # no matter what, so a handful of large ones each blocking one thread costs
-    # nothing overall - while the extra silence detection and re-concatenation
-    # chunking adds would just be wasted effort.
-    if split_threshold > 0:
-        skip_at = jobs * 50
-        if len(state.tracks) >= skip_at:
-            # A codec with a whole-file ceiling still cuts what is past it - that
-            # survives this on purpose - so the line does not claim otherwise.
-            print("Many input files (%d >= %d threads x 50): skipping long-file "
-                  "chunking%s." % (len(state.tracks), skip_at,
-                                   ", except for files too long to encode whole"
-                                   if chunk_over_ceiling else ""))
-            split_threshold = 0
-            state.split_threshold = 0
+    state.chunked = _decide_chunking(state, jobs)
 
     chunk_root, chunk_status = ramscratch.ram_scratch_dir("convertAudio.chunks")
     plan_root, plan_status = ramscratch.ram_scratch_dir("convertAudio.plans")
@@ -2058,6 +2035,35 @@ def _filesize(state: Run, track: str) -> int:
         return 0
 
 
+def _decide_chunking(state: Run, jobs: int) -> frozenset:
+    """The tracks this run cuts into chunks, weighed from their sizes alone.
+
+    Nothing is probed for it: the decision is made before the queue starts, and
+    what a file's size and extension say about it is all it weighs. A run that
+    decides to chunk says so and what it expects to gain; one that does not
+    says nothing, because nothing about the run has changed.
+    """
+    if state.adaptive or not state.tracks:
+        return frozenset()
+    decision = chunkdecision.decide(
+        [(enums.lower_extension_of(track), _filesize(state, track))
+         for track in state.tracks],
+        jobs, runlog.cpu_count(), state.mono,
+        resolve_bitrate(state.bitrate, state.mono),
+        MONO_THRESHOLD if state.mono else state.threshold,
+        lambda extension: extension in enums.VIDEO_EXTENSIONS,
+        lambda extension: extension in enums.ALWAYS_TRANSCODE_EXTENSIONS,
+        state.codec)
+    if not decision.chunked:
+        return frozenset()
+    print("Splitting %d long file(s) into chunks: expected %s, against %s "
+          "encoding every file whole."
+          % (len(decision.chunked),
+             formatting.fmt_hms("%.0f" % decision.expected),
+             formatting.fmt_hms("%.0f" % decision.whole)))
+    return frozenset(state.tracks[index] for index in decision.chunked)
+
+
 def _settle_preload(state: Run, planner: Planner) -> tuple:
     """The tracks the queue loads naively, and the rest it must plan for.
 
@@ -2082,22 +2088,14 @@ def _settle_preload(state: Run, planner: Planner) -> tuple:
                 preload.append((track, _filesize(state, track)))
         return preload, candidates
 
-    # No ceiling can refuse a whole encode, so the split is settled from the
-    # file's size alone, probe-free: the size divided by the format's largest
-    # plausible rate is the shortest the file can possibly be, and a file that
-    # is still past the threshold at its shortest is a candidate no matter what
-    # it really is.
-    threshold = state.split_threshold
-    if threshold <= 0:
-        return [(track, _filesize(state, track)) for track in state.tracks], []
+    # No ceiling can refuse a whole encode, so the split is the run's decision
+    # and nothing else: what it chose is planned, and everything else is loaded
+    # as it is.
     for track in state.tracks:
-        size = _filesize(state, track)
-        rate = enums.AUDIO_MAX_KBPS.get(
-            enums.lower_extension_of(track), enums.AUDIO_MAX_KBPS_DEFAULT)
-        if size / (rate * 125.0) > threshold:
+        if track in state.chunked:
             candidates.append(track)
         else:
-            preload.append((track, size))
+            preload.append((track, _filesize(state, track)))
     return preload, candidates
 
 

@@ -339,6 +339,59 @@ class TestSplittingAndTheCodec:
         assert preset == xheaac.exhale_preset(ca.MONO_BITRATE, 1)
 
 
+class TestTheChunkingDecision:
+    """Which tracks a run cuts is `chunkdecision`'s to weigh; what is pinned
+    here is what the run hands it and does with the answer."""
+
+    def _run(self, tmp_path, sizes, **settings):
+        for track, size in sizes.items():
+            (tmp_path / track).write_bytes(b"\0" * size)
+        base = {"input_dir": str(tmp_path), "tracks": list(sizes),
+                "adaptive": False, "mono": False, "bitrate": ca.DEFAULT_BITRATE,
+                "threshold": ca.THRESHOLD, "codec": "opus"}
+        base.update(settings)
+        return ca.Run(**base)
+
+    def test_adaptive_mode_cuts_nothing_and_weighs_nothing(self, tmp_path,
+                                                           monkeypatch):
+        monkeypatch.setattr(ca.chunkdecision, "decide",
+                            lambda *a: pytest.fail("adaptive mode weighed"))
+        state = self._run(tmp_path, {"book.m4b": 10}, adaptive=True)
+        assert ca._decide_chunking(state, 32) == frozenset()
+
+    def test_the_tracks_are_weighed_by_extension_and_size(self, tmp_path,
+                                                          monkeypatch):
+        asked = []
+
+        def decide(tracks, workers, *rest):
+            asked.append((tracks, workers))
+            return ca.chunkdecision.Decision(frozenset(), 0.0, 0.0)
+
+        monkeypatch.setattr(ca.chunkdecision, "decide", decide)
+        state = self._run(tmp_path, {"Book.M4B": 30, "a.mp3": 20})
+        ca._decide_chunking(state, 8)
+        assert asked == [([("m4b", 30), ("mp3", 20)], 8)]
+
+    def test_what_it_chose_is_named_by_track_and_said(self, tmp_path,
+                                                      monkeypatch, capsys):
+        monkeypatch.setattr(
+            ca.chunkdecision, "decide",
+            lambda *a: ca.chunkdecision.Decision(frozenset({1}), 60.0, 600.0))
+        state = self._run(tmp_path, {"a.m4a": 20, "book.m4b": 30})
+        assert ca._decide_chunking(state, 32) == frozenset({"book.m4b"})
+        said = capsys.readouterr().out
+        assert "Splitting 1 long file(s)" in said
+        assert "0:01:00" in said and "0:10:00" in said
+
+    def test_a_run_that_cuts_nothing_says_nothing(self, tmp_path, monkeypatch,
+                                                  capsys):
+        monkeypatch.setattr(
+            ca.chunkdecision, "decide",
+            lambda *a: ca.chunkdecision.Decision(frozenset(), 60.0, 60.0))
+        ca._decide_chunking(self._run(tmp_path, {"a.m4a": 20}), 32)
+        assert capsys.readouterr().out == ""
+
+
 class TestTheSampleRateProbe:
     """Only the xhe-aac path reads it, because only its encoders have a band."""
 
@@ -873,21 +926,13 @@ class TestABookTooLongForOnePipe:
     def test_a_run_that_was_cutting_is_not_told_to_cut(self, spawned,
                                                        tmp_path, capsys):
         said = self._way_out(spawned, tmp_path, capsys)
-        assert "-s 0" not in said and "-a" not in said.replace("-aac", "")
-
-    def test_with_s_0_the_way_out_is_to_drop_it(self, spawned, tmp_path,
-                                                capsys):
-        """The run could have cut this file had it been chunking, so the
-        option that stopped it is the first thing to name."""
-        said = self._way_out(spawned, tmp_path, capsys,
-                             chunk_over_ceiling=False)
-        assert "drop -s 0" in said
+        assert "-a" not in said.replace("-aac", "")
 
     def test_under_a_it_is_adaptive_mode_that_stopped_the_cut(
             self, spawned, tmp_path, capsys):
         said = self._way_out(spawned, tmp_path, capsys, adaptive=True,
                              chunk_over_ceiling=False)
-        assert "drop -a" in said and "-s 0" not in said
+        assert "drop -a" in said
 
     def test_a_book_inside_the_ceiling_is_encoded_as_it_always_was(
             self, spawned, tmp_path):
@@ -950,7 +995,7 @@ class TestTheQueueOrder:
     its own after the whole queue has drained.
     """
 
-    def _producer(self, tmp_path, sizes, chunked, threshold, seed=0):
+    def _producer(self, tmp_path, sizes, chunked, seed=0):
         """The encode producer with the planning stubbed out: every candidate's
         jobs are written as the planner would write them, so what is under test
         is the size settle, the weighing and the handover alone."""
@@ -987,7 +1032,7 @@ class TestTheQueueOrder:
         state = types.SimpleNamespace(
             tracks=sorted(sizes, key=lambda track: -sizes[track]),
             input_dir=str(inputs), plan_root=str(plans),
-            split_threshold=threshold, codec="opus")
+            chunked=frozenset(chunked), codec="opus")
         preload, candidates = ca._settle_preload(state, _Planner(state, 1))
         total_file = str(tmp_path / "total")
         return (ca._encode_producer(state, _Planner(state, 1), preload,
@@ -999,8 +1044,7 @@ class TestTheQueueOrder:
         into eight it is eight jobs SMALLER than that file - so the file leads
         instead of waiting behind all of them."""
         producer, _total_file = self._producer(
-            tmp_path, {"book.m4b": 800, "track.m4a": 150}, {"book.m4b": 8},
-            0.01)
+            tmp_path, {"book.m4b": 800, "track.m4a": 150}, {"book.m4b": 8})
         items = list(producer)
         names = [token.split(ca.UNIT)[0] for token, _size in items]
         assert names[0] == "track.m4a"
@@ -1016,7 +1060,7 @@ class TestTheQueueOrder:
         sizes = {"long%d.m4b" % n: 900 - n for n in range(4)}
         sizes.update({"short%d.m4a" % n: 300 - n for n in range(6)})
         producer, _total_file = self._producer(
-            tmp_path, sizes, {track: 1 for track in sizes}, 0.02)
+            tmp_path, sizes, {track: 1 for track in sizes})
         order = [token for token, _size in producer]
         assert order == sorted(sizes, key=lambda track: -sizes[track])
 
@@ -1026,7 +1070,7 @@ class TestTheQueueOrder:
         asked nothing of - the most encoding the pool can be given up front."""
         sizes = {"book.m4b": 900, "a.m4a": 300, "b.m4a": 200, "c.m4a": 100}
         producer, _total_file = self._producer(
-            tmp_path, sizes, {"book.m4b": 1}, 0.02, seed=2)
+            tmp_path, sizes, {"book.m4b": 1}, seed=2)
         order = [token for token, _size in producer]
         assert order == ["a.m4a", "b.m4a", "book.m4b", "c.m4a"]
 
@@ -1037,7 +1081,7 @@ class TestTheQueueOrder:
         run is reproducible."""
         producer, _total_file = self._producer(
             tmp_path, {"book.m4b": 400, "a.m4a": 100, "b.m4a": 100},
-            {"book.m4b": 4}, 0.01)
+            {"book.m4b": 4})
         items = list(producer)
         indexes = [token.split(ca.UNIT)[1] for token, _size in items
                    if ca.UNIT in token]
@@ -1047,8 +1091,7 @@ class TestTheQueueOrder:
         """The queue orders what it holds by the size it is told, so the
         producer owes it the scan's order - largest file first - and no more."""
         producer, _total_file = self._producer(
-            tmp_path, {"small.m4a": 10, "big.m4a": 900, "mid.m4a": 100}, {},
-            0.03)
+            tmp_path, {"small.m4a": 10, "big.m4a": 900, "mid.m4a": 100}, {})
         items = list(producer)
         assert [token for token, _size in items] == \
             ["big.m4a", "mid.m4a", "small.m4a"]
@@ -1059,7 +1102,7 @@ class TestTheQueueOrder:
         ten times the size of its neighbours are still the two biggest jobs."""
         producer, _total_file = self._producer(
             tmp_path, {"book.m4b": 2000, "a.m4a": 100, "b.m4a": 100},
-            {"book.m4b": 2}, 0.01)
+            {"book.m4b": 2})
         items = list(producer)
         names = [token.split(ca.UNIT)[0]
                  for token, _size in sorted(items, key=lambda item: -item[1])]
@@ -1070,8 +1113,7 @@ class TestTheQueueOrder:
         knows the queue's own length, which is when the plan is made - and it
         writes it then, before the first job the plan settled."""
         producer, total_file = self._producer(
-            tmp_path, {"book.m4b": 800, "track.m4a": 150}, {"book.m4b": 8},
-            0.01)
+            tmp_path, {"book.m4b": 800, "track.m4a": 150}, {"book.m4b": 8})
         items = list(producer)
         with open(total_file) as handle:
             assert handle.read() == "%d\n" % len(items)
@@ -1081,7 +1123,7 @@ class TestTheQueueOrder:
         """With no candidates the length is known before the first job is
         handed over, so the first line the run prints may already carry it."""
         producer, total_file = self._producer(
-            tmp_path, {"a.m4a": 100, "b.m4a": 200}, {}, 0.03)
+            tmp_path, {"a.m4a": 100, "b.m4a": 200}, {})
         next(producer)
         with open(total_file) as handle:
             assert handle.read() == "2\n"

@@ -80,7 +80,8 @@ class TestTheProgressCounter:
     file's chunk count as its denominator. The denominator is absent for as long
     as the queue is still being planned - a line printed before the total is
     known carries the count alone - so a line's denominator, where it has one,
-    is what this asserts on. Cores and the split threshold are pinned so the job
+    is what this asserts on. The pool is pinned, and a long file is large
+    enough that the run cuts it however many threads the host has, so the job
     counts do not depend on the host's CPU count.
     """
 
@@ -93,12 +94,13 @@ class TestTheProgressCounter:
         outputs = tmp_path / "out"
         inputs.mkdir()
         for name in names:
-            # The split is settled from the file's size, not a probe: a "long"
-            # file must be big enough to be PAST the threshold at its format's
-            # largest plausible rate, and a short one inside it.
-            size = 400_000 if name.startswith("long") else 100_000
-            (inputs / name).write_bytes(b"\0" * size)
-        done = convert.run("convert-audio", "-j", 4, "-s", 10, inputs, outputs)
+            # Whether a file is cut is settled from its size, not a probe, so a
+            # "long" one is twenty gigabytes - sparse, so it costs no disk - and
+            # a short one is small enough never to be worth cutting.
+            with open(inputs / name, "wb") as handle:
+                handle.truncate(20_000_000_000 if name.startswith("long")
+                                else 100_000)
+        done = convert.run("convert-audio", "-j", 4, inputs, outputs)
         return [(int(n), int(total) if total else None) for n, total in
                 re.findall(r"^\[(\d+)(?:/(\d+))?\] [^:\n]+:", done.stdout,
                            re.M)]
@@ -204,7 +206,7 @@ class TestRelativePaths:
                                                                 tmp_path):
         parent = tmp_path / "parent"
         self._fixture(parent / "in")
-        done = convert.run("convert-audio", "-j", 2, "-s", 0, "-c", "in", "out",
+        done = convert.run("convert-audio", "-j", 2, "-c", "in", "out",
                            cwd=parent)
         assert done.returncode == 0, done.stderr
 
@@ -223,9 +225,9 @@ class TestRelativePaths:
         self._fixture(relative / "in")
         self._fixture(absolute / "in")
 
-        assert convert.run("convert-audio", "-j", 2, "-s", 0, "-c", "in", "out",
+        assert convert.run("convert-audio", "-j", 2, "-c", "in", "out",
                            cwd=relative).returncode == 0
-        assert convert.run("convert-audio", "-j", 2, "-s", 0, "-c",
+        assert convert.run("convert-audio", "-j", 2, "-c",
                            absolute / "in", absolute / "out",
                            cwd=tmp_path).returncode == 0
         assert blackbox.tree_of(relative / "out") == blackbox.tree_of(
