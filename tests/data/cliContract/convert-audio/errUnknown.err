@@ -38,10 +38,5 @@ Options:
     -j, --jobs <jobs>
                     Run up to <jobs> encoder processes in parallel.
                     Default one per CPU thread
-    -s, --split-threshold <seconds>
-                    Split files longer than <seconds> into one chunk per logical
-                    CPU core, which encode in parallel alongside the other files,
-                    then transparently re-concatenate. 0 disables splitting.
-                    Default 10000
 
 Nothing was changed.
