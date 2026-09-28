@@ -13,6 +13,17 @@ hold one large image per page — into a tree of `.cbz` archives of AVIF pages.
 | **Reruns** | a `.cbz` left by an earlier run is skipped, so a grown library neither duplicates nor rewrites finished books |
 | **Network** | none |
 
+## Default behavior
+
+With no options, a run:
+
+- writes pages as **AVIF** at quality 45, speed 4, colour at full resolution (4:4:4) (`-q`, `-s`, `-u`)
+- **scales pages taller than 2960 px down** to that height (`-m`)
+- **trims light, plain margins off every page**, treating colours within 10% of the edge as margin (`-f`)
+- **drops blank pages**
+- **repackages a book of mostly starved pages** instead of re-encoding it ([below](#starved-scans))
+- inspects every PDF and skips one that is not a scanned comic ([below](#pdfs))
+
 ## How a book is converted
 
 1. Each book is extracted and flattened into a single folder of pages.

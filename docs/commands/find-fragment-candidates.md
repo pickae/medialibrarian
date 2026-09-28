@@ -9,9 +9,17 @@ about them — so they can be reviewed and added to `data/fragments.txt`.
 | At a glance | |
 | --- | --- |
 | **Takes** | a folder, or a tree file that already exists |
-| **Writes** | `fragmentCandidates.txt` beside whichever it was given, or wherever `-o` says |
-| **Input** | never touched: it reads nothing but names and writes nothing but its report |
+| **Writes** | the report, and for a folder its `.tree` ([below](#default-behavior)) |
+| **Input** | nothing is renamed: it reads names only |
 | **Network** | none |
+
+## Default behavior
+
+With no options, a run:
+
+- for a folder, **writes `<folder>.tree` into it** (needs `tree`), then reads that
+- writes the report **into the folder** as `fragmentCandidates.txt`, or beside a tree file as `<stem>.fragmentCandidates.txt`, overwriting an older one (`-o`)
+- reports only fragments at least 2 distinct names carry (`-m`)
 
 | Given | What is parsed |
 | --- | --- |

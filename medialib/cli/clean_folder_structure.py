@@ -12,7 +12,7 @@ directory's name changes when its PARENT is processed - so the tree has to be
 stable before anything reads a file's path. Sub-folders left empty are removed
 at the very end; the input root itself is always kept.
 
-Simulation mode (-s) runs the whole pipeline against a name-only mirror in a
+Simulation mode (-p) runs the whole pipeline against a name-only mirror in a
 sandbox, so the input is only ever read, and writes "before.tree"/"after.tree"
 into it. Every step here is name-only, which is what makes an empty stand-in per
 file a faithful preview rather than an approximation.
@@ -416,7 +416,7 @@ def mirror_structure(source: str, destination: str) -> None:
 
 
 class Simulation:
-    """The sandbox mirror, and the two snapshots that are the whole point of -s."""
+    """The sandbox mirror, and the two snapshots that are the whole point of -p."""
 
     def __init__(self, input_path: str) -> None:
         self.original = os.path.abspath(input_path)
@@ -548,7 +548,7 @@ def main(argv: list, program: str = "clean-folder-structure",
     if simulate:
         # The one external tool this script has, and only in this mode: both
         # snapshots are a `tree` invocation.
-        if tooldeps.require_tools("simulation mode (-s)", ["tree"]):
+        if tooldeps.require_tools("simulation mode (-p)", ["tree"]):
             return 1
         simulation = Simulation(input_path)
         input_path = simulation.start()

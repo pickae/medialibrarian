@@ -67,7 +67,8 @@ OPT_SPEC = """
 h |  | Print this help page.
 t | <table> | A feed table to read. May be given more than once, and each
                     table brings its own profile and its own parallelism (see
-                    below). Default: podcasts.tsv beside this script.
+                    below). Default: data/podcasts/podcasts.tsv, else
+                    podcasts.tsv, under the script directory.
 j | <jobs> | Cap how many feeds any one table may fetch at once. Lower
                     only; a table asking for less keeps its own number.
 p |  | Preview: print the yt-dlp call each feed would get and

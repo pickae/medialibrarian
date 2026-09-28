@@ -99,10 +99,12 @@ u | <chroma> | page chroma: {chromas}. 444 keeps colour at full resolution,
                     420 at a quarter of it, for smaller books with colour
                     fringes on thin lines and lettering. Default {chroma}.
 s | <speed> | av1 speed preset, lower is slower, default {speed}
-m | <maxRes> | maximum resolution (height) to keep
-f | <fuzz> | when trimming, how many percent color difference gets still trimmed
+m | <maxRes> | maximum resolution (height) to keep, default {max_res}
+f | <fuzz> | when trimming, how many percent color difference gets still
+                    trimmed, default {fuzz}
 """.format(quality=DEFAULT_QUALITY, chromas=" or ".join(CHROMAS),
-           chroma=DEFAULT_CHROMA, speed=DEFAULT_SPEED_PRESET)
+           chroma=DEFAULT_CHROMA, speed=DEFAULT_SPEED_PRESET,
+           max_res=DEFAULT_MAX_RES, fuzz=DEFAULT_FUZZ)
 
 # Checked here rather than left to convert-images, where a bad value would be
 # refused once per book, deep into the run.

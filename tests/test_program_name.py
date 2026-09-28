@@ -25,7 +25,7 @@ _REPO = blackbox.REPO
 _SUBJECT = {"require_tools": 0, "require_python_module": 1}
 
 # A subject that names the RUN rather than the command is right and stays:
-# "simulation mode (-s)" and "the tidy-up (-c) of the video tables" are what a
+# "simulation mode (-p)" and "the tidy-up (-c) of the video tables" are what a
 # refusal about one mode of a command should say. What may not be written down is
 # the command's own name, in either spelling.
 _A_COMMAND = re.compile(r"\b(%s)\b|\.sh\b" % "|".join(

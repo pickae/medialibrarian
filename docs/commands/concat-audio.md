@@ -12,6 +12,16 @@ subfolder, with chapters and an embedded cover.
 | **Input** | untouched, unless pretreatment (`-p`) is opted into, which renames folders and files in place |
 | **Network** | none |
 
+## Default behavior
+
+With no options, a run:
+
+- joins each subfolder's audio in name order into one book, **without re-encoding** (FLAC is re-encoded to FLAC); AAC and m4a books come out as `.m4b`
+- passes over a subfolder holding more than one audio format
+- takes chapters from a cue sheet, else makes one per file, and embeds a cover ([below](#chapters-and-cover))
+- **never overwrites an existing book**: that subfolder fails instead
+- leaves the input alone (`-p`)
+
 The naming of the files and subfolders should reflect the order they are to be
 joined in.
 

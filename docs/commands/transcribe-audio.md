@@ -13,6 +13,16 @@ in a mirrored output folder.
 | **Reruns** | a transcript already present in the output is left in place, so only what is new is done |
 | **Network** | none, beyond whisper fetching a model the first time it is used |
 
+## Default behavior
+
+With no options, a run:
+
+- **picks the whisper model for the host**: the biggest the free VRAM holds, or `base` on the CPU
+- detects each file's language itself
+- writes plain `.txt` transcripts (`-f`)
+- transcribes only the first audio track of a video
+- keeps a transcript already in the output
+
 | Input | Transcribed from | Becomes |
 | --- | --- | --- |
 | `<input>/a/track.mp3` | the audio as it is | `<output>/a/track.txt` |

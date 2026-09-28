@@ -20,7 +20,7 @@ Options:
                     Default txt
     -j, --jobs <jobs>
                     Run up to <jobs> transcriptions in parallel.
-                    Default: what the card can hold
+                    Default: what the card can hold, or 2 on the CPU
 
 
 Nothing was changed.
