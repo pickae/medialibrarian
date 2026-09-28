@@ -705,9 +705,11 @@ class TestAnOpusEncodeOfASurroundSource:
         self._chunk_and_whole(self._run(surround=surround), monkeypatch,
                               tmp_path)
         chunk, whole = seen
+        # The chunk encoder joins the source path itself, so it is spelled with
+        # this platform's separator.
         assert chunk[:13] == ["ffmpeg", "-nostdin", "-y", "-ss", "0",
-                              "-t", "600", "-i", "in/a.m4b", "-map", "0:a:0",
-                              "-map_metadata", "-1"]
+                              "-t", "600", "-i", os.path.join("in", "a.m4b"),
+                              "-map", "0:a:0", "-map_metadata", "-1"]
         assert chunk[13:-1] == whole[9:-1] == codec
 
     def test_a_given_bitrate_is_kept_as_given(self, seen):
