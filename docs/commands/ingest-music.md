@@ -9,9 +9,22 @@ library, plus Opus copies to carry around.
 | --- | --- |
 | **Takes** | a folder of downloaded music |
 | **Writes** | the FLAC library into `<ingestDir>`, and 120 kbps Opus copies into `<opusCopyDir>` (default: the sibling folder `<ingestDir>opus`) |
-| **Input** | never renamed: everything is applied to the output only |
+| **Input** | de-duplicated and multi-disc rips split into subfolders; everything else is applied to the output only |
 | **Reruns** | add only what is new: running the same download folder again leaves the library exactly as it was |
 | **Network** | yes — beets asks AcoustID, MusicBrainz, Last.fm, a lyrics site and a cover-art host ([details](../file-safety.md#what-leaves-the-machine)) |
+
+## Default behavior
+
+With no options, a run:
+
+- **de-duplicates the download folder and splits multi-disc rips there**, deleting identical files
+- re-encodes lossless tracks to 16-bit FLAC at most 48 kHz, and copies the rest
+- **tags and fetches covers, lyrics and genres with beets** (online)
+- cleans the names with [`clean-folder-structure`](clean-folder-structure.md)
+- makes 120 kbps Opus copies into `<ingestDir>opus` (`[opusCopyDir]`)
+- adds only what is new on a rerun
+
+Each phase is in the [table below](#what-it-does).
 
 ## What it does
 

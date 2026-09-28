@@ -9,9 +9,20 @@ over chapters and cover art.
 | --- | --- |
 | **Takes** | a folder of audio, and of video whose soundtrack is wanted |
 | **Writes** | the converted files under `<outputDir>`; with `-c`, the rest copied verbatim beside them |
-| **Input** | never modified |
+| **Input** | file extensions lower-cased and `.jpeg` renamed to `.jpg`; nothing else is changed |
 | **Reruns** | an up-to-date output is skipped |
 | **Network** | none |
+
+## Default behavior
+
+With no options, a run:
+
+- writes **Opus at 46 kbps**, keeping the source's channel count (`-e`, `-b`, `-m`, `-a`)
+- re-encodes only what is at or above 90 kbps, or in a format not worth keeping, and **leaves smaller files out of the output** ([below](#what-gets-re-encoded); `-c` copies them)
+- **splits files longer than 10000 s** into chunks that encode in parallel (`-s`)
+- carries chapters and cover art over, and copies images across
+- **lower-cases file extensions in the input**, and renames `.jpeg` to `.jpg`
+- runs one encoder per CPU thread (`-j`)
 
 ## What gets re-encoded
 

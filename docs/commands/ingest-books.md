@@ -13,6 +13,15 @@ each source's name and sub-folder into the output.
 | **Reruns** | a book whose output already exists from a previous run is skipped |
 | **Network** | none |
 
+## Default behavior
+
+With no options, a run:
+
+- copies PDFs, **converts other formats to epub, and re-converts every epub** (`-t` for plain text)
+- **keeps everything in a book**: fonts, images, a PDF's pictures (`-d`)
+- skips a book already in the output, and keeps both on a name collision
+- ignores formats it does not list, and does not clean the names afterwards (`-c`)
+
 Books are processed in parallel across all cores, and only the finished file is
 written to disk.
 

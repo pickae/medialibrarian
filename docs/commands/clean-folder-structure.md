@@ -14,6 +14,17 @@ itself.
 | **Reruns** | a name already in its target form is left alone |
 | **Network** | none |
 
+## Default behavior
+
+With no options, a run:
+
+- **renames folders and files in place**, at every level below the folder given
+- removes the configured fragments ([below](#fragments); `-f`)
+- **renames the cover image in each folder to `folder.<ext>`**: the largest one with `folder`, `front` or `cover` in its name
+- **removes sub-folders left empty**, keeping the folder given
+- refuses any rename that would overwrite something
+- fixes no dates, makes no year folders and numbers nothing (`-d`, `-y`, `-n`)
+
 ## Optional passes
 
 | Option | Adds |

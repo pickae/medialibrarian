@@ -15,7 +15,17 @@ Opus is preferred over m4a.
 | **Reruns** | fetch only what is new: the archive says what is already there |
 | **Network** | yes — the feeds themselves |
 
-**Contents:** [Arguments](#arguments) · [Feed tables](#feed-tables) ·
+## Default behavior
+
+With no options, a run:
+
+- **updates a nightly yt-dlp first** (`-p`)
+- reads the feeds in `data/podcasts/podcasts.tsv` (`-t`), skipping those marked inactive (`-a`)
+- downloads audio only with the `youtubeAudio` profile: **sponsor segments cut out**, Opus preferred, thumbnail and metadata embedded ([feed tables](#feed-tables))
+- walks back at most 20 entries per feed, and names episodes `<upload date> <title>` (table columns)
+- does not tidy up or build the phone's library afterwards (`-c`, `-i`)
+
+**Contents:** [Default behavior](#default-behavior) · [Arguments](#arguments) · [Feed tables](#feed-tables) ·
 [One table, both systems](#one-table-both-systems) ·
 [Options that shape a run](#options-that-shape-a-run) ·
 [Tidying up](#tidying-up-after-a-run--c) · [The phone's library](#building-the-phones-library-from-the-run--i) ·

@@ -15,6 +15,16 @@ driven headless.
 | **Reruns** | resume: a book is either fully in the library or not in it at all, so an interrupted run costs at most the book it was reading |
 | **Network** | none of its own — whatever the checkout fetches for itself is the checkout's |
 
+## Default behavior
+
+With no options, a run:
+
+- reads each book with the `xtts` engine in its own voice, on the GPU when there is one (`-v`, `-d`)
+- **picks each book's language** from its metadata, then its text, falling back to English (`-l`)
+- writes a 36 kbps mono Opus **and** a lossless FLAC of every book (`-b`, `-o`; [below](#the-two-libraries))
+- reads as many books at once as the free VRAM holds, longest first (`-j`)
+- skips a book that is already in the library
+
 `<in>/Fiction/Author/Title.epub` becomes `<out>/opus/Fiction/Author/Title.opus`
 **and** `<out>/flac/Fiction/Author/Title.flac`. The narration is the checkout's;
 this command is the library-level work around it — which books, in what order,

@@ -10,8 +10,18 @@ entirely in RAM.
 | --- | --- |
 | **Takes** | a folder with one subfolder — or archive — per book (per subfolder of those, with `-s`) |
 | **Writes** | one finished book per subfolder into `<outputDir>`; nothing else reaches the disk |
-| **Input** | untouched, unless `-i` cleans the input folders; archives are never touched |
+| **Input** | file extensions lower-cased by the conversion, and folders cleaned with `-i`; archives are never touched |
 | **Network** | none |
+
+## Default behavior
+
+With no options, a run:
+
+- converts every book's audio to **Opus at 46 kbps**, keeping the source's channels, and copies the files too small to re-encode (`-e`, `-b`, `-m`; see [`convert-audio`](convert-audio.md#default-behavior))
+- then joins one book per subfolder of the input (`-s` for one level deeper; `-c` skips the conversion)
+- unpacks archives into RAM ([below](#archives))
+- does not clean the input folders (`-i`), but the conversion does **lower-case the input's file extensions**
+- converts everything again on a rerun, and fails on a book already in the output
 
 Only the finished books are ever written to disk — which is why the output
 folder is given rather than derived: it usually lives on a different disk than

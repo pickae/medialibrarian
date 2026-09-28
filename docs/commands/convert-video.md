@@ -13,11 +13,21 @@ x265 (**always 10-bit**), audio to Opus, everything else copied across.
 | **Reruns** | a no-op: an output that already spans its input is skipped |
 | **Network** | none |
 
-Audio goes to Opus (surround downmixed to stereo), and subtitle, attachment,
-chapter and metadata streams are copied across. Empty output folders are pruned
-at the end.
+## Default behavior
 
-**Contents:** [Options that change the encode](#options-that-change-the-encode) ·
+With no options, a run:
+
+- picks up `.mkv` and `.mp4` files only, and writes every output as `.mkv`
+- encodes video with the `av1BluRay` preset: SVT-AV1, 10-bit, quality shifted by resolution (`-p`, `-q`; [details](#quality-and-grain))
+- **measures each film's grain, denoises it out and synthesises it back** (`-g`)
+- **keeps the picture as it is**: no cropping, scaling or deinterlacing (`-c`, `-m`, `-u`)
+- keeps the first video stream only, and drops data streams
+- **re-encodes every audio track to Opus, surround downmixed to stereo**, 120 kbps for stereo (`-a`, `-b`)
+- copies subtitles, attachments, chapters and metadata across
+- keeps HDR10, Dolby Vision and HDR10+ where the tools allow ([details](#hdr-and-dolby-vision))
+- converts every file, whether or not it saves much (`-t`)
+
+**Contents:** [Default behavior](#default-behavior) · [Options that change the encode](#options-that-change-the-encode) ·
 [Hardware and parallelism](#hardware-and-parallelism) ·
 [Picture size](#picture-size--m-and--u) · [Setting up the upscaler](#setting-up-the-upscaler) ·
 [Cropping](#cropping--c) · [Quality and grain](#quality-and-grain) ·

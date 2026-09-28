@@ -61,7 +61,7 @@ h |  | Print this help page.
 f | <format> | Transcript format: txt, srt, vtt or tsv.
                     Default txt
 j | <jobs> | Run up to <jobs> transcriptions in parallel.
-                    Default: what the card can hold
+                    Default: what the card can hold, or 2 on the CPU
 """
 
 # The format has to be one whisper-ctranslate2 knows, or it would only surface as

@@ -15,6 +15,15 @@ much of it is what**.
 | **Reruns** | rebuilt from nothing every time, and says so — a cube is derived data with no history in it |
 | **Network** | none while building; the page fetches its engine the first time it is opened ([below](#the-page)) |
 
+## Default behavior
+
+With no options, a run:
+
+- looks for census reports recursively in any folder given
+- **rebuilds the database from nothing**, replacing the previous one only once the new one is complete
+- writes the `.duckdb` and the `.html` page beside the first audio, video, images, books or comics report, in that order (`-o`)
+- exports no CSV, prints no totals and runs no query (`-e`, `-s`, `-q`)
+
 How many hours of 2160p, how many gigabytes of comics scanned below 1080p, what
 the duration-weighted average bitrate of the Opus audiobooks is — without anyone
 writing a `GROUP BY`.

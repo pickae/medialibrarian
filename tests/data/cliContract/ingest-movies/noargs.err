@@ -117,6 +117,9 @@ Usage:
 
     Default behavior
     ----------------
+    deletes release junk: .txt/.nfo/.exe/.sfv files, samples, .mkv files under
+    1000 KiB, folders named "unwanted", and folders left empty
+    remuxes non-Matroska video into .mkv, deleting the source
     sorts loose movie files into one subfolder each (Plex layout)
     cleans up folder, movie and subtitle names
     sorts bonus material into the subfolders Plex recognizes (see below)
@@ -183,8 +186,9 @@ Usage:
     Tags & commentary
     ------------------
     reads the track layout once and refreshes the mkv tags from it
-    transcodes regular audio to opus at a per-channel target bitrate
-    extracts commentary tracks, transcribes them and archives them
+    transcodes lossless audio to opus at a per-channel target bitrate, and
+    leaves lossy tracks as they are
+    extracts commentary tracks and transcribes them into .srt beside the film
     takes a track for a commentary by its mkv flag or by its name, in any of the
     supported languages ("Audiokommentar" counts as much as "Audio Commentary")
     reads each commentary's language from its track name or mkv language tag, and
@@ -211,7 +215,8 @@ Usage:
     ---------
     all large temporary media (extracts, remux copies, Dolby Vision streams)
     live in tmpfs
-    only the final outputs (.mkv, .srt, .opus) are written to disk
+    only the final outputs (.mkv, .srt, .opus) are written to disk, unless a
+    remux copy is too large for tmpfs
 
     Dependencies
     ------------

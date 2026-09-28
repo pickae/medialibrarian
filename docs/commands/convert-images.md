@@ -12,6 +12,16 @@ whitespace cropping and parallel encoding.
 | **Input** | never modified — so nothing is lost by pointing a run at an animated GIF, which is read for its first frame |
 | **Network** | none |
 
+## Default behavior
+
+With no options, a run:
+
+- writes **AVIF** at quality 60, speed 5, colour at a quarter resolution (4:2:0) (`-e`, `-q`, `-s`, `-u`)
+- keeps every image at its own size: no resizing, no cropping (`-m`, `-c`)
+- **skips an image that is already starved** ([below](#starved-images); `-a`)
+- skips an image whose output already exists, so a rerun only does what is left
+- picks the number of parallel encoders itself (`-j`)
+
 ## Formats
 
 | `-e` | Writes | Notes |

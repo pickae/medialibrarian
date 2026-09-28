@@ -12,6 +12,14 @@ content type (audio, video, images, books, comics).
 | **Input** | never changed: nothing in the tree is renamed, moved or converted |
 | **Network** | none |
 
+## Default behavior
+
+With no options, a run:
+
+- treats each path given as one library, read recursively (`-d`)
+- writes a report per content type found into that library's folder, **replacing one left by an earlier run** (`-o`, `-t` for `.tsv`)
+- does not judge file sizes (`-a`) and builds no cubes (`-b`)
+
 Every file whose suffix is in one of the central extension lists is included.
 
 ## Several libraries at once

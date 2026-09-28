@@ -19,8 +19,9 @@ Options:
     -s, --speed <speed>
                     av1 speed preset, lower is slower, default 4
     -m, --max-resolution <maxRes>
-                    maximum resolution (height) to keep
+                    maximum resolution (height) to keep, default 2960
     -f, --fuzz <fuzz>
-                    when trimming, how many percent color difference gets still trimmed
+                    when trimming, how many percent color difference gets still
+                    trimmed, default 10
 
 Nothing was changed.

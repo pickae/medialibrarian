@@ -9,12 +9,29 @@ commentaries and the chapters the disc had.
 | At a glance | |
 | --- | --- |
 | **Takes** | one or more folders of films |
-| **Writes** | in place: the improved `.mkv`, `.srt` sidecars, and lists under `logs/ingest-movies/` |
+| **Writes** | in place: the improved `.mkv`, `.srt` sidecars and `.opus` tracks; the sweeps also write lists under `logs/ingest-movies/` |
 | **Input** | changed — that is the job; each remuxed original is kept as `<name> (old).mkv` |
-| **Reruns** | a no-op: a folder that already carries an `(old)` backup is skipped whole |
+| **Reruns** | a film that already has its `(old)` backup is not remuxed again |
 | **Network** | TMDb, OpenSubtitles, IMDb's title lists, ChapterDB, and dvdcompare.net under `-n` |
 
-**Contents:** [Settings](#settings) · [Single-task sweeps](#single-task-sweeps) ·
+## Default behavior
+
+With no options, a run goes through every phase in one pass over the folders
+given (one level deep, not the whole tree):
+
+- **deletes release junk**: `.txt`/`.nfo`/`.exe`/`.sfv` files, samples, `.mkv`s under 1000 KiB, folders named `unwanted`, and folders left empty
+- **remuxes non-Matroska video** (avi, mp4, mov, …) into `.mkv`, deleting the source
+- sorts loose films into a folder each, with extras where Plex looks for them
+- cleans folder, film and subtitle names
+- **transcodes lossless audio to Opus**, leaving lossy tracks as they are
+- transcribes commentary tracks with whisper
+- **remuxes each film once into an improved copy**, keeping the original as `<name> (old).mkv` ([details](#what-a-full-ingest-does))
+- tags names with the IMDb id (needs `tmdbApiKey`), looks up chapters, and downloads missing subtitles (needs the OpenSubtitles login)
+
+Each phase can also be run on its own, over a whole library: see
+[single-task sweeps](#single-task-sweeps).
+
+**Contents:** [Default behavior](#default-behavior) · [Settings](#settings) · [Single-task sweeps](#single-task-sweeps) ·
 [What a full ingest does](#what-a-full-ingest-does) ·
 [Naming films](#naming-films--t) · [Feeding ids back](#feeding-ids-back--i) ·
 [Subtitles](#subtitles--s) · [Commentary transcripts](#commentary-transcripts--a) ·
@@ -66,7 +83,7 @@ ingest-movies -c  ~/Films     # chapters for the tagged films
 
 Sorts loose movie files into per-movie subfolders (Plex layout), cleans
 folder/movie/subtitle names, renames/downloads subtitles for six languages,
-refreshes mkv tags, transcodes audio to Opus, transcribes commentary tracks,
+refreshes mkv tags, transcodes lossless audio to Opus, transcribes commentary tracks,
 and gives films without named chapters the ones their disc had.
 
 ### Subtitles
@@ -114,7 +131,7 @@ is thrown away and the original left alone.
 
 The original is preserved as `<name> (old).mkv`, so nothing is lost and a rerun
 is a no-op — which is also what makes the Dolby Vision work a one-time job per
-film: a folder that already carries a `(old)` backup is skipped whole.
+film: a film that already has its `(old)` backup is not remuxed again.
 
 ### The Plex names
 
