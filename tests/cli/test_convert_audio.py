@@ -301,7 +301,7 @@ class TestSplittingAndTheCodec:
 
     def _planner(self, **settings):
         base = {"codec": "opus", "input_dir": "in", "mono": False,
-                "bitrate": ca.DEFAULT_BITRATE}
+                "surround": False, "bitrate": ca.DEFAULT_BITRATE}
         base.update(settings)
         return ca.Planner(ca.Run(**base), jobs=4)
 
@@ -443,7 +443,8 @@ class TestTheXheAacEncodeCall:
         return calls
 
     def _run(self, **settings):
-        base = {"codec": "xheaac", "extension": "m4a", "output_dir": "out"}
+        base = {"codec": "xheaac", "extension": "m4a", "output_dir": "out",
+                "surround": False}
         base.update(settings)
         return ca.Run(**base)
 
@@ -487,6 +488,22 @@ class TestTheXheAacEncodeCall:
                                    channels=6)
         assert asked == []
         _decode, encode = spawned
+        assert encode.argv[1] == xheaac.exhale_preset(46, 2)
+
+    def test_a_surround_source_is_decoded_to_stereo_by_default(self, spawned,
+                                                                tmp_path):
+        self._run()._encode_xheaac("a.flac", str(tmp_path / "a.m4a"),
+                                   mono=False, bitrate=46, channels=6)
+        decode, encode = spawned
+        assert decode.argv[decode.argv.index("-ac") + 1] == "2"
+        assert encode.argv[1] == xheaac.exhale_preset(46, 2)
+
+    def test_and_kept_whole_with_surround(self, spawned, tmp_path):
+        self._run(surround=True)._encode_xheaac(
+            "a.flac", str(tmp_path / "a.m4a"), mono=False, bitrate=46,
+            channels=6)
+        decode, encode = spawned
+        assert "-ac" not in decode.argv
         assert encode.argv[1] == xheaac.exhale_preset(46, 6)
 
     def test_a_stale_output_is_removed_before_the_encoder_sees_it(
@@ -589,7 +606,9 @@ class TestTheOpusEncodeIsUnchanged:
         seen = []
         monkeypatch.setattr(ca.subprocess, "run",
                             lambda argv, **kw: seen.append(list(argv)))
-        run = ca.Run(codec="opus", extension="opus", output_dir="out")
+        monkeypatch.setattr(ca, "source_channels", lambda src: 2)
+        run = ca.Run(codec="opus", extension="opus", output_dir="out",
+                     adaptive=False, surround=False)
         run._encode("a.flac", "out/a.opus", mono=False, bitrate=46)
         assert seen == [["ffmpeg", "-nostdin", "-y", "-i", "a.flac",
                          "-map", "0:a:0", "-map_metadata", "0:s:0",
@@ -616,6 +635,163 @@ class TestTheOpusEncodeIsUnchanged:
         assert "-c:a" in seen[0] and seen[0][seen[0].index("-c:a") + 1] == "copy"
         assert "libopus" not in seen[0]
 
+
+
+class TestAnOpusEncodeOfASurroundSource:
+    """A surround source - the 5.1(side) an Atmos m4b decodes to - is folded
+    down to stereo by default, for listening on a phone, and kept only with -u.
+    Kept, it has to be re-labelled: libopus opens past stereo only on the
+    Vorbis layout for the count, and wrote nothing at all for a 5.1(side). Both
+    encode paths are pinned, because the chunks of a split book have to come
+    out exactly as a whole file would for the stream-copy join to take them."""
+
+    @pytest.fixture
+    def seen(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(ca.subprocess, "run",
+                            lambda argv, **kw: calls.append(list(argv)))
+        monkeypatch.setattr(ca, "source_channels", lambda src: 6)
+        monkeypatch.setattr(ca, "source_channel_layout",
+                            lambda src: "5.1(side)")
+        return calls
+
+    def _run(self, **settings):
+        base = {"codec": "opus", "extension": "opus", "output_dir": "out",
+                "adaptive": False, "mono": False, "surround": False,
+                "bitrate": 46}
+        base.update(settings)
+        return ca.Run(**base)
+
+    def _chunk_and_whole(self, run, monkeypatch, tmp_path):
+        class _Counters:
+            def report_progress(self, *args):
+                pass
+
+        # The chunk's own measurement is not what is under test; declining it
+        # stops the job right after the encode.
+        monkeypatch.setattr(ca.durationcheck, "verify", lambda *a: False)
+        run.__dict__.update(input_dir="in", chunk_root=str(tmp_path),
+                            counters=_Counters())
+        run.encode_chunk(ca.UNIT.join(["a.m4b", "0", "4", "0", "600"]))
+        run._encode("in/a.m4b", "out/a.opus", mono=False, bitrate=46)
+
+    def test_by_default_a_six_channel_file_is_folded_down_to_stereo(
+            self, seen):
+        self._run()._encode("a.m4b", "out/a.opus", mono=False, bitrate=46)
+        assert seen == [["ffmpeg", "-nostdin", "-y", "-i", "a.m4b",
+                         "-map", "0:a:0", "-map_metadata", "0:s:0",
+                         "-ac", "2", "-c:a", "libopus", "-b:a", "46k",
+                         "out/a.opus"]]
+
+    def test_a_stereo_source_is_not_given_a_downmix_it_does_not_need(
+            self, seen, monkeypatch):
+        monkeypatch.setattr(ca, "source_channels", lambda src: 2)
+        self._run()._encode("a.m4b", "out/a.opus", mono=False, bitrate=46)
+        assert seen[0][9:-1] == ["-c:a", "libopus", "-b:a", "46k"]
+
+    def test_with_surround_it_keeps_its_count_at_a_surround_rate(self, seen):
+        self._run(surround=True)._encode("a.m4b", "out/a.opus", mono=False,
+                                         bitrate=46)
+        assert seen == [["ffmpeg", "-nostdin", "-y", "-i", "a.m4b",
+                         "-map", "0:a:0", "-map_metadata", "0:s:0",
+                         "-ac", "6", "-c:a", "libopus", "-b:a", "106k",
+                         "out/a.opus"]]
+
+    @pytest.mark.parametrize("surround, codec", [
+        (False, ["-ac", "2", "-c:a", "libopus", "-b:a", "46k"]),
+        (True, ["-ac", "6", "-c:a", "libopus", "-b:a", "106k"])])
+    def test_a_chunk_is_encoded_with_the_settings_of_a_whole_file(
+            self, seen, monkeypatch, tmp_path, surround, codec):
+        self._chunk_and_whole(self._run(surround=surround), monkeypatch,
+                              tmp_path)
+        chunk, whole = seen
+        # The chunk encoder joins the source path itself, so it is spelled with
+        # this platform's separator.
+        assert chunk[:13] == ["ffmpeg", "-nostdin", "-y", "-ss", "0",
+                              "-t", "600", "-i", os.path.join("in", "a.m4b"),
+                              "-map", "0:a:0", "-map_metadata", "-1"]
+        assert chunk[13:-1] == whole[9:-1] == codec
+
+    def test_a_given_bitrate_is_kept_as_given(self, seen):
+        self._run(surround=True)._encode("a.m4b", "out/a.opus", mono=False,
+                                         bitrate=128)
+        assert seen[0][9:-1] == ["-ac", "6", "-c:a", "libopus", "-b:a",
+                                 "128k"]
+
+    def test_adaptive_mode_keeps_the_rate_it_looked_up(self, seen):
+        self._run(adaptive=True, surround=True)._encode(
+            "a.m4b", "out/a.opus", mono=False, bitrate=150, channels=6)
+        assert seen[0][9:-1] == ["-ac", "6", "-c:a", "libopus", "-b:a",
+                                 "150k"]
+
+    def test_forced_mono_never_asks_about_the_source(self, seen, monkeypatch):
+        def probed(src):
+            raise AssertionError("mono needs no channel count")
+
+        monkeypatch.setattr(ca, "source_channels", probed)
+        self._run(surround=True)._encode("a.m4b", "out/a.opus", mono=True,
+                                         bitrate=32)
+        assert seen[0][9:-1] == ["-ac", "1", "-c:a", "libopus", "-b:a", "32k"]
+
+
+class TestOutputChannels:
+    @pytest.mark.parametrize("channels, expected", [
+        (0, 1), (1, 1), (2, 2), (6, 2), (8, 2)])
+    def test_stereo_is_the_ceiling_by_default(self, channels, expected):
+        assert ca.output_channels(channels, surround=False) == expected
+
+    @pytest.mark.parametrize("channels, expected", [
+        (1, 1), (2, 2), (6, 6), (8, 8), (12, 8)])
+    def test_surround_keeps_the_count_up_to_seven_one(self, channels,
+                                                      expected):
+        assert ca.output_channels(channels, surround=True) == expected
+
+
+class TestOpusChannelArgs:
+    """The layout decision on its own, one row per case libopus treats
+    differently."""
+
+    @pytest.mark.parametrize("channels", [1, 2])
+    def test_stereo_and_below_need_nothing(self, channels):
+        assert ca.opus_channel_args(channels) == (channels, [])
+
+    @pytest.mark.parametrize("channels", [5, 6, 7, 8])
+    def test_five_to_eight_ask_for_their_own_count(self, channels):
+        assert ca.opus_channel_args(channels) == (channels,
+                                                  ["-ac", str(channels)])
+
+    @pytest.mark.parametrize("channels, layout, named", [
+        (3, "3.0", "3.0"), (4, "4.0", "quad"), (4, "quad", "quad"),
+        (4, "quad(side)", "quad")])
+    def test_three_and_four_without_an_lfe_are_named_outright(
+            self, channels, layout, named):
+        assert ca.opus_channel_args(channels, layout) == (
+            channels, ["-channel_layout", named])
+
+    @pytest.mark.parametrize("channels, layout", [
+        (3, "2.1"), (4, "3.1"), (3, ""), (4, "")])
+    def test_an_lfe_or_an_unknown_layout_is_downmixed_to_stereo(
+            self, channels, layout):
+        assert ca.opus_channel_args(channels, layout) == (2, ["-ac", "2"])
+
+    def test_past_eight_the_source_is_folded_down_to_seven_one(self):
+        assert ca.opus_channel_args(12) == (8, ["-ac", "8"])
+
+
+class TestSurroundBitrate:
+    @pytest.mark.parametrize("channels, expected", [
+        (1, 46), (2, 46), (6, 106), (8, 142)])
+    def test_the_default_grows_with_the_channel_count(self, channels,
+                                                      expected):
+        assert ca.surround_bitrate(ca.DEFAULT_BITRATE, channels) == expected
+
+    def test_a_given_bitrate_is_never_second_guessed(self):
+        assert ca.surround_bitrate(64, 6) == 64
+
+    def test_an_empty_table_leaves_the_default_alone(self, monkeypatch):
+        monkeypatch.setattr(ca.bitrates, "audio_bitrate",
+                            lambda channels, column: None)
+        assert ca.surround_bitrate(ca.DEFAULT_BITRATE, 6) == 46
 
 def _stub_popen(monkeypatch):
     """Both halves of the pipe, stubbed, recording the argv of each spawn."""
@@ -665,7 +841,8 @@ class TestABookTooLongForOnePipe:
         # refusal then only ever meets a file the planner could not cut.
         return ca.Run(**dict(dict(codec="xheaac", extension="m4a",
                                   output_dir="out", adaptive=False,
-                                  chunk_over_ceiling=True), **settings))
+                                  surround=False, chunk_over_ceiling=True),
+                             **settings))
 
     # 83:41:50 of mono at 44.1 kHz: the file this was written for.
     TOO_LONG = 301309.7

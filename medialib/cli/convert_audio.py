@@ -91,13 +91,17 @@ OPT_SPEC = """
 h |  | Print this help page.
 m |  | Force mono output.
                     Default false
+u |  | Keep a surround source's channels, up to 7.1, instead of
+                    downmixing it to stereo.
+                    Default false
 a |  | Adaptive mode: decide channels and bitrate per file rather
                     than globally. The output keeps the source's own channel
-                    count, and its target bitrate is the spoken-word (commentary)
-                    figure listed for that channel count in the shared bitrate
-                    table, so a mono source encodes mono at the lower rate, a
-                    stereo one stays stereo, and a multi-channel one gets its own
-                    rate. Cannot be combined with -m or -b, and disables long-file
+                    count - capped at stereo unless -u is given - and its target
+                    bitrate is the spoken-word (commentary) figure listed for
+                    that channel count in the shared bitrate table, so a mono
+                    source encodes mono at the lower rate, a stereo one stays
+                    stereo, and with -u a multi-channel one gets its own rate.
+                    Cannot be combined with -m or -b, and disables long-file
                     splitting.
                     Default false
 k |  | Keep temporary files.
@@ -108,7 +112,9 @@ e | <codec> | Output encoding: {codecs}.
                     written as .m4a.
                     Default {codec}
 b | <bitrate> | Bitrate of the output files
-                    Default 46 kbps or 32 kbps for forced mono output
+                    Default 46 kbps or 32 kbps for forced mono output, and
+                    with -u the 46 scaled up with the channel count for a
+                    surround source
 j | <jobs> | Run up to <jobs> encoder processes in parallel.
                     Default one per CPU thread
 s | <seconds> | Split files longer than <seconds> into one chunk per logical
@@ -119,11 +125,11 @@ s | <seconds> | Split files longer than <seconds> into one chunk per logical
            encoders=xheaac.ENCODER_SPEC,
            codec=DEFAULT_CODEC)
 
-OPT_VARS = ("m:mono a:adaptive c:copy k:keep e:outputCodec b:bitrate j:jobs "
-            "s:splitThreshold")
+OPT_VARS = ("m:mono u:surround a:adaptive c:copy k:keep e:outputCodec "
+            "b:bitrate j:jobs s:splitThreshold")
 OPT_COLUMN = 20
-OPT_LONG = ("h:help m:mono a:adaptive k:keep c:copy-others e:encoding b:bitrate "
-            "j:jobs s:split-threshold")
+OPT_LONG = ("h:help m:mono u:surround a:adaptive k:keep c:copy-others "
+            "e:encoding b:bitrate j:jobs s:split-threshold")
 
 # The codec has to be one this command can write, or a typo would only surface
 # as a per-file failure deep into a run. The choices are joined with an ESCAPED
@@ -410,7 +416,7 @@ def source_sample_rate(src: str) -> int:
 
 
 def too_long_for_one_encode(source: str, duration: float,
-                           mono: bool) -> bool:
+                           mono: bool, surround: bool = False) -> bool:
     """Whether this file is past what one encode of it could carry, so that
     chunking it is the only way to convert it at all.
 
@@ -429,7 +435,8 @@ def too_long_for_one_encode(source: str, duration: float,
                                                WIDEST_LAYOUT):
         return False
     rate = xheaac.input_sample_rate(source_sample_rate(source))
-    channels = 1 if mono else max(1, source_channels(source))
+    channels = 1 if mono else output_channels(source_channels(source),
+                                              surround)
     return not xheaac.fits_in_one_wave(duration, rate, channels)
 
 
@@ -443,6 +450,100 @@ def adaptive_bitrate(channels, default: int) -> int:
     value = (bitrates.audio_bitrate(str(channels), "comment")
              or bitrates.audio_bitrate("2", "comment"))
     return int(value) if value else default
+
+
+def output_channels(channels: int, surround: bool) -> int:
+    """How many channels a source of <channels> is encoded to when the run is
+    not forcing mono.
+
+    Stereo unless -u asked otherwise. What this command makes is listened to on
+    a phone, in earbuds, and a 5.1 audiobook - which is what an Atmos m4b
+    decodes to - spends two and a half times the bytes on speakers that are not
+    there, to be folded back down by the player anyway. Folded down once here
+    instead, by ffmpeg, the book costs the stereo rate. A mono or stereo source
+    keeps its own count either way: nothing is ever widened.
+
+    -u keeps the source's count, up to the 7.1 that is the widest layout either
+    encoder takes - `opus_channel_args` then settles the layout Opus can carry
+    it in.
+    """
+    channels = max(1, channels)
+    return min(channels, WIDEST_LAYOUT if surround else 2)
+
+
+def source_channel_layout(src: str) -> str:
+    """The channel layout ffprobe names for the source's first AUDIO stream,
+    or "" when it names none.
+
+    Only asked of a three- or four-channel source, the two counts whose layout
+    decides whether Opus can carry them as they are - see `opus_channel_args`.
+    """
+    return _probe(["ffprobe", "-v", "quiet", "-select_streams", "a:0",
+                   "-show_entries", "stream=channel_layout",
+                   "-of", "default=nk=1:nw=1", src]).split("\n")[0].strip()
+
+
+def opus_channel_args(channels: int, layout: str = "") -> tuple:
+    """(channels, argv): how many channels an Opus encode of this source comes
+    out with, and the ffmpeg options that get it there. <layout> is the
+    source's own, and is read only for three and four channels.
+
+    ffmpeg's libopus wrapper encodes past stereo only in the Vorbis channel
+    orders - one fixed layout per count, 5.1 for six channels - and refuses to
+    open on anything else, with nothing written at all. That is not a rare
+    corner: the 5.1(side) that EAC3 (and so every Atmos audiobook) decodes to is
+    the SIDE variant, and so are 5.0(side), 6.1(back) and 7.1(wide); none is
+    what the encoder wants, and without this each of them was left unconverted
+    with the reason thrown away on a silenced stderr.
+
+    From five channels up `-ac` with the source's own count is the whole fix:
+    ffmpeg's default layout for 5 to 8 channels is exactly the Vorbis one, so
+    asking for the count re-labels side speakers as back ones (a 5.1(side)
+    comes out 5.1, every channel at full level) and leaves a layout that was
+    already right alone. Three and four are the exception the shared bitrate
+    table already knows: their defaults, 2.1 and 4.0, are refused too, so the
+    layout is named outright - but only for a source with no LFE, since naming
+    3.0 over a 2.1 would play its LFE out of a full-range speaker. A 2.1 or 3.1,
+    or one whose layout the probe cannot say, is downmixed to stereo instead.
+    Past eight channels Opus has no layout to offer at all, so the source is
+    folded down to 7.1 - a book encoded narrower than its source rather than
+    not encoded.
+
+    Stereo and below need nothing, and get nothing: their call is the one every
+    existing library was made with.
+    """
+    if channels <= 2:
+        return channels, []
+    if channels > WIDEST_LAYOUT:
+        return WIDEST_LAYOUT, ["-ac", str(WIDEST_LAYOUT)]
+    named = bitrates.audio_opus_layout(str(channels))
+    if named is None:
+        return channels, ["-ac", str(channels)]
+    if (channels, layout) in ((3, "3.0"), (4, "4.0"), (4, "quad"),
+                              (4, "quad(side)")):
+        return channels, ["-channel_layout", named]
+    return 2, ["-ac", "2"]
+
+
+def surround_bitrate(bitrate: int, channels: int) -> int:
+    """The default bitrate carried over to a surround encode, or <bitrate>
+    untouched.
+
+    46 kbps is a stereo figure. Spread over six channels it is under 8 kbps a
+    speaker, which Opus renders as smeared, lisping speech - so the DEFAULT is
+    scaled by how much more the shared table's spoken-word column asks for this
+    channel count than for stereo, keeping the run's own quality level rather
+    than jumping to the table's higher one: a 5.1 source encodes at 106 kbps.
+    A bitrate given with -b is kept as given, exactly as the forced-mono swap
+    keeps it, and so is one the table has no rows to scale by.
+    """
+    if channels <= 2 or bitrate != DEFAULT_BITRATE:
+        return bitrate
+    wide = bitrates.audio_bitrate(str(channels), "comment")
+    stereo = bitrates.audio_bitrate("2", "comment")
+    if not wide or not stereo:
+        return bitrate
+    return round(bitrate * int(wide) / int(stereo))
 
 
 def detect_window(token: str, noise: str, min_duration: str) -> None:
@@ -597,6 +698,9 @@ class Run:
     output_dir: str
     script_dir: str
     mono: bool
+    # -u: a surround source keeps its channels rather than being folded down to
+    # stereo, the default for listening on a phone.
+    surround: bool
     adaptive: bool
     copy: bool
     keep: bool
@@ -684,9 +788,7 @@ class Run:
         else:
             argv = ["ffmpeg", "-nostdin", "-y", "-ss", start, "-t", duration,
                     "-i", source, "-map", "0:a:0", "-map_metadata", "-1"]
-            if self.mono:
-                argv += ["-ac", "1"]
-            argv += ["-c:a", "libopus", "-b:a", "%dk" % bitrate, out]
+            argv += self._opus_codec(source, self.mono, bitrate) + [out]
             subprocess.run(argv, stderr=subprocess.DEVNULL)
 
         # Measured here as well as on the finished file, because a chunk is the
@@ -726,7 +828,10 @@ class Run:
         if self.adaptive:
             channels = source_channels(source)
             mono = channels <= 1
-            bitrate = adaptive_bitrate(channels, self.bitrate)
+            # Priced for what is ENCODED, not what the source carries: a 5.1
+            # folded down to stereo is a stereo encode, at the stereo rate.
+            bitrate = adaptive_bitrate(
+                output_channels(channels, self.surround), self.bitrate)
 
         input_duration_raw = _probe(
             ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
@@ -818,20 +923,54 @@ class Run:
         if self.codec == "xheaac":
             return self._encode_xheaac(source, out, mono, bitrate, channels,
                                        duration)
-        self._encode_opus(source, out, mono, bitrate)
+        self._encode_opus(source, out, mono, bitrate, channels)
         return True
 
     def _encode_opus(self, source: str, out: str, mono: bool,
-                     bitrate: int) -> None:
+                     bitrate: int, channels: int = 0) -> None:
         """The one-pass ffmpeg encode: libopus, in ffmpeg, straight to the
         output."""
-        codec = ["-c:a", "libopus", "-b:a", "%dk" % bitrate]
-        if mono:
-            codec = ["-ac", "1"] + codec
         subprocess.run(
             ["ffmpeg", "-nostdin", "-y", "-i", source, "-map", "0:a:0",
-             "-map_metadata", "0:s:0"] + codec + [out],
+             "-map_metadata", "0:s:0"]
+            + self._opus_codec(source, mono, bitrate, channels) + [out],
             stderr=subprocess.DEVNULL)
+
+    def _opus_codec(self, source: str, mono: bool, bitrate: int,
+                    channels: int = 0) -> list:
+        """The channel and codec half of an Opus encode's argv, shared by the
+        whole-file encode and the chunk encoder.
+
+        Shared because the chunks of a split book are joined by a stream copy:
+        a chunk encoded at another layout or another rate than its neighbours
+        would not join into one stream at all, so both paths have to come out
+        of the same decision rather than two copies of it.
+
+        <channels> is the source's count if a caller already probed it, and 0
+        for "ask" - asked only when the output is not forced mono, since mono
+        needs nothing but its `-ac 1`.
+
+        A surround source is folded down to stereo with `-ac 2` unless -u asked
+        to keep it (`output_channels`), which is also what gets it past libopus
+        at all: the encoder refuses every surround layout but one per count. Kept
+        with -u, the layout step (`opus_channel_args`) is what lets a 5.1(side)
+        audiobook encode, and the default bitrate grows with it
+        (`surround_bitrate`) - except in adaptive mode, whose rate was already
+        looked up for this very channel count.
+        """
+        if mono:
+            layout = ["-ac", "1"]
+        else:
+            channels = channels or source_channels(source)
+            if output_channels(channels, self.surround) <= 2:
+                layout = ["-ac", "2"] if channels > 2 else []
+            else:
+                probed = (source_channel_layout(source)
+                          if channels in (3, 4) else "")
+                channels, layout = opus_channel_args(channels, probed)
+                if not self.adaptive:
+                    bitrate = surround_bitrate(bitrate, channels)
+        return layout + ["-c:a", "libopus", "-b:a", "%dk" % bitrate]
 
     def _encode_xheaac(self, source: str, out: str, mono: bool,
                        bitrate: int, channels: int = 0,
@@ -874,9 +1013,14 @@ class Run:
         if mono:
             # -m is a downmix, so the output really is one channel whatever the
             # source had - and the preset is a rate for the OUTPUT.
-            channels = 1
+            channels = downmix = 1
         else:
-            channels = max(1, channels or source_channels(source))
+            # Folded to stereo unless -u keeps it, exactly as for Opus - and the
+            # preset and the WAVE ceiling below are asked for the count that is
+            # ENCODED, since that is what the pipe carries.
+            source_count = max(1, channels or source_channels(source))
+            channels = output_channels(source_count, self.surround)
+            downmix = channels if channels < source_count else 0
         preset = xheaac.exhale_preset(bitrate, channels)
 
         # The one limit of the pipe, asked before the hours are spent rather
@@ -901,7 +1045,7 @@ class Run:
         # unguarded OSError here would take the whole WORKER down and with it
         # every other file queued behind it.
         try:
-            decode = subprocess.Popen(xheaac.wav_argv(source, rate, mono,
+            decode = subprocess.Popen(xheaac.wav_argv(source, rate, downmix,
                                                       start, take),
                                       stdout=subprocess.PIPE,
                                       stderr=subprocess.DEVNULL)
@@ -1240,7 +1384,8 @@ class Planner:
         worth_splitting = 0 < state.split_threshold < duration
         if not worth_splitting and not (
                 state.chunk_over_ceiling
-                and too_long_for_one_encode(source, duration, state.mono)):
+                and too_long_for_one_encode(source, duration, state.mono,
+                                            state.surround)):
             _write_jobs(base, [track])
             return False
 
@@ -1324,7 +1469,8 @@ class Planner:
             return 0, 0, 0
         source = os.path.join(state.input_dir, track)
         rate = xheaac.input_sample_rate(source_sample_rate(source))
-        channels = 1 if state.mono else max(1, source_channels(source))
+        channels = 1 if state.mono else output_channels(
+            source_channels(source), state.surround)
         preset = xheaac.exhale_preset(
             resolve_bitrate(state.bitrate, state.mono), channels)
         priming, frame = xheaac.encoder_timing(preset, rate, channels)
@@ -1572,6 +1718,7 @@ def main(argv: list, program: str = "convert-audio",
         return 1
 
     mono = "m" in result.given
+    surround = "u" in result.given
     adaptive = "a" in result.given
     copy = "c" in result.given
     keep = "k" in result.given
@@ -1668,7 +1815,7 @@ def main(argv: list, program: str = "convert-audio",
         return _convert(program, script_dir, input_dir, output_dir, probe_what,
                         skips, mono, adaptive, copy, keep, bitrate, jobs,
                         split_threshold, codec, chunk_over_ceiling,
-                        mkvtoolnix_unsaid)
+                        mkvtoolnix_unsaid, surround)
     finally:
         statusline.stop_status_monitor()
         ramscratch.run_exit_cleanup()
@@ -1713,13 +1860,14 @@ def _convert(program: str, script_dir: str, input_dir: str, output_dir: str,
              keep: bool, bitrate: int, jobs: int, split_threshold: int,
              codec: str = DEFAULT_CODEC,
              chunk_over_ceiling: bool = False,
-             mkvtoolnix_unsaid: bool = False) -> int:
+             mkvtoolnix_unsaid: bool = False,
+             surround: bool = False) -> int:
     pre_start = time.time()
 
     state = Run(
         input_dir=input_dir, output_dir=output_dir, script_dir=script_dir,
-        mono=mono, adaptive=adaptive, copy=copy, keep=keep, bitrate=bitrate,
-        threshold=THRESHOLD, split_threshold=split_threshold,
+        mono=mono, surround=surround, adaptive=adaptive, copy=copy, keep=keep,
+        bitrate=bitrate, threshold=THRESHOLD, split_threshold=split_threshold,
         codec=codec, extension=enums.AUDIO_CODEC_EXTENSIONS[codec],
         chunk_over_ceiling=chunk_over_ceiling,
         # The table's default: a cover that rides along in every transcoded
