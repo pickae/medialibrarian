@@ -12,11 +12,10 @@ import json
 import os
 import re
 import subprocess
-import time
 from collections.abc import Callable
 from typing import NamedTuple
 
-from medialib.lib import durationcheck, imdbdata, plexnames, safety, titlematch
+from medialib.lib import durationcheck, imdbdata, plexnames, politepacing, safety, titlematch
 from medialib.lib.titlematch import normalize_title, title_keys
 
 # The TMDb endpoint everything is relative to.
@@ -157,33 +156,15 @@ def read_folder(name: str) -> tuple:
 # service draws it.
 MAX_REQUESTS_PER_SECOND = 10.0
 
-# The moment the last request went out, so the next can wait out the remainder
-# of its slot. A list rather than a global name, the way the iconv answer above
-# is kept, so it can be reset without a `global` statement.
-_LAST_REQUEST: list[float] = []
+# Every request to TMDb, spaced to that limit. No jitter: the limit is the
+# service's own, and spacing each call evenly at it IS the rate.
+_PACER = politepacing.Pacer(1.0 / MAX_REQUESTS_PER_SECOND)
 
 
 def reset_rate_limit() -> None:
     """Forget when the last request went out, so the next one goes immediately.
     For a test that would otherwise pay the interval."""
-    _LAST_REQUEST.clear()
-
-
-def _wait_for_a_slot() -> None:
-    """Hold the next request back until its slot comes round.
-
-    A plain minimum interval rather than a rolling window: the calls here are
-    sequential, so spacing each one evenly IS the rate, and it needs no history
-    to be kept.
-    """
-    interval = 1.0 / MAX_REQUESTS_PER_SECOND
-    now = time.monotonic()
-    if _LAST_REQUEST:
-        waiting = _LAST_REQUEST[0] + interval - now
-        if waiting > 0:
-            time.sleep(waiting)
-            now = time.monotonic()
-    _LAST_REQUEST[:] = [now]
+    _PACER.reset()
 
 
 # The escapes a curl config file's double-quoted value has, and all it has.
@@ -217,7 +198,7 @@ def _curl(url: str, params) -> str | None:
     that window once per candidate folder. On stdin it reaches curl and nothing
     else.
     """
-    _wait_for_a_slot()
+    _PACER.wait()
     lines = ["url = " + _config_value(url), "get", "fail", "silent",
              "show-error"]
     for key, value in params:

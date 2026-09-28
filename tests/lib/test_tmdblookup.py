@@ -21,7 +21,7 @@ import subprocess
 
 import pytest
 
-from medialib.lib import titlematch, tmdblookup
+from medialib.lib import politepacing, titlematch, tmdblookup
 from medialib.lib.safety import SkipLog
 
 pytestmark = pytest.mark.stubbed
@@ -1082,12 +1082,12 @@ class TestTheRateLimit:
         tmdblookup.reset_rate_limit()
         ticks = [0.0]
         slept = []
-        monkeypatch.setattr(tmdblookup.time, "monotonic", lambda: ticks[0])
+        monkeypatch.setattr(politepacing.time, "monotonic", lambda: ticks[0])
 
         def fake_sleep(seconds):
             slept.append(seconds)
             ticks[0] += seconds
-        monkeypatch.setattr(tmdblookup.time, "sleep", fake_sleep)
+        monkeypatch.setattr(politepacing.time, "sleep", fake_sleep)
         monkeypatch.setattr(tmdblookup.subprocess, "run",
                             lambda *a, **k: _Done())
         for _call in range(3):
@@ -1099,8 +1099,8 @@ class TestTheRateLimit:
         tmdblookup.reset_rate_limit()
         ticks = [0.0]
         slept = []
-        monkeypatch.setattr(tmdblookup.time, "monotonic", lambda: ticks[0])
-        monkeypatch.setattr(tmdblookup.time, "sleep", slept.append)
+        monkeypatch.setattr(politepacing.time, "monotonic", lambda: ticks[0])
+        monkeypatch.setattr(politepacing.time, "sleep", slept.append)
         monkeypatch.setattr(tmdblookup.subprocess, "run",
                             lambda *a, **k: _Done())
         tmdblookup._curl("https://example.invalid", [])
