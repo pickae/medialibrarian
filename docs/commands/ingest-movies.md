@@ -388,7 +388,10 @@ Each folder given gets these lists, in the script directory's
 A folder is on the unmatched list or the ambiguous one, never both. Under each
 name, the ambiguous list says what it *reads as* once the spelling is folded
 away: two lines that read the same are a reading the matching does not have
-yet — worth reporting; two that read differently are two different films. Read
+yet — worth reporting; two that read differently are two different films. The
+exception is a folder that *holds the same film twice, spelled two ways*: there
+the lines read the same because the files are one film kept twice, and which to
+keep is yours to decide. Read
 the near-miss list before trusting either: a page of candidates that are
 plainly the film means the matching is too narrow; a page of films that merely
 share a word means it is working.

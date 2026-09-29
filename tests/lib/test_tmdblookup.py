@@ -1964,6 +1964,37 @@ class TestTheFolderNothingCanRename:
         assert self._reasons(ambiguous) == [
             "holds a film that is not its own" + tmdblookup.TAGGED_ANYWAY]
 
+    def test_one_film_under_two_spellings_is_reported_as_twice(
+            self, monkeypatch, tmp_path):
+        """The respelling of the one is the name the other already has, so it
+        cannot be made - and that makes it the same film kept twice, not a
+        film that is not the folder's."""
+        tag = "{imdb-tt0054824}"
+        folder = "Starfall Vol. 2 (2017) " + tag
+        logs, ambiguous = self._run(
+            monkeypatch, tmp_path, folder,
+            ["Starfall Vol 2 (2017) " + tag + ".mkv",
+             "Starfall Vol. 2 (2017).mkv"])
+        assert [(reason, names) for _p, reason, names in ambiguous] == [(
+            "holds the same film twice, spelled two ways"
+            + tmdblookup.TAGGED_ANYWAY,
+            ["Starfall Vol 2 (2017) " + tag + ".mkv",
+             "Starfall Vol. 2 (2017).mkv"])]
+        # Said once, however many things the tagging then does.
+        assert sum("tagging only" in line for line in logs) == 1
+
+    def test_a_real_stray_beside_a_twin_is_still_a_stray(self, monkeypatch,
+                                                          tmp_path):
+        tag = "{imdb-tt0054824}"
+        _logs, ambiguous = self._run(
+            monkeypatch, tmp_path, "Starfall Vol. 2 (2017) " + tag,
+            ["Starfall Vol 2 (2017) " + tag + ".mkv",
+             "Starfall Vol. 2 (2017).mkv",
+             "Moonrise.mkv"])
+        assert [(reason, names) for _p, reason, names in ambiguous] == [
+            ("holds a film that is not its own" + tmdblookup.TAGGED_ANYWAY,
+             ["Moonrise.mkv"])]
+
 
 class TestTheNamesAReportAndAProbeSee:
     """Nothing has been renamed while the folder is still being read, so both
