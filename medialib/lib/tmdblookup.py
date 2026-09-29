@@ -1724,6 +1724,11 @@ def write_ambiguous_list(path: str, folders, root: str,
         _ID_COMMENT + " name does not extend the folder's. Which film it is is",
         _ID_COMMENT + " not something a tag may guess.",
         _ID_COMMENT + "",
+        _ID_COMMENT + " 'holds the same film twice, spelled two ways': a file",
+        _ID_COMMENT + " that is this film under another spelling, beside one",
+        _ID_COMMENT + " already under the folder's. Which to keep is not a",
+        _ID_COMMENT + " thing a tag may decide.",
+        _ID_COMMENT + "",
         _ID_COMMENT + " 'one film in parts that do not stack': Plex reads a",
         _ID_COMMENT + " part from the END of the name - '<film> Part1' - and",
         _ID_COMMENT + " these have a title after the token, so it cannot.",
@@ -2385,7 +2390,7 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
                 base, long_names)
             continue
 
-        trouble = _what_is_wrong(base, respelled)
+        trouble = _what_is_wrong(base, respelled, also, bool(tag))
         if trouble:
             left = [on_disk.get(name, name) for name in trouble[1]]
             # Reported either way. A folder whose id was settled is still a
@@ -2485,12 +2490,15 @@ def duplicate_films(tagged: dict) -> list:
 
 # What can be wrong with a folder that no id settles, as
 # (reason for the report, the files it is about, how the run says it).
-def _what_is_wrong(base: str, names: list):
+def _what_is_wrong(base: str, names: list, also=(), typos: bool = False):
     """The one thing this folder cannot be tagged for, or None.
 
     Asked in the order the answers are worth having: a second film in the folder
     is a different problem from one film written as parts, and each is reported
     under its own name.
+
+    ``also`` and ``typos`` are the readings the names were respelled with, so
+    that a name left unrespelled can be told apart from one no reading reaches.
     """
     # A folder holding a film that is not this folder's is left whole and
     # reported instead. A name that EXTENDS the folder's own - or that SAYS the
@@ -2498,9 +2506,22 @@ def _what_is_wrong(base: str, names: list):
     # that does neither is something else, and guessing which film it is is how
     # a second feature becomes an edition of the first.
     strays = plexnames.strays_in(base, names)
+    twins = {name: plexnames.onto_base(base, name, also, typos)
+             for name in strays}
+    others = [name for name in strays if not twins[name]]
+    if others:
+        return ("holds a film that is not its own", others,
+                "holds %d file(s) that are not this film" % len(others))
+    # What is left DOES say this film, and was only left unrespelled because
+    # its respelling is a name the folder already holds: the same film twice,
+    # once under each spelling. Which of the two to keep is not a naming
+    # question, and calling the second one a different film sends someone
+    # looking for a film that is not there.
     if strays:
-        return ("holds a film that is not its own", strays,
-                "holds %d file(s) that are not this film" % len(strays))
+        both = sorted(set(strays) | {twins[name] for name in strays
+                                     if twins[name] in names})
+        return ("holds the same film twice, spelled two ways", both,
+                "holds the same film twice, spelled two ways")
 
     # A part written the way a person writes one - "Part 1 - The First Half" -
     # would become an edition, and Plex would read three separate releases of
@@ -2604,9 +2625,6 @@ def _tag_only(folder, names: list, only: str, skip_log: safety.SkipLog,
     if long_names is not None:
         for name, cut in cropped:
             long_names.crop(folder.path, name, cut)
-    if announce is not None and (plan or os.path.basename(target)
-                                 != folder.name):
-        announce()
     done = True
     for old, new in plan:
         if not _rename(os.path.join(folder.path, old),
