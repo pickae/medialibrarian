@@ -54,6 +54,12 @@ _BROKEN_YEAR = (
     re.compile(r"^(.+?)\s+([12][0-9]{3})\s*\)\s*$"),
 )
 
+# A year glued onto the title with no space at all - "The Movie(1999)". Not one
+# of the repairs above: a bracketed year written straight after a word can be
+# part of a title, so the disk is not touched on the name's word alone. The
+# film is ASKED about as that title and that year, and only a match renames it.
+_GLUED_YEAR = re.compile(r"^(.*\S)\(([12][0-9]{3})\)$")
+
 
 class LongNames:
     """What the file name limit did to a run's renames, for the run to close
@@ -2253,6 +2259,7 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
         # respelled it. Both are collected here and read in one place below.
         also: tuple = ()
         redated = False
+        glued = None
         if asked:
             # The hand-written id first: a film someone has already looked up is
             # not worth asking an API that has already failed to name it.
@@ -2266,6 +2273,12 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
                 continue
             if not tag:
                 notes: list = []
+                # "The Movie(1999)" is asked about as "The Movie" of 1999. What
+                # the folder said is put back if nothing answers, so a title
+                # that really does end that way is left exactly as it was.
+                glued = None if year else _GLUED_YEAR.match(title)
+                if glued:
+                    title, year = glued.group(1), glued.group(2)
                 found, year, also = _settle_the_year(
                     title, year, plexnames.years_disagreeing(base, respelled),
                     functools.partial(_folder_runtime, folder.path, base,
@@ -2278,6 +2291,8 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
                         os.path.join(folder.path, name) for name in names
                         if plexnames.is_movie_file(name)]))
                 tag = found.tag
+                if glued and not tag:
+                    title, year, glued = glued.group(0), "", None
                 # A folder that said no year, or one the catalogue has the film
                 # nowhere near, takes the year the catalogue dates it to: it
                 # is the one the match was made in.
@@ -2433,7 +2448,10 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
         # then what would happen to it. Only a folder this run ASKED about says
         # anything: one already tagged would repeat its line for the rest of
         # the library's life.
-        if asked and not read_folder(folder.name)[0]:
+        if asked and glued:
+            log('  "{}" has its year glued onto its title, and TMDb knows it '
+                'as that - renaming it "{}"'.format(folder.name, base))
+        elif asked and not read_folder(folder.name)[0]:
             log('  "{}" says no year, and TMDb dates it {} - renaming it "{}"'
                 .format(folder.name, year, base))
         elif asked and redated:
