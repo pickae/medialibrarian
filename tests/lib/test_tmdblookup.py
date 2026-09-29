@@ -3608,6 +3608,46 @@ class TestAFolderThatSaysNoYear:
         assert (tmp_path / "Moss Harbour {imdb-tt0000101}").is_dir()
 
 
+class TestAYearGluedOntoTheTitle:
+    """"Moss Harbour(1953)": the year is there, with no space before it.
+
+    Asked about as the title and the year it most likely is, and renamed only
+    once the catalogue answers - a title that really ends that way is asked
+    under its own name too, and is left as it was when nothing answers.
+    """
+
+    def test_it_is_asked_unglued_and_renamed_on_the_match(self, monkeypatch,
+                                                          tmp_path):
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("Moss Harbour(1953)", ["Moss Harbour(1953).mkv",
+                                                "Moss Harbour(1953).de.srt"]))
+        _catalogue(monkeypatch, {
+            1: ("Moss Harbour", "1953-03-01", 80, "tt0000101", ())},
+            found_under={"Moss Harbour"})
+        logs = []
+        tmdblookup.tag_plex_ids(".", logs.append, SkipLog())
+        folder = tmp_path / "Moss Harbour (1953) {imdb-tt0000101}"
+        assert sorted(p.name for p in folder.iterdir()) == [
+            "Moss Harbour (1953) {imdb-tt0000101}.de.srt",
+            "Moss Harbour (1953) {imdb-tt0000101}.mkv"]
+        assert logs[0] == ('  "Moss Harbour(1953)" has its year glued onto its '
+                           'title, and TMDb knows it as that - renaming it '
+                           '"Moss Harbour (1953)"')
+
+    def test_with_no_match_it_is_left_and_listed_as_it_was(self, monkeypatch,
+                                                            tmp_path):
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, ("Moss Harbour(1953)", ["Moss Harbour(1953).mkv"]))
+        _catalogue(monkeypatch, {
+            1: ("Moss Harbour", "1953-03-01", 80, "tt0000101", ())},
+            found_under=set())
+        unmatched: list = []
+        tmdblookup.tag_plex_ids(".", [].append, SkipLog(), unmatched=unmatched)
+        assert unmatched == ["Moss Harbour(1953)"]
+        assert (tmp_path / "Moss Harbour(1953)" / "Moss Harbour(1953).mkv"
+                ).is_file()
+
+
 class TestTheTranslatedTitles:
     """TMDb's search reads a film's translations, and so must its document:
     a film found under its German title may hold that title nowhere else."""
