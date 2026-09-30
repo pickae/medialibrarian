@@ -392,6 +392,39 @@ class TestAFileAlreadyAtTheOutputName:
         assert done.returncode == 1
 
 
+class TestTheBookIsBuiltAwayFromTheOutput:
+    """Every step that writes the book - the join, the chapters, the cover -
+    writes it in the scratch, so the output disk sees only the finished file,
+    copied there once."""
+
+    @pytest.fixture
+    def run(self, concat, tmp_path):
+        _tree(concat.inputs,
+              "Book mp3/01 - part.mp3", "Book mp3/02 - part.mp3",
+              "Book aac/01 - part.aac", "Book aac/02 - part.aac")
+        written = tmp_path / "ffmpegOutputs"
+        concat.with_tool(
+            "ffmpeg",
+            'out="${!#}"; echo "$out" >> "%s";'
+            ' [[ "$out" == "-" ]] || : > "$out"' % written)
+        done = concat.run("concat-audio", concat.inputs, concat.outputs)
+        assert done.returncode == 0, done.stdout + done.stderr
+        return concat, written.read_text().split("\n")
+
+    def test_ffmpeg_writes_nothing_into_the_output(self, run):
+        concat, written = run
+        assert [path for path in written if path and path != "-"]
+        assert [path for path in written
+                if path.startswith(str(concat.outputs))] == []
+
+    def test_the_finished_books_still_arrive(self, run):
+        """And nothing beside them: no staging copy is left over. The shared
+        "Book " is cropped off both names by the collective clean-up."""
+        concat, _ = run
+        assert sorted(p.name for p in concat.outputs.iterdir()) == [
+            "aac.m4b", "mp3.mp3"]
+
+
 class TestAnInputOfNothingButAac:
     """`.aac` is a format this command joins, so a folder of it is work rather
     than an input to refuse - which means it belongs in the extension list the

@@ -304,3 +304,128 @@ class TestConcatViaDemuxer:
         real = "[in#0/concat @ 0x3] Impossible to open 'x'"
         assert ca._filtered_stderr(spam + real + "\n") == real
         assert ca._filtered_stderr("") == ""
+
+
+class TestBooksAtOnce:
+    """How wide the pool is, from where the input is read."""
+
+    def test_an_input_in_ram_takes_every_thread(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(ca.ramscratch, "filesystem_type",
+                            lambda _directory: "tmpfs")
+        monkeypatch.setattr(ca.runlog, "cpu_count", lambda: 32)
+        assert ca.books_at_once(str(tmp_path)) == 32
+
+    def test_an_input_on_disk_is_read_by_two(self, monkeypatch, tmp_path):
+        """Whatever the thread count: it is the drive that is being spared."""
+        monkeypatch.setattr(ca.ramscratch, "filesystem_type",
+                            lambda _directory: "ext4")
+        monkeypatch.setattr(ca.runlog, "cpu_count", lambda: 32)
+        assert ca.books_at_once(str(tmp_path)) == ca.JOBS_FROM_DISK == 2
+
+    def test_a_host_that_cannot_name_the_filesystem_counts_as_disk(
+            self, monkeypatch, tmp_path):
+        monkeypatch.setattr(ca.ramscratch, "filesystem_type",
+                            lambda _directory: "")
+        assert ca.books_at_once(str(tmp_path)) == ca.JOBS_FROM_DISK
+
+
+class TestPublishBook:
+    """A finished book onto the output disk, never over what is there."""
+
+    def _built(self, tmp_path):
+        scratch = tmp_path / "scratch"
+        scratch.mkdir()
+        built = scratch / "Book.mp3"
+        built.write_text("the whole book")
+        out = tmp_path / "out"
+        out.mkdir()
+        return built, out
+
+    def test_the_book_lands_under_its_name(self, tmp_path):
+        built, out = self._built(tmp_path)
+        assert ca.publish_book(str(built), str(out / "Book.mp3")) == ""
+        assert (out / "Book.mp3").read_text() == "the whole book"
+
+    def test_nothing_but_the_book_is_left_beside_it(self, tmp_path):
+        """The staging copy is gone once the book is in place."""
+        built, out = self._built(tmp_path)
+        ca.publish_book(str(built), str(out / "Book.mp3"))
+        assert [p.name for p in out.iterdir()] == ["Book.mp3"]
+
+    def test_a_taken_name_is_refused_and_left_alone(self, tmp_path):
+        built, out = self._built(tmp_path)
+        (out / "Book.mp3").write_text("somebody else's")
+        reason = ca.publish_book(str(built), str(out / "Book.mp3"))
+        assert "never overwritten" in reason
+        assert (out / "Book.mp3").read_text() == "somebody else's"
+        assert [p.name for p in out.iterdir()] == ["Book.mp3"]
+
+    def test_a_filesystem_without_hard_links_still_gets_the_book(
+            self, monkeypatch, tmp_path):
+        built, out = self._built(tmp_path)
+
+        def no_links(_source, _target):
+            raise PermissionError("operation not permitted")
+
+        monkeypatch.setattr(ca.os, "link", no_links)
+        assert ca.publish_book(str(built), str(out / "Book.mp3")) == ""
+        assert [p.name for p in out.iterdir()] == ["Book.mp3"]
+
+    def test_without_hard_links_a_taken_name_is_still_refused(
+            self, monkeypatch, tmp_path):
+        built, out = self._built(tmp_path)
+        (out / "Book.mp3").write_text("somebody else's")
+
+        def no_links(_source, _target):
+            raise PermissionError("operation not permitted")
+
+        monkeypatch.setattr(ca.os, "link", no_links)
+        assert "never overwritten" in ca.publish_book(
+            str(built), str(out / "Book.mp3"))
+        assert (out / "Book.mp3").read_text() == "somebody else's"
+
+
+class TestBookScratch:
+    """Where a book is built: RAM while the claims fit, disk after that."""
+
+    def _state(self, monkeypatch, tmp_path, free):
+        ram = tmp_path / "ram"
+        ram.mkdir()
+        disk = tmp_path / "disk"
+        disk.mkdir()
+        monkeypatch.setattr(ca.ramscratch, "ram_dir_free_bytes",
+                            lambda _directory: free)
+        monkeypatch.setattr(ca.ramscratch, "ram_disk_base", lambda: str(disk))
+        state = ca.Run(ram_dir=str(ram),
+                       reservation_file=str(ram / "ramReserved"))
+        return state, ram, disk
+
+    def test_a_book_that_fits_is_built_in_ram(self, monkeypatch, tmp_path):
+        state, ram, _disk = self._state(monkeypatch, tmp_path, 1000)
+        scratch, claimed = state._book_scratch(600)
+        assert os.path.dirname(scratch) == str(ram)
+        assert claimed == 600
+
+    def test_the_next_book_is_counted_against_the_first(
+            self, monkeypatch, tmp_path):
+        """Both asked before either wrote anything, so the free space alone
+        would have let both in."""
+        state, _ram, disk = self._state(monkeypatch, tmp_path, 1000)
+        state._book_scratch(600)
+        scratch, claimed = state._book_scratch(600)
+        assert os.path.dirname(scratch) == str(disk)
+        assert claimed == 0
+
+    def test_a_released_claim_makes_room_again(self, monkeypatch, tmp_path):
+        state, ram, _disk = self._state(monkeypatch, tmp_path, 1000)
+        _scratch, claimed = state._book_scratch(600)
+        state._release(claimed)
+        scratch, _claimed = state._book_scratch(600)
+        assert os.path.dirname(scratch) == str(ram)
+
+    def test_ram_that_cannot_be_measured_is_not_claimed(
+            self, monkeypatch, tmp_path):
+        state, _ram, disk = self._state(monkeypatch, tmp_path, None)
+        scratch, claimed = state._book_scratch(1)
+        assert os.path.dirname(scratch) == str(disk)
+        assert claimed == 0
