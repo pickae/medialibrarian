@@ -6,8 +6,9 @@ file it mostly holds - video, audio, document and so on
 are not part of it. What that group is numbered by decides what is missing:
 
 * **episodes** - S01E01, s1e14, S02,E13, 1x05: every episode from 1 up to the
-  highest one a season has, and with two or more seasons in one folder, every
-  season from 1 up to the highest;
+  highest one a season has, and every season from 1 up to the highest - unless
+  the folder is itself named for its season ("Season 2"), whose parent then
+  says what is missing before it;
 * **dates** - a leading YYYYMMDD (or YYYY-MM-DD): the stretches with nothing in
   them that are conspicuous for how often the run otherwise comes - a week for a
   daily run, a month for a weekly one, two skipped months for a monthly one. The
@@ -17,7 +18,7 @@ are not part of it. What that group is numbered by decides what is missing:
   everything from 1 up to the highest is expected.
 
 Sub-folders form a run of their own the same way: "Season 1", "Season 3", or
-"01 ...", "03 ...".
+"01 ...", "03 ...". A lone "Season 3" is missing Seasons 1 and 2.
 
 The report is a `tree` of the folders that have something missing, each holding
 what is missing instead of what is there, and it is written to
@@ -78,6 +79,11 @@ _CROSS_EPISODE = re.compile(r"(?<![A-Za-z0-9])([0-9]{1,2})[xX]([0-9]{2,3})(?![0-
 _SEASON_FOLDER = re.compile(
     r"^(?:season|series|staffel|saison|seizoen|temporada|stagione|s)"
     r"[ ._-]*([0-9]{1,3})(?![0-9])", re.IGNORECASE)
+# A folder whose name says which season it holds, anywhere in it: "Season 2",
+# "Show S02 1080p". Not inside a word: "Jobs 2" names no season.
+_NAMES_SEASON = re.compile(
+    r"(?<![A-Za-z0-9])(?:season|series|staffel|saison|seizoen|temporada|"
+    r"stagione|s)[ ._-]*[0-9]{1,3}(?![0-9])", re.IGNORECASE)
 
 # A leading date, compact or separated. The separated shape is the one
 # `clean-folder-structure -d` normalises, so a tree it has not been run over yet
@@ -89,6 +95,9 @@ _YEAR_FOLDER = re.compile(r"^[12][0-9]{3}$")
 # How much of a run has to be there for it to be a run at all: three numbers out
 # of 1 to 2021 are years, not the three chapters left of two thousand.
 _MIN_COVERAGE = 0.5
+# How dense a run has to be between its own ends to be one when it starts far
+# from 1 - chapters 51 to 90.
+_MIN_DENSITY = 0.75
 # And how many dates a run needs before how often it comes can be told.
 _MIN_DATES = 4
 
@@ -223,9 +232,11 @@ def missing_numbers(values: set[int]) -> list[int]:
     """What is missing from a run of numbers, or [] when they are no run.
 
     Expected is everything from 1 up to the highest, when at least half of that
-    is there. A run that does not start near 1 - chapters 101 to 150 - is still
-    one when it is dense between its own ends, and only its inner gaps are
-    missing then.
+    is there. A run that starts far from 1 - chapters 51 to 90 - is still one
+    when it is dense between its own ends, and everything before it is missing
+    too. Two shapes of dense run are not counted from 1, only their inner gaps:
+    years (1994 to 1999), and one disc of a disc-and-track numbering (101 to
+    112), where nothing numbered 1 to 100 was ever meant to be.
     """
     counted = {value for value in values if value > 0}
     if len(counted) < 2:
@@ -234,8 +245,11 @@ def missing_numbers(values: set[int]) -> list[int]:
     if len(counted) / top >= _MIN_COVERAGE:
         return [n for n in range(1, top) if n not in counted]
     bottom = min(counted)
-    if len(counted) >= 3 and len(counted) / (top - bottom + 1) >= 0.75:
-        return [n for n in range(bottom, top) if n not in counted]
+    if len(counted) >= 3 and len(counted) / (top - bottom + 1) >= _MIN_DENSITY:
+        years = bottom >= 1900 and top <= 2099
+        disc = bottom > 100 and bottom % 100 == 1 and top // 100 == bottom // 100
+        start = bottom if years or disc else 1
+        return [n for n in range(start, top) if n not in counted]
     return []
 
 
@@ -256,9 +270,15 @@ def _number_entries(missing: list[int], width: int, suffix: str = "") -> list[st
             for first, last in _blocks(missing)]
 
 
-def episode_gaps(names: list[str]) -> tuple[list[str], int] | None:
+def episode_gaps(names: list[str], folder: str = ""
+                 ) -> tuple[list[str], int] | None:
     """What is missing from a folder of episodes: (entries, how many), or None
-    when the names are not episodes."""
+    when the names are not episodes.
+
+    The seasons before the lowest one there are missing, unless ``folder`` - the
+    folder's own name - says which season it is: that folder is one season of a
+    show, and its parent reports the others.
+    """
     seasons: dict[int, set[int]] = {}
     matched = 0
     for name in names:
@@ -267,7 +287,8 @@ def episode_gaps(names: list[str]) -> tuple[list[str], int] | None:
             matched += 1
         for season, episode in found:
             seasons.setdefault(season, set()).add(episode)
-    if matched < 2 or matched * 2 < len(names):
+    # One file is a run only on its own: S01E05 alone is missing E01 to E04.
+    if not matched or matched < min(2, len(names)) or matched * 2 < len(names):
         return None
 
     entries: list[str] = []
@@ -275,10 +296,11 @@ def episode_gaps(names: list[str]) -> tuple[list[str], int] | None:
     season_width = max(2, len(str(max(seasons))))
     episode_width = max(2, *(len(str(max(e))) for e in seasons.values()))
     numbered = sorted(season for season in seasons if season > 0)
-    if len(numbered) >= 2:
-        whole = [s for s in range(1, numbered[-1]) if s not in seasons]
-    else:
+    if not numbered:
         whole = []
+    else:
+        first = numbered[0] if _NAMES_SEASON.search(folder) else 1
+        whole = [s for s in range(first, numbered[-1]) if s not in seasons]
     for season in sorted(set(seasons) | set(whole)):
         label = "S%0*d" % (season_width, season)
         if season in whole:
@@ -340,7 +362,7 @@ def _file_gaps(files: list[str], year_dates: list[datetime.date],
     as one run with the other years'.
     """
     run = _run_files(files) if len(files) >= 2 else files
-    episodes = episode_gaps(run) if len(run) >= 2 else None
+    episodes = episode_gaps(run, os.path.basename(node.name)) if run else None
     if episodes:
         node.entries += episodes[0]
         node.missing += episodes[1]
@@ -363,12 +385,11 @@ def _file_gaps(files: list[str], year_dates: list[datetime.date],
 
 
 def _folder_gaps(folders: list[str], node: Folder) -> None:
-    """What is missing from the run the sub-folders form, into ``node``."""
-    if len(folders) < 2:
-        return
+    """What is missing from the run the sub-folders form, into ``node``. A
+    single season folder is a run, one that is missing the seasons before it."""
     seasons = [_SEASON_FOLDER.match(name) for name in folders]
     matched = [match for match in seasons if match]
-    if len(matched) >= 2 and len(matched) * 2 >= len(folders):
+    if matched and len(matched) * 2 >= len(folders):
         present = {int(match.group(1)) for match in matched}
         missing = [n for n in range(1, max(present)) if n not in present]
         # Named the way the folders there are: "Season 1" is followed by a
@@ -379,6 +400,8 @@ def _folder_gaps(folders: list[str], node: Folder) -> None:
             node.entries.append("%s%0*d (folder)" % (
                 sample.string[:sample.start(1)], width, number))
         node.missing += len(missing)
+        return
+    if len(folders) < 2:
         return
     values, width = numbers_of(folders, "folders")
     missing = missing_numbers(values)
