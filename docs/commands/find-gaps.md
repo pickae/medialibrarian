@@ -24,7 +24,7 @@ What the files are numbered by decides what is missing:
 
 | Numbered by | Examples | Reported missing |
 | --- | --- | --- |
-| season and episode | `S01E01`, `s1e14`, `S02,E13`, `S01E01-E03`, `1x05` | every episode from 1 up to a season's highest; with two or more seasons in one folder, every whole season up to the highest |
+| season and episode | `S01E01`, `s1e14`, `S02,E13`, `S01E01-E03`, `1x05` | every episode from 1 up to a season's highest, and every whole season from 1 up to the highest |
 | a leading date | `20240105 …`, `2024-01-05 …` | the stretches with nothing in them that stand out for how often the run comes |
 | a number | `1`, `01`, `001`, `Chapter 7`, `(03)` | every number from 1 up to the highest |
 
@@ -33,7 +33,15 @@ reads a numbered prefix, padding and all, so `3`, `03` and `003` are one number,
 and text every name shares (`Chapter `) is looked past. A handful of numbers
 that covers less than half of 1 to its highest — `1994`, `1999`, `2011` — is not
 a run and reports nothing. A run that starts high but is dense between its own
-ends (`101` to `150`) reports only the gaps inside it.
+ends (`51` to `90`) is missing everything before it as well — except years
+(`1994` to `1999`) and one disc of disc-and-track numbers (`101` to `112`),
+which report only the gaps inside them.
+
+A run not starting at 1 is missing its start: `S01E03` onwards is missing
+`S01E01-E02`, and a folder holding only season 3 is missing seasons 1 and 2 —
+unless the folder is named for its season (`Season 3`, `Show S03 1080p`), in
+which case the folder above it reports them. A single episode file is a run on
+its own.
 
 A dated run's cadence is the median distance between its dates:
 
@@ -49,6 +57,7 @@ a folder's year folders (`2023/`, `2024/`, as `clean-folder-structure -y` sorts
 them) are one run with the folder's own, so a gap across New Year is found.
 
 Sub-folders are a run of their own: `Season 1`, `Season 3` reports
+`Season 2 (folder)`, a lone `Season 3` reports `Season 1 (folder)` and
 `Season 2 (folder)`, and `01 …`, `03 …` reports `02 (folder)`.
 
 ## The report

@@ -51,9 +51,26 @@ class TestEpisodes:
             ["S01E01.mkv", "S01E02.mkv", "S03E01.mkv", "S03E03.mkv"])
         assert entries == ["S02 (the whole season)", "S03E02"]
 
-    def test_a_folder_of_one_season_is_not_missing_the_others(self):
-        entries, _count = find_gaps.episode_gaps(["S04E01.mkv", "S04E02.mkv"])
+    def test_the_first_episodes_of_a_season_are_missing(self):
+        entries, count = find_gaps.episode_gaps(["S01E03.mkv", "S01E04.mkv"])
+        assert entries == ["S01E01-E02"]
+        assert count == 2
+
+    def test_the_seasons_before_the_lowest_are_missing(self):
+        entries, count = find_gaps.episode_gaps(["S03E01.mkv", "S03E02.mkv"])
+        assert entries == ["S01 (the whole season)", "S02 (the whole season)"]
+        assert count == 2
+
+    @pytest.mark.parametrize("folder", ["Season 4", "S04", "Show S04 1080p"])
+    def test_a_folder_named_for_its_season_is_not_missing_the_others(
+            self, folder):
+        entries, _count = find_gaps.episode_gaps(["S04E01.mkv", "S04E02.mkv"],
+                                                 folder)
         assert entries == []
+
+    def test_one_episode_on_its_own_is_a_run(self):
+        entries, _count = find_gaps.episode_gaps(["S01E03.mkv"], "Season 1")
+        assert entries == ["S01E01-E02"]
 
     def test_names_that_are_mostly_not_episodes_are_not_a_season(self):
         assert find_gaps.episode_gaps(["S01E01.mkv", "a.mkv", "b.mkv"]) is None
@@ -85,8 +102,17 @@ class TestNumbers:
     def test_years_are_not_a_run(self):
         assert find_gaps.missing_numbers({1994, 1999, 2011}) == []
 
-    def test_a_run_that_starts_high_reports_only_its_inner_gaps(self):
-        assert find_gaps.missing_numbers({101, 102, 104, 105}) == [103]
+    def test_a_run_that_starts_high_is_missing_its_start(self):
+        assert find_gaps.missing_numbers({51, 52, 54, 55}) == [
+            *range(1, 51), 53]
+
+    @pytest.mark.parametrize("values,expected", [
+        ({1994, 1995, 1997}, [1996]),
+        ({101, 102, 104, 105}, [103]),
+    ])
+    def test_years_and_one_disc_of_tracks_report_only_inner_gaps(
+            self, values, expected):
+        assert find_gaps.missing_numbers(values) == expected
 
     def test_a_complete_run_has_nothing_missing(self):
         assert find_gaps.missing_numbers({1, 2, 3}) == []
@@ -160,6 +186,12 @@ class TestFolders:
     def test_a_missing_season_folder_is_named_like_the_others(self, tmp_path):
         _touch(tmp_path, "Show/Season 1/a.mkv", "Show/Season 3/a.mkv")
         assert _tree(tmp_path) == ["lib", "`-- Show/",
+                                   "    `-- Season 2 (folder)"]
+
+    def test_a_lone_season_folder_is_missing_the_seasons_before(self, tmp_path):
+        _touch(tmp_path, "Show/Season 3/S03E01.mkv", "Show/Season 3/S03E02.mkv")
+        assert _tree(tmp_path) == ["lib", "`-- Show/",
+                                   "    |-- Season 1 (folder)",
                                    "    `-- Season 2 (folder)"]
 
     def test_numbered_folders_are_a_run(self, tmp_path):
