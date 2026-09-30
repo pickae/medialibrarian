@@ -20,12 +20,12 @@ MB = 1_000_000
 
 
 def _decide(tracks, workers=32, threads=None, mono=False, bitrate=46,
-            codec="opus"):
+            codec="opus", probe=None):
     return chunkdecision.decide(
         tracks, workers, threads or workers, mono, bitrate,
         50000 if mono else 90000,
         lambda ext: ext in enums.VIDEO_EXTENSIONS,
-        lambda ext: ext in enums.ALWAYS_TRANSCODE_EXTENSIONS, codec)
+        lambda ext: ext in enums.ALWAYS_TRANSCODE_EXTENSIONS, codec, probe)
 
 
 class TestNothingToDecide:
@@ -120,3 +120,55 @@ class TestWhatTheBytesSay:
     def test_every_audio_extension_has_a_census(self, extension):
         """An extension outside the census is weighed as a guess."""
         assert chunkdecision.census_for(extension)
+
+
+class TestProbingTheCandidates:
+    """The census guesses what a file holds; the files it would cut are probed
+    for what they really do, and weighed again with it."""
+
+    def _probe(self, answers):
+        asked = []
+
+        def probe(index):
+            asked.append(index)
+            return answers.get(index)
+        return probe, asked
+
+    def test_only_the_files_it_would_cut_are_probed(self):
+        tracks = [("m4b", 2 * GB)] + [("m4b", 30 * MB)] * 200
+        probe, asked = self._probe({0: ("aac", 2, 96000, 2 * GB * 8 / 96000)})
+        assert _decide(tracks, probe=probe).chunked == {0}
+        assert asked == [0]
+
+    def test_a_run_that_cuts_nothing_probes_nothing(self):
+        probe, asked = self._probe({})
+        _decide([("m4a", 20 * MB)] * 500, probe=probe)
+        assert asked == []
+
+    def test_a_file_shorter_than_its_bytes_suggest_moves_the_estimate(self):
+        """Twice the rate is half the audio, and half the wall clock."""
+        tracks = [("m4b", 2 * GB)] + [("m4b", 30 * MB)] * 200
+        guessed = _decide(tracks)
+        probe, _asked = self._probe({0: ("aac", 2, 138000,
+                                         2 * GB * 8 / 138000)})
+        measured = _decide(tracks, probe=probe)
+        assert measured.whole < guessed.whole * 0.7
+
+    def test_a_file_under_the_threshold_is_not_cut_after_all(self):
+        """Left alone, it costs next to nothing, so cutting it wins nothing."""
+        tracks = [("mp3", 2 * GB)] + [("mp3", 30 * MB)] * 200
+        probe, asked = self._probe({0: ("mp3", 2, 64000, 2 * GB * 8 / 64000)})
+        assert _decide(tracks, probe=probe).chunked == frozenset()
+        assert asked == [0]
+
+    def test_a_file_the_probe_cannot_measure_keeps_its_guess(self):
+        tracks = [("m4b", 2 * GB)] + [("m4b", 30 * MB)] * 200
+        probe, asked = self._probe({})
+        assert _decide(tracks, probe=probe) == _decide(tracks)
+        assert asked == [0]
+
+    def test_no_file_is_probed_twice(self):
+        tracks = [("m4b", 1 * GB)] * 4 + [("mp3", 400 * MB)] * 4
+        probe, asked = self._probe({})
+        _decide(tracks, probe=probe)
+        assert len(asked) == len(set(asked))
