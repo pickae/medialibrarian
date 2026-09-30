@@ -26,13 +26,20 @@ question at a time rather than over every possible schedule:
    the decision not to chunk at all; moving it down to take in a few more files
    is what a tail of a few similar leftovers asks for.
 
-Everything here is known before a single probe: a file's byte size and extension
-are all it is weighed by. The census of what real spoken-word trees hold - at
+The decision starts from what is known before a single probe: a file's byte size
+and extension. The census of what real spoken-word trees hold - at
 which rate, in which codec, with how many channels - turns bytes into the
 seconds a file is likely to hold and what encoding them is likely to cost,
 including the chance that it is under the re-encode threshold and costs next to
 nothing. The costs were measured on one CPU; another is faster or slower at
 every part of the trade alike, so only its thread count enters.
+
+The census is a guess, and the files it picks to cut are the ones the guess
+matters most for: the run's longest, which decide its wall clock either way. So
+those, and only those, are probed for what they really hold, and the decision is
+made again with their real length and rate. A file cut only once the guess is
+corrected is probed in turn, so what is finally cut is never weighed by the
+census alone. A run of a thousand files probes the few it may cut.
 """
 
 import bisect
@@ -169,6 +176,11 @@ XHEAAC_FACTOR = 3.5
 SPEEDUP = ((1 / 32, 2.81), (2 / 32, 2.45), (4 / 32, 2.31), (0.25, 1.98),
            (0.5, 1.58), (0.75, 1.24), (1.0, 1.0))
 
+# How many times a decision is made again, each time with the files it cut
+# probed: it settles in one or two, and the bound only keeps a probe that keeps
+# changing its mind from probing the whole tree.
+PROBE_ROUNDS = 4
+
 # A job's fixed cost whatever its length - the probes around the encode, its
 # scratch directory, the cover - and what a file that is left alone costs, in
 # full-load seconds.
@@ -265,7 +277,7 @@ class _Kind:
     """
 
     def __init__(self, rows, video, always, mono, bitrate, threshold, codec,
-                 copied=True):
+                 copied=True, seconds_per_byte=None):
         # Whether the planner stream-copies a candidate of this kind first.
         self.copied = copied
         # Per row: (share, encoded seconds, encode cost, search cost) - the
@@ -274,7 +286,11 @@ class _Kind:
         self.cumulative = []
         total = 0.0
         for decoder, channels, kbps, share in rows:
-            per_byte = 8.0 / (kbps * 1000.0)
+            # A probed file's length is what it holds, not what its rate
+            # would make of its bytes: its container has cover art and, in a
+            # video, a picture beside the audio.
+            per_byte = seconds_per_byte if seconds_per_byte is not None \
+                else 8.0 / (kbps * 1000.0)
             if video or always or kbps * 1000 >= threshold:
                 self.rows.append((
                     share, per_byte,
@@ -468,7 +484,7 @@ class _Run:
 
 
 def decide(tracks, workers, threads, mono, bitrate, threshold, is_video,
-           always_transcode, codec="opus"):
+           always_transcode, codec="opus", probe=None):
     """The run's chunking: which of <tracks> to cut, if any.
 
     <tracks> is ``[(extension, size), ...]`` in any order. <workers> is the
@@ -476,11 +492,15 @@ def decide(tracks, workers, threads, mono, bitrate, threshold, is_video,
     kbps and <threshold> the source rate, in bps, from which a file is
     re-encoded rather than left alone; <is_video> and <always_transcode> say
     of an extension whether it is encoded whatever its rate.
+
+    <probe>, given a track's position, answers ``(decoder, channels, bps,
+    seconds)`` for its first audio stream, or None when it cannot say. It is
+    asked only of the tracks a decision would cut, and each at most once.
     """
     if workers < 2 or not tracks:
         return Decision(frozenset(), 0.0, 0.0)
     known = {}
-    kinds = []
+    census = []
     for extension, _size in tracks:
         if extension not in known:
             video = is_video(extension)
@@ -490,7 +510,36 @@ def decide(tracks, workers, threads, mono, bitrate, threshold, is_video,
                 rows, video, always_transcode(extension), mono, bitrate,
                 threshold, codec,
                 extension not in enums.SEEK_CHEAP_EXTENSIONS)
-        kinds.append(known[extension])
+        census.append(known[extension])
+    kinds = list(census)
+    asked = set()
+    decision = _decide(tracks, kinds, workers, threads)
+    for _round in range(PROBE_ROUNDS if probe else 0):
+        fresh = sorted(decision.chunked - asked)
+        if not fresh:
+            break
+        for index in fresh:
+            asked.add(index)
+            found = probe(index)
+            if found is None:
+                continue
+            decoder, channels, bps, seconds = found
+            extension, size = tracks[index]
+            if size <= 0 or seconds <= 0:
+                continue
+            # The rate the threshold is read against is the audio stream's
+            # own; one that states none is taken as its bytes over its length.
+            kbps = (bps or size * 8.0 / seconds) / 1000.0
+            kinds[index] = _Kind(
+                ((decoder, channels, kbps, 1.0),), is_video(extension),
+                always_transcode(extension), mono, bitrate, threshold, codec,
+                census[index].copied, seconds / size)
+        decision = _decide(tracks, kinds, workers, threads)
+    return decision
+
+
+def _decide(tracks, kinds, workers, threads):
+    """One decision, with each track weighed as its kind says."""
     run = _Run([size for _extension, size in tracks], kinds, workers,
                threads)
     whole = run.expected(frozenset())

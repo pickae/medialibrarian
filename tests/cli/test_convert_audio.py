@@ -383,6 +383,20 @@ class TestTheChunkingDecision:
         assert "Splitting 1 long file(s)" in said
         assert "0:01:00" in said and "0:10:00" in said
 
+    def test_the_probe_asks_about_the_track_at_that_position(self, tmp_path,
+                                                             monkeypatch):
+        probed = []
+        monkeypatch.setattr(ca, "chunk_candidate_audio", probed.append)
+
+        def decide(*args):
+            args[-1](1)
+            return ca.chunkdecision.Decision(frozenset(), 0.0, 0.0)
+
+        monkeypatch.setattr(ca.chunkdecision, "decide", decide)
+        ca._decide_chunking(self._run(tmp_path, {"a.m4a": 20, "b.m4b": 30}),
+                            32)
+        assert probed == [str(tmp_path / "b.m4b")]
+
     def test_a_run_that_cuts_nothing_says_nothing(self, tmp_path, monkeypatch,
                                                   capsys):
         monkeypatch.setattr(
@@ -390,6 +404,35 @@ class TestTheChunkingDecision:
             lambda *a: ca.chunkdecision.Decision(frozenset(), 60.0, 60.0))
         ca._decide_chunking(self._run(tmp_path, {"a.m4a": 20}), 32)
         assert capsys.readouterr().out == ""
+
+
+class TestTheChunkCandidateProbe:
+    def _probed(self, monkeypatch, document):
+        monkeypatch.setattr(ca, "_probe", lambda argv: document)
+        return ca.chunk_candidate_audio("book.m4b")
+
+    def test_it_reads_decoder_channels_rate_and_length(self, monkeypatch):
+        document = ('{"format": {"duration": "301309.7", "bit_rate": "96836"},'
+                    ' "streams": [{"codec_type": "video"},'
+                    ' {"codec_type": "audio", "codec_name": "AAC",'
+                    ' "channels": 2, "bit_rate": "95124"}]}')
+        assert self._probed(monkeypatch, document) == ("aac", 2, 95124,
+                                                        301309.7)
+
+    def test_a_stream_that_states_no_channels_is_read_as_stereo(
+            self, monkeypatch):
+        document = ('{"format": {"duration": "60"},'
+                    ' "streams": [{"codec_type": "audio",'
+                    ' "codec_name": "mp3"}]}')
+        assert self._probed(monkeypatch, document) == ("mp3", 2, 0, 60.0)
+
+    @pytest.mark.parametrize("document", [
+        "", "not json", "[]",
+        '{"format": {"duration": "60"}, "streams": []}',
+        '{"format": {}, "streams": [{"codec_type": "audio"}]}',
+    ])
+    def test_a_file_it_cannot_measure_is_none(self, monkeypatch, document):
+        assert self._probed(monkeypatch, document) is None
 
 
 class TestTheSampleRateProbe:

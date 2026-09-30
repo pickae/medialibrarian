@@ -23,8 +23,9 @@ A long file can be cut into one chunk per core, and the chunks encode as
 independent queue jobs, each taking its own place in the queue at the size of one
 chunk - so one huge file neither pins a single core while the rest of the machine
 idles nor keeps the whole run waiting behind it. Which files are cut, if any, is
-decided up front from the file sizes alone, by weighing the expected wall clock
-of the run with and without it (medialib/lib/chunkdecision.py). The cuts are
+decided up front from the file sizes, and a probe of the few files it would cut,
+by weighing the expected wall clock of the run with and without it
+(medialib/lib/chunkdecision.py). The cuts are
 nudged to the nearest quiet spot, so the seam between separately encoded chunks
 is inaudible.
 
@@ -319,6 +320,12 @@ def source_audio_bitrate(src: str) -> int:
     bitrate stays unknown therefore reports 0, which is read as "unknown" and not
     as "small".
     """
+    return _audio_bitrate_in(_probe_document(src))
+
+
+def _probe_document(src: str) -> dict:
+    """ffprobe's account of a source's format and streams, or {} when it
+    gives none."""
     import json
 
     raw = _probe(["ffprobe", "-loglevel", "0", "-print_format", "json",
@@ -326,12 +333,15 @@ def source_audio_bitrate(src: str) -> int:
     try:
         document = json.loads(raw or "{}")
     except ValueError:
-        return 0
+        return {}
     # Anything that is not an object - a bare number, or a list - is "nothing
-    # stated it" rather than an error, and the lookup falls through to 0.
-    if not isinstance(document, dict):
-        return 0
+    # stated it" rather than an error.
+    return document if isinstance(document, dict) else {}
 
+
+def _audio_bitrate_in(document: dict) -> int:
+    """The first audio stream's bitrate in a probe document, as
+    `source_audio_bitrate` reads it."""
     streams = document.get("streams") or []
     audio = [stream for stream in streams
              if stream.get("codec_type") == "audio"]
@@ -353,6 +363,29 @@ def source_audio_bitrate(src: str) -> int:
     if value is None:
         return 0
     return int(value) if re.fullmatch(r"[0-9]+", str(value)) else 0
+
+
+def chunk_candidate_audio(src: str):
+    """What a file the chunk decision would cut really holds: its first audio
+    stream's decoder, channels and bitrate, and its length in seconds - or None
+    when the probe cannot say how long it is.
+
+    One probe per file, asked only of the few files the decision would cut, so
+    their length is measured rather than guessed from their bytes.
+    """
+    document = _probe_document(src)
+    audio = [stream for stream in document.get("streams") or []
+             if stream.get("codec_type") == "audio"]
+    if not audio:
+        return None
+    seconds = formatting.awk_number(
+        str((document.get("format") or {}).get("duration") or ""))
+    if seconds <= 0:
+        return None
+    channels = str(audio[0].get("channels") or "")
+    return (str(audio[0].get("codec_name") or "").lower(),
+            int(channels) if re.fullmatch(r"[1-9][0-9]*", channels) else 2,
+            _audio_bitrate_in(document), seconds)
 
 
 def source_audio_is_finished(src: str, bitrate, limit,
@@ -2036,10 +2069,11 @@ def _filesize(state: Run, track: str) -> int:
 
 
 def _decide_chunking(state: Run, jobs: int) -> frozenset:
-    """The tracks this run cuts into chunks, weighed from their sizes alone.
+    """The tracks this run cuts into chunks, weighed from their sizes.
 
-    Nothing is probed for it: the decision is made before the queue starts, and
-    what a file's size and extension say about it is all it weighs. A run that
+    The decision is made before the queue starts, from what each file's size
+    and extension say about it; only the files it would cut are probed, for
+    their real length and rate, and weighed again with them. A run that
     decides to chunk says so and what it expects to gain; one that does not
     says nothing, because nothing about the run has changed.
     """
@@ -2053,7 +2087,9 @@ def _decide_chunking(state: Run, jobs: int) -> frozenset:
         MONO_THRESHOLD if state.mono else state.threshold,
         lambda extension: extension in enums.VIDEO_EXTENSIONS,
         lambda extension: extension in enums.ALWAYS_TRANSCODE_EXTENSIONS,
-        state.codec)
+        state.codec,
+        lambda index: chunk_candidate_audio(
+            os.path.join(state.input_dir, state.tracks[index])))
     if not decision.chunked:
         return frozenset()
     print("Splitting %d long file(s) into chunks: expected %s, against %s "
