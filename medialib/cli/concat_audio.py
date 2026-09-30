@@ -11,9 +11,13 @@ that describes it, and from the individual files otherwise. The cover comes from
 an image in the folder, else a booklet PDF's first page, else the artwork embedded
 in the audio.
 
-The concatenation runs several sub-folders at once. It is largely I/O bound - the
-input often sits in RAM while the output goes to disk - so overlapping them keeps
-whichever drive is the bottleneck busy.
+The concatenation runs several sub-folders at once, and each book is built
+whole in RAM - the join, the chapters and the cover - so the output disk sees
+nothing until the book is finished. Finished books are then written out one at
+a time: a disk handed several large writes at once only seeks between them.
+How many build at once depends on where the input is read from: an input in RAM
+costs no drive anything, so every thread takes one; an input on disk is read by
+two, which a mechanical drive still streams rather than seeks.
 """
 
 import os
@@ -106,8 +110,16 @@ JPG_QUALITY_LEVEL = 80
 # it full-screen on a tablet is the case that decides the size.
 THUMBNAIL_RESOLUTION_TIER = "quadHD"
 
-# One job per four CPU threads, matching the other scripts.
-JOBS_PER_CORE = 4
+# How many books build at once when the input is on a disk rather than in RAM.
+# Two, not one: while one book is read the other is probed, given its cover or
+# written out. Not more, because whether the disk is mechanical cannot be told
+# reliably, and a mechanical one read by several at once spends its time seeking.
+JOBS_FROM_DISK = 2
+
+# How much bigger than its sources a book is reckoned when RAM is reserved for
+# it: the cover it gains, and a FLAC re-encode that can come out a little larger.
+BOOK_SIZE_MARGIN = 1.1
+BOOK_SIZE_SLACK = 64 * 1024 * 1024
 
 # The join, per format: which extension the sources have, which container comes
 # out, and how the two are joined. mp3 and opus are already container-framed, so
@@ -539,6 +551,10 @@ class Run:
     thumbnail_resolution: str
     progress_file: str
     failure_file: str
+    # The bytes the books now building have claimed in RAM, and the lock that
+    # lets one finished book at a time be written to the output.
+    reservation_file: str
+    publish_lock: str
     total: int
 
     def __init__(self, **settings) -> None:
@@ -586,8 +602,54 @@ class Run:
         except OSError:
             pass
 
+    def _reserve(self, byte_count: int) -> bool:
+        """Claim <byte_count> bytes of the RAM scratch for one book, or say
+        there is not that much to claim.
+
+        Counted here rather than read off the filesystem alone: every worker
+        asks before it has written anything, so the free space each one sees
+        is the same, and on its own it would let all of them in at once. What
+        is claimed stays claimed until the book is written out, which counts a
+        half-built book twice - its bytes and its claim - and errs towards the
+        disk rather than towards a full tmpfs.
+        """
+        with open(self.reservation_file + ".lock", "w") as lock, \
+                runlog.take_lock(lock):
+            claimed = _read_count(self.reservation_file)
+            free = ramscratch.ram_dir_free_bytes(self.ram_dir)
+            if free is None or claimed + byte_count > free:
+                return False
+            with open(self.reservation_file, "w") as handle:
+                handle.write("%d\n" % (claimed + byte_count))
+        return True
+
+    def _release(self, byte_count: int) -> None:
+        with open(self.reservation_file + ".lock", "w") as lock, \
+                runlog.take_lock(lock):
+            claimed = _read_count(self.reservation_file)
+            with open(self.reservation_file, "w") as handle:
+                handle.write("%d\n" % max(0, claimed - byte_count))
+
+    def _book_scratch(self, byte_count: int) -> tuple:
+        """Where one book is built: its own directory in the RAM scratch when
+        the book fits, else one under the disk overflow, else "" - with the
+        bytes claimed in RAM, 0 for a book built on disk."""
+        if self._reserve(byte_count):
+            try:
+                return tempfile.mkdtemp(prefix="book.", dir=self.ram_dir), \
+                    byte_count
+            except OSError:
+                self._release(byte_count)
+        disk_parent = ramscratch.ram_disk_base()
+        if disk_parent:
+            try:
+                return tempfile.mkdtemp(prefix=".concatAudioBook.",
+                                        dir=disk_parent), 0
+            except OSError:
+                pass
+        return "", 0
+
     def process_subfolder(self, input_path: str, output_path: str) -> None:
-        chapter_file = output_path.rstrip("/") + ".ch"
         name = os.path.basename(output_path.rstrip("/"))
 
         scan = Scan(input_path)
@@ -608,16 +670,57 @@ class Run:
 
         self.report_progress(name)
 
+        fmt, label = present[0]
+        target = "%s.%s" % (output_path.rstrip("/"), FORMATS[fmt][1])
+        # Asked before any work rather than only at the end, so a book that
+        # could never be written out is not built first. The write-out refuses
+        # a taken name as well, for one taken while this book was building.
+        if os.path.exists(target):
+            self.record_failure(name, _name_taken_reason(label))
+            return
+
+        sources = _sorted_by_extension(input_path, FORMATS[fmt][0])
+        size = int(_total_size(sources) * BOOK_SIZE_MARGIN) + BOOK_SIZE_SLACK
+        scratch, claimed = self._book_scratch(size)
+        if not scratch:
+            self.record_failure(name, "no scratch directory could be made to "
+                                      "build the book in.")
+            return
+        try:
+            built = self._build(scan, input_path, os.path.join(scratch, name),
+                                fmt, label, scratch)
+            if built:
+                self._publish(name, built, target)
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+            if claimed:
+                self._release(claimed)
+
+    def _publish(self, name: str, built: str, target: str) -> None:
+        """The finished book onto the output disk, one book at a time across
+        the whole run."""
+        with open(self.publish_lock, "w") as lock, runlog.take_lock(lock):
+            reason = publish_book(built, target)
+        if reason:
+            self.record_failure(name, reason)
+
+    def _build(self, scan: "Scan", input_path: str, output_path: str,
+               fmt: str, label: str, scratch: str) -> str:
+        """One book, joined and given its chapters and cover, all in
+        <scratch>. Returns the finished file, or "" when there is none -
+        which has already been said and recorded."""
+        chapter_file = output_path + ".ch"
+        name = os.path.basename(output_path)
+
         # Quiet mode (the default) silences the per-step lines from here on.
         # Each sub-folder is its own worker, so this reaches only that worker
         # and the helpers it calls - never the run's own top-level lines. The
         # progress line above is printed directly, so it stays visible.
         step = log if self.verbose else (lambda _message: None)
 
-        fmt, label = present[0]
         step("    Concatenating %d %s file(s)" % (scan.counts[fmt], label))
-        concat_list = concat_format(input_path, output_path, fmt,
-                                    self.ram_dir, self.ffmpeg)
+        concat_list = concat_format(input_path, output_path, fmt, scratch,
+                                    self.ffmpeg)
 
         # Nothing joined, so there is nothing for the two steps below to write
         # into. Going on would run them against a file that is not there and
@@ -625,10 +728,8 @@ class Run:
         if not concat_list:
             self.record_failure(
                 name, "the %s join produced no file - chapters and cover "
-                      "skipped. ffmpeg's own error is above; a file already at "
-                      "the output name is the usual cause, and is never "
-                      "overwritten." % label)
-            return
+                      "skipped. ffmpeg's own error is above." % label)
+            return ""
 
         # A join reports the status of the last thing it managed to write, so a
         # book that is missing half its tracks comes back as a success with a
@@ -641,20 +742,14 @@ class Run:
                 _sorted_by_extension(input_path, FORMATS[fmt][0]))
             produced = durationcheck.media_duration(joined)
         if expected and not durationcheck.length_matches(expected, produced):
-            # Removed rather than left: nothing else here made this file - a
-            # name already taken is refused above, not overwritten - and a book
-            # with tracks missing is worse than no book, because it looks
-            # finished.
-            try:
-                os.remove(joined)
-            except OSError:
-                pass
+            # Never written out: a book with tracks missing is worse than no
+            # book, because it looks finished. The scratch it is in goes.
             self.record_failure(
                 name, "the join came out %s from %s of %s files - the output "
                       "was removed, since it is not the whole book."
                       % (formatting.fmt_hms("%.3f" % produced),
                          formatting.fmt_hms("%.3f" % expected), label))
-            return
+            return ""
 
         # Chapters, one of two ways. A cue sheet wins when there is one and the
         # music is not yet split - which means a CD1/CD2 input needs one folder
@@ -670,14 +765,86 @@ class Run:
 
         if chapter_lines:
             step("    Embedding chapters")
-            chapters.embed_chapters(chapter_file, chapter_lines, self.ram_dir,
+            chapters.embed_chapters(chapter_file, chapter_lines, scratch,
                                     self.script_dir, self.have_mkvtoolnix)
 
         step("    Embedding thumbnail")
         thumbnails.embed_thumbnail(input_path, output_path, IMAGE_SIZE_LIMIT,
                                    JPG_QUALITY_LEVEL, self.thumbnail_resolution,
-                                   DPI, self.have_mkvtoolnix, self.ram_dir,
+                                   DPI, self.have_mkvtoolnix, scratch,
                                    self.script_dir)
+        if not os.path.isfile(joined):
+            self.record_failure(name, "the book was lost while its chapters "
+                                      "and cover were written into it.")
+            return ""
+        return joined
+
+
+def _read_count(path: str) -> int:
+    try:
+        with open(path) as handle:
+            return int(handle.read().strip() or 0)
+    except (OSError, ValueError):
+        return 0
+
+
+def _total_size(paths: list) -> int:
+    total = 0
+    for path in paths:
+        try:
+            total += os.path.getsize(path)
+        except OSError:
+            pass
+    return total
+
+
+def _name_taken_reason(label: str) -> str:
+    return ("a file is already at the output name, and is never overwritten - "
+            "the %s join was skipped." % label)
+
+
+def publish_book(built: str, target: str) -> str:
+    """A finished book from the scratch onto its output name, never over a
+    file already there. Returns "" on success, else why not.
+
+    Copied to a hidden staging name beside the target first and only then put
+    in place: the copy out of RAM takes a while, and a book must never appear
+    under its real name half-written. It goes in place as a hard link, which
+    refuses a name that is taken - a rename would silently replace it. A
+    filesystem without hard links gets a check and a rename instead.
+    """
+    label = os.path.splitext(target)[1].lstrip(".")
+    try:
+        os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
+        handle, staged = tempfile.mkstemp(prefix=".concatAudio.",
+                                          dir=os.path.dirname(target) or ".")
+        os.close(handle)
+    except OSError as error:
+        return "the finished book could not be written out: %s." % error
+    try:
+        try:
+            shutil.copyfile(built, staged)
+        except OSError as error:
+            return "the finished book could not be written out: %s." % error
+        try:
+            os.link(staged, target)
+            return ""
+        except FileExistsError:
+            return _name_taken_reason(label)
+        except OSError:
+            pass
+        if os.path.exists(target):
+            return _name_taken_reason(label)
+        try:
+            os.rename(staged, target)
+        except OSError as error:
+            return "the finished book could not be written out: %s." % error
+        return ""
+    finally:
+        try:
+            os.remove(staged)
+        except OSError:
+            pass
 
 
 def _in_worker(state: Run, input_path: str, output_path: str) -> None:
@@ -857,7 +1024,9 @@ def _run_with_scratch(ram_dir: str, input_dir: str, output_dir: str,
     with open(progress_file, "w") as handle:
         handle.write("0\n")
 
-    jobs = max(1, runlog.cpu_count() // JOBS_PER_CORE)
+    # The working directory rather than the name given: the run is inside the
+    # input by now, and a relative name would be read from the wrong place.
+    jobs = books_at_once(os.getcwd())
     # "Up to N at a time" only where more than one really can run: the pool is
     # never wider than the work, and at one wide there is no "at a time" to say.
     width = min(jobs, total)
@@ -873,6 +1042,8 @@ def _run_with_scratch(ram_dir: str, input_dir: str, output_dir: str,
         thumbnail_resolution=imagesizes.geometry(THUMBNAIL_RESOLUTION_TIER),
         progress_file=progress_file,
         failure_file=failure_file,
+        reservation_file=os.path.join(ram_dir, "ramReserved"),
+        publish_lock=os.path.join(ram_dir, "publish.lock"),
         total=total,
     )
 
@@ -883,7 +1054,9 @@ def _run_with_scratch(ram_dir: str, input_dir: str, output_dir: str,
     # By the paths this run made them at, which are all in the scratch: the join
     # and the thumbnail leave nothing in the output tree to clean up.
     log("Cleaning up temporary files")
-    for path in (progress_file, progress_file + ".lock"):
+    for path in (progress_file, progress_file + ".lock",
+                 state.reservation_file, state.reservation_file + ".lock",
+                 state.publish_lock):
         try:
             os.remove(path)
         except OSError:
@@ -917,6 +1090,19 @@ def _run_with_scratch(ram_dir: str, input_dir: str, output_dir: str,
     # handled itself, so the pool never saw it - but the run still asked for a
     # file it did not get, and must not end on the status of one that did.
     return workerpool.exit_status(1 if failed else 0)
+
+
+def books_at_once(input_dir: str) -> int:
+    """Every thread when the input is read from RAM, where reading costs no
+    drive anything; JOBS_FROM_DISK otherwise.
+
+    RAM against disk is the one distinction made, because it is the one the
+    mount table answers for certain. Mechanical against solid-state is not
+    guessed at, so a disk is read as if it could be mechanical.
+    """
+    if ramscratch.filesystem_type(input_dir) in ("tmpfs", "ramfs"):
+        return runlog.cpu_count()
+    return JOBS_FROM_DISK
 
 
 def _settle_mkvtoolnix(input_dir: str) -> bool:

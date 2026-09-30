@@ -25,6 +25,19 @@ With no options, a run:
 The naming of the files and subfolders should reflect the order they are to be
 joined in.
 
+## Several books at once
+
+Each book is built whole in RAM — joined, chaptered and given its cover — and
+only the finished file is written to `<outputDir>`, one book at a time. How
+many are built at once depends on where the input is:
+
+- **in RAM** (as `convert-and-concat` hands it over): one per CPU thread
+- **on disk**: two, since a mechanical drive read by more than that spends its
+  time seeking
+
+A book too big for the RAM left over is built in the disk overflow scratch
+instead.
+
 ## Chapters and cover
 
 Each is taken from the first source that has one:
