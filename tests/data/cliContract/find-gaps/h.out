@@ -1,0 +1,6 @@
+David Ernst
+
+Usage:
+    find-gaps [options] <inputDir>
+Options:
+    -h, --help      Print this help page.

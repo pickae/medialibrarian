@@ -13,6 +13,8 @@ __all__ = [
     "extension_of",
     "lower_extension_of",
     "extension_list",
+    "FILE_KINDS",
+    "file_kind",
     "BRACKET_OPEN",
     "BRACKET_CLOSE",
     "PART_WORDS",
@@ -97,8 +99,38 @@ LOSSLESS_AUDIO_EXTENSIONS = ("flac", "ape", "wav", "wv",)
 # disk thrash between them: a 3 GB book took twenty times longer than one
 # sequential read. Matroska can hold FLAC too.
 SEEK_CHEAP_EXTENSIONS = ("opus", "ogg", "ogx",)
+SUBTITLE_EXTENSIONS = ("srt", "ass", "ssa", "vtt", "sub", "idx", "sup",)
 LOSSLESS_CODECS = ("flac", "ape", "alac", "pcm_s16le", "pcm_s16be", "wavpack",)
 LOSSLESS_TRACK_CODECS = ("dts", "flac", "truehd", "wav", "ape", "pcm",)
+
+
+# --- the kinds of file --------------------------------------------------------
+# What a file IS, a level above its extension: the lists above answer "is this a
+# format this command reads?", and this answers "what is this folder a folder
+# of?" - a season of video, a book of audio, a stack of documents - so that a
+# cover, a cue sheet and a subtitle among them are told apart from what the
+# folder holds.
+#
+# Built from the lists above rather than spelled out again, in the order the
+# kinds are asked: the first kind that holds an extension is its kind. That
+# order is what settles the formats two lists share - a comic's .pdf is a
+# document, as most pdfs are, and a book's cover .jpg is an image.
+FILE_KINDS: dict[str, tuple[str, ...]] = {
+    "video": tuple(dict.fromkeys(VIDEO_EXTENSIONS + SOURCE_VIDEO_EXTENSIONS)),
+    "audio": tuple(dict.fromkeys(AUDIO_EXTENSIONS + LOSSLESS_AUDIO_EXTENSIONS)),
+    "image": tuple(dict.fromkeys(IMAGE_EXTENSIONS + COVER_IMAGE_EXTENSIONS)),
+    "comic": COMIC_EXTENSIONS,
+    "document": tuple(dict.fromkeys(BOOK_INPUT_EXTENSIONS
+                                    + NARRATABLE_BOOK_EXTENSIONS)),
+    "subtitle": SUBTITLE_EXTENSIONS,
+    "archive": ARCHIVE_EXTENSIONS,
+}
+
+# The same table read the other way, for the per-file question.
+_KIND_OF: dict[str, str] = {}
+for _kind, _members in FILE_KINDS.items():
+    for _member in _members:
+        _KIND_OF.setdefault(_member, _kind)
 
 
 # --- the bracket set ----------------------------------------------------------
@@ -197,6 +229,17 @@ def lower_extension_of(path: str) -> str:
 # the only difference between the two - so a single substitution is a complete
 # fix here and not a patch over an unknown set.
 _SHELL_LOWER_EXCEPTIONS = str.maketrans({"\u0130": "i"})
+
+
+def file_kind(path: str) -> str:
+    """Which of :data:`FILE_KINDS` a file is, from its extension.
+
+    A format none of them knows is a kind of its own, named by its lowered
+    extension, so a folder of them is still a folder of ONE kind; a file with no
+    extension answers "".
+    """
+    extension = lower_extension_of(path)
+    return _KIND_OF.get(extension, extension)
 
 
 def shell_lower(text: str) -> str:

@@ -12,14 +12,28 @@ group under consideration (the plurality filetype, say). Entries outside the gro
 are returned untouched. Every pass is all-or-nothing across its group: a partial
 strip would desynchronise the group's numbering, which is the one thing the whole
 name-cleaning stack exists to preserve.
+
+The pairs themselves come from :func:`split_siblings`, which is also how
+`find-gaps` reads the number a name is numbered by: the same reading of a
+padded, bracketed or hidden prefix, so what one command renumbers is what the
+other counts.
 """
 
 import re
 from collections.abc import Sequence
+from typing import NamedTuple
 
+from medialib.lib import cleannamescollectively, cleannamesindividually, plurality
 from medialib.lib.enums import DATE_PREFIX_PATTERN
 
-__all__ = ["normalize_prefix_padding", "wipe_doubled_prefixes", "wipe_uniform_prefixes"]
+__all__ = [
+    "SplitSiblings",
+    "extension_of",
+    "normalize_prefix_padding",
+    "split_siblings",
+    "wipe_doubled_prefixes",
+    "wipe_uniform_prefixes",
+]
 
 # An eight-digit YYYYMMDD, compiled from the one definition of the shape.
 _DATE_PREFIX = re.compile(DATE_PREFIX_PATTERN)
@@ -33,6 +47,91 @@ def _is_digits(value: str) -> bool:
     contain them.
     """
     return value != "" and all("0" <= c <= "9" for c in value)
+
+
+def extension_of(base: str, mode: str) -> tuple[str, str]:
+    """(name, extension) for one sibling.
+
+    Folders never have one, and a dotfile's leading dot begins a NAME rather than
+    an extension.
+    """
+    if mode == "files" and "." in base and not base.startswith("."):
+        stem, _, extension = base.rpartition(".")
+        return stem, extension
+    return base, ""
+
+
+class SplitSiblings(NamedTuple):
+    """One directory's siblings of one kind, each split into its parts."""
+
+    extensions: list[str]
+    prefixes: list[str]
+    cores: list[str]
+    # The indices of the siblings that form the group (the plurality filetype).
+    group: list[int]
+
+
+def split_siblings(names: Sequence[str], mode: str,
+                   fragments_file: str | None,
+                   group: Sequence[int] | None = None) -> SplitSiblings:
+    """Every sibling's prefix, core and extension, before any group pass runs.
+
+    ``names`` are basenames, in the order the caller lists them. Three steps:
+    individual cleaning with the prefix split off, collective stripping of the
+    text the group shares, and a recovery pass for a prefix that was hidden
+    behind that shared text ("Chapter 07" is "07" once "Chapter " is gone).
+
+    ``group`` overrides which siblings form the group; left out, it is the
+    plurality filetype in files mode and every sibling in folders mode.
+    """
+    extensions, item_prefixes, cores = [], [], []
+    for base in names:
+        name, extension = extension_of(base, mode)
+        prefix, core = cleannamesindividually.clean_names_individually(
+            name, fragments_file)
+        extensions.append(extension)
+        item_prefixes.append(prefix)
+        cores.append(core)
+
+    clean_names = list(cores)
+
+    # Which siblings take part in the collective pass: the plurality filetype in
+    # files mode, all of them in folders mode. A lone odd file - one cover.jpg
+    # among many .mp3s - must neither join the group nor, by not sharing their
+    # affix, stop the group's common text from being stripped.
+    if group is None:
+        group = plurality.plurality_group_indices(mode, extensions)
+    group = list(group)
+
+    if len(group) > 1:
+        group_cores = [cores[i] for i in group]
+        # The ORIGINAL basename lengths, extension included: the files-mode
+        # truncation guard on the suffix is measured against them.
+        group_lengths = [len(names[i]) for i in group]
+        cleaned = cleannamescollectively.clean_names_collectively(
+            group_cores, mode, group_lengths)
+        for position, index in enumerate(group):
+            clean_names[index] = cleaned[position]
+
+    # A prefix can have been hidden behind the common leading text the
+    # collective pass has just removed, so the individual cleaner runs again on
+    # the group's cleaned names to recover it.
+    if group and not item_prefixes[group[0]]:
+        for index in group:
+            # Only an item that came out of the first pass WITHOUT a prefix can
+            # have one hidden. One that already split a prefix off has nothing to
+            # recover - its core no longer holds it - and re-running would
+            # overwrite the real prefix with an empty one. That is how a sparsely
+            # numbered group ("02 Title" and "04 Title" among unnumbered
+            # siblings) lost exactly the numbers that told its members apart.
+            if item_prefixes[index]:
+                continue
+            prefix, core = cleannamesindividually.clean_names_individually(
+                clean_names[index], fragments_file)
+            item_prefixes[index] = prefix
+            clean_names[index] = core
+
+    return SplitSiblings(extensions, item_prefixes, clean_names, group)
 
 
 def wipe_doubled_prefixes(

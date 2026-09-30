@@ -72,7 +72,7 @@ class TestTheListsThemselves:
     lists, a suffix no report claims. Every member can be right and the set wrong."""
 
     def test_the_registry_holds_every_list(self):
-        assert len(enums.LISTS) == 19
+        assert len(enums.LISTS) == 20
 
     def test_no_list_is_empty(self):
         assert all(members for members in enums.LISTS.values())
@@ -163,3 +163,24 @@ class TestLoweringTheWayTheShellDoes:
     @pytest.mark.parametrize("text", ["MP3", "MÜLL", "ẞ", "ß", "Straße", "ÅNGSTRÖM"])
     def test_everything_else_is_plain_lower_case(self, text):
         assert enums.shell_lower(text) == text.lower()
+
+
+class TestFileKinds:
+    def test_a_kind_is_read_whatever_the_case(self):
+        assert enums.file_kind("Film.MKV") == "video"
+        assert enums.file_kind("track.Flac") == "audio"
+
+    def test_a_format_two_lists_share_goes_to_the_kind_asked_first(self):
+        # A comic's .pdf and a book's cover .jpg.
+        assert enums.file_kind("issue.pdf") == "document"
+        assert enums.file_kind("cover.jpg") == "image"
+
+    def test_an_unknown_format_is_a_kind_of_its_own(self):
+        assert enums.file_kind("show.NFO") == "nfo"
+        assert enums.file_kind("README") == ""
+
+    def test_every_list_a_kind_is_built_from_is_in_it(self):
+        for extension in enums.VIDEO_EXTENSIONS + enums.AUDIO_EXTENSIONS:
+            assert enums.file_kind("x." + extension) in ("video", "audio")
+        for extension in enums.SUBTITLE_EXTENSIONS:
+            assert enums.file_kind("x." + extension) == "subtitle"

@@ -30,6 +30,7 @@ from medialib.lib import (
     enums,
     ffmpegselect,
     imdbdata,
+    overwrite,
     plexnames,
     ramscratch,
     research,
@@ -658,6 +659,9 @@ def main(argv: list, program: str = "ingest-movies",
     # folders given: the walk and the transcription, and not the rest of the
     # run around them.
     if result.values.get("commentaryOnly"):
+        if not _may_overwrite(script_dir, names, (), (COMMENTARY_ORPHANS_LIST,
+                                                    UNFIXED_MOVIES_LIST)):
+            return 1
         return _commentary_only(program, script_dir, roots, fragments_file)
 
     if result.values.get("commentaryNames"):
@@ -665,11 +669,15 @@ def main(argv: list, program: str = "ingest-movies",
         if tooldeps.require_tools(program, ["curl", "mkvmerge"]
                                   + (["mkvpropedit"] if write else [])):
             return 1
+        if not _may_overwrite(script_dir, names, (COMMENTARY_NAMES_LIST,)):
+            return 1
         site = dvdcompare.Site(dvdcompare.directory(script_dir), log)
         return _commentary_names(roots, names, write, site.releases,
                                  fragments_file, script_dir, queued=True)
 
     if result.values.get("subtitlesOnly"):
+        if not _may_overwrite(script_dir, names, (SUBTITLES_LIST,)):
+            return 1
         return _subtitles_only(program, script_dir, roots, names,
                                bool(result.values.get("writeTags")))
 
@@ -679,6 +687,10 @@ def main(argv: list, program: str = "ingest-movies",
     # An id list is only ever read by the tagging phase, so asking for one asks
     # for that phase.
     if result.values.get("tagsOnly") or result.values.get("idList"):
+        if not _may_overwrite(script_dir, names,
+                              *_tag_lists(bool(result.values.get("idList")),
+                                          bool(result.values.get("writeTags")))):
+            return 1
         return _tags_only(program, script_dir, roots, names,
                           bool(result.values.get("writeTags")),
                           result.values.get("idList") or "")
@@ -832,6 +844,31 @@ SUBTITLES_LIST = os.path.join(LOGS, "ingest-movies-subtitles-%s.txt")
 # left alone with the reason for each.
 COMMENTARY_NAMES_LIST = os.path.join(LOGS,
                                      "ingest-movies-commentarynames-%s.txt")
+
+# And the two lists of a -a run, one for the whole run rather than per folder.
+COMMENTARY_ORPHANS_LIST = os.path.join(LOGS, "commentaryOrphans.txt")
+UNFIXED_MOVIES_LIST = os.path.join(LOGS, "unfixedMovies.txt")
+
+
+def _tag_lists(id_list: bool, write: bool) -> tuple[tuple, tuple]:
+    """The lists a -t or -i run can write: (per folder, for the whole run).
+    Under -i only the conflicts and duplicates, and the near misses only on a
+    dry run - the same choices :func:`_tags_only` makes."""
+    if id_list:
+        return (CONFLICTS_LIST,), (DUPLICATES_LIST,)
+    per_folder = (CONFLICTS_LIST, UNMATCHED_LIST, AMBIGUOUS_LIST, RENAMES_LIST,
+                  ALIAS_LIST) + (() if write else (NEAR_MISS_LIST,))
+    return per_folder, (DUPLICATES_LIST,)
+
+
+def _may_overwrite(script_dir: str, names: list, per_folder: tuple,
+                   shared: tuple = ()) -> bool:
+    """Asked before a phase that writes lists runs at all: whether the ones an
+    earlier run left for these folders may be replaced."""
+    return overwrite.confirm_overwrite(
+        [commands.logs_file(script_dir, pattern % name)
+         for name in names for pattern in per_folder]
+        + [commands.logs_file(script_dir, path) for path in shared])
 
 
 def _tags_only(program: str, script_dir: str, roots: list, names: list,
@@ -1597,8 +1634,7 @@ def _write_commentary_orphans(script_dir: str, orphans: list) -> None:
     nothing, so a run with nothing to report leaves no file behind."""
     if not orphans:
         return
-    path = commands.logs_file(script_dir,
-                              os.path.join(LOGS, "commentaryOrphans.txt"))
+    path = commands.logs_file(script_dir, COMMENTARY_ORPHANS_LIST)
     with open(path, "w", encoding="utf-8") as handle:
         for orphan in orphans:
             handle.write(orphan + "\n")
@@ -1628,8 +1664,7 @@ def _write_unfixed_movies(script_dir: str, movies: list) -> None:
     nothing, so a run with nothing to report leaves no file behind."""
     if not movies:
         return
-    path = commands.logs_file(script_dir,
-                              os.path.join(LOGS, "unfixedMovies.txt"))
+    path = commands.logs_file(script_dir, UNFIXED_MOVIES_LIST)
     with open(path, "w", encoding="utf-8") as handle:
         for movie in movies:
             handle.write(movie + "\n")

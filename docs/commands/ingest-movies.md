@@ -385,6 +385,13 @@ Each folder given gets these lists, in the script directory's
 | `ingest-movies-renames-<folder>.txt` | every rename the run would make | dry run only |
 | `ingest-movies-nearmisses-<folder>.txt` | for each folder in the first two: what TMDb was asked, what it offered, and why each offer was refused | dry run only |
 
+**A list an earlier run left is not replaced without asking.** When one of the
+lists this run could write is already there — for any of the folders given, and
+for `-s`, `-n` and `-a` too — the run names them and asks before it starts; only
+`y` overwrites, and anything else stops the run with nothing changed. The answer
+is read from standard input, so a run nobody is watching (a closed stdin) keeps
+the old lists and stops, and `echo y |` in front of it says yes.
+
 A folder is on the unmatched list or the ambiguous one, never both. Under each
 name, the ambiguous list says what it *reads as* once the spelling is folded
 away: two lines that read the same are a reading the matching does not have

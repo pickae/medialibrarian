@@ -9,6 +9,8 @@ The check itself is pinned in tests/lib/test_subtitlefiles.py.
 
 from __future__ import annotations
 
+import io
+
 import pytest
 
 from medialib.cli import ingest_movies_run as run
@@ -170,14 +172,29 @@ class TestTheList:
             "/Films/b.de.srt\n")
 
     def test_nothing_to_list_removes_an_earlier_run_s_list(self, stubbed,
-                                                           tmp_path):
+                                                           tmp_path,
+                                                           monkeypatch):
         films = _library(tmp_path, "Films")
         listing = self._listing(stubbed)
         listing.parent.mkdir(parents=True)
         listing.write_text("stale\n")
         stubbed["verdicts"]["kept"] = ["/Films/a.en.srt"]
+        monkeypatch.setattr("sys.stdin", io.StringIO("y\n"))
         _main(stubbed, "-s", str(films))
         assert not listing.exists()
+
+    def test_an_earlier_list_is_kept_unless_the_user_says_yes(
+            self, stubbed, tmp_path, monkeypatch, capsys):
+        films = _library(tmp_path, "Films")
+        listing = self._listing(stubbed)
+        listing.parent.mkdir(parents=True)
+        listing.write_text("stale\n")
+        stubbed["verdicts"]["discarded"] = ["/Films/b.de.srt"]
+        monkeypatch.setattr("sys.stdin", io.StringIO("n\n"))
+        assert _main(stubbed, "-s", str(films)) == 1
+        assert listing.read_text() == "stale\n"
+        assert stubbed["calls"] == []
+        assert "Overwrite it? [y/N]" in capsys.readouterr().err
 
 
 class TestWhatItSaysAtTheEnd:

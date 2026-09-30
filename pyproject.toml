@@ -5,7 +5,7 @@
 # command names are unaffected - only the name a wheel is published under.
 name = "medialibrarian"
 version = "0.0.0"
-description = "Eighteen commands for building and keeping a media library: transcoding video, audio, images and comics, ingesting films, music and books, cleaning names, and a census of what is in it"
+description = "Nineteen commands for building and keeping a media library: transcoding video, audio, images and comics, ingesting films, music and books, cleaning names, and a census of what is in it"
 readme = "README.md"
 # 3.11.4 and not 3.11: the archive extraction asks tarfile.extractall for the
 # "tar" filter, which is what keeps a member spelled through ".." from being
@@ -20,7 +20,7 @@ authors = [{ name = "David Ernst" }]
 # Vorbis-comment chapters ffmpeg has no way to write (medialib/lib/mutagentags.py).
 dependencies = ["mutagen"]
 
-# The eighteen commands. medialib/commands.py holds the same mapping for the
+# The nineteen commands. medialib/commands.py holds the same mapping for the
 # other two things that need it - the name a help page prints, and how one
 # command starts another - and tests/test_commands.py fails if the two ever
 # disagree.
@@ -37,6 +37,7 @@ convert-images = "medialib.cli.convert_images:cli"
 convert-video = "medialib.cli.convert_video_run:cli"
 cue-to-chapters = "medialib.cli.cue_to_chapters:cli"
 find-fragment-candidates = "medialib.cli.find_fragment_candidates:cli"
+find-gaps = "medialib.cli.find_gaps:cli"
 ingest-books = "medialib.cli.ingest_books:cli"
 ingest-movies = "medialib.cli.ingest_movies_run:cli"
 ingest-music = "medialib.cli.ingest_music:cli"

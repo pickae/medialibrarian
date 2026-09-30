@@ -50,6 +50,7 @@ _MISSING_DIR = {
     "ingest-music": ["no-such-dir", "out"],
     "read-library": ["no-such-dir", "out"],
     "ingest-movies": ["no-such-dir"],
+    "find-gaps": ["no-such-dir"],
 }
 
 
@@ -115,5 +116,5 @@ def test_every_recorded_page_belongs_to_a_scenario_that_still_runs():
 def test_there_are_pages_to_compare():
     """A glob that matched nothing would satisfy every assertion above by never
     running one."""
-    assert len(list(_FIXTURES.glob("*/*"))) == 180
+    assert len(list(_FIXTURES.glob("*/*"))) == 192
     assert shutil.which("bash") or True
