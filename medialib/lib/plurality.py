@@ -15,10 +15,16 @@ own rather than an error.
 A tie goes to the filetype that appears FIRST among the siblings. That is a
 stated rule rather than whatever a hash table's order happens to produce, so it
 answers the same on every host.
+
+`find-gaps` asks the same question a level up: which KIND of file - video,
+audio, document - a folder is mostly of, so that a folder of .mp3 and .m4a
+tracks is one run and its .jpg cover is not part of it.
 """
 
 from collections import Counter
 from collections.abc import Sequence
+
+from medialib.lib import enums
 
 
 def plurality_group_indices(mode: str, extensions: Sequence[str]) -> list[int]:
@@ -28,16 +34,30 @@ def plurality_group_indices(mode: str, extensions: Sequence[str]) -> list[int]:
     """
     if mode != "files":
         return list(range(len(extensions)))
+    return _plurality([e.lower() for e in extensions])
 
-    lowered = [e.lower() for e in extensions]
-    counts = Counter(lowered)
+
+def plurality_kind_indices(names: Sequence[str]) -> list[int]:
+    """The indices of the files of the commonest KIND (:data:`enums.FILE_KINDS`)
+    - the videos of a season with its .srt and .nfo files beside them, the
+    tracks of a book whatever mix of .mp3 and .m4a they were ripped to.
+
+    The same tie rule as the extension group. A file with no extension is a
+    kind of its own.
+    """
+    return _plurality([enums.file_kind(name) for name in names])
+
+
+def _plurality(keys: Sequence[str]) -> list[int]:
+    """The indices holding the commonest key, a tie going to the first seen."""
+    counts = Counter(keys)
 
     # Walk the siblings in order, not the tally: first appearance settles a tie.
-    best_ext: str | None = None
+    best: str | None = None
     best_count = 0
-    for ext in lowered:
-        if counts[ext] > best_count:
-            best_count = counts[ext]
-            best_ext = ext
+    for key in keys:
+        if counts[key] > best_count:
+            best_count = counts[key]
+            best = key
 
-    return [i for i, ext in enumerate(lowered) if ext == best_ext]
+    return [i for i, key in enumerate(keys) if key == best]

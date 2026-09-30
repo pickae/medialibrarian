@@ -1,0 +1,8 @@
+Unknown option: -x
+
+Usage:
+    find-gaps [options] <inputDir>
+Options:
+    -h, --help      Print this help page.
+
+Nothing was changed.

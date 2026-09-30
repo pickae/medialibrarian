@@ -97,3 +97,20 @@ class TestTieBreak:
     def test_a_tie_between_dotless_and_an_extension(self):
         assert group("files", ["", "mp3"]) == [0]
         assert group("files", ["mp3", ""]) == [0]
+
+
+class TestByKind:
+    """find-gaps' question: which KIND of file a folder is mostly of."""
+
+    def test_two_audio_formats_are_one_kind_and_the_cover_is_not_part(self):
+        from medialib.lib.plurality import plurality_kind_indices as kind
+        assert kind(["01.mp3", "02.m4a", "03.mp3", "cover.jpg"]) == [0, 1, 2]
+
+    def test_the_subtitles_beside_a_season_are_left_out(self):
+        from medialib.lib.plurality import plurality_kind_indices as kind
+        assert kind(["e1.mkv", "e1.srt", "e2.mp4", "e2.srt", "e3.mkv"]) == [
+            0, 2, 4]
+
+    def test_a_tie_goes_to_the_kind_seen_first(self):
+        from medialib.lib.plurality import plurality_kind_indices as kind
+        assert kind(["a.pdf", "b.mp3", "c.epub", "d.flac"]) == [0, 2]

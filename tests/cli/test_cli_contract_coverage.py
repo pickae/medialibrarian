@@ -37,7 +37,7 @@ def _recorded():
 def test_there_are_commands_to_check_at_all():
     """A comparison of two empty sets satisfies every assertion below by
     checking nothing."""
-    assert len(_scripts()) == 18
+    assert len(_scripts()) == 19
 
 
 def test_every_command_has_a_recorded_contract():

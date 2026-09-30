@@ -30,11 +30,11 @@ def _console_scripts():
         return tomllib.load(handle)["project"]["scripts"]
 
 
-def test_there_are_eighteen_commands_to_check():
+def test_there_are_nineteen_commands_to_check():
     """A comparison of two empty things satisfies every assertion below by
     checking nothing, so the count is spelled out."""
-    assert len(_console_scripts()) == 18
-    assert len(commands.COMMANDS) == 18
+    assert len(_console_scripts()) == 19
+    assert len(commands.COMMANDS) == 19
 
 
 def test_the_installed_commands_are_the_table():

@@ -27,13 +27,11 @@ import tempfile
 
 from medialib import commands
 from medialib.lib import (
-    cleannamescollectively,
     cleannamesindividually,
     clioptions,
     cover,
     mtp,
     numbering,
-    plurality,
     prefixes,
     safety,
     tooldeps,
@@ -99,18 +97,6 @@ def spec(program: str) -> clioptions.Spec:
     )
 
 
-def _extension_of(base: str, mode: str) -> tuple[str, str]:
-    """(name, extension) for one sibling.
-
-    Folders never have one, and a dotfile's leading dot begins a NAME rather than
-    an extension.
-    """
-    if mode == "files" and "." in base and not base.startswith("."):
-        stem, _, extension = base.rpartition(".")
-        return stem, extension
-    return base, ""
-
-
 def siblings(directory: str, mode: str) -> list[str]:
     """The immediate children of one kind, in version-sorted order."""
     want_dir = mode == "folders"
@@ -134,52 +120,10 @@ def rename_siblings(directory: str, mode: str, fragments_file: str,
     if not items:
         return 0
 
-    # First pass: individual cleaning, splitting off the prefix and (for files
-    # that have one) the extension.
-    extensions, item_prefixes, cores = [], [], []
-    for full in items:
-        name, extension = _extension_of(os.path.basename(full), mode)
-        prefix, core = cleannamesindividually.clean_names_individually(
-            name, fragments_file)
-        extensions.append(extension)
-        item_prefixes.append(prefix)
-        cores.append(core)
-
-    clean_names = list(cores)
-
-    # Which siblings take part in the collective pass: the plurality filetype in
-    # files mode, all of them in folders mode. A lone odd file - one cover.jpg
-    # among many .mp3s - must neither join the group nor, by not sharing their
-    # affix, stop the group's common text from being stripped.
-    group = plurality.plurality_group_indices(mode, extensions)
-
-    if len(group) > 1:
-        group_cores = [cores[i] for i in group]
-        # The ORIGINAL basename lengths, extension included: the files-mode
-        # truncation guard on the suffix is measured against them.
-        group_lengths = [len(os.path.basename(items[i])) for i in group]
-        cleaned = cleannamescollectively.clean_names_collectively(
-            group_cores, mode, group_lengths)
-        for position, index in enumerate(group):
-            clean_names[index] = cleaned[position]
-
-    # Third pass: a prefix can have been hidden behind the common leading text
-    # the collective pass has just removed, so the individual cleaner runs again
-    # on the group's cleaned names to recover it.
-    if group and not item_prefixes[group[0]]:
-        for index in group:
-            # Only an item that came out of the first pass WITHOUT a prefix can
-            # have one hidden. One that already split a prefix off has nothing to
-            # recover - its core no longer holds it - and re-running would
-            # overwrite the real prefix with an empty one. That is how a sparsely
-            # numbered group ("02 Title" and "04 Title" among unnumbered
-            # siblings) lost exactly the numbers that told its members apart.
-            if item_prefixes[index]:
-                continue
-            prefix, core = cleannamesindividually.clean_names_individually(
-                clean_names[index], fragments_file)
-            item_prefixes[index] = prefix
-            clean_names[index] = core
+    split = prefixes.split_siblings(
+        [os.path.basename(full) for full in items], mode, fragments_file)
+    extensions, item_prefixes = split.extensions, split.prefixes
+    clean_names, group = split.cores, split.group
 
     # A prefix that is ALSO still the leading token of the core says nothing
     # twice, so the outer copy goes.

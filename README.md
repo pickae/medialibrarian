@@ -5,7 +5,7 @@ libraries — audiobooks, music, movies, comics and image galleries. Every one t
 renames files follows the same "never clobber, never lose a file" rules,
 described under [File safety](docs/file-safety.md).
 
-Each is an installed command. From a checkout, `pip install .` puts all eighteen
+Each is an installed command. From a checkout, `pip install .` puts all nineteen
 on your PATH; `pip install -e .` does the same and keeps them running the
 checkout, which is what you want while editing it. Under a plain `pip install .`
 the per-machine files — the `data/` tables, the `logs/` logs — live under
@@ -68,6 +68,7 @@ apply to it.
 | --- | --- |
 | [`clean-folder-structure`](docs/commands/clean-folder-structure.md) | Apply the shared name cleaners across a tree |
 | [`find-fragment-candidates`](docs/commands/find-fragment-candidates.md) | Report the recurring name fragments a library still carries |
+| [`find-gaps`](docs/commands/find-gaps.md) | A tree of what is missing from the numbered, episode and dated runs |
 | [`cue-to-chapters`](docs/commands/cue-to-chapters.md) | A `.cue` sheet → an OGM chapter file |
 
 ### Library census
