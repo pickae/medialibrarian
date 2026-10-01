@@ -813,8 +813,8 @@ def test_a_well_formed_table_is_accepted(tmp_path):
         "\n"
         "1\tAI/latent space\t\t40\t\thttps://example.test/latent\n"
         "0\tMisc/paused\t\t\t\thttps://example.test/paused\n"
-        "1\tMisc/Joe Rogan\t%(title)s.%(ext)s\t\t--no-sponsorblock"
-        "\thttps://example.test/rogan\n", tmp_path)
+        "1\tMisc/Some Host\t%(title)s.%(ext)s\t\t--no-sponsorblock"
+        "\thttps://example.test/host\n", tmp_path)
     assert status == 0 and profile == "youtubeAudio" and jobs == "1"
     assert len(rows) == 3
     assert pf.split_podcast_row(rows[1]) == \
