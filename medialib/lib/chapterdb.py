@@ -176,12 +176,6 @@ class Existing(NamedTuple):
 
 # --- the network --------------------------------------------------------------
 
-def reset_rate_limit() -> None:
-    """Forget when the last request went out. For a test that would otherwise
-    pay the interval."""
-    _PACER.reset()
-
-
 def ask_archive(path: str, params=()) -> str | None:
     """One GET of the archive, or ``None`` when it did not answer.
 

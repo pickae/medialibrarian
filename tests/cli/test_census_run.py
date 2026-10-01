@@ -89,13 +89,18 @@ class TestResolveLibraries:
         _, lib_names, _ = census_run.resolve_libraries(paths, names, 2)
         assert lib_names == ["MediaFilmsMarvel"]
 
-    def test_a_folder_reached_twice_is_one_library(self, tmp_path):
-        """Nested paths given on one command line can reach the same folder."""
-        _tree(tmp_path, "media/Films/")
+    def test_nested_paths_never_reach_one_folder_twice(self, tmp_path):
+        """A folder and one inside it, both given: each path's libraries lie
+        the same number of levels below it, so the two sets never meet."""
+        _tree(tmp_path, "media/Films/Westerns/")
         paths, names = census_run.resolve_input_paths(
             [str(tmp_path / "media"), str(tmp_path / "media" / "Films")])
-        lib_paths, _, _ = census_run.resolve_libraries(paths, names, 0)
-        assert len(lib_paths) == 2      # both were named, and both are libraries
+        lib_paths, lib_names, lib_roots = census_run.resolve_libraries(
+            paths, names, 1)
+        assert lib_paths == [str(tmp_path / "media" / "Films"),
+                             str(tmp_path / "media" / "Films" / "Westerns")]
+        assert lib_names == ["MediaFilms", "FilmsWesterns"]
+        assert lib_roots == [0, 1]
 
     def test_nothing_that_deep_anywhere_is_a_refusal(self, tmp_path):
         _tree(tmp_path, "media/Films/")
