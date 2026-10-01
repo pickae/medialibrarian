@@ -9,6 +9,7 @@ sitecustomize goes, which session directory is dropped.
 import os
 import re
 import shutil
+import signal
 import sys
 from types import SimpleNamespace
 
@@ -1080,6 +1081,52 @@ class TestNarrateBook:
         assert bn.narrate_book(str(nb.tmp_path / "b.epub"), outdir) is None
         assert nb.calls() == []
         assert not os.path.exists(os.path.join(outdir, "narration.log"))
+
+    def test_an_interrupted_verbose_run_takes_the_engine_down_with_it(self, nb):
+        """The run's interrupt handler raises in the middle of the engine call.
+        An engine left running outlives the run and, when it writes its output,
+        recreates the RAM scratch the run's cleanup had just removed.
+
+        The engine sends the interrupt itself, once it is running, so the
+        signal lands while the call is waiting on it."""
+        checkout = nb.tmp_path / "checkout"
+        (checkout / "python_env" / "bin").mkdir(parents=True)
+        (checkout / "app.py").write_text("x\n", encoding="ascii")
+        pid_file = nb.tmp_path / "engine.pid"
+        exe = checkout / "python_env" / "bin" / "python"
+        exe.write_text(
+            "#!/bin/bash\n"
+            "echo $$ > %s\n"
+            "echo reading\n"
+            "kill -USR1 $PPID\n"
+            "exec %s 60\n" % (pid_file, shutil.which("sleep")),
+            encoding="ascii")
+        os.chmod(str(exe), 0o755)
+        os.environ["narrationHome"] = str(checkout)
+        os.environ["narrationPython"] = str(exe)
+        os.environ["narrationDevice"] = "cpu"
+        os.environ["narrationVerbose"] = "1"
+
+        class Interrupted(Exception):
+            pass
+
+        def interrupt(_number, _frame):
+            raise Interrupted
+
+        previous = signal.signal(signal.SIGUSR1, interrupt)
+        try:
+            with pytest.raises(Interrupted):
+                bn.narrate_book(str(nb.tmp_path / "book.epub"),
+                                str(nb.tmp_path / "out"))
+        finally:
+            signal.signal(signal.SIGUSR1, previous)
+        engine = int(pid_file.read_text())
+        try:
+            os.kill(engine, 0)
+        except ProcessLookupError:
+            return
+        os.kill(engine, signal.SIGKILL)
+        pytest.fail("the engine was still running after the interrupt")
 
 
 # --- the progress ------------------------------------------------------------------
