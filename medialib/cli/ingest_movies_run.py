@@ -1365,21 +1365,6 @@ def _commentary_films(root: str):
 _QUIET_REFUSALS = ("no commentary track", "a commentary track already has a name")
 
 
-def _name_commentaries(movie: str, base: str, lookup, write: bool,
-                       fragments_file: str) -> tuple:
-    """One film's commentary tracks named, or what would be: (the renames said
-    as lines, "") when there are any, ([], why not) when there are not - with
-    "" for the reasons nobody needs told."""
-    plan, why = _plan_commentary_names(movie, base, lookup, fragments_file)
-    if plan is None:
-        return [], why
-    if write:
-        failure = _carry_out_commentary_names(plan)
-        if failure:
-            return [], failure
-    return plan["lines"], ""
-
-
 def _commentary_film(movie: str, base: str) -> tuple:
     """What naming a film's commentaries starts from, the database not yet
     asked: ((tracks, its commentaries, those as the naming reads them, title,
