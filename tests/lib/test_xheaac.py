@@ -30,7 +30,7 @@ class TestTheEncoder:
     same constant."""
 
     def test_the_tool_spec_is_the_binary_a_preflight_asks_for(self):
-        assert xheaac.ENCODER_SPEC == xheaac.EXHALE == "exhale"
+        assert xheaac.ENCODER_SPEC == xheaac.EXHALE
 
     def test_the_binary_has_a_line_in_the_shared_notes_table(self):
         """A refusal reads its role and its install hint from there, so a
@@ -45,12 +45,14 @@ class TestTheEncoder:
     def test_a_host_without_it_cannot(self):
         assert xheaac.encoder_present(having()) is False
 
-    def test_the_presence_test_is_read_at_the_call_and_not_at_import(self):
+    @pytest.mark.parametrize("tools,expected", [(("exhale",), True), ((), False)])
+    def test_the_presence_test_is_read_at_the_call_and_not_at_import(
+            self, monkeypatch, tools, expected):
         """A default argument is bound once, at import, so a signature default
-        would freeze this to whatever the function was then."""
-        calls = []
-        xheaac.encoder_present(lambda spec: calls.append(spec) or True)
-        assert calls == [xheaac.EXHALE]
+        would freeze this to whatever the function was then. Both answers, so
+        a frozen lookup is caught whether or not this host has the binary."""
+        monkeypatch.setattr(tooldeps, "tool_present", having(*tools))
+        assert xheaac.encoder_present() is expected
 
 
 class TestRefusing:
@@ -338,10 +340,6 @@ class TestHowLongAWaveCanBe:
     def test_the_ceiling_is_the_largest_a_32_bit_length_can_say(self):
         assert xheaac.WAVE_DATA_CEILING == 0xFFFFFFFF
 
-    def test_it_is_the_byte_count_divided_by_the_bytes_a_second_costs(self):
-        assert xheaac.wave_seconds_ceiling(48000, 2) == pytest.approx(
-            xheaac.WAVE_DATA_CEILING / (48000 * 2 * xheaac.SAMPLE_BYTES))
-
     def test_the_sample_width_is_the_one_the_decode_actually_writes(self):
         """The arithmetic and the ffmpeg call have to agree, or the ceiling
         describes a WAVE nobody writes: `pcm_s16le` is two bytes."""
@@ -382,3 +380,62 @@ class TestHowLongAWaveCanBe:
         band is under seven hours, which an audiobook reaches routinely."""
         for rate in xheaac.SAMPLE_RATES:
             assert xheaac.wave_seconds_ceiling(rate, 2) < 24 * 3600
+
+
+class TestWhereAChunkBoundaryCanFall:
+    """A boundary mid-frame leaves the piece before it a partial last frame,
+    which the join writes out whole - so every interior cut is moved onto a
+    frame."""
+
+    @pytest.mark.parametrize("seconds", [0.0, 0.01, 1234.567, 3600.0213,
+                                         86399.99])
+    def test_it_lands_on_a_whole_frame_within_half_a_frame(self, seconds):
+        rate, frame = 44100, 2048
+        aligned = xheaac.align_to_frame(seconds, rate, frame)
+        samples = aligned * rate
+        assert samples == pytest.approx(round(samples / frame) * frame)
+        assert abs(aligned - seconds) <= frame / 2 / rate
+
+    def test_a_boundary_already_on_a_frame_stays_where_it_is(self):
+        once = xheaac.align_to_frame(1234.567, 48000, 2048)
+        assert xheaac.align_to_frame(once, 48000, 2048) == once
+
+    @pytest.mark.parametrize("rate, frame", [(0, 2048), (44100, 0)])
+    def test_without_a_frame_to_align_to_it_is_left_alone(self, rate, frame):
+        assert xheaac.align_to_frame(12.345, rate, frame) == 12.345
+
+
+class TestTheEncodersOwnTiming:
+    """The priming and the frame, read off the first packet ffprobe lists for
+    one second of silence encoded."""
+
+    def test_a_negative_timestamp_is_the_priming_and_the_duration_the_frame(
+            self):
+        listed = "pts=-1024|duration=2048|\npts=1024|duration=2048\n"
+        assert xheaac._parse_first_packet(listed) == (1024, 2048)
+
+    def test_an_encoder_that_primes_nothing_starts_at_zero(self):
+        assert xheaac._parse_first_packet("pts=0|duration=2048|\n") == (0, 2048)
+
+    @pytest.mark.parametrize("listed", [
+        "pts=N/A|duration=N/A|\n", "pts=-1024|duration=N/A|\n",
+        "pts=-1024|duration=0|\n", ""])
+    def test_a_row_that_does_not_say_reads_as_could_not_be_asked(self, listed):
+        """(0, 0) is what tells the planner not to cut the file: a guessed
+        frame would drift every seam."""
+        assert xheaac._parse_first_packet(listed) == (0, 0)
+
+    @pytest.mark.parametrize("rate, channels", [(44100, 1), (48000, 2),
+                                                (32000, 6)])
+    def test_the_silence_it_is_asked_with_is_a_wave_python_can_read(
+            self, rate, channels):
+        import io
+        import wave
+
+        with wave.open(io.BytesIO(xheaac._silence_wave(rate, channels,
+                                                       seconds=2))) as read:
+            assert read.getframerate() == rate
+            assert read.getnchannels() == channels
+            assert read.getsampwidth() == xheaac.SAMPLE_BYTES
+            assert read.getnframes() == 2 * rate
+            assert set(read.readframes(read.getnframes())) == {0}

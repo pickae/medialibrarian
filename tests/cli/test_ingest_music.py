@@ -48,6 +48,16 @@ class TestChapterTimeMs:
         invalid octal and abort the arithmetic under set -e."""
         assert im.chapter_time_ms(stamp) == expected
 
+    @pytest.mark.parametrize("stamp,expected", [
+        ("00:01:05", 65000),
+        ("00:00:00", 0),
+        ("01:00:59", 3659000),
+    ])
+    def test_a_stamp_without_a_fraction_has_no_milliseconds(self, stamp,
+                                                            expected):
+        """Not the seconds a second time: "00:01:05" is 65 s, not 65.005."""
+        assert im.chapter_time_ms(stamp) == expected
+
     @pytest.mark.parametrize("ms", [0, 13, 120, 999, 53120, 3600000, 45296789])
     def test_the_round_trip_with_the_writer_these_come_from(self, ms):
         """``time_row`` formats milliseconds and this parses them back, so the
@@ -176,6 +186,59 @@ class TestDeleteUnneededCue:
         before = sorted(str(p) for p in tree.rglob("*"))
         assert im.delete_unneeded_cue(str(tree)) == 0
         assert sorted(str(p) for p in tree.rglob("*")) == before
+
+
+_FLAC_STREAMS = """{
+    "streams": [
+        {
+            "index": 0,
+            "codec_name": "flac",
+            "codec_type": "audio",
+            "sample_fmt": "s16",
+            "sample_rate": "44100",
+            "channels": 2
+        }
+    ],
+    "format": {
+        "format_name": "flac",
+        "duration": "600.000000"
+    }
+}
+"""
+
+
+class TestParseStreamInfo:
+    """The first stream's codec and sample rate out of ffprobe's JSON, which is
+    what decides whether a track is encoded at all. Whatever ffprobe could not
+    answer comes back as "null" and 0, never as an exception that ends the
+    run."""
+
+    @pytest.mark.parametrize("text,expected", [
+        (_FLAC_STREAMS, ("flac", 44100)),
+        # What ffprobe prints, with status 0, for a file it cannot open.
+        ("{\n\n}\n", ("null", 0)),
+        ("", ("null", 0)),
+        ("not json", ("null", 0)),
+        ('["streams"]', ("null", 0)),
+        ('{"streams": []}', ("null", 0)),
+        ('{"streams": ["flac"]}', ("null", 0)),
+        # A cover image's stream: a codec, and no rate to give.
+        ('{"streams": [{"codec_name": "png"}]}', ("png", 0)),
+        ('{"streams": [{"sample_rate": "48000"}]}', ("null", 48000)),
+        ('{"streams": [{"codec_name": "flac", "sample_rate": "junk"}]}',
+         ("flac", 0)),
+    ], ids=["a real flac", "an unopenable file", "no output", "bad json",
+            "not an object", "no streams", "a stream that is not an object",
+            "no sample rate", "no codec name", "a rate that is not a number"])
+    def test_what_each_document_answers(self, text, expected):
+        assert im.parse_stream_info(text) == expected
+
+    def test_only_the_first_stream_is_read(self):
+        """A release's flac with embedded art lists the audio first; what comes
+        after it is not the track."""
+        assert im.parse_stream_info(
+            '{"streams": [{"codec_name": "flac", "sample_rate": "96000"},'
+            ' {"codec_name": "mjpeg"}]}') == ("flac", 96000)
 
 
 class TestIsLosslessCodec:

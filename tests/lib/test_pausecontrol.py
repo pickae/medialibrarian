@@ -317,10 +317,13 @@ def test_signal_job_tree_never_fails_on_a_job_that_has_gone(pause_state):
 
 
 def _read_keys(state, keys: bytes) -> str:
+    """The keys read in one go, every one of them at the canned clock of 1000000."""
     import io
 
     err = io.StringIO()
-    pc.pause_key_reader(io.BytesIO(keys), 1_000_000, error=err)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(pc, "_time_now", lambda: 1_000_000)
+        pc.pause_key_reader(io.BytesIO(keys), error=err)
     return err.getvalue()
 
 
@@ -415,6 +418,47 @@ def test_the_key_reader_is_started_on_a_readable_console(pause_state,
         assert pc.pause_requested()
     finally:
         pc.stop_pause_keys()
+
+
+def test_a_pause_lasts_as_long_as_the_keys_were_apart(pause_state, monkeypatch,
+                                                      capsys):
+    """A reader started at one time and keyed later: ``p`` at t=100 and ``r`` a
+    minute after must bank that minute, not the zero a clock read once at start
+    would give."""
+    import threading
+
+    clock = [40]
+    monkeypatch.setattr(pc, "_time_now", lambda: clock[0])
+
+    class KeysAt:
+        """A console whose every key arrives at its own time."""
+
+        def __init__(self, presses):
+            self.presses = list(presses)
+            self.closed = threading.Event()
+
+        def read(self, _size):
+            if not self.presses:
+                return b""
+            clock[0], key = self.presses.pop(0)
+            return key
+
+        def close(self):
+            self.closed.set()
+
+    console = KeysAt([(100, b"p"), (160, b"r")])
+    monkeypatch.setattr(pc, "_is_console", lambda: True)
+    monkeypatch.setattr(pc.os, "open", lambda path, flags: -1)
+    monkeypatch.setattr(pc.os, "fdopen", lambda fd, mode, buffering: console)
+
+    try:
+        assert pc.start_pause_keys()
+        assert console.closed.wait(5.0)
+    finally:
+        pc.stop_pause_keys()
+    assert not pc.pause_requested()
+    assert pc.paused_seconds(clock[0]) == 60
+    assert "Resumed - 0:01:00 spent paused so far." in capsys.readouterr().err
 
 
 def test_no_console_to_open_leaves_the_run_exactly_as_it_was(pause_state,

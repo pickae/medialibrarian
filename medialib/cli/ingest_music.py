@@ -142,8 +142,6 @@ def chapter_time_ms(timestamp: str) -> int:
     hours, _, rest = timestamp.partition(":")
     minutes, _, seconds_and_ms = rest.rpartition(":")
     seconds, _, milliseconds = seconds_and_ms.partition(".")
-    if not milliseconds:
-        milliseconds = seconds
     return (_base_ten(hours) * 3600000 + _base_ten(minutes) * 60000
             + _base_ten(seconds) * 1000 + _base_ten(milliseconds))
 
@@ -1025,11 +1023,18 @@ def _duration_ms(path: str) -> int:
 
 
 def _codec_and_rate(path: str) -> tuple:
-    """The first stream's codec name and sample rate - an absent field
-    answering the literal "null"."""
+    """The first stream's codec name and sample rate, as ffprobe reports
+    them for ``path``."""
+    return parse_stream_info(_probe(
+        ["ffprobe", "-loglevel", "0", "-print_format", "json",
+         "-show_format", "-show_streams", path]))
+
+
+def parse_stream_info(text: str) -> tuple:
+    """The first stream's codec name and sample rate out of ffprobe's JSON -
+    an absent codec answering the literal "null", an absent rate 0, and
+    anything that is not such a document both."""
     import json
-    text = _probe(["ffprobe", "-loglevel", "0", "-print_format", "json",
-                   "-show_format", "-show_streams", path])
     try:
         document = json.loads(text)
     except ValueError:

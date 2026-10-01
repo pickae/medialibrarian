@@ -1650,15 +1650,7 @@ def write_rename_list(path: str, renames, root: str,
     for source, target in renames:
         lines.append(os.path.relpath(source, root))
         lines.append("    -> " + os.path.relpath(target, root))
-    try:
-        with open(path, "w", encoding="utf-8",
-                  errors="surrogateescape") as handle:
-            handle.write("\n".join(lines) + "\n")
-    except OSError as error:
-        if log is not None:
-            log("WARNING: could not write %s: %s" % (path, error))
-        return False
-    return True
+    return _write_lines(path, lines, log)
 
 
 def write_conflict_list(path: str, skips, root: str,
@@ -1703,14 +1695,18 @@ def write_duplicate_list(path: str, duplicates,
 
 
 def _write_lines(path: str, lines: list,
-                 log: Callable[[str], None] | None) -> bool:
+                 log: Callable[[str], None] | None,
+                 what: str | None = None) -> bool:
+    """``lines`` as the whole of ``path``. A list that cannot be written is a
+    warning through ``log``, naming it as ``what`` if given, and False - never
+    an exception."""
     try:
         with open(path, "w", encoding="utf-8",
                   errors="surrogateescape") as handle:
             handle.write("\n".join(lines) + "\n")
     except OSError as error:
         if log is not None:
-            log("WARNING: could not write %s: %s" % (path, error))
+            log("WARNING: could not write %s: %s" % (what or path, error))
         return False
     return True
 
@@ -1765,15 +1761,7 @@ def write_ambiguous_list(path: str, folders, root: str,
         lines += _how_close(read_folder(os.path.basename(folder))[0] or folder,
                             movies)
         lines.append("")
-    try:
-        with open(path, "w", encoding="utf-8",
-                  errors="surrogateescape") as handle:
-            handle.write("\n".join(lines) + "\n")
-    except OSError as error:
-        if log is not None:
-            log("WARNING: could not write %s: %s" % (path, error))
-        return False
-    return True
+    return _write_lines(path, lines, log)
 
 
 def write_near_miss_list(path: str, folders, root: str,
@@ -1799,15 +1787,7 @@ def write_near_miss_list(path: str, folders, root: str,
         lines.append("%s  -  %s" % (os.path.relpath(folder, root), reason))
         lines += ["    " + note for note in notes]
         lines.append("")
-    try:
-        with open(path, "w", encoding="utf-8",
-                  errors="surrogateescape") as handle:
-            handle.write("\n".join(lines) + "\n")
-    except OSError as error:
-        if log is not None:
-            log("WARNING: could not write %s: %s" % (path, error))
-        return False
-    return True
+    return _write_lines(path, lines, log)
 
 
 def write_alias_list(path: str, folders, root: str,
@@ -1839,15 +1819,7 @@ def write_alias_list(path: str, folders, root: str,
             lines.append("        is a title TMDb holds it under: "
                          + known[name])
         lines.append("")
-    try:
-        with open(path, "w", encoding="utf-8",
-                  errors="surrogateescape") as handle:
-            handle.write("\n".join(lines) + "\n")
-    except OSError as error:
-        if log is not None:
-            log("WARNING: could not write %s: %s" % (path, error))
-        return False
-    return True
+    return _write_lines(path, lines, log)
 
 
 def read_id_list(path: str, blank: list | None = None) -> dict | None:
@@ -1908,15 +1880,7 @@ def write_id_list(path: str, names, ids: dict | None = None,
     ]
     lines += [name + "\t" + tag for name, tag in sorted((ids or {}).items())]
     lines += [name + "\t" for name in names]
-    try:
-        with open(path, "w", encoding="utf-8",
-                  errors="surrogateescape") as handle:
-            handle.write("\n".join(lines) + "\n")
-    except OSError as error:
-        if log is not None:
-            log("WARNING: could not write the id list %s: %s" % (path, error))
-        return False
-    return True
+    return _write_lines(path, lines, log, "the id list " + path)
 
 
 def _candidates(directory: str, recursive: bool) -> list:
