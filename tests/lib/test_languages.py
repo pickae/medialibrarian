@@ -25,10 +25,6 @@ class TestTheTableItself:
     def test_no_code_is_claimed_by_two_languages(self):
         """The lookups walk the table in order and take the first match, so a code
         in two rows would make the order load-bearing without saying so."""
-        seen = []
-        for row in lang.LANGUAGES:
-            seen += [row.code2, row.code3, row.code3b]
-        assert len(set(seen)) == len(set(seen))
         for row in lang.LANGUAGES:
             for other in lang.LANGUAGES:
                 if other is row:

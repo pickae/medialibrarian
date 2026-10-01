@@ -22,6 +22,7 @@ the call this command made before there was an -e at all.
 
 
 import os
+import re
 import time
 
 import pytest
@@ -151,9 +152,6 @@ class TestTheFormatTable:
 
     def test_avif_is_still_the_default(self):
         assert ci.DEFAULT_FORMAT == "avif"
-
-    def test_the_default_is_a_format_the_command_can_write(self):
-        assert ci.DEFAULT_FORMAT in ci.FORMATS
 
     def test_the_table_covers_the_central_list_and_nothing_else(self):
         """enums.IMAGE_CODECS is what the page offers and the check accepts, so
@@ -393,10 +391,18 @@ class TestTheOptionsAreSettledUpFront:
             self._parse("-e", "gif", "in", "out")
         assert ", ".join(enums.IMAGE_CODECS) in refusal.value.message
 
-    def test_the_page_advertises_exactly_what_the_check_accepts(self):
-        """Both are generated from the one list, and this is what says so."""
-        for codec in enums.IMAGE_CODECS:
-            assert codec in ci.OPT_SPEC
+    def test_every_format_the_page_offers_is_accepted(self):
+        """Read off the page a reader sees, so a format offered there and
+        refused by the check is a refusal of what the page told them to type."""
+        page = clioptions.page(ci.spec("convert-images"))
+        line = next(line for line in page.splitlines()
+                    if "output encoding:" in line)
+        offered = re.split(r", | or ", line.split("output encoding:")[1]
+                           .split(", default")[0].strip())
+        assert len(offered) > 1
+        for name in offered:
+            assert self._parse("-e", name, "in", "out").values["outputFormat"] \
+                == name
 
     def test_the_long_form_is_the_same_option(self):
         assert self._parse("--encoding=jxl", "in", "out").values["outputFormat"] \

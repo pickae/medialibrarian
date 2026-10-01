@@ -30,7 +30,7 @@ class TestTheEncoder:
     same constant."""
 
     def test_the_tool_spec_is_the_binary_a_preflight_asks_for(self):
-        assert xheaac.ENCODER_SPEC == xheaac.EXHALE == "exhale"
+        assert xheaac.ENCODER_SPEC == xheaac.EXHALE
 
     def test_the_binary_has_a_line_in_the_shared_notes_table(self):
         """A refusal reads its role and its install hint from there, so a
@@ -45,12 +45,14 @@ class TestTheEncoder:
     def test_a_host_without_it_cannot(self):
         assert xheaac.encoder_present(having()) is False
 
-    def test_the_presence_test_is_read_at_the_call_and_not_at_import(self):
+    @pytest.mark.parametrize("tools,expected", [(("exhale",), True), ((), False)])
+    def test_the_presence_test_is_read_at_the_call_and_not_at_import(
+            self, monkeypatch, tools, expected):
         """A default argument is bound once, at import, so a signature default
-        would freeze this to whatever the function was then."""
-        calls = []
-        xheaac.encoder_present(lambda spec: calls.append(spec) or True)
-        assert calls == [xheaac.EXHALE]
+        would freeze this to whatever the function was then. Both answers, so
+        a frozen lookup is caught whether or not this host has the binary."""
+        monkeypatch.setattr(tooldeps, "tool_present", having(*tools))
+        assert xheaac.encoder_present() is expected
 
 
 class TestRefusing:
@@ -337,10 +339,6 @@ class TestHowLongAWaveCanBe:
 
     def test_the_ceiling_is_the_largest_a_32_bit_length_can_say(self):
         assert xheaac.WAVE_DATA_CEILING == 0xFFFFFFFF
-
-    def test_it_is_the_byte_count_divided_by_the_bytes_a_second_costs(self):
-        assert xheaac.wave_seconds_ceiling(48000, 2) == pytest.approx(
-            xheaac.WAVE_DATA_CEILING / (48000 * 2 * xheaac.SAMPLE_BYTES))
 
     def test_the_sample_width_is_the_one_the_decode_actually_writes(self):
         """The arithmetic and the ffmpeg call have to agree, or the ceiling

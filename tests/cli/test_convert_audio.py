@@ -13,7 +13,7 @@ import os
 import pytest
 
 from medialib.cli import convert_audio as ca
-from medialib.lib import enums, xheaac
+from medialib.lib import clioptions, enums, xheaac
 
 pytestmark = pytest.mark.pure
 
@@ -194,13 +194,19 @@ class TestTheOutputCodec:
     def test_opus_is_the_default_and_the_first_of_the_list(self):
         assert ca.DEFAULT_CODEC == "opus" == enums.AUDIO_CODECS[0]
 
-    def test_the_page_offers_exactly_the_codecs_the_check_accepts(self):
-        """Both are generated from the one list. Written out by hand they drift,
-        and the page ends up advertising a codec -o refuses."""
-        offered = ca.OPT_SPEC.split("Output encoding: ")[1].split(".")[0]
-        assert offered.split(" or ") == list(enums.AUDIO_CODECS)
-        accepted = ca.OPT_CHECKS.split("enum:")[1].split(" |")[0]
-        assert accepted.split("\\|") == list(enums.AUDIO_CODECS)
+    def test_every_codec_the_page_offers_is_accepted(self):
+        """Read off the page a reader sees. Written out by hand the two drift,
+        and the page ends up advertising a codec -e refuses."""
+        declaration = ca.spec("convert-audio")
+        page = clioptions.page(declaration)
+        line = next(line for line in page.splitlines()
+                    if "Output encoding:" in line)
+        offered = line.split("Output encoding:")[1].strip().rstrip(".")
+        codecs = offered.split(" or ")
+        assert len(codecs) > 1
+        for codec in codecs:
+            result = clioptions.parse(declaration, ["-e", codec, "in", "out"])
+            assert result.values["outputCodec"] == codec
 
     def test_every_codec_has_a_spoken_name_for_the_messages(self):
         assert set(ca.CODEC_NAMES) == set(enums.AUDIO_CODECS)

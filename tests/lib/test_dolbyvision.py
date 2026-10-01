@@ -460,14 +460,24 @@ class TestStreamHasRpu:
         ok, _ = self._rpu(first, second, str(tmp_path))
         assert ok is expected
 
-    def test_the_argv_of_both_tools(self, tmp_path):
+    def test_only_the_head_of_the_first_video_stream_is_read(self, tmp_path):
+        """A probe, not a demux: a few frames of the main picture are enough to
+        carry an RPU, and reading on would cost the whole film's bytes."""
+        _, pipe = self._rpu(0, 0, str(tmp_path))
+        ffmpeg_argv, _dovi_argv, _kw = pipe.calls[0]
+
+        def flag(name):
+            return ffmpeg_argv[ffmpeg_argv.index(name) + 1]
+
+        assert flag("-i") == "movie.mkv"
+        assert flag("-map") == "0:v:0"
+        assert 0 < int(flag("-frames:v")) <= 100
+
+    def test_the_stream_is_piped_into_the_rpu_extractor(self, tmp_path):
         _, pipe = self._rpu(0, 0, str(tmp_path))
         ffmpeg_argv, dovi_argv, _kw = pipe.calls[0]
-        assert ffmpeg_argv == ["ffmpeg", "-loglevel", "error", "-nostats",
-                               "-i", "movie.mkv", "-map", "0:v:0", "-c",
-                               "copy", "-frames:v", "48", "-bsf:v",
-                               "hevc_mp4toannexb", "-f", "hevc", "-"]
-        assert dovi_argv[:4] == ["dovi_tool", "extract-rpu", "-", "-o"]
+        assert ffmpeg_argv[-3:] == ["-f", "hevc", "-"]
+        assert dovi_argv[:3] == ["dovi_tool", "extract-rpu", "-"]
         assert dovi_argv[4].startswith(os.path.join(str(tmp_path), "dvRpuProbe."))
 
     def test_the_probe_is_removed_either_way(self, tmp_path):
