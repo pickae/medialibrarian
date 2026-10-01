@@ -100,11 +100,16 @@ def interrupt(sandbox, tmp_path):
                            "comicsRamBase", "musicRamBase",
                            "readLibraryRamBase")})
 
-    def stop(sig, command, *args):
+    def stop(sig, command, *args, ready=None, env=None):
+        """`ready` replaces "the scratch exists" as the moment to signal, for a
+        run whose work starts well after its scratch does; `env` adds to the
+        environment."""
         started = blackbox.start(command, *args, cwd=sandbox.work,
-                                 path=sandbox.path, env=environment)
+                                 path=sandbox.path,
+                                 env=dict(environment, **(env or {})))
+        ready = ready or (lambda: any(base.iterdir()))
         deadline = time.monotonic() + _SCRATCH_TIMEOUT
-        while not any(base.iterdir()) and time.monotonic() < deadline:
+        while not ready() and time.monotonic() < deadline:
             if started.poll() is not None:
                 break
             time.sleep(0.05)
@@ -301,3 +306,78 @@ class TestALongRunningIngest:
     def test_it_leaves_no_scratch_behind(self, stopped):
         _assert_stopped_cleanly(stopped)
         assert stopped.leaked == []
+
+
+# A phone over adb, played by the local shell: `devices` lists one, and every
+# device command runs here. The third `mv` hangs instead, so a run can be
+# stopped with exactly two renames on the "phone" and one in flight.
+_ADB = """\
+case "$1" in
+  devices) printf 'List of devices attached\\nfakephone\\tdevice\\n\\n' ;;
+  shell|exec-out)
+    case "$2" in
+      mv\\ *) n=$(( $(cat '%(moves)s' 2>/dev/null || echo 0) + 1 ))
+             echo "$n" > '%(moves)s'
+             [ "$n" -gt 2 ] && exec sleep 60 ;;
+    esac
+    exec sh -c "$2" ;;
+esac"""
+
+
+class TestAReplayStoppedOnThePhone:
+    """`clean-folder-structure-adb`, stopped part-way through replaying its
+    renames: the phone then holds real, half-applied changes, and the footer is
+    the only account of how many.
+
+    Through the real adb route, quoting included, with the signal landing while
+    the third rename hangs. The mirror is put in the scratch base through
+    TMPDIR, so "no scratch left" is "the mirror was removed".
+    """
+
+    @pytest.fixture
+    def stopped(self, interrupt, tmp_path):
+        album = tmp_path / "phone" / "My_Album"
+        album.mkdir(parents=True)
+        names = _tracks(6, "mp3", prefix="my_")
+        for name in names:
+            (album / name).write_text(name)
+        fragments = tmp_path / "no-fragments.txt"
+        fragments.write_text("# no fragments\n", encoding="utf-8")
+        moves = tmp_path / "mv-count"
+        interrupt.with_tool("adb", _ADB % {"moves": moves})
+
+        def hanging():
+            return moves.is_file() and moves.read_text().strip() == "3"
+
+        stopped = interrupt.stop(
+            signal.SIGTERM, "clean-folder-structure-adb", "-f", fragments,
+            album.parent, ready=hanging,
+            env={"CFS_DEV_BACKEND": "adb", "ADB": str(interrupt.bin / "adb"),
+                 "TMPDIR": str(tmp_path / "rambase")})
+        return stopped, album.parent, names
+
+    def test_it_exits_with_the_signals_status_and_says_it_was_interrupted(
+            self, stopped):
+        result, _, _ = stopped
+        _assert_stopped_cleanly(result)
+        assert "Interrupted" in result.log
+
+    def test_the_footer_counts_the_renames_that_reached_the_phone(
+            self, stopped):
+        result, phone, _ = stopped
+        assert "Done: 2 rename(s) applied on device" in result.log, result.log
+        assert len(list((phone / "My Album").iterdir())) == 2
+
+    def test_the_footer_is_printed_exactly_once(self, stopped):
+        result, _, _ = stopped
+        assert result.log.count("Done: ") == 1, result.log
+
+    def test_no_file_is_lost_or_overwritten(self, stopped):
+        _, phone, names = stopped
+        held = sorted(path.read_text() for path in phone.rglob("*.mp3"))
+        assert held == sorted(names)
+
+    def test_the_mirror_is_removed(self, stopped):
+        result, _, _ = stopped
+        _assert_stopped_cleanly(result)
+        assert result.leaked == []
