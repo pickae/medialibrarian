@@ -8,6 +8,7 @@ with it, so it is not repeated here; nor is the encoder choice itself, which is
 `medialib/lib/xheaac.py` and has its own file.
 """
 
+import itertools
 import os
 
 import pytest
@@ -185,6 +186,29 @@ class TestSourceAudioBitrate:
         raising."""
         monkeypatch.setattr(ca, "_probe", lambda argv: raw)
         assert ca.source_audio_bitrate("x") == 0
+
+
+class TestTheMeasuredBitrate:
+    """What the packets ffprobe lists really cost: their bytes over the time
+    they cover, for the containers that state no bitrate at all."""
+
+    def test_it_is_the_bits_the_packets_take_over_the_seconds_they_cover(
+            self):
+        # Packets of uneven sizes: 10000 bytes in two seconds.
+        listed = ("duration_time=0.500000|size=2000|\n"
+                  "duration_time=0.500000|size=3000\n"
+                  "duration_time=1.000000|size=5000\n")
+        assert ca._packet_bitrate(listed) == 40000
+
+    def test_packets_that_cover_no_time_measure_nothing(self):
+        """Not a division by zero, and not "free": 0 is "unknown"."""
+        assert ca._packet_bitrate("duration_time=N/A|size=200|\n" * 3) == 0
+        assert ca._packet_bitrate("") == 0
+
+    def test_a_size_ffprobe_could_not_read_counts_as_nothing(self):
+        listed = ("duration_time=0.500000|size=N/A|\n"
+                  "duration_time=0.500000|size=4000\n")
+        assert ca._packet_bitrate(listed) == 32000
 
 
 class TestTheOutputCodec:
@@ -1187,6 +1211,52 @@ class TestTheMissingMkvtoolnixWarning:
         """A .mkv is a video, whose picture is never taken as a cover."""
         ca._warn_mkvtoolnix(tracks)
         assert capsys.readouterr().err == ""
+
+
+class TestTheChunksOfALongFile:
+    """The pieces a split file is encoded as, which have to join back into
+    exactly the file: no gap, no overlap, and nothing past either end."""
+
+    @staticmethod
+    def _ranges(tokens):
+        fields = [token.split(ca.UNIT) for token in tokens]
+        return [(float(start), float(start) + float(length))
+                for _track, _index, _total, start, length in fields]
+
+    def test_opus_pieces_tile_the_file_exactly(self):
+        tokens = ca.chunk_tokens("a.m4b", [0.0, 87.5, 162.5, 237.5, 300.0],
+                                 0, 0, 0)
+        ranges = self._ranges(tokens)
+        assert ranges[0][0] == 0.0
+        assert ranges[-1][1] == pytest.approx(300.0)
+        for (_start, end), (next_start, _end) in itertools.pairwise(ranges):
+            assert end == pytest.approx(next_start)
+
+    def test_each_piece_says_which_of_how_many_it_is(self):
+        tokens = ca.chunk_tokens("a.m4b", [0.0, 100.0, 200.0, 300.0], 0, 0, 0)
+        assert [token.split(ca.UNIT)[:3] for token in tokens] == [
+            ["a.m4b", "0", "3"], ["a.m4b", "1", "3"], ["a.m4b", "2", "3"]]
+
+    def test_xhe_aac_pieces_leave_the_priming_at_every_seam(self):
+        """Every piece starts one priming late, the first included, and that
+        gap is exactly what the decoder's priming frame fills; the inner cuts
+        sit on whole frames, and the last piece still runs to the end."""
+        rate, priming, frame = 44100, 1024, 2048
+        offset = priming / rate
+        ranges = self._ranges(ca.chunk_tokens(
+            "a.m4b", [0.0, 87.51, 162.49, 237.5, 300.0], rate, priming, frame))
+        assert ranges[0][0] == pytest.approx(offset)
+        assert ranges[-1][1] == pytest.approx(300.0)
+        for (_start, end), (next_start, _end) in itertools.pairwise(ranges):
+            assert next_start - end == pytest.approx(offset)
+            cut = end * rate
+            assert cut == pytest.approx(round(cut / frame) * frame)
+
+    def test_cuts_closer_than_the_priming_are_not_cut_at_all(self):
+        """A piece of no length cannot be encoded, so the file stays whole
+        rather than being joined with a hole in it."""
+        assert ca.chunk_tokens("a.m4b", [0.0, 0.01, 300.0], 44100, 1024,
+                               2048) == []
 
 
 class TestSeekCopies:
