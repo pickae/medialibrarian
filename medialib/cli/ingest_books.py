@@ -406,7 +406,9 @@ class Run:
             epub = os.path.join(work, "book.epub")
             if extension == "epub":
                 shutil.copyfile(source, epub)
-            elif ext_in_list(extension, enums.BOOK_CONVERT_EXTENSIONS):
+            else:
+                # The scan admits nothing but the input list, so whatever is
+                # neither a PDF nor an epub is one of the convertible formats.
                 self.note("Converting: " + base)
                 done = subprocess.run(
                     ["ebook-convert", source, epub, "--no-default-epub-cover"],
@@ -414,11 +416,6 @@ class Run:
                 if done.returncode != 0:
                     self.progress("FAILED (convert): " + base)
                     return
-            else:
-                # Unreachable while the scan only picks up the input list, but
-                # still counted so the tally stays exact.
-                self.progress("Skip (unsupported): " + base)
-                return
 
             # Unpacking and repacking exist only to reach the cleaner between
             # them, and the cleaner is what -d gates - so without -d the epub
