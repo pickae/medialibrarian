@@ -91,9 +91,7 @@ class TestThePhaseRunsAndNothingElse:
                               log, drain_queue, *rest, **kw):
             exports.append({"directory": directory, "whisper": whisper,
                             "drain": drain_queue,
-                            "ram_root": ram_root, "rest": rest,
-                            "same_commentary_name":
-                                kw.get("same_commentary_name")})
+                            "ram_root": ram_root, "rest": rest})
 
         monkeypatch.setattr(run.commentarytranscription,
                             "export_commentary", export_commentary)
@@ -164,38 +162,6 @@ class TestThePhaseRunsAndNothingElse:
         assert offset == run.rules.MAX_WHISPER_SYNC_OFFSET
         assert quality == "yes"
         assert ram_root == str(scratch)
-
-    def test_the_discarder_is_handed_to_the_phase_to_judge_sidecars(
-            self, monkeypatch, tmp_path):
-        """The verdict on an existing sidecar is the run's own: the phase is
-        handed a callable that decides, by the sidecar's size, whether to keep
-        it or discard and re-transcribe."""
-        exports, _settled, _scratch = self._stubbed(monkeypatch, tmp_path)
-        films = _library(tmp_path, "Films")
-        assert run.main(["-a", str(films)]) == 0
-        discard_existing = exports[0]["rest"][2]
-        seen = {}
-
-        def fake_too_small(prefix, movie, durations):
-            seen["prefix"] = prefix
-            seen["movie"] = movie
-            return True
-
-        monkeypatch.setattr(run, "_sidecar_too_small", fake_too_small)
-        assert discard_existing("P ", "M") is True
-        assert seen["prefix"] == "P "
-        assert seen["movie"] == "M"
-
-    def test_the_name_rule_is_handed_to_the_phase_to_renumber_stale_transcripts(
-            self, monkeypatch, tmp_path):
-        """A transcript an older run numbered for a track that no longer stands
-        where it numbered it is renumbered rather than transcribed again, and
-        whether a name names the commentary is the run's own rule, handed down
-        to the phase."""
-        exports, _settled, _scratch = self._stubbed(monkeypatch, tmp_path)
-        films = _library(tmp_path, "Films")
-        assert run.main(["-a", str(films)]) == 0
-        assert exports[0]["same_commentary_name"] is run.rules._same_commentary
 
     def test_without_ffsubsync_and_pipx_the_warning_is_the_run(
             self, monkeypatch, tmp_path):

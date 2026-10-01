@@ -374,8 +374,15 @@ def _first_packet(path: str) -> tuple[int, int]:
              path], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     except OSError:
         return 0, 0
+    return _parse_first_packet(done.stdout.decode("utf-8", "surrogateescape"))
+
+
+def _parse_first_packet(text: str) -> tuple[int, int]:
+    """(priming, frame) in samples from the first of ffprobe's compact
+    packet rows, or (0, 0) when it states no frame or a field that is not a
+    whole number."""
     fields = {}
-    line = done.stdout.decode("utf-8", "surrogateescape").split("\n")[0]
+    line = text.split("\n")[0]
     # The compact writer ends a row with a separator, so the last piece of the
     # split is empty rather than a field.
     for field in [piece for piece in line.split("|") if piece]:
@@ -455,8 +462,6 @@ def wav_argv(source: str, rate: int, downmix: int = 0,
         argv += ["-copyts", "-ss", "%.9f" % begin]
         cut = ["-af", "atrim=start=%.9f:end=%.9f,asetpts=PTS-STARTPTS"
                % (float(start), float(start) + float(duration))]
-    elif start:
-        argv += ["-ss", start]
     argv += ["-i", source, "-map", "0:a:0", "-map_metadata", "-1"] + cut
     if downmix:
         argv += ["-ac", str(downmix)]

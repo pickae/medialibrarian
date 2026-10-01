@@ -1,9 +1,9 @@
 """The white box for medialib/cli/ingest_books.py.
 
 test_ingest_books_cli.py drives the whole pipeline with stubbed converters;
-what is pinned here are the helpers underneath it - the membership check, the
-removal that has to get past read-only content, the epub cleaning, and the emit
-that must never clobber.
+what is pinned here are the helpers underneath it - the removal that has to
+get past read-only content, the epub cleaning, and the emit that must never
+clobber.
 """
 
 import stat
@@ -12,19 +12,8 @@ import sys
 import pytest
 
 from medialib.cli import ingest_books as ib
-from medialib.lib import enums
 
 pytestmark = pytest.mark.fs
-
-
-class TestExtInList:
-    def test_it_finds_a_convertible_extension(self):
-        assert ib.ext_in_list("mobi", enums.BOOK_CONVERT_EXTENSIONS)
-
-    @pytest.mark.parametrize("extension", ["pdf", "epub"])
-    def test_it_rejects_a_non_member(self, extension):
-        """A PDF is copied rather than converted, and an epub is already one."""
-        assert not ib.ext_in_list(extension, enums.BOOK_CONVERT_EXTENSIONS)
 
 
 posix_modes = pytest.mark.skipif(

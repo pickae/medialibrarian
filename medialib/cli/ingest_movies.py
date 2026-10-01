@@ -167,7 +167,7 @@ USAGE_TAIL = """
     Default behavior
     ----------------
     deletes release junk: .txt/.nfo/.exe/.sfv files, samples, .mkv files under
-    1000 KiB, folders named \"unwanted\", and folders left empty
+    1000 KiB, folders named \".unwanted\", and folders left empty
     remuxes non-Matroska video into .mkv, deleting the source
     sorts loose movie files into one subfolder each (Plex layout)
     cleans up folder, movie and subtitle names
@@ -291,6 +291,11 @@ USAGE_TAIL = """
 # video, so the cleanup treats it as one of the sample clips that ship next to a
 # release rather than as a movie.
 MIN_MOVIE_BYTES = 1000 * 1024
+
+# The folder qBittorrent puts the files a download was told to skip in, which
+# the cleanup deletes whole wherever it sits. Only this exact name: a film
+# folder can have the word "unwanted" in its title.
+UNWANTED_FOLDER = ".unwanted"
 
 # Subtitle syncing is governed by two different numbers, which ffsubsync keeps
 # apart: the search window it looks for an offset IN, and the offset it is still
@@ -664,9 +669,10 @@ def cleanup(root: str) -> None:
                 _remove(path)
 
     for parent, dirs, _names in os.walk(root):
-        for name in dirs:
-            if "unwanted" in name:
-                shutil.rmtree(os.path.join(parent, name), ignore_errors=True)
+        if UNWANTED_FOLDER in dirs:
+            dirs.remove(UNWANTED_FOLDER)
+            shutil.rmtree(os.path.join(parent, UNWANTED_FOLDER),
+                          ignore_errors=True)
 
     _remove_empty_below(root)
 
@@ -1067,20 +1073,20 @@ def _tag_arguments(tracks: list) -> list:
         if "sdh" in folded:
             sets += ["--set", "flag-hearing-impaired=1"]
 
-        matched = False
-        for row in languages.LANGUAGES:
-            for keyword in row.keywords:
-                if keyword in folded:
-                    sets += ["--set", "language=" + row.code3]
-                    matched = True
-                    break
+        # One language tag, the highest-priority one the name names:
+        # mkvpropedit would keep the last of several.
+        spoken = next((row for row in languages.LANGUAGES
+                       if any(keyword in folded for keyword in row.keywords)),
+                      None)
+        if spoken is not None:
+            sets += ["--set", "language=" + spoken.code3]
 
         # A commentary track whose name names no language is defaulted to
         # English, which most commentaries are - but ONLY when the file says
         # nothing itself. Overwriting a real tag here both mislabels the track
         # and destroys the only cheap hint the transcription has about which
         # language to work in.
-        if (not matched and not languages.is_real_language_tag(track.language)
+        if (spoken is None and not languages.is_real_language_tag(track.language)
                 and track.is_commentary):
             sets += ["--set", "language=eng"]
 
