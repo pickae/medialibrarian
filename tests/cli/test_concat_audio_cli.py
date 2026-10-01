@@ -462,3 +462,97 @@ class TestTheRawRemuxOnAFailedJoin:
         _, done = run
         assert '!!! "Book"' in done.stdout + done.stderr
         assert done.returncode == 1
+
+
+class TestPretreatment:
+    """`-p` renames the user's input in place before anything is joined: only
+    the known problems, every level of the tree, and never onto a name that
+    is taken."""
+
+    @pytest.fixture
+    def run(self, concat):
+        for path, text in (("Book_One/01_Part.m4b", "one"),
+                           ("Book_One/02_Part.m4b", "two"),
+                           ("Book_One/Cover.jpeg", "cover"),
+                           ("Loud/01.MP3", ""), ("Loud/02.MP3", ""),
+                           ("Outer_Dir/Inner_Dir/01_part.mp3", ""),
+                           ("Clash/01_part.mp3", "underscored"),
+                           ("Clash/01 part.mp3", "spaced")):
+            full = concat.inputs / path
+            full.parent.mkdir(parents=True, exist_ok=True)
+            full.write_text(text)
+        done = concat.run("concat-audio", "-p", concat.inputs, concat.outputs)
+        assert done.returncode == 0, done.stdout + done.stderr
+        return concat, done.stdout + done.stderr
+
+    def test_an_m4b_is_counted_as_m4a_and_joins_back_to_an_m4b(self, run):
+        concat, _ = run
+        book = concat.inputs / "Book One"
+        assert sorted(p.name for p in book.glob("*.m4*")) == [
+            "01 Part.m4a", "02 Part.m4a"]
+        assert (book / "01 Part.m4a").read_text() == "one"
+        assert _names(concat.outputs, ".m4b") == ["Book One.m4b"]
+
+    def test_an_upper_case_extension_is_lowered(self, run):
+        concat, _ = run
+        assert _names(concat.inputs / "Loud", "") == ["01.mp3", "02.mp3"]
+        assert "Loud.mp3" in _names(concat.outputs, ".mp3")
+
+    def test_a_jpeg_becomes_a_jpg(self, run):
+        concat, _ = run
+        book = concat.inputs / "Book One"
+        assert (book / "Cover.jpg").read_text() == "cover"
+        assert not (book / "Cover.jpeg").exists()
+
+    def test_every_level_of_a_nested_tree_is_cleaned(self, run):
+        """Top-down: the inner folder is still found at the path its cleaned
+        parent gives it."""
+        concat, _ = run
+        assert (concat.inputs / "Outer Dir" / "Inner Dir" / "01 part.mp3"
+                ).is_file()
+        assert "Outer Dir.mp3" in _names(concat.outputs, ".mp3")
+
+    def test_a_rename_onto_a_taken_name_is_skipped(self, run):
+        concat, _ = run
+        clash = concat.inputs / "Clash"
+        assert (clash / "01_part.mp3").read_text() == "underscored"
+        assert (clash / "01 part.mp3").read_text() == "spaced"
+
+    def test_the_recap_names_the_skipped_rename(self, run):
+        concat, log = run
+        assert "Safety: skipped 1 rename(s) to avoid overwrite" in log
+        assert "%s -> %s" % (concat.inputs / "Clash" / "01_part.mp3",
+                             concat.inputs / "Clash" / "01 part.mp3") in log
+
+
+class TestAShortJoinIsNotPublished:
+    """A join that exits 0 with tracks missing looks finished, so its length is
+    checked against the tracks that went in, and a short one never reaches the
+    output."""
+
+    @pytest.fixture
+    def run(self, concat, monkeypatch):
+        from medialib.lib import durationcheck
+        monkeypatch.delenv(durationcheck.SKIP_VARIABLE, raising=False)
+        _tree(concat.inputs, "Short/01 - part.mp3", "Short/02 - part.mp3",
+              "Whole/01 - part.mp3", "Whole/02 - part.mp3")
+        # Every track is a minute; the join of "Short" comes out at ten seconds
+        # and every other join at the two minutes it should be.
+        concat.with_tool(
+            "ffprobe",
+            'path="${!#}"; case "$path" in "%s"/*) echo 60 ;;'
+            ' *Short*) echo 10 ;; *) echo 120 ;; esac' % concat.inputs)
+        done = concat.run("concat-audio", concat.inputs, concat.outputs)
+        return concat, done
+
+    def test_the_short_book_is_not_written_out(self, run):
+        concat, _ = run
+        assert _names(concat.outputs, ".mp3") == ["Whole.mp3"]
+
+    def test_the_folder_is_named_in_a_failure_line(self, run):
+        _, done = run
+        assert '!!! "Short"' in done.stdout + done.stderr
+
+    def test_the_run_ends_non_zero(self, run):
+        _, done = run
+        assert done.returncode == 1
