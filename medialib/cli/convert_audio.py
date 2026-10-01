@@ -2046,15 +2046,14 @@ def _convert(program: str, script_dir: str, input_dir: str, output_dir: str,
 
     safety.print_run_footer()
 
-    # Twice, so a folder that only held empty folders collapses too. The input
-    # folder itself stays: a folder the user named must still be there.
-    for _pass in range(2):
-        for parent, _dirs, _names in os.walk(input_dir, topdown=False):
-            if parent != input_dir:
-                try:
-                    os.rmdir(parent)
-                except OSError:
-                    pass
+    # Deepest first, so a folder that only held empty folders collapses too.
+    # The input folder itself stays: a folder the user named must still be there.
+    for parent, _dirs, _names in os.walk(input_dir, topdown=False):
+        if parent != input_dir:
+            try:
+                os.rmdir(parent)
+            except OSError:
+                pass
     # A file that came out the wrong length is not a warning: the run did not do
     # what it was asked, and a caller chaining commands has to see that.
     return workerpool.exit_status(1 if durationcheck.failures() else 0)
