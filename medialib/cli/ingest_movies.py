@@ -1067,20 +1067,20 @@ def _tag_arguments(tracks: list) -> list:
         if "sdh" in folded:
             sets += ["--set", "flag-hearing-impaired=1"]
 
-        matched = False
-        for row in languages.LANGUAGES:
-            for keyword in row.keywords:
-                if keyword in folded:
-                    sets += ["--set", "language=" + row.code3]
-                    matched = True
-                    break
+        # One language tag, the highest-priority one the name names:
+        # mkvpropedit would keep the last of several.
+        spoken = next((row for row in languages.LANGUAGES
+                       if any(keyword in folded for keyword in row.keywords)),
+                      None)
+        if spoken is not None:
+            sets += ["--set", "language=" + spoken.code3]
 
         # A commentary track whose name names no language is defaulted to
         # English, which most commentaries are - but ONLY when the file says
         # nothing itself. Overwriting a real tag here both mislabels the track
         # and destroys the only cheap hint the transcription has about which
         # language to work in.
-        if (not matched and not languages.is_real_language_tag(track.language)
+        if (spoken is None and not languages.is_real_language_tag(track.language)
                 and track.is_commentary):
             sets += ["--set", "language=eng"]
 
