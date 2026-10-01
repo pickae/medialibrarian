@@ -73,15 +73,24 @@ markers = [
 addopts = "-m 'not media'"
 
 # Coverage, for `pytest --cov` or `coverage run -m pytest`. The black-box tier
-# runs each command as a child python, so without the subprocess patch nothing
-# those runs execute is counted; parallel gives every process its own data file
-# for `coverage combine` to merge.
+# runs each command as a child python, and the commands fan out to worker
+# processes of their own, so each layer needs its own patch to be counted:
+#
+#   * subprocess - a command started as a child measures itself;
+#   * fork, _exit - a forkserver worker gets its own data file and saves it on
+#     the os._exit it leaves through.
+#
+# source_dirs and not source: a worker runs its module as __mp_main__, which a
+# package-name match does not recognise, and a relative source is read as a
+# package name in any process whose cwd is not the checkout. Not
+# concurrency = multiprocessing either: that starts each worker from this file
+# again, in the worker's cwd, where "medialib" does not exist. Coverage refuses
+# the fork patch on Windows, so --cov is a POSIX-only measurement here.
 [tool.coverage.run]
-source = ["medialib"]
+source_dirs = ["medialib"]
 branch = true
 parallel = true
-patch = ["subprocess"]
-concurrency = ["thread", "multiprocessing"]
+patch = ["subprocess", "fork", "_exit"]
 
 [tool.coverage.report]
 skip_covered = true
