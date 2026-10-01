@@ -196,12 +196,30 @@ class TestWhatEachLineSays:
         assert "\nUp to date, skipping: book.m4a\n" in said
         assert "Converting:" not in said
 
+    def _split_run(self, convert, tmp_path):
+        """A run over a tree with one file long enough that it is cut up."""
+        inputs = tmp_path / "in"
+        inputs.mkdir(exist_ok=True)
+        (inputs / "book.m4a").write_bytes(b"\0" * 1000)
+        with open(inputs / "long.m4a", "wb") as handle:
+            handle.truncate(20_000_000_000)
+        done = convert.run("convert-audio", "-j", 4, inputs, tmp_path / "out")
+        assert done.returncode == 0, done.stdout + done.stderr
+        return done.stdout
+
+    def test_a_run_that_split_a_file_times_the_re_join(self, convert,
+                                                       tmp_path):
+        assert re.search(r"^Post-conversion: +\d", self._split_run(
+            convert, tmp_path), re.M)
+
     def test_and_its_footer_leaves_out_what_it_did_not_do(self, convert,
                                                           tmp_path):
-        """Nothing was encoded and nothing split, so there is no audio to
-        total, no speed to give and no re-join to time."""
-        self._said(convert, tmp_path)
-        said = self._said(convert, tmp_path)
+        """The tree was split once already, but this time nothing was encoded
+        and nothing split, so there is no audio to total, no speed to give and
+        no re-join to time."""
+        self._split_run(convert, tmp_path)
+        said = self._split_run(convert, tmp_path)
+        assert "Up to date, skipping: long.m4a" in said
         for row in ("Total duration:", "Real-time speedup:",
                     "Post-conversion:"):
             assert row not in said

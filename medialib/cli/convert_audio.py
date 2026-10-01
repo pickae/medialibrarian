@@ -2048,6 +2048,7 @@ def _convert(program: str, script_dir: str, input_dir: str, output_dir: str,
         plans_queue += _records(
             segments.plan_file_for(state.plan_root, track) + ".plans")
     state.post_start = time.time()
+    state.rejoined = len(plans_queue)
     if plans_queue:
         print("Re-concatenating %d split file(s)..." % len(plans_queue))
         _run_pool(state, "reconcat", plans_queue, jobs)
