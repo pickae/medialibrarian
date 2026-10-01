@@ -29,6 +29,7 @@ from medialib.lib import (
     dynamicqueue,
     enums,
     ffmpegselect,
+    fixedpoint,
     imdbdata,
     overwrite,
     plexnames,
@@ -1960,12 +1961,10 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
     # Repeated until the names stop changing: some changes around parentheses
     # induce new double spaces, so a pass can create work for the next.
     log("Phase: cleaning up names")
-    for _pass in range(MAX_RENAME_PASSES):
-        if rules.rename_folders(root, state.fragments_file, state.skips) == 0:
-            break
-    for _pass in range(MAX_RENAME_PASSES):
-        if rules.rename_movies(root, state.fragments_file, state.skips) == 0:
-            break
+    fixedpoint.until_stable(lambda: rules.rename_folders(
+        root, state.fragments_file, state.skips), MAX_RENAME_PASSES)
+    fixedpoint.until_stable(lambda: rules.rename_movies(
+        root, state.fragments_file, state.skips), MAX_RENAME_PASSES)
 
     # Once the names have settled, a movie whose name never got the dot before
     # its mkv can be conformed to the spelling its folder spells it - where the

@@ -30,6 +30,7 @@ from medialib.lib import (
     cleannamesindividually,
     clioptions,
     cover,
+    fixedpoint,
     mtp,
     numbering,
     prefixes,
@@ -187,21 +188,19 @@ def rename_siblings_until_stable(directory: str, mode: str,
     if not count:
         return
 
-    # Only the iterations that CHANGED something are counted: an already stable
-    # directory reports 0, one change followed by a clean pass reports 1.
-    iterations = 0
-    while True:
-        changed = rename_siblings(directory, mode, fragments_file, skips)
-        if not changed:
-            break
-        iterations += 1
-        # Said once the first pass has renamed something, so a directory whose
-        # names were already clean - every one of them, on a re-run - is never
-        # announced. What the later passes do is the stabilising line's.
-        if iterations == 1:
-            log('  "%s": renamed %d of %d %s'
-                % (os.path.basename(directory), changed, count, mode))
+    # Said once the first pass has renamed something, so a directory whose
+    # names were already clean - every one of them, on a re-run - is never
+    # announced. What the later passes do is the stabilising line's.
+    changed = rename_siblings(directory, mode, fragments_file, skips)
+    if not changed:
+        return
+    log('  "%s": renamed %d of %d %s'
+        % (os.path.basename(directory), changed, count, mode))
 
+    # Only the iterations that CHANGED something are counted: one change
+    # followed by a clean pass reports 1.
+    iterations = 1 + fixedpoint.until_stable(
+        lambda: rename_siblings(directory, mode, fragments_file, skips))
     if iterations >= 2:
         log("    Stabilised after %d iteration(s)" % iterations)
 

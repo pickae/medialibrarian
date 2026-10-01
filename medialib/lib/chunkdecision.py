@@ -47,7 +47,7 @@ import heapq
 import random
 from dataclasses import dataclass
 
-from medialib.lib import enums, segments
+from medialib.lib import enums, fixedpoint, segments
 
 __all__ = ["Decision", "decide", "census_for", "START_CUTOFF"]
 
@@ -514,10 +514,14 @@ def decide(tracks, workers, threads, mono, bitrate, threshold, is_video,
     kinds = list(census)
     asked = set()
     decision = _decide(tracks, kinds, workers, threads)
-    for _round in range(PROBE_ROUNDS if probe else 0):
+
+    def probe_round():
+        """The files the decision cuts that are not yet probed, probed, and
+        the decision made again; whether there were any."""
+        nonlocal decision
         fresh = sorted(decision.chunked - asked)
         if not fresh:
-            break
+            return False
         for index in fresh:
             asked.add(index)
             found = probe(index)
@@ -535,6 +539,10 @@ def decide(tracks, workers, threads, mono, bitrate, threshold, is_video,
                 always_transcode(extension), mono, bitrate, threshold, codec,
                 census[index].copied, seconds / size)
         decision = _decide(tracks, kinds, workers, threads)
+        return True
+
+    if probe:
+        fixedpoint.until_stable(probe_round, PROBE_ROUNDS)
     return decision
 
 
