@@ -72,6 +72,21 @@ markers = [
 ]
 addopts = "-m 'not media'"
 
+# Coverage, for `pytest --cov` or `coverage run -m pytest`. The black-box tier
+# runs each command as a child python, so without the subprocess patch nothing
+# those runs execute is counted; parallel gives every process its own data file
+# for `coverage combine` to merge.
+[tool.coverage.run]
+source = ["medialib"]
+branch = true
+parallel = true
+patch = ["subprocess"]
+concurrency = ["thread", "multiprocessing"]
+
+[tool.coverage.report]
+skip_covered = true
+sort = "Cover"
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"
