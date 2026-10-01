@@ -188,6 +188,59 @@ class TestDeleteUnneededCue:
         assert sorted(str(p) for p in tree.rglob("*")) == before
 
 
+_FLAC_STREAMS = """{
+    "streams": [
+        {
+            "index": 0,
+            "codec_name": "flac",
+            "codec_type": "audio",
+            "sample_fmt": "s16",
+            "sample_rate": "44100",
+            "channels": 2
+        }
+    ],
+    "format": {
+        "format_name": "flac",
+        "duration": "600.000000"
+    }
+}
+"""
+
+
+class TestParseStreamInfo:
+    """The first stream's codec and sample rate out of ffprobe's JSON, which is
+    what decides whether a track is encoded at all. Whatever ffprobe could not
+    answer comes back as "null" and 0, never as an exception that ends the
+    run."""
+
+    @pytest.mark.parametrize("text,expected", [
+        (_FLAC_STREAMS, ("flac", 44100)),
+        # What ffprobe prints, with status 0, for a file it cannot open.
+        ("{\n\n}\n", ("null", 0)),
+        ("", ("null", 0)),
+        ("not json", ("null", 0)),
+        ('["streams"]', ("null", 0)),
+        ('{"streams": []}', ("null", 0)),
+        ('{"streams": ["flac"]}', ("null", 0)),
+        # A cover image's stream: a codec, and no rate to give.
+        ('{"streams": [{"codec_name": "png"}]}', ("png", 0)),
+        ('{"streams": [{"sample_rate": "48000"}]}', ("null", 48000)),
+        ('{"streams": [{"codec_name": "flac", "sample_rate": "junk"}]}',
+         ("flac", 0)),
+    ], ids=["a real flac", "an unopenable file", "no output", "bad json",
+            "not an object", "no streams", "a stream that is not an object",
+            "no sample rate", "no codec name", "a rate that is not a number"])
+    def test_what_each_document_answers(self, text, expected):
+        assert im.parse_stream_info(text) == expected
+
+    def test_only_the_first_stream_is_read(self):
+        """A release's flac with embedded art lists the audio first; what comes
+        after it is not the track."""
+        assert im.parse_stream_info(
+            '{"streams": [{"codec_name": "flac", "sample_rate": "96000"},'
+            ' {"codec_name": "mjpeg"}]}') == ("flac", 96000)
+
+
 class TestIsLosslessCodec:
     """Codec membership in the central enum - the one gate on whether a track is
     re-encoded into the library or left behind entirely.
