@@ -244,32 +244,53 @@ def emit_output(source: str, destination: str) -> None:
     BOTH via a " (N)" suffix. A missing source is a silent no-op - a failed
     conversion simply produces no output for that book.
 
+    The workspace is in RAM and the library on disk, so this is a copy - and a
+    copy straight onto the final name would leave a short book exactly where
+    the resume check looks if the run is cut off mid-copy. The bytes go to a
+    hidden staging name in the destination folder first, with no book
+    extension, and only a finished copy is given the real name.
+
     Several books are emitted in parallel, so another worker may take the same
-    name between choosing it and moving; the move is retried with the next free
-    suffix until it actually lands.
+    name between choosing it and claiming it; the claim never overwrites, and
+    is retried with the next free suffix until it actually lands.
     """
     if not os.path.exists(source):
         return
-    os.makedirs(os.path.dirname(destination) or ".", exist_ok=True)
-    while True:
-        candidate = destination
-        if os.path.exists(candidate):
-            candidate = safety.unique_suffix_path(candidate)
-        try:
-            # Claim the name atomically: two workers emitting at once must not
-            # both find it free. The workspace is in RAM and the library on
-            # disk, so this is a copy either way - a rename across filesystems
-            # is one too.
-            handle = os.open(candidate,
-                             os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-        except FileExistsError:
-            continue                      # another worker took it; next suffix
-        except OSError:
-            return
+    destination_dir = os.path.dirname(destination) or "."
+    try:
+        os.makedirs(destination_dir, exist_ok=True)
+        handle, staged = tempfile.mkstemp(prefix=".ingestBooks.",
+                                          dir=destination_dir)
         os.close(handle)
-        shutil.copyfile(source, candidate)
-        os.remove(source)
+    except OSError:
         return
+    try:
+        shutil.copyfile(source, staged)
+        for _attempt in range(100):
+            candidate = destination
+            if os.path.exists(candidate):
+                candidate = safety.unique_suffix_path(candidate)
+            try:
+                os.link(staged, candidate)
+            except FileExistsError:
+                continue                  # another worker took it; next suffix
+            except OSError:
+                # A library on a filesystem without hard links: claim the name
+                # empty, then rename the finished copy over the claim.
+                try:
+                    claim = os.open(candidate,
+                                    os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+                except FileExistsError:
+                    continue
+                except OSError:
+                    return
+                os.close(claim)
+                os.replace(staged, candidate)
+            os.remove(source)
+            return
+    finally:
+        if os.path.exists(staged):
+            os.remove(staged)
 
 
 class Run:
