@@ -167,7 +167,7 @@ USAGE_TAIL = """
     Default behavior
     ----------------
     deletes release junk: .txt/.nfo/.exe/.sfv files, samples, .mkv files under
-    1000 KiB, folders named \"unwanted\", and folders left empty
+    1000 KiB, folders named \".unwanted\", and folders left empty
     remuxes non-Matroska video into .mkv, deleting the source
     sorts loose movie files into one subfolder each (Plex layout)
     cleans up folder, movie and subtitle names
@@ -291,6 +291,11 @@ USAGE_TAIL = """
 # video, so the cleanup treats it as one of the sample clips that ship next to a
 # release rather than as a movie.
 MIN_MOVIE_BYTES = 1000 * 1024
+
+# The folder qBittorrent puts the files a download was told to skip in, which
+# the cleanup deletes whole wherever it sits. Only this exact name: a film
+# folder can have the word "unwanted" in its title.
+UNWANTED_FOLDER = ".unwanted"
 
 # Subtitle syncing is governed by two different numbers, which ffsubsync keeps
 # apart: the search window it looks for an offset IN, and the offset it is still
@@ -664,9 +669,10 @@ def cleanup(root: str) -> None:
                 _remove(path)
 
     for parent, dirs, _names in os.walk(root):
-        for name in dirs:
-            if "unwanted" in name:
-                shutil.rmtree(os.path.join(parent, name), ignore_errors=True)
+        if UNWANTED_FOLDER in dirs:
+            dirs.remove(UNWANTED_FOLDER)
+            shutil.rmtree(os.path.join(parent, UNWANTED_FOLDER),
+                          ignore_errors=True)
 
     _remove_empty_below(root)
 
