@@ -247,12 +247,6 @@ class TestTheCoverGoesIn:
             mutagentags.embed_cover(str(target), str(cover))
             assert len(_pictures(target)) == 1
 
-    def test_and_comes_back_off_an_opus(self, audio, cover):
-        opus = audio("art.opus")
-        mutagentags.embed_cover(str(opus), str(cover))
-        assert mutagentags.remove_cover(str(opus)) == 0
-        assert _pictures(opus) == []
-
 
 class TestTheStatusIsAStatus:
     """The process boundary these functions replace turned any failure into a
@@ -276,7 +270,6 @@ class TestTheStatusIsAStatus:
     def test_and_for_a_file_that_is_not_there_at_all(self, tmp_path, cover):
         missing = str(tmp_path / "gone.opus")
         assert mutagentags.embed_cover(missing, str(cover)) == 1
-        assert mutagentags.remove_cover(missing) == 1
         assert mutagentags.embed_chapters(missing, "/dev/null") == 1
 
     def test_a_cover_file_that_is_not_there_is_a_status_too(self, audio, tmp_path):

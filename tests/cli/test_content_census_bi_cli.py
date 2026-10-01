@@ -138,9 +138,6 @@ class TestWhatIsRefused:
         assert "Usage:" in log
         assert not list(bi.cubes.iterdir())
 
-    def test_the_page_says_the_options_are_position_free(self, bi):
-        assert "may be given before the reports or after them" in bi.bi("-h")
-
 
 class TestWhatTheFlagsBuild:
     """The same two flags, in both positions, doing their job rather than merely

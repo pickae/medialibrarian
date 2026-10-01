@@ -72,7 +72,16 @@ class TestTheListsThemselves:
     lists, a suffix no report claims. Every member can be right and the set wrong."""
 
     def test_the_registry_holds_every_list(self):
-        assert len(enums.LISTS) == 20
+        # A sequence named like a list but left out of the registry is one the
+        # properties below never look at.
+        declared = {name: value for name, value in vars(enums).items()
+                    if name.endswith(("_EXTENSIONS", "_CODECS"))
+                    and isinstance(value, (tuple, list))}
+        assert declared
+        registered = list(enums.LISTS.values())
+        missing = [name for name, value in declared.items()
+                   if not any(value is member for member in registered)]
+        assert not missing, missing
 
     def test_no_list_is_empty(self):
         assert all(members for members in enums.LISTS.values())

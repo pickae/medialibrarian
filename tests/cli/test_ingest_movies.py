@@ -309,3 +309,42 @@ class TestReadTrackInfo:
         monkeypatch.setattr(im.subprocess, "run", lambda *a, **k: Done())
         assert im.read_track_info("/x.mkv") == ([], [], [], [], [], [])
 
+
+
+def _sets_by_track(arguments: list) -> dict:
+    """mkvpropedit's arguments read back as ``{track: [(flag, value), ...]}``,
+    every ``--set`` under the ``--edit`` it follows."""
+    by_track: dict = {}
+    current = None
+    for flag, value in zip(arguments[::2], arguments[1::2], strict=True):
+        if flag == "--edit":
+            current = by_track.setdefault(value, [])
+        else:
+            assert flag == "--set" and current is not None
+            key, _eq, setting = value.partition("=")
+            current.append((key, setting))
+    return by_track
+
+
+class TestTagArguments:
+    """The language a track's name says is the one tag mkvpropedit is given:
+    two tags would leave whichever came last."""
+
+    def _languages(self, name):
+        tracks = [im.Track(id="0", type="video"),
+                  im.Track(id="1", type="audio", name=name)]
+        sets = _sets_by_track(im._tag_arguments(tracks))["track:2"]
+        return [value for key, value in sets if key == "language"]
+
+    def test_a_name_with_one_language_word_is_tagged_with_it(self):
+        assert self._languages("German Dolby Digital") == ["deu"]
+
+    @pytest.mark.parametrize("name", ["German dub (English original)",
+                                      "English, with French titles",
+                                      "Deutsch / English"])
+    def test_a_name_with_two_gets_one_tag_the_first_listed_language(self,
+                                                                   name):
+        assert self._languages(name) == ["eng"]
+
+    def test_two_lower_priority_words_still_give_one_tag(self):
+        assert self._languages("Italian dub of the Spanish cut") == ["spa"]

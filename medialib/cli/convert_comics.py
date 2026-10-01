@@ -359,8 +359,6 @@ def _flatten(destination: str) -> None:
         for name in names:
             source = os.path.join(parent, name)
             target = os.path.join(destination, name)
-            if source == target:
-                continue
             if os.path.exists(target):
                 target = safety.unique_suffix_path(target)
             try:
