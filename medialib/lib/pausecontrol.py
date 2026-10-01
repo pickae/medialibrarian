@@ -101,21 +101,14 @@ def abort_requested() -> bool:
 # --- arming -------------------------------------------------------------------
 
 
-def init(directory: str | None = None) -> None:
-    """Arm the pause state. Inheritance wins, as it does for the abort flag: when a
-    wrapper has already armed a pause for the run, the inner script shares THAT
-    state, or a keypress would only reach one layer of it. Given a directory the
-    state goes there (a caller that owns a RAM scratch passes one from there, so it
-    goes back with the rest of the run's scratch); without one a private one is
-    made."""
+def init(pause_dir: str) -> None:
+    """Arm the pause state in ``pause_dir``. Inheritance wins, as it does for the
+    abort flag: when a wrapper has already armed a pause for the run, the inner
+    script shares THAT state, or a keypress would only reach one layer of it. The
+    caller passes a directory from its RAM scratch, so the state goes back with
+    the rest of the run's scratch."""
     if _env("PAUSE_DIR"):
         return
-    if directory:
-        pause_dir = directory
-    else:
-        import tempfile
-
-        pause_dir = tempfile.mkdtemp(prefix="pauseControl.")
     _set_state("PAUSE_DIR", pause_dir)
     _set_state("PAUSE_JOBS", os.path.join(pause_dir, "jobs"))
     _set_state("PAUSE_FLAG", os.path.join(pause_dir, "paused"))
