@@ -227,11 +227,14 @@ def emit_output(source: str, target: str) -> bool:
             candidate = safety.unique_suffix_path(candidate)
         try:
             os.link(staged, candidate)
-            os.unlink(staged)
-            return True
         except OSError:
             if not os.path.exists(staged):
                 return True
+            continue
+        # Published once the link exists. A staging name that will not go is
+        # dotted litter, not a reason to link the book under another name.
+        _remove(staged)
+        return True
     _remove(staged)
     return False
 
@@ -730,7 +733,7 @@ def _run_pool(state: Run, method: str, items: list, jobs: int) -> list:
     return []
 
 
-def _weigh_queue(state: Run, scan: list, jobs: int) -> list:
+def _weigh_queue(state: Run, scan: list) -> list:
     """The books, longest first.
 
     Starting the long books at the front means they finish near the beginning of
@@ -887,7 +890,7 @@ def main(argv: list, program: str = "read-library",
 
     try:
         return _read(result, program, script_dir, in_path, out_path, temp_path,
-                     counter_dir, scan, book_what, opus_bitrate, keep_lossless,
+                     counter_dir, scan, opus_bitrate, keep_lossless,
                      resume_extensions, narration_language, narration_engine)
     finally:
         # The refresher is stopped here as well as after the queue drains: an
@@ -921,7 +924,7 @@ def _scan_books(in_path: str) -> list:
 
 
 def _read(result, program: str, script_dir: str, in_path: str, out_path: str,
-          temp_path: str, counter_dir: str, scan: list, book_what: str,
+          temp_path: str, counter_dir: str, scan: list,
           opus_bitrate: int, keep_lossless: bool, resume_extensions: list,
           narration_language: str, narration_engine: str) -> int:
     run_start = time.time()
@@ -997,13 +1000,6 @@ def _read(result, program: str, script_dir: str, in_path: str, out_path: str,
     os.makedirs(out_path, exist_ok=True)
 
     total = len(scan)
-    # Belt and braces: the probe already refused an input with no book in it, but
-    # the checkout preparation between the two can have taken a while, and an
-    # input that changed underneath the run should be said out loud rather than
-    # reported as "0 books".
-    if total <= 0:
-        return safety.fail_no_relevant_input(in_path, book_what)
-
     counters = Counters(counter_dir, total)
     state = Run(
         in_path=in_path, out_path=out_path, temp_path=temp_path,
@@ -1096,21 +1092,11 @@ def _order_the_queue(state: Run, scan: list, total: int) -> list:
     log("Measuring %d book(s) to read the longest first - this takes a moment."
         % total)
     weigh_start = time.time()
-    books = _weigh_queue(state, scan, runlog.cpu_count())
+    books = _weigh_queue(state, scan)
     # A Ctrl+C during a pass this long has to end the run HERE. Left to itself it
     # would fall through to a queue built from however many books were weighed,
     # and start narrating them.
     safety.exit_if_aborted()
-    # One weight per book, or the queue is not the library: a short count means a
-    # worker died rather than a book being unmeasurable, and the difference
-    # between the two lists is books that would never be read at all. The ORDER is
-    # worth a fallback; the contents are not.
-    if len(books) != total:
-        log("WARNING: measured %d of %d books - the measuring pass lost some. The"
-            % (len(books), total))
-        log("         queue is ordered by file size instead. Every book is still "
-            "read.")
-        return order_books_by_size(scan)
     log("Measured %d book(s) in %s."
         % (total, formatting.fmt_clock(int(time.time() - weigh_start))))
     return books

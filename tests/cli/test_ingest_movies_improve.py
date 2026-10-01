@@ -9,6 +9,7 @@ ladder only sees what the language rule left, and the commentary exemption has t
 survive both.
 """
 
+import errno
 import os
 import sys
 
@@ -40,15 +41,22 @@ FIXTURE = [
 ]
 
 
+ORIGINAL = b"the film as it came"
+REMUXED = b"the film as mkvmerge wrote it"
+
+
 @pytest.fixture
-def remux(tmp_path, monkeypatch):
+def remux(tmp_path, monkeypatch, request):
     """One film through the improvement, with mkvmerge recording rather than
-    running: what comes back is the argv it was handed."""
+    running: what comes back is the argv it was handed. mkvmerge exits with
+    the status the test parametrizes it with, 0 when it does not."""
+    mkvmerge_status = getattr(request, "param", 0)
     folder = tmp_path / "Film (2020)"
     folder.mkdir()
     movie = str(folder / "Film (2020).mkv")
     base = str(folder / "Film (2020)")
-    open(movie, "w").close()
+    with open(movie, "wb") as handle:
+        handle.write(ORIGINAL)
 
     # The sidecars that drive the swap, the FLAC exception and the appends.
     for name in ("_0.opus",                       # track 0 -> swap
@@ -92,8 +100,9 @@ def remux(tmp_path, monkeypatch):
         recorded.append(argv)
         out = argv[argv.index("-o") + 1]
         os.makedirs(os.path.dirname(out), exist_ok=True)
-        open(out, "w").close()
-        return 0, ""
+        with open(out, "wb") as handle:
+            handle.write(REMUXED)
+        return mkvmerge_status, "a message" if mkvmerge_status else ""
     monkeypatch.setattr(run_module, "_mkvmerge", stub)
 
     state = run_module.Run(script_dir="", ram_root=str(tmp_path),
@@ -101,7 +110,7 @@ def remux(tmp_path, monkeypatch):
     run_module.improve_main_movies(state, str(tmp_path))
     return {"root": str(tmp_path), "movie": movie, "base": base,
             "argv": recorded[0] if recorded else [], "calls": recorded,
-            "state": state}
+            "state": state, "scratch": scratch}
 
 
 def _name_only(tracks):
@@ -151,6 +160,52 @@ class TestTheSwap:
         assert argv[argv.index("--track-name", at - 12) + 1] == "0:"
 
 
+class TestWhatMkvmergeSaysDecides:
+    """mkvmerge exits 1 on warnings with a good file written, and 2 on errors
+    with whatever it got as far as writing."""
+
+    @pytest.mark.parametrize("remux", [2], indirect=True)
+    def test_a_failed_remux_leaves_the_original_alone(self, remux):
+        with open(remux["movie"], "rb") as handle:
+            assert handle.read() == ORIGINAL
+        assert not os.path.exists(remux["base"] + " (old).mkv")
+        assert [path for path in remux["scratch"].rglob("*")
+                if path.is_file()] == []
+
+    @pytest.mark.parametrize("remux", [1], indirect=True)
+    def test_one_with_warnings_is_swapped_in(self, remux):
+        with open(remux["movie"], "rb") as handle:
+            assert handle.read() == REMUXED
+        with open(remux["base"] + " (old).mkv", "rb") as handle:
+            assert handle.read() == ORIGINAL
+
+
+class TestTheSwapFromATmpfsScratch:
+    """The scratch is a tmpfs and the library is on disk, so putting the
+    remux in place is a move across file systems, which a rename refuses."""
+
+    def test_the_remux_is_copied_into_place_and_the_scratch_let_go(
+            self, tmp_path, monkeypatch):
+        scratch = tmp_path / "scratch"
+        scratch.mkdir()
+        library = tmp_path / "library"
+        library.mkdir()
+        source = scratch / "Film (2020).mkv"
+        source.write_bytes(REMUXED)
+
+        def cross_device(*_args, **_kwargs):
+            raise OSError(errno.EXDEV, "Invalid cross-device link")
+
+        monkeypatch.setattr(os, "replace", cross_device)
+        monkeypatch.setattr(os, "rename", cross_device)
+
+        rules._rename_quiet(str(source), str(library / "Film (2020).mkv"))
+
+        assert (library / "Film (2020).mkv").read_bytes() == REMUXED
+        assert os.listdir(library) == ["Film (2020).mkv"]
+        assert os.listdir(scratch) == []
+
+
 class TestWhatSurvives:
     """The keep-lists, which is where every rule lands."""
 
@@ -196,6 +251,23 @@ class TestTheCommentaryTranscripts:
             remux["argv"], remux["base"] + " 8 Commentary Dutch.en.srt") == [
             "--language", "0:en", "--track-name", "0:Commentary Dutch (EN)",
             "--commentary-flag", "0:1", "--default-track-flag", "0:0"]
+
+
+class TestTheScratchSize:
+    """A remux holds a whole copy of the film in its scratch, and Dolby Vision
+    work holds the prepared video stream beside it."""
+
+    @pytest.mark.parametrize("film,video_work,stream,expected", [
+        (1000, False, "", "1000"),
+        (1000, False, "400", "1000"),
+        (1000, True, "400", "1400"),
+        (1000, True, "", "2000"),
+        (1000, True, "1.2 GiB", "2000"),
+        (0, True, "400", ""),
+        (0, False, "", ""),
+    ])
+    def test_it_is_asked_for(self, film, video_work, stream, expected):
+        assert run_module._scratch_need(film, video_work, stream) == expected
 
 
 class TestTheEXRung:
