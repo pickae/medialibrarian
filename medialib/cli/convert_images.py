@@ -509,6 +509,14 @@ def _images_under(directory: str, extensions, lowercase_only=False):
     return sorted(found, key=os.fsencode)
 
 
+def _holds_bytes(path: str) -> bool:
+    """Whether <path> is a file that _prune() would leave in place."""
+    try:
+        return os.path.getsize(path) > 0
+    except OSError:
+        return False
+
+
 def _prune(directory: str) -> None:
     """Empty folders and zero-byte files go, deepest first - the pretreatment
     both trees get before anything is converted."""
@@ -647,7 +655,8 @@ def main(argv: list, program: str = "convert-images") -> int:
     runlog.warn_uncounted_progress()
 
     # Nothing to convert? Say so before the input is de-duplicated, pruned and
-    # lower-cased, so a refused run leaves it exactly as it was.
+    # lower-cased, so a refused run leaves it exactly as it was. A 0-byte image
+    # is not something to convert: the pruning would take it away first.
     if reverse:
         wanted = "%s images (.%s) to convert back to JPEG" % (
             image_format.upper(), image_format)
@@ -656,7 +665,8 @@ def main(argv: list, program: str = "convert-images") -> int:
         wanted = "images (%s)" % enums.extension_list(
             list(enums.IMAGE_EXTENSIONS))
         extensions = list(enums.IMAGE_EXTENSIONS)
-    if not _images_under(input_dir, extensions):
+    if not any(_holds_bytes(os.path.join(input_dir, relative))
+               for relative in _images_under(input_dir, extensions)):
         return safety.fail_no_relevant_input(input_dir, wanted)
 
     counter_dir = ""

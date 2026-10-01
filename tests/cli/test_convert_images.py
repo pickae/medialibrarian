@@ -28,6 +28,7 @@ import pytest
 
 from medialib.cli import convert_images as ci
 from medialib.lib import clioptions, enums
+from tests import blackbox
 
 pytestmark = pytest.mark.fs
 
@@ -496,3 +497,33 @@ class TestTheFooter:
         assert "Converted 0 of 2 images in " in out
         assert "seconds per image" not in out
         assert "already done: 2 (100.0%)" in out
+
+
+class TestARunWithOnlyEmptyImagesIsRefusedUntouched:
+    """A folder whose every image is a 0-byte file has nothing to convert, and
+    is refused BEFORE the preparation that would prune and lower-case it: what a
+    user is told "nothing was changed" about has to be what they left there."""
+
+    @pytest.fixture
+    def refused(self, sandbox, tmp_path):
+        sandbox.with_tool("fdupes", "exit 0")
+        folder = tmp_path / "in"
+        (folder / "Chapter").mkdir(parents=True)
+        (folder / "cover.jpg").write_bytes(b"")
+        (folder / "Chapter" / "01.PNG").write_bytes(b"")
+        before = blackbox.tree_of(folder)
+        done = sandbox.run("convert-images", folder, tmp_path / "out")
+        return done, folder, before, blackbox.tree_of(folder)
+
+    @pytest.mark.stubbed
+    def test_it_exits_non_zero_and_says_there_was_nothing(self, refused):
+        done, folder, _, _ = refused
+        log = done.stdout + done.stderr
+        assert done.returncode != 0, log
+        assert "nothing" in log.lower(), log
+        assert str(folder) in log, log
+
+    @pytest.mark.stubbed
+    def test_the_input_is_left_exactly_as_it_was(self, refused):
+        _, _, before, after = refused
+        assert after == before
