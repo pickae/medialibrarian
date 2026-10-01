@@ -28,6 +28,7 @@ import pytest
 
 from medialib.cli import convert_images as ci
 from medialib.lib import clioptions, enums
+from tests import blackbox
 
 pytestmark = pytest.mark.fs
 
@@ -496,3 +497,127 @@ class TestTheFooter:
         assert "Converted 0 of 2 images in " in out
         assert "seconds per image" not in out
         assert "already done: 2 (100.0%)" in out
+
+
+class TestARunWithOnlyEmptyImagesIsRefusedUntouched:
+    """A folder whose every image is a 0-byte file has nothing to convert, and
+    is refused BEFORE the preparation that would prune and lower-case it: what a
+    user is told "nothing was changed" about has to be what they left there."""
+
+    @pytest.fixture
+    def refused(self, sandbox, tmp_path):
+        sandbox.with_tool("fdupes", "exit 0")
+        folder = tmp_path / "in"
+        (folder / "Chapter").mkdir(parents=True)
+        (folder / "cover.jpg").write_bytes(b"")
+        (folder / "Chapter" / "01.PNG").write_bytes(b"")
+        before = blackbox.tree_of(folder)
+        done = sandbox.run("convert-images", folder, tmp_path / "out")
+        return done, folder, before, blackbox.tree_of(folder)
+
+    @pytest.mark.stubbed
+    def test_it_exits_non_zero_and_says_there_was_nothing(self, refused):
+        done, folder, _, _ = refused
+        log = done.stdout + done.stderr
+        assert done.returncode != 0, log
+        assert "nothing" in log.lower(), log
+        assert str(folder) in log, log
+
+    @pytest.mark.stubbed
+    def test_the_input_is_left_exactly_as_it_was(self, refused):
+        _, _, before, after = refused
+        assert after == before
+
+
+class TestATrimThatCannotBeMeasured:
+    """-c measures the page, trims it, and measures the trim. A page whose trim
+    gives no size back is still converted, untrimmed: the same answer a page
+    gets when it cannot be measured at all."""
+
+    @pytest.mark.parametrize("answer", ["", "not a size", "800 tall"])
+    def test_the_page_is_converted_whole(self, tmp_path, answer):
+        counters = tmp_path / "counters"
+        counters.mkdir()
+        state = _run()
+        state.counter_dir = str(counters)
+        answers = iter(["1000 1500", answer])
+        state._identify = lambda arguments: next(answers)
+        converted = []
+        state._convert = lambda arguments: converted.append(arguments) or 0
+        state.crop_convert("page.jpg")
+        assert converted[-1] == state._encode_arguments(
+            "page.jpg", OUT + "/page.avif")
+        assert state.counter("converted") == 1
+
+
+# A 1000 x 1500 page: 1% is 10 x 15, 20% is 200 x 300, 99% is 990 x 1485.
+_W, _H = 1000, 1500
+_LIGHT = "hsl(45.0007,51.6136%,87.8431%)"
+
+
+def _light():
+    return _LIGHT, ci.LIGHTNESS_THRESHOLD
+
+
+class TestTheTrimVerdict:
+    """What a -c trim meant, read from how much it took off each edge."""
+
+    pytestmark = pytest.mark.pure
+
+    @pytest.mark.parametrize("cut,verdict", [
+        ((_W, _H), "converted"),            # nothing came off
+        ((990, 1485), "trimmed"),           # exactly the 1% floor on both
+        ((991, 1485), "converted"),         # a pixel under it across
+        ((990, 1486), "converted"),         # a pixel under it down
+        ((800, 1200), "trimmed"),           # exactly the 20% ceiling on both
+        ((799, 1200), "converted"),         # a pixel over it across
+        ((800, 1199), "converted"),         # a pixel over it down
+        ((10, _H), "converted"),            # exactly 99% across is not blank
+        ((9, _H), "blank"),                 # past it is
+        ((_W, 14), "blank"),                # down as well as across
+        (None, "converted"),                # the trim could not be measured
+    ])
+    def test_the_share_that_came_off_decides(self, cut, verdict):
+        assert ci.trim_verdict(_W, _H, cut, _light)[0] == verdict
+
+    def test_a_margin_keeps_the_corner_s_colour_and_a_thin_border(self):
+        """The border given back is 1% of the page's shorter edge."""
+        assert ci.trim_verdict(_W, _H, (900, 1400), _light) == (
+            "trimmed", _LIGHT, 10)
+
+    @pytest.mark.parametrize("corner,verdict", [
+        ((_LIGHT, ci.LIGHTNESS_THRESHOLD), "trimmed"),
+        (("hsl(0,0%,12.549%)", ci.LIGHTNESS_THRESHOLD - 1), "converted"),
+        (None, "converted"),
+    ], ids=["light", "dark", "unmeasured"])
+    def test_a_margin_is_only_one_when_its_corner_is_light(self, corner,
+                                                           verdict):
+        """A dark edge is part of the picture, not paper around it."""
+        assert ci.trim_verdict(_W, _H, (900, 1400),
+                               lambda: corner)[0] == verdict
+
+    @pytest.mark.parametrize("cut", [(_W, _H), (9, _H), (700, 1000), None])
+    def test_the_corner_is_only_asked_about_a_margin(self, cut):
+        """It costs a call of its own, per page."""
+        def corner():
+            raise AssertionError("the corner was asked")
+        ci.trim_verdict(_W, _H, cut, corner)
+
+
+class TestTheCornerProbe:
+    """`<colour> <lightness>` as ImageMagick prints it for the corner pixel."""
+
+    pytestmark = pytest.mark.pure
+
+    @pytest.mark.parametrize("text,corner", [
+        ("hsl(45.0007,51.6136%,87.8431%) 50.1717",
+         ("hsl(45.0007,51.6136%,87.8431%)", 50)),
+        ("hsl(0,0%,40%) 20", ("hsl(0,0%,40%)", 20)),
+        # truncated, not rounded: 39.9 is not light enough
+        ("hsl(0,0%,79.8%) 39.9\n", ("hsl(0,0%,79.8%)", 39)),
+        ("", None),
+        ("hsl(0,0%,40%)", None),
+        ("hsl(0,0%,40%) nan", None),
+    ])
+    def test_the_answer_is_read(self, text, corner):
+        assert ci._parse_corner(text) == corner
