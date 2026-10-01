@@ -125,6 +125,44 @@ class TestTheSizeAFileIsAnnouncedAt:
         assert size_text("", "1080", "", "1080", "", "1080") == "?x1080"
 
 
+class TestTheRenderNodeDecodedOn:
+    """Which ``/dev/dri`` node an Intel decode is opened on. A desktop with an
+    NVIDIA card and an Intel iGPU lists both, and the NVIDIA one may open a VA
+    display too, through a VA-API driver of its own: it must still not be taken
+    for the iGPU."""
+
+    pytestmark = pytest.mark.pure
+
+    INTEL, NVIDIA, AMD = "0x8086", "0x10de", "0x1002"
+
+    @pytest.mark.parametrize("vendors,opens,chosen", [
+        # The mixed machine, either way round.
+        ({"renderD128": NVIDIA, "renderD129": INTEL},
+         {"renderD128", "renderD129"}, "renderD129"),
+        ({"renderD128": INTEL, "renderD129": NVIDIA},
+         {"renderD128", "renderD129"}, "renderD128"),
+        # A discrete card's VA-API driver opens, and still is not taken.
+        ({"renderD128": NVIDIA}, {"renderD128"}, ""),
+        ({"renderD128": AMD, "renderD129": NVIDIA},
+         {"renderD128", "renderD129"}, ""),
+        # An Intel node that will not open gives way to the next Intel one.
+        ({"renderD128": INTEL, "renderD129": INTEL}, {"renderD129"},
+         "renderD129"),
+        # A host with no vendor files: the first node that opens.
+        ({"renderD128": "", "renderD129": ""}, {"renderD129"}, "renderD129"),
+        # An Intel node is preferred to one with no vendor file before it.
+        ({"renderD128": "", "renderD129": INTEL},
+         {"renderD128", "renderD129"}, "renderD129"),
+        ({"renderD128": INTEL}, set(), ""),
+        ({}, set(), ""),
+    ])
+    def test_the_node_chosen(self, vendors, opens, chosen):
+        node = run_module.pick_render_node(
+            sorted(vendors), vendors.get,
+            lambda path: path.rsplit("/", 1)[1] in opens)
+        assert node == ("/dev/dri/" + chosen if chosen else "")
+
+
 class TestTheHardwareDecodeLadder:
     """Which interface a run decodes through, and what it says it chose.
 

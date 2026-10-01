@@ -187,16 +187,25 @@ def intel_render_node() -> str:
         except OSError:
             return ""
 
+    return pick_render_node(nodes, vendor_of, vaapi_works)
+
+
+def pick_render_node(nodes: list, vendor_of, works) -> str:
+    """The node out of <nodes> (``renderD*`` names, in order) to decode on, or "".
+
+    An Intel node a VA display opens on comes first. Only then a node with no
+    vendor to read, the first one that opens; a node whose vendor is known and is
+    not Intel is never taken, whatever VA-API driver may open on it.
+    """
     for name in nodes:
         node = "/dev/dri/" + name
-        if vendor_of(name) == INTEL_PCI_VENDOR and vaapi_works(node):
+        if vendor_of(name) == INTEL_PCI_VENDOR and works(node):
             return node
     for name in nodes:
         node = "/dev/dri/" + name
-        # sysfs present but not Intel: skip it.
         if vendor_of(name):
             continue
-        if vaapi_works(node):
+        if works(node):
             return node
     return ""
 
@@ -1539,13 +1548,6 @@ def _in_worker(settings, token: str) -> None:
 
 
 def _run_chunk_pool(settings, tokens: list, width: int) -> None:
-    if width <= 1:
-        for token in tokens:
-            if safety.abort_requested():
-                return
-            encode_video_chunk(settings, token)
-        return
-
     workerpool.run(tokens, width, _in_worker, lambda token: (settings, token))
 
 
