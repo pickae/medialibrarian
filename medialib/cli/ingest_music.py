@@ -142,8 +142,6 @@ def chapter_time_ms(timestamp: str) -> int:
     hours, _, rest = timestamp.partition(":")
     minutes, _, seconds_and_ms = rest.rpartition(":")
     seconds, _, milliseconds = seconds_and_ms.partition(".")
-    if not milliseconds:
-        milliseconds = seconds
     return (_base_ten(hours) * 3600000 + _base_ten(minutes) * 60000
             + _base_ten(seconds) * 1000 + _base_ten(milliseconds))
 

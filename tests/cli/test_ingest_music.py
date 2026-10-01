@@ -48,6 +48,16 @@ class TestChapterTimeMs:
         invalid octal and abort the arithmetic under set -e."""
         assert im.chapter_time_ms(stamp) == expected
 
+    @pytest.mark.parametrize("stamp,expected", [
+        ("00:01:05", 65000),
+        ("00:00:00", 0),
+        ("01:00:59", 3659000),
+    ])
+    def test_a_stamp_without_a_fraction_has_no_milliseconds(self, stamp,
+                                                            expected):
+        """Not the seconds a second time: "00:01:05" is 65 s, not 65.005."""
+        assert im.chapter_time_ms(stamp) == expected
+
     @pytest.mark.parametrize("ms", [0, 13, 120, 999, 53120, 3600000, 45296789])
     def test_the_round_trip_with_the_writer_these_come_from(self, ms):
         """``time_row`` formats milliseconds and this parses them back, so the
