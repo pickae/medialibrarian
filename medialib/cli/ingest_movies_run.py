@@ -252,19 +252,10 @@ class Run:
         one that would not fit - beside it because that file system already has
         to hold the result, which turns the final move into a rename.
         """
-        need = rules._size_of(movie)
-        if need and job["wanted"]:
-            # The prepared video stream comes on top: its measured size where
-            # mediainfo reported one, and the whole film as the upper bound where
-            # it did not - a video track cannot be larger than the file it is in.
-            size = job["stream_size"]
-            need += int(size) if str(size).isdigit() else need
-        # The byte count travels as text: an unreadable size is the empty
-        # string rather than a number, and that is what tells the scratch it
-        # has nothing to size itself against.
         path, on_disk, status = ramscratch.ram_scratch_dir_for(
-            str(need) if need else "", "improveMovie",
-            os.path.dirname(movie))
+            _scratch_need(rules._size_of(movie), job["wanted"],
+                          job["stream_size"]),
+            "improveMovie", os.path.dirname(movie))
         if status != 0:
             return None, False
         return path, on_disk
@@ -520,6 +511,26 @@ def check_folders(root: str) -> None:
                                   matches=lambda name: name.endswith(".mkv")):
             log("WARNING: folder without mkv (a file may be named like the "
                 "folder): " + directory)
+
+
+def _scratch_need(film_bytes: int, video_work: bool, stream_size) -> str:
+    """The bytes one film's improvement needs in its scratch, as text: a whole
+    copy of the film, and with Dolby Vision work the prepared video stream on
+    top.
+
+    The stream is its measured size where mediainfo reported one, and the
+    whole film as the upper bound where it did not - a video track cannot be
+    larger than the file it is in. An unreadable film size is the empty
+    string rather than a number, and that is what tells the scratch it has
+    nothing to size itself against.
+    """
+    if not film_bytes:
+        return ""
+    need = film_bytes
+    if video_work:
+        need += (int(stream_size) if str(stream_size).isdigit()
+                 else film_bytes)
+    return str(need)
 
 
 def _mkvmerge(argv: list) -> tuple:

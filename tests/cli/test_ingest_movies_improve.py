@@ -253,6 +253,23 @@ class TestTheCommentaryTranscripts:
             "--commentary-flag", "0:1", "--default-track-flag", "0:0"]
 
 
+class TestTheScratchSize:
+    """A remux holds a whole copy of the film in its scratch, and Dolby Vision
+    work holds the prepared video stream beside it."""
+
+    @pytest.mark.parametrize("film,video_work,stream,expected", [
+        (1000, False, "", "1000"),
+        (1000, False, "400", "1000"),
+        (1000, True, "400", "1400"),
+        (1000, True, "", "2000"),
+        (1000, True, "1.2 GiB", "2000"),
+        (0, True, "400", ""),
+        (0, False, "", ""),
+    ])
+    def test_it_is_asked_for(self, film, video_work, stream, expected):
+        assert run_module._scratch_need(film, video_work, stream) == expected
+
+
 class TestTheEXRung:
     """Dolby Surround EX, read off the mediainfo pass and taken to the ladder."""
 
