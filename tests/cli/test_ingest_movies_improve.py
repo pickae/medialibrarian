@@ -9,6 +9,7 @@ ladder only sees what the language rule left, and the commentary exemption has t
 survive both.
 """
 
+import errno
 import os
 import sys
 
@@ -177,6 +178,32 @@ class TestWhatMkvmergeSaysDecides:
             assert handle.read() == REMUXED
         with open(remux["base"] + " (old).mkv", "rb") as handle:
             assert handle.read() == ORIGINAL
+
+
+class TestTheSwapFromATmpfsScratch:
+    """The scratch is a tmpfs and the library is on disk, so putting the
+    remux in place is a move across file systems, which a rename refuses."""
+
+    def test_the_remux_is_copied_into_place_and_the_scratch_let_go(
+            self, tmp_path, monkeypatch):
+        scratch = tmp_path / "scratch"
+        scratch.mkdir()
+        library = tmp_path / "library"
+        library.mkdir()
+        source = scratch / "Film (2020).mkv"
+        source.write_bytes(REMUXED)
+
+        def cross_device(*_args, **_kwargs):
+            raise OSError(errno.EXDEV, "Invalid cross-device link")
+
+        monkeypatch.setattr(os, "replace", cross_device)
+        monkeypatch.setattr(os, "rename", cross_device)
+
+        rules._rename_quiet(str(source), str(library / "Film (2020).mkv"))
+
+        assert (library / "Film (2020).mkv").read_bytes() == REMUXED
+        assert os.listdir(library) == ["Film (2020).mkv"]
+        assert os.listdir(scratch) == []
 
 
 class TestWhatSurvives:
