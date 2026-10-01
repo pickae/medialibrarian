@@ -69,39 +69,88 @@ _WITH_CARD = "emulated\r\nself\r\n1A2B-3C4D\r\n"
 @pytest.mark.pure
 class TestTheDevicePathsAFusePathIsTriedAt:
     """The gvfs path names a storage LABEL ("SD card"), which the phone's own
-    filesystem knows nothing about - so the part after it is tried under each
-    root the phone could be holding it in."""
+    filesystem knows nothing about - but it does say which volume was meant, so
+    the part after it is tried only under that volume's roots. Internal storage
+    usually has a DCIM of its own, and a card path that fell through to it would
+    rename the wrong folder."""
 
-    def test_the_primary_roots_come_first_and_then_the_listed_volumes(self):
-        assert cfsadb.probe_paths(_FUSE + "/SD card/DCIM/Camera",
+    @pytest.mark.parametrize("label", [
+        "SD card", "SanDisk SD card", "Carte SD", "SD-Karte", "Card",
+        "USB storage"])
+    def test_a_card_label_is_tried_at_the_listed_volumes_alone(self, label):
+        assert cfsadb.probe_paths(_FUSE + "/" + label + "/DCIM/Camera",
+                                  _WITH_CARD) == [
+            "/storage/1A2B-3C4D/DCIM/Camera"]
+
+    @pytest.mark.parametrize("label", [
+        "Internal storage", "Internal shared storage", "Phone",
+        "Interner gemeinsamer Speicher", "Memoria interna"])
+    def test_an_internal_label_is_tried_at_the_primary_roots_alone(
+            self, label):
+        assert cfsadb.probe_paths(_FUSE + "/" + label + "/DCIM/Camera",
                                   _WITH_CARD) == [
             "/sdcard/DCIM/Camera",
             "/storage/emulated/0/DCIM/Camera",
             "/storage/self/primary/DCIM/Camera",
-            "/storage/1A2B-3C4D/DCIM/Camera",
+        ]
+
+    def test_a_label_that_names_neither_is_tried_everywhere_primary_first(
+            self):
+        assert cfsadb.probe_paths(_FUSE + "/Speicher/DCIM", _WITH_CARD) == [
+            "/sdcard/DCIM",
+            "/storage/emulated/0/DCIM",
+            "/storage/self/primary/DCIM",
+            "/storage/1A2B-3C4D/DCIM",
         ]
 
     def test_self_and_emulated_are_not_tried_as_volumes_of_their_own(self):
-        probes = cfsadb.probe_paths(_FUSE + "/Internal storage/Music",
-                                    _WITH_CARD)
+        probes = cfsadb.probe_paths(_FUSE + "/Speicher/Music", _WITH_CARD)
         assert "/storage/self/Music" not in probes
         assert "/storage/emulated/Music" not in probes
 
-    @pytest.mark.parametrize("path", [
-        _FUSE + "/Internal storage",
-        _FUSE + "/Internal storage/",
-        _FUSE,
+    @pytest.mark.parametrize("path,expected", [
+        (_FUSE + "/Internal storage",
+         ["/sdcard", "/storage/emulated/0", "/storage/self/primary"]),
+        (_FUSE + "/Internal storage/",
+         ["/sdcard", "/storage/emulated/0", "/storage/self/primary"]),
+        (_FUSE + "/SD card", ["/storage/1A2B-3C4D"]),
+        (_FUSE, ["/sdcard", "/storage/emulated/0", "/storage/self/primary",
+                 "/storage/1A2B-3C4D"]),
     ])
-    def test_a_path_at_the_storage_itself_is_the_roots_themselves(self, path):
-        assert cfsadb.probe_paths(path, _WITH_CARD) == [
-            "/sdcard", "/storage/emulated/0", "/storage/self/primary",
-            "/storage/1A2B-3C4D"]
+    def test_a_path_at_the_storage_itself_is_its_roots_themselves(
+            self, path, expected):
+        assert cfsadb.probe_paths(path, _WITH_CARD) == expected
 
-    def test_a_phone_listing_no_volumes_is_tried_at_the_roots_alone(self):
-        assert cfsadb.probe_paths(_FUSE + "/Internal storage/Podcasts",
-                                  "") == [
-            "/sdcard/Podcasts", "/storage/emulated/0/Podcasts",
-            "/storage/self/primary/Podcasts"]
+    def test_a_card_path_on_a_phone_listing_no_card_has_nowhere_to_go(self):
+        assert cfsadb.probe_paths(_FUSE + "/SD card/Podcasts", "") == []
+
+
+@pytest.mark.fs
+class TestAReplayCutShort:
+    """Stopping partway is normal over adb, and the footer is the one record of
+    how far it got - so it has to measure that against the whole plan, not the
+    part the replay had reached."""
+
+    def test_the_footer_counts_every_rename_planned(self, tmp_path, capsys):
+        device = tmp_path / "device"
+        device.mkdir()
+        for name in ("A_1.jpg", "B_2.jpg", "C_3.jpg"):
+            (device / name).write_text(name)
+
+        class StopAfterOne(cfsadb.Device):
+            def move(self, source, destination):
+                if not (device / "A 1.jpg").exists():
+                    return super().move(source, destination)
+                raise KeyboardInterrupt
+
+        plan = cfsadb.Plan(dry_run=False)
+        with pytest.raises(KeyboardInterrupt):
+            cfsadb.replay(StopAfterOne("local"), str(device),
+                          {"A_1.jpg": "A 1.jpg", "B_2.jpg": "B 2.jpg",
+                           "C_3.jpg": "C 3.jpg"}, plan)
+        plan.footer()
+        assert "Done: 1 rename(s) applied on device, 0 skipped, of 3 " \
+            "planned\n" in capsys.readouterr().err
 
 
 @pytest.mark.fs
