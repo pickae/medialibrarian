@@ -1073,6 +1073,50 @@ class TestTheIdList:
 
 
 
+_LIST_WRITERS = {
+    "renames": lambda path, log: tmdblookup.write_rename_list(
+        path, [], "/library", log),
+    "conflicts": lambda path, log: tmdblookup.write_conflict_list(
+        path, [], "/library", log),
+    "duplicates": lambda path, log: tmdblookup.write_duplicate_list(
+        path, [], log),
+    "ambiguous": lambda path, log: tmdblookup.write_ambiguous_list(
+        path, [], "/library", log),
+    "near misses": lambda path, log: tmdblookup.write_near_miss_list(
+        path, [], "/library", log),
+    "aliases": lambda path, log: tmdblookup.write_alias_list(
+        path, [], "/library", log),
+    "ids": lambda path, log: tmdblookup.write_id_list(path, [], None, log),
+}
+
+
+class TestAListThatCannotBeWritten:
+    """The lists go to logs/ after the run has done its work. A logs/ that
+    will not take them is a warning naming the file and a False the caller
+    reads, and never a traceback that ends the run before its summary."""
+
+    @pytest.mark.parametrize("writer", _LIST_WRITERS.values(),
+                             ids=_LIST_WRITERS.keys())
+    def test_it_is_a_warning_and_not_a_crash(self, writer, tmp_path):
+        # A file where the folder should be refuses the write even for root.
+        (tmp_path / "logs").write_text("not a folder")
+        path = str(tmp_path / "logs" / "list.txt")
+        said: list = []
+        assert writer(path, said.append) is False
+        assert len(said) == 1
+        assert said[0].startswith("WARNING: could not write ")
+        assert path in said[0]
+
+    @pytest.mark.parametrize("writer", _LIST_WRITERS.values(),
+                             ids=_LIST_WRITERS.keys())
+    def test_and_one_that_can_says_nothing(self, writer, tmp_path):
+        path = tmp_path / "list.txt"
+        said: list = []
+        assert writer(str(path), said.append) is True
+        assert said == []
+        assert path.is_file()
+
+
 class TestTheRateLimit:
     """TMDb asks for no more than about ten requests a second, and one film
     costs several - the search, an alternative-titles call per candidate, and

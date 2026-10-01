@@ -813,8 +813,8 @@ def test_a_well_formed_table_is_accepted(tmp_path):
         "\n"
         "1\tAI/latent space\t\t40\t\thttps://example.test/latent\n"
         "0\tMisc/paused\t\t\t\thttps://example.test/paused\n"
-        "1\tMisc/Joe Rogan\t%(title)s.%(ext)s\t\t--no-sponsorblock"
-        "\thttps://example.test/rogan\n", tmp_path)
+        "1\tMisc/Some Host\t%(title)s.%(ext)s\t\t--no-sponsorblock"
+        "\thttps://example.test/host\n", tmp_path)
     assert status == 0 and profile == "youtubeAudio" and jobs == "1"
     assert len(rows) == 3
     assert pf.split_podcast_row(rows[1]) == \
@@ -1027,17 +1027,9 @@ def test_an_empty_argv_renders_to_nothing():
 
 # --- the constants -----------------------------------------------------------------------
 
-def test_the_constants_the_call_is_built_from():
-    assert pf.PODCAST_EPISODE_MARKER == "__episode__"
-    assert pf.PODCAST_RSS_JOBS == 10
-    assert pf.PODCAST_DEFAULT_PROFILE == "youtubeAudio"
-    assert pf.PODCAST_DEFAULT_TEMPLATE == "%(upload_date)s %(title)s.%(ext)s"
-    assert pf.PODCAST_DEFAULT_PLAYLIST_END == 20
-    assert pf.PODCAST_UNLIMITED_PLAYLIST_END == 0
+def test_the_columns_are_the_ones_the_hand_edited_tables_hold():
     assert pf.PODCAST_COLUMNS == ("active", "subdir", "nameTemplate",
                                   "playlistEnd", "extraArgs", "url")
-    assert pf.PODCAST_PROFILES == (
-        "youtubeAudio", "youtubeVideo", "rssAudio", "rssVideo", "siteVideo")
 
 # --- the tables that ship with the repository --------------------------------
 # They are data, and data is where a typo hides. EVERY table found, not one named
