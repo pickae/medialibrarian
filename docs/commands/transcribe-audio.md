@@ -11,6 +11,7 @@ in a mirrored output folder.
 | **Writes** | one transcript per input under `<outputDir>`: the same sub-folder structure, a new extension |
 | **Input** | never modified |
 | **Reruns** | a transcript already present in the output is left in place, so only what is new is done |
+| **Failures** | a file whisper wrote no transcript for (it exits 0 even when the GPU runs out of memory) is reported `failed` and leaves nothing behind; the run carries on, then exits 1, and a rerun tries that file again |
 | **Network** | none, beyond whisper fetching a model the first time it is used |
 
 ## Default behavior
