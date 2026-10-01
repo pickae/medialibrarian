@@ -175,11 +175,13 @@ def _nul_split(payload: bytes):
     return [os.fsdecode(entry) for entry in payload.split(b"\0") if entry]
 
 
-def resolve_device_root(device: Device, fuse_path: str):
-    """A gvfs MTP fuse path translated into the equivalent on-device path.
+def probe_paths(fuse_path: str, storage_listing: str) -> list[str]:
+    """The on-device paths a gvfs MTP fuse path may be, in the order to try.
 
-    The part after the storage label is taken and the usual device roots probed
-    for it, so no storage-name mapping has to be hard-coded.
+    The part after the storage label is appended to each of the usual device
+    roots and then to every volume `ls -1 /storage` lists (`storage_listing`),
+    so no storage-name mapping has to be hard-coded. `self` and `emulated` are
+    left out: they are the primary storage again, already among the roots.
     """
     _, marker, tail = fuse_path.partition("/gvfs/mtp:host=")
     if marker:
@@ -187,14 +189,19 @@ def resolve_device_root(device: Device, fuse_path: str):
     relative = tail.partition("/")[2] if "/" in tail else ""
 
     candidates = list(DEVICE_ROOTS)
-    listing = device._shell_output("ls -1 /storage 2>/dev/null")
-    for name in listing.splitlines():
+    for name in storage_listing.splitlines():
         name = name.rstrip("\r")
         if name and name not in ("self", "emulated"):
             candidates.append("/storage/" + name)
+    return [candidate + ("/" + relative if relative else "")
+            for candidate in candidates]
 
-    for candidate in candidates:
-        probe = candidate + ("/" + relative if relative else "")
+
+def resolve_device_root(device: Device, fuse_path: str):
+    """A gvfs MTP fuse path translated into the equivalent on-device path: the
+    first of its `probe_paths` that is a directory on the device."""
+    listing = device._shell_output("ls -1 /storage 2>/dev/null")
+    for probe in probe_paths(fuse_path, listing):
         if device.isdir(probe):
             return probe
     return None
@@ -414,7 +421,13 @@ def main(argv: list, program: str = "clean-folder-structure-adb",
 
 def _attached_devices(device: Device) -> int:
     proc = subprocess.run([device.adb, "devices"], stdout=subprocess.PIPE)
-    lines = proc.stdout.decode("utf-8", "replace").splitlines()[1:]
+    return count_attached(proc.stdout.decode("utf-8", "replace"))
+
+
+def count_attached(text: str) -> int:
+    """How many devices an `adb devices` listing shows as ready to use - not
+    the ones it lists as `unauthorized` or `offline`."""
+    lines = text.splitlines()[1:]
     return sum(1 for line in lines if line.split()[1:2] == ["device"])
 
 
