@@ -224,3 +224,149 @@ class TestTheProgressCounter:
         uncounted: an indented note, once per book that needs converting."""
         announced = re.findall(r"^\s+Converting: ", log, re.MULTILINE)
         assert len(announced) == 3, log
+
+
+@pytest.fixture
+def shelf(sandbox, tmp_path):
+    """An empty input to stock with books of known contents, and the default
+    stubs - with a converter that copies its source through, so a book's words
+    reach its text. Text mode reads a PDF with pdftotext wherever there is one,
+    so that is stubbed the same way rather than left to the host."""
+    sandbox.with_tool("ebook-convert", r'cat "$1" > "$2"')
+    sandbox.with_tool("pdftotext", r'cat "${@: -2:1}" > "${@: -1}"')
+    sandbox.with_tool("gs", _GHOSTSCRIPT)
+    sandbox.with_tool("unzip", _UNZIP)
+    sandbox.with_tool("zip", _ZIP)
+    sandbox.with_tool("convert", _CONVERT)
+    source, outputs = tmp_path / "in", tmp_path / "out"
+    source.mkdir()
+
+    def stock(contents: dict[str, str]):
+        for relative, text in contents.items():
+            path = source / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text)
+
+    def run(*flags):
+        done = sandbox.run("ingest-books", *flags, source, outputs,
+                           timeout=600)
+        assert done.returncode == 0, done.stdout + done.stderr
+        return done.stdout + done.stderr
+
+    sandbox.source = source
+    sandbox.outputs = outputs
+    sandbox.stock = stock
+    sandbox.ingest = run
+    return sandbox
+
+
+def _counts_each_book_once(log: str, total: int) -> None:
+    assert sorted(n for n, _ in _counted(log)) == list(range(1, total + 1)), log
+    assert {t for _, t in _counted(log)} == {total}, log
+
+
+class TestABookThatFailsIsStillCountedOnce:
+    """A failure is reported for that book and the run goes on: the counter
+    still reaches the number of books, each exactly once, and the failed book
+    leaves nothing in the output."""
+
+    def test_a_converter_that_fails_one_book(self, shelf):
+        shelf.stock({"good.mobi": "fine", "broken.mobi": "bad",
+                     "other.epub": "ok"})
+        shelf.with_tool("ebook-convert",
+                        r'[[ "$1" == *broken* ]] && exit 1; cat "$1" > "$2"')
+        log = shelf.ingest()
+        _counts_each_book_once(log, 3)
+        assert re.search(r"^\[\d/3\] FAILED \(convert\): broken\.mobi$", log,
+                         re.MULTILINE), log
+        assert sorted(p.name for p in shelf.outputs.iterdir()) == [
+            "good.epub", "other.epub"]
+
+    def test_ghostscript_failing_under_d(self, shelf):
+        shelf.stock({"scan.pdf": "pages", "novel.epub": "words"})
+        shelf.with_tool("gs", "exit 1")
+        log = shelf.ingest("-d")
+        _counts_each_book_once(log, 2)
+        assert re.search(r"^\[\d/2\] FAILED \(pdf\): scan\.pdf$", log,
+                         re.MULTILINE), log
+        assert sorted(p.name for p in shelf.outputs.iterdir()) == [
+            "novel.epub"]
+
+    def test_only_the_final_re_conversion_failing_still_emits_the_epub(
+            self, shelf):
+        """The re-conversion is the polish, not the book: when it fails, the
+        epub that went in comes out instead, and that is a success."""
+        shelf.stock({"novel.epub": "the epub as it came in"})
+        shelf.with_tool("ebook-convert", "exit 1")
+        log = shelf.ingest()
+        _counts_each_book_once(log, 1)
+        assert re.search(r"^\[1/1\] Done: novel\.epub$", log, re.MULTILINE), log
+        assert (shelf.outputs / "novel.epub").read_text() \
+            == "the epub as it came in"
+
+
+class TestTextMode:
+    """-t turns every book into one raw .txt in the mirrored folder, then word-
+    counts them into a summary named after the output folder."""
+
+    @pytest.fixture
+    def run(self, shelf):
+        shelf.stock({"fiction/novel.mobi": "one two three four",
+                     "fiction/story.epub": "one",
+                     "manuals/guide.pdf": "one two three four five six",
+                     "notes.txt": "one two"})
+        return shelf, shelf.ingest("-t")
+
+    @staticmethod
+    def _summary(shelf) -> list[tuple[int, str]]:
+        rows = (shelf.outputs / "out.txt").read_text().splitlines()
+        return [(int(words), path) for words, path
+                in (row.split("\t") for row in rows)]
+
+    def test_every_book_becomes_one_txt_in_its_mirrored_folder(self, run):
+        shelf, _ = run
+        assert blackbox.tree_of(shelf.outputs) == [
+            "fiction", "fiction/novel.txt", "fiction/story.txt",
+            "manuals", "manuals/guide.txt", "notes.txt", "out.txt"]
+        assert (shelf.outputs / "fiction" / "novel.txt").read_text() \
+            == "one two three four"
+
+    def test_the_summary_is_sorted_by_word_count_most_first(self, run):
+        shelf, _ = run
+        assert [(words, path.rpartition("/")[2])
+                for words, path in self._summary(shelf)] == [
+            (6, "guide.txt"), (4, "novel.txt"), (2, "notes.txt"),
+            (1, "story.txt")]
+
+    def test_the_summary_does_not_count_itself(self, run):
+        shelf, log = run
+        assert not any(path.endswith("/out.txt")
+                       for _, path in self._summary(shelf))
+        assert "Total words across 4 file(s): 13" in log
+
+    def test_each_book_is_counted_once(self, run):
+        _, log = run
+        _counts_each_book_once(log, 4)
+
+
+class TestTextModeOverTextAlone:
+    """When every input is already a .txt nothing is converted: the originals
+    are measured where they are."""
+
+    @pytest.fixture
+    def run(self, shelf):
+        shelf.stock({"a.txt": "one two three", "sub/b.txt": "one"})
+        before = {path: path.read_bytes()
+                  for path in shelf.source.rglob("*") if path.is_file()}
+        tree = blackbox.tree_of(shelf.source)
+        return shelf, shelf.ingest("-t"), before, tree
+
+    def test_the_input_is_byte_identical_afterwards(self, run):
+        shelf, _, before, tree = run
+        assert blackbox.tree_of(shelf.source) == tree
+        assert {path: path.read_bytes() for path in before} == before
+
+    def test_the_output_holds_only_the_summary(self, run):
+        shelf, log, _, _ = run
+        assert blackbox.tree_of(shelf.outputs) == ["out.txt"]
+        assert "Total words across 2 file(s): 4" in log
