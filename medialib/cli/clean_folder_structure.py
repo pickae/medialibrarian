@@ -253,8 +253,6 @@ def fix_date_prefixes(root: str, skips: safety.SkipLog) -> None:
         if not match:
             continue
         new_base = "%s%s%s %s" % match.groups()
-        if new_base == base:
-            continue
         target = os.path.join(os.path.dirname(path), new_base)
         if safety.safe_rename(path, target, skips):
             fixed += 1
