@@ -106,6 +106,14 @@ def _pin_locale() -> str | None:
 
 PINNED_LOCALE = _pin_locale()
 
+# --- coverage ----------------------------------------------------------------
+# Under `pytest --cov`, every command a case starts measures itself too, and a
+# relative data file lands in the child's working directory - the case's own
+# tree, which several black-box cases assert is left exactly as it was. An
+# absolute path keeps every process's data at the checkout root instead.
+os.environ.setdefault(
+    "COVERAGE_FILE", str(pathlib.Path(__file__).resolve().parent.parent / ".coverage"))
+
 # --- macOS -------------------------------------------------------------------
 # macOS support is aspirational: nobody has a Mac to run it on, so the CI job
 # there reports rather than gates. What a Mac host cannot do - a tool the case
