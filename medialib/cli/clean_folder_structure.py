@@ -18,8 +18,6 @@ into it. Every step here is name-only, which is what makes an empty stand-in per
 file a faithful preview rather than an approximation.
 """
 
-import atexit
-import contextlib
 import os
 import re
 import shutil
@@ -477,13 +475,7 @@ def main(argv: list, program: str = "clean-folder-structure",
         return safety.fail_no_relevant_input(
             input_path, "files or sub-folders whose names could be cleaned")
 
-    inherited = os.environ.get("SAFETY_LOG", "")
-    skip_log = safety.init_safety_log()
-    if skip_log != inherited:
-        # A temp file of this run's own, so this run takes it away - after the
-        # footer has read it, whichever way the run ends. A wrapper's is left
-        # to the wrapper.
-        atexit.register(_remove_quietly, skip_log)
+    safety.init_safety_log()
     skips = safety.RunSkipLog()
     # The recap of every rename held back to avoid an overwrite. Cleaning a large
     # tree takes a while, and a run stopped part-way has still renamed things and
@@ -558,11 +550,6 @@ def main(argv: list, program: str = "clean-folder-structure",
         if simulation:
             simulation.clean_up()
     return 0
-
-
-def _remove_quietly(path: str) -> None:
-    with contextlib.suppress(OSError):
-        os.remove(path)
 
 
 def cli(argv: list | None = None) -> int:

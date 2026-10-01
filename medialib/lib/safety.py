@@ -643,7 +643,28 @@ def init_safety_log(path: str = "") -> str:
     descriptor, path = tempfile.mkstemp(prefix="safetySkips.", dir=directory)
     os.close(descriptor)
     os.environ["SAFETY_LOG"] = path
+    # A temp file of this run's own, so this run takes it away again - at exit,
+    # after the footer has read it, whether the run finished or was stopped. A
+    # named or inherited log belongs to whoever named or opened it.
+    remove_at_exit(path)
     return path
+
+
+def remove_at_exit(path: str) -> None:
+    """Remove ``path`` when this process exits - after the footer, which is
+    printed before the exit hooks run whichever way the run ends."""
+    atexit.register(_remove_if_owner, path, os.getpid())
+
+
+def _remove_if_owner(path: str, owner: int) -> None:
+    # A forked worker that leaves through the ordinary exit runs the parent's
+    # hooks too, and the file is still the parent's to read.
+    if os.getpid() != owner:
+        return
+    try:
+        os.remove(path)
+    except OSError:
+        pass
 
 
 def report_safety_skips(stream=None) -> None:

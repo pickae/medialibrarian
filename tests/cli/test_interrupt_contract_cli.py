@@ -191,6 +191,35 @@ class TestAnInterruptedConversion:
         assert stopped.leaked == []
 
 
+class TestAnInterruptedConversionLeavesNothingInTheTempFolder:
+    """The logs a run makes for itself in TMPDIR - the renames it held back, the
+    outputs of the wrong length - are read by the footer an interrupt still
+    prints, and removed after it, just as at the end of a finished run."""
+
+    @pytest.fixture
+    def stopped(self, interrupt, tmp_path):
+        source = interrupt.tree("audioIn", *_tracks(8))
+        # A cover already holds the name the .jpeg would be renamed to.
+        (source / "cover.jpeg").write_text("jpeg")
+        (source / "cover.jpg").write_text("jpg")
+        temp = tmp_path / "temp"
+        temp.mkdir()
+        stopped = interrupt.stop(signal.SIGTERM, "convert-audio", "-j", "1",
+                                 source, interrupt.outputs,
+                                 env={"TMPDIR": str(temp)})
+        return stopped, temp
+
+    def test_the_skip_is_still_reported(self, stopped):
+        result, _ = stopped
+        _assert_stopped_cleanly(result)
+        assert "Safety: skipped 1 rename(s) to avoid overwrite" in result.log
+
+    def test_the_temp_folder_is_empty_afterwards(self, stopped):
+        result, temp = stopped
+        _assert_stopped_cleanly(result)
+        assert list(temp.iterdir()) == []
+
+
 class TestAClosedTerminal:
     """SIGHUP: the same handler, and the interruption nobody is watching the
     output of - so the report being written matters more here, not less."""

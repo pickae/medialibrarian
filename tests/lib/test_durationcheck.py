@@ -242,3 +242,22 @@ class TestTheRecord:
         assert durationcheck.init_log() == str(inherited)
         durationcheck.record("two.m4b", 60, 30)
         assert len(durationcheck.failures()) == 2
+
+    def test_only_a_log_of_its_own_is_removed_at_exit(self, tmp_path,
+                                                      monkeypatch):
+        hooks = []
+        monkeypatch.setattr(durationcheck.safety.atexit, "register",
+                            lambda *call: hooks.append(call))
+        monkeypatch.delenv(durationcheck.LOG_VARIABLE, raising=False)
+        monkeypatch.setenv("TMPDIR", str(tmp_path))
+        named = tmp_path / "named.log"
+        durationcheck.init_log(str(named))
+        assert hooks == []
+
+        monkeypatch.delenv(durationcheck.LOG_VARIABLE)
+        own = durationcheck.init_log()
+        for hook, *args in hooks:
+            hook(*args)
+
+        assert not os.path.exists(own)
+        assert named.exists()
