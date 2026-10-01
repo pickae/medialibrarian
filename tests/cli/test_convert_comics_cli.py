@@ -183,6 +183,44 @@ class TestThePackaging:
         assert blackbox.tree_of(base) == []
 
 
+class TestAnArchiveThatCannotBeTrusted:
+    """A book whose archive asks to write outside its folder, or cannot even be
+    read, is not unpacked at all - and the good book beside it is still made."""
+
+    @pytest.fixture
+    def run(self, comics, tmp_path):
+        comics.with_tool("identify", _IDENTIFY_FLAT)
+        comics.with_tool("convert", _CONVERT_STAMPING)
+        comics.with_tool("fdupes", "exit 0")
+        _cbz(comics.inputs, "Alpha.cbz", {"01.jpg": "alpha 1"})
+        # zip(1) will not store a "../" name, so this one is written directly.
+        with zipfile.ZipFile(comics.inputs / "Escaping.cbz", "w") as packed:
+            packed.writestr("01.jpg", "a page")
+            packed.writestr("../x.jpg", "a page beside the book's folder")
+        (comics.inputs / "Corrupt.cbz").write_bytes(b"PK\x03\x04 not a zip")
+        done = comics.run("convert-comics", comics.inputs, comics.outputs)
+        assert done.returncode == 0, done.stdout + done.stderr
+        return comics, done.stdout + done.stderr, tmp_path
+
+    def test_the_warning_names_the_escaping_member(self, run):
+        _, log, _ = run
+        assert re.search(r'WARNING: not unpacking "Escaping\.cbz": '
+                         r'.*\(\.\./x\.jpg\)', log), log
+
+    def test_the_corrupt_archive_is_refused_by_name(self, run):
+        _, log, _ = run
+        assert 'WARNING: not unpacking "Corrupt.cbz"' in log, log
+
+    def test_nothing_is_written_outside_the_work_folder(self, run):
+        _, _, root = run
+        assert list(root.rglob("x.jpg")) == []
+
+    def test_only_the_good_book_is_packaged(self, run):
+        comics, _, _ = run
+        assert blackbox.tree_of(comics.outputs) == ["Alpha.cbz"]
+        assert len(_entries(comics.outputs / "Alpha.cbz")) == 1
+
+
 class TestThePageStatistics:
     """The closing report's page total, its seconds per page, and the share each
     kind of page ended in.

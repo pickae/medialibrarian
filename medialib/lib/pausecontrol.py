@@ -101,21 +101,14 @@ def abort_requested() -> bool:
 # --- arming -------------------------------------------------------------------
 
 
-def init(directory: str | None = None) -> None:
-    """Arm the pause state. Inheritance wins, as it does for the abort flag: when a
-    wrapper has already armed a pause for the run, the inner script shares THAT
-    state, or a keypress would only reach one layer of it. Given a directory the
-    state goes there (a caller that owns a RAM scratch passes one from there, so it
-    goes back with the rest of the run's scratch); without one a private one is
-    made."""
+def init(pause_dir: str) -> None:
+    """Arm the pause state in ``pause_dir``. Inheritance wins, as it does for the
+    abort flag: when a wrapper has already armed a pause for the run, the inner
+    script shares THAT state, or a keypress would only reach one layer of it. The
+    caller passes a directory from its RAM scratch, so the state goes back with
+    the rest of the run's scratch."""
     if _env("PAUSE_DIR"):
         return
-    if directory:
-        pause_dir = directory
-    else:
-        import tempfile
-
-        pause_dir = tempfile.mkdtemp(prefix="pauseControl.")
     _set_state("PAUSE_DIR", pause_dir)
     _set_state("PAUSE_JOBS", os.path.join(pause_dir, "jobs"))
     _set_state("PAUSE_FLAG", os.path.join(pause_dir, "paused"))
@@ -493,14 +486,15 @@ def restore_pause_terminal() -> None:
         pass
 
 
-def pause_key_reader(stream, now: int, error=None) -> None:
+def pause_key_reader(stream, error=None) -> None:
     """The key reader itself, run against a key stream: ``p`` holds the run off,
     ``r`` lets it carry on, and anything else is ignored rather than acted on. The
     loop comes up for air each turn - it is how a reader notices that the run has
     been interrupted and stops reading a console it no longer owns; a stream that
     ends for any other reason means there is no console to read from any more, and
     the reader leaves quietly and the run carries on without the keys, which is the
-    same thing that happens when there was no terminal to begin with."""
+    same thing that happens when there was no terminal to begin with. The clock is
+    read as each key arrives, since a pause lasts from one keypress to another."""
     from medialib.lib import formatting
 
     while True:
@@ -510,6 +504,7 @@ def pause_key_reader(stream, now: int, error=None) -> None:
         if not key:
             break
         key = key.decode("utf-8", "replace") if isinstance(key, bytes) else key
+        now = _time_now()
         if key in ("p", "P"):
             if not pause_requested():
                 pause_jobs(now)
@@ -546,7 +541,7 @@ def start_pause_keys() -> bool:
 
     def _run() -> None:
         try:
-            pause_key_reader(console, int(_time_now()))
+            pause_key_reader(console)
         finally:
             console.close()
 

@@ -12,7 +12,10 @@ What is pinned here:
 import errno
 import io
 import os
+import pathlib
+import shutil
 import sys
+import tempfile
 
 import pytest
 
@@ -348,6 +351,7 @@ class TestLowerCasingExtensions:
         safety.lower_case_ending(str(tmp_path / ".HIDDEN"))
         assert (tmp_path / ".HIDDEN").exists()
 
+    @conftest.needs_case_sensitive_fs
     def test_a_collision_is_refused_rather_than_resolved(self, tmp_path):
         (tmp_path / "x.MP3").write_text("newcomer")
         (tmp_path / "x.mp3").write_text("already here")
@@ -404,6 +408,95 @@ class TestLowerCasingExtensions:
 
         safety.lower_case_extensions(str(tmp_path))
         assert (tmp_path / "link.MP3").is_symlink()
+
+
+def _folds_case(directory) -> bool:
+    probe = directory / "case-probe.TMP"
+    probe.touch()
+    try:
+        return (directory / "case-probe.tmp").exists()
+    finally:
+        probe.unlink()
+
+
+@pytest.fixture
+def folding_dir(tmp_path):
+    """A fresh folder on a case-insensitive filesystem.
+
+    The test's own temporary folder where that already folds case (a Mac), or
+    a fresh folder under $MEDIALIB_TEST_FOLDING_DIR - a FAT or exFAT mount, say -
+    where it does not. Skipped when neither is available.
+    """
+    if _folds_case(tmp_path):
+        yield tmp_path
+        return
+    base = os.environ.get("MEDIALIB_TEST_FOLDING_DIR", "")
+    if not base:
+        pytest.skip("no case-insensitive filesystem to test on; "
+                    "set MEDIALIB_TEST_FOLDING_DIR to a folder on one")
+    made = pathlib.Path(tempfile.mkdtemp(dir=base))
+    if not _folds_case(made):
+        pytest.skip("MEDIALIB_TEST_FOLDING_DIR does not fold case")
+    yield made
+    shutil.rmtree(made, ignore_errors=True)
+
+
+@pytest.mark.fs
+class TestACaseOnlyRename:
+    """On a filesystem that folds case, ``01.mp3`` finds ``01.MP3`` - the very
+    file being renamed - and that is not a collision."""
+
+    def test_the_new_spelling_is_what_the_folder_lists(self, folding_dir):
+        (folding_dir / "01.MP3").write_text("audio")
+        log = safety.SkipLog()
+
+        assert safety.safe_rename(str(folding_dir / "01.MP3"),
+                                  str(folding_dir / "01.mp3"), log) is True
+        assert os.listdir(folding_dir) == ["01.mp3"]
+        assert (folding_dir / "01.mp3").read_text() == "audio"
+        assert log.skips == []
+
+    def test_a_folder_can_be_respelled_with_what_it_holds(self, folding_dir):
+        (folding_dir / "BOOK").mkdir()
+        (folding_dir / "BOOK" / "01.mp3").write_text("audio")
+
+        assert safety.safe_rename(str(folding_dir / "BOOK"),
+                                  str(folding_dir / "Book")) is True
+        assert os.listdir(folding_dir) == ["Book"]
+        assert (folding_dir / "Book" / "01.mp3").read_text() == "audio"
+
+    def test_lowering_extensions_lowers_them(self, folding_dir):
+        (folding_dir / "01.MP3").touch()
+        (folding_dir / "02.Mp3").touch()
+
+        safety.lower_case_extensions(str(folding_dir))
+        assert sorted(os.listdir(folding_dir)) == ["01.mp3", "02.mp3"]
+
+    def test_a_different_file_at_the_name_is_still_refused(self, folding_dir):
+        (folding_dir / "a.mp3").write_text("newcomer")
+        (folding_dir / "B.mp3").write_text("already here")
+        log = safety.SkipLog()
+
+        assert safety.safe_rename(str(folding_dir / "a.mp3"),
+                                  str(folding_dir / "b.mp3"), log) is False
+        assert (folding_dir / "a.mp3").read_text() == "newcomer"
+        assert (folding_dir / "B.mp3").read_text() == "already here"
+        assert log.skips == [(str(folding_dir / "a.mp3"),
+                              str(folding_dir / "b.mp3"))]
+
+    @_POSIX_LINKS
+    @conftest.needs_case_sensitive_fs
+    def test_a_hard_link_at_the_other_spelling_is_a_collision(self, tmp_path):
+        """Same file, but a name of its own in the folder: renaming onto it
+        would drop that name, so it is refused like any other."""
+        (tmp_path / "x.MP3").write_text("audio")
+        os.link(tmp_path / "x.MP3", tmp_path / "x.mp3")
+        log = safety.SkipLog()
+
+        assert safety.safe_rename(str(tmp_path / "x.MP3"),
+                                  str(tmp_path / "x.mp3"), log) is False
+        assert sorted(os.listdir(tmp_path)) == ["x.MP3", "x.mp3"]
+        assert len(log.skips) == 1
 
 
 @pytest.mark.fs

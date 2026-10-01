@@ -264,6 +264,24 @@ class TestDropAlternateFormats:
         write("015.psd", size="fail", picture="p15")
         assert cc.drop_alternate_formats(str(book)) == []
 
+    @pytest.mark.parametrize("answer", [
+        # compare's own "failed" status, with the metric it would print had
+        # it worked, so only the status can be what keeps the page
+        'printf "655 (0.01)" >&2; exit 2',
+        # a status that says "compared", and nothing on stderr to read
+        "exit 0",
+        # a status that says "compared", and an error instead of the metric
+        'printf "compare: unable to open image" >&2; exit 1',
+    ], ids=["failed", "silent", "unparseable"])
+    def test_a_compare_that_says_nothing_usable_keeps_both_pages(
+            self, pages, stub_bin, answer):
+        book, write = pages
+        write("015.jpg", picture="p15")
+        write("015.psd", picture="p15")
+        _stub(str(stub_bin), "compare", answer + "\n")
+        assert cc.drop_alternate_formats(str(book)) == []
+        assert sorted(os.listdir(str(book))) == ["015.jpg", "015.psd"]
+
     def test_a_book_without_shared_names_is_not_compared(self, pages,
                                                          stub_bin):
         book, write = pages

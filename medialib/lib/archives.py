@@ -612,10 +612,9 @@ def extract_archive(file: str, dest: str) -> int:
         # reads it as one.
         status = _run(["unrar", "x", "-o+", "-idq", "--", file, dest + "/"])
     elif ext == "7z":
-        seven_zip = seven_zip_command()
-        if not seven_zip:
-            return 1
-        status = _run([seven_zip, "x", "-y", "-o" + dest, "--", file])
+        # A host without 7-Zip never gets here: it cannot list the members, so
+        # the archive was refused above.
+        status = _run([seven_zip_command(), "x", "-y", "-o" + dest, "--", file])
     else:
         # The tar family, compression and all.
         status = _extract_tar(file, dest, ext)
