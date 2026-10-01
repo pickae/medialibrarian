@@ -276,3 +276,18 @@ class TestTheOptionalToolWarnings:
 
     def test_an_input_without_pdfs_hears_nothing_of_poppler(self, warn):
         assert "poppler" not in warn(["mp3"])
+
+
+class TestCleanup:
+    def test_a_chain_of_empty_folders_the_run_made_is_given_back_whole(
+            self, tmp_path):
+        _tree(tmp_path, "a/b/c/")
+        census_run._cleanup("", str(tmp_path / "a"))
+        assert not os.path.exists(tmp_path / "a")
+
+    def test_a_folder_holding_a_report_survives_and_its_empty_siblings_go(
+            self, tmp_path):
+        _tree(tmp_path, "a/b/c/", "a/reports/Films.txt")
+        census_run._cleanup("", str(tmp_path / "a"))
+        assert os.path.isfile(tmp_path / "a" / "reports" / "Films.txt")
+        assert not os.path.exists(tmp_path / "a" / "b")

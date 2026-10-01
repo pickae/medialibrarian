@@ -707,12 +707,14 @@ def _cleanup(scratch, created_out_root):
     ramscratch.run_exit_cleanup()
     if not created_out_root:
         return
-    for parent, dirs, files in os.walk(created_out_root, topdown=False):
-        if not dirs and not files:
-            try:
-                os.rmdir(parent)
-            except OSError:
-                pass
+    # Not by os.walk's own listing, which was taken before the children below
+    # were removed: a folder that held only an empty folder would still look
+    # occupied. rmdir itself refuses a folder that is not empty.
+    for parent, _dirs, _files in os.walk(created_out_root, topdown=False):
+        try:
+            os.rmdir(parent)
+        except OSError:
+            pass
 
 
 def run(arguments, depth, out_dir, run_bi, separator, extension,
