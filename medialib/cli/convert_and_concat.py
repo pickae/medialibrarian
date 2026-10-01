@@ -145,21 +145,14 @@ def holds_one_audio_type(directory: str) -> bool:
     return len(kinds) == 1
 
 
-def holds_ingestible_audio(directory: str, depth=None) -> bool:
-    """True when <directory> holds a file the transcoding phase would ingest -
-    audio, or video to take the audio from.
-
-    Asked in two shapes: over a whole tree, to decide whether it is worth
-    handing to the transcoder at all, and one level deep, which is what makes a
-    folder ONE output file.
-    """
+def holds_ingestible_audio(directory: str) -> bool:
+    """True when <directory>'s tree holds a file the transcoding phase would
+    ingest - audio, or video to take the audio from."""
     wanted = _ingestible_names()
-    for _parent, dirs, names in os.walk(directory):
+    for _parent, _dirs, names in os.walk(directory):
         for name in names:
             if enums.lower_extension_of(name) in wanted:
                 return True
-        if depth == 1:
-            del dirs[:]
     return False
 
 
