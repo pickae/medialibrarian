@@ -81,9 +81,13 @@ exit 0
 # was asked to do, which is how the cases below can tell WHICH file the lossless
 # copy was made from. The "-" guard is the shared stub's: an analysis-only call
 # ends in the "-" of "-f null -", which is stdout and not a file to create.
+# STUB_OPUS_FAILS makes the Opus encode fail the way libopus does: a status and
+# no file.
 _FFMPEG = r"""
 printf '%s\n' "$*" >> "$STUB_FFMPEG_LOG"
-out="${!#}"; [[ "$out" == "-" ]] || printf x > "$out"
+out="${!#}"
+[[ -n "${STUB_OPUS_FAILS:-}" && "$*" == *libopus* ]] && exit 1
+[[ "$out" == "-" ]] || printf x > "$out"
 """
 
 # The book-to-text step the queue is ordered by, stubbed as a copy - so a
@@ -257,6 +261,64 @@ class TestASecondRun:
                       for p in library.outputs.rglob("*") if p.is_file()) \
             == before
         assert "Skipped (done):    2" in log, log
+
+
+class TestTwoBooksOfTheSameName:
+    """`story.epub` and `story.pdf` in one folder both belong at `story.opus`.
+    Both are read, both are kept, and the next run takes both as done."""
+
+    @pytest.fixture
+    def siblings(self, library, tmp_path):
+        source = tmp_path / "siblings"
+        source.mkdir()
+        (source / "story.epub").write_text("one two three")
+        (source / "story.pdf").write_text("one two three four")
+        return library, source, tmp_path / "siblings.out"
+
+    def test_each_comes_out_as_an_audiobook_of_its_own(self, siblings):
+        library, source, outputs = siblings
+        log = library.read("-l", "deu", source, outputs,
+                           STUB_WRITES_MASTER="1")
+        assert "Read:              2" in log, log
+        for extension in ("opus", "flac"):
+            names = sorted(p.name for p in (outputs / extension).iterdir())
+            assert len(names) == 2, names
+            assert "story.%s" % extension in names, names
+            assert all(re.fullmatch(r"story( \(\d+\))?\.%s" % extension, name)
+                       for name in names), names
+
+    def test_a_second_run_reads_neither_again(self, siblings):
+        library, source, outputs = siblings
+        library.read("-l", "deu", source, outputs, STUB_WRITES_MASTER="1")
+        before = blackbox.tree_of(outputs)
+        library.calls.write_text("")
+        log = library.read("-l", "deu", source, outputs, STUB_WRITES_MASTER="1")
+        assert library.engine_calls() == []
+        assert "Skipped (done):    2" in log, log
+        assert blackbox.tree_of(outputs) == before
+
+
+class TestAnOpusEncodeThatFails:
+    """The lossless file is not published without its Opus either. The resume
+    check looks for the Opus, so a FLAC left on its own would be read again and
+    published again by every later run."""
+
+    def test_nothing_is_published_and_the_book_is_failed(self, library):
+        log = library.read("-l", "deu", library.source, library.outputs,
+                           STUB_WRITES_MASTER="1", STUB_OPUS_FAILS="1")
+        assert "could not be encoded to Opus" in log, log
+        assert "Failed:            2" in log, log
+        assert [p for p in library.outputs.rglob("*") if p.is_file()] == []
+
+    def test_a_run_after_it_reads_the_books_once(self, library):
+        library.read("-l", "deu", library.source, library.outputs,
+                     STUB_WRITES_MASTER="1", STUB_OPUS_FAILS="1")
+        library.calls.write_text("")
+        library.read("-l", "deu", library.source, library.outputs,
+                     STUB_WRITES_MASTER="1")
+        assert len(library.engine_calls()) == 2
+        assert len(list(library.outputs.rglob("*.flac"))) == 2
+        assert len(list(library.outputs.rglob("*.opus"))) == 2
 
 
 class TestAConversionThatLeavesNoLosslessMaster:
