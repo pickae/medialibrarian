@@ -446,3 +446,32 @@ class TestTheChapterWordIsSpacedFromItsNumber:
     @pytest.mark.parametrize("folder", ["Tracker Notes", "Pistes en bois"])
     def test_a_longer_word_is_left_whole(self, tmp_path, folder):
         assert self._named(tmp_path, folder) == [folder]
+
+
+class TestEveryOutputIsNamedInsideTheOutputFolder:
+    """Whatever the cleaning takes away, each book keeps a name of its own,
+    with nothing trailing it, directly under the output folder."""
+
+    def _named(self, tmp_path, *folders):
+        for folder in folders:
+            (tmp_path / "in" / folder).mkdir(parents=True)
+        _inputs, outputs = ca.name_output_files(str(tmp_path / "in"), "/out")
+        assert {os.path.dirname(path) for path in outputs} == {"/out"}
+        return [os.path.basename(path) for path in outputs]
+
+    def test_a_name_that_is_all_number_carries_no_trailing_space(
+            self, tmp_path):
+        assert self._named(tmp_path, "Track01", "Track02") == ["01", "02"]
+
+    def test_a_word_that_ends_one_name_is_not_a_crop_of_another(
+            self, tmp_path):
+        """"Track" closing one name is not the cut-off start of the other
+        name's "Trackers Guide": folder names are not truncated."""
+        assert self._named(tmp_path, "Back Track", "Trackers Guide") == [
+            "Back Track", "Trackers Guide"]
+
+    def test_names_that_clean_to_the_same_text_are_not_emptied(
+            self, tmp_path):
+        """Cleaned, both read "Alpha", and the common text of the pair is the
+        whole of it. Telling them apart is the taken-name refusal's job."""
+        assert self._named(tmp_path, "Alpha", "Alpha.") == ["Alpha", "Alpha"]

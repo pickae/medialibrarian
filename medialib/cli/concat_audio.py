@@ -457,13 +457,17 @@ def name_output_files(input_dir: str, output_dir: str) -> tuple:
         names.append(cleaned)
 
     # The collective pass only means anything with more than one folder.
+    # "folders": a folder name is never truncated, so a word ending one name
+    # is not the cut-off start of another's ("Back Track", "Trackers Guide").
     if len(input_paths) > 1:
-        clean_names = cleannamescollectively.clean_names_collectively(names)
+        clean_names = cleannamescollectively.clean_names_collectively(
+            names, "folders")
     else:
         clean_names = list(names)
 
     # A prefix that was blocked by common text in front of it can be split off
     # now that the text is gone.
+    first_prefixes = list(prefixes)
     if not prefixes[0]:
         prefixes, cleaner_names = [], []
         for name in clean_names:
@@ -477,10 +481,14 @@ def name_output_files(input_dir: str, output_dir: str) -> tuple:
     output_paths = []
     for index, name in enumerate(cleaner_names):
         prefix = prefixes[index]
+        # Names the individual pass left identical have nothing but common
+        # text, and an empty one would put the book beside the output folder.
+        if not (prefix or name):
+            prefix, name = first_prefixes[index], names[index]
         # A dot in a folder name would not make an acceptable file name.
         name = name.replace(".", "")
         path = os.path.join(output_dir,
-                            "%s %s" % (prefix, name) if prefix else name)
+                            " ".join(part for part in (prefix, name) if part))
         output_paths.append(path.replace("//", "/"))
 
     return input_paths, output_paths
