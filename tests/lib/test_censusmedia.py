@@ -421,6 +421,34 @@ class TestVideoRow:
         # where the whole 6 Mbit would have been adequate
         assert row.split(",")[4] == "starved"
 
+    def test_dolby_vision_is_read_from_the_side_data_ffprobe_attaches(
+            self, probe):
+        """With no mediainfo the claim comes from the stream's own side data:
+        a profile 8 film over a PQ base layer, the way ffprobe describes it."""
+        document = json.loads(json.dumps(self.FILM))
+        document["streams"][0].update({
+            "codec_name": "hevc", "color_transfer": "smpte2084",
+            "side_data_list": [
+                {"side_data_type": "DOVI configuration record",
+                 "dv_version_major": 1, "dv_version_minor": 0,
+                 "dv_profile": 8, "dv_level": 6, "rpu_present_flag": 1,
+                 "el_present_flag": 0, "bl_present_flag": 1,
+                 "dv_bl_signal_compatibility_id": 1}]})
+        row, _reason = self._row(probe, document)
+        assert row.split(",")[9] == "DolbyVision+HDR10"
+
+    def test_hdr_side_data_that_is_not_a_dovi_record_claims_nothing(
+            self, probe):
+        document = json.loads(json.dumps(self.FILM))
+        document["streams"][0].update({
+            "codec_name": "hevc", "color_transfer": "smpte2084",
+            "side_data_list": [
+                {"side_data_type": "Mastering display metadata"},
+                {"side_data_type": "Content light level metadata",
+                 "max_content": 1000, "max_average": 400}]})
+        row, _reason = self._row(probe, document)
+        assert row.split(",")[9] == "HDR10"
+
 
 class TestContainerName:
     @pytest.mark.parametrize("formats,extension,expected", [

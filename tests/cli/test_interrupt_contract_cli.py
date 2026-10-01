@@ -301,3 +301,36 @@ class TestALongRunningIngest:
     def test_it_leaves_no_scratch_behind(self, stopped):
         _assert_stopped_cleanly(stopped)
         assert stopped.leaked == []
+
+
+class TestAnInterruptedCensus:
+    """`content-census -b`, stopped while a probe is in flight: the report of
+    the part it read is kept, and the cubes are not built from it, since a cube
+    cannot say it was built from half a library."""
+
+    @pytest.fixture
+    def stopped(self, interrupt):
+        built = interrupt.work / "duckdbWasRun"
+        interrupt.with_tool("duckdb", ': > "%s"' % built)
+        library = interrupt.tree("Shelf", "a.txt", *_tracks(4, "mp3"))
+        stopped = interrupt.stop(signal.SIGTERM, "content-census", "-b",
+                                 library)
+        stopped.library = library
+        stopped.built = built
+        return stopped
+
+    def test_it_exits_with_the_signals_status(self, stopped):
+        _assert_stopped_cleanly(stopped)
+        assert "Interrupted" in stopped.log
+
+    def test_the_report_of_what_was_read_is_kept(self, stopped):
+        assert (stopped.library / "booksShelf.csv").is_file(), stopped.log
+
+    def test_the_cubes_are_not_built_from_it(self, stopped):
+        assert "the cubes were NOT built" in stopped.log, stopped.log
+        assert not stopped.built.exists()
+        assert not list(stopped.library.glob("*.duckdb"))
+
+    def test_it_leaves_no_scratch_behind(self, stopped):
+        _assert_stopped_cleanly(stopped)
+        assert stopped.leaked == []
