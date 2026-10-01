@@ -40,15 +40,22 @@ FIXTURE = [
 ]
 
 
+ORIGINAL = b"the film as it came"
+REMUXED = b"the film as mkvmerge wrote it"
+
+
 @pytest.fixture
-def remux(tmp_path, monkeypatch):
+def remux(tmp_path, monkeypatch, request):
     """One film through the improvement, with mkvmerge recording rather than
-    running: what comes back is the argv it was handed."""
+    running: what comes back is the argv it was handed. mkvmerge exits with
+    the status the test parametrizes it with, 0 when it does not."""
+    mkvmerge_status = getattr(request, "param", 0)
     folder = tmp_path / "Film (2020)"
     folder.mkdir()
     movie = str(folder / "Film (2020).mkv")
     base = str(folder / "Film (2020)")
-    open(movie, "w").close()
+    with open(movie, "wb") as handle:
+        handle.write(ORIGINAL)
 
     # The sidecars that drive the swap, the FLAC exception and the appends.
     for name in ("_0.opus",                       # track 0 -> swap
@@ -92,8 +99,9 @@ def remux(tmp_path, monkeypatch):
         recorded.append(argv)
         out = argv[argv.index("-o") + 1]
         os.makedirs(os.path.dirname(out), exist_ok=True)
-        open(out, "w").close()
-        return 0, ""
+        with open(out, "wb") as handle:
+            handle.write(REMUXED)
+        return mkvmerge_status, "a message" if mkvmerge_status else ""
     monkeypatch.setattr(run_module, "_mkvmerge", stub)
 
     state = run_module.Run(script_dir="", ram_root=str(tmp_path),
@@ -101,7 +109,7 @@ def remux(tmp_path, monkeypatch):
     run_module.improve_main_movies(state, str(tmp_path))
     return {"root": str(tmp_path), "movie": movie, "base": base,
             "argv": recorded[0] if recorded else [], "calls": recorded,
-            "state": state}
+            "state": state, "scratch": scratch}
 
 
 def _name_only(tracks):
@@ -149,6 +157,26 @@ class TestTheSwap:
         argv = remux["argv"]
         at = argv.index(remux["base"] + "_0.opus")
         assert argv[argv.index("--track-name", at - 12) + 1] == "0:"
+
+
+class TestWhatMkvmergeSaysDecides:
+    """mkvmerge exits 1 on warnings with a good file written, and 2 on errors
+    with whatever it got as far as writing."""
+
+    @pytest.mark.parametrize("remux", [2], indirect=True)
+    def test_a_failed_remux_leaves_the_original_alone(self, remux):
+        with open(remux["movie"], "rb") as handle:
+            assert handle.read() == ORIGINAL
+        assert not os.path.exists(remux["base"] + " (old).mkv")
+        assert [path for path in remux["scratch"].rglob("*")
+                if path.is_file()] == []
+
+    @pytest.mark.parametrize("remux", [1], indirect=True)
+    def test_one_with_warnings_is_swapped_in(self, remux):
+        with open(remux["movie"], "rb") as handle:
+            assert handle.read() == REMUXED
+        with open(remux["base"] + " (old).mkv", "rb") as handle:
+            assert handle.read() == ORIGINAL
 
 
 class TestWhatSurvives:
