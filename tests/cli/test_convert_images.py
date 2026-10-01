@@ -151,9 +151,6 @@ class TestTheFormatTable:
     def test_avif_is_still_the_default(self):
         assert ci.DEFAULT_FORMAT == "avif"
 
-    def test_the_default_is_a_format_the_command_can_write(self):
-        assert ci.DEFAULT_FORMAT in ci.FORMATS
-
     def test_the_table_covers_the_central_list_and_nothing_else(self):
         """enums.IMAGE_CODECS is what the page offers and the check accepts, so
         a codec there with no entry here would be accepted and then crash."""

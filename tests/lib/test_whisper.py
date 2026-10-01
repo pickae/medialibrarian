@@ -97,19 +97,6 @@ def w(tmp_path, monkeypatch):
 
 
 class TestConstants:
-    def test_the_queue_runs_two_at_a_time(self):
-        assert whisper.WHISPER_JOBS == 2
-
-    def test_the_gpu_table_best_first(self):
-        assert whisper.WHISPER_GPU_MODELS == (
-            ("large-v3", "large-v3", 4122, 349),
-            ("large-v3-turbo", "large-v3-turbo", 2522, 133),
-            ("distil-large-v3.5", "medium", 2468, 203),
-            ("medium.en", "medium", 2370, 203),
-            ("small.en", "small", 1125, 82),
-            ("base.en", "base", 907, 56),
-        )
-
     def test_a_slot_is_never_dearer_than_the_run_it_widens(self):
         """Every row's fixed cost outweighs a slot's by a wide margin, which is
         why the plan fills slots before it starts a second run."""

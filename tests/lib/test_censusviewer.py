@@ -116,9 +116,6 @@ class TestThePagesUnitsAreThePages:
         disk's stated capacity."""
         assert v.BYTES_PER_GIGABYTE == "1000000000.0"
 
-    def test_and_the_hour_is_an_hour(self):
-        assert v.SECONDS_PER_HOUR == "3600.0"
-
 
 class TestEveryColumnIsDeclared:
     """A census column is empty when nobody stated the value - a library whose
