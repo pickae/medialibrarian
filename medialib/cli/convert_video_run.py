@@ -656,11 +656,14 @@ def encode_video_chunk(settings, token: str) -> int:
     progress = os.path.join(directory, "prog.%04d" % int(index))
     if settings.upscale_size:
         # The same boundaries in frames: each chunk ends at the frame the next
-        # one starts at, and the last one runs to the end of the stream.
+        # one starts at, and the last one runs to the end of the stream. The end
+        # is put back to the boundary as written, millisecond for millisecond,
+        # because the next chunk's first frame is worked out from that text: a
+        # sum a hair either side of a half frame would round the other way.
         first = upscale.frame_at(start, settings.upscale_fps)
-        last = (upscale.frame_at(formatting.awk_number(start)
-                                 + formatting.awk_number(duration),
-                                 settings.upscale_fps)
+        end = "%.3f" % (formatting.awk_number(start)
+                        + formatting.awk_number(duration))
+        last = (upscale.frame_at(end, settings.upscale_fps)
                 if int(index) < int(total) - 1 else -1)
         return run_upscaled_encode(settings, source, args, progress, out,
                                    first, last)

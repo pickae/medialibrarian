@@ -273,3 +273,60 @@ class TestTheResumeSkip:
 
     def test_a_truncated_output_is_converted_again(self, resume):
         assert not resume(self.SOURCE / 2)
+
+
+class TestTheFramesEachUpscaledChunkIsGiven:
+    """An upscaled chunk is handed frame numbers rather than times, and the
+    chunks must tile the film: each ends at the frame the next one starts at,
+    the first starts at frame 0 and the last runs to the end. A boundary that
+    falls on a half frame is the hard case, since the two sides of it are worked
+    out from different figures."""
+
+    @pytest.fixture
+    def ranges(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(rules, "build_video_args",
+                            lambda base, path, settings: "-c:v libx265")
+        monkeypatch.setattr(run_module.safety, "trap_worker_abort",
+                            lambda: None)
+        monkeypatch.setattr(run_module.statusline, "start_status_monitor",
+                            lambda *a: 0)
+        monkeypatch.setattr(run_module, "log", lambda *a, **k: None)
+        monkeypatch.setattr(run_module, "reconcat_video_only",
+                            lambda *a: 0)
+        monkeypatch.setattr(
+            run_module, "_run_chunk_pool",
+            lambda settings, tokens, width: [
+                run_module.encode_video_chunk(settings, token)
+                for token in tokens])
+        seen = []
+        monkeypatch.setattr(
+            run_module, "run_upscaled_encode",
+            lambda settings, source, args, progress, out, start, end:
+            seen.append((start, end)) or 0)
+
+        def run(bounds, fps):
+            settings = rules.Settings(input_dir=str(tmp_path / "in"),
+                                      chunk_root=str(tmp_path / "chunks"),
+                                      upscale_size="1920x1080",
+                                      upscale_fps=fps)
+            state = run_module.Run(settings)
+            status = state._encode(settings, "film.mkv",
+                                   str(tmp_path / "chunks" / "film"),
+                                   float(bounds[-1]), bounds, "1280x720")
+            assert status == 0
+            return seen
+        return run
+
+    @pytest.mark.parametrize("fps,bounds", [
+        ("24000/1001", run_module.chunk_bounds(5423.417, 37)),
+        # 1.820 s and 4.060 s are each exactly half a frame past a frame at
+        # 25 fps, which is where a sum of start and span lands either side.
+        ("25/1", ["0", "1.234", "1.820", "4.060", "60.000"]),
+    ])
+    def test_the_chunks_tile_the_frames_exactly(self, ranges, fps, bounds):
+        frames = ranges(bounds, fps)
+        assert len(frames) == len(bounds) - 1
+        assert frames[0][0] == 0
+        assert frames[-1][1] == -1
+        for (_start, end), (next_start, _end) in zip(frames, frames[1:]):
+            assert end == next_start
