@@ -1277,3 +1277,32 @@ class TestSeekCopies:
         ("a.mkv", False), ("a.mp4", False)])
     def test_which_formats_seek_cheaply(self, track, cheap):
         assert ca.seek_cheap_file(track) is cheap
+
+
+class TestTheSilencesAWindowProbeFound:
+    """The midpoints read out of what silencedetect prints, which is one line
+    for where a silence starts and ANOTHER for where it ends."""
+
+    _TWO = (
+        "Input #0, wav, from 'book.m4a':\n"
+        "[Parsed_silencedetect_0 @ 0x7d8a90002d80] silence_start: 1.999909\n"
+        "[Parsed_silencedetect_0 @ 0x7d8a90002d80] silence_end: 3.500113"
+        " | silence_duration: 1.500204\n"
+        "size=N/A time=00:00:09.00 bitrate=N/A speed= 812x\n"
+        "[Parsed_silencedetect_0 @ 0x7d8a90002d80] silence_start: 7.25\n"
+        "[Parsed_silencedetect_0 @ 0x7d8a90002d80] silence_end: 8.75"
+        " | silence_duration: 1.5\n")
+
+    def test_each_start_and_end_pair_is_one_midpoint(self):
+        assert ca._silence_midpoints(self._TWO) == pytest.approx(
+            [2.750011, 8.0])
+
+    def test_a_silence_still_running_at_the_window_end_gives_none(self):
+        """ffmpeg prints no end for a silence the window cut off, so there is
+        nothing to take the middle of."""
+        text = ("[Parsed_silencedetect_0 @ 0x55] silence_start: 12.5\n"
+                "size=N/A time=00:00:14.00 bitrate=N/A speed= 900x\n")
+        assert ca._silence_midpoints(text) == []
+
+    def test_no_silence_at_all_gives_none(self):
+        assert ca._silence_midpoints("") == []

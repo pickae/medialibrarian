@@ -31,8 +31,14 @@ done
 exit 0
 '''
 
-# A silencedetect probe reports one silence straddling the middle of its window,
-# so a cut lands at every ideal boundary and the chunk count is the core count.
+# A silencedetect probe reports one silence the way ffmpeg prints it, the start
+# on one line and the end on the next. It sits a third of the nudge window past
+# the middle of the probe window - the ideal boundary - so a cut found there can
+# only have come from the silence and not from the arithmetic. The probe window
+# is the ideal boundary give or take the nudge window and a 2s guard, which is
+# how the nudge window is read back out of its length.
+# Any other call that seeks is a chunk encode, and notes where it starts in a
+# "seeks" file beside this stub.
 # Any other call creates its output - the last argument - except the "-f null -"
 # sink, where "-" is stdout and not a file.
 _FFMPEG = '''
@@ -47,13 +53,16 @@ while [[ $i -lt ${#args[@]} ]]; do
   i=$((i+1))
 done
 if [[ $sd -eq 1 ]]; then
-  c=$(awk -v s="$ss" -v l="$t" "BEGIN{printf \\"%.3f\\", s + l/2}")
-  printf "silencedetect @ silence_start: %s\\n" \\
+  c=$(awk -v s="$ss" -v l="$t" \\
+    "BEGIN{printf \\"%.3f\\", s + l/2 + (l-4)/2/3}")
+  printf "[Parsed_silencedetect_0 @ 0x55d5c8a0] silence_start: %s\\n" \\
     "$(awk -v c="$c" "BEGIN{printf \\"%.3f\\", c-0.4}")" >&2
-  printf "silencedetect @ silence_end: %s | silence_duration: 0.800\\n" \\
+  printf "[Parsed_silencedetect_0 @ 0x55d5c8a0] silence_end: %s" \\
     "$(awk -v c="$c" "BEGIN{printf \\"%.3f\\", c+0.4}")" >&2
+  printf " | silence_duration: 0.800\\n" >&2
   exit 0
 fi
+[[ -n "$ss" ]] && echo "$ss" >> "$(dirname "$0")/seeks"
 last="${args[$((${#args[@]}-1))]}"
 [[ "$last" != "-" ]] && : > "$last"
 exit 0
@@ -122,6 +131,27 @@ class TestTheProgressCounter:
         assert denominators <= {jobs}
         assert not [n for n, total in lines
                     if total is not None and n > total]
+
+
+class TestWhereALongFileIsCut:
+    """Each cut lands in the silence the window probe found near it, not at
+    the arithmetic boundary - so a chunk never starts mid-word."""
+
+    def test_every_chunk_but_the_first_starts_in_a_silence(self, sandbox,
+                                                           tmp_path):
+        convert = _stubbed(sandbox)
+        inputs = tmp_path / "in"
+        inputs.mkdir()
+        with open(inputs / "long.m4a", "wb") as handle:
+            handle.truncate(20_000_000_000)
+        done = convert.run("convert-audio", "-j", 4, inputs, tmp_path / "out")
+        assert done.returncode == 0, done.stdout + done.stderr
+
+        # 300 s over four cores: the ideal boundaries are 75 s apart and the
+        # nudge window is half that, so each silence is 12.5 s past one.
+        starts = sorted(float(line) for line in
+                        (convert.bin / "seeks").read_text().split())
+        assert starts == pytest.approx([0.0, 87.5, 162.5, 237.5], abs=0.01)
 
 
 class TestWhatEachLineSays:
