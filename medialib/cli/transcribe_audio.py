@@ -171,6 +171,14 @@ class Run:
             sys.stdout.write("%s%s\n" % (
                 runlog.counted_prefix(current, self.total), label))
 
+    def record_failure(self) -> None:
+        """Mark the run as having a failed transcription, in a file because the
+        workers are separate processes."""
+        open(self.progress_file + ".failed", "w").close()
+
+    def any_failed(self) -> bool:
+        return os.path.exists(self.progress_file + ".failed")
+
     def transcribe_one(self, relative: str) -> None:
         """One queued job: this input's speech into its mirrored transcript."""
         source = os.path.join(self.input_dir, relative)
@@ -225,12 +233,15 @@ class Run:
                  "--threads", str(self.model["threads"]),
                  "--vad_filter", "True", *self.batch_args],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            # The status alone is not the evidence: whisper-ctranslate2 exits 0
+            # after a CUDA out-of-memory error, having written nothing.
             if done.returncode == 0 and os.path.isfile(whisper_out):
                 os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
                 shutil.move(whisper_out, out)
                 self.report_progress("transcribed: " + relative)
             else:
                 log("WARNING: transcription failed: " + relative)
+                self.record_failure()
                 self.report_progress("failed: " + relative)
         finally:
             shutil.rmtree(work, ignore_errors=True)
@@ -361,7 +372,8 @@ def main(argv: list, program: str = "transcribe-audio") -> int:
                              "run.\nNothing was changed.\n")
             return 1
         ramscratch.add_exit_cleanup([progress_file,
-                                     progress_file + ".lock"])
+                                     progress_file + ".lock",
+                                     progress_file + ".failed"])
         with open(progress_file, "w") as handle:
             handle.write("0\n")
 
@@ -374,8 +386,11 @@ def main(argv: list, program: str = "transcribe-audio") -> int:
         safety.exit_if_aborted()
         sys.stdout.write("Done.\n")
         safety.print_run_footer()
+        # A file that came out with no transcript, or with a short one, means
+        # the run did not do what it was asked, and a caller chaining commands
+        # has to see that.
         return workerpool.exit_status(
-            1 if durationcheck.failures() else 0)
+            1 if durationcheck.failures() or state.any_failed() else 0)
     finally:
         ramscratch.run_exit_cleanup()
 

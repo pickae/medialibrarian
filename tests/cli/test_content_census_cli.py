@@ -67,6 +67,21 @@ class TestOneFolder:
         assert report.is_file()
         assert len(_rows(report)) == 1
 
+    def test_a_bare_run_writes_one_comma_separated_report_and_nothing_else(
+            self, census):
+        """What leaving every option out does: the path given is the library,
+        so a subfolder's book is a row of it rather than a library of its own;
+        the report goes into the library as a .csv; and no cube is built."""
+        films = census.work / "Films"
+        _write(films / "Sequels" / "d.txt", "eleven twelve\n")
+        before = set(census.work.rglob("*"))
+        census.census(films)
+        report = films / "booksFilms.csv"
+        assert set(census.work.rglob("*")) - before == {report}
+        header = report.read_text(encoding="utf-8").splitlines()[0]
+        assert "," in header and "\t" not in header
+        assert len(_rows(report)) == 2
+
 
 class TestSeveralLibraries:
     """One report set per library, named per library, and `-o` puts them all in

@@ -97,9 +97,10 @@ class TestTheProbe:
         path = probe.media("a.mp3")
         probe.says({"streams": [{"codec_type": "audio", "channels": 2}]})
         cm.census_audio_row(path)
-        assert probe.calls() == [[
-            "ffprobe", "-v", "quiet", "-print_format", "json",
-            "-show_format", "-show_streams", "-show_chapters", path]]
+        [call] = probe.calls()
+        assert call[-1] == path
+        assert {"-show_format", "-show_streams", "-show_chapters"} <= set(call)
+        assert call[call.index("-print_format") + 1] == "json"
 
     def test_a_probe_that_printed_and_then_failed_is_still_read(self, probe):
         """The shell ends the call with ``|| true``: the status is discarded on

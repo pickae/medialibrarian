@@ -556,11 +556,17 @@ class TestNormalisingDolbyVisionProfile7:
         (inputs / "clip.mkv").write_text("")
         logs = {name: tmp_path / (name.lower() + ".log")
                 for name in ("FFMPEG_LOG", "DOVI_LOG", "MKVMERGE_LOG")}
+        # The run's RAM scratch base, this test's own: left to pick /dev/shm, the
+        # intermediate lands where every sibling worker's does, and "is any of it
+        # still there?" is then a question about the machine.
+        ram = tmp_path / "ram"
+        ram.mkdir()
 
         def convert(name, drop_dovi_tool=False, **scenario):
             for path in logs.values():
                 path.write_text("")
             env = dict(_os.environ, OUT_MARKER="/scenario-",
+                       ramScratchBase=str(ram),
                        **{key: str(path) for key, path in logs.items()},
                        **{key: str(value) for key, value in scenario.items()})
             path = sandbox.path
@@ -591,6 +597,8 @@ class TestNormalisingDolbyVisionProfile7:
         sandbox.inputs = inputs
         sandbox.logs = logs
         sandbox.out_of = lambda name: (tmp_path / ("scenario-" + name))
+        sandbox.root = tmp_path
+        sandbox.ram = ram
         return sandbox
 
     @staticmethod
@@ -606,24 +614,21 @@ class TestNormalisingDolbyVisionProfile7:
         """The converted stream and its container are a whole film's video, so a
         run over a folder of profile 7 films must not accumulate one per file.
 
-        Every base a run may pick, not one of them: an assertion that looked in
-        the wrong directory would be an empty list either way.
+        Only this test's own directory, which holds both places the run may put
+        it - the RAM base it was handed, and beside the output when that is too
+        small. Not /dev/shm or /tmp: those the whole machine shares, and under
+        `-n` a sibling worker's conversion is in them mid-run.
 
-        Walked with `os.walk` rather than `rglob`, because these are roots the
-        whole machine shares: under `-n auto` a sibling worker's directory can
-        go between this walk listing it and descending into it, and on 3.11
-        that reaches `rglob` as a FileNotFoundError naming a path this test has
-        never heard of. `os.walk` ignores an entry that stops existing, which
-        is the only sane reading of "is it still there?"."""
+        An assertion that looked in the wrong directory would be an empty list
+        either way, so what the run said it converted INTO has to be in here."""
         import os as _os
-        bases = {_os.environ.get(name, "") for name in
-                 ("ramBase", "ramScratchBase", "TMPDIR")}
-        bases.add("/dev/shm")
-        bases.add("/tmp")
+        written = [arg for line in dv.logs["DOVI_LOG"].read_text().splitlines()
+                   for arg in line.split() if "dv81." in arg]
+        stray = [arg for arg in written if not Path(arg).is_relative_to(dv.ram)]
+        assert not stray, "the conversion went outside this test's scratch"
         return sorted(
             _os.path.join(root, name)
-            for base in bases if base and Path(base).is_dir()
-            for root, _dirs, files in _os.walk(base)
+            for root, _dirs, files in _os.walk(dv.root)
             for name in files if name.startswith("dv81."))
 
     @pytest.fixture

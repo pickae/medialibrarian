@@ -58,6 +58,21 @@ def film(tmp_path, monkeypatch):
     return given
 
 
+def _name(movie, lookup, write):
+    """The naming run over the film's library as the full ingest runs it,
+    one film at a time: the list it leaves, "" when it leaves none."""
+    root = os.path.dirname(os.path.dirname(movie))
+    script = os.path.join(root, "script")
+    run_module._commentary_names_in(root, "Films", write, lookup, "", script,
+                                    queued=False)
+    listing = os.path.join(script, "logs", "ingest-movies",
+                           "ingest-movies-commentarynames-Films.txt")
+    if not os.path.exists(listing):
+        return ""
+    with open(listing, encoding="utf-8") as handle:
+        return handle.read()
+
+
 def test_a_single_commentary_is_named_and_its_transcripts_follow(film):
     movie, lookup, calls = film(
         _tracks("Commentary", subtitles=["Commentary"]),
@@ -67,9 +82,9 @@ def test_a_single_commentary_is_named_and_its_transcripts_follow(film):
     with open(srt, "w", encoding="utf-8") as handle:
         handle.write(_srt("Hello."))
 
-    lines, why = run_module._name_commentaries(movie, FILM, lookup, True, "")
+    listing = _name(movie, lookup, True)
 
-    assert why == "" and lines
+    assert listing.startswith("# Named:\n") and "Left alone" not in listing
     assert calls == [["mkvpropedit", movie,
                       "--edit", "track:3", "--set",
                       "name=Commentary by director Wenna Castellane",
@@ -90,9 +105,9 @@ def test_a_dry_run_changes_nothing(film):
     with open(srt, "w", encoding="utf-8") as handle:
         handle.write(_srt("Hello."))
 
-    lines, _why = run_module._name_commentaries(movie, FILM, lookup, False, "")
+    listing = _name(movie, lookup, False)
 
-    assert lines and calls == []
+    assert listing.startswith("# Would be named:\n") and calls == []
     assert os.path.isfile(srt)
 
 
@@ -110,9 +125,9 @@ def test_several_are_named_by_their_transcripts_openings(film):
                   "w", encoding="utf-8") as handle:
             handle.write(_srt(text))
 
-    _lines, why = run_module._name_commentaries(movie, FILM, lookup, True, "")
+    listing = _name(movie, lookup, True)
 
-    assert why == ""
+    assert "Left alone" not in listing
     [argv] = calls
     assert "name=Commentary by director Wenna Castellane" in argv
     assert "name=Commentary with actors Oriel Pask and Tamsin Voller" in argv
@@ -123,24 +138,50 @@ def test_several_without_transcripts_are_left_alone(film):
         _tracks("Commentary 1", "Commentary 2"),
         [Release("Region A", (Disc("bluray", (DIRECTOR, CAST)),))])
 
-    lines, why = run_module._name_commentaries(movie, FILM, lookup, True, "")
+    listing = _name(movie, lookup, True)
 
-    assert lines == [] and "no transcript" in why and calls == []
+    assert listing.startswith("# Left alone:\n")
+    assert "no transcript" in listing and calls == []
 
 
 def test_an_already_named_film_is_not_looked_up_or_listed(film):
     asked = []
     movie, _lookup, calls = film(_tracks("Director's Commentary"), [])
 
-    lines, why = run_module._name_commentaries(
-        movie, FILM, lambda *a: asked.append(a), True, "")
+    listing = _name(movie, lambda *a: asked.append(a), True)
 
-    assert (lines, why, asked, calls) == ([], "", [], [])
+    assert (listing, asked, calls) == ("", [], [])
 
 
 def test_the_film_is_looked_up_by_its_folder_s_title_and_year(film):
     asked = []
     movie, _lookup, _calls = film(_tracks("Commentary"), [])
-    run_module._name_commentaries(
-        movie, FILM, lambda *a: asked.append(a) or [], False, "")
+    _name(movie, lambda *a: asked.append(a) or [], False)
     assert asked == [("Nightfall Harbour", "1987", "bluray")]
+
+
+def test_a_subtitle_no_commentary_owns_leaves_the_film_alone(film, tmp_path):
+    movie, lookup, calls = film(
+        _tracks("Commentary 1", "Commentary 2", subtitles=["Commentary 3"]),
+        [Release("Region A", (Disc("bluray", (DIRECTOR, CAST)),))])
+    folder = os.path.dirname(movie)
+    for track_id, name, text in (
+            ("2", "Commentary 1", "Hi, I'm Wenna Castellane."),
+            ("3", "Commentary 2", "This is Oriel Pask, here with Tamsin "
+                                  "Voller.")):
+        with open(os.path.join(folder, "%s %s %s.en.srt"
+                               % (FILM, track_id, name)),
+                  "w", encoding="utf-8") as handle:
+            handle.write(_srt(text))
+    script = tmp_path / "script"
+
+    run_module._commentary_names_in(str(tmp_path), "Films", True, lookup, "",
+                                    str(script), queued=False)
+
+    listing = (script / "logs" / "ingest-movies"
+               / "ingest-movies-commentarynames-Films.txt")
+    text = listing.read_text(encoding="utf-8")
+    assert text.startswith("# Left alone:\n")
+    assert './%s/%s.mkv\n' % (FILM, FILM) in text
+    assert 'subtitle "Commentary 3" cannot be told which commentary' in text
+    assert calls == []
