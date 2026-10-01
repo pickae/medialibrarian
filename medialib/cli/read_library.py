@@ -227,11 +227,14 @@ def emit_output(source: str, target: str) -> bool:
             candidate = safety.unique_suffix_path(candidate)
         try:
             os.link(staged, candidate)
-            os.unlink(staged)
-            return True
         except OSError:
             if not os.path.exists(staged):
                 return True
+            continue
+        # Published once the link exists. A staging name that will not go is
+        # dotted litter, not a reason to link the book under another name.
+        _remove(staged)
+        return True
     _remove(staged)
     return False
 
