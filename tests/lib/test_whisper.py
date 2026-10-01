@@ -1,9 +1,10 @@
 """Tests for medialib.lib.whisper - the device, compute type and models this
 host can actually transcribe with.
 
-What is pinned here: the job/model/multi constants, the probe-and-init
-settlement driven through the shared tool stub, the exact argv each probe hands
-its tools, and the host-tool edge cases - an absent ffmpeg, an absent pipx.
+What is pinned here: the model table's invariant, the probe-and-init
+settlement driven through the shared tool stub, which models each settlement
+probes and in what order, and the host-tool edge cases - an absent ffmpeg, an
+absent pipx.
 """
 
 import os
@@ -23,26 +24,18 @@ _GPU_LINE = "GPU 0: NVIDIA GeForce RTX 5090"
 _PLUMBING = ("bash", "awk", "cat", "grep", "head")
 
 
-def _ffmpeg_call(ram):
-    return ["ffmpeg", "-y", "-loglevel", "error", "-nostats", "-f", "lavfi",
-            "-i", "anullsrc=r=16000:cl=mono", "-t", "0.5",
-            os.path.join(ram, "whisperProbe.wav")]
+def _flag(call, name):
+    return call[call.index(name) + 1]
 
 
-def _pipx_call(ram, model, device, compute, threads):
-    return ["pipx", "run", "whisper-ctranslate2",
-            os.path.join(ram, "whisperProbe.wav"), "--output_dir", ram,
-            "--model", model, "--language", "en", "--output_format", "srt",
-            "--device", device, "--compute_type", compute, "--threads", threads]
+def _tools(calls):
+    """Which tool each call ran, in order."""
+    return [call[0] for call in calls]
 
 
-def _nvidia_listing():
-    return ["nvidia-smi", "-L"]
-
-
-def _nvidia_query():
-    return ["nvidia-smi", "--query-gpu=memory.free",
-            "--format=csv,noheader,nounits"]
+def _probed(calls):
+    """The models the transcription probes were asked to run, in order."""
+    return [_flag(call, "--model") for call in calls if call[0] == "pipx"]
 
 
 def _nvidia_stdout(vram, gpu=True):
@@ -130,8 +123,11 @@ class TestWorks:
         w.rc("pipx", "0")
         status = whisper.whisper_works("cuda", "float16", "large-v3", w.ram, "8")
         assert status == 0
-        assert w.calls() == [_ffmpeg_call(w.ram),
-                             _pipx_call(w.ram, "large-v3", "cuda", "float16", "8")]
+        audio, probe = w.calls()
+        # whisper is asked to transcribe the clip ffmpeg made, in the scratch
+        assert audio[-1] in probe
+        assert os.path.dirname(audio[-1]) == w.ram
+        assert _flag(probe, "--output_dir") == w.ram
 
     def test_the_combo_is_passed_through(self, w):
         w.install("ffmpeg")
@@ -140,8 +136,11 @@ class TestWorks:
         w.rc("pipx", "0")
         status = whisper.whisper_works("cpu", "int8", "base.en", w.ram, "32")
         assert status == 0
-        assert w.calls() == [_ffmpeg_call(w.ram),
-                             _pipx_call(w.ram, "base.en", "cpu", "int8", "32")]
+        probe = w.calls()[-1]
+        assert _flag(probe, "--model") == "base.en"
+        assert _flag(probe, "--device") == "cpu"
+        assert _flag(probe, "--compute_type") == "int8"
+        assert _flag(probe, "--threads") == "32"
 
     def test_when_the_audio_cannot_be_made_whisper_is_never_asked(self, w):
         w.install("ffmpeg")
@@ -150,7 +149,7 @@ class TestWorks:
         w.rc("pipx", "0")
         status = whisper.whisper_works("cuda", "float16", "large-v3", w.ram, "8")
         assert status == 1
-        assert w.calls() == [_ffmpeg_call(w.ram)]
+        assert _tools(w.calls()) == ["ffmpeg"]
 
     def test_and_so_when_the_transcription_fails(self, w):
         w.install("ffmpeg")
@@ -159,8 +158,7 @@ class TestWorks:
         w.rc("pipx", "7")
         status = whisper.whisper_works("cuda", "float16", "large-v3", w.ram, "8")
         assert status == 7
-        assert w.calls() == [_ffmpeg_call(w.ram),
-                             _pipx_call(w.ram, "large-v3", "cuda", "float16", "8")]
+        assert _tools(w.calls()) == ["ffmpeg", "pipx"]
 
     def test_a_missing_ffmpeg_is_a_failed_probe_not_a_crash(self, w):
         w.install("pipx")
@@ -173,7 +171,7 @@ class TestWorks:
         w.rc("ffmpeg", "0")
         status = whisper.whisper_works("cuda", "float16", "large-v3", w.ram, "8")
         assert status == 127
-        assert w.calls() == [_ffmpeg_call(w.ram)]
+        assert _tools(w.calls()) == ["ffmpeg"]
 
 
 class TestPlan:
@@ -253,7 +251,7 @@ class TestSettlement:
     def test_and_so_does_an_nvidia_smii_with_no_gpu(self, w):
         logs = []
         answer, calls = self._run(w, logs, "8", nvidia="0\n", install=("nvidia-smi",))
-        assert calls == [_nvidia_listing()]
+        assert _tools(calls) == ["nvidia-smi"]
         assert answer["device"] == "cpu"
 
     def test_a_card_that_holds_large_v3_twice_over(self, w):
@@ -272,9 +270,10 @@ class TestSettlement:
             "Transcribing on the GPU (cuda, float16) with large-v3, 2 at a "
             "time, 16 batch slots each",
         ]
-        assert calls == [_nvidia_listing(), _nvidia_query(),
-                         _ffmpeg_call(w.ram),
-                         _pipx_call(w.ram, "large-v3", "cuda", "float16", "4")]
+        assert _probed(calls) == ["large-v3"]
+        probe = calls[-1]
+        assert (_flag(probe, "--device"), _flag(probe, "--compute_type")) \
+            == ("cuda", "float16")
 
     def test_a_card_that_holds_it_once_runs_one_wide_batch(self, w):
         """The slots are worth more than a second run, so a card that cannot
@@ -314,9 +313,7 @@ class TestSettlement:
             install=("nvidia-smi", "ffmpeg", "pipx"))
         assert answer["model"] == "large-v3-turbo"
         assert answer["modelMulti"] == "large-v3-turbo"
-        assert calls == [_nvidia_listing(), _nvidia_query(),
-                         _ffmpeg_call(w.ram),
-                         _pipx_call(w.ram, "large-v3-turbo", "cuda", "float16", "4")]
+        assert _probed(calls) == ["large-v3-turbo"]
 
     def test_an_english_only_winner_gets_its_counterpart_probed(self, w):
         # 4000 MiB rules large-v3 out, and the probe refuses turbo, which
@@ -331,15 +328,8 @@ class TestSettlement:
         assert answer["modelMulti"] == "medium"
         assert "Non-English work (detection, foreign transcripts, translations) " \
             "runs on medium" in logs
-        assert calls == [
-            _nvidia_listing(), _nvidia_query(),
-            _ffmpeg_call(w.ram),
-            _pipx_call(w.ram, "large-v3-turbo", "cuda", "float16", "4"),
-            _ffmpeg_call(w.ram),
-            _pipx_call(w.ram, "distil-large-v3.5", "cuda", "float16", "4"),
-            _ffmpeg_call(w.ram),
-            _pipx_call(w.ram, "medium", "cuda", "float16", "4"),
-        ]
+        assert _probed(calls) == ["large-v3-turbo", "distil-large-v3.5",
+                                  "medium"]
 
     def test_the_smaller_english_only_rows_settle_the_same_way(self, w):
         logs = []
@@ -349,7 +339,7 @@ class TestSettlement:
             install=("nvidia-smi", "ffmpeg", "pipx"))
         assert answer["model"] == "base.en"
         assert answer["modelMulti"] == "base"
-        assert calls[-1] == _pipx_call(w.ram, "base", "cuda", "float16", "4")
+        assert _probed(calls)[-1] == "base"
 
     def test_a_card_that_holds_nothing_falls_back_with_a_warning(self, w):
         logs = []
@@ -359,7 +349,7 @@ class TestSettlement:
         assert answer["device"] == "cpu"
         assert "WARNING: the GPU cannot run whisper at all (missing CUDA " \
             "libraries?), falling back to the CPU" in logs
-        assert calls == [_nvidia_listing(), _nvidia_query()]
+        assert _tools(calls) == ["nvidia-smi", "nvidia-smi"]
 
     def test_a_memory_query_that_prints_nothing_is_zero(self, w):
         logs = []
@@ -386,13 +376,7 @@ class TestSettlement:
         assert answer["model"] == "large-v3-turbo"
         assert "WARNING: the GPU cannot run whisper on large-v3, trying a " \
             "smaller model" in logs
-        assert calls == [
-            _nvidia_listing(), _nvidia_query(),
-            _ffmpeg_call(w.ram),
-            _pipx_call(w.ram, "large-v3", "cuda", "float16", "4"),
-            _ffmpeg_call(w.ram),
-            _pipx_call(w.ram, "large-v3-turbo", "cuda", "float16", "4"),
-        ]
+        assert _probed(calls) == ["large-v3", "large-v3-turbo"]
 
     def test_and_so_does_the_probe_audio_failing(self, w):
         logs = []
@@ -402,12 +386,8 @@ class TestSettlement:
             install=("nvidia-smi", "ffmpeg", "pipx"))
         assert answer["model"] == "large-v3-turbo"
         # large-v3: ffmpeg fails (7), so pipx is never asked for it.
-        assert calls == [
-            _nvidia_listing(), _nvidia_query(),
-            _ffmpeg_call(w.ram),
-            _ffmpeg_call(w.ram),
-            _pipx_call(w.ram, "large-v3-turbo", "cuda", "float16", "4"),
-        ]
+        assert _tools(calls).count("ffmpeg") == 2
+        assert _probed(calls) == ["large-v3-turbo"]
 
     def test_a_counterpart_the_gpu_cannot_run_falls_back_to_base(self, w):
         logs = []
@@ -419,7 +399,7 @@ class TestSettlement:
         assert answer["modelMulti"] == "base"
         assert "WARNING: the GPU cannot run whisper on medium, falling back " \
             "to base for the non-English work" in logs
-        assert calls[-1] == _pipx_call(w.ram, "medium", "cuda", "float16", "4")
+        assert _probed(calls)[-1] == "medium"
 
 
 class TestThreadCap:

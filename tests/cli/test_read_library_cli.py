@@ -99,9 +99,9 @@ def library(sandbox, tmp_path, private_workspace):
 
     The books' CONTENT is what the queue is ordered by, and the two are set
     deliberately at odds with every other order the run could come out in: "plain
-    book" is twenty words in 39 bytes, "Der Process" one word in 200. So "plain
+    book" is twenty words in 39 bytes, "Ein Roman" one word in 200. So "plain
     book" is read first if and only if the queue is ordered by WORD COUNT - by
-    byte size, or by path, "Der Process" would win both.
+    byte size, or by path, "Ein Roman" would win both.
     """
     checkout = tmp_path / "e2a"
     (checkout / "python_env" / "bin").mkdir(parents=True)
@@ -123,8 +123,8 @@ def library(sandbox, tmp_path, private_workspace):
     ffmpeg_log.write_text("")
 
     source = tmp_path / "books"
-    (source / "Fiction" / "Kafka").mkdir(parents=True)
-    (source / "Fiction" / "Kafka" / "Der Process.epub").write_text("book" * 50)
+    (source / "Fiction" / "Autor").mkdir(parents=True)
+    (source / "Fiction" / "Autor" / "Ein Roman.epub").write_text("book" * 50)
     (source / "plain book.epub").write_text("a b c d e f g h i j k l m n o p "
                                             "q r s t")
     (source / "cover.jpg").write_text("x")
@@ -165,10 +165,10 @@ class TestAFullRun:
     def test_both_output_files_land_in_their_own_formats_library(self, run):
         """Under the same name, in the mirrored sub-folder of each."""
         lib, _, _ = run
-        assert (lib.outputs / "opus" / "Fiction" / "Kafka"
-                / "Der Process.opus").is_file()
-        assert (lib.outputs / "flac" / "Fiction" / "Kafka"
-                / "Der Process.flac").is_file()
+        assert (lib.outputs / "opus" / "Fiction" / "Autor"
+                / "Ein Roman.opus").is_file()
+        assert (lib.outputs / "flac" / "Fiction" / "Autor"
+                / "Ein Roman.flac").is_file()
         assert (lib.outputs / "opus" / "plain book.opus").is_file()
         assert (lib.outputs / "flac" / "plain book.flac").is_file()
 
@@ -219,11 +219,16 @@ class TestAFullRun:
         lib, _, _ = run
         calls = lib.engine_calls()
         assert "plain book.epub" in calls[0], calls
-        assert "Der Process.epub" in calls[-1], calls
+        assert "Ein Roman.epub" in calls[-1], calls
 
     def test_each_book_gets_its_own_output_directory(self, run):
+        """The output is FOUND as the newest file there, so two books sharing
+        one would let the second claim the first's audiobook."""
         lib, _, _ = run
-        assert all("--output_dir /" in call for call in lib.engine_calls())
+        dirs = [re.search(r"--output_dir (/.*?)(?= --[a-z]|$)", call).group(1)
+                for call in lib.engine_calls()]
+        assert len(dirs) == 2
+        assert len(set(dirs)) == 2, dirs
 
     @pytest.mark.parametrize("row", ["Books found:       2", "Read:              2",
                                      "Real-time speedup:"])
@@ -459,8 +464,8 @@ class TestRelativeDirectories:
                                                             tmp_path):
         library.read("-l", "deu", "books", "audiobooks", cwd=tmp_path)
         assert (tmp_path / "audiobooks" / "opus" / "plain book.opus").is_file()
-        assert (tmp_path / "audiobooks" / "opus" / "Fiction" / "Kafka"
-                / "Der Process.opus").is_file()
+        assert (tmp_path / "audiobooks" / "opus" / "Fiction" / "Autor"
+                / "Ein Roman.opus").is_file()
         assert not (library.checkout / "audiobooks").exists()
 
     def test_a_path_reaching_its_library_through_dot_dot(self, library,
