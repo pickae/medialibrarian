@@ -144,3 +144,30 @@ def test_the_film_is_looked_up_by_its_folder_s_title_and_year(film):
     run_module._name_commentaries(
         movie, FILM, lambda *a: asked.append(a) or [], False, "")
     assert asked == [("Nightfall Harbour", "1987", "bluray")]
+
+
+def test_a_subtitle_no_commentary_owns_leaves_the_film_alone(film, tmp_path):
+    movie, lookup, calls = film(
+        _tracks("Commentary 1", "Commentary 2", subtitles=["Commentary 3"]),
+        [Release("Region A", (Disc("bluray", (DIRECTOR, CAST)),))])
+    folder = os.path.dirname(movie)
+    for track_id, name, text in (
+            ("2", "Commentary 1", "Hi, I'm Wenna Castellane."),
+            ("3", "Commentary 2", "This is Oriel Pask, here with Tamsin "
+                                  "Voller.")):
+        with open(os.path.join(folder, "%s %s %s.en.srt"
+                               % (FILM, track_id, name)),
+                  "w", encoding="utf-8") as handle:
+            handle.write(_srt(text))
+    script = tmp_path / "script"
+
+    run_module._commentary_names_in(str(tmp_path), "Films", True, lookup, "",
+                                    str(script), queued=False)
+
+    listing = (script / "logs" / "ingest-movies"
+               / "ingest-movies-commentarynames-Films.txt")
+    text = listing.read_text(encoding="utf-8")
+    assert text.startswith("# Left alone:\n")
+    assert './%s/%s.mkv\n' % (FILM, FILM) in text
+    assert 'subtitle "Commentary 3" cannot be told which commentary' in text
+    assert calls == []

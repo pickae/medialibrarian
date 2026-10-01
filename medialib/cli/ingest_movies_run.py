@@ -1423,7 +1423,7 @@ def _plan_commentary_names(movie: str, base: str, lookup,
     subtitles, why = commentarynames.subtitle_renames(
         tracks, [(old[track_id], name) for track_id, name in decision.names])
     if why:
-        return [], why
+        return None, why
 
     def clean(name: str) -> str:
         return rules.rename(name.replace("/", "").replace("&", "and"),
