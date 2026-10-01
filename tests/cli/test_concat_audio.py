@@ -429,3 +429,20 @@ class TestBookScratch:
         scratch, claimed = state._book_scratch(1)
         assert os.path.dirname(scratch) == str(disk)
         assert claimed == 0
+
+
+class TestTheChapterWordIsSpacedFromItsNumber:
+    """"Track01" is read as "Track 01", and a word that merely starts with
+    "Track" or "Piste" is a word, not a chapter number to split off."""
+
+    def _named(self, tmp_path, folder):
+        (tmp_path / "in" / folder).mkdir(parents=True)
+        _inputs, outputs = ca.name_output_files(str(tmp_path / "in"), "/out")
+        return [os.path.basename(path) for path in outputs]
+
+    def test_a_number_glued_to_the_word_is_spaced_off(self, tmp_path):
+        assert self._named(tmp_path, "Piste01") == ["Piste 01"]
+
+    @pytest.mark.parametrize("folder", ["Tracker Notes", "Pistes en bois"])
+    def test_a_longer_word_is_left_whole(self, tmp_path, folder):
+        assert self._named(tmp_path, folder) == [folder]
