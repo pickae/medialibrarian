@@ -34,7 +34,7 @@ import base64
 import os
 import sys
 
-__all__ = ["MP4_SUFFIXES", "embed_chapters", "embed_cover", "remove_cover"]
+__all__ = ["MP4_SUFFIXES", "embed_chapters", "embed_cover"]
 
 # The containers whose metadata is MP4's rather than a Vorbis comment's: a cover
 # is a `covr` atom, and chapters are a track this module cannot write at all.
@@ -102,21 +102,6 @@ def embed_cover(audio: str, cover: str) -> int:
         opus["METADATA_BLOCK_PICTURE"] = base64.b64encode(
             picture.write()).decode("ascii")
         opus.save()
-        return 0
-    except Exception:
-        return 1
-
-
-def remove_cover(opus: str) -> int:
-    """Take the cover back off an Opus file. Nothing in the pipelines calls this;
-    it is here for the times a wrong cover has to be removed by hand."""
-    try:
-        from mutagen.oggopus import OggOpus
-
-        handle = OggOpus(opus)
-        if "METADATA_BLOCK_PICTURE" in handle:
-            del handle["METADATA_BLOCK_PICTURE"]
-        handle.save()
         return 0
     except Exception:
         return 1
