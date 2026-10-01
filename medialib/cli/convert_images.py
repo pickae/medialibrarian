@@ -22,6 +22,7 @@ import os
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from typing import NamedTuple
 
 from medialib import commands
@@ -269,6 +270,63 @@ def disambiguated_output(relative: str, new_extension: str, input_dir: str,
     return os.path.join(output_dir, "%s%s.%s" % (prefix, stem, new_extension))
 
 
+def _parse_size(text: str) -> tuple[int, int] | None:
+    """``identify -format "%w %h"``'s answer as (width, height), or None when
+    it is not one."""
+    words = text.split()
+    if len(words) != 2:
+        return None
+    try:
+        return int(words[0]), int(words[1])
+    except ValueError:
+        return None
+
+
+def _parse_corner(text: str) -> tuple[str, int] | None:
+    """The corner probe's ``<colour> <lightness>`` as (colour, lightness), or
+    None when it is not that. The lightness is truncated at the dot: 39.9 is 39
+    and not 40."""
+    parts = text.strip().split(" ")
+    if len(parts) < 2:
+        return None
+    try:
+        return parts[0], int(parts[1].split(".")[0])
+    except ValueError:
+        return None
+
+
+def trim_verdict(width: int, height: int, cut: tuple[int, int] | None,
+                 corner: Callable[[], tuple[str, int] | None]
+                 ) -> tuple[str, str, int]:
+    """What a -c trim meant, from how much it took off a <width> x <height>
+    page: ``(verdict, colour, border)``, the verdict being "blank", "trimmed"
+    or "converted". <cut> is the trimmed size, None when it could not be
+    measured.
+
+    Past BLANK_TRIM_PERCENT in either direction there was nothing on the page.
+    Between MIN_ and MAX_TRIM_PERCENT in both, the trim took a margin - if the
+    corner is light enough to be one. <corner> is only asked then, because it
+    costs a call of its own; what it answers is the colour, and the border is
+    the thin margin given back so the content does not end flush with the edge.
+    Anything else is converted whole.
+    """
+    if cut is None:
+        return "converted", "", 0
+    width_diff = width - cut[0]
+    height_diff = height - cut[1]
+    min_w = width * MIN_TRIM_PERCENT // 100
+    min_h = height * MIN_TRIM_PERCENT // 100
+    if (width_diff > width * BLANK_TRIM_PERCENT // 100
+            or height_diff > height * BLANK_TRIM_PERCENT // 100):
+        return "blank", "", 0
+    if (min_w <= width_diff <= width * MAX_TRIM_PERCENT // 100
+            and min_h <= height_diff <= height * MAX_TRIM_PERCENT // 100):
+        found = corner()
+        if found is not None and found[1] >= LIGHTNESS_THRESHOLD:
+            return "trimmed", found[0], min(min_w, min_h)
+    return "converted", "", 0
+
+
 class Run:
     """One conversion run: the settled options, and the counters its workers
     share through files because they are separate processes."""
@@ -361,50 +419,31 @@ class Run:
         out = disambiguated_output(relative, self.options["format"],
                                    self.input_dir, self.output_dir)
         source = relative
-        dimensions = self._identify(["-format", "%w %h", source]).split()
-        if len(dimensions) != 2:
+        dimensions = _parse_size(self._identify(["-format", "%w %h", source]))
+        if dimensions is None:
             self.record("converted", "CONV", relative)
             self._convert(self._encode_arguments(source, out))
             return
-        width, height = int(dimensions[0]), int(dimensions[1])
+        width, height = dimensions
 
         trimmed = os.path.join(self.counter_dir, "trimmed_%d.miff" % os.getpid())
         self._convert([source, "-fuzz", self.options["fuzzCommand"], "-trim",
                        "miff:" + trimmed])
-        cut = self._identify(["-format", "%w %h", "miff:" + trimmed]).split()
+        cut = _parse_size(self._identify(["-format", "%w %h",
+                                          "miff:" + trimmed]))
         try:
-            if len(cut) != 2:
-                raise ValueError
-            width_diff = width - int(cut[0])
-            height_diff = height - int(cut[1])
-
-            min_w = width * MIN_TRIM_PERCENT // 100
-            max_w = width * MAX_TRIM_PERCENT // 100
-            blank_w = width * BLANK_TRIM_PERCENT // 100
-            min_h = height * MIN_TRIM_PERCENT // 100
-            max_h = height * MAX_TRIM_PERCENT // 100
-            blank_h = height * BLANK_TRIM_PERCENT // 100
-
-            # Trimmed away past the blank threshold in either direction: there
-            # was nothing on the page.
-            if width_diff > blank_w or height_diff > blank_h:
+            verdict, colour, border = trim_verdict(
+                width, height, cut, lambda: self._identify_corner(source))
+            if verdict == "blank":
                 self.record("blank", "SKIP (blank)", relative,
                             stream=sys.stderr)
                 return
-
-            in_margin_range = (min_w <= width_diff <= max_w
-                               and min_h <= height_diff <= max_h)
-            if in_margin_range:
-                corner = self._identify_corner(source)
-                if corner is not None and corner[1] >= LIGHTNESS_THRESHOLD:
-                    # Give the trimmed page a thin margin back, so the content
-                    # does not end flush with the page edge.
-                    border = min(min_w, min_h)
-                    self.record("trimmed", "TRIM", relative)
-                    self._convert(self._encode_arguments(
-                        "miff:" + trimmed, out,
-                        ["-bordercolor", corner[0], "-border", str(border)]))
-                    return
+            if verdict == "trimmed":
+                self.record("trimmed", "TRIM", relative)
+                self._convert(self._encode_arguments(
+                    "miff:" + trimmed, out,
+                    ["-bordercolor", colour, "-border", str(border)]))
+                return
             self.record("converted", "CONV", relative)
             self._convert(self._encode_arguments(source, out))
         finally:
@@ -423,14 +462,7 @@ class Run:
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         if answer.returncode != 0:
             return None
-        parts = answer.stdout.decode("utf-8", "replace").strip().split(" ")
-        if len(parts) < 2:
-            return None
-        try:
-            # Truncated at the dot: 39.9 is 39 and not 40.
-            return parts[0], int(parts[1].split(".")[0])
-        except ValueError:
-            return None
+        return _parse_corner(answer.stdout.decode("utf-8", "replace"))
 
     def starved(self, relative: str) -> bool:
         """Whether this image is already too small to be worth re-encoding.
