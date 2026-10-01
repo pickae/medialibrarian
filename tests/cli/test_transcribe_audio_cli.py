@@ -81,6 +81,7 @@ def transcribe(sandbox, tmp_path):
 
     sandbox.whisper_log = whisper_log
     sandbox.ffmpeg_log = ffmpeg_log
+    sandbox.environment = environment
     sandbox.transcribe = run
     return sandbox
 
@@ -175,3 +176,49 @@ class TestTheJobCount:
         (source / "talk" / "episode.opus").touch()
         transcribe.transcribe("-j", "zero", source, tmp_path / "out3", expect=1)
         assert transcribe.whisper_log.read_text() == ""
+
+
+# What whisper-ctranslate2 does when CUDA runs out of memory: it says so, writes
+# no transcript, and exits 0 anyway.
+_PIPX_OUT_OF_MEMORY = r"""
+printf '%s\n' "$*" >> "$WHISPERLOG"
+echo "CUDA failed with error out of memory" >&2
+exit 0
+"""
+
+
+class TestWhisperExitingCleanWithNoTranscript:
+    """Its status is not the evidence: a transcription with no transcript to
+    show for it failed, and the run has to say so in its exit status as well as
+    in its log - a caller chaining commands sees only the first."""
+
+    @pytest.fixture
+    def run(self, transcribe, tmp_path):
+        source = tmp_path / "in"
+        (source / "talk").mkdir(parents=True)
+        (source / "talk" / "episode.opus").touch()
+        outputs = tmp_path / "out"
+        scratch = tmp_path / "ram"
+        scratch.mkdir()
+        transcribe.environment["ramScratchBase"] = str(scratch)
+        transcribe.with_tool("pipx", _PIPX_OUT_OF_MEMORY)
+        log = transcribe.transcribe(source, outputs, expect=1)
+        return outputs, scratch, log
+
+    def test_the_file_is_reported_failed(self, run):
+        _, _, log = run
+        assert "failed: talk/episode.opus" in log, log
+
+    def test_no_transcript_appears(self, run):
+        outputs, _, _ = run
+        assert list(outputs.rglob("*.txt")) == []
+
+    def test_the_scratch_is_handed_back(self, run):
+        _, scratch, _ = run
+        assert list(scratch.iterdir()) == []
+
+    def test_a_rerun_tries_it_again(self, transcribe, run):
+        outputs, _, _ = run
+        transcribe.with_tool("pipx", _PIPX)
+        transcribe.transcribe(outputs.parent / "in", outputs)
+        assert (outputs / "talk" / "episode.txt").is_file()
