@@ -771,20 +771,14 @@ def _tee_run(argv, log_file, cwd, env):
     An interrupt arriving while the engine runs kills it and waits for it, as
     ``subprocess.run`` does for the quiet call. Left running, the engine would
     outlive the run and recreate the RAM scratch the run's cleanup had just
-    removed when it writes its output.
-
-    The Popen is built in two steps so that an interrupt landing while Popen
-    is still being built, after the engine has already started, finds the pid:
-    Popen closes its pipes when its constructor raises, but leaves the child
-    running."""
+    removed when it writes its output."""
     with open(log_file, "wb") as handle:
         console = os.fdopen(2, "wb", closefd=False)
-        proc = subprocess.Popen.__new__(subprocess.Popen)
+        proc = subprocess.Popen(list(argv), cwd=cwd, env=env,
+                                stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT)
         try:
-            proc.__init__(list(argv), cwd=cwd, env=env,
-                          stdin=subprocess.DEVNULL,
-                          stdout=subprocess.PIPE,
-                          stderr=subprocess.STDOUT)
             with proc.stdout:
                 for chunk in iter(lambda: proc.stdout.read(65536), b""):
                     handle.write(chunk)
@@ -792,9 +786,8 @@ def _tee_run(argv, log_file, cwd, env):
             console.flush()
             proc.wait()
         except BaseException:
-            if getattr(proc, "pid", None) is not None:
-                proc.kill()
-                proc.wait()
+            proc.kill()
+            proc.wait()
             raise
         return proc.returncode
 
