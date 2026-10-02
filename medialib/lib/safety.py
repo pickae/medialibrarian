@@ -147,10 +147,21 @@ def would_hide(destination: str) -> bool:
     return name.startswith(".") and not name.startswith("...")
 
 
+def _folder_of(path: str) -> str:
+    """The folder an entry sits in, by the platform's own separators.
+
+    Unlike _dirname this reads ``\\`` on Windows, so a re-spelling's temporary
+    name lands beside the entry and never in the working directory, which can
+    be on another drive.
+    """
+    return os.path.dirname(os.path.normpath(path)) or os.curdir
+
+
 def _listed(path: str) -> bool:
     """Whether ``path``'s own spelling is an entry of its folder."""
     try:
-        return os.path.basename(path.rstrip("/")) in os.listdir(_dirname(path))
+        return os.path.basename(os.path.normpath(path)) in os.listdir(
+            _folder_of(path))
     except OSError:
         return False
 
@@ -166,7 +177,7 @@ def _is_respelling(source: str, destination: str) -> bool:
     case-sensitive disk is still a collision, and the filesystem's own folding
     rules (which no casefold() reproduces) are the ones applied.
     """
-    if _dirname(source) != _dirname(destination):
+    if _folder_of(source) != _folder_of(destination):
         return False
     try:
         held, wanted = os.lstat(source), os.lstat(destination)
@@ -184,10 +195,10 @@ def _respell(source: str, destination: str) -> bool:
     folder now lists it under the new spelling; on a failure halfway it is put
     back under the old one.
     """
-    parent = _dirname(source)
+    parent = _folder_of(source)
     while True:
         suffix = "".join(random.choice(_MKTEMP_ALPHABET) for _ in range(10))
-        staging = f"{parent}/.respell.{suffix}"
+        staging = os.path.join(parent, f".respell.{suffix}")
         if not os.path.lexists(staging):
             break
     try:
