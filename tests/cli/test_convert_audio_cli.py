@@ -32,8 +32,17 @@ done
 exit 0
 '''
 
-# A silencedetect probe reports one silence straddling the middle of its window,
-# so a cut lands at every ideal boundary and the chunk count is the core count.
+# A silencedetect probe reports one silence the way ffmpeg prints it, the start
+# on one line and the end on the next. It sits a third of the nudge window past
+# the middle of the probe window - the ideal boundary - so a cut found there can
+# only have come from the silence and not from the arithmetic. The probe window
+# is the ideal boundary give or take the nudge window and a 2s guard, which is
+# how the nudge window is read back out of its length.
+# Any other call that seeks is a chunk encode, and notes where it starts in a
+# "seeks" file beside this stub.
+# The awk program is single-quoted: macOS's bash 3.2 does not keep \" intact
+# inside a "$(...)", so a double-quoted program there reached awk broken and
+# the probe printed no times at all.
 # Any other call creates its output - the last argument - except the "-f null -"
 # sink, where "-" is stdout and not a file.
 _FFMPEG = '''
@@ -48,13 +57,15 @@ while [[ $i -lt ${#args[@]} ]]; do
   i=$((i+1))
 done
 if [[ $sd -eq 1 ]]; then
-  c=$(awk -v s="$ss" -v l="$t" "BEGIN{printf \\"%.3f\\", s + l/2}")
-  printf "silencedetect @ silence_start: %s\\n" \\
-    "$(awk -v c="$c" "BEGIN{printf \\"%.3f\\", c-0.4}")" >&2
-  printf "silencedetect @ silence_end: %s | silence_duration: 0.800\\n" \\
-    "$(awk -v c="$c" "BEGIN{printf \\"%.3f\\", c+0.4}")" >&2
+  awk -v s="$ss" -v l="$t" 'BEGIN {
+    c = s + l/2 + (l-4)/2/3
+    p = "[Parsed_silencedetect_0 @ 0x55d5c8a0] "
+    printf "%ssilence_start: %.3f\\n", p, c - 0.4
+    printf "%ssilence_end: %.3f | silence_duration: 0.800\\n", p, c + 0.4
+  }' >&2
   exit 0
 fi
+[[ -n "$ss" ]] && echo "$ss" >> "$(dirname "$0")/seeks"
 last="${args[$((${#args[@]}-1))]}"
 [[ "$last" != "-" ]] && : > "$last"
 exit 0
@@ -125,6 +136,27 @@ class TestTheProgressCounter:
                     if total is not None and n > total]
 
 
+class TestWhereALongFileIsCut:
+    """Each cut lands in the silence the window probe found near it, not at
+    the arithmetic boundary - so a chunk never starts mid-word."""
+
+    def test_every_chunk_but_the_first_starts_in_a_silence(self, sandbox,
+                                                           tmp_path):
+        convert = _stubbed(sandbox)
+        inputs = tmp_path / "in"
+        inputs.mkdir()
+        with open(inputs / "long.m4a", "wb") as handle:
+            handle.truncate(20_000_000_000)
+        done = convert.run("convert-audio", "-j", 4, inputs, tmp_path / "out")
+        assert done.returncode == 0, done.stdout + done.stderr
+
+        # 300 s over four cores: the ideal boundaries are 75 s apart and the
+        # nudge window is half that, so each silence is 12.5 s past one.
+        starts = sorted(float(line) for line in
+                        (convert.bin / "seeks").read_text().split())
+        assert starts == pytest.approx([0.0, 87.5, 162.5, 237.5], abs=0.01)
+
+
 class TestWhatEachLineSays:
     """A counted line says what its job does to the file, so a re-run over a
     finished tree does not read as every file being converted again.
@@ -167,12 +199,30 @@ class TestWhatEachLineSays:
         assert "\nUp to date, skipping: book.m4a\n" in said
         assert "Converting:" not in said
 
+    def _split_run(self, convert, tmp_path):
+        """A run over a tree with one file long enough that it is cut up."""
+        inputs = tmp_path / "in"
+        inputs.mkdir(exist_ok=True)
+        (inputs / "book.m4a").write_bytes(b"\0" * 1000)
+        with open(inputs / "long.m4a", "wb") as handle:
+            handle.truncate(20_000_000_000)
+        done = convert.run("convert-audio", "-j", 4, inputs, tmp_path / "out")
+        assert done.returncode == 0, done.stdout + done.stderr
+        return done.stdout
+
+    def test_a_run_that_split_a_file_times_the_re_join(self, convert,
+                                                       tmp_path):
+        assert re.search(r"^Post-conversion: +\d", self._split_run(
+            convert, tmp_path), re.M)
+
     def test_and_its_footer_leaves_out_what_it_did_not_do(self, convert,
                                                           tmp_path):
-        """Nothing was encoded and nothing split, so there is no audio to
-        total, no speed to give and no re-join to time."""
-        self._said(convert, tmp_path)
-        said = self._said(convert, tmp_path)
+        """The tree was split once already, but this time nothing was encoded
+        and nothing split, so there is no audio to total, no speed to give and
+        no re-join to time."""
+        self._split_run(convert, tmp_path)
+        said = self._split_run(convert, tmp_path)
+        assert "Up to date, skipping: long.m4a" in said
         for row in ("Total duration:", "Real-time speedup:",
                     "Post-conversion:"):
             assert row not in said

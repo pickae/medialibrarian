@@ -611,23 +611,34 @@ def detect_window(token: str, noise: str, min_duration: str) -> None:
     except OSError:
         text = ""
 
+    try:
+        with open(mids_file, "w") as handle:
+            handle.write("".join("%.3f\n" % point
+                                 for point in _silence_midpoints(text)))
+    except OSError:
+        pass
+
+
+def _silence_midpoints(text: str) -> list:
+    """The middle of every silence silencedetect printed, in seconds.
+
+    ffmpeg prints a silence's start and its end on two separate lines, so the
+    start is carried from one line to the next. A start with no end after it -
+    a silence still running when the window closed - gives nothing.
+    """
     midpoints = []
+    start = None
     for line in text.split("\n"):
         fields = line.split()
-        start = None
         for index, field in enumerate(fields):
             if field == "silence_start:" and index + 1 < len(fields):
                 start = formatting.awk_number(fields[index + 1])
             elif field == "silence_end:" and index + 1 < len(fields) \
                     and start is not None:
                 end = formatting.awk_number(fields[index + 1])
-                midpoints.append("%.3f" % ((start + end) / 2))
+                midpoints.append((start + end) / 2)
                 start = None
-    try:
-        with open(mids_file, "w") as handle:
-            handle.write("".join(point + "\n" for point in midpoints))
-    except OSError:
-        pass
+    return midpoints
 
 
 class Counters:
@@ -2063,6 +2074,7 @@ def _convert(program: str, script_dir: str, input_dir: str, output_dir: str,
         plans_queue += _records(
             segments.plan_file_for(state.plan_root, track) + ".plans")
     state.post_start = time.time()
+    state.rejoined = len(plans_queue)
     if plans_queue:
         print("Re-concatenating %d split file(s)..." % len(plans_queue))
         _run_pool(state, "reconcat", plans_queue, jobs)
