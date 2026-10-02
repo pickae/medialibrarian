@@ -23,6 +23,7 @@ byte-for-byte the same run.
 
 from __future__ import annotations
 
+import os
 import shutil
 
 import pytest
@@ -211,6 +212,33 @@ class TestTheInputFolderSurvivesItsOwnPruning:
         cleaner.clean(cleaner.folder)
         assert cleaner.folder.is_dir()
         assert list(cleaner.folder.iterdir()) == []
+
+
+class TestTheRunLeavesNothingInTheTempFolder:
+    """The list of renames held back to avoid an overwrite is kept in a temp
+    file of the run's own, and the run takes it away again - including after
+    reporting a skip from it. One left per run piles up in /tmp for good."""
+
+    @pytest.fixture
+    def run(self, cleaner, tmp_path):
+        temp = tmp_path / "temp"
+        temp.mkdir()
+        # A year folder that already holds the name -y would move in.
+        _tree(cleaner.folder, "docs/20230101 alpha.txt",
+              "docs/2023/20230101 alpha.txt")
+        done = cleaner.run("clean-folder-structure", "-y", "-f",
+                           tmp_path / "no-fragments.txt", cleaner.folder,
+                           env=dict(os.environ, TMPDIR=str(temp)))
+        assert done.returncode == 0, done.stdout + done.stderr
+        return temp, done.stdout + done.stderr
+
+    def test_the_skip_is_still_reported(self, run):
+        _, log = run
+        assert "Safety: skipped 1 rename(s) to avoid overwrite" in log
+
+    def test_the_temp_folder_is_empty_afterwards(self, run):
+        temp, _ = run
+        assert list(temp.iterdir()) == []
 
 
 class TestCollectiveCleaningIsScopedToThePlurality:
