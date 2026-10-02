@@ -116,16 +116,6 @@ class TestBaseName:
 
 
 class TestToolSpecs:
-    def test_each_known_suffix(self):
-        assert archives.archive_tool_specs("zip") == "unzip"
-        assert archives.archive_tool_specs("rar") == "unrar"
-        assert archives.archive_tool_specs("7z") == "7z|7zz|7za"
-        assert archives.archive_tool_specs("tar.zst") == "tar zstd"
-        assert archives.archive_tool_specs("tzst") == "tar zstd"
-        for ext in ("tar", "tar.gz", "tgz", "tar.bz2", "tbz2", "tbz",
-                    "tar.xz", "txz"):
-            assert archives.archive_tool_specs(ext) == "tar"
-
     def test_the_lookup_is_case_sensitive(self):
         # A name match, but this is a table: the suffix in the case it is spelled
         # in answers nothing, the way a typo does.

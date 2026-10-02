@@ -265,11 +265,13 @@ class TestALibraryRenamedInBetween:
     """
 
     @pytest.fixture
-    def run(self, music):
+    def run(self, music, tmp_path):
+        (tmp_path / "download" / "Album" / "rip.log").write_text("rip log")
         music.ingest()
         album = music.library / "Album"
         (album / "one.flac").rename(album / "renamed one.flac")
         (album / "two.flac").rename(album / "renamed two.flac")
+        (album / "rip.log").rename(album / "Renamed Rip.log")
         album.rename(music.library / "Cleaned Album")
         return music, music.ingest()
 
@@ -291,6 +293,13 @@ class TestALibraryRenamedInBetween:
         assert len(list(music.library.rglob("*.flac"))) == 2
         assert len(list(music.library.rglob("back.jpg"))) == 1
         assert len(list(music.library.rglob("*.avif"))) == 1
+
+    def test_a_sidecar_renamed_in_the_library_is_not_copied_again(self, run):
+        """The rip log carries no tag, so it is its bytes that say the library
+        already has it - and the run says it found it there."""
+        music, log = run
+        assert len(list(music.library.rglob("*.log"))) == 1, log
+        assert _stat(log, "Already in library") == "1", log
 
     def test_the_cue_the_rename_orphaned_is_dropped_and_said_to_be(self, run):
         """Its flac has a different name and there is more than one flac in the

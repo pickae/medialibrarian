@@ -6,6 +6,8 @@ full the queue is. The width is whisper's rather than the core count, one run
 already spanning the GPU or every CPU thread.
 """
 
+import inspect
+
 import pytest
 
 from medialib.cli import ingest_movies_run as run_module
@@ -86,16 +88,21 @@ def test_every_queued_record_reaches_the_transcription(monkeypatch):
 
 
 def test_the_transcription_is_handed_this_run_s_settings(monkeypatch):
+    """The models this run settled on and its ffsubsync answer, read by name,
+    so the order the arguments travel in is not what is pinned."""
+    real = inspect.signature(
+        run_module.commentarytranscription.transcribe_commentary)
     seen = []
     monkeypatch.setattr(run_module.commentarytranscription,
                         "transcribe_commentary",
-                        lambda record, *a: seen.append(a))
+                        lambda *a: seen.append(real.bind(*a).arguments))
     state = run_module.Run(script_dir="", ram_root="/ram", skips=None,
                            fragments_file="", whisper={"model": "m"},
                            whisper_said=[], ffsubsync_quality="no")
     run_module._drain_commentary(state, iter([("one", 0)]), 1)
-    assert seen == [({"model": "m"}, run_module.rules.MAX_WHISPER_SYNC_OFFSET,
-                     "no", "/ram", run_module.log)]
+    [handed] = seen
+    assert handed["whisper"] == {"model": "m"}
+    assert handed["quality"] == "no"
 
 
 def test_an_abort_stops_the_drain_where_it_is(monkeypatch):

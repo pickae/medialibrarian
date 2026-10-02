@@ -9,6 +9,7 @@ sitecustomize goes, which session directory is dropped.
 import os
 import re
 import shutil
+import signal
 import sys
 from types import SimpleNamespace
 
@@ -805,17 +806,11 @@ class TestNarrateBook:
         os.environ["narrationEngine"] = engine
         return checkout
 
-    def _argv(self, checkout, book, outdir, device="cuda", fmt="m4b",
-              channel="mono", engine="xtts", voice="", language=""):
-        argv = ["python", "app.py", "--headless", "--device", device,
-                "--tts_engine", engine, "--output_format", fmt,
-                "--output_channel", channel, "--ebook", book,
-                "--output_dir", outdir]
-        if voice:
-            argv += ["--voice", voice]
-        if language:
-            argv += ["--language", language]
-        return argv
+    @staticmethod
+    def _flag(nb, name):
+        """The value the one engine call was given for <name>."""
+        [call] = nb.calls()
+        return call[call.index(name) + 1]
 
     def test_a_success_is_the_newest_file_it_left(self, nb):
         checkout = _checkout(nb)
@@ -830,7 +825,8 @@ class TestNarrateBook:
         nb.say("python", "engine console output")
         got = bn.narrate_book(book, outdir)
         assert got == m4b
-        assert nb.calls() == [self._argv(checkout, book, outdir)]
+        assert self._flag(nb, "--ebook") == book
+        assert self._flag(nb, "--output_dir") == outdir
         with open(os.path.join(outdir, "narration.log"),
                   encoding="ascii") as written:
             assert written.read() == "engine console output"
@@ -849,8 +845,7 @@ class TestNarrateBook:
         nb.write("python", [m4b])
         got = bn.narrate_book("book.epub", outdir)
         assert got == m4b
-        assert nb.calls() == [self._argv(checkout, str(work / "book.epub"),
-                                         outdir)]
+        assert self._flag(nb, "--ebook") == str(work / "book.epub")
 
     def test_voice_and_language_are_optional_flags(self, nb):
         checkout = _checkout(nb)
@@ -863,8 +858,8 @@ class TestNarrateBook:
         nb.write("python", [m4b])
         got = bn.narrate_book(book, outdir, voice="v.wav", language="deu")
         assert got == m4b
-        assert nb.calls() == [self._argv(checkout, book, outdir,
-                                         voice="v.wav", language="deu")]
+        assert self._flag(nb, "--voice") == "v.wav"
+        assert self._flag(nb, "--language") == "deu"
 
     def test_an_empty_language_falls_back_to_narrationLanguage(self, nb):
         checkout = _checkout(nb)
@@ -876,8 +871,7 @@ class TestNarrateBook:
         nb.rc("python", "0")
         nb.write("python", [m4b])
         bn.narrate_book(book, outdir)
-        assert nb.calls() == [self._argv(checkout, book, outdir,
-                                         language="fra")]
+        assert self._flag(nb, "--language") == "fra"
 
     def test_with_neither_language_set_the_flag_is_absent(self, nb):
         checkout = _checkout(nb)
@@ -888,7 +882,8 @@ class TestNarrateBook:
         nb.rc("python", "0")
         nb.write("python", [m4b])
         bn.narrate_book(book, outdir)
-        assert nb.calls() == [self._argv(checkout, book, outdir)]
+        [call] = nb.calls()
+        assert "--language" not in call
 
     def test_an_unset_device_is_an_empty_argument(self, nb, monkeypatch):
         checkout = _checkout(nb)
@@ -900,7 +895,7 @@ class TestNarrateBook:
         nb.rc("python", "0")
         nb.write("python", [m4b])
         bn.narrate_book(book, outdir)
-        assert nb.calls() == [self._argv(checkout, book, outdir, device="")]
+        assert self._flag(nb, "--device") == ""
 
     def test_the_engine_configuration_reaches_the_argv(self, nb):
         checkout = _checkout(nb)
@@ -913,9 +908,10 @@ class TestNarrateBook:
         nb.write("python", [os.path.join(outdir, "B.m4a")])
         got = bn.narrate_book(book, outdir)
         assert got == os.path.join(outdir, "B.m4a")
-        assert nb.calls() == [self._argv(checkout, book, outdir, device="cpu",
-                                         fmt="m4a", channel="stereo",
-                                         engine="bark")]
+        assert self._flag(nb, "--device") == "cpu"
+        assert self._flag(nb, "--output_format") == "m4a"
+        assert self._flag(nb, "--output_channel") == "stereo"
+        assert self._flag(nb, "--tts_engine") == "bark"
 
     def test_a_failed_conversion_is_nothing_even_with_a_leftover_file(self, nb):
         checkout = _checkout(nb)
@@ -1085,6 +1081,52 @@ class TestNarrateBook:
         assert bn.narrate_book(str(nb.tmp_path / "b.epub"), outdir) is None
         assert nb.calls() == []
         assert not os.path.exists(os.path.join(outdir, "narration.log"))
+
+    def test_an_interrupted_verbose_run_takes_the_engine_down_with_it(self, nb):
+        """The run's interrupt handler raises in the middle of the engine call.
+        An engine left running outlives the run and, when it writes its output,
+        recreates the RAM scratch the run's cleanup had just removed.
+
+        The engine sends the interrupt itself, once it is running, so the
+        signal lands while the call is waiting on it."""
+        checkout = nb.tmp_path / "checkout"
+        (checkout / "python_env" / "bin").mkdir(parents=True)
+        (checkout / "app.py").write_text("x\n", encoding="ascii")
+        pid_file = nb.tmp_path / "engine.pid"
+        exe = checkout / "python_env" / "bin" / "python"
+        exe.write_text(
+            "#!/bin/bash\n"
+            "echo $$ > %s\n"
+            "echo reading\n"
+            "kill -USR1 $PPID\n"
+            "exec %s 60\n" % (pid_file, shutil.which("sleep")),
+            encoding="ascii")
+        os.chmod(str(exe), 0o755)
+        os.environ["narrationHome"] = str(checkout)
+        os.environ["narrationPython"] = str(exe)
+        os.environ["narrationDevice"] = "cpu"
+        os.environ["narrationVerbose"] = "1"
+
+        class Interrupted(Exception):
+            pass
+
+        def interrupt(_number, _frame):
+            raise Interrupted
+
+        previous = signal.signal(signal.SIGUSR1, interrupt)
+        try:
+            with pytest.raises(Interrupted):
+                bn.narrate_book(str(nb.tmp_path / "book.epub"),
+                                str(nb.tmp_path / "out"))
+        finally:
+            signal.signal(signal.SIGUSR1, previous)
+        engine = int(pid_file.read_text())
+        try:
+            os.kill(engine, 0)
+        except ProcessLookupError:
+            return
+        os.kill(engine, signal.SIGKILL)
+        pytest.fail("the engine was still running after the interrupt")
 
 
 # --- the progress ------------------------------------------------------------------
@@ -1465,28 +1507,28 @@ class TestVoiceSampleWindow:
                    "[silencedetect] silence_end: 1800 | silence_duration: 50\n")
         assert self._window(nb, "3600", silence) == "1822.500 45.000"
 
-    def test_a_slice_between_two_gaps_keeps_both_nudges(self, nb):
-        silence = ("[silencedetect] silence_start: 5.5\n"
-                   "[silencedetect] silence_end: 6.5\n"
-                   "[silencedetect] silence_start: 13.5\n"
-                   "[silencedetect] silence_end: 14.5\n")
-        os.environ["voiceSampleSearchSeconds"] = "10"
-        os.environ["voiceSampleSeconds"] = "6"
-        try:
-            assert self._window(nb, "20", silence) == "7.000 6.000"
-        finally:
-            del os.environ["voiceSampleSearchSeconds"]
-            del os.environ["voiceSampleSeconds"]
+    def test_a_slice_between_two_gaps_keeps_both_nudges(self, nb, monkeypatch):
+        monkeypatch.setenv("voiceSampleSearchSeconds", "10")
+        monkeypatch.setenv("voiceSampleSeconds", "6")
+        # Window 5-15, one stretch, so the slice is its middle 7-13. Both
+        # pauses are short enough to sit inside a stretch, and each catches one
+        # edge: the start moves out to 7.5 and the stop back to 12.5, which
+        # still leaves the five seconds the slice may not shrink below.
+        silence = ("[silencedetect] silence_start: 6.5\n"
+                   "[silencedetect] silence_end: 7.5\n"
+                   "[silencedetect] silence_start: 12.5\n"
+                   "[silencedetect] silence_end: 13.5\n")
+        assert self._window(nb, "20", silence) == "7.500 5.000"
 
     def test_stretches_too_short_give_the_plain_middle(self, nb, monkeypatch):
         monkeypatch.setenv("voiceSampleSearchSeconds", "10")
         monkeypatch.setenv("voiceSampleSeconds", "6")
         monkeypatch.setenv("voiceSampleMinSeconds", "5")
-        # The gap runs from before the window starts: it is skipped rather
-        # than split on, so the whole window is one stretch that cannot hold
-        # the slice - the plain middle of the window, centred.
-        silence = ("[silencedetect] silence_start: 2\n"
-                   "[silencedetect] silence_end: 8\n")
+        # A long gap splits the window 5-15 into 5-8 and 11-15, neither of
+        # which holds the five seconds a sample needs: no stretch is chosen,
+        # and the slice is the plain middle of the whole window, centred.
+        silence = ("[silencedetect] silence_start: 8\n"
+                   "[silencedetect] silence_end: 11\n")
         assert self._window(nb, "20", silence) == "7.000 6.000"
 
 

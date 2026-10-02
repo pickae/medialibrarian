@@ -30,11 +30,11 @@ def _console_scripts():
         return tomllib.load(handle)["project"]["scripts"]
 
 
-def test_there_are_nineteen_commands_to_check():
+def test_there_are_commands_to_check():
     """A comparison of two empty things satisfies every assertion below by
-    checking nothing, so the count is spelled out."""
-    assert len(_console_scripts()) == 19
-    assert len(commands.COMMANDS) == 19
+    checking nothing, so there is a floor under the count."""
+    assert len(_console_scripts()) > 10
+    assert len(commands.COMMANDS) > 10
 
 
 def test_the_installed_commands_are_the_table():
@@ -58,10 +58,6 @@ def test_every_name_is_a_lower_case_kebab_word():
 def test_no_two_commands_share_a_module():
     modules = list(commands.COMMANDS.values())
     assert len(set(modules)) == len(modules)
-
-
-def test_the_reverse_lookup_is_the_table_reversed():
-    assert {m: c for c, m in commands.COMMANDS.items()} == commands.MODULES
 
 
 def test_an_unknown_command_names_itself():

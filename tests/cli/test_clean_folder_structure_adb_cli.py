@@ -284,7 +284,8 @@ class TestTheRefusals:
     The "target already exists, skipping" branch is deliberately not among them:
     the mirror is a faithful snapshot, so the cleaner resolves every collision it
     can see inside the mirror, and the replay's own existence check fires only on
-    genuine device incoherence - which no local backend can stage.
+    genuine device incoherence - which a run through the local backend cannot
+    stage, so test_clean_folder_structure_adb.py drives the replay directly.
     """
 
     def test_a_device_path_with_nothing_under_it_is_refused(self, adb):

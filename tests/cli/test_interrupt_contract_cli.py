@@ -100,11 +100,16 @@ def interrupt(sandbox, tmp_path):
                            "comicsRamBase", "musicRamBase",
                            "readLibraryRamBase")})
 
-    def stop(sig, command, *args):
+    def stop(sig, command, *args, ready=None, env=None):
+        """`ready` replaces "the scratch exists" as the moment to signal, for a
+        run whose work starts well after its scratch does; `env` adds to the
+        environment."""
         started = blackbox.start(command, *args, cwd=sandbox.work,
-                                 path=sandbox.path, env=environment)
+                                 path=sandbox.path,
+                                 env=dict(environment, **(env or {})))
+        ready = ready or (lambda: any(base.iterdir()))
         deadline = time.monotonic() + _SCRATCH_TIMEOUT
-        while not any(base.iterdir()) and time.monotonic() < deadline:
+        while not ready() and time.monotonic() < deadline:
             if started.poll() is not None:
                 break
             time.sleep(0.05)
@@ -301,3 +306,151 @@ class TestALongRunningIngest:
     def test_it_leaves_no_scratch_behind(self, stopped):
         _assert_stopped_cleanly(stopped)
         assert stopped.leaked == []
+
+
+# A phone over adb, played by the local shell: `devices` lists one, and every
+# device command runs here. The third `mv` hangs instead, so a run can be
+# stopped with exactly two renames on the "phone" and one in flight.
+_ADB = """\
+case "$1" in
+  devices) printf 'List of devices attached\\nfakephone\\tdevice\\n\\n' ;;
+  shell|exec-out)
+    case "$2" in
+      mv\\ *) n=$(( $(cat '%(moves)s' 2>/dev/null || echo 0) + 1 ))
+             echo "$n" > '%(moves)s'
+             [ "$n" -gt 2 ] && exec sleep 60 ;;
+    esac
+    exec sh -c "$2" ;;
+esac"""
+
+
+class TestAReplayStoppedOnThePhone:
+    """`clean-folder-structure-adb`, stopped part-way through replaying its
+    renames: the phone then holds real, half-applied changes, and the footer is
+    the only account of how many.
+
+    Through the real adb route, quoting included, with the signal landing while
+    the third rename hangs. The mirror is put in the scratch base through
+    TMPDIR, so "no scratch left" is "the mirror was removed".
+    """
+
+    @pytest.fixture
+    def stopped(self, interrupt, tmp_path):
+        album = tmp_path / "phone" / "My_Album"
+        album.mkdir(parents=True)
+        names = _tracks(6, "mp3", prefix="my_")
+        for name in names:
+            (album / name).write_text(name)
+        fragments = tmp_path / "no-fragments.txt"
+        fragments.write_text("# no fragments\n", encoding="utf-8")
+        moves = tmp_path / "mv-count"
+        interrupt.with_tool("adb", _ADB % {"moves": moves})
+
+        def hanging():
+            return moves.is_file() and moves.read_text().strip() == "3"
+
+        stopped = interrupt.stop(
+            signal.SIGTERM, "clean-folder-structure-adb", "-f", fragments,
+            album.parent, ready=hanging,
+            env={"CFS_DEV_BACKEND": "adb", "ADB": str(interrupt.bin / "adb"),
+                 "TMPDIR": str(tmp_path / "rambase")})
+        return stopped, album.parent, names
+
+    def test_it_exits_with_the_signals_status_and_says_it_was_interrupted(
+            self, stopped):
+        result, _, _ = stopped
+        _assert_stopped_cleanly(result)
+        assert "Interrupted" in result.log
+
+    def test_the_footer_counts_the_renames_that_reached_the_phone(
+            self, stopped):
+        result, phone, _ = stopped
+        assert "Done: 2 rename(s) applied on device" in result.log, result.log
+        assert len(list((phone / "My Album").iterdir())) == 2
+
+    def test_the_footer_is_printed_exactly_once(self, stopped):
+        result, _, _ = stopped
+        assert result.log.count("Done: ") == 1, result.log
+
+    def test_no_file_is_lost_or_overwritten(self, stopped):
+        _, phone, names = stopped
+        held = sorted(path.read_text() for path in phone.rglob("*.mp3"))
+        assert held == sorted(names)
+
+    def test_the_mirror_is_removed(self, stopped):
+        result, _, _ = stopped
+        _assert_stopped_cleanly(result)
+        assert result.leaked == []
+# The narration checkout's interpreter, as little of it as a run needs: the setup
+# probe's answer, and an audiobook for every book it is asked to read, with each
+# request recorded beside it so a second run can say which books it read.
+_CHECKOUT_PYTHON = r"""
+here="$(dirname "$0")"
+if [[ "$1" == "-c" ]]; then
+    [[ "$2" == *sysconfig* ]] && mkdir -p "$here/site" && echo "$here/site"
+    exit 0
+fi
+[[ "$1" == "app.py" ]] || exit 0
+printf '%s\n' "$*" >> "$here/calls.log"
+while [[ $# -gt 0 ]]; do
+    [[ "$1" == "--output_dir" ]] && out="$2"
+    shift
+done
+mkdir -p "$out" && printf 'audiobook' > "$out/Book.m4b"
+"""
+
+
+class TestAnInterruptedLibraryReading:
+    """`read-library`, whose books take hours each, stopped with one of them in
+    hand. The lossless library only (`-b 0`), so the slow probe after each
+    narration is the one place the run can be waiting when the signal lands."""
+
+    @pytest.fixture
+    def checkout(self, tmp_path):
+        checkout = tmp_path / "e2a"
+        (checkout / "python_env" / "bin").mkdir(parents=True)
+        (checkout / "app.py").touch()
+        interpreter = checkout / "python_env" / "bin" / "python"
+        interpreter.write_text("#!/usr/bin/env bash\n%s\n" % _CHECKOUT_PYTHON)
+        interpreter.chmod(0o755)
+        return checkout
+
+    @pytest.fixture
+    def stopped(self, interrupt, checkout):
+        interrupt.with_tool("ebook-convert", 'cat -- "$1" > "$2"')
+        source = interrupt.tree("booksIn", *_tracks(3, "epub"))
+        arguments = ("-c", checkout, "-d", "cpu", "-l", "deu", "-b", "0",
+                     source, interrupt.outputs)
+        stopped = interrupt.stop(signal.SIGTERM, "read-library", *arguments)
+        stopped.arguments = arguments
+        return stopped
+
+    def test_it_exits_with_the_signals_status_and_says_it_was_interrupted(
+            self, stopped):
+        _assert_stopped_cleanly(stopped)
+        assert "Interrupted" in stopped.log
+
+    def test_it_prints_its_closing_stats_exactly_once(self, stopped):
+        assert stopped.log.count("\nStats\n") == 1, stopped.log
+        assert "Books found:       3" in stopped.log, stopped.log
+
+    def test_it_leaves_no_scratch_behind(self, stopped):
+        _assert_stopped_cleanly(stopped)
+        assert stopped.leaked == []
+
+    def test_a_second_run_reads_the_books_it_did_not_finish(self, stopped,
+                                                           interrupt,
+                                                           checkout):
+        _assert_stopped_cleanly(stopped)
+        library = interrupt.outputs / "m4b"
+        finished = sorted(p.name for p in library.glob("*.m4b")) \
+            if library.is_dir() else []
+        assert len(finished) < 3, stopped.log
+        calls = checkout / "python_env" / "bin" / "calls.log"
+        calls.write_text("")
+        done, leaked = interrupt.finish("read-library", *stopped.arguments)
+        assert done.returncode == 0, done.stdout + done.stderr
+        assert sorted(p.name for p in library.glob("*.m4b")) == [
+            "track1.m4b", "track2.m4b", "track3.m4b"]
+        assert len(calls.read_text().splitlines()) == 3 - len(finished)
+        assert leaked == []

@@ -1,9 +1,9 @@
 """The white box for medialib/cli/ingest_books.py.
 
 test_ingest_books_cli.py drives the whole pipeline with stubbed converters;
-what is pinned here are the helpers underneath it - the membership check, the
-removal that has to get past read-only content, the epub cleaning, and the emit
-that must never clobber.
+what is pinned here are the helpers underneath it - the removal that has to
+get past read-only content, the epub cleaning, and the emit that must never
+clobber.
 """
 
 import stat
@@ -12,19 +12,8 @@ import sys
 import pytest
 
 from medialib.cli import ingest_books as ib
-from medialib.lib import enums
 
 pytestmark = pytest.mark.fs
-
-
-class TestExtInList:
-    def test_it_finds_a_convertible_extension(self):
-        assert ib.ext_in_list("mobi", enums.BOOK_CONVERT_EXTENSIONS)
-
-    @pytest.mark.parametrize("extension", ["pdf", "epub"])
-    def test_it_rejects_a_non_member(self, extension):
-        """A PDF is copied rather than converted, and an epub is already one."""
-        assert not ib.ext_in_list(extension, enums.BOOK_CONVERT_EXTENSIONS)
 
 
 posix_modes = pytest.mark.skipif(
@@ -246,6 +235,46 @@ class TestEmitOutput:
         source.write_text("one")
         ib.emit_output(str(source), str(tmp_path / "deep" / "down" / "b.epub"))
         assert (tmp_path / "deep" / "down" / "b.epub").exists()
+
+    def test_a_copy_cut_off_halfway_leaves_nothing_where_resume_looks(
+            self, tmp_path, monkeypatch):
+        """The workspace is in RAM and the library on disk, so the emit is a
+        copy. Cut off halfway, it must not leave a short book under the final
+        name: the next run would take it for finished and skip that book for
+        good."""
+        source, dest = tmp_path / "src", tmp_path / "dst"
+        source.mkdir()
+        dest.mkdir()
+        (source / "a.epub").write_bytes(b"x" * 1000)
+
+        def cut_off(src, dst, *args, **kwargs):
+            with open(src, "rb") as reader, open(dst, "wb") as writer:
+                writer.write(reader.read(500))
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(ib.shutil, "copyfile", cut_off)
+        with pytest.raises(KeyboardInterrupt):
+            ib.emit_output(str(source / "a.epub"), str(dest / "book.epub"))
+        assert list(dest.iterdir()) == []
+        assert (source / "a.epub").stat().st_size == 1000
+
+    def test_a_library_without_hard_links_still_gets_both_books(
+            self, tmp_path, monkeypatch):
+        source, dest = tmp_path / "src", tmp_path / "dst"
+        source.mkdir()
+        dest.mkdir()
+
+        def no_links(*args, **kwargs):
+            raise PermissionError("no hard links here")
+
+        monkeypatch.setattr(ib.os, "link", no_links)
+        for name, text in (("a.epub", "one"), ("b.epub", "two")):
+            (source / name).write_text(text)
+            ib.emit_output(str(source / name), str(dest / "book.epub"))
+        assert sorted(p.name for p in dest.iterdir()) == [
+            "book (2).epub", "book.epub"]
+        assert (dest / "book.epub").read_text() == "one"
+        assert (dest / "book (2).epub").read_text() == "two"
 
 
 class TestWordCount:
