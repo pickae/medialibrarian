@@ -252,7 +252,7 @@ _TABLE = (
     "# a comment\n\n"
     "1\tAI/latent space\t\t40\t\thttps://example.test/latent\n"
     "0\tMisc/paused\t\t\t\thttps://example.test/paused\n"
-    "1\tMisc/Joe Rogan\t%(title)s.%(ext)s\t\t\thttps://example.test/rogan\n"
+    "1\tMisc/Some Host\t%(title)s.%(ext)s\t\t\thttps://example.test/host\n"
     "1\tMisc/broken\t\t\t\thttps://example.test/fails\n"
 )
 
@@ -350,7 +350,7 @@ class TestARunOverATable:
 
     def test_the_numbering_runs_across_the_session_and_not_per_feed(self, run):
         _, log = run
-        assert re.search(r"\[\s*2\]\s+ok\s+Misc/Joe Rogan", log), log
+        assert re.search(r"\[\s*2\]\s+ok\s+Misc/Some Host", log), log
 
     def test_the_downloaders_own_output_is_silenced(self, run):
         _, log = run
@@ -396,7 +396,7 @@ class TestTheArgvAFeedIsCalledWith:
 
     def test_a_feeds_own_name_template_is_not_the_default(self, run):
         assert _option(run.argv(2), "-o") == str(
-            run.library / "Misc/Joe Rogan/%(title)s.%(ext)s")
+            run.library / "Misc/Some Host/%(title)s.%(ext)s")
 
 
 class TestTheDateRange:

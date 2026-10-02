@@ -12,6 +12,7 @@ import sys
 import pytest
 
 from medialib.cli import convert_video as cv
+from medialib.lib import resolutions
 
 pytestmark = pytest.mark.pure
 
@@ -78,8 +79,17 @@ class TestQualityBiasSpellings:
         """Which would only look like a decision that was made."""
         assert "1080p 0," in cv.quality_bias_spellings()
 
-    def test_every_table_row_is_spelled_out(self):
-        assert len(cv.quality_bias_spellings().split(",")) == 7
+    def test_every_tier_is_spelled_with_the_bias_it_gets(self):
+        """Every rung of the ladder, the floor below it and a size nobody could
+        read, each with the sign of the bias a file that size is encoded with."""
+        spelled = cv.quality_bias_spellings().split(", ")
+        sizes = [(tier.name, tier.width, tier.height)
+                 for tier in resolutions.TABLE]
+        sizes += [(resolutions.SUB_TIER, 640, 360),
+                  (resolutions.UNKNOWN_TIER, None, None)]
+        for name, width, height in sizes:
+            bias = cv.quality_bias_for(width, height)
+            assert "%s %s" % (name, "%+d" % bias if bias else "0") in spelled
 
 
 class TestChunkCount:

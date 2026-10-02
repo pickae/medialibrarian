@@ -291,6 +291,15 @@ def estimated_audio_bitrate(src: str) -> int:
                      "-read_intervals", "%d%%+%d" % (round(start),
                                                      BITRATE_PROBE_SECONDS),
                      src])
+    return _packet_bitrate(listed)
+
+
+def _packet_bitrate(listed: str) -> int:
+    """Bits per second over the packets ffprobe listed, one `size=..|
+    duration_time=..` row each, or 0 when they cover no time at all.
+
+    A field ffprobe could not fill reads "N/A", which counts as nothing.
+    """
     total_bytes = 0.0
     total_seconds = 0.0
     for line in listed.split("\n"):
@@ -1103,8 +1112,8 @@ class Run:
             # output that is not there is caught by the measuring afterwards
             # along with every other way this can produce nothing.
             return True
-        if decode.stdout is None:
-            return True
+        # stdout=PIPE always hands a pipe back; this only says so to mypy.
+        assert decode.stdout is not None
         try:
             encode = subprocess.Popen(xheaac.exhale_argv(preset, out),
                                       stdin=decode.stdout,
@@ -1612,30 +1621,47 @@ class Planner:
             # than joined on a guess.
             _write_jobs(base, [track])
             return
-        if frame > 0:
-            bounds = [bounds[0]] + [
-                xheaac.align_to_frame(point, rate, frame)
-                for point in bounds[1:-1]] + [bounds[-1]]
-        offset = xheaac.chunk_start_offset(priming, rate) if priming else 0.0
-
-        tokens = []
-        for index in range(total):
-            # Every chunk starts one priming LATE, the first included: the frame
-            # the decoder plays at the head of each piece is what fills the gap,
-            # so a piece that did not leave one would push the whole book along.
-            start = bounds[index] + offset
-            length = bounds[index + 1] - start
-            if length <= 0:
-                # Two boundaries closer together than the allowance between
-                # them. Nothing here can be cut into pieces that join, so the
-                # file is not cut at all.
-                _write_jobs(base, [track])
-                return
-            tokens.append(UNIT.join([track, str(index), str(total),
-                                     "%.9f" % start, "%.9f" % length]))
+        tokens = chunk_tokens(track, bounds, rate, priming, frame)
+        if not tokens:
+            _write_jobs(base, [track])
+            return
         _write_jobs(base, tokens)
         with open(base + ".plans", "w") as handle:
             handle.write("%s\t%d\0" % (track, total))
+
+
+def chunk_tokens(track: str, bounds: list, rate: int, priming: int,
+                 frame: int) -> list:
+    """The chunk jobs for <track> cut at <bounds> - the start, the interior
+    cuts and the end, in seconds - or [] when the pieces cannot be placed.
+
+    <frame> and <priming> are what the encoder needs of the pieces to join
+    without a seam, both 0 for a codec that joins wherever it is cut: the
+    interior cuts move onto whole frames, and every piece starts one priming
+    late.
+    """
+    total = len(bounds) - 1
+    if frame > 0:
+        bounds = [bounds[0]] + [
+            xheaac.align_to_frame(point, rate, frame)
+            for point in bounds[1:-1]] + [bounds[-1]]
+    offset = xheaac.chunk_start_offset(priming, rate) if priming else 0.0
+
+    tokens = []
+    for index in range(total):
+        # Every chunk starts one priming LATE, the first included: the frame
+        # the decoder plays at the head of each piece is what fills the gap,
+        # so a piece that did not leave one would push the whole book along.
+        start = bounds[index] + offset
+        length = bounds[index + 1] - start
+        if length <= 0:
+            # Two boundaries closer together than the allowance between
+            # them. Nothing here can be cut into pieces that join, so the
+            # file is not cut at all.
+            return []
+        tokens.append(UNIT.join([track, str(index), str(total),
+                                 "%.9f" % start, "%.9f" % length]))
+    return tokens
 
 
 def _write_jobs(base: str, tokens: list) -> None:

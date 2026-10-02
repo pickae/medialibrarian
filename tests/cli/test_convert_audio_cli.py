@@ -280,3 +280,67 @@ class TestRelativePaths:
                            cwd=tmp_path).returncode == 0
         assert blackbox.tree_of(relative / "out") == blackbox.tree_of(
             absolute / "out")
+
+
+class TestARerunOverASplitFile:
+    """A long file the first run cut up and joined is up to date the second
+    time: nothing is planned, cut or written again."""
+
+    def test_it_is_skipped_whole_and_its_output_is_untouched(self, sandbox,
+                                                             tmp_path):
+        convert = _stubbed(sandbox)
+        inputs, outputs = tmp_path / "in", tmp_path / "out"
+        inputs.mkdir()
+        with open(inputs / "long.m4a", "wb") as handle:
+            handle.truncate(20_000_000_000)
+        first = convert.run("convert-audio", "-j", 4, inputs, outputs)
+        assert first.returncode == 0, first.stdout + first.stderr
+        assert "[chunk 1/4]" in first.stdout
+        joined = outputs / "long.opus"
+        before = (blackbox.tree_of(outputs), joined.stat().st_mtime_ns,
+                  joined.read_bytes())
+
+        again = convert.run("convert-audio", "-j", 4, inputs, outputs)
+        assert again.returncode == 0, again.stdout + again.stderr
+        assert "Up to date, skipping: long.m4a\n" in again.stdout
+        assert "[chunk" not in again.stdout
+        assert "Joining" not in again.stdout
+        assert (blackbox.tree_of(outputs), joined.stat().st_mtime_ns,
+                joined.read_bytes()) == before
+
+
+# Twenty hours of mono at 44.1 kHz: past the thirteen and a half one WAVE can
+# carry, so xHE-AAC can only take it in pieces.
+_FFPROBE_TWENTY_HOURS = '''
+for a in "$@"; do [[ "$a" == "-show_chapters" ]] && exit 0; done
+for a in "$@"; do
+  case "$a" in
+    *sample_rate*) echo 44100; exit 0;;
+    *channels*) echo 1; exit 0;;
+    *duration*) echo 72000.000; exit 0;;
+  esac
+done
+exit 0
+'''
+
+
+class TestAFileTooLongForOneXheAacEncode:
+    """-a turns the chunking off, so a book past the WAVE ceiling reaches the
+    whole-file encode - which refuses it rather than writing its first
+    thirteen hours and calling that the book."""
+
+    def test_the_run_fails_and_writes_no_m4a(self, sandbox, tmp_path):
+        convert = _stubbed(sandbox)
+        convert.with_tool("ffprobe", _FFPROBE_TWENTY_HOURS)
+        # Present, so the run gets as far as asking it; it must never run.
+        convert.with_tool("exhale", ': > "$(dirname "$0")/exhale-ran"')
+        inputs, outputs = tmp_path / "in", tmp_path / "out"
+        inputs.mkdir()
+        (inputs / "book.m4a").write_bytes(b"\0" * 1000)
+
+        done = convert.run("convert-audio", "-j", 1, "-e", "xheaac", "-a",
+                           inputs, outputs)
+        assert done.returncode == 1, done.stdout + done.stderr
+        assert "too long for exhale to encode whole" in done.stderr
+        assert not list(outputs.rglob("*.m4a"))
+        assert not (convert.bin / "exhale-ran").exists()

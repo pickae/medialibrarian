@@ -19,7 +19,7 @@ commentaries and the chapters the disc had.
 With no options, a run goes through every phase in one pass over the folders
 given (one level deep, not the whole tree):
 
-- **deletes release junk**: `.txt`/`.nfo`/`.exe`/`.sfv` files, samples, `.mkv`s under 1000 KiB, folders named `unwanted`, and folders left empty
+- **deletes release junk**: `.txt`/`.nfo`/`.exe`/`.sfv` files, samples, `.mkv`s under 1000 KiB, folders named `.unwanted` (qBittorrent's skipped files), and folders left empty
 - **remuxes non-Matroska video** (avi, mp4, mov, …) into `.mkv`, deleting the source
 - sorts loose films into a folder each, with extras where Plex looks for them
 - cleans folder, film and subtitle names

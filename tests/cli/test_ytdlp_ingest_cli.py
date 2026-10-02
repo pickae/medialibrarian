@@ -88,6 +88,7 @@ def ingest(sandbox, tmp_path):
                            phone, phone / "archive.log", env=environment,
                            timeout=600)
         assert done.returncode == expect, done.stdout + done.stderr
+        sandbox.stderr = done.stderr
         return done.stdout + done.stderr
 
     sandbox.phone = phone
@@ -165,3 +166,38 @@ class TestARunOfOneTableOverAFullStagingTree:
             self, run):
         _, log = run
         assert "Also converting Music" in log, log
+
+
+class TestALibraryStepThatFails:
+    """The downloads came down and the conversion into the library did not.
+    That is a run that did not do what it was asked, and the one copy of what
+    was published must still be where the next run will look for it."""
+
+    @pytest.fixture
+    def run(self, ingest):
+        # A stray file where the library belongs: nothing can be converted
+        # into it, and every conversion step fails.
+        ingest.phone.mkdir()
+        (ingest.phone / "Ingested").write_text("not a folder")
+        return ingest, ingest.ingest(expect=1)
+
+    def test_the_failed_steps_are_named_on_stderr(self, run):
+        ingest, _ = run
+        assert "2 step(s) of the library copy (-i) failed:" in ingest.stderr
+        assert "  Music audio\n" in ingest.stderr
+        assert "  Speech audio\n" in ingest.stderr
+
+    def test_the_steps_that_worked_are_not_among_them(self, run):
+        ingest, _ = run
+        assert "names\n" not in ingest.stderr
+
+    def test_it_does_not_claim_the_library_is_up_to_date(self, run):
+        _, log = run
+        assert "Library copy up to date" not in log
+
+    @pytest.mark.parametrize("episode", [
+        "Music/Podcasts/AI/anthropic", "Speech/Podcasts/talking",
+        "Speech/Podcasts/history"])
+    def test_the_downloads_are_kept_in_staging(self, run, episode):
+        ingest, _ = run
+        assert (ingest.phone / "Staging" / episode / _EPISODE).is_file()
