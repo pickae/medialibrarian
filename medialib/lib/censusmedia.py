@@ -123,12 +123,8 @@ def _tostring(value):
     """jq's ``tostring``. A number keeps the spelling the document gave it, which
     is what json.loads already preserves for the integers and decimals ffprobe
     writes."""
-    if value is None:
-        return "null"
     if value is True:
         return "true"
-    if value is False:
-        return "false"
     if isinstance(value, str):
         return value
     return str(value)

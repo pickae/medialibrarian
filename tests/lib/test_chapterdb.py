@@ -187,6 +187,17 @@ class TestTheSniffTest:
         assert chapterdb.plausible(_set(past), FILM) == \
             "has a chapter past the end"
 
+    @pytest.mark.parametrize("stamp", ["00:15", "abc", ""])
+    def test_a_time_that_cannot_be_read_refuses_the_set(self, stamp):
+        """Never a mark at 0: the first chapter is the one place a 0 would
+        pass every other check."""
+        downloaded = chapterdb.parse_set("7", _xml(
+            [(stamp, "Opening"), ("00:15:00", "The Harbour"),
+             ("00:50:00", "Storm"), ("01:40:00", "Landfall")]))
+        assert chapterdb.plausible(downloaded, FILM) == "has a malformed time"
+        assert chapterdb.choose([downloaded],
+                                chapterdb.Existing(FILM, ())) is None
+
 
 class TestWhichSetAFilmIsGiven:
 
