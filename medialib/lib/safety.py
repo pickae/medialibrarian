@@ -147,13 +147,84 @@ def would_hide(destination: str) -> bool:
     return name.startswith(".") and not name.startswith("...")
 
 
+def _folder_of(path: str) -> str:
+    """The folder an entry sits in, by the platform's own separators.
+
+    Unlike _dirname this reads ``\\`` on Windows, so a re-spelling's temporary
+    name lands beside the entry and never in the working directory, which can
+    be on another drive.
+    """
+    return os.path.dirname(os.path.normpath(path)) or os.curdir
+
+
+def _listed(path: str) -> bool:
+    """Whether ``path``'s own spelling is an entry of its folder."""
+    try:
+        return os.path.basename(os.path.normpath(path)) in os.listdir(
+            _folder_of(path))
+    except OSError:
+        return False
+
+
+def _is_respelling(source: str, destination: str) -> bool:
+    """Whether ``destination`` is ``source`` itself under another spelling.
+
+    On a case-insensitive filesystem - the macOS default, and the FAT and exFAT
+    of most USB disks and memory cards - ``01.mp3`` finds ``01.MP3``, so a rename
+    that only changes case sees its target as taken. It is not: nothing else is
+    there to lose. The test is the folder's own listing rather than a name
+    comparison, so a hard link that genuinely sits at the other name on a
+    case-sensitive disk is still a collision, and the filesystem's own folding
+    rules (which no casefold() reproduces) are the ones applied.
+    """
+    if _folder_of(source) != _folder_of(destination):
+        return False
+    try:
+        held, wanted = os.lstat(source), os.lstat(destination)
+    except OSError:
+        return False
+    return ((held.st_dev, held.st_ino) == (wanted.st_dev, wanted.st_ino)
+            and not _listed(destination))
+
+
+def _respell(source: str, destination: str) -> bool:
+    """Re-spell an entry in place, by way of a free temporary name.
+
+    A direct rename onto a name the filesystem considers the same one is a
+    no-op on some of them, so the entry steps aside first. True when the
+    folder now lists it under the new spelling; on a failure halfway it is put
+    back under the old one.
+    """
+    parent = _folder_of(source)
+    while True:
+        suffix = "".join(random.choice(_MKTEMP_ALPHABET) for _ in range(10))
+        staging = os.path.join(parent, f".respell.{suffix}")
+        if not os.path.lexists(staging):
+            break
+    try:
+        os.rename(source, staging)
+    except OSError:
+        return False
+    try:
+        os.rename(staging, destination)
+    except OSError:
+        try:
+            os.rename(staging, source)
+        except OSError:
+            pass
+        return False
+    return _listed(destination)
+
+
 def safe_rename(source: str, destination: str, log: SkipLog | None = None) -> bool:
     """Rename ``source`` to ``destination``, and report whether one happened.
 
     False, having done nothing, when the two are the same path (no work) or when
     the destination already exists (a rename would destroy it, so it is refused
-    and recorded). True only when the item really moved, which is what lets a
-    caller count its changes.
+    and recorded). A destination that is only the source itself under another
+    spelling - a case change on a case-insensitive filesystem - is not taken.
+    True only when the item really moved, which is what lets a caller count its
+    changes.
     """
     if source == destination:
         return False
@@ -166,7 +237,8 @@ def safe_rename(source: str, destination: str, log: SkipLog | None = None) -> bo
     # across a filesystem boundary that is a copy which FOLLOWS the link and
     # lands wherever it pointed - outside the tree this run was given. Something
     # is already sitting at that name whatever it resolves to, so it is refused.
-    if os.path.lexists(destination):
+    respelling = _is_respelling(source, destination)
+    if os.path.lexists(destination) and not respelling:
         if log is not None:
             log.record(source, destination)
         return False
@@ -180,20 +252,25 @@ def safe_rename(source: str, destination: str, log: SkipLog | None = None) -> bo
     source_parent_at = _mtime(source_parent)
     destination_parent_at = _mtime(destination_parent)
 
-    try:
-        # shutil.move rather than os.rename: the destination may be on another
-        # filesystem, and the network shares and phone mounts this runs over
-        # regularly are.
-        shutil.move(source, destination)
-    except (OSError, shutil.Error):
-        pass
+    if respelling:
+        if not _respell(source, destination):
+            return False
+    else:
+        try:
+            # shutil.move rather than os.rename: the destination may be on
+            # another filesystem, and the network shares and phone mounts this
+            # runs over regularly are.
+            shutil.move(source, destination)
+        except (OSError, shutil.Error):
+            pass
 
-    # The outcome decides, not the exit status of the move. On the same mounts,
-    # a move can complete and still report failure because it could not carry
-    # permissions or ownership across, and a caller's change counter should not
-    # depend on which filesystem the user happened to be on.
-    if not (os.path.lexists(destination) and not os.path.lexists(source)):
-        return False
+        # The outcome decides, not the exit status of the move. On the same
+        # mounts, a move can complete and still report failure because it could
+        # not carry permissions or ownership across, and a caller's change
+        # counter should not depend on which filesystem the user happened to be
+        # on.
+        if not (os.path.lexists(destination) and not os.path.lexists(source)):
+            return False
 
     # The item first and the folders last: touching a file does not re-bump its
     # parent, so this order is stable. The source's parent is skipped when it is

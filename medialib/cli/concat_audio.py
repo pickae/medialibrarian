@@ -21,6 +21,7 @@ two, which a mechanical drive still streams rather than seeks.
 """
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -448,8 +449,9 @@ def name_output_files(input_dir: str, output_dir: str) -> tuple:
         # than a fragment to remove, and it is specific to audio, so it lives
         # here rather than in the shared cleaner. It makes the common
         # "Track"/"Piste" prefix easy to crop collectively in the next pass; a
-        # doubled space is collapsed by the trimming inside the cleaner.
-        name = name.replace("Track", "Track ").replace("Piste", "Piste ")
+        # doubled space is collapsed by the trimming inside the cleaner. Only
+        # where no letter follows: "Tracker" is a word, not a chapter.
+        name = re.sub(r"(Track|Piste)(?![^\W\d_])", r"\1 ", name)
         prefix, cleaned = cleannamesindividually.clean_names_individually(name)
         prefixes.append(prefix)
         names.append(cleaned)
