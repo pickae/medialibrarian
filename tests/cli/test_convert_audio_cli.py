@@ -39,6 +39,9 @@ exit 0
 # how the nudge window is read back out of its length.
 # Any other call that seeks is a chunk encode, and notes where it starts in a
 # "seeks" file beside this stub.
+# The awk program is single-quoted: macOS's bash 3.2 does not keep \" intact
+# inside a "$(...)", so a double-quoted program there reached awk broken and
+# the probe printed no times at all.
 # Any other call creates its output - the last argument - except the "-f null -"
 # sink, where "-" is stdout and not a file.
 _FFMPEG = '''
@@ -53,13 +56,12 @@ while [[ $i -lt ${#args[@]} ]]; do
   i=$((i+1))
 done
 if [[ $sd -eq 1 ]]; then
-  c=$(awk -v s="$ss" -v l="$t" \\
-    "BEGIN{printf \\"%.3f\\", s + l/2 + (l-4)/2/3}")
-  printf "[Parsed_silencedetect_0 @ 0x55d5c8a0] silence_start: %s\\n" \\
-    "$(awk -v c="$c" "BEGIN{printf \\"%.3f\\", c-0.4}")" >&2
-  printf "[Parsed_silencedetect_0 @ 0x55d5c8a0] silence_end: %s" \\
-    "$(awk -v c="$c" "BEGIN{printf \\"%.3f\\", c+0.4}")" >&2
-  printf " | silence_duration: 0.800\\n" >&2
+  awk -v s="$ss" -v l="$t" 'BEGIN {
+    c = s + l/2 + (l-4)/2/3
+    p = "[Parsed_silencedetect_0 @ 0x55d5c8a0] "
+    printf "%ssilence_start: %.3f\\n", p, c - 0.4
+    printf "%ssilence_end: %.3f | silence_duration: 0.800\\n", p, c + 0.4
+  }' >&2
   exit 0
 fi
 [[ -n "$ss" ]] && echo "$ss" >> "$(dirname "$0")/seeks"
