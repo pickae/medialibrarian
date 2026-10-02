@@ -20,6 +20,7 @@ incoherence to reason about.
 """
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -49,9 +50,17 @@ OPT_COLUMN = 16
 OPT_LONG = ("y:sort-into-years d:fix-dates n:number-files f:fragments p:preview "
             "h:help")
 
-# The roots a phone's primary storage is usually reachable at, tried in order
-# before the ones /storage itself lists.
+# The roots a phone's primary storage is usually reachable at. The volumes
+# `ls -1 /storage` lists besides these are its removable ones.
 DEVICE_ROOTS = ("/sdcard", "/storage/emulated/0", "/storage/self/primary")
+
+# Words in an MTP storage label that say which volume it is. Phones label their
+# storages in the user's language, so a few common ones are here; a label with
+# none of them is tried at every root.
+_REMOVABLE_WORDS = frozenset((
+    "sd", "microsd", "sdcard", "card", "carte", "karte", "tarjeta", "scheda",
+    "kaart", "usb", "otg", "external", "removable"))
+_PRIMARY_WORDS = frozenset(("phone", "shared", "primary"))
 
 
 def spec(program: str) -> clioptions.Spec:
@@ -175,26 +184,51 @@ def _nul_split(payload: bytes):
     return [os.fsdecode(entry) for entry in payload.split(b"\0") if entry]
 
 
-def resolve_device_root(device: Device, fuse_path: str):
-    """A gvfs MTP fuse path translated into the equivalent on-device path.
+def storage_kind(label: str) -> str:
+    """Which volume an MTP storage label names: "removable", "primary", or ""
+    when the label does not say."""
+    words = re.findall(r"[a-z0-9]+", label.casefold())
+    if any(word in _REMOVABLE_WORDS for word in words):
+        return "removable"
+    if any(word in _PRIMARY_WORDS or word.startswith("intern")
+           for word in words):
+        return "primary"
+    return ""
 
-    The part after the storage label is taken and the usual device roots probed
-    for it, so no storage-name mapping has to be hard-coded.
+
+def probe_paths(fuse_path: str, storage_listing: str) -> list[str]:
+    """The on-device paths a gvfs MTP fuse path may be, in the order to try.
+
+    The part after the storage label is appended to the roots of the volume the
+    label names: the usual primary roots for internal storage, every other
+    volume `ls -1 /storage` lists (`storage_listing`) for a card. A path on the
+    card must never resolve to internal storage just because that has a folder
+    of the same name - nor the other way round - so only a label that names
+    neither is tried at both, primary first. `self` and `emulated` are left out
+    of the listing: they are the primary storage again.
     """
     _, marker, tail = fuse_path.partition("/gvfs/mtp:host=")
     if marker:
         tail = tail.partition("/")[2]
-    relative = tail.partition("/")[2] if "/" in tail else ""
+    label, _, relative = tail.partition("/")
+    kind = storage_kind(label)
 
-    candidates = list(DEVICE_ROOTS)
-    listing = device._shell_output("ls -1 /storage 2>/dev/null")
-    for name in listing.splitlines():
+    volumes = []
+    for name in storage_listing.splitlines():
         name = name.rstrip("\r")
         if name and name not in ("self", "emulated"):
-            candidates.append("/storage/" + name)
+            volumes.append("/storage/" + name)
+    candidates = ([] if kind == "removable" else list(DEVICE_ROOTS)) \
+        + ([] if kind == "primary" else volumes)
+    return [candidate + ("/" + relative if relative else "")
+            for candidate in candidates]
 
-    for candidate in candidates:
-        probe = candidate + ("/" + relative if relative else "")
+
+def resolve_device_root(device: Device, fuse_path: str):
+    """A gvfs MTP fuse path translated into the equivalent on-device path: the
+    first of its `probe_paths` that is a directory on the device."""
+    listing = device._shell_output("ls -1 /storage 2>/dev/null")
+    for probe in probe_paths(fuse_path, listing):
         if device.isdir(probe):
             return probe
     return None
@@ -292,12 +326,11 @@ def replay(device: Device, device_root: str, mapping, plan: Plan) -> None:
     untangle such a chain - it makes the outcome the same every time and the
     plan readable, which is what a plan is for.
     """
+    renames = [(old, mapping[old]) for old in sorted(mapping, key=os.fsencode)
+               if mapping[old] != old]
+    plan.planned = len(renames)
     ensured = {"."}
-    for old in sorted(mapping, key=os.fsencode):
-        new = mapping[old]
-        if old == new:
-            continue
-        plan.planned += 1
+    for old, new in renames:
         sys.stderr.write("  RENAME  %s\n          -> %s\n" % (old, new))
         if plan.dry_run:
             continue
@@ -414,7 +447,13 @@ def main(argv: list, program: str = "clean-folder-structure-adb",
 
 def _attached_devices(device: Device) -> int:
     proc = subprocess.run([device.adb, "devices"], stdout=subprocess.PIPE)
-    lines = proc.stdout.decode("utf-8", "replace").splitlines()[1:]
+    return count_attached(proc.stdout.decode("utf-8", "replace"))
+
+
+def count_attached(text: str) -> int:
+    """How many devices an `adb devices` listing shows as ready to use - not
+    the ones it lists as `unauthorized` or `offline`."""
+    lines = text.splitlines()[1:]
     return sum(1 for line in lines if line.split()[1:2] == ["device"])
 
 

@@ -766,19 +766,29 @@ def narrate_book(book, out_dir, voice="", language=None, log_file=None):
 def _tee_run(argv, log_file, cwd, env):
     """The verbose engine call: its output goes to the log and to the console
     stderr at once. The console side is file descriptor 2 itself, so it
-    survives the test's swap of sys.stderr."""
+    survives the test's swap of sys.stderr.
+
+    An interrupt arriving while the engine runs kills it and waits for it, as
+    ``subprocess.run`` does for the quiet call. Left running, the engine would
+    outlive the run and recreate the RAM scratch the run's cleanup had just
+    removed when it writes its output."""
     with open(log_file, "wb") as handle:
         console = os.fdopen(2, "wb", closefd=False)
         proc = subprocess.Popen(list(argv), cwd=cwd, env=env,
                                 stdin=subprocess.DEVNULL,
                                 stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT)
-        with proc.stdout:
-            for chunk in iter(lambda: proc.stdout.read(65536), b""):
-                handle.write(chunk)
-                console.write(chunk)
-        console.flush()
-        proc.wait()
+        try:
+            with proc.stdout:
+                for chunk in iter(lambda: proc.stdout.read(65536), b""):
+                    handle.write(chunk)
+                    console.write(chunk)
+            console.flush()
+            proc.wait()
+        except BaseException:
+            proc.kill()
+            proc.wait()
+            raise
         return proc.returncode
 
 

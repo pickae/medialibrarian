@@ -380,6 +380,73 @@ class TestTheReportFolder:
         assert "could not be made" in log.lower()
 
 
+# What ffprobe prints for a short stereo mp3: enough of its real shape for the
+# audio row to read every column it has.
+_MP3_PROBE = """{
+    "streams": [{"index": 0, "codec_name": "mp3", "codec_type": "audio",
+                 "sample_rate": "44100", "channels": 2,
+                 "channel_layout": "stereo", "bit_rate": "128000"}],
+    "chapters": [],
+    "format": {"filename": "x.mp3", "nb_streams": 1, "format_name": "mp3",
+               "duration": "61.440000", "size": "983040",
+               "bit_rate": "128000"}
+}"""
+
+
+@pytest.fixture
+def music(census):
+    """A library of audio, read through an ffprobe that describes every .mp3 as
+    a stereo one - and prints nothing for one whose name says it is broken, the
+    way the real one answers a file that is not audio at all."""
+    census.with_tool("ffmpeg", ":")
+    census.with_tool("ffprobe", """for last; do :; done
+case "$last" in
+    *broken*) ;;
+    *) cat <<'JSON'
+%s
+JSON
+    ;;
+esac""" % _MP3_PROBE)
+    census.music = census.work / "Albums"
+    census.music.mkdir()
+    return census
+
+
+class TestMediaThatIsNotABook:
+    """The rows every other type gets go through the same loop as the books
+    do, minus the pool - an .mp3 is enough to walk it."""
+
+    def test_an_mp3_gives_an_audio_row(self, music):
+        _write(music.music / "track.mp3", "frames")
+        music.census(music.music)
+        rows = _rows(music.music / "audioAlbums.csv")
+        assert len(rows) == 1
+        fields = rows[0].split(",")
+        assert fields[0] == str(music.music / "track.mp3")
+        assert fields[2:4] == ["61.440", "128000"]
+        assert fields[5:7] == ["2", "mp3"]
+
+    def test_an_mp3_ffprobe_cannot_read_is_listed_and_given_no_row(
+            self, music):
+        _write(music.music / "track.mp3", "frames")
+        _write(music.music / "broken.mp3", "not audio")
+        log = music.census(music.music)
+        assert len(_rows(music.music / "audioAlbums.csv")) == 1
+        assert "1 file(s) were skipped because they are not what their " \
+            "suffix says:" in log
+        assert "  %s: ffprobe could not read it" % (
+            music.music / "broken.mp3") in log
+
+    def test_nothing_readable_writes_no_report_and_gives_back_the_o_folder(
+            self, music):
+        _write(music.music / "broken.mp3", "not audio")
+        out = music.work / "fresh" / "reports"
+        log = music.census("-o", out, music.music)
+        assert "No report was written" in log
+        assert not (music.work / "fresh").exists()
+        assert list(music.music.iterdir()) == [music.music / "broken.mp3"]
+
+
 class TestTheBackendFlag:
     """The cubes need DuckDB and are the backend's own business; what belongs to
     this command is that `-b` is documented."""
