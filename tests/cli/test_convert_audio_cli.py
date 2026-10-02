@@ -241,10 +241,12 @@ class TestTheRunLeavesNothingInTheTempFolder:
     reporting a skip from it. One left per run piles up in /tmp for good."""
 
     @pytest.fixture
-    def run(self, sandbox, tmp_path):
+    def run(self, sandbox, tmp_path, tmp_path_factory):
         convert = _stubbed(sandbox)
-        temp = tmp_path / "temp"
-        temp.mkdir()
+        # The worker pool's forkserver puts its socket in TMPDIR, and a socket
+        # path has to fit in about 100 bytes: tmp_path, named after the test,
+        # can be too deep for that.
+        temp = tmp_path_factory.mktemp("t")
         inputs = tmp_path / "in"
         inputs.mkdir()
         (inputs / "track.mp3").write_bytes(b"\0" * 100_000)
