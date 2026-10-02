@@ -123,26 +123,16 @@ def resolve_libraries(in_paths, report_names, depth):
     type ("videoFilmsMarvel.csv").
     """
     lib_paths, lib_names, lib_roots = [], [], []
-    seen_paths = set()
     for root_index, root in enumerate(in_paths):
         root_name = report_names[root_index]
         if depth == 0:
             lib_paths.append(root)
             lib_names.append(root_name)
             lib_roots.append(root_index)
-            seen_paths.add(root)
             continue
 
         found = 0
         for candidate in _folders_at_depth(root, depth):
-            # Nested paths given on one command line can reach the same folder
-            # twice. One folder is one library, exactly as the same path named
-            # twice is.
-            if candidate in seen_paths:
-                log('Ignoring "%s": that folder is already being censused'
-                    % candidate)
-                continue
-            seen_paths.add(candidate)
             relative = candidate[len(root):].lstrip("/")
             name = root_name + "".join(
                 _capitalise(segment) for segment in relative.split("/"))
