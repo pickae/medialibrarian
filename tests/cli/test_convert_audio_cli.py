@@ -8,6 +8,7 @@ to the caller, not to the directory the run chdirs into.
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 
@@ -232,6 +233,38 @@ class TestRelativePaths:
                            cwd=tmp_path).returncode == 0
         assert blackbox.tree_of(relative / "out") == blackbox.tree_of(
             absolute / "out")
+
+
+class TestTheRunLeavesNothingInTheTempFolder:
+    """The list of renames held back to avoid an overwrite is kept in a temp
+    file of the run's own, and the run takes it away again - including after
+    reporting a skip from it. One left per run piles up in /tmp for good."""
+
+    @pytest.fixture
+    def run(self, sandbox, tmp_path, tmp_path_factory):
+        convert = _stubbed(sandbox)
+        # The worker pool's forkserver puts its socket in TMPDIR, and a socket
+        # path has to fit in about 100 bytes: tmp_path, named after the test,
+        # can be too deep for that.
+        temp = tmp_path_factory.mktemp("t")
+        inputs = tmp_path / "in"
+        inputs.mkdir()
+        (inputs / "track.mp3").write_bytes(b"\0" * 100_000)
+        # A cover already holds the name the .jpeg would be renamed to.
+        (inputs / "cover.jpeg").write_text("jpeg")
+        (inputs / "cover.jpg").write_text("jpg")
+        done = convert.run("convert-audio", "-j", 2, inputs, tmp_path / "out",
+                           env=dict(os.environ, TMPDIR=str(temp)))
+        assert done.returncode == 0, done.stdout + done.stderr
+        return temp, done.stdout + done.stderr
+
+    def test_the_skip_is_still_reported(self, run):
+        _, log = run
+        assert "Safety: skipped 1 rename(s) to avoid overwrite" in log
+
+    def test_the_temp_folder_is_empty_afterwards(self, run):
+        temp, _ = run
+        assert list(temp.iterdir()) == []
 
 
 class TestARerunOverASplitFile:

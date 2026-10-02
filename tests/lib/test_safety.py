@@ -607,6 +607,47 @@ class TestWhereTheSafetyLogIsMade:
         assert inherited.read_text() == "the wrapper's line\n"
 
 
+class TestWhoRemovesTheSafetyLog:
+    """The run that made the temp file removes it at exit; a log it was handed
+    is left to whoever named or opened it."""
+
+    @pytest.fixture
+    def registered(self, monkeypatch):
+        hooks = []
+        monkeypatch.setattr(safety.atexit, "register",
+                            lambda *call: hooks.append(call))
+        return hooks
+
+    def test_a_log_of_its_own_is_removed_at_exit(self, tmp_path, monkeypatch,
+                                                  registered):
+        monkeypatch.delenv("SAFETY_LOG", raising=False)
+        monkeypatch.setenv("TMPDIR", str(tmp_path))
+
+        path = safety.init_safety_log()
+        for hook, *args in registered:
+            hook(*args)
+
+        assert not os.path.exists(path)
+
+    def test_a_named_log_is_not(self, tmp_path, monkeypatch, registered):
+        monkeypatch.delenv("SAFETY_LOG", raising=False)
+        safety.init_safety_log(str(tmp_path / "safetySkips.log"))
+        assert registered == []
+
+    def test_an_inherited_log_is_not(self, tmp_path, monkeypatch, registered):
+        inherited = tmp_path / "wrapper.log"
+        inherited.write_text("")
+        monkeypatch.setenv("SAFETY_LOG", str(inherited))
+        safety.init_safety_log()
+        assert registered == []
+
+    def test_a_forked_worker_leaves_its_parents_log_alone(self, tmp_path):
+        log = tmp_path / "safetySkips.parent"
+        log.write_text("")
+        safety._remove_if_owner(str(log), os.getpid() + 1)
+        assert log.exists()
+
+
 # --- the interrupt, and the refusal an unusable input gets ---------------------
 
 class TestAbortFlag:

@@ -31,7 +31,7 @@ import subprocess
 import sys
 import tempfile
 
-from medialib.lib import formatting, runlog
+from medialib.lib import formatting, runlog, safety
 
 __all__ = [
     "TOLERANCE_SECONDS",
@@ -166,6 +166,9 @@ def init_log(path: str = "") -> str:
                                         dir=directory)
     os.close(descriptor)
     os.environ[LOG_VARIABLE] = path
+    # This run's own temp file, so this run removes it at exit. A named or
+    # inherited log belongs to whoever named or opened it.
+    safety.remove_at_exit(path)
     return path
 
 
