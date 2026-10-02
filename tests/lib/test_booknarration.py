@@ -1087,8 +1087,11 @@ class TestNarrateBook:
         An engine left running outlives the run and, when it writes its output,
         recreates the RAM scratch the run's cleanup had just removed.
 
-        The engine sends the interrupt itself, once it is running, so the
-        signal lands while the call is waiting on it."""
+        The engine sends the interrupt itself, so the signal lands while the
+        call is waiting on it. It first writes twice what a pipe holds, which
+        only completes once the call is reading: sent any earlier, the signal
+        could land while the engine is still being started, before there is a
+        process to kill."""
         checkout = nb.tmp_path / "checkout"
         (checkout / "python_env" / "bin").mkdir(parents=True)
         (checkout / "app.py").write_text("x\n", encoding="ascii")
@@ -1098,6 +1101,7 @@ class TestNarrateBook:
             "#!/bin/bash\n"
             "echo $$ > %s\n"
             "echo reading\n"
+            "printf '%%0131072d\\n' 0\n"
             "kill -USR1 $PPID\n"
             "exec %s 60\n" % (pid_file, shutil.which("sleep")),
             encoding="ascii")
