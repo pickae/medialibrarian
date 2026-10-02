@@ -1861,6 +1861,10 @@ def main(argv: list, program: str = "convert-audio",
     # next run its own encodes to encode again.
     if safety.require_separate_output(input_dir, output_dir):
         return 1
+    if os.path.exists(output_dir) and not os.path.isdir(output_dir):
+        sys.stderr.write('\nError: the output folder "%s" is not a folder.\n'
+                         "Nothing was changed.\n" % output_dir)
+        return 1
 
     script_dir = script_dir or commands.script_dir()
 

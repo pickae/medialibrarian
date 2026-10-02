@@ -229,6 +229,35 @@ class TestWhatEachLineSays:
         assert "Files:" in said
 
 
+class TestAnOutputPathThatIsAFile:
+    """An output path naming an existing file is refused before anything runs;
+    it once reached the output folder's makedirs and died in a traceback."""
+
+    def test_it_is_refused_and_nothing_is_touched(self, sandbox, tmp_path):
+        convert = _stubbed(sandbox)
+        inputs, output = tmp_path / "in", tmp_path / "out.opus"
+        (inputs / "sub").mkdir(parents=True)
+        (inputs / "track.m4a").write_bytes(b"\0" * 1000)
+        (inputs / "sub" / "track.mp3").write_bytes(b"\1" * 1000)
+        output.write_bytes(b"not a folder")
+
+        def snapshot():
+            return [(name, (inputs / name).is_file()
+                     and (inputs / name).read_bytes())
+                    for name in blackbox.tree_of(inputs)]
+        before = snapshot()
+
+        done = convert.run("convert-audio", inputs, output)
+        assert done.returncode == 1, done.stdout + done.stderr
+        assert "Traceback" not in done.stderr
+        errors = [line for line in done.stderr.splitlines()
+                  if line.startswith("Error:")]
+        assert errors == ['Error: the output folder "%s" is not a folder.'
+                          % output]
+        assert snapshot() == before
+        assert output.read_bytes() == b"not a folder"
+
+
 class TestRelativePaths:
     """The run chdirs into its input folder, so a relative path from the command
     line once resolved against that folder rather than the caller's and no output
