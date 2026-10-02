@@ -285,6 +285,29 @@ class TestASubfolderThatProducesNothing:
         assert len(headings) == 3
 
 
+class TestOutputNamesFromCleanedFolderNames:
+    """The name a folder's book is written under, as the user finds it."""
+
+    def _run(self, concat, *folders):
+        _tree(concat.inputs, *["%s/01 - part.mp3" % f for f in folders])
+        done = concat.run("concat-audio", concat.inputs, concat.outputs)
+        assert done.returncode == 0, done.stdout + done.stderr
+        return concat
+
+    def test_a_numbered_chapter_folder_names_its_book_by_the_number(
+            self, concat):
+        concat = self._run(concat, "Track01", "Track02")
+        assert _names(concat.outputs, ".mp3") == ["01.mp3", "02.mp3"]
+
+    def test_no_book_is_written_beside_the_output_folder(self, concat):
+        """An emptied name once made the book "<output>.mp3" in its parent."""
+        concat = self._run(concat, "Trackers Guide", "Back Track")
+        assert _names(concat.outputs, ".mp3") == [
+            "Back Track.mp3", "Trackers Guide.mp3"]
+        assert sorted(p.name for p in concat.outputs.parent.iterdir()
+                      if p.is_file()) == []
+
+
 class TestM4aIsConcatenated:
     """MP4-framed AAC joins like mp3 and opus rather than through raw ADTS -
     which xHE-AAC cannot pass through at all."""
