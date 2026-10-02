@@ -487,3 +487,51 @@ class TestAnInterruptedCensus:
     def test_it_leaves_no_scratch_behind(self, stopped):
         _assert_stopped_cleanly(stopped)
         assert stopped.leaked == []
+
+
+class TestAVideoRunWaitingForItsDolbyVisionSlot:
+    """`convert-video` prepares the next file while the current one encodes, and
+    a Dolby Vision profile 7 file prepared ahead waits for the run's one DV slot.
+    An interrupt has to reach that waiter too, or the run's exit waits on a
+    thread that waits on a slot the stopped encode never hands back.
+
+    In-process rather than a whole run: the waiter is a thread inside the run,
+    and how long it takes to let go is the thing pinned."""
+
+    def test_the_waiter_lets_go_within_about_a_second(self, tmp_path,
+                                                      monkeypatch):
+        import threading
+
+        from medialib.cli import convert_video as rules
+        from medialib.cli import convert_video_run as run_module
+        from medialib.lib import safety
+
+        monkeypatch.setenv("ABORT_FLAG", str(tmp_path / "abortRequested"))
+        monkeypatch.setattr(run_module, "log", lambda *a, **k: None)
+        monkeypatch.setattr(rules, "dolby_vision_profile",
+                            lambda path: ("7", "1"))
+        converted = []
+        monkeypatch.setattr(run_module, "normalise_dolby_vision",
+                            lambda *a: converted.append(a) or ("", ""))
+        settings = rules.Settings(input_dir=str(tmp_path / "in"),
+                                  chunk_root=str(tmp_path / "work"),
+                                  dv_encoder_support=True)
+        state = run_module.Run(settings)
+        # The file encoding holds the slot, and is stopped holding it.
+        assert state.dv_slot.acquire(timeout=1)
+        ahead = run_module.Plan("b.mkv", rules.Settings(**settings.__dict__))
+        waiter = threading.Thread(target=state._settle_dolby_vision,
+                                  args=(ahead,), daemon=True)
+        waiter.start()
+        waiter.join(0.3)
+        assert waiter.is_alive()
+
+        stopped_at = time.monotonic()
+        safety.request_abort()
+        waiter.join(5)
+
+        assert not waiter.is_alive()
+        assert time.monotonic() - stopped_at < 2.0
+        assert converted == []
+        assert not ahead.holds_dv_slot
+        assert ahead.settings.dolby_vision_mode == "0"

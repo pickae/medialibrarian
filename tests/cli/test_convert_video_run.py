@@ -125,6 +125,44 @@ class TestTheSizeAFileIsAnnouncedAt:
         assert size_text("", "1080", "", "1080", "", "1080") == "?x1080"
 
 
+class TestTheRenderNodeDecodedOn:
+    """Which ``/dev/dri`` node an Intel decode is opened on. A desktop with an
+    NVIDIA card and an Intel iGPU lists both, and the NVIDIA one may open a VA
+    display too, through a VA-API driver of its own: it must still not be taken
+    for the iGPU."""
+
+    pytestmark = pytest.mark.pure
+
+    INTEL, NVIDIA, AMD = "0x8086", "0x10de", "0x1002"
+
+    @pytest.mark.parametrize("vendors,opens,chosen", [
+        # The mixed machine, either way round.
+        ({"renderD128": NVIDIA, "renderD129": INTEL},
+         {"renderD128", "renderD129"}, "renderD129"),
+        ({"renderD128": INTEL, "renderD129": NVIDIA},
+         {"renderD128", "renderD129"}, "renderD128"),
+        # A discrete card's VA-API driver opens, and still is not taken.
+        ({"renderD128": NVIDIA}, {"renderD128"}, ""),
+        ({"renderD128": AMD, "renderD129": NVIDIA},
+         {"renderD128", "renderD129"}, ""),
+        # An Intel node that will not open gives way to the next Intel one.
+        ({"renderD128": INTEL, "renderD129": INTEL}, {"renderD129"},
+         "renderD129"),
+        # A host with no vendor files: the first node that opens.
+        ({"renderD128": "", "renderD129": ""}, {"renderD129"}, "renderD129"),
+        # An Intel node is preferred to one with no vendor file before it.
+        ({"renderD128": "", "renderD129": INTEL},
+         {"renderD128", "renderD129"}, "renderD129"),
+        ({"renderD128": INTEL}, set(), ""),
+        ({}, set(), ""),
+    ])
+    def test_the_node_chosen(self, vendors, opens, chosen):
+        node = run_module.pick_render_node(
+            sorted(vendors), vendors.get,
+            lambda path: path.rsplit("/", 1)[1] in opens)
+        assert node == ("/dev/dri/" + chosen if chosen else "")
+
+
 class TestTheHardwareDecodeLadder:
     """Which interface a run decodes through, and what it says it chose.
 
@@ -273,3 +311,218 @@ class TestTheResumeSkip:
 
     def test_a_truncated_output_is_converted_again(self, resume):
         assert not resume(self.SOURCE / 2)
+
+
+class TestTheFramesEachUpscaledChunkIsGiven:
+    """An upscaled chunk is handed frame numbers rather than times, and the
+    chunks must tile the film: each ends at the frame the next one starts at,
+    the first starts at frame 0 and the last runs to the end. A boundary that
+    falls on a half frame is the hard case, since the two sides of it are worked
+    out from different figures."""
+
+    @pytest.fixture
+    def ranges(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(rules, "build_video_args",
+                            lambda base, path, settings: "-c:v libx265")
+        monkeypatch.setattr(run_module.safety, "trap_worker_abort",
+                            lambda: None)
+        monkeypatch.setattr(run_module.statusline, "start_status_monitor",
+                            lambda *a: 0)
+        monkeypatch.setattr(run_module, "log", lambda *a, **k: None)
+        monkeypatch.setattr(run_module, "reconcat_video_only",
+                            lambda *a: 0)
+        monkeypatch.setattr(
+            run_module, "_run_chunk_pool",
+            lambda settings, tokens, width: [
+                run_module.encode_video_chunk(settings, token)
+                for token in tokens])
+        seen = []
+        monkeypatch.setattr(
+            run_module, "run_upscaled_encode",
+            lambda settings, source, args, progress, out, start, end:
+            seen.append((start, end)) or 0)
+
+        def run(bounds, fps):
+            settings = rules.Settings(input_dir=str(tmp_path / "in"),
+                                      chunk_root=str(tmp_path / "chunks"),
+                                      upscale_size="1920x1080",
+                                      upscale_fps=fps)
+            state = run_module.Run(settings)
+            status = state._encode(settings, "film.mkv",
+                                   str(tmp_path / "chunks" / "film"),
+                                   float(bounds[-1]), bounds, "1280x720")
+            assert status == 0
+            return seen
+        return run
+
+    @pytest.mark.parametrize("fps,bounds", [
+        ("24000/1001", run_module.chunk_bounds(5423.417, 37)),
+        # 1.820 s and 4.060 s are each exactly half a frame past a frame at
+        # 25 fps, which is where a sum of start and span lands either side.
+        ("25/1", ["0", "1.234", "1.820", "4.060", "60.000"]),
+    ])
+    def test_the_chunks_tile_the_frames_exactly(self, ranges, fps, bounds):
+        frames = ranges(bounds, fps)
+        assert len(frames) == len(bounds) - 1
+        assert frames[0][0] == 0
+        assert frames[-1][1] == -1
+        for (_start, end), (next_start, _end) in zip(frames, frames[1:],
+                                                     strict=False):
+            assert end == next_start
+
+
+class TestAnUpscaledChunkThatFailed:
+    """The ffmpeg at the end of the upscaler's pipe finishes cleanly on whatever
+    it was given, so a chunk whose vspipe died is a short file that looks whole.
+    A failed pipe must take its output with it."""
+
+    @pytest.fixture
+    def encode(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(run_module.upscale, "pipeline_argv",
+                            lambda stack, script, values, encode: encode)
+
+        def run(status):
+            out = tmp_path / "0003.mkv"
+
+            def pipe(argv):
+                out.write_text("the frames before vspipe died")
+                return status
+
+            monkeypatch.setattr(run_module, "run_quiet_encode", pipe)
+            settings = rules.Settings(upscale_size="1920x1080",
+                                      upscale_fps="24000/1001")
+            returned = run_module.run_upscaled_encode(
+                settings, "film.mkv", "-c:v libx265",
+                str(tmp_path / "prog.0003"), str(out), 0, 959)
+            return returned, out.exists()
+        return run
+
+    def test_a_failed_pipe_leaves_no_chunk(self, encode):
+        assert encode(1) == (1, False)
+
+    def test_a_whole_one_is_kept(self, encode):
+        assert encode(0) == (0, True)
+
+
+class TestTheDolbyVisionModeAFileIsEncodedWith:
+    """"" leaves ffmpeg's own default alone and "0" switches Dolby Vision off.
+    Mixed up, the default turns DV back on for a source already known not to
+    encode with it, and the encode fails."""
+
+    @pytest.fixture
+    def mode(self, monkeypatch):
+        monkeypatch.setattr(rules, "build_video_args",
+                            lambda base, path, settings: "-c:v libsvtav1")
+        lines = []
+        monkeypatch.setattr(run_module, "log", lines.append)
+
+        def run(profile, enhancement="", support=True, probe=(0, b"")):
+            status, stderr = probe
+
+            class Done:
+                returncode = status
+
+            Done.stderr = stderr
+            monkeypatch.setattr(run_module, "_run",
+                                lambda argv, capture=False: Done())
+            settings = rules.Settings(encoder="libsvtav1",
+                                      dv_encoder_support=support)
+            return (run_module.dolby_vision_mode_for(
+                "film.mkv", profile, enhancement, settings), lines)
+        return run
+
+    def test_no_dolby_vision_leaves_the_default_alone(self, mode):
+        assert mode("")[0] == ""
+
+    def test_an_encoder_that_cannot_code_an_rpu_leaves_the_default_alone(
+            self, mode):
+        assert mode("8", support=False)[0] == ""
+
+    def test_a_dual_layer_source_is_switched_off(self, mode):
+        assert mode("7", "1")[0] == "0"
+
+    def test_a_probe_that_encodes_a_frame_carries_it(self, mode):
+        assert mode("8")[0] == "1"
+
+    def test_a_failed_probe_is_switched_off_and_says_why(self, mode):
+        stderr = (b"Svt[info]: -------------------------------------------\n"
+                  b"Svt[info]: SVT [version]:\tSVT-AV1 Encoder Lib v3.0.0\n"
+                  b"Svt[warn]: Failed to set thread priority\n"
+                  b"\n"
+                  b"[libsvtav1 @ 0x55d6c2b3e440] Unsupported Dolby Vision "
+                  b"profile 5\n"
+                  b"Error while opening encoder - maybe incorrect parameters\n")
+        chosen, lines = mode("5", probe=(1, stderr))
+        assert chosen == "0"
+        assert ("([libsvtav1 @ 0x55d6c2b3e440] Unsupported Dolby Vision "
+                "profile 5)" in lines[-1])
+
+
+class TestWhetherAFileIsUpscaled:
+    """-u for one 720x480 anamorphic DVD file cropped to 720x360, which would be
+    enlarged to 1920x810. HDR keeps its own size; a file the upscaler cannot be
+    set up for is skipped, not encoded as it is, so a later run still gets to
+    it."""
+
+    PROGRESSIVE = (0, 0, 500)
+
+    @pytest.fixture
+    def settle(self, monkeypatch, tmp_path):
+        lines = []
+        monkeypatch.setattr(run_module, "log", lines.append)
+        monkeypatch.setattr(run_module.pausecontrol, "wait_while_paused",
+                            lambda *a, **k: None)
+
+        def run(fields=self.PROGRESSIVE, transfer="bt709", color_range="tv",
+                fps="30000/1001", engine=("/engines/720x480.engine", ""),
+                indexed=True):
+            monkeypatch.setattr(rules, "video_color_space",
+                                lambda path: ("smpte170m", color_range,
+                                              transfer))
+            monkeypatch.setattr(rules, "video_frame_rate", lambda path: fps)
+            monkeypatch.setattr(run_module.upscale, "engine_for",
+                                lambda stack, w, h: engine)
+            monkeypatch.setattr(run_module.upscale, "index_source",
+                                lambda stack, source, index, rate: indexed)
+            settings = rules.Settings(input_dir=str(tmp_path / "in"),
+                                      chunk_root=str(tmp_path / "chunks"),
+                                      upscale_resolution="1080p",
+                                      crop="720:360:0:60")
+            plan = run_module.Plan("film.mkv", settings)
+            converted = run_module.Run(settings)._settle_upscale(
+                plan, "720", "480", "32:27", "720", "360", fields)
+            return converted, settings, lines
+        return run
+
+    def test_an_hdr_source_keeps_its_own_size(self, settle):
+        converted, settings, _lines = settle(transfer="smpte2084")
+        assert converted
+        assert settings.upscale_size == ""
+
+    @pytest.mark.parametrize("case,why", [
+        (dict(fields=(400, 0, 100)), "interlaced"),
+        (dict(fields=None), "fields could not be measured"),
+        (dict(fps=""), "frame rate"),
+        (dict(engine=("", "out of GPU memory")), "out of GPU memory"),
+        (dict(indexed=False), "source filter"),
+    ])
+    def test_a_file_the_upscaler_cannot_take_is_skipped(self, settle, case,
+                                                        why):
+        converted, settings, lines = settle(**case)
+        assert not converted
+        assert settings.upscale_size == ""
+        assert "film.mkv" in lines[-1] and why in lines[-1]
+
+    def test_an_upscaled_file_is_given_everything_its_chunks_need(self,
+                                                                  settle):
+        converted, settings, _lines = settle(color_range="pc")
+        assert converted
+        assert settings.upscale_size == "1920x810"
+        assert settings.upscale_engine == "/engines/720x480.engine"
+        assert settings.upscale_fps == "30000/1001"
+        assert settings.upscale_crop == "0,0,60,60"
+        assert settings.upscale_matrix == "170m"
+        assert settings.upscale_range == "full"
+
+    def test_a_limited_range_source_stays_limited(self, settle):
+        assert settle()[1].upscale_range == "limited"

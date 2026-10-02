@@ -187,16 +187,25 @@ def intel_render_node() -> str:
         except OSError:
             return ""
 
+    return pick_render_node(nodes, vendor_of, vaapi_works)
+
+
+def pick_render_node(nodes: list, vendor_of, works) -> str:
+    """The node out of <nodes> (``renderD*`` names, in order) to decode on, or "".
+
+    An Intel node a VA display opens on comes first. Only then a node with no
+    vendor to read, the first one that opens; a node whose vendor is known and is
+    not Intel is never taken, whatever VA-API driver may open on it.
+    """
     for name in nodes:
         node = "/dev/dri/" + name
-        if vendor_of(name) == INTEL_PCI_VENDOR and vaapi_works(node):
+        if vendor_of(name) == INTEL_PCI_VENDOR and works(node):
             return node
     for name in nodes:
         node = "/dev/dri/" + name
-        # sysfs present but not Intel: skip it.
         if vendor_of(name):
             continue
-        if vaapi_works(node):
+        if works(node):
             return node
     return ""
 
@@ -656,11 +665,14 @@ def encode_video_chunk(settings, token: str) -> int:
     progress = os.path.join(directory, "prog.%04d" % int(index))
     if settings.upscale_size:
         # The same boundaries in frames: each chunk ends at the frame the next
-        # one starts at, and the last one runs to the end of the stream.
+        # one starts at, and the last one runs to the end of the stream. The end
+        # is put back to the boundary as written, millisecond for millisecond,
+        # because the next chunk's first frame is worked out from that text: a
+        # sum a hair either side of a half frame would round the other way.
         first = upscale.frame_at(start, settings.upscale_fps)
-        last = (upscale.frame_at(formatting.awk_number(start)
-                                 + formatting.awk_number(duration),
-                                 settings.upscale_fps)
+        end = "%.3f" % (formatting.awk_number(start)
+                        + formatting.awk_number(duration))
+        last = (upscale.frame_at(end, settings.upscale_fps)
                 if int(index) < int(total) - 1 else -1)
         return run_upscaled_encode(settings, source, args, progress, out,
                                    first, last)
@@ -1536,13 +1548,6 @@ def _in_worker(settings, token: str) -> None:
 
 
 def _run_chunk_pool(settings, tokens: list, width: int) -> None:
-    if width <= 1:
-        for token in tokens:
-            if safety.abort_requested():
-                return
-            encode_video_chunk(settings, token)
-        return
-
     workerpool.run(tokens, width, _in_worker, lambda token: (settings, token))
 
 

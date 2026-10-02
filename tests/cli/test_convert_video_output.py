@@ -131,3 +131,69 @@ def test_finish_muxes_to_the_sibling_when_the_name_was_taken(tree, tmp_path,
     assert status == 0
     assert muxed == [os.path.join(tree.output_dir, "Films", "film (2).mkv")]
     assert Path(taken).read_text() == "not ours"
+
+
+class TestAFinishThatFailsAfterTheVideoKeepsTheEncode:
+    """Once the video is complete, a cheaper step that fails afterwards still
+    writes the encode out on its own. The file at the output path is the one
+    thing that must NOT be left: the next run's resume would take a short or
+    half-written .mkv there for a finished conversion."""
+
+    @pytest.fixture
+    def finished(self, tree, tmp_path, monkeypatch):
+        directory = tmp_path / "chunks"
+        directory.mkdir()
+        (directory / "video.mkv").write_text("the expensive part")
+        monkeypatch.setattr(rules, "video_intermediate_complete",
+                            lambda *a, **k: True)
+        return str(directory)
+
+    def _assert_kept_alone(self, tree, directory, status):
+        assert status == 1
+        kept = rules.video_only_path_for("Films/film.mkv", tree.output_dir)
+        assert Path(kept).read_text() == "the expensive part"
+        assert not os.path.exists(
+            os.path.join(tree.output_dir, "Films", "film.mkv"))
+        assert not os.path.exists(directory)
+
+    def test_a_failed_audio_encode(self, tree, finished, monkeypatch):
+        muxed = []
+        monkeypatch.setattr(run_module, "mux_final",
+                            lambda *a: muxed.append(a) or 0)
+
+        status = run_module.Run(tree).finish("Films/film.mkv", finished,
+                                             600.0, 1)
+
+        self._assert_kept_alone(tree, finished, status)
+        assert muxed == []
+
+    def test_a_mux_that_wrote_half_a_file_and_failed(self, tree, finished,
+                                                     monkeypatch):
+        def half_a_mux(relative, chunk_dir, settings, output):
+            Path(output).write_text("half")
+            return 1
+
+        monkeypatch.setattr(run_module, "mux_final", half_a_mux)
+
+        status = run_module.Run(tree).finish("Films/film.mkv", finished,
+                                             600.0, 0)
+
+        self._assert_kept_alone(tree, finished, status)
+
+    def test_a_mux_that_came_out_shorter_than_the_source(self, tree, finished,
+                                                         monkeypatch):
+        from medialib.lib import durationcheck
+        monkeypatch.delenv(durationcheck.SKIP_VARIABLE, raising=False)
+        monkeypatch.setattr(durationcheck, "media_duration",
+                            lambda path: 300.0)
+
+        def short_mux(relative, chunk_dir, settings, output):
+            Path(output).write_text("half the film")
+            return 0
+
+        monkeypatch.setattr(run_module, "mux_final", short_mux)
+
+        status = run_module.Run(tree).finish("Films/film.mkv", finished,
+                                             600.0, 0)
+
+        self._assert_kept_alone(tree, finished, status)
