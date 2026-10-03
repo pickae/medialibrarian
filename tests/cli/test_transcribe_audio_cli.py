@@ -156,6 +156,40 @@ class TestASecondPass:
         assert blackbox.tree_of(outputs) == before
 
 
+class TestAnEmptyTranscript:
+    """A transcript that exists but is 0 bytes is not a finished one - it is a
+    transcript a run left behind after starting it, so a rerun does not take it
+    for done and transcribes the input again over it."""
+
+    def test_a_zero_byte_transcript_is_done_again(self, transcribe, tmp_path):
+        source = tmp_path / "in"
+        outputs = tmp_path / "out"
+        (source / "a").mkdir(parents=True)
+        (source / "a" / "track.mp3").touch()
+        (outputs / "a").mkdir(parents=True)
+        # the transcript a stopped run left behind: the file, but nothing in it
+        (outputs / "a" / "track.txt").write_text("")
+        transcribe.transcribe(source, outputs)
+        assert len(transcribe.whisper_log.read_text().splitlines()) == 1
+        assert (outputs / "a" / "track.txt").read_text() != ""
+
+
+class TestRelativePaths:
+    """A caller may give the input and output folders as relative paths; they
+    are read from the caller's working directory, not from the input folder."""
+
+    def test_relative_folders_resolve_against_the_callers_cwd(self,
+                                                              transcribe,
+                                                              tmp_path):
+        base = tmp_path / "cwd"
+        (base / "in").mkdir(parents=True)
+        (base / "in" / "track.mp3").touch()
+        done = transcribe.run("transcribe-audio", "in", "out", cwd=base,
+                              env=transcribe.environment)
+        assert done.returncode == 0, done.stdout + done.stderr
+        assert (base / "out" / "track.txt").is_file()
+
+
 class TestTheTranscriptFormat:
     def test_it_is_honoured_end_to_end(self, transcribe, tmp_path):
         source = tmp_path / "in2"
