@@ -368,6 +368,35 @@ class TestQueue:
                        (w.tmp_path / "root").rglob("*") if p.is_file())
         assert before == after
 
+    def test_a_detected_language_without_a_code_gets_english_alone(self, w):
+        """whisper names a language the table has no row for: the track gets the
+        English translation and nothing native, because the empty code is exactly
+        the test that a native transcript is not worth writing."""
+        root = w.tmp_path / "root"
+        (root / "Film2020").mkdir(parents=True)
+        (root / "Film2020" / "Film2020.mkv").touch()
+        ram = w.tmp_path / "ram"
+        ram.mkdir()
+        tracks = {
+            "Film2020": [
+                ("Main", "false", "video", ""),
+                ("Commentary", "true", "audio", "eng"),
+            ],
+        }
+        logs, records, _sizes = _run_export(
+            w, root, ram, tracks, _detected("Punjabi"),
+            "0 0 0 0 0", ffmpeg_rc="0 0 0 0 0")
+
+        # one commentary, and the only subtitle it asks for is the English one
+        assert len(records) == 1
+        _mka, srt, task, lang, _siblings = records[0].split("\x1f")
+        assert task == "translate"
+        assert lang == "Punjabi"
+        assert srt.endswith("Commentary.en.srt")
+        # and no native-language transcript: nothing but the .en.srt is wanted
+        assert not [r for r in records
+                    if not r.split("\x1f")[1].endswith(".en.srt")]
+
     def test_a_translation_gets_the_prompt_even_from_english(self, w):
         root = w.tmp_path / "root"
         root.mkdir()
