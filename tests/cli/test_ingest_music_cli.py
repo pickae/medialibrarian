@@ -14,6 +14,7 @@ command's own accounting rather than a mock of it.
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 
@@ -163,6 +164,144 @@ def music(sandbox, tmp_path):
     return sandbox
 
 
+# Apple Music files carry .m4a whether the codec is lossy AAC or lossless ALAC,
+# so the codec is the whole story: the ffprobe stub answers alac for the track
+# the case encodes and aac for the one it must copy, whatever the extension.
+_FFPROBE_M4A = r"""
+file=""; prev=""
+for a in "$@"; do [[ "$prev" == "-i" ]] && file="$a"; prev="$a"; done
+[[ -n "$file" ]] || file="${!#}"
+[[ -e "$file" ]] || exit 0
+json=0; entries=""; prev=""
+for a in "$@"; do
+  [[ "$a" == "json" ]] && json=1
+  [[ "$prev" == "-show_entries" ]] && entries="$a"
+  prev="$a"
+done
+case "$file" in *two*) codec=aac ;; *) codec=alac ;; esac
+if (( json )); then
+  printf '{"streams":[{"codec_name":"%s","sample_rate":"44100"}],' "$codec"
+  printf '"format":{"duration":"600.000"}}\n'
+  exit 0
+fi
+if [[ "$entries" == format_tags=* ]]; then
+  wanted="${entries#format_tags=}"
+  recorded="$(sed -n 2p -- "$file")"
+  [[ "$recorded" == "$wanted="* ]] && printf '%s\n' "${recorded#*=}"
+  exit 0
+fi
+[[ -n "$entries" ]] && { echo "600.000"; exit 0; }
+printf 'duration=600.000\n'
+"""
+
+
+@pytest.fixture
+def m4a_library(sandbox, tmp_path):
+    """One release with an ALAC .m4a and a lossy .m4a side by side - the one
+    extension, two different fates."""
+    for tool in _TOOLS:
+        if shutil.which(tool) is None:
+            conftest.missing_host_tool(
+                "the host has no %s: the command needs it to do the work "
+                "asserted here" % tool)
+    sandbox.with_tool("ffprobe", _FFPROBE_M4A)
+    sandbox.with_tool("ffmpeg", _FFMPEG)
+    sandbox.with_tool("convert", _CONVERT)
+    sandbox.with_tool("mkvmerge", _MKVMERGE)
+    sandbox.with_tools("fdupes", "beet", "mkvpropedit", "mkvextract")
+
+    download = tmp_path / "download"
+    album = download / "Album"
+    album.mkdir(parents=True)
+    (album / "one.m4a").write_text("alac")
+    (album / "two.m4a").write_text("aac")
+
+    library = tmp_path / "library"
+    opus = tmp_path / "libraryopus"
+
+    def run():
+        done = sandbox.run("ingest-music", "-j", "2", download, library, opus,
+                           timeout=900)
+        return done.stdout + done.stderr
+
+    sandbox.download = download
+    sandbox.library = library
+    sandbox.opus = opus
+    sandbox.ingest = run
+    return sandbox
+
+
+# An encoder that stops half way still closes a valid file and exits 0, so the
+# length is what settles it: the stub answers the source's full length for
+# anything in the download, and half of it for the output the encoder "wrote"
+# into the library - the shape of an encode that gave up part way through.
+_FFPROBE_SHORT = r"""
+file=""; prev=""
+for a in "$@"; do [[ "$prev" == "-i" ]] && file="$a"; prev="$a"; done
+[[ -n "$file" ]] || file="${!#}"
+[[ -e "$file" ]] || exit 0
+json=0; entries=""; prev=""
+for a in "$@"; do
+  [[ "$a" == "json" ]] && json=1
+  [[ "$prev" == "-show_entries" ]] && entries="$a"
+  prev="$a"
+done
+case "$file" in */library/*) dur=300.000 ;; *) dur=600.000 ;; esac
+if (( json )); then
+  printf '{"streams":[{"codec_name":"flac","sample_rate":"44100"}],'
+  printf '"format":{"duration":"%s"}}\n' "$dur"
+  exit 0
+fi
+if [[ "$entries" == format_tags=* ]]; then
+  wanted="${entries#format_tags=}"
+  recorded="$(sed -n 2p -- "$file")"
+  [[ "$recorded" == "$wanted="* ]] && printf '%s\n' "${recorded#*=}"
+  exit 0
+fi
+[[ -n "$entries" ]] && { echo "$dur"; exit 0; }
+printf 'duration=%s\n' "$dur"
+"""
+
+
+@pytest.fixture
+def short_encode(sandbox, tmp_path):
+    """One lossless track whose encode comes out half as long as its source."""
+    for tool in _TOOLS:
+        if shutil.which(tool) is None:
+            conftest.missing_host_tool(
+                "the host has no %s: the command needs it to do the work "
+                "asserted here" % tool)
+    sandbox.with_tool("ffprobe", _FFPROBE_SHORT)
+    sandbox.with_tool("ffmpeg", _FFMPEG)
+    sandbox.with_tool("convert", _CONVERT)
+    sandbox.with_tool("mkvmerge", _MKVMERGE)
+    sandbox.with_tools("fdupes", "beet", "mkvpropedit", "mkvextract")
+
+    download = tmp_path / "download"
+    album = download / "Album"
+    album.mkdir(parents=True)
+    (album / "one.flac").write_text("full length")
+
+    library = tmp_path / "library"
+    opus = tmp_path / "libraryopus"
+
+    def run():
+        # The suite turns the length check off below the media tier (stubs would
+        # otherwise report every output as truncated); this case IS about a
+        # truncated output, and its stubs report real lengths, so it asks for the
+        # check back.
+        done = sandbox.run("ingest-music", "-j", "2", download, library, opus,
+                           env=dict(os.environ, SKIP_LENGTH_CHECK=""),
+                           timeout=900)
+        return done
+
+    sandbox.download = download
+    sandbox.library = library
+    sandbox.opus = opus
+    sandbox.ingest = run
+    return sandbox
+
+
 def _assert_phase(log, label, expected, pattern):
     lines = _counted(log, pattern)
     denominators = {total for _, total in lines}
@@ -172,6 +311,50 @@ def _assert_phase(log, label, expected, pattern):
     counters = sorted(n for n, _ in lines)
     assert counters == list(range(1, expected + 1)), \
         "%s: counters %s\n%s" % (label, counters, log)
+
+
+class TestAnM4aThatIsLossless:
+    """Apple Music files carry .m4a whether the codec is lossy AAC or lossless
+    ALAC, so the extension alone cannot tell them apart. The lossless one is
+    renamed up front and handed to the encoder; the lossy one is the ordinary
+    case and is carried across as a copy, re-encoded by nothing."""
+
+    def test_the_alac_m4a_is_encoded_not_copied(self, m4a_library):
+        m4a_library.ingest()
+        library = m4a_library.library
+        assert (library / "Album" / "one.flac").is_file()
+        assert not (library / "Album" / "one.m4a").exists()
+
+    def test_the_lossy_m4a_is_copied_not_encoded(self, m4a_library):
+        m4a_library.ingest()
+        library = m4a_library.library
+        assert (library / "Album" / "two.m4a").is_file()
+        assert not (library / "Album" / "two.flac").exists()
+
+    def test_the_alac_rename_is_announced(self, m4a_library):
+        log = m4a_library.ingest()
+        assert "Lossless m4a (ALAC) renamed for the encoder" in log, log
+
+
+class TestAShortEncodeFailsTheRun:
+    """An encoder that stops early still closes a valid file and exits 0, so the
+    length is what settles it: an output shorter than its source is a failure the
+    run reports, and - because a finished library could then hold a track cut off
+    half way - it is the reason the whole run ends nonzero."""
+
+    def test_the_run_ends_nonzero_when_an_encode_came_out_short(
+            self, short_encode):
+        done = short_encode.ingest()
+        log = done.stdout + done.stderr
+        assert done.returncode == 1, log
+        assert "ffmpeg could not encode this track" in log, log
+
+    def test_the_track_that_came_out_short_is_counted_failed_not_encoded(
+            self, short_encode):
+        done = short_encode.ingest()
+        log = done.stdout + done.stderr
+        assert re.search(r"^  failed: +1$", log, re.MULTILINE), log
+        assert re.search(r"^  encoded: ", log, re.MULTILINE) is None, log
 
 
 class TestAnOutputNestedInTheInput:
