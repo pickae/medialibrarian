@@ -766,6 +766,25 @@ class TestAnArchiveThatAsksForTooMuchIsNotUnpacked:
         assert archives.extract_archive_as_folder("Book.zip", "Book") == 1
         assert sorted(os.listdir(str(tmp_path))) == ["Book.zip"]
 
+    def test_a_refusal_names_the_first_ten_and_the_rest_in_a_count(
+            self, tmp_path, monkeypatch, capsys):
+        """A refusal names the members it will not write, but a book's archive
+        can hold many of them: the first ten are named and the rest counted, so
+        the answer stays one screen while still saying how much more there is."""
+        calls = _record_calls(monkeypatch)
+        self._dest(tmp_path, monkeypatch)
+        _pack_zip(tmp_path / "Book.zip",
+                  tuple("../escaped %d.txt" % n for n in range(1, 13)))
+
+        assert archives.extract_archive("Book.zip", "out") == 1
+        assert calls == []
+        out = capsys.readouterr().err
+        assert "Refusing to unpack" in out
+        assert "../escaped 1.txt" in out
+        assert "../escaped 10.txt" in out
+        assert "../escaped 11.txt" not in out
+        assert "... and 2 more" in out
+
 
 def _fake_extraction(monkeypatch, layout, rc=0):
     """An extractArchive that writes the given layout into its destination.
