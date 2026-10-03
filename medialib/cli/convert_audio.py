@@ -2259,7 +2259,7 @@ def _weigh_jobs(state: Run, track: str, tokens: list) -> list:
     if total <= 0:
         return [(size, token) for token in tokens]
     return [(size * length / total, token)
-            for length, token in zip(lengths, tokens)]
+            for length, token in zip(lengths, tokens, strict=True)]
 
 
 class _Detector:

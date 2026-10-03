@@ -349,6 +349,31 @@ class TestTextMode:
         _counts_each_book_once(log, 4)
 
 
+class TestTextModeWhoseOutputFolderSharesAStem:
+    """A top-level book whose stem is the output folder's name emits right
+    onto the summary's own path. The book keeps the name and the summary
+    moves to make room, so neither is lost and both are counted."""
+
+    def test_the_book_keeps_the_name_and_the_summary_makes_room(self, shelf):
+        shelf.stock({"out.mobi": "one two three",
+                     "novel.epub": "one"})
+        log = shelf.ingest("-t")
+        assert (shelf.outputs / "out.txt").read_text() == "one two three"
+        rows = (shelf.outputs / "out (2).txt").read_text().splitlines()
+        assert [(int(words), path.rpartition("/")[2])
+                for words, path in (row.split("\t") for row in rows)] == [
+            (3, "out.txt"), (1, "novel.txt")]
+        assert "Total words across 2 file(s): 4" in log
+
+    def test_a_second_run_does_not_breed_another_summary(self, shelf):
+        """The summary's moved name is fixed by the book set, so a rerun
+        overwrites the summary in place rather than suffixing it further."""
+        shelf.stock({"out.mobi": "one two three"})
+        shelf.ingest("-t")
+        shelf.ingest("-t")
+        assert blackbox.tree_of(shelf.outputs) == ["out (2).txt", "out.txt"]
+
+
 class TestTextModeOverTextAlone:
     """When every input is already a .txt nothing is converted: the originals
     are measured where they are."""

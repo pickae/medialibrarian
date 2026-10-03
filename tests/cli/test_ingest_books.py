@@ -208,7 +208,8 @@ class TestEmitOutput:
         source.mkdir()
         dest.mkdir()
         (source / "a.epub").write_text("one")
-        ib.emit_output(str(source / "a.epub"), str(dest / "book.epub"))
+        ib.emit_output(str(source / "a.epub"), str(dest / "book.epub"),
+                       str(tmp_path / "claims"))
         assert (dest / "book.epub").read_text() == "one"
         assert not (source / "a.epub").exists()    # consumed by the move
 
@@ -217,9 +218,11 @@ class TestEmitOutput:
         source.mkdir()
         dest.mkdir()
         (source / "a.epub").write_text("one")
-        ib.emit_output(str(source / "a.epub"), str(dest / "book.epub"))
+        ib.emit_output(str(source / "a.epub"), str(dest / "book.epub"),
+                       str(tmp_path / "claims"))
         (source / "b.epub").write_text("two")
-        ib.emit_output(str(source / "b.epub"), str(dest / "book.epub"))
+        ib.emit_output(str(source / "b.epub"), str(dest / "book.epub"),
+                       str(tmp_path / "claims"))
         assert (dest / "book (2).epub").exists()
         assert (dest / "book.epub").read_text() == "one"   # not overwritten
 
@@ -227,13 +230,15 @@ class TestEmitOutput:
         """A failed conversion simply produces no output for that book."""
         dest = tmp_path / "dst"
         dest.mkdir()
-        ib.emit_output(str(tmp_path / "gone.epub"), str(dest / "ghost.epub"))
+        ib.emit_output(str(tmp_path / "gone.epub"), str(dest / "ghost.epub"),
+                       str(tmp_path / "claims"))
         assert not (dest / "ghost.epub").exists()
 
     def test_the_destination_folder_is_made(self, tmp_path):
         source = tmp_path / "a.epub"
         source.write_text("one")
-        ib.emit_output(str(source), str(tmp_path / "deep" / "down" / "b.epub"))
+        ib.emit_output(str(source), str(tmp_path / "deep" / "down" / "b.epub"),
+                       str(tmp_path / "claims"))
         assert (tmp_path / "deep" / "down" / "b.epub").exists()
 
     def test_a_copy_cut_off_halfway_leaves_nothing_where_resume_looks(
@@ -254,27 +259,47 @@ class TestEmitOutput:
 
         monkeypatch.setattr(ib.shutil, "copyfile", cut_off)
         with pytest.raises(KeyboardInterrupt):
-            ib.emit_output(str(source / "a.epub"), str(dest / "book.epub"))
+            ib.emit_output(str(source / "a.epub"), str(dest / "book.epub"),
+                           str(tmp_path / "claims"))
         assert list(dest.iterdir()) == []
         assert (source / "a.epub").stat().st_size == 1000
 
-    def test_a_library_without_hard_links_still_gets_both_books(
+    def test_an_interrupt_at_placement_leaves_nothing_under_the_final_name(
             self, tmp_path, monkeypatch):
+        """A library on a filesystem without hard links (exFAT) used to claim
+        the final name empty before the finished copy was renamed over it; cut
+        off in that gap, the library was left a 0-byte book under a finished
+        name. The name is now claimed by a token in the scratch, so the final
+        name never appears until the finished copy is moved over it whole."""
         source, dest = tmp_path / "src", tmp_path / "dst"
         source.mkdir()
         dest.mkdir()
+        (source / "a.epub").write_bytes(b"x" * 100)
 
         def no_links(*args, **kwargs):
             raise PermissionError("no hard links here")
 
+        def cut_off(*args, **kwargs):
+            raise KeyboardInterrupt
+
         monkeypatch.setattr(ib.os, "link", no_links)
-        for name, text in (("a.epub", "one"), ("b.epub", "two")):
-            (source / name).write_text(text)
-            ib.emit_output(str(source / name), str(dest / "book.epub"))
-        assert sorted(p.name for p in dest.iterdir()) == [
-            "book (2).epub", "book.epub"]
-        assert (dest / "book.epub").read_text() == "one"
-        assert (dest / "book (2).epub").read_text() == "two"
+        monkeypatch.setattr(ib.os, "replace", cut_off)
+        with pytest.raises(KeyboardInterrupt):
+            ib.emit_output(str(source / "a.epub"), str(dest / "book.epub"),
+                           str(tmp_path / "claims"))
+        assert list(dest.iterdir()) == []
+        assert (source / "a.epub").stat().st_size == 100
+
+    def test_nothing_but_the_book_remains_in_the_destination(self, tmp_path):
+        """The staging copy and the name claim leave no trace in the library:
+        the destination ends up with the finished book and nothing else."""
+        source, dest = tmp_path / "src", tmp_path / "dst"
+        source.mkdir()
+        dest.mkdir()
+        (source / "a.epub").write_text("one")
+        ib.emit_output(str(source / "a.epub"), str(dest / "book.epub"),
+                       str(tmp_path / "claims"))
+        assert [p.name for p in dest.iterdir()] == ["book.epub"]
 
 
 class TestWordCount:

@@ -54,9 +54,8 @@ def test_every_link_reaches_a_file_and_heading():
                 continue
             path, _, fragment = target.partition("#")
             dest = (page.parent / path).resolve() if path else page
-            if not dest.exists():
-                broken.append(f"{page.name}: {target}")
-            elif fragment and fragment not in {_anchor(h) for h in _headings(dest)}:
+            if not dest.exists() or (fragment and fragment not in
+                                     {_anchor(h) for h in _headings(dest)}):
                 broken.append(f"{page.name}: {target}")
     assert broken == []
 
