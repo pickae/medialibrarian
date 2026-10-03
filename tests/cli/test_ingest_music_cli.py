@@ -174,6 +174,48 @@ def _assert_phase(log, label, expected, pattern):
         "%s: counters %s\n%s" % (label, counters, log)
 
 
+class TestAnOutputNestedInTheInput:
+    """The FLAC library and the Opus copies are written to output folders, and
+    what the run looks for in the input is exactly what it writes to the output,
+    so an output nested inside the input would be ingested again by the next run
+    - and the cleanup of the input tree would reach into the finished output.
+    Each of the three folders nested inside another is refused before the ingest
+    folder is created, so a refused run leaves nothing behind.
+
+    The refusal is settled from the paths alone, before any tool is reached for,
+    so these cases need no stubs: a folder to stand in for the input, and the
+    nested path typed as the output."""
+
+    def test_a_library_inside_the_download_is_refused_and_leaves_nothing(
+            self, sandbox, tmp_path):
+        download = tmp_path / "download"
+        album = download / "Album"
+        album.mkdir(parents=True)
+        (album / "one.flac").write_text("one")
+        before = blackbox.tree_of(download)
+        library = download / "library"
+        done = sandbox.run("ingest-music", download, library)
+        log = done.stdout + done.stderr
+        assert done.returncode == 1, log
+        assert "Refusing to write the output inside the input" in log, log
+        assert "Nothing was changed." in log, log
+        assert blackbox.tree_of(download) == before
+        assert not library.exists()
+
+    def test_an_opus_folder_inside_the_library_is_refused_too(self, sandbox,
+                                                              tmp_path):
+        download = tmp_path / "download"
+        (download / "Album").mkdir(parents=True)
+        library = tmp_path / "library"
+        opus = library / "opus"
+        done = sandbox.run("ingest-music", download, library, opus)
+        log = done.stdout + done.stderr
+        assert done.returncode == 1, log
+        assert "Refusing to write the output inside the input" in log, log
+        assert "Nothing was changed." in log, log
+        assert not library.exists()
+
+
 class TestAFirstRun:
     """Everything is encoded and converted, and says so."""
 
