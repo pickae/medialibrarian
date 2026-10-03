@@ -11,6 +11,7 @@ import re
 import shutil
 import signal
 import sys
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -21,6 +22,12 @@ from tests import blackbox
 pytestmark = pytest.mark.stubbed
 
 _TOOLSTUB = blackbox.TOOLSTUB
+
+# Resolved at import time, while the real PATH is still in place: the `nb`
+# fixture replaces PATH with the stub directory, where there is no sleep, so
+# the engine scripts must name the sleep that keeps the engine and its helper
+# alive by absolute path.
+_SLEEP = shutil.which("sleep")
 
 _PROBE = 'import sys; print("%d.%d" % sys.version_info[:2])'
 _SYS_CONFIG = "import sysconfig; print(sysconfig.get_paths()['purelib'])"
@@ -124,6 +131,25 @@ def _venv_env(nb, checkout):
     os.environ["narrationHome"] = checkout
     os.environ["narrationPython"] = python
     return python
+
+
+def _assert_dead(pid, what):
+    """<what> was in the killed process group, so it must be gone: wait for it
+    to be, and if it is still running, kill it so the next test does not
+    inherit it, and fail."""
+    deadline = time.monotonic() + 5.0
+    while True:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        if time.monotonic() >= deadline:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            pytest.fail("the %s was still running after the interrupt" % what)
+        time.sleep(0.1)
 
 
 # --- the engine's language table -----------------------------------------------
@@ -1082,10 +1108,12 @@ class TestNarrateBook:
         assert nb.calls() == []
         assert not os.path.exists(os.path.join(outdir, "narration.log"))
 
-    def test_an_interrupted_verbose_run_takes_the_engine_down_with_it(self, nb):
+    @pytest.mark.skipif(_SLEEP is None, reason="no sleep(1) on this host")
+    def test_an_interrupted_verbose_run_takes_the_engine_and_its_helpers_down_with_it(self, nb):
         """The run's interrupt handler raises in the middle of the engine call.
         An engine left running outlives the run and, when it writes its output,
-        recreates the RAM scratch the run's cleanup had just removed.
+        recreates the RAM scratch the run's cleanup had just removed - and so
+        would a helper it had started, which the kill must reach as well.
 
         The engine sends the interrupt itself, so the signal lands while the
         call is waiting on it. It first writes twice what a pipe holds, which
@@ -1095,15 +1123,18 @@ class TestNarrateBook:
         checkout = nb.tmp_path / "checkout"
         (checkout / "python_env" / "bin").mkdir(parents=True)
         (checkout / "app.py").write_text("x\n", encoding="ascii")
-        pid_file = nb.tmp_path / "engine.pid"
+        engine_pid_file = nb.tmp_path / "engine.pid"
+        helper_pid_file = nb.tmp_path / "helper.pid"
         exe = checkout / "python_env" / "bin" / "python"
         exe.write_text(
             "#!/bin/bash\n"
             "echo $$ > %s\n"
+            "%s 60 &\n"
+            "echo $! > %s\n"
             "echo reading\n"
             "printf '%%0131072d\\n' 0\n"
             "kill -USR1 $PPID\n"
-            "exec %s 60\n" % (pid_file, shutil.which("sleep")),
+            "exec %s 60\n" % (engine_pid_file, _SLEEP, helper_pid_file, _SLEEP),
             encoding="ascii")
         os.chmod(str(exe), 0o755)
         os.environ["narrationHome"] = str(checkout)
@@ -1124,13 +1155,56 @@ class TestNarrateBook:
                                 str(nb.tmp_path / "out"))
         finally:
             signal.signal(signal.SIGUSR1, previous)
-        engine = int(pid_file.read_text())
+        _assert_dead(int(engine_pid_file.read_text()), "engine")
+        _assert_dead(int(helper_pid_file.read_text()), "helper")
+
+    @pytest.mark.skipif(_SLEEP is None, reason="no sleep(1) on this host")
+    def test_an_interrupted_quiet_run_takes_the_engine_and_its_helpers_down_with_it(self, nb):
+        """The quiet path is the default one, and so is the one a stopped run
+        is most likely to be inside. The engine starts a helper the way the
+        real one starts its encoders, and the interrupt's kill must reach the
+        helper too.
+
+        The engine waits a moment before it sends the interrupt so the signal
+        lands with the call already waiting on the engine: sent any earlier,
+        it could land while the engine is still being started, before there is
+        a process to kill."""
+        checkout = nb.tmp_path / "checkout"
+        (checkout / "python_env" / "bin").mkdir(parents=True)
+        (checkout / "app.py").write_text("x\n", encoding="ascii")
+        engine_pid_file = nb.tmp_path / "engine.pid"
+        helper_pid_file = nb.tmp_path / "helper.pid"
+        exe = checkout / "python_env" / "bin" / "python"
+        exe.write_text(
+            "#!/bin/bash\n"
+            "echo $$ > %s\n"
+            "%s 60 &\n"
+            "echo $! > %s\n"
+            "%s 0.5\n"
+            "kill -USR1 $PPID\n"
+            "exec %s 60\n" % (engine_pid_file, _SLEEP, helper_pid_file,
+                              _SLEEP, _SLEEP),
+            encoding="ascii")
+        os.chmod(str(exe), 0o755)
+        os.environ["narrationHome"] = str(checkout)
+        os.environ["narrationPython"] = str(exe)
+        os.environ["narrationDevice"] = "cpu"
+
+        class Interrupted(Exception):
+            pass
+
+        def interrupt(_number, _frame):
+            raise Interrupted
+
+        previous = signal.signal(signal.SIGUSR1, interrupt)
         try:
-            os.kill(engine, 0)
-        except ProcessLookupError:
-            return
-        os.kill(engine, signal.SIGKILL)
-        pytest.fail("the engine was still running after the interrupt")
+            with pytest.raises(Interrupted):
+                bn.narrate_book(str(nb.tmp_path / "book.epub"),
+                                str(nb.tmp_path / "out"))
+        finally:
+            signal.signal(signal.SIGUSR1, previous)
+        _assert_dead(int(engine_pid_file.read_text()), "engine")
+        _assert_dead(int(helper_pid_file.read_text()), "helper")
 
 
 # --- the progress ------------------------------------------------------------------
