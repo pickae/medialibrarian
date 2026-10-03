@@ -437,11 +437,13 @@ class TestMediaThatIsNotABook:
         assert "  %s: ffprobe could not read it" % (
             music.music / "broken.mp3") in log
 
-    def test_nothing_readable_writes_no_report_and_gives_back_the_o_folder(
-            self, music):
+    def test_nothing_readable_writes_no_report_and_fails_the_run(self,
+                                                                  music):
+        """A run that found files but could read none of them produced
+        nothing, and the caller can tell that only from the status."""
         _write(music.music / "broken.mp3", "not audio")
         out = music.work / "fresh" / "reports"
-        log = music.census("-o", out, music.music)
+        log = music.census("-o", out, music.music, expect=1)
         assert "No report was written" in log
         assert not (music.work / "fresh").exists()
         assert list(music.music.iterdir()) == [music.music / "broken.mp3"]
