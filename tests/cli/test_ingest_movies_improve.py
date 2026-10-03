@@ -422,6 +422,17 @@ class TestWhatCountsAsAlreadyThere:
                           [(1, "Commentary"), (2, "Commentary by Director")],
                           [(3, "Commentary")]) == ["Commentary by Director"]
 
+    def test_a_nameless_commentary_is_matched_by_nothing(self):
+        """A transcript with no name says of which commentary it is of nothing,
+        so it is never taken for one of the film's named commentaries - the
+        other side being empty is the same: a name to compare against is what a
+        match is made of."""
+        named = ["Commentary by Director"]
+        assert rules._same_commentary("", "Commentary by Director", named) \
+            is False
+        assert rules._same_commentary("Commentary by Director", "", named) \
+            is False
+
     def test_an_image_subtitle_named_like_one_is_not_a_transcript(self,
                                                                   tmp_path):
         """A disc's own "Commentary #1" subtitle is a picture of the film's
