@@ -8,6 +8,8 @@ not worth starting an encoder to read back.
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from medialib.cli import convert_and_concat as cac
@@ -102,3 +104,49 @@ class TestTheOptionPage:
         """The page names what -e actually takes: `xhe-aac` is the codec's
         name, and a reader who types it gets a refusal."""
         assert "xhe-aac" not in cac.OPT_SPEC
+
+
+class TestTheCueSheetsATranscodeHandsOver:
+    """The cue sheets a tree holds, copied into the destination at the path they
+    sit at in the source - and nothing but the cue sheets and the folders on the
+    way to them: the audio they describe is what the transcode itself writes."""
+
+    pytestmark = pytest.mark.fs
+
+    def test_cue_sheets_land_at_the_path_they_have_in_the_source(self, tmp_path):
+        source = tmp_path / "in"
+        (source / "Disc 1").mkdir(parents=True)
+        (source / "top.cue").write_text("cue two")
+        (source / "Disc 1" / "track.cue").write_text("cue one")
+        destination = tmp_path / "out"
+
+        cac._copy_cue_files(str(source), str(destination))
+
+        assert (destination / "top.cue").read_text() == "cue two"
+        assert (destination / "Disc 1" / "track.cue").read_text() == "cue one"
+
+    def test_and_nothing_but_the_cue_sheets_is_copied(self, tmp_path):
+        source = tmp_path / "in"
+        (source / "Disc 1").mkdir(parents=True)
+        (source / "Disc 1" / "track.cue").write_text("cue")
+        (source / "Disc 1" / "track.mp3").write_text("audio")
+        (source / "notes.txt").write_text("not a cue")
+        destination = tmp_path / "out"
+
+        cac._copy_cue_files(str(source), str(destination))
+
+        copied = sorted(os.path.relpath(path, str(destination))
+                        for path in destination.rglob("*") if path.is_file())
+        assert copied == ["Disc 1/track.cue"]
+
+    def test_a_cue_is_found_in_either_case(self, tmp_path):
+        source = tmp_path / "in"
+        source.mkdir()
+        (source / "sheet.CUE").write_text("one")
+        (source / "sheet.cue").write_text("two")
+        destination = tmp_path / "out"
+
+        cac._copy_cue_files(str(source), str(destination))
+
+        assert sorted(p.name for p in destination.iterdir()) == [
+            "sheet.CUE", "sheet.cue"]
