@@ -12,6 +12,8 @@ from pathlib import Path
 
 import pytest
 
+from tests import blackbox
+
 pytestmark = pytest.mark.stubbed
 
 # Everything ordinary a run reaches for. Symlinked into the sandbox rather than
@@ -769,3 +771,69 @@ class TestUpscale:
         log = done.stdout + done.stderr
         assert "Upscale:" not in log
         assert log.count("upscale (-u)") == 1
+
+
+class TestRefusalsChangeNothing:
+    """A refusal is decided before a file is touched, and it stays that way:
+    the run exits 1 with the reason, the input is byte-identical, and the
+    refusals that land before the output folder is made leave it unmade."""
+
+    @pytest.fixture
+    def video(self, sandbox, tmp_path):
+        sandbox.inputs = tmp_path / "in"
+        sandbox.inputs.mkdir()
+        (sandbox.inputs / "clip.mkv").write_text("")
+        sandbox.outputs = tmp_path / "out"
+        return sandbox
+
+    def _refused(self, video, *options):
+        before = blackbox.tree_of(video.inputs)
+        done = video.run("convert-video", *options, video.inputs,
+                         video.outputs, timeout=120)
+        assert done.returncode == 1
+        assert blackbox.tree_of(video.inputs) == before
+        return done
+
+    def test_a_quality_level_on_a_bitrate_profile_is_refused(self, video):
+        done = self._refused(video, "-p", "av1Constrained", "-q", "20")
+        assert ("The -q quality level only applies to the constant-quality "
+                "profiles" in done.stderr)
+        assert not video.outputs.exists()
+
+    def test_a_quality_level_past_the_encoders_top_is_refused(self, video):
+        done = self._refused(video, "-p", "av1BluRay", "-q", "64")
+        assert ('The -q quality level must be an integer between 0 and 63 '
+                'for -p av1BluRay (got "64")' in done.stderr)
+        assert not video.outputs.exists()
+
+    def test_a_quality_level_that_is_not_a_number_is_refused(self, video):
+        done = self._refused(video, "-p", "av1BluRay", "-q", "12a")
+        assert ('The -q quality level must be an integer between 0 and 63 '
+                'for -p av1BluRay (got "12a")' in done.stderr)
+        assert not video.outputs.exists()
+
+    def test_a_tier_that_is_not_a_tier_names_the_flag_and_the_valid_ones(
+            self, video):
+        done = self._refused(video, "-m", "999p")
+        assert ('Cannot scale to resolution tier "999p". Valid -m tiers: '
+                '720p' in done.stderr)
+        assert not video.outputs.exists()
+
+    def test_an_engine_count_on_a_software_profile_is_refused(self, video):
+        done = self._refused(video, "-p", "av1BluRay", "-e", "3")
+        assert ("The -e NVENC engine count only applies to the *Nvenc video "
+                "profiles (got -p av1BluRay)" in done.stderr)
+        assert not video.outputs.exists()
+
+    def test_a_machine_without_the_encoder_is_refused_naming_it(self,
+                                                                video):
+        """The one refusal that lands after the output folder is made, because
+        it needs to exercise the encoder: the folder then holds nothing, and
+        the encoder that is missing is the one named."""
+        video.with_tool("ffmpeg", "exit 1")
+        video.with_tool("ffprobe", "echo 1.0")
+        video.linking(*_ORDINARY).narrow()
+        done = self._refused(video, "-p", "hevcNvenc")
+        assert ("The hevcNvenc profile needs a working hevc_nvenc encoder, "
+                "which this machine does not provide." in done.stderr)
+        assert blackbox.tree_of(video.outputs) == []

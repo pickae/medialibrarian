@@ -1709,7 +1709,7 @@ def _validate(settings, video_args: str, grain: str,
     if settings.max_resolution:
         named = resolutions.named(settings.max_resolution)
         if not named or not resolutions.ceiling(named):
-            return ('Cannot scale to resolution tier "%s". Valid -r tiers: %s.'
+            return ('Cannot scale to resolution tier "%s". Valid -m tiers: %s.'
                     % (settings.max_resolution, resolutions.spellings()))
         settings.max_resolution = named
 
