@@ -18,6 +18,17 @@ from medialib.lib import enums
 pytestmark = pytest.mark.pure
 
 
+def _folds_case(directory) -> bool:
+    """Whether the filesystem folds case: probe.TMP and probe.tmp then name one
+    file, and two names differing only in case cannot both exist."""
+    probe = directory / "case-probe.TMP"
+    probe.touch()
+    try:
+        return (directory / "case-probe.tmp").exists()
+    finally:
+        probe.unlink()
+
+
 class _Phases:
     """The child commands a run would have started, as (command, argv)."""
 
@@ -137,9 +148,12 @@ class TestTheCueSheetsATranscodeHandsOver:
 
         copied = sorted(os.path.relpath(path, str(destination))
                         for path in destination.rglob("*") if path.is_file())
-        assert copied == ["Disc 1/track.cue"]
+        assert copied == [os.path.join("Disc 1", "track.cue")]
 
     def test_a_cue_is_found_in_either_case(self, tmp_path):
+        if _folds_case(tmp_path):
+            pytest.skip("needs a case-sensitive filesystem: sheet.CUE and "
+                        "sheet.cue would be one file")
         source = tmp_path / "in"
         source.mkdir()
         (source / "sheet.CUE").write_text("one")

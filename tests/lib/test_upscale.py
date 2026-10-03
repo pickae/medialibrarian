@@ -11,12 +11,20 @@ one command a chunk runs.
 """
 
 import os
+import sys
 
 import pytest
 
 from medialib.lib import upscale
 
 pytestmark = pytest.mark.pure
+
+# The venv the settle path is proved through is stubbed as shell scripts - a
+# python that answers its -c by pattern - and Windows cannot execute one.
+_POSIX_STUBS = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="the venv's python is stubbed as a POSIX shell script, which "
+           "Windows cannot run")
 
 
 def _layout(root, skip=()):
@@ -109,6 +117,7 @@ class TestWhereItLives:
 
 
 @pytest.mark.fs
+@_POSIX_STUBS
 class TestSettle:
     """Refused, with the reason, before anything is encoded."""
 
@@ -197,6 +206,7 @@ class TestSettle:
 
 
 @pytest.mark.fs
+@_POSIX_STUBS
 class TestTheEngineKept:
     """An engine is compiled for one frame size, one GPU and one TensorRT
     release, and what is kept is named after all three: what a change of any
