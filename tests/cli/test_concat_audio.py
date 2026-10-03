@@ -475,3 +475,76 @@ class TestEveryOutputIsNamedInsideTheOutputFolder:
         """Cleaned, both read "Alpha", and the common text of the pair is the
         whole of it. Telling them apart is the taken-name refusal's job."""
         assert self._named(tmp_path, "Alpha", "Alpha.") == ["Alpha", "Alpha"]
+
+
+class TestTheChapterSourceAFolderHolds:
+    """Which source a book's chapters come from, decided by what its folder
+    holds: the cue sheet wins only while the music is one file, and a cue does
+    not override the split a multi-track input asks for."""
+
+    def _drive(self, monkeypatch, tmp_path, tracks, with_cue):
+        folder = tmp_path / "Book"
+        folder.mkdir()
+        for number in range(1, len(tracks) + 1):
+            (folder / ("%02d.mp3" % number)).write_text("")
+        if with_cue:
+            (folder / "Book.cue").write_text('FILE "01.mp3" WAVE\n')
+        scan = ca.Scan(str(folder))
+        scratch = tmp_path / "scratch"
+        scratch.mkdir()
+        cue_calls, file_calls = [], []
+
+        def fake_concat_format(_folder, base_name, fmt, _ram, _ffmpeg):
+            with open("%s.%s" % (base_name, ca.FORMATS[fmt][1]), "w") as handle:
+                handle.write("x")
+            return [str(folder / ("%02d.mp3" % number))
+                    for number in range(1, len(tracks) + 1)]
+
+        def fake_cue(cue):
+            cue_calls.append(cue)
+            return ["a chapter from the cue"]
+
+        def fake_files(concat_list):
+            file_calls.append(concat_list)
+            return []
+
+        monkeypatch.setattr(ca, "concat_format", fake_concat_format)
+        monkeypatch.setattr(ca.cuechapters, "chapters_from_cue", fake_cue)
+        monkeypatch.setattr(ca.chapters, "chapters_from_files", fake_files)
+        monkeypatch.setattr(ca.chapters, "embed_chapters",
+                            lambda *a, **k: "")
+        monkeypatch.setattr(ca.thumbnails, "embed_thumbnail",
+                            lambda *a, **k: "")
+        monkeypatch.setattr(ca.durationcheck, "checking", lambda: False)
+
+        run = ca.Run(verbose=False, ffmpeg="ffmpeg", script_dir=str(scratch),
+                     have_mkvtoolnix=False, thumbnail_resolution="x")
+        run._build(scan, str(folder), str(scratch / "Book.mp3"), "mp3",
+                   "MP3", str(scratch))
+        return scan, cue_calls, file_calls
+
+    def test_one_track_beside_a_cue_reads_its_chapters_from_the_cue(
+            self, monkeypatch, tmp_path):
+        scan, cue_calls, file_calls = self._drive(
+            monkeypatch, tmp_path, ["one"], with_cue=True)
+        assert scan.audio_files == 1
+        assert cue_calls == [str(tmp_path / "Book" / "Book.cue")]
+        assert file_calls == []
+
+    def test_two_tracks_take_their_chapters_from_the_files_not_the_cue(
+            self, monkeypatch, tmp_path):
+        scan, cue_calls, file_calls = self._drive(
+            monkeypatch, tmp_path, ["one", "two"], with_cue=True)
+        assert scan.audio_files == 2
+        assert cue_calls == []
+        assert len(file_calls) == 1
+        assert len(file_calls[0]) == 2
+
+    def test_one_track_without_a_cue_gets_no_chapters_from_either(self,
+                                                                  monkeypatch,
+                                                                  tmp_path):
+        scan, cue_calls, file_calls = self._drive(
+            monkeypatch, tmp_path, ["one"], with_cue=False)
+        assert scan.audio_files == 1
+        assert cue_calls == []
+        assert file_calls == []
