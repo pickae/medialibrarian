@@ -27,6 +27,7 @@ simply "is this directory empty", with no list of scratch names to keep in step.
 from __future__ import annotations
 
 import os
+import re
 import signal
 import time
 
@@ -483,6 +484,62 @@ class TestAnInterruptedLibraryReading:
             "track1.m4b", "track2.m4b", "track3.m4b"]
         assert len(calls.read_text().splitlines()) == 3 - len(finished)
         assert leaked == []
+
+
+class TestAnInterruptDuringTheMeasuringPass:
+    """`read-library`, stopped while the queue is being weighed - the one long
+    step before a single book is read. No book is in hand when it is stopped,
+    but the closing stats still have to come out: the run found the books, and
+    throwing the whole account away for stopping before the first of them is read
+    is exactly what the footer's docstring rules out."""
+
+    @pytest.fixture
+    def checkout(self, tmp_path):
+        checkout = tmp_path / "e2a"
+        (checkout / "python_env" / "bin").mkdir(parents=True)
+        (checkout / "app.py").touch()
+        interpreter = checkout / "python_env" / "bin" / "python"
+        interpreter.write_text("#!/usr/bin/env bash\n%s\n" % _CHECKOUT_PYTHON)
+        interpreter.chmod(0o755)
+        return checkout
+
+    @pytest.fixture
+    def stopped(self, interrupt, checkout, tmp_path):
+        flag = tmp_path / "measuring"
+        # The measuring pass's own tool, made slow so the run is certainly still
+        # weighing when the signal lands - and naming, by touching a flag, the
+        # moment the weighing of the first book has started.
+        interrupt.with_tool("ebook-convert",
+                            'touch "$MEASURING_FLAG"\nsleep 5\n'
+                            'cat -- "$1" > "$2"')
+        source = interrupt.tree("booksIn", *_tracks(3, "epub"))
+        arguments = ("-c", checkout, "-d", "cpu", "-l", "deu", "-b", "0",
+                     source, interrupt.outputs)
+        stopped = interrupt.stop(
+            signal.SIGTERM, "read-library", *arguments,
+            ready=lambda: flag.exists(),
+            env={"MEASURING_FLAG": str(flag)})
+        stopped.arguments = arguments
+        return stopped
+
+    def test_it_exits_with_the_signals_status(self, stopped):
+        _assert_stopped_cleanly(stopped)
+        assert "Interrupted" in stopped.log
+
+    def test_it_still_prints_its_closing_stats(self, stopped):
+        """The stats footer is named before the measuring pass, so a stop in it
+        reports the books found instead of none at all."""
+        assert stopped.log.count("\nStats\n") == 1, stopped.log
+        assert re.search(r"^Books found:\s+3$", stopped.log, re.MULTILINE)
+        assert re.search(r"^Read:\s+0$", stopped.log, re.MULTILINE)
+
+    def test_no_book_was_started(self, stopped, interrupt, checkout):
+        library = interrupt.outputs / "m4b"
+        assert not library.is_dir() or not list(library.glob("*.m4b")), \
+            stopped.log
+        calls = checkout / "python_env" / "bin" / "calls.log"
+        assert not calls.exists() or not calls.read_text().splitlines(), \
+            stopped.log
 
 
 class TestAnInterruptedCensus:
