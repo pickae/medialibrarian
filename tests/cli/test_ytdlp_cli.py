@@ -435,6 +435,37 @@ class TestTheArchiveFile:
         assert _option(ytdlp.argv(1), "--download-archive") == str(archive)
 
 
+class TestTheConsolidation:
+    """`-l` merges the archives it is given into the first one, and every one of
+    them must be an archive. A folder that happens to end in .log is not one,
+    and is refused rather than merged - whatever position it is given in."""
+
+    def _run(self, ytdlp, *paths):
+        # Not the fixture's ytdlp() call: that prefixes -s linux, and -l answers
+        # to no other flag at all. The consolidation is reached before any tool.
+        return ytdlp.run("ytdlp", "-l", *[str(p) for p in paths],
+                         env=ytdlp.env)
+
+    def test_a_folder_among_the_archives_is_not_merged(self, ytdlp, tmp_path):
+        first = tmp_path / "a.log"
+        first.write_text("ep-1\n", encoding="utf-8")
+        folder = tmp_path / "b.log"
+        folder.mkdir()
+        done = self._run(ytdlp, first, folder)
+        assert done.returncode == 1, done.stdout + done.stderr
+        assert "No such file" in done.stderr
+        assert first.read_text(encoding="utf-8") == "ep-1\n"
+
+    def test_a_folder_in_the_target_position_is_refused(self, ytdlp, tmp_path):
+        target = tmp_path / "out.log"
+        target.mkdir()
+        other = tmp_path / "c.log"
+        other.write_text("ep-1\n", encoding="utf-8")
+        done = self._run(ytdlp, target, other)
+        assert done.returncode == 1, done.stdout + done.stderr
+        assert "Not a file" in done.stderr
+
+
 class TestTheFlags:
     def test_all_fetches_the_paused_feed_too(self, ytdlp):
         ytdlp.ytdlp("-t", ytdlp.table, "-a", "-m", "paused", ytdlp.library,
