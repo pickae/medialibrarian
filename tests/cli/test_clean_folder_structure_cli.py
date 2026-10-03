@@ -241,6 +241,27 @@ class TestTheRunLeavesNothingInTheTempFolder:
         assert list(temp.iterdir()) == []
 
 
+class TestTheYearFolderThatAlreadyHoldsTheName:
+    """Two files that would land on the same name: the one already in the year
+    folder wins. The newcomer is refused the clobber and stays where it is, so
+    the run reports a skip rather than choosing one and destroying the other."""
+
+    def test_the_resident_is_kept_and_the_newcomer_stays(self, cleaner):
+        docs = cleaner.folder / "docs"
+        resident = docs / "2023" / "20230101 alpha.txt"
+        resident.parent.mkdir(parents=True)
+        resident.write_text("the resident\n", encoding="utf-8")
+        newcomer = docs / "20230101 alpha.txt"
+        newcomer.write_text("the newcomer\n", encoding="utf-8")
+        done = cleaner.clean(cleaner.folder, "-y")
+        assert (docs / "2023" / "20230101 alpha.txt").read_text(
+            encoding="utf-8") == "the resident\n"
+        assert (docs / "20230101 alpha.txt").read_text(
+            encoding="utf-8") == "the newcomer\n"
+        assert "skipped 1 rename(s) to avoid overwrite" in (
+            done.stdout + done.stderr)
+
+
 class TestCollectiveCleaningIsScopedToThePlurality:
     """Three `.mp3` sharing a leading word, and one `.jpg` that does not.
 
@@ -616,3 +637,37 @@ class TestTheRecordedCases:
         produced = treefiles.snapshot(root)
         cleaner.clean(root)
         assert treefiles.snapshot(root) == produced
+
+
+class TestAFragmentsFileThatCannotBeRead:
+    """-f names the fragments this run removes, and a path that holds none is
+    never quietly dropped: cleaning a whole tree without them would have to
+    be undone by hand, so the run stops with the path named, before a name in
+    the tree is looked at - the same answer for a file that is there but
+    empty."""
+
+    @pytest.fixture
+    def tree(self, cleaner):
+        _tree(cleaner.folder, "My_Show/My_Movie.mp4", "docs/notes.txt")
+        return cleaner
+
+    def test_a_missing_file_is_refused(self, tree, tmp_path):
+        missing = tmp_path / "no-such-fragments.txt"
+        before = blackbox.tree_of(tree.folder)
+        done = tree.run("clean-folder-structure", "-f", str(missing),
+                        tree.folder)
+        assert done.returncode == 1, done.stdout + done.stderr
+        assert 'The fragments file "%s" does not exist or is empty.' \
+            % missing in done.stderr
+        assert blackbox.tree_of(tree.folder) == before
+
+    def test_an_empty_file_is_refused(self, tree, tmp_path):
+        empty = tmp_path / "empty-fragments.txt"
+        empty.touch()
+        before = blackbox.tree_of(tree.folder)
+        done = tree.run("clean-folder-structure", "-f", str(empty),
+                        tree.folder)
+        assert done.returncode == 1, done.stdout + done.stderr
+        assert 'The fragments file "%s" does not exist or is empty.' \
+            % empty in done.stderr
+        assert blackbox.tree_of(tree.folder) == before

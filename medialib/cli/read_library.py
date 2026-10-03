@@ -1012,6 +1012,12 @@ def _read(result, program: str, script_dir: str, in_path: str, out_path: str,
     )
     counters.render = state.reading_status_text
 
+    # Named BEFORE the measuring pass, not after it: the pass is the long step a
+    # Ctrl+C lands in, and the abort trap ends the run by printing the closing
+    # report - which is nothing until it is named. The counters it reads are not
+    # written yet, and the footer reads a missing counter as zero.
+    safety.set_run_footer(lambda: footer(state))
+
     books = _order_the_queue(state, scan, total)
     if safety.abort_requested():
         safety.exit_if_aborted()
@@ -1021,8 +1027,6 @@ def _read(result, program: str, script_dir: str, in_path: str, out_path: str,
     os.makedirs(os.path.join(counter_dir, "active"), exist_ok=True)
     with open(os.path.join(counter_dir, "duration"), "w") as handle:
         handle.write("0\n")
-
-    safety.set_run_footer(lambda: footer(state))
 
     _announce(state, jobs, jobs_from, device, voice_map, voice_sample)
 

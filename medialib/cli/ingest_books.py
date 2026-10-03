@@ -92,11 +92,6 @@ def spec(program: str) -> clioptions.Spec:
     )
 
 
-def ext_in_list(extension: str, candidates) -> bool:
-    """``extInList``: is this extension one of those?"""
-    return extension in list(candidates)
-
-
 def _grant_tree_access(path: str) -> None:
     """``chmod -R u+rwX``: the owner gets read and write on everything under
     ``path``, and execute on the directories and on whatever already carried an
@@ -239,7 +234,7 @@ def clean_book_folder(directory: str, geometry: str = "",
                              verdict_of=verdict_of)
 
 
-def emit_output(source: str, destination: str) -> None:
+def emit_output(source: str, destination: str, claims_dir: str) -> None:
     """Move a finished book to the output, never clobbering: a collision keeps
     BOTH via a " (N)" suffix. A missing source is a silent no-op - a failed
     conversion simply produces no output for that book.
@@ -247,8 +242,12 @@ def emit_output(source: str, destination: str) -> None:
     The workspace is in RAM and the library on disk, so this is a copy - and a
     copy straight onto the final name would leave a short book exactly where
     the resume check looks if the run is cut off mid-copy. The bytes go to a
-    hidden staging name in the destination folder first, with no book
-    extension, and only a finished copy is given the real name.
+    hidden staging name in the destination folder first, and only a finished
+    copy is given the real name. The name is claimed by a token in the shared
+    scratch before the copy is moved over it, so the final name never appears
+    empty or half-written - on a filesystem that cannot hard-link (exFAT),
+    claiming it empty was how a cut-off run left a 0-byte book under a
+    finished name.
 
     Several books are emitted in parallel, so another worker may take the same
     name between choosing it and claiming it; the claim never overwrites, and
@@ -271,26 +270,38 @@ def emit_output(source: str, destination: str) -> None:
             if os.path.exists(candidate):
                 candidate = safety.unique_suffix_path(candidate)
             try:
-                os.link(staged, candidate)
-            except FileExistsError:
-                continue                  # another worker took it; next suffix
+                if not _claim_name(claims_dir, candidate):
+                    continue          # another worker took it; next suffix
             except OSError:
-                # A library on a filesystem without hard links: claim the name
-                # empty, then rename the finished copy over the claim.
-                try:
-                    claim = os.open(candidate,
-                                    os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-                except FileExistsError:
-                    continue
-                except OSError:
-                    return
-                os.close(claim)
-                os.replace(staged, candidate)
+                return                # the scratch itself is failing
+            os.replace(staged, candidate)
             os.remove(source)
             return
     finally:
         if os.path.exists(staged):
             os.remove(staged)
+
+
+def _claim_name(claims_dir: str, candidate: str) -> bool:
+    """Reserve ``candidate`` for this worker before anything is placed under
+    the name.
+
+    The reservation is a token file in the shared scratch, mirroring the
+    destination's path and claimed with O_EXCL, so two workers can never take
+    one name: the loser is the one who retries with the next free suffix. The
+    token lives in the scratch rather than as an empty file at the destination
+    itself, because the destination's filesystem may be one that cannot
+    hard-link (exFAT, FAT32), and an empty file there is what a cut-off run
+    would leave under a finished book's name.
+    """
+    token = os.path.join(claims_dir, *candidate.split(os.sep))
+    os.makedirs(os.path.dirname(token), exist_ok=True)
+    try:
+        handle = os.open(token, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    except FileExistsError:
+        return False
+    os.close(handle)
+    return True
 
 
 class Run:
@@ -302,6 +313,10 @@ class Run:
         self.in_path = in_path
         self.out_path = out_path
         self.counter_dir = counter_dir
+        # Where emit_output's name claims live: fresh with the run, shared by
+        # every worker, gone with it - so a claim can never outlive the run it
+        # guarded.
+        self.claims_dir = os.path.join(counter_dir, "claims")
         self.temp_path = temp_path
         self.options = options
         self.total = total
@@ -371,7 +386,8 @@ class Run:
                 self.note("Text: " + base)
                 out = os.path.join(work, "out.txt")
                 if booktext.book_to_text(source, out) == 0:
-                    emit_output(out, os.path.join(dest_dir, stem + ".txt"))
+                    emit_output(out, os.path.join(dest_dir, stem + ".txt"),
+                                self.claims_dir)
                     self.progress("Done (txt): " + base)
                 else:
                     self.progress("FAILED (txt): " + base)
@@ -385,7 +401,8 @@ class Run:
                 if not self.options["discardExtras"]:
                     self.note("PDF (copy): " + base)
                     shutil.copyfile(source, out)
-                    emit_output(out, os.path.join(dest_dir, stem + ".pdf"))
+                    emit_output(out, os.path.join(dest_dir, stem + ".pdf"),
+                                self.claims_dir)
                     self.progress("Done (pdf): " + base)
                     return
                 self.note("PDF: " + base)
@@ -396,7 +413,8 @@ class Run:
                      "-r25", "-sOutputFile=" + out, source],
                     stderr=subprocess.DEVNULL)
                 if done.returncode == 0:
-                    emit_output(out, os.path.join(dest_dir, stem + ".pdf"))
+                    emit_output(out, os.path.join(dest_dir, stem + ".pdf"),
+                                self.claims_dir)
                     self.progress("Done (pdf): " + base)
                 else:
                     self.progress("FAILED (pdf): " + base)
@@ -446,7 +464,8 @@ class Run:
             if done.returncode != 0 or not os.path.exists(final):
                 shutil.copyfile(source_epub, final)
 
-            emit_output(final, os.path.join(dest_dir, stem + ".epub"))
+            emit_output(final, os.path.join(dest_dir, stem + ".epub"),
+                        self.claims_dir)
             self.progress("Done: " + base)
         finally:
             safe_rmrf(work)
@@ -512,12 +531,46 @@ def _word_count(path: str) -> int:
         return 0
 
 
+def _text_output_path(out_path: str, relative: str) -> str:
+    """Where text mode puts one input book: its stem plus ``.txt``, in the
+    mirrored sub-folder - the same destination process_book emits to."""
+    base = os.path.basename(relative)
+    stem = base.rsplit(".", 1)[0] if "." in base else base
+    relative_dir = os.path.dirname(relative)
+    dest_dir = os.path.join(out_path, relative_dir) if relative_dir \
+        else out_path
+    return os.path.join(dest_dir, stem + ".txt")
+
+
+def _summary_name(out_path: str, book_outputs) -> str:
+    """The word-count summary's path: named after the output folder, unless a
+    book's own output claims that name - a top-level book whose stem is the
+    folder's name emits exactly there. Then the summary takes the first " (N)"
+    variant no book claims, so the book keeps its name.
+
+    The choice is deterministic in the book set rather than in whatever files
+    happen to sit in the output: a second run lands on the same summary file
+    and overwrites it instead of breeding a new one.
+    """
+    stem, dot, extension = (os.path.basename(out_path) + ".txt").rpartition(
+        ".")
+    number = 1
+    while True:
+        base = stem + dot + extension if number == 1 \
+            else "%s (%d)%s%s" % (stem, number, dot, extension)
+        candidate = os.path.join(out_path, base)
+        if candidate not in book_outputs:
+            return candidate
+        number += 1
+
+
 def _text_mode_report(state, books, out_path, temp_path, all_txt,
                       in_path) -> str:
     """Word-count every measured .txt, write the summary the run is named after,
     and say what the whole corpus came to."""
     if all_txt:
         measured = [os.path.join(in_path, relative) for relative in books]
+        book_outputs = set()
     else:
         measured = []
         for parent, _dirs, names in os.walk(out_path):
@@ -525,8 +578,10 @@ def _text_mode_report(state, books, out_path, temp_path, all_txt,
                 if enums.lower_extension_of(name) == "txt":
                     measured.append(os.path.join(parent, name))
         measured.sort(key=os.fsencode)
+        book_outputs = {_text_output_path(out_path, relative)
+                        for relative in books}
 
-    report = os.path.join(out_path, os.path.basename(out_path) + ".txt")
+    report = _summary_name(out_path, book_outputs)
     rows, total_words, counted = [], 0, 0
     for path in measured:
         if path == report:

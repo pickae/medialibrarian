@@ -348,8 +348,10 @@ IMAGE_SUB_CODECS = ("S_HDMV/PGS", "S_VOBSUB", "S_DVBSUB")
 # reads as the film being missing when it is right there.
 MATROSKA_MAGIC = b"\x1a\x45\xdf\xa3"
 
-# The junk a release ships with, deleted before anything else runs.
-JUNK_EXTENSIONS = ("txt", "nfo", "exe", "DOC", "sfv")
+# The junk a release ships with, deleted before anything else runs. Matched
+# case-insensitively: a release folder is as likely to ship Film.NFO as
+# Film.nfo, and a film's .DOC is junk whatever case it wears.
+JUNK_EXTENSIONS = ("txt", "nfo", "exe", "doc", "sfv")
 SAMPLE_NAMES = ("sample.mkv", "Sample.mkv", "SAMPLE.mkv")
 
 # The field separator the track reads join on, which cannot appear in a track
@@ -658,7 +660,7 @@ def cleanup(root: str) -> None:
     for parent, _dirs, names in os.walk(root):
         for name in names:
             path = os.path.join(parent, name)
-            extension = name.rpartition(".")[2] if "." in name else ""
+            extension = enums.lower_extension_of(name) if "." in name else ""
             if extension in JUNK_EXTENSIONS or name in SAMPLE_NAMES:
                 _remove(path)
                 continue
@@ -763,10 +765,7 @@ def rename_movies(root: str, fragments_file: str, skips) -> int:
         new_movie = os.path.join(directory, new_base + ".mkv")
 
         if new_movie != movie:
-            if safety.would_hide(new_movie):
-                skips.record(movie, new_movie)
-                new_movie = movie
-            elif os.path.exists(new_movie):
+            if safety.would_hide(new_movie) or os.path.exists(new_movie):
                 skips.record(movie, new_movie)
                 new_movie = movie
             else:

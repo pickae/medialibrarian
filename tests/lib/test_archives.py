@@ -674,12 +674,61 @@ class TestAnArchiveThatAsksForTooMuchIsNotUnpacked:
     def test_a_7z_of_ordinary_members_is_unpacked(self, tmp_path, monkeypatch):
         calls = _record_calls(monkeypatch, listings={
             "7z": _seven_zip_listing(("chapter one", "D drwxr-xr-x"),
-                                     ("chapter one/01.jpg", "A -rw-r--r--"))})
+                                      ("chapter one/01.jpg", "A -rw-r--r--"))})
         monkeypatch.setattr(archives, "seven_zip_command", lambda: "7z")
         self._dest(tmp_path, monkeypatch)
 
         assert archives.extract_archive("Book.7z", "out") == 0
         assert calls[0][0][:2] == ["7z", "x"]
+
+    def test_a_7z_that_names_a_symbolic_link_is_refused(self, tmp_path,
+                                                        monkeypatch):
+        """The ``Symbolic Link`` field, not a unix mode, is what marks the member
+        in an archive packed where a link carries no mode: an unchecked link is
+        the exact shape this exists to stop, so it is refused on that ground
+        alone - the field is read, and the target that is never printed is the
+        reason."""
+        listing = ("Listing archive: Book.7z\n\n--\nPath = Book.7z\n"
+                   "Type = 7z\n\n----------\n"
+                   "Path = cover.jpg\nAttributes = A---r--------\n\n"
+                   "Path = escape\nSymbolic Link = ../../etc\n"
+                   "Attributes = A---r--------\n\n")
+        calls = _record_calls(monkeypatch, listings={"7z": listing})
+        monkeypatch.setattr(archives, "seven_zip_command", lambda: "7z")
+        self._dest(tmp_path, monkeypatch)
+
+        assert archives.extract_archive("Book.7z", "out") == 1
+        assert calls == []
+
+    def test_a_rar_whose_member_is_a_socket_is_refused(self, tmp_path,
+                                                       monkeypatch):
+        """A device, fifo or socket is not content a book can hold: the type the
+        listing gives it is none of file, directory or link, so it is refused
+        whole and nothing is unpacked from the archive."""
+        calls = _record_calls(monkeypatch, listings={
+            "unrar": _rar_listing(("Disc 1/01.mp3", "File"),
+                                  ("pipe", "Socket"))})
+        self._dest(tmp_path, monkeypatch)
+
+        assert archives.extract_archive("Book.rar", "out") == 1
+        assert calls == []
+
+    def test_a_zip_whose_link_is_too_long_to_be_a_path(self, tmp_path,
+                                                       monkeypatch):
+        """A link's target IS its content, and a path is short: a member whose
+        "target" runs past the length a path can be is not a link this will
+        unpack, so it is refused on the ground that its target cannot be read."""
+        import zipfile
+        calls = _record_calls(monkeypatch)
+        self._dest(tmp_path, monkeypatch)
+        with zipfile.ZipFile(str(tmp_path / "Book.zip"), "w") as packed:
+            packed.writestr("page.jpg", "x")
+            link = zipfile.ZipInfo("escape")
+            link.external_attr = (stat.S_IFLNK | 0o777) << 16
+            packed.writestr(link, "x" * 5000)
+
+        assert archives.extract_archive("Book.zip", "out") == 1
+        assert calls == []
 
     def test_the_listing_is_asked_of_the_tool_that_knows(self, tmp_path,
                                                          monkeypatch):
@@ -716,6 +765,25 @@ class TestAnArchiveThatAsksForTooMuchIsNotUnpacked:
 
         assert archives.extract_archive_as_folder("Book.zip", "Book") == 1
         assert sorted(os.listdir(str(tmp_path))) == ["Book.zip"]
+
+    def test_a_refusal_names_the_first_ten_and_the_rest_in_a_count(
+            self, tmp_path, monkeypatch, capsys):
+        """A refusal names the members it will not write, but a book's archive
+        can hold many of them: the first ten are named and the rest counted, so
+        the answer stays one screen while still saying how much more there is."""
+        calls = _record_calls(monkeypatch)
+        self._dest(tmp_path, monkeypatch)
+        _pack_zip(tmp_path / "Book.zip",
+                  tuple("../escaped %d.txt" % n for n in range(1, 13)))
+
+        assert archives.extract_archive("Book.zip", "out") == 1
+        assert calls == []
+        out = capsys.readouterr().err
+        assert "Refusing to unpack" in out
+        assert "../escaped 1.txt" in out
+        assert "../escaped 10.txt" in out
+        assert "../escaped 11.txt" not in out
+        assert "... and 2 more" in out
 
 
 def _fake_extraction(monkeypatch, layout, rc=0):
@@ -923,6 +991,44 @@ class TestTheRootFolderAnArchiveCarries:
         _pack_zip(tmp_path / "dl.zip", ("Bleak House/",))
         assert archives.archive_root_folder(
             str(tmp_path / "dl.zip")) == "Bleak House"
+
+    def test_a_windows_packed_7z_without_a_unix_half_still_names_its_root(
+            self, tmp_path, monkeypatch):
+        """Packed on Windows a 7z carries no unix mode, so an empty folder is
+        read as a folder from the DOS flag and not from a mode string: that is
+        the only ground a folder has to be recognised here, so drop it and the
+        root it names is lost - the flag, not a mode, is what finds it."""
+        _record_calls(monkeypatch, listings={
+            "7z": _seven_zip_listing(("Book", "D"))})
+        monkeypatch.setattr(archives, "seven_zip_command", lambda: "7z")
+        assert archives.archive_root_folder(str(tmp_path / "Book.7z")) == "Book"
+
+    @pytest.mark.parametrize("ext", ["tar.zst", "tzst"])
+    def test_a_zstd_tar_on_an_interpreter_without_zstd_still_names_its_root(
+            self, tmp_path, monkeypatch, ext):
+        """The NAME path and not the extraction: the interpreter whose tarfile
+        cannot open a .tar.zst by name still hands the host the compression and
+        reads the root folder off the decompressed stream - the same answer the
+        3.14 tarfile gives reading it directly, so the fallback is not a loss of
+        the packed-under name on the interpreters that need it."""
+        if not shutil.which("zstd"):
+            pytest.skip("the fallback is the zstd binary")
+        plain = tmp_path / "staging.tar"
+        with tarfile.open(str(plain), "w") as archive:
+            for name in ("Book/", "Book/01.mp3"):
+                info = tarfile.TarInfo(name)
+                is_dir = name.endswith("/")
+                info.type = tarfile.DIRTYPE if is_dir else tarfile.REGTYPE
+                info.size = 0 if is_dir else 1
+                archive.addfile(info, io.BytesIO(b"x") if not is_dir
+                                else io.BytesIO(b""))
+        subprocess.run(["zstd", "-q", "-f", str(plain),
+                        "-o", str(tmp_path / f"Book.{ext}")], check=True)
+        plain.unlink()
+        _tarfile_without_zstd(monkeypatch)
+        monkeypatch.chdir(tmp_path)
+
+        assert archives.archive_root_folder(f"Book.{ext}") == "Book"
 
     def test_files_at_the_root_have_no_name_to_give(self, tmp_path):
         _pack_zip(tmp_path / "Moby Dick.zip", ("01.mp3", "02.mp3"))

@@ -21,6 +21,7 @@ A cut with nothing near it stays where the arithmetic put it, and so does every
 cut of a source this cannot read.
 """
 
+import itertools
 import shlex
 import subprocess
 from typing import NamedTuple
@@ -146,7 +147,7 @@ def pick_cut(frames: list, target: float) -> tuple | None:
     millisecond the cut is written to rounds.
     """
     best = None
-    for before, frame in zip(frames, frames[1:]):
+    for before, frame in itertools.pairwise(frames):
         if frame.black:
             kind = "black"
         elif frame.score >= SCENE_SCORE:
@@ -171,7 +172,7 @@ def aligned_bounds(source: str, bounds: list, decode_accel_args: str = "",
     if len(bounds) < 3:
         return list(bounds), []
     values = [formatting.awk_number(bound) for bound in bounds]
-    shortest = min(b - a for a, b in zip(values, values[1:]))
+    shortest = min(b - a for a, b in itertools.pairwise(values))
     window = min(SCENE_WINDOW, shortest / 4)
 
     out = [bounds[0]]

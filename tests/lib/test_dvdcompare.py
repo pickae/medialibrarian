@@ -8,6 +8,9 @@ kind of disc, and which are not - a featurette's optional commentary, a scene's,
 a box set's other film.
 """
 
+import os
+import time
+
 import pytest
 
 from medialib.lib import dvdcompare, politepacing
@@ -22,6 +25,24 @@ SEARCH = (_DATA / "search.html").read_text(encoding="utf-8")
 
 DIRECTOR = "Audio commentary by director Wenna Castellane"
 CAST = "Audio commentary with actors Oriel Pask and Tamsin Voller"
+
+
+class TestThePictureFormat:
+    """The kind of disc a release's "Picture Format" names: the resolution is
+    what says it, and a format the site names without a resolution is a DVD."""
+
+    def test_a_2160_picture_is_a_4k_disc(self):
+        assert dvdcompare._picture_kind("2160p") == "uhd"
+
+    def test_and_1080_or_720_a_blu_ray(self):
+        assert dvdcompare._picture_kind("1080p") == "bluray"
+        assert dvdcompare._picture_kind("720p") == "bluray"
+
+    def test_a_std_def_576i_is_a_dvd(self):
+        assert dvdcompare._picture_kind("576i") == "dvd"
+
+    def test_and_no_format_says_none(self):
+        assert dvdcompare._picture_kind("") == ""
 
 
 class TestAFilmsPage:
@@ -166,6 +187,31 @@ class TestAskingTheSite:
                                 lambda *a: asked.append(a))
         assert again.releases("Nightfall Harbour", "1987", "dvd")
         assert len(asked) == 2
+
+    def test_a_stale_cached_page_is_fetched_again(self, site, tmp_path):
+        """A page is believed only while it is young: the one a run kept, once
+        it is older than the belief window, is not trusted and is asked for
+        again rather than read from where it sits."""
+        made, asked, _clock = site
+        made.releases("Nightfall Harbour", "1987", "dvd")
+        first = len(asked)
+        # the pages it kept are now far older than they are believed to stay
+        long_ago = time.time() - 2 * 365 * 86400
+        for page in tmp_path.glob("*.html"):
+            os.utime(str(page), (long_ago, long_ago))
+
+        def refetch(url, form):
+            asked.append((url, form))
+            return SEARCH if url.endswith("search.php") else FILM
+
+        again = dvdcompare.Site(
+            str(tmp_path), lambda _line: None, refetch,
+            pacer=politepacing.Pacer(
+                dvdcompare.MIN_INTERVAL, dvdcompare.JITTER,
+                now=_Clock().now, sleep=lambda _s: None,
+                draw=lambda _low, high: high))
+        assert again.releases("Nightfall Harbour", "1987", "dvd")
+        assert len(asked) > first
 
     def test_a_film_the_search_cannot_place_is_none(self, site):
         made, _asked, _clock = site

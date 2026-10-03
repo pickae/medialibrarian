@@ -74,3 +74,20 @@ class TestADestinationThatKeepsTheStagingName:
                        if not p.name.startswith("."))
         assert audio == ["story.opus"]
         assert target.read_bytes() == b"the whole audiobook"
+
+
+class TestTheActiveBooksOrder:
+    """The books on the status row come out in numeric order - 2, 9, 10 - not the
+    string order that would put 10 before 2."""
+
+    def test_the_books_are_shown_in_numeric_order(self, tmp_path):
+        counter_dir = tmp_path / "counters"
+        active = counter_dir / "active"
+        active.mkdir(parents=True)
+        (active / "2").write_text("=copying")
+        (active / "9").write_text("=publishing")
+        (active / "10").write_text("=done")
+        run = read_library.Run(
+            counters=read_library.Counters(str(counter_dir), 10))
+        assert run.active_book_progress() == \
+            "  [2] copying  [9] publishing  [10] done"

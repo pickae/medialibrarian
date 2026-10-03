@@ -31,8 +31,9 @@ def _left(root):
 
 
 class TestTheJunk:
-    @pytest.mark.parametrize("name", ["Film.nfo", "Release notes.txt",
-                                      "Film.sfv", "setup.exe"])
+    @pytest.mark.parametrize("name", ["Film.nfo", "Film.NFO", "Film.DOC",
+                                       "Release notes.txt", "Film.sfv",
+                                       "setup.exe"])
     def test_a_release_s_notes_and_checksums_go(self, tmp_path, name):
         _sized(tmp_path / "Film (2020)" / "Film (2020).mkv", im.MIN_MOVIE_BYTES)
         _sized(tmp_path / "Film (2020)" / name, 10)

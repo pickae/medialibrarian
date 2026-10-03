@@ -1,10 +1,12 @@
-"""Tier D for medialib.lib.mutagentags: what it writes into a REAL file, and
-which of the two chapter sets wins when the file already has some.
+"""Tier D for medialib.lib.mutagentags: what it writes into a file only an
+encoder can make, and which of the two chapter sets wins when the file already
+has some.
 
-The stubbed tests can only show that the writer was called. The tags it leaves
-behind need real mutagen to read back, and a real encoder to make a file worth
-reading - so this tier encodes one and reads it with the same library the writer
-used. It is opt-in (`pytest -m media`) because of exactly that.
+The FLAC decisions run in the default tier against a file mutagen stands up
+itself; what is left here needs a real encoder to make the file worth reading,
+and a real mutagen to read the tags back - so this tier encodes one of each and
+reads it with the same library the writer used. It is opt-in (`pytest -m media`)
+because of exactly that.
 
 What decides between the two chapter sets is ``--force``: without it, chapters
 already in the file are kept, so marks placed by hand survive a rerun that would
@@ -38,9 +40,8 @@ ONE = "CHAPTER01=00:00:00.000\nCHAPTER01NAME=Replaced\n"
 
 
 def _load(path):
-    from mutagen.flac import FLAC
     from mutagen.oggopus import OggOpus
-    return OggOpus(path) if str(path).lower().endswith(".opus") else FLAC(path)
+    return OggOpus(str(path))
 
 
 def _tag(path, field):
@@ -78,12 +79,12 @@ def _write(*args):
 
 @pytest.fixture
 def audio(tmp_path):
-    """A real encoded file of each container, chapterless, standing in for one
-    the pipeline has just produced."""
+    """A real encoded file of each container an encoder must make, chapterless,
+    standing in for one the pipeline has just produced."""
     def make(name):
         path = tmp_path / name
         codec = ["-c:a", "libopus", "-b:a", "64k"] if name.endswith(".opus") \
-            else ["-c:a", "flac"]
+            else ["-c:a", "aac"]
         subprocess.run(
             ["ffmpeg", "-nostdin", "-y", "-loglevel", "error", "-f", "lavfi",
              "-i", "sine=frequency=440:duration=3", *codec, str(path)],
@@ -101,81 +102,9 @@ def chapter_file(tmp_path):
     return make
 
 
-class TestAFileWithNoChaptersYet:
-    def test_it_gets_them_with_no_flag_needed(self, audio, chapter_file):
-        flac = audio("plain.flac")
-        _write(flac, chapter_file("three.chapters", THREE), "Plain Title")
-        assert _chapters(flac) == 3
-        assert _tag(flac, "TITLE") == "Plain Title"
-        assert _tag(flac, "CHAPTER01NAME") == "First"
-
-
-class TestAFileThatAlreadyHasChapters:
-    @pytest.fixture
-    def already(self, audio, chapter_file):
-        flac = audio("plain.flac")
-        _write(flac, chapter_file("three.chapters", THREE), "Plain Title")
-        return flac, chapter_file("one.chapters", ONE)
-
-    def test_a_second_run_leaves_them_alone_down_to_their_names(self, already):
-        flac, one = already
-        _write(flac, one, "Second Title")
-        assert _chapters(flac) == 3
-        assert _tag(flac, "CHAPTER01NAME") == "First"
-
-    def test_but_it_still_writes_the_title_it_was_handed(self, already):
-        flac, one = already
-        _write(flac, one, "Second Title")
-        assert _tag(flac, "TITLE") == "Second Title"
-
-    def test_it_says_so_naming_the_flag(self, already):
-        """Rather than quietly doing nothing."""
-        flac, one = already
-        assert "--force" in _write(flac, one).stderr
-
-    def test_and_keeping_them_is_not_a_failure(self, already):
-        """A caller checking the status must not read it as one."""
-        flac, one = already
-        assert _write(flac, one).returncode == 0
-
-
-class TestForceMakesTheChapterFileTheWholeTruth:
-    @pytest.fixture
-    def already(self, audio, chapter_file):
-        flac = audio("plain.flac")
-        _write(flac, chapter_file("three.chapters", THREE), "Plain Title")
-        return flac, chapter_file("one.chapters", ONE)
-
-    def test_the_set_is_replaced_wholesale(self, already):
-        flac, one = already
-        _write("--force", flac, one, "Forced Title")
-        assert _chapters(flac) == 1
-        assert _tag(flac, "CHAPTER01NAME") == "Replaced"
-        # the ones past the end of the new set are gone
-        assert _tag(flac, "CHAPTER03NAME") == ""
-        assert _tag(flac, "TITLE") == "Forced Title"
-
-
-class TestAnEmptyChapterFile:
-    """The caller hands over /dev/null when it built no chapters."""
-
-    def test_it_writes_no_chapters_and_the_title_still_lands(self, audio):
-        flac = audio("titleOnly.flac")
-        _write("--force", flac, "/dev/null", "Only A Title")
-        assert _chapters(flac) == 0
-        assert _tag(flac, "TITLE") == "Only A Title"
-
-    def test_with_force_it_clears_what_was_there(self, audio, chapter_file):
-        """So nothing inherited survives a rebuild that produced none."""
-        flac = audio("plain.flac")
-        _write(flac, chapter_file("three.chapters", THREE), "Plain Title")
-        _write("--force", flac, "/dev/null", "Cleared")
-        assert _chapters(flac) == 0
-
-
-class TestTheOtherContainer:
-    """Opus takes a different mutagen loader, so both halves are checked there
-    too."""
+class TestTheOpus:
+    """Opus takes a different mutagen loader than the FLAC the default tier
+    checks, so the decisions are checked there too."""
 
     def test_an_opus_takes_them_keeps_them_and_gives_them_up_to_force(
             self, audio, chapter_file):
@@ -210,27 +139,15 @@ def cover(tmp_path):
 
 
 def _pictures(path):
-    """The embedded pictures, however the container carries them."""
-    handle = _load(path)
-    if str(path).lower().endswith(".opus"):
-        import base64
+    """The pictures the opus file carries, base64 in a comment."""
+    import base64
 
-        from mutagen.flac import Picture
-        return [Picture(base64.b64decode(blob))
-                for blob in handle.get("METADATA_BLOCK_PICTURE", [])]
-    return list(handle.pictures)
+    from mutagen.flac import Picture
+    return [Picture(base64.b64decode(blob))
+            for blob in _load(path).get("METADATA_BLOCK_PICTURE", [])]
 
 
-class TestTheCoverGoesIn:
-    def test_a_flac_gets_a_front_cover_a_player_can_read(self, audio, cover):
-        flac = audio("art.flac")
-        assert mutagentags.embed_cover(str(flac), str(cover)) == 0
-        pictures = _pictures(flac)
-        assert len(pictures) == 1
-        assert pictures[0].type == 3
-        assert pictures[0].mime == "image/jpeg"
-        assert pictures[0].data == cover.read_bytes()
-
+class TestTheOpusCoverGoesIn:
     def test_an_opus_gets_the_same_thing_base64_in_a_comment(self, audio, cover):
         opus = audio("art.opus")
         assert mutagentags.embed_cover(str(opus), str(cover)) == 0
@@ -239,13 +156,31 @@ class TestTheCoverGoesIn:
         assert pictures[0].data == cover.read_bytes()
 
     def test_a_rerun_replaces_rather_than_accumulates(self, audio, cover):
-        """Which is the whole reason the FLAC path clears first: a library
+        """Which is the whole reason the path clears first: a library
         re-ingested twice would otherwise carry two copies of its own art."""
-        for path in ("art.flac", "art.opus"):
-            target = audio(path)
-            mutagentags.embed_cover(str(target), str(cover))
-            mutagentags.embed_cover(str(target), str(cover))
-            assert len(_pictures(target)) == 1
+        target = audio("art.opus")
+        mutagentags.embed_cover(str(target), str(cover))
+        mutagentags.embed_cover(str(target), str(cover))
+        assert len(_pictures(target)) == 1
+
+
+class TestTheMP4CoverGoesIn:
+    """The `covr` branch does not build a picture structure around the bytes,
+    and it had never been read back in any tier: a rerun must replace the atom
+    rather than stack a second one."""
+
+    def test_a_rerun_leaves_exactly_one_covr_with_the_bytes_handed_in(
+            self, audio, cover):
+        from mutagen.mp4 import MP4, MP4Cover
+
+        mp4 = audio("art.m4a")
+        for _ in range(2):
+            assert mutagentags.embed_cover(str(mp4), str(cover)) == 0
+        covr = MP4(str(mp4))["covr"]
+        assert len(covr) == 1
+        # the cover is the JPEG itself: MP4Cover is the bytes, tagged
+        assert covr[0] == cover.read_bytes()
+        assert covr[0].imageformat == MP4Cover.FORMAT_JPEG
 
 
 class TestTheStatusIsAStatus:
@@ -255,23 +190,7 @@ class TestTheStatusIsAStatus:
     direct call that raised instead would take the run down.
     """
 
-    def test_a_file_mutagen_cannot_read_is_a_status_not_a_traceback(self, tmp_path):
-        junk = tmp_path / "notaudio.flac"
-        junk.write_text("this is not a FLAC file")
-        chapters = tmp_path / "c.chapters"
-        chapters.write_text(THREE)
-        assert mutagentags.embed_chapters(str(junk), str(chapters)) == 1
-
-    def test_the_same_for_a_cover(self, tmp_path, cover):
-        junk = tmp_path / "notaudio.flac"
-        junk.write_text("this is not a FLAC file")
-        assert mutagentags.embed_cover(str(junk), str(cover)) == 1
-
     def test_and_for_a_file_that_is_not_there_at_all(self, tmp_path, cover):
         missing = str(tmp_path / "gone.opus")
         assert mutagentags.embed_cover(missing, str(cover)) == 1
         assert mutagentags.embed_chapters(missing, "/dev/null") == 1
-
-    def test_a_cover_file_that_is_not_there_is_a_status_too(self, audio, tmp_path):
-        flac = audio("art.flac")
-        assert mutagentags.embed_cover(str(flac), str(tmp_path / "gone.jpg")) == 1

@@ -870,6 +870,11 @@ def _summarise(state, worker_roots, results, run_bi, script_dir, total):
 
     if interrupted:
         return safety.INTERRUPTED_EXIT_STATUS
+    if written == 0:
+        # The "No report was written" line above: files were found, none was
+        # readable, nothing was produced. That is a failed ask, and the status
+        # is how the caller tells it from a quiet success.
+        return 1
     return workerpool.exit_status()
 
 

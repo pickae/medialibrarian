@@ -451,6 +451,37 @@ class TestOneVoicePerLanguage:
                     if re.search(r"--voice \S*/-/", c)]) == 2
 
 
+class TestAVoiceSampleThatIsRefused:
+    """-v is settled for the whole run before a book is read, and a sample the
+    run cannot use is refused there: nothing is narrated, the output folder is
+    never made, and the library is left byte for byte as it was."""
+
+    def test_a_sample_that_does_not_exist(self, library, tmp_path):
+        before = blackbox.tree_of(library.source)
+        missing = tmp_path / "no-such-sample.wav"
+        target = tmp_path / "out.voice"
+        log = library.read("-l", "deu", "-v", str(missing), library.source,
+                           target, expect=1)
+        assert 'Voice sample "%s" does not exist.' % missing in log, log
+        assert library.engine_calls() == []
+        assert not target.exists()
+        assert blackbox.tree_of(library.source) == before
+
+    def test_a_folder_holding_no_usable_sample(self, library, tmp_path):
+        before = blackbox.tree_of(library.source)
+        folder = tmp_path / "voices"
+        folder.mkdir()
+        # A name that carries no language, so no sample in the folder is one.
+        (folder / "voice.mp3").write_bytes(b"\x00" * 32)
+        target = tmp_path / "out.voices"
+        log = library.read("-l", "deu", "-v", str(folder), library.source,
+                           target, expect=1)
+        assert 'No usable voice sample was found in "%s".' % folder in log, log
+        assert library.engine_calls() == []
+        assert not target.exists()
+        assert blackbox.tree_of(library.source) == before
+
+
 class TestChoosingTheEngine:
     """-e is the engine every book is read with, and the one the language is
     checked against."""

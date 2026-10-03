@@ -408,3 +408,57 @@ class TestAFileTooLongForOneXheAacEncode:
         assert "too long for exhale to encode whole" in done.stderr
         assert not list(outputs.rglob("*.m4a"))
         assert not (convert.bin / "exhale-ran").exists()
+
+
+class TestAdaptiveRefusesTheGlobals:
+    """-a decides the channel and the bitrate per file, so a global -m or -b
+    would contradict it: refused at the option line, before a file is looked
+    at and before the output folder is made."""
+
+    @pytest.fixture
+    def convert(self, sandbox, tmp_path):
+        convert = _stubbed(sandbox)
+        convert.inputs = tmp_path / "in"
+        convert.inputs.mkdir()
+        (convert.inputs / "track.m4a").write_bytes(b"\0" * 1000)
+        convert.outputs = tmp_path / "out"
+        return convert
+
+    def _refused(self, convert, *options):
+        before = blackbox.tree_of(convert.inputs)
+        done = convert.run("convert-audio", *options, convert.inputs,
+                           convert.outputs)
+        assert done.returncode == 1, done.stdout + done.stderr
+        assert "error: -a (adaptive) cannot be combined with -m or -b." \
+            in done.stderr
+        assert blackbox.tree_of(convert.inputs) == before
+        assert not convert.outputs.exists()
+
+    def test_a_global_mono_is_refused(self, convert):
+        self._refused(convert, "-a", "-m")
+
+    def test_a_global_bitrate_is_refused(self, convert):
+        self._refused(convert, "-a", "-b", "64")
+
+
+class TestXheAacWithoutItsEncoder:
+    """xHE-AAC is the one codec ffmpeg cannot produce at all: the run needs
+    the separate exhale binary, and a machine without it is refused up front,
+    naming the tool and the way out - rather than failing per file."""
+
+    def test_the_run_refuses_naming_the_encoder_and_the_way_out(self, sandbox,
+                                                                tmp_path):
+        convert = _stubbed(sandbox).narrow()
+        inputs, outputs = tmp_path / "in", tmp_path / "out"
+        inputs.mkdir()
+        (inputs / "track.m4a").write_bytes(b"\0" * 1000)
+        before = blackbox.tree_of(inputs)
+        done = convert.run("convert-audio", "-e", "xheaac", inputs, outputs,
+                           env=dict(os.environ, SKIP_TOOL_PREFLIGHT=""))
+        assert done.returncode == 1, done.stdout + done.stderr
+        assert "Cannot run convert-audio (-e xheaac): it needs an xHE-AAC " \
+            "encoder, and this machine has none." in done.stderr
+        assert "exhale" in done.stderr
+        assert "(-e opus)" in done.stderr
+        assert blackbox.tree_of(inputs) == before
+        assert not outputs.exists()

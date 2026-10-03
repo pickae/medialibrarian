@@ -15,6 +15,7 @@ notes.
 
 from __future__ import annotations
 
+import os
 import re
 
 import pytest
@@ -349,6 +350,31 @@ class TestTextMode:
         _counts_each_book_once(log, 4)
 
 
+class TestTextModeWhoseOutputFolderSharesAStem:
+    """A top-level book whose stem is the output folder's name emits right
+    onto the summary's own path. The book keeps the name and the summary
+    moves to make room, so neither is lost and both are counted."""
+
+    def test_the_book_keeps_the_name_and_the_summary_makes_room(self, shelf):
+        shelf.stock({"out.mobi": "one two three",
+                     "novel.epub": "one"})
+        log = shelf.ingest("-t")
+        assert (shelf.outputs / "out.txt").read_text() == "one two three"
+        rows = (shelf.outputs / "out (2).txt").read_text().splitlines()
+        assert [(int(words), path.rpartition("/")[2])
+                for words, path in (row.split("\t") for row in rows)] == [
+            (3, "out.txt"), (1, "novel.txt")]
+        assert "Total words across 2 file(s): 4" in log
+
+    def test_a_second_run_does_not_breed_another_summary(self, shelf):
+        """The summary's moved name is fixed by the book set, so a rerun
+        overwrites the summary in place rather than suffixing it further."""
+        shelf.stock({"out.mobi": "one two three"})
+        shelf.ingest("-t")
+        shelf.ingest("-t")
+        assert blackbox.tree_of(shelf.outputs) == ["out (2).txt", "out.txt"]
+
+
 class TestTextModeOverTextAlone:
     """When every input is already a .txt nothing is converted: the originals
     are measured where they are."""
@@ -370,3 +396,74 @@ class TestTextModeOverTextAlone:
         shelf, log, _, _ = run
         assert blackbox.tree_of(shelf.outputs) == ["out.txt"]
         assert "Total words across 2 file(s): 4" in log
+
+
+# The ordinary tools these runs reach for. A miss fails loudly rather than
+# quietly narrowing what the run can do: on a narrow PATH a missing `mktemp` is
+# an unhandled error in code no case here is about.
+_ORDINARY = ("bash", "env", "xargs", "find", "sort", "sed", "awk", "grep", "head",
+             "tail", "wc", "cat", "cut", "tr", "uniq", "mktemp", "stat", "touch",
+             "date", "basename", "dirname", "realpath", "mkdir", "rmdir", "rm",
+             "mv", "cp", "ln", "jq", "rsync", "md5sum", "flock", "nproc")
+
+
+@pytest.fixture
+def no_gs(sandbox, tmp_path):
+    """A PATH that finds no `gs` at all, and every tool a run needs but that one.
+
+    Built as an allow-list rather than by dropping directories from the host's
+    PATH, because on this host `gs` lives in the same directory as the coreutils,
+    so dropping it would take those with it. The suite-wide preflight switch is
+    off for these runs, because it would silence the very refusal under test -
+    the stubs satisfy the preflight the same way they satisfy the runs, and `gs`
+    is the one name nothing on this PATH answers to.
+    """
+    source = tmp_path / "in"
+    (source / "fiction").mkdir(parents=True)
+    (source / "fiction" / "novel.epub").write_text("words")
+    (source / "manuals").mkdir()
+    (source / "manuals" / "guide.pdf").write_text("pages")
+    outputs = tmp_path / "out"
+
+    sandbox.with_tool("ebook-convert", r'cat "$1" > "$2"')
+    sandbox.with_tool("unzip", "exit 0")
+    sandbox.with_tool("zip", "exit 0")
+    sandbox.with_tool("convert", "exit 0")
+    sandbox.with_tool("identify", "exit 0")
+    sandbox.linking(*_ORDINARY).narrow()
+
+    def run(*flags, expect=0):
+        done = sandbox.run("ingest-books", *flags, source, outputs,
+                           env=dict(os.environ, SKIP_TOOL_PREFLIGHT=""))
+        assert done.returncode == expect, done.stdout + done.stderr
+        return done.stdout + done.stderr
+
+    sandbox.source = source
+    sandbox.outputs = outputs
+    sandbox.ingest = run
+    return sandbox
+
+
+class TestDiscardWithNoGhostscript:
+    """-d is the one mode that throws part of a book away, and Ghostscript is the
+    tool that strips a PDF's images. A machine without it is told so up front -
+    and only for -d: a plain run never reaches for it, so it still succeeds."""
+
+    def test_the_path_really_finds_no_gs(self, no_gs):
+        """The scenario before the claims that rest on it."""
+        import shutil
+        assert shutil.which("gs", path=no_gs.path) is None
+
+    def test_d_is_refused_naming_the_missing_tool_and_changes_nothing(
+            self, no_gs):
+        before = blackbox.tree_of(no_gs.source)
+        log = no_gs.ingest("-d", expect=1)
+        assert "it needs a tool this machine does not have" in log, log
+        assert "gs" in log, log
+        assert blackbox.tree_of(no_gs.source) == before
+        assert not no_gs.outputs.exists()
+
+    def test_a_plain_run_needs_no_gs_and_succeeds(self, no_gs):
+        no_gs.ingest()
+        assert (no_gs.outputs / "fiction" / "novel.epub").is_file()
+        assert (no_gs.outputs / "manuals" / "guide.pdf").is_file()

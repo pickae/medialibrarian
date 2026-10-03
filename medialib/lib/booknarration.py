@@ -18,6 +18,7 @@ gets the answers the module would have given.
 import os
 import re
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -745,11 +746,7 @@ def narrate_book(book, out_dir, voice="", language=None, log_file=None):
             # not stdout - and keep it in the log as well.
             status = _tee_run(argv, log_file, home, narration_env)
         else:
-            with open(log_file, "wb") as handle:
-                proc = subprocess.run(argv, cwd=home, env=narration_env,
-                                      stdin=subprocess.DEVNULL, stdout=handle,
-                                      stderr=subprocess.STDOUT)
-            status = proc.returncode
+            status = _quiet_run(argv, log_file, home, narration_env)
     except (OSError, ValueError):
         return None
     if status != 0:
@@ -763,21 +760,54 @@ def narrate_book(book, out_dir, voice="", language=None, log_file=None):
     return produced
 
 
+def _kill_engine_tree(proc):
+    """Kill the engine and the helpers it started, and wait for the engine.
+
+    The engine runs in its own session (start_new_session=True), so the
+    helpers it spawned - the encoders, for instance - sit in its process
+    group, and a group kill reaches them all. A kill of the engine alone would
+    stop it and leave the helpers running on to recreate the RAM scratch the
+    run's cleanup had just removed."""
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+    proc.wait()
+
+
+def _quiet_run(argv, log_file, cwd, env):
+    """The quiet engine call: its output goes only to the log. An interrupt
+    arriving while the engine runs kills the engine's whole process group and
+    waits for it, as the tee path below does."""
+    with open(log_file, "wb") as handle:
+        proc = subprocess.Popen(list(argv), cwd=cwd, env=env,
+                                stdin=subprocess.DEVNULL,
+                                stdout=handle, stderr=subprocess.STDOUT,
+                                start_new_session=True)
+        try:
+            proc.wait()
+        except BaseException:
+            _kill_engine_tree(proc)
+            raise
+        return proc.returncode
+
+
 def _tee_run(argv, log_file, cwd, env):
     """The verbose engine call: its output goes to the log and to the console
     stderr at once. The console side is file descriptor 2 itself, so it
     survives the test's swap of sys.stderr.
 
-    An interrupt arriving while the engine runs kills it and waits for it, as
-    ``subprocess.run`` does for the quiet call. Left running, the engine would
-    outlive the run and recreate the RAM scratch the run's cleanup had just
-    removed when it writes its output."""
+    An interrupt arriving while the engine runs kills the engine's whole
+    process group and waits for it. Left running, the engine would outlive the
+    run and recreate the RAM scratch the run's cleanup had just removed when
+    it writes its output, and so would the helpers it had started."""
     with open(log_file, "wb") as handle:
         console = os.fdopen(2, "wb", closefd=False)
         proc = subprocess.Popen(list(argv), cwd=cwd, env=env,
                                 stdin=subprocess.DEVNULL,
                                 stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT)
+                                stderr=subprocess.STDOUT,
+                                start_new_session=True)
         try:
             with proc.stdout:
                 for chunk in iter(lambda: proc.stdout.read(65536), b""):
@@ -786,8 +816,7 @@ def _tee_run(argv, log_file, cwd, env):
             console.flush()
             proc.wait()
         except BaseException:
-            proc.kill()
-            proc.wait()
+            _kill_engine_tree(proc)
             raise
         return proc.returncode
 

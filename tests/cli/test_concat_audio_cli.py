@@ -415,6 +415,27 @@ class TestAFileAlreadyAtTheOutputName:
         assert done.returncode == 1
 
 
+class TestTwoFoldersThatCleanToTheSameName:
+    """The collision is between two folders of one run rather than a file left
+    from an earlier one: one book lands under the name they share, and the other
+    is reported rather than overwriting it or vanishing."""
+
+    @pytest.fixture
+    def run(self, concat):
+        _tree(concat.inputs, "Alpha/01 - part.mp3", "Alpha./01 - part.mp3")
+        done = concat.run("concat-audio", concat.inputs, concat.outputs)
+        return concat, done
+
+    def test_only_one_book_lands_under_the_shared_name(self, run):
+        concat, _ = run
+        assert _names(concat.outputs, ".mp3") == ["Alpha.mp3"]
+
+    def test_the_other_folder_is_reported_and_the_run_says_so(self, run):
+        _, done = run
+        assert '!!! "Alpha"' in done.stdout + done.stderr
+        assert done.returncode == 1
+
+
 class TestTheBookIsBuiltAwayFromTheOutput:
     """Every step that writes the book - the join, the chapters, the cover -
     writes it in the scratch, so the output disk sees only the finished file,
