@@ -442,6 +442,11 @@ class TestAFolderJudgedWhole:
     what a book that is to be joined afterwards cannot survive."""
 
     def _run(self, tracks, rates, depth=1, **settings):
+        # Written with "/" for reading, and handed over in the separator the
+        # track scan really yields, which is what the folders are split on.
+        tracks = [os.path.normpath(track) for track in tracks]
+        rates = {os.path.normpath(track): rate
+                 for track, rate in rates.items()}
         base = {"input_dir": "/in", "tracks": list(tracks), "mono": False,
                 "threshold": ca.THRESHOLD, "group_depth": depth,
                 "verdicts": {}}
@@ -462,7 +467,7 @@ class TestAFolderJudgedWhole:
             {"Book/1.mp3": (128000, 3000), "Book/2.mp3": (64000, 1000)})
         state.verdicts = ca._judge_groups(state, 4)
         assert state.verdicts == {"Book": True}
-        assert state.transcodes("Book/2.mp3", 64000, ca.THRESHOLD)
+        assert state.transcodes(os.path.join("Book", "2.mp3"), 64000, ca.THRESHOLD)
 
     def test_a_folder_averaging_under_it_keeps_every_file(self):
         state = self._run(
@@ -470,7 +475,7 @@ class TestAFolderJudgedWhole:
             {"Book/1.mp3": (128000, 1000), "Book/2.mp3": (64000, 3000)})
         state.verdicts = ca._judge_groups(state, 4)
         assert state.verdicts == {"Book": False}
-        assert not state.transcodes("Book/1.mp3", 128000, ca.THRESHOLD)
+        assert not state.transcodes(os.path.join("Book", "1.mp3"), 128000, ca.THRESHOLD)
 
     def test_the_files_below_the_depth_belong_to_the_folder_at_it(self):
         state = self._run(
