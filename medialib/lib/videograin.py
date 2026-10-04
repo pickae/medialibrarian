@@ -284,6 +284,10 @@ def grain_level_for(input: str, label, media_duration, video_dimensions,
         sys.stderr.write(
             "Film grain: could not measure the source, synthesising none: "
             "{}\n".format(label))
+    elif int(level) <= 0:
+        sys.stderr.write(
+            "Film grain: source measured {} sigma -> too little to "
+            "synthesise, none synthesised: {}\n".format(sigma, label))
     else:
         sys.stderr.write(
             "Film grain: source measured {} sigma -> synthesising {}: "
