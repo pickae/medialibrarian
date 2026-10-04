@@ -12,7 +12,7 @@ import shutil
 import sys
 import time
 
-__all__ = ["log", "counted_prefix", "cpu_count", "can_lock", "have_flock",
+__all__ = ["log", "counted_prefix", "film_header", "cpu_count", "can_lock", "have_flock",
            "settle_flock", "take_lock", "warn_uncounted_progress"]
 
 
@@ -128,6 +128,17 @@ def counted_prefix(count: int, total: int | None) -> str:
     if total is None:
         return "[%d] " % count
     return "[%d/%d] " % (count, total)
+
+
+def film_header(index: int, total: int, root: str, film: str) -> str:
+    """The line each film of a walk over a folder opens with: where it stands
+    in the folder, and the film spelled from it - so a film nothing is done to
+    is still named, and the lines below it need not name it again.
+
+    No flock is asked for, unlike :func:`counted_prefix`: one walk counts its
+    own films in one process, and the number is honest without a lock.
+    """
+    return "[%d/%d] %s" % (index, total, os.path.relpath(film, root))
 
 
 def cpu_count() -> int:

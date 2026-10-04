@@ -18,7 +18,7 @@ import subprocess
 import tempfile
 import time
 
-from medialib.lib import languages, plexnames, treewalk
+from medialib.lib import languages, plexnames, runlog, treewalk
 from medialib.lib import whisper as whisper_lib
 from medialib.lib.census import printf_f0
 from medialib.lib.enums import shell_lower
@@ -180,7 +180,7 @@ def commentary_language(name: str, tag: str, mka: str, ram_root: str,
             return (code2, code2)
 
     # 3. ask whisper
-    log("Detecting the language of: " + os.path.basename(mka))
+    log("detecting the language it is spoken in")
     detected = detect_commentary_language(mka, ram_root, whisper, log)
     if not detected:
         return ("", "")
@@ -362,8 +362,8 @@ def _renumber_stale_transcripts(file_stem: str, track_id, name: str,
     for entry, rest in found:
         target = "{} {} {}".format(stem_base, track_id, rest)
         if os.path.exists(os.path.join(directory, target)):
-            log("WARNING: dropping a second transcript of the same "
-                "commentary: {}".format(entry))
+            log("  track {}: WARNING: dropping a second transcript of the "
+                "same commentary: {}".format(track_id, entry))
             try:
                 os.remove(os.path.join(directory, entry))
             except OSError:
@@ -375,8 +375,8 @@ def _renumber_stale_transcripts(file_stem: str, track_id, name: str,
         except OSError:
             continue
         kept += 1
-        log("Renumbered the track's transcript from a stale track number "
-            "(track {}): {} -> {}".format(track_id, entry, target))
+        log("  track {}: renumbered its transcript from a stale track "
+            "number: {} -> {}".format(track_id, entry, target))
     return kept > 0
 
 
@@ -541,30 +541,38 @@ def export_commentary(directory: str, read_track_info, is_bonus_folder,
     except OSError:
         return
 
-    def prepare():
+    def films():
         for file in _mkv_entries("."):
-            dir_name = os.path.dirname(file)
             # a commentary is a film's, so bonus material is passed over
-            if is_bonus_folder(dir_name):
+            if is_bonus_folder(os.path.dirname(file)):
                 continue
             # and so is the "(old)" copy an improved remux kept: its commentary
             # is the same audio as its living sibling's, already being
             # transcribed.
             if plexnames.is_kept_copy(file):
                 continue
+            if os.path.isfile(file):
+                yield file
+
+    def prepare():
+        # by name, folder by folder, so the films are counted in an order
+        # that can be followed
+        found = sorted(films(), key=lambda file: file.split("/"))
+        for index, file in enumerate(found, start=1):
+            log(runlog.film_header(index, len(found), ".", file))
+            dir_name = os.path.dirname(file)
             # A name that carries no dot before its extension has no stem to
             # read the transcript's name from: built from the empty stem it
             # would be written without a directory, in the library's root
             # rather than the film's folder. The film is left untranscribed and
             # handed over to be reported.
-            if not os.path.isfile(file):
-                continue
             if not os.path.basename(file).endswith(".mkv"):
-                log("WARNING: no dot before the extension in the movie's "
-                    "name, left untranscribed: " + file)
+                log("  WARNING: no dot before the extension in its name - "
+                    "left untranscribed")
                 if unfixed is not None:
                     unfixed.append(file)
                 continue
+            any_commentary = False
             (names, _codecs, _channels, comments, types, langs) = \
                 read_track_info(file)
             # What every commentary of the film is called, which is what says
@@ -611,6 +619,10 @@ def export_commentary(directory: str, read_track_info, is_bonus_folder,
                 if comment != "true" and \
                         not languages.is_commentary_name(names[i - 1]):
                     continue
+                any_commentary = True
+
+                def track_log(line, track=i - 1):
+                    log("  track {}: {}".format(track, line))
 
                 # determine name of file to export; a nameless track is the
                 # rare one, and the "null" it carries would be spelled into
@@ -645,20 +657,20 @@ def export_commentary(directory: str, read_track_info, is_bonus_folder,
                 if existing:
                     if (discard_existing is None
                             or not discard_existing(prefix, file)):
+                        track_log("already transcribed")
                         continue
                     # The sidecar is too small to be this film's real
                     # transcript - the one a run wrote before it could tell a
                     # commentary's language, which forced a non-English
                     # commentary through the English model. Discard it and
                     # transcribe for real.
-                    log("Discarding too-small commentary sidecar, "
-                        "re-transcribing (track {}) of: {}".format(i - 1,
-                                                                   file))
+                    track_log("transcript too small to be the real one - "
+                              "discarded, transcribing again")
                     _remove_sidecars(prefix)
 
                 # mkvtools index the whole matroska while ffmpeg indexes each
                 # track type separately and from zero
-                log("Extracting commentary track {}: {}".format(i - 1, file))
+                track_log('extracting "{}"'.format(name))
                 os.makedirs(os.path.dirname(mka), exist_ok=True)
                 index = audio_stream_index(i, types)
                 # this ffmpeg's stderr is left on the script's stderr
@@ -674,20 +686,19 @@ def export_commentary(directory: str, read_track_info, is_bonus_folder,
                     # a missing ffmpeg is a failed extract
                     made_ok = False
                 if not made_ok:
-                    log("WARNING: commentary extract failed (track {}): {}"
-                        .format(i - 1, file))
+                    track_log("WARNING: the extract failed - skipped")
                     if os.path.exists(mka):
                         os.remove(mka)
                     continue
 
                 # what language it is in decides which subtitles are wanted
                 spec, code = commentary_language(name, langs[i - 1], mka,
-                                                 ram_root, whisper, log)
+                                                 ram_root, whisper, track_log)
                 if not spec:
                     # neither the file nor whisper could tell: English is both
                     # the likeliest answer and what this script assumed before
-                    log("WARNING: could not tell the language of commentary "
-                        "track {}, assuming English: {}".format(i - 1, file))
+                    track_log("WARNING: could not tell its language - taken "
+                              "as English")
                     spec, code = "en", "en"
 
                 # the three cases of the table at the top of this section
@@ -712,12 +723,17 @@ def export_commentary(directory: str, read_track_info, is_bonus_folder,
                 size = _size_of(mka)
                 # the sibling list all runs of this extract share
                 siblings = "\x1e".join(job_srt)
+                track_log("queued to " + " and ".join(
+                    "transcribe ({})".format(job_lang[j])
+                    if job_task[j] == "transcribe"
+                    else "translate into English"
+                    for j in range(len(job_srt))))
                 for j in range(len(job_srt)):
-                    log("Queued: {} {} -> {}".format(
-                        job_task[j], job_lang[j], os.path.basename(job_srt[j])))
                     record = "\x1f".join([mka, job_srt[j], job_task[j],
                                           job_lang[j], siblings])
                     yield (record, size)
+            if not any_commentary:
+                log("  no commentary track")
 
     drain_queue(prepare())
 

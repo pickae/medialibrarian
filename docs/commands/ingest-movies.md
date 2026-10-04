@@ -63,6 +63,12 @@ pointed at a library. A full ingest reads only the one level it always did.
 | [`-n`](#commentary-names--n) | naming numbered commentary tracks | dry run | names the tracks | `logs/ingest-movies/ingest-movies-commentarynames-<folder>.txt` | `-a` |
 | [`-c`](#chapters--c) | chapters from the ChapterDB archive | writes as it goes | refused | — | `-tw` |
 
+`-s`, `-a`, `-n` and `-c` take the films in name order and open each with
+`[n/total] <film>`, its place in the folder, so a film nothing is done to still
+shows up. What is said about that film follows, indented under it. For `-a`
+that is one line per commentary track. Each transcription finishes in a worker
+later and names its own transcript, and so does each chapter write.
+
 **`-w` on its own is refused.** Without `-t`, `-i`, `-s` or `-n` there is no dry
 run to carry out, and the run it would otherwise start is a full ingest. `-a`
 and `-c` refuse it as well: the transcription and the chapter lookup are not dry
@@ -460,6 +466,20 @@ subtitles or languages outside the six.
 
 A dry run tests each subtitle on a copy. Run it after `-tw`, so that films are
 searched for by their ids.
+
+The films are taken one at a time in name order, each announced with its place
+in the folder, so a film with nothing to test or download still shows up. With
+`-sw` each film's missing subtitles are downloaded before the run moves on to
+the next film. Under the film, one line per subtitle says what it was aligned
+to, by how much, and what became of it:
+
+```
+==> [3/120] The Movie (1999)/The Movie (1999).mkv
+==>   English: in step with the film's subtitle track (shifted +1.2 s, confidence 4.81) - synced and kept
+==>   German: out of step with the audio (confidence 0.42) - thrown out
+==>   German: none found to download
+==>   French: downloaded, in step with the audio (shifted -0.4 s, confidence 2.10) - synced and kept
+```
 
 ## Commentary transcripts (`-a`)
 

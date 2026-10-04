@@ -185,3 +185,26 @@ def test_a_subtitle_no_commentary_owns_leaves_the_film_alone(film, tmp_path):
     assert './%s/%s.mkv\n' % (FILM, FILM) in text
     assert 'subtitle "Commentary 3" cannot be told which commentary' in text
     assert calls == []
+
+
+def test_each_film_is_announced_with_the_renames_under_it(film,
+                                                          monkeypatch):
+    movie, lookup, _calls = film(
+        _tracks("Commentary"),
+        [Release("Region A", (Disc("bluray", (DIRECTOR,)),))])
+    lines = []
+    monkeypatch.setattr(run_module, "log", lines.append)
+    _name(movie, lookup, False)
+    assert lines[0] == "[1/1] " + os.path.join(FILM, FILM + ".mkv")
+    assert lines[1] == ('  track 2 "Commentary" -> "Commentary by director '
+                        'Wenna Castellane"')
+
+
+def test_a_film_with_nothing_to_name_says_so_and_stays_off_the_list(
+        film, monkeypatch):
+    movie, lookup, _calls = film(_tracks(), [])
+    lines = []
+    monkeypatch.setattr(run_module, "log", lines.append)
+    assert _name(movie, lookup, True) == ""
+    assert lines == ["[1/1] " + os.path.join(FILM, FILM + ".mkv"),
+                     "  left alone: no commentary track"]

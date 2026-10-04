@@ -1062,9 +1062,11 @@ def _subtitles_only(program: str, script_dir: str, roots: list, names: list,
     has to stand out from every other offset - and, like -t, this is a DRY RUN
     unless asked otherwise: a subtitle thrown out is gone. The dry run tests a
     copy, says what each would come to and lists the ones out of step; -w syncs
-    the ones in step, deletes the rest, and then downloads what is missing the
-    way a full ingest does, which puts each download to the same test. A
-    subtitle thrown out here is therefore fetched again in the same run.
+    the ones in step, deletes the rest, and then downloads what that film is
+    missing the way a full ingest does, which puts each download to the same
+    test, before going on to the next. A subtitle thrown out here is therefore
+    fetched again in the same run. Each film is announced with its place in the
+    folder, so one nothing is done to is named all the same.
 
     Nothing else the full run does is set up: no RAM scratch, no whisper, no
     renaming, and no commentary - its transcripts are named after their track
@@ -1105,20 +1107,17 @@ def _subtitles_only(program: str, script_dir: str, roots: list, names: list,
     totals = {"kept": 0, "discarded": 0, "untested": 0}
     for root, name in zip(roots, names, strict=True):
         log('Phase: testing the subtitles already beside the films in "%s"'
-            % root + ("" if write else " - DRY RUN, nothing will be changed"))
+            % root + (" and downloading the missing" if download else "")
+            + ("" if write else " - DRY RUN, nothing will be changed"))
         verdicts = subtitlefiles.check_subs(
             root, rules.MAX_SYNC_OFFSET, rules.MAX_SYNC_QUALITY_OFFSET,
-            ffsubsync_quality, write, log)
+            ffsubsync_quality, write, log,
+            (user, password) if download else None)
         for verdict, found in verdicts.items():
             totals[verdict] += len(found)
         _write_subtitle_list(commands.logs_file(script_dir,
                                                 SUBTITLES_LIST % name),
                              root, verdicts, write)
-        if download:
-            log('Phase: downloading missing subtitles in "%s"' % root)
-            subtitlefiles.download_subs(
-                root, user, password, rules.MAX_SYNC_OFFSET,
-                rules.MAX_SYNC_QUALITY_OFFSET, ffsubsync_quality, log)
 
     log(_subtitle_totals(totals))
     if not write:
@@ -1307,13 +1306,17 @@ def _commentary_names_in(root: str, name: str, write: bool, lookup,
     planned: list = []
 
     def plans():
-        for movie, base in _commentary_films(root):
+        films = list(_commentary_films(root))
+        for index, (movie, base) in enumerate(films, start=1):
+            log(runlog.film_header(index, len(films), root, movie))
             plan, why = _plan_commentary_names(movie, base, lookup,
                                                fragments_file)
             relative = "./" + os.path.relpath(movie, root)
             if plan is None:
                 if why:
-                    refused.append((relative, why))
+                    log("  left alone: " + why)
+                    if why not in _QUIET_REFUSALS:
+                        refused.append((relative, why))
                 continue
             yield relative, plan
 
@@ -1361,15 +1364,15 @@ def _commentary_films(root: str):
 
 
 # The reasons a film is left alone that are not worth a line in the list: it
-# has nothing to name, or somebody already named it.
+# has nothing to name, or somebody already named it. They are still said under
+# the film's header as the walk passes it.
 _QUIET_REFUSALS = ("no commentary track", "a commentary track already has a name")
 
 
 def _commentary_film(movie: str, base: str) -> tuple:
     """What naming a film's commentaries starts from, the database not yet
     asked: ((tracks, its commentaries, those as the naming reads them, title,
-    year, kind of disc), "") - or (None, why not), "" for the reasons nobody
-    needs told."""
+    year, kind of disc), "") - or (None, why not)."""
     tracks = rules._identify(movie)
     commentaries = [track for track in tracks
                     if track.is_audio and track.is_commentary]
@@ -1377,7 +1380,7 @@ def _commentary_film(movie: str, base: str) -> tuple:
                    for track in commentaries]
     ordered, why = commentarynames.order_file_commentaries(file_tracks)
     if not ordered:
-        return None, "" if why in _QUIET_REFUSALS else why
+        return None, why
 
     year = plexnames.year_of(base)
     title = plexnames.untitled_base(base, year).strip()
@@ -1440,7 +1443,7 @@ def _plan_commentary_names(movie: str, base: str, lookup,
     lines += ['"%s" -> "%s"' % pair for pair in sidecars]
     lines.append("(listed by: %s)" % decision.source)
     for line in lines:
-        log("  %s: %s" % (os.path.basename(movie), line))
+        log("  " + line)
 
     arguments = []
     for position, track in enumerate(tracks, start=1):

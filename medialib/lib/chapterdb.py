@@ -43,7 +43,7 @@ import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from typing import NamedTuple
 
-from medialib.lib import plexnames, politepacing, subtitlefiles, titlematch
+from medialib.lib import plexnames, politepacing, runlog, subtitlefiles, titlematch
 
 __all__ = ["SITE", "ChapterSet", "Existing", "add_chapters", "apply_set",
            "ask_archive",
@@ -530,12 +530,16 @@ def findings(directory: str, log: Callable[[str], None],
     archive does not answer, the rest of the films are not asked about: it is
     down, or it has started refusing, and either way asking again per film
     only waits out the timeout a few hundred times.
+
+    Each film opens with its place in the folder, and a line under it says
+    what it came to - for a film a set was found for, which set it is.
     """
-    for movie in subtitlefiles.subtitle_movies(directory):
+    movies = subtitlefiles.subtitle_movies(directory)
+    for index, movie in enumerate(movies, start=1):
+        log(runlog.film_header(index, len(movies), directory, movie))
         verdict, title, existing = examine(movie)
-        if verdict == "failed":
-            log("WARNING: could not read the length of, skipping: " + movie)
         if verdict:
+            log("  " + _NOT_LOOKED_UP[verdict])
             yield movie, verdict, existing, None
             continue
         chosen, answered = find_set(title, existing, fetch)
@@ -544,8 +548,21 @@ def findings(directory: str, log: Callable[[str], None],
                 "films are looked up this run"
                 % (os.environ.get(SITE_VARIABLE) or SITE))
             return
+        if chosen is None:
+            log("  no set in the archive fits")
+        else:
+            log("  set %s fits: %d %s chapters (%s, %d confirmation(s))" % (
+                chosen.set_id, len(chosen.chapters),
+                "named" if chosen.named else "numbered",
+                chosen.source or "unknown source", chosen.confirmations))
         yield (movie, "unmatched" if chosen is None else "found", existing,
                chosen)
+
+
+# What is said under a film's header for each reason it is not looked up.
+_NOT_LOOKED_UP = {"untagged": "untagged - not looked up",
+                  "failed": "WARNING: could not read its length - skipped",
+                  "kept": "already has named chapters"}
 
 
 def apply_set(movie: str, existing: Existing, chosen: ChapterSet,
@@ -553,12 +570,9 @@ def apply_set(movie: str, existing: Existing, chosen: ChapterSet,
     """Write the set a film was found, and say what came of it: "added",
     "replaced" or "failed"."""
     verdict = "replaced" if existing.kind == "numbered" else "added"
-    what = "%d %s chapters (set %s, %s, %d confirmation(s))" % (
-        len(chosen.chapters), "named" if chosen.named else "numbered",
-        chosen.set_id, chosen.source or "unknown source",
-        chosen.confirmations)
     if write_chapters(movie, chosen):
-        log("Chapters %s, %s: %s" % (verdict, what, movie))
+        # the set itself was said under the film's header
+        log("Chapters %s from set %s: %s" % (verdict, chosen.set_id, movie))
         return verdict
     log("WARNING: mkvpropedit could not write the chapters, left as it was: "
         + movie)

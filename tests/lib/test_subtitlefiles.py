@@ -6,6 +6,7 @@ edge cases - an absent pipx, an absent ffprobe, a conversion ffmpeg refuses.
 """
 
 import os
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -563,18 +564,18 @@ class TestSyncToFilm:
             "Movie.mkv", str(srt), None, "600", "60", "yes") == 0
         assert seen == [("Movie.mkv", "as downloaded\n")]
 
-    def test_a_download_says_which_it_was_synced_to(self, monkeypatch, tmp_path):
-        monkeypatch.chdir(tmp_path)
-        (tmp_path / "Movie.de.srt").write_text("as downloaded\n")
-        timing = SimpleNamespace(path=lambda: "ref.srt")
-        self._syncs(monkeypatch, {"ref.srt": 0})
-        logs = []
-        status = subtitlefiles._sync_downloaded(
-            "Movie.mkv", "Movie.de.srt", "de", "600", "60", "yes",
-            logs.append, timing)
-        assert status == 0
-        assert logs == ["Syncing de subtitles to the film's own subtitle "
-                        "track: Movie.mkv"]
+    @pytest.mark.parametrize("verdicts,against", [
+        ({"ref.srt": 0}, "the film's subtitle track"),
+        ({"ref.srt": 2, "Movie.mkv": 0}, "the audio")])
+    def test_it_says_which_it_was_synced_to(self, monkeypatch, srt, verdicts,
+                                            against):
+        """The alignment that decided, and not one refused before it."""
+        self._syncs(monkeypatch, verdicts)
+        measured = {}
+        assert subtitlefiles._sync_to_film(
+            "Movie.mkv", str(srt), "ref.srt", "600", "60", "yes",
+            measured) == 0
+        assert measured == {"against": against}
 
 
 class TestDownloadSrt:
@@ -629,8 +630,8 @@ class TestDownloadSrt:
         logs = []
         subtitlefiles.download_srt("Movie.mkv", "en", "u", "p", "600", "60",
                                    "yes", logs.append)
-        assert logs == ["Downloading en subtitles: Movie.mkv",
-                        "Syncing en subtitles: Movie.mkv"]
+        assert logs == ["  English: downloaded, in step with the audio "
+                        "(shifted +5.0 s) - synced and kept"]
         assert (tree / "Movie.en.srt").is_file()
         by_tool = {}
         for argv in have_calls():
@@ -663,7 +664,7 @@ class TestDownloadSrt:
         logs = []
         subtitlefiles.download_srt("Movie.mkv", "en", "u", "p", "600", "60",
                                    "yes", logs.append)
-        assert logs[1] == "Converting en subtitle from webvtt to subrip: Movie.mkv"
+        assert logs[0] == "  English: converting from webvtt to SubRip"
         assert (tree / "Movie.en.srt").is_file()
         assert not (tree / "Movie.en.converted.srt").exists()
         (ffmpeg,) = [a for a in have_calls() if a[0] == "ffmpeg"]
@@ -684,10 +685,11 @@ class TestDownloadSrt:
         assert any(a[0] == "ffsubsync" for a in have_calls())
 
     @pytest.mark.parametrize("rc,log,want,wording", [
-        ("1", None, "failed", "WARNING: subtitle sync failed (en), "
-                             "discarding: Movie.mkv"),
-        ("0", _BAD_LOG, "rejected", "WARNING: subtitle sync rejected as "
-                                   "low-quality (en), discarding: Movie.mkv"),
+        ("1", None, "failed", "  English: WARNING: downloaded, but could "
+                             "not be synced - thrown out"),
+        ("0", _BAD_LOG, "rejected", "  English: downloaded, out of step with "
+                                   "the audio (best fit 282.0 s off) - thrown "
+                                   "out"),
     ])
     def test_a_subtitle_that_cannot_be_synced_is_discarded(self, w, monkeypatch,
                                                            rc, log, want, wording):
@@ -724,7 +726,7 @@ class TestDownloadSrt:
         logs = []
         subtitlefiles.download_srt("Movie.mkv", "en", "u", "p", "600", "60",
                                    "yes", logs.append)
-        assert logs[1] == "Converting en subtitle from webvtt to subrip: Movie.mkv"
+        assert logs[0] == "  English: converting from webvtt to SubRip"
         assert not (tree / "Movie.en.converted.srt").exists()
         assert (tree / "Movie.en.srt").is_file()
 
@@ -911,10 +913,52 @@ class TestCheckSubs:
         return tree
 
     def _check(self, tree, write):
+        """The verdicts and what was said about the subtitles, each film's
+        header left out: the headers are tested on their own below."""
         logs = []
         verdicts = subtitlefiles.check_subs(str(tree), "600", "60", "yes",
                                             write, logs.append)
-        return verdicts, logs
+        return verdicts, [line for line in logs
+                          if not re.match(r"\[\d+/\d+\] ", line)]
+
+    def test_every_film_is_announced_with_its_place_in_the_folder(
+            self, w, monkeypatch):
+        """Counted by film, not by subtitle, and a film with no subtitle to
+        test is announced all the same."""
+        tree = self._library(w, monkeypatch, "Films/Second/Second.mkv",
+                             self._SRT)
+        logs = []
+        subtitlefiles.check_subs(str(tree), "600", "60", "yes", False,
+                                 logs.append)
+        assert logs == ["[1/2] " + os.path.join("Films", "Movie", "Movie.mkv"),
+                        "  English: in step with the audio (shifted +5.0 s) "
+                        "- would be kept",
+                        "[2/2] " + os.path.join("Films", "Second", "Second.mkv")]
+
+    def test_with_credentials_each_film_downloads_before_the_next(
+            self, w, monkeypatch):
+        """So the subtitle thrown out is fetched again straight away, under
+        its own film's header."""
+        tree = self._library(w, monkeypatch, "Films/Second/Second.mkv",
+                             self._SRT, log=_BAD_LOG)
+        w.install("pipx")
+        logs = []
+        subtitlefiles.check_subs(str(tree), "600", "60", "yes", True,
+                                 logs.append, ("u", "p"))
+        second = logs.index("[2/2] " + os.path.join("Films", "Second", "Second.mkv"))
+        first = logs[:second]
+        assert first[0] == "[1/2] " + os.path.join("Films", "Movie", "Movie.mkv")
+        # thrown out, then searched for again - the helper here writes
+        # nothing, and a search that finds nothing says so rather than
+        # leaving its film silent
+        assert first[1:3] == [
+            "  English: out of step with the audio (best fit 282.0 s off) - "
+            "thrown out",
+            "  English: none found to download"]
+        pipx = [argv[-1] for argv in w.calls() if argv[0] == "pipx"]
+        assert pipx == (
+            [str(tree / "Films/Movie/Movie.mkv")] * len(languages.LANGUAGES)
+            + [str(tree / "Films/Second/Second.mkv")] * len(languages.LANGUAGES))
 
     def _synced(self, w):
         return [argv[3] for argv in w.calls() if argv[0] == "ffsubsync"]
@@ -930,15 +974,16 @@ class TestCheckSubs:
         assert tested != srt
         assert os.path.basename(tested) == "Movie.en.srt"
         assert not os.path.exists(os.path.dirname(tested))
-        assert logs == ["Subtitle out of step (en), would be thrown out: "
-                        + srt]
+        assert logs == ["  English: out of step with the audio (best fit "
+                        "282.0 s off) - would be thrown out"]
 
     def test_the_dry_run_says_which_would_be_kept(self, w, monkeypatch):
         tree = self._library(w, monkeypatch, self._SRT)
         srt = str(tree / self._SRT)
         verdicts, logs = self._check(tree, write=False)
         assert verdicts == {"kept": [srt], "discarded": [], "untested": []}
-        assert logs == ["Subtitle in step (en), would be kept: " + srt]
+        assert logs == ["  English: in step with the audio (shifted +5.0 s) "
+                        "- would be kept"]
 
     def test_w_syncs_the_one_in_step_in_place(self, w, monkeypatch):
         tree = self._library(w, monkeypatch, self._SRT)
@@ -947,7 +992,8 @@ class TestCheckSubs:
         assert verdicts["kept"] == [srt]
         assert self._synced(w) == [srt]
         assert (tree / self._SRT).is_file()
-        assert logs == ["Subtitle in step (en), synced and kept: " + srt]
+        assert logs == ["  English: in step with the audio (shifted +5.0 s) "
+                        "- synced and kept"]
 
     def test_w_throws_out_the_one_out_of_step(self, w, monkeypatch):
         tree = self._library(w, monkeypatch, self._SRT, log=_BAD_LOG)
@@ -955,8 +1001,8 @@ class TestCheckSubs:
         verdicts, logs = self._check(tree, write=True)
         assert verdicts["discarded"] == [srt]
         assert not (tree / self._SRT).exists()
-        assert logs == ["WARNING: subtitle sync rejected as low-quality (en), "
-                        "discarding: " + srt]
+        assert logs == ["  English: out of step with the audio (best fit "
+                        "282.0 s off) - thrown out"]
 
     @pytest.mark.parametrize("write", [False, True])
     def test_one_ffsubsync_could_not_align_is_left_alone(self, w, monkeypatch,
@@ -967,8 +1013,8 @@ class TestCheckSubs:
         verdicts, logs = self._check(tree, write=write)
         assert verdicts["untested"] == [str(tree / self._SRT)]
         assert (tree / self._SRT).is_file()
-        assert logs == ["WARNING: subtitle could not be tested (en), left "
-                        "alone: " + str(tree / self._SRT)]
+        assert logs == ["  English: WARNING: could not be tested - left "
+                        "alone"]
 
     def test_every_language_and_nothing_but_the_movie_s_own_sidecars(
             self, w, monkeypatch):
@@ -1045,5 +1091,4 @@ class TestCheckSubs:
         _verdicts, logs = self._check(tree, write=True)
         (ffmpeg,) = [a for a in w.calls() if a[0] == "ffmpeg"]
         assert ffmpeg[6] == str(tree / self._SRT)
-        assert logs[0] == ("Converting en subtitle from webvtt to subrip: "
-                           + str(tree / "Films/Movie/Movie.mkv"))
+        assert logs[0] == "  English: converting from webvtt to SubRip"
