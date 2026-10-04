@@ -66,6 +66,11 @@ USAGE_HEAD = """Usage:
     FOLDER of that name is left alone, on the assumption it has already been
     unpacked there.
 
+    Whether a book is converted is decided for the book as a whole: all of its
+    files when their average bitrate is high enough to be worth converting, and
+    none of them otherwise - one file converted beside others copied as they
+    are could never be joined.
+
     The intermediate transcoded tree is kept entirely in RAM
     (/dev/shm), so only the final output folder is written to disk.
 
@@ -446,7 +451,7 @@ def main(argv: list, program: str = "convert-and-concat",
 
         # PHASE 3
         _transcode_phase(in_path, temp_path, stage, only_concat, mono, bitrate,
-                         codec, script_dir)
+                         codec, sub_folders, script_dir)
         _stop_if_interrupted()
 
         # PHASE 4
@@ -563,7 +568,7 @@ def _unpack_phase(in_path: str, archive_types, depth: int):
 
 
 def _transcode_phase(in_path, temp_path, stage, only_concat, mono, bitrate,
-                     codec, script_dir) -> None:
+                     codec, sub_folders, script_dir) -> None:
     if only_concat:
         progress("PHASE 3/4: skipped")
         return
@@ -574,6 +579,11 @@ def _transcode_phase(in_path, temp_path, stage, only_concat, mono, bitrate,
     # SAYS which codec it is using must not leave the choice to be settled
     # somewhere else.
     options += ["-e", codec]
+    # Each book judged whole, at the depth this run's books lie at - the same in
+    # the staging tree, which mirrors the input's. Judged file by file, a book
+    # would come out part converted and part copied as it was, two formats the
+    # concatenation then cannot join.
+    options += ["-g", "2" if sub_folders else "1"]
 
     # One transcoded tree, fed from up to two input trees: the input as given,
     # and the unpacked archives. Each is handed over only when it holds
