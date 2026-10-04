@@ -69,21 +69,23 @@ def test_the_entry_just_handed_over_may_be_removed(tmp_path):
     assert sorted(seen) == ["a", "b", "c"]
 
 
-@pytest.mark.skipif(sys.platform == "win32",
-                    reason="a path that deep is past Windows' MAX_PATH")
+def _frames():
+    frame, count = sys._getframe(), 0
+    while frame is not None:
+        frame, count = frame.f_back, count + 1
+    return count
+
+
 def test_a_tree_deeper_than_the_recursion_limit(tmp_path, monkeypatch):
-    depth = sys.getrecursionlimit() + 100
+    """The limit is lowered rather than the tree deepened past it: a path
+    a thousand folders deep is longer than macOS's PATH_MAX."""
+    depth = 60
     monkeypatch.chdir(tmp_path)
-    # not os.makedirs, which recurses once per level itself
-    deep = "d"
-    os.mkdir(deep)
-    for _ in range(depth - 1):
-        deep += "/d"
-        os.mkdir(deep)
+    os.makedirs(os.path.join(*["d"] * depth))
+    limit = sys.getrecursionlimit()
+    sys.setrecursionlimit(_frames() + 20)
     try:
-        assert sum(1 for _ in treewalk.entries_below(".")) == depth
+        count = sum(1 for _ in treewalk.entries_below("."))
     finally:
-        # bottom up, since a recursive rmtree is what this is guarding against
-        while deep:
-            os.rmdir(deep)
-            deep = os.path.dirname(deep)
+        sys.setrecursionlimit(limit)
+    assert count == depth
