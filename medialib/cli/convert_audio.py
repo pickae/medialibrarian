@@ -2245,7 +2245,9 @@ def _decide_chunking(state: Run, jobs: int) -> frozenset:
         lambda extension: extension in enums.ALWAYS_TRANSCODE_EXTENSIONS,
         state.codec,
         lambda index: chunk_candidate_audio(
-            os.path.join(state.input_dir, state.tracks[index])))
+            os.path.join(state.input_dir, state.tracks[index])),
+        verdicts=[state.verdicts.get(state.group_of(track))
+                  for track in state.tracks])
     if not decision.chunked:
         return frozenset()
     print("Splitting %d long file(s) into chunks: expected %s, against %s "
