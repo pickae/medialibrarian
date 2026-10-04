@@ -124,7 +124,7 @@ def detect_commentary_language(mka: str, ram_root: str, whisper: dict,
     if made is None or made.returncode != 0:
         return ""
     try:
-        ran = _run(["pipx", "run", "whisper-ctranslate2", excerpt,
+        ran = _run([*whisper_lib.WHISPER_COMMAND, excerpt,
                     "--output_dir", ram_root, "--model", whisper["modelMulti"],
                     "--task", "transcribe", "--output_format", "txt",
                     "--vad_filter", "True",
@@ -435,7 +435,7 @@ def transcribe_commentary(record: str, whisper: dict, max_sync_offset: str,
         if srt_dir:
             os.makedirs(srt_dir, exist_ok=True)
         try:
-            ran = _run(["pipx", "run", "whisper-ctranslate2", mka,
+            ran = _run([*whisper_lib.WHISPER_COMMAND, mka,
                         "--output_dir", out_dir, "--model", model,
                         "--task", task, *lang_args,
                         "--compute_type", whisper["computeType"],

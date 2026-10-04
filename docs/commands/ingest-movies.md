@@ -106,6 +106,12 @@ offset far better than at any other, however far that offset is from where it
 started; a subtitle that fits nowhere in particular belongs to some other film
 or cut and is thrown away, to be tried again on the next run.
 
+Where the film carries a picture subtitle of its own (a Blu-ray's or a DVD's,
+not forced), the times its lines are on screen stand in for the speech: they
+are exact, and they still work where speech detection does not — a musical,
+whose sung lines over an orchestra it cannot pick out. A subtitle that does not
+line up with them is still tried against the speech before it is thrown away.
+
 ### Commentary tracks
 
 A track counts as a commentary when its mkv commentary flag says so *or* when its
