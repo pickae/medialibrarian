@@ -29,6 +29,7 @@ import tarfile
 import tempfile
 import zipfile
 
+from medialib.lib import treewalk
 from medialib.lib.enums import ARCHIVE_EXTENSIONS, shell_lower
 
 __all__ = [
@@ -553,26 +554,17 @@ def prune_irregular(dest: str) -> int:
     user's.
     """
     found = 0
-    pending = [dest]
-    while pending:
-        current = pending.pop()
-        try:
-            entries = list(os.scandir(current))
-        except OSError:
+    for entry in treewalk.entries_below(dest):
+        if (entry.is_dir(follow_symlinks=False)
+                or entry.is_file(follow_symlinks=False)):
             continue
-        for entry in entries:
-            if entry.is_dir(follow_symlinks=False):
-                pending.append(entry.path)
-                continue
-            if entry.is_file(follow_symlinks=False):
-                continue
-            # A link, a device node, a fifo, a socket. One that will not go is
-            # still counted: the caller's question is whether the tree is clean.
-            found += 1
-            try:
-                os.unlink(entry.path)
-            except OSError:
-                pass
+        # A link, a device node, a fifo, a socket. One that will not go is
+        # still counted: the caller's question is whether the tree is clean.
+        found += 1
+        try:
+            os.unlink(entry.path)
+        except OSError:
+            pass
     return found
 
 

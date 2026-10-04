@@ -8,6 +8,7 @@ edge cases - an absent pipx, an absent ffprobe, a conversion ffmpeg refuses.
 import os
 import re
 import shutil
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1044,6 +1045,20 @@ class TestCheckSubs:
                              nested + ".de.srt")
         verdicts, _logs = self._check(tree, write=False)
         assert verdicts["kept"] == [str(tree / (nested + ".de.srt"))]
+
+    @pytest.mark.skipif(sys.platform == "win32" or os.geteuid() == 0,
+                        reason="a folder its owner cannot list is POSIX's, "
+                               "and root lists it anyway")
+    def test_a_folder_it_cannot_list_is_passed_over(self, w, monkeypatch):
+        """lost+found on an ext4 drive is root's alone."""
+        tree = self._library(w, monkeypatch, self._SRT, ("lost+found", "d"))
+        closed = tree / "lost+found"
+        closed.chmod(0o000)
+        try:
+            verdicts, _logs = self._check(tree, write=False)
+        finally:
+            closed.chmod(0o700)
+        assert verdicts["kept"] == [str(tree / self._SRT)]
 
     def test_a_linked_sidecar_is_not_tested(self, w, monkeypatch):
         tree = self._library(w, monkeypatch, "elsewhere.srt")
