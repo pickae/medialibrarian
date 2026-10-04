@@ -930,10 +930,10 @@ class TestCheckSubs:
         logs = []
         subtitlefiles.check_subs(str(tree), "600", "60", "yes", False,
                                  logs.append)
-        assert logs == ["[1/2] Films/Movie/Movie.mkv",
+        assert logs == ["[1/2] " + os.path.join("Films", "Movie", "Movie.mkv"),
                         "  English: in step with the audio (shifted +5.0 s) "
                         "- would be kept",
-                        "[2/2] Films/Second/Second.mkv"]
+                        "[2/2] " + os.path.join("Films", "Second", "Second.mkv")]
 
     def test_with_credentials_each_film_downloads_before_the_next(
             self, w, monkeypatch):
@@ -945,9 +945,9 @@ class TestCheckSubs:
         logs = []
         subtitlefiles.check_subs(str(tree), "600", "60", "yes", True,
                                  logs.append, ("u", "p"))
-        second = logs.index("[2/2] Films/Second/Second.mkv")
+        second = logs.index("[2/2] " + os.path.join("Films", "Second", "Second.mkv"))
         first = logs[:second]
-        assert first[0] == "[1/2] Films/Movie/Movie.mkv"
+        assert first[0] == "[1/2] " + os.path.join("Films", "Movie", "Movie.mkv")
         # thrown out, then searched for again - the helper here writes
         # nothing, and a search that finds nothing says so rather than
         # leaving its film silent

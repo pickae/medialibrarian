@@ -352,14 +352,15 @@ class TestAddingChaptersToALibrary:
         chapterdb.add_chapters(str(library), lines.append, self._archive([]))
         named = "Named (2003) {imdb-tt0000003}"
         nordwind = "Nordwind (1998) {imdb-tt0000001}"
-        assert lines[:3] == ["[1/3] %s/%s.mkv" % (named, named),
+        assert lines[:3] == ["[1/3] " + os.path.join(named, named + ".mkv"),
                              "  already has named chapters",
-                             "[2/3] %s/%s.mkv" % (nordwind, nordwind)]
+                             "[2/3] " + os.path.join(nordwind, nordwind + ".mkv")]
         assert lines[3].startswith("  set 42 fits: 4 named chapters (")
         assert lines[4:] == [
             "Chapters replaced from set 42: %s/%s/%s.mkv"
             % (library, nordwind, nordwind),
-            "[3/3] Untagged (2001)/Untagged (2001).mkv",
+            "[3/3] " + os.path.join("Untagged (2001)",
+                                   "Untagged (2001).mkv"),
             "  untagged - not looked up"]
 
     def test_numbered_marks_the_archive_does_not_share_are_kept(

@@ -567,13 +567,13 @@ class TestTheWalkSaysWhereItIs:
             ffmpeg_rc="0")
         walk = [line for line in logs
                 if line.startswith(("[", "  "))]
-        assert walk == ["[1/3] Alpha/Alpha.mkv",
+        assert walk == ["[1/3] " + os.path.join("Alpha", "Alpha.mkv"),
                         "  no commentary track",
-                        "[2/3] Beta/Beta.mkv",
+                        "[2/3] " + os.path.join("Beta", "Beta.mkv"),
                         '  track 1: extracting "Commentary"',
                         "  track 1: queued to transcribe (fr) and "
                         "translate into English",
-                        "[3/3] Gamma/Gamma.mkv",
+                        "[3/3] " + os.path.join("Gamma", "Gamma.mkv"),
                         "  track 1: already transcribed"]
 
 
