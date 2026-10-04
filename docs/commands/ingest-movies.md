@@ -63,6 +63,12 @@ pointed at a library. A full ingest reads only the one level it always did.
 | [`-n`](#commentary-names--n) | naming numbered commentary tracks | dry run | names the tracks | `logs/ingest-movies/ingest-movies-commentarynames-<folder>.txt` | `-a` |
 | [`-c`](#chapters--c) | chapters from the ChapterDB archive | writes as it goes | refused | — | `-tw` |
 
+`-s`, `-a`, `-n` and `-c` take the films in name order and open each with
+`[n/total] <film>`, its place in the folder, so a film nothing is done to still
+shows up. What is said about that film follows, indented under it. For `-a`
+that is one line per commentary track. Each transcription finishes in a worker
+later and names its own transcript, and so does each chapter write.
+
 **`-w` on its own is refused.** Without `-t`, `-i`, `-s` or `-n` there is no dry
 run to carry out, and the run it would otherwise start is a full ingest. `-a`
 and `-c` refuse it as well: the transcription and the chapter lookup are not dry

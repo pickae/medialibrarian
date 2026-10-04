@@ -24,7 +24,7 @@ import tempfile
 from collections.abc import Callable
 
 from medialib import helpers
-from medialib.lib import languages, plexnames, safety, tmdblookup, treewalk
+from medialib.lib import languages, plexnames, runlog, safety, tmdblookup, treewalk
 from medialib.lib.safety import SkipLog
 
 __all__ = [
@@ -674,17 +674,11 @@ def download_subs(directory: str, user: str, password: str,
         return
     movies = subtitle_movies(directory)
     for index, movie in enumerate(movies, start=1):
-        log(_movie_header(index, len(movies), directory, movie))
+        log(runlog.film_header(index, len(movies), directory, movie))
         with TimingReference(movie) as timing:
             _download_missing(movie, user, password, max_sync_offset,
                               max_sync_quality_offset, ffsubsync_quality, log,
                               timing)
-
-
-def _movie_header(index: int, total: int, directory: str, movie: str) -> str:
-    """The line each film of a folder's subtitle walk opens with: where it
-    stands in the folder, so a film nothing is done to is still named."""
-    return "[{}/{}] {}".format(index, total, os.path.relpath(movie, directory))
 
 
 def _download_missing(movie: str, user: str, password: str,
@@ -788,7 +782,7 @@ def check_subs(directory: str, max_sync_offset: str,
     verdicts: dict = {"kept": [], "discarded": [], "untested": []}
     movies = subtitle_movies(directory)
     for index, movie in enumerate(movies, start=1):
-        log(_movie_header(index, len(movies), directory, movie))
+        log(runlog.film_header(index, len(movies), directory, movie))
         with TimingReference(movie) as timing:
             for row in languages.LANGUAGES:
                 srt = _sidecar(movie, row.code2)

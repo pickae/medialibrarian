@@ -1306,13 +1306,17 @@ def _commentary_names_in(root: str, name: str, write: bool, lookup,
     planned: list = []
 
     def plans():
-        for movie, base in _commentary_films(root):
+        films = list(_commentary_films(root))
+        for index, (movie, base) in enumerate(films, start=1):
+            log(runlog.film_header(index, len(films), root, movie))
             plan, why = _plan_commentary_names(movie, base, lookup,
                                                fragments_file)
             relative = "./" + os.path.relpath(movie, root)
             if plan is None:
                 if why:
-                    refused.append((relative, why))
+                    log("  left alone: " + why)
+                    if why not in _QUIET_REFUSALS:
+                        refused.append((relative, why))
                 continue
             yield relative, plan
 
@@ -1360,15 +1364,15 @@ def _commentary_films(root: str):
 
 
 # The reasons a film is left alone that are not worth a line in the list: it
-# has nothing to name, or somebody already named it.
+# has nothing to name, or somebody already named it. They are still said under
+# the film's header as the walk passes it.
 _QUIET_REFUSALS = ("no commentary track", "a commentary track already has a name")
 
 
 def _commentary_film(movie: str, base: str) -> tuple:
     """What naming a film's commentaries starts from, the database not yet
     asked: ((tracks, its commentaries, those as the naming reads them, title,
-    year, kind of disc), "") - or (None, why not), "" for the reasons nobody
-    needs told."""
+    year, kind of disc), "") - or (None, why not)."""
     tracks = rules._identify(movie)
     commentaries = [track for track in tracks
                     if track.is_audio and track.is_commentary]
@@ -1376,7 +1380,7 @@ def _commentary_film(movie: str, base: str) -> tuple:
                    for track in commentaries]
     ordered, why = commentarynames.order_file_commentaries(file_tracks)
     if not ordered:
-        return None, "" if why in _QUIET_REFUSALS else why
+        return None, why
 
     year = plexnames.year_of(base)
     title = plexnames.untitled_base(base, year).strip()
@@ -1439,7 +1443,7 @@ def _plan_commentary_names(movie: str, base: str, lookup,
     lines += ['"%s" -> "%s"' % pair for pair in sidecars]
     lines.append("(listed by: %s)" % decision.source)
     for line in lines:
-        log("  %s: %s" % (os.path.basename(movie), line))
+        log("  " + line)
 
     arguments = []
     for position, track in enumerate(tracks, start=1):

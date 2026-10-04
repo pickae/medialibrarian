@@ -344,6 +344,24 @@ class TestAddingChaptersToALibrary:
         assert len(outcome["kept"]) == 1
         assert len(outcome["untagged"]) == 1
 
+    def test_every_film_is_announced_and_said_what_it_came_to(self, library,
+                                                              probed):
+        """In name order, counted by film, with a line under each - the set it
+        was found for, or why it was not looked up."""
+        lines = []
+        chapterdb.add_chapters(str(library), lines.append, self._archive([]))
+        named = "Named (2003) {imdb-tt0000003}"
+        nordwind = "Nordwind (1998) {imdb-tt0000001}"
+        assert lines[:3] == ["[1/3] %s/%s.mkv" % (named, named),
+                             "  already has named chapters",
+                             "[2/3] %s/%s.mkv" % (nordwind, nordwind)]
+        assert lines[3].startswith("  set 42 fits: 4 named chapters (")
+        assert lines[4:] == [
+            "Chapters replaced from set 42: %s/%s/%s.mkv"
+            % (library, nordwind, nordwind),
+            "[3/3] Untagged (2001)/Untagged (2001).mkv",
+            "  untagged - not looked up"]
+
     def test_numbered_marks_the_archive_does_not_share_are_kept(
             self, library, probed, monkeypatch):
         monkeypatch.setattr(chapterdb, "existing_chapters",

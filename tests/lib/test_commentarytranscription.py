@@ -544,6 +544,39 @@ class TestOrphans:
                     "0 1", ffmpeg_rc="0 0")
 
 
+class TestTheWalkSaysWhereItIs:
+    """Each film opens with its place in the folder, in name order, and every
+    commentary track is said under it - one already transcribed as well - so
+    a film nothing is done to is named all the same."""
+
+    def test_every_film_and_every_commentary_track(self, w):
+        root = w.tmp_path / "root"
+        for film in ("Beta", "Alpha", "Gamma"):
+            (root / film).mkdir(parents=True)
+            (root / film / (film + ".mkv")).touch()
+        (root / "Gamma" / "Gamma 1 Commentary.en.srt").write_text("1\n")
+        ram = w.tmp_path / "ram"
+        ram.mkdir()
+        tracks = {"Alpha": [("Main", "false", "audio", "eng")],
+                  "Beta": [("Main", "false", "audio", "eng"),
+                           ("Commentary", "true", "audio", "fra")],
+                  "Gamma": [("Main", "false", "audio", "eng"),
+                            ("Commentary", "true", "audio", "eng")]}
+        logs, _records, _sizes = _run_export(
+            w, str(root), str(ram), tracks, _detected("English"), "0",
+            ffmpeg_rc="0")
+        walk = [line for line in logs
+                if line.startswith(("[", "  "))]
+        assert walk == ["[1/3] Alpha/Alpha.mkv",
+                        "  no commentary track",
+                        "[2/3] Beta/Beta.mkv",
+                        '  track 1: extracting "Commentary"',
+                        "  track 1: queued to transcribe (fr) and "
+                        "translate into English",
+                        "[3/3] Gamma/Gamma.mkv",
+                        "  track 1: already transcribed"]
+
+
 class TestUnfixed:
     """A movie whose name carries no dot before its extension has no stem to
     read the transcript's name from: built from the empty stem it would be
@@ -828,8 +861,8 @@ class TestExportEdges:
         logs, records, _sizes = self._one_track(
             w, ("Commentary", "true", "audio", "und"),
             _detected("Dutch", "0.3"), "0 1", ffmpeg_rc="0 0")
-        assert "WARNING: could not tell the language of commentary " \
-            "track 0, assuming English: ./movie.mkv" in logs
+        assert "  track 0: WARNING: could not tell its language - taken " \
+            "as English" in logs
         fields = records[0].split("\x1f")
         assert fields[2] == "transcribe"
         assert fields[3] == "en"
@@ -842,7 +875,7 @@ class TestExportEdges:
         # the excerpt cannot be made, so whisper is never ASKED what language this is
         # (the queue's transcription run is a different question), and the
         # track falls back to English
-        assert any("assuming English" in line for line in logs)
+        assert any("taken as English" in line for line in logs)
         assert not any(c[0] == "pipx" and c[3] == os.path.join(
             str(w.tmp_path / "ram"), "languageProbe.wav")
             for c in w.calls())
@@ -856,8 +889,9 @@ class TestExportEdges:
             _detected("English"), "0 0", ffmpeg_rc="7")
         # the extract failed, so nothing was queued ...
         assert records == []
-        assert "WARNING: commentary extract failed (track 0): " \
-            "./movie.mkv" in logs
+        assert logs == ["[1/1] movie.mkv",
+                        '  track 0: extracting "Commentary"',
+                        "  track 0: WARNING: the extract failed - skipped"]
         # ... and the failed extract is not left behind
         ram = w.tmp_path / "ram"
         assert _leftover_mkas(str(ram)) == []
@@ -966,7 +1000,7 @@ class TestExportEdges:
         assert discarded[0].endswith("movie 0 ")
         assert not sidecar.exists()
         assert len(records) == 1
-        assert any("Discarding" in line for line in logs)
+        assert any("discarded, transcribing again" in line for line in logs)
 
     def test_and_a_sidecar_the_caller_keeps_is_not_touched(self, w):
         """The existing sidecar is the resume: asked about, and left alone -
@@ -1031,7 +1065,7 @@ class TestStaleNumber:
         # and nothing extracted, detected or transcribed on top of it
         assert records == []
         assert w.calls() == []
-        assert sum("Renumbered" in line for line in logs) == 1
+        assert sum("renumbered its transcript" in line for line in logs) == 1
 
     def test_and_a_name_an_older_run_cut_short_is_the_same_commentary(self, w):
         """Not an identical name: a name an older run cut at a different place
@@ -1103,7 +1137,7 @@ class TestStaleNumber:
         assert len(records) == 1
         assert records[0].split("\x1f")[1].endswith(
             "movie 2 Audio Commentary.en.srt")
-        assert sum("Renumbered" in line for line in logs) == 1
+        assert sum("renumbered its transcript" in line for line in logs) == 1
 
     def test_a_transcript_an_older_version_named_without_a_language(self, w):
         """One written before the language went into the name carries no
@@ -1139,7 +1173,7 @@ class TestStaleNumber:
         assert discarded[0].endswith("movie 2 ")
         assert not stale.exists()
         assert len(records) == 1
-        assert any("Discarding" in line for line in logs)
+        assert any("discarded, transcribing again" in line for line in logs)
 
     def test_and_a_stale_sidecar_the_caller_keeps_is_renumbered_not_touched(
             self, w):
@@ -1178,7 +1212,7 @@ class TestStaleNumber:
         assert stale.read_bytes() == b"\x01opus\x80"
         assert not (root / "movie 2 Commentary.opus").exists()
         assert len(records) == 1
-        assert not any("Renumbered" in line for line in logs)
+        assert not any("renumbered its transcript" in line for line in logs)
 
     def test_two_stale_copies_of_one_transcript_keep_the_one_written(self, w):
         """Two copies under one name are one transcript twice over: the number
@@ -1194,7 +1228,7 @@ class TestStaleNumber:
         assert records == []
         assert sorted(p.name for p in root.iterdir()
                       if p.name.endswith(".srt")) == ["movie 2 Commentary.en.srt"]
-        assert sum("Renumbered" in line for line in logs) == 1
+        assert sum("renumbered its transcript" in line for line in logs) == 1
         assert sum("dropping a second transcript" in line for line in logs) \
             == 1
 
