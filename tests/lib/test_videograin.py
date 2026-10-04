@@ -250,6 +250,13 @@ class TestCallerWording:
         assert log == ("Film grain: source measured 0.3400 sigma -> "
                        "synthesising 20: the label\n")
 
+    def test_grain_level_for_measured_too_little(self):
+        level, log = _wrapper(videograin.grain_level_for,
+                              "0 0.0207", "the label")
+        assert level == "0"
+        assert log == ("Film grain: source measured 0.0207 sigma -> too "
+                       "little to synthesise, none synthesised: the label\n")
+
     def test_grain_level_for_unmeasurable(self):
         level, log = _wrapper(videograin.grain_level_for, "0", "the label")
         assert level == "0"

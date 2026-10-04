@@ -908,6 +908,8 @@ class Plan:
                                    os.path.splitext(relative)[0] + ".mkv")
         self.directory = segments.chunk_dir_for(settings.chunk_root, relative)
         self.duration = 0.0
+        # The picture's own length, which can be shorter than the container's.
+        self.video_duration = 0.0
         self.replacing = False
         self.size_text = ""
         # The chunk boundaries, start to end, or [] for a file encoded whole,
@@ -980,6 +982,7 @@ class Run:
         pausecontrol.wait_while_paused()
 
         plan.duration = duration = _media_duration(source)
+        plan.video_duration = _video_duration(source, duration)
         # An output already here is the out-of-date result of an earlier run, and
         # replacing it is the whole point of converting this file again. Remembered
         # now, because after the encode a file at that path is no longer
@@ -1143,7 +1146,8 @@ class Run:
             target=_audio_worker, args=(relative, directory, settings))
         audio.start()
 
-        self._encode(settings, relative, directory, plan.duration, plan.bounds,
+        self._encode(settings, relative, directory, plan.video_duration,
+                     plan.bounds,
                      plan.size_text, scenecuts.describe(plan.cut_kinds))
         frames, micros = rules.sum_encode_progress(directory)
 
@@ -1402,7 +1406,8 @@ class Run:
         hdr10plus_metadata = plan.hdr10plus_metadata if plan else ""
         source_dv_profile = plan.source_dv_profile if plan else ""
 
-        if not rules.video_intermediate_complete(directory, duration):
+        video_duration = plan.video_duration if plan else duration
+        if not rules.video_intermediate_complete(directory, video_duration):
             log("Video encoding failed (no complete encoded video to keep), "
                 "skipping: " + relative)
             shutil.rmtree(directory, ignore_errors=True)
@@ -1541,6 +1546,33 @@ def _media_duration(path: str) -> float:
     return formatting.awk_number(rules._probe([
         "ffprobe", "-v", "error", "-show_entries", "format=duration",
         "-of", "default=nk=1:nw=1", path]).strip() or 0)
+
+
+def _video_duration(path: str, container: float) -> float:
+    """How long the source's PICTURE runs, which the video-only intermediate is
+    measured against.
+
+    Not the container's length: that is its longest stream, and an audio track
+    running seconds past the last frame - a dub mastered from another cut - is
+    common, while the video intermediate can only ever be as long as the picture.
+    Matroska keeps the figure in a DURATION tag, MP4 as the stream's duration;
+    a source stating neither, or one past the container, falls back to the
+    container's.
+    """
+    lines = rules._probe([
+        "ffprobe", "-v", "error", "-select_streams", "V:0",
+        "-show_entries", "stream=duration:stream_tags=DURATION",
+        "-of", "default=nk=1:nw=1", path]).split()
+    for line in lines:
+        parts = line.split(":")
+        if not all(formatting.awk_looks_numeric(part) for part in parts):
+            continue
+        seconds = 0.0
+        for part in parts:
+            seconds = seconds * 60 + formatting.awk_number(part)
+        if 0 < seconds <= container:
+            return seconds
+    return container
 
 
 def _in_worker(settings, token: str) -> None:
