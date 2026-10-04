@@ -17,6 +17,11 @@ Usage:
     FOLDER of that name is left alone, on the assumption it has already been
     unpacked there.
 
+    Whether a book is converted is decided for the book as a whole: all of its
+    files when their average bitrate is high enough to be worth converting, and
+    none of them otherwise - one file converted beside others copied as they
+    are could never be joined.
+
     The intermediate transcoded tree is kept entirely in RAM
     (/dev/shm), so only the final output folder is written to disk.
 

@@ -436,6 +436,90 @@ class TestTheChunkingDecision:
         assert capsys.readouterr().out == ""
 
 
+class TestAFolderJudgedWhole:
+    """-g: a folder's files are converted or kept together, on their average
+    bitrate weighted by length, so none comes out half converted - which is
+    what a book that is to be joined afterwards cannot survive."""
+
+    def _run(self, tracks, rates, depth=1, **settings):
+        # Written with "/" for reading, and handed over in the separator the
+        # track scan really yields, which is what the folders are split on.
+        tracks = [os.path.normpath(track) for track in tracks]
+        rates = {os.path.normpath(track): rate
+                 for track, rate in rates.items()}
+        base = {"input_dir": "/in", "tracks": list(tracks), "mono": False,
+                "threshold": ca.THRESHOLD, "group_depth": depth,
+                "verdicts": {}}
+        base.update(settings)
+        state = ca.Run(**base)
+        self.rates = {os.path.join("/in", track): rate
+                      for track, rate in rates.items()}
+        return state
+
+    @pytest.fixture(autouse=True)
+    def _probe(self, monkeypatch):
+        monkeypatch.setattr(ca, "_measured_rate",
+                            lambda src: self.rates.get(src))
+
+    def test_a_folder_averaging_over_the_threshold_converts_every_file(self):
+        state = self._run(
+            ["Book/1.mp3", "Book/2.mp3"],
+            {"Book/1.mp3": (128000, 3000), "Book/2.mp3": (64000, 1000)})
+        state.verdicts = ca._judge_groups(state, 4)
+        assert state.verdicts == {"Book": True}
+        assert state.transcodes(os.path.join("Book", "2.mp3"), 64000, ca.THRESHOLD)
+
+    def test_a_folder_averaging_under_it_keeps_every_file(self):
+        state = self._run(
+            ["Book/1.mp3", "Book/2.mp3"],
+            {"Book/1.mp3": (128000, 1000), "Book/2.mp3": (64000, 3000)})
+        state.verdicts = ca._judge_groups(state, 4)
+        assert state.verdicts == {"Book": False}
+        assert not state.transcodes(os.path.join("Book", "1.mp3"), 128000, ca.THRESHOLD)
+
+    def test_the_files_below_the_depth_belong_to_the_folder_at_it(self):
+        state = self._run(
+            ["Set/Book/CD1/1.mp3", "Set/Book/CD2/1.mp3"],
+            {"Set/Book/CD1/1.mp3": (128000, 10),
+             "Set/Book/CD2/1.mp3": (64000, 10)}, depth=2)
+        assert ca._judge_groups(state, 1) == {os.path.join("Set", "Book"): True}
+
+    def test_a_file_above_the_depth_is_judged_on_its_own(self):
+        state = self._run(["loose.mp3"], {"loose.mp3": (128000, 10)})
+        assert ca._judge_groups(state, 1) == {}
+        assert state.transcodes("loose.mp3", 128000, ca.THRESHOLD)
+        assert not state.transcodes("loose.mp3", 64000, ca.THRESHOLD)
+
+    def test_a_format_always_converted_converts_its_folder_unmeasured(self):
+        state = self._run(["Book/1.m4b"], {})
+        assert ca._judge_groups(state, 1) == {"Book": True}
+
+    def test_a_folder_whose_rates_cannot_be_read_gets_no_verdict(self):
+        state = self._run(["Book/1.mp3"], {})
+        assert ca._judge_groups(state, 1) == {}
+
+    def test_mono_reads_the_average_against_the_mono_threshold(self):
+        state = self._run(["Book/1.mp3"], {"Book/1.mp3": (64000, 10)},
+                          mono=True)
+        assert ca._judge_groups(state, 1) == {"Book": True}
+
+    def test_an_overruled_file_is_said(self, capsys):
+        state = self._run(
+            ["Book/1.mp3", "Book/2.mp3"],
+            {"Book/1.mp3": (128000, 3000), "Book/2.mp3": (64000, 1000)})
+        ca._judge_groups(state, 1)
+        assert "1 file(s) under it" in capsys.readouterr().out
+
+    def test_without_g_nothing_is_judged(self):
+        state = self._run(["Book/1.mp3"], {"Book/1.mp3": (128000, 10)},
+                          depth=0)
+        assert ca._judge_groups(state, 1) == {}
+
+    def test_it_cannot_be_combined_with_adaptive_mode(self, capsys):
+        assert ca.main(["-a", "-g", "1", "/in", "/out"]) == 1
+        assert "cannot be combined with -g" in capsys.readouterr().err
+
+
 class TestTheChunkCandidateProbe:
     def _probed(self, monkeypatch, document):
         monkeypatch.setattr(ca, "_probe", lambda argv: document)

@@ -121,15 +121,22 @@ b | <bitrate> | Bitrate of the output files
                     surround source
 j | <jobs> | Run up to <jobs> encoder processes in parallel.
                     Default one per CPU thread
+g | <depth> | Judge the files under each folder <depth> levels into
+                    <inputDir> together rather than one by one: all of them
+                    are converted when their average bitrate reaches the
+                    threshold, and none of them otherwise, so no folder comes
+                    out half converted. A video, or a format that is always
+                    converted, has its whole folder converted with it.
+                    Cannot be combined with -a.
 """.format(codecs=" or ".join(enums.AUDIO_CODECS),
            encoders=xheaac.ENCODER_SPEC,
            codec=DEFAULT_CODEC)
 
 OPT_VARS = ("m:mono u:surround a:adaptive c:copy k:keep e:outputCodec "
-            "b:bitrate j:jobs")
+            "b:bitrate j:jobs g:groupDepth")
 OPT_COLUMN = 20
 OPT_LONG = ("h:help m:mono u:surround a:adaptive k:keep c:copy-others "
-            "e:encoding b:bitrate j:jobs")
+            "e:encoding b:bitrate j:jobs g:group")
 
 # The codec has to be one this command can write, or a typo would only surface
 # as a per-file failure deep into a run. The choices are joined with an ESCAPED
@@ -138,6 +145,7 @@ OPT_LONG = ("h:help m:mono u:surround a:adaptive k:keep c:copy-others "
 # pipe, the kind ends at the first codec and every other one is refused.
 OPT_CHECKS = """
 e | enum:{codecs} | output encoding
+g | posInt | group depth
 """.format(codecs="\\|".join(enums.AUDIO_CODECS))
 
 DEFAULT_BITRATE = 46
@@ -763,6 +771,12 @@ class Run:
     keep: bool
     bitrate: int
     threshold: int
+    # -g: how deep into the input the folders lie whose files are judged
+    # together (0 for none), and what was judged of each - converted whole or
+    # kept whole - keyed by the folder's path relative to the input. A folder
+    # with no verdict is one whose files' bitrates could not be read at all.
+    group_depth: int
+    verdicts: dict
     # The tracks the run decided to cut into chunks, for being long enough
     # against the rest of the queue that cutting them shortens the run.
     chunked: frozenset
@@ -808,6 +822,27 @@ class Run:
         """
         return os.path.join(self.output_dir,
                             os.path.splitext(relative)[0] + "." + self.extension)
+
+    def group_of(self, relative: str) -> str:
+        """The folder <relative> is judged with under -g, or "" when it is
+        judged on its own - no -g, or a file lying above that depth."""
+        parts = relative.split(os.sep)
+        if not self.group_depth or len(parts) <= self.group_depth:
+            return ""
+        return os.sep.join(parts[:self.group_depth])
+
+    def transcodes(self, relative: str, source_bitrate: int,
+                   threshold: int) -> bool:
+        """Whether a track gets an output of its own rather than being skipped
+        or copied: every video and always-transcoded format, and otherwise
+        whatever its folder was judged under -g, or its own bitrate against the
+        threshold."""
+        if is_video_file(relative) or always_transcode_file(relative):
+            return True
+        verdict = self.verdicts.get(self.group_of(relative))
+        if verdict is not None:
+            return verdict
+        return source_bitrate >= threshold
 
     # --- encoding -------------------------------------------------------------
 
@@ -943,10 +978,12 @@ class Run:
         """
         if lift_out:
             return "Already %s, extracting as is" % CODEC_NAMES[self.codec]
-        if video or always_transcode_file(relative) \
-                or source_bitrate >= threshold:
+        if self.transcodes(relative, source_bitrate, threshold):
             return "Converting"
         action = "copying" if self.copy else "skipping"
+        if self.group_of(relative) in self.verdicts:
+            return "Folder under %d kbps on average, %s" % (threshold // 1000,
+                                                            action)
         # 0 is "nothing stated it", which the run keeps as it would a small
         # file - so the line says it did not know rather than naming a rate.
         if source_bitrate <= 0:
@@ -1154,8 +1191,7 @@ class Run:
                  channels: int = 0, lift_out: bool = False) -> None:
         cover_target = ""
 
-        if video or always_transcode_file(relative) \
-                or source_bitrate >= threshold:
+        if self.transcodes(relative, source_bitrate, threshold):
             if lift_out:
                 self._remux(source, out)
             elif not self._encode(source, out, mono, bitrate, channels,
@@ -1456,8 +1492,7 @@ class Planner:
                                               threshold, state.codec):
             _write_jobs(base, [track])
             return False
-        if not video and not always_transcode_file(track) \
-                and source_bitrate < threshold:
+        if not state.transcodes(track, source_bitrate, threshold):
             _write_jobs(base, [track])
             return False
 
@@ -1824,6 +1859,7 @@ def main(argv: list, program: str = "convert-audio",
     bitrate = int(result.values["bitrate"] or DEFAULT_BITRATE)
     codec = result.values["outputCodec"] or DEFAULT_CODEC
     jobs = int(result.values["jobs"] or runlog.cpu_count())
+    group_depth = int(result.values["groupDepth"] or 0)
 
     # Adaptive mode owns the channel and bitrate decision per file, so a global
     # -m or -b would contradict it. It also keeps files whole: the split queue
@@ -1832,6 +1868,14 @@ def main(argv: list, program: str = "convert-audio",
     if adaptive and (mono or bitrate_set):
         sys.stderr.write("%s\n\nerror: -a (adaptive) cannot be combined "
                          "with -m or -b.\n\n%s\n"
+                         % (declaration.credits,
+                            clioptions.page(declaration)))
+        return 1
+    # And it judges each file by its own channel count, so a folder's files
+    # would not even share the threshold their average is read against.
+    if adaptive and group_depth:
+        sys.stderr.write("%s\n\nerror: -a (adaptive) cannot be combined "
+                         "with -g.\n\n%s\n"
                          % (declaration.credits,
                             clioptions.page(declaration)))
         return 1
@@ -1913,7 +1957,7 @@ def main(argv: list, program: str = "convert-audio",
         return _convert(program, script_dir, input_dir, output_dir, probe_what,
                         skips, mono, adaptive, copy, keep, bitrate, jobs,
                         codec, chunk_over_ceiling, mkvtoolnix_unsaid,
-                        surround)
+                        surround, group_depth)
     finally:
         statusline.stop_status_monitor()
         ramscratch.run_exit_cleanup()
@@ -1959,14 +2003,14 @@ def _convert(program: str, script_dir: str, input_dir: str, output_dir: str,
              codec: str = DEFAULT_CODEC,
              chunk_over_ceiling: bool = False,
              mkvtoolnix_unsaid: bool = False,
-             surround: bool = False) -> int:
+             surround: bool = False, group_depth: int = 0) -> int:
     pre_start = time.time()
 
     state = Run(
         input_dir=input_dir, output_dir=output_dir, script_dir=script_dir,
         mono=mono, surround=surround, adaptive=adaptive, copy=copy, keep=keep,
         bitrate=bitrate, threshold=THRESHOLD, chunked=frozenset(),
-        codec=codec, extension=enums.AUDIO_CODEC_EXTENSIONS[codec],
+        group_depth=group_depth, verdicts={}, codec=codec, extension=enums.AUDIO_CODEC_EXTENSIONS[codec],
         chunk_over_ceiling=chunk_over_ceiling,
         # The table's default: a cover that rides along in every transcoded
         # track is glanced at in a track list, not studied, so the floor of the
@@ -2007,6 +2051,8 @@ def _convert(program: str, script_dir: str, input_dir: str, output_dir: str,
     if mkvtoolnix_unsaid:
         _warn_mkvtoolnix(state.tracks)
 
+    # Before the chunking, which asks of each track whether it is encoded.
+    state.verdicts = _judge_groups(state, jobs)
     state.chunked = _decide_chunking(state, jobs)
 
     chunk_root, chunk_status = ramscratch.ram_scratch_dir("convertAudio.chunks")
@@ -2107,6 +2153,75 @@ def _filesize(state: Run, track: str) -> int:
         return os.path.getsize(os.path.join(state.input_dir, track))
     except OSError:
         return 0
+
+
+def _measured_rate(src: str):
+    """(bps, seconds) of a source's first audio stream, or None when either
+    cannot be read. A rate nothing states is measured, as the lift-out does."""
+    found = chunk_candidate_audio(src)
+    if found is None:
+        return None
+    _decoder, _channels, bps, seconds = found
+    if bps <= 0:
+        bps = estimated_audio_bitrate(src)
+    if bps <= 0:
+        return None
+    return bps, seconds
+
+
+def _judge_groups(state: Run, jobs: int) -> dict:
+    """-g: each folder's verdict, converted whole or kept whole.
+
+    Read against the threshold from the folder's average bitrate, weighted by
+    length, so a long track counts for what it holds. A folder that has a video
+    or an always-transcoded format in it is converted whole without measuring:
+    those are converted whatever their rate, and the rest must match them.
+    Said only for a folder where the verdict overrules some of its files' own.
+    """
+    groups: dict[str, list] = {}
+    for track in state.tracks:
+        group = state.group_of(track)
+        if group:
+            groups.setdefault(group, []).append(track)
+    verdicts = {}
+    for group, members in groups.items():
+        if any(is_video_file(track) or always_transcode_file(track)
+               for track in members):
+            verdicts[group] = True
+    measured = [track for group, members in groups.items()
+                if group not in verdicts for track in members]
+    if not measured:
+        return verdicts
+
+    import concurrent.futures
+    # Probes only, so one per encoder slot is no load on anything but ffprobe.
+    with concurrent.futures.ThreadPoolExecutor(
+            max_workers=max(1, jobs)) as pool:
+        rates = dict(zip(measured, pool.map(
+            lambda track: _measured_rate(os.path.join(state.input_dir, track)),
+            measured)))
+
+    threshold = MONO_THRESHOLD if state.mono else state.threshold
+    for group in sorted(groups, key=os.fsencode):
+        if group in verdicts:
+            continue
+        known = [rates[track] for track in groups[group] if rates[track]]
+        seconds = sum(length for _bps, length in known)
+        if seconds <= 0:
+            continue
+        average = sum(bps * length for bps, length in known) / seconds
+        verdict = verdicts[group] = average >= threshold
+        overruled = sum(1 for bps, _length in known
+                        if (bps >= threshold) != verdict)
+        if overruled:
+            print('"%s" averages %d kbps, %s the %d kbps threshold: %s, '
+                  "%d file(s) %s it included"
+                  % (group, average // 1000,
+                     "over" if verdict else "under", threshold // 1000,
+                     "all of it is converted" if verdict
+                     else "none of it is converted",
+                     overruled, "under" if verdict else "over"))
+    return verdicts
 
 
 def _decide_chunking(state: Run, jobs: int) -> frozenset:

@@ -61,12 +61,13 @@ def _transcode(phases, tmp_path, **overrides):
     settings = dict(in_path=str(tmp_path / "in"),
                     temp_path=str(tmp_path / "temp"), stage=None,
                     only_concat=False, mono=False, bitrate="",
-                    codec="opus", script_dir="")
+                    codec="opus", sub_folders=False, script_dir="")
     settings.update(overrides)
     cac._transcode_phase(settings["in_path"], settings["temp_path"],
                          settings["stage"], settings["only_concat"],
                          settings["mono"], settings["bitrate"],
-                         settings["codec"], settings["script_dir"])
+                         settings["codec"], settings["sub_folders"],
+                         settings["script_dir"])
     return phases.transcode
 
 
@@ -95,8 +96,23 @@ class TestTheCodecReachesTheTranscoder:
 
     def test_only_concat_starts_no_transcoder_at_all(self, phases, tmp_path):
         cac._transcode_phase(str(tmp_path / "in"), str(tmp_path / "temp"),
-                             None, True, False, "", "xheaac", "")
+                             None, True, False, "", "xheaac", False, "")
         assert phases.started == []
+
+
+class TestEachBookIsJudgedWhole:
+    """A book converted file by file comes out part converted and part copied
+    as it was whenever its bitrates straddle the threshold, and the two halves
+    can then never be joined - so the transcoder judges each book whole, at the
+    depth this run's books lie at."""
+
+    def test_a_book_is_a_subfolder_of_the_input(self, phases, tmp_path):
+        argv = _transcode(phases, tmp_path)
+        assert argv[argv.index("-g") + 1] == "1"
+
+    def test_with_s_a_book_is_one_level_further_in(self, phases, tmp_path):
+        argv = _transcode(phases, tmp_path, sub_folders=True)
+        assert argv[argv.index("-g") + 1] == "2"
 
 
 class TestTheOptionPage:
