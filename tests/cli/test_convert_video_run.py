@@ -313,6 +313,31 @@ class TestTheResumeSkip:
         assert not resume(self.SOURCE / 2)
 
 
+class TestTheLengthTheVideoIntermediateIsHeldTo:
+    """The picture's own length, not the container's: an audio track running
+    past the last frame made every encode of such a source look short."""
+
+    @pytest.fixture
+    def probed(self, monkeypatch):
+        def run(answer, container=7212.736):
+            monkeypatch.setattr(rules, "_probe", lambda args: answer)
+            return run_module._video_duration("film.mkv", container)
+        return run
+
+    def test_a_matroska_duration_tag_is_read(self, probed):
+        assert probed("N/A\n02:00:04.698000000\n") == pytest.approx(7204.698)
+
+    def test_an_mp4_stream_duration_is_read(self, probed):
+        assert probed("7204.698000\n") == pytest.approx(7204.698)
+
+    def test_a_source_stating_neither_falls_back_to_the_container(self, probed):
+        assert probed("N/A\n") == 7212.736
+        assert probed("") == 7212.736
+
+    def test_a_figure_past_the_container_is_not_believed(self, probed):
+        assert probed("03:00:00.000000000\n") == 7212.736
+
+
 class TestTheFramesEachUpscaledChunkIsGiven:
     """An upscaled chunk is handed frame numbers rather than times, and the
     chunks must tile the film: each ends at the frame the next one starts at,
