@@ -24,7 +24,7 @@ import tempfile
 from collections.abc import Callable
 
 from medialib import helpers
-from medialib.lib import languages, plexnames, safety, tmdblookup
+from medialib.lib import languages, plexnames, safety, tmdblookup, treewalk
 from medialib.lib.safety import SkipLog
 
 __all__ = [
@@ -592,16 +592,12 @@ def subtitle_movies(directory: str) -> list:
             return directory + rel
         return directory + "/" + rel
 
-    def walk(base, rel_prefix):
-        for entry in os.scandir(base):
-            rel = rel_prefix + entry.name
-            if entry.name.endswith("mkv"):
-                yield spell(rel)
-            if entry.is_dir(follow_symlinks=False):
-                yield from walk(entry.path, rel + "/")
-
     movies = []
-    for movie in walk(directory, ""):
+    for entry in treewalk.entries_below(directory):
+        if not entry.name.endswith("mkv"):
+            continue
+        movie = spell(os.path.relpath(entry.path, directory)
+                      .replace(os.sep, "/"))
         slash = movie.rfind("/")
         folder = movie[:slash] if slash != -1 else movie
         if any(word in folder for word in EXTRAS_WORDS):

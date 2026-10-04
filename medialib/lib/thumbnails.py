@@ -19,7 +19,7 @@ import sys
 import time
 from collections.abc import Callable, Iterator, Sequence
 
-from medialib.lib import imagemagick, mutagentags
+from medialib.lib import imagemagick, mutagentags, treewalk
 from medialib.lib.enums import shell_lower
 
 __all__ = [
@@ -98,18 +98,9 @@ def _regular_files(top: str) -> Iterator[str]:
     interleaves them. ``-type f`` is an lstat test, so a link wearing a
     filename is not a file and is not followed.
     """
-    def descend(dirpath: str) -> Iterator[str]:
-        try:
-            entries = list(os.scandir(dirpath))
-        except OSError:
-            return
-        for entry in entries:
-            if entry.is_dir(follow_symlinks=False):
-                yield from descend(entry.path)
-            elif entry.is_file(follow_symlinks=False):
-                yield entry.path
-
-    yield from descend(top)
+    for entry in treewalk.entries_below(top):
+        if entry.is_file(follow_symlinks=False):
+            yield entry.path
 
 
 def _first_file(top: str, predicate) -> str | None:
