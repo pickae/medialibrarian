@@ -803,6 +803,27 @@ def ids_in(names) -> set:
             for match in [ID_TAG_RE.search(name)] if match}
 
 
+def id_key(movie: str) -> str:
+    """The one movie file of a film a record kept across runs knows it by:
+    its id tag, then its edition and stacking token when it has them - so two
+    versions of one film, or two parts of it, are never taken for each other.
+
+    The id is read off the file's own name, or off its folder's where only
+    the folder carries one; a film with neither has no key, "" - its name is
+    only a guess at which film it is, and it would stop answering to that
+    guess once the tagging named it.
+    """
+    stem, _extension = os.path.splitext(os.path.basename(movie))
+    match = (ID_TAG_RE.search(stem)
+             or ID_TAG_RE.search(os.path.basename(os.path.dirname(movie))))
+    if not match:
+        return ""
+    edition, part, _eaten = _markers(stem)
+    return " ".join(word for word in (
+        match.group(0), "{edition-%s}" % edition if edition else "", part)
+        if word)
+
+
 def _word_counter(words) -> Counter:
     """A name's words as a multiset, compared the way titles are compared:
     case folded, and the brackets a year often wears stripped away, so a

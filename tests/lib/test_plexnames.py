@@ -1042,3 +1042,26 @@ class TestConformToFolder:
         assert plexnames.conform_to_folder(
             "Hollow Ridge (1981)", "",
             "Hollow Ridge (1981) 1981") == ("", False)
+
+
+class TestIdKey:
+    """The key a film is recorded under across runs: its id, and the edition
+    and part that keep two versions or two halves of it apart."""
+
+    def test_the_file_s_own_id(self):
+        assert plexnames.id_key(
+            "Films/The Movie (1999)/The Movie (1999) %s.mkv" % TAG) == TAG
+
+    def test_the_folder_s_id_when_the_file_has_none(self):
+        assert plexnames.id_key(
+            "Films/The Movie (1999) {tmdb-42}/The Movie (1999).mkv") \
+            == "{tmdb-42}"
+
+    def test_an_edition_and_a_part_are_part_of_the_key(self):
+        assert plexnames.id_key(
+            "F/The Movie (1999) %s {edition-Colorized} Part2.mkv" % TAG) \
+            == TAG + " {edition-Colorized} Part2"
+
+    def test_an_untagged_film_has_no_key(self):
+        assert plexnames.id_key("Films/The Movie (1999)/The Movie (1999).mkv") \
+            == ""

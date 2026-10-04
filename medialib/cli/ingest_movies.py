@@ -103,7 +103,12 @@ s |  | subtitles only: the six languages' subtitles and nothing else -
                   missing is downloaded, synced and tested the way a full
                   ingest does it. One ffsubsync cannot align at all is left
                   alone either way. Best run after -tw, so films are searched
-                  for by their ids.
+                  for by their ids. Every film -sw gets through is recorded by
+                  its id in logs/ingest-movies/ingest-movies-subtitles-done.txt,
+                  and every -s run after it skips the films recorded there;
+                  one untagged is never recorded, nor one with a subtitle that
+                  could not be tested. Delete a film's line, or the file, to
+                  have it done again.
 n |  | commentary names only: a film whose commentary tracks are only
                   numbered - "Commentary 2", "Kommentar 1", "Audiosommentary
                   3" - has them named after who speaks in each, the way the

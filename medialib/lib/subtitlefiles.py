@@ -24,7 +24,15 @@ import tempfile
 from collections.abc import Callable
 
 from medialib import helpers
-from medialib.lib import languages, plexnames, runlog, safety, tmdblookup, treewalk
+from medialib.lib import (
+    donelog,
+    languages,
+    plexnames,
+    runlog,
+    safety,
+    tmdblookup,
+    treewalk,
+)
 from medialib.lib.safety import SkipLog
 
 __all__ = [
@@ -766,7 +774,8 @@ def _test_copy(file: str, srt: str, language_code: str, max_sync_offset: str,
 def check_subs(directory: str, max_sync_offset: str,
                max_sync_quality_offset: str, ffsubsync_quality: str,
                write: bool, log: Callable[[str], None],
-               credentials: tuple | None = None) -> dict:
+               credentials: tuple | None = None,
+               done: donelog.DoneLog | None = None) -> dict:
     """:func:`check_srt` for every ``<movie>.<xx>.srt`` beside every movie of
     :func:`subtitle_movies`, in every language of the table - the sidecars a
     download would have written, and so never a commentary transcript, whose
@@ -776,13 +785,26 @@ def check_subs(directory: str, max_sync_offset: str,
     what is missing downloaded before the walk goes on to the next, so one
     thrown out is fetched again straight away.
 
+    With ``done``, a film it holds is not walked at all, and with ``write`` and
+    ``credentials`` as well each film is recorded in it once it has been
+    through both - unless one of its subtitles could not be tested, or the run
+    was interrupted, either of which may have left it half done.
+
     Returns the sidecars by verdict: ``{"kept": [...], "discarded": [...],
     "untested": [...]}``.
     """
     verdicts: dict = {"kept": [], "discarded": [], "untested": []}
     movies = subtitle_movies(directory)
+    if done is not None:
+        skipped = [movie for movie in movies if done.has(movie)]
+        if skipped:
+            movies = [movie for movie in movies if not done.has(movie)]
+            log('{} film(s) skipped, done in an earlier run - recorded in '
+                '"{}"'.format(len(skipped), done.path))
+    record = write and bool(credentials)
     for index, movie in enumerate(movies, start=1):
         log(runlog.film_header(index, len(movies), directory, movie))
+        untested = len(verdicts["untested"])
         with TimingReference(movie) as timing:
             for row in languages.LANGUAGES:
                 srt = _sidecar(movie, row.code2)
@@ -797,4 +819,8 @@ def check_subs(directory: str, max_sync_offset: str,
                 _download_missing(movie, user, password, max_sync_offset,
                                   max_sync_quality_offset, ffsubsync_quality,
                                   log, timing)
+        if (done is not None and record
+                and len(verdicts["untested"]) == untested
+                and not safety.abort_requested()):
+            done.add(movie)
     return verdicts

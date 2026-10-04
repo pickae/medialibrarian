@@ -61,11 +61,13 @@ def stubbed(monkeypatch, tmp_path):
         monkeypatch.setattr(run, name, _never)
 
     calls: list = []
+    dones: list = []
     verdicts = {"kept": [], "discarded": [], "untested": []}
 
     def check_subs(directory, max_offset, quality_offset, quality, write,
-                   log, credentials=None):
+                   log, credentials=None, done=None):
         calls.append(("check", directory, quality, write, credentials))
+        dones.append(done)
         return {key: list(found) for key, found in verdicts.items()}
 
     def download_subs(directory, user, password, max_offset, quality_offset,
@@ -75,7 +77,7 @@ def stubbed(monkeypatch, tmp_path):
     monkeypatch.setattr(run.subtitlefiles, "check_subs", check_subs)
     monkeypatch.setattr(run.subtitlefiles, "download_subs", download_subs)
     script = tmp_path / "script"
-    return {"calls": calls, "tools": tools, "logs": logs,
+    return {"calls": calls, "tools": tools, "logs": logs, "dones": dones,
             "verdicts": verdicts, "script": str(script)}
 
 
@@ -106,6 +108,18 @@ class TestThePhaseRunsAndNothingElse:
         assert stubbed["calls"] == [
             ("check", str(films), "confidence", True, ("u", "p")),
             ("check", str(docs), "confidence", True, ("u", "p"))]
+
+    def test_every_folder_shares_one_done_log_under_logs(self, stubbed,
+                                                          tmp_path):
+        """By id rather than per folder, so a film moved from one folder
+        given to another is still known to be done."""
+        films = _library(tmp_path, "Films")
+        docs = _library(tmp_path, "Documentaries")
+        assert _main(stubbed, "-sw", str(films), str(docs)) == 0
+        first, second = stubbed["dones"]
+        assert first is second
+        assert first.path == str(tmp_path / "script" / "logs"
+                                 / run.SUBTITLES_DONE)
 
     def test_pipx_is_asked_for_only_when_there_is_a_download(self, stubbed,
                                                              tmp_path):

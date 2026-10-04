@@ -1092,3 +1092,60 @@ class TestCheckSubs:
         (ffmpeg,) = [a for a in w.calls() if a[0] == "ffmpeg"]
         assert ffmpeg[6] == str(tree / self._SRT)
         assert logs[0] == "  English: converting from webvtt to SubRip"
+
+class TestCheckSubsDoneLog:
+    """With a done-log the walk skips the films an earlier -sw run finished,
+    and a -sw run with credentials records each film it gets through."""
+
+    _MOVIE = "Films/Movie {imdb-tt0000001}/Movie {imdb-tt0000001}.mkv"
+
+    def _tree(self, w, monkeypatch, *entries):
+        tree = _tree(w, self._MOVIE, *entries)
+        monkeypatch.setenv("TMPDIR", str(w.tmp_path))
+        w.install("pipx")
+        return tree
+
+    def _done(self, w):
+        from medialib.lib import donelog
+        return donelog.DoneLog(str(w.tmp_path / "done.txt"))
+
+    def test_a_film_finished_is_recorded_and_skipped_next_time(
+            self, w, monkeypatch):
+        tree = self._tree(w, monkeypatch)
+        subtitlefiles.check_subs(str(tree), "600", "60", "yes", True,
+                                 [].append, ("u", "p"), self._done(w))
+        searched = len(w.calls())
+        assert searched == len(languages.LANGUAGES)
+        logs = []
+        subtitlefiles.check_subs(str(tree), "600", "60", "yes", True,
+                                 logs.append, ("u", "p"), self._done(w))
+        assert len(w.calls()) == searched
+        assert logs == ['1 film(s) skipped, done in an earlier run - recorded '
+                        'in "%s"' % (w.tmp_path / "done.txt")]
+
+    @pytest.mark.parametrize("write,credentials", [(False, ("u", "p")),
+                                                   (True, None)])
+    def test_nothing_is_recorded_without_a_real_run_that_downloads(
+            self, w, monkeypatch, write, credentials):
+        tree = self._tree(w, monkeypatch)
+        subtitlefiles.check_subs(str(tree), "600", "60", "yes", write,
+                                 [].append, credentials, self._done(w))
+        assert not (w.tmp_path / "done.txt").exists()
+
+    def test_a_film_with_a_subtitle_left_untested_is_not_recorded(
+            self, w, monkeypatch):
+        tree = self._tree(w, monkeypatch,
+                          self._MOVIE.replace(".mkv", ".en.srt"))
+        w.install("ffsubsync")
+        w.rc("ffsubsync", "1")
+        subtitlefiles.check_subs(str(tree), "600", "60", "yes", True,
+                                 [].append, ("u", "p"), self._done(w))
+        assert not (w.tmp_path / "done.txt").exists()
+
+    def test_an_interrupted_film_is_not_recorded(self, w, monkeypatch):
+        tree = self._tree(w, monkeypatch)
+        monkeypatch.setattr(subtitlefiles.safety, "abort_requested",
+                            lambda: True)
+        subtitlefiles.check_subs(str(tree), "600", "60", "yes", True,
+                                 [].append, ("u", "p"), self._done(w))
+        assert not (w.tmp_path / "done.txt").exists()

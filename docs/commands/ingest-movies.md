@@ -481,6 +481,24 @@ to, by how much, and what became of it:
 ==>   French: downloaded, in step with the audio (shifted -0.4 s, confidence 2.10) - synced and kept
 ```
 
+**Films already done are skipped.** Testing and syncing a whole library takes
+hours, so every film `-sw` gets through is recorded by its id tag in
+`logs/ingest-movies/ingest-movies-subtitles-done.txt` as soon as it is
+finished, and every later `-s` or `-sw` run skips the films recorded there,
+saying how many it skipped. A run that is stopped halfway keeps every film it
+finished. A film is known by its `{imdb-…}` or `{tmdb-…}` tag, plus its
+edition and part when it has them, so moving or renaming it does not undo the
+record. These films are never recorded:
+
+- a film with no id tag, since its name is only a guess at which film it is
+- a film with a subtitle ffsubsync could not align at all
+- a film the run was interrupted on
+- any film of a `-sw` run made without OpenSubtitles credentials, since nothing
+  was downloaded
+
+To have a film done again, delete its line from the file. To redo every film,
+delete the file.
+
 ## Commentary transcripts (`-a`)
 
 **`-a` does only the audio commentary phase.** Every commentary track that does
