@@ -18,7 +18,7 @@ import subprocess
 import tempfile
 import time
 
-from medialib.lib import languages, plexnames
+from medialib.lib import languages, plexnames, treewalk
 from medialib.lib import whisper as whisper_lib
 from medialib.lib.census import printf_f0
 from medialib.lib.enums import shell_lower
@@ -496,21 +496,8 @@ def _mkv_entries(top: str) -> list[str]:
     siblings. The pattern carries no dot - any name ending in "mkv" - and it
     is tested against directories too, not only the files.
     """
-    found: list[str] = []
-
-    def descend(dirpath: str) -> None:
-        try:
-            entries = list(os.scandir(dirpath))
-        except OSError:
-            return
-        for entry in entries:
-            if fnmatch.fnmatchcase(entry.name, "*mkv"):
-                found.append(entry.path)
-            if entry.is_dir(follow_symlinks=False):
-                descend(entry.path)
-
-    descend(top)
-    return found
+    return [entry.path for entry in treewalk.entries_below(top)
+            if fnmatch.fnmatchcase(entry.name, "*mkv")]
 
 
 def export_commentary(directory: str, read_track_info, is_bonus_folder,
