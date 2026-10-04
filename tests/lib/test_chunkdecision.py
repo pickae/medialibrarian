@@ -20,12 +20,13 @@ MB = 1_000_000
 
 
 def _decide(tracks, workers=32, threads=None, mono=False, bitrate=46,
-            codec="opus", probe=None):
+            codec="opus", probe=None, verdicts=None):
     return chunkdecision.decide(
         tracks, workers, threads or workers, mono, bitrate,
         50000 if mono else 90000,
         lambda ext: ext in enums.VIDEO_EXTENSIONS,
-        lambda ext: ext in enums.ALWAYS_TRANSCODE_EXTENSIONS, codec, probe)
+        lambda ext: ext in enums.ALWAYS_TRANSCODE_EXTENSIONS, codec, probe,
+        verdicts)
 
 
 class TestNothingToDecide:
@@ -160,6 +161,26 @@ class TestProbingTheCandidates:
         probe, asked = self._probe({0: ("mp3", 2, 64000, 2 * GB * 8 / 64000)})
         assert _decide(tracks, probe=probe).chunked == frozenset()
         assert asked == [0]
+
+    def test_a_folder_converted_whole_cuts_its_file_under_the_threshold(self):
+        """-g converts it with its folder whatever its own rate, so it is
+        weighed as the encode it will be - left whole, it is the one encode
+        the whole run waits on at the end."""
+        tracks = [("mp3", 2 * GB)] + [("mp3", 30 * MB)] * 200
+        probe, _asked = self._probe({0: ("mp3", 2, 64000,
+                                         2 * GB * 8 / 64000)})
+        verdicts = [True] + [None] * 200
+        assert _decide(tracks, probe=probe,
+                       verdicts=verdicts).chunked == {0}
+
+    def test_a_folder_kept_whole_cuts_nothing_over_the_threshold(self):
+        tracks = [("mp3", 2 * GB)] + [("mp3", 30 * MB)] * 200
+        probe, _asked = self._probe({0: ("mp3", 2, 128000,
+                                         2 * GB * 8 / 128000)})
+        assert _decide(tracks, probe=probe).chunked == {0}
+        verdicts = [False] + [None] * 200
+        assert _decide(tracks, probe=probe,
+                       verdicts=verdicts).chunked == frozenset()
 
     def test_a_file_the_probe_cannot_measure_keeps_its_guess(self):
         tracks = [("m4b", 2 * GB)] + [("m4b", 30 * MB)] * 200

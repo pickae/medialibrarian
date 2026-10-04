@@ -378,14 +378,16 @@ class TestTheChunkingDecision:
             (tmp_path / track).write_bytes(b"\0" * size)
         base = {"input_dir": str(tmp_path), "tracks": list(sizes),
                 "adaptive": False, "mono": False, "bitrate": ca.DEFAULT_BITRATE,
-                "threshold": ca.THRESHOLD, "codec": "opus"}
+                "threshold": ca.THRESHOLD, "codec": "opus",
+                "group_depth": 0, "verdicts": {}}
         base.update(settings)
         return ca.Run(**base)
 
     def test_adaptive_mode_cuts_nothing_and_weighs_nothing(self, tmp_path,
                                                            monkeypatch):
         monkeypatch.setattr(ca.chunkdecision, "decide",
-                            lambda *a: pytest.fail("adaptive mode weighed"))
+                            lambda *a, **kw: pytest.fail(
+                                "adaptive mode weighed"))
         state = self._run(tmp_path, {"book.m4b": 10}, adaptive=True)
         assert ca._decide_chunking(state, 32) == frozenset()
 
@@ -393,7 +395,7 @@ class TestTheChunkingDecision:
                                                           monkeypatch):
         asked = []
 
-        def decide(tracks, workers, *rest):
+        def decide(tracks, workers, *rest, **kw):
             asked.append((tracks, workers))
             return ca.chunkdecision.Decision(frozenset(), 0.0, 0.0)
 
@@ -402,11 +404,33 @@ class TestTheChunkingDecision:
         ca._decide_chunking(state, 8)
         assert asked == [([("m4b", 30), ("mp3", 20)], 8)]
 
+    def test_each_track_is_weighed_with_its_folders_verdict(self, tmp_path,
+                                                             monkeypatch):
+        """Under -g a folder converted whole converts a file under the
+        threshold too, and the weighing has to know it will be encoded."""
+        asked = []
+
+        def decide(*args, verdicts=None):
+            asked.append(verdicts)
+            return ca.chunkdecision.Decision(frozenset(), 0.0, 0.0)
+
+        monkeypatch.setattr(ca.chunkdecision, "decide", decide)
+        for book in ("kept", "converted"):
+            (tmp_path / book).mkdir()
+        state = self._run(tmp_path, {os.path.join("kept", "a.mp3"): 20,
+                                     os.path.join("converted", "b.mp3"): 20,
+                                     "loose.mp3": 20},
+                          group_depth=1, verdicts={"kept": False,
+                                                   "converted": True})
+        ca._decide_chunking(state, 8)
+        assert asked == [[False, True, None]]
+
     def test_what_it_chose_is_named_by_track_and_said(self, tmp_path,
                                                       monkeypatch, capsys):
         monkeypatch.setattr(
             ca.chunkdecision, "decide",
-            lambda *a: ca.chunkdecision.Decision(frozenset({1}), 60.0, 600.0))
+            lambda *a, **kw: ca.chunkdecision.Decision(frozenset({1}), 60.0,
+                                                       600.0))
         state = self._run(tmp_path, {"a.m4a": 20, "book.m4b": 30})
         assert ca._decide_chunking(state, 32) == frozenset({"book.m4b"})
         said = capsys.readouterr().out
@@ -418,7 +442,7 @@ class TestTheChunkingDecision:
         probed = []
         monkeypatch.setattr(ca, "chunk_candidate_audio", probed.append)
 
-        def decide(*args):
+        def decide(*args, **kw):
             args[-1](1)
             return ca.chunkdecision.Decision(frozenset(), 0.0, 0.0)
 
@@ -431,7 +455,7 @@ class TestTheChunkingDecision:
                                                   capsys):
         monkeypatch.setattr(
             ca.chunkdecision, "decide",
-            lambda *a: ca.chunkdecision.Decision(frozenset(), 60.0, 60.0))
+            lambda *a, **kw: ca.chunkdecision.Decision(frozenset(), 60.0, 60.0))
         ca._decide_chunking(self._run(tmp_path, {"a.m4a": 20}), 32)
         assert capsys.readouterr().out == ""
 

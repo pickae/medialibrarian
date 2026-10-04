@@ -277,7 +277,7 @@ class _Kind:
     """
 
     def __init__(self, rows, video, always, mono, bitrate, threshold, codec,
-                 copied=True, seconds_per_byte=None):
+                 copied=True, seconds_per_byte=None, verdict=None):
         # Whether the planner stream-copies a candidate of this kind first.
         self.copied = copied
         # Per row: (share, encoded seconds, encode cost, search cost) - the
@@ -291,7 +291,10 @@ class _Kind:
             # video, a picture beside the audio.
             per_byte = seconds_per_byte if seconds_per_byte is not None \
                 else 8.0 / (kbps * 1000.0)
-            if video or always or kbps * 1000 >= threshold:
+            # A folder's verdict overrules its files' own rates, but not a
+            # video or a format that is converted whatever its rate.
+            if video or always or (kbps * 1000 >= threshold
+                                   if verdict is None else verdict):
                 self.rows.append((
                     share, per_byte,
                     per_byte * cost_per_second(decoder, channels, mono,
@@ -484,7 +487,7 @@ class _Run:
 
 
 def decide(tracks, workers, threads, mono, bitrate, threshold, is_video,
-           always_transcode, codec="opus", probe=None):
+           always_transcode, codec="opus", probe=None, verdicts=None):
     """The run's chunking: which of <tracks> to cut, if any.
 
     <tracks> is ``[(extension, size), ...]`` in any order. <workers> is the
@@ -493,24 +496,30 @@ def decide(tracks, workers, threads, mono, bitrate, threshold, is_video,
     re-encoded rather than left alone; <is_video> and <always_transcode> say
     of an extension whether it is encoded whatever its rate.
 
+    <verdicts>, beside <tracks>, is what convert-audio -g judged of each
+    track's folder: True for converted whole, False for kept whole, None where
+    the track's own rate decides.
+
     <probe>, given a track's position, answers ``(decoder, channels, bps,
     seconds)`` for its first audio stream, or None when it cannot say. It is
     asked only of the tracks a decision would cut, and each at most once.
     """
     if workers < 2 or not tracks:
         return Decision(frozenset(), 0.0, 0.0)
+    verdicts = verdicts or [None] * len(tracks)
     known = {}
     census = []
-    for extension, _size in tracks:
-        if extension not in known:
+    for (extension, _size), verdict in zip(tracks, verdicts):
+        if (extension, verdict) not in known:
             video = is_video(extension)
             rows = VIDEO_ROWS if video else (census_for(extension)
                                              or UNKNOWN_ROWS)
-            known[extension] = _Kind(
+            known[extension, verdict] = _Kind(
                 rows, video, always_transcode(extension), mono, bitrate,
                 threshold, codec,
-                extension not in enums.SEEK_CHEAP_EXTENSIONS)
-        census.append(known[extension])
+                extension not in enums.SEEK_CHEAP_EXTENSIONS,
+                verdict=verdict)
+        census.append(known[extension, verdict])
     kinds = list(census)
     asked = set()
     decision = _decide(tracks, kinds, workers, threads)
@@ -537,7 +546,7 @@ def decide(tracks, workers, threads, mono, bitrate, threshold, is_video,
             kinds[index] = _Kind(
                 ((decoder, channels, kbps, 1.0),), is_video(extension),
                 always_transcode(extension), mono, bitrate, threshold, codec,
-                census[index].copied, seconds / size)
+                census[index].copied, seconds / size, verdicts[index])
         decision = _decide(tracks, kinds, workers, threads)
         return True
 
