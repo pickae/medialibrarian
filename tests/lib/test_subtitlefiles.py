@@ -7,6 +7,7 @@ edge cases - an absent pipx, an absent ffprobe, a conversion ffmpeg refuses.
 
 import os
 import shutil
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -396,6 +397,185 @@ class TestSyncByConfidence:
                                            "confidence") == 1
 
 
+class TestTimingReference:
+    """A film's own picture subtitle, turned into the timings a downloaded
+    subtitle is synced to: which track is taken, and where each line starts
+    and ends."""
+
+    def _film(self, monkeypatch, streams, packets):
+        asked = []
+
+        def probe(args, _file):
+            asked.append(args)
+            if "-show_entries" in args and args[
+                    args.index("-show_entries") + 1].startswith("packet="):
+                return {"packets": packets}
+            return {"streams": streams}
+        monkeypatch.setattr(subtitlefiles, "_probe", probe)
+        return asked
+
+    @staticmethod
+    def _pgs(index=3, frames=None, forced=0, title=None):
+        tags = {}
+        if frames is not None:
+            tags["NUMBER_OF_FRAMES"] = str(frames)
+        if title is not None:
+            tags["title"] = title
+        return {"index": index, "codec_name": "hdmv_pgs_subtitle",
+                "disposition": {"forced": forced}, "tags": tags}
+
+    @staticmethod
+    def _blu_ray_packets(count):
+        """A line every 4 s, each shown by a picture packet and cleared 2.5 s
+        later by a 30-byte one; neither says how long it lasts."""
+        packets = []
+        for n in range(count):
+            packets.append({"pts_time": "%.6f" % (10 + 4 * n),
+                            "duration_time": "N/A", "size": "9000"})
+            packets.append({"pts_time": "%.6f" % (12.5 + 4 * n),
+                            "duration_time": "N/A", "size": "30"})
+        return packets
+
+    def _cues(self, path):
+        text = Path(path).read_text(encoding="utf-8")
+        return [line for line in text.splitlines() if "-->" in line]
+
+    def test_a_blu_ray_subtitle_becomes_its_on_screen_times(
+            self, monkeypatch, tmp_path):
+        monkeypatch.setenv("TMPDIR", str(tmp_path))
+        self._film(monkeypatch, [self._pgs()], self._blu_ray_packets(150))
+        with subtitlefiles.TimingReference("Movie.mkv") as timing:
+            path = timing.path()
+            cues = self._cues(path)
+            assert len(cues) == 150
+            assert cues[0] == "00:00:10,000 --> 00:00:12,500"
+            assert cues[1] == "00:00:14,000 --> 00:00:16,500"
+        assert not os.path.exists(path)
+
+    def test_a_packet_that_says_how_long_it_lasts_is_believed(
+            self, monkeypatch, tmp_path):
+        monkeypatch.setenv("TMPDIR", str(tmp_path))
+        dvd = {"index": 2, "codec_name": "dvd_subtitle",
+               "disposition": {"forced": 0}, "tags": {}}
+        self._film(monkeypatch, [dvd], [
+            {"pts_time": "%d" % (60 * n), "duration_time": "1.5", "size": "20"}
+            for n in range(120)])
+        with subtitlefiles.TimingReference("Movie.mkv") as timing:
+            assert self._cues(timing.path())[1] == \
+                "00:01:00,000 --> 00:01:01,500"
+
+    def test_the_fullest_track_that_is_neither_forced_nor_a_commentary(
+            self, monkeypatch):
+        asked = self._film(monkeypatch, [
+            self._pgs(index=3, frames=90),
+            self._pgs(index=4, frames=5000, forced=1),
+            self._pgs(index=5, frames=4000, title="Director's Commentary"),
+            self._pgs(index=6, frames=2000),
+            self._pgs(index=7, frames=1900),
+        ], self._blu_ray_packets(150))
+        with subtitlefiles.TimingReference("Movie.mkv") as timing:
+            assert timing.path()
+        assert asked[1][:2] == ["-select_streams", "6"]
+
+    def test_a_forced_track_when_it_is_all_there_is(self, monkeypatch):
+        """A film in a foreign language flags its whole subtitle forced."""
+        asked = self._film(monkeypatch, [
+            self._pgs(index=4, frames=1777, forced=1),
+            self._pgs(index=5, frames=900, title="Commentary")],
+            self._blu_ray_packets(150))
+        with subtitlefiles.TimingReference("Movie.mkv") as timing:
+            assert timing.path()
+        assert asked[1][:2] == ["-select_streams", "4"]
+
+    def test_the_film_is_read_once_and_only_when_asked(self, monkeypatch):
+        asked = self._film(monkeypatch, [self._pgs()],
+                           self._blu_ray_packets(150))
+        with subtitlefiles.TimingReference("Movie.mkv") as timing:
+            assert asked == []
+            first = timing.path()
+            assert timing.path() == first
+        assert len(asked) == 2
+
+    @pytest.mark.parametrize("streams,lines", [
+        ([], 150),
+        # a text subtitle, which ffsubsync reads by itself
+        ([{"index": 2, "codec_name": "subrip", "tags": {}}], 150),
+        ([{"index": 2, "codec_name": "subrip", "tags": {}},
+          {"index": 3, "codec_name": "hdmv_pgs_subtitle", "tags": {}}], 150),
+        # a handful of signs and foreign lines lines up with almost anything
+        ([{"index": 3, "codec_name": "hdmv_pgs_subtitle", "tags": {}}], 99),
+    ])
+    def test_nothing_to_sync_to(self, monkeypatch, streams, lines):
+        self._film(monkeypatch, streams, self._blu_ray_packets(lines))
+        with subtitlefiles.TimingReference("Movie.mkv") as timing:
+            assert timing.path() is None
+
+    def test_a_film_ffprobe_cannot_read_has_none(self, w):
+        w.install("ffprobe")
+        w.say("ffprobe", "not json")
+        with subtitlefiles.TimingReference("Movie.mkv") as timing:
+            assert timing.path() is None
+
+
+class TestSyncToFilm:
+    """A subtitle is synced to the film's picture subtitle where it has one,
+    and to the audio where it has none or that sync was refused - and the
+    audio is handed the subtitle as it came, not what the refused try left."""
+
+    def _syncs(self, monkeypatch, verdicts):
+        seen = []
+
+        def sync(reference, srt, *_args):
+            seen.append((reference, Path(srt).read_text()))
+            with open(srt, "w") as handle:
+                handle.write("synced to %s\n" % reference)
+            return verdicts[reference]
+        monkeypatch.setattr(subtitlefiles, "sync_subtitle", sync)
+        return seen
+
+    @pytest.fixture()
+    def srt(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TMPDIR", str(tmp_path))
+        path = tmp_path / "Movie.de.srt"
+        path.write_text("as downloaded\n")
+        return path
+
+    def test_the_picture_subtitle_first_and_nothing_else(self, monkeypatch, srt):
+        seen = self._syncs(monkeypatch, {"ref.srt": 0, "Movie.mkv": 0})
+        assert subtitlefiles._sync_to_film(
+            "Movie.mkv", str(srt), "ref.srt", "600", "60", "yes") == 0
+        assert seen == [("ref.srt", "as downloaded\n")]
+        assert srt.read_text() == "synced to ref.srt\n"
+
+    @pytest.mark.parametrize("first", [1, 2])
+    def test_the_audio_after_a_refusal_with_the_subtitle_as_it_came(
+            self, monkeypatch, srt, first):
+        seen = self._syncs(monkeypatch, {"ref.srt": first, "Movie.mkv": 2})
+        assert subtitlefiles._sync_to_film(
+            "Movie.mkv", str(srt), "ref.srt", "600", "60", "yes") == 2
+        assert seen == [("ref.srt", "as downloaded\n"),
+                        ("Movie.mkv", "as downloaded\n")]
+
+    def test_the_audio_alone_without_one(self, monkeypatch, srt):
+        seen = self._syncs(monkeypatch, {"Movie.mkv": 0})
+        assert subtitlefiles._sync_to_film(
+            "Movie.mkv", str(srt), None, "600", "60", "yes") == 0
+        assert seen == [("Movie.mkv", "as downloaded\n")]
+
+    def test_a_download_says_which_it_was_synced_to(self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "Movie.de.srt").write_text("as downloaded\n")
+        timing = SimpleNamespace(path=lambda: "ref.srt")
+        self._syncs(monkeypatch, {"ref.srt": 0})
+        logs = []
+        status = subtitlefiles._sync_downloaded(
+            "Movie.mkv", "Movie.de.srt", "de", "600", "60", "yes",
+            logs.append, timing)
+        assert status == 0
+        assert logs == ["Syncing de subtitles to the film's own subtitle "
+                        "track: Movie.mkv"]
+
+
 class TestDownloadSrt:
     def _setup(self, w, tree, have=("pipx", "ffprobe", "ffmpeg", "ffsubsync"),
                pipx_write="-", ffprobe="-", ffmpeg_rc="-",
@@ -456,11 +636,16 @@ class TestDownloadSrt:
             by_tool.setdefault(argv[0], []).append(argv)
         assert by_tool["pipx"] == [["pipx", "run", _HELPER, "en", "",
                                     "Movie.mkv"]]
-        assert by_tool["ffprobe"] == [["ffprobe", "-v", "error",
-                                       "-select_streams", "s:0",
-                                       "-show_entries", "stream=codec_name",
-                                       "-of", "default=nw=1:nk=1",
-                                       "Movie.en.srt"]]
+        # the sidecar's format, then the film's subtitle tracks for a picture
+        # subtitle to sync to - the stub has none to give
+        assert by_tool["ffprobe"] == [
+            ["ffprobe", "-v", "error", "-select_streams", "s:0",
+             "-show_entries", "stream=codec_name", "-of", "default=nw=1:nk=1",
+             "Movie.en.srt"],
+            ["ffprobe", "-v", "error", "-select_streams", "s",
+             "-show_entries",
+             "stream=index,codec_name:stream_disposition=forced:stream_tags",
+             "-of", "json", str(tree / "Movie.mkv")]]
         assert "ffmpeg" not in by_tool
         (sync,) = by_tool["ffsubsync"]
         assert sync[:8] == ["ffsubsync", "Movie.mkv", "-i", "Movie.en.srt",
