@@ -4,7 +4,7 @@ The settlement is functional rather than a guess from a driver version: a
 broken or absent CUDA install only announces itself when a model is really
 placed on the device, so ``init_whisper_model`` probes its way down the model
 table and trusts only what answers. The probe - half a second of silence made
-with ``ffmpeg`` and transcribed with ``pipx run whisper-ctranslate2`` - is the
+with ``ffmpeg`` and transcribed with :data:`WHISPER_COMMAND` - is the
 one part that touches a tool, and a test drives it through the shared tool stub,
 where the case names which probes fail.
 
@@ -19,7 +19,10 @@ The plan therefore fills one run's slots before it considers a second run.
 import os
 import subprocess
 
+from medialib import helpers
+
 __all__ = [
+    "WHISPER_COMMAND",
     "WHISPER_JOBS",
     "WHISPER_BATCH_SLOTS",
     "WHISPER_BATCH_MIN_SLOTS",
@@ -32,6 +35,10 @@ __all__ = [
     "settle_gpu_plan",
     "init_whisper_model",
 ]
+
+# How whisper-ctranslate2 is started: through a helper that pins the PyAV its
+# faster-whisper can still open audio with - see the helper for why.
+WHISPER_COMMAND = ("pipx", "run", helpers.path_of("whisper_transcribe.py"))
 
 # The most runs at once. Two, on the CPU as well as on the GPU: on a card with
 # room for a third it measured 2% and left no headroom for the desktop, which
@@ -125,7 +132,7 @@ def whisper_works(device: str, compute_type: str, model: str,
         return 1
     try:
         ran = subprocess.run(
-            ["pipx", "run", "whisper-ctranslate2", probe, "--output_dir",
+            [*WHISPER_COMMAND, probe, "--output_dir",
              ram_root, "--model", model, "--language", "en",
              "--output_format", "srt", "--device", device,
              "--compute_type", compute_type, "--threads", threads],

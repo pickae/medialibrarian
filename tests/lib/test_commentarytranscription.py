@@ -72,7 +72,7 @@ def _detected(name, probability="0.987654"):
 
 
 def _pipx_detect(ram):
-    return ["pipx", "run", "whisper-ctranslate2",
+    return [*whisper_lib.WHISPER_COMMAND,
             os.path.join(ram, "languageProbe.wav"), "--output_dir", ram,
             "--model", MODEL_MULTI, "--task", "transcribe",
             "--output_format", "txt", "--vad_filter", "True",
@@ -88,7 +88,7 @@ def _mka(ram, root, rel_base):
 def _srt_calls(calls, mka):
     """The recorded transcription runs whose input is this extract."""
     return [call for call in calls
-            if call[:3] == ["pipx", "run", "whisper-ctranslate2"]
+            if call[:3] == list(whisper_lib.WHISPER_COMMAND)
             and call[3] == mka and "--output_format" in call
             and call[call.index("--output_format") + 1] == "srt"]
 

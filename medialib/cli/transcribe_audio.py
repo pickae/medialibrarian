@@ -224,7 +224,7 @@ class Run:
             whisper_out = os.path.join(
                 work, os.path.splitext(name)[0] + "." + self.fmt)
             done = subprocess.run(
-                ["pipx", "run", "whisper-ctranslate2", for_whisper,
+                [*whisper.WHISPER_COMMAND, for_whisper,
                  "--output_dir", work,
                  "--model", self.model["modelMulti"],
                  "--output_format", self.fmt,
