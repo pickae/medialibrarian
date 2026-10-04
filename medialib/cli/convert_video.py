@@ -1061,20 +1061,21 @@ def video_intermediate_complete(directory: str, source_duration) -> bool:
 
 def sum_encode_progress(directory: str) -> tuple:
     """``sumEncodeProgress``: how far this file's video encode has got, as
-    (frames, microseconds).
+    (frames, microseconds, bytes written).
 
     Every parallel job writes an ffmpeg -progress file, each key re-appended on
     every update, so the LAST occurrence per file is that chunk's position and the
-    per-file totals sum to the file's.
+    per-file totals sum to the file's. The bytes are video only: every job writes
+    a video-only intermediate.
     """
-    frames = micros = 0
+    frames = micros = written = 0
     try:
         names = sorted(name for name in os.listdir(directory)
                        if name.startswith("prog."))
     except OSError:
-        return 0, 0
+        return 0, 0, 0
     for name in names:
-        one_frames = one_micros = 0
+        one_frames = one_micros = one_written = 0
         try:
             with open(os.path.join(directory, name)) as handle:
                 for line in handle:
@@ -1083,11 +1084,14 @@ def sum_encode_progress(directory: str) -> tuple:
                         one_frames = _as_int(value)
                     elif key == "out_time_us":
                         one_micros = _as_int(value)
+                    elif key == "total_size":
+                        one_written = _as_int(value)
         except OSError:
             continue
         frames += one_frames
         micros += one_micros
-    return frames, micros
+        written += one_written
+    return frames, micros, written
 
 
 def _as_int(value: str) -> int:
@@ -1257,7 +1261,9 @@ def video_status_text(directory: str, total_seconds, label: str, start: int,
     """``videoStatusText``: ONE line for a file's video pass, in place of ffmpeg's
     per-process banners - one set per parallel chunk.
 
-    It reports how far through the file is, the wall-clock spent and left, and the
+    It reports how far through the file is, the wall-clock spent and left, the
+    size the video stream is heading for - the bytes written so far scaled up to
+    the whole duration, so audio, subtitles and muxing are not in it - and the
     two figures that say how FAST it is going: frames per second, and the
     real-time speed-up. Both are aggregates across the parallel chunks, which is
     what makes them comparable between a chunked and an unchunked file.
@@ -1269,6 +1275,8 @@ def video_status_text(directory: str, total_seconds, label: str, start: int,
 
     The file NAME is what gives way when the row does not fit: the numbers are the
     point of it, so they are measured first and the name gets the columns left.
+    Once the name is down to its floor, the size estimate goes next - an 80-column
+    terminal has no room for it.
     """
     from medialib.lib import formatting, statusline
     # The two spellings are the same WIDTH, so pausing does not shift the rest of
@@ -1276,7 +1284,7 @@ def video_status_text(directory: str, total_seconds, label: str, start: int,
     prefix = "  paused   " if paused else "  encoding "
     minimum_label = 12
 
-    frames, micros = sum_encode_progress(directory)
+    frames, micros, written = sum_encode_progress(directory)
     elapsed = max(0, now - start - max(0, paused_now - paused_at_start))
     total = formatting.awk_number(total_seconds)
 
@@ -1285,12 +1293,24 @@ def video_status_text(directory: str, total_seconds, label: str, start: int,
         eta = formatting.fmt_clock("%d" % (elapsed * (100 - percent) / percent))
     else:
         eta = "--:--"
+    # Withheld for as long as the ETA is, and as rough as it is early on: the
+    # opening of a film - titles, black - is cheaper than what follows.
+    if percent > 0.5 and written > 0:
+        estimate = "~" + formatting.fmt_bytes(
+            written * total * 1000000 / micros)
+    else:
+        estimate = "--"
     fps = 0.0 if elapsed <= 0 else frames / elapsed
     speed = formatting.fmt_ratio(
         "%.6f" % (micros / 1000000 / elapsed) if elapsed > 0 else "0")
 
+    sized = (": %.1f%%  elapsed %s  ETA %s  size %s  %.1f fps  %sx realtime"
+             % (percent, formatting.fmt_clock(elapsed), eta, estimate, fps,
+                speed))
     fields = (": %.1f%%  elapsed %s  ETA %s  %.1f fps  %sx realtime"
               % (percent, formatting.fmt_clock(elapsed), eta, fps, speed))
+    if cols - margin - len(prefix) - len(sized) >= minimum_label:
+        fields = sized
     # What is left of the row once the prefix, the reserved end column and the
     # fields have had theirs. The prefix is MEASURED rather than counted: written
     # out as a literal and as its own width, the two would drift apart the first

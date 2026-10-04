@@ -1149,7 +1149,7 @@ class Run:
         self._encode(settings, relative, directory, plan.video_duration,
                      plan.bounds,
                      plan.size_text, scenecuts.describe(plan.cut_kinds))
-        frames, micros = rules.sum_encode_progress(directory)
+        frames, micros, _written = rules.sum_encode_progress(directory)
 
         # The intermediate has been read for the last time - everything left reads
         # the ORIGINAL. Handed back per file because it is a whole film's video
