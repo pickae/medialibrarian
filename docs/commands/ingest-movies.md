@@ -461,6 +461,20 @@ subtitles or languages outside the six.
 A dry run tests each subtitle on a copy. Run it after `-tw`, so that films are
 searched for by their ids.
 
+The films are taken one at a time in name order, each announced with its place
+in the folder, so a film with nothing to test or download still shows up. With
+`-sw` each film's missing subtitles are downloaded before the run moves on to
+the next film. Under the film, one line per subtitle says what it was aligned
+to, by how much, and what became of it:
+
+```
+==> [3/120] The Movie (1999)/The Movie (1999).mkv
+==>   English: in step with the film's subtitle track (shifted +1.2 s, confidence 4.81) - synced and kept
+==>   German: out of step with the audio (confidence 0.42) - thrown out
+==>   German: none found to download
+==>   French: downloaded, in step with the audio (shifted -0.4 s, confidence 2.10) - synced and kept
+```
+
 ## Commentary transcripts (`-a`)
 
 **`-a` does only the audio commentary phase.** Every commentary track that does

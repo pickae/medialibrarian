@@ -1062,9 +1062,11 @@ def _subtitles_only(program: str, script_dir: str, roots: list, names: list,
     has to stand out from every other offset - and, like -t, this is a DRY RUN
     unless asked otherwise: a subtitle thrown out is gone. The dry run tests a
     copy, says what each would come to and lists the ones out of step; -w syncs
-    the ones in step, deletes the rest, and then downloads what is missing the
-    way a full ingest does, which puts each download to the same test. A
-    subtitle thrown out here is therefore fetched again in the same run.
+    the ones in step, deletes the rest, and then downloads what that film is
+    missing the way a full ingest does, which puts each download to the same
+    test, before going on to the next. A subtitle thrown out here is therefore
+    fetched again in the same run. Each film is announced with its place in the
+    folder, so one nothing is done to is named all the same.
 
     Nothing else the full run does is set up: no RAM scratch, no whisper, no
     renaming, and no commentary - its transcripts are named after their track
@@ -1105,20 +1107,17 @@ def _subtitles_only(program: str, script_dir: str, roots: list, names: list,
     totals = {"kept": 0, "discarded": 0, "untested": 0}
     for root, name in zip(roots, names, strict=True):
         log('Phase: testing the subtitles already beside the films in "%s"'
-            % root + ("" if write else " - DRY RUN, nothing will be changed"))
+            % root + (" and downloading the missing" if download else "")
+            + ("" if write else " - DRY RUN, nothing will be changed"))
         verdicts = subtitlefiles.check_subs(
             root, rules.MAX_SYNC_OFFSET, rules.MAX_SYNC_QUALITY_OFFSET,
-            ffsubsync_quality, write, log)
+            ffsubsync_quality, write, log,
+            (user, password) if download else None)
         for verdict, found in verdicts.items():
             totals[verdict] += len(found)
         _write_subtitle_list(commands.logs_file(script_dir,
                                                 SUBTITLES_LIST % name),
                              root, verdicts, write)
-        if download:
-            log('Phase: downloading missing subtitles in "%s"' % root)
-            subtitlefiles.download_subs(
-                root, user, password, rules.MAX_SYNC_OFFSET,
-                rules.MAX_SYNC_QUALITY_OFFSET, ffsubsync_quality, log)
 
     log(_subtitle_totals(totals))
     if not write:

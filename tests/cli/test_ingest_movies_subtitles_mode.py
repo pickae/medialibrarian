@@ -3,7 +3,7 @@ already there, and nothing else.
 
 What is pinned here is the boundary: the check runs per folder in the order
 given, as a dry run unless -w is given, -w adds the download the full run does
-and adds it after the check, and no other phase of the run touches the library.
+to the same walk, and no other phase of the run touches the library.
 The check itself is pinned in tests/lib/test_subtitlefiles.py.
 """
 
@@ -64,8 +64,8 @@ def stubbed(monkeypatch, tmp_path):
     verdicts = {"kept": [], "discarded": [], "untested": []}
 
     def check_subs(directory, max_offset, quality_offset, quality, write,
-                   log):
-        calls.append(("check", directory, quality, write))
+                   log, credentials=None):
+        calls.append(("check", directory, quality, write, credentials))
         return {key: list(found) for key, found in verdicts.items()}
 
     def download_subs(directory, user, password, max_offset, quality_offset,
@@ -90,23 +90,22 @@ class TestThePhaseRunsAndNothingElse:
         docs = _library(tmp_path, "Documentaries")
         assert _main(stubbed, "-s", str(films), str(docs)) == 0
         assert stubbed["calls"] == [
-            ("check", str(films), "confidence", False),
-            ("check", str(docs), "confidence", False)]
+            ("check", str(films), "confidence", False, None),
+            ("check", str(docs), "confidence", False, None)]
         assert any(line.startswith("Dry run: nothing was changed")
                    for line in stubbed["logs"])
 
-    def test_w_checks_then_downloads_folder_by_folder(self, stubbed,
-                                                       tmp_path):
-        """The check comes first, so a subtitle it throws out is fetched again
-        in the same run."""
+    def test_w_checks_and_downloads_folder_by_folder(self, stubbed,
+                                                      tmp_path):
+        """One walk of each folder, handed the credentials so each film is
+        checked and then has what is missing downloaded - a subtitle the check
+        throws out is fetched again in the same run."""
         films = _library(tmp_path, "Films")
         docs = _library(tmp_path, "Documentaries")
         assert _main(stubbed, "-sw", str(films), str(docs)) == 0
         assert stubbed["calls"] == [
-            ("check", str(films), "confidence", True),
-            ("download", str(films), "confidence"),
-            ("check", str(docs), "confidence", True),
-            ("download", str(docs), "confidence")]
+            ("check", str(films), "confidence", True, ("u", "p")),
+            ("check", str(docs), "confidence", True, ("u", "p"))]
 
     def test_pipx_is_asked_for_only_when_there_is_a_download(self, stubbed,
                                                              tmp_path):
@@ -123,7 +122,8 @@ class TestThePhaseRunsAndNothingElse:
         films = _library(tmp_path, "Films")
         docs = _library(tmp_path, "Documentaries")
         assert _main(stubbed, "-sw", str(films), str(docs)) == 0
-        assert [call[0] for call in stubbed["calls"]] == ["check", "check"]
+        assert [(call[0], call[4]) for call in stubbed["calls"]] == [
+            ("check", None), ("check", None)]
         assert len([line for line in stubbed["logs"]
                     if "openSubtitlesUser" in line]) == 1
 

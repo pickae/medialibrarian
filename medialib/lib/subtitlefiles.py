@@ -76,6 +76,9 @@ MIN_REFERENCE_CUES = 100
 _PGS_CLEAR_BYTES = 50
 
 _CONFIDENCE = re.compile(r"^alignment confidence: (-?[0-9.]+)$", re.M)
+_OFFSET = re.compile(r"^offset seconds: (-?[0-9.]+)$", re.M)
+# How far off the best fit was, in the line ffsubsync refuses it with.
+_REFUSED_OFFSET = re.compile(r"\|offset\| ([0-9.]+)s")
 
 # The two id tags a Plex name carries, read for the number in them.
 _IMDB_TAG = re.compile(r"\{imdb-(tt[0-9]+)\}", re.I)
@@ -202,7 +205,8 @@ def can_measure_confidence() -> bool:
 
 
 def sync_subtitle(reference: str, srt: str, max_offset: str,
-                  quality_offset: str, quality: str) -> int:
+                  quality_offset: str, quality: str,
+                  measured: dict | None = None) -> int:
     """Align one subtitle to its reference, and say which of three things
     happened: 0 the subtitle was synced, 1 ffsubsync died outright (bad
     arguments, a missing dependency) or caught its own failure, 2 the
@@ -217,6 +221,11 @@ def sync_subtitle(reference: str, srt: str, max_offset: str,
     since a right subtitle found far away is still right. "yes": ffsubsync's
     own check alone, with ``quality_offset`` as the furthest offset believed.
     Anything else: no check at all.
+
+    ``measured``, when handed one, is given what the log says of the
+    alignment: its ``offset`` in seconds - or, for one ffsubsync refused, the
+    ``distance`` of its best fit - and its ``confidence``, each only where the
+    log has it.
 
     Telling 2 from 0 needs the log file read, because ffsubsync exits 0 for
     both. The log is read from ``--log-dir-path`` and not from stderr, because
@@ -258,14 +267,24 @@ def sync_subtitle(reference: str, srt: str, max_offset: str,
                 log_text = handle.read()
         except OSError:
             return 1 if quality == "confidence" else 0
+        measured_confidence = _CONFIDENCE.search(log_text)
+        if measured is not None:
+            offset = _OFFSET.search(log_text)
+            refused = _REFUSED_OFFSET.search(log_text)
+            if offset:
+                measured["offset"] = float(offset.group(1))
+            elif refused:
+                measured["distance"] = float(refused.group(1))
+            if measured_confidence:
+                measured["confidence"] = float(measured_confidence.group(1))
         if "low-quality alignment" in log_text:
             return 2
         if quality != "confidence":
             return 0
-        measured = _CONFIDENCE.search(log_text)
-        if not measured:
+        if not measured_confidence:
             return 1
-        return 0 if float(measured.group(1)) >= MIN_SYNC_CONFIDENCE else 2
+        return (0 if float(measured_confidence.group(1)) >= MIN_SYNC_CONFIDENCE
+                else 2)
     finally:
         shutil.rmtree(log_dir, ignore_errors=True)
 
@@ -403,12 +422,18 @@ class TimingReference:
 
 
 def _sync_to_film(file: str, srt: str, timing: str | None, max_offset: str,
-                  quality_offset: str, quality: str) -> int:
+                  quality_offset: str, quality: str,
+                  measured: dict | None = None) -> int:
     """:func:`sync_subtitle`'s status for a subtitle aligned to its film: to
     the film's picture-subtitle ``timing`` first where there is one, and to its
     audio where there is none or that alignment was refused or failed. The
     first try runs on a copy, so a refusal - after which ffsubsync may already
-    have rewritten the file - hands the audio the subtitle as it came."""
+    have rewritten the file - hands the audio the subtitle as it came.
+
+    ``measured`` is given :func:`sync_subtitle`'s measurement of the alignment
+    that decided, and what it was aligned ``against``."""
+    if measured is None:
+        measured = {}
     if timing:
         try:
             scratch = tempfile.mkdtemp(dir=os.environ.get("TMPDIR"))
@@ -419,14 +444,42 @@ def _sync_to_film(file: str, srt: str, timing: str | None, max_offset: str,
                 copy = os.path.join(scratch, os.path.basename(srt))
                 shutil.copyfile(srt, copy)
                 if sync_subtitle(timing, copy, max_offset, quality_offset,
-                                 quality) == 0:
+                                 quality, measured) == 0:
                     shutil.copyfile(copy, srt)
+                    measured["against"] = "the film's subtitle track"
                     return 0
             except OSError:
                 pass
             finally:
                 shutil.rmtree(scratch, ignore_errors=True)
-    return sync_subtitle(file, srt, max_offset, quality_offset, quality)
+    measured.clear()
+    measured["against"] = "the audio"
+    return sync_subtitle(file, srt, max_offset, quality_offset, quality,
+                         measured)
+
+
+def _said(language_code: str, text: str) -> str:
+    """One subtitle's line under its film's header: the language, and what
+    became of it."""
+    name = next((row.sub_word for row in languages.LANGUAGES
+                 if row.code2 == language_code), language_code)
+    return "  {}: {}".format(name, text)
+
+
+def _alignment(step: str, measured: dict) -> str:
+    """"in step" or "out of step", with what the alignment was made against
+    and what it came to where ffsubsync said: "in step with the audio
+    (shifted +5.0 s, confidence 3.20)"."""
+    if measured.get("against"):
+        step += " with " + measured["against"]
+    detail = []
+    if "offset" in measured:
+        detail.append("shifted {:+.1f} s".format(measured["offset"]))
+    elif "distance" in measured:
+        detail.append("best fit {:.1f} s off".format(measured["distance"]))
+    if "confidence" in measured:
+        detail.append("confidence {:.2f}".format(measured["confidence"]))
+    return step + (" ({})".format(", ".join(detail)) if detail else "")
 
 
 def film_imdb_id(file: str) -> str:
@@ -469,8 +522,8 @@ def _to_subrip(srt: str, language_code: str, file: str,
     except OSError:
         sub_codec = ""
     if sub_codec and sub_codec != "subrip":
-        log("Converting {} subtitle from {} to subrip: {}".format(
-            language_code, sub_codec, file))
+        log(_said(language_code,
+                  "converting from {} to SubRip".format(sub_codec)))
         converted = (srt[:-len(".srt")] + ".converted.srt"
                      if srt.endswith(".srt") else srt + ".converted.srt")
         try:
@@ -518,7 +571,6 @@ def download_srt(file: str, language_code: str, user: str, password: str,
         log("WARNING: openSubtitlesUser/openSubtitlesPassword not set, "
             "skipping subtitle download")
         return
-    log("Downloading {} subtitles: {}".format(language_code, file))
     # The credentials travel in the environment, where argv would show them to
     # every account on the machine.
     env = dict(os.environ, openSubtitlesUser=user,
@@ -531,45 +583,35 @@ def download_srt(file: str, language_code: str, user: str, password: str,
     except OSError:
         pass
     if not os.path.isfile(srt):
+        log(_said(language_code, "none found to download"))
         return
 
     _to_subrip(srt, language_code, file, log)
 
+    measured: dict = {}
     if timing is None:
         with TimingReference(file) as own:
-            status = _sync_downloaded(file, srt, language_code,
-                                      max_sync_offset, max_sync_quality_offset,
-                                      ffsubsync_quality, log, own)
+            status = _sync_to_film(file, srt, own.path(), max_sync_offset,
+                                   max_sync_quality_offset, ffsubsync_quality,
+                                   measured)
     else:
-        status = _sync_downloaded(file, srt, language_code, max_sync_offset,
-                                  max_sync_quality_offset, ffsubsync_quality,
-                                  log, timing)
+        status = _sync_to_film(file, srt, timing.path(), max_sync_offset,
+                               max_sync_quality_offset, ffsubsync_quality,
+                               measured)
+    if status == 0:
+        log(_said(language_code, "downloaded, {} - synced and kept".format(
+            _alignment("in step", measured))))
+        return
     if status == 1:
-        log("WARNING: subtitle sync failed ({}), discarding: {}".format(
-            language_code, file))
-        try:
-            os.remove(srt)
-        except OSError:
-            pass
-    elif status == 2:
-        log("WARNING: subtitle sync rejected as low-quality ({}), "
-            "discarding: {}".format(language_code, file))
-        try:
-            os.remove(srt)
-        except OSError:
-            pass
-
-
-def _sync_downloaded(file: str, srt: str, language_code: str,
-                     max_sync_offset: str, max_sync_quality_offset: str,
-                     ffsubsync_quality: str, log: Callable[[str], None],
-                     timing: TimingReference) -> int:
-    reference = timing.path()
-    log("Syncing {} subtitles{}: {}".format(
-        language_code, " to the film's own subtitle track" if reference else "",
-        file))
-    return _sync_to_film(file, srt, reference, max_sync_offset,
-                         max_sync_quality_offset, ffsubsync_quality)
+        log(_said(language_code, "WARNING: downloaded, but could not be "
+                  "synced - thrown out"))
+    else:
+        log(_said(language_code, "downloaded, {} - thrown out".format(
+            _alignment("out of step", measured))))
+    try:
+        os.remove(srt)
+    except OSError:
+        pass
 
 
 def subtitle_movies(directory: str) -> list:
@@ -593,7 +635,9 @@ def subtitle_movies(directory: str) -> list:
         return directory + "/" + rel
 
     def walk(base, rel_prefix):
-        for entry in os.scandir(base):
+        # by name, so a walk that counts its films counts them in an order
+        # that can be followed
+        for entry in sorted(os.scandir(base), key=lambda entry: entry.name):
             rel = rel_prefix + entry.name
             if entry.name.endswith("mkv"):
                 yield spell(rel)
@@ -632,12 +676,28 @@ def download_subs(directory: str, user: str, password: str,
             log("WARNING: openSubtitlesUser/openSubtitlesPassword not set, "
                 "skipping subtitle download ({} missing)".format(missing))
         return
-    for movie in subtitle_movies(directory):
+    movies = subtitle_movies(directory)
+    for index, movie in enumerate(movies, start=1):
+        log(_movie_header(index, len(movies), directory, movie))
         with TimingReference(movie) as timing:
-            for row in languages.LANGUAGES:
-                download_srt(movie, row.code2, user, password, max_sync_offset,
-                             max_sync_quality_offset, ffsubsync_quality, log,
-                             timing)
+            _download_missing(movie, user, password, max_sync_offset,
+                              max_sync_quality_offset, ffsubsync_quality, log,
+                              timing)
+
+
+def _movie_header(index: int, total: int, directory: str, movie: str) -> str:
+    """The line each film of a folder's subtitle walk opens with: where it
+    stands in the folder, so a film nothing is done to is still named."""
+    return "[{}/{}] {}".format(index, total, os.path.relpath(movie, directory))
+
+
+def _download_missing(movie: str, user: str, password: str,
+                      max_sync_offset: str, max_sync_quality_offset: str,
+                      ffsubsync_quality: str, log: Callable[[str], None],
+                      timing: TimingReference) -> None:
+    for row in languages.LANGUAGES:
+        download_srt(movie, row.code2, user, password, max_sync_offset,
+                     max_sync_quality_offset, ffsubsync_quality, log, timing)
 
 
 def check_srt(file: str, srt: str, language_code: str, max_sync_offset: str,
@@ -659,39 +719,39 @@ def check_srt(file: str, srt: str, language_code: str, max_sync_offset: str,
             return check_srt(file, srt, language_code, max_sync_offset,
                              max_sync_quality_offset, ffsubsync_quality,
                              write, log, own)
+    measured: dict = {}
     if write:
         _to_subrip(srt, language_code, file, log)
         status = _sync_to_film(file, srt, timing.path(), max_sync_offset,
-                               max_sync_quality_offset, ffsubsync_quality)
+                               max_sync_quality_offset, ffsubsync_quality,
+                               measured)
     else:
         status = _test_copy(file, srt, language_code, max_sync_offset,
                             max_sync_quality_offset, ffsubsync_quality,
-                            timing.path())
+                            timing.path(), measured)
 
     if status == 1:
-        log("WARNING: subtitle could not be tested ({}), left alone: {}"
-            .format(language_code, srt))
+        log(_said(language_code, "WARNING: could not be tested - left alone"))
         return "untested"
     if status == 2:
-        if not write:
-            log("Subtitle out of step ({}), would be thrown out: {}".format(
-                language_code, srt))
-            return "discarded"
-        log("WARNING: subtitle sync rejected as low-quality ({}), "
-            "discarding: {}".format(language_code, srt))
-        try:
-            os.remove(srt)
-        except OSError:
-            pass
+        log(_said(language_code, "{} - {}".format(
+            _alignment("out of step", measured),
+            "thrown out" if write else "would be thrown out")))
+        if write:
+            try:
+                os.remove(srt)
+            except OSError:
+                pass
         return "discarded"
-    log("Subtitle in step ({}), {}: {}".format(
-        language_code, "synced and kept" if write else "would be kept", srt))
+    log(_said(language_code, "{} - {}".format(
+        _alignment("in step", measured),
+        "synced and kept" if write else "would be kept")))
     return "kept"
 
 
 def _test_copy(file: str, srt: str, language_code: str, max_sync_offset: str,
                max_sync_quality_offset: str, ffsubsync_quality: str,
-               reference: str | None) -> int:
+               reference: str | None, measured: dict) -> int:
     """:func:`_sync_to_film`'s status for a copy of the sidecar, made the way
     the real one would be synced - converted to SubRip first - so the dry run
     gives the verdict the real run would, and leaves the sidecar as it was."""
@@ -707,24 +767,32 @@ def _test_copy(file: str, srt: str, language_code: str, max_sync_offset: str,
             return 1
         _to_subrip(copy, language_code, file, lambda _line: None)
         return _sync_to_film(file, copy, reference, max_sync_offset,
-                             max_sync_quality_offset, ffsubsync_quality)
+                             max_sync_quality_offset, ffsubsync_quality,
+                             measured)
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
 
 
 def check_subs(directory: str, max_sync_offset: str,
                max_sync_quality_offset: str, ffsubsync_quality: str,
-               write: bool, log: Callable[[str], None]) -> dict:
+               write: bool, log: Callable[[str], None],
+               credentials: tuple | None = None) -> dict:
     """:func:`check_srt` for every ``<movie>.<xx>.srt`` beside every movie of
     :func:`subtitle_movies`, in every language of the table - the sidecars a
     download would have written, and so never a commentary transcript, whose
     name carries the track number after the movie's.
 
+    With ``credentials`` - OpenSubtitles' (user, password) - each film then has
+    what is missing downloaded before the walk goes on to the next, so one
+    thrown out is fetched again straight away.
+
     Returns the sidecars by verdict: ``{"kept": [...], "discarded": [...],
     "untested": [...]}``.
     """
     verdicts: dict = {"kept": [], "discarded": [], "untested": []}
-    for movie in subtitle_movies(directory):
+    movies = subtitle_movies(directory)
+    for index, movie in enumerate(movies, start=1):
+        log(_movie_header(index, len(movies), directory, movie))
         with TimingReference(movie) as timing:
             for row in languages.LANGUAGES:
                 srt = _sidecar(movie, row.code2)
@@ -734,4 +802,9 @@ def check_subs(directory: str, max_sync_offset: str,
                                     max_sync_quality_offset, ffsubsync_quality,
                                     write, log, timing)
                 verdicts[verdict].append(srt)
+            if credentials:
+                user, password = credentials
+                _download_missing(movie, user, password, max_sync_offset,
+                                  max_sync_quality_offset, ffsubsync_quality,
+                                  log, timing)
     return verdicts
