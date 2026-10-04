@@ -24,6 +24,7 @@ from medialib.lib import (
     commentarynames,
     commentarytranscription,
     dolbyvision,
+    donelog,
     durationcheck,
     dvdcompare,
     dynamicqueue,
@@ -852,6 +853,12 @@ DUPLICATES_LIST = os.path.join(LOGS, "ingest-movies-duplicates.txt")
 # deleted.
 SUBTITLES_LIST = os.path.join(LOGS, "ingest-movies-subtitles-%s.txt")
 
+# And the films a -sw run has finished, by id, which every -s run after it
+# skips: the ffsubsync passes are what a run over a library spends its hours
+# on. One file for every folder, appended to rather than replaced - a film is
+# known by its id however it has since been moved or renamed.
+SUBTITLES_DONE = os.path.join(LOGS, "ingest-movies-subtitles-done.txt")
+
 # And the commentary tracks a -n run named, or would name, and the films it
 # left alone with the reason for each.
 COMMENTARY_NAMES_LIST = os.path.join(LOGS,
@@ -1104,6 +1111,7 @@ def _subtitles_only(program: str, script_dir: str, roots: list, names: list,
         log("WARNING: openSubtitlesUser/openSubtitlesPassword not set - the "
             "subtitles already here are tested, and none is downloaded.")
 
+    done = donelog.DoneLog(commands.logs_file(script_dir, SUBTITLES_DONE))
     totals = {"kept": 0, "discarded": 0, "untested": 0}
     for root, name in zip(roots, names, strict=True):
         log('Phase: testing the subtitles already beside the films in "%s"'
@@ -1112,7 +1120,7 @@ def _subtitles_only(program: str, script_dir: str, roots: list, names: list,
         verdicts = subtitlefiles.check_subs(
             root, rules.MAX_SYNC_OFFSET, rules.MAX_SYNC_QUALITY_OFFSET,
             ffsubsync_quality, write, log,
-            (user, password) if download else None)
+            (user, password) if download else None, done)
         for verdict, found in verdicts.items():
             totals[verdict] += len(found)
         _write_subtitle_list(commands.logs_file(script_dir,
