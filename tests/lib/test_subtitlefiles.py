@@ -7,6 +7,7 @@ edge cases - an absent pipx, an absent ffprobe, a conversion ffmpeg refuses.
 
 import os
 import re
+import shlex
 import shutil
 import sys
 from pathlib import Path
@@ -25,6 +26,11 @@ _TOOLSTUB = blackbox.TOOLSTUB
 _PLUMBING = ("bash", "awk", "cat", "find", "grep", "mktemp", "mv", "rm")
 
 _HELPER = helpers.path_of("subliminal_download.py")
+
+# OpenSubtitles.org alone, as every download asked before there were others;
+# and every provider but it, as a run without its login asks.
+_ORG = subtitlefiles.PROVIDERS[:1]
+_NO_ORG = subtitlefiles.PROVIDERS[1:]
 
 # The log a sync that applied the alignment leaves, and one that refused it.
 _GOOD_LOG = "score: 44100.000\noffset seconds: 5.000\nwriting output"
@@ -77,6 +83,26 @@ def w(tmp_path, monkeypatch):
     return SimpleNamespace(install=install, say=say, rc=rc, write=write,
                            calls=calls, clear=clear, bin_dir=bin_dir,
                            tmp_path=tmp_path)
+
+
+# A subtitle of three cues, and a subcleaner that leaves the one in the middle:
+# the first and the last were adverts.
+_THREE_CUES = ("1\n00:00:01,000 --> 00:00:03,000\nSubtitles by someone\n\n"
+               "2\n00:01:00,000 --> 00:01:02,000\nHello.\n\n"
+               "3\n01:30:00,000 --> 01:30:02,000\nwww.example.org\n")
+
+
+def _fake_subcleaner(w, says=""):
+    """A subcleaner on the stub PATH that records its call the way the stubs
+    do, prints ``says`` and leaves only the middle cue of the subtitle."""
+    tool = w.bin_dir / "subcleaner"
+    tool.write_text(
+        "#!/bin/bash\n"
+        "{ printf 'call\\tsubcleaner'; printf '\\t%s' \"$@\"; echo; } "
+        ">> \"$TOOLSTUB_LOG\"\n"
+        "printf '%s' " + shlex.quote(says) + "\n"
+        "printf '1\\n00:01:00,000 --> 00:01:02,000\\nHello.\\n' > \"$1\"\n")
+    os.chmod(str(tool), 0o755)
 
 
 def _tree(w, *entries):
@@ -605,21 +631,102 @@ class TestDownloadSrt:
         monkeypatch.chdir(tree)
         have_calls, _ = self._setup(w, tree)
         logs = []
-        subtitlefiles.download_srt("Movie.mkv", "en", "u", "p", "600", "60",
+        subtitlefiles.download_srt("Movie.mkv", "en", _ORG, "600", "60",
                                    "yes", logs.append)
         assert have_calls() == []
         assert logs == []
 
-    def test_without_credentials_it_warns_and_calls_nothing(self, w, monkeypatch):
+    def _providers_asked(self, calls):
+        """Each call of the helper's provider, and the ids it was told not to
+        offer again."""
+        return [argv[6:] for argv in calls() if argv[0] == "pipx"]
+
+    def test_a_provider_with_none_hands_over_to_the_next(self, w,
+                                                         monkeypatch):
         tree = _tree(w)
         monkeypatch.chdir(tree)
-        have_calls, _ = self._setup(w, tree)
+        have_calls, tree = self._setup(
+            w, tree, pipx_write="- Movie.en.srt", ffprobe="subrip",
+            ffsubsync_log=_GOOD_LOG)
         logs = []
-        subtitlefiles.download_srt("Movie.mkv", "en", "", "p", "600", "60",
+        subtitlefiles.download_srt("Movie.mkv", "en", _NO_ORG, "600", "60",
                                    "yes", logs.append)
-        assert have_calls() == []
-        assert logs == ["WARNING: openSubtitlesUser/openSubtitlesPassword "
-                        "not set, skipping subtitle download"]
+        assert self._providers_asked(have_calls) == [["opensubtitlescom"],
+                                                     ["subdl"]]
+        assert logs == ["  English: downloaded from SubDL, in step with "
+                        "the audio (shifted +5.0 s) - synced and kept"]
+        assert (tree / "Movie.en.srt").is_file()
+
+    def test_one_thrown_out_is_not_offered_again(self, w, monkeypatch):
+        """Two of a provider's, by the id the helper printed, then the next
+        provider's."""
+        tree = _tree(w)
+        monkeypatch.chdir(tree)
+        have_calls, tree = self._setup(
+            w, tree, pipx_write="Movie.en.srt Movie.en.srt Movie.en.srt",
+            ffprobe="subrip", ffsubsync_rc="1 1 0", ffsubsync_log=_GOOD_LOG)
+        w.write("ffsubsync", " ".join(["${--log-dir-path}/ffsubsync.log"] * 3))
+        w.say("pipx", "4711\n")
+        logs = []
+        subtitlefiles.download_srt(
+            "Movie.mkv", "en", _ORG + subtitlefiles.PROVIDERS[2:3], "600",
+            "60", "yes", logs.append)
+        assert self._providers_asked(have_calls) == [
+            ["opensubtitles"], ["opensubtitles", "4711"], ["subdl"]]
+        assert logs == [
+            "  English: WARNING: downloaded from OpenSubtitles.org, but could "
+            "not be synced - thrown out"] * 2 + [
+            "  English: downloaded from SubDL, in step with the audio "
+            "(shifted +5.0 s) - synced and kept"]
+
+    def test_no_more_than_five_are_tried(self, w, monkeypatch):
+        tree = _tree(w)
+        monkeypatch.chdir(tree)
+        have_calls, tree = self._setup(
+            w, tree, pipx_write=" ".join(["Movie.en.srt"] * 8),
+            ffprobe="subrip", ffsubsync_rc="1")
+        w.say("pipx", "1\n")
+        logs = []
+        subtitlefiles.download_srt("Movie.mkv", "en", subtitlefiles.PROVIDERS,
+                                   "600", "60", "yes", logs.append)
+        assert [asked[0] for asked in self._providers_asked(have_calls)] == [
+            "opensubtitles", "opensubtitles", "opensubtitlescom",
+            "opensubtitlescom", "subdl"]
+        assert len(logs) == subtitlefiles.TRIES_PER_LANGUAGE
+        assert not (tree / "Movie.en.srt").exists()
+
+    def test_a_language_the_film_already_has_asks_no_one_else(self, w,
+                                                              monkeypatch):
+        tree = _tree(w)
+        monkeypatch.chdir(tree)
+        have_calls, tree = self._setup(w, tree)
+        w.rc("pipx", "3")
+        logs = []
+        subtitlefiles.download_srt("Movie.mkv", "en", _NO_ORG, "600", "60",
+                                   "yes", logs.append)
+        assert self._providers_asked(have_calls) == [["opensubtitlescom"]]
+        assert logs == ["  English: none found to download"]
+
+    def test_the_adverts_are_taken_out_before_the_sync(self, w, monkeypatch):
+        tree = _tree(w)
+        monkeypatch.chdir(tree)
+        have_calls, tree = self._setup(
+            w, tree, pipx_write="Movie.en.srt", ffprobe="subrip",
+            ffsubsync_log=_GOOD_LOG)
+        w.say("pipx", _THREE_CUES)
+        _fake_subcleaner(w)
+        logs = []
+        subtitlefiles.download_srt("Movie.mkv", "en", _ORG, "600", "60",
+                                   "yes", logs.append)
+        assert logs == [
+            "  English: 2 advert cues removed",
+            "  English: downloaded from OpenSubtitles.org, in step with the "
+            "audio (shifted +5.0 s) - synced and kept"]
+        tools = [argv[0] for argv in have_calls()]
+        assert tools.index("subcleaner") < tools.index("ffsubsync")
+        (cleaned,) = [argv for argv in have_calls() if argv[0] == "subcleaner"]
+        assert cleaned == ["subcleaner", str(tree / "Movie.en.srt"),
+                           "--language", "en", "--silent", "--no-log"]
 
     def test_the_full_walk_keeps_a_subtitle_that_aligned(self, w, monkeypatch):
         tree = _tree(w)
@@ -628,16 +735,16 @@ class TestDownloadSrt:
             w, tree, pipx_write="Movie.en.srt", ffprobe="subrip",
             ffsubsync_log=_GOOD_LOG)
         logs = []
-        subtitlefiles.download_srt("Movie.mkv", "en", "u", "p", "600", "60",
+        subtitlefiles.download_srt("Movie.mkv", "en", _ORG, "600", "60",
                                    "yes", logs.append)
-        assert logs == ["  English: downloaded, in step with the audio "
+        assert logs == ["  English: downloaded from OpenSubtitles.org, in step with the audio "
                         "(shifted +5.0 s) - synced and kept"]
         assert (tree / "Movie.en.srt").is_file()
         by_tool = {}
         for argv in have_calls():
             by_tool.setdefault(argv[0], []).append(argv)
         assert by_tool["pipx"] == [["pipx", "run", _HELPER, "en", "",
-                                    "Movie.mkv"]]
+                                    "Movie.mkv", "opensubtitles"]]
         # the sidecar's format, then the film's subtitle tracks for a picture
         # subtitle to sync to - the stub has none to give
         assert by_tool["ffprobe"] == [
@@ -662,7 +769,7 @@ class TestDownloadSrt:
             ffmpeg_rc="0", ffmpeg_write="Movie.en.converted.srt",
             ffsubsync_log=_GOOD_LOG)
         logs = []
-        subtitlefiles.download_srt("Movie.mkv", "en", "u", "p", "600", "60",
+        subtitlefiles.download_srt("Movie.mkv", "en", _ORG, "600", "60",
                                    "yes", logs.append)
         assert logs[0] == "  English: converting from webvtt to SubRip"
         assert (tree / "Movie.en.srt").is_file()
@@ -678,16 +785,18 @@ class TestDownloadSrt:
             w, tree, pipx_write="Movie.en.srt", ffprobe="webvtt", ffmpeg_rc="1",
             ffsubsync_log=_GOOD_LOG)
         logs = []
-        subtitlefiles.download_srt("Movie.mkv", "en", "u", "p", "600", "60",
+        subtitlefiles.download_srt("Movie.mkv", "en", _ORG, "600", "60",
                                    "yes", logs.append)
         assert not (tree / "Movie.en.converted.srt").exists()
         assert (tree / "Movie.en.srt").is_file()
         assert any(a[0] == "ffsubsync" for a in have_calls())
 
     @pytest.mark.parametrize("rc,log,want,wording", [
-        ("1", None, "failed", "  English: WARNING: downloaded, but could "
-                             "not be synced - thrown out"),
-        ("0", _BAD_LOG, "rejected", "  English: downloaded, out of step with "
+        ("1", None, "failed", "  English: WARNING: downloaded from "
+                             "OpenSubtitles.org, but could not be synced - "
+                             "thrown out"),
+        ("0", _BAD_LOG, "rejected", "  English: downloaded from "
+                                   "OpenSubtitles.org, out of step with "
                                    "the audio (best fit 282.0 s off) - thrown "
                                    "out"),
     ])
@@ -699,7 +808,7 @@ class TestDownloadSrt:
             w, tree, pipx_write="Movie.en.srt", ffprobe="subrip",
             ffsubsync_rc=rc, ffsubsync_log=log)
         logs = []
-        subtitlefiles.download_srt("Movie.mkv", "en", "u", "p", "600", "60",
+        subtitlefiles.download_srt("Movie.mkv", "en", _ORG, "600", "60",
                                    "yes", logs.append)
         assert logs[-1] == wording
         assert not (tree / "Movie.en.srt").exists()
@@ -711,7 +820,7 @@ class TestDownloadSrt:
             w, tree, have=("pipx", "ffmpeg", "ffsubsync"),
             pipx_write="Movie.en.srt", ffsubsync_log=_GOOD_LOG)
         logs = []
-        subtitlefiles.download_srt("Movie.mkv", "en", "u", "p", "600", "60",
+        subtitlefiles.download_srt("Movie.mkv", "en", _ORG, "600", "60",
                                    "yes", logs.append)
         assert not any(a[0] == "ffmpeg" for a in have_calls())
         assert (tree / "Movie.en.srt").is_file()
@@ -724,7 +833,7 @@ class TestDownloadSrt:
             pipx_write="Movie.en.srt", ffprobe="webvtt",
             ffsubsync_log=_GOOD_LOG)
         logs = []
-        subtitlefiles.download_srt("Movie.mkv", "en", "u", "p", "600", "60",
+        subtitlefiles.download_srt("Movie.mkv", "en", _ORG, "600", "60",
                                    "yes", logs.append)
         assert logs[0] == "  English: converting from webvtt to SubRip"
         assert not (tree / "Movie.en.converted.srt").exists()
@@ -767,32 +876,47 @@ class TestTheDownloadCall:
         report = w.tmp_path / "env"
         pipx = w.bin_dir / "pipx"
         pipx.write_text('#!/bin/bash\nprintf "%s\\n" "$*" '
-                        '"$openSubtitlesUser" "$openSubtitlesPassword" > '
+                        '"$openSubtitlesUser" "$openSubtitlesPassword" '
+                        '"$openSubtitlesComUser" "$openSubtitlesComPassword" > '
                         + str(report) + "\n")
         os.chmod(str(pipx), 0o755)
         return report
 
     def test_the_id_and_the_credentials(self, w, monkeypatch):
+        """The logins are the run's own environment, handed down whole."""
         tree = _tree(w, "Movie (1999) {imdb-tt0000003}.mkv")
         monkeypatch.chdir(tree)
+        for name, value in (("openSubtitlesUser", "someone"),
+                            ("openSubtitlesPassword", "secret"),
+                            ("openSubtitlesComUser", "else"),
+                            ("openSubtitlesComPassword", "hidden")):
+            monkeypatch.setenv(name, value)
         report = self._pipx_that_reports_its_environment(w)
         subtitlefiles.download_srt("Movie (1999) {imdb-tt0000003}.mkv", "en",
-                                   "someone", "secret", "600", "60", "yes",
+                                   _ORG, "600", "60", "yes",
                                    lambda _line: None)
-        argv, user, password = report.read_text().splitlines()
+        argv, *logins = report.read_text().splitlines()
         assert argv == ("run " + _HELPER + " en tt0000003 "
-                        "Movie (1999) {imdb-tt0000003}.mkv")
+                        "Movie (1999) {imdb-tt0000003}.mkv opensubtitles")
         assert "secret" not in argv
-        assert (user, password) == ("someone", "secret")
+        assert logins == ["someone", "secret", "else", "hidden"]
 
     def test_an_untagged_film_hands_an_empty_id(self, w, monkeypatch):
         tree = _tree(w, "Movie.mkv")
         monkeypatch.chdir(tree)
         report = self._pipx_that_reports_its_environment(w)
-        subtitlefiles.download_srt("Movie.mkv", "nl", "u", "p", "600", "60",
+        subtitlefiles.download_srt("Movie.mkv", "nl", _ORG, "600", "60",
                                    "yes", lambda _line: None)
         argv = report.read_text().splitlines()[0]
-        assert argv == "run " + _HELPER + " nl  Movie.mkv"
+        assert argv == "run " + _HELPER + " nl  Movie.mkv opensubtitles"
+
+    def test_the_helper_reads_the_logins_the_run_asks_by(self):
+        """The helper runs on its own and cannot import the table, so the two
+        are kept in step here."""
+        text = Path(_HELPER).read_text()
+        for provider in subtitlefiles.PROVIDERS:
+            for name in provider.login:
+                assert '"%s"' % name in text
 
     def test_the_helper_is_shipped(self):
         assert os.path.isfile(_HELPER)
@@ -810,14 +934,14 @@ class TestDownloadSubs:
         w.say("ffsubsync", _GOOD_LOG)
         w.write("ffsubsync", "${--log-dir-path}/ffsubsync.log")
         logs = []
-        subtitlefiles.download_subs(str(tree), "u", "p", "600", "60", "yes",
+        subtitlefiles.download_subs(str(tree), _ORG, "600", "60", "yes",
                                     logs.append)
         assert (tree / "Movie.en.srt").is_file()
         assert not (tree / "Featurettes/Clip.en.srt").exists()
         pipx_calls = [a for a in w.calls() if a[0] == "pipx"]
         assert [a[3] for a in pipx_calls] == [
             row.code2 for row in languages.LANGUAGES]
-        assert all(a[-1].endswith("/Movie.mkv") for a in pipx_calls)
+        assert all(a[5].endswith("/Movie.mkv") for a in pipx_calls)
         assert len(pipx_calls) == len(languages.LANGUAGES)
 
     @pytest.mark.parametrize("folder", [
@@ -831,7 +955,7 @@ class TestDownloadSubs:
         w.write("pipx", "Clip.en.srt")
         w.rc("ffsubsync", "0")
         logs = []
-        subtitlefiles.download_subs(str(tree), "u", "p", "600", "60", "yes",
+        subtitlefiles.download_subs(str(tree), _ORG, "600", "60", "yes",
                                     logs.append)
         assert w.calls() == []
         assert logs == []
@@ -850,25 +974,42 @@ class TestDownloadSubs:
         w.install("pipx")
         w.write("pipx", "Movie.en.srt")
         logs = []
-        subtitlefiles.download_subs(str(tree), "u", "p", "600", "60", "yes",
+        subtitlefiles.download_subs(str(tree), _ORG, "600", "60", "yes",
                                     logs.append)
         assert w.calls() == []
         assert logs == []
 
-    def test_without_credentials_it_says_so_once_for_the_folder(self, w,
-                                                                 monkeypatch):
-        """Once, with the count, rather than once per film and language."""
+    def test_without_credentials_it_says_so_once_and_asks_the_rest(
+            self, w, monkeypatch):
+        """Once for the folder rather than once per film and language, and
+        the providers that need no login are asked all the same."""
         tree = _tree(w, "One.mkv", "Two.mkv", "Two.en.srt")
         monkeypatch.chdir(tree)
         w.install("pipx")
         logs = []
-        subtitlefiles.download_subs(str(tree), "", "", "600", "60", "yes",
+        subtitlefiles.download_subs(str(tree), _NO_ORG, "600", "60", "yes",
+                                    logs.append)
+        assert logs[0] == ("WARNING: openSubtitlesUser/openSubtitlesPassword "
+                           "not set, OpenSubtitles skipped")
+        assert sum("OpenSubtitles skipped" in line for line in logs) == 1
+        missing = 2 * len(languages.LANGUAGES) - 1
+        assert len([a for a in w.calls() if a[0] == "pipx"]) \
+            == missing * len(_NO_ORG)
+
+    def test_without_any_login_it_says_so_once_and_asks_no_one(
+            self, w, monkeypatch):
+        tree = _tree(w, "One.mkv", "Two.mkv")
+        monkeypatch.chdir(tree)
+        w.install("pipx")
+        logs = []
+        subtitlefiles.download_subs(str(tree), (), "600", "60", "yes",
                                     logs.append)
         assert w.calls() == []
-        missing = 2 * len(languages.LANGUAGES) - 1
-        assert logs == ["WARNING: openSubtitlesUser/openSubtitlesPassword "
-                        "not set, skipping subtitle download (%d missing)"
-                        % missing]
+        assert logs == [
+            "WARNING: no subtitle source has its login set "
+            "(openSubtitlesUser/openSubtitlesPassword, "
+            "openSubtitlesComUser/openSubtitlesComPassword, subDlApiKey) - "
+            "skipping subtitle download"]
 
     def test_without_credentials_and_nothing_missing_it_is_silent(
             self, w, monkeypatch):
@@ -876,7 +1017,7 @@ class TestDownloadSubs:
                                        for row in languages.LANGUAGES])
         monkeypatch.chdir(tree)
         logs = []
-        subtitlefiles.download_subs(str(tree), "", "", "600", "60", "yes",
+        subtitlefiles.download_subs(str(tree), (), "600", "60", "yes",
                                     logs.append)
         assert logs == []
 
@@ -886,7 +1027,7 @@ class TestDownloadSubs:
         w.install("pipx")
         w.write("pipx", "Movie.en.srt")
         logs = []
-        subtitlefiles.download_subs(str(tree), "u", "p", "600", "60", "yes",
+        subtitlefiles.download_subs(str(tree), _ORG, "600", "60", "yes",
                                     logs.append)
         assert w.calls() == []
         assert not (tree / "Movie.en.srt").exists()
@@ -944,7 +1085,7 @@ class TestCheckSubs:
         w.install("pipx")
         logs = []
         subtitlefiles.check_subs(str(tree), "600", "60", "yes", True,
-                                 logs.append, ("u", "p"))
+                                 logs.append, _ORG)
         second = logs.index("[2/2] " + os.path.join("Films", "Second", "Second.mkv"))
         first = logs[:second]
         assert first[0] == "[1/2] " + os.path.join("Films", "Movie", "Movie.mkv")
@@ -955,7 +1096,7 @@ class TestCheckSubs:
             "  English: out of step with the audio (best fit 282.0 s off) - "
             "thrown out",
             "  English: none found to download"]
-        pipx = [argv[-1] for argv in w.calls() if argv[0] == "pipx"]
+        pipx = [argv[5] for argv in w.calls() if argv[0] == "pipx"]
         assert pipx == (
             [str(tree / "Films/Movie/Movie.mkv")] * len(languages.LANGUAGES)
             + [str(tree / "Films/Second/Second.mkv")] * len(languages.LANGUAGES))
@@ -994,6 +1135,28 @@ class TestCheckSubs:
         assert (tree / self._SRT).is_file()
         assert logs == ["  English: in step with the audio (shifted +5.0 s) "
                         "- synced and kept"]
+
+    def test_w_takes_the_adverts_out_and_says_how_many(self, w, monkeypatch):
+        tree = self._library(w, monkeypatch, self._SRT)
+        (tree / self._SRT).write_text(_THREE_CUES)
+        _fake_subcleaner(w)
+        verdicts, logs = self._check(tree, write=True)
+        assert logs == ["  English: 2 advert cues removed",
+                        "  English: in step with the audio (shifted +5.0 s) "
+                        "- synced and kept"]
+        assert "Hello." in (tree / self._SRT).read_text()
+        assert "example.org" not in (tree / self._SRT).read_text()
+
+    def test_the_dry_run_says_what_would_go_and_keeps_it(self, w,
+                                                         monkeypatch):
+        tree = self._library(w, monkeypatch, self._SRT)
+        (tree / self._SRT).write_text(_THREE_CUES)
+        _fake_subcleaner(w)
+        verdicts, logs = self._check(tree, write=False)
+        assert logs == ["  English: 2 advert cues would be removed",
+                        "  English: in step with the audio (shifted +5.0 s) "
+                        "- would be kept"]
+        assert (tree / self._SRT).read_text() == _THREE_CUES
 
     def test_w_throws_out_the_one_out_of_step(self, w, monkeypatch):
         tree = self._library(w, monkeypatch, self._SRT, log=_BAD_LOG)
@@ -1113,23 +1276,23 @@ class TestCheckSubsDoneLog:
             self, w, monkeypatch):
         tree = self._tree(w, monkeypatch)
         subtitlefiles.check_subs(str(tree), "600", "60", "yes", True,
-                                 [].append, ("u", "p"), self._done(w))
+                                 [].append, _ORG, self._done(w))
         searched = len(w.calls())
         assert searched == len(languages.LANGUAGES)
         logs = []
         subtitlefiles.check_subs(str(tree), "600", "60", "yes", True,
-                                 logs.append, ("u", "p"), self._done(w))
+                                 logs.append, _ORG, self._done(w))
         assert len(w.calls()) == searched
         assert logs == ['1 film(s) skipped, done in an earlier run - recorded '
                         'in "%s"' % (w.tmp_path / "done.txt")]
 
-    @pytest.mark.parametrize("write,credentials", [(False, ("u", "p")),
+    @pytest.mark.parametrize("write,providers", [(False, _ORG),
                                                    (True, None)])
     def test_nothing_is_recorded_without_a_real_run_that_downloads(
-            self, w, monkeypatch, write, credentials):
+            self, w, monkeypatch, write, providers):
         tree = self._tree(w, monkeypatch)
         subtitlefiles.check_subs(str(tree), "600", "60", "yes", write,
-                                 [].append, credentials, self._done(w))
+                                 [].append, providers, self._done(w))
         assert not (w.tmp_path / "done.txt").exists()
 
     def test_a_film_with_a_subtitle_left_untested_is_not_recorded(
@@ -1139,7 +1302,7 @@ class TestCheckSubsDoneLog:
         w.install("ffsubsync")
         w.rc("ffsubsync", "1")
         subtitlefiles.check_subs(str(tree), "600", "60", "yes", True,
-                                 [].append, ("u", "p"), self._done(w))
+                                 [].append, _ORG, self._done(w))
         assert not (w.tmp_path / "done.txt").exists()
 
     def test_an_interrupted_film_is_not_recorded(self, w, monkeypatch):
@@ -1147,5 +1310,5 @@ class TestCheckSubsDoneLog:
         monkeypatch.setattr(subtitlefiles.safety, "abort_requested",
                             lambda: True)
         subtitlefiles.check_subs(str(tree), "600", "60", "yes", True,
-                                 [].append, ("u", "p"), self._done(w))
+                                 [].append, _ORG, self._done(w))
         assert not (w.tmp_path / "done.txt").exists()

@@ -12,7 +12,7 @@ commentaries and the chapters the disc had.
 | **Writes** | in place: the improved `.mkv`, `.srt` sidecars and `.opus` tracks; the sweeps also write lists under `logs/ingest-movies/` |
 | **Input** | changed — that is the job; each remuxed original is kept as `<name> (old).mkv` |
 | **Reruns** | a film that already has its `(old)` backup is not remuxed again |
-| **Network** | TMDb, OpenSubtitles, IMDb's title lists, ChapterDB and dvdcompare.net — the last two a few seconds apart, with some jitter |
+| **Network** | TMDb, OpenSubtitles, SubDL, IMDb's title lists, ChapterDB and dvdcompare.net — the last two a few seconds apart, with some jitter |
 
 ## Default behavior
 
@@ -26,7 +26,7 @@ given (one level deep, not the whole tree):
 - **transcodes lossless audio to Opus**, leaving lossy tracks as they are
 - transcribes commentary tracks with whisper, and names numbered ones after who speaks in them (dvdcompare.net)
 - **remuxes each film once into an improved copy**, keeping the original as `<name> (old).mkv` ([details](#what-a-full-ingest-does))
-- tags names with the IMDb id (needs `tmdbApiKey`), looks up chapters, and downloads missing subtitles (needs the OpenSubtitles login)
+- tags names with the IMDb id (needs `tmdbApiKey`), looks up chapters, and downloads missing subtitles (needs an OpenSubtitles or SubDL login)
 
 Each phase can also be run on its own, over a whole library: see
 [single-task sweeps](#single-task-sweeps).
@@ -45,7 +45,12 @@ These are read from the environment:
 | Variable | Needed for | Without it |
 | --- | --- | --- |
 | `tmdbApiKey` | naming films (TMDb lookups) | the lookup is skipped, and the run says so |
-| `openSubtitlesUser`, `openSubtitlesPassword` | downloading missing subtitles | subtitles already beside a film are still tested; none are downloaded |
+| `openSubtitlesUser`, `openSubtitlesPassword` | downloading missing subtitles from OpenSubtitles.org, the first source | the other sources below are still asked, and the run says OpenSubtitles was skipped |
+| `openSubtitlesComUser`, `openSubtitlesComPassword` | asking OpenSubtitles.com second — a separate service, with free accounts of its own | it is not asked |
+| `subDlApiKey` | asking SubDL third — the key a free account at subdl.com gets | it is not asked |
+
+With none of the three set, no subtitle is downloaded; the ones already beside
+a film are still tested.
 
 ## Single-task sweeps
 
@@ -111,6 +116,30 @@ downloaded subtitle is kept only when it lines up with the film's speech at one
 offset far better than at any other, however far that offset is from where it
 started; a subtitle that fits nowhere in particular belongs to some other film
 or cut and is thrown away, to be tried again on the next run.
+
+The sources are asked in turn, each only once its login is set (see
+[Settings](#settings)): OpenSubtitles.org, then OpenSubtitles.com, then SubDL.
+When a source has none, or the ones it had were thrown away, the next is asked —
+up to two subtitles from each source and five in all, every one put to the same
+test whichever source it came from. A thrown-away subtitle is not offered again
+in that run, but nothing remembers it past the run.
+
+Before it is tested, a downloaded subtitle has its adverts taken out — the cues
+a catalogue or an uploader adds before the film starts or after it ends — by
+[subcleaner](https://github.com/KBlixt/subcleaner). It is optional, and not
+packaged anywhere:
+
+```bash
+git clone https://github.com/KBlixt/subcleaner ~/.local/share/subcleaner
+chmod +x ~/.local/share/subcleaner/subcleaner.py
+ln -s ~/.local/share/subcleaner/subcleaner.py ~/.local/bin/subcleaner
+```
+
+subcleaner only knows the words of a few languages by heart; for the others to
+be cleaned too (German, French and Italian among ours), set
+`require_language_profile = false` in its `subcleaner.conf` — the file appears
+in the checkout the first time it runs. The run warns once a language when it
+is not.
 
 Where the film carries a picture subtitle of its own (a Blu-ray's or a DVD's,
 not forced), the times its lines are on screen stand in for the speech: they
@@ -459,12 +488,13 @@ subtitles or languages outside the six.
 
 | | Dry run (`-s`) | `-sw` |
 | --- | --- | --- |
-| subtitle in step | said to be kept | synced |
+| subtitle in step | said to be kept | adverts taken out, synced |
 | subtitle out of step | listed in `logs/ingest-movies/ingest-movies-subtitles-<folder>.txt` | deleted |
 | subtitle missing | — | downloaded, synced and tested, exactly as a full ingest does — so one thrown out is fetched again in the same run |
 | subtitle ffsubsync cannot align at all | left alone | left alone, since it may be one that cannot be fetched again |
 
-A dry run tests each subtitle on a copy. Run it after `-tw`, so that films are
+A dry run tests each subtitle on a copy, its adverts taken out first, and says
+how many advert cues the real run would remove. Run it after `-tw`, so that films are
 searched for by their ids.
 
 The films are taken one at a time in name order, each announced with its place
@@ -478,7 +508,8 @@ to, by how much, and what became of it:
 ==>   English: in step with the film's subtitle track (shifted +1.2 s, confidence 4.81) - synced and kept
 ==>   German: out of step with the audio (confidence 0.42) - thrown out
 ==>   German: none found to download
-==>   French: downloaded, in step with the audio (shifted -0.4 s, confidence 2.10) - synced and kept
+==>   French: 2 advert cues removed
+==>   French: downloaded from OpenSubtitles.org, in step with the audio (shifted -0.4 s, confidence 2.10) - synced and kept
 ```
 
 **Films already done are skipped.** Testing and syncing a whole library takes
@@ -493,8 +524,8 @@ record. These films are never recorded:
 - a film with no id tag, since its name is only a guess at which film it is
 - a film with a subtitle ffsubsync could not align at all
 - a film the run was interrupted on
-- any film of a `-sw` run made without OpenSubtitles credentials, since nothing
-  was downloaded
+- any film of a `-sw` run made with no subtitle source's login set, since
+  nothing was downloaded
 
 To have a film done again, delete its line from the file. To redo every film,
 delete the file.

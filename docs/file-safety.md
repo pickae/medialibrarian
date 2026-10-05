@@ -129,7 +129,10 @@ do too, which is less obvious:
 - **`ingest-movies`** asks TheMovieDB what a film is, but only once `tmdbApiKey`
   is set — with no key it skips the lookup and says so. The key goes to curl on
   stdin rather than on its command line, so it is not readable from the process
-  table.
+  table. It downloads subtitles only from the catalogues whose login is set
+  (OpenSubtitles.org, OpenSubtitles.com, SubDL); the logins reach the download
+  helper through its environment, and SubDL's API key goes to SubDL in the
+  request's address, which is where its API takes it.
 - **`content-census-bi`** writes an `.html` page that loads the Perspective
   engine from jsDelivr when you open it, pinned to an exact release with the
   stylesheet checked against a hash. Your census data is not uploaded anywhere:

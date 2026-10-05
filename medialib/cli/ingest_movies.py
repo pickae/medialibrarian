@@ -218,7 +218,9 @@ USAGE_TAIL = """
     ---------------------
     six languages are supported out of the box (en, de, fr, nl, es, it)
     renames pre-existing subtitles to the .xx.srt convention
-    downloads missing subtitles and embeds the language tags
+    downloads missing subtitles - from OpenSubtitles.org, then OpenSubtitles.com
+    and SubDL, each asked only once its login is set - takes the adverts out of
+    them, and embeds the language tags
 
     Chapters
     --------
@@ -290,7 +292,8 @@ USAGE_TAIL = """
     Optional, each skipped with a warning when absent: pipx + ffsubsync (together
     they enable subtitle downloading and commentary transcription - without either,
     BOTH are skipped, since neither subtitle is worth keeping unaligned), dovi_tool
-    (the Dolby Vision normalisation), flock (numbers the progress lines)"""
+    (the Dolby Vision normalisation), flock (numbers the progress lines),
+    subcleaner (takes the adverts out of downloaded subtitles)"""
 
 # The smallest a real movie file can be: an .mkv under this holds seconds of
 # video, so the cleanup treats it as one of the sample clips that ship next to a

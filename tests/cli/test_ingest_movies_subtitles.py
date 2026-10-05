@@ -138,7 +138,7 @@ def ingested(monkeypatch):
             monkeypatch.setattr(run_module, name, lambda *a, **k: None)
         monkeypatch.setattr(run_module, "log", lambda *a, **k: None)
 
-        def download_subs(directory, user, password, max_offset,
+        def download_subs(directory, providers, max_offset,
                           max_quality_offset, ffsubsync_quality, log):
             seen["download"] = ffsubsync_quality
 
