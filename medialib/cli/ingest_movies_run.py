@@ -38,6 +38,7 @@ from medialib.lib import (
     research,
     runlog,
     safety,
+    subtitleads,
     subtitlefiles,
     tmdblookup,
     tooldeps,
@@ -725,6 +726,8 @@ def main(argv: list, program: str = "ingest-movies",
     # Only the subtitle work syncs anything, so with it off there is no
     # alignment to check and nothing to warn about how well it would be.
     ffsubsync_quality = _settle_ffsubsync_quality() if subtitle_work else "no"
+    if subtitle_work:
+        _warn_without_subcleaner()
 
     # Asked of each folder before any of them is set up for, and a folder with
     # nothing to ingest is dropped rather than ending the run: the others were
@@ -1103,13 +1106,14 @@ def _subtitles_only(program: str, script_dir: str, roots: list, names: list,
                          "Nothing was changed.\n")
         return 1
 
-    user = os.environ.get("openSubtitlesUser", "")
-    password = os.environ.get("openSubtitlesPassword", "")
-    download = write and bool(user and password)
-    if write and not download:
+    providers = subtitlefiles.providers_to_ask() if write else ()
+    download = bool(providers)
+    if write and subtitlefiles.missing_login_warning(providers):
         # Said once here rather than once per film and language.
-        log("WARNING: openSubtitlesUser/openSubtitlesPassword not set - the "
-            "subtitles already here are tested, and none is downloaded.")
+        log(subtitlefiles.missing_login_warning(providers)
+            + ("" if download else ", the subtitles already here are only "
+               "tested"))
+    _warn_without_subcleaner()
 
     done = donelog.DoneLog(commands.logs_file(script_dir, SUBTITLES_DONE))
     totals = {"kept": 0, "discarded": 0, "untested": 0}
@@ -1119,8 +1123,7 @@ def _subtitles_only(program: str, script_dir: str, roots: list, names: list,
             + ("" if write else " - DRY RUN, nothing will be changed"))
         verdicts = subtitlefiles.check_subs(
             root, rules.MAX_SYNC_OFFSET, rules.MAX_SYNC_QUALITY_OFFSET,
-            ffsubsync_quality, write, log,
-            (user, password) if download else None, done)
+            ffsubsync_quality, write, log, providers or None, done)
         for verdict, found in verdicts.items():
             totals[verdict] += len(found)
         _write_subtitle_list(commands.logs_file(script_dir,
@@ -1903,6 +1906,17 @@ def _settle_subtitle_work(commentary_only: bool = False) -> bool:
     return False
 
 
+def _warn_without_subcleaner() -> None:
+    """Said once at the start: without subcleaner a subtitle keeps the adverts
+    it came with, and the run goes on."""
+    if os.environ.get("SKIP_TOOL_PREFLIGHT") or subtitleads.available():
+        return
+    log("WARNING: subcleaner not installed - subtitles keep the adverts they "
+        "came with.")
+    log("         To enable it: %s."
+        % tooldeps.tool_note(subtitleads.TOOL).split("|", 1)[1])
+
+
 def _tool_help(name: str) -> str:
     """A tool's help page, or "" if it will not print one."""
     try:
@@ -2043,8 +2057,7 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
     if subtitle_work:
         log("Phase: downloading missing subtitles")
         subtitlefiles.download_subs(
-            root, os.environ.get("openSubtitlesUser", ""),
-            os.environ.get("openSubtitlesPassword", ""),
+            root, subtitlefiles.providers_to_ask(),
             rules.MAX_SYNC_OFFSET, rules.MAX_SYNC_QUALITY_OFFSET,
             state.ffsubsync_quality, log)
     else:

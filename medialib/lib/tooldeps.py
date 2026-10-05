@@ -79,6 +79,10 @@ _TOOL_NOTES = {
     "duckdb": "building the census hypercubes"
               "|https://duckdb.org/docs/installation (single binary)",
     "ffsubsync": "aligning subtitles to the audio|pipx install ffsubsync",
+    # Not packaged anywhere: a checkout whose script is put on PATH.
+    "subcleaner": "taking the adverts out of downloaded subtitles"
+                  "|git clone https://github.com/KBlixt/subcleaner, then chmod +x"
+                  " its subcleaner.py and link it onto PATH as subcleaner",
     "pipx": "running whisper-ctranslate2 and subliminal|apt install pipx",
     "python3": "the mutagen tag/chapter helpers|apt install python3",
     "adb": "reaching the files on the attached phone|apt install android-tools-adb",
@@ -147,6 +151,8 @@ _MACOS_HINTS = {
     "adb": "brew install --cask android-platform-tools",
     # Not in Homebrew either, so the same source on both hosts.
     "exhale": "https://gitlab.com/ecodis/exhale (make release)",
+    "subcleaner": "git clone https://github.com/KBlixt/subcleaner, then chmod +x"
+                  " its subcleaner.py and link it onto PATH as subcleaner",
 }
 
 # The line a name with no entry falls through to, rather than to an empty one,

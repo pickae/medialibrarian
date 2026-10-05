@@ -22,6 +22,7 @@ import shutil
 import subprocess
 import tempfile
 from collections.abc import Callable
+from dataclasses import dataclass
 
 from medialib import helpers
 from medialib.lib import (
@@ -30,6 +31,7 @@ from medialib.lib import (
     plexnames,
     runlog,
     safety,
+    subtitleads,
     tmdblookup,
     treewalk,
 )
@@ -43,6 +45,10 @@ __all__ = [
     "sync_subtitle",
     "TimingReference",
     "film_imdb_id",
+    "Provider",
+    "PROVIDERS",
+    "providers_to_ask",
+    "missing_login_warning",
     "download_srt",
     "subtitle_movies",
     "download_subs",
@@ -552,7 +558,97 @@ def _to_subrip(srt: str, language_code: str, file: str,
                 pass
 
 
-def download_srt(file: str, language_code: str, user: str, password: str,
+@dataclass(frozen=True)
+class Provider:
+    """One catalogue a missing subtitle is looked for in."""
+    name: str
+    """What subliminal calls it."""
+    label: str
+    """What the run's lines call it."""
+    login: tuple
+    """The environment variables its login is read from - a user and a
+    password, or an API key - every one of which must be set for it to be
+    asked."""
+
+
+# In the order they are asked. OpenSubtitles.org first, as it always was; then
+# OpenSubtitles.com, a separate service with accounts of its own; then SubDL,
+# with the API key a free account gets. None of them is asked without its
+# login: none of the catalogues that need no account was reachable, or would
+# hand over a subtitle, when they were tried.
+PROVIDERS = (
+    Provider("opensubtitles", "OpenSubtitles.org",
+             ("openSubtitlesUser", "openSubtitlesPassword")),
+    Provider("opensubtitlescom", "OpenSubtitles.com",
+             ("openSubtitlesComUser", "openSubtitlesComPassword")),
+    Provider("subdl", "SubDL", ("subDlApiKey",)),
+)
+
+# How many of one provider's subtitles are tried for one language before the
+# next provider is asked - a catalogue tends to hold the same cut several times
+# over, so its third best is rarely in step where its first two were not - and
+# how many are tried in all, each costing a sync against the whole film.
+TRIES_PER_PROVIDER = 2
+TRIES_PER_LANGUAGE = 5
+
+# The helper's exit status for a film that already has the language, beside it
+# or inside it: no provider need be asked.
+_ALREADY_THERE = 3
+
+
+def providers_to_ask(environ=None) -> tuple:
+    """The providers a download asks, in order: every one of
+    :data:`PROVIDERS` whose login is set."""
+    environ = os.environ if environ is None else environ
+    return tuple(provider for provider in PROVIDERS
+                 if all(environ.get(name) for name in provider.login))
+
+
+def missing_login_warning(providers: tuple) -> str:
+    """What a run says once when a provider is left out for want of its
+    login: that nothing can be downloaded, or that OpenSubtitles.org, the
+    first source, was skipped - "" when it was not. The others are extras,
+    and are not missed out loud."""
+    if not providers:
+        return ("WARNING: no subtitle source has its login set ({}) - "
+                "skipping subtitle download".format(", ".join(
+                    "/".join(provider.login) for provider in PROVIDERS)))
+    if not any(provider.name == PROVIDERS[0].name for provider in providers):
+        return ("WARNING: openSubtitlesUser/openSubtitlesPassword not set, "
+                "OpenSubtitles skipped")
+    return ""
+
+
+def _fetch(file: str, language_code: str, imdb: str, provider: Provider,
+           thrown: list) -> tuple:
+    """One subtitle from one provider, saved as the film's sidecar: the
+    helper's exit status, and the id of the subtitle it saved ("" for none).
+
+    A provider's login travels in the environment the helper inherits, where
+    argv would show it to every account on the machine."""
+    try:
+        done = subprocess.run(
+            ["pipx", "run", helpers.path_of("subliminal_download.py"),
+             language_code, imdb, file, provider.name, *thrown],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+            errors="replace")
+    except OSError:
+        return 1, ""
+    printed = (done.stdout or "").split()
+    return done.returncode, printed[-1] if printed else ""
+
+
+def _clean(srt: str, language_code: str, log: Callable[[str], None]) -> int:
+    """:func:`subtitleads.clean` with what it says put under the language."""
+    return subtitleads.clean(srt, language_code,
+                             lambda text: log(_said(language_code, text)))
+
+
+def _adverts(count: int) -> str:
+    return "{} advert cue{}".format(count, "" if count == 1 else "s")
+
+
+def download_srt(file: str, language_code: str, providers: tuple,
                  max_sync_offset: str, max_sync_quality_offset: str,
                  ffsubsync_quality: str,
                  log: Callable[[str], None],
@@ -561,65 +657,87 @@ def download_srt(file: str, language_code: str, user: str, password: str,
 
     A sidecar that already exists is left in place - that is the resume
     check, and it looks for exactly the name the deletions below remove, so
-    the next run re-downloads what this one threw out. Without credentials
-    the download is skipped cleanly. A film whose name carries its id is
-    searched for BY that id, and only a subtitle filed under that film is
-    taken; one without is searched for by the title its name reads as. A
-    sidecar some provider labelled ``.srt`` but that ffprobe names as another
-    format is converted to real SubRip first, and a subtitle that cannot be
-    synced is discarded rather than kept out of step - whether ffsubsync failed
-    outright or the alignment it found was refused. It is synced to ``timing``,
-    the film's own picture subtitle, where the film has one (see
+    the next run re-downloads what this one threw out. The ``providers`` are
+    asked in turn (see :func:`providers_to_ask`), and each one's subtitles are
+    tried best first until one is kept - up to :data:`TRIES_PER_PROVIDER` of a
+    provider's and :data:`TRIES_PER_LANGUAGE` in all.
+
+    A film whose name carries its id is searched for BY that id, and only a
+    subtitle filed under that film is taken; one without is searched for by
+    the title its name reads as. Every subtitle downloaded, whichever provider
+    it came from, is put through the same test: one some provider labelled
+    ``.srt`` but that ffprobe names as another format is converted to real
+    SubRip first, its adverts are taken out, and one that cannot be synced is
+    discarded rather than kept out of step - whether ffsubsync failed outright
+    or the alignment it found was refused. It is synced to ``timing``, the
+    film's own picture subtitle, where the film has one (see
     :func:`_sync_to_film`); one is read off the film here when none is handed in.
     """
     srt = _sidecar(file, language_code)
     if os.path.isfile(srt):
         return
-    if not user or not password:
-        log("WARNING: openSubtitlesUser/openSubtitlesPassword not set, "
-            "skipping subtitle download")
-        return
-    # The credentials travel in the environment, where argv would show them to
-    # every account on the machine.
-    env = dict(os.environ, openSubtitlesUser=user,
-               openSubtitlesPassword=password)
-    try:
-        subprocess.run(
-            ["pipx", "run", helpers.path_of("subliminal_download.py"),
-             language_code, film_imdb_id(file), file],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
-    except OSError:
-        pass
-    if not os.path.isfile(srt):
-        log(_said(language_code, "none found to download"))
-        return
-
-    _to_subrip(srt, language_code, file, log)
-
-    measured: dict = {}
     if timing is None:
         with TimingReference(file) as own:
-            status = _sync_to_film(file, srt, own.path(), max_sync_offset,
-                                   max_sync_quality_offset, ffsubsync_quality,
-                                   measured)
-    else:
-        status = _sync_to_film(file, srt, timing.path(), max_sync_offset,
-                               max_sync_quality_offset, ffsubsync_quality,
-                               measured)
+            return download_srt(file, language_code, providers,
+                                max_sync_offset, max_sync_quality_offset,
+                                ffsubsync_quality, log, own)
+    imdb = film_imdb_id(file)
+    tries = 0
+    already_there = False
+    for provider in providers:
+        if already_there or tries >= TRIES_PER_LANGUAGE:
+            break
+        thrown: list = []
+        while len(thrown) < TRIES_PER_PROVIDER and tries < TRIES_PER_LANGUAGE:
+            status, subtitle_id = _fetch(file, language_code, imdb, provider,
+                                         thrown)
+            already_there = status == _ALREADY_THERE
+            if already_there or not os.path.isfile(srt):
+                break
+            tries += 1
+            if _keep_download(file, srt, language_code, provider,
+                              max_sync_offset, max_sync_quality_offset,
+                              ffsubsync_quality, log, timing):
+                return
+            if not subtitle_id:
+                # Nothing to tell the provider not to offer again.
+                break
+            thrown.append(subtitle_id)
+    if not tries:
+        log(_said(language_code, "none found to download"))
+
+
+def _keep_download(file: str, srt: str, language_code: str, provider: Provider,
+                   max_sync_offset: str, max_sync_quality_offset: str,
+                   ffsubsync_quality: str, log: Callable[[str], None],
+                   timing: TimingReference) -> bool:
+    """:func:`download_srt`'s test of one downloaded subtitle, which is synced
+    and kept or deleted: whether it was kept."""
+    _to_subrip(srt, language_code, file, log)
+    removed = _clean(srt, language_code, log)
+    if removed:
+        log(_said(language_code, _adverts(removed) + " removed"))
+
+    measured: dict = {}
+    status = _sync_to_film(file, srt, timing.path(), max_sync_offset,
+                           max_sync_quality_offset, ffsubsync_quality,
+                           measured)
+    source = "downloaded from " + provider.label
     if status == 0:
-        log(_said(language_code, "downloaded, {} - synced and kept".format(
-            _alignment("in step", measured))))
-        return
+        log(_said(language_code, "{}, {} - synced and kept".format(
+            source, _alignment("in step", measured))))
+        return True
     if status == 1:
-        log(_said(language_code, "WARNING: downloaded, but could not be "
-                  "synced - thrown out"))
+        log(_said(language_code, "WARNING: {}, but could not be synced - "
+                  "thrown out".format(source)))
     else:
-        log(_said(language_code, "downloaded, {} - thrown out".format(
-            _alignment("out of step", measured))))
+        log(_said(language_code, "{}, {} - thrown out".format(
+            source, _alignment("out of step", measured))))
     try:
         os.remove(srt)
     except OSError:
         pass
+    return False
 
 
 def subtitle_movies(directory: str) -> list:
@@ -660,7 +778,7 @@ def subtitle_movies(directory: str) -> list:
     return sorted(movies, key=lambda movie: movie.split("/"))
 
 
-def download_subs(directory: str, user: str, password: str,
+def download_subs(directory: str, providers: tuple,
                   max_sync_offset: str, max_sync_quality_offset: str,
                   ffsubsync_quality: str,
                   log: Callable[[str], None]) -> None:
@@ -668,33 +786,32 @@ def download_subs(directory: str, user: str, password: str,
     :func:`subtitle_movies` and every language. Sequential by design:
     rapid-fire downloads get throttled.
 
-    Without credentials nothing can be downloaded, which is said once for the
-    folder - with how many subtitles that leaves missing - rather than once per
-    film and language, and not at all where none is missing.
+    A provider left out for want of its login is said once for the folder
+    (see :func:`missing_login_warning`) rather than once per film and
+    language, and not at all where no subtitle is missing; with none left to
+    ask, nothing is walked.
     """
-    if not user or not password:
-        missing = sum(1 for movie in subtitle_movies(directory)
-                      for row in languages.LANGUAGES
-                      if not os.path.isfile(_sidecar(movie, row.code2)))
-        if missing:
-            log("WARNING: openSubtitlesUser/openSubtitlesPassword not set, "
-                "skipping subtitle download ({} missing)".format(missing))
-        return
     movies = subtitle_movies(directory)
+    warning = missing_login_warning(providers)
+    if warning and any(not os.path.isfile(_sidecar(movie, row.code2))
+                       for movie in movies for row in languages.LANGUAGES):
+        log(warning)
+    if not providers:
+        return
     for index, movie in enumerate(movies, start=1):
         log(runlog.film_header(index, len(movies), directory, movie))
         with TimingReference(movie) as timing:
-            _download_missing(movie, user, password, max_sync_offset,
+            _download_missing(movie, providers, max_sync_offset,
                               max_sync_quality_offset, ffsubsync_quality, log,
                               timing)
 
 
-def _download_missing(movie: str, user: str, password: str,
+def _download_missing(movie: str, providers: tuple,
                       max_sync_offset: str, max_sync_quality_offset: str,
                       ffsubsync_quality: str, log: Callable[[str], None],
                       timing: TimingReference) -> None:
     for row in languages.LANGUAGES:
-        download_srt(movie, row.code2, user, password, max_sync_offset,
+        download_srt(movie, row.code2, providers, max_sync_offset,
                      max_sync_quality_offset, ffsubsync_quality, log, timing)
 
 
@@ -707,10 +824,11 @@ def check_srt(file: str, srt: str, language_code: str, max_sync_offset: str,
 
     With ``write`` the verdict is carried out the way :func:`download_srt`
     carries it out - converted to SubRip, synced in place, and thrown out when
-    the alignment is refused. Without it the same test runs on a copy, and the
-    sidecar is not touched. One ffsubsync could not align at all is left alone
-    either way: unlike a download it may be a subtitle that cannot be fetched
-    again, and a tool that failed says nothing about whether it is in step.
+    the alignment is refused, its adverts taken out first. Without it the same
+    test runs on a copy, and the sidecar is not touched. One ffsubsync could
+    not align at all is left alone either way: unlike a download it may be a
+    subtitle that cannot be fetched again, and a tool that failed says nothing
+    about whether it is in step.
     """
     if timing is None:
         with TimingReference(file) as own:
@@ -720,13 +838,16 @@ def check_srt(file: str, srt: str, language_code: str, max_sync_offset: str,
     measured: dict = {}
     if write:
         _to_subrip(srt, language_code, file, log)
+        removed = _clean(srt, language_code, log)
+        if removed:
+            log(_said(language_code, _adverts(removed) + " removed"))
         status = _sync_to_film(file, srt, timing.path(), max_sync_offset,
                                max_sync_quality_offset, ffsubsync_quality,
                                measured)
     else:
         status = _test_copy(file, srt, language_code, max_sync_offset,
                             max_sync_quality_offset, ffsubsync_quality,
-                            timing.path(), measured)
+                            timing.path(), measured, log)
 
     if status == 1:
         log(_said(language_code, "WARNING: could not be tested - left alone"))
@@ -749,10 +870,12 @@ def check_srt(file: str, srt: str, language_code: str, max_sync_offset: str,
 
 def _test_copy(file: str, srt: str, language_code: str, max_sync_offset: str,
                max_sync_quality_offset: str, ffsubsync_quality: str,
-               reference: str | None, measured: dict) -> int:
+               reference: str | None, measured: dict,
+               log: Callable[[str], None] = lambda _line: None) -> int:
     """:func:`_sync_to_film`'s status for a copy of the sidecar, made the way
-    the real one would be synced - converted to SubRip first - so the dry run
-    gives the verdict the real run would, and leaves the sidecar as it was."""
+    the real one would be synced - converted to SubRip and cleaned of adverts
+    first - so the dry run gives the verdict the real run would, and leaves the
+    sidecar as it was. The adverts the copy lost are said through ``log``."""
     try:
         scratch = tempfile.mkdtemp(dir=os.environ.get("TMPDIR"))
     except OSError:
@@ -764,6 +887,9 @@ def _test_copy(file: str, srt: str, language_code: str, max_sync_offset: str,
         except OSError:
             return 1
         _to_subrip(copy, language_code, file, lambda _line: None)
+        removed = _clean(copy, language_code, log)
+        if removed:
+            log(_said(language_code, _adverts(removed) + " would be removed"))
         return _sync_to_film(file, copy, reference, max_sync_offset,
                              max_sync_quality_offset, ffsubsync_quality,
                              measured)
@@ -774,19 +900,19 @@ def _test_copy(file: str, srt: str, language_code: str, max_sync_offset: str,
 def check_subs(directory: str, max_sync_offset: str,
                max_sync_quality_offset: str, ffsubsync_quality: str,
                write: bool, log: Callable[[str], None],
-               credentials: tuple | None = None,
+               providers: tuple | None = None,
                done: donelog.DoneLog | None = None) -> dict:
     """:func:`check_srt` for every ``<movie>.<xx>.srt`` beside every movie of
     :func:`subtitle_movies`, in every language of the table - the sidecars a
     download would have written, and so never a commentary transcript, whose
     name carries the track number after the movie's.
 
-    With ``credentials`` - OpenSubtitles' (user, password) - each film then has
-    what is missing downloaded before the walk goes on to the next, so one
-    thrown out is fetched again straight away.
+    With ``providers`` (see :func:`providers_to_ask`) each film then has what
+    is missing downloaded before the walk goes on to the next, so one thrown
+    out is fetched again straight away.
 
     With ``done``, a film it holds is not walked at all, and with ``write`` and
-    ``credentials`` as well each film is recorded in it once it has been
+    ``providers`` as well each film is recorded in it once it has been
     through both - unless one of its subtitles could not be tested, or the run
     was interrupted, either of which may have left it half done.
 
@@ -801,7 +927,7 @@ def check_subs(directory: str, max_sync_offset: str,
             movies = [movie for movie in movies if not done.has(movie)]
             log('{} film(s) skipped, done in an earlier run - recorded in '
                 '"{}"'.format(len(skipped), done.path))
-    record = write and bool(credentials)
+    record = write and bool(providers)
     for index, movie in enumerate(movies, start=1):
         log(runlog.film_header(index, len(movies), directory, movie))
         untested = len(verdicts["untested"])
@@ -814,9 +940,8 @@ def check_subs(directory: str, max_sync_offset: str,
                                     max_sync_quality_offset, ffsubsync_quality,
                                     write, log, timing)
                 verdicts[verdict].append(srt)
-            if credentials:
-                user, password = credentials
-                _download_missing(movie, user, password, max_sync_offset,
+            if providers:
+                _download_missing(movie, providers, max_sync_offset,
                                   max_sync_quality_offset, ffsubsync_quality,
                                   log, timing)
         if (done is not None and record

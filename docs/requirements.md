@@ -27,6 +27,7 @@ worth refusing over. The rest say what they cannot do and the run goes on:
 | `wc` | the books census leaves its word and character columns blank, and `read-library` reads in name order instead of longest-first |
 | Calibre's `ebook-convert` | a book whose metadata does not state its language is narrated in the engine's default, and the reading queue is ordered by file size rather than by length |
 | `ffsubsync` **or** `pipx` | **both** subtitle producers are skipped together |
+| `subcleaner` | downloaded subtitles keep the adverts they came with |
 | `AtomicParsley` | the podcast episodes that arrive as m4a get no cover art |
 
 Subtitles are all-or-nothing on purpose: a downloaded subtitle is usually cut for

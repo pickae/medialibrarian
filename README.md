@@ -98,8 +98,9 @@ option can never change what a command you already type means.
   `yt-dlp`, `fdupes`, `unrar`/`unzip`/`7z`/`tar`/`zstd`, `zip`, poppler-utils (`pdftoppm`,
   `pdfinfo`, `pdfimages`, `pdftotext`),
   `whisper-ctranslate2`, `ffsubsync`, `tree`, `beets`, Calibre's `ebook-convert`,
-  Ghostscript (`gs`), `duckdb` and `wc` — that last one being the only piece of
-  coreutils anything here still shells out to.
+  Ghostscript (`gs`), `duckdb`, [subcleaner](https://github.com/KBlixt/subcleaner)
+  and `wc` — that last one being the only piece of coreutils anything here still
+  shells out to.
 - `convert-audio -o xheaac` additionally needs
   [exhale](https://gitlab.com/ecodis/exhale), which ffmpeg cannot stand in for:
   it decodes the codec but does not encode it. No distribution packages exhale,

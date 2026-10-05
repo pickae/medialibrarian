@@ -43,6 +43,10 @@ def stubbed(monkeypatch, tmp_path):
                         lambda **_k: "confidence")
     monkeypatch.setenv("openSubtitlesUser", "u")
     monkeypatch.setenv("openSubtitlesPassword", "p")
+    monkeypatch.delenv("openSubtitlesComUser", raising=False)
+    monkeypatch.delenv("openSubtitlesComPassword", raising=False)
+    monkeypatch.delenv("subDlApiKey", raising=False)
+    monkeypatch.setattr(run.subtitleads, "available", lambda: True)
     logs: list = []
     monkeypatch.setattr(run, "log", logs.append)
 
@@ -65,12 +69,13 @@ def stubbed(monkeypatch, tmp_path):
     verdicts = {"kept": [], "discarded": [], "untested": []}
 
     def check_subs(directory, max_offset, quality_offset, quality, write,
-                   log, credentials=None, done=None):
-        calls.append(("check", directory, quality, write, credentials))
+                   log, providers=None, done=None):
+        calls.append(("check", directory, quality, write,
+                      providers and [p.name for p in providers]))
         dones.append(done)
         return {key: list(found) for key, found in verdicts.items()}
 
-    def download_subs(directory, user, password, max_offset, quality_offset,
+    def download_subs(directory, providers, max_offset, quality_offset,
                       quality, log):
         calls.append(("download", directory, quality))
 
@@ -99,15 +104,16 @@ class TestThePhaseRunsAndNothingElse:
 
     def test_w_checks_and_downloads_folder_by_folder(self, stubbed,
                                                       tmp_path):
-        """One walk of each folder, handed the credentials so each film is
+        """One walk of each folder, handed the providers so each film is
         checked and then has what is missing downloaded - a subtitle the check
         throws out is fetched again in the same run."""
         films = _library(tmp_path, "Films")
         docs = _library(tmp_path, "Documentaries")
         assert _main(stubbed, "-sw", str(films), str(docs)) == 0
+        asked = ["opensubtitles"]
         assert stubbed["calls"] == [
-            ("check", str(films), "confidence", True, ("u", "p")),
-            ("check", str(docs), "confidence", True, ("u", "p"))]
+            ("check", str(films), "confidence", True, asked),
+            ("check", str(docs), "confidence", True, asked)]
 
     def test_every_folder_shares_one_done_log_under_logs(self, stubbed,
                                                           tmp_path):
@@ -130,7 +136,7 @@ class TestThePhaseRunsAndNothingElse:
         assert "ffsubsync" in dry and "pipx" not in dry
         assert "ffsubsync" in real and "pipx" in real
 
-    def test_without_credentials_w_still_checks_and_says_so_once(
+    def test_without_any_login_w_still_checks_and_says_so_once(
             self, stubbed, tmp_path, monkeypatch):
         monkeypatch.delenv("openSubtitlesPassword")
         films = _library(tmp_path, "Films")
@@ -138,8 +144,45 @@ class TestThePhaseRunsAndNothingElse:
         assert _main(stubbed, "-sw", str(films), str(docs)) == 0
         assert [(call[0], call[4]) for call in stubbed["calls"]] == [
             ("check", None), ("check", None)]
-        assert len([line for line in stubbed["logs"]
-                    if "openSubtitlesUser" in line]) == 1
+        (said,) = [line for line in stubbed["logs"]
+                   if "openSubtitlesUser" in line]
+        assert said.startswith("WARNING: no subtitle source has its login set")
+        assert said.endswith("the subtitles already here are only tested")
+
+    def test_without_the_opensubtitles_login_the_others_are_asked(
+            self, stubbed, tmp_path, monkeypatch):
+        monkeypatch.delenv("openSubtitlesPassword")
+        monkeypatch.setenv("subDlApiKey", "k")
+        films = _library(tmp_path, "Films")
+        assert _main(stubbed, "-sw", str(films)) == 0
+        assert stubbed["calls"][0][4] == ["subdl"]
+        assert [line for line in stubbed["logs"]
+                if "openSubtitlesUser" in line] == [
+            "WARNING: openSubtitlesUser/openSubtitlesPassword not set, "
+            "OpenSubtitles skipped"]
+
+    def test_every_login_set_asks_every_provider_in_order(
+            self, stubbed, tmp_path, monkeypatch):
+        monkeypatch.setenv("openSubtitlesComUser", "u")
+        monkeypatch.setenv("openSubtitlesComPassword", "p")
+        monkeypatch.setenv("subDlApiKey", "k")
+        films = _library(tmp_path, "Films")
+        assert _main(stubbed, "-sw", str(films)) == 0
+        assert stubbed["calls"][0][4] == [
+            "opensubtitles", "opensubtitlescom", "subdl"]
+
+    def test_without_subcleaner_it_says_so_once_and_goes_on(
+            self, stubbed, tmp_path, monkeypatch):
+        monkeypatch.setattr(run.subtitleads, "available", lambda: False)
+        films = _library(tmp_path, "Films")
+        docs = _library(tmp_path, "Documentaries")
+        assert _main(stubbed, "-sw", str(films), str(docs)) == 0
+        warning = ("WARNING: subcleaner not installed - subtitles keep the "
+                   "adverts they came with.")
+        assert stubbed["logs"].count(warning) == 1
+        hint = stubbed["logs"][stubbed["logs"].index(warning) + 1]
+        assert hint.startswith("         To enable it: git clone ")
+        assert len(stubbed["calls"]) == 2
 
     def test_an_ffsubsync_that_cannot_refuse_has_nothing_to_test_with(
             self, stubbed, tmp_path, monkeypatch, capsys):
