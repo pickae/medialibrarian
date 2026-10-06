@@ -484,3 +484,18 @@ class TestQuiet:
         log = census.census("-q", "-o", out, left.parent, right.parent,
                             expect=1)
         assert "nothing was changed" in log.lower()
+
+
+class TestCubesAfterAnInterruptCountedNothing:
+    """A worker stopped between writing its report and recording it leaves the
+    run's count at nothing while a report is on disk - and the cubes are still
+    said not to be built, rather than that there was nothing to build from."""
+
+    def test_the_interrupt_is_what_is_said(self, monkeypatch, capsys):
+        from medialib.cli import census_run
+        monkeypatch.delenv("LOG_VERBOSITY", raising=False)
+        monkeypatch.delenv("LOG_TIMESTAMPS", raising=False)
+        census_run._build_cubes([], 0, True, "")
+        err = capsys.readouterr().err
+        assert "the cubes were NOT built" in err
+        assert "nothing to build cubes from" not in err

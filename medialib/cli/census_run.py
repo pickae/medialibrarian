@@ -844,7 +844,9 @@ def _summarise(state, worker_roots, results, run_bi, script_dir, total):
             os.path.join(results, "%d.skipped" % root_index)))
 
     runlog.say("\n", sys.stderr)
-    if written == 0:
+    # Not said of an interrupted run: a worker stopped between writing its
+    # report and recording it leaves the count short of what is on disk.
+    if written == 0 and not interrupted:
         runlog.error("No report was written: none of the %d file(s) found "
                      "could be censused." % total)
     elif len(state.lib_paths) > 1:
@@ -890,7 +892,11 @@ def _build_cubes(reports, written, interrupted, script_dir):
     cube says nothing about how complete the thing it was built from is - so a
     total out of it would be wrong in a way nobody could see afterwards.
     """
-    if written == 0:
+    # The interrupt first, whatever was counted: a worker stopped between
+    # writing its report and recording it leaves the count at nothing while a
+    # report of part of the library is on disk - and that is exactly the case
+    # the cubes must not be built from, and must be said.
+    if not interrupted and written == 0:
         log("-b: no report was written, so there is nothing to build cubes "
             "from.")
         return
@@ -898,9 +904,12 @@ def _build_cubes(reports, written, interrupted, script_dir):
         runlog.say("\n", sys.stderr)
         log("-b: the run was interrupted, so the cubes were NOT built - the "
             "reports hold")
-        log("    only part of the libraries. Build them from a finished census "
-            "with:")
-        log("    content-census-bi %s" % os.path.dirname(reports[0]))
+        if reports:
+            log("    only part of the libraries. Build them from a finished "
+                "census with:")
+            log("    content-census-bi %s" % os.path.dirname(reports[0]))
+        else:
+            log("    only part of the libraries.")
         return
     runlog.say("\n", sys.stderr)
     log("Building the cubes from the %d report(s) just written" % written)
