@@ -9,6 +9,7 @@ values fall into, and the exit status the last command of each function leaves
 behind. """
 
 import os
+import sys
 
 import pytest
 
@@ -33,7 +34,7 @@ class _Run:
         self._rc_index = {}
         self._write_index = {}
 
-    def __call__(self, argv, quiet=False):
+    def __call__(self, argv, may_fail=False):
         name = os.path.basename(str(argv[0]))
         self.calls.append(list(argv))
         rcs = self.results.get(name, [0])
@@ -209,7 +210,7 @@ def test_a_host_without_poppler_forgets_the_pdf_and_warns(tmp_path, isolated_env
     assert status == 0
     assert "pdftoppm not installed" in capsys.readouterr().err
     assert run.called("ffmpeg") == [
-        ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
+        ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "info",
          "-i", str(tmp_path / "a.opus"), "-an", "-vcodec", "copy",
          "ram/track01.jpg"]]
 
@@ -425,7 +426,7 @@ def test_an_mp3_output_is_rewritten_through_a_temp(tmp_path, isolated_env,
         str(d), "track01", 100, 90, "1024x1024", 100, False, "ram", "script",
         run) == 0
     assert run.called("ffmpeg") == [
-        ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
+        ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "info",
          "-i", "track01.mp3", "-i", "ram/track01.output.jpg",
          "-c", "copy", "-map", "0", "-map", "1", "ram/track01.temp.mp3"]]
     assert (d / "track01.mp3").is_file()
@@ -655,3 +656,32 @@ def test_a_failed_extraction_is_still_a_status_zero(tmp_path, isolated_env,
     run = _Run(results={"ffmpeg": [1]})
     monkeypatch.setenv("PATH", _stub_bin(tmp_path, ["ffmpeg"]))
     assert thumbnails.extract_source_cover("src.mp3", "tmp", run) == 0
+
+class TestTheRealRunner:
+    """A cover step's tool is heard from only when it failed, and not even
+    then when failing was an answer."""
+
+    @pytest.fixture(autouse=True)
+    def plain(self, monkeypatch):
+        monkeypatch.delenv("LOG_TIMESTAMPS", raising=False)
+        monkeypatch.setattr(thumbnails.toolcapture.statusline.state, "row", "")
+
+    def _tool(self, script):
+        return [sys.executable, "-c", script]
+
+    def test_a_failed_step_is_a_warning_in_the_tools_words(self, capfd):
+        thumbnails._run(self._tool("print('no such stream'); exit(1)"))
+        err = capfd.readouterr().err
+        assert err.startswith("==> WARNING: cover not written, so the book "
+                              "keeps what it had")
+        assert "    | no such stream\n" in err
+
+    def test_one_that_may_fail_says_nothing(self, capfd):
+        done = thumbnails._run(self._tool("print('no cover'); exit(1)"),
+                               may_fail=True)
+        assert done.returncode == 1
+        assert capfd.readouterr() == ("", "")
+
+    def test_one_that_worked_says_nothing(self, capfd):
+        thumbnails._run(self._tool("print('chatter')"))
+        assert capfd.readouterr() == ("", "")

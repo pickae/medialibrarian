@@ -32,6 +32,7 @@ from medialib.lib import (
     ramscratch,
     runlog,
     safety,
+    toolcapture,
     tooldeps,
     workerpool,
 )
@@ -63,6 +64,8 @@ USAGE_HEAD = """Usage:
 
 Options:"""
 
+OPT_COLUMN = 20
+
 OPT_SPEC = """
 h |  | Print this help page.
 t | <table> | A feed table to read. May be given more than once, and each
@@ -73,8 +76,7 @@ j | <jobs> | Cap how many feeds any one table may fetch at once. Lower
                     only; a table asking for less keeps its own number.
 p |  | Preview: print the yt-dlp call each feed would get and
                     download nothing.
-v |  | Verbose: print yt-dlp's own output as well. Without it the
-                    run prints exactly one line per episode and nothing else.
+""" + clioptions.verbosity_options(OPT_COLUMN) + """\
 a |  | Also fetch the feeds whose active column is 0.
 c |  | Tidy up after the run: the sidecars each finished episode
                     leaves (the thumbnail that was embedded, the description and
@@ -127,9 +129,9 @@ j | nonNegInt | feed cap
 s | enum:windows\\|linux\\|auto | system
 """
 
-OPT_COLUMN = 20
-OPT_LONG = ("h:help t:table j:jobs p:preview v:verbose a:include-inactive "
-            "c:clean-up i:ingest m:match s:system l:consolidate")
+OPT_LONG = ("h:help t:table j:jobs p:preview a:include-inactive "
+            "c:clean-up i:ingest m:match s:system l:consolidate "
+            + clioptions.VERBOSITY_LONG)
 
 USAGE_TAIL = """
 
@@ -290,7 +292,6 @@ class Run:
             profile=os.environ.get("PODCAST_PROFILE", ""),
             date_after=os.environ.get("PODCAST_DATE_AFTER", ""),
             date_before=os.environ.get("PODCAST_DATE_BEFORE", ""),
-            verbose=os.environ.get("PODCAST_VERBOSE", ""),
             sponsorblock=os.environ.get("PODCAST_SPONSORBLOCK"),
             ffmpeg_location=self.ffmpeg_location)
         if argv is None:
@@ -302,18 +303,27 @@ class Run:
         # The one refusal this run answers by itself: yt-dlp names the
         # argument that gets past it, so the feed is asked again with it.
         retry = podcastfeeds.podcast_impersonate_retry(argv)
-        status, challenged = self._download(argv, manifest, podcast, block_flag,
-                                            provider, retriable=retry is not None)
+        status, challenged, output = self._download(
+            argv, manifest, podcast, block_flag, provider,
+            retriable=retry is not None)
         if challenged and retry is not None:
             log("%s: Cloudflare anti-bot challenge, retrying with impersonation"
                 % podcast)
-            status, _ = self._download(retry, manifest, podcast, block_flag,
-                                       provider)
+            argv = retry
+            status, _, output = self._download(retry, manifest, podcast,
+                                               block_flag, provider)
 
         # A feed the reader cut short did not fail - it was stopped, and saying
         # otherwise would put it in the list of feeds to go and look at.
         if self.provider_blocked(provider) and status != 0:
             status = "blocked"
+        elif status != 0:
+            toolcapture.report_failure(
+                toolcapture.finished(argv, status, output, label=podcast,
+                                     tool="yt-dlp"),
+                lock_file=self.counter_file + ".lock" if self.have_flock
+                else "",
+                shown_if=_worth_replaying)
 
         # An interrupt can take the scratch away underneath a feed that was
         # already dispatched; its status is then simply absent, which reads as
@@ -331,7 +341,8 @@ class Run:
     def _download(self, argv, manifest: str, podcast: str, block_flag: str,
                   provider: str, retriable: bool = False):
         """Run one call, reporting its episodes AS THEY ARRIVE, and answer with
-        its status and whether a Cloudflare challenge refused it.
+        its status, whether a Cloudflare challenge refused it, and everything
+        else it said - kept, for the replay should the feed fail.
 
         A feed's lines are reported while it downloads rather than when it
         finishes; the reporter is stateless between lines - everything it counts
@@ -341,16 +352,18 @@ class Run:
         then is the challenge held back from the reporter: it is about to be
         answered, and a FAIL line for a feed that then downloads would be a lie.
         """
+        output = toolcapture.ToolOutput()
         try:
             process = subprocess.Popen(argv, stdout=subprocess.PIPE,
                                        stderr=subprocess.STDOUT,
                                        stdin=subprocess.DEVNULL)
-        except OSError:
-            return 1, False
+        except OSError as error:
+            output.feed("%s\n" % error)
+            return 1, False, output
         if process.stdout is None:
             # stdout=PIPE was asked for, so this is the same "could not start"
             # the OSError above answers.
-            return 1, False
+            return 1, False, output
         challenged = False
         with process.stdout as stream:
             for raw in stream:
@@ -368,13 +381,12 @@ class Run:
                     self._warn_impersonation_missing()
                 podcastfeeds.report_episodes(
                     line, self.counter_file, manifest, podcast, block_flag,
-                    provider, os.environ.get("PODCAST_VERBOSE", ""),
-                    self.have_flock)
+                    provider, self.have_flock, output)
                 if os.path.exists(block_flag):
                     # Carrying on through the remaining refusals is precisely
                     # the behaviour that deepens the block.
                     break
-        return process.wait(), challenged
+        return process.wait(), challenged, output
 
     def _warn_impersonation_missing(self) -> None:
         """Said once for the whole run, through a file: the feeds that hit it
@@ -436,7 +448,6 @@ class Run:
                     profile=profile,
                     date_after=os.environ.get("PODCAST_DATE_AFTER", ""),
                     date_before=os.environ.get("PODCAST_DATE_BEFORE", ""),
-                    verbose=os.environ.get("PODCAST_VERBOSE", ""),
                     sponsorblock=os.environ.get("PODCAST_SPONSORBLOCK"),
                     ffmpeg_location=self.ffmpeg_location)
                 if argv is not None:
@@ -701,6 +712,7 @@ def main(argv: list, program: str = "ytdlp", script_dir: str = "") -> int:
     declaration = spec(program)
     try:
         result = clioptions.parse(declaration, argv, _on_opt)
+        clioptions.settle_verbosity(result)
     except clioptions.HelpRequested:
         sys.stdout.write(clioptions.help_text(declaration))
         return 0
@@ -880,12 +892,17 @@ def _consolidate(declaration: clioptions.Spec, result) -> int:
     return 0
 
 
+def _worth_replaying(line: str) -> bool:
+    """A line of yt-dlp's that a failed feed's replay prints: everything but
+    its ``--verbose`` debug lines - its versions, its request headers, its
+    resolved options - which are in the kept log for whoever wants them."""
+    return not line.startswith("[debug] ")
+
+
 def _on_opt(letter: str, value: str) -> None:
-    """-v and -s name no variable of their own: both settle an environment
-    variable the feed library reads."""
-    if letter == "v":
-        os.environ["PODCAST_VERBOSE"] = "1"
-    elif letter == "s":
+    """-s names no variable of its own: it settles an environment variable the
+    feed library reads."""
+    if letter == "s":
         if value in ("windows", "linux"):
             os.environ["PODCAST_PLATFORM"] = value
         elif value == "auto":

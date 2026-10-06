@@ -71,7 +71,7 @@ class _Run:
         self.metadata_contents = []
         self._rc_index = {}
 
-    def __call__(self, argv, quiet=False):
+    def __call__(self, argv, may_fail=False):
         name = os.path.basename(str(argv[0]))
         self.calls.append(list(argv))
         for i, a in enumerate(argv):
@@ -499,7 +499,7 @@ def test_embed_mp3_with_mkvtoolnix_detours_over_mka(tmp_path, monkeypatch,
                             "info", "--set", "title=song", "--edit", "track:1",
                             "--set", "name=song"]
     assert run.calls[2] == ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel",
-                            "error", "-y", "-i", "ram/song.mka", "-codec", "copy",
+                            "info", "-y", "-i", "ram/song.mka", "-codec", "copy",
                             "song.mp3"]
     # and the intermediate does not outlive the detour
     assert not (tmp_path / "ram" / "song.mka").exists()
@@ -634,8 +634,8 @@ def _staging_run(tmp_path, write=b"muxed", rc=0):
     for the wrong reason.
     """
     class _Muxer(_Run):
-        def __call__(self, argv, quiet=False):
-            super().__call__(argv, quiet)
+        def __call__(self, argv, may_fail=False):
+            super().__call__(argv, may_fail)
             if write is not None:
                 pathlib.Path(argv[-1]).write_bytes(write)
             return subprocess.CompletedProcess(argv, rc)

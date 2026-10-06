@@ -361,6 +361,13 @@ class TestAJoinThatFails:
         _, done = run
         assert '!!! "Breaks"' in done.stdout + done.stderr
 
+    def test_ffmpegs_own_words_come_before_it(self, run):
+        _, done = run
+        log = done.stdout + done.stderr
+        assert "ERROR: Breaks: ffmpeg exited with status 1\n    | boom\n" \
+            in log, log
+        assert log.index("    | boom") < log.index('!!! "Breaks"')
+
     def test_the_run_ends_non_zero(self, run):
         """It was asked for two books and made one."""
         _, done = run

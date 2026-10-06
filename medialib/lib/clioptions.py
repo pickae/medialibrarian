@@ -38,10 +38,9 @@ DEFAULT_COLUMN = 20
 # :func:`verbosity_options`, which wraps them for the spec's own column.
 VERBOSITY_LONG = "v:verbose q:quiet"
 _VERBOSITY_HELP = (
-    ("v", "verbose: also say why each item was handled the way it was, and "
-          "on a failure print the tool's whole output rather than its last "
-          "lines."),
-    ("q", "quiet: print errors only - no progress and no warnings."),
+    ("v", "Also say why each item was handled the way it was, and on a "
+          "failure print the tool's whole output rather than its last lines."),
+    ("q", "Print errors only - no progress and no warnings."),
 )
 
 

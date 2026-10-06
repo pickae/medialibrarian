@@ -141,7 +141,8 @@ the two systems and is worked out at run time:
 | `-m <text>` | narrows the run to the feeds whose folder or URL matches |
 | `-p` | prints the yt-dlp calls and downloads nothing |
 | `-s windows\|linux` | with `-p`, prints the other machine's calls |
-| `-v` | puts yt-dlp's own output back |
+| `-v` | runs yt-dlp with `--verbose`, and replays more of a failed feed's output |
+| `-q` | prints only failures: no episode lines and no warnings |
 | [`-c`](#tidying-up-after-a-run--c) | tidies up after the run |
 | [`-i`](#building-the-phones-library-from-the-run--i) | builds the phone's library from the run |
 | [`-l`](#merging-archives--l) | merges archives; downloads nothing |
@@ -203,8 +204,10 @@ first, creating it if it is not there. Nothing is downloaded.
 
 ## What a run prints
 
-One line per episode, and nothing else; `-v` puts yt-dlp's own output back for
-when something needs diagnosing. The episodes are counted from what yt-dlp
+One line per episode, and nothing else. What yt-dlp says is kept rather than
+shown, and only a feed that fails has it replayed — its last lines under the
+error, with all of it kept in `logs/tool-failures/`. `-v` has yt-dlp say more
+and replays more of it, its `[debug]` lines left to the kept log. The episodes are counted from what yt-dlp
 reports after all post-processing, so the closing figures are of finished files
 on disk rather than of feeds walked.
 

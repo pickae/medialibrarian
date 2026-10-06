@@ -57,7 +57,7 @@ def rejoin(tmp_path, monkeypatch):
             with open(argv[-1], "wb") as handle:
                 handle.write(joined)
 
-        monkeypatch.setattr(ca.subprocess, "run", concat)
+        monkeypatch.setattr(ca.toolcapture, "run", concat)
         state = ca.Run(input_dir=str(inputs), output_dir=str(outputs),
                        chunk_root=str(chunk_root), extension="opus",
                        keep=keep, script_dir="", cover_resolution="")

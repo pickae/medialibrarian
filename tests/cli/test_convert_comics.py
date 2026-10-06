@@ -356,10 +356,12 @@ class TestTheChromaReachesTheConversion:
     @staticmethod
     def _argv(tmp_path, monkeypatch, chroma):
         calls = []
+        real = cc.commands.command_line
         monkeypatch.setattr(
-            cc.commands, "run_command",
+            cc.commands, "command_line",
             lambda name, argv, **kwargs: calls.append((name, argv))
-            or cc.subprocess.CompletedProcess(argv, 0))
+            or real(name, argv, **kwargs))
+        monkeypatch.setattr(cc.toolcapture, "run", lambda *a, **k: None)
         state = cc.Run(counters=cc.Counters(str(tmp_path)), script_dir="",
                        quality="45", chroma=chroma, speed_preset="4",
                        pages_per_book=4,
@@ -478,3 +480,16 @@ class TestTheDroppedDuplicatesAreSaidOncePerBook:
 
     def test_none_is_silence(self, extract):
         assert extract([]) == []
+
+
+class TestAnArchiveThatWouldNotUnpack:
+    def test_the_unpackers_run_is_handed_back_for_the_replay(self, tmp_path,
+                                                            monkeypatch):
+        from medialib.lib import toolcapture
+        failed = toolcapture.ToolRun(["unzip"], 9, toolcapture.ToolOutput(),
+                                     failure="exited with status 9")
+        monkeypatch.setattr(cc.archives, "unsafe_members", lambda *a: [])
+        monkeypatch.setattr(cc.toolcapture, "run", lambda *a, **k: failed)
+        book = tmp_path / "book.cbz"
+        book.write_bytes(b"not a zip")
+        assert cc.extract(str(book), str(tmp_path / "pages"), 2960) is failed

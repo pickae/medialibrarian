@@ -204,7 +204,7 @@ class TestConcatViaDemuxer:
         entries = self._concat(self._folder(tmp_path, 3), run)
         assert run.text == "\n".join(entries) + "\n"
         assert run.argv[:10] == [
-            "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
+            "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "info",
             "-safe", "0", "-f", "concat", "-i"]
         assert run.argv[11:] == ["-codec", "copy", str(tmp_path) + "/out.mp3"]
 
@@ -270,40 +270,15 @@ class TestConcatViaDemuxer:
         assert all(not os.path.exists(link) for link in links)
         assert not os.path.exists(os.path.dirname(links[0]))
 
-    def test_the_dts_complaint_is_not_reprinted(self, tmp_path, capsys):
+    def test_the_dts_complaint_is_left_out_of_a_replay(self):
         """The mp3 muxer says it once per seam of a stream-copied join and
-        says nothing wrong, so it does not reach the console; a real error in
-        the same stderr does."""
-        spam = (b"[mp3 @ 0x600aa2373dc0] Application provided invalid, non "
-                b"monotonically increasing dts to muxer in stream 0: "
-                b"60597164781 >= 60597075188\n"
-                b"[in#0/concat @ 0x5c06c069a840] Impossible to open "
-                b"'/a/missing.mp3'\n")
-
-        class _Result:
-            returncode = 0
-            stderr = spam
-
-        def _join(argv, **_kwargs):
-            open(argv[-1], "w").close()
-            return _Result()
-
-        folder = self._folder(tmp_path, 2)
-        entries = ca.concat_via_demuxer(folder, "mp3", folder + "/out.mp3",
-                                         "copy", "ffmpeg", run=_join)
-        printed = capsys.readouterr().err
-        assert entries
-        assert "non monotonically increasing dts" not in printed
-        assert "Impossible to open" in printed
-
-    def test_the_filter_drops_only_the_dts_lines(self):
+        says nothing wrong, so a failed join's replay leaves it out; a real
+        error beside it stays."""
         spam = ("[mp3 @ 0x1] Application provided invalid, non monotonically "
-                "increasing dts to muxer in stream 0: 6 >= 5\n"
-                "[mp3 @ 0x2] Application provided invalid, non monotonically "
-                "increasing dts to muxer in stream 0: 7 >= 6\n")
+                "increasing dts to muxer in stream 0: 6 >= 5")
         real = "[in#0/concat @ 0x3] Impossible to open 'x'"
-        assert ca._filtered_stderr(spam + real + "\n") == real
-        assert ca._filtered_stderr("") == ""
+        assert not ca._worth_showing(spam)
+        assert ca._worth_showing(real)
 
 
 class TestBooksAtOnce:
@@ -494,7 +469,7 @@ class TestTheChapterSourceAFolderHolds:
         scratch.mkdir()
         cue_calls, file_calls = [], []
 
-        def fake_concat_format(_folder, base_name, fmt, _ram, _ffmpeg):
+        def fake_concat_format(_folder, base_name, fmt, _ram, _ffmpeg, _run):
             with open("%s.%s" % (base_name, ca.FORMATS[fmt][1]), "w") as handle:
                 handle.write("x")
             return [str(folder / ("%02d.mp3" % number))

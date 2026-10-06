@@ -23,7 +23,6 @@ two, which a mechanical drive still streams rather than seeks.
 import os
 import re
 import shutil
-import subprocess
 import sys
 import tempfile
 
@@ -44,6 +43,7 @@ from medialib.lib import (
     runlog,
     safety,
     thumbnails,
+    toolcapture,
     tooldeps,
     workerpool,
 )
@@ -58,13 +58,12 @@ USAGE_HEAD = """Usage:
 
 # The spec is DATA, and the page it renders is compared byte for byte against the
 # recorded contract under tests/data/cliContract.
+OPT_COLUMN = 12
+
 OPT_SPEC = """
 p |  | opt-in input pretreatment (in-place): renames folders/files in
             <inputDir> before concatenation.
-v |  | verbose: show every per-subfolder step. Without it (the default)
-            only the '[i/N] Processing ...' progress line is printed per
-            subfolder; the individual step messages are hidden.
-h |  | print this help page.
+""" + clioptions.verbosity_options(OPT_COLUMN) + """h |  | print this help page.
 """
 
 USAGE_TAIL = """
@@ -98,9 +97,8 @@ USAGE_TAIL = """
     pdftoppm (renders a booklet PDF's first page as the cover; without it the
     embedded cover art is used instead), flock (numbers the progress lines)"""
 
-OPT_VARS = "p:pretreat v:verbose"
-OPT_COLUMN = 12
-OPT_LONG = "p:pretreat v:verbose h:help"
+OPT_VARS = "p:pretreat"
+OPT_LONG = "p:pretreat h:help " + clioptions.VERBOSITY_LONG
 
 IMAGE_SIZE_LIMIT = 700000
 DPI = 300
@@ -180,8 +178,11 @@ def spec(program: str) -> clioptions.Spec:
     )
 
 
-def _run(argv, **kwargs):
-    return subprocess.run(argv, **kwargs)
+def _run(argv):
+    """One join's ffmpeg, its output kept rather than shown: a book whose join
+    failed has it replayed by :meth:`Run._build`, and one that worked says
+    nothing."""
+    return toolcapture.run(argv, tool="ffmpeg", report=False)
 
 
 def select_cue_sheet(cues: list, audio: str) -> str:
@@ -308,25 +309,12 @@ def _unsafe_in_concat_list(path: str) -> bool:
     return any(ch in path for ch in ("'", "\\", "\n", "\r"))
 
 
-def _filtered_stderr(text: str) -> str:
-    """The join's ffmpeg stderr with the one line dropped that is not worth
-    printing: the mp3 muxer's 'non monotonically increasing dts' complaint,
-    which it says once per seam of a stream-copied join, where the copy
-    itself is fine. Every other line is a real error and stays."""
-    return "\n".join(line for line in text.splitlines()
-                     if "non monotonically increasing dts to muxer" not in line)
-
-
-def _reprint_stderr(stderr) -> None:
-    """The captured stderr of the join's ffmpeg back to the console, filtered:
-    a failure that still exits 0 is told only here, so nothing real is held."""
-    if not stderr:
-        return
-    text = stderr.decode("utf-8", "surrogateescape") \
-        if isinstance(stderr, (bytes, bytearray)) else str(stderr)
-    kept = _filtered_stderr(text)
-    if kept:
-        sys.stderr.write(kept + "\n")
+def _worth_showing(line: str) -> bool:
+    """Whether a line of a failed join's ffmpeg is printed when it is
+    replayed: all but the mp3 muxer's 'non monotonically increasing dts'
+    complaint, which it says once per seam of a stream-copied join, where the
+    copy itself is fine. The kept log has it regardless."""
+    return "non monotonically increasing dts to muxer" not in line
 
 
 def concat_via_demuxer(folder: str, source_extension: str, output_file: str,
@@ -375,14 +363,14 @@ def concat_via_demuxer(folder: str, source_extension: str, output_file: str,
     try:
         with os.fdopen(descriptor, "w") as handle:
             handle.write("\n".join(entries) + "\n")
-        result = run([ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
+        result = run([ffmpeg, "-nostdin", "-hide_banner",
+                      *toolcapture.ffmpeg_loglevel(),
                       "-safe", "0", "-f", "concat", "-i", list_file]
-                     + codec + [output_file], stderr=subprocess.PIPE)
+                     + codec + [output_file])
     finally:
         os.remove(list_file)
         if links_dir:
             shutil.rmtree(links_dir, ignore_errors=True)
-    _reprint_stderr(getattr(result, "stderr", None))
     # An empty list is what a caller reads as "nothing was joined", which is
     # the truth of a failed join as much as of an empty folder.
     if _join_failed(result, output_file, existed_before):
@@ -409,7 +397,8 @@ def concat_via_raw_remux(folder: str, base_name: str, source_extension: str,
         for path in files:
             with open(path, "rb") as source:
                 shutil.copyfileobj(source, target)
-    result = run([ffmpeg, "-nostdin", "-hide_banner", "-loglevel", "error",
+    result = run([ffmpeg, "-nostdin", "-hide_banner",
+                  *toolcapture.ffmpeg_loglevel(),
                   "-i", temporary, "-acodec", "copy", "-bsf:a",
                   "aac_adtstoasc", output_file])
     os.remove(temporary)
@@ -552,7 +541,6 @@ class Run:
 
     # Declared, not defaulted: the settings dict supplies every one, so a name
     # it does not carry is still an AttributeError at the read.
-    verbose: bool
     ram_dir: str
     script_dir: str
     ffmpeg: str
@@ -572,8 +560,8 @@ class Run:
 
     def report_progress(self, name: str, note: str = "") -> None:
         """The one status line kept per folder, atomic and ordered across the
-        parallel workers - so it is printed directly rather than through log(),
-        which quiet mode silences.
+        parallel workers - so it is printed directly rather than through log().
+        Counted under -q as well, where it is not printed.
 
         A folder that will produce nothing carries the reason as a second line
         written inside the same lock, so it cannot land under another worker's
@@ -588,6 +576,8 @@ class Run:
                 current = 1
             with open(self.progress_file, "w") as handle:
                 handle.write("%d\n" % current)
+            if runlog.verbosity() < runlog.NORMAL:
+                return
             line = '==> %sProcessing "%s"\n' % (
                 runlog.counted_prefix(current, self.total), name)
             if note:
@@ -611,6 +601,19 @@ class Run:
                 handle.write("%s\n" % name)
         except OSError:
             pass
+
+    def _replay_join(self, joins: list, name: str, otherwise: str) -> None:
+        """The last join's ffmpeg output, replayed for a book that has none to
+        show. ``otherwise`` is the failure a join that exited 0 is reported as.
+        """
+        if not joins or not isinstance(joins[-1], toolcapture.ToolRun):
+            return
+        join = joins[-1]
+        join.label = name
+        if join.ok:
+            join.failure = otherwise
+        toolcapture.report_failure(join, lock_file=self.progress_file + ".lock",
+                                   shown_if=_worth_showing)
 
     def _reserve(self, byte_count: int) -> bool:
         """Claim <byte_count> bytes of the RAM scratch for one book, or say
@@ -722,20 +725,25 @@ class Run:
         chapter_file = output_path + ".ch"
         name = os.path.basename(output_path)
 
-        # Quiet mode (the default) silences the per-step lines from here on.
-        # Each sub-folder is its own worker, so this reaches only that worker
-        # and the helpers it calls - never the run's own top-level lines. The
-        # progress line above is printed directly, so it stays visible.
-        step = log if self.verbose else (lambda _message: None)
+        # The per-step lines are -v's: the progress line above is the one a
+        # sub-folder gets otherwise.
+        step = runlog.detail
 
         step("    Concatenating %d %s file(s)" % (scan.counts[fmt], label))
+        joins: list = []
+
+        def run(argv):
+            joins.append(_run(argv))
+            return joins[-1]
+
         concat_list = concat_format(input_path, output_path, fmt, scratch,
-                                    self.ffmpeg)
+                                    self.ffmpeg, run)
 
         # Nothing joined, so there is nothing for the two steps below to write
         # into. Going on would run them against a file that is not there and
         # end the run saying "Done" over a book it never made.
         if not concat_list:
+            self._replay_join(joins, name, "wrote no file")
             self.record_failure(
                 name, "the %s join produced no file - chapters and cover "
                       "skipped. ffmpeg's own error is above." % label)
@@ -754,6 +762,8 @@ class Run:
         if expected and not durationcheck.length_matches(expected, produced):
             # Never written out: a book with tracks missing is worse than no
             # book, because it looks finished. The scratch it is in goes.
+            # ffmpeg said why, if anything did, while exiting 0.
+            self._replay_join(joins, name, "came out short")
             self.record_failure(
                 name, "the join came out %s from %s of %s files - the output "
                       "was removed, since it is not the whole book."
@@ -907,6 +917,7 @@ def main(argv: list, program: str = "concat-audio",
     declaration = spec(program)
     try:
         result = clioptions.parse(declaration, argv)
+        clioptions.settle_verbosity(result)
     except clioptions.HelpRequested:
         sys.stdout.write(clioptions.help_text(declaration))
         return 0
@@ -920,7 +931,6 @@ def main(argv: list, program: str = "concat-audio",
         return 1
 
     pretreat = "p" in result.given
-    verbose = "v" in result.given
     input_dir, output_dir = result.positionals[0], result.positionals[1]
 
     script_dir = script_dir or commands.script_dir()
@@ -985,7 +995,7 @@ def main(argv: list, program: str = "concat-audio",
 
     try:
         return _run_with_scratch(ram_dir, input_dir, output_dir, pretreat,
-                                 verbose, program, script_dir, have_mkvtoolnix)
+                                 program, script_dir, have_mkvtoolnix)
     finally:
         # However this run ends, the scratch goes back to the tmpfs rather
         # than staying there.
@@ -993,7 +1003,7 @@ def main(argv: list, program: str = "concat-audio",
 
 
 def _run_with_scratch(ram_dir: str, input_dir: str, output_dir: str,
-                      pretreat: bool, verbose: bool, program: str,
+                      pretreat: bool, program: str,
                       script_dir: str, have_mkvtoolnix: bool) -> int:
     safety.init_safety_log(os.path.join(ram_dir, "safetySkips.log"))
     skips = safety.RunSkipLog()
@@ -1044,7 +1054,6 @@ def _run_with_scratch(ram_dir: str, input_dir: str, output_dir: str,
         % (total, ", up to %d at a time" % width if width > 1 else ""))
 
     state = Run(
-        verbose=verbose,
         ram_dir=ram_dir,
         script_dir=script_dir,
         ffmpeg="ffmpeg",

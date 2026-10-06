@@ -17,9 +17,9 @@ import os
 import subprocess
 import sys
 
-__all__ = ["COMMANDS", "MODULES", "config_dir", "exec_command", "logs_file",
-           "module_for", "package_root", "program_name", "run_command",
-           "script_dir"]
+__all__ = ["COMMANDS", "MODULES", "command_line", "config_dir", "exec_command",
+           "logs_file", "module_for", "package_root", "program_name",
+           "run_command", "script_dir"]
 
 COMMANDS = {
     "clean-folder-structure": "medialib.cli.clean_folder_structure",
@@ -154,6 +154,19 @@ def exec_command(command: str, argv, script_dir: str = "") -> None:
               env)
 
 
+def command_line(command: str, argv, script_dir: str = "",
+                 env: dict | None = None) -> tuple:
+    """The argv and environment that start another one of these commands as a
+    child, for a caller that starts it itself - :func:`run_command` is this
+    plus ``subprocess.run``."""
+    environment = dict(env or os.environ)
+    environment["CLI_PROGRAM"] = command
+    if script_dir:
+        environment["CLI_SCRIPT_DIR"] = script_dir
+    return ([sys.executable, "-m", module_for(command),
+             *[str(a) for a in argv]], environment)
+
+
 def run_command(command: str, argv, script_dir: str = "", **kwargs):
     """Start another one of these commands as a CHILD PROCESS.
 
@@ -170,10 +183,5 @@ def run_command(command: str, argv, script_dir: str = "", **kwargs):
     environment because that is where the callee reads it from, and left out of
     the argv where it never was.
     """
-    env = dict(kwargs.pop("env", None) or os.environ)
-    env["CLI_PROGRAM"] = command
-    if script_dir:
-        env["CLI_SCRIPT_DIR"] = script_dir
-    return subprocess.run(
-        [sys.executable, "-m", module_for(command), *[str(a) for a in argv]],
-        env=env, **kwargs)
+    argv, env = command_line(command, argv, script_dir, kwargs.pop("env", None))
+    return subprocess.run(argv, env=env, **kwargs)

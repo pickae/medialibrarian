@@ -657,6 +657,9 @@ class TestTheXheAacEncodeCall:
                 self.kwargs = kwargs
                 self.stdout = _Pipe() if kwargs.get("stdout") is not None \
                     else None
+                self.stderr = _Pipe() if kwargs.get("stderr") is not None \
+                    else None
+                self.returncode = 0
                 self.waited = 0
 
             def wait(self):
@@ -784,6 +787,8 @@ class TestTheXheAacEncodeCall:
         class _Decoder:
             def __init__(self):
                 self.stdout = _Pipe()
+                self.stderr = _Pipe()
+                self.returncode = 0
                 self.killed = False
                 self.waited = 0
 
@@ -823,10 +828,14 @@ class TestTheXheAacEncodeCall:
 
 
 class _Pipe:
-    """Stands in for a Popen's stdout, so a case can see that it was closed."""
+    """Stands in for a Popen's pipe, so a case can see that it was closed. It
+    is read as one that is already at its end."""
 
     def __init__(self) -> None:
         self.closed = False
+
+    def read1(self, _size: int) -> bytes:
+        return b""
 
     def close(self) -> None:
         self.closed = True
@@ -838,7 +847,7 @@ class TestTheOpusEncodeIsUnchanged:
 
     def test_the_stereo_call_is_the_one_it_always_was(self, monkeypatch):
         seen = []
-        monkeypatch.setattr(ca.subprocess, "run",
+        monkeypatch.setattr(ca.toolcapture, "run",
                             lambda argv, **kw: seen.append(list(argv)))
         monkeypatch.setattr(ca, "source_channels", lambda src: 2)
         run = ca.Run(codec="opus", extension="opus", output_dir="out",
@@ -851,7 +860,7 @@ class TestTheOpusEncodeIsUnchanged:
     def test_and_the_mono_call_puts_the_downmix_before_the_codec(self,
                                                                  monkeypatch):
         seen = []
-        monkeypatch.setattr(ca.subprocess, "run",
+        monkeypatch.setattr(ca.toolcapture, "run",
                             lambda argv, **kw: seen.append(list(argv)))
         run = ca.Run(codec="opus", extension="opus", output_dir="out")
         run._encode("a.flac", "out/a.opus", mono=True, bitrate=32)
@@ -862,7 +871,7 @@ class TestTheOpusEncodeIsUnchanged:
 
     def test_the_lift_out_copies_and_never_names_an_encoder(self, monkeypatch):
         seen = []
-        monkeypatch.setattr(ca.subprocess, "run",
+        monkeypatch.setattr(ca.toolcapture, "run",
                             lambda argv, **kw: seen.append(list(argv)))
         run = ca.Run(codec="opus", extension="opus", output_dir="out")
         run._remux("a.mkv", "out/a.opus")
@@ -882,7 +891,7 @@ class TestAnOpusEncodeOfASurroundSource:
     @pytest.fixture
     def seen(self, monkeypatch):
         calls = []
-        monkeypatch.setattr(ca.subprocess, "run",
+        monkeypatch.setattr(ca.toolcapture, "run",
                             lambda argv, **kw: calls.append(list(argv)))
         monkeypatch.setattr(ca, "source_channels", lambda src: 6)
         monkeypatch.setattr(ca, "source_channel_layout",
@@ -1035,6 +1044,8 @@ def _stub_popen(monkeypatch):
         def __init__(self, argv, **kwargs):
             self.argv = list(argv)
             self.stdout = _Pipe() if kwargs.get("stdout") is not None else None
+            self.stderr = _Pipe() if kwargs.get("stderr") is not None else None
+            self.returncode = 0
 
         def wait(self):
             return 0
@@ -1490,3 +1501,33 @@ class TestTheSilencesAWindowProbeFound:
 
     def test_no_silence_at_all_gives_none(self):
         assert ca._silence_midpoints("") == []
+
+
+class TestAnOutputMeasuredShort:
+    """An encode is judged by what came out rather than by its status, so what
+    the encoder said waits beside its output until that is measured."""
+
+    def test_the_encoders_words_follow_the_measuring(self, monkeypatch,
+                                                     capfd):
+        from medialib.lib import toolcapture
+        said = toolcapture.ToolOutput()
+        said.feed("Invalid data found when processing input\n")
+        monkeypatch.setattr(
+            ca.toolcapture, "run",
+            lambda argv, **kw: toolcapture.ToolRun(list(argv), 0, said))
+        monkeypatch.setattr(ca, "source_channels", lambda src: 2)
+        run = ca.Run(codec="opus", extension="opus", output_dir="out",
+                     adaptive=False, surround=False)
+        run._encode("a.flac", "out/a.opus", mono=False, bitrate=46)
+        run._replay("out/a.opus", "a.flac")
+        err = capfd.readouterr().err
+        assert ("ERROR: a.flac: ffmpeg exited 0, but its output fell short"
+                in err), err
+        assert "    | Invalid data found when processing input" in err
+        assert run.tool_runs == {}
+
+    def test_an_output_that_measured_whole_is_not_replayed(self, monkeypatch,
+                                                           capfd):
+        run = ca.Run(codec="opus", extension="opus", output_dir="out")
+        run._replay("out/never-made.opus", "x")
+        assert capfd.readouterr().err == ""

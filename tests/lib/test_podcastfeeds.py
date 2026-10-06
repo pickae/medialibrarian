@@ -399,7 +399,7 @@ def test_the_call_starts_with_the_resolved_tool_and_the_output_path():
                          "%(title)s.%(ext)s"]
     assert call[-1] == "https://example.test/latent"
     assert "--dateafter" not in call and "--datebefore" not in call
-    assert "--no-warnings" in call and "--no-quiet" not in call
+    assert "--no-warnings" not in call and "--no-quiet" not in call
     assert "--print" in call
     assert f"after_move:{pf.PODCAST_EPISODE_MARKER}%(filepath)s" in call
 
@@ -435,10 +435,10 @@ def test_extra_args_land_between_the_archive_and_the_url():
     assert call[-4:] == ["--playlist-reverse", "--retries", "3", "https://u"]
 
 
-def test_verbose_puts_the_firehose_back():
-    call = _call(verbose="1")
+def test_verbose_asks_for_the_firehose(monkeypatch):
+    monkeypatch.setenv("LOG_VERBOSITY", "verbose")
+    call = _call()
     assert "--no-quiet" in call and "--verbose" in call
-    assert "--no-warnings" not in call
 
 
 def test_an_unknown_profile_refuses_the_call():
@@ -546,15 +546,25 @@ def test_a_vanished_episode_measures_zero(tmp_path, capsys):
         "[   1] ok   AI/x | gone.opus | 0 B\n"
 
 
-def test_verbose_passes_everything_else_through(tmp_path, capsys):
+def test_everything_else_is_kept_rather_than_printed(tmp_path, capsys):
+    from medialib.lib.toolcapture import ToolOutput
+    output = ToolOutput()
     pf.report_episodes("[download] noise nobody wants\n",
                        str(tmp_path / "counter"), str(tmp_path / "manifest"),
-                       "AI/x", verbose="1")
-    assert capsys.readouterr().out == "[download] noise nobody wants\n"
-    pf.report_episodes("[download] noise nobody wants\n",
-                       str(tmp_path / "counter"), str(tmp_path / "manifest"),
-                       "AI/x")
+                       "AI/x", output=output)
     assert capsys.readouterr().out == ""
+    assert output.lines() == ["[download] noise nobody wants"]
+
+
+def test_quiet_counts_an_episode_without_printing_it(tmp_path, capsys,
+                                                     monkeypatch):
+    monkeypatch.setenv("LOG_VERBOSITY", "quiet")
+    counter = tmp_path / "counter"
+    pf.report_episodes(
+        f"{pf.PODCAST_EPISODE_MARKER}{tmp_path / 'gone.opus'}\n",
+        str(counter), str(tmp_path / "manifest"), "AI/x")
+    assert capsys.readouterr().out == ""
+    assert counter.read_text() == "1\n"
 
 
 def test_a_final_line_without_its_newline_is_not_read(tmp_path, capsys):
