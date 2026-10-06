@@ -21,7 +21,7 @@ import os
 import subprocess
 import sys
 
-from medialib.lib import ramscratch
+from medialib.lib import ramscratch, runlog
 
 __all__ = [
     "FfmpegOverrideRefused",
@@ -332,7 +332,7 @@ def ffmpeg_version(binary: str) -> str:
 
 
 def report_ffmpeg_selection(always: bool = False) -> int:
-    """Say which build the run settled on, on stderr.
+    """Say which build the run settled on, on stderr - unless the run is quiet.
 
     Silent by default unless the choice CHANGED something - the ladder
     overruled what the surrounding shell would have run. That case is worth
@@ -350,7 +350,7 @@ def report_ffmpeg_selection(always: bool = False) -> int:
     # path says nothing about which build this is, and which build it is is
     # the point of the line.
     version = ffmpeg_version(_STATE.selected)
-    sys.stderr.write(
+    runlog.say(
         "Using ffmpeg: %s (%s)\n"
-        % (_STATE.selected, version or "version not reported"))
+        % (_STATE.selected, version or "version not reported"), sys.stderr)
     return 0

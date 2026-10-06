@@ -456,3 +456,46 @@ class TestTheBackendFlag:
     def test_it_is_documented_in_the_usage(self, census):
         assert re.search(r"^\s+-b, --build-cubes", census.census("-h"),
                          re.MULTILINE)
+
+
+class TestQuiet:
+    """`-q` leaves out the progress and the closing count, never the report nor
+    a refusal."""
+
+    def test_a_quiet_run_writes_the_report_and_says_nothing(self, census):
+        log = census.census("-q", census.work / "Films")
+        assert len(_rows(census.work / "Films" / "booksFilms.csv")) == 1
+        assert log == ""
+
+    def test_the_parallel_progress_lines_are_left_out_too(self, census):
+        out = census.work / "clash"
+        out.mkdir()
+        log = census.census("-q", "-o", out, census.work / "Films",
+                            census.work / "Series", census.work / "Music")
+        assert len(list(out.glob("books*.csv"))) == 3
+        assert "Series: " not in log
+        assert "Censused" not in log
+
+    def test_a_refusal_is_still_said(self, census):
+        left = _write(census.work / "left" / "Films" / "l.txt", "left words\n")
+        right = _write(census.work / "right" / "Films" / "r.txt", "right w\n")
+        out = census.work / "clash"
+        out.mkdir()
+        log = census.census("-q", "-o", out, left.parent, right.parent,
+                            expect=1)
+        assert "nothing was changed" in log.lower()
+
+
+class TestCubesAfterAnInterruptCountedNothing:
+    """A worker stopped between writing its report and recording it leaves the
+    run's count at nothing while a report is on disk - and the cubes are still
+    said not to be built, rather than that there was nothing to build from."""
+
+    def test_the_interrupt_is_what_is_said(self, monkeypatch, capsys):
+        from medialib.cli import census_run
+        monkeypatch.delenv("LOG_VERBOSITY", raising=False)
+        monkeypatch.delenv("LOG_TIMESTAMPS", raising=False)
+        census_run._build_cubes([], 0, True, "")
+        err = capsys.readouterr().err
+        assert "the cubes were NOT built" in err
+        assert "nothing to build cubes from" not in err

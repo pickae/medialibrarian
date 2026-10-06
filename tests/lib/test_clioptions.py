@@ -593,9 +593,32 @@ class TestTheSharedVerbosityFlags:
         assert cli.settle_verbosity(result) == level
         assert runlog.verbosity() == level
 
+    def test_neither_keeps_the_level_a_parent_handed_down(self, monkeypatch):
+        from medialib.lib import runlog
+        monkeypatch.setenv("LOG_VERBOSITY", "quiet")
+        result = cli.parse(self.verbosity_spec(), [])
+        assert cli.settle_verbosity(result) == runlog.QUIET
+        assert runlog.verbosity() == runlog.QUIET
+
     def test_both_at_once_is_refused(self, monkeypatch):
         monkeypatch.delenv("LOG_VERBOSITY", raising=False)
         result = cli.parse(self.verbosity_spec(), ["-vq"])
         with pytest.raises(cli.UsageError, match="-v and -q"):
             cli.settle_verbosity(result)
 
+
+
+class TestWithVerbosity:
+    def test_the_shared_lines_end_the_block_and_the_names_join_the_long(self):
+        built = cli.with_verbosity(spec(options="a |  | Something.\n",
+                                        long="a:something", column=20))
+        assert built.options.startswith("a |  | Something.\n")
+        letters = [cli._entry_letter(line)
+                   for line in built.options.split("\n")]
+        assert [letter for letter in letters if letter] == ["a", "v", "q"]
+        assert built.long == "a:something v:verbose q:quiet"
+
+    def test_a_block_without_its_final_break_gets_one(self):
+        built = cli.with_verbosity(spec(options="a |  | Something.",
+                                        column=20))
+        assert "Something.\nv |  |" in built.options

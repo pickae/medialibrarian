@@ -94,4 +94,5 @@ of the command says yes.
 ---
 
 **Options:** `find-gaps -h` lists every option and its default.
-**Shared rules:** [file safety](../file-safety.md)
+**Shared rules:** [file safety](../file-safety.md) ·
+[what a run prints](../output.md)

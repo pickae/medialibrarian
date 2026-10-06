@@ -1,0 +1,50 @@
+Directory "no-such-dir" does not exist.
+
+Usage:
+    convert-and-concat [options] <inputDir> <outputDir>
+
+    inputDir      the folder whose subfolders are ingested and concatenated.
+    outputDir     where the finished books are written. Created if missing, and
+                  refused if it lies inside inputDir. A trailing slash on either
+                  is tolerated.
+
+    One output file is made per subfolder of inputDir - or per subfolder of each
+    of those, with -s. An ARCHIVE lying where such a folder would (.zip, .rar,
+    .7z, .tar and the compressed tars) counts as one: it is unpacked into RAM
+    and ingested from there like a folder. That folder is named for the one
+    folder the archive holds at its root, and for the archive file minus its
+    extension when it holds anything else there. An archive lying beside a
+    FOLDER of that name is left alone, on the assumption it has already been
+    unpacked there.
+
+    Whether a book is converted is decided for the book as a whole: all of its
+    files when their average bitrate is high enough to be worth converting, and
+    none of them otherwise - one file converted beside others copied as they
+    are could never be joined.
+
+    The intermediate transcoded tree is kept entirely in RAM
+    (/dev/shm), so only the final output folder is written to disk.
+
+    OPTIONS
+    =======
+    -m, --mono
+            mono output, lower default bitrate.
+    -s, --sub-folders
+            iterate through different input subfolders independently
+    -c, --only-concat
+            only concat
+    -b, --bitrate
+            specify bitrate
+    -i, --clean-input
+            clean input folders
+    -e, --encoding <codec>
+            output encoding of the transcoding phase, handed to
+            convert-audio: opus or xheaac. xheaac needs an external encoder and
+            is written as .m4a, which the concatenating phase joins into
+            an .m4b.
+            Default opus
+    -v, --verbose
+            Also say why each item was handled the way it was, and on a failure
+            print the tool's whole output rather than its last lines.
+    -q, --quiet
+            Print errors only - no progress and no warnings.

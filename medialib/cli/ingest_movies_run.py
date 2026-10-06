@@ -555,6 +555,7 @@ def main(argv: list, program: str = "ingest-movies",
     declaration = rules.spec(program)
     try:
         result = clioptions.parse(declaration, argv)
+        clioptions.settle_verbosity(result)
     except clioptions.HelpRequested:
         sys.stdout.write(clioptions.help_text(declaration))
         return 0
@@ -773,8 +774,7 @@ def main(argv: list, program: str = "ingest-movies",
     def recap() -> None:
         safety.report_safety_skips()
         durationcheck.report()
-        for line in long_names.report():
-            sys.stderr.write(line + "\n")
+        _report_long_names(long_names)
         _report_unfixed_movies(unfixed_movies)
 
     safety.set_run_footer(recap)
@@ -893,6 +893,15 @@ def _may_overwrite(script_dir: str, names: list, per_folder: tuple,
         + [commands.logs_file(script_dir, path) for path in shared])
 
 
+def _preview_log(write: bool):
+    """How a mode that dry-runs by default says what it found: a dry run's
+    account of what it would change is its result, so -q leaves it standing;
+    under -w it is a run's progress like any other."""
+    if write or runlog.verbosity() >= runlog.NORMAL:
+        return log
+    return runlog.result
+
+
 def _tags_only(program: str, script_dir: str, roots: list, names: list,
                write: bool, id_list: str) -> int:
     """The naming phase on its own: the id, the editions and a split film's
@@ -918,6 +927,7 @@ def _tags_only(program: str, script_dir: str, roots: list, names: list,
     named after it. Under -i the one file someone named holds them all and is
     read once for every folder.
     """
+    log = _preview_log(write)
     # First, being about what was typed rather than about the environment: a -i
     # file that cannot be read STOPS the run, the way a -f one does. Read as an
     # empty list it would throw away every id in the file someone meant and put
@@ -1017,8 +1027,7 @@ def _tags_only(program: str, script_dir: str, roots: list, names: list,
                     'what came back is in "%s"'
                     % (len(near_misses), root, listing))
 
-    for line in long_names.report():
-        sys.stderr.write(line + "\n")
+    _report_long_names(long_names)
     duplicates = tmdblookup.duplicate_films(tagged)
     if duplicates:
         listing = commands.logs_file(script_dir, DUPLICATES_LIST)
@@ -1082,6 +1091,7 @@ def _subtitles_only(program: str, script_dir: str, roots: list, names: list,
     renaming, and no commentary - its transcripts are named after their track
     and are never one of the sidecars tested.
     """
+    log = _preview_log(write)
     # Which ffmpeg of the ones installed, before the preflight asks whether PATH
     # can reach one.
     ffmpegselect.select_ffmpeg()
@@ -1312,6 +1322,7 @@ def _commentary_names_in(root: str, name: str, write: bool, lookup,
     waiting for a rename. Unqueued, each film is renamed as it is settled: the
     full ingest's way, whose research asked the database long before.
     """
+    log = _preview_log(write)
     named: list = []
     refused: list = []
     planned: list = []
@@ -1651,6 +1662,21 @@ def _write_commentary_orphans(script_dir: str, orphans: list) -> None:
             handle.write(orphan + "\n")
     log("Commentary transcript(s) with no matching track in the film, "
         "written to %s" % path)
+
+
+def _report_long_names(long_names: tmdblookup.LongNames) -> None:
+    """The file name limit's closing lines on stderr. Its WARNING section - names
+    cut to fit, the rename still made - is left out under -q; its ERROR section -
+    folders left unrenamed - never is."""
+    warning = False
+    for line in long_names.report():
+        # A section opens on an unindented line; the lines under it are indented.
+        if not line.startswith(" "):
+            warning = line.startswith("WARNING:")
+        if warning:
+            runlog.say(line + "\n", sys.stderr)
+        else:
+            sys.stderr.write(line + "\n")
 
 
 def _report_unfixed_movies(movies: list) -> None:

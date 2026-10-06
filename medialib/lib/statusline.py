@@ -137,7 +137,10 @@ def draw_status(text: str) -> int:
     On a terminal: back to the start of the console row, print, then erase whatever a
     previous, longer refresh left to the right of it - the text truncated short of
     the terminal width by ``STATUS_ROW_MARGIN``. Off one: one ordinary line.
+    Under -q, nothing: the row is progress.
     """
+    if runlog.verbosity() < runlog.NORMAL:
+        return 0
     if state.row:
         width = state.cols - STATUS_ROW_MARGIN
         sys.stderr.write("\r%s\033[K" % text[:width])
@@ -154,6 +157,8 @@ def clear_status() -> int:
     way along the row's text. Off a terminal the heartbeat lines are ordinary output
     that nothing has to make way for, so this is a no-op.
     """
+    if runlog.verbosity() < runlog.NORMAL:
+        return 0
     if state.row:
         sys.stderr.write("\r\033[K")
         sys.stderr.flush()
@@ -166,6 +171,8 @@ def end_status() -> int:
     Whatever prints next starts on its own line instead of overwriting the last thing
     the row said. Off a terminal there is no row to end.
     """
+    if runlog.verbosity() < runlog.NORMAL:
+        return 0
     if state.row:
         sys.stderr.write("\n")
         sys.stderr.flush()
@@ -210,6 +217,23 @@ def adopt_status_geometry(geometry) -> int:
     return 0
 
 
+# This process's console: the refresher thread's draw and a line written
+# around the row must not interleave.
+_console = threading.RLock()
+
+
+def _writer_around(render):
+    """How runlog writes a line while the row is pinned: the row erased, the
+    line, the row drawn again under it."""
+    def write(out, text: str) -> None:
+        with _console:
+            clear_status()
+            out.write(text)
+            out.flush()
+            repin_status(render)
+    return write
+
+
 @contextlib.contextmanager
 def _take_lock(lock_file: str):
     """Take the row's console lock: serialise against the parallel workers' own
@@ -244,7 +268,7 @@ def status_tick(lock_file: str, render) -> int:
     ``lock_file`` is the file whose lock serialises the console against the workers
     that print the scrolling lines; pass "" when nothing else prints concurrently.
     """
-    with _take_lock(lock_file):
+    with _take_lock(lock_file), _console:
         text = render()
         if text is None:
             return 0
@@ -274,6 +298,7 @@ def start_status_monitor(lock_file: str, render) -> int:
     """
     stop_status_monitor()
     status_tick(lock_file, render)
+    runlog._row_writer = _writer_around(render)
     stop_event = threading.Event()
     thread = threading.Thread(target=status_monitor,
                               args=(lock_file, render, stop_event),
@@ -292,6 +317,7 @@ def stop_status_monitor() -> int:
     """
     if state.mon_pid is None:
         return 0
+    runlog._row_writer = None
     state._mon_stop.set()
     state.mon_pid.join()
     state.mon_pid = None

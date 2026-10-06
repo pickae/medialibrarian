@@ -16,7 +16,7 @@ whitespace cropping and parallel encoding.
 
 With no options, a run:
 
-- writes **AVIF** at quality 60, speed 5, colour at a quarter resolution (4:2:0) (`-e`, `-q`, `-s`, `-u`)
+- writes **AVIF** at quality 60, speed 5, colour at a quarter resolution (4:2:0) (`-e`, `-l`, `-s`, `-u`)
 - keeps every image at its own size: no resizing, no cropping (`-m`, `-c`)
 - **skips an image that is already starved** ([below](#starved-images); `-a`)
 - skips an image whose output already exists, so a rerun only does what is left
@@ -61,4 +61,5 @@ Such images are counted in the closing report and skipped.
 rules:** [file safety](../file-safety.md) ·
 [output never inside the input](../file-safety.md#the-output-folder-must-not-sit-inside-the-input) ·
 [stopping a run](../file-safety.md#stopping-a-run) ·
-[missing tools](../requirements.md#missing-tools-are-refused-up-front)
+[missing tools](../requirements.md#missing-tools-are-refused-up-front) ·
+[what a run prints](../output.md)

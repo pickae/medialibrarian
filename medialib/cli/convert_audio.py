@@ -180,7 +180,7 @@ UNIT = "\x1f"
 
 
 def spec(program: str) -> clioptions.Spec:
-    return clioptions.Spec(
+    return clioptions.with_verbosity(clioptions.Spec(
         head=USAGE_HEAD.format(program=program),
         options=OPT_SPEC,
         long=OPT_LONG,
@@ -188,7 +188,7 @@ def spec(program: str) -> clioptions.Spec:
         checks=OPT_CHECKS,
         column=OPT_COLUMN,
         credits=CREDITS_LINE,
-    )
+    ))
 
 
 def _probe(argv: list) -> str:
@@ -702,9 +702,9 @@ class Counters:
             with open(self.progress_file, "w") as handle:
                 handle.write("%d\n" % current)
             statusline.clear_status()
-            sys.stdout.write("%s%s: %s\n" % (
+            runlog.say("%s%s: %s\n" % (
                 runlog.counted_prefix(current, self._total()), verb, label))
-            sys.stdout.flush()
+            sys.stderr.flush()
             statusline.repin_status(self.status_text)
 
     def tally_duration(self, add) -> None:
@@ -1147,13 +1147,14 @@ class Run:
         seconds = formatting.awk_number(duration)
         if not xheaac.fits_in_one_wave(seconds, rate, channels):
             ceiling = xheaac.wave_seconds_ceiling(rate, channels)
-            log("ERROR: too long for %s to encode whole (%s, and one WAVE holds "
+            runlog.error(
+                "too long for %s to encode whole (%s, and one WAVE holds "
                 "%s at %d Hz %s):"
                 % (xheaac.EXHALE, formatting.fmt_hms("%.3f" % seconds),
                    formatting.fmt_hms("%.3f" % ceiling), rate,
                    "mono" if channels == 1 else "%d channels" % channels))
-            log("       %s" % os.path.basename(source))
-            log("       %s" % self._ceiling_way_out())
+            runlog.error_continued("       %s" % os.path.basename(source))
+            runlog.error_continued("       %s" % self._ceiling_way_out())
             return False
 
         # Both spawns are guarded, the way every other tool call in this module
@@ -1337,8 +1338,8 @@ class Run:
         chunk_files = [self.chunk_path(directory, index)
                        for index in range(int(total))]
 
-        sys.stdout.write("Joining %s chunks: %s\n" % (total, relative))
-        sys.stdout.flush()
+        runlog.say("Joining %s chunks: %s\n" % (total, relative))
+        sys.stderr.flush()
 
         tmp_dir, status = ramscratch.ram_scratch_dir("convertAudio.rc")
         if status != 0 or not tmp_dir:
@@ -1560,8 +1561,8 @@ class Planner:
                 ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
                  "-of", "default=nk=1:nw=1", out])))
             if duration <= output_duration:
-                sys.stdout.write("Up to date, skipping: %s\n" % track)
-                sys.stdout.flush()
+                runlog.say("Up to date, skipping: %s\n" % track)
+                sys.stderr.flush()
                 return False
 
         with open(base + ".meta", "w") as handle:
@@ -1818,25 +1819,23 @@ def footer(state: Run) -> None:
         phases.append(("Post-conversion", post_seconds))
     phases.append(("Total time", total_seconds))
 
-    print("")
-    print("Stats")
-    print("=====")
+    runlog.say("\nStats\n=====\n")
     for label, seconds in phases:
-        print("%-18s %.2f s (%s)"
-              % (label + ":", seconds, formatting.fmt_hms("%.2f" % seconds)))
-    print("Files:             %d" % file_count)
+        runlog.say("%-18s %.2f s (%s)\n"
+                   % (label + ":", seconds, formatting.fmt_hms("%.2f" % seconds)))
+    runlog.say("Files:             %d\n" % file_count)
     # Both are about audio this run encoded, and a run that found everything
     # up to date encoded none: a 0 s and a 0x would only say so twice.
     if audio_seconds > 0:
-        print("Total duration:    %.0f s (%s)"
-              % (audio_seconds, formatting.fmt_hms("%.2f" % audio_seconds)))
+        runlog.say("Total duration:    %.0f s (%s)\n"
+                   % (audio_seconds, formatting.fmt_hms("%.2f" % audio_seconds)))
     if file_count > 0:
-        print("Time per file:     %.2f s" % (total_seconds / file_count))
+        runlog.say("Time per file:     %.2f s\n" % (total_seconds / file_count))
     if total_seconds > 0 and audio_seconds > 0:
-        print("Real-time speedup: %sx" % formatting.fmt_ratio(
+        runlog.say("Real-time speedup: %sx\n" % formatting.fmt_ratio(
             "%.6f" % (audio_seconds / total_seconds)))
 
-    sys.stdout.flush()
+    sys.stderr.flush()
     safety.report_safety_skips()
     durationcheck.report()
 
@@ -1901,6 +1900,7 @@ def main(argv: list, program: str = "convert-audio",
     declaration = spec(program)
     try:
         result = clioptions.parse(declaration, argv)
+        clioptions.settle_verbosity(result)
     except clioptions.HelpRequested:
         sys.stdout.write(clioptions.help_text(declaration))
         return 0
@@ -1950,7 +1950,7 @@ def main(argv: list, program: str = "convert-audio",
     input_dir, output_dir = result.positionals[0], result.positionals[1]
 
     if not os.path.isdir(input_dir):
-        sys.stdout.write(clioptions.missing_dir_text(declaration, input_dir))
+        sys.stderr.write(clioptions.missing_dir_text(declaration, input_dir))
         return 1
 
     # Both made absolute, once: the run later chdirs into the input folder, so a
@@ -2033,7 +2033,7 @@ def _report_encoder(codec: str, bitrate: int, mono: bool,
     keeps that from being silent. Adaptive mode has no one rate to print: it
     decides per file, so only the encoder is named.
     """
-    print("Encoding %s with %s." % (CODEC_NAMES[codec], xheaac.EXHALE))
+    runlog.say("Encoding %s with %s.\n" % (CODEC_NAMES[codec], xheaac.EXHALE))
     if adaptive:
         return
     channels = 1 if mono else 2
@@ -2041,9 +2041,9 @@ def _report_encoder(codec: str, bitrate: int, mono: bool,
     preset = xheaac.exhale_preset(target, channels)
     actual = xheaac.preset_bitrate(preset, channels)
     note = "" if actual == target else " (nearest preset to %d)" % target
-    print("  %s preset %s: about %d kbps %s%s"
-          % (xheaac.EXHALE, preset, actual,
-             "mono" if channels == 1 else "stereo", note))
+    runlog.say("  %s preset %s: about %d kbps %s%s\n"
+               % (xheaac.EXHALE, preset, actual,
+                  "mono" if channels == 1 else "stereo", note))
 
 
 def _holds_input(input_dir: str) -> bool:
@@ -2149,7 +2149,7 @@ def _convert(program: str, script_dir: str, input_dir: str, output_dir: str,
 
     # The queue's own length is not known until the last file is planned, so the
     # headline names no number it would have to promise.
-    print("Converting...")
+    runlog.say("Converting...\n")
     state.conv_start = time.time()
     if preload or candidates:
         # The live row, refreshed underneath the per-file lines for as long as
@@ -2185,11 +2185,11 @@ def _convert(program: str, script_dir: str, input_dir: str, output_dir: str,
     state.post_start = time.time()
     state.rejoined = len(plans_queue)
     if plans_queue:
-        print("Re-concatenating %d split file(s)..." % len(plans_queue))
+        runlog.say("Re-concatenating %d split file(s)...\n" % len(plans_queue))
         _run_pool(state, "reconcat", plans_queue, jobs)
         safety.exit_if_aborted()
     state.post_end = time.time()
-    print("Done.")
+    runlog.say("Done.\n")
 
     safety.print_run_footer()
 
@@ -2273,13 +2273,13 @@ def _judge_groups(state: Run, jobs: int) -> dict:
         overruled = sum(1 for bps, _length in known
                         if (bps >= threshold) != verdict)
         if overruled:
-            print('"%s" averages %d kbps, %s the %d kbps threshold: %s, '
-                  "%d file(s) %s it included"
-                  % (group, average // 1000,
-                     "over" if verdict else "under", threshold // 1000,
-                     "all of it is converted" if verdict
-                     else "none of it is converted",
-                     overruled, "under" if verdict else "over"))
+            runlog.say('"%s" averages %d kbps, %s the %d kbps threshold: %s, '
+                       "%d file(s) %s it included\n"
+                       % (group, average // 1000,
+                          "over" if verdict else "under", threshold // 1000,
+                          "all of it is converted" if verdict
+                          else "none of it is converted",
+                          overruled, "under" if verdict else "over"))
     return verdicts
 
 
@@ -2309,11 +2309,11 @@ def _decide_chunking(state: Run, jobs: int) -> frozenset:
                   for track in state.tracks])
     if not decision.chunked:
         return frozenset()
-    print("Splitting %d long file(s) into chunks: expected %s, against %s "
-          "encoding every file whole."
-          % (len(decision.chunked),
-             formatting.fmt_hms("%.0f" % decision.expected),
-             formatting.fmt_hms("%.0f" % decision.whole)))
+    runlog.say("Splitting %d long file(s) into chunks: expected %s, against %s "
+               "encoding every file whole.\n"
+               % (len(decision.chunked),
+                  formatting.fmt_hms("%.0f" % decision.expected),
+                  formatting.fmt_hms("%.0f" % decision.whole)))
     return frozenset(state.tracks[index] for index in decision.chunked)
 
 

@@ -19,7 +19,7 @@ Options:
                     5 GB on a GPU, and 1 on a CPU, which one narration saturates
                     on its own. At 1, however it was arrived at, the engine's own
                     per-book progress is printed as well.
-    -v, --voice <sample>
+    -r, --voice <sample>
                     Voice sample(s) to clone the narrator's voice from.
                     A FILE is used for every book: any audio or video file, one in
                     the wrong format is transcoded to WAV first, and one longer
@@ -43,7 +43,7 @@ Options:
                     Default cuda when an NVIDIA GPU is present, cpu otherwise
     -e, --engine <engine>
                     TTS engine: xtts, bark, vits, fairseq, tacotron, yourtts.
-                    Voice cloning (-v) needs one that supports it.
+                    Voice cloning (-r) needs one that supports it.
                     Default xtts
     -l, --language <language>
                     Language of the books, ISO 639-3 (eng, deu, ita, ...). Given,
@@ -51,5 +51,9 @@ Options:
                     each book's own language is established from its metadata,
                     or from its text when the metadata says nothing.
                     Default: detected per book
+    -v, --verbose   Also say why each item was handled the way it was, and on a
+                    failure print the tool's whole output rather than its last
+                    lines.
+    -q, --quiet     Print errors only - no progress and no warnings.
 
 Nothing was changed.

@@ -887,8 +887,8 @@ def write_video_only(relative: str, directory: str, reason: str,
             restore_output_folder(output)
             shutil.copy(encoded, output)
         except (OSError, shutil.Error):
-            log("WARNING: the video-only failsafe could not be written, the "
-                "video encode is lost: %s" % relative)
+            runlog.error("the video-only failsafe could not be written, the "
+                         "video encode is lost: %s" % relative)
             return False
     try:
         stamp = os.stat(source)
@@ -1417,8 +1417,8 @@ class Run:
 
         video_duration = plan.video_duration if plan else duration
         if not rules.video_intermediate_complete(directory, video_duration):
-            log("Video encoding failed (no complete encoded video to keep), "
-                "skipping: " + relative)
+            runlog.error("Video encoding failed (no complete encoded video to "
+                         "keep), skipping: " + relative)
             shutil.rmtree(directory, ignore_errors=True)
             return 1
 
@@ -1507,29 +1507,32 @@ class Run:
         paused = pausecontrol.paused_seconds(int(time.time()))
         encoding = max(0.0, total - paused)
 
+        # The figures are progress, which -q leaves out; the recap of files that
+        # came out short is a failure, which it does not.
         out = sys.stderr
-        out.write("\nStats\n=====\n")
-        out.write("Total time:        %.2f s (%s)\n"
-                  % (total, formatting.fmt_hms("%.2f" % total)))
+        say = runlog.say
+        say("\nStats\n=====\n", out)
+        say("Total time:        %.2f s (%s)\n"
+            % (total, formatting.fmt_hms("%.2f" % total)), out)
         if paused > 0:
-            out.write("Of that, paused:   %d s (%s) - left out of the figures "
-                      "below\n" % (paused, formatting.fmt_hms(str(paused))))
-        out.write("Files converted:   %d\n" % self.converted)
-        out.write("Files skipped:     %d\n" % self.skipped)
-        out.write("Files failed:      %d\n" % self.failed)
+            say("Of that, paused:   %d s (%s) - left out of the figures "
+                "below\n" % (paused, formatting.fmt_hms(str(paused))), out)
+        say("Files converted:   %d\n" % self.converted, out)
+        say("Files skipped:     %d\n" % self.skipped, out)
+        say("Files failed:      %d\n" % self.failed, out)
         # A run that converted nothing has no encode to measure, and a row of
         # zeros would only read like one that went badly.
         if self.converted > 0:
-            out.write("Total duration:    %.0f s (%s)\n"
-                      % (self.video_seconds,
-                         formatting.fmt_hms("%.3f" % self.video_seconds)))
-            out.write("Frames encoded:    %d\n" % self.frames)
-            out.write("Time per file:     %.2f s\n"
-                      % (encoding / self.converted))
+            say("Total duration:    %.0f s (%s)\n"
+                % (self.video_seconds,
+                   formatting.fmt_hms("%.3f" % self.video_seconds)), out)
+            say("Frames encoded:    %d\n" % self.frames, out)
+            say("Time per file:     %.2f s\n" % (encoding / self.converted),
+                out)
         if self.converted > 0 and encoding > 0:
-            out.write("Average fps:       %.1f\n" % (self.frames / encoding))
-            out.write("Real-time speedup: %sx\n" % formatting.fmt_ratio(
-                "%.6f" % (self.video_seconds / encoding)))
+            say("Average fps:       %.1f\n" % (self.frames / encoding), out)
+            say("Real-time speedup: %sx\n" % formatting.fmt_ratio(
+                "%.6f" % (self.video_seconds / encoding)), out)
         out.flush()
         durationcheck.report(out)
 
@@ -1610,6 +1613,7 @@ def main(argv: list, program: str = "convert-video",
 
     try:
         result = clioptions.parse(declaration, argv, on_opt=on_option)
+        clioptions.settle_verbosity(result)
     except clioptions.HelpRequested:
         sys.stdout.write(clioptions.help_text(declaration))
         return 0
@@ -1633,7 +1637,7 @@ def main(argv: list, program: str = "convert-video",
         audio_profile=result.values["audioProfile"] or "opus",
         custom_audio_bitrate=result.values["customAudioBitrate"] or "",
         quality=result.values["videoQuality"] or "",
-        quality_given="q" in result.given,
+        quality_given="l" in result.given,
         max_resolution=result.values["maxVideoResolution"] or "",
         upscale_resolution=result.values["upscaleResolution"] or "",
         crop_wanted="c" in result.given,
@@ -1665,7 +1669,7 @@ def main(argv: list, program: str = "convert-video",
         return 1
 
     if not os.path.isdir(settings.input_dir):
-        sys.stdout.write(clioptions.missing_dir_text(declaration,
+        sys.stderr.write(clioptions.missing_dir_text(declaration,
                                                      settings.input_dir))
         return 1
     # Before the output folder is created: a re-encode written inside the input is
@@ -1738,12 +1742,12 @@ def _validate(settings, video_args: str, grain: str,
 
     if settings.quality:
         if not rules.video_quality_flag(video_args):
-            return ("The -q quality level only applies to the "
+            return ("The -l quality level only applies to the "
                     "constant-quality profiles; -p %s targets an average "
                     "bitrate instead." % settings.video_profile)
         top = rules.video_quality_max(video_args)
         if not settings.quality.isdigit() or int(settings.quality) > top:
-            return ('The -q quality level must be an integer between 0 and %d '
+            return ('The -l quality level must be an integer between 0 and %d '
                     'for -p %s (got "%s").'
                     % (top, settings.video_profile, settings.quality))
 
@@ -2017,12 +2021,12 @@ def _summarise(settings, video_args: str, grain: str) -> None:
         log("Video quality: none to set - %s targets an average bitrate, not a "
             "quality level." % settings.video_profile)
     elif settings.quality_given:
-        log("Video quality: %s %s for every file (-q), so no resolution bias "
+        log("Video quality: %s %s for every file (-l), so no resolution bias "
             "is applied." % (rules.video_quality_flag(settled),
                              settings.quality))
     else:
         log("Video quality: the %s profile default above, biased per file by "
-            "the tier it is ENCODED at (%s; override with -q)."
+            "the tier it is ENCODED at (%s; override with -l)."
             % (settings.video_profile,
                rules.quality_bias_spellings(settings.max_resolution)))
 

@@ -433,7 +433,7 @@ class TestTheChunkingDecision:
                                                        600.0))
         state = self._run(tmp_path, {"a.m4a": 20, "book.m4b": 30})
         assert ca._decide_chunking(state, 32) == frozenset({"book.m4b"})
-        said = capsys.readouterr().out
+        said = capsys.readouterr().err
         assert "Splitting 1 long file(s)" in said
         assert "0:01:00" in said and "0:10:00" in said
 
@@ -457,7 +457,7 @@ class TestTheChunkingDecision:
             ca.chunkdecision, "decide",
             lambda *a, **kw: ca.chunkdecision.Decision(frozenset(), 60.0, 60.0))
         ca._decide_chunking(self._run(tmp_path, {"a.m4a": 20}), 32)
-        assert capsys.readouterr().out == ""
+        assert capsys.readouterr().err == ""
 
 
 class TestAFolderJudgedWhole:
@@ -532,7 +532,7 @@ class TestAFolderJudgedWhole:
             ["Book/1.mp3", "Book/2.mp3"],
             {"Book/1.mp3": (128000, 3000), "Book/2.mp3": (64000, 1000)})
         ca._judge_groups(state, 1)
-        assert "1 file(s) under it" in capsys.readouterr().out
+        assert "1 file(s) under it" in capsys.readouterr().err
 
     def test_without_g_nothing_is_judged(self):
         state = self._run(["Book/1.mp3"], {"Book/1.mp3": (128000, 10)},
@@ -607,7 +607,7 @@ class TestTheEncoderReport:
         settings.update(kwargs)
         ca._report_encoder(settings["codec"], settings["bitrate"],
                            settings["mono"], settings["adaptive"])
-        return capsys.readouterr().out.splitlines()
+        return capsys.readouterr().err.splitlines()
 
     def test_the_chosen_encoder_is_named(self, capsys):
         lines = self._lines(capsys)

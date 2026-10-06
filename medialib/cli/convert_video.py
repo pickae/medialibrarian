@@ -69,7 +69,7 @@ b | <kbit/s> | Opus bitrate applied to every audio track, overriding the
 e | <count> | NVENC engine count to parallelise hardware encoding across,
                   overriding the built-in per-GPU guess. Only affects the *Nvenc
                   profiles.
-q | <level> | Constant-quality level to encode at, overriding the one the
+l | <level> | Constant-quality level to encode at, overriding the one the
                   chosen video profile hardcodes: -crf for the software profiles,
                   -cq for the *Nvenc ones. Lower means better quality and a bigger
                   file, and the bitrate follows from it. Also turns OFF the
@@ -131,7 +131,7 @@ t | [percent] | Test each source before encoding it, and convert only the ones
 """
 
 OPT_LONG = ("h:help j:cores p:profile a:audio-profile b:audio-bitrate "
-            "e:nvenc-engines q:quality m:max-resolution u:upscale c:crop "
+            "e:nvenc-engines l:quality m:max-resolution u:upscale c:crop "
             "f:fast-decode g:grain t:test")
 
 USAGE_TAIL = r"""
@@ -281,17 +281,17 @@ _LEVEL = re.compile(r"(-crf|-cq)\s+([0-9]+)")
 
 
 def spec(program: str) -> "clioptions.Spec":
-    return clioptions.Spec(
+    return clioptions.with_verbosity(clioptions.Spec(
         head=USAGE_HEAD.format(program=program),
         options=OPT_SPEC,
         long=OPT_LONG,
         vars="j:CORES p:videoProfile a:audioProfile b:customAudioBitrate "
-             "e:nvencEnginesOverride q:videoQuality f:videoFastDecode "
+             "e:nvencEnginesOverride l:videoQuality f:videoFastDecode "
              "g:videoGrain m:maxVideoResolution u:upscaleResolution",
         flags="optionalArg:t:^[0-9]+$",
         column=18,
         tail=USAGE_TAIL,
-    )
+    ))
 
 
 # --- the profile tables -------------------------------------------------------
@@ -337,7 +337,7 @@ def video_quality_flag(args: str) -> str:
 
     The same knob under two names: -crf for the software encoders, -cq for the
     NVENC ones. The av1Constrained* rows have neither - they target an average
-    bitrate, so there is no level for -q to override.
+    bitrate, so there is no level for -l to override.
     """
     padded = " %s " % args
     if " -crf " in padded:
@@ -351,7 +351,7 @@ def video_quality_max(args: str) -> int:
     """``videoQualityMax``: the top of that encoder's scale. SVT-AV1's CRF runs to
     63; x265's CRF and NVENC's CQ both stop at 51.
 
-    Used both to reject an out-of-range -q up front and to clamp the resolution
+    Used both to reject an out-of-range -l up front and to clamp the resolution
     bias, so the two cannot disagree about what the encoder will accept.
     """
     return 63 if "libsvtav1" in args else 51
@@ -396,7 +396,7 @@ def apply_video_quality(args: str, width="", height="", given: bool = False,
                         quality: str = "") -> str:
     """``applyVideoQuality``: that argument string with its level settled.
 
-    The -q value when one was given, or the profile's own level moved by the
+    The -l value when one was given, or the profile's own level moved by the
     resolution bias when it was not. The two dimensions are the size the file is
     ENCODED at, not the size it arrived at: with -m in play those differ, and it is
     the encoded frame that decides whether a level is generous or mean. A profile

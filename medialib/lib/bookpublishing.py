@@ -24,7 +24,7 @@ import shutil
 import subprocess
 
 from medialib import commands
-from medialib.lib import chapters, durationcheck, mutagentags
+from medialib.lib import chapters, durationcheck, mutagentags, toolcapture
 from medialib.lib.newestfile import newest_file
 
 __all__ = ["audiobook_lossless", "audiobook_to_opus"]
@@ -59,18 +59,6 @@ def _probe_field(path, entry):
         return ""
     lines = proc.stdout.decode("utf-8", "replace").split("\n")
     return lines[0] if lines else ""
-
-
-def _run_quiet(argv):
-    """A call with everything redirected away: only its status is asked of
-    it."""
-    try:
-        proc = subprocess.run(list(argv), stdout=subprocess.DEVNULL,
-                              stderr=subprocess.DEVNULL,
-                              stdin=subprocess.DEVNULL)
-    except (OSError, ValueError):
-        return 1
-    return proc.returncode
 
 
 def _nonempty(path):
@@ -124,12 +112,18 @@ def audiobook_lossless(master, tagged, work_dir, script_dir=None,
     if channels.isdigit():
         args += ["-ac", channels]
 
-    if _run_quiet(["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
-                   "-y", "-i", master, "-map", "0:a:0", "-map_metadata", "-1"]
-                  + args
-                  + ["-c:a", "flac", "-compression_level",
-                     _config("audiobookLosslessCompression",
-                             LOSSLESS_COMPRESSION), finished]) != 0:
+    # Not failing the book - the m4b is kept instead - but a lossless copy that
+    # was asked for and is not there is worth a warning with ffmpeg's reason.
+    if not toolcapture.run(
+            ["ffmpeg", "-nostdin", "-hide_banner",
+             *toolcapture.ffmpeg_loglevel(),
+             "-y", "-i", master, "-map", "0:a:0", "-map_metadata", "-1"]
+            + args
+            + ["-c:a", "flac", "-compression_level",
+               _config("audiobookLosslessCompression",
+                       LOSSLESS_COMPRESSION), finished],
+            name, warning="the lossless copy of %s could not be made, so the "
+                          "m4b is kept instead" % name).ok:
         return None
     if not _nonempty(finished):
         return None
@@ -143,8 +137,11 @@ def audiobook_lossless(master, tagged, work_dir, script_dir=None,
     chapters.attach_chapters(tagged, finished, out_dir, script_dir)
 
     cover = os.path.join(out_dir, "bookCover.jpg")
-    _run_quiet(["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
-                "-y", "-i", tagged, "-an", "-c:v", "copy", cover])
+    # A book with no cover fails this, which is an answer rather than a fault.
+    toolcapture.run(["ffmpeg", "-nostdin", "-hide_banner",
+                     *toolcapture.ffmpeg_loglevel(),
+                     "-y", "-i", tagged, "-an", "-c:v", "copy", cover],
+                    report=False)
     if _nonempty(cover):
         mutagentags.embed_cover(finished, cover)
     try:

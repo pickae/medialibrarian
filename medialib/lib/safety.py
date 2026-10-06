@@ -27,6 +27,7 @@ import tempfile
 from collections.abc import Iterable, Iterator
 from typing import Any
 
+from medialib.lib import runlog
 from medialib.lib.enums import shell_lower
 
 __all__ = [
@@ -709,8 +710,8 @@ def init_safety_log(path: str = "") -> str:
         open(path, "w").close()
         return path
     if path:
-        sys.stderr.write("\nWARNING: the safety log path is a symlink and was "
-                         "not used:\n  %s\n" % path)
+        runlog.say("\nWARNING: the safety log path is a symlink and was "
+                   "not used:\n  %s\n" % path, sys.stderr)
     else:
         inherited = os.environ.get("SAFETY_LOG", "")
         if inherited and os.path.isfile(inherited) and not os.path.islink(
@@ -753,6 +754,9 @@ def report_safety_skips(stream=None) -> None:
             # A final line with no newline is not counted - and the report walks
             # the same lines it counted.
             lines = fh.read().split("\n")[:-1]
+    # A run that skipped nothing has nothing to say about it under -q.
+    if not lines and runlog.verbosity() < runlog.NORMAL:
+        return
     out.write("Safety: skipped %d rename(s) to avoid overwrite\n" % len(lines))
     if lines:
         out.write("Safety skip details:\n")

@@ -1651,7 +1651,7 @@ class TestPrepareVoiceSample:
                                         str(nb.tmp_path / "s")) == sample
         assert nb.calls()[-1] == [
             "ffmpeg",
-            "-y", "-nostdin", "-loglevel", "error",
+            "-y", "-nostdin", "-hide_banner", "-loglevel", "info",
             "-i", str(src), "-map", "0:a:0", "-ac", "1", "-ar", "24000",
             "-c:a", "pcm_s16le", sample,
         ]
@@ -1677,7 +1677,7 @@ class TestPrepareVoiceSample:
                      if len(c) > 1 and c[1] == "-y"]
         assert transcode == [[
             "ffmpeg",
-            "-y", "-nostdin", "-loglevel", "error",
+            "-y", "-nostdin", "-hide_banner", "-loglevel", "info",
             "-ss", "1822.500", "-t", "45.000",
             "-i", str(src), "-map", "0:a:0", "-ac", "1", "-ar", "24000",
             "-c:a", "pcm_s16le", sample,

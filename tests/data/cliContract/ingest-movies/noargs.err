@@ -122,6 +122,10 @@ Usage:
                   handed, which is still being filled in. -w carries the
                   renames out and brings the file up to date, every folder
                   given into that one file.
+    -v, --verbose Also say why each item was handled the way it was, and on a
+                  failure print the tool's whole output rather than its last
+                  lines.
+    -q, --quiet   Print errors only - no progress and no warnings.
 
     Default behavior
     ----------------

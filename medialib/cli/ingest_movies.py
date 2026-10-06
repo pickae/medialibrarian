@@ -375,7 +375,7 @@ _LANGUAGE_MARKER = re.compile(r"\s*\([A-Za-z]{2,3}\)$")
 
 
 def spec(program: str) -> "clioptions.Spec":
-    return clioptions.Spec(
+    return clioptions.with_verbosity(clioptions.Spec(
         head=USAGE_HEAD.format(program=program),
         options=OPT_SPEC,
         long=OPT_LONG,
@@ -384,7 +384,7 @@ def spec(program: str) -> "clioptions.Spec":
         tail=USAGE_TAIL,
         no_args_with_credits=False,
         no_args_stream="stderr",
-    )
+    ))
 
 
 # --- the pure questions -------------------------------------------------------

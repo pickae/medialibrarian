@@ -37,4 +37,5 @@ and `ingest-movies` remove.
 
 **Options:** `find-fragment-candidates -h` lists every option and its default.
 **Shared rules:** [file safety](../file-safety.md) ·
-[missing tools](../requirements.md#missing-tools-are-refused-up-front)
+[missing tools](../requirements.md#missing-tools-are-refused-up-front) ·
+[what a run prints](../output.md)

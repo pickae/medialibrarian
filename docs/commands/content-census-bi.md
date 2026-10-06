@@ -22,7 +22,7 @@ With no options, a run:
 - looks for census reports recursively in any folder given
 - **rebuilds the database from nothing**, replacing the previous one only once the new one is complete
 - writes the `.duckdb` and the `.html` page beside the first audio, video, images, books or comics report, in that order (`-o`)
-- exports no CSV, prints no totals and runs no query (`-e`, `-s`, `-q`)
+- exports no CSV, prints no totals and runs no query (`-e`, `-s`, `-c`)
 
 How many hours of 2160p, how many gigabytes of comics scanned below 1080p, what
 the duration-weighted average bitrate of the Opus audiobooks is — without anyone
@@ -113,4 +113,5 @@ The page is one file with one tab per content type, each a
 **Shared rules:** [file safety](../file-safety.md) ·
 [stopping a run](../file-safety.md#stopping-a-run) ·
 [missing tools](../requirements.md#missing-tools-are-refused-up-front) ·
-[what leaves the machine](../file-safety.md#what-leaves-the-machine)
+[what leaves the machine](../file-safety.md#what-leaves-the-machine) ·
+[what a run prints](../output.md)

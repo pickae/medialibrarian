@@ -12,6 +12,7 @@ from __future__ import annotations
 import pytest
 
 from medialib.cli import ingest_movies_run as run
+from medialib.lib import tmdblookup
 
 pytestmark = pytest.mark.fs
 
@@ -95,3 +96,59 @@ class TestAFragmentsFileThatCannotBeRead:
         errors = capsys.readouterr().err
         assert 'The fragments file "%s" does not exist or is empty.' \
             % empty in errors
+
+
+class TestUnderQuiet:
+    """-q is errors only. A refusal is an error and is said in full; of the file
+    name limit's closing report, the names cut to fit are a warning and go,
+    and the folders left unrenamed are a failure and stay."""
+
+    def test_a_refusal_is_still_said(self, monkeypatch, tmp_path, capsys):
+        # Set here so the -q the run settles is undone after the test.
+        monkeypatch.setenv("LOG_VERBOSITY", "")
+        monkeypatch.delenv("tmdbApiKey", raising=False)
+        monkeypatch.setenv("CLI_SCRIPT_DIR", str(tmp_path))
+        assert run.main(["-q", "-t", str(_library(tmp_path, "Films"))]) == 1
+        errors = capsys.readouterr().err
+        assert "tmdbApiKey is not set, so there is nothing to tag with." \
+            in errors
+
+    @pytest.fixture
+    def long_names(self):
+        names = tmdblookup.LongNames()
+        names.crop("/films/A", "A.commentary.srt", "A.comm.srt")
+        names.refuse("/films/B", "B.mkv", "too long")
+        return names
+
+    def test_the_cut_names_go_and_the_unrenamed_folders_stay(
+            self, monkeypatch, capsys, long_names):
+        monkeypatch.setenv("LOG_VERBOSITY", "quiet")
+        run._report_long_names(long_names)
+        errors = capsys.readouterr().err
+        assert "WARNING" not in errors
+        assert "A.comm.srt" not in errors
+        assert errors.startswith("ERROR: 1 folder(s) were left unrenamed")
+        assert "    B.mkv (too long)\n" in errors
+
+    def test_and_at_normal_verbosity_both_are_said(self, monkeypatch, capsys,
+                                                   long_names):
+        monkeypatch.setenv("LOG_VERBOSITY", "")
+        run._report_long_names(long_names)
+        assert capsys.readouterr().err == "".join(
+            line + "\n" for line in long_names.report())
+
+
+class TestADryRunUnderQuiet:
+    """A dry run's account of what it would change is its result, so -q keeps
+    it; under -w the same lines are progress, and -q drops them."""
+
+    def test_the_preview_is_said_under_quiet(self, monkeypatch, capsys):
+        monkeypatch.setenv("LOG_VERBOSITY", "quiet")
+        monkeypatch.delenv("LOG_TIMESTAMPS", raising=False)
+        run._preview_log(write=False)('    would rename: "a" -> "b"')
+        assert capsys.readouterr().err == '==>     would rename: "a" -> "b"\n'
+
+    def test_but_under_w_it_is_progress(self, monkeypatch, capsys):
+        monkeypatch.setenv("LOG_VERBOSITY", "quiet")
+        run._preview_log(write=True)("TMDb: tagged")
+        assert capsys.readouterr().err == ""

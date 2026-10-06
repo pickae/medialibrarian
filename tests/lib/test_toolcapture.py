@@ -298,3 +298,21 @@ class TestReplayTextForACallersOwnLine:
         result = toolcapture.run(tool("raise SystemExit(1)"), report=False)
         assert toolcapture.replay_text(result) == ""
         assert os.path.isfile(result.log_path)
+
+
+@pytest.mark.fs
+class TestFromLog:
+    def test_a_tools_own_log_replays_like_a_capture(self, tmp_path,
+                                                    logs_home):
+        log = tmp_path / "engine.log"
+        log.write_bytes(b"loading model\rloaded\nCUDA out of memory\n")
+        result = toolcapture.from_log(str(log), "read nothing", "book.epub",
+                                      "the narration engine")
+        assert not result.ok and result.name == "the narration engine"
+        assert result.output.lines() == ["loaded", "CUDA out of memory"]
+        assert toolcapture.replay_text(result).startswith(
+            "    | loaded\n    | CUDA out of memory\n")
+
+    def test_a_missing_log_replays_as_nothing(self, tmp_path, logs_home):
+        result = toolcapture.from_log(str(tmp_path / "none.log"), "x")
+        assert result.output.lines() == []

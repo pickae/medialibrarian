@@ -144,6 +144,20 @@ class TestOneRunOverAMixedTree:
         assert argument in transcribe.whisper_log.read_text()
 
 
+class TestAQuietRun:
+    """-q prints errors only: a run that went well prints nothing at all."""
+
+    def test_a_clean_run_prints_nothing(self, transcribe, tmp_path):
+        source = tmp_path / "in"
+        for relative in ("a/track.mp3", "b/movie.mkv", "b/noaudio.mkv"):
+            path = source / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch()
+        log = transcribe.transcribe("-q", source, tmp_path / "out")
+        assert log == "", log
+        assert (tmp_path / "out" / "a" / "track.txt").is_file()
+
+
 class TestASecondPass:
     """Every input already has its transcript, so no whisper run is queued and the
     output tree is left exactly as it was."""
@@ -268,6 +282,19 @@ class TestWhisperExitingCleanWithNoTranscript:
     def test_the_scratch_is_handed_back(self, run):
         _, scratch, _ = run
         assert list(scratch.iterdir()) == []
+
+    def test_under_q_the_failure_is_all_that_is_printed(self, transcribe,
+                                                        tmp_path):
+        source = tmp_path / "in"
+        (source / "talk").mkdir(parents=True)
+        (source / "talk" / "episode.opus").touch()
+        transcribe.with_tool("pipx", _PIPX_OUT_OF_MEMORY)
+        log = transcribe.transcribe("-q", source, tmp_path / "out", expect=1)
+        assert "failed: talk/episode.opus" in log, log
+        assert ("ERROR: talk/episode.opus: whisper wrote no transcript"
+                in log), log
+        for progress in ("Transcribing ", "Done.", "Stats", "Total time:"):
+            assert progress not in log, log
 
     def test_a_rerun_tries_it_again(self, transcribe, run):
         outputs, _, _ = run

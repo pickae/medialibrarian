@@ -306,6 +306,31 @@ class TestABookThatFailsIsStillCountedOnce:
             == "the epub as it came in"
 
 
+class TestQuiet:
+    """-q leaves out the heading, the per-book lines and the notes, and keeps
+    the line of a book that failed. The safety report is not this command's to
+    leave out."""
+
+    @staticmethod
+    def _own(log: str) -> str:
+        return re.sub(r"^Safety: .*\n", "", log, flags=re.MULTILINE)
+
+    def test_a_good_run_prints_nothing(self, shelf):
+        shelf.stock({"novel.mobi": "words", "other.epub": "more"})
+        log = shelf.ingest("-q")
+        assert self._own(log) == "", log
+        assert sorted(p.name for p in shelf.outputs.iterdir()) == [
+            "novel.epub", "other.epub"]
+
+    def test_a_failed_book_is_still_said(self, shelf):
+        shelf.stock({"good.mobi": "fine", "broken.mobi": "bad"})
+        shelf.with_tool("ebook-convert",
+                        r'[[ "$1" == *broken* ]] && exit 1; cat "$1" > "$2"')
+        log = shelf.ingest("-q")
+        assert re.fullmatch(r"\[\d/2\] FAILED \(convert\): broken\.mobi\n",
+                            self._own(log)), log
+
+
 class TestTextMode:
     """-t turns every book into one raw .txt in the mirrored folder, then word-
     counts them into a summary named after the output folder."""

@@ -17,7 +17,15 @@ import sys
 import tempfile
 
 from medialib import commands
-from medialib.lib import censusviewer, clioptions, cubes, ramscratch, safety, tooldeps
+from medialib.lib import (
+    censusviewer,
+    clioptions,
+    cubes,
+    ramscratch,
+    runlog,
+    safety,
+    tooldeps,
+)
 from medialib.lib.runlog import log
 
 USAGE_HEAD = """Usage:
@@ -37,16 +45,16 @@ o | <file> | Write the database to <file> instead of to
                     contentCensusBI.duckdb beside the first report. The .html page
                     is always written beside it, under the same name.
 e | <dir> | Also export each cube as <type>Cube.csv into <dir>.
-q | <sql> | Run one query against the finished database and print it.
+c | <sql> | Run one query against the finished database and print it.
                     The tables are named above; try
-                      -q \"SELECT * FROM videoCube WHERE depth = 1 AND resolution != 'ALL'\"
+                      -c \"SELECT * FROM videoCube WHERE depth = 1 AND resolution != 'ALL'\"
 s |  | Print each cube's grand total when it is built.
 h |  | Print this help page.
 """
 
-OPT_VARS = "o:dbPath e:exportDir q:query s:showTotals"
+OPT_VARS = "o:dbPath e:exportDir c:query s:showTotals"
 OPT_COLUMN = 20
-OPT_LONG = "o:database e:export-dir q:query s:show-totals h:help"
+OPT_LONG = "o:database e:export-dir c:query s:show-totals h:help"
 
 # The report name prefixes this command looks for, which are the census's own
 # content types and not a second list of them.
@@ -63,13 +71,13 @@ class Refusal(Exception):
 
 
 def spec(program: str) -> clioptions.Spec:
-    return clioptions.Spec(
+    return clioptions.with_verbosity(clioptions.Spec(
         head=USAGE_HEAD.format(program=program),
         options=OPT_SPEC,
         long=OPT_LONG,
         vars=OPT_VARS,
         column=OPT_COLUMN,
-    )
+    ))
 
 
 def _looks_like_a_report(name: str) -> bool:
@@ -425,6 +433,7 @@ def main(argv: list, program: str = "content-census-bi") -> int:
     declaration = spec(program)
     try:
         result = clioptions.parse(declaration, argv)
+        clioptions.settle_verbosity(result)
     except clioptions.HelpRequested:
         sys.stdout.write(clioptions.help_text(declaration))
         return 0
@@ -501,7 +510,7 @@ def main(argv: list, program: str = "content-census-bi") -> int:
 
         html_path = write_page(db_path, scratch, built)
 
-        sys.stderr.write("\n")
+        runlog.say("\n", sys.stderr)
         log('Wrote "%s".' % db_path)
         log('Query it with: duckdb "%s"' % db_path)
         if html_path and os.path.isfile(html_path):

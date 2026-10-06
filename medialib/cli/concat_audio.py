@@ -63,7 +63,7 @@ OPT_COLUMN = 12
 OPT_SPEC = """
 p |  | opt-in input pretreatment (in-place): renames folders/files in
             <inputDir> before concatenation.
-""" + clioptions.verbosity_options(OPT_COLUMN) + """h |  | print this help page.
+h |  | print this help page.
 """
 
 USAGE_TAIL = """
@@ -98,7 +98,7 @@ USAGE_TAIL = """
     embedded cover art is used instead), flock (numbers the progress lines)"""
 
 OPT_VARS = "p:pretreat"
-OPT_LONG = "p:pretreat h:help " + clioptions.VERBOSITY_LONG
+OPT_LONG = "p:pretreat h:help"
 
 IMAGE_SIZE_LIMIT = 700000
 DPI = 300
@@ -168,14 +168,14 @@ def _nothing_found_note() -> str:
 
 
 def spec(program: str) -> clioptions.Spec:
-    return clioptions.Spec(
+    return clioptions.with_verbosity(clioptions.Spec(
         head=USAGE_HEAD.format(program=program),
         options=OPT_SPEC,
         long=OPT_LONG,
         vars=OPT_VARS,
         column=OPT_COLUMN,
         tail=USAGE_TAIL,
-    )
+    ))
 
 
 def _run(argv):
@@ -936,7 +936,7 @@ def main(argv: list, program: str = "concat-audio",
     script_dir = script_dir or commands.script_dir()
 
     if not os.path.isdir(input_dir):
-        sys.stdout.write(clioptions.missing_dir_text(declaration, input_dir))
+        sys.stderr.write(clioptions.missing_dir_text(declaration, input_dir))
         return 1
 
     # The two folders, checked before anything runs: the concatenated book is

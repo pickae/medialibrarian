@@ -74,14 +74,14 @@ OPT_LONG = "d:depth o:output-dir a:adequacy b:build-cubes t:tsv h:help"
 
 def spec(program: str) -> clioptions.Spec:
     """The script's declaration, with the program name it is started under."""
-    return clioptions.Spec(
+    return clioptions.with_verbosity(clioptions.Spec(
         head=USAGE_HEAD.format(program=program),
         options=OPT_SPEC,
         long=OPT_LONG,
         vars=OPT_VARS,
         checks=OPT_CHECKS,
         column=OPT_COLUMN,
-    )
+    ))
 
 
 def cli(argv: list[str] | None = None) -> int:
@@ -103,6 +103,7 @@ def main(argv: list[str], program: str = "content-census",
     declaration = spec(program)
     try:
         result = clioptions.parse(declaration, argv)
+        clioptions.settle_verbosity(result)
     except clioptions.HelpRequested:
         sys.stdout.write(clioptions.help_text(declaration))
         return 0

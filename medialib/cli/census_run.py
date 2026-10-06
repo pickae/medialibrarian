@@ -442,7 +442,8 @@ class Run:
         """
         if not self.parallel:
             self.index += 1
-            sys.stderr.write("[%d/%d] %s\n" % (self.index, self.total, label))
+            runlog.say("[%d/%d] %s\n" % (self.index, self.total, label),
+                       sys.stderr)
             return
         with open(self.console_lock, "r+b") as handle, runlog.take_lock(handle):
             try:
@@ -453,8 +454,9 @@ class Run:
             count += 1
             with open(self.counter, "w") as counter:
                 counter.write(str(count))
-            sys.stderr.write("%s%s: %s\n" % (
-                runlog.counted_prefix(count, self.total), library, label))
+            runlog.say("%s%s: %s\n" % (
+                runlog.counted_prefix(count, self.total), library, label),
+                sys.stderr)
 
     # --- one book, in a worker of the pool --------------------------------
     def book_one(self, file_index, path, shared_scratch, skipped):
@@ -841,10 +843,12 @@ def _summarise(state, worker_roots, results, run_bi, script_dir, total):
         skipped.extend(_read_entries(
             os.path.join(results, "%d.skipped" % root_index)))
 
-    sys.stderr.write("\n")
-    if written == 0:
-        log("No report was written: none of the %d file(s) found could be "
-            "censused." % total)
+    runlog.say("\n", sys.stderr)
+    # Not said of an interrupted run: a worker stopped between writing its
+    # report and recording it leaves the count short of what is on disk.
+    if written == 0 and not interrupted:
+        runlog.error("No report was written: none of the %d file(s) found "
+                     "could be censused." % total)
     elif len(state.lib_paths) > 1:
         log("Censused %d of %d file(s) from %d libraries into %d report(s)."
             % (censused, total, len(state.lib_paths), written))
@@ -888,19 +892,26 @@ def _build_cubes(reports, written, interrupted, script_dir):
     cube says nothing about how complete the thing it was built from is - so a
     total out of it would be wrong in a way nobody could see afterwards.
     """
-    if written == 0:
+    # The interrupt first, whatever was counted: a worker stopped between
+    # writing its report and recording it leaves the count at nothing while a
+    # report of part of the library is on disk - and that is exactly the case
+    # the cubes must not be built from, and must be said.
+    if not interrupted and written == 0:
         log("-b: no report was written, so there is nothing to build cubes "
             "from.")
         return
     if interrupted:
-        sys.stderr.write("\n")
+        runlog.say("\n", sys.stderr)
         log("-b: the run was interrupted, so the cubes were NOT built - the "
             "reports hold")
-        log("    only part of the libraries. Build them from a finished census "
-            "with:")
-        log("    content-census-bi %s" % os.path.dirname(reports[0]))
+        if reports:
+            log("    only part of the libraries. Build them from a finished "
+                "census with:")
+            log("    content-census-bi %s" % os.path.dirname(reports[0]))
+        else:
+            log("    only part of the libraries.")
         return
-    sys.stderr.write("\n")
+    runlog.say("\n", sys.stderr)
     log("Building the cubes from the %d report(s) just written" % written)
     commands.run_command("content-census-bi", reports, script_dir=script_dir,
                          check=False)

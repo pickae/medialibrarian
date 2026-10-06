@@ -38,8 +38,8 @@ from dataclasses import dataclass
 from medialib import commands
 from medialib.lib import runlog, statusline
 
-__all__ = ["ToolOutput", "ToolRun", "ffmpeg_loglevel", "finished", "pick",
-           "redact", "replay_text", "report_failure", "run"]
+__all__ = ["ToolOutput", "ToolRun", "ffmpeg_loglevel", "finished", "from_log",
+           "pick", "redact", "replay_text", "report_failure", "run"]
 
 # What is kept of one run: its first lines, then the last ones.
 HEAD_LINES = 200
@@ -212,6 +212,23 @@ class ToolRun:
         if self.tool:
             return self.tool
         return os.path.basename(self.argv[0]) if self.argv else "tool"
+
+
+def from_log(path: str, failure: str, label: str = "",
+             tool: str = "") -> ToolRun:
+    """A failed run whose output a tool wrote to a log of its own - read back,
+    so it can be replayed like any other before the scratch it sits in goes.
+    A log that is missing replays as nothing."""
+    output = ToolOutput()
+    try:
+        with open(path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(65536), b""):
+                output.feed(chunk)
+    except OSError:
+        pass
+    output.close()
+    return ToolRun([tool or os.path.basename(path)], 1, output,
+                   failure=failure, label=label, tool=tool)
 
 
 def _status_text(returncode: int) -> str:

@@ -43,3 +43,8 @@ Usage:
             is written as .m4a, which the concatenating phase joins into
             an .m4b.
             Default opus
+    -v, --verbose
+            Also say why each item was handled the way it was, and on a failure
+            print the tool's whole output rather than its last lines.
+    -q, --quiet
+            Print errors only - no progress and no warnings.

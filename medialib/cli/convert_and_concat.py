@@ -105,7 +105,7 @@ e | enum:{codecs} | output encoding
 
 
 def spec(program: str) -> clioptions.Spec:
-    return clioptions.Spec(
+    return clioptions.with_verbosity(clioptions.Spec(
         head=USAGE_HEAD.format(program=program),
         options=OPT_SPEC,
         long=OPT_LONG,
@@ -114,18 +114,28 @@ def spec(program: str) -> clioptions.Spec:
         checks=OPT_CHECKS,
         column=OPT_COLUMN,
         credits=CREDITS,
-    )
+    ))
+
+
+def _stamped(message) -> str:
+    import time
+    return "[%s] %s\n" % (time.strftime("%H:%M:%S"),
+                          " ".join(str(part) for part in message))
 
 
 def progress(*message) -> None:
-    """The wrapper's own progress line.
+    """The wrapper's own progress line, which -q leaves out.
 
-    Named for what it is rather than `log`: the phases keep their own verbosity
-    and their own log(), and this is the layer above them.
+    Named for what it is rather than `log`: the phases have their own log(),
+    and this is the layer above them.
     """
-    import time
-    sys.stderr.write("[%s] %s\n" % (time.strftime("%H:%M:%S"),
-                                    " ".join(str(part) for part in message)))
+    runlog.say(_stamped(message), sys.stderr)
+
+
+def shortfall(*message) -> None:
+    """A line like :func:`progress` about something the run did not do, which
+    every verbosity prints."""
+    sys.stderr.write(_stamped(message))
 
 
 def _audio_names():
@@ -250,13 +260,13 @@ class Staging:
             # into a single folder and mix their tracks. Sorted order, so which
             # one that is does not depend on how the file system lists them.
             if base in claimed_by:
-                progress('  skipping "%s": "%s" already stands in for "%s"'
-                         % (name, claimed_by[base], base))
+                shortfall('  skipping "%s": "%s" already stands in for "%s"'
+                          % (name, claimed_by[base], base))
                 continue
             dest = os.path.join(self.path, relative_dir, base) if relative_dir \
                 else os.path.join(self.path, base)
             if archives.extract_archive_as_folder(path, dest) != 0:
-                progress("  could not unpack, skipping: " + name)
+                shortfall("  could not unpack, skipping: " + name)
                 continue
             claimed_by[base] = name
             self.unpacked += 1
@@ -328,6 +338,7 @@ def main(argv: list, program: str = "convert-and-concat",
     declaration = spec(program)
     try:
         result = clioptions.parse(declaration, argv)
+        clioptions.settle_verbosity(result)
     except clioptions.HelpRequested:
         sys.stdout.write(clioptions.help_text(declaration))
         return 0
@@ -351,7 +362,7 @@ def main(argv: list, program: str = "convert-and-concat",
     in_path = result.positionals[0].rstrip("/")
     out_path = result.positionals[1].rstrip("/")
     if not os.path.isdir(in_path):
-        sys.stdout.write(clioptions.missing_dir_text(declaration, in_path))
+        sys.stderr.write(clioptions.missing_dir_text(declaration, in_path))
         return 1
 
     # Absolute, because the concatenating phase runs from INSIDE the tree it
@@ -544,7 +555,7 @@ def _unpack_phase(in_path: str, archive_types, depth: int):
     progress("PHASE 2/4: unpacking archives (%s)" % " ".join(archive_types))
     path, status = ramscratch.ram_scratch_dir("convertAndConcat.archives")
     if status != 0 or not path:
-        progress("PHASE 2/4: no scratch for the archives, unpacking nothing")
+        shortfall("PHASE 2/4: no scratch for the archives, unpacking nothing")
         return None
     ramscratch.add_exit_cleanup([path])
     progress("Unpacked to: " + path)

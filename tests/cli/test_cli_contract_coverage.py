@@ -122,3 +122,35 @@ def test_one_letter_never_gets_two_names_or_one_name_two_letters():
         names = [name for _, name in pairs]
         assert len(set(letters)) == len(letters), f"{stem}: letter twice"
         assert len(set(names)) == len(names), f"{stem}: name twice"
+
+
+# --- the shared -v and -q -----------------------------------------------------
+# One meaning on every page: a letter that says "quiet" in one command and
+# "quality" in the next is the thing these replaced.
+
+# A command that parses no options has nowhere to take them.
+_NO_OPTIONS = {"cue_to_chapters"}
+
+
+def test_every_command_takes_the_shared_v_and_q():
+    missing = []
+    for stem, declaration in _cli_modules():
+        if stem in _NO_OPTIONS:
+            continue
+        longs = dict(clioptions.long_pairs(declaration))
+        if longs.get("v") != "verbose" or longs.get("q") != "quiet":
+            missing.append(stem)
+    assert not missing, "without the shared -v/-q: %s" % missing
+
+
+def test_and_words_them_the_shared_way():
+    """Built through clioptions.with_verbosity rather than written out, so a
+    page cannot drift into its own wording of the two."""
+    drifted = []
+    for stem, declaration in _cli_modules():
+        if stem in _NO_OPTIONS:
+            continue
+        if clioptions.verbosity_options(declaration.column) \
+                not in declaration.options:
+            drifted.append(stem)
+    assert not drifted, "-v/-q worded their own way: %s" % drifted

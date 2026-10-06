@@ -114,7 +114,7 @@ class TestTheProgressCounter:
                                 else 100_000)
         done = convert.run("convert-audio", "-j", 4, inputs, outputs)
         return [(int(n), int(total) if total else None) for n, total in
-                re.findall(r"^\[(\d+)(?:/(\d+))?\] [^:\n]+:", done.stdout,
+                re.findall(r"^\[(\d+)(?:/(\d+))?\] [^:\n]+:", done.stderr,
                            re.M)]
 
     @pytest.mark.parametrize("names,jobs", [
@@ -178,7 +178,7 @@ class TestWhatEachLineSays:
         done = convert.run("convert-audio", "-j", 1, *options, inputs,
                            tmp_path / "out")
         assert done.returncode == 0, done.stdout + done.stderr
-        return re.sub(r"^\[\d+(?:/\d+)?\] ", "", done.stdout, flags=re.M)
+        return re.sub(r"^\[\d+(?:/\d+)?\] ", "", done.stderr, flags=re.M)
 
     def test_a_file_that_is_encoded_is_converting(self, convert, tmp_path):
         assert "\nConverting: book.m4a\n" in self._said(convert, tmp_path)
@@ -199,16 +199,18 @@ class TestWhatEachLineSays:
         assert "\nUp to date, skipping: book.m4a\n" in said
         assert "Converting:" not in said
 
-    def _split_run(self, convert, tmp_path):
+    def _split_run(self, convert, tmp_path, *options):
         """A run over a tree with one file long enough that it is cut up."""
         inputs = tmp_path / "in"
         inputs.mkdir(exist_ok=True)
         (inputs / "book.m4a").write_bytes(b"\0" * 1000)
         with open(inputs / "long.m4a", "wb") as handle:
             handle.truncate(20_000_000_000)
-        done = convert.run("convert-audio", "-j", 4, inputs, tmp_path / "out")
+        done = convert.run("convert-audio", "-j", 4, *options, inputs,
+                           tmp_path / "out")
         assert done.returncode == 0, done.stdout + done.stderr
-        return done.stdout
+        convert.stdout = done.stdout
+        return done.stderr
 
     def test_a_run_that_split_a_file_times_the_re_join(self, convert,
                                                        tmp_path):
@@ -227,6 +229,13 @@ class TestWhatEachLineSays:
                     "Post-conversion:"):
             assert row not in said
         assert "Files:" in said
+
+    def test_under_q_a_split_run_that_went_well_prints_nothing(self, convert,
+                                                               tmp_path):
+        """Not the counted lines, the split and the re-join, nor the footer."""
+        assert self._split_run(convert, tmp_path, "-q") == ""
+        assert convert.stdout == ""
+        assert (tmp_path / "out" / "long.opus").is_file()
 
 
 class TestAnOutputPathThatIsAFile:
@@ -359,16 +368,16 @@ class TestARerunOverASplitFile:
             handle.truncate(20_000_000_000)
         first = convert.run("convert-audio", "-j", 4, inputs, outputs)
         assert first.returncode == 0, first.stdout + first.stderr
-        assert "[chunk 1/4]" in first.stdout
+        assert "[chunk 1/4]" in first.stderr
         joined = outputs / "long.opus"
         before = (blackbox.tree_of(outputs), joined.stat().st_mtime_ns,
                   joined.read_bytes())
 
         again = convert.run("convert-audio", "-j", 4, inputs, outputs)
         assert again.returncode == 0, again.stdout + again.stderr
-        assert "Up to date, skipping: long.m4a\n" in again.stdout
-        assert "[chunk" not in again.stdout
-        assert "Joining" not in again.stdout
+        assert "Up to date, skipping: long.m4a\n" in again.stderr
+        assert "[chunk" not in again.stderr
+        assert "Joining" not in again.stderr
         assert (blackbox.tree_of(outputs), joined.stat().st_mtime_ns,
                 joined.read_bytes()) == before
 
@@ -408,6 +417,21 @@ class TestAFileTooLongForOneXheAacEncode:
         assert "too long for exhale to encode whole" in done.stderr
         assert not list(outputs.rglob("*.m4a"))
         assert not (convert.bin / "exhale-ran").exists()
+
+    def test_under_q_the_error_is_all_that_is_printed(self, sandbox,
+                                                      tmp_path):
+        convert = _stubbed(sandbox)
+        convert.with_tool("ffprobe", _FFPROBE_TWENTY_HOURS)
+        convert.with_tool("exhale", ': > "$(dirname "$0")/exhale-ran"')
+        inputs = tmp_path / "in"
+        inputs.mkdir()
+        (inputs / "book.m4a").write_bytes(b"\0" * 1000)
+
+        done = convert.run("convert-audio", "-q", "-j", 1, "-e", "xheaac",
+                           "-a", inputs, tmp_path / "out")
+        assert done.returncode == 1, done.stdout + done.stderr
+        assert "ERROR: too long for exhale to encode whole" in done.stderr
+        assert done.stdout == "", done.stdout
 
 
 class TestAdaptiveRefusesTheGlobals:

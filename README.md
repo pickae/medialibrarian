@@ -3,7 +3,9 @@
 Command-line tools for ingesting, transcoding and tidying up personal media
 libraries — audiobooks, music, movies, comics and image galleries. Every one that
 renames files follows the same "never clobber, never lose a file" rules,
-described under [File safety](docs/file-safety.md).
+described under [File safety](docs/file-safety.md). What they print, and the `-v` and
+`-q` that set how much, is described under
+[What a run prints](docs/output.md).
 
 Each is an installed command. From a checkout, `pip install .` puts all nineteen
 on your PATH; `pip install -e .` does the same and keeps them running the

@@ -35,10 +35,6 @@ Options:
                     only; a table asking for less keeps its own number.
     -p, --preview   Preview: print the yt-dlp call each feed would get and
                     download nothing.
-    -v, --verbose   Also say why each item was handled the way it was, and on a
-                    failure print the tool's whole output rather than its last
-                    lines.
-    -q, --quiet     Print errors only - no progress and no warnings.
     -a, --include-inactive
                     Also fetch the feeds whose active column is 0.
     -c, --clean-up  Tidy up after the run: the sidecars each finished episode
@@ -78,6 +74,10 @@ Options:
                     tables are run on more than one computer and each one's
                     .log has diverged: merged, every machine skips what any
                     of them already fetched.
+    -v, --verbose   Also say why each item was handled the way it was, and on a
+                    failure print the tool's whole output rather than its last
+                    lines.
+    -q, --quiet     Print errors only - no progress and no warnings.
 
 A table says what it is with a "#!profile <name>" line, one of:
     youtubeAudio    (the default) audio only, SponsorBlock segments cut out,

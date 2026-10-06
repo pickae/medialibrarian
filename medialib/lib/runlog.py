@@ -19,7 +19,9 @@ import shutil
 import sys
 import time
 
-__all__ = ["log", "detail", "warn", "error", "verbosity", "settle_verbosity",
+__all__ = ["log", "say", "result", "detail", "warn", "error", "error_continued",
+           "verbosity",
+           "settle_verbosity",
            "QUIET", "NORMAL", "VERBOSE", "counted_prefix", "film_header",
            "cpu_count", "can_lock", "have_flock", "settle_flock", "take_lock",
            "warn_uncounted_progress"]
@@ -27,6 +29,11 @@ __all__ = ["log", "detail", "warn", "error", "verbosity", "settle_verbosity",
 QUIET, NORMAL, VERBOSE = 0, 1, 2
 
 VERBOSITY_VARIABLE = "LOG_VERBOSITY"
+
+# Set by the status line while it keeps a row pinned in this process: how a
+# line is written to stderr around that row, so it lands on a console row of
+# its own rather than on the end of the row's text.
+_row_writer = None
 _LEVEL_WORDS = {QUIET: "quiet", NORMAL: "", VERBOSE: "verbose"}
 
 
@@ -140,7 +147,15 @@ def _write(message: tuple, stream) -> None:
         line = "[%s] %s\n" % (time.strftime("%H:%M:%S"), text)
     else:
         line = "==> %s\n" % text
-    (sys.stderr if stream is None else stream).write(line)
+    _emit(line, stream)
+
+
+def _emit(text: str, stream) -> None:
+    out = sys.stderr if stream is None else stream
+    if _row_writer is not None and out is sys.stderr:
+        _row_writer(out, text)
+    else:
+        out.write(text)
 
 
 def log(*message: object, stream=None) -> None:
@@ -151,6 +166,23 @@ def log(*message: object, stream=None) -> None:
     """
     if verbosity() >= NORMAL:
         _write(message, stream)
+
+
+def say(text: str, stream=None) -> None:
+    """``text`` written as it is - stderr unless ``stream`` says otherwise -
+    unless the run is quiet. For a command's own progress lines and closing
+    figures, which -q leaves out; never for a result, which no verbosity
+    changes and which belongs on stdout, nor for an error, which every
+    verbosity prints."""
+    if verbosity() >= NORMAL:
+        _emit(text, stream)
+
+
+def result(*message: object, stream=None) -> None:
+    """A :func:`log` line that is the run's result rather than its progress -
+    a dry run's account of what it would change - printed at every
+    verbosity."""
+    _write(message, stream)
 
 
 def detail(*message: object, stream=None) -> None:
@@ -172,6 +204,12 @@ def warn(*message: object, stream=None) -> None:
 def error(*message: object, stream=None) -> None:
     """An ``ERROR:`` line, printed at every verbosity - ``-q`` included."""
     _write(("ERROR:",) + message, stream)
+
+
+def error_continued(*message: object, stream=None) -> None:
+    """A line under an :func:`error` that goes on explaining it, printed
+    wherever the error is."""
+    _write(message, stream)
 
 
 def counted_prefix(count: int, total: int | None) -> str:

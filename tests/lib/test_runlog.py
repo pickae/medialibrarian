@@ -306,3 +306,25 @@ class TestEveryHelperGoesThroughIt:
         loaded = importlib.import_module("medialib.lib." + module)
         monkeypatch.setenv("PYTHON_BIN", "/opt/stub/python3")
         assert loaded._python_bin() == "/opt/stub/python3"
+
+
+class TestSayAndTheErrorsQuietKeeps:
+    def test_say_writes_its_text_as_it_is(self, monkeypatch):
+        monkeypatch.delenv("LOG_VERBOSITY", raising=False)
+        out = io.StringIO()
+        runlog.say("[3/9] done: x\n", out)
+        assert out.getvalue() == "[3/9] done: x\n"
+
+    def test_say_is_silent_under_quiet(self, monkeypatch):
+        monkeypatch.setenv("LOG_VERBOSITY", "quiet")
+        out = io.StringIO()
+        runlog.say("[3/9] done: x\n", out)
+        assert out.getvalue() == ""
+
+    def test_an_errors_continuation_survives_quiet(self, monkeypatch):
+        monkeypatch.delenv("LOG_TIMESTAMPS", raising=False)
+        monkeypatch.setenv("LOG_VERBOSITY", "quiet")
+        out = io.StringIO()
+        runlog.error("too long:", stream=out)
+        runlog.error_continued("       the way out", stream=out)
+        assert out.getvalue() == "==> ERROR: too long:\n==>        the way out\n"

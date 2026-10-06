@@ -367,17 +367,17 @@ class TestWhereTheQualityLevelComesFrom:
     @pytest.mark.parametrize("options,summary", [
         (["-p", "av1Grain"],
          "biased per file by the tier it is ENCODED at (4320p +3, 2160p +2, "
-         "1440p +1, 1080p 0, 720p -1, SD -2, unknown 0; override with -q)"),
-        (["-p", "av1Grain", "-q", 22],
-         "Video quality: -crf 22 for every file (-q), so no resolution bias is "
+         "1440p +1, 1080p 0, 720p -1, SD -2, unknown 0; override with -l)"),
+        (["-p", "av1Grain", "-l", 22],
+         "Video quality: -crf 22 for every file (-l), so no resolution bias is "
          "applied."),
         (["-p", "av1Constrained"],
          "Video quality: none to set - av1Constrained targets an average "
          "bitrate, not a quality level."),
         # A tier above the -m ceiling is one no file is encoded at.
         (["-p", "av1Grain", "-m", "1080p"],
-         "(1080p 0, 720p -1, SD -2, unknown 0; override with -q)"),
-    ], ids=["the bias ladder", "-q turns it off", "a bitrate-capped profile",
+         "(1080p 0, 720p -1, SD -2, unknown 0; override with -l)"),
+    ], ids=["the bias ladder", "-l turns it off", "a bitrate-capped profile",
             "under a ceiling"])
     def test_the_summary_states_it(self, video_cli, options, summary):
         _, log = video_cli.start(*options)
@@ -773,6 +773,44 @@ class TestUpscale:
         assert log.count("upscale (-u)") == 1
 
 
+class TestQuiet:
+    """-q is errors only: the startup summary, the progress and the closing
+    figures all go, and a refusal is still said in full."""
+
+    @pytest.fixture
+    def video(self, sandbox, tmp_path):
+        sandbox.with_tool("ffmpeg", "exit 0")
+        sandbox.with_tool("ffprobe", "echo 1.0")
+        sandbox.linking(*_ORDINARY).narrow()
+        sandbox.inputs = tmp_path / "in"
+        sandbox.inputs.mkdir()
+        (sandbox.inputs / "clip.mkv").write_text("")
+        return sandbox
+
+    def _run(self, video, *options):
+        outputs = video.work / ("out%d" % len(options))
+        return video.run("convert-video", *options, video.inputs, outputs,
+                         timeout=180)
+
+    def test_the_summary_and_the_closing_figures_are_left_out(self, video):
+        loud = self._run(video)
+        assert "\nStats\n=====\n" in loud.stderr
+        assert "Video profile: " in loud.stderr
+
+        quiet = self._run(video, "-q")
+        assert quiet.returncode == loud.returncode
+        assert quiet.stdout == ""
+        for said in ("Stats", "Files failed:", "Video profile: ",
+                     "Using ffmpeg: ", "Encoding whole "):
+            assert said not in quiet.stderr, quiet.stderr
+
+    def test_a_refusal_is_still_said(self, video):
+        done = self._run(video, "-q", "-u", "1080p")
+        assert done.returncode == 1
+        assert "-u 1080p needs a working upscaler" in done.stderr
+        assert "Video profile: " not in done.stderr
+
+
 class TestRefusalsChangeNothing:
     """A refusal is decided before a file is touched, and it stays that way:
     the run exits 1 with the reason, the input is byte-identical, and the
@@ -795,20 +833,20 @@ class TestRefusalsChangeNothing:
         return done
 
     def test_a_quality_level_on_a_bitrate_profile_is_refused(self, video):
-        done = self._refused(video, "-p", "av1Constrained", "-q", "20")
-        assert ("The -q quality level only applies to the constant-quality "
+        done = self._refused(video, "-p", "av1Constrained", "-l", "20")
+        assert ("The -l quality level only applies to the constant-quality "
                 "profiles" in done.stderr)
         assert not video.outputs.exists()
 
     def test_a_quality_level_past_the_encoders_top_is_refused(self, video):
-        done = self._refused(video, "-p", "av1BluRay", "-q", "64")
-        assert ('The -q quality level must be an integer between 0 and 63 '
+        done = self._refused(video, "-p", "av1BluRay", "-l", "64")
+        assert ('The -l quality level must be an integer between 0 and 63 '
                 'for -p av1BluRay (got "64")' in done.stderr)
         assert not video.outputs.exists()
 
     def test_a_quality_level_that_is_not_a_number_is_refused(self, video):
-        done = self._refused(video, "-p", "av1BluRay", "-q", "12a")
-        assert ('The -q quality level must be an integer between 0 and 63 '
+        done = self._refused(video, "-p", "av1BluRay", "-l", "12a")
+        assert ('The -l quality level must be an integer between 0 and 63 '
                 'for -p av1BluRay (got "12a")' in done.stderr)
         assert not video.outputs.exists()
 

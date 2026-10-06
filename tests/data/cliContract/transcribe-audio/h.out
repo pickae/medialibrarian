@@ -21,4 +21,8 @@ Options:
     -j, --jobs <jobs>
                     Run up to <jobs> transcriptions in parallel.
                     Default: what the card can hold, or 2 on the CPU
+    -v, --verbose   Also say why each item was handled the way it was, and on a
+                    failure print the tool's whole output rather than its last
+                    lines.
+    -q, --quiet     Print errors only - no progress and no warnings.
 

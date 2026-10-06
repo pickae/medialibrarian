@@ -118,7 +118,7 @@ class TestPerFileLine:
     def test_the_line_carries_the_queue_position(self, counters, capsys):
         counters.progress.write_text("11\n")
         counters.report_progress("track12.m4a")
-        assert capsys.readouterr().out == "[12/80] Converting: track12.m4a\n"
+        assert capsys.readouterr().err == "[12/80] Converting: track12.m4a\n"
 
     def test_the_line_advanced_the_shared_counter(self, counters):
         counters.progress.write_text("11\n")
@@ -131,7 +131,7 @@ class TestPerFileLine:
         printed before then carries the count alone."""
         still_loading.progress.write_text("11\n")
         still_loading.report_progress("track12.m4a")
-        assert capsys.readouterr().out == "[12] Converting: track12.m4a\n"
+        assert capsys.readouterr().err == "[12] Converting: track12.m4a\n"
 
     def test_the_row_is_erased_for_the_line_and_re_pinned_underneath_it(
             self, counters, capsys, monkeypatch):
@@ -140,6 +140,7 @@ class TestPerFileLine:
         counters.report_progress("track12.m4a")
         assert capsys.readouterr().err == (
             "\r\033[K"
+            "[12/80] Converting: track12.m4a\n"
             "\r  encoding 12/80 jobs: elapsed 3:07  encoded 3:14:08"
             "  62.3x realtime\033[K")
 
@@ -151,14 +152,14 @@ class TestPerFileLine:
         monkeypatch.setattr(statusline.state, "row", "")
         counters.progress.write_text("11\n")
         counters.report_progress("track12.m4a")
-        assert capsys.readouterr().err == ""
+        assert capsys.readouterr().err == "[12/80] Converting: track12.m4a\n"
 
     def test_off_a_terminal_the_line_itself_is_unchanged(self, counters,
                                                          capsys, monkeypatch):
         monkeypatch.setattr(statusline.state, "row", "")
         counters.progress.write_text("12\n")
         counters.report_progress("track13.m4a")
-        assert capsys.readouterr().out == "[13/80] Converting: track13.m4a\n"
+        assert capsys.readouterr().err == "[13/80] Converting: track13.m4a\n"
 
 
 class _Reporter:
