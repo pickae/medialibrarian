@@ -169,6 +169,8 @@ _STATE_KNOBS = (
     # and exporting it means SETTING it in this process - after which every
     # later test in the same worker reads a timestamp where it expects "==>".
     "LOG_TIMESTAMPS",
+    # Settled by a command's -v or -q for its children, the same way.
+    "LOG_VERBOSITY",
 )
 
 
