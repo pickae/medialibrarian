@@ -14,8 +14,11 @@ happens at ``--``. So it is implemented here, in silent mode.
 from __future__ import annotations
 
 import re
+import textwrap
 from collections.abc import Callable
 from dataclasses import dataclass, field
+
+from medialib.lib import runlog
 
 # The C-locale [[:space:]] set. Python's str.strip() with no argument strips a
 # great deal more than this, and a spec field is allowed to hold any of it.
@@ -29,6 +32,17 @@ _ENTRY = re.compile(r"[a-zA-Z][ \t\n\v\f\r]*\|")
 
 DEFAULT_CREDITS = "David Ernst"
 DEFAULT_COLUMN = 20
+
+# The -v and -q every command shares, worded once. The long names go into a
+# spec's ``long`` field as they are; the option lines come from
+# :func:`verbosity_options`, which wraps them for the spec's own column.
+VERBOSITY_LONG = "v:verbose q:quiet"
+_VERBOSITY_HELP = (
+    ("v", "verbose: also say why each item was handled the way it was, and "
+          "on a failure print the tool's whole output rather than its last "
+          "lines."),
+    ("q", "quiet: print errors only - no progress and no warnings."),
+)
 
 
 class UsageError(Exception):
@@ -393,6 +407,38 @@ def help_text(spec: Spec) -> str:
 def missing_dir_text(spec: Spec, directory: str) -> str:
     """The input-folder refusal, worded the way every script worded it."""
     return f'Directory "{directory}" does not exist.\n\n{page(spec)}\n'
+
+
+def verbosity_options(column: int) -> str:
+    """The -v and -q option lines, wrapped to 80 columns at ``column``.
+
+    A spec appends this to its own ``options`` and :data:`VERBOSITY_LONG` to its
+    ``long``, so every command's page words the two the same way. Wrapped here
+    and not written out because a continuation line is emitted as it stands,
+    and each spec has its own column to indent it to.
+    """
+    lines = []
+    for letter, help_text in _VERBOSITY_HELP:
+        wrapped = textwrap.wrap(help_text, width=80 - column)
+        lines.append(f"{letter} |  | {wrapped[0]}")
+        lines.extend(" " * column + rest for rest in wrapped[1:])
+    return "\n".join(lines) + "\n"
+
+
+def settle_verbosity(result: Result) -> int:
+    """The verbosity this command line asked for, settled for the whole run.
+
+    Both at once is refused rather than one silently winning: whichever the
+    user meant, the other was typed by mistake.
+    """
+    verbose = "v" in result.given
+    quiet = "q" in result.given
+    if verbose and quiet:
+        raise UsageError("Options -v and -q cannot be used together")
+    level = (runlog.VERBOSE if verbose
+             else runlog.QUIET if quiet else runlog.NORMAL)
+    runlog.settle_verbosity(level)
+    return level
 
 
 def args_out_of_range(count: int, minimum: int, maximum: int | None) -> bool:

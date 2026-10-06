@@ -562,3 +562,40 @@ class TestRenderingTheLongForms:
         assert cli.render_options(s) == (
             "    -j <n>          jobs\n"
             "    -c, --clean     clean")
+
+
+class TestTheSharedVerbosityFlags:
+    """-v and -q, worded once and settled for the whole run."""
+
+    def verbosity_spec(self, column=20):
+        return spec(options=cli.verbosity_options(column) + "h |  | help.\n",
+                    long=cli.VERBOSITY_LONG + " h:help", column=column)
+
+    @pytest.mark.parametrize("column", [12, 18, 20])
+    def test_the_lines_fit_80_columns_at_any_column(self, column):
+        page = cli.render_options(self.verbosity_spec(column))
+        assert "--verbose" in page and "--quiet" in page
+        assert max(len(line) for line in page.split("\n")) <= 80
+
+    def test_continuation_lines_start_at_the_column(self):
+        page = cli.render_options(self.verbosity_spec(20))
+        for line in page.split("\n"):
+            if not line.lstrip().startswith("-"):
+                assert line.startswith(" " * 20) and line[20] != " "
+
+    @pytest.mark.parametrize("argv, level", [
+        ([], 1), (["-v"], 2), (["--verbose"], 2), (["-q"], 0), (["--quiet"], 0),
+    ])
+    def test_the_level_is_settled_for_the_run(self, monkeypatch, argv, level):
+        from medialib.lib import runlog
+        monkeypatch.delenv("LOG_VERBOSITY", raising=False)
+        result = cli.parse(self.verbosity_spec(), argv)
+        assert cli.settle_verbosity(result) == level
+        assert runlog.verbosity() == level
+
+    def test_both_at_once_is_refused(self, monkeypatch):
+        monkeypatch.delenv("LOG_VERBOSITY", raising=False)
+        result = cli.parse(self.verbosity_spec(), ["-vq"])
+        with pytest.raises(cli.UsageError, match="-v and -q"):
+            cli.settle_verbosity(result)
+

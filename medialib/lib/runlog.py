@@ -4,6 +4,13 @@ One line to stderr per step, timestamped only when ``LOG_TIMESTAMPS`` is set, an
 a "[n/total] " counter that appears only when flock is there to keep it honest.
 The eighteen commands say these things the same way, which is what lets one
 command read another's output.
+
+How much is said is the run's verbosity, one of three levels read from
+``LOG_VERBOSITY``: quiet (errors only), normal (what a run has always said),
+verbose (that plus the reason behind each decision). An environment variable
+rather than an argument because the workers a run fans out to and the commands
+it starts as children have to say the same amount, and the environment is the
+one thing all of them inherit.
 """
 
 import contextlib
@@ -12,8 +19,15 @@ import shutil
 import sys
 import time
 
-__all__ = ["log", "counted_prefix", "film_header", "cpu_count", "can_lock", "have_flock",
-           "settle_flock", "take_lock", "warn_uncounted_progress"]
+__all__ = ["log", "detail", "warn", "error", "verbosity", "settle_verbosity",
+           "QUIET", "NORMAL", "VERBOSE", "counted_prefix", "film_header",
+           "cpu_count", "can_lock", "have_flock", "settle_flock", "take_lock",
+           "warn_uncounted_progress"]
+
+QUIET, NORMAL, VERBOSE = 0, 1, 2
+
+VERBOSITY_VARIABLE = "LOG_VERBOSITY"
+_LEVEL_WORDS = {QUIET: "quiet", NORMAL: "", VERBOSE: "verbose"}
 
 
 def can_lock() -> bool:
@@ -98,17 +112,66 @@ def take_lock(handle):
                 pass
 
 
-def log(*message: object, stream=None) -> None:
-    """``log``: one line on stderr, timestamped only when the run asked for it.
+def settle_verbosity(level: int) -> None:
+    """Set the run's verbosity, for this process and everything it starts.
 
-    The arguments are joined with spaces.
+    Normal is written as an empty value rather than removed, so a parent's
+    "quiet" or "verbose" cannot outlive a child that asked for normal.
     """
+    os.environ[VERBOSITY_VARIABLE] = _LEVEL_WORDS[level]
+
+
+def verbosity() -> int:
+    """The run's verbosity. Anything but the two words is normal, so a value
+    nobody set and a value nobody meant both leave a run saying what it always
+    said."""
+    value = os.environ.get(VERBOSITY_VARIABLE, "")
+    if value == "quiet":
+        return QUIET
+    if value == "verbose":
+        return VERBOSE
+    return NORMAL
+
+
+def _write(message: tuple, stream) -> None:
+    """One line on stderr, timestamped only when the run asked for it."""
     text = " ".join(str(part) for part in message)
     if os.environ.get("LOG_TIMESTAMPS", ""):
         line = "[%s] %s\n" % (time.strftime("%H:%M:%S"), text)
     else:
         line = "==> %s\n" % text
     (sys.stderr if stream is None else stream).write(line)
+
+
+def log(*message: object, stream=None) -> None:
+    """``log``: one line on stderr, timestamped only when the run asked for it.
+
+    The arguments are joined with spaces. Silent under ``-q``, so a line that
+    has to survive it - an error - goes through :func:`error` instead.
+    """
+    if verbosity() >= NORMAL:
+        _write(message, stream)
+
+
+def detail(*message: object, stream=None) -> None:
+    """A line only ``-v`` prints: why an item was handled the way it was.
+
+    One whole line per call, like :func:`log`, which is what lets workers print
+    these as they go without their lines mixing.
+    """
+    if verbosity() >= VERBOSE:
+        _write(message, stream)
+
+
+def warn(*message: object, stream=None) -> None:
+    """A ``WARNING:`` line: printed unless the run is quiet."""
+    if verbosity() >= NORMAL:
+        _write(("WARNING:",) + message, stream)
+
+
+def error(*message: object, stream=None) -> None:
+    """An ``ERROR:`` line, printed at every verbosity - ``-q`` included."""
+    _write(("ERROR:",) + message, stream)
 
 
 def counted_prefix(count: int, total: int | None) -> str:

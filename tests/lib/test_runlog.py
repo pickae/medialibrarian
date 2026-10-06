@@ -52,6 +52,64 @@ class TestLog:
         assert out.getvalue() == "==> \n"
 
 
+
+class TestVerbosity:
+    """Three levels, carried by LOG_VERBOSITY so workers and children agree."""
+
+    def say_everything(self) -> str:
+        out = io.StringIO()
+        runlog.log("step", stream=out)
+        runlog.detail("why", stream=out)
+        runlog.warn("odd", stream=out)
+        runlog.error("broke", stream=out)
+        return out.getvalue()
+
+    def test_unset_is_normal(self, monkeypatch):
+        monkeypatch.delenv("LOG_VERBOSITY", raising=False)
+        assert runlog.verbosity() == runlog.NORMAL
+
+    def test_a_word_nobody_meant_is_normal(self, monkeypatch):
+        monkeypatch.setenv("LOG_VERBOSITY", "loud")
+        assert runlog.verbosity() == runlog.NORMAL
+
+    @pytest.mark.parametrize("level", [runlog.QUIET, runlog.NORMAL,
+                                       runlog.VERBOSE])
+    def test_settling_it_is_what_is_read_back(self, monkeypatch, level):
+        monkeypatch.delenv("LOG_VERBOSITY", raising=False)
+        runlog.settle_verbosity(level)
+        assert runlog.verbosity() == level
+
+    def test_normal_overrides_a_level_handed_down(self, monkeypatch):
+        """A child that asked for normal is not left quiet by its parent."""
+        monkeypatch.setenv("LOG_VERBOSITY", "quiet")
+        runlog.settle_verbosity(runlog.NORMAL)
+        assert runlog.verbosity() == runlog.NORMAL
+
+    def test_normal_says_all_but_the_reasons(self, monkeypatch):
+        monkeypatch.delenv("LOG_TIMESTAMPS", raising=False)
+        monkeypatch.delenv("LOG_VERBOSITY", raising=False)
+        assert self.say_everything() == (
+            "==> step\n==> WARNING: odd\n==> ERROR: broke\n")
+
+    def test_verbose_adds_the_reasons(self, monkeypatch):
+        monkeypatch.delenv("LOG_TIMESTAMPS", raising=False)
+        monkeypatch.setenv("LOG_VERBOSITY", "verbose")
+        assert self.say_everything() == (
+            "==> step\n==> why\n==> WARNING: odd\n==> ERROR: broke\n")
+
+    def test_quiet_says_only_the_error(self, monkeypatch):
+        monkeypatch.delenv("LOG_TIMESTAMPS", raising=False)
+        monkeypatch.setenv("LOG_VERBOSITY", "quiet")
+        assert self.say_everything() == "==> ERROR: broke\n"
+
+    def test_every_level_keeps_the_timestamp_form(self, monkeypatch):
+        monkeypatch.setenv("LOG_TIMESTAMPS", "1")
+        monkeypatch.setenv("LOG_VERBOSITY", "verbose")
+        out = io.StringIO()
+        runlog.detail("why", stream=out)
+        assert re.fullmatch(r"\[\d\d:\d\d:\d\d\] why\n", out.getvalue())
+
+
 class TestCountedPrefix:
     def test_with_flock_it_is_the_position(self, monkeypatch):
         monkeypatch.setenv("HAVE_FLOCK", "1")
