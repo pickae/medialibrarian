@@ -227,6 +227,9 @@ def private_workspace(tmp_path_factory, monkeypatch):
         monkeypatch.setenv(name, str(scratch))
     for name in _STATE_KNOBS:
         monkeypatch.delenv(name, raising=False)
+    # The script directory too, which is where a run keeps its logs - a tool
+    # failure's among them. A case that needs one of its own still sets it.
+    monkeypatch.setenv("CLI_SCRIPT_DIR", str(scratch / "scriptDir"))
 
     # The ffmpeg ladder's rungs past PATH are absolute paths into the MACHINE -
     # /opt/ffmpeg/bin, /usr/local/bin, /usr/bin, $HOME/.local/bin - and a caller

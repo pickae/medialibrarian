@@ -36,10 +36,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from medialib import commands
-from medialib.lib import runlog
+from medialib.lib import runlog, statusline
 
-__all__ = ["ToolOutput", "ToolRun", "ffmpeg_loglevel", "pick", "redact",
-           "report_failure", "run"]
+__all__ = ["ToolOutput", "ToolRun", "ffmpeg_loglevel", "finished", "pick",
+           "redact", "report_failure", "run"]
 
 # What is kept of one run: its first lines, then the last ones.
 HEAD_LINES = 200
@@ -147,6 +147,13 @@ class ToolOutput:
         if len(self._pending) > _PENDING_LIMIT:
             self._pending = self._pending[-_PENDING_LIMIT:]
 
+    def drain(self, stream) -> None:
+        """Feed it everything ``stream`` (a pipe opened in binary) has until the
+        tool closes it, then close the stream."""
+        for chunk in iter(lambda: stream.read1(65536), b""):
+            self.feed(chunk)
+        stream.close()
+
     def close(self) -> None:
         """The tool has finished: an unended last line is still a line."""
         self._pending += self._decoder.decode(b"", final=True)
@@ -198,10 +205,19 @@ class ToolRun:
     failure: str = ""
     log_path: str = ""
     label: str = ""
+    tool: str = ""
 
     @property
     def ok(self) -> bool:
         return not self.failure
+
+    @property
+    def name(self) -> str:
+        """What the tool is called in the error line: as the caller named it,
+        else the program that was run."""
+        if self.tool:
+            return self.tool
+        return os.path.basename(self.argv[0]) if self.argv else "tool"
 
 
 def _status_text(returncode: int) -> str:
@@ -210,13 +226,22 @@ def _status_text(returncode: int) -> str:
     return "exited with status %d" % returncode
 
 
-def _pump(stream, output: ToolOutput) -> None:
-    for chunk in iter(lambda: stream.read1(65536), b""):
-        output.feed(chunk)
-    stream.close()
+def finished(argv, returncode: int, output: ToolOutput, label: str = "",
+             tool: str = "", verify: Callable[[], str] | None = None,
+             stdout: str = "") -> ToolRun:
+    """How a run that has ended went, for a caller that ran the tool itself
+    and fed its output to ``output`` - :func:`run` decides it the same way."""
+    output.close()
+    failure = "" if returncode == 0 else _status_text(returncode)
+    if not failure and verify is not None:
+        failure = verify() or ""
+    return ToolRun([str(word) for word in argv], returncode, output,
+                   stdout=stdout, failure=failure, label=label, tool=tool)
 
 
 def run(argv, label: str = "", *,
+        tool: str = "",
+        warning: str = "",
         verify: Callable[[], str] | None = None,
         stdout: str = "merge",
         cwd: str | None = None,
@@ -231,7 +256,13 @@ def run(argv, label: str = "", *,
 
     A tool fails when it exits non-zero, cannot be started, or - for a tool
     whose exit status is not to be trusted - when ``verify``, asked after a
-    zero exit, returns a reason. ``label`` names the item in the error line.
+    zero exit, returns a reason. ``label`` names the item in the error line,
+    and ``tool`` the tool, for one started through a launcher whose own name
+    would say nothing.
+
+    ``warning`` is for a failure the caller treats as a skip rather than an
+    error: the block opens with that ``WARNING:`` sentence instead, and like
+    every warning it is not printed under ``-q``.
 
     ``report`` False leaves the replay to the caller, who may want to retry
     first: :func:`report_failure` is the same replay, called by hand.
@@ -250,35 +281,29 @@ def run(argv, label: str = "", *,
         output.feed("%s\n" % exc)
         output.close()
         result = ToolRun(argv, 127, output, failure="could not be started: %s"
-                         % (exc.strerror or exc), label=label)
+                         % (exc.strerror or exc), label=label, tool=tool)
     else:
         assert process.stdout is not None
         if stdout == "capture":
-            reader = threading.Thread(target=_pump,
-                                      args=(process.stderr, output),
-                                      daemon=True)
+            reader = threading.Thread(target=output.drain,
+                                      args=(process.stderr,), daemon=True)
             reader.start()
             captured = process.stdout.read().decode("utf-8", "replace")
             process.stdout.close()
             reader.join()
         else:
-            _pump(process.stdout, output)
-        returncode = process.wait()
-        output.close()
-        failure = "" if returncode == 0 else _status_text(returncode)
-        if not failure and verify is not None:
-            failure = verify() or ""
-        result = ToolRun(argv, returncode, output, stdout=captured,
-                         failure=failure, label=label)
+            output.drain(process.stdout)
+        result = finished(argv, process.wait(), output, label, tool, verify,
+                          captured)
     if result.failure and report:
-        report_failure(result, lock_file=lock_file)
+        report_failure(result, lock_file=lock_file, warning=warning)
     return result
 
 
 def _keep(result: ToolRun) -> str:
     """The failure's whole kept output, in `logs/`; its path, or empty when it
     could not be written - a full disk is no reason to lose the error line."""
-    tool = os.path.basename(result.argv[0]) if result.argv else "tool"
+    tool = re.sub(r"[^A-Za-z0-9._-]+", "-", result.name)
     slug = re.sub(r"[^A-Za-z0-9._-]+", "-", result.label or tool).strip("-")
     name = "%s-%d-%s-%s.log" % (time.strftime("%Y%m%d-%H%M%S"), os.getpid(),
                                 tool, slug[:60] or "run")
@@ -294,12 +319,18 @@ def _keep(result: ToolRun) -> str:
     return path
 
 
-def _block(result: ToolRun, level: int) -> str:
+def _block(result: ToolRun, level: int, warning: str = "") -> str:
     """The replay, as one piece of text."""
+    if warning and level < runlog.NORMAL:
+        return ""
     out = io.StringIO()
-    tool = os.path.basename(result.argv[0]) if result.argv else "the tool"
-    subject = "%s: %s" % (result.label, tool) if result.label else tool
-    runlog.error(subject, result.failure, stream=out)
+    if warning:
+        runlog.warn("%s (%s %s)" % (warning, result.name, result.failure),
+                    stream=out)
+    else:
+        subject = ("%s: %s" % (result.label, result.name) if result.label
+                   else result.name)
+        runlog.error(subject, result.failure, stream=out)
     output = result.output
     if level >= runlog.VERBOSE:
         out.write("    command: %s\n" % redact(shlex.join(result.argv)))
@@ -320,16 +351,27 @@ def _block(result: ToolRun, level: int) -> str:
     return out.getvalue()
 
 
-def report_failure(result: ToolRun, stream=None, lock_file: str = "") -> None:
-    """Replay a failed run: keep its output in `logs/`, then print the block."""
+def report_failure(result: ToolRun, stream=None, lock_file: str = "",
+                   warning: str = "") -> None:
+    """Replay a failed run: keep its output in `logs/`, then print the block -
+    opened by ``warning`` when the caller treats the failure as a skip."""
     if not result.log_path:
         result.log_path = _keep(result)
-    text = _block(result, runlog.verbosity())
+    text = _block(result, runlog.verbosity(), warning)
+    if not text:
+        return
     out = sys.stderr if stream is None else stream
     if lock_file:
         with open(lock_file, "a") as handle, runlog.take_lock(handle):
-            out.write(text)
-            out.flush()
+            _write_block(out, text)
     else:
-        out.write(text)
-        out.flush()
+        _write_block(out, text)
+
+
+def _write_block(out, text: str) -> None:
+    """The block on a console row of its own: a status row pinned where it is
+    about to go is erased first, and redraws itself under it."""
+    if out is sys.stderr:
+        statusline.clear_status()
+    out.write(text)
+    out.flush()

@@ -36,6 +36,7 @@ from medialib.lib import (
     scenecuts,
     segments,
     statusline,
+    toolcapture,
     tooldeps,
     upscale,
     videocrop,
@@ -564,28 +565,27 @@ def _remove(path: str) -> None:
 
 # --- the encodes --------------------------------------------------------------
 
-def vspipe_chatter(line: str) -> bool:
-    """vspipe's closing tally ("Output 959 frames in 35.76 seconds ..."), which
-    it prints once per chunk whatever it is told."""
-    return line.startswith("Output ") and " frames in " in line
+def run_quiet_encode(argv: list, label: str = "",
+                     tool: str = "ffmpeg") -> int:
+    """One video encode, with the p/r keys able to stop and continue it and its
+    output kept rather than shown.
 
-
-def run_quiet_encode(argv: list) -> int:
-    """One video encode, with the encoder library's own chatter stripped and the
-    p/r keys able to stop and continue it.
-
-    libsvtav1 does not log through ffmpeg: it prints its banner, resolved
-    configuration and warnings straight to stderr, ignoring -loglevel entirely,
-    once per encoder instance - so a chunked software AV1 encode emits that block
-    once PER CHUNK, all interleaved, burying the progress row. Only the library's
-    info and warn lines are dropped; its errors, everything ffmpeg prints, and the
-    exit status pass through untouched.
+    Nothing the encode prints reaches the console while it runs: libsvtav1 alone
+    writes its banner and resolved configuration once per encoder instance -
+    once PER CHUNK of a chunked encode - and parallel chunks would interleave
+    that over the status row. An encode that fails is replayed instead, with the
+    lines that say why, and kept in `logs/`; one that succeeds is never heard
+    from.
 
     Every video encode goes through here, whole file or chunk, software or NVENC,
     which is what makes one keypress reach all of them at once.
     """
-    return pausecontrol.run_pausable(
-        argv, keep=lambda line: not (svt_chatter(line) or vspipe_chatter(line)))
+    output = toolcapture.ToolOutput()
+    status = pausecontrol.run_pausable(argv, output=output)
+    if status != 0:
+        toolcapture.report_failure(toolcapture.finished(
+            argv, status, output, label=label, tool=tool))
+    return status
 
 
 def encode_video_whole(relative: str, directory: str, settings) -> int:
@@ -603,17 +603,18 @@ def encode_video_whole(relative: str, directory: str, settings) -> int:
     out = os.path.join(directory, "video.mkv")
     progress = os.path.join(directory, "prog.0000")
     if settings.upscale_size:
-        return run_upscaled_encode(settings, source, args, progress, out, 0, -1)
-    argv = (["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
-             "-nostats", "-progress", progress,
+        return run_upscaled_encode(settings, source, args, progress, out, 0, -1,
+                                   relative)
+    argv = (["ffmpeg", "-nostdin", "-hide_banner",
+             *toolcapture.ffmpeg_loglevel(), "-nostats", "-progress", progress,
              "-y"] + settings.decode_accel.split()
             + ["-i", source, "-an", "-sn", "-map", "0:v:0"] + args.split()
             + ["-f", "matroska", out])
-    return run_quiet_encode(argv)
+    return run_quiet_encode(argv, relative)
 
 
 def run_upscaled_encode(settings, source: str, args: str, progress: str,
-                        out: str, start: int, end: int) -> int:
+                        out: str, start: int, end: int, label: str = "") -> int:
     """Frames <start> up to <end> (-1: to the last) of <source> upscaled and
     encoded into <out>.
 
@@ -623,8 +624,9 @@ def run_upscaled_encode(settings, source: str, args: str, progress: str,
     the pipe finishes cleanly on whatever it was given, and a chunk that stopped
     a few frames short would otherwise pass for a whole one.
     """
-    encode = (["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
-               "-nostats", "-progress", progress, "-y",
+    encode = (["ffmpeg", "-nostdin", "-hide_banner",
+               *toolcapture.ffmpeg_loglevel(), "-nostats", "-progress", progress,
+               "-y",
                "-f", "yuv4mpegpipe", "-i", "pipe:0"] + args.split()
               + ["-f", "matroska", out])
     width, height = settings.upscale_size.split("x")
@@ -636,7 +638,8 @@ def run_upscaled_encode(settings, source: str, args: str, progress: str,
               "range": settings.upscale_range, "engine": settings.upscale_engine,
               "width": width, "height": height}
     status = run_quiet_encode(upscale.pipeline_argv(
-        settings.upscale_stack, settings.upscale_script, values, encode))
+        settings.upscale_stack, settings.upscale_script, values, encode),
+        label, tool="vspipe | ffmpeg")
     if status != 0:
         _remove(out)
     return status
@@ -663,6 +666,7 @@ def encode_video_chunk(settings, token: str) -> int:
         rules.profile_args(rules.VIDEO_PROFILES, settings.video_profile),
         source, settings)
     progress = os.path.join(directory, "prog.%04d" % int(index))
+    chunk_label = "%s (chunk %d of %s)" % (relative, int(index) + 1, total)
     if settings.upscale_size:
         # The same boundaries in frames: each chunk ends at the frame the next
         # one starts at, and the last one runs to the end of the stream. The end
@@ -675,17 +679,18 @@ def encode_video_chunk(settings, token: str) -> int:
         last = (upscale.frame_at(end, settings.upscale_fps)
                 if int(index) < int(total) - 1 else -1)
         return run_upscaled_encode(settings, source, args, progress, out,
-                                   first, last)
+                                   first, last, chunk_label)
     # The last chunk runs to the end of the stream rather than to the container's
     # duration, so a final frame past that rounded figure is not lost.
     if int(index) < int(total) - 1:
         args = rules.with_chunk_end(args, duration)
-    argv = (["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
-             "-nostats", "-progress", progress, "-y"]
+    argv = (["ffmpeg", "-nostdin", "-hide_banner",
+             *toolcapture.ffmpeg_loglevel(), "-nostats", "-progress", progress,
+             "-y"]
             + settings.decode_accel.split()
             + ["-ss", start, "-i", source, "-an", "-sn",
                "-map", "0:v:0"] + args.split() + ["-f", "matroska", out])
-    return run_quiet_encode(argv)
+    return run_quiet_encode(argv, chunk_label)
 
 
 def reconcat_video_only(relative: str, total: int, settings) -> int:
@@ -705,10 +710,11 @@ def reconcat_video_only(relative: str, total: int, settings) -> int:
     # chunks are re-joined - so make an empty console row for this line.
     statusline.clear_status()
     log("Joining %d video chunks: %s" % (total, relative))
-    return _run(["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
-                 "-nostats", "-y", "-safe", "0", "-f", "concat",
-                 "-i", listing, "-map", "0:v", "-c", "copy", "-f", "matroska",
-                 os.path.join(directory, "video.mkv")]).returncode
+    return toolcapture.run(
+        ["ffmpeg", "-nostdin", "-hide_banner", *toolcapture.ffmpeg_loglevel(),
+         "-nostats", "-y", "-safe", "0", "-f", "concat",
+         "-i", listing, "-map", "0:v", "-c", "copy", "-f", "matroska",
+         os.path.join(directory, "video.mkv")], relative).returncode
 
 
 def encode_audio_all(relative: str, directory: str, settings) -> int:
@@ -735,7 +741,8 @@ def encode_audio_all(relative: str, directory: str, settings) -> int:
         out = os.path.join(directory, "audio%02d.mka" % index)
         process = multiprocessing.Process(
             target=_encode_audio_track,
-            args=(source, str(index), bitrate, track_args, out))
+            args=(source, str(index), bitrate, track_args, out,
+                  "%s (audio track %d)" % (relative, index + 1)))
         process.start()
         workers.append(process)
 
@@ -748,18 +755,18 @@ def encode_audio_all(relative: str, directory: str, settings) -> int:
 
 
 def _encode_audio_track(source: str, index: str, bitrate: str, audio_args: str,
-                        out: str) -> None:
+                        out: str, label: str = "") -> None:
     """ONE audio track to its own Matroska.
 
     Mapping a single audio stream carries its metadata, language and disposition
     across automatically, so the final mux keeps them.
     """
     safety.trap_worker_abort()
-    argv = (["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
-             "-nostats", "-y", "-i", source, "-map", "0:a:" + index, "-vn",
-             "-sn"] + audio_args.split()
+    argv = (["ffmpeg", "-nostdin", "-hide_banner",
+             *toolcapture.ffmpeg_loglevel(), "-nostats", "-y", "-i", source,
+             "-map", "0:a:" + index, "-vn", "-sn"] + audio_args.split()
             + ["-b:a", bitrate + "k", "-f", "matroska", out])
-    raise SystemExit(_run(argv).returncode)
+    raise SystemExit(toolcapture.run(argv, label).returncode)
 
 
 def restore_output_folder(path: str) -> bool:
@@ -817,8 +824,9 @@ def mux_final(relative: str, directory: str, settings, output: str) -> int:
     audio_args = rules.profile_args(rules.AUDIO_PROFILES,
                                     settings.audio_profile)
 
-    argv = ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
-            "-nostats", "-y", "-i", os.path.join(directory, "video.mkv"),
+    argv = ["ffmpeg", "-nostdin", "-hide_banner",
+            *toolcapture.ffmpeg_loglevel(), "-nostats", "-y",
+            "-i", os.path.join(directory, "video.mkv"),
             "-i", source]
     maps = ["-map", "0:v"]
     if "-c:a copy" in audio_args:
@@ -836,14 +844,15 @@ def mux_final(relative: str, directory: str, settings, output: str) -> int:
     log("Muxing: " + relative)
     argv += maps + ["-map_metadata", "1", "-map_chapters", "1", "-c", "copy",
                     "-f", "matroska", output]
-    status = _run(argv).returncode
+    muxed = toolcapture.run(argv, relative, report=False)
     # A mux that failed on a folder that has just gone is retried, once, on the
     # folder put back: stream-copying the parts together again is minutes at
     # most, against the hours of encoding they took to produce.
-    if status != 0 and restore_output_folder(output):
-        status = _run(argv).returncode
-    if status != 0:
-        return status
+    if not muxed.ok and restore_output_folder(output):
+        muxed = toolcapture.run(argv, relative, report=False)
+    if not muxed.ok:
+        toolcapture.report_failure(muxed)
+        return muxed.returncode
     # The output gets the source's modification time, like the sibling scripts do.
     try:
         stamp = os.stat(source)

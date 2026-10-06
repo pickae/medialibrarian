@@ -14,7 +14,7 @@ import pytest
 
 from medialib.cli import convert_video as rules
 from medialib.cli import convert_video_run as run_module
-from medialib.lib import dolbyvision
+from medialib.lib import dolbyvision, toolcapture
 
 pytestmark = pytest.mark.fs
 
@@ -63,20 +63,17 @@ def test_a_mux_that_failed_on_a_missing_folder_is_retried_once(tree, tmp_path,
     os.rmdir(os.path.dirname(output))
     attempts = []
 
-    class Result:
-        def __init__(self, code):
-            self.returncode = code
-
-    def fake_run(argv, capture=False):
+    def fake_run(argv, *_a, **_k):
         attempts.append(os.path.isdir(os.path.dirname(output)))
         # The first attempt fails the way ffmpeg does with no folder to open;
         # the second finds the folder back and writes.
         if len(attempts) == 1:
-            return Result(1)
+            return toolcapture.ToolRun(argv, 1, toolcapture.ToolOutput(),
+                                       failure="exited with status 1")
         Path(output).write_text("muxed")
-        return Result(0)
+        return toolcapture.ToolRun(argv, 0, toolcapture.ToolOutput())
 
-    monkeypatch.setattr(run_module, "_run", fake_run)
+    monkeypatch.setattr(run_module.toolcapture, "run", fake_run)
     monkeypatch.setattr(rules, "profile_args", lambda *a, **k: "-c:a copy")
     directory = tmp_path / "chunks"
     directory.mkdir()

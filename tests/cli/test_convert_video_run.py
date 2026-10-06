@@ -227,7 +227,7 @@ class TestTheArgumentsOfOneChunk:
                             lambda: None)
         seen = []
         monkeypatch.setattr(run_module, "run_quiet_encode",
-                            lambda argv: seen.append(argv) or 0)
+                            lambda argv, *a, **k: seen.append(argv) or 0)
         settings = rules.Settings(input_dir=str(tmp_path / "in"),
                                   chunk_root=str(tmp_path / "chunks"))
 
@@ -364,7 +364,7 @@ class TestTheFramesEachUpscaledChunkIsGiven:
         seen = []
         monkeypatch.setattr(
             run_module, "run_upscaled_encode",
-            lambda settings, source, args, progress, out, start, end:
+            lambda settings, source, args, progress, out, start, end, label:
             seen.append((start, end)) or 0)
 
         def run(bounds, fps):
@@ -409,7 +409,7 @@ class TestAnUpscaledChunkThatFailed:
         def run(status):
             out = tmp_path / "0003.mkv"
 
-            def pipe(argv):
+            def pipe(argv, *_a, **_k):
                 out.write_text("the frames before vspipe died")
                 return status
 

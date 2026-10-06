@@ -10,12 +10,18 @@ import sys
 
 import pytest
 
-from medialib.lib import runlog, toolcapture
+from medialib.lib import runlog, statusline, toolcapture
 from medialib.lib.toolcapture import ToolOutput
 
 
 def tool(script: str) -> list:
     return [sys.executable, "-c", script]
+
+
+@pytest.fixture(autouse=True)
+def no_status_row(monkeypatch):
+    """No row pinned, whatever an earlier case in this process left settled."""
+    monkeypatch.setattr(statusline.state, "row", "")
 
 
 @pytest.fixture
@@ -184,6 +190,13 @@ class TestRun:
         toolcapture.report_failure(result, stream=out)
         assert out.getvalue().startswith("==> ERROR: ")
 
+    def test_a_pinned_status_row_is_erased_before_the_block(self, logs_home,
+                                                            capfd,
+                                                            monkeypatch):
+        monkeypatch.setattr(statusline.state, "row", "1")
+        toolcapture.run(tool("raise SystemExit(1)"))
+        assert capfd.readouterr().err.startswith("\r\x1b[K==> ERROR: ")
+
     def test_the_replay_is_written_under_the_run_lock(self, logs_home,
                                                       tmp_path, monkeypatch):
         held = []
@@ -206,3 +219,40 @@ class TestRun:
         result = toolcapture.run(tool("raise SystemExit(1)"))
         assert result.log_path == ""
         assert "ERROR:" in capfd.readouterr().err
+
+
+@pytest.mark.stubbed
+class TestAFailureTheCallerSkips:
+    def test_it_opens_with_the_callers_warning(self, logs_home, capfd):
+        toolcapture.run(tool("print('no stream'); raise SystemExit(1)"), "x.mkv",
+                        tool="ffmpeg", warning="no audio track: x.mkv")
+        err = capfd.readouterr().err
+        assert err.startswith("==> WARNING: no audio track: x.mkv "
+                              "(ffmpeg exited with status 1)\n")
+        assert "    | no stream\n" in err
+        assert "ERROR" not in err
+
+    def test_quiet_does_not_print_it_but_still_keeps_it(self, logs_home, capfd,
+                                                       monkeypatch):
+        monkeypatch.setenv("LOG_VERBOSITY", "quiet")
+        result = toolcapture.run(tool("raise SystemExit(1)"),
+                                 warning="skipped")
+        assert capfd.readouterr().err == ""
+        assert os.path.isfile(result.log_path)
+
+
+@pytest.mark.pure
+class TestFinished:
+    """For a caller that ran the tool itself, feeding its own ToolOutput."""
+
+    def test_a_zero_exit_is_a_success(self):
+        assert toolcapture.finished(["ffmpeg"], 0, ToolOutput()).ok
+
+    def test_a_signal_is_named(self):
+        result = toolcapture.finished(["ffmpeg"], -9, ToolOutput())
+        assert result.failure == "was killed by signal 9"
+
+    def test_the_tool_is_named_as_the_caller_said(self):
+        result = toolcapture.finished(["bash", "-c", "x"], 1, ToolOutput(),
+                                      tool="vspipe | ffmpeg")
+        assert result.name == "vspipe | ffmpeg"
