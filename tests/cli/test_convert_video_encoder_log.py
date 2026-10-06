@@ -36,14 +36,25 @@ def _encoder(lines, status=0):
     return [sys.executable, "-c", script]
 
 
-def test_the_library_chatter_is_dropped(capfd):
-    run_module.run_quiet_encode(_encoder(CHATTER))
-    assert capfd.readouterr().err == ""
+@pytest.fixture(autouse=True)
+def plain_lines(monkeypatch):
+    monkeypatch.delenv("LOG_TIMESTAMPS", raising=False)
 
 
-def test_a_failure_is_not(capfd):
-    run_module.run_quiet_encode(_encoder(CHATTER + TROUBLE, status=1))
-    assert capfd.readouterr().err.splitlines() == TROUBLE
+def test_a_successful_encode_says_nothing(capfd):
+    run_module.run_quiet_encode(_encoder(CHATTER), "film.mkv")
+    assert capfd.readouterr() == ("", "")
+
+
+def test_a_failure_is_replayed_with_its_reason(capfd):
+    run_module.run_quiet_encode(_encoder(CHATTER + TROUBLE, status=1),
+                                "film.mkv (chunk 2 of 9)")
+    err = capfd.readouterr().err
+    assert err.startswith(
+        "==> ERROR: film.mkv (chunk 2 of 9): ffmpeg exited with status 1\n")
+    replayed = [line[len("    | "):] for line in err.splitlines()
+                if line.startswith("    | ")]
+    assert replayed == CHATTER + TROUBLE
 
 
 def test_the_exit_status_is_the_encoder_own(capfd):

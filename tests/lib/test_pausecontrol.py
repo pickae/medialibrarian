@@ -520,7 +520,7 @@ class TestTheGateBetweenJobs:
 
 class TestRunningOneJob:
     """``run_pausable`` is the only way a job gets into the registry, and the one
-    place a job's stderr can be filtered on its way to the console."""
+    place a job's output can be captured on its way to the console."""
 
     def _job(self, *lines, status=0):
         """A stand-in job that writes those lines to stderr and exits."""
@@ -537,15 +537,19 @@ class TestRunningOneJob:
         pc.run_pausable(self._job())
         assert list(pause_state["jobs"].iterdir()) == []
 
-    def test_without_a_filter_stderr_is_left_alone(self, pause_state, capfd):
+    def test_without_a_sink_the_output_is_left_alone(self, pause_state, capfd):
         pc.run_pausable(self._job("chatter", "trouble"))
         assert capfd.readouterr().err.splitlines() == ["chatter", "trouble"]
 
-    def test_a_filter_keeps_only_the_lines_it_accepts(self, pause_state, capfd):
-        pc.run_pausable(self._job("chatter", "trouble"),
-                        keep=lambda line: line != "chatter")
-        assert capfd.readouterr().err.splitlines() == ["trouble"]
+    def test_a_sink_takes_all_of_it_and_nothing_is_shown(self, pause_state,
+                                                         capfd):
+        from medialib.lib.toolcapture import ToolOutput
+        output = ToolOutput()
+        pc.run_pausable(self._job("chatter", "trouble"), output=output)
+        assert output.lines() == ["chatter", "trouble"]
+        assert capfd.readouterr() == ("", "")
 
-    def test_a_filtered_job_still_reports_its_status(self, pause_state):
+    def test_a_captured_job_still_reports_its_status(self, pause_state):
+        from medialib.lib.toolcapture import ToolOutput
         assert pc.run_pausable(self._job("chatter", status=4),
-                               keep=lambda line: False) == 4
+                               output=ToolOutput()) == 4

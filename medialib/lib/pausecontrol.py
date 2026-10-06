@@ -318,33 +318,27 @@ def unregister_pausable_job(pid: int) -> None:
     _remove(os.path.join(jobs, str(pid)))
 
 
-def run_pausable(command, keep=None) -> int:
+def run_pausable(command, output=None) -> int:
     """Run one job so that p and r can stop and continue it, and return exactly what
     it returned. The job is run in the background and waited for, because a pause
     has to know what to signal.
 
-    ``keep`` is an optional line predicate. Given one, the job's stderr is read here
-    and only the lines it accepts are passed on, with the filtering kept in this
-    process so that the filter is not one more thing a pause has to stop. A job
-    whose stderr is being read stays readable while it is stopped: it simply
-    writes nothing until it is continued.
+    ``output`` is an optional :class:`~medialib.lib.toolcapture.ToolOutput`.
+    Given one, everything the job prints - standard output and error alike - is
+    fed to it rather than shown, and it is the caller's to replay if the job
+    failed. A job whose output is being read stays readable while it is stopped:
+    it simply writes nothing until it is continued.
     """
     import subprocess as _sp
-    import sys
 
-    if keep is None:
+    if output is None:
         process = _sp.Popen(list(command))
     else:
-        process = _sp.Popen(list(command), stderr=_sp.PIPE)
+        process = _sp.Popen(list(command), stdout=_sp.PIPE, stderr=_sp.STDOUT)
     register_pausable_job(process.pid)
-    stderr = process.stderr
-    if keep is not None and stderr is not None:
-        for raw in stderr:
-            line = raw.decode("utf-8", "replace")
-            if keep(line.rstrip("\r\n")):
-                sys.stderr.write(line)
-                sys.stderr.flush()
-        stderr.close()
+    if output is not None:
+        output.drain(process.stdout)
+        output.close()
     rc = process.wait()
     unregister_pausable_job(process.pid)
     return rc

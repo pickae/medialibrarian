@@ -12,7 +12,6 @@ instead of one huge file landing last and pinning a worker to the end.
 
 import os
 import shutil
-import subprocess
 import sys
 import tempfile
 import time
@@ -26,6 +25,7 @@ from medialib.lib import (
     ramscratch,
     runlog,
     safety,
+    toolcapture,
     tooldeps,
     whisper,
     workerpool,
@@ -192,15 +192,15 @@ class Run:
         try:
             if _is_video(relative):
                 for_whisper = os.path.join(work, "track.wav")
-                extracted = subprocess.run(
-                    ["ffmpeg", "-nostdin", "-y", "-loglevel", "error",
-                     "-nostats", "-i", source, "-map", "0:a:0", "-ac", "1",
+                extracted = toolcapture.run(
+                    ["ffmpeg", "-nostdin", "-y", "-hide_banner",
+                     *toolcapture.ffmpeg_loglevel(), "-nostats",
+                     "-i", source, "-map", "0:a:0", "-ac", "1",
                      "-ar", "16000", "-c:a", "pcm_s16le", for_whisper],
-                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL)
-                if extracted.returncode != 0:
-                    log("WARNING: no first audio track to transcribe: "
-                        + relative)
+                    relative,
+                    warning="no first audio track to transcribe: " + relative,
+                    lock_file=self.progress_file + ".lock")
+                if not extracted.ok:
                     self.report_progress("skipped (no audio): " + relative)
                     return
                 # A short extraction transcribes cleanly and stops early, and a
@@ -223,7 +223,7 @@ class Run:
             name = os.path.basename(for_whisper)
             whisper_out = os.path.join(
                 work, os.path.splitext(name)[0] + "." + self.fmt)
-            done = subprocess.run(
+            done = toolcapture.run(
                 [*whisper.WHISPER_COMMAND, for_whisper,
                  "--output_dir", work,
                  "--model", self.model["modelMulti"],
@@ -232,15 +232,18 @@ class Run:
                  "--compute_type", self.model["computeType"],
                  "--threads", str(self.model["threads"]),
                  "--vad_filter", "True", *self.batch_args],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            # The status alone is not the evidence: whisper-ctranslate2 exits 0
-            # after a CUDA out-of-memory error, having written nothing.
-            if done.returncode == 0 and os.path.isfile(whisper_out):
+                relative, tool="whisper",
+                # The status alone is not the evidence: whisper-ctranslate2
+                # exits 0 after a CUDA out-of-memory error, having written
+                # nothing.
+                verify=lambda: ("" if os.path.isfile(whisper_out)
+                                else "wrote no transcript"),
+                lock_file=self.progress_file + ".lock")
+            if done.ok:
                 os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
                 shutil.move(whisper_out, out)
                 self.report_progress("transcribed: " + relative)
             else:
-                log("WARNING: transcription failed: " + relative)
                 self.record_failure()
                 self.report_progress("failed: " + relative)
         finally:

@@ -30,7 +30,7 @@ _FFMPEG = r"""
 printf '%s\n' "$*" >> "$FFMPEGLOG"
 inp=""; prev=""
 for a in "$@"; do [[ "$prev" == "-i" ]] && inp="$a"; prev="$a"; done
-case "$inp" in *noaudio*) exit 1 ;; esac
+case "$inp" in *noaudio*) echo "Stream map '0:a:0' matches no streams." >&2; exit 1 ;; esac
 out="${!#}"
 [[ "$out" == "-" ]] || : > "$out"
 exit 0
@@ -117,7 +117,12 @@ class TestOneRunOverAMixedTree:
     def test_a_video_with_no_audio_track_is_skipped_with_a_warning(self, run):
         _, _, outputs, log = run
         assert not (outputs / "b" / "noaudio.txt").exists()
-        assert "noaudio" in log, log
+        assert ("WARNING: no first audio track to transcribe: b/noaudio.mkv "
+                "(ffmpeg exited with status 1)") in log, log
+
+    def test_the_warning_carries_what_ffmpeg_said(self, run):
+        _, _, _, log = run
+        assert "    | Stream map '0:a:0' matches no streams." in log, log
 
     def test_only_the_video_is_extracted_and_from_its_first_track(self, run):
         transcribe, _, _, _ = run
@@ -242,6 +247,19 @@ class TestWhisperExitingCleanWithNoTranscript:
     def test_the_file_is_reported_failed(self, run):
         _, _, log = run
         assert "failed: talk/episode.opus" in log, log
+
+    def test_whisper_s_own_words_are_shown_with_the_error(self, run):
+        _, _, log = run
+        assert ("ERROR: talk/episode.opus: whisper wrote no transcript"
+                in log), log
+        assert "    | CUDA failed with error out of memory" in log, log
+
+    def test_and_kept_in_the_logs_for_after_the_run(self, run):
+        _, _, log = run
+        kept = [line.split(": ", 1)[1] for line in log.splitlines()
+                if line.startswith("    all ")]
+        assert len(kept) == 1, log
+        assert "CUDA failed with error out of memory" in open(kept[0]).read()
 
     def test_no_transcript_appears(self, run):
         outputs, _, _ = run
