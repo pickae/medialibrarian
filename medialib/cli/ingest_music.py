@@ -44,6 +44,7 @@ from medialib.lib import (
     runlog,
     safety,
     statusline,
+    toolcapture,
     tooldeps,
     workerpool,
 )
@@ -513,13 +514,16 @@ class Counters:
         with open(self.lock_file, "w") as lock, runlog.take_lock(lock):
             self._bump_position()
 
-    def note(self, line: str) -> None:
+    def note(self, line: str, said: str = "") -> None:
         """One UNCOUNTED line about an item that has already announced itself -
         the warning a failed encode has to give afterwards. Indented, because by
-        then the line it belongs to can be several items up the screen."""
+        then the line it belongs to can be several items up the screen.
+
+        ``said`` is what the tool that failed said, replayed under it in the
+        same lock (:func:`toolcapture.replay_text`)."""
         with open(self.lock_file, "w") as lock, runlog.take_lock(lock):
             statusline.clear_status()
-            sys.stderr.write("    %s\n" % line)
+            sys.stderr.write("    %s\n%s" % (line, said))
             sys.stderr.flush()
             statusline.repin_status(self.status_text)
 
@@ -716,7 +720,8 @@ class Run:
         scale = ("scale='min(%s,iw)':min'(%s,ih)'"
                  ":force_original_aspect_ratio=decrease,format=yuvj420p"
                  % (self.cover_max_edge, self.cover_max_edge))
-        argv = ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
+        argv = ["ffmpeg", "-nostdin", "-hide_banner",
+                *toolcapture.ffmpeg_loglevel(),
                 "-y", "-i", source, "-map", "0:a:0", "-map", "0:v:0?",
                 "-filter:v", scale, "-c:v", "mjpeg", "-c:a", "flac",
                 "-sample_fmt", "s16", "-ar", str(rate),
@@ -730,17 +735,21 @@ class Run:
         # ffmpeg's status says it wrote a file, not that it wrote the whole
         # track: a decode that gives up part way still closes a valid flac and
         # exits 0, so the length is what settles it.
-        if _run(argv) == 0 and durationcheck.verify(
-                relative, source, output, input_duration) \
-                and _copy_mtime(source, output):
+        encoded = _tool(argv, relative)
+        whole = encoded.ok and durationcheck.verify(
+            relative, source, output, input_duration)
+        if whole and _copy_mtime(source, output):
             self.counters.bump("encoded")
             # Only counted when the encode landed, so the figure stays the rate
             # of real work.
             self.counters.tally_duration(input_duration)
         else:
             self.counters.bump("failed")
+            if encoded.ok and not whole:
+                encoded.failure = "exited 0, but its output fell short"
             self.counters.note("WARNING: ffmpeg could not encode this track, "
-                               "no flac written: " + relative)
+                               "no flac written: " + relative,
+                               "" if whole else toolcapture.replay_text(encoded))
 
     def _already_ingested(self, relative: str) -> bool:
         """One whole NUL-terminated record in the file equal to this path."""
@@ -804,7 +813,8 @@ class Run:
         # Counted by what the image ENDED UP as, not by what was attempted: the
         # fall-back copy is a copy, and a tally that called it an AVIF would say
         # the library holds art it does not.
-        if _run(argv) == 0:
+        converted = _tool(argv, relative)
+        if converted.ok:
             # The encode is a pure function of the source and these settings, so
             # an AVIF the library already holds under a cleaned name is byte for
             # byte this one: keep theirs, drop ours. The encode itself cannot be
@@ -817,7 +827,8 @@ class Run:
         else:
             self.counters.bump("coverCopied")
             self.counters.note("WARNING: the AVIF encode failed, copying the "
-                               "image as it is: " + relative)
+                               "image as it is: " + relative,
+                               toolcapture.replay_text(converted))
             _copy(source, copy)
 
     # --- the serial phases ----------------------------------------------------
@@ -829,13 +840,15 @@ class Run:
             relative = _relative_to(path, self.ingest_dir)
             self.counters.progress("Remuxing to Matroska: " + relative)
             target = os.path.splitext(path)[0] + ".mkv"
-            if _run(["mkvmerge", "-q", "-o", target, path]) == 0 \
-                    and _remove_tree(path):
+            remuxed = _tool(["mkvmerge", "-o", target, path], relative)
+            if remuxed.ok and _remove_tree(path):
                 self.counters.bump("videosRemuxed")
             else:
                 self.counters.bump("videosFailed")
                 self.counters.note("WARNING: mkvmerge could not remux this "
-                                   "file, left as it is: " + relative)
+                                   "file, left as it is: " + relative,
+                                   "" if remuxed.ok
+                                   else toolcapture.replay_text(remuxed))
 
     def embed_cue_chapters(self, cues: list) -> None:
         """``embedCueChapters``: the chapters a cue sheet describes, written into
@@ -994,6 +1007,12 @@ def _run(argv: list) -> int:
     except OSError:
         return 127
     return done.returncode
+
+
+def _tool(argv: list, label: str):
+    """One tool doing an item's work, its output kept for the warning a
+    failure gives (:func:`toolcapture.replay_text`)."""
+    return toolcapture.run(argv, label, report=False)
 
 
 def _probe(argv: list) -> str:

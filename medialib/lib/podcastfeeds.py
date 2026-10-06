@@ -14,6 +14,7 @@ import sys
 import time
 from collections.abc import Sequence
 
+from medialib.lib import runlog, toolcapture
 from medialib.lib.enums import shell_lower
 from medialib.lib.formatting import fmt_bytes
 
@@ -540,7 +541,7 @@ def podcast_call(output_root: str, archive_file: str, subdir: str,
                  template: str, playlist_end: str, extra_args: str,
                  url: str, *, ytdlp_command: Sequence[str],
                  profile: str = "", date_after: str = "",
-                 date_before: str = "", verbose: str = "",
+                 date_before: str = "",
                  sponsorblock: str | None = None,
                  ffmpeg_location: str = "") -> list[str] | None:
     """The complete argv for one feed, or None when the profile is unknown.
@@ -583,10 +584,9 @@ def podcast_call(output_root: str, archive_file: str, subdir: str,
         call += ["--datebefore", date_before]
     call += ["--download-archive", archive_file,
              "--print", f"after_move:{PODCAST_EPISODE_MARKER}%(filepath)s"]
-    if verbose:
-        call += ["--no-quiet", "--verbose"]
-    else:
-        call += ["--no-warnings"]
+    # Its warnings are kept with the rest of what it says, and are shown only
+    # if the feed fails; -v has it say a great deal more for the same purpose.
+    call += toolcapture.pick([], ["--no-quiet", "--verbose"])
 
     # Whitespace-split on purpose: the column holds yt-dlp arguments, not a
     # shell command line.
@@ -733,6 +733,10 @@ def _emit_line(counter_file: str, status: str, podcast: str, episode: str,
     n = _read_counter(counter_file) + 1
     with open(counter_file, "w", encoding="utf-8") as handle:
         handle.write(f"{n}\n")
+    # Counted either way, so the closing figures stay true under -q; only the
+    # line for an episode that simply arrived is not printed there.
+    if status == "ok" and runlog.verbosity() < runlog.NORMAL:
+        return
     sys.stdout.write(f"[{n:4d}] {status:<4} {podcast} | {episode} | {size}\n")
 
 
@@ -756,10 +760,14 @@ def _take_dir_lock(directory: str) -> None:
 
 def report_episodes(stream: str, counter_file: str, manifest_file: str,
                     podcast: str, block_flag: str = "",
-                    provider: str = "the provider", verbose: str = "",
-                    have_flock: bool = False) -> int:
+                    provider: str = "the provider",
+                    have_flock: bool = False,
+                    output: toolcapture.ToolOutput | None = None) -> int:
     """Filter a feed's output into the run's own progress: one line per
     episode, numbered across the whole run.
+
+    Every line but an episode's is fed to ``output``, the feed's kept output,
+    which is replayed if the feed fails.
 
     ``stream`` is yt-dlp's output as read from its pipe: a line without a
     trailing newline at the very end is not read. Reads on a bot block stop
@@ -784,6 +792,8 @@ def report_episodes(stream: str, counter_file: str, manifest_file: str,
                             counter_file, "ok", podcast, episode,
                             fmt_bytes(size))
         elif line.startswith("ERROR:"):
+            if output is not None:
+                output.feed(line + "\n")
             # The literal prefix is stripped only when it is there; a line that
             # starts with the marker but not the space keeps it.
             detail = line[len("ERROR: "):] if line.startswith("ERROR: ") else line
@@ -812,9 +822,8 @@ def report_episodes(stream: str, counter_file: str, manifest_file: str,
             else:
                 _dir_locked(_emit_line, f"{counter_file}.lockdir",
                             counter_file, "FAIL", podcast, detail, "-")
-        else:
-            if verbose:
-                sys.stdout.write(f"{line}\n")
+        elif output is not None:
+            output.feed(line + "\n")
     return 0
 
 

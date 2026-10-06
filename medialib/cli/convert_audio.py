@@ -43,6 +43,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 
 from medialib import commands
@@ -64,6 +65,7 @@ from medialib.lib import (
     segments,
     statusline,
     thumbnails,
+    toolcapture,
     tooldeps,
     workerpool,
     xheaac,
@@ -810,6 +812,27 @@ class Run:
 
     def __init__(self, **settings) -> None:
         self.__dict__.update(settings)
+        # What the tool making each output said, by that output's path, until
+        # the output has been measured: an encode is judged by what came out
+        # rather than by its status, so this is where the reason waits.
+        self.tool_runs: dict = {}
+
+    def _run_tool(self, argv: list, out: str) -> None:
+        """One encode or join making ``out``, its output kept for
+        :meth:`_replay`."""
+        self.tool_runs[out] = toolcapture.run(argv, tool="ffmpeg", report=False)
+
+    def _replay(self, out: str, name: str) -> None:
+        """What the tool said while making ``out``, for an output its
+        measuring has just rejected. Said under the measuring's own error
+        line, so a tool that exited 0 is named as having done so."""
+        made = self.tool_runs.pop(out, None)
+        if made is None:
+            return
+        made.label = name
+        if made.ok:
+            made.failure = "exited 0, but its output fell short"
+        toolcapture.report_failure(made)
 
     def output_path(self, relative: str) -> str:
         """Where a track's converted file goes: the mirrored path under the
@@ -882,16 +905,17 @@ class Run:
             argv = ["ffmpeg", "-nostdin", "-y", "-ss", start, "-t", duration,
                     "-i", source, "-map", "0:a:0", "-map_metadata", "-1"]
             argv += self._opus_codec(source, self.mono, bitrate) + [out]
-            subprocess.run(argv, stderr=subprocess.DEVNULL)
+            self._run_tool(argv, out)
 
         # Measured here as well as on the finished file, because a chunk is the
         # one place the answer names WHERE a split file lost its time. The chunk
         # is removed with it, so the re-join fails outright rather than quietly
         # producing a book with a hole in the middle.
-        if not durationcheck.verify(
-                "%s [chunk %d/%s]" % (relative, int(index) + 1, total),
-                source, out, duration):
+        chunk_name = "%s [chunk %d/%s]" % (relative, int(index) + 1, total)
+        if not durationcheck.verify(chunk_name, source, out, duration):
+            self._replay(out, chunk_name)
             return
+        self.tool_runs.pop(out, None)
 
         # The join is a plain concatenation, and an MP4 carries ONE edit list -
         # so a chunk that still asks for its own priming to be discarded would
@@ -997,10 +1021,9 @@ class Run:
         One ffmpeg pass whatever the codec is - a stream copy does not care what
         it is copying, and both output containers take the stream it finds.
         """
-        subprocess.run(
+        self._run_tool(
             ["ffmpeg", "-nostdin", "-y", "-i", source, "-map", "0:a:0",
-             "-map_metadata", "0:s:0", "-c:a", "copy", out],
-            stderr=subprocess.DEVNULL)
+             "-map_metadata", "0:s:0", "-c:a", "copy", out], out)
 
     def _encode(self, source: str, out: str, mono: bool, bitrate: int,
                 channels: int = 0, duration: object = 0) -> bool:
@@ -1025,11 +1048,10 @@ class Run:
                      bitrate: int, channels: int = 0) -> None:
         """The one-pass ffmpeg encode: libopus, in ffmpeg, straight to the
         output."""
-        subprocess.run(
+        self._run_tool(
             ["ffmpeg", "-nostdin", "-y", "-i", source, "-map", "0:a:0",
              "-map_metadata", "0:s:0"]
-            + self._opus_codec(source, mono, bitrate, channels) + [out],
-            stderr=subprocess.DEVNULL)
+            + self._opus_codec(source, mono, bitrate, channels) + [out], out)
 
     def _opus_codec(self, source: str, mono: bool, bitrate: int,
                     channels: int = 0) -> list:
@@ -1139,35 +1161,56 @@ class Run:
         # impossible - one can go away between the check and the file - and an
         # unguarded OSError here would take the whole WORKER down and with it
         # every other file queued behind it.
+        decode_argv = xheaac.wav_argv(source, rate, downmix, start, take)
+        encode_argv = xheaac.exhale_argv(preset, out)
+        argv = decode_argv + ["|"] + encode_argv
+        # What each half says is kept apart while they run - two pipes read at
+        # once - and put together, decoder first, for the replay.
+        decoded, encoded = toolcapture.ToolOutput(), toolcapture.ToolOutput()
+
+        def record(status: int) -> bool:
+            said = toolcapture.ToolOutput()
+            for half, output in (("ffmpeg", decoded), (xheaac.EXHALE, encoded)):
+                output.close()
+                for line in output.lines():
+                    said.feed("%s: %s\n" % (half, line))
+            self.tool_runs[out] = toolcapture.finished(
+                argv, status, said, tool="ffmpeg | " + xheaac.EXHALE)
+            return True
+
         try:
-            decode = subprocess.Popen(xheaac.wav_argv(source, rate, downmix,
-                                                      start, take),
-                                      stdout=subprocess.PIPE,
-                                      stderr=subprocess.DEVNULL)
-        except OSError:
+            decode = subprocess.Popen(decode_argv, stdout=subprocess.PIPE,
+                                      stderr=subprocess.PIPE)
+        except OSError as error:
             # Still "attempted": a spawn that failed leaves no output, and an
             # output that is not there is caught by the measuring afterwards
             # along with every other way this can produce nothing.
-            return True
+            decoded.feed("%s\n" % error)
+            return record(127)
         # stdout=PIPE always hands a pipe back; this only says so to mypy.
         assert decode.stdout is not None
         try:
-            encode = subprocess.Popen(xheaac.exhale_argv(preset, out),
-                                      stdin=decode.stdout,
-                                      stdout=subprocess.DEVNULL,
-                                      stderr=subprocess.DEVNULL)
-        except OSError:
+            encode = subprocess.Popen(encode_argv, stdin=decode.stdout,
+                                      stdout=subprocess.PIPE,
+                                      stderr=subprocess.STDOUT)
+        except OSError as error:
             decode.stdout.close()
             decode.kill()
             decode.wait()
-            return True
+            encoded.feed("%s\n" % error)
+            return record(127)
         # Closed in THIS process once the encoder holds it, so the pipe really
         # has one reader: kept open here, a decoder that outlives its encoder
         # would never see EPIPE and the run would hang on a dead consumer.
         decode.stdout.close()
+        reader = threading.Thread(target=decoded.drain, args=(decode.stderr,),
+                                  daemon=True)
+        reader.start()
+        encoded.drain(encode.stdout)
         encode.wait()
         decode.wait()
-        return True
+        reader.join()
+        return record(decode.returncode or encode.returncode)
 
     def _ceiling_way_out(self) -> str:
         """What to do about a file too long for one xHE-AAC encode.
@@ -1206,7 +1249,9 @@ class Run:
             # a file that is all there.
             if not durationcheck.verify(relative, source, out,
                                         input_duration_raw):
+                self._replay(out, relative)
                 return
+            self.tool_runs.pop(out, None)
 
             # Neither encoder carries chapters through, so they are re-attached
             # from the source - with mutagen for Opus, and as a chapter track
@@ -1306,11 +1351,12 @@ class Run:
                     handle.write("file '%s'\n" % chunk)
             # The segments joined AND the source's stream tags carried over in
             # one pass, straight into the RAM staging file.
-            subprocess.run(
-                ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
+            self._run_tool(
+                ["ffmpeg", "-nostdin", "-hide_banner",
+                 *toolcapture.ffmpeg_loglevel(),
                  "-y", "-safe", "0", "-f", "concat", "-i", listing,
                  "-i", source, "-map", "0:a:0", "-map_metadata", "1:s:0",
-                 "-c:a", "copy", stage], stderr=subprocess.DEVNULL)
+                 "-c:a", "copy", stage], out)
 
             # The staged output carries all the audio now, so the chunk copies
             # are dead weight: the steps below read only the ORIGINAL source.
@@ -1346,7 +1392,9 @@ class Run:
 
         # Outside the try, so a join that never reached the move is measured too:
         # an output that is not there is as short as one that stopped early.
-        durationcheck.verify(relative, source, out)
+        if not durationcheck.verify(relative, source, out):
+            self._replay(out, relative)
+        self.tool_runs.pop(out, None)
 
 
 def _flatten_edit_list(path: str) -> None:
@@ -1368,18 +1416,28 @@ def _flatten_edit_list(path: str) -> None:
     # from that, and a name ending in anything else is refused outright.
     root, extension = os.path.splitext(path)
     staged = root + ".flat" + extension
-    try:
-        done = subprocess.run(
-            ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
-             "-ignore_editlist", "1", "-i", path, "-c", "copy",
-             "-use_editlist", "0", "-movflags", "+faststart", staged],
-            stdin=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        if done.returncode == 0 and os.path.getsize(staged) > 0:
+    done = toolcapture.run(
+        ["ffmpeg", "-nostdin", "-hide_banner", *toolcapture.ffmpeg_loglevel(),
+         "-y", "-ignore_editlist", "1", "-i", path, "-c", "copy",
+         "-use_editlist", "0", "-movflags", "+faststart", staged],
+        os.path.basename(path), tool="ffmpeg",
+        verify=lambda: "" if _non_empty(staged) else "wrote nothing",
+        warning="could not flatten the edit list of %s, so the join may "
+                "carry a seam there" % os.path.basename(path))
+    if done.ok:
+        try:
             os.replace(staged, path)
             return
-    except OSError:
-        pass
+        except OSError:
+            pass
     _remove(staged)
+
+
+def _non_empty(path: str) -> bool:
+    try:
+        return os.path.getsize(path) > 0
+    except OSError:
+        return False
 
 
 def _touch_from(source: str, target: str) -> None:
@@ -1605,15 +1663,16 @@ class Planner:
         """
         source = os.path.join(self.state.input_dir, track)
         copy = segments.plan_file_for(self.state.plan_root, track) + ".seek.mka"
-        try:
-            done = subprocess.run(
-                ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
-                 "-y", "-i", source, "-map", "0:a:0", "-c:a", "copy", copy],
-                stdin=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            if done.returncode == 0 and os.path.getsize(copy) > 0:
-                return
-        except OSError:
-            pass
+        done = toolcapture.run(
+            ["ffmpeg", "-nostdin", "-hide_banner",
+             *toolcapture.ffmpeg_loglevel(),
+             "-y", "-i", source, "-map", "0:a:0", "-c:a", "copy", copy],
+            report=False)
+        if done.ok and _non_empty(copy):
+            return
+        runlog.detail("    No seekable copy of %s (%s), so its silence is "
+                      "found in the source itself"
+                      % (track, done.failure or "it came out empty"))
         _remove(copy)
 
     def write_chunk_jobs_for(self, track: str) -> None:

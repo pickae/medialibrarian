@@ -35,8 +35,10 @@ Options:
                     only; a table asking for less keeps its own number.
     -p, --preview   Preview: print the yt-dlp call each feed would get and
                     download nothing.
-    -v, --verbose   Verbose: print yt-dlp's own output as well. Without it the
-                    run prints exactly one line per episode and nothing else.
+    -v, --verbose   Also say why each item was handled the way it was, and on a
+                    failure print the tool's whole output rather than its last
+                    lines.
+    -q, --quiet     Print errors only - no progress and no warnings.
     -a, --include-inactive
                     Also fetch the feeds whose active column is 0.
     -c, --clean-up  Tidy up after the run: the sidecars each finished episode

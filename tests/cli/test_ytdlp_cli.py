@@ -27,8 +27,9 @@ pytestmark = pytest.mark.stubbed
 
 # One episode per call in the folder the output template names, sized so the byte
 # total is assertable; the finished path on stdout behind the marker, the way
-# yt-dlp answers `--print`; noise that quiet mode has to swallow; and a failure
-# for one URL on purpose, so "one feed's failure is not the run's" can be checked.
+# yt-dlp answers `--print`; noise a feed that succeeds keeps to itself; and a
+# failure for one URL on purpose, so "one feed's failure is not the run's" can be
+# checked, with what it says about why.
 _STUB = r"""
 n=$(( $(ls "$CALL_LOG" | wc -l) + 1 ))
 printf '%s\n' "$@" > "$CALL_LOG/call$n"
@@ -39,14 +40,20 @@ for a in "$@"; do
     prev="$a"
 done
 marker="${marker%\%(filepath)s}"
-for a in "$@"; do [[ "$a" == *"/fails" ]] && exit 1; done
+for a in "$@"; do
+    if [[ "$a" == *"/fails" ]]; then
+        printf '[debug] Request Headers: every one of them\n'
+        printf 'WARNING: the feed moved somewhere else\n'
+        exit 1
+    fi
+done
 if [[ -n "$marker" && -n "$outTemplate" ]]; then
     episode="${outTemplate%/*}/episode$n.opus"
     mkdir -p "${episode%/*}"
     printf '%*s' "$((100 * n))" '' > "$episode"
     printf '%s%s\n' "$marker" "$episode"
 fi
-printf '[download] noise that only -v should show\n'
+printf '[download] noise nobody needs to see\n'
 exit 0
 """
 
@@ -354,7 +361,12 @@ class TestARunOverATable:
 
     def test_the_downloaders_own_output_is_silenced(self, run):
         _, log = run
-        assert "noise that only -v should show" not in log
+        assert "noise nobody needs to see" not in log
+
+    def test_a_failed_feed_says_why_in_the_downloaders_words(self, run):
+        _, log = run
+        assert "ERROR: Misc/broken: yt-dlp exited with status 1" in log, log
+        assert "    | WARNING: the feed moved somewhere else" in log, log
 
     def test_the_manifests_are_not_left_in_the_library(self, run):
         """They are the run's own bookkeeping, not something to leave beside the
@@ -362,10 +374,28 @@ class TestARunOverATable:
         ytdlp, _ = run
         assert list(ytdlp.library.rglob("podcastManifest*")) == []
 
-    def test_verbose_puts_the_downloaders_output_back(self, ytdlp):
+    def test_verbose_asks_the_downloader_for_more(self, ytdlp):
+        ytdlp.ytdlp("-v", "-t", ytdlp.table, "-m", "latent",
+                    ytdlp.library, ytdlp.library / "archive.log")
+        call = (ytdlp.calls / "call1").read_text().splitlines()
+        assert "--verbose" in call and "--no-quiet" in call
+
+    def test_but_a_feed_that_succeeds_still_keeps_it_to_itself(self, ytdlp):
         log = ytdlp.ytdlp("-v", "-t", ytdlp.table, "-m", "latent",
                           ytdlp.library, ytdlp.library / "archive.log")
-        assert "noise that only -v should show" in log
+        assert "noise nobody needs to see" not in log
+
+    def test_a_failed_feeds_replay_leaves_out_the_debug_lines(self, ytdlp):
+        log = ytdlp.ytdlp("-v", "-t", ytdlp.table, ytdlp.library,
+                          ytdlp.library / "archive.log", expect=1)
+        assert "    | WARNING: the feed moved somewhere else" in log, log
+        assert "Request Headers" not in log, log
+
+    def test_quiet_prints_the_failure_but_not_the_episodes(self, ytdlp):
+        log = ytdlp.ytdlp("-q", "-t", ytdlp.table, ytdlp.library,
+                          ytdlp.library / "archive.log", expect=1)
+        assert "ERROR: Misc/broken: yt-dlp exited with status 1" in log, log
+        assert " ok " not in log, log
 
 
 class TestTheArgvAFeedIsCalledWith:

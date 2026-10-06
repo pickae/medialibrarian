@@ -256,3 +256,45 @@ class TestFinished:
         result = toolcapture.finished(["bash", "-c", "x"], 1, ToolOutput(),
                                       tool="vspipe | ffmpeg")
         assert result.name == "vspipe | ffmpeg"
+
+
+@pytest.mark.stubbed
+class TestThinningTheReplay:
+    def test_lines_that_never_say_why_are_left_out_of_the_print(self,
+                                                                 logs_home,
+                                                                 capfd):
+        script = ("print('[debug] header'); print('the reason'); "
+                  "print('[debug] more'); raise SystemExit(1)")
+        toolcapture.run(
+            tool(script), shown_if=lambda line: not line.startswith("[debug]"))
+        err = capfd.readouterr().err
+        assert "    | the reason\n" in err
+        assert "[debug]" not in err
+
+    def test_but_the_kept_log_has_every_line(self, logs_home, capfd):
+        script = "print('[debug] header'); raise SystemExit(1)"
+        result = toolcapture.run(
+            tool(script), shown_if=lambda line: not line.startswith("[debug]"))
+        with open(result.log_path) as kept:
+            assert "[debug] header" in kept.read()
+        assert "all 1 line(s) it printed" not in capfd.readouterr().err
+
+
+
+@pytest.mark.stubbed
+class TestReplayTextForACallersOwnLine:
+    def test_it_is_the_lines_and_the_log_without_an_opening_line(self,
+                                                                 logs_home):
+        result = toolcapture.run(tool("print('why'); raise SystemExit(1)"),
+                                 report=False)
+        text = toolcapture.replay_text(result)
+        assert text.startswith("    | why\n")
+        assert "ERROR" not in text and "WARNING" not in text
+        assert os.path.isfile(result.log_path)
+
+    def test_quiet_leaves_it_empty_but_keeps_the_log(self, logs_home,
+                                                     monkeypatch):
+        monkeypatch.setenv("LOG_VERBOSITY", "quiet")
+        result = toolcapture.run(tool("raise SystemExit(1)"), report=False)
+        assert toolcapture.replay_text(result) == ""
+        assert os.path.isfile(result.log_path)

@@ -39,7 +39,7 @@ from medialib import commands
 from medialib.lib import runlog, statusline
 
 __all__ = ["ToolOutput", "ToolRun", "ffmpeg_loglevel", "finished", "pick",
-           "redact", "report_failure", "run"]
+           "redact", "replay_text", "report_failure", "run"]
 
 # What is kept of one run: its first lines, then the last ones.
 HEAD_LINES = 200
@@ -179,12 +179,6 @@ class ToolOutput:
         gap = [self._gap(self._dropped)] if self._dropped else []
         return self._head + gap + list(self._tail)
 
-    def first(self, count: int) -> list[str]:
-        return self.lines()[:count]
-
-    def last(self, count: int) -> list[str]:
-        return self.lines()[-count:] if count > 0 else []
-
     def text(self) -> str:
         return "".join(line + "\n" for line in self.lines())
 
@@ -242,6 +236,7 @@ def finished(argv, returncode: int, output: ToolOutput, label: str = "",
 def run(argv, label: str = "", *,
         tool: str = "",
         warning: str = "",
+        shown_if: Callable[[str], bool] | None = None,
         verify: Callable[[], str] | None = None,
         stdout: str = "merge",
         cwd: str | None = None,
@@ -296,7 +291,8 @@ def run(argv, label: str = "", *,
         result = finished(argv, process.wait(), output, label, tool, verify,
                           captured)
     if result.failure and report:
-        report_failure(result, lock_file=lock_file, warning=warning)
+        report_failure(result, lock_file=lock_file, warning=warning,
+                       shown_if=shown_if)
     return result
 
 
@@ -319,7 +315,8 @@ def _keep(result: ToolRun) -> str:
     return path
 
 
-def _block(result: ToolRun, level: int, warning: str = "") -> str:
+def _block(result: ToolRun, level: int, warning: str = "",
+           shown_if: Callable[[str], bool] | None = None) -> str:
     """The replay, as one piece of text."""
     if warning and level < runlog.NORMAL:
         return ""
@@ -331,17 +328,29 @@ def _block(result: ToolRun, level: int, warning: str = "") -> str:
         subject = ("%s: %s" % (result.label, result.name) if result.label
                    else result.name)
         runlog.error(subject, result.failure, stream=out)
+    out.write(_body(result, level, shown_if))
+    return out.getvalue()
+
+
+def _body(result: ToolRun, level: int,
+          shown_if: Callable[[str], bool] | None = None) -> str:
+    """The replay's lines under its opening one: the tool's own, and where the
+    rest of them were kept."""
+    out = io.StringIO()
     output = result.output
+    lines = output.lines()
+    if shown_if is not None:
+        lines = [line for line in lines if shown_if(line)]
+    tail_count = SHOWN_TAIL[level]
     if level >= runlog.VERBOSE:
         out.write("    command: %s\n" % redact(shlex.join(result.argv)))
-        head = output.first(SHOWN_HEAD_VERBOSE)
-        tail = output.last(SHOWN_TAIL[level])
-        if len(output.lines()) > len(head) + len(tail):
-            shown = head + ["[...]"] + tail
+        if len(lines) > SHOWN_HEAD_VERBOSE + tail_count:
+            shown = (lines[:SHOWN_HEAD_VERBOSE] + ["[...]"]
+                     + lines[-tail_count:])
         else:
-            shown = output.lines()
+            shown = lines
     else:
-        shown = output.last(SHOWN_TAIL[level])
+        shown = lines[-tail_count:] if tail_count else []
     for line in shown:
         out.write(redact("    | %s\n" % line))
     if result.log_path:
@@ -351,13 +360,29 @@ def _block(result: ToolRun, level: int, warning: str = "") -> str:
     return out.getvalue()
 
 
-def report_failure(result: ToolRun, stream=None, lock_file: str = "",
-                   warning: str = "") -> None:
-    """Replay a failed run: keep its output in `logs/`, then print the block -
-    opened by ``warning`` when the caller treats the failure as a skip."""
+def replay_text(result: ToolRun,
+                shown_if: Callable[[str], bool] | None = None) -> str:
+    """A failed run's replay without its opening line, for a caller that
+    prints one of its own - its output kept in `logs/` all the same. Empty
+    under -q, where a caller's warning is not printed either."""
     if not result.log_path:
         result.log_path = _keep(result)
-    text = _block(result, runlog.verbosity(), warning)
+    level = runlog.verbosity()
+    return _body(result, level, shown_if) if level >= runlog.NORMAL else ""
+
+
+def report_failure(result: ToolRun, stream=None, lock_file: str = "",
+                   warning: str = "",
+                   shown_if: Callable[[str], bool] | None = None) -> None:
+    """Replay a failed run: keep its output in `logs/`, then print the block -
+    opened by ``warning`` when the caller treats the failure as a skip.
+
+    ``shown_if`` thins what is printed, for a tool with lines that never say
+    why it failed; the log in `logs/` keeps every line regardless.
+    """
+    if not result.log_path:
+        result.log_path = _keep(result)
+    text = _block(result, runlog.verbosity(), warning, shown_if)
     if not text:
         return
     out = sys.stderr if stream is None else stream

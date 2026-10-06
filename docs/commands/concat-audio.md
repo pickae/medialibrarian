@@ -25,6 +25,15 @@ With no options, a run:
 The naming of the files and subfolders should reflect the order they are to be
 joined in.
 
+## What a run prints
+
+One progress line per subfolder. ffmpeg's own output is kept rather than
+shown, and replayed only for a book whose join failed or came out short — its
+last lines under the error, all of it kept in `logs/tool-failures/`.
+
+- `-v` adds each subfolder's steps and replays more of a failed join
+- `-q` prints only failures
+
 ## Several books at once
 
 Each book is built whole in RAM — joined, chaptered and given its cover — and

@@ -39,7 +39,6 @@ import shutil
 import subprocess
 import sys
 import time
-from typing import Any
 
 from medialib import commands
 from medialib.cli.convert_images import (
@@ -60,6 +59,7 @@ from medialib.lib import (
     ramscratch,
     runlog,
     safety,
+    toolcapture,
     tooldeps,
     workerpool,
 )
@@ -287,20 +287,20 @@ COMIC_INPUT_EXTENSIONS = tuple(enums.COMIC_EXTENSIONS) + tuple(
 _COMIC_CONTAINERS = {"cbz": "zip", "cbr": "rar", "cb7": "7z"}
 
 
-def extract(archive: str, destination: str, max_res: int) -> None:
+def extract(archive: str, destination: str, max_res: int):
     """One book's pages into <destination>, whatever container they arrived in.
 
-    Every extractor is silenced, stdout included: each is chatty in its own way,
-    several books unpack at once so the lines arrive interleaved and unattributed,
-    and nothing downstream reads them. What matters is whether pages appeared,
-    which is decided by looking at the folder afterwards - so an extractor that
-    fails silently lands the book in the "no pages" case, exactly where a corrupt
-    archive lands.
+    Every extractor's output is kept rather than shown, stdout included: each
+    is chatty in its own way, and several books unpack at once so the lines
+    would arrive interleaved and unattributed. What matters is whether pages
+    appeared, which is decided by looking at the folder afterwards - so an
+    extractor that fails lands the book in the "no pages" case, exactly where a
+    corrupt archive lands, and the unpacker's run is handed back for that case
+    to replay. None when no unpacker ran.
     """
     os.makedirs(destination, exist_ok=True)
-    quiet: dict[str, Any] = {"stdout": subprocess.DEVNULL,
-                             "stderr": subprocess.DEVNULL}
     lowered = archive.lower()
+    unpacked = None
 
     # A comic container is a zip, a rar or a 7z under another name, and is held
     # to the same rule: a book asking to write outside its own folder is read
@@ -311,13 +311,14 @@ def extract(archive: str, destination: str, max_res: int) -> None:
         if refused:
             log('  WARNING: not unpacking "%s": %s (%s)'
                 % (os.path.basename(archive), refused[0][1], refused[0][0]))
-            return
+            return None
 
     if lowered.endswith(".cbr"):
-        subprocess.run(["unrar", "e", "--", archive, destination], **quiet)
+        unpacked = toolcapture.run(["unrar", "e", "--", archive, destination],
+                                   report=False)
     elif lowered.endswith(".cbz"):
-        subprocess.run(["unzip", "-o", "-d", destination, "--", archive],
-                       **quiet)
+        unpacked = toolcapture.run(
+            ["unzip", "-o", "-d", destination, "--", archive], report=False)
     elif lowered.endswith(".cb7"):
         # 7-Zip's binary has three names in the wild - 7z from p7zip, 7zz in the
         # official build, 7za where only the reduced package is installed. None
@@ -330,8 +331,9 @@ def extract(archive: str, destination: str, max_res: int) -> None:
                 break
         # x, not e: the archive's own folders are kept and flattened below,
         # together with the name collisions that flattening can produce.
-        subprocess.run([seven, "x", "-y", "-o" + destination, "--", archive],
-                       **quiet)
+        unpacked = toolcapture.run(
+            [seven, "x", "-y", "-o" + destination, "--", archive],
+            report=False)
     elif lowered.endswith(".pdf"):
         comicpdf.render_comic_pdf_pages(archive, destination, str(max_res))
 
@@ -347,6 +349,7 @@ def extract(archive: str, destination: str, max_res: int) -> None:
             log('  "%s": dropped %d page(s), the same picture(s) also there in '
                 "another format: %s" % (os.path.basename(archive),
                                         len(dropped), ", ".join(dropped)))
+    return unpacked
 
 
 def _flatten(destination: str) -> None:
@@ -527,9 +530,10 @@ def package_book(book_dir: str, out_path: str, out_rel: str,
     stage = tempfile.mkdtemp(prefix=".pack.", dir=stage_root)
     staged = os.path.join(stage, book_name + ".cbz")
     try:
-        done = subprocess.run(["zip", "-0", "-q", "-X", "-D", staged] + pages,
-                              cwd=book_dir)
-        if done.returncode != 0:
+        done = toolcapture.run(["zip", "-0", "-q", "-X", "-D", staged] + pages,
+                               cwd=book_dir,
+                               warning="could not pack %s" % book_name)
+        if not done.ok:
             return False
 
         # Which archive this came from, in the zip's own comment. The name is
@@ -618,10 +622,14 @@ class Run:
         self.counters.progress("Converting: %s"
                                % os.path.join(self.in_path, partial_path))
 
-        extract(os.path.join(self.in_path, partial_path), book_temp,
-                self.max_res)
+        unpacked = extract(os.path.join(self.in_path, partial_path), book_temp,
+                           self.max_res)
 
         if not os.path.isdir(book_temp):
+            if unpacked is not None and not unpacked.ok:
+                toolcapture.report_failure(
+                    unpacked, warning="could not unpack %s"
+                    % os.path.basename(partial_path))
             self.counters.note("Skip (no pages): %s"
                                % os.path.basename(partial_path))
             return None
@@ -723,12 +731,10 @@ class Run:
     def _convert_pages(self, book_temp: str, book_avif: str,
                        file_name: str) -> None:
         """This book's pages, converted by convert-images as its own process -
-        with its output captured, because a few dozen books' worth of its progress
-        would bury this run's own. Shown when the conversion actually fails."""
-        log_path = os.path.join(self.counters.dir,
-                                "convert.%d.log" % os.getpid())
-        with open(log_path, "w") as handle:
-            done = commands.run_command(
+        with its output kept rather than shown, because a few dozen books' worth
+        of its progress would bury this run's own. Replayed when the conversion
+        actually fails."""
+        argv, env = commands.command_line(
                 "convert-images",
                 # -a: every page or none. That command's own default leaves a
                 # starved image alone, which is the right answer for a folder of
@@ -738,19 +744,9 @@ class Run:
                 ["-c", "-a", "-u", self.chroma, "-j", self.pages_per_book,
                  "-m", self.max_res, "-q", self.quality, "-s", self.speed_preset,
                  "-f", self.fuzz, book_temp, book_avif],
-                script_dir=self.script_dir,
-                stdout=handle, stderr=subprocess.STDOUT)
-        if done.returncode != 0:
-            sys.stderr.write("WARNING: conversion failed for %s\n" % file_name)
-            try:
-                with open(log_path) as handle:
-                    sys.stderr.write(handle.read())
-            except OSError:
-                pass
-        try:
-            os.remove(log_path)
-        except OSError:
-            pass
+                script_dir=self.script_dir)
+        toolcapture.run(argv, file_name, tool="convert-images", env=env,
+                        warning="conversion failed for %s" % file_name)
 
     def vet_pdf(self, relative: str) -> None:
         """Whether one PDF is a comic, with the numbers the verdict was reached

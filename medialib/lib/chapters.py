@@ -24,10 +24,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import time
 from collections.abc import Callable, Sequence
 
-from medialib.lib import mutagentags
+from medialib.lib import mutagentags, runlog, toolcapture
 from medialib.lib.census import three_decimals
 from medialib.lib.cleannamescollectively import clean_names_collectively
 from medialib.lib.cleannamesindividually import clean_names_individually
@@ -40,7 +39,7 @@ __all__ = [
     "attach_mp4_chapters",
 ]
 
-Runner = Callable[..., "subprocess.CompletedProcess"]
+Runner = Callable[..., "toolcapture.ToolRun"]
 
 # The units the chapter rows are built from.
 _MS_PER_SECOND = 1000
@@ -69,23 +68,20 @@ _SOURCE = os.path.abspath(__file__)
 _INT_PREFIX = re.compile(r"[+-]?\d+")
 
 
-def _run(argv: Sequence[str], quiet: bool = False) -> subprocess.CompletedProcess:
-    """The real runner: the tool on PATH.
+def _run(argv: Sequence[str], may_fail: bool = False) -> toolcapture.ToolRun:
+    """The real runner: the tool on PATH, its output kept rather than shown.
 
-    ``quiet`` sends both streams to /dev/null; the rest inherits them.
+    A failure is a warning with the tool's own words under it: chapters are
+    metadata, and a step that did not complete leaves the book as it was.
+    ``may_fail`` is for a call whose failure is an answer rather than a
+    problem, and says nothing.
     """
-    if quiet:
-        return subprocess.run(list(argv), stdout=subprocess.DEVNULL,
-                              stderr=subprocess.DEVNULL)
-    return subprocess.run(list(argv))
+    return toolcapture.run(
+        list(argv), report=not may_fail,
+        warning="chapters or title not written, so the book keeps what it had")
 
 
-def _log(message: str) -> None:
-    """The one line the module prints, to stderr."""
-    if os.environ.get("LOG_TIMESTAMPS"):
-        sys.stderr.write(f"[{time.strftime('%H:%M:%S')}] {message}\n")
-    else:
-        sys.stderr.write(f"==> {message}\n")
+_log = runlog.log
 
 
 def _remove_quiet(path: str) -> None:
@@ -382,8 +378,9 @@ def _embed_mp4_chapters(m4b_file: str, chapter_lines: Sequence[str],
     try:
         with open(metadata_file, "w", encoding="utf-8") as handle:
             handle.write(document)
-        result = run(["ffmpeg", "-nostdin", "-hide_banner", "-loglevel",
-                      "error", "-y", "-i", m4b_file, "-i", metadata_file,
+        result = run(["ffmpeg", "-nostdin", "-hide_banner",
+                      *toolcapture.ffmpeg_loglevel(), "-y", "-i", m4b_file,
+                      "-i", metadata_file,
                       "-map_metadata", "1", "-map", "0:a", "-codec", "copy",
                       chaptered])
         if getattr(result, "returncode", 0) != 0 \
@@ -471,7 +468,8 @@ def embed_chapters(chapter_file: str, chapter_lines: Sequence[str],
 
     # Re-extract the audio from the mka, now with chapters.
     if audio_file:
-        run(["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+        run(["ffmpeg", "-nostdin", "-hide_banner",
+             *toolcapture.ffmpeg_loglevel(), "-y",
              "-i", mka_file, "-codec", "copy", audio_file])
     return _remove_status(mka_file)
 
@@ -608,9 +606,10 @@ def attach_mp4_chapters(src: str, target: str, tmp_dir: str,
     staged = os.path.join(tmp_dir, "chapters" + os.path.splitext(target)[1])
     _remove_quiet(staged)
     try:
-        run(["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+        run(["ffmpeg", "-nostdin", "-hide_banner",
+             *toolcapture.ffmpeg_loglevel(), "-y",
              "-i", target, "-i", src, "-map", "0:a:0", "-map_chapters", "1",
-             "-c", "copy", staged], quiet=True)
+             "-c", "copy", staged])
     except OSError:
         _remove_quiet(staged)
         return 1

@@ -14,12 +14,9 @@ from __future__ import annotations
 import fnmatch
 import os
 import shutil
-import subprocess
-import sys
-import time
 from collections.abc import Callable, Iterator, Sequence
 
-from medialib.lib import imagemagick, mutagentags, treewalk
+from medialib.lib import imagemagick, mutagentags, runlog, toolcapture, treewalk
 from medialib.lib.enums import shell_lower
 
 __all__ = [
@@ -48,26 +45,23 @@ _LADDER: tuple[tuple[tuple[str, bool], ...], ...] = (
     (("*cover*", False), ("*front*", False)),
 )
 
-Runner = Callable[..., "subprocess.CompletedProcess"]
+Runner = Callable[..., "toolcapture.ToolRun"]
 
 
-def _run(argv: Sequence[str], quiet: bool = False) -> subprocess.CompletedProcess:
-    """The real runner: the tool on PATH.
+def _run(argv: Sequence[str], may_fail: bool = False) -> toolcapture.ToolRun:
+    """The real runner: the tool on PATH, its output kept rather than shown.
 
-    A quiet call sends its streams to /dev/null; the rest inherits them.
+    A failure is a warning with the tool's own words under it: a cover is
+    metadata, and a step that did not complete leaves the book as it was.
+    ``may_fail`` is for a call whose failure is an answer rather than a
+    problem - asking a file for a cover it does not have - and says nothing.
     """
-    if quiet:
-        return subprocess.run(list(argv), stdout=subprocess.DEVNULL,
-                              stderr=subprocess.DEVNULL)
-    return subprocess.run(list(argv))
+    return toolcapture.run(
+        list(argv), report=not may_fail,
+        warning="cover not written, so the book keeps what it had")
 
 
-def _log(message: str) -> None:
-    """log: the one line the module prints, to stderr."""
-    if os.environ.get("LOG_TIMESTAMPS"):
-        sys.stderr.write(f"[{time.strftime('%H:%M:%S')}] {message}\n")
-    else:
-        sys.stderr.write(f"==> {message}\n")
+_log = runlog.log
 
 
 def _iname(name: str, pattern: str) -> bool:
@@ -203,25 +197,28 @@ def extract_thumbnail(input_path: str, file_name: str, dpi: int,
             run(["mkvmerge", "--quiet", "-o", temp_file,
                  "--no-chapters", source_opus])
             run(["mkvextract", "--quiet", temp_file, "attachments",
-                 f"1:{file_name}.jpg"])
+                 f"1:{file_name}.jpg"], may_fail=True)
             _remove_quiet(temp_file)
         else:
             # mkvtoolnix absent: an opus cover stored as a Vorbis-comment PICTURE
             # block is a stream ffmpeg can copy out, the same way the mp3 and
             # flac branches do it.
-            run(["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
+            run(["ffmpeg", "-nostdin", "-hide_banner",
+                 *toolcapture.ffmpeg_loglevel(),
                  "-i", source_opus, "-an", "-vcodec", "copy",
-                 f"{file_name}.jpg"])
+                 f"{file_name}.jpg"], may_fail=True)
         return 0
     if source_mp3 is not None:
-        run(["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
+        run(["ffmpeg", "-nostdin", "-hide_banner",
+             *toolcapture.ffmpeg_loglevel(),
              "-i", source_mp3, "-an", "-vcodec", "copy",
-             f"{file_name}.jpg"])
+             f"{file_name}.jpg"], may_fail=True)
         return 0
     if source_flac is not None:
-        run(["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
+        run(["ffmpeg", "-nostdin", "-hide_banner",
+             *toolcapture.ffmpeg_loglevel(),
              "-i", source_flac, "-an", "-vcodec", "copy",
-             f"{file_name}.jpg"])
+             f"{file_name}.jpg"], may_fail=True)
         return 0
     return 0
 
@@ -273,14 +270,16 @@ def embed_thumbnail(input_path: str, file_name: str, image_size_limit: int,
             return 0
         if os.path.isfile(mp3_file):
             mp3_temp_file = f"{ram_base}.temp.mp3"
-            run(["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
+            run(["ffmpeg", "-nostdin", "-hide_banner",
+                 *toolcapture.ffmpeg_loglevel(),
                  "-i", mp3_file, "-i", output_thumb,
                  "-c", "copy", "-map", "0", "-map", "1", mp3_temp_file])
             _remove_quiet(mp3_file)
             _remove_quiet(output_thumb)
             return _move_over(mp3_temp_file, mp3_file)
         if os.path.isfile(m4b_file):
-            run(["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
+            run(["ffmpeg", "-nostdin", "-hide_banner",
+                 *toolcapture.ffmpeg_loglevel(),
                  "-i", m4b_file, "-i", output_thumb,
                  "-c", "copy", "-disposition:v:0", "attached_pic",
                  m4b_temp_file])
@@ -322,7 +321,7 @@ def apply_cover(track: str, target: str | None, cover_threshold: int,
         run(imagemagick.convert_argv(
             [temp_cover,
              "-quality", str(cover_quality),
-             "-resize", f"{cover_resolution}>", cover]), quiet=True)
+             "-resize", f"{cover_resolution}>", cover]))
     else:
         shutil.copyfile(temp_cover, cover)
 
@@ -344,11 +343,11 @@ def extract_source_cover(src: str, tmp_dir: str, run: Runner = _run) -> int:
     lowered = shell_lower(src)
     if lowered.endswith(".mka") or lowered.endswith(".mkv"):
         rc = run(["mkvextract", src, "attachments", f"1:{temp_cover}"],
-                 quiet=True).returncode
+                 may_fail=True).returncode
         if rc != 0:
             run(["ffmpeg", "-nostdin", "-i", src, "-an", "-c:v", "copy",
-                 temp_cover], quiet=True)
+                 temp_cover], may_fail=True)
     else:
         run(["ffmpeg", "-nostdin", "-i", src, "-an", "-c:v", "copy",
-             temp_cover], quiet=True)
+             temp_cover], may_fail=True)
     return 0
