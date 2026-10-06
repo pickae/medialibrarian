@@ -139,14 +139,14 @@ STOP_WORDS = frozenset([
 
 
 def spec(program: str) -> clioptions.Spec:
-    return clioptions.Spec(
+    return clioptions.with_verbosity(clioptions.Spec(
         head=USAGE_HEAD.format(program=program),
         options=OPT_SPEC,
         long=OPT_LONG,
         vars=OPT_VARS,
         checks=OPT_CHECKS,
         column=OPT_COLUMN,
-    )
+    ))
 
 
 def extract_names(tree_file: str) -> list:
@@ -284,6 +284,7 @@ def main(argv: list, program: str = "find-fragment-candidates") -> int:
     declaration = spec(program)
     try:
         result = clioptions.parse(declaration, argv)
+        clioptions.settle_verbosity(result)
     except clioptions.HelpRequested:
         sys.stdout.write(clioptions.help_text(declaration))
         return 0

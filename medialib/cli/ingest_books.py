@@ -43,6 +43,7 @@ from medialib.lib import (
     ramscratch,
     runlog,
     safety,
+    toolcapture,
     tooldeps,
     workerpool,
 )
@@ -83,13 +84,13 @@ FONT_EXTENSIONS = ("ttf", "otf")
 
 
 def spec(program: str) -> clioptions.Spec:
-    return clioptions.Spec(
+    return clioptions.with_verbosity(clioptions.Spec(
         head=USAGE_HEAD.format(program=program),
         options=OPT_SPEC,
         long=OPT_LONG,
         vars=OPT_VARS,
         column=OPT_COLUMN,
-    )
+    ))
 
 
 def _grant_tree_access(path: str) -> None:
@@ -322,8 +323,10 @@ class Run:
         self.total = total
         self.run_marker = run_marker
 
-    def progress(self, line: str) -> None:
-        """Bump the shared counter and print one clean line.
+    def progress(self, line: str, said: str = "") -> None:
+        """Bump the shared counter and print one clean line - and under a FAILED
+        one, ``said``: what the tool that failed said
+        (:func:`toolcapture.replay_text`), in the same lock.
 
         The counter counts BOOKS FINISHED against the number of input books, so
         this is called exactly ONCE per book - on every path through, including
@@ -331,6 +334,8 @@ class Run:
         inside one book's pipeline reports through note() instead, which prints
         without counting: calling this twice for one book is what produced
         "[2/1]".
+
+        Under -q only a FAILED line is printed; the counting goes on regardless.
         """
         with open(os.path.join(self.counter_dir, "lock"), "w") as handle, \
                 runlog.take_lock(handle):
@@ -342,8 +347,12 @@ class Run:
                 current = 1
             with open(path, "w") as counter:
                 counter.write(str(current))
-            sys.stdout.write("%s%s\n" % (
-                runlog.counted_prefix(current, self.total), line))
+            text = "%s%s\n" % (
+                runlog.counted_prefix(current, self.total), line)
+            if line.startswith("FAILED"):
+                sys.stderr.write(text + said)
+            else:
+                runlog.say(text)
 
     def note(self, line: str) -> None:
         """An UNCOUNTED line about a step inside one book's pipeline, indented
@@ -351,7 +360,7 @@ class Run:
         interleave."""
         with open(os.path.join(self.counter_dir, "lock"), "w") as handle, \
                 runlog.take_lock(handle):
-            sys.stdout.write("        %s\n" % line)
+            runlog.say("        %s\n" % line)
 
     def _output_extension(self, extension: str) -> str:
         if self.options["textMode"]:
@@ -406,18 +415,19 @@ class Run:
                     self.progress("Done (pdf): " + base)
                     return
                 self.note("PDF: " + base)
-                done = subprocess.run(
+                done = toolcapture.run(
                     ["gs", "-sDEVICE=pdfwrite", "-dCompatibilityLevel=1.4",
                      "-dPDFSETTINGS=/default", "-dNOPAUSE", "-dQUIET",
                      "-dBATCH", "-dFILTERIMAGE", "-dCompressFonts=true",
                      "-r25", "-sOutputFile=" + out, source],
-                    stderr=subprocess.DEVNULL)
-                if done.returncode == 0:
+                    base, report=False)
+                if done.ok:
                     emit_output(out, os.path.join(dest_dir, stem + ".pdf"),
                                 self.claims_dir)
                     self.progress("Done (pdf): " + base)
                 else:
-                    self.progress("FAILED (pdf): " + base)
+                    self.progress("FAILED (pdf): " + base,
+                                  toolcapture.replay_text(done))
                 return
 
             # Everything else is normalised to an epub first.
@@ -428,11 +438,12 @@ class Run:
                 # The scan admits nothing but the input list, so whatever is
                 # neither a PDF nor an epub is one of the convertible formats.
                 self.note("Converting: " + base)
-                done = subprocess.run(
+                done = toolcapture.run(
                     ["ebook-convert", source, epub, "--no-default-epub-cover"],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                if done.returncode != 0:
-                    self.progress("FAILED (convert): " + base)
+                    base, report=False)
+                if not done.ok:
+                    self.progress("FAILED (convert): " + base,
+                                  toolcapture.replay_text(done))
                     return
 
             # Unpacking and repacking exist only to reach the cleaner between
@@ -443,25 +454,29 @@ class Run:
             if self.options["discardExtras"]:
                 unpacked = os.path.join(work, "unpacked")
                 os.makedirs(unpacked, exist_ok=True)
-                subprocess.run(
-                    ["unzip", "-q", "-o", "-d", unpacked, "--", epub],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                toolcapture.run(
+                    ["unzip", "-q", "-o", "-d", unpacked, "--", epub], base,
+                    warning="could not unpack %s to clean it" % base)
 
                 clean_book_folder(unpacked, self.options["imageResolution"])
 
                 source_epub = os.path.join(work, "repacked.epub")
-                subprocess.run(["zip", "-q", "-r", "-X", source_epub, "."],
-                               cwd=unpacked, stdout=subprocess.DEVNULL,
-                               stderr=subprocess.DEVNULL)
+                toolcapture.run(["zip", "-q", "-r", "-X", source_epub, "."],
+                                base, cwd=unpacked,
+                                warning="could not repack %s after cleaning it"
+                                % base)
 
             # Re-converted once more for consistent readability; the epub that
             # went in is the fallback when that heavier step is unavailable.
             final = os.path.join(work, "final.epub")
-            done = subprocess.run(
+            done = toolcapture.run(
                 ["ebook-convert", source_epub, final,
                  "--no-default-epub-cover"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            if done.returncode != 0 or not os.path.exists(final):
+                base, report=False)
+            if not done.ok or not os.path.exists(final):
+                runlog.detail("        Re-conversion of %s did not finish (%s), "
+                              "keeping the epub as it was"
+                              % (base, done.failure or "it wrote nothing"))
                 shutil.copyfile(source_epub, final)
 
             emit_output(final, os.path.join(dest_dir, stem + ".epub"),
@@ -595,8 +610,8 @@ def _text_mode_report(state, books, out_path, temp_path, all_txt,
         for words, path in rows:
             handle.write("%d\t%s\n" % (words, path))
 
-    print("Word-count summary written to: %s" % report)
-    print("Total words across %d file(s): %d" % (counted, total_words))
+    runlog.say("Word-count summary written to: %s\n" % report)
+    runlog.say("Total words across %d file(s): %d\n" % (counted, total_words))
     return report
 
 
@@ -631,6 +646,7 @@ def main(argv: list, program: str = "ingest-books",
     declaration = spec(program)
     try:
         result = clioptions.parse(declaration, argv)
+        clioptions.settle_verbosity(result)
     except clioptions.HelpRequested:
         sys.stdout.write(clioptions.help_text(declaration))
         return 0
@@ -723,17 +739,17 @@ def main(argv: list, program: str = "ingest-books",
         jobs = runlog.cpu_count()
 
         if text_mode:
-            print("Ingesting %d book(s) in text mode" % total)
-            print("=====================================")
-            print("")
+            runlog.say("Ingesting %d book(s) in text mode\n" % total)
+            runlog.say("=====================================\n")
+            runlog.say("\n")
             # All inputs already plain .txt? Then nothing is copied or
             # converted: the originals stay untouched and are measured in place.
             all_txt = all(enums.lower_extension_of(relative) == "txt"
                           for relative in books)
             if all_txt:
-                print("All inputs are already .txt - skipping copy and "
-                      "conversion")
-                print("")
+                runlog.say("All inputs are already .txt - skipping copy and "
+                           "conversion\n")
+                runlog.say("\n")
                 archive_root = in_path
             else:
                 _run_pool(state, books, jobs)
@@ -744,21 +760,21 @@ def main(argv: list, program: str = "ingest-books",
             if zpaq_archive:
                 _archive(out_path, archive_root)
         else:
-            print("Ingesting %d book(s)" % total)
-            print("========================")
+            runlog.say("Ingesting %d book(s)\n" % total)
+            runlog.say("========================\n")
             has_pdf = any(enums.lower_extension_of(relative) == "pdf"
                           for relative in books)
             has_reflowable = any(enums.lower_extension_of(relative) != "pdf"
                                  for relative in books)
-            print(discard_summary(discard_extras, image_resolution,
-                                  has_pdf, has_reflowable))
-            print("")
+            runlog.say(discard_summary(discard_extras, image_resolution,
+                                       has_pdf, has_reflowable) + "\n")
+            runlog.say("\n")
             _run_pool(state, books, jobs)
             safety.exit_if_aborted()
 
         if clean_structure:
-            print("")
-            print("Cleaning output folder structure")
+            runlog.say("\n")
+            runlog.say("Cleaning output folder structure\n")
             commands.run_command("clean-folder-structure", [out_path],
                                  script_dir=script_dir)
 
@@ -773,13 +789,14 @@ def _archive(out_path: str, archive_root: str) -> None:
     a conversion happened, or the untouched input when all inputs were already
     text. Named after the output folder and written into it."""
     archive = os.path.join(out_path, os.path.basename(out_path) + ".zpaq")
-    print("")
-    print('Creating zpaq archive of "%s" -> %s' % (archive_root, archive))
-    done = subprocess.run(["zpaq", "a", archive, archive_root, "-m5"])
-    if done.returncode == 0:
-        print("Archive written: %s" % archive)
-    else:
-        print('WARNING: zpaq archiving failed for "%s"' % archive_root)
+    runlog.say("\n")
+    runlog.say('Creating zpaq archive of "%s" -> %s\n'
+               % (archive_root, archive))
+    done = toolcapture.run(["zpaq", "a", archive, archive_root, "-m5"],
+                           warning='zpaq archiving failed for "%s"'
+                           % archive_root)
+    if done.ok:
+        runlog.say("Archive written: %s\n" % archive)
 
 
 def cli(argv: list | None = None) -> int:

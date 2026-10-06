@@ -483,7 +483,7 @@ class TestTheFooter:
                 (tmp_path / name).write_text(str(count))
             state = ci.Run("/in", OUT, str(tmp_path), {}, total)
             ci._print_footer(state, time.time(), {}, False)
-            return capsys.readouterr().out
+            return capsys.readouterr().err
         return run
 
     def test_a_run_that_converted_everything_says_it_in_one_line(self, footer):
@@ -533,6 +533,50 @@ class TestARunWithOnlyEmptyImagesIsRefusedUntouched:
     def test_the_input_is_left_exactly_as_it_was(self, refused):
         _, _, before, after = refused
         assert after == before
+
+
+class TestAQuietRun:
+    """-q leaves out the per-image lines and the closing report; the stats
+    record a calling run sums is a result, and is written all the same."""
+
+    @pytest.fixture
+    def run(self, sandbox, tmp_path):
+        sandbox.with_tool("fdupes", "exit 0")
+        sandbox.with_tool("identify", 'echo "1000 1500"')
+        sandbox.with_tool("convert", 'out="${!#}"; echo converted > "$out"')
+        folder = tmp_path / "in"
+        folder.mkdir()
+        (folder / "cover.jpg").write_text("a page")
+        (folder / "back.jpg").write_text("another page")
+        stats = tmp_path / "stats"
+        done = sandbox.run("convert-images", "-q", folder, tmp_path / "out",
+                           env={"imageStatsFile": str(stats)})
+        return sandbox, done, folder, tmp_path / "out", stats
+
+    @pytest.mark.stubbed
+    def test_both_images_are_converted_without_a_line_of_their_own(self, run):
+        _, done, _, out, _ = run
+        log = done.stdout + done.stderr
+        assert done.returncode == 0, log
+        assert blackbox.tree_of(out) == ["back.avif", "cover.avif"]
+        assert "CONV: " not in log, log
+        assert "Converted 2 images in " not in log, log
+        assert "seconds per image" not in log, log
+        assert done.stdout == "", done.stdout
+
+    @pytest.mark.stubbed
+    def test_the_stats_record_is_still_written(self, run):
+        _, _, _, _, stats = run
+        assert stats.read_text().split()[:2] == ["2", "2"]
+
+    @pytest.mark.stubbed
+    def test_a_rerun_does_not_announce_its_skips(self, run):
+        sandbox, _, folder, out, _ = run
+        again = sandbox.run("convert-images", "-q", folder, out)
+        log = again.stdout + again.stderr
+        assert again.returncode == 0, log
+        assert "SKIP (already done)" not in log, log
+        assert "already done: 2" not in log, log
 
 
 class TestATrimThatCannotBeMeasured:

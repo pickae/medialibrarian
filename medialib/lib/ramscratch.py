@@ -30,7 +30,7 @@ import tempfile
 import threading
 
 from medialib import commands
-from medialib.lib import hostos, safety
+from medialib.lib import hostos, runlog, safety
 
 _INT = re.compile(r"^[0-9]+$")
 
@@ -317,7 +317,7 @@ def ram_disk_base():
     return base
 
 
-def ram_scratch_dir(label, state=_STATE, log=print):
+def ram_scratch_dir(label, state=_STATE, log=runlog.log):
     """A fresh scratch DIRECTORY under the run's base, returned with its
     status. The label becomes the name's prefix, so a leftover names the
     purpose it belonged to.

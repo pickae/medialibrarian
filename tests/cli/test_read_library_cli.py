@@ -315,6 +315,14 @@ class TestAnOpusEncodeThatFails:
         assert "Failed:            2" in log, log
         assert [p for p in library.outputs.rglob("*") if p.is_file()] == []
 
+    def test_what_the_encode_said_is_replayed_under_the_failure(self,
+                                                                library):
+        """Its log is in the book's scratch, which goes with the book."""
+        log = library.read("-l", "deu", library.source, library.outputs,
+                           STUB_WRITES_MASTER="1", STUB_OPUS_FAILS="1")
+        failed = log.index("could not be encoded to Opus")
+        assert re.search(r"\n    \| .*Converting", log[failed:]), log
+
     def test_a_run_after_it_reads_the_books_once(self, library):
         library.read("-l", "deu", library.source, library.outputs,
                      STUB_WRITES_MASTER="1", STUB_OPUS_FAILS="1")
@@ -389,6 +397,30 @@ class TestANarrationThatDiedPartWay:
         assert [p for p in library.outputs.rglob("*") if p.is_file()] == []
 
 
+class TestQuiet:
+    """-q leaves out the announcement, the per-book lines, the engine's own
+    output and the closing figures, and keeps the line of a book that failed.
+    The safety report is not this command's to leave out."""
+
+    @staticmethod
+    def _own(log: str) -> str:
+        return re.sub(r"^Safety: .*\n", "", log, flags=re.MULTILINE)
+
+    def test_a_good_run_prints_nothing(self, library):
+        log = library.read("-q", "-l", "deu", library.source, library.outputs,
+                           STUB_WRITES_MASTER="1")
+        assert self._own(log) == "", log
+        assert len(list(library.outputs.rglob("*.opus"))) == 2
+
+    def test_a_failed_book_is_still_said(self, library):
+        log = library.read("-q", "-l", "deu", library.source, library.outputs,
+                           STUB_PRODUCES_NOTHING="1")
+        assert re.search(r"^\[\d/2\] FAILED: plain book\.epub$", log,
+                         re.MULTILINE), log
+        for progress in ("Reading 2 book(s)", "Reading (", "Stats"):
+            assert progress not in log, log
+
+
 class TestACheckoutWhoseEnvironmentIsNotPopulatedYet:
     """The first book is read on its own, because that book's run is also the
     checkout's dependency install and two of those at once corrupt the
@@ -432,7 +464,7 @@ class TestOneVoicePerLanguage:
 
     def test_a_book_gets_the_sample_of_its_own_language(self, voices):
         library, folder = voices
-        log = library.read("-l", "deu", "-v", folder, library.source,
+        log = library.read("-l", "deu", "-r", folder, library.source,
                            library.outputs)
         assert len([c for c in library.engine_calls()
                     if re.search(r"--voice \S*/deu/", c)]) == 2
@@ -440,13 +472,13 @@ class TestOneVoicePerLanguage:
 
     def test_a_sample_naming_no_language_is_named_and_ignored(self, voices):
         library, folder = voices
-        log = library.read("-l", "deu", "-v", folder, library.source,
+        log = library.read("-l", "deu", "-r", folder, library.source,
                            library.outputs)
         assert 'notalanguage.wav" names no language' in log, log
 
     def test_a_language_with_no_sample_of_its_own_falls_back(self, voices):
         library, folder = voices
-        library.read("-l", "ita", "-v", folder, library.source, library.outputs)
+        library.read("-l", "ita", "-r", folder, library.source, library.outputs)
         assert len([c for c in library.engine_calls()
                     if re.search(r"--voice \S*/-/", c)]) == 2
 
@@ -460,7 +492,7 @@ class TestAVoiceSampleThatIsRefused:
         before = blackbox.tree_of(library.source)
         missing = tmp_path / "no-such-sample.wav"
         target = tmp_path / "out.voice"
-        log = library.read("-l", "deu", "-v", str(missing), library.source,
+        log = library.read("-l", "deu", "-r", str(missing), library.source,
                            target, expect=1)
         assert 'Voice sample "%s" does not exist.' % missing in log, log
         assert library.engine_calls() == []
@@ -474,7 +506,7 @@ class TestAVoiceSampleThatIsRefused:
         # A name that carries no language, so no sample in the folder is one.
         (folder / "voice.mp3").write_bytes(b"\x00" * 32)
         target = tmp_path / "out.voices"
-        log = library.read("-l", "deu", "-v", str(folder), library.source,
+        log = library.read("-l", "deu", "-r", str(folder), library.source,
                            target, expect=1)
         assert 'No usable voice sample was found in "%s".' % folder in log, log
         assert library.engine_calls() == []

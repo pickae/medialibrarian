@@ -402,3 +402,34 @@ class TestTheBookShapeProbe:
         outputs = tmp_path / "a5out"
         wrapper.wrapper(source, outputs)
         assert blackbox.tree_of(outputs) == ["Alpha.mp3", "Beta.mp3"]
+
+
+class TestAQuietRun:
+    """-q leaves out the phases, the counted lines and the closing figures of the
+    wrapper and of every phase it runs - but not an archive it passed over."""
+
+    @pytest.fixture
+    def run(self, wrapper, tmp_path):
+        source = tmp_path / "qin"
+        outputs = tmp_path / "qout"
+        packs = wrapper.packs
+        _book(source / "Alpha", "mp3")
+        _pack_with_folder(source / "Bravo.zip",
+                          _book(packs / "Bravo", "mp3"))
+        _pack_flat(source / "Bravo.tar.gz", packs / "Bravo")
+        log = wrapper.wrapper("-q", source, outputs)
+        return outputs, log
+
+    def test_it_still_makes_every_book(self, run):
+        outputs, _ = run
+        assert _names(outputs) == ["Alpha.mp3", "Bravo.mp3"]
+
+    def test_the_skipped_archive_is_still_reported(self, run):
+        _, log = run
+        assert 'already stands in for "Bravo"' in log, log
+
+    def test_no_progress_is_printed(self, run):
+        _, log = run
+        for progress in ("PHASE ", "Input:", "unpacked:", "Done.", "Stats"):
+            assert progress not in log, log
+        assert _counted(log, "Alpha") == 0, log

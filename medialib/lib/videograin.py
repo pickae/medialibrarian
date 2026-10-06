@@ -23,7 +23,7 @@ import struct
 import subprocess
 import sys
 
-from medialib.lib import safety
+from medialib.lib import runlog, safety
 
 __all__ = [
     "GRAIN_PROBE_SAMPLES",
@@ -281,17 +281,18 @@ def grain_level_for(input: str, label, media_duration, video_dimensions,
                              jobs_per_core, decode_accel_args)
     level, _, sigma = line.partition(" ")
     if not sigma:
-        sys.stderr.write(
+        runlog.say(
             "Film grain: could not measure the source, synthesising none: "
-            "{}\n".format(label))
+            "{}\n".format(label), sys.stderr)
     elif int(level) <= 0:
-        sys.stderr.write(
+        runlog.say(
             "Film grain: source measured {} sigma -> too little to "
-            "synthesise, none synthesised: {}\n".format(sigma, label))
+            "synthesise, none synthesised: {}\n".format(sigma, label),
+            sys.stderr)
     else:
-        sys.stderr.write(
+        runlog.say(
             "Film grain: source measured {} sigma -> synthesising {}: "
-            "{}\n".format(sigma, int(level), label))
+            "{}\n".format(sigma, int(level), label), sys.stderr)
     return level
 
 

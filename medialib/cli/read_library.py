@@ -38,6 +38,7 @@ from medialib.lib import (
     runlog,
     safety,
     statusline,
+    toolcapture,
     tooldeps,
     workerpool,
 )
@@ -65,7 +66,7 @@ j | <jobs> | Narrate up to <jobs> books at a time.
                     5 GB on a GPU, and 1 on a CPU, which one narration saturates
                     on its own. At 1, however it was arrived at, the engine's own
                     per-book progress is printed as well.
-v | <sample> | Voice sample(s) to clone the narrator's voice from.
+r | <sample> | Voice sample(s) to clone the narrator's voice from.
                     A FILE is used for every book: any audio or video file, one in
                     the wrong format is transcoded to WAV first, and one longer
                     than a minute is cut down to a slice of speech from its middle.
@@ -84,7 +85,7 @@ c | <dir> | The ebook2audiobook checkout to drive.
 d | <device> | Where the model runs: cpu, cuda, mps, rocm, xpu, jetson.
                     Default cuda when an NVIDIA GPU is present, cpu otherwise
 e | <engine> | TTS engine: xtts, bark, vits, fairseq, tacotron, yourtts.
-                    Voice cloning (-v) needs one that supports it.
+                    Voice cloning (-r) needs one that supports it.
                     Default xtts
 l | <language> | Language of the books, ISO 639-3 (eng, deu, ita, ...). Given,
                     it is used for every book and nothing is detected. Omitted,
@@ -92,7 +93,7 @@ l | <language> | Language of the books, ISO 639-3 (eng, deu, ita, ...). Given,
                     or from its text when the metadata says nothing.
                     Default: detected per book"""
 
-OPT_VARS = ("j:jobs v:voiceSample b:opusBitrate c:narrationCheckout "
+OPT_VARS = ("j:jobs r:voiceSample b:opusBitrate c:narrationCheckout "
             "d:narrationDeviceArg e:narrationEngine l:languageArg")
 
 # -j left out is the device's own answer, which is why only a value somebody
@@ -105,7 +106,7 @@ b | nonNegInt | bitrate in kbps
 """
 
 OPT_COLUMN = 20
-OPT_LONG = ("h:help j:jobs v:voice b:opus-bitrate o:opus-only c:checkout d:device "
+OPT_LONG = ("h:help j:jobs r:voice b:opus-bitrate o:opus-only c:checkout d:device "
             "e:engine l:language")
 
 # The listening copy and the archival one. 36 kbps of mono Opus is transparent
@@ -120,14 +121,14 @@ BOOK_PROGRESS_INTERVAL = 60
 
 
 def spec(program: str) -> clioptions.Spec:
-    return clioptions.Spec(
+    return clioptions.with_verbosity(clioptions.Spec(
         head=USAGE_HEAD.format(program=program),
         options=OPT_SPEC,
         long=OPT_LONG,
         vars=OPT_VARS,
         checks=OPT_CHECKS,
         column=OPT_COLUMN,
-    )
+    ))
 
 
 def output_path_for(out_path: str, relative: str, extension: str) -> str:
@@ -288,16 +289,21 @@ class Counters:
             self.write("started", number)
             return number
 
-    def book_line(self, number: int, line: str) -> None:
+    def book_line(self, number: int, line: str, failed: bool = False,
+                  said: str = "") -> None:
         """One scrolling line about a book, printed without disturbing the status
         row: the row is erased before the line goes out and re-pinned under it
         afterwards, under the lock the row's own refresher takes before it
-        draws."""
+        draws. Under -q only a failed book's line is printed - with ``said``,
+        what the tool that failed it said, under it."""
         with open(self._lock_path(), "w") as lock, runlog.take_lock(lock):
             statusline.clear_status()
-            sys.stdout.write("%s%s\n" % (
-                runlog.counted_prefix(number, self.total), line))
-            sys.stdout.flush()
+            text = "%s%s\n" % (runlog.counted_prefix(number, self.total), line)
+            if failed:
+                sys.stderr.write(text + said)
+            else:
+                runlog.say(text)
+            sys.stderr.flush()
             if self.render is not None:
                 statusline.repin_status(self.render)
 
@@ -306,12 +312,13 @@ class Counters:
         reads as subordinate to the numbered lines rather than as another book."""
         with open(self._lock_path(), "w") as lock, runlog.take_lock(lock):
             statusline.clear_status()
-            sys.stdout.write("        %s\n" % line)
-            sys.stdout.flush()
+            runlog.say("        %s\n" % line)
+            sys.stderr.flush()
             if self.render is not None:
                 statusline.repin_status(self.render)
 
-    def report_progress(self, category: str, number: int, line: str) -> None:
+    def report_progress(self, category: str, number: int, line: str,
+                        said: str = "") -> None:
         """Record one FINISHED book, then print its closing line.
 
         The counter counts BOOKS FINISHED against a denominator of books found,
@@ -321,7 +328,7 @@ class Counters:
         with open(self._lock_path(), "w") as lock, runlog.take_lock(lock):
             self.write("current", self.read("current") + 1)
             self.write(category, self.read(category) + 1)
-        self.book_line(number, line)
+        self.book_line(number, line, failed=category == "failed", said=said)
 
     def mark_book_active(self, number: int, what: str) -> None:
         """One file per book being read, named after that book's number and
@@ -576,8 +583,13 @@ class Run:
                                                   os.path.join(work, "audiobook"),
                                                   voice, language, narration_log)
             if not produced:
-                self.counters.report_progress("failed", number,
-                                              "FAILED: %s" % base)
+                # Its log is in the scratch that goes below, so what the engine
+                # said is replayed now or never.
+                self.counters.report_progress(
+                    "failed", number, "FAILED: %s" % base,
+                    toolcapture.replay_text(toolcapture.from_log(
+                        narration_log, "read nothing", base,
+                        "the narration engine")))
                 return
 
             narrated_seconds = booknarration._media_duration(produced)
@@ -598,15 +610,16 @@ class Run:
                     lossless = produced
 
             opus = ""
+            opus_log = os.path.join(work, "opus.log")
             if self.opus_bitrate != 0:
                 self.counters.mark_book_active(number, "=encoding")
                 opus = bookpublishing.audiobook_to_opus(
                     produced, work, self.opus_bitrate, self.opus_jobs,
-                    os.path.join(work, "opus.log"), self.script_dir) or ""
+                    opus_log, self.script_dir) or ""
 
             self.counters.mark_book_active(number, "=writing")
             self._publish(number, base, relative, lossless, opus,
-                          narrated_seconds)
+                          narrated_seconds, opus_log)
         finally:
             self.counters.mark_book_done(number)
             # The engine keeps its own working copy of every book it converts -
@@ -618,13 +631,16 @@ class Run:
             shutil.rmtree(work, ignore_errors=True)
 
     def _publish(self, number: int, base: str, relative: str, lossless: str,
-                 opus: str, narrated_seconds: str) -> None:
+                 opus: str, narrated_seconds: str, opus_log: str = "") -> None:
         """The two output files, the lossless one first so the file the resume
-        check reads is written last."""
+        check reads is written last. ``opus_log`` is what the encode said, for
+        a book it failed."""
         if self.opus_bitrate != 0 and not opus:
             self.counters.report_progress(
                 "failed", number,
-                "FAILED (read, but could not be encoded to Opus): %s" % base)
+                "FAILED (read, but could not be encoded to Opus): %s" % base,
+                toolcapture.replay_text(toolcapture.from_log(
+                    opus_log, "encoded nothing", base, "convert-audio")))
             return
 
         written = ""
@@ -675,29 +691,30 @@ def footer(state: Run) -> None:
     end = state.run_end if state.run_end is not None else time.time()
     total_seconds = end - state.run_start
 
-    print("")
-    print("Stats")
-    print("=====")
-    print("Books found:       %d" % state.total)
-    print("Read:              %d" % narrated)
-    print("Skipped (done):    %d" % counters.read("skipped"))
-    print("Failed:            %d" % counters.read("failed"))
-    print("Total time:        %.2f s (%s)"
-          % (total_seconds, formatting.fmt_hms("%.2f" % total_seconds)))
+    runlog.say("\n")
+    runlog.say("Stats\n")
+    runlog.say("=====\n")
+    runlog.say("Books found:       %d\n" % state.total)
+    runlog.say("Read:              %d\n" % narrated)
+    runlog.say("Skipped (done):    %d\n" % counters.read("skipped"))
+    runlog.say("Failed:            %d\n" % counters.read("failed"))
+    runlog.say("Total time:        %.2f s (%s)\n"
+               % (total_seconds, formatting.fmt_hms("%.2f" % total_seconds)))
     # The rows about the audio only once there is some: a run that skipped or
     # failed every book produced none, and "0 s" at "0x" says nothing the counts
     # above have not.
     if narrated > 0:
-        print("Audio produced:    %.0f s (%s)"
-              % (audio_seconds, formatting.fmt_hms("%.2f" % audio_seconds)))
+        runlog.say("Audio produced:    %.0f s (%s)\n"
+                   % (audio_seconds,
+                      formatting.fmt_hms("%.2f" % audio_seconds)))
         per_book = total_seconds / narrated
-        print("Time per book:     %.2f s (%s)"
-              % (per_book, formatting.fmt_hms("%.2f" % per_book)))
+        runlog.say("Time per book:     %.2f s (%s)\n"
+                   % (per_book, formatting.fmt_hms("%.2f" % per_book)))
         if total_seconds > 0:
-            print("Real-time speedup: %sx" % formatting.fmt_ratio(
+            runlog.say("Real-time speedup: %sx\n" % formatting.fmt_ratio(
                 "%.6f" % (audio_seconds / total_seconds)))
 
-    sys.stdout.flush()
+    sys.stderr.flush()
     safety.report_safety_skips()
 
 
@@ -754,6 +771,7 @@ def main(argv: list, program: str = "read-library",
     declaration = spec(program)
     try:
         result = clioptions.parse(declaration, argv)
+        clioptions.settle_verbosity(result)
     except clioptions.HelpRequested:
         sys.stdout.write(clioptions.help_text(declaration))
         return 0
@@ -962,8 +980,9 @@ def _read(result, program: str, script_dir: str, in_path: str, out_path: str,
     # the long silences of a slow model stop looking like a hung run. Past that
     # the same output is several books talking over each other. Decided from the
     # job count the run really ended up with, rather than from the -j that was
-    # typed.
-    os.environ["narrationVerbose"] = "1" if jobs == 1 else "0"
+    # typed. Under -q it is progress like any other, and stays in the log.
+    os.environ["narrationVerbose"] = (
+        "1" if jobs == 1 and runlog.verbosity() >= runlog.NORMAL else "0")
 
     # How many cores the Opus encode of a finished book may use. The narration of
     # the NEXT books runs alongside it, so one full set of cores per reader would
@@ -992,7 +1011,7 @@ def _read(result, program: str, script_dir: str, in_path: str, out_path: str,
                              "a folder of them named\n")
             sys.stderr.write("after the languages they speak (deu.wav, "
                              "german.m4a, de.mp3, default.wav),\n")
-            sys.stderr.write("or omit -v to use the engine's own voice. Nothing "
+            sys.stderr.write("or omit -r to use the engine's own voice. Nothing "
                              "was changed.\n")
             return 1
     os.environ["narrationVoiceMap"] = voice_map or ""
@@ -1116,7 +1135,7 @@ def _announce(state: Run, jobs: int, jobs_from: str, device: str,
             device, os.environ.get("narrationVramPerBookGB", ""))
     else:
         line += " (%s)" % device
-    print(line)
+    runlog.say(line + "\n")
 
     description = "the engine's own"
     if voice_map:
@@ -1126,16 +1145,16 @@ def _announce(state: Run, jobs: int, jobs_from: str, device: str,
             description = "cloned from %s" % voice_sample
         else:
             description = "cloned, one per language (%s)" % " ".join(languages)
-    print("Voice: %s" % description)
+    runlog.say("Voice: %s\n" % description)
 
     if state.opus_bitrate == 0:
-        print("Output: the lossless file only")
+        runlog.say("Output: the lossless file only\n")
     elif state.keep_lossless:
-        print("Output: %d kbps mono Opus, with the lossless file beside it"
-              % state.opus_bitrate)
+        runlog.say("Output: %d kbps mono Opus, with the lossless file beside "
+                   "it\n" % state.opus_bitrate)
     else:
-        print("Output: %d kbps mono Opus" % state.opus_bitrate)
-    print("")
+        runlog.say("Output: %d kbps mono Opus\n" % state.opus_bitrate)
+    runlog.say("\n")
 
 
 def _settle_mkvtoolnix(opus_wanted: bool) -> None:

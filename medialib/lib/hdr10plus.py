@@ -18,7 +18,7 @@ import os
 import re
 import subprocess
 
-from medialib.lib import dolbyvision
+from medialib.lib import dolbyvision, runlog
 
 # What ffprobe calls the side data an HDR10+ frame carries.
 SIDE_DATA_TYPE = "SMPTE2094-40"
@@ -49,7 +49,7 @@ def stream_has_hdr10plus(path, run=dolbyvision._subprocess_run):
     return SIDE_DATA_TYPE.encode() in (done.stdout or b"")
 
 
-def extract_metadata(movie, out, log=print, pipe=dolbyvision._subprocess_pipe):
+def extract_metadata(movie, out, log=runlog.log, pipe=dolbyvision._subprocess_pipe):
     """The HDR10+ metadata of <movie>'s video, as hdr10plus_tool's JSON, to
     <out>. The video track is piped straight into the tool, so no copy of it is
     ever written. Returns 0 when the JSON is there and non-empty; on a failure
@@ -95,7 +95,7 @@ def metadata_windows(path):
                 if isinstance(scene, dict)), default=0)
 
 
-def inject_metadata(video, metadata, out, fps, scratch, log=print,
+def inject_metadata(video, metadata, out, fps, scratch, log=runlog.log,
                     run=dolbyvision._subprocess_run):
     """<video>'s HEVC stream with the HDR10+ <metadata> interleaved into it, as
     a video-only Matroska at <out>. <fps> is the frame rate as ffprobe reports

@@ -14,6 +14,10 @@ Options:
     -j, --jobs <jobs>
                   Run up to <jobs> encoder processes in parallel
                   (default: the number of CPU cores).
+    -v, --verbose Also say why each item was handled the way it was, and on a
+                  failure print the tool's whole output rather than its last
+                  lines.
+    -q, --quiet   Print errors only - no progress and no warnings.
 
 Dependencies:
     ffmpeg, mkvtoolnix, ImageMagick, rsync, fdupes, beets, and the mutagen

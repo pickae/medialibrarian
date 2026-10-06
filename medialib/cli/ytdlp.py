@@ -76,7 +76,6 @@ j | <jobs> | Cap how many feeds any one table may fetch at once. Lower
                     only; a table asking for less keeps its own number.
 p |  | Preview: print the yt-dlp call each feed would get and
                     download nothing.
-""" + clioptions.verbosity_options(OPT_COLUMN) + """\
 a |  | Also fetch the feeds whose active column is 0.
 c |  | Tidy up after the run: the sidecars each finished episode
                     leaves (the thumbnail that was embedded, the description and
@@ -130,8 +129,7 @@ s | enum:windows\\|linux\\|auto | system
 """
 
 OPT_LONG = ("h:help t:table j:jobs p:preview a:include-inactive "
-            "c:clean-up i:ingest m:match s:system l:consolidate "
-            + clioptions.VERBOSITY_LONG)
+            "c:clean-up i:ingest m:match s:system l:consolidate")
 
 USAGE_TAIL = """
 
@@ -150,7 +148,7 @@ A "#!jobs <n>" line overrides how wide that table runs."""
 
 
 def spec(program: str) -> clioptions.Spec:
-    return clioptions.Spec(
+    return clioptions.with_verbosity(clioptions.Spec(
         head=USAGE_HEAD.format(program=program),
         options=OPT_SPEC,
         long=OPT_LONG,
@@ -163,7 +161,7 @@ def spec(program: str) -> clioptions.Spec:
         # the tail of a pipeline, and its usage belongs with the other
         # diagnostics rather than in whatever is reading its stdout.
         no_args_stream="stderr",
-    )
+    ))
 
 
 class Counters:

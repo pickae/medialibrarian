@@ -94,7 +94,7 @@ DEFAULT_FUZZ = 10
 # recorded contract under tests/data/cliContract.
 OPT_SPEC = """
 h |  | Print this help page.
-q | <quality> | quality level of the output images, default {quality}
+l | <quality> | quality level of the output images, default {quality}
 u | <chroma> | page chroma: {chromas}. 444 keeps colour at full resolution,
                     420 at a quarter of it, for smaller books with colour
                     fringes on thin lines and lettering. Default {chroma}.
@@ -113,9 +113,9 @@ s | int:0:{top} | speed preset
 u | enum:{chromas} | chroma
 """.format(chromas="\\|".join(CHROMAS), top=MAX_SPEED)
 
-OPT_VARS = "q:quality u:chroma s:speedPreset m:maxRes f:fuzz"
+OPT_VARS = "l:quality u:chroma s:speedPreset m:maxRes f:fuzz"
 OPT_COLUMN = 20
-OPT_LONG = "h:help q:quality u:chroma s:speed m:max-resolution f:fuzz"
+OPT_LONG = "h:help l:quality u:chroma s:speed m:max-resolution f:fuzz"
 
 # The smallest an AVIF page can plausibly be, in bytes. A conversion that
 # produced less than this produced no picture - a truncated or empty encode - and
@@ -157,14 +157,14 @@ UNIT = "\x1f"
 
 
 def spec(program: str) -> clioptions.Spec:
-    return clioptions.Spec(
+    return clioptions.with_verbosity(clioptions.Spec(
         head=USAGE_HEAD.format(program=program),
         options=OPT_SPEC,
         long=OPT_LONG,
         vars=OPT_VARS,
         checks=OPT_CHECKS,
         column=OPT_COLUMN,
-    )
+    ))
 
 
 def page_slots(threads: int, speed: int) -> int:
@@ -240,18 +240,23 @@ class Counters:
             current = self.read("current") + 1
             with open(os.path.join(self.dir, "current"), "w") as handle:
                 handle.write(str(current))
-            sys.stdout.write("%s%s\n" % (
+            runlog.say("%s%s\n" % (
                 runlog.counted_prefix(current, self.total), line))
-            sys.stdout.flush()
+            sys.stderr.flush()
 
-    def note(self, line: str) -> None:
+    def note(self, line: str, failed: bool = False) -> None:
         """One line about a book that has already been counted. A book announces
         itself when it STARTS, before anything is known about how it ends, so the
         few that end badly still have something to say afterwards - and saying it
-        must not make the run look one book further along than it is."""
+        must not make the run look one book further along than it is. A book
+        that FAILED is said under -q too: the footer counts it but never names
+        it."""
         with self._lock() as lock, runlog.take_lock(lock):
-            sys.stdout.write("    %s\n" % line)
-            sys.stdout.flush()
+            if failed:
+                sys.stderr.write("    %s\n" % line)
+            else:
+                runlog.say("    %s\n" % line)
+            sys.stderr.flush()
 
     def bump(self, name: str, amount: int = 1) -> None:
         with self._lock(name + ".lock") as lock, runlog.take_lock(lock):
@@ -309,8 +314,10 @@ def extract(archive: str, destination: str, max_res: int):
     if container:
         refused = archives.unsafe_members(archive, container)
         if refused:
-            log('  WARNING: not unpacking "%s": %s (%s)'
-                % (os.path.basename(archive), refused[0][1], refused[0][0]))
+            # Left alone to keep the library safe, which -q still says.
+            runlog.error('not unpacking "%s": %s (%s)'
+                         % (os.path.basename(archive), refused[0][1],
+                            refused[0][0]))
             return None
 
     if lowered.endswith(".cbr"):
@@ -631,7 +638,7 @@ class Run:
                     unpacked, warning="could not unpack %s"
                     % os.path.basename(partial_path))
             self.counters.note("Skip (no pages): %s"
-                               % os.path.basename(partial_path))
+                               % os.path.basename(partial_path), failed=True)
             return None
         self.counters.bump("pagesFound")
 
@@ -685,7 +692,8 @@ class Run:
             self.counters.bump("pagesBroken", broken)
 
         if not _files_matching(book_avif, ("avif",)):
-            self.counters.note("Skip (nothing converted): %s" % file_name)
+            self.counters.note("Skip (nothing converted): %s" % file_name,
+                               failed=True)
             shutil.rmtree(book_avif, ignore_errors=True)
             return
 
@@ -742,7 +750,7 @@ class Run:
                 # was already taken above, for the WHOLE book, and a book that
                 # got this far is one being converted.
                 ["-c", "-a", "-u", self.chroma, "-j", self.pages_per_book,
-                 "-m", self.max_res, "-q", self.quality, "-s", self.speed_preset,
+                 "-m", self.max_res, "-l", self.quality, "-s", self.speed_preset,
                  "-f", self.fuzz, book_temp, book_avif],
                 script_dir=self.script_dir)
         toolcapture.run(argv, file_name, tool="convert-images", env=env,
@@ -761,17 +769,17 @@ class Run:
             if comic:
                 with open(self.input_list, "a") as handle:
                     handle.write(relative + "\0")
-                sys.stdout.write("Comic: %s (%s, rendering at %d dpi)\n"
-                                 % (relative, share, dpi))
+                runlog.say("Comic: %s (%s, rendering at %d dpi)\n"
+                           % (relative, share, dpi))
             elif pages <= 0:
                 # No page count at all - a damaged file, or the poppler tools
                 # missing, which was said above - so there is no share to give.
-                sys.stdout.write("Not a comic, skipped: %s (its pages could not "
+                sys.stderr.write("Not a comic, skipped: %s (its pages could not "
                                  "be read)\n" % relative)
             else:
-                sys.stdout.write("Not a comic, skipped: %s (%s)\n"
-                                 % (relative, share))
-            sys.stdout.flush()
+                runlog.say("Not a comic, skipped: %s (%s)\n"
+                           % (relative, share))
+            sys.stderr.flush()
         self.counters.bump("pdf.comic" if comic else "pdf.other")
 
 
@@ -836,8 +844,8 @@ def _print_page_stat(label: str, count: int, total: int) -> None:
     would otherwise carry three lines of zeroes."""
     if count <= 0:
         return
-    print("    %-26s %d/%d (%s%%)"
-          % (label + ":", count, total, "%.1f" % (100.0 * count / total)))
+    runlog.say("    %-26s %d/%d (%s%%)\n"
+               % (label + ":", count, total, "%.1f" % (100.0 * count / total)))
 
 
 def footer(state: Run) -> None:
@@ -856,19 +864,22 @@ def footer(state: Run) -> None:
         packaged = counters.read("packaged") - existing
         end = state.phase_end if state.phase_end is not None else time.time()
         runtime = end - state.phase_start
-        print("")
-        print("Converted and packaged %d of %d book(s) in %.2f seconds"
-              % (packaged, state.total, runtime))
+        runlog.say("\n")
+        runlog.say("Converted and packaged %d of %d book(s) in %.2f seconds\n"
+                   % (packaged, state.total, runtime))
         if packaged > 0:
-            print("%.2f seconds per book" % (runtime / packaged))
+            runlog.say("%.2f seconds per book\n" % (runtime / packaged))
         repackaged = counters.read("repackaged")
         if repackaged > 0:
-            print("%d of those were repackaged with their own pages: more than "
-                  "%d%% of each was" % (repackaged, STARVED_PAGE_PERCENT))
-            print("already starved, so re-encoding could only have cost them.")
+            runlog.say("%d of those were repackaged with their own pages: more "
+                       "than %d%% of each was\n"
+                       % (repackaged, STARVED_PAGE_PERCENT))
+            runlog.say("already starved, so re-encoding could only have cost "
+                       "them.\n")
         # Last, so the "of those" above cannot be read as being about these.
         if existing > 0:
-            print("%d already packaged by an earlier run, skipped" % existing)
+            runlog.say("%d already packaged by an earlier run, skipped\n"
+                       % existing)
 
         # A book is a coarse unit to judge a run by - collections hold 20-page
         # floppies and 300-page omnibuses in the same folder - so seconds per PAGE
@@ -876,9 +887,9 @@ def footer(state: Run) -> None:
         totals, books = _page_stats(state.stats_file)
         page_total = totals[0]
         if page_total > 0:
-            print("")
-            print("%d page(s) in %d converted book(s), %.3f seconds per page"
-                  % (page_total, books, runtime / page_total))
+            runlog.say("\n")
+            runlog.say("%d page(s) in %d converted book(s), %.3f seconds per "
+                       "page\n" % (page_total, books, runtime / page_total))
             # The five below partition the page total - the converter puts every
             # page in exactly one of them - so what is printed adds up to 100%.
             _print_page_stat("converted", totals[1], page_total)
@@ -900,19 +911,21 @@ def footer(state: Run) -> None:
                         os.rmdir(parent)
                     except OSError:
                         pass
-            print("")
+            runlog.say("\n")
             written = len(_files_matching(state.out_path, ("cbz",)))
             # With books from an earlier run among them, the count is what the
             # folder holds now rather than what this run wrote.
             if existing > 0:
-                print("%s now holds %d cbz file(s)" % (state.out_path, written))
+                runlog.say("%s now holds %d cbz file(s)\n"
+                           % (state.out_path, written))
             else:
-                print("Wrote %d cbz file(s) to %s" % (written, state.out_path))
+                runlog.say("Wrote %d cbz file(s) to %s\n"
+                           % (written, state.out_path))
 
     # The recap goes to stderr and everything above it to stdout, so the two are
     # only in the order they were written if this one is flushed first - a log
     # capturing both would otherwise show the recap ahead of the report.
-    sys.stdout.flush()
+    sys.stderr.flush()
     safety.report_safety_skips()
 
 
@@ -988,6 +1001,7 @@ def main(argv: list, program: str = "convert-comics",
     declaration = spec(program)
     try:
         result = clioptions.parse(declaration, argv)
+        clioptions.settle_verbosity(result)
     except clioptions.HelpRequested:
         sys.stdout.write(clioptions.help_text(declaration))
         return 0
@@ -1131,16 +1145,14 @@ def _run(result, declaration, program: str, script_dir: str,
                   _files_matching(in_path, enums.COMIC_PDF_EXTENSIONS,
                                   exact_case=True))
     if pdfs:
-        print("PDFs")
-        print("====")
-        print("")
+        runlog.say("PDFs\n====\n\n")
         # Asked once and said out loud: with the poppler tools absent every PDF
         # reads as "no full-page images" and is skipped as not a comic, which is
         # indistinguishable from a correct verdict on a folder of magazines.
         missing = _missing_pdf_tools()
         if missing:
-            sys.stderr.write("WARNING: %s not found - PDFs cannot be inspected "
-                             "and are all skipped.\n\n" % missing)
+            runlog.say("WARNING: %s not found - PDFs cannot be inspected and "
+                       "are all skipped.\n\n" % missing, sys.stderr)
         for name in ("pdf.comic", "pdf.other"):
             with open(os.path.join(counter_dir, name), "w") as handle:
                 handle.write("0")
@@ -1151,14 +1163,13 @@ def _run(result, declaration, program: str, script_dir: str,
                   max(1, int(runlog.cpu_count()
                              / threads_per_conversion("avif", speed))))
         safety.exit_if_aborted()
-        print("")
+        runlog.say("\n")
         # A single PDF's verdict is its own line above; the tally only adds
         # something once there are several.
         if len(pdfs) > 1:
             comic_count = counters.read("pdf.comic")
-            print("%d of %d PDF(s) taken as comic book(s)"
-                  % (comic_count, len(pdfs)))
-            print("")
+            runlog.say("%d of %d PDF(s) taken as comic book(s)\n\n"
+                       % (comic_count, len(pdfs)))
 
     books_found = _records(state.input_list)
     # Everything found is a PDF and none of them is a comic. Refused here with
@@ -1174,9 +1185,7 @@ def _run(result, declaration, program: str, script_dir: str,
         sys.stderr.write("a large, unreadable .cbz. Nothing was converted.\n")
         return 1
 
-    print("Naming")
-    print("======")
-    print("")
+    runlog.say("Naming\n======\n\n")
 
     # What is already converted, read out of the archives themselves rather than
     # guessed from their names. Only .cbz written by a version that records it are
@@ -1192,10 +1201,7 @@ def _run(result, declaration, program: str, script_dir: str,
 
     book_list = _naming_pass(state, books_found)
 
-    print("")
-    print("Converting")
-    print("==========")
-    print("")
+    runlog.say("\nConverting\n==========\n\n")
     state.total = len(book_list)
     counters.total = state.total
     for name in ("current", "pagesFound", "packaged", "existing",

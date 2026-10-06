@@ -41,4 +41,5 @@ many transcriptions run at a time.
 rules:** [file safety](../file-safety.md) ·
 [stopping a run](../file-safety.md#stopping-a-run) ·
 [missing tools](../requirements.md#missing-tools-are-refused-up-front) ·
-[which ffmpeg](../requirements.md#which-ffmpeg-a-run-uses)
+[which ffmpeg](../requirements.md#which-ffmpeg-a-run-uses) ·
+[what a run prints](../output.md)

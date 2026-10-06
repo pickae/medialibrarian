@@ -115,14 +115,14 @@ _CHAPTER_START = re.compile(r"^CHAPTER[0-9]+=(.+)$")
 
 
 def spec(program: str) -> "clioptions.Spec":
-    return clioptions.Spec(
+    return clioptions.with_verbosity(clioptions.Spec(
         head=USAGE_HEAD.format(program=program),
         options=OPT_SPEC,
         long=OPT_LONG,
         vars=OPT_VARS,
         column=OPT_COLUMN,
         tail=USAGE_TAIL,
-    )
+    ))
 
 
 # --- the pure questions -------------------------------------------------------
@@ -502,8 +502,8 @@ class Counters:
         with open(self.lock_file, "w") as lock, runlog.take_lock(lock):
             current = self._bump_position()
             statusline.clear_status()
-            sys.stderr.write("%s%s\n" % (
-                runlog.counted_prefix(current, self.total), line))
+            runlog.say("%s%s\n" % (
+                runlog.counted_prefix(current, self.total), line), sys.stderr)
             sys.stderr.flush()
             statusline.repin_status(self.status_text)
 
@@ -523,7 +523,7 @@ class Counters:
         same lock (:func:`toolcapture.replay_text`)."""
         with open(self.lock_file, "w") as lock, runlog.take_lock(lock):
             statusline.clear_status()
-            sys.stderr.write("    %s\n%s" % (line, said))
+            runlog.say("    %s\n%s" % (line, said), sys.stderr)
             sys.stderr.flush()
             statusline.repin_status(self.status_text)
 
@@ -1152,7 +1152,7 @@ def _find_relative(root: str, matches) -> list:
 # --- the closing report -------------------------------------------------------
 
 def _stat_row(label: str, value) -> None:
-    sys.stdout.write("%-20s %s\n" % (label + ":", value))
+    runlog.say("%-20s %s\n" % (label + ":", value))
 
 
 def _stat_row_if_any(label: str, value) -> None:
@@ -1188,7 +1188,7 @@ def footer(state) -> None:
     else:
         encode_seconds = 0
 
-    sys.stdout.write("\nStats\n=====\n")
+    runlog.say("\nStats\n=====\n")
     _stat_row("Lossless tracks", tracks)
     _stat_row_if_any("  encoded", encoded)
     _stat_row_if_any("  up to date", counters.value("upToDate"))
@@ -1268,6 +1268,7 @@ def main(argv: list, program: str = "ingest-music",
     declaration = spec(program)
     try:
         result = clioptions.parse(declaration, argv)
+        clioptions.settle_verbosity(result)
     except clioptions.HelpRequested:
         sys.stdout.write(clioptions.help_text(declaration))
         return 0
@@ -1297,7 +1298,7 @@ def main(argv: list, program: str = "ingest-music",
     os.environ["LOG_TIMESTAMPS"] = "1"
 
     if not os.path.isdir(download_dir):
-        sys.stdout.write(clioptions.missing_dir_text(declaration,
+        sys.stderr.write(clioptions.missing_dir_text(declaration,
                                                      download_dir))
         return 1
 

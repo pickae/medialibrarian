@@ -15,7 +15,7 @@ import re
 import subprocess
 import tempfile
 
-from medialib.lib import dolbyvisionlevel
+from medialib.lib import dolbyvisionlevel, runlog
 
 _INT = re.compile(r"^[0-9]+$")
 _FPS = re.compile(r"^[0-9]+([.][0-9]+)?$")
@@ -334,7 +334,7 @@ def _reason(*streams):
     return text if text else "<no output>"
 
 
-def convert_to_profile81(movie, out, log=print, pipe=_subprocess_pipe):
+def convert_to_profile81(movie, out, log=runlog.log, pipe=_subprocess_pipe):
     """dvConvertToProfile81: the video track out of <movie> rewritten from
     profile 7 to profile 8.1 - the RPU rewritten, the enhancement layer
     dropped, no re-encode - to <out>. The extraction is piped straight into
@@ -358,7 +358,7 @@ def convert_to_profile81(movie, out, log=print, pipe=_subprocess_pipe):
     return 1
 
 
-def extract_video_stream(movie, out, log=print, run=_subprocess_run):
+def extract_video_stream(movie, out, log=runlog.log, run=_subprocess_run):
     """dvExtractVideoStream: the video track out of <movie> copied, with no
     conversion of any kind, to <out> - the counterpart of
     convert_to_profile81 for a file whose Dolby Vision claim is false. There
@@ -522,7 +522,7 @@ def read_config_level(path, run=_subprocess_run):
             "EXPECTED": "" if expected is None else str(expected)}
 
 
-def normalise_config_level(path, report_as=None, script_dir="", log=print,
+def normalise_config_level(path, report_as=None, script_dir="", log=runlog.log,
                            run=_subprocess_run):
     """dvNormaliseConfigLevel: correct <path>'s Dolby Vision level if it
     overstates what the video needs. <report_as> is the name to use in the log

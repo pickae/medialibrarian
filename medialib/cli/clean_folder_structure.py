@@ -89,13 +89,13 @@ DATE_PREFIX = r"^([12][0-9]{3})[ ./_-]([01][0-9])[ ./_-]([0-3][0-9])[ ./_-](.+)$
 
 
 def spec(program: str) -> clioptions.Spec:
-    return clioptions.Spec(
+    return clioptions.with_verbosity(clioptions.Spec(
         head=USAGE_HEAD.format(program=program),
         options=OPT_SPEC,
         long=OPT_LONG,
         vars=OPT_VARS,
         column=OPT_COLUMN,
-    )
+    ))
 
 
 def siblings(directory: str, mode: str) -> list[str]:
@@ -391,6 +391,7 @@ def main(argv: list, program: str = "clean-folder-structure",
     declaration = spec(program)
     try:
         result = clioptions.parse(declaration, argv)
+        clioptions.settle_verbosity(result)
     except clioptions.HelpRequested:
         sys.stdout.write(clioptions.help_text(declaration))
         return 0

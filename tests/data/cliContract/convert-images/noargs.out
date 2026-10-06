@@ -18,7 +18,7 @@ Options:
     -j, --jobs <jobs>
                     Run up to <jobs> encoder processes in parallel.
                     Only needed when RAM is short, otherwise a good guess is made.
-    -q, --quality <quality>
+    -l, --quality <quality>
                     quality level of the output images
     -s, --speed <speed>
                     av1 speed preset 0-9, lower is slower, default 5
@@ -26,3 +26,7 @@ Options:
                     maximum resolution (height) to keep
     -f, --fuzz <fuzz>
                     when trimming, how many percent color difference gets still trimmed
+    -v, --verbose   Also say why each item was handled the way it was, and on a
+                    failure print the tool's whole output rather than its last
+                    lines.
+    -q, --quiet     Print errors only - no progress and no warnings.

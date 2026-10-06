@@ -285,12 +285,13 @@ def short_encode(sandbox, tmp_path):
     library = tmp_path / "library"
     opus = tmp_path / "libraryopus"
 
-    def run():
+    def run(*options):
         # The suite turns the length check off below the media tier (stubs would
         # otherwise report every output as truncated); this case IS about a
         # truncated output, and its stubs report real lengths, so it asks for the
         # check back.
-        done = sandbox.run("ingest-music", "-j", "2", download, library, opus,
+        done = sandbox.run("ingest-music", "-j", "2", *options, download,
+                           library, opus,
                            env=dict(os.environ, SKIP_LENGTH_CHECK=""),
                            timeout=900)
         return done
@@ -355,6 +356,26 @@ class TestAShortEncodeFailsTheRun:
         log = done.stdout + done.stderr
         assert re.search(r"^  failed: +1$", log, re.MULTILINE), log
         assert re.search(r"^  encoded: ", log, re.MULTILINE) is None, log
+
+
+class TestAQuietRun:
+    """`-q` leaves out the counted lines, the warnings and the closing stats -
+    but a run that failed still fails, and still says which track it was."""
+
+    @pytest.fixture
+    def done(self, short_encode):
+        return short_encode.ingest("-q")
+
+    def test_it_still_ends_nonzero_naming_the_track(self, done):
+        log = done.stdout + done.stderr
+        assert done.returncode == 1, log
+        assert "  Album/one.flac (input 0:10:00, output 0:05:00)" in log, log
+
+    def test_the_progress_warnings_and_stats_are_left_out(self, done):
+        log = done.stdout + done.stderr
+        assert _counted(log, r".") == [], log
+        assert "ffmpeg could not encode this track" not in log, log
+        assert "Stats" not in log, log
 
 
 class TestAnOutputNestedInTheInput:

@@ -100,7 +100,7 @@ u | <chroma> | AVIF chroma: {chromas}. 444 keeps colour at full resolution,
                     larger files. Default {chroma}. AVIF only.
 j | <jobs> | Run up to <jobs> encoder processes in parallel.
                     Only needed when RAM is short, otherwise a good guess is made.
-q | <quality> | quality level of the output images
+l | <quality> | quality level of the output images
 s | <speed> | av1 speed preset {speeds}, lower is slower, default {speed}
 m | <maxRes> | maximum resolution (height) to keep
 f | <fuzz> | when trimming, how many percent color difference gets still trimmed
@@ -123,10 +123,10 @@ u | enum:{chromas} | chroma
            chromas="\\|".join(CHROMAS))
 
 OPT_VARS = ("c:crop a:alwaysConvert r:reverse e:outputFormat u:chroma "
-            "j:jobs q:quality s:speedPreset m:maxRes f:fuzz")
+            "j:jobs l:quality s:speedPreset m:maxRes f:fuzz")
 OPT_COLUMN = 20
 OPT_LONG = ("h:help c:crop a:always r:reverse e:encoding u:chroma j:jobs "
-            "q:quality s:speed m:max-resolution f:fuzz")
+            "l:quality s:speed m:max-resolution f:fuzz")
 
 # One conversion spans about this many threads, so the pool is the cores divided
 # by it.
@@ -223,14 +223,14 @@ _SAME_STEM = frozenset(
 
 
 def spec(program: str) -> clioptions.Spec:
-    return clioptions.Spec(
+    return clioptions.with_verbosity(clioptions.Spec(
         head=USAGE_HEAD.format(program=program),
         options=OPT_SPEC,
         long=OPT_LONG,
         vars=OPT_VARS,
         checks=OPT_CHECKS,
         column=OPT_COLUMN,
-    )
+    ))
 
 
 def disambiguated_output(relative: str, new_extension: str, input_dir: str,
@@ -343,14 +343,19 @@ class Run:
                stream=None) -> None:
         """Bump the global counter and this category's, then print one clean
         line. The lock serialises both across the parallel workers - or, without
-        flock, takes nothing and the line comes out unnumbered."""
-        out = sys.stdout if stream is None else stream
+        flock, takes nothing and the line comes out unnumbered. Under -q only
+        the error line is printed; the counting goes on regardless."""
+        out = sys.stderr if stream is None else stream
         with open(os.path.join(self.counter_dir, "lock"), "w") as handle, \
                 runlog.take_lock(handle):
                 current = self._bump("current")
                 self._bump(category)
-                out.write("%s%s: %s\n" % (
-                    runlog.counted_prefix(current, self.total), label, path))
+                line = "%s%s: %s\n" % (
+                    runlog.counted_prefix(current, self.total), label, path)
+                if category == "notFound":
+                    out.write(line)
+                else:
+                    runlog.say(line, out)
 
     def _bump(self, name: str) -> int:
         path = os.path.join(self.counter_dir, name)
@@ -607,6 +612,7 @@ def main(argv: list, program: str = "convert-images") -> int:
     declaration = spec(program)
     try:
         result = clioptions.parse(declaration, argv)
+        clioptions.settle_verbosity(result)
     except clioptions.HelpRequested:
         sys.stdout.write(clioptions.help_text(declaration))
         return 0
@@ -772,14 +778,14 @@ def _print_footer(state, started, values, own_safety_log) -> None:
     # costs a stat or a header read, and averaging over those would flatter the
     # encoder.
     encoded = state.counter("converted") + state.counter("trimmed")
-    print("")
+    runlog.say("\n")
     if encoded == total:
-        print("Converted %d images in %.2f seconds" % (total, runtime))
+        runlog.say("Converted %d images in %.2f seconds\n" % (total, runtime))
     else:
-        print("Converted %d of %d images in %.2f seconds"
-              % (encoded, total, runtime))
+        runlog.say("Converted %d of %d images in %.2f seconds\n"
+                   % (encoded, total, runtime))
     if encoded > 0:
-        print("%.3f seconds per image" % (runtime / encoded))
+        runlog.say("%.3f seconds per image\n" % (runtime / encoded))
 
     # The breakdown only once there is one: a run in which every image was
     # plainly converted has said all of it in the line above.
@@ -792,7 +798,8 @@ def _print_footer(state, started, values, own_safety_log) -> None:
                             ("trimmed", "trimmed")):
             count = state.counter(name)
             if count >= 1:
-                print("%s: %d (%.1f%%)" % (label, count, 100.0 * count / total))
+                runlog.say("%s: %d (%.1f%%)\n"
+                           % (label, count, 100.0 * count / total))
 
     # The same numbers again, machine-readable, for a caller that runs this
     # script once per unit of work and throws each child's output away. Under a

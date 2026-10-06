@@ -401,7 +401,7 @@ class TestTheClosingReport:
                        out_path=str(tmp_path / "absent"), total=4,
                        stats_file=str(stats), phase_start=0.0, phase_end=8.0)
         cc.footer(state)
-        return capsys.readouterr().out
+        return capsys.readouterr().err
 
     def test_the_books_an_earlier_run_packaged_are_counted_apart(
             self, tmp_path, capsys, monkeypatch):
@@ -436,7 +436,7 @@ class TestThePdfVerdictLine:
                            counters=cc.Counters(str(counters)),
                            input_list=str(counters / "inputs"))
             state.vet_pdf("Book.pdf")
-            return capsys.readouterr().out
+            return capsys.readouterr().err
         return run
 
     def test_a_comic_gives_its_share_and_its_dpi(self, vet):

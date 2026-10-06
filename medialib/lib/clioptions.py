@@ -13,6 +13,7 @@ happens at ``--``. So it is implemented here, in silent mode.
 
 from __future__ import annotations
 
+import dataclasses
 import re
 import textwrap
 from collections.abc import Callable
@@ -424,18 +425,32 @@ def verbosity_options(column: int) -> str:
     return "\n".join(lines) + "\n"
 
 
+def with_verbosity(spec: Spec) -> Spec:
+    """``spec`` with the shared -v and -q added: their lines at the end of its
+    option block, their long names after its own. Every command's page is
+    built through this, so the two read the same everywhere."""
+    options = spec.options if spec.options.endswith("\n") \
+        else spec.options + "\n"
+    return dataclasses.replace(
+        spec, options=options + verbosity_options(spec.column),
+        long=(spec.long + " " + VERBOSITY_LONG).strip())
+
+
 def settle_verbosity(result: Result) -> int:
     """The verbosity this command line asked for, settled for the whole run.
 
-    Both at once is refused rather than one silently winning: whichever the
-    user meant, the other was typed by mistake.
+    Neither flag keeps the level the run was handed: a command another one
+    started says as much as its parent, which is how a quiet run stays quiet
+    all the way down. Both at once is refused rather than one silently
+    winning: whichever the user meant, the other was typed by mistake.
     """
     verbose = "v" in result.given
     quiet = "q" in result.given
     if verbose and quiet:
         raise UsageError("Options -v and -q cannot be used together")
-    level = (runlog.VERBOSE if verbose
-             else runlog.QUIET if quiet else runlog.NORMAL)
+    if not (verbose or quiet):
+        return runlog.verbosity()
+    level = runlog.VERBOSE if verbose else runlog.QUIET
     runlog.settle_verbosity(level)
     return level
 

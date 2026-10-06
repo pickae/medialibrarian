@@ -82,7 +82,7 @@ OPT_LONG = "h:help f:format j:jobs"
 
 
 def spec(program: str) -> clioptions.Spec:
-    return clioptions.Spec(
+    return clioptions.with_verbosity(clioptions.Spec(
         head=USAGE_HEAD.format(program=program),
         options=OPT_SPEC,
         long=OPT_LONG,
@@ -91,7 +91,7 @@ def spec(program: str) -> clioptions.Spec:
         column=OPT_COLUMN,
         credits=CREDITS,
         tail="\n",
-    )
+    ))
 
 
 def _is_video(name: str) -> bool:
@@ -153,12 +153,13 @@ class Run:
                 "--max_line_width", str(whisper.WHISPER_LINE_WIDTH),
                 "--max_line_count", str(whisper.WHISPER_LINE_COUNT)]
 
-    def report_progress(self, label: str) -> None:
+    def report_progress(self, label: str, failed: bool = False) -> None:
         """Increment the shared counter and print one clean progress line.
 
         The counter is a FILE under a lock because the workers are separate
         processes; without flock it is not taken at all and the line comes out
-        unnumbered.
+        unnumbered. Under -q only a <failed> line is printed, but every job
+        still counts.
         """
         with open(self.progress_file + ".lock", "w") as handle, runlog.take_lock(handle):
             try:
@@ -168,8 +169,11 @@ class Run:
                 current = 1
             with open(self.progress_file, "w") as counter:
                 counter.write("%d\n" % current)
-            sys.stdout.write("%s%s\n" % (
-                runlog.counted_prefix(current, self.total), label))
+            line = "%s%s\n" % (runlog.counted_prefix(current, self.total), label)
+            if failed:
+                sys.stderr.write(line)
+            else:
+                runlog.say(line)
 
     def record_failure(self) -> None:
         """Mark the run as having a failed transcription, in a file because the
@@ -208,7 +212,8 @@ class Run:
                 # notice - there is no gap in it to see.
                 if not durationcheck.verify(relative, source, for_whisper):
                     self.report_progress(
-                        "skipped (audio extracted short): " + relative)
+                        "skipped (audio extracted short): " + relative,
+                        failed=True)
                     return
             else:
                 for_whisper = source
@@ -245,7 +250,7 @@ class Run:
                 self.report_progress("transcribed: " + relative)
             else:
                 self.record_failure()
-                self.report_progress("failed: " + relative)
+                self.report_progress("failed: " + relative, failed=True)
         finally:
             shutil.rmtree(work, ignore_errors=True)
 
@@ -285,6 +290,7 @@ def main(argv: list, program: str = "transcribe-audio") -> int:
     declaration = spec(program)
     try:
         result = clioptions.parse(declaration, argv)
+        clioptions.settle_verbosity(result)
     except clioptions.HelpRequested:
         sys.stdout.write(clioptions.help_text(declaration))
         return 0
@@ -299,7 +305,7 @@ def main(argv: list, program: str = "transcribe-audio") -> int:
 
     input_dir, output_dir = result.positionals[0], result.positionals[1]
     if not os.path.isdir(input_dir):
-        sys.stdout.write(clioptions.missing_dir_text(declaration, input_dir))
+        sys.stderr.write(clioptions.missing_dir_text(declaration, input_dir))
         return 1
 
     # Both paths absolute here, once: the run reads the input tree relative to
@@ -357,10 +363,9 @@ def main(argv: list, program: str = "transcribe-audio") -> int:
         def footer():
             total = int(time.time() - started)
             total = total if total > 0 else 0
-            sys.stdout.write("\nStats\n=====\n")
-            sys.stdout.write("Files:        %d\n" % len(tracks))
-            sys.stdout.write("Total time:   %d s (%s)\n"
-                             % (total, fmt_hms(total)))
+            runlog.say("\nStats\n=====\n")
+            runlog.say("Files:        %d\n" % len(tracks))
+            runlog.say("Total time:   %d s (%s)\n" % (total, fmt_hms(total)))
             durationcheck.report()
 
         durationcheck.init_log()
@@ -383,11 +388,11 @@ def main(argv: list, program: str = "transcribe-audio") -> int:
         state = Run(input_dir, output_dir, fmt, model, ram_root, progress_file,
                     len(tracks))
         # The pool is never wider than the work.
-        sys.stdout.write("Transcribing %d file(s) on %d worker(s)...\n"
-                         % (len(tracks), min(int(jobs), len(tracks))))
+        runlog.say("Transcribing %d file(s) on %d worker(s)...\n"
+                   % (len(tracks), min(int(jobs), len(tracks))))
         _run_queue(state, tracks, jobs)
         safety.exit_if_aborted()
-        sys.stdout.write("Done.\n")
+        runlog.say("Done.\n")
         safety.print_run_footer()
         # A file that came out with no transcript, or with a short one, means
         # the run did not do what it was asked, and a caller chaining commands

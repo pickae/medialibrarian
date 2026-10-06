@@ -737,7 +737,7 @@ def _emit_line(counter_file: str, status: str, podcast: str, episode: str,
     # line for an episode that simply arrived is not printed there.
     if status == "ok" and runlog.verbosity() < runlog.NORMAL:
         return
-    sys.stdout.write(f"[{n:4d}] {status:<4} {podcast} | {episode} | {size}\n")
+    sys.stderr.write(f"[{n:4d}] {status:<4} {podcast} | {episode} | {size}\n")
 
 
 def _take_dir_lock(directory: str) -> None:

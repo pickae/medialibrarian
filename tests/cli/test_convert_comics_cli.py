@@ -204,12 +204,12 @@ class TestAnArchiveThatCannotBeTrusted:
 
     def test_the_warning_names_the_escaping_member(self, run):
         _, log, _ = run
-        assert re.search(r'WARNING: not unpacking "Escaping\.cbz": '
+        assert re.search(r'ERROR: not unpacking "Escaping\.cbz": '
                          r'.*\(\.\./x\.jpg\)', log), log
 
     def test_the_corrupt_archive_is_refused_by_name(self, run):
         _, log, _ = run
-        assert 'WARNING: not unpacking "Corrupt.cbz"' in log, log
+        assert 'ERROR: not unpacking "Corrupt.cbz"' in log, log
 
     def test_nothing_is_written_outside_the_work_folder(self, run):
         _, _, root = run
@@ -219,6 +219,46 @@ class TestAnArchiveThatCannotBeTrusted:
         comics, _, _ = run
         assert blackbox.tree_of(comics.outputs) == ["Alpha.cbz"]
         assert len(_entries(comics.outputs / "Alpha.cbz")) == 1
+
+
+class TestAQuietRun:
+    """-q leaves out the headings, the per-book lines and the closing report,
+    and still names the book that could not be converted."""
+
+    @pytest.fixture
+    def run(self, comics):
+        comics.with_tool("identify", _IDENTIFY_FLAT)
+        comics.with_tool("convert", _CONVERT_STAMPING)
+        comics.with_tool("fdupes", "exit 0")
+        _cbz(comics.inputs, "Alpha.cbz", {"01.jpg": "alpha 1"})
+        (comics.inputs / "Corrupt.cbz").write_bytes(b"PK\x03\x04 not a zip")
+        done = comics.run("convert-comics", "-q", comics.inputs, comics.outputs)
+        assert done.returncode == 0, done.stdout + done.stderr
+        return comics, done
+
+    def test_the_book_is_still_made(self, run):
+        comics, _ = run
+        assert blackbox.tree_of(comics.outputs) == ["Alpha.cbz"]
+
+    def test_the_failed_book_is_still_named(self, run):
+        _, done = run
+        assert re.search(r"^    Skip \(.*\): Corrupt\.cbz$", done.stderr,
+                         re.MULTILINE), done.stdout
+
+    @pytest.mark.parametrize("line", [
+        "Naming\n", "Converting\n", "Converting: ", "[1/2] ", "[2/2] ",
+        "Converted and packaged", "seconds per book", "Wrote 1 cbz file(s)"])
+    def test_the_progress_and_the_report_are_left_out(self, run, line):
+        _, done = run
+        assert line not in done.stdout + done.stderr
+
+    def test_a_rerun_does_not_announce_its_skips(self, run):
+        comics, _ = run
+        again = comics.run("convert-comics", "-q", comics.inputs,
+                           comics.outputs)
+        assert again.returncode == 0, again.stdout + again.stderr
+        assert "Skip (exists)" not in again.stdout + again.stderr
+        assert "already packaged" not in again.stdout + again.stderr
 
 
 class TestThePageStatistics:

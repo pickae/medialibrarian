@@ -46,3 +46,7 @@ Options:
                     out half converted. A video, or a format that is always
                     converted, has its whole folder converted with it.
                     Cannot be combined with -a.
+    -v, --verbose   Also say why each item was handled the way it was, and on a
+                    failure print the tool's whole output rather than its last
+                    lines.
+    -q, --quiet     Print errors only - no progress and no warnings.

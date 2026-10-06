@@ -500,7 +500,7 @@ def test_one_line_per_episode_and_the_counter_behind_it(tmp_path, capsys):
         ["[download] noise nobody wants", line, "ERROR: Video unavailable"]) + "\n"
     rc = pf.report_episodes(stream, str(tmp_path / "counter"),
                             str(tmp_path / "manifest"), "AI/latent space")
-    out = capsys.readouterr().out
+    out = capsys.readouterr().err
     assert rc == 0
     assert out == ("[   1] ok   AI/latent space | ep1.opus | 10 B\n"
                    "[   2] FAIL AI/latent space | Video unavailable | -\n")
@@ -513,7 +513,7 @@ def test_the_numbering_carries_on_across_feeds(tmp_path, capsys):
     pf.report_episodes(
         f"{_episode_line(tmp_path, 'e.opus', 10)}\n",
         str(tmp_path / "counter"), str(tmp_path / "manifest"), "AI/x")
-    assert capsys.readouterr().out == \
+    assert capsys.readouterr().err == \
         "[   6] ok   AI/x | e.opus | 10 B\n"
 
 
@@ -527,14 +527,14 @@ def test_the_counter_read_takes_the_whole_first_line(tmp_path, capsys):
         pf.report_episodes(
             f"{_episode_line(tmp_path, 'e.opus', 10)}\n",
             str(tmp_path / "counter"), str(tmp_path / "manifest"), "AI/x")
-        assert capsys.readouterr().out == \
+        assert capsys.readouterr().err == \
             "[   8] ok   AI/x | e.opus | 10 B\n", stale
         capsys.readouterr()
     (tmp_path / "counter").write_text("7 8\n")
     pf.report_episodes(
         f"{_episode_line(tmp_path, 'e.opus', 10)}\n",
         str(tmp_path / "counter"), str(tmp_path / "manifest"), "AI/x")
-    assert capsys.readouterr().out == \
+    assert capsys.readouterr().err == \
         "[   1] ok   AI/x | e.opus | 10 B\n"
 
 
@@ -542,7 +542,7 @@ def test_a_vanished_episode_measures_zero(tmp_path, capsys):
     pf.report_episodes(
         f"{pf.PODCAST_EPISODE_MARKER}{tmp_path / 'gone.opus'}\n",
         str(tmp_path / "counter"), str(tmp_path / "manifest"), "AI/x")
-    assert capsys.readouterr().out == \
+    assert capsys.readouterr().err == \
         "[   1] ok   AI/x | gone.opus | 0 B\n"
 
 
@@ -552,7 +552,7 @@ def test_everything_else_is_kept_rather_than_printed(tmp_path, capsys):
     pf.report_episodes("[download] noise nobody wants\n",
                        str(tmp_path / "counter"), str(tmp_path / "manifest"),
                        "AI/x", output=output)
-    assert capsys.readouterr().out == ""
+    assert capsys.readouterr().err == ""
     assert output.lines() == ["[download] noise nobody wants"]
 
 
@@ -563,7 +563,7 @@ def test_quiet_counts_an_episode_without_printing_it(tmp_path, capsys,
     pf.report_episodes(
         f"{pf.PODCAST_EPISODE_MARKER}{tmp_path / 'gone.opus'}\n",
         str(counter), str(tmp_path / "manifest"), "AI/x")
-    assert capsys.readouterr().out == ""
+    assert capsys.readouterr().err == ""
     assert counter.read_text() == "1\n"
 
 
@@ -571,7 +571,7 @@ def test_a_final_line_without_its_newline_is_not_read(tmp_path, capsys):
     pf.report_episodes(_episode_line(tmp_path, "e.opus", 10),
                        str(tmp_path / "counter"), str(tmp_path / "manifest"),
                        "AI/x")
-    assert capsys.readouterr().out == ""
+    assert capsys.readouterr().err == ""
     assert not (tmp_path / "manifest").exists()
 
 
@@ -579,7 +579,7 @@ def test_the_carriage_return_does_not_reach_the_path(tmp_path, capsys):
     line = _episode_line(tmp_path, "crlf.opus", 4)
     pf.report_episodes(line + "\r\n", str(tmp_path / "counter"),
                        str(tmp_path / "manifest"), "AI/x")
-    assert capsys.readouterr().out == \
+    assert capsys.readouterr().err == \
         "[   1] ok   AI/x | crlf.opus | 4 B\n"
     assert (tmp_path / "manifest").read_text() == f"{tmp_path / 'crlf.opus'}\n"
 
@@ -587,14 +587,14 @@ def test_the_carriage_return_does_not_reach_the_path(tmp_path, capsys):
 def test_an_error_without_its_space_keeps_the_prefix(tmp_path, capsys):
     pf.report_episodes("ERROR:Video unavailable\n", str(tmp_path / "counter"),
                        str(tmp_path / "manifest"), "AI/x")
-    assert "ERROR:Video unavailable" in capsys.readouterr().out
+    assert "ERROR:Video unavailable" in capsys.readouterr().err
 
 
 def test_the_flock_branch_prints_the_same_lines(tmp_path, capsys):
     line = _episode_line(tmp_path, "e.opus", 10)
     pf.report_episodes(line + "\n", str(tmp_path / "counter"),
                        str(tmp_path / "manifest"), "AI/x", have_flock=True)
-    assert capsys.readouterr().out == \
+    assert capsys.readouterr().err == \
         "[   1] ok   AI/x | e.opus | 10 B\n"
     assert (tmp_path / "counter").read_text() == "1\n"
 
@@ -613,9 +613,10 @@ def test_the_bot_block_stops_the_feed_saying_so(tmp_path, capsys):
     rc = pf.report_episodes(stream, str(tmp_path / "counter"),
                             str(tmp_path / "manifest"), "AI/x",
                             block_flag=str(flag), provider="youtube")
-    out, err = capsys.readouterr()
+    err = capsys.readouterr().err
     assert rc == 0
-    assert out == f"[   1] STOP AI/x | {BOT_LINE[len('ERROR: '):]} | -\n"
+    assert err.startswith(
+        f"[   1] STOP AI/x | {BOT_LINE[len('ERROR: '):]} | -\n")
     assert flag.exists()
     assert "WARNING: youtube answered" in err
     # nothing after the block is read: the episode never made the manifest
@@ -647,7 +648,7 @@ def test_the_age_gate_fails_alone_and_the_feed_carries_on(tmp_path, capsys):
     pf.report_episodes(stream, str(tmp_path / "counter"),
                        str(tmp_path / "manifest"), "AI/x",
                        block_flag=str(flag), provider="youtube")
-    out = capsys.readouterr().out
+    out = capsys.readouterr().err
     assert not flag.exists()
     assert "FAIL" in out and "ok" in out
 
@@ -658,7 +659,7 @@ def test_without_a_block_flag_the_block_line_is_just_a_failure(
     stream = BOT_LINE + "\n" + line + "\n"
     pf.report_episodes(stream, str(tmp_path / "counter"),
                        str(tmp_path / "manifest"), "AI/x")
-    out = capsys.readouterr().out
+    out = capsys.readouterr().err
     assert "FAIL" in out and "STOP" not in out
     assert (tmp_path / "manifest").exists()  # it carried on
 
@@ -670,8 +671,8 @@ def test_a_flag_that_cannot_be_written_still_stops_the_run(tmp_path,
                        str(tmp_path / "manifest"), "AI/x",
                        block_flag=str(tmp_path / "no" / "such" / "dir" / "f"),
                        provider="youtube")
-    out, err = capsys.readouterr()
-    assert "STOP" in out and "WARNING: youtube answered" in err
+    err = capsys.readouterr().err
+    assert "STOP" in err and "WARNING: youtube answered" in err
 
 
 def test_the_warning_says_what_to_do(capsys):

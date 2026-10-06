@@ -39,7 +39,7 @@ Options:
                   NVENC engine count to parallelise hardware encoding across,
                   overriding the built-in per-GPU guess. Only affects the *Nvenc
                   profiles.
-    -q, --quality <level>
+    -l, --quality <level>
                   Constant-quality level to encode at, overriding the one the
                   chosen video profile hardcodes: -crf for the software profiles,
                   -cq for the *Nvenc ones. Lower means better quality and a bigger
@@ -104,6 +104,10 @@ Options:
                   converts anything that can save 30%), and -t 0 keeps only the
                   starved-source check. Audio is left out of the comparison.
                   Off by default: every source is converted.
+    -v, --verbose Also say why each item was handled the way it was, and on a
+                  failure print the tool's whole output rather than its last
+                  lines.
+    -q, --quiet   Print errors only - no progress and no warnings.
 
     Run with an unknown profile or tier name to have the valid names listed.
 

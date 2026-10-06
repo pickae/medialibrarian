@@ -23,6 +23,7 @@ import stat
 import subprocess
 import sys
 
+from medialib.lib import toolcapture
 from medialib.lib.booklanguage import book_language_code
 from medialib.lib.enums import lower_extension_of, shell_lower
 from medialib.lib.formatting import awk_gt, awk_number, fmt_clock
@@ -505,9 +506,11 @@ def narration_ensure_torchcodec(log=None):
         "versions it" % installed)
     log("         shipped libraries for) - installing torchcodec %s, the one "
         "torch %s is paired with." % (wanted, torch_series))
-    if not _silenced([python, "-m", "pip", "install", "--quiet",
-                      "--no-cache-dir", "--no-deps",
-                      "torchcodec==%s.*" % wanted]):
+    if not toolcapture.run([python, "-m", "pip", "install", "--quiet",
+                            "--no-cache-dir", "--no-deps",
+                            "torchcodec==%s.*" % wanted],
+                           tool="pip", warning="torchcodec %s could not be "
+                           "installed" % wanted).ok:
         return False
     return _python_ok(python, ["-c", "import torchcodec"])
 
@@ -1174,11 +1177,13 @@ def prepare_voice_sample(src, scratch_dir, log=None):
     sample = os.path.join(scratch_dir, "voiceSample.wav")
     rate = _config("voiceSampleRate", "24000")
     codec = _config("voiceSampleCodec", "pcm_s16le")
-    proc = _run(["ffmpeg", "-y", "-nostdin", "-loglevel", "error"] + cut_args
-                + ["-i", src, "-map", "0:a:0", "-ac", "1", "-ar", rate,
-                   "-c:a", codec, sample],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    if proc is None or proc.returncode != 0:
+    if not toolcapture.run(["ffmpeg", "-y", "-nostdin", "-hide_banner",
+                            *toolcapture.ffmpeg_loglevel()] + cut_args
+                           + ["-i", src, "-map", "0:a:0", "-ac", "1",
+                              "-ar", rate, "-c:a", codec, sample],
+                           os.path.basename(src),
+                           warning='voice sample "%s" could not be made '
+                                   'ready' % os.path.basename(src)).ok:
         return None
     if not os.path.isfile(sample) or os.path.getsize(sample) == 0:
         return None
@@ -1215,7 +1220,7 @@ def voice_sample_language(path):
 
 
 def prepare_voice_samples(given, scratch_dir, log=None):
-    """The voice map for what -v was given, having prepared every sample in it
+    """The voice map for what -r was given, having prepared every sample in it
     exactly once. Returns the map (one "<code><TAB><path>" per line, no trailing
     newline), or None when nothing usable came out of it at all."""
     if log is None:

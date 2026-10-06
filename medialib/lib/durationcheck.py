@@ -238,7 +238,7 @@ def report(stream=None) -> int:
 
 
 def verify(name: str, source: str, output: str, source_seconds: object = None,
-           remove: bool = True, log=runlog.log) -> bool:
+           remove: bool = True, log=None) -> bool:
     """One finished output measured against what it was made from.
 
     <source_seconds> is the source's length where the caller already probed it -
@@ -268,9 +268,14 @@ def verify(name: str, source: str, output: str, source_seconds: object = None,
     if present and length_matches(expected, produced):
         return True
 
-    log("ERROR: the output is not as long as the input (input %s, output %s): "
-        "%s" % (formatting.fmt_hms("%.3f" % expected),
-                formatting.fmt_hms("%.3f" % produced), name))
+    said = ("the output is not as long as the input (input %s, output %s): %s"
+            % (formatting.fmt_hms("%.3f" % expected),
+               formatting.fmt_hms("%.3f" % produced), name))
+    # An error, so -q prints it: runlog.error rather than the step log.
+    if log is None:
+        runlog.error(said)
+    else:
+        log("ERROR: " + said)
     if remove:
         try:
             os.remove(output)

@@ -18,7 +18,7 @@ x265 (**always 10-bit**), audio to Opus, everything else copied across.
 With no options, a run:
 
 - picks up `.mkv` and `.mp4` files only, and writes every output as `.mkv`
-- encodes video with the `av1BluRay` preset: SVT-AV1, 10-bit, quality shifted by resolution (`-p`, `-q`; [details](#quality-and-grain))
+- encodes video with the `av1BluRay` preset: SVT-AV1, 10-bit, quality shifted by resolution (`-p`, `-l`; [details](#quality-and-grain))
 - **measures each film's grain, denoises it out and synthesises it back** (`-g`)
 - **keeps the picture as it is**: no cropping, scaling or deinterlacing (`-c`, `-m`, `-u`)
 - keeps the first video stream only, and drops data streams
@@ -47,7 +47,7 @@ measured.
 | `-m <tier>` | caps the resolution; never scales up | [Picture size](#picture-size--m-and--u) |
 | `-u <tier>` | upscales what is smaller, with a neural network on the GPU | [Picture size](#picture-size--m-and--u) |
 | `-c` | crops the black bands off | [Cropping](#cropping--c) |
-| `-q <level>` | names the quality level yourself, and turns the per-file bias off | [Quality and grain](#quality-and-grain) |
+| `-l <level>` | names the quality level yourself, and turns the per-file bias off | [Quality and grain](#quality-and-grain) |
 | `-g <level\|off>` | names the film grain yourself, or turns it off | [Quality and grain](#quality-and-grain) |
 | `-t [percent]` | converts only what has room to save | [Only what has room to save](#only-what-has-room-to-save--t) |
 
@@ -176,7 +176,7 @@ states one quality level, and that level is then moved by the tier the file is
 *encoded* at — a 2160p file two levels softer, an SD file two levels harder — since
 the same number does not buy the same visible quality across the ladder. A source
 capped by `-m` is judged by the size it comes out at, not the one it arrived at.
-`-q` names a level yourself and turns the bias off.
+`-l` names a level yourself and turns the bias off.
 
 **Film grain follows the source.** Every preset that synthesises grain measures each
 file and synthesises what it measured, so a clean digital master and a 16mm blow-up
@@ -288,4 +288,5 @@ rules:** [file safety](../file-safety.md) ·
 [stopping a run](../file-safety.md#stopping-a-run) ·
 [pausing a run](../file-safety.md#pausing-a-run) ·
 [missing tools](../requirements.md#missing-tools-are-refused-up-front) ·
-[which ffmpeg](../requirements.md#which-ffmpeg-a-run-uses)
+[which ffmpeg](../requirements.md#which-ffmpeg-a-run-uses) ·
+[what a run prints](../output.md)

@@ -19,7 +19,7 @@ driven headless.
 
 With no options, a run:
 
-- reads each book with the `xtts` engine in its own voice, on the GPU when there is one (`-v`, `-d`)
+- reads each book with the `xtts` engine in its own voice, on the GPU when there is one (`-r`, `-d`)
 - **picks each book's language** from its metadata, then its text, falling back to English (`-l`)
 - writes a 36 kbps mono Opus **and** a lossless FLAC of every book (`-b`, `-o`; [below](#the-two-libraries))
 - reads as many books at once as the free VRAM holds, longest first (`-j`)
@@ -69,9 +69,9 @@ metadata, and from its text when the metadata says nothing. `-l` sets one for
 the whole run instead; a language the engine cannot speak is refused up front
 rather than per book, hours into a queue.
 
-**Voice cloning** is optional (`-v`):
+**Voice cloning** is optional (`-r`):
 
-| `-v` given | Voice |
+| `-r` given | Voice |
 | --- | --- |
 | nothing | the engine's own |
 | a **file** | cloned from it for every book: any audio or video file will do, in any format and any length |
@@ -96,4 +96,5 @@ rules:** [file safety](../file-safety.md) ·
 [output never inside the input](../file-safety.md#the-output-folder-must-not-sit-inside-the-input) ·
 [stopping a run](../file-safety.md#stopping-a-run) ·
 [missing tools](../requirements.md#missing-tools-are-refused-up-front) ·
-[which ffmpeg](../requirements.md#which-ffmpeg-a-run-uses)
+[which ffmpeg](../requirements.md#which-ffmpeg-a-run-uses) ·
+[what a run prints](../output.md)

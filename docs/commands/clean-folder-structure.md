@@ -80,4 +80,5 @@ that URI stands for.
 **Options:** `clean-folder-structure -h` lists every option and its default.
 **Shared rules:** [file safety](../file-safety.md) ·
 [stopping a run](../file-safety.md#stopping-a-run) ·
-[missing tools](../requirements.md#missing-tools-are-refused-up-front)
+[missing tools](../requirements.md#missing-tools-are-refused-up-front) ·
+[what a run prints](../output.md)

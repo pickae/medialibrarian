@@ -17,7 +17,7 @@ hold one large image per page — into a tree of `.cbz` archives of AVIF pages.
 
 With no options, a run:
 
-- writes pages as **AVIF** at quality 45, speed 4, colour at full resolution (4:4:4) (`-q`, `-s`, `-u`)
+- writes pages as **AVIF** at quality 45, speed 4, colour at full resolution (4:4:4) (`-l`, `-s`, `-u`)
 - **scales pages taller than 2960 px down** to that height (`-m`)
 - **trims light, plain margins off every page**, treating colours within 10% of the edge as margin (`-f`)
 - **drops blank pages**
@@ -54,7 +54,7 @@ but puts a coloured fringe on thin inked lines and lettering.
 
 | `-u` | Colour | Size |
 | --- | --- | --- |
-| `444` (default) | full resolution | about a quarter more per page, which the slower default speed (`-s 4`) and lower default quality (`-q 45`) pay back, so books come out about the size they did at 4:2:0 |
+| `444` (default) | full resolution | about a quarter more per page, which the slower default speed (`-s 4`) and lower default quality (`-l 45`) pay back, so books come out about the size they did at 4:2:0 |
 | `420` | a quarter of it | smaller books, with colour fringes on thin lines and lettering |
 
 4:4:4 is AV1's High profile: software decoders read it, but some hardware
@@ -80,4 +80,5 @@ in the closing report.
 rules:** [file safety](../file-safety.md) ·
 [output never inside the input](../file-safety.md#the-output-folder-must-not-sit-inside-the-input) ·
 [stopping a run](../file-safety.md#stopping-a-run) ·
-[missing tools](../requirements.md#missing-tools-are-refused-up-front)
+[missing tools](../requirements.md#missing-tools-are-refused-up-front) ·
+[what a run prints](../output.md)

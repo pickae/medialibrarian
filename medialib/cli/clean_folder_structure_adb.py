@@ -27,7 +27,7 @@ import sys
 import tempfile
 
 from medialib import commands
-from medialib.lib import clioptions, safety
+from medialib.lib import clioptions, runlog, safety
 from medialib.lib.runlog import log
 
 USAGE_HEAD = """Usage:
@@ -64,17 +64,17 @@ _PRIMARY_WORDS = frozenset(("phone", "shared", "primary"))
 
 
 def spec(program: str) -> clioptions.Spec:
-    return clioptions.Spec(
+    return clioptions.with_verbosity(clioptions.Spec(
         head=USAGE_HEAD.format(program=program),
         options=OPT_SPEC,
         long=OPT_LONG,
         vars=OPT_VARS,
         column=OPT_COLUMN,
-    )
+    ))
 
 
 def warn(message: str) -> None:
-    sys.stderr.write("!!  %s\n" % message)
+    runlog.say("!!  %s\n" % message, sys.stderr)
 
 
 class Died(Exception):
@@ -267,8 +267,11 @@ class Plan:
         elif self.moves == self.planned:
             log("Done: %d rename(s) applied on device" % self.moves)
         else:
-            log("Done: %d rename(s) applied on device, %d skipped, of %d planned"
-                % (self.moves, self.skips, self.planned))
+            # Fell short - an interrupt, or renames refused - so how far it got
+            # is said whatever the verbosity.
+            runlog.result("Done: %d rename(s) applied on device, %d skipped, "
+                          "of %d planned" % (self.moves, self.skips,
+                                             self.planned))
 
 
 def build_mirror(device: Device, device_root: str, mirror: str):
@@ -331,9 +334,12 @@ def replay(device: Device, device_root: str, mapping, plan: Plan) -> None:
     plan.planned = len(renames)
     ensured = {"."}
     for old, new in renames:
-        sys.stderr.write("  RENAME  %s\n          -> %s\n" % (old, new))
+        line = "  RENAME  %s\n          -> %s\n" % (old, new)
+        # Under -p the plan is the result; applied, each line is progress.
         if plan.dry_run:
+            sys.stderr.write(line)
             continue
+        runlog.say(line, sys.stderr)
 
         parent = os.path.dirname(new) or "."
         if parent not in ensured:
@@ -367,6 +373,7 @@ def main(argv: list, program: str = "clean-folder-structure-adb",
     declaration = spec(program)
     try:
         result = clioptions.parse(declaration, argv)
+        clioptions.settle_verbosity(result)
     except clioptions.HelpRequested:
         sys.stdout.write(clioptions.help_text(declaration))
         return 0

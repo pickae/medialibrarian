@@ -276,3 +276,47 @@ def test_the_tick_holds_the_lock_while_it_draws(tmp_path, monkeypatch):
     monkeypatch.setattr(statusline, "draw_status", draw_and_ask)
     statusline.status_tick(lock_file, lambda: "counted")
     assert (tmp_path / "answer").read_text() == "held"
+
+
+def test_quiet_draws_no_row_and_clears_none(monkeypatch, capsys):
+    """-q prints errors only, and the row is progress."""
+    monkeypatch.setenv("LOG_VERBOSITY", "quiet")
+    state.row = "1"
+    state.cols = 100
+    statusline.draw_status("encoding 40%")
+    statusline.clear_status()
+    statusline.end_status()
+    assert capsys.readouterr().err == ""
+
+
+def test_a_log_line_while_the_row_is_pinned_lands_on_its_own_row(monkeypatch,
+                                                                   capsys):
+    """Not on the end of the row's text, the way a line written over a pinned
+    row without erasing it first would."""
+    monkeypatch.delenv("LOG_VERBOSITY", raising=False)
+    monkeypatch.delenv("LOG_TIMESTAMPS", raising=False)
+    state.row = "1"
+    state.cols = 100
+    state.interval = 3600
+    statusline.start_status_monitor("", lambda: "encoding 0 jobs")
+    try:
+        runlog.log("Queue: pre-filling")
+    finally:
+        statusline.stop_status_monitor()
+    assert capsys.readouterr().err == (
+        "\rencoding 0 jobs\033[K"          # drawn when the monitor starts
+        "\r\033[K==> Queue: pre-filling\n"  # erased, then the line
+        "\rencoding 0 jobs\033[K"          # and the row back under it
+        "\n")                              # finished off when it stops
+
+
+def test_once_the_row_is_gone_lines_are_written_plainly(monkeypatch, capsys):
+    monkeypatch.delenv("LOG_VERBOSITY", raising=False)
+    monkeypatch.delenv("LOG_TIMESTAMPS", raising=False)
+    state.row = "1"
+    state.interval = 3600
+    statusline.start_status_monitor("", lambda: "x")
+    statusline.stop_status_monitor()
+    capsys.readouterr()
+    runlog.log("after")
+    assert capsys.readouterr().err == "==> after\n"

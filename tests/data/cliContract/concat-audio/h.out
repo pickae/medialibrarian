@@ -8,13 +8,13 @@ Usage:
     -p, --pretreat
             opt-in input pretreatment (in-place): renames folders/files in
             <inputDir> before concatenation.
+    -h, --help
+            print this help page.
     -v, --verbose
             Also say why each item was handled the way it was, and on a failure
             print the tool's whole output rather than its last lines.
     -q, --quiet
             Print errors only - no progress and no warnings.
-    -h, --help
-            print this help page.
     
     Default behavior
     ----------------

@@ -147,6 +147,34 @@ class TestThePreview:
         assert (device / "Another Show" / "Some File.mp4").is_file()
 
 
+class TestQuiet:
+    """`-q` leaves out the progress and the tally of an applied run; a preview's
+    plan is its result and a refusal is an error, so both are still printed."""
+
+    def test_an_applied_run_renames_without_its_lines_or_tally(self, adb):
+        device = adb.device()
+        _write(device / "My_Show" / "My_Movie.mp4", "the real bytes")
+        log = adb.run_dev("clean-folder-structure-adb", "-q", device)
+        assert (device / "My Show" / "My Movie.mp4").read_text() \
+            == "the real bytes"
+        assert _plan_sources(log) == []
+        assert "Snapshotting" not in log
+        assert "Done:" not in log
+
+    def test_a_preview_still_prints_its_plan(self, adb):
+        device = adb.device()
+        _write(device / "Another_Show" / "Some_File.mp4", "untouched")
+        log = adb.run_dev("clean-folder-structure-adb", "-q", "-p", device)
+        assert _plan_sources(log) == ["Another_Show/Some_File.mp4"]
+        assert "Preview:" not in log
+
+    def test_a_refusal_is_still_said(self, adb):
+        device = adb.device()
+        log = adb.run_dev("clean-folder-structure-adb", "-q",
+                          device / "nope", expect=1)
+        assert "local backend: not a directory" in log
+
+
 class TestPruningOnTheDevice:
     """Sub-folders the cleaning emptied out are removed from the device too -
     but never the input root, even when everything under it went."""
