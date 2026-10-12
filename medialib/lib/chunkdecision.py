@@ -40,6 +40,12 @@ those, and only those, are probed for what they really hold, and the decision is
 made again with their real length and rate. A file cut only once the guess is
 corrected is probed in turn, so what is finally cut is never weighed by the
 census alone. A run of a thousand files probes the few it may cut.
+
+A guess that a file is left alone is the one no probe would ever correct: a
+file expected to cost nothing is never cut, so never probed. Most Opus is under
+the threshold, and a tree of a few long Opus files at 128 kbps would encode
+whole on that guess alone. So the files that would be cut were every file
+encoded are probed first as well, before the census decides anything.
 """
 
 import bisect
@@ -307,6 +313,8 @@ class _Kind:
         self.seconds = sum(r[0] * r[1] for r in self.rows) / total
         self.cost = sum(r[0] * r[2] for r in self.rows) / total
         encoded = sum(r[0] for r in self.rows if r[1] > 0) / total
+        # Whether the census leaves some files of this kind alone.
+        self.may_skip = encoded < 1
         self.fixed = encoded * JOB_OVERHEAD + (1 - encoded) * SKIP_COST
 
     def draw(self, rng):
@@ -502,14 +510,15 @@ def decide(tracks, workers, threads, mono, bitrate, threshold, is_video,
 
     <probe>, given a track's position, answers ``(decoder, channels, bps,
     seconds)`` for its first audio stream, or None when it cannot say. It is
-    asked only of the tracks a decision would cut, and each at most once.
+    asked only of the tracks a decision would cut, or would cut were they
+    encoded, and each at most once.
     """
     if workers < 2 or not tracks:
         return Decision(frozenset(), 0.0, 0.0)
     verdicts = verdicts or [None] * len(tracks)
     known = {}
-    census = []
-    for (extension, _size), verdict in zip(tracks, verdicts):
+
+    def kind_of(extension, verdict):
         if (extension, verdict) not in known:
             video = is_video(extension)
             rows = VIDEO_ROWS if video else (census_for(extension)
@@ -519,19 +528,16 @@ def decide(tracks, workers, threads, mono, bitrate, threshold, is_video,
                 threshold, codec,
                 extension not in enums.SEEK_CHEAP_EXTENSIONS,
                 verdict=verdict)
-        census.append(known[extension, verdict])
+        return known[extension, verdict]
+
+    census = [kind_of(extension, verdict)
+              for (extension, _size), verdict in zip(tracks, verdicts)]
     kinds = list(census)
     asked = set()
-    decision = _decide(tracks, kinds, workers, threads)
 
-    def probe_round():
-        """The files the decision cuts that are not yet probed, probed, and
-        the decision made again; whether there were any."""
-        nonlocal decision
-        fresh = sorted(decision.chunked - asked)
-        if not fresh:
-            return False
-        for index in fresh:
+    def measure(indices):
+        """The tracks at <indices> probed, and weighed as what they hold."""
+        for index in indices:
             asked.add(index)
             found = probe(index)
             if found is None:
@@ -547,6 +553,27 @@ def decide(tracks, workers, threads, mono, bitrate, threshold, is_video,
                 ((decoder, channels, kbps, 1.0),), is_video(extension),
                 always_transcode(extension), mono, bitrate, threshold, codec,
                 census[index].copied, seconds / size, verdicts[index])
+
+    if probe:
+        # The files the census expects to be left alone, weighed as encoded:
+        # the ones that would then be cut are probed for whether they are.
+        encoded = [kind_of(extension, True)
+                   if verdict is None and kind.may_skip else kind
+                   for (extension, _size), verdict, kind
+                   in zip(tracks, verdicts, census)]
+        if encoded != census:
+            measure(sorted(_decide(tracks, encoded, workers,
+                                   threads).chunked))
+    decision = _decide(tracks, kinds, workers, threads)
+
+    def probe_round():
+        """The files the decision cuts that are not yet probed, probed, and
+        the decision made again; whether there were any."""
+        nonlocal decision
+        fresh = sorted(decision.chunked - asked)
+        if not fresh:
+            return False
+        measure(fresh)
         decision = _decide(tracks, kinds, workers, threads)
         return True
 

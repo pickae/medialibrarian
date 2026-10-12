@@ -182,6 +182,25 @@ class TestProbingTheCandidates:
         assert _decide(tracks, probe=probe,
                        verdicts=verdicts).chunked == frozenset()
 
+    def test_a_few_long_files_guessed_to_be_left_alone_are_probed_and_cut(self):
+        """Most Opus is under the threshold, so the census alone never cuts
+        it - and so would never probe it to find out it is not."""
+        tracks = [("opus", 75 * MB), ("opus", 67 * MB), ("opus", 66 * MB)]
+        assert _decide(tracks).chunked == frozenset()
+        probe, asked = self._probe({
+            index: ("opus", 2, 130000, size * 8 / 130000)
+            for index, (_extension, size) in enumerate(tracks)})
+        assert _decide(tracks, probe=probe).chunked == {0, 1, 2}
+        assert sorted(asked) == [0, 1, 2]
+
+    def test_and_cut_nothing_when_they_are_left_alone_after_all(self):
+        tracks = [("opus", 75 * MB), ("opus", 67 * MB), ("opus", 66 * MB)]
+        probe, asked = self._probe({
+            index: ("opus", 2, 48000, size * 8 / 48000)
+            for index, (_extension, size) in enumerate(tracks)})
+        assert _decide(tracks, probe=probe).chunked == frozenset()
+        assert sorted(asked) == [0, 1, 2]
+
     def test_a_file_the_probe_cannot_measure_keeps_its_guess(self):
         tracks = [("m4b", 2 * GB)] + [("m4b", 30 * MB)] * 200
         probe, asked = self._probe({})
