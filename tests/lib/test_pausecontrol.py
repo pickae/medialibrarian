@@ -151,9 +151,11 @@ def test_pause_jobs_unarmed_is_a_noop(pause_state, monkeypatch):
 
 def test_register_pausable_job_stops_itself_when_the_run_is_paused(pause_state):
     pause_state["flag"].write_text("100\n", encoding="ascii")
-    pc.register_pausable_job(4242)
-    assert (pause_state["jobs"] / "4242").exists()
-    assert _signals(pause_state["kill_log"]) == [("STOP", ["4242"])]
+    # A pid with no process, so the tree walk finds no children of a real one.
+    pid = _a_pid_with_no_process()
+    pc.register_pausable_job(pid)
+    assert (pause_state["jobs"] / str(pid)).exists()
+    assert _signals(pause_state["kill_log"]) == [("STOP", [str(pid)])]
 
 
 def test_register_pausable_job_runs_on_unpaused(pause_state):
@@ -172,9 +174,10 @@ def test_a_job_registered_after_an_interrupt_takes_itself_down(pause_state,
     abort = tmp_path / "abort"
     abort.write_text("")
     monkeypatch.setenv("ABORT_FLAG", str(abort))
-    pc.register_pausable_job(4242)
+    pid = _a_pid_with_no_process()
+    pc.register_pausable_job(pid)
     assert _signals(pause_state["kill_log"]) == [
-        ("STOP", ["4242"]), ("CONT", ["4242"]), ("TERM", ["4242"])]
+        ("STOP", [str(pid)]), ("CONT", [str(pid)]), ("TERM", [str(pid)])]
 
 
 def test_an_unarmed_abort_flag_leaves_a_new_job_alone(pause_state,
