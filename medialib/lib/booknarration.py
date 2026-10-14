@@ -172,6 +172,16 @@ def _config(name, default):
     return os.environ.get(name, default)
 
 
+# The free VRAM, in GB, one book read on the GPU is given.
+VRAM_PER_BOOK_GB = "5"
+
+
+def narration_vram_per_book():
+    """The narrationVramPerBookGB setting, or its default - the GB of free VRAM
+    each book read in parallel on the GPU is sized for."""
+    return _config("narrationVramPerBookGB", VRAM_PER_BOOK_GB)
+
+
 def _noop(*_args):
     return None
 
@@ -330,7 +340,7 @@ def narration_job_budget(device=None):
     free = narration_free_vram()
     if free is None:
         return "1"
-    per_book = awk_number(_config("narrationVramPerBookGB", "5"))
+    per_book = awk_number(narration_vram_per_book())
     divisor = per_book * 1024
     if divisor == 0:
         return ""
