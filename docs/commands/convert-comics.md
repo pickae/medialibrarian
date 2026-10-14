@@ -81,4 +81,5 @@ rules:** [file safety](../file-safety.md) ·
 [output never inside the input](../file-safety.md#the-output-folder-must-not-sit-inside-the-input) ·
 [stopping a run](../file-safety.md#stopping-a-run) ·
 [missing tools](../requirements.md#missing-tools-are-refused-up-front) ·
-[what a run prints](../output.md)
+[what a run prints](../output.md) ·
+[settings](../settings.md)

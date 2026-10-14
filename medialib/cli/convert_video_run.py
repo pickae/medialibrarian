@@ -35,6 +35,7 @@ from medialib.lib import (
     safety,
     scenecuts,
     segments,
+    settings,
     statusline,
     toolcapture,
     tooldeps,
@@ -2259,6 +2260,7 @@ def _run_all(settings) -> int:
 
 
 def cli(argv: list | None = None) -> int:
+    settings.load()
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, commands.program_name(__spec__.name),

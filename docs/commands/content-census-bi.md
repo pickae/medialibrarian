@@ -114,4 +114,5 @@ The page is one file with one tab per content type, each a
 [stopping a run](../file-safety.md#stopping-a-run) ·
 [missing tools](../requirements.md#missing-tools-are-refused-up-front) ·
 [what leaves the machine](../file-safety.md#what-leaves-the-machine) ·
-[what a run prints](../output.md)
+[what a run prints](../output.md) ·
+[settings](../settings.md)

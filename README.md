@@ -121,6 +121,15 @@ What a run does when one of these is missing, what does not work on a Mac yet,
 and which ffmpeg build a run picks are in
 [Requirements in detail](docs/requirements.md).
 
+## Settings
+
+Logins, API keys and the knobs the commands are tuned with are environment
+variables, read from the environment a command starts in or from one settings
+file, `~/.config/medialib/settings`, written the way a shell profile writes
+them. A file that holds a secret has to be private (`chmod 600`). Every
+setting, what it does and which commands read it is listed in
+[Settings](docs/settings.md).
+
 ## File safety
 
 Renaming never overwrites an existing file and never writes outside the input

@@ -59,6 +59,7 @@ from medialib.lib import (
     ramscratch,
     runlog,
     safety,
+    settings,
     toolcapture,
     tooldeps,
     workerpool,
@@ -1278,6 +1279,7 @@ def _settle_fdupes() -> bool:
 
 
 def cli(argv: list | None = None) -> int:
+    settings.load()
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, program=commands.program_name(__spec__.name),

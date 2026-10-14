@@ -42,6 +42,7 @@ from medialib.lib import (
     ramscratch,
     runlog,
     safety,
+    settings,
     thumbnails,
     toolcapture,
     tooldeps,
@@ -1158,6 +1159,7 @@ def _holds_mp3(input_dir: str) -> bool:
 
 
 def cli(argv: list | None = None) -> int:
+    settings.load()
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, program=commands.program_name(__spec__.name),

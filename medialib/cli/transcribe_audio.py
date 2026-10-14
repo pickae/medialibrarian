@@ -25,6 +25,7 @@ from medialib.lib import (
     ramscratch,
     runlog,
     safety,
+    settings,
     toolcapture,
     tooldeps,
     whisper,
@@ -404,6 +405,7 @@ def main(argv: list, program: str = "transcribe-audio") -> int:
 
 
 def cli(argv: list | None = None) -> int:
+    settings.load()
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, program=commands.program_name(__spec__.name))
