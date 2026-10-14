@@ -1,0 +1,43 @@
+David Ernst
+
+Usage:
+    plex-letterboxd-sync [options] <export.zip|account>
+Argument:
+    <export.zip|account>
+                        A Letterboxd data export (Settings > Data > Export),
+                        which holds everything the account has logged - or the
+                        account's name, whose public RSS feed holds only the
+                        fifty or so most recent diary entries.
+Environment:
+    plexUrl             The Plex server, e.g. http://192.168.1.10:32400
+    plexToken           Its X-Plex-Token.
+Options:
+    -s, --sections <names>
+                    Only the Plex movie libraries with these titles,
+                    comma-separated. Default: every movie library.
+    -l, --to-plex-only
+                    Letterboxd -> Plex only: mark films played and rated, and
+                    write no CSV.
+    -o, --output <file>
+                    Write the CSV for Letterboxd's importer to <file>. Default:
+                    logs/letterboxd-import-<date>.csv beside this script.
+    -k, --state <file>
+                    Remember what Letterboxd has, and what was sent to it, in
+                    <file>, and keep a copy of the Plex library beside it, so
+                    the next run reads only what changed. Default:
+                    data/plex-letterboxd-state.json beside this script.
+    -a, --account <id>
+                    Read the plays of the Plex account with this number on the
+                    server rather than its owner's (1). The numbers are listed
+                    at <plexUrl>/accounts.
+    -f, --full      Read the whole Plex library rather than what changed since the
+                    last run - which a run also does by itself once a week, to
+                    see films removed or marked unplayed.
+    -p, --preview   Preview: say what would be marked, rated, added and
+                    exported, and change nothing - not Plex, not the CSVs, not
+                    the state file. The copy of the Plex library is kept.
+    -h, --help      Print this help page.
+    -v, --verbose   Also say why each item was handled the way it was, and on a
+                    failure print the tool's whole output rather than its last
+                    lines.
+    -q, --quiet     Print errors only - no progress and no warnings.

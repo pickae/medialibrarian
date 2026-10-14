@@ -7,7 +7,7 @@ described under [File safety](docs/file-safety.md). What they print, and the `-v
 `-q` that set how much, is described under
 [What a run prints](docs/output.md).
 
-Each is an installed command. From a checkout, `pip install .` puts all nineteen
+Each is an installed command. From a checkout, `pip install .` puts all twenty
 on your PATH; `pip install -e .` does the same and keeps them running the
 checkout, which is what you want while editing it. Under a plain `pip install .`
 the per-machine files — the `data/` tables, the `logs/` logs — live under
@@ -54,6 +54,7 @@ apply to it.
 | --- | --- |
 | [`convert-video`](docs/commands/convert-video.md) | Re-encode a video library (AV1/x265 + Opus) |
 | [`ingest-movies`](docs/commands/ingest-movies.md) | Sort, clean and improve a movie library in place |
+| [`plex-letterboxd-sync`](docs/commands/plex-letterboxd-sync.md) | Sync watched films between Plex and Letterboxd |
 
 ### Books, comics and images
 
@@ -100,9 +101,9 @@ option can never change what a command you already type means.
   `yt-dlp`, `fdupes`, `unrar`/`unzip`/`7z`/`tar`/`zstd`, `zip`, poppler-utils (`pdftoppm`,
   `pdfinfo`, `pdfimages`, `pdftotext`),
   `whisper-ctranslate2`, `ffsubsync`, `tree`, `beets`, Calibre's `ebook-convert`,
-  Ghostscript (`gs`), `duckdb`, [subcleaner](https://github.com/KBlixt/subcleaner)
-  and `wc` — that last one being the only piece of coreutils anything here still
-  shells out to.
+  Ghostscript (`gs`), `duckdb`, [subcleaner](https://github.com/KBlixt/subcleaner),
+  `curl` (for TheMovieDB, Plex and Letterboxd) and `wc` — that last one being the
+  only piece of coreutils anything here still shells out to.
 - `convert-audio -o xheaac` additionally needs
   [exhale](https://gitlab.com/ecodis/exhale), which ffmpeg cannot stand in for:
   it decodes the codec but does not encode it. No distribution packages exhale,
