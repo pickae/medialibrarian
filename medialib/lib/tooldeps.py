@@ -48,7 +48,7 @@ _TOOL_NOTES = {
     "hdr10plus_tool": "HDR10+ metadata extraction and injection"
                       "|https://github.com/quietvoid/hdr10plus_tool (release binary)",
     "jq": "reading the JSON that ffprobe and mkvmerge print|apt install jq",
-    "curl": "the TheMovieDB lookups|apt install curl",
+    "curl": "the TheMovieDB, Plex and Letterboxd requests|apt install curl",
     "rsync": "copying side-car files across trees|apt install rsync",
     "fdupes": "de-duplicating the input folder|apt install fdupes",
     "tree": "the before/after folder snapshots|apt install tree",

@@ -117,8 +117,10 @@ The reverse nesting is allowed: an input **inside** the output (`<library>` and
 
 ## What leaves the machine
 
-`ytdlp` downloads, so it obviously talks to the internet. Three other commands
-do too, which is less obvious:
+`ytdlp` downloads, and `plex-letterboxd-sync` talks to a Plex server, plex.tv
+(for the account's watchlist), Letterboxd and — once `tmdbApiKey` is set —
+TheMovieDB, so both obviously reach the network. Three other commands do too,
+which is less obvious:
 
 - **`ingest-music`** runs beets with the config that ships beside it, and that
   config enables `chroma`, `lastgenre`, `lyrics` and `fetchart`. So an ingest

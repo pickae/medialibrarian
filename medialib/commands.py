@@ -1,4 +1,4 @@
-"""The nineteen commands: what each is called, and which module is it.
+"""The twenty commands: what each is called, and which module is it.
 
 One table, because three separate things need exactly this mapping and must not
 disagree about it - the console scripts ``pyproject.toml`` installs, the program
@@ -38,6 +38,7 @@ COMMANDS = {
     "ingest-books": "medialib.cli.ingest_books",
     "ingest-movies": "medialib.cli.ingest_movies_run",
     "ingest-music": "medialib.cli.ingest_music",
+    "plex-letterboxd-sync": "medialib.cli.plex_letterboxd_sync",
     "read-library": "medialib.cli.read_library",
     "transcribe-audio": "medialib.cli.transcribe_audio",
     "ytdlp": "medialib.cli.ytdlp",
