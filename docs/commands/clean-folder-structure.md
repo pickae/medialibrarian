@@ -81,4 +81,5 @@ that URI stands for.
 **Shared rules:** [file safety](../file-safety.md) ·
 [stopping a run](../file-safety.md#stopping-a-run) ·
 [missing tools](../requirements.md#missing-tools-are-refused-up-front) ·
-[what a run prints](../output.md)
+[what a run prints](../output.md) ·
+[settings](../settings.md)

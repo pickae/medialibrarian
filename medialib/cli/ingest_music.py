@@ -43,6 +43,7 @@ from medialib.lib import (
     ramscratch,
     runlog,
     safety,
+    settings,
     statusline,
     toolcapture,
     tooldeps,
@@ -1672,6 +1673,7 @@ def _run_child(command: str, argv: list, script_dir: str) -> int:
 
 
 def cli(argv: list | None = None) -> int:
+    settings.load()
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, commands.program_name(__spec__.name),

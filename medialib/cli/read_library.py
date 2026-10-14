@@ -37,6 +37,7 @@ from medialib.lib import (
     ramscratch,
     runlog,
     safety,
+    settings,
     statusline,
     toolcapture,
     tooldeps,
@@ -1182,6 +1183,7 @@ def _settle_mkvtoolnix(opus_wanted: bool) -> None:
 
 
 def cli(argv: list | None = None) -> int:
+    settings.load()
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, program=commands.program_name(__spec__.name),

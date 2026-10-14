@@ -230,6 +230,9 @@ def private_workspace(tmp_path_factory, monkeypatch):
     # The script directory too, which is where a run keeps its logs - a tool
     # failure's among them. A case that needs one of its own still sets it.
     monkeypatch.setenv("CLI_SCRIPT_DIR", str(scratch / "scriptDir"))
+    # And a settings file that is not there, so no case - nor a command a case
+    # starts - reads the settings of the machine the suite runs on.
+    monkeypatch.setenv("CLI_SETTINGS_FILE", str(scratch / "no-settings-file"))
 
     # The ffmpeg ladder's rungs past PATH are absolute paths into the MACHINE -
     # /opt/ffmpeg/bin, /usr/local/bin, /usr/bin, $HOME/.local/bin - and a caller

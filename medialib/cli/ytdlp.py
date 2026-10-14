@@ -32,6 +32,7 @@ from medialib.lib import (
     ramscratch,
     runlog,
     safety,
+    settings,
     toolcapture,
     tooldeps,
     workerpool,
@@ -1394,6 +1395,7 @@ def _build_library(state, ingest):
 
 
 def cli(argv: list | None = None) -> int:
+    settings.load()
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, program=commands.program_name(__spec__.name),

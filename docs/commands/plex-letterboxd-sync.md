@@ -109,4 +109,5 @@ with the Letterboxd spelling beside it, and `-v` says which rule made it.
 **Options:** `plex-letterboxd-sync -h` lists every option and its default.
 **Shared rules:** [file safety](../file-safety.md) ·
 [missing tools](../requirements.md#missing-tools-are-refused-up-front) ·
-[what a run prints](../output.md)
+[what a run prints](../output.md) ·
+[settings](../settings.md)

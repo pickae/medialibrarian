@@ -35,6 +35,7 @@ from medialib.lib import (
     numbering,
     prefixes,
     safety,
+    settings,
     tooldeps,
 )
 from medialib.lib.runlog import log
@@ -554,6 +555,7 @@ def main(argv: list, program: str = "clean-folder-structure",
 
 
 def cli(argv: list | None = None) -> int:
+    settings.load()
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, program=commands.program_name(__spec__.name),

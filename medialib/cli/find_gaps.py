@@ -45,6 +45,7 @@ from medialib.lib import (
     plurality,
     prefixes,
     safety,
+    settings,
 )
 from medialib.lib.versionsort import version_key
 
@@ -478,6 +479,7 @@ def report_name(directory: str) -> str:
 
 
 def cli(argv: list | None = None) -> int:
+    settings.load()
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, program=commands.program_name(__spec__.name))

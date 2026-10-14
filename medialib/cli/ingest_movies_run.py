@@ -38,6 +38,7 @@ from medialib.lib import (
     research,
     runlog,
     safety,
+    settings,
     subtitleads,
     subtitlefiles,
     tmdblookup,
@@ -2263,6 +2264,7 @@ def _run_pool(state, movies: list, root: str, jobs: int) -> None:
 
 
 def cli(argv: list | None = None) -> int:
+    settings.load()
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, commands.program_name(__spec__.name),

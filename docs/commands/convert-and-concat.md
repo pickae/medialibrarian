@@ -59,4 +59,5 @@ An archive is read before it is unpacked, so that last check comes first.
 [stopping a run](../file-safety.md#stopping-a-run) ·
 [missing tools](../requirements.md#missing-tools-are-refused-up-front) ·
 [which ffmpeg](../requirements.md#which-ffmpeg-a-run-uses) ·
-[what a run prints](../output.md)
+[what a run prints](../output.md) ·
+[settings](../settings.md)

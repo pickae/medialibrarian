@@ -20,7 +20,7 @@ import sys
 import time
 
 from medialib import commands
-from medialib.lib import clioptions, safety, tooldeps
+from medialib.lib import clioptions, safety, settings, tooldeps
 
 USAGE_HEAD = """Usage:
     {program} [options] <folderOrTreeFile>
@@ -275,6 +275,7 @@ def write_report(report: str, tree_file: str, rows, minimum: int) -> int:
 
 
 def cli(argv: list | None = None) -> int:
+    settings.load()
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, program=commands.program_name(__spec__.name))

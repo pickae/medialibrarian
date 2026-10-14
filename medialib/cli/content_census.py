@@ -10,7 +10,7 @@ import sys
 
 from medialib import commands
 from medialib.cli import census_run
-from medialib.lib import clioptions
+from medialib.lib import clioptions, settings
 
 # The name is the caller's to supply: a command started by another one prints the
 # name that command was told, not its own.
@@ -86,6 +86,7 @@ def spec(program: str) -> clioptions.Spec:
 
 def cli(argv: list[str] | None = None) -> int:
     """The module's own entry point, and the console script's."""
+    settings.load()
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, program=commands.program_name(__spec__.name),
