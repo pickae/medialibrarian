@@ -91,3 +91,25 @@ class TestTheActiveBooksOrder:
             counters=read_library.Counters(str(counter_dir), 10))
         assert run.active_book_progress() == \
             "  [2] copying  [9] publishing  [10] done"
+
+
+class TestTheAnnouncedVramPerBook:
+    """The opening line on a GPU names the free VRAM each book is given - the
+    same figure the job count was divided by, its default when unset."""
+
+    @staticmethod
+    def _first_line(monkeypatch):
+        said = []
+        monkeypatch.setattr(read_library.runlog, "say", said.append)
+        run = read_library.Run(total=3, opus_bitrate=0)
+        read_library._announce(run, 2, "", "cuda", "", "")
+        return said[0]
+
+    def test_unset_it_names_the_default(self, monkeypatch):
+        monkeypatch.delenv("narrationVramPerBookGB", raising=False)
+        assert self._first_line(monkeypatch) == \
+            "Reading 3 book(s), 2 at a time (cuda, 5 GB of free VRAM each)\n"
+
+    def test_set_it_names_the_setting(self, monkeypatch):
+        monkeypatch.setenv("narrationVramPerBookGB", "8")
+        assert "(cuda, 8 GB of free VRAM each)" in self._first_line(monkeypatch)

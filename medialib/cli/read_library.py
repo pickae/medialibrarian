@@ -1133,7 +1133,7 @@ def _announce(state: Run, jobs: int, jobs_from: str, device: str,
         line += " (-j)"
     elif device == "cuda":
         line += " (%s, %s GB of free VRAM each)" % (
-            device, os.environ.get("narrationVramPerBookGB", ""))
+            device, booknarration.narration_vram_per_book())
     else:
         line += " (%s)" % device
     runlog.say(line + "\n")
