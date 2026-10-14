@@ -273,7 +273,8 @@ class TestWhisperExitingCleanWithNoTranscript:
         kept = [line.split(": ", 1)[1] for line in log.splitlines()
                 if line.startswith("    all ")]
         assert len(kept) == 1, log
-        assert "CUDA failed with error out of memory" in open(kept[0]).read()
+        with open(kept[0]) as handle:
+            assert "CUDA failed with error out of memory" in handle.read()
 
     def test_no_transcript_appears(self, run):
         outputs, _, _ = run

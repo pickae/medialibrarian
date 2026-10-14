@@ -140,7 +140,8 @@ class TestRun:
         shown = [line for line in err.splitlines() if line.startswith("    | ")]
         assert shown == ["    | %d" % n for n in range(60, 100)]
         assert "all 100 line(s) it printed: %s" % result.log_path in err
-        kept = open(result.log_path).read()
+        with open(result.log_path) as handle:
+            kept = handle.read()
         assert "exited with status 3" in kept and "\n0\n" in kept
 
     def test_quiet_prints_only_the_error_and_where_it_is(self, logs_home,

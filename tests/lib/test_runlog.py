@@ -16,7 +16,7 @@ from medialib.lib import runlog
 try:
     import fcntl
 except ImportError:      # a platform without POSIX file locks
-    fcntl = None
+    fcntl = None  # type: ignore[assignment]
 
 pytestmark = pytest.mark.pure
 

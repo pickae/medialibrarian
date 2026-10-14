@@ -531,7 +531,7 @@ def decide(tracks, workers, threads, mono, bitrate, threshold, is_video,
         return known[extension, verdict]
 
     census = [kind_of(extension, verdict)
-              for (extension, _size), verdict in zip(tracks, verdicts)]
+              for (extension, _size), verdict in zip(tracks, verdicts, strict=True)]
     kinds = list(census)
     asked = set()
 
@@ -560,7 +560,7 @@ def decide(tracks, workers, threads, mono, bitrate, threshold, is_video,
         encoded = [kind_of(extension, True)
                    if verdict is None and kind.may_skip else kind
                    for (extension, _size), verdict, kind
-                   in zip(tracks, verdicts, census)]
+                   in zip(tracks, verdicts, census, strict=True)]
         if encoded != census:
             measure(sorted(_decide(tracks, encoded, workers,
                                    threads).chunked))

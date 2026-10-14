@@ -2069,7 +2069,8 @@ def _convert(program: str, script_dir: str, input_dir: str, output_dir: str,
         input_dir=input_dir, output_dir=output_dir, script_dir=script_dir,
         mono=mono, surround=surround, adaptive=adaptive, copy=copy, keep=keep,
         bitrate=bitrate, threshold=THRESHOLD, chunked=frozenset(),
-        group_depth=group_depth, verdicts={}, codec=codec, extension=enums.AUDIO_CODEC_EXTENSIONS[codec],
+        group_depth=group_depth, verdicts={}, codec=codec,
+        extension=enums.AUDIO_CODEC_EXTENSIONS[codec],
         chunk_over_ceiling=chunk_over_ceiling,
         # The table's default: a cover that rides along in every transcoded
         # track is glanced at in a track list, not studied, so the floor of the
@@ -2258,7 +2259,7 @@ def _judge_groups(state: Run, jobs: int) -> dict:
             max_workers=max(1, jobs)) as pool:
         rates = dict(zip(measured, pool.map(
             lambda track: _measured_rate(os.path.join(state.input_dir, track)),
-            measured)))
+            measured), strict=True))
 
     threshold = MONO_THRESHOLD if state.mono else state.threshold
     for group in sorted(groups, key=os.fsencode):
