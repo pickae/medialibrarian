@@ -99,13 +99,17 @@ class _Run:
                 if os.path.basename(str(call[0])) == name]
 
 
+def _NO_CHAPTERS(_path):
+    return ""
+
+
 def _rows(names, durations=None):
     """The OGM rows for these file names, in this order, with these durations
     - the unit contract's chapters() helper, with the probe a table lookup."""
     entries = [f"file '/work/{n}'" for n in names]
     table = {f"/work/{n}": d for n, d in zip(
         names, durations or ["2.500"] * len(names), strict=True)}
-    return chapters.chapters_from_files(entries, table.get)
+    return chapters.chapters_from_files(entries, table.get, _NO_CHAPTERS)
 
 
 def _name_of(lines, n):
@@ -283,7 +287,7 @@ def test_every_file_word_is_stripped():
     # holds the word still lands where the shell lands.
     lines = chapters.chapters_from_files(
         ["file '/work/my file one.flac'"],
-        {"/work/my one.flac": "2.500"}.get)
+        {"/work/my one.flac": "2.500"}.get, _NO_CHAPTERS)
     assert _name_of(lines, 1) == "my one"
 
 
@@ -296,7 +300,7 @@ def test_an_apostrophe_in_a_name_reaches_its_probe():
         ["file '/work/one.mp3'", "file '/work/it's.mp3'",
          "file '/work/two.mp3'"],
         {"/work/one.mp3": "2.500", "/work/it's.mp3": "4.000",
-         "/work/two.mp3": "1.000"}.get)
+         "/work/two.mp3": "1.000"}.get, _NO_CHAPTERS)
     assert _time_of(lines, 1) == "00:00:00.000"
     assert _time_of(lines, 2) == "00:00:02.500"
     assert _time_of(lines, 3) == "00:00:06.500"
@@ -304,13 +308,13 @@ def test_an_apostrophe_in_a_name_reaches_its_probe():
 
 def test_base_name_is_taken_after_the_last_slash():
     lines = chapters.chapters_from_files(
-        ["file '/a/b/c.flac'"], {"/a/b/c.flac": "2.500"}.get)
+        ["file '/a/b/c.flac'"], {"/a/b/c.flac": "2.500"}.get, _NO_CHAPTERS)
     assert _name_of(lines, 1) == "c"
 
 
 def test_last_extension_only_is_stripped():
     lines = chapters.chapters_from_files(
-        ["file '/x/a.b.c.mp3'"], {"/x/a.b.c.mp3": "2.500"}.get)
+        ["file '/x/a.b.c.mp3'"], {"/x/a.b.c.mp3": "2.500"}.get, _NO_CHAPTERS)
     # the individual pass settles the dotted stem to its space form
     assert _name_of(lines, 1) == "a b c"
 
@@ -319,9 +323,125 @@ def test_a_blank_duration_is_zero():
     # a probe that answers nothing is zero, the way the shell's :-0 does
     lines = chapters.chapters_from_files(
         ["file '/a/one.flac'", "file '/a/two.flac'"],
-        {"/a/one.flac": "2.500", "/a/two.flac": ""}.get)
+        {"/a/one.flac": "2.500", "/a/two.flac": ""}.get, _NO_CHAPTERS)
     assert _time_of(lines, 1) == "00:00:00.000"
     assert _time_of(lines, 2) == "00:00:02.500"
+
+
+# --- a file's own chapters ----------------------------------------------------
+
+def _flat(*marks):
+    """A flat -show_chapters stream for these (start seconds, title) marks; a
+    title of None leaves the chapter untitled."""
+    rows = []
+    for index, (start, title) in enumerate(marks):
+        rows.append(f'chapters.chapter.{index}.start_time="{start:.6f}"')
+        if title is not None:
+            rows.append(f'chapters.chapter.{index}.tags.title="{title}"')
+    return "\n".join(rows) + "\n"
+
+
+def _join(durations, flats):
+    """chapters_from_files over these {path: seconds} files, in order, with
+    {path: flat stream} as the chapter probe."""
+    return chapters.chapters_from_files(
+        [f"file '{path}'" for path in durations], durations.get,
+        lambda path: flats.get(path, ""))
+
+
+def test_inner_chapters_are_kept_and_shifted_by_the_files_before():
+    lines = _join(
+        {"/a/01 Part.m4a": "100.000", "/a/02 Part.m4a": "120.000"},
+        {"/a/01 Part.m4a": _flat((0, "Prologue"), (60.5, "Opening")),
+         "/a/02 Part.m4a": _flat((0, "Storm"), (30, "Harbour"),
+                                 (90, "Home"))})
+    assert lines == [
+        "CHAPTER01=00:00:00.000", "CHAPTER01NAME=Prologue",
+        "CHAPTER02=00:01:00.500", "CHAPTER02NAME=Opening",
+        "CHAPTER03=00:01:40.000", "CHAPTER03NAME=Storm",
+        "CHAPTER04=00:02:10.000", "CHAPTER04NAME=Harbour",
+        "CHAPTER05=00:03:10.000", "CHAPTER05NAME=Home",
+    ]
+
+
+def test_inner_titles_are_cleaned_among_their_own_file_only():
+    # The text common to one file's titles goes, but not text common across
+    # files: each file is its own set.
+    lines = _join(
+        {"/a/one.opus": "100.000", "/a/two.opus": "100.000"},
+        {"/a/one.opus": _flat((0, "01 - Book One - Arrival"),
+                              (50, "02 - Book One - Departure")),
+         "/a/two.opus": _flat((0, "01 - Book Two - Arrival"),
+                              (50, "02 - Book Two - Return"))})
+    names = [lines[i].split("=", 1)[1] for i in range(1, len(lines), 2)]
+    assert names == ["Arrival", "Departure", "Arrival", "Return"]
+
+
+def test_file_names_are_cleaned_among_the_unchaptered_as_before():
+    # No file carries chapters: the rows are exactly what the names alone give.
+    durations = {"/w/Book - 01.mp3": "2.500", "/w/Book - 02.mp3": "2.500"}
+    assert _join(durations, {}) == chapters.chapters_from_files(
+        [f"file '{p}'" for p in durations], durations.get, _NO_CHAPTERS)
+
+
+def test_a_late_first_chapter_gets_a_mark_named_after_the_file():
+    lines = _join(
+        {"/a/02 Before.flac": "5.000", "/a/03 Third Leg.flac": "100.000"},
+        {"/a/03 Third Leg.flac": _flat((10, "Dawn"), (60, "Dusk"))})
+    assert lines[2:] == [
+        "CHAPTER02=00:00:05.000", "CHAPTER02NAME=Third Leg",
+        "CHAPTER03=00:00:15.000", "CHAPTER03NAME=Dawn",
+        "CHAPTER04=00:01:05.000", "CHAPTER04NAME=Dusk"]
+
+
+def test_a_lone_file_gets_no_mark_named_after_it():
+    # The whole book is that one file: its chapters are all there is, the
+    # first where it says it starts - and still cleaned among themselves.
+    lines = _join(
+        {"/a/03 Third Leg.flac": "100.000"},
+        {"/a/03 Third Leg.flac": _flat((10, "01 - Dawn"),
+                                          (60, "02 - Dusk"))})
+    assert lines == ["CHAPTER01=00:00:10.000", "CHAPTER01NAME=Dawn",
+                     "CHAPTER02=00:01:00.000", "CHAPTER02NAME=Dusk"]
+
+
+def test_a_first_chapter_within_a_second_marks_the_start():
+    lines = _join({"/a/x.flac": "100.000"},
+                  {"/a/x.flac": _flat((0.4, "Dawn"), (60, "Dusk"))})
+    assert lines == ["CHAPTER01=00:00:00.000", "CHAPTER01NAME=Dawn",
+                     "CHAPTER02=00:01:00.000", "CHAPTER02NAME=Dusk"]
+
+
+def test_a_single_chapter_counts_as_none():
+    # One chapter is the file itself: the file's name titles it, as for a
+    # file with no chapters at all.
+    lines = _join({"/a/one.opus": "10.000", "/a/two.opus": "10.000"},
+                  {"/a/one.opus": _flat((0, "Whole thing")),
+                   "/a/two.opus": _flat((0, "Alpha"), (5, "Beta"))})
+    assert lines == [
+        "CHAPTER01=00:00:00.000", "CHAPTER01NAME=one",
+        "CHAPTER02=00:00:10.000", "CHAPTER02NAME=Alpha",
+        "CHAPTER03=00:00:15.000", "CHAPTER03NAME=Beta",
+    ]
+
+
+def test_a_lone_file_keeps_its_own_chapters():
+    lines = _join({"/a/book.m4b": "600.000"},
+                  {"/a/book.m4b": _flat((0, "Start"), (300, "Middle"))})
+    assert lines == ["CHAPTER01=00:00:00.000", "CHAPTER01NAME=Start",
+                     "CHAPTER02=00:05:00.000", "CHAPTER02NAME=Middle"]
+
+
+def test_inner_marks_outside_the_file_or_out_of_order_are_dropped():
+    # One that does not move forward, or lies at or past the file's end, is
+    # dropped; an untitled one is "Chapter nn" before the cleaning.
+    lines = _join({"/a/x.flac": "50.000"},
+                  {"/a/x.flac": _flat((0, "Opening"), (20, None),
+                                      (20, "Same"), (10, "Back"),
+                                      (50, "End"), (70, "Past"))})
+    assert [lines[0], lines[2]] == ["CHAPTER01=00:00:00.000",
+                                    "CHAPTER02=00:00:20.000"]
+    assert len(lines) == 4
 
 
 # --- the flat chapter stream --------------------------------------------------

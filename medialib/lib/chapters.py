@@ -4,7 +4,8 @@ A list of concatenated audio files becomes chapter marks, and the marks get
 written into the finished file - and, on the transcode side, a source's own
 chapters are read back out and re-attached to what was encoded from it.
 
-  chapters_from_files    the concat list -> OGM CHAPTERnn= rows
+  chapters_from_files    the concat list -> OGM CHAPTERnn= rows, a source's
+                         own chapters kept and shifted to where it starts
   embed_chapters         the rows into the output file(s)
   extract_chapters       a source's chapters -> an OGM file
   attach_chapters       re-attach them after an encode
@@ -259,33 +260,25 @@ def _probe_duration(path: str) -> str:
     return proc.stdout.decode("utf-8", "replace").rstrip("\n")
 
 
-def chapters_from_files(concat_list: Sequence[str],
-                        probe: Callable[[str], str] = _probe_duration) -> list[str]:
-    """The concat list's OGM rows, in the list's own order.
-
-    ``probe`` takes each entry's full path - the path, not the base name -
-    and answers the probe's output with the trailing newlines gone.
-    """
-    lines: list[str] = []
+def _clean_titles(raw: Sequence[str]) -> list[str]:
+    """The names a set of chapters gets, each decided by looking at the
+    others: every raw name cleaned on its own, then the set cleaned together,
+    then a name the common text was blocking cleaned on its own once more."""
     names: list[str] = []
     temp_prefixes: list[str] = []
 
     # First pass: the names and prefixes the individual pass splits out.
-    for entry in concat_list:
-        stem = _stem_of(_base_of(_entry_path(entry)))
-        prefix, name = clean_names_individually(stem)
+    for text in raw:
+        prefix, name = clean_names_individually(text)
         temp_prefixes.append(prefix)
         names.append(name)
 
     clean_names, prefixes = _clean_collectively(names, temp_prefixes)
 
-    # Second pass: one chapter per entry - a chapter's name can depend on the
-    # other chapters, so the rows cannot be written while the names are made.
-    accumulated = 0
-    for index, entry in enumerate(concat_list):
-        clean_name = clean_names[index]
-        prefix = prefixes[index]
-
+    # Second pass: one title per name - a name can depend on the others, so
+    # none is final until the set has been looked at.
+    titles: list[str] = []
+    for clean_name, prefix in zip(clean_names, prefixes, strict=True):
         # The number a name still carries, blocked by the common text that is
         # now gone: removed by a second individual pass, but only when
         # something remains of the name.
@@ -293,15 +286,89 @@ def chapters_from_files(concat_list: Sequence[str],
             _, again = clean_names_individually(clean_name)
             if again:
                 clean_name = again
+        titles.append(_chapter_name(prefix, clean_name))
+    return titles
 
-        chapter_name = _chapter_name(prefix, clean_name)
-        number = index + 1
-        lines.append(f"CHAPTER{number:02d}={_time_stamp(accumulated)}")
-        lines.append(f"CHAPTER{number:02d}NAME={chapter_name}")
 
-        raw = probe(_entry_path(entry))
-        accumulated += _duration_ms(raw.rstrip("\n"))
+def _clean_alone(text: str) -> str:
+    """One name cleaned on its own, with nothing to compare it against."""
+    return _chapter_name(*clean_names_individually(text))
+
+
+def chapters_from_files(concat_list: Sequence[str],
+                        probe: Callable[[str], str] = _probe_duration,
+                        chapter_probe: Callable[[str], str] | None = None,
+                        ) -> list[str]:
+    """The concat list's OGM rows, in the list's own order.
+
+    ``probe`` takes each entry's full path - the path, not the base name -
+    and answers the probe's output with the trailing newlines gone.
+
+    A file that carries two or more chapters of its own keeps them, each moved
+    on by the length of every file before it, and their titles cleaned the way
+    the file names are - but among that file's titles only. When its first
+    chapter starts later than the file does, the stretch before it gets a
+    chapter of its own, named after the file cleaned on its own - unless the
+    file is the whole book, which then starts where its own chapters say. A
+    file with one chapter or none gets one chapter named after the file, the
+    file names cleaned among each other. ``chapter_probe`` answers a path's flat
+    -show_chapters stream, ffprobe's unless a caller hands another.
+    """
+    if chapter_probe is None:
+        chapter_probe = _flat_chapters
+    paths = [_entry_path(entry) for entry in concat_list]
+    stems = [_stem_of(_base_of(path)) for path in paths]
+    file_titles = _clean_titles(stems)
+
+    lines: list[str] = []
+    accumulated = 0
+    number = 0
+    for path, stem, file_title in zip(paths, stems, file_titles, strict=True):
+        duration = _duration_ms(probe(path).rstrip("\n"))
+        inner = _inner_chapters(chapter_probe(path), duration)
+        if inner:
+            offsets = [offset for offset, _ in inner]
+            titles = [clean or raw for (_, raw), clean in zip(
+                inner, _clean_titles([raw for _, raw in inner]), strict=True)]
+            if offsets[0] > 0 and len(paths) > 1:
+                offsets.insert(0, 0)
+                titles.insert(0, _clean_alone(stem) or file_title)
+            marks = list(zip(offsets, titles, strict=True))
+        else:
+            marks = [(0, file_title)]
+        for offset, title in marks:
+            number += 1
+            lines.append(f"CHAPTER{number:02d}="
+                         f"{_time_stamp(accumulated + offset)}")
+            lines.append(f"CHAPTER{number:02d}NAME={title}")
+        accumulated += duration
     return lines
+
+
+# A file's first chapter starting this close to the file's own start marks the
+# start: a mark a few frames in is the muxer's rounding, not a stretch of the
+# file before the first chapter.
+_START_SLACK_MS = _MS_PER_SECOND
+
+
+def _inner_chapters(flat: str, duration: int) -> list[tuple[int, str]]:
+    """A file's own chapters as (offset ms, raw title), or nothing when it has
+    fewer than two - one chapter is the file itself, and the file's name says
+    that as well. A start at or past the file's end, or not past the one
+    before it, is dropped: the join has nothing there for it to mark."""
+    marks: list[tuple[int, str]] = []
+    for _, start, title in _flat_entries(flat):
+        try:
+            offset = max(0, round(float(start) * _MS_PER_SECOND))
+        except ValueError:
+            offset = 0
+        if not marks and offset < _START_SLACK_MS:
+            offset = 0
+        if marks and offset <= marks[-1][0] or (duration
+                                                and offset >= duration):
+            continue
+        marks.append((offset, title))
+    return marks if len(marks) >= 2 else []
 
 
 # The characters ffmetadata reads as syntax, which a title carrying one of them
@@ -496,10 +563,11 @@ def _flat_time(value: str) -> str:
     return f"{hours:02d}:{minutes:02d}:{seconds:06.3f}"
 
 
-def _chapters_from_flat(text: str) -> list[str]:
-    """The flat -show_chapters stream to OGM rows - the dotted chapter keys,
-    the quotes off the values, the rows in index order from the lowest index
-    to the highest that carries a start time."""
+def _flat_entries(text: str) -> list[tuple[int, str, str]]:
+    """The flat -show_chapters stream as (index, start, title) - the dotted
+    chapter keys, the quotes off the values, in index order from the lowest
+    index to the highest that carries a start time. An untitled chapter is
+    "Chapter nn", by its index."""
     start: dict[int, str] = {}
     title: dict[int, str] = {}
     max_index = -1
@@ -519,13 +587,19 @@ def _chapters_from_flat(text: str) -> list[str]:
                 max_index = index
         elif parts[3] == "tags" and len(parts) > 4 and parts[4] == "title":
             title[index] = value
+    return [(index, start[index],
+             title.get(index, f"Chapter {index + 1:02d}"))
+            for index in range(max_index + 1) if index in start]
+
+
+def _chapters_from_flat(text: str) -> list[str]:
+    """The flat -show_chapters stream to OGM rows, numbered by the source's
+    own chapter index."""
     lines: list[str] = []
-    for index in range(max_index + 1):
-        if index not in start:
-            continue
+    for index, start, title in _flat_entries(text):
         number = f"{index + 1:02d}"
-        lines.append(f"CHAPTER{number}={_flat_time(start[index])}")
-        lines.append(f"CHAPTER{number}NAME={title.get(index, 'Chapter ' + number)}")
+        lines.append(f"CHAPTER{number}={_flat_time(start)}")
+        lines.append(f"CHAPTER{number}NAME={title}")
     return lines
 
 

@@ -515,11 +515,11 @@ class TestTheChapterSourceAFolderHolds:
         assert len(file_calls) == 1
         assert len(file_calls[0]) == 2
 
-    def test_one_track_without_a_cue_gets_no_chapters_from_either(self,
-                                                                  monkeypatch,
-                                                                  tmp_path):
+    def test_one_track_without_a_cue_reads_its_own_chapters(self,
+                                                            monkeypatch,
+                                                            tmp_path):
         scan, cue_calls, file_calls = self._drive(
             monkeypatch, tmp_path, ["one"], with_cue=False)
         assert scan.audio_files == 1
         assert cue_calls == []
-        assert file_calls == []
+        assert len(file_calls) == 1
