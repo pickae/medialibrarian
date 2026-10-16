@@ -20,13 +20,13 @@ MB = 1_000_000
 
 
 def _decide(tracks, workers=32, threads=None, mono=False, bitrate=46,
-            codec="opus", probe=None, verdicts=None):
+            codec="opus", probe=None, verdicts=None, background=0.0):
     return chunkdecision.decide(
         tracks, workers, threads or workers, mono, bitrate,
         50000 if mono else 90000,
         lambda ext: ext in enums.VIDEO_EXTENSIONS,
         lambda ext: ext in enums.ALWAYS_TRANSCODE_EXTENSIONS, codec, probe,
-        verdicts)
+        verdicts, background)
 
 
 class TestNothingToDecide:
@@ -91,6 +91,33 @@ class TestManyFiles:
         start = time.monotonic()
         _decide(tracks)
         assert time.monotonic() - start < 5
+
+
+class TestABusyMachine:
+    """A tail encoded whole is quick because the machine has drained and the
+    last jobs have it to themselves. Beside another process's work it has not
+    drained, and the long books then cost their full-load time to the end."""
+
+    # A shelf of books of uneven length, about as many as the cores: the
+    # longest is twice what each core gets of the whole shelf.
+    HOURS = (8.7, 8.0, 7.5, 7.4, 7.3, 7.1, 7.0, 6.9, 6.9, 6.0, 5.7, 5.6, 5.5,
+             5.5, 5.4, 5.3, 5.3, 5.1, 5.0, 4.9, 4.8, 4.7, 4.5, 4.4, 4.0, 3.6,
+             3.5, 3.5)
+
+    def _shelf(self, background):
+        hours = self.HOURS
+        return _decide([("m4b", int(h * 3600 * 128000 / 8)) for h in hours],
+                       probe=lambda i: ("aac", 2, 128000, hours[i] * 3600),
+                       background=background)
+
+    def test_on_an_idle_machine_the_shelf_is_encoded_whole(self):
+        assert self._shelf(0.0).chunked == frozenset()
+
+    def test_beside_other_work_its_longest_books_are_cut(self):
+        decision = self._shelf(8.0)
+        assert 0 in decision.chunked
+        assert len(self.HOURS) - 1 not in decision.chunked
+        assert decision.expected < decision.whole
 
 
 class TestWhatTheBytesSay:

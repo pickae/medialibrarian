@@ -167,6 +167,8 @@ COVER_QUALITY = 75
 # size of the naive seed the queue starts on, because the seed exists to carry
 # the pool through the planning and a buffer's worth is what the pool can hold.
 QUEUE_BUFFER_FACTOR = 2
+# The load other processes put on the machine, as a caller measured it.
+BACKGROUND_LOAD_VARIABLE = "BACKGROUND_LOAD"
 SILENCE_NOISE = "-30dB"
 SILENCE_MIN_DUR = "0.3"
 
@@ -804,6 +806,9 @@ class Run:
     # How many split files the post-conversion phase joined back together, so
     # the closing report times that phase only when it had work.
     rejoined: int
+    # The threads other processes were keeping busy as the run started, which
+    # the chunk decision cannot count on having to itself.
+    background: float
     # The four phase clocks, unset until the phase they time has begun.
     pre_start: float
     conv_start: float | None
@@ -2065,6 +2070,9 @@ def _convert(program: str, script_dir: str, input_dir: str, output_dir: str,
              mkvtoolnix_unsaid: bool = False,
              surround: bool = False, group_depth: int = 0) -> int:
     pre_start = time.time()
+    # Read before this run has started anything of its own, so what it says is
+    # other processes' work.
+    background = _background_load()
 
     state = Run(
         input_dir=input_dir, output_dir=output_dir, script_dir=script_dir,
@@ -2080,7 +2088,7 @@ def _convert(program: str, script_dir: str, input_dir: str, output_dir: str,
         ram_base=ramscratch.ram_base(), tracks=[], pre_start=pre_start,
         conv_start=None, conv_end=None,
         post_start=None, post_end=None, duration_file="", counters=None,
-        chunk_root="", plan_root="", rejoined=0,
+        chunk_root="", plan_root="", rejoined=0, background=background,
     )
     safety.set_run_footer(lambda: footer(state))
 
@@ -2308,7 +2316,8 @@ def _decide_chunking(state: Run, jobs: int) -> frozenset:
         lambda index: chunk_candidate_audio(
             os.path.join(state.input_dir, state.tracks[index])),
         verdicts=[state.verdicts.get(state.group_of(track))
-                  for track in state.tracks])
+                  for track in state.tracks],
+        background=state.background)
     if not decision.chunked:
         return frozenset()
     runlog.say("Splitting %d long file(s) into chunks: expected %s, against %s "
@@ -2317,6 +2326,26 @@ def _decide_chunking(state: Run, jobs: int) -> frozenset:
                   formatting.fmt_hms("%.0f" % decision.expected),
                   formatting.fmt_hms("%.0f" % decision.whole)))
     return frozenset(state.tracks[index] for index in decision.chunked)
+
+
+def _background_load() -> float:
+    """How many of the machine's threads other processes are keeping busy: the
+    one-minute load average, and 0 where the host has none to give.
+
+    A tail encoded whole is only quick on a machine that has drained, and one
+    still busy with someone else's work has not - so the chunk decision weighs
+    the run against this, not against an idle machine.
+
+    A caller that has already started work of its own - convert-and-concat
+    unpacking archives - reads it before that and hands it down in
+    BACKGROUND_LOAD, which is also how the suite pins it.
+    """
+    given = os.environ.get(BACKGROUND_LOAD_VARIABLE, "")
+    try:
+        load = float(given) if given else os.getloadavg()[0]
+    except (AttributeError, OSError, ValueError):
+        return 0.0
+    return max(0.0, min(float(runlog.cpu_count()), load))
 
 
 def _settle_preload(state: Run, planner: Planner) -> tuple:

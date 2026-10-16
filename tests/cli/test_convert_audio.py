@@ -379,7 +379,7 @@ class TestTheChunkingDecision:
         base = {"input_dir": str(tmp_path), "tracks": list(sizes),
                 "adaptive": False, "mono": False, "bitrate": ca.DEFAULT_BITRATE,
                 "threshold": ca.THRESHOLD, "codec": "opus",
-                "group_depth": 0, "verdicts": {}}
+                "group_depth": 0, "verdicts": {}, "background": 0.0}
         base.update(settings)
         return ca.Run(**base)
 
@@ -410,7 +410,7 @@ class TestTheChunkingDecision:
         threshold too, and the weighing has to know it will be encoded."""
         asked = []
 
-        def decide(*args, verdicts=None):
+        def decide(*args, verdicts=None, **kw):
             asked.append(verdicts)
             return ca.chunkdecision.Decision(frozenset(), 0.0, 0.0)
 
@@ -424,6 +424,32 @@ class TestTheChunkingDecision:
                                                    "converted": True})
         ca._decide_chunking(state, 8)
         assert asked == [[False, True, None]]
+
+    def test_the_load_the_run_started_beside_is_weighed(self, tmp_path,
+                                                         monkeypatch):
+        asked = []
+
+        def decide(*args, background=None, **kw):
+            asked.append(background)
+            return ca.chunkdecision.Decision(frozenset(), 0.0, 0.0)
+
+        monkeypatch.setattr(ca.chunkdecision, "decide", decide)
+        ca._decide_chunking(self._run(tmp_path, {"a.m4a": 20}, background=6.5),
+                            8)
+        assert asked == [6.5]
+
+    def test_a_load_handed_down_stands_for_the_machines(self, monkeypatch):
+        monkeypatch.setenv("BACKGROUND_LOAD", "3.25")
+        monkeypatch.setattr(ca.os, "getloadavg", lambda: pytest.fail(
+            "the machine's load was read"))
+        assert ca._background_load() == 3.25
+
+    def test_the_load_is_read_off_the_machine_and_capped_at_its_threads(
+            self, monkeypatch):
+        monkeypatch.delenv("BACKGROUND_LOAD", raising=False)
+        monkeypatch.setattr(ca.runlog, "cpu_count", lambda: 8)
+        monkeypatch.setattr(ca.os, "getloadavg", lambda: (40.0, 0.0, 0.0))
+        assert ca._background_load() == 8.0
 
     def test_what_it_chose_is_named_by_track_and_said(self, tmp_path,
                                                       monkeypatch, capsys):
