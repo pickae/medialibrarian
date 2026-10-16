@@ -7,7 +7,8 @@ holding two of them is skipped rather than mangled - mp3, opus, aac, m4a and
 flac streams cannot be concatenated with each other.
 
 The chapters come from a cue sheet when the folder holds one audio file and a cue
-that describes it, and from the individual files otherwise. The cover comes from
+that describes it, and from the individual files otherwise - one chapter per
+file, or the file's own chapters where it carries them. The cover comes from
 an image in the folder, else a booklet PDF's first page, else the artwork embedded
 in the audio.
 
@@ -83,7 +84,8 @@ USAGE_TAIL = """
       * one cue sheet in the folder (recursively): always used
       * several: prefer the cue next to the audio file sharing its name,
         else fall back to the largest cue sheet
-    fallback: concat files and build chapters from individual files
+    fallback: concat files and build chapters from individual files - a
+              file's own chapters kept, shifted to where it starts
 
     Thumbnail
     ---------
@@ -774,15 +776,21 @@ class Run:
 
         # Chapters, one of two ways. A cue sheet wins when there is one and the
         # music is not yet split - which means a CD1/CD2 input needs one folder
-        # per disc.
+        # per disc. Otherwise the files give them: one chapter per file, or
+        # the file's own chapters where it carries them. The join drops those,
+        # so a lone file keeps its chapters only through here - and a lone
+        # file without any would get one chapter for the whole book, which is
+        # no chapter at all.
         chapter_lines = []
         if scan.cues and scan.audio_files == 1:
             cue = select_cue_sheet(scan.cues, scan.audio_file)
             step("    Reading chapters from cue sheet")
             chapter_lines = cuechapters.chapters_from_cue(cue)
-        elif scan.audio_files >= 2:
+        elif scan.audio_files >= 1:
             step("    Building chapters from individual files")
             chapter_lines = chapters.chapters_from_files(concat_list)
+            if scan.audio_files == 1 and len(chapter_lines) < 4:
+                chapter_lines = []
 
         if chapter_lines:
             step("    Embedding chapters")

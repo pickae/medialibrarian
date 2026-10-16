@@ -30,7 +30,8 @@ Usage:
       * one cue sheet in the folder (recursively): always used
       * several: prefer the cue next to the audio file sharing its name,
         else fall back to the largest cue sheet
-    fallback: concat files and build chapters from individual files
+    fallback: concat files and build chapters from individual files - a
+              file's own chapters kept, shifted to where it starts
 
     Thumbnail
     ---------
