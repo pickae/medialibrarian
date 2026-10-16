@@ -440,16 +440,24 @@ class TestTheChunkingDecision:
 
     def test_a_load_handed_down_stands_for_the_machines(self, monkeypatch):
         monkeypatch.setenv("BACKGROUND_LOAD", "3.25")
+        monkeypatch.setattr(ca.runlog, "cpu_count", lambda: 8)
+        # raising=False: Windows has no load average to replace.
         monkeypatch.setattr(ca.os, "getloadavg", lambda: pytest.fail(
-            "the machine's load was read"))
+            "the machine's load was read"), raising=False)
         assert ca._background_load() == 3.25
 
     def test_the_load_is_read_off_the_machine_and_capped_at_its_threads(
             self, monkeypatch):
         monkeypatch.delenv("BACKGROUND_LOAD", raising=False)
         monkeypatch.setattr(ca.runlog, "cpu_count", lambda: 8)
-        monkeypatch.setattr(ca.os, "getloadavg", lambda: (40.0, 0.0, 0.0))
+        monkeypatch.setattr(ca.os, "getloadavg", lambda: (40.0, 0.0, 0.0),
+                            raising=False)
         assert ca._background_load() == 8.0
+
+    def test_a_host_with_no_load_average_is_taken_as_idle(self, monkeypatch):
+        monkeypatch.delenv("BACKGROUND_LOAD", raising=False)
+        monkeypatch.delattr(ca.os, "getloadavg", raising=False)
+        assert ca._background_load() == 0.0
 
     def test_what_it_chose_is_named_by_track_and_said(self, tmp_path,
                                                       monkeypatch, capsys):
