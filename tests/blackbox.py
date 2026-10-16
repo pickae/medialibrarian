@@ -76,6 +76,9 @@ def _argv(command: str, args) -> list[str]:
 def _environment(path, env, command, program) -> dict:
     environment = dict(os.environ if env is None else env)
     environment.setdefault("SKIP_TOOL_PREFLIGHT", "1")
+    # An idle machine, whatever the one running the suite is doing, so a
+    # run's chunk decision does not move with it.
+    environment.setdefault("BACKGROUND_LOAD", "0")
     if path is not None:
         environment["PATH"] = str(path)
     environment["PYTHONPATH"] = os.pathsep.join(

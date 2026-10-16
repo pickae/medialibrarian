@@ -178,7 +178,9 @@ XHEAAC_FACTOR = 3.5
 
 # How much faster a job runs when fewer than all threads are busy, over the
 # busy share of the machine. A lone job has a performance core, and its turbo,
-# to itself.
+# to itself - but only on a machine nothing else is using: the threads other
+# processes keep busy count as busy too, so a tail beside someone else's work
+# does not speed up.
 SPEEDUP = ((1 / 32, 2.81), (2 / 32, 2.45), (4 / 32, 2.31), (0.25, 1.98),
            (0.5, 1.58), (0.75, 1.24), (1.0, 1.0))
 
@@ -270,8 +272,8 @@ def cost_per_second(decoder, channels, mono, bitrate, codec="opus"):
     return cost * XHEAAC_FACTOR if codec == "xheaac" else cost
 
 
-def _speed(busy, threads):
-    return _read(SPEEDUP, busy / float(threads))
+def _speed(busy, threads, background=0.0):
+    return _read(SPEEDUP, (busy + background) / float(threads))
 
 
 class _Kind:
@@ -337,14 +339,16 @@ def _stream_pieces(work, count, workers):
     return pieces
 
 
-def _makespan(seed, release, slow, tail, workers, threads, watch=None):
+def _makespan(seed, release, slow, tail, workers, threads, watch=None,
+              background=0.0):
     """The wall clock of one queue, from its first job to its last - or, with
     <watch> a position in <seed>, the pair (when that job finishes, when every
     other job has).
 
     <seed> is there at once, <tail> only from <release> on - the moment the plan
     is ready - and <slow> is ``[(until, pace), ...]``: how much of their pace the
-    planning leaves the encodes, up to each point in time. Every running job
+    planning leaves the encodes, up to each point in time. <background> is the
+    threads other processes keep busy throughout. Every running job
     progresses at the pace the number of busy workers gives, so the simulation
     keeps one clock of progress and each job its finishing point on it.
     """
@@ -367,7 +371,7 @@ def _makespan(seed, release, slow, tail, workers, threads, watch=None):
             now = max(now, release)
             queue, pending = pending[::-1], None
             continue
-        pace = _speed(len(finishing), threads)
+        pace = _speed(len(finishing), threads, background)
         for until, factor in slow:
             if now < until:
                 pace *= factor
@@ -394,8 +398,9 @@ def _makespan(seed, release, slow, tail, workers, threads, watch=None):
 class _Run:
     """The queue a run would make, and what it is expected to take."""
 
-    def __init__(self, sizes, kinds, workers, threads):
+    def __init__(self, sizes, kinds, workers, threads, background=0.0):
         self.workers, self.threads = workers, threads
+        self.background = background
         self.sizes, self.kinds = sizes, kinds
         count = len(sizes)
         order = sorted(range(count), key=lambda i: -sizes[i])
@@ -425,7 +430,7 @@ class _Run:
                     in zip(self.discrete, draw, strict=True)]
             watch = max(range(len(jobs)), key=jobs.__getitem__)
             ends = _makespan(jobs + self.stream, 0.0, (), None, self.workers,
-                             self.threads, watch)
+                             self.threads, watch, self.background)
             longest, rest = longest + ends[0], rest + ends[1]
         return longest >= rest * (1 - 1e-9)
 
@@ -455,7 +460,8 @@ class _Run:
                 whole.append((size, size * cost + JOB_OVERHEAD))
         if not chunked:
             jobs = [cost for _size, cost in whole] + self.stream
-            return _makespan(jobs, 0.0, (), None, workers, threads)
+            return _makespan(jobs, 0.0, (), None, workers, threads,
+                             background=self.background)
 
         # The seed is the largest of what needs no plan, and it is all that
         # encodes until the plan is ready. How busy it keeps the machine
@@ -478,24 +484,26 @@ class _Run:
                                                 workers)))
             detect = sum(c[2] for c in candidates) / workers \
                 * (1 + (DETECT_LOADED_FACTOR - 1) * busy)
-            busy = min(1.0, seed_work / (workers * max(1e-9, seek + detect)))
+            busy = min(1.0, seed_work / (workers * max(1e-9, seek + detect))
+                       + self.background / threads)
         release = seek + detect
         wall = _makespan(seed, release,
                          ((seek, SEEK_SLOWDOWN), (release, DETECT_SLOWDOWN)),
                          [cost for _size, cost in tail] + self.stream,
-                         workers, threads)
+                         workers, threads, background=self.background)
         if candidates:
             joins = sorted((JOIN_FIXED + JOIN_PER_SECOND * seconds
                             for _size, seconds, _search, _copied
                             in candidates),
                            reverse=True)
             wall += max(joins[0], sum(joins) / workers) / _speed(
-                min(len(joins), workers), threads)
+                min(len(joins), workers), threads, self.background)
         return wall
 
 
 def decide(tracks, workers, threads, mono, bitrate, threshold, is_video,
-           always_transcode, codec="opus", probe=None, verdicts=None):
+           always_transcode, codec="opus", probe=None, verdicts=None,
+           background=0.0):
     """The run's chunking: which of <tracks> to cut, if any.
 
     <tracks> is ``[(extension, size), ...]`` in any order. <workers> is the
@@ -507,6 +515,10 @@ def decide(tracks, workers, threads, mono, bitrate, threshold, is_video,
     <verdicts>, beside <tracks>, is what convert-audio -g judged of each
     track's folder: True for converted whole, False for kept whole, None where
     the track's own rate decides.
+
+    <background> is how many of the machine's threads other processes are
+    keeping busy - the load average before this run starts - which a tail
+    encoded whole cannot then have to itself.
 
     <probe>, given a track's position, answers ``(decoder, channels, bps,
     seconds)`` for its first audio stream, or None when it cannot say. It is
@@ -562,9 +574,9 @@ def decide(tracks, workers, threads, mono, bitrate, threshold, is_video,
                    for (extension, _size), verdict, kind
                    in zip(tracks, verdicts, census, strict=True)]
         if encoded != census:
-            measure(sorted(_decide(tracks, encoded, workers,
-                                   threads).chunked))
-    decision = _decide(tracks, kinds, workers, threads)
+            measure(sorted(_decide(tracks, encoded, workers, threads,
+                                   background).chunked))
+    decision = _decide(tracks, kinds, workers, threads, background)
 
     def probe_round():
         """The files the decision cuts that are not yet probed, probed, and
@@ -574,7 +586,7 @@ def decide(tracks, workers, threads, mono, bitrate, threshold, is_video,
         if not fresh:
             return False
         measure(fresh)
-        decision = _decide(tracks, kinds, workers, threads)
+        decision = _decide(tracks, kinds, workers, threads, background)
         return True
 
     if probe:
@@ -582,10 +594,10 @@ def decide(tracks, workers, threads, mono, bitrate, threshold, is_video,
     return decision
 
 
-def _decide(tracks, kinds, workers, threads):
+def _decide(tracks, kinds, workers, threads, background=0.0):
     """One decision, with each track weighed as its kind says."""
     run = _Run([size for _extension, size in tracks], kinds, workers,
-               threads)
+               threads, background)
     whole = run.expected(frozenset())
 
     # 1. The longest file starts among the first jobs. If the rest of the

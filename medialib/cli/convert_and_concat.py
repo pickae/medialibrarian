@@ -352,6 +352,15 @@ def main(argv: list, program: str = "convert-and-concat",
         sys.stdout.write(clioptions.no_args_text(declaration))
         return 1
 
+    # The load other processes put on the machine, read before this run's own
+    # phases add to it - the unpacking can keep every core busy - and handed
+    # to the transcoding phase, whose chunk decision weighs it.
+    if not os.environ.get("BACKGROUND_LOAD"):
+        try:
+            os.environ["BACKGROUND_LOAD"] = "%.2f" % os.getloadavg()[0]
+        except (AttributeError, OSError):
+            pass
+
     mono = "m" in result.given
     sub_folders = "s" in result.given
     only_concat = "c" in result.given
