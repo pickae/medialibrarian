@@ -43,7 +43,7 @@ the two disagree.
 | `narrationPythonMaxMinor` | The newest Python 3 minor version the engine's environment is built with | 12 | `read-library` |
 | `narrationPythonMinMinor` | The oldest Python 3 minor version the engine's environment is built with | 10 | `read-library` |
 | `narrationSoundfileFallbackMark` | The text that marks the engine shim this package wrote | `_load_with_soundfile_fallback` | `read-library` |
-| `narrationTorchcodecPairs` | Which torchcodec goes with which torch, for repairing a mismatch | 2.9:0.9 2.10:0.10 2.11:0.11 | `read-library` |
+| `narrationTorchcodecPairs` | Which torchcodec goes with which torch, for repairing a mismatch | 2.9:0.9 2.10:0.10 2.11:0.11 2.13:0.15 2.14:0.17 | `read-library` |
 | `narrationVoiceFallbackNames` | The voice-sample names that mean "any language" | default any fallback other | `read-library` |
 | `narrationVramPerBookGB` | The GPU memory, in GB, each book read at once needs - which sets the default `-j` | 5 | `read-library` |
 | `openSubtitlesComPassword` (secret) | OpenSubtitles.com password | unset | `ingest-movies` |

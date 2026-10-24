@@ -1,7 +1,7 @@
 """The white box for medialib/lib/booknarration.py.
 
 What is pinned here: the exact argv each probe and each engine call is handed,
-the two stderr refusals, the venv bootstrap branch, the PATH the engine call runs
+the three stderr refusals, the venv bootstrap branch, the PATH the engine call runs
 under, and the file-level decisions - which of several m4b is the one, which
 sitecustomize goes, which session directory is dropped.
 """
@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import signal
+import subprocess
 import sys
 import time
 from types import SimpleNamespace
@@ -104,12 +105,18 @@ def nb(tmp_path, monkeypatch):
                            bin_dir=bin_dir, out_dir=out_dir, tmp_path=tmp_path)
 
 
+# The pyvenv.cfg of an env uv made: app.py runs in nothing else.
+_UV_CFG = "home = /usr/bin\nuv = 0.12.21\nversion_info = 3.12.8\n"
+
+
 def _checkout(nb, venv_python="stub"):
     """A checkout with app.py and a python_env/bin/python that is what the test
     named: a copy of the toolstub, or a bash script that exits 0 for everything
     and answers the sysconfig probe with the given site."""
     checkout = nb.tmp_path / "checkout"
     (checkout / "python_env" / "bin").mkdir(parents=True)
+    (checkout / "python_env" / "pyvenv.cfg").write_text(_UV_CFG,
+                                                       encoding="ascii")
     (checkout / "app.py").write_text("print('engine')\n", encoding="ascii")
     exe = checkout / "python_env" / "bin" / "python"
     if venv_python == "stub":
@@ -320,58 +327,81 @@ class TestEnsureVenv:
         os.environ["narrationHome"] = checkout
         assert bn.narration_ensure_venv() is None
 
-    def test_the_bootstrap_runs_venv_then_pip_and_echoes_the_path(self, nb):
-        # The base python is a script, not the stub: the venv step has to
-        # MATERIALISE an executable interpreter at the path only the module
-        # knows, and a stub's write cannot chmod the file it makes. The script
-        # answers the version probe, creates the interpreter when asked for the
-        # venv, and the interpreter it creates records its own calls in the
-        # stub's line format.
-        checkout = nb.tmp_path / "checkout"
-        checkout.mkdir()
-        (checkout / "app.py").write_text("x\n", encoding="ascii")
-        os.environ["narrationHome"] = str(checkout)
-        base = nb.bin_dir / "python3.12"
-        base.write_text(r"""#!/bin/bash
-if [[ "${1:-}" == "-c" ]]; then
-    echo "3.12"
-    exit 0
-fi
-if [[ "${1:-}" == "-m" && "${2:-}" == "venv" ]]; then
-    /bin/mkdir -p -- "$3/bin"
-    cat > "$3/bin/python" <<'PYEOF'
-#!/bin/bash
-line=$'call\tpython'
-for a in "$@"; do line+=$'\t'"$a"; done
-printf '%s\n' "$line" >> "${TOOLSTUB_LOG}"
-exit 0
-PYEOF
-    /bin/chmod +x -- "$3/bin/python"
-    exit 0
-fi
-exit 1
-""", encoding="ascii")
-        os.chmod(str(base), 0o755)
-        python = bn.narration_ensure_venv()
-        assert python == str(checkout / "python_env" / "bin" / "python")
-        assert os.access(python, os.X_OK)
-        assert nb.calls() == [
-            ["python", "-m", "pip", "install", "--quiet", "--upgrade",
-             "pip", "setuptools", "wheel"],
-        ]
-
-    def test_the_bootstrap_stops_when_pip_fails(self, nb):
+    def test_the_bootstrap_has_uv_build_the_env_and_echoes_the_path(self, nb):
+        # uv is a script, not the stub: the venv step has to MATERIALISE an
+        # executable interpreter at the path only the module knows, and a
+        # stub's write cannot chmod the file it makes. The script records its
+        # own call in the stub's line format and creates the interpreter.
         checkout = nb.tmp_path / "checkout"
         checkout.mkdir()
         (checkout / "app.py").write_text("x\n", encoding="ascii")
         os.environ["narrationHome"] = str(checkout)
         nb.install("python3.12")
         nb.table("python3.12", [_table_line(["-c", _PROBE], 0, "3.12")])
-        nb.rc("python3.12", "0 7")
+        uv = nb.bin_dir / "uv"
+        uv.write_text(r"""#!/bin/bash
+line=$'call\tuv'
+for a in "$@"; do line+=$'\t'"$a"; done
+printf '%s\n' "$line" >> "${TOOLSTUB_LOG}"
+env="${@: -1}"
+/bin/mkdir -p -- "$env/bin"
+printf '#!/bin/bash\nexit 0\n' > "$env/bin/python"
+/bin/chmod +x -- "$env/bin/python"
+""", encoding="ascii")
+        os.chmod(str(uv), 0o755)
+        python = bn.narration_ensure_venv()
+        env_dir = str(checkout / "python_env")
+        assert python == env_dir + "/bin/python"
+        assert os.access(python, os.X_OK)
+        assert nb.calls()[-1] == [
+            "uv", "venv", "--quiet", "--python",
+            str(nb.bin_dir / "python3.12"), env_dir]
+
+    def test_the_bootstrap_stops_when_uv_fails(self, nb):
+        checkout = nb.tmp_path / "checkout"
+        checkout.mkdir()
+        (checkout / "app.py").write_text("x\n", encoding="ascii")
+        os.environ["narrationHome"] = str(checkout)
+        nb.install("python3.12")
+        nb.table("python3.12", [_table_line(["-c", _PROBE], 0, "3.12")])
+        nb.install("uv")
+        nb.rc("uv", "7")
         assert bn.narration_ensure_venv() is None
+
+    def test_an_env_python_venv_made_is_handed_to_uv_in_place(self, nb):
+        # The packages already in it stay: uv is pointed at the env's own
+        # interpreter, so the base it rewrites pyvenv.cfg around is the one
+        # they were installed for.
+        checkout = _checkout(nb)
+        cfg = os.path.join(checkout, "python_env", "pyvenv.cfg")
+        with open(cfg, "w", encoding="ascii") as handle:
+            handle.write("home = /usr/bin\nversion = 3.12.8\n")
+        os.environ["narrationHome"] = checkout
+        nb.install("uv")
+        nb.rc("uv", "0")
+        python = bn.narration_ensure_venv()
+        env_dir = os.path.join(checkout, "python_env")
+        assert python == os.path.join(env_dir, "bin", "python")
+        assert nb.calls() == [
+            ["uv", "venv", "--quiet", "--allow-existing", "--python",
+             python, env_dir]]
+
+    def test_without_uv_the_run_is_refused(self, nb, capsys):
+        checkout = _checkout(nb)
+        os.remove(os.path.join(checkout, "python_env", "pyvenv.cfg"))
+        os.environ["narrationHome"] = checkout
+        assert bn.narration_ensure_venv() is None
+        assert capsys.readouterr().err == (
+            "\n"
+            "Cannot narrate: uv is not installed.\n\n"
+            "  uv  what ebook2audiobook builds and fills its environment "
+            "with  https://github.com/astral-sh/uv\n"
+            "\nInstall it and run again. Nothing was changed.\n")
+        assert nb.calls() == []
 
     def test_no_base_python_prints_the_refusal_and_returns_none(self, nb, capsys):
         os.environ["narrationHome"] = str(nb.tmp_path / "checkout")
+        nb.install("uv")
         assert bn.narration_ensure_venv() is None
         assert capsys.readouterr().err == (
             "\n"
@@ -385,6 +415,7 @@ exit 1
     def test_the_refusal_uses_the_configured_range(self, nb, capsys, monkeypatch):
         monkeypatch.setenv("narrationPythonMinMinor", "9")
         monkeypatch.setenv("narrationPythonMaxMinor", "11")
+        nb.install("uv")
         assert bn.narration_ensure_venv() is None
         err = capsys.readouterr().err
         assert "no Python 3.9-3.11 interpreter" in err
@@ -441,14 +472,13 @@ class TestEnsureTorchcodec:
 
     def test_a_mismatch_is_corrected_with_the_paired_series(self, nb):
         checkout = _checkout(nb)
-        self._stub_python(nb, checkout)
+        python = _venv_env(nb, checkout)
+        nb.install("uv")
+        nb.rc("uv", "0")
         nb.table("python", [
             _table_line(["-c", "import torchcodec"], 1, ""),
             _table_line(["-", "torchcodec"], 0, "0.7"),
             _table_line(["-", "torch"], 0, "2.9"),
-            _table_line(["-m", "pip", "install", "--quiet",
-                         "--no-cache-dir", "--no-deps",
-                         "torchcodec==0.9.*"], 0, ""),
         ])
         logs = []
         # The re-import after the install cannot succeed in the stub's world:
@@ -460,8 +490,8 @@ class TestEnsureTorchcodec:
             ["python", "-c", "import torchcodec"],
             ["python", "-", "torchcodec"],
             ["python", "-", "torch"],
-            ["python", "-m", "pip", "install", "--quiet",
-             "--no-cache-dir", "--no-deps", "torchcodec==0.9.*"],
+            ["uv", "pip", "install", "--python", python, "--quiet",
+             "--no-cache", "--no-deps", "torchcodec==0.9.*"],
             ["python", "-c", "import torchcodec"],
         ]
         assert logs == [
@@ -517,6 +547,7 @@ class TestEnsureTorchcodec:
 
     @pytest.mark.parametrize("torch,expected", [
         ("2.9", "0.9"), ("2.10", "0.10"), ("2.11", "0.11"),
+        ("2.13", "0.15"), ("2.14", "0.17"),
     ])
     def test_the_pairs_table(self, nb, torch, expected):
         assert bn.narration_wanted_torchcodec(torch) == expected
@@ -585,82 +616,113 @@ class TestSoundfileShim:
         assert bn.narration_remove_soundfile_fallback() == 0
 
 
-# --- the engine's device detection ---------------------------------------------------
+# --- the engine's CUDA range ---------------------------------------------------------
 
 
-# detect_device() as v26.8.20 leaves it: the helper defined in the branch that
-# does not need it, and called from the one that does.
-_FAULTED = '''class DeviceInstaller:
-    def check_device_info(self):
-        def version_classify(version_str, version_range):
-            return (0, (), (), ())
+_CONF = """torchaudio_max = '2.11.0'
+cuda_version_range = {"min": (11,8), "max": (13,2)}
+rocm_version_range = {"min": (5,7), "max": (7,2)}
+"""
 
-        if self.rocm:
-
-            def _normalize_version(v):
-                return (int(v), 0, 0)
-
-            return _normalize_version('5.7')
-        else:
-            return _normalize_version('12.9')
-'''
+_INSTALLER = """                                torchaudio_url_tag = 'cu130' if tag_dir.startswith('cu') else tag_dir
+"""
 
 
-class TestDeviceDetectionFix:
-    def _installer(self, nb, text):
+class TestCudaCap:
+    def _engine(self, nb, conf=_CONF, installer=_INSTALLER):
         checkout = nb.tmp_path / "ck"
         (checkout / "lib" / "classes").mkdir(parents=True)
-        target = checkout / "lib" / "classes" / "device_installer.py"
-        target.write_text(text, encoding="utf-8")
+        (checkout / "lib" / "conf.py").write_text(conf, encoding="utf-8")
+        (checkout / "lib" / "classes" / "device_installer.py").write_text(
+            installer, encoding="utf-8")
         os.environ["narrationHome"] = str(checkout)
-        return target
+        return checkout / "lib" / "conf.py"
 
-    def _detect_on_cuda(self, text):
-        """Run the branch that only ever CALLED the helper - the one the engine
-        dies in while the definition sits in the other."""
-        namespace = {"re": re}
-        exec(compile(text, "device_installer.py", "exec"), namespace)
-        installer = namespace["DeviceInstaller"]()
-        installer.rocm = False
-        return installer.check_device_info()
+    def test_a_range_past_13_0_is_capped_there(self, nb):
+        conf = self._engine(nb)
+        logs = []
+        assert bn.narration_cap_cuda_range(logs.append) == 0
+        assert conf.read_text(encoding="utf-8") == _CONF.replace(
+            '"max": (13,2)', '"max": (13,0)')
+        assert len(logs) == 1
 
-    def test_the_helper_lands_where_both_branches_can_see_it(self, nb):
-        target = self._installer(nb, _FAULTED)
-        # The fault the fix is for, reproduced: without this the case below
-        # would pass against a checkout that never had anything wrong with it.
-        with pytest.raises(UnboundLocalError):
-            self._detect_on_cuda(_FAULTED)
+    def test_a_capped_range_is_left_alone(self, nb):
+        capped = _CONF.replace('"max": (13,2)', '"max": (13,0)')
+        conf = self._engine(nb, conf=capped)
+        logs = []
+        assert bn.narration_cap_cuda_range(logs.append) == 0
+        assert conf.read_text(encoding="utf-8") == capped
+        assert logs == []
 
-        assert bn.narration_fix_device_detection() == 0
-        text = target.read_text(encoding="utf-8")
-        assert re.search(r"^ {8}def _normalize_version\(", text, re.M)
-        assert self._detect_on_cuda(text) == (12, 9, 0)
+    def test_a_range_below_the_cap_is_not_raised(self, nb):
+        lower = _CONF.replace('"max": (13,2)', '"max": (12,9)')
+        conf = self._engine(nb, conf=lower)
+        assert bn.narration_cap_cuda_range() == 0
+        assert conf.read_text(encoding="utf-8") == lower
 
-    def test_a_checkout_upstream_already_fixed_is_left_alone(self, nb):
-        target = self._installer(nb, _FAULTED)
-        assert bn.narration_fix_device_detection() == 0
-        once = target.read_text(encoding="utf-8")
-        assert bn.narration_fix_device_detection() == 0
-        assert target.read_text(encoding="utf-8") == once
+    def test_an_installer_that_pairs_torchaudio_itself_is_not_capped(self, nb):
+        # The cap is for one installer rule: once it is gone, so is the reason.
+        conf = self._engine(nb, installer="torchaudio_url_tag = tag_dir\n")
+        assert bn.narration_cap_cuda_range() == 0
+        assert conf.read_text(encoding="utf-8") == _CONF
 
-    def test_a_checkout_without_the_helper_at_all_is_left_alone(self, nb):
-        target = self._installer(nb, "    def check_device_info(self):\n"
-                                     "        return 0\n")
-        before = target.read_text(encoding="utf-8")
-        assert bn.narration_fix_device_detection() == 0
-        assert target.read_text(encoding="utf-8") == before
+    def test_an_unrecognised_range_is_not_guessed_at(self, nb):
+        other = _CONF.replace('"max": (13,2)', '"max": (13, 2)')
+        conf = self._engine(nb, conf=other)
+        assert bn.narration_cap_cuda_range() == 0
+        assert conf.read_text(encoding="utf-8") == other
 
-    def test_without_the_anchor_nothing_is_guessed(self, nb):
-        # The insertion point is named, not searched for: a detect_device() this
-        # fix does not recognise is not patched at a place picked at random.
-        faulted = _FAULTED.replace("def version_classify(", "def classify(")
-        target = self._installer(nb, faulted)
-        assert bn.narration_fix_device_detection() == 0
-        assert target.read_text(encoding="utf-8") == faulted
-
-    def test_without_a_home_there_is_nothing_to_patch(self, nb, monkeypatch):
+    def test_without_a_home_there_is_nothing_to_cap(self, nb, monkeypatch):
         monkeypatch.delenv("narrationHome", raising=False)
-        assert bn.narration_fix_device_detection() == 0
+        assert bn.narration_cap_cuda_range() == 0
+
+
+# --- the ffmpeg the engine exports with ----------------------------------------------
+
+
+class TestFfmpegShim:
+    def _venv(self, nb):
+        venv_bin = nb.tmp_path / "venv" / "bin"
+        venv_bin.mkdir(parents=True)
+        os.environ["narrationPython"] = str(venv_bin / "python")
+        return venv_bin
+
+    def test_the_shim_drops_thread_queue_size_and_runs_the_real_one(self, nb):
+        venv_bin = self._venv(nb)
+        assert bn.narration_install_ffmpeg_shim() == 0
+        shim = venv_bin / "ffmpeg"
+        assert os.access(str(shim), os.X_OK)
+        real_dir = nb.tmp_path / "real"
+        real_dir.mkdir()
+        record = nb.tmp_path / "argv"
+        real = real_dir / "ffmpeg"
+        real.write_text('#!/bin/bash\nprintf "%%s\\n" "$@" > "%s"\nexit 3\n'
+                        % record, encoding="ascii")
+        os.chmod(str(real), 0o755)
+        env = dict(os.environ,
+                   PATH=os.pathsep.join([str(venv_bin), str(real_dir),
+                                         "/usr/bin", "/bin"]))
+        proc = subprocess.run(
+            [str(shim), "-hide_banner", "-thread_queue_size", "1024", "-i",
+             "in put.flac", "-c:a", "aac", "out.m4b"], env=env)
+        assert proc.returncode == 3
+        assert record.read_text().splitlines() == [
+            "-hide_banner", "-i", "in put.flac", "-c:a", "aac", "out.m4b"]
+
+    def test_an_ffmpeg_the_repo_did_not_write_stays(self, nb):
+        venv_bin = self._venv(nb)
+        (venv_bin / "ffmpeg").write_text("#!/bin/sh\nexit 0\n")
+        assert bn.narration_install_ffmpeg_shim() == 0
+        assert (venv_bin / "ffmpeg").read_text() == "#!/bin/sh\nexit 0\n"
+
+    def test_the_repo_s_own_shim_is_rewritten(self, nb):
+        venv_bin = self._venv(nb)
+        (venv_bin / "ffmpeg").write_text("# medialib ffmpeg shim\nold\n")
+        assert bn.narration_install_ffmpeg_shim() == 0
+        assert "-thread_queue_size" in (venv_bin / "ffmpeg").read_text()
+
+    def test_without_a_settled_python_it_is_a_noop(self, nb):
+        assert bn.narration_install_ffmpeg_shim() == 0
 
 
 # --- the emptied unidic -------------------------------------------------------------
@@ -732,6 +794,8 @@ class TestInit:
     def test_the_home_is_settled_logically_not_physically(self, nb):
         real = nb.tmp_path / "real"
         (real / "python_env" / "bin").mkdir(parents=True)
+        (real / "python_env" / "pyvenv.cfg").write_text(_UV_CFG,
+                                                       encoding="ascii")
         (real / "app.py").write_text("x\n", encoding="ascii")
         (real / "python_env" / "bin" / "python").write_text(
             "#!/bin/bash\nexit 0\n", encoding="ascii")
@@ -794,6 +858,8 @@ class TestInit:
     def test_an_unpopulated_env_is_ready_zero(self, nb):
         checkout = nb.tmp_path / "checkout"
         (checkout / "python_env" / "bin").mkdir(parents=True)
+        (checkout / "python_env" / "pyvenv.cfg").write_text(_UV_CFG,
+                                                           encoding="ascii")
         (checkout / "app.py").write_text("x\n", encoding="ascii")
         exe = checkout / "python_env" / "bin" / "python"
         exe.write_text(
@@ -810,6 +876,7 @@ class TestInit:
         checkout = nb.tmp_path / "checkout"
         checkout.mkdir()
         (checkout / "app.py").write_text("x\n", encoding="ascii")
+        nb.install("uv")
         rc = bn.init_book_narration(checkout)
         assert rc == 1
         assert "no Python 3.10-3.12 interpreter found" \
@@ -1312,6 +1379,38 @@ class TestLosslessMaster:
         path = self._log(nb, "\n".join(
             "Completed -> %s" % p for p in (absent, empty, real)))
         assert bn.narration_lossless_master(path) == real
+
+    def test_an_unannounced_merge_is_found_in_the_session(self, nb,
+                                                          monkeypatch):
+        # v26.10: only the chapters are announced; the whole-book merge sits
+        # beside them in the process directory, and is still held to the
+        # audiobook's length.
+        home = nb.tmp_path / "ck"
+        monkeypatch.setenv("narrationHome", str(home))
+        process = "ck/tmp/proc-ab12/9f0e"
+        chapter = self._flac(nb, process + "/chapters/c1.flac")
+        merge = self._flac(nb, process + "/Some Title.flac")
+        self._flac(nb, process + "/interludes_mix/music.flac")
+        path = self._log(nb, "Completed -> %s\n" % chapter)
+        ab = str(nb.tmp_path / "book.m4b")
+        monkeypatch.setattr(bn, "_media_duration",
+                            lambda p: "100.0" if p == merge else "100.5")
+        assert bn.narration_lossless_master(path, ab) == merge
+        monkeypatch.setattr(bn, "_media_duration",
+                            lambda p: "50.0" if p == merge else "100.0")
+        assert bn.narration_lossless_master(path, ab) is None
+
+    def test_an_announced_master_wins_over_the_session_s(self, nb,
+                                                         monkeypatch):
+        home = nb.tmp_path / "ck"
+        monkeypatch.setenv("narrationHome", str(home))
+        self._flac(nb, "ck/tmp/proc-ab12/9f0e/Merge.flac")
+        announced = self._flac(nb, "out/Book.flac")
+        # The session is named in the log by a chapter's line, as it is.
+        chapter = self._flac(nb, "ck/tmp/proc-ab12/9f0e/chapters/c1.flac")
+        path = self._log(nb, "Completed -> %s\nCompleted -> %s\n"
+                         % (chapter, announced))
+        assert bn.narration_lossless_master(path) == announced
 
     def test_the_master_must_be_as_long_as_the_audiobook(self, nb, monkeypatch):
         flac = self._flac(nb, "m.flac")
