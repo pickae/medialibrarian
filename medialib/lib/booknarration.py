@@ -42,8 +42,9 @@ __all__ = [
     "narration_ensure_torchcodec",
     "narration_install_soundfile_fallback",
     "narration_remove_soundfile_fallback",
-    "narration_fix_device_detection",
     "narration_drop_empty_unidic",
+    "narration_cap_cuda_range",
+    "narration_install_ffmpeg_shim",
     "init_book_narration",
     "narrate_book",
     "narration_progress",
@@ -65,7 +66,7 @@ _ENGINE_LANGUAGES = (
 )
 
 # The torchcodec PyTorch pairs, as "<torch series>:<torchcodec series>".
-_TORCHCODEC_PAIRS = "2.9:0.9 2.10:0.10 2.11:0.11"
+_TORCHCODEC_PAIRS = "2.9:0.9 2.10:0.10 2.11:0.11 2.13:0.15 2.14:0.17"
 
 # The mark that recognises this repo's own sitecustomize.py.
 _SOUNDFILE_MARK = "_load_with_soundfile_fallback"
@@ -121,22 +122,46 @@ _patch_torchaudio_load()
 del _patch_torchaudio_load
 '''
 
-# The engine's own version helper, as upstream's fix spells it, indented for the
-# scope that both of detect_device()'s branches can see.
-_NORMALIZE_VERSION = r"""        def _normalize_version(v:str)->tuple:
-            '''Parse version string into (major, minor, patch). Patch defaults to 0.'''
-            m = re.search(r'(\d+)\.(\d+)(?:\.(\d+))?', v or '')
-            if not m:
-                return ()
-            major = int(m.group(1))
-            minor = int(m.group(2))
-            patch = int(m.group(3)) if m.group(3) else 0
-            return (major, minor, patch)
+# The engine's CUDA range, as conf.py spells it, and the line in its installer
+# that takes torchaudio from cu130 whatever CUDA torch itself was built for.
+_CUDA_RANGE = re.compile(
+    r'^(cuda_version_range = \{"min": \(\d+,\d+\), "max": \()(\d+),(\d+)(\)\})',
+    re.MULTILINE)
+_TORCHAUDIO_CU130 = "torchaudio_url_tag = 'cu130' if"
+_CUDA_CAP = (13, 0)
 
+# The mark that recognises this repo's own ffmpeg in the venv's bin.
+_FFMPEG_SHIM_MARK = "# medialib ffmpeg shim"
+
+# An ffmpeg in front of the real one that drops -thread_queue_size: the engine
+# hands it to every input, and ffmpeg since 2026-09 accepts it on outputs only,
+# refusing the whole export with EINVAL. It only sizes a packet queue, which a
+# file input never fills.
+_FFMPEG_SHIM = r"""#!/usr/bin/env bash
+# medialib ffmpeg shim
+self_dir=$(cd -- "$(dirname -- "$0")" && pwd)
+real=""
+IFS=: read -ra dirs <<< "$PATH"
+for dir in "${dirs[@]}"; do
+    [[ -n "$dir" && ! "$dir" -ef "$self_dir" && -x "$dir/ffmpeg" ]] || continue
+    real="$dir/ffmpeg"
+    break
+done
+if [[ -z "$real" ]]; then
+    echo "ffmpeg: no ffmpeg on PATH behind $self_dir" >&2
+    exit 127
+fi
+args=()
+while (($#)); do
+    if [[ "$1" == "-thread_queue_size" && $# -ge 2 ]]; then
+        shift 2
+        continue
+    fi
+    args+=("$1")
+    shift
+done
+exec "$real" "${args[@]}"
 """
-
-# Where that definition goes: the next helper down in the same scope.
-_NORMALIZE_ANCHOR = "        def version_classify("
 
 # The script narrationPackageSeries feeds the venv python on stdin: the
 # package's version from its METADATA, never by importing it - torchcodec is
@@ -418,15 +443,47 @@ def _pyenv_versions_bare():
     return proc.stdout.decode("utf-8", "replace").split("\n")
 
 
+def _made_by_uv(env_dir):
+    """True when the venv's pyvenv.cfg carries uv's own line - the test app.py
+    applies before it will run at all."""
+    try:
+        with open(os.path.join(env_dir, "pyvenv.cfg"), encoding="utf-8",
+                  errors="replace") as handle:
+            return any(line.strip().startswith("uv") for line in handle)
+    except OSError:
+        return False
+
+
 def narration_ensure_venv(log=None):
-    """The checkout's own interpreter, creating the plain venv when it is not
-    there yet. Returns the interpreter path, or None when no base python can be
-    found, having printed the refusal."""
+    """The checkout's own interpreter, creating the venv with uv when it is not
+    there yet - the engine installs into it with ``uv pip`` and refuses an env
+    uv did not make. An env an earlier version made with ``python -m venv`` is
+    adopted in place: uv rewrites its pyvenv.cfg around the same base
+    interpreter and leaves the installed packages alone. Returns the
+    interpreter path, or None having printed the refusal."""
     if log is None:
         log = _noop
     home = os.environ.get("narrationHome", "")
-    python_exe = home + "/python_env/bin/python"
-    if os.path.isfile(python_exe) and os.access(python_exe, os.X_OK):
+    env_dir = home + "/python_env"
+    python_exe = env_dir + "/bin/python"
+    built = os.path.isfile(python_exe) and os.access(python_exe, os.X_OK)
+    if built and _made_by_uv(env_dir):
+        return python_exe
+
+    if shutil.which("uv") is None:
+        sys.stderr.write("\n")
+        sys.stderr.write("Cannot narrate: uv is not installed.\n\n")
+        sys.stderr.write(
+            "  uv  what ebook2audiobook builds and fills its environment with  "
+            "https://github.com/astral-sh/uv\n")
+        sys.stderr.write("\nInstall it and run again. Nothing was changed.\n")
+        return None
+
+    if built:
+        log("Handing %s over to uv (made by an older python -m venv)" % env_dir)
+        if not _console(["uv", "venv", "--quiet", "--allow-existing",
+                         "--python", python_exe, env_dir]):
+            return None
         return python_exe
 
     base_python = narration_base_python()
@@ -444,12 +501,9 @@ def narration_ensure_venv(log=None):
         sys.stderr.write("\nInstall one and run again. Nothing was changed.\n")
         return None
 
-    log("Creating %s/python_env from %s (first run only)"
-        % (home, base_python))
-    if not _console([base_python, "-m", "venv", home + "/python_env"]):
-        return None
-    if not _console([python_exe, "-m", "pip", "install", "--quiet",
-                     "--upgrade", "pip", "setuptools", "wheel"]):
+    log("Creating %s from %s (first run only)" % (env_dir, base_python))
+    if not _console(["uv", "venv", "--quiet", "--python", base_python,
+                     env_dir]):
         return None
     return python_exe
 
@@ -516,10 +570,10 @@ def narration_ensure_torchcodec(log=None):
         "versions it" % installed)
     log("         shipped libraries for) - installing torchcodec %s, the one "
         "torch %s is paired with." % (wanted, torch_series))
-    if not toolcapture.run([python, "-m", "pip", "install", "--quiet",
-                            "--no-cache-dir", "--no-deps",
+    if not toolcapture.run(["uv", "pip", "install", "--python", python,
+                            "--quiet", "--no-cache", "--no-deps",
                             "torchcodec==%s.*" % wanted],
-                           tool="pip", warning="torchcodec %s could not be "
+                           tool="uv", warning="torchcodec %s could not be "
                            "installed" % wanted).ok:
         return False
     return _python_ok(python, ["-c", "import torchcodec"])
@@ -576,46 +630,6 @@ def narration_remove_soundfile_fallback():
     return 0
 
 
-def narration_fix_device_detection(log=None):
-    """Give the engine's device detection the version helper it calls but does
-    not define. v26.8.20 puts _normalize_version() inside detect_device()'s ROCm
-    branch and calls it from the CUDA one, so on an NVIDIA machine the engine
-    dies of an UnboundLocalError before a word is read. Returns 0 whatever
-    happened: a checkout without the fault is left exactly as it is.
-
-    The definition is ADDED at the enclosing scope rather than moved out of the
-    branch: adding cannot disturb a checkout upstream has meanwhile fixed its
-    own way.
-    """
-    if log is None:
-        log = _noop
-    home = os.environ.get("narrationHome", "")
-    if not home:
-        return 0
-    target = os.path.join(home, "lib", "classes", "device_installer.py")
-    try:
-        with open(target, encoding="utf-8") as handle:
-            text = handle.read()
-    except OSError:
-        return 0
-    if "def _normalize_version(" not in text:
-        return 0
-    # One at the enclosing scope already - upstream's fix, or an earlier run's.
-    if re.search(r"^ {8}def _normalize_version\(", text, re.MULTILINE):
-        return 0
-    if _NORMALIZE_ANCHOR not in text:
-        return 0
-    log("Patching the engine: its device detection calls _normalize_version() "
-        "from a branch that does not define it.")
-    try:
-        with open(target, "w", encoding="utf-8") as handle:
-            handle.write(text.replace(_NORMALIZE_ANCHOR,
-                                      _NORMALIZE_VERSION + _NORMALIZE_ANCHOR, 1))
-    except OSError:
-        pass
-    return 0
-
-
 def narration_drop_empty_unidic():
     """Remove an EMPTY unidic/ from the venv, left there by the engine's own
     uninstall of the package. Python imports such a directory as a namespace
@@ -633,6 +647,73 @@ def narration_drop_empty_unidic():
         if os.listdir(target):
             return 0
         os.rmdir(target)
+    except OSError:
+        pass
+    return 0
+
+
+def narration_cap_cuda_range(log=None):
+    """Cap the engine's CUDA range at 13.0 while its installer takes torchaudio
+    from cu130 for every newer torch. torchaudio's last release has no newer
+    build, and it refuses at import to load beside a torch built for another
+    CUDA - so on a CUDA 13.2+ host the engine pairs cu132 torch with cu130
+    torchaudio and loads no model at all. Capped, torch comes from cu130 too.
+    Returns 0 whatever happened: a checkout whose installer no longer does this
+    is left exactly as it is."""
+    if log is None:
+        log = _noop
+    home = os.environ.get("narrationHome", "")
+    if not home:
+        return 0
+    try:
+        with open(os.path.join(home, "lib", "classes", "device_installer.py"),
+                  encoding="utf-8") as handle:
+            if _TORCHAUDIO_CU130 not in handle.read():
+                return 0
+    except OSError:
+        return 0
+    target = os.path.join(home, "lib", "conf.py")
+    try:
+        with open(target, encoding="utf-8") as handle:
+            text = handle.read()
+    except OSError:
+        return 0
+    match = _CUDA_RANGE.search(text)
+    if match is None:
+        return 0
+    if (int(match.group(2)), int(match.group(3))) <= _CUDA_CAP:
+        return 0
+    log("Patching the engine: capping its CUDA at %d.%d, the newest torchaudio "
+        "is built for." % _CUDA_CAP)
+    capped = "%s%d,%d%s" % ((match.group(1),) + _CUDA_CAP + (match.group(4),))
+    try:
+        with open(target, "w", encoding="utf-8") as handle:
+            handle.write(text[:match.start()] + capped + text[match.end():])
+    except OSError:
+        pass
+    return 0
+
+
+def narration_install_ffmpeg_shim():
+    """Put the -thread_queue_size-dropping ffmpeg in the venv's bin, which the
+    engine's PATH has first. An ffmpeg there that this repo did not write
+    stays."""
+    python = os.environ.get("narrationPython", "")
+    if not python:
+        return 0
+    target = os.path.join(os.path.dirname(python), "ffmpeg")
+    try:
+        with open(target, encoding="utf-8", errors="replace") as handle:
+            if _FFMPEG_SHIM_MARK not in handle.read():
+                return 0
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return 0
+    try:
+        with open(target, "w", encoding="utf-8") as handle:
+            handle.write(_FFMPEG_SHIM)
+        os.chmod(target, 0o755)
     except OSError:
         pass
     return 0
@@ -669,7 +750,7 @@ def init_book_narration(checkout=None, device=None, log=None):
     # The checkout is settled to an absolute path, the symlinks still standing.
     os.environ["narrationHome"] = os.path.abspath(os.path.expanduser(checkout))
 
-    narration_fix_device_detection(log)
+    narration_cap_cuda_range(log)
 
     python = narration_ensure_venv(log)
     if python is None:
@@ -685,6 +766,7 @@ def init_book_narration(checkout=None, device=None, log=None):
         narration_install_soundfile_fallback()
 
     narration_drop_empty_unidic()
+    narration_install_ffmpeg_shim()
 
     if not device:
         device = "cuda" if narration_has_nvidia() else "cpu"
@@ -919,6 +1001,23 @@ def narration_lossless_master(log_file, audiobook=None):
         candidate = line[slash:]
         if re.search(r"\.flac$", candidate, re.IGNORECASE):
             candidates.append(candidate)
+
+    # Since v26.10 the engine announces only the chapters it assembles, not the
+    # whole-book merge - which it still leaves in each process directory of
+    # its session, beside the chapters/ it was made from. Those come first in
+    # the walk below, the announced ones winning by coming last.
+    session = narration_session_dir(log_file)
+    if session is not None:
+        try:
+            for process in sorted(os.listdir(session)):
+                process_dir = os.path.join(session, process)
+                if not os.path.isdir(process_dir):
+                    continue
+                for name in sorted(os.listdir(process_dir)):
+                    if re.search(r"\.flac$", name, re.IGNORECASE):
+                        candidates.insert(0, os.path.join(process_dir, name))
+        except OSError:
+            pass
 
     tolerance = awk_number(_config("narrationLosslessTolerance", "0.02"))
     # Newest last in the log, so the candidates are walked from the back.

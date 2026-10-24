@@ -439,6 +439,8 @@ class TestAnInterruptedLibraryReading:
     def checkout(self, tmp_path):
         checkout = tmp_path / "e2a"
         (checkout / "python_env" / "bin").mkdir(parents=True)
+        # uv's line: app.py runs in no env uv did not make.
+        (checkout / "python_env" / "pyvenv.cfg").write_text("uv = 0.12.21\n")
         (checkout / "app.py").touch()
         interpreter = checkout / "python_env" / "bin" / "python"
         interpreter.write_text("#!/usr/bin/env bash\n%s\n" % _CHECKOUT_PYTHON)
@@ -497,6 +499,8 @@ class TestAnInterruptDuringTheMeasuringPass:
     def checkout(self, tmp_path):
         checkout = tmp_path / "e2a"
         (checkout / "python_env" / "bin").mkdir(parents=True)
+        # uv's line: app.py runs in no env uv did not make.
+        (checkout / "python_env" / "pyvenv.cfg").write_text("uv = 0.12.21\n")
         (checkout / "app.py").touch()
         interpreter = checkout / "python_env" / "bin" / "python"
         interpreter.write_text("#!/usr/bin/env bash\n%s\n" % _CHECKOUT_PYTHON)

@@ -164,7 +164,7 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("narrationPythonMaxMinor", "The newest Python 3 minor version the "
             "engine's environment is built with", _NARRATION, "12"),
     Setting("narrationTorchcodecPairs", "Which torchcodec goes with which torch, for "
-            "repairing a mismatch", _NARRATION, "2.9:0.9 2.10:0.10 2.11:0.11"),
+            "repairing a mismatch", _NARRATION, "2.9:0.9 2.10:0.10 2.11:0.11 2.13:0.15 2.14:0.17"),
     Setting("narrationSoundfileFallbackMark", "The text that marks the engine shim "
             "this package wrote", _NARRATION, "`_load_with_soundfile_fallback`"),
     Setting("narrationProgressTail", "How much of the end of the engine's log, in "

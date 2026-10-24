@@ -32,9 +32,9 @@ how many at a time, and what the run cost.
 
 ## Setup
 
-It needs a local ebook2audiobook checkout and a Python 3.10–3.12 to build its
-environment from; everything inside that environment is installed by the
-checkout itself.
+It needs a local ebook2audiobook checkout, a Python 3.10–3.12 to build its
+environment from, and [uv](https://github.com/astral-sh/uv) to build it with;
+everything inside that environment is installed by the checkout itself.
 
 | Setting | Default | What it is |
 | --- | --- | --- |
