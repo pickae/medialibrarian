@@ -1104,6 +1104,51 @@ def _tag_arguments(tracks: list) -> list:
     return arguments
 
 
+# ffmpeg's libopus wrapper takes one layout per channel count - mono, stereo,
+# 3.0, quad, 5.0, 5.1, 6.1 and 7.1 - and anything else handed over with `-ac`
+# is REMIXED onto that count's default, not relabelled: a 4.1 loses its LFE, a
+# 7.0 has its two back speakers folded into one. So the source's layout decides.
+
+# (channels, source layout) -> the options that encode it in its own layout.
+# The side variants of 5.0 and 5.1 are the one remix that is harmless: ffmpeg
+# moves the side pair onto the back pair at full level.
+_OPUS_NATIVE = {
+    ("3", "3.0"): ["-channel_layout", "3.0"],
+    ("4", "quad"): ["-channel_layout", "quad"],
+    ("5", "5.0"): ["-ac", "5"],
+    ("5", "5.0(side)"): ["-ac", "5"],
+    ("6", "5.1"): ["-ac", "6"],
+    ("6", "5.1(side)"): ["-ac", "6"],
+    ("7", "6.1"): ["-ac", "7"],
+    ("8", "7.1"): ["-ac", "8"],
+}
+
+# (channels, source layout) -> (channels it is padded to, the pan filter). A
+# layout with no opus equivalent is padded out to 5.1, or to 7.1 where 5.1 has
+# too few speakers, with every source channel where that layout has it and
+# silence in the rest - opus spends next to nothing on silence, so the padded
+# layout's bitrate costs about what the source's own would. A back centre,
+# which neither has, is shared equally by the back pair (-3 dB each), and a
+# lone surround pair is 5.1's back pair or, beside a back centre, 7.1's sides.
+_PADDED = {
+    ("3", "2.1"): ("6", "pan=5.1|FL=FL|FR=FR|LFE=LFE"),
+    ("3", "3.0(back)"): ("6", "pan=5.1|FL=FL|FR=FR"
+                              "|BL=0.7071*BC|BR=0.7071*BC"),
+    ("4", "3.1"): ("6", "pan=5.1|FL=FL|FR=FR|FC=FC|LFE=LFE"),
+    ("4", "4.0"): ("6", "pan=5.1|FL=FL|FR=FR|FC=FC"
+                        "|BL=0.7071*BC|BR=0.7071*BC"),
+    ("4", "quad(side)"): ("6", "pan=5.1|FL=FL|FR=FR|BL=SL|BR=SR"),
+    ("5", "4.1"): ("6", "pan=5.1|FL=FL|FR=FR|FC=FC|LFE=LFE"
+                        "|BL=0.7071*BC|BR=0.7071*BC"),
+    ("6", "6.0"): ("8", "pan=7.1|FL=FL|FR=FR|FC=FC"
+                        "|BL=0.7071*BC|BR=0.7071*BC|SL=SL|SR=SR"),
+    ("7", "6.1(back)"): ("8", "pan=7.1|FL=FL|FR=FR|FC=FC|LFE=LFE"
+                              "|BL=0.7071*BC|BR=0.7071*BC|SL=BL|SR=BR"),
+    ("7", "7.0"): ("8", "pan=7.1|FL=FL|FR=FR|FC=FC"
+                        "|BL=BL|BR=BR|SL=SL|SR=SR"),
+}
+
+
 def check_audio_tracks(movie: str, root: str) -> None:
     """``checkAudioTracks``: every lossless track transcoded to opus, at the
     per-channel target bitrate."""
@@ -1121,24 +1166,38 @@ def check_audio_tracks(movie: str, root: str) -> None:
         # mkvtools index the whole matroska while ffmpeg indexes each track type
         # separately and from zero.
         index = audio_stream_index(position, types)
-        bitrate = bitrates.audio_bitrate(track.channels, "normal")
+        channels = track.channels
+        bitrate = bitrates.audio_bitrate(channels, "normal")
         if not bitrate:
             continue
 
-        # 3 and 4 channels are the only counts that need an explicit layout:
-        # ffmpeg's own defaults for them (2.1 / 4.0) are layouts libopus refuses.
-        # Forcing the layout only renames channels when the source carries no
-        # LFE, so the source is checked: a 2.1 / 3.1 source - or one the probe
-        # cannot read - would have its LFE remapped onto a regular speaker and is
-        # kept lossless.
-        layout = bitrates.audio_opus_layout(track.channels)
-        if layout:
+        # Mono and stereo need nothing. Past that the source's layout is
+        # encoded as it is where opus has it, and padded out to 5.1 / 7.1 where
+        # it does not. One the probe cannot name is left to ffmpeg's default
+        # for its count from five channels up, which is opus's own; at three or
+        # four that default is a layout opus refuses, so it is kept lossless,
+        # as is an unusual layout neither table knows.
+        layout_args = ["-ac", channels]
+        if channels not in ("1", "2"):
             source_layout = _probe([
                 "ffprobe", "-v", "quiet", "-select_streams", "a:%d" % index,
                 "-show_entries", "stream=channel_layout",
                 "-of", "default=nk=1:nw=1", movie]).strip()
-            if (track.channels, source_layout) not in (
-                    ("3", "3.0"), ("4", "4.0"), ("4", "quad")):
+            unnamed = re.fullmatch(r"(\d+ channels)?", source_layout)
+            if (channels, source_layout) in _OPUS_NATIVE:
+                layout_args = _OPUS_NATIVE[(channels, source_layout)]
+            elif (channels, source_layout) in _PADDED:
+                padded_channels, pan = _PADDED[(channels, source_layout)]
+                padded = bitrates.audio_bitrate(padded_channels, "normal")
+                if not padded:
+                    continue
+                layout_args = ["-af", pan]
+                channels, bitrate = padded_channels, padded
+            elif not (unnamed and int(channels) >= 5):
+                log("WARNING: audio track %d kept as it is, its %s-channel "
+                    "layout %r has no opus equivalent: %s"
+                    % (position - 1, channels, source_layout or "unknown",
+                       "./" + os.path.relpath(movie, root)))
                 continue
 
         opus = "%s_%d.opus" % (os.path.splitext(movie)[0], position - 1)
@@ -1151,10 +1210,8 @@ def check_audio_tracks(movie: str, root: str) -> None:
         if os.path.isfile(opus) and file_duration <= opus_duration:
             continue
 
-        layout_args = (["-channel_layout", layout] if layout
-                       else ["-ac", track.channels])
         log("Transcoding audio track %d to opus (%sk, %sch): %s"
-            % (position - 1, bitrate, track.channels,
+            % (position - 1, bitrate, channels,
                "./" + os.path.relpath(movie, root)))
         if _run(["ffmpeg", "-y", "-loglevel", "error", "-nostats",
                  "-i", movie, "-vn", "-map", "0:a:%d" % index,
@@ -1390,9 +1447,9 @@ def decide_actions(tracks: list, base: str) -> bool:
 
     A track "was converted to opus" is decided by the presence of its opus file
     rather than by re-deriving losslessness, which is what makes every exception
-    fall out for free: a 3/4-channel source whose layout carries an LFE, a bed
-    above the libopus ceiling and a non-lossless commentary all simply have no
-    opus, so they stay as they are.
+    fall out for free: a 3/4-channel source whose layout the probe cannot
+    read, a bed above the libopus ceiling and a non-lossless commentary all
+    simply have no opus, so they stay as they are.
     """
     primary = ""
     for track in tracks:
