@@ -344,9 +344,9 @@ line=$'call\tuv'
 for a in "$@"; do line+=$'\t'"$a"; done
 printf '%s\n' "$line" >> "${TOOLSTUB_LOG}"
 env="${@: -1}"
-/bin/mkdir -p -- "$env/bin"
+/bin/mkdir -p "$env/bin"
 printf '#!/bin/bash\nexit 0\n' > "$env/bin/python"
-/bin/chmod +x -- "$env/bin/python"
+/bin/chmod +x "$env/bin/python"
 """, encoding="ascii")
         os.chmod(str(uv), 0o755)
         python = bn.narration_ensure_venv()
