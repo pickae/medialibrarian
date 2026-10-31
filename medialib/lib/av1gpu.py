@@ -110,6 +110,23 @@ def binary() -> str:
 # never as a FASTER preset than the one asked for, which would hand a small
 # image less than the calibration promised.
 SMALL_PRESET = "base"
+
+# 4x4 AV1 tiles for images of 2 MP and more, at every preset - turbo's own
+# rule is 2x2, the slower presets' as few as AV1 allows; only turbo was measured:
+# `--tiles MIN_MP,COLS_LOG2,ROWS_LOG2`. Within a tile the reconstruction is a
+# serial wavefront over its superblocks, and on a big card 2x2 leaves it mostly
+# idle - comic pages, whose line art makes every superblock heavy, the most.
+# Measured on an RTX 5090 at turbo, 4:4:4 10-bit: 60 comic pages of 6 MP went
+# from 89-102 to 148-151 MP/s and photos from 152 to 246 MP/s, for +0.3-0.5 %
+# bytes and SSIMULACRA2 unchanged within 0.05. The calibration was measured with
+# 2x2 tiles, but its crops stay below 2 MP and so untiled either way, and half
+# a percent at an equal score is within its noise; it was not measured again.
+# Bigger GPU batches (GP_ENCODE_MP=96) add 16 % on 2x2 tiles, nothing on 4x4.
+# av1gpu's --preset resets the tiling, so this has to come after it.
+#
+# The value is tuned for a 170-SM card (the RTX 5090); a smaller one has fewer
+# chains to fill. Should av1gpu come to pick its tiles by GPU itself, this goes.
+TILES = "2,2,2"
 _PRESET_ORDER = ("slow", "base", "fast", "faster", "turbo", "turbo2", "turbo3")
 
 
@@ -219,7 +236,7 @@ def encode_chunk(encoder: str, items, workdir: str, quality: int,
     status = subprocess.run(
         [encoder, "--batch", listing, "--outdir", outputs,
          "--quality", str(quality), "--preset", preset,
-         "--small-preset", small_preset(preset),
+         "--small-preset", small_preset(preset), "--tiles", TILES,
          "--yuv", chroma, "--depth", str(depth)],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         env=environment).returncode

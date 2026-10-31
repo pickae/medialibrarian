@@ -213,7 +213,7 @@ class TestAChunk:
         chunk()
         assert chunk.args.read_text().split() == [
             "--quality", "60", "--preset", "turbo", "--small-preset", "base",
-            "--yuv", "420", "--depth", "10"]
+            "--tiles", "2,2,2", "--yuv", "420", "--depth", "10"]
 
     def test_png_and_webp_are_decoded_on_more_threads_than_its_own(
             self, chunk, monkeypatch):
