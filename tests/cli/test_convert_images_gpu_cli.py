@@ -23,7 +23,7 @@ pytestmark = pytest.mark.stubbed
 _IDENTIFY = '''
 for a in "$@"; do last="$a"; done
 case "$*" in
-    *"%@"*) case "${last##*/}" in margin*) echo "900x1400+50+50" ;;
+    *"%@"*) case "${last##*/}" in *margin*) echo "900x1400+50+50" ;;
             *) echo "1000x1500+0+0" ;; esac; exit 0 ;;
     *"%A %z %w %h %[orientation]"*) ;;
     *) echo "1000 1500"; exit 0 ;;
@@ -182,9 +182,9 @@ def test_a_relative_input_and_output_are_where_the_caller_meant(sandbox,
 
 def test_under_a_lane_the_pages_are_sorted_and_none_encoded(run, tmp_path):
     """The run that set the lane encodes: this one never calls the card nor
-    ImageMagick's encoder. Each JPEG the card can encode as it is is listed
-    with its input for the card; everything else - a PNG or WebP included,
-    whose decode would hold the card up - with the CPU call alone."""
+    ImageMagick's encoder. Each page the card can encode as it is - a PNG
+    or WebP as well as a JPEG - is listed with its input for the card;
+    everything else with the CPU call alone."""
     lane = tmp_path / "lane"
     lane.mkdir()
     written, called, _ = run("-c", imageGpuLane=str(lane))
@@ -195,10 +195,11 @@ def test_under_a_lane_the_pages_are_sorted_and_none_encoded(run, tmp_path):
                for entry in lines}
     assert sorted(name for name, entry in entries.items()
                   if "input" in entry) == [
-        "a/cover.avif", "b/cover.avif", "decline.avif", "photo.avif"]
+        "a/cover.avif", "b/cover.avif", "decline.avif", "deep.avif",
+        "flat.avif", "photo.avif"]
     assert sorted(name for name, entry in entries.items()
-                  if "input" not in entry) == [
-        "alpha.avif", "deep.avif", "flat.avif", "scan.avif"]
+                  if "input" not in entry) == ["alpha.avif", "scan.avif"]
+    assert entries["flat.avif"]["input"] == str(tmp_path / "in/flat.png")
     assert entries["photo.avif"]["input"] == str(tmp_path / "in/photo.jpeg")
     assert entries["photo.avif"]["pixels"] == 1_500_000
     assert entries["photo.avif"]["cpu"][-1] == entries["photo.avif"]["output"]
@@ -231,3 +232,25 @@ def test_under_a_lane_a_trimmed_jpeg_is_cropped_losslessly_for_the_card(
         ".jpg")
     with open(entry["input"]) as cropped:
         assert cropped.read() == "margin.jpg"
+
+
+def test_under_a_lane_a_trimmed_png_is_cut_by_imagemagick_for_the_card(
+        run, sandbox, tmp_path):
+    """A PNG has no lossless crop of its own: ImageMagick cuts it exactly as
+    the CPU's trim would, into a PNG in the lane, and that is what the card
+    is given."""
+    lane = tmp_path / "lane"
+    lane.mkdir()
+    (tmp_path / "in" / "margin.png").write_text("margin.png")
+    (tmp_path / "in" / "alpha-margin.png").write_text("alpha-margin.png")
+    run("-c", imageGpuLane=str(lane))
+    entries = {os.path.basename(entry["output"]): entry for entry in (
+        json.loads(line) for line in (lane / "manifest").read_text().splitlines())}
+    entry = entries["margin.avif"]
+    assert entry["input"].startswith(str(lane)) and entry["input"].endswith(
+        ".png")
+    with open(entry["input"]) as cropped:
+        assert cropped.read() == "CPU margin.png\n"
+    # One the card would not take uncut is not cut for it.
+    assert "input" not in entries["alpha-margin.avif"]
+    assert "-crop" in " ".join(entries["alpha-margin.avif"]["cpu"])

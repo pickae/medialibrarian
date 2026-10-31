@@ -6,8 +6,11 @@ card's CUDA cores, several times faster than libaom on every CPU thread at the
 same file size, and leaves the CPU nearly idle. It is not a replacement for the
 ImageMagick call, only a faster road for the images it can carry:
 
-- it writes 4:2:0 or 4:4:4 at 8 or 10 bits, and no alpha;
-- it reads JPEG on the GPU, PNG and WebP on the CPU, and nothing else;
+- it writes 4:2:0 or 4:4:4 at 8 or 10 bits, and alpha - which it is not
+  given here: its alpha quality is not calibrated against the CPU's, and an
+  older av1gpu drops it;
+- it reads JPEG on the GPU, PNG and WebP on the CPU (on
+  :data:`DECODE_THREADS` threads), and nothing else;
 - it cannot resize or crop.
 
 So the caller decides per image, and everything it does not take - and
@@ -57,6 +60,8 @@ __all__ = [
     "EXTENSIONS",
     "CHUNK_MEGAPIXELS",
     "MAX_PIXELS",
+    "DECODE_THREADS_VARIABLE",
+    "DECODE_THREADS",
     "chunks",
     "binary",
     "small_preset",
@@ -80,6 +85,14 @@ CHUNK_MEGAPIXELS = 24000
 # Above this av1gpu declines an image itself; asking first keeps such an image
 # out of a chunk's budget.
 MAX_PIXELS = 35_600_000
+
+# The CPU threads av1gpu decodes PNG and WebP on, in place of its own 4, unless
+# the environment already names a number. On 40 comic pages of 2035x2960 at
+# 4:4:4 10-bit, turbo, on an RTX 5090 (av1gpu cbea9b8): 55-57 MP/s with 4,
+# where the decode held the card up; 72-75 with 8, about what the same pages
+# cost as JPEG; 71-77 with 12. Nothing for JPEG, which the card decodes.
+DECODE_THREADS_VARIABLE = "GP_FALLBACK_WORKERS"
+DECODE_THREADS = 8
 
 def binary() -> str:
     """The encoder to run, or ``""`` when this host has none - or was told not
@@ -201,12 +214,15 @@ def encode_chunk(encoder: str, items, workdir: str, quality: int,
 
     # The process group's Ctrl+C reaches it as it reaches ImageMagick; stderr
     # names what it skipped and why, which the fallback does not need.
+    environment = dict(os.environ)
+    environment.setdefault(DECODE_THREADS_VARIABLE, str(DECODE_THREADS))
     status = subprocess.run(
         [encoder, "--batch", listing, "--outdir", outputs,
          "--quality", str(quality), "--preset", preset,
          "--small-preset", small_preset(preset),
          "--yuv", chroma, "--depth", str(depth)],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        env=environment).returncode
     if status < 0:
         return [], status
 
