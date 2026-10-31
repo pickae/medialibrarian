@@ -39,7 +39,8 @@ class TestTheProbe:
         ("Undefined 8 1000 1500 Undefined", 1_500_000),  # a JPEG
         ("True 8 1000 1500 Undefined", 0),        # transparency
         ("Blend 8 1000 1500 Undefined", 0),
-        ("False 16 1000 1500 Undefined", 0),      # av1gpu misreads 16-bit PNG
+        ("False 16 1000 1500 Undefined", 1_500_000),  # a 16-bit PNG
+        ("False 32 1000 1500 Undefined", 0),      # a float TIFF's depth
         ("False 8 1000 1501 Undefined", 0),       # -m would shrink it
         ("False 8 10001 1500 Undefined", 0),      # so would the width cap
         ("False 8 1000 1500 Undefined\n", 1_500_000),
@@ -209,4 +210,5 @@ class TestAChunk:
     def test_the_quality_and_preset_are_passed_as_given(self, chunk):
         chunk()
         assert chunk.args.read_text().split() == [
-            "--quality", "60", "--preset", "turbo", "--small-preset", "base"]
+            "--quality", "60", "--preset", "turbo", "--small-preset", "base",
+            "--yuv", "420", "--depth", "10"]

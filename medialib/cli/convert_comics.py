@@ -43,16 +43,20 @@ import time
 from medialib import commands
 from medialib.cli.convert_images import (
     CHROMAS,
+    LANE_VARIABLE,
     MAX_SPEED,
     threads_per_conversion,
 )
 from medialib.lib import (
     adequacy,
     archives,
+    av1gpu,
     clioptions,
     comicpdf,
     dynamicqueue,
+    encodercalibration,
     enums,
+    gpulane,
     imagebitrate,
     imagemagick,
     numbering,
@@ -146,6 +150,27 @@ IMAGES_PER_BOOK = 4
 # sizing the pool to the bare thread count would leave the CPU idling through
 # those stretches.
 OVERSUBSCRIBE = 2
+
+# Under the lane a book worker only sorts its pages - a header read, the trim's
+# box and, for a JPEG it cut, a lossless crop - and the lane encodes them. That
+# is what feeds the card, so it is run wider than the encoding it replaced: this
+# many books at once, this many pages of each.
+LANE_BOOKS = 4
+LANE_PAGES_PER_BOOK = 8
+
+# What av1gpu is asked for in place of -s and -l. convert-images' calibration
+# was measured on photographs at 4:2:0, and on comic pages at 4:4:4 it is off:
+# its quality 47 for -l 45 scored 65 in SSIMULACRA2 where the CPU's page scored
+# 73, so the card's pages would be visibly worse than the CPU's in the same
+# book. Measured 2026-10-31 on an RTX 5090 (av1gpu 84394ca) against ImageMagick
+# 7.1.2 / libaom at -s 4 4:4:4, over 24 1280x1280 crops of four comics - a
+# digital colour comic and three album scans. The preset is turbo whatever -s
+# says: at equal score its files were 6 % larger than fast's, at twice the
+# speed (129-148 MP/s against 69); faster bought nothing at the same 6 %, and
+# turbo2 and turbo3 cost 19 % and 26 % on line art. Only -s 4 was measured.
+COMIC_CALIBRATION = encodercalibration.Calibration(
+    presets={4: "turbo"},
+    qualities={4: [(35, 46.6), (45, 56.1), (55, 66.9)]})
 
 # Prepared books waiting for a worker, per worker. Each one is a whole book
 # unpacked in RAM, so the buffer is kept to what a freed worker needs to start
@@ -587,9 +612,18 @@ class Run:
     # The phase clock, unset until the phase it times has begun.
     phase_start: float | None
     phase_end: float | None
+    # The GPU lane, None when the pages are all encoded on the CPU - and the
+    # one setting with a default, since it is made after the rest. It lives in
+    # the run's process only: its threads cannot go to a worker.
+    lane: "gpulane.Lane | None" = None
 
     def __init__(self, **settings) -> None:
         self.__dict__.update(settings)
+
+    def __getstate__(self) -> dict:
+        state = dict(self.__dict__)
+        state["lane"] = None
+        return state
 
     def prepare_book(self, record: str):
         """One book's preparation, in the RUN's process: the skip checks, the
@@ -656,8 +690,14 @@ class Run:
         return (record, starved, measured), size
 
     def finish_book(self, item: tuple) -> None:
-        """One prepared book, in a worker: convert, number, zip, free."""
-        record, starved, measured = item
+        """One prepared book, in a worker: convert, number, zip, free.
+
+        Under the lane the worker only sorts the pages: each one's encode,
+        on the card or the CPU, is listed in the book's lane folder, marked
+        ready, and the lane calls :meth:`package_pages` once every page has
+        been encoded. The unpacked pages stay until then, since the encoders
+        read them where they are."""
+        record, starved, measured, lane_folder = item
         partial_path, _, out_rel = record.partition(UNIT)
         book_temp = os.path.join(self.temp_path, partial_path)
         book_avif = os.path.join(self.avif_path, partial_path)
@@ -670,8 +710,25 @@ class Run:
             return
 
         os.makedirs(os.path.dirname(book_avif) or self.avif_path, exist_ok=True)
-        self._convert_pages(book_temp, book_avif, file_name)
+        self._convert_pages(book_temp, book_avif, file_name, lane_folder)
+        if lane_folder:
+            open(os.path.join(lane_folder, gpulane.READY), "w").close()
+            return
+        self.package_pages(item)
+
+    def package_pages(self, item: tuple) -> None:
+        """A converted book: drop its broken pages, number, zip, free."""
+        record = item[0]
+        partial_path, _, out_rel = record.partition(UNIT)
+        book_temp = os.path.join(self.temp_path, partial_path)
+        book_avif = os.path.join(self.avif_path, partial_path)
+        file_name = os.path.basename(partial_path)
         shutil.rmtree(book_temp, ignore_errors=True)
+        # A book the lane gives back after a Ctrl+C may be missing pages the
+        # card never got to; it is not packaged as if it were whole.
+        if safety.abort_requested():
+            shutil.rmtree(book_avif, ignore_errors=True)
+            return
 
         # The pages that came out broken, counted as they are dropped: this is the
         # only place the run learns of them, because the converter counted such a
@@ -738,11 +795,18 @@ class Run:
             self.counters.bump("repackaged")
 
     def _convert_pages(self, book_temp: str, book_avif: str,
-                       file_name: str) -> None:
+                       file_name: str, lane_folder: str = "") -> None:
         """This book's pages, converted by convert-images as its own process -
         with its output kept rather than shown, because a few dozen books' worth
         of its progress would bury this run's own. Replayed when the conversion
-        actually fails."""
+        actually fails. With a <lane_folder>, the pages the GPU can take are
+        only made ready there."""
+        # Named here rather than inherited: this runs in a worker, which a
+        # forkserver started with the environment of its own start - before
+        # the run set the stats file, when PDFs were vetted first.
+        environment = dict(os.environ, imageStatsFile=self.stats_file)
+        if lane_folder:
+            environment[LANE_VARIABLE] = lane_folder
         argv, env = commands.command_line(
                 "convert-images",
                 # -a: every page or none. That command's own default leaves a
@@ -753,7 +817,7 @@ class Run:
                 ["-c", "-a", "-u", self.chroma, "-j", self.pages_per_book,
                  "-m", self.max_res, "-l", self.quality, "-s", self.speed_preset,
                  "-f", self.fuzz, book_temp, book_avif],
-                script_dir=self.script_dir)
+                script_dir=self.script_dir, env=environment)
         toolcapture.run(argv, file_name, tool="convert-images", env=env,
                         warning="conversion failed for %s" % file_name)
 
@@ -804,14 +868,68 @@ def _run_pool(state: Run, method: str, items: list, jobs: int) -> None:
     workerpool.run(items, jobs, _in_worker, lambda item: (state, method, item))
 
 
+def bytes_per_page(path: str) -> float:
+    """A book's size over its page count, from its archive's listing alone:
+    the crude guess at its pages' size that tells a book of pages the card can
+    take as they are from one of pages too large for it. Manga came out at a
+    quarter of a MB a page, digital comics near one, scans of album pages
+    taller than -m at three to six. A book whose pages cannot be counted - a
+    PDF, rendered rather than unpacked - ranks as the largest."""
+    container = _COMIC_CONTAINERS.get(path.lower().rsplit(".", 1)[-1], "")
+    members = archives.archive_members(path, container) if container else None
+    wanted = tuple("." + extension for extension in enums.IMAGE_EXTENSIONS)
+    pages = sum(1 for name, kind, _target in members or ()
+                if kind == "file" and name.lower().endswith(wanted))
+    if not pages:
+        return float("inf")
+    try:
+        return os.path.getsize(path) / pages
+    except OSError:
+        return float("inf")
+
+
+def _by_page_size(state: Run, book_list: list) -> list:
+    """The books, smallest pages first - each listing read once, several at
+    a time."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    def rank(record: str) -> float:
+        return bytes_per_page(os.path.join(state.in_path,
+                                           record.partition(UNIT)[0]))
+
+    with ThreadPoolExecutor(max_workers=runlog.cpu_count()) as pool:
+        ranks = list(pool.map(rank, book_list))
+    return [record for _rank, _order, record in
+            sorted(zip(ranks, range(len(book_list)), book_list, strict=True))]
+
+
 def _prepared_books(state: Run, book_list: list):
-    """The queue's producer: every book that still needs a worker, prepared."""
-    for record in book_list:
+    """The queue's producer: every book that still needs a worker, prepared.
+
+    With a lane, a book to be converted gets a lane folder, and the next book
+    is unpacked as soon as either of the lane's sides is short of work - and
+    it is the book likeliest to feed THAT side: the smallest pages left when
+    it is the card, the largest when it is the CPU."""
+    if state.lane is None:
+        ordered = list(book_list)
+    else:
+        ordered = _by_page_size(state, book_list)
+    while ordered:
+        side = "gpu"
+        if state.lane is not None:
+            side = state.lane.wait_for_room()
         if safety.abort_requested():
             return
+        record = ordered.pop(0) if side == "gpu" else ordered.pop()
         prepared = state.prepare_book(record)
-        if prepared is not None:
-            yield prepared
+        if prepared is None:
+            continue
+        (record, starved, measured), size = prepared
+        folder = ""
+        if state.lane is not None and not book_is_starved(starved, measured):
+            folder = state.lane.folder()
+            state.lane.expect(folder, (record, starved, measured, folder))
+        yield (record, starved, measured, folder), size
 
 
 def _page_stats(stats_file: str) -> tuple:
@@ -877,6 +995,17 @@ def footer(state: Run) -> None:
                        % (repackaged, STARVED_PAGE_PERCENT))
             runlog.say("already starved, so re-encoding could only have cost "
                        "them.\n")
+        lane = state.lane
+        if lane is not None and lane.calls:
+            share = (" (%.0f%% of the run)" % (100.0 * lane.busy / runtime)
+                     if runtime > 0 else "")
+            runlog.say("GPU: %d page(s), %.0f MP in %d call(s), busy %.1f "
+                       "seconds%s\n" % (lane.pages, lane.pixels / 1e6,
+                                         lane.calls, lane.busy, share))
+        if lane is not None and lane.cpu_pages:
+            runlog.say("CPU: %d page(s), %.0f MP, %d of them taken from the "
+                       "GPU's queue\n" % (lane.cpu_pages, lane.cpu_pixels / 1e6,
+                                          lane.stolen + lane.fallbacks))
         # Last, so the "of those" above cannot be read as being about these.
         if existing > 0:
             runlog.say("%d already packaged by an earlier run, skipped\n"
@@ -1093,7 +1222,7 @@ def _run(result, declaration, program: str, script_dir: str,
         pages_per_book=IMAGES_PER_BOOK, max_res=max_res, fuzz=fuzz,
         converted=set(), input_list=os.path.join(counter_dir, "inputs"),
         stats_file=os.path.join(counter_dir, "pageStats"),
-        phase_start=None, phase_end=None, total=0,
+        phase_start=None, phase_end=None, total=0, lane=None,
     )
     safety.set_run_footer(lambda: footer(state))
 
@@ -1222,13 +1351,36 @@ def _run(result, declaration, program: str, script_dir: str,
 
     state.pages_per_book = pages_per_book(runlog.cpu_count(), speed,
                                           len(book_list))
+    # The card, when this host has one: owned by this process for the whole
+    # run, and fed the pages of every book, since a call per book would pay
+    # av1gpu's start-up per book. The book workers then only sort the pages,
+    # and the lane encodes them - the card's and the CPU's at once, across
+    # books. -l and -s are the CPU's; what av1gpu has to be asked for to match
+    # them on comic pages was measured (COMIC_CALIBRATION).
+    encoder = av1gpu.binary()
+    if encoder:
+        lane_root, lane_status = ramscratch.ram_scratch_dir("convertComics.gpu")
+        if lane_status == 0 and lane_root:
+            ramscratch.add_exit_cleanup([lane_root])
+            preset, gpu_quality = COMIC_CALIBRATION.gpu_settings(
+                speed, int(quality))
+            state.lane = gpulane.Lane(
+                encoder, lane_root, gpu_quality, preset, chroma,
+                state.package_pages, page_slots(runlog.cpu_count(), speed),
+                log)
+    workers = book_workers(runlog.cpu_count(), speed)
+    if state.lane is not None:
+        workers, state.pages_per_book = LANE_BOOKS, LANE_PAGES_PER_BOOK
     # One prepared book waiting per worker: enough that a freed worker starts
     # its next book at once, and no more, because every book waiting is a book
     # held in RAM.
-    dynamicqueue.run(_prepared_books(state, book_list),
-                     book_workers(runlog.cpu_count(), speed), _in_worker,
-                     lambda item: (state, "finish_book", item),
-                     buffer_factor=BOOKS_BUFFERED_PER_WORKER, log=log)
+    try:
+        dynamicqueue.run(_prepared_books(state, book_list), workers, _in_worker,
+                         lambda item: (state, "finish_book", item),
+                         buffer_factor=BOOKS_BUFFERED_PER_WORKER, log=log)
+    finally:
+        if state.lane is not None:
+            state.lane.close()
     safety.exit_if_aborted()
     state.phase_end = time.time()
 

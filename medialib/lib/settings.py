@@ -119,7 +119,7 @@ SETTINGS: tuple[Setting, ...] = (
             "`/usr/bin`"),
     Setting("imageGpuEncoder", "The GPU AVIF encoder (av1gpu) tried before "
             "ImageMagick, by name or path; empty to encode every image on the CPU",
-            ("convert-images",), "`av1gpu`"),
+            ("convert-comics", "convert-images"), "`av1gpu`"),
     Setting("upscaleHome", "The VapourSynth environment `convert-video -u` upscales "
             "with", ("convert-video",), "`~/vapoursynth`"),
     Setting("upscaleModel", "The upscaling model: a path, or a file name under "
@@ -208,6 +208,7 @@ INTERNAL = frozenset((
     "narrationPython", "narrationDevice", "narrationEnvReady", "narrationVerbose",
     "narrationVoiceMap", "narrationEngine", "censusVideoExtensions",
     "censusPageExtensions", "censusAllExtensions", "imageStatsFile",
+    "imageGpuLane",
     # The usage text a refusal prints after itself, which only a shell caller
     # ever set.
     "usage",

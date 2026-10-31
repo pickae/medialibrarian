@@ -22,6 +22,7 @@ take to the card first, in batches, and what the card did not write goes to
 ImageMagick after it. medialib/lib/av1gpu.py says which images those are.
 """
 
+import json
 import os
 import shutil
 import subprocess
@@ -156,6 +157,13 @@ def threads_per_conversion(image_format: str, speed: int) -> float:
     if image_format != "avif":
         return THREADS_PER_CONVERSION
     return AVIF_THREADS_BY_SPEED.get(speed, THREADS_PER_CONVERSION)
+
+# Set by a run that encodes the images of many of these runs together -
+# convert-comics, one of these per book: the folder this run writes the
+# manifest of its pages into. Under it this run only sorts the pages - which go
+# to the card, which to the CPU, and with what call - and encodes none of them.
+LANE_VARIABLE = "imageGpuLane"
+LANE_MANIFEST = "manifest"
 
 # The width half of every -resize geometry. Only the height is ever capped (-m),
 # so the width is given a value no page can reach: "no limit" and "cap the height
@@ -315,6 +323,19 @@ def _parse_size(text: str) -> tuple[int, int] | None:
         return int(words[0]), int(words[1])
     except ValueError:
         return None
+
+
+def _parse_box(text: str) -> tuple[int, int, int, int] | None:
+    """``identify -format %@``'s trim box, ``WxH+X+Y``, as (width, height,
+    left, top), or None when it is not one. A blank page's box is empty, 0x0,
+    which is what makes the trim's verdict "blank"."""
+    size, _, offsets = text.strip().partition("+")
+    try:
+        width, height = (int(part) for part in size.split("x"))
+        left, top = (int(part) for part in offsets.split("+"))
+    except ValueError:
+        return None
+    return width, height, left, top
 
 
 def _parse_corners(text: str) -> tuple[str, float] | None:
@@ -491,13 +512,17 @@ class Run:
         out = disambiguated_output(relative, self.options["format"],
                                    self.input_dir, self.output_dir)
         source = relative
-        dimensions = _parse_size(self._identify(["-format", "%w %h", source]))
+        dimensions = _parse_size(self._identify(["-ping", "-format", "%w %h",
+                                                 source]))
         if dimensions is None:
             self.record("converted", "CONV", relative)
             self._convert(self._encode_arguments(source, out))
             return
         width, height = dimensions
         pixels = width * height
+        if self.options.get("gpuLane"):
+            self._crop_for_lane(relative, out, width, height)
+            return
 
         trimmed = os.path.join(self.counter_dir, "trimmed_%d.miff" % os.getpid())
         self._convert([source, "-fuzz", self.options["fuzzCommand"], "-trim",
@@ -517,6 +542,8 @@ class Run:
                     "miff:" + trimmed, out,
                     ["-bordercolor", colour, "-border", str(border)]))
                 return
+            if self._to_lane(relative, out):
+                return
             self.record("converted", "CONV", relative, pixels=pixels)
             self._convert(self._encode_arguments(source, out))
         finally:
@@ -524,6 +551,77 @@ class Run:
                 os.remove(trimmed)
             except OSError:
                 pass
+
+    def _crop_for_lane(self, relative: str, out: str, width: int,
+                       height: int) -> None:
+        """The -c path under a GPU lane: each page sorted, none encoded here.
+
+        The trim is measured as a box rather than written out. A JPEG it cuts
+        is cut by jpegtran: on the JPEG's own coefficients, so the page the
+        card is given is the same pixels as the source, still a JPEG the card
+        decodes itself. Two things differ from the CPU's trim. The margin
+        given back is the page's own rather than a border of the corner's
+        colour, and the left and top edges can only move in whole blocks of 8
+        or 16 pixels, so up to that much more of the margin stays.
+
+        What the card cannot take - taller than -m even cut, not a JPEG, no
+        jpegtran - is listed for the lane's CPU encoders, with the call that
+        trims and encodes it.
+        """
+        pixels = width * height
+        box = _parse_box(self._identify(
+            ["-fuzz", self.options["fuzzCommand"], "-format", "%@", relative]))
+        verdict, colour, border = trim_verdict(
+            width, height, box[:2] if box else None,
+            lambda: self._identify_corner(relative))
+        if verdict == "blank":
+            self.record("blank", "SKIP (blank)", relative, stream=sys.stderr)
+            return
+        if verdict == "converted":
+            if not self._to_lane(relative, out):
+                self._cpu_to_lane(relative, out, (), "converted", "CONV",
+                                  pixels)
+            return
+        assert box is not None
+        trim = ["-crop", "%dx%d+%d+%d" % box, "+repage",
+                "-bordercolor", colour, "-border", str(border)]
+        if (self.options.get("losslessCrop")
+                and relative.endswith((".jpg", ".jpeg"))):
+            cut_w, cut_h, left, top = box
+            left, top = max(0, left - border), max(0, top - border)
+            right = min(width, box[2] + cut_w + border)
+            bottom = min(height, box[3] + cut_h + border)
+            geometry = "%dx%d+%d+%d" % (right - left, bottom - top, left, top)
+            descriptor, cropped = tempfile.mkstemp(
+                suffix=".jpg", dir=self.options["gpuLane"])
+            os.close(descriptor)
+            done = subprocess.run(
+                ["jpegtran", "-copy", "all", "-crop", geometry,
+                 "-outfile", cropped, relative],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if done.returncode == 0 and self._to_lane(
+                    relative, out, cropped, "trimmed", "TRIM (GPU)"):
+                return
+            os.remove(cropped)
+        self._cpu_to_lane(relative, out, trim, "trimmed", "TRIM", pixels)
+
+    def _cpu_to_lane(self, relative: str, out: str, extra, category: str,
+                     label: str, pixels: int) -> None:
+        """List a page for the lane's CPU encoders, with the ImageMagick call
+        that encodes it - <extra> being the trim, when there is one."""
+        out = os.path.abspath(out)
+        self._list({"output": out, "pixels": pixels,
+                    "cpu": imagemagick.convert_argv(self._encode_arguments(
+                        os.path.abspath(relative), out, extra))})
+        self.record(category, label, relative, pixels=pixels)
+
+    def _list(self, entry: dict) -> None:
+        """One line of the lane's manifest."""
+        lane = self.options["gpuLane"]
+        with open(os.path.join(lane, LANE_MANIFEST + ".lock"), "w") as handle, \
+                runlog.take_lock(handle), \
+                open(os.path.join(lane, LANE_MANIFEST), "a") as manifest:
+            manifest.write(json.dumps(entry) + "\n")
 
     def _identify_corner(self, source: str):
         """The margin's colour and lightness, from the page's four corner pixels
@@ -576,9 +674,51 @@ class Run:
         if self.options["crop"]:
             self.crop_convert(relative)
             return
+        if self._to_lane(relative, out):
+            return
+        if self.options.get("gpuLane"):
+            self._cpu_to_lane(relative, out, (), "converted", "CONV",
+                              self._pixels(relative))
+            return
         self.record("converted", "CONV", relative,
                     pixels=self._pixels(relative))
         self._convert(self._encode_arguments(relative, out))
+
+    def _to_lane(self, relative: str, out: str, gpu_input: str = "",
+                 category: str = "converted",
+                 label: str = "CONV (GPU)") -> bool:
+        """Hand this image to the GPU lane of the run that started this one,
+        and say whether it was taken. Only under a lane (:data:`LANE_VARIABLE`):
+        that run owns the card and encodes the pages of many of these runs
+        together, so this one only writes down where each page is.
+
+        Only what the card encodes fastest goes: a JPEG - decoded on the card,
+        where a PNG or WebP is decoded on a single CPU thread that left the
+        card waiting at a third of its speed - that is encoded whole: within
+        -m and without alpha. Nothing is re-encoded to make it fit. <gpu_input>
+        is what the card is given in place of the page itself: the page
+        losslessly cropped by :meth:`_crop_for_lane`.
+
+        Each line of the manifest is the card's input, the output, its pixels,
+        and the ImageMagick call that encodes that input on the CPU - which the
+        lane runs for a page the card did not write, or one a CPU encoder
+        takes while the card has more than it can start on.
+        """
+        lane = self.options.get("gpuLane", "")
+        source = gpu_input or relative
+        if not lane or not source.endswith((".jpg", ".jpeg")):
+            return False
+        pixels = av1gpu.takes_probe(
+            self._identify(["-ping", "-format", av1gpu.PROBE_FORMAT, source]),
+            UNBOUNDED_EDGE, self.options["maxHeight"])
+        if not pixels:
+            return False
+        source, out = os.path.abspath(source), os.path.abspath(out)
+        self._list({"input": source, "output": out, "pixels": pixels,
+                    "cpu": imagemagick.convert_argv(
+                        self._encode_arguments(source, out))})
+        self.record(category, label, relative, pixels=pixels, road="gpu")
+        return True
 
     def gpu_pixels(self, relative: str) -> int:
         """The pixel count of this image when it goes to the GPU encoder
@@ -736,7 +876,7 @@ def _encode_on_gpu(state, work, jobs: int, encoder: str) -> list:
         try:
             written, status = av1gpu.encode_chunk(
                 encoder, items, workdir, state.options["gpuQuality"],
-                state.options["gpuPreset"])
+                state.options["gpuPreset"], chroma=state.options["chroma"])
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
         for index in written:
@@ -806,13 +946,20 @@ def main(argv: list, program: str = "convert-images") -> int:
         "maxResCommand": "%dx%s>" % (UNBOUNDED_EDGE, max_res),
         "maxHeight": int(max_res) if max_res.isdigit() else 0,
     }
-    # The GPU writes 8-bit 4:2:0 AVIF of the whole picture, so it is only asked
-    # where that is what the run wants: not for -c, whose trim decides per image
-    # what to encode, and not for an -m it could not read as a height.
+    # The GPU encodes the whole picture as it is, so this run only asks it
+    # where that is what is wanted: not for -c, whose trim decides per image
+    # what to encode, and not for an -m it could not read as a height. Under a
+    # lane the run that set it asks instead, -c included: a page the trim does
+    # not cut is encoded whole, as the card would.
     encoder = ""
-    if (image_format == CHROMA_FORMAT and chroma == DEFAULT_CHROMA
-            and not crop and not reverse and options["maxHeight"]):
-        encoder = av1gpu.binary()
+    lane = os.environ.get(LANE_VARIABLE, "")
+    if image_format == CHROMA_FORMAT and not reverse and options["maxHeight"]:
+        if lane:
+            options["gpuLane"] = lane
+            # The trim done losslessly, where jpegtran is there to do it.
+            options["losslessCrop"] = bool(shutil.which("jpegtran"))
+        elif not crop:
+            encoder = av1gpu.binary()
     # -l and -s mean what they mean on the CPU; what av1gpu has to be asked
     # for to give the same was measured, not assumed.
     if encoder:
