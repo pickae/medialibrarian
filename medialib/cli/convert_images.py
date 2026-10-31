@@ -230,7 +230,29 @@ JPEG_QUALITY_BONUS = 25
 MIN_TRIM_PERCENT = 1
 MAX_TRIM_PERCENT = 20
 BLANK_TRIM_PERCENT = 99
-LIGHTNESS_THRESHOLD = 40
+
+# How light, in percent, the corners around a trimmed margin must be for it to
+# count as paper. The measure is HSL lightness, the mean of a pixel's largest and
+# smallest sRGB channel, so reaching 80 needs every channel at 60% or more: a
+# saturated colour peaks at 50 however bright it looks, and only near-white,
+# off-white, light grey and pale tints get there. Measured with ImageMagick
+# 7.1.2-18:
+#
+#   white 100   cream #f5ecd7 90   pale blue #d0e8ff 91   pale yellow #fff0c0 88
+#   grey 80% 80   grey 79% 79   grey 70% 70   grey 50% 50
+#   pure red 50   pure yellow 50   dark blue #2050a0 38   dark red #8b0000 27
+#
+# On 3300 comic pages whose trim took a margin, the paper ones read 84 or more
+# and nearly all of them 100; the near-black frames read 13 and the coloured
+# cover frames 26-68.
+LIGHTNESS_THRESHOLD = 80
+
+# The probe's four corners and what each prints: its colour, which is what the
+# border is drawn in, and its lightness.
+_CORNERS = ("0,0", "w-1,0", "0,h-1", "w-1,h-1")
+_CORNER_FORMAT = "".join(
+    "%%[pixel:p{%s}] %%[fx:100*p{%s}.lightness]\n" % (at, at)
+    for at in _CORNERS)
 
 # The stems a disambiguated output has to look out for: two sources in one folder
 # sharing a stem would otherwise map to the same converted name. Every extension
@@ -316,21 +338,35 @@ def _parse_box(text: str) -> tuple[int, int, int, int] | None:
     return width, height, left, top
 
 
-def _parse_corner(text: str) -> tuple[str, int] | None:
-    """The corner probe's ``<colour> <lightness>`` as (colour, lightness), or
-    None when it is not that. The lightness is truncated at the dot: 39.9 is 39
-    and not 40."""
-    parts = text.strip().split(" ")
-    if len(parts) < 2:
+def _parse_corners(text: str) -> tuple[str, float] | None:
+    """The corner probe's four ``<colour> <lightness>`` lines as the
+    (colour, lightness) of the margin they surround, or None when they are not
+    four such lines.
+
+    The margin is the second-darkest corner: light when at least three of the
+    four are. One corner may be a speck, a scanner's shadow or a picture running
+    off the page - the trim then took the margin from the other sides - and it is
+    outvoted; two dark corners are a dark edge, and that is part of the picture.
+    """
+    corners = []
+    for line in text.strip().split("\n"):
+        parts = line.split(" ")
+        if len(parts) != 2:
+            return None
+        try:
+            lightness = float(parts[1])
+        except ValueError:
+            return None
+        if lightness != lightness:      # nan
+            return None
+        corners.append((parts[0], lightness))
+    if len(corners) != len(_CORNERS):
         return None
-    try:
-        return parts[0], int(parts[1].split(".")[0])
-    except ValueError:
-        return None
+    return sorted(corners, key=lambda corner: corner[1])[1]
 
 
 def trim_verdict(width: int, height: int, cut: tuple[int, int] | None,
-                 corner: Callable[[], tuple[str, int] | None]
+                 corner: Callable[[], tuple[str, float] | None]
                  ) -> tuple[str, str, int]:
     """What a -c trim meant, from how much it took off a <width> x <height>
     page: ``(verdict, colour, border)``, the verdict being "blank", "trimmed"
@@ -339,7 +375,7 @@ def trim_verdict(width: int, height: int, cut: tuple[int, int] | None,
 
     Past BLANK_TRIM_PERCENT in either direction there was nothing on the page.
     Between MIN_ and MAX_TRIM_PERCENT in both, the trim took a margin - if the
-    corner is light enough to be one. <corner> is only asked then, because it
+    corners are light enough to be one. <corner> is only asked then, because it
     costs a call of its own; what it answers is the colour, and the border is
     the thin margin given back so the content does not end flush with the edge.
     Anything else is converted whole.
@@ -588,16 +624,21 @@ class Run:
             manifest.write(json.dumps(entry) + "\n")
 
     def _identify_corner(self, source: str):
-        """The corner pixel's colour and lightness, in one call - what decides
-        whether a margin is light enough to be a margin."""
+        """The margin's colour and lightness, from the page's four corner pixels
+        in one call - what decides whether a margin is light enough to be a
+        margin.
+
+        Decoding the page is the cost; reading four pixels of it rather than one
+        adds nothing measurable. sRGB first, so that a CMYK or greyscale page is
+        measured in the channels the lightness is defined on."""
         answer = subprocess.run(
             imagemagick.convert_argv(
-                [source, "-crop", "1x1+0+0", "-colorspace", "HSL",
-                 "-format", "%[pixel:p{0,0}] %[fx:100*lightness]", "info:"]),
+                [source, "-colorspace", "sRGB",
+                 "-format", _CORNER_FORMAT, "info:"]),
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         if answer.returncode != 0:
             return None
-        return _parse_corner(answer.stdout.decode("utf-8", "replace"))
+        return _parse_corners(answer.stdout.decode("utf-8", "replace"))
 
     def starved(self, relative: str) -> bool:
         """Whether this image is already too small to be worth re-encoding.

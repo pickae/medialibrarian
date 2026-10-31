@@ -39,7 +39,8 @@ _CONVERT = '''
 src=""
 for a in "$@"; do [[ -f "$a" ]] && { src="$a"; break; }; done
 out="${!#}"
-[ "$out" = "info:" ] && { echo "white 100"; exit 0; }
+[ "$out" = "info:" ] && {
+    printf "srgb(255,255,255) 100\\n%.0s" 1 2 3 4; exit 0; }
 echo "CPU ${src##*/}" > "$out"
 '''
 
