@@ -30,6 +30,7 @@ ran is the suite the repository holds.
 import locale
 import os
 import pathlib
+import signal
 import sys
 
 import pytest
@@ -208,6 +209,26 @@ def no_imdb_lists(request, monkeypatch):
         return
     from medialib.lib import imdbdata
     monkeypatch.setattr(imdbdata, "prepare", lambda _where, _log: "")
+
+
+@pytest.fixture(autouse=True)
+def interrupt_handlers_put_back():
+    """A command run in-process installs the run's interrupt handler, and
+    nothing in the command takes it off again: a run's process ends with it.
+    The test process does not, so without this every later case in the same
+    worker inherits it - and so does every child it FORKS, where a terminate()
+    then runs the run's handler instead of ending the child. A child signalled
+    before its bootstrap leaves that handler as a copy of the test process
+    itself, and a join on it waits forever.
+    """
+    from medialib.lib import safety
+    numbers = safety.interrupt_signals()
+    handlers = [signal.getsignal(number) for number in numbers]
+    yield
+    for number, handler in zip(numbers, handlers, strict=True):
+        # None: a handler installed outside Python, which it cannot put back.
+        if handler is not None:
+            signal.signal(number, handler)
 
 
 @pytest.fixture(autouse=True)
