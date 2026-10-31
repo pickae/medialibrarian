@@ -300,12 +300,13 @@ esac
 '''
 
     # Three jobs in one, as ImageMagick's own is: asked for "info:" it samples the
-    # corner colour and lightness - a light margin, so a trimmable page really is
-    # trimmed - and otherwise it writes the output stamped with the page it came
-    # from. A *-broken.jpg is written far below the minimum page size, which is
-    # how a truncated encode presents itself.
+    # four corners' colour and lightness - a white margin, so a trimmable page
+    # really is trimmed - and otherwise it writes the output stamped with the
+    # page it came from. A *-broken.jpg is written far below the minimum page
+    # size, which is how a truncated encode presents itself.
     _CONVERT = '''
-for a in "$@"; do [[ "$a" == "info:" ]] && { echo "white 100"; exit 0; }; done
+for a in "$@"; do [[ "$a" == "info:" ]] && {
+    printf "srgb(255,255,255) 100\\n%.0s" 1 2 3 4; exit 0; }; done
 src=""
 for a in "$@"; do p="${a#miff:}"; [[ -f "$p" ]] && { src="$p"; break; }; done
 out="${!#}"; out="${out%\\>}"; out="${out#miff:}"

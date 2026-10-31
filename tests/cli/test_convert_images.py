@@ -602,7 +602,7 @@ class TestATrimThatCannotBeMeasured:
 
 # A 1000 x 1500 page: 1% is 10 x 15, 20% is 200 x 300, 99% is 990 x 1485.
 _W, _H = 1000, 1500
-_LIGHT = "hsl(45.0007,51.6136%,87.8431%)"
+_LIGHT = "srgb(240,232,208)"
 
 
 def _light():
@@ -637,9 +637,10 @@ class TestTheTrimVerdict:
 
     @pytest.mark.parametrize("corner,verdict", [
         ((_LIGHT, ci.LIGHTNESS_THRESHOLD), "trimmed"),
-        (("hsl(0,0%,12.549%)", ci.LIGHTNESS_THRESHOLD - 1), "converted"),
+        (("srgb(203,203,203)", 79.6078), "converted"),
+        (("srgb(35,31,32)", 12.9412), "converted"),
         (None, "converted"),
-    ], ids=["light", "dark", "unmeasured"])
+    ], ids=["light", "just-under", "dark", "unmeasured"])
     def test_a_margin_is_only_one_when_its_corner_is_light(self, corner,
                                                            verdict):
         """A dark edge is part of the picture, not paper around it."""
@@ -654,20 +655,43 @@ class TestTheTrimVerdict:
         ci.trim_verdict(_W, _H, cut, corner)
 
 
+def _corners(*lines):
+    return "".join(line + "\n" for line in lines)
+
+
+_WHITE = "srgb(255,255,255) 100"
+_INK = "srgb(35,31,32) 12.9412"
+
+
 class TestTheCornerProbe:
-    """`<colour> <lightness>` as ImageMagick prints it for the corner pixel."""
+    """Four `<colour> <lightness>` lines as ImageMagick prints them for the
+    page's corners, read as the margin they surround."""
 
     pytestmark = pytest.mark.pure
 
     @pytest.mark.parametrize("text,corner", [
-        ("hsl(45.0007,51.6136%,87.8431%) 50.1717",
-         ("hsl(45.0007,51.6136%,87.8431%)", 50)),
-        ("hsl(0,0%,40%) 20", ("hsl(0,0%,40%)", 20)),
-        # truncated, not rounded: 39.9 is not light enough
-        ("hsl(0,0%,79.8%) 39.9\n", ("hsl(0,0%,79.8%)", 39)),
-        ("", None),
-        ("hsl(0,0%,40%)", None),
-        ("hsl(0,0%,40%) nan", None),
-    ])
+        (_corners(*[_WHITE] * 4), ("srgb(255,255,255)", 100.0)),
+        (_corners(*["gray(204) 80"] * 4), ("gray(204)", 80.0)),
+        # a picture running off one corner, or a speck on it, is outvoted
+        (_corners(_INK, _WHITE, _WHITE, _WHITE), ("srgb(255,255,255)", 100.0)),
+        (_corners(_WHITE, _WHITE, _WHITE, _INK), ("srgb(255,255,255)", 100.0)),
+        # two dark corners are a dark edge
+        (_corners(_INK, _WHITE, _INK, _WHITE), ("srgb(35,31,32)", 12.9412)),
+        # three light corners: the darkest of them speaks for the margin
+        (_corners(_WHITE, "srgb(238,238,238) 93.3333", _INK, _WHITE),
+         ("srgb(238,238,238)", 93.3333)),
+    ], ids=["white", "grey", "one-dark-corner", "another-dark-corner",
+            "dark-edge", "the-darkest-light-one"])
     def test_the_answer_is_read(self, text, corner):
-        assert ci._parse_corner(text) == corner
+        assert ci._parse_corners(text) == corner
+
+    @pytest.mark.parametrize("text", [
+        "",
+        _corners(*[_WHITE] * 3),
+        _corners(*[_WHITE] * 5),
+        _corners(_WHITE, _WHITE, _WHITE, "srgb(255,255,255)"),
+        _corners(_WHITE, _WHITE, _WHITE, "srgb(255,255,255) nan"),
+        _corners(_WHITE, _WHITE, _WHITE, "srgb(255,255,255) light"),
+    ], ids=["nothing", "three", "five", "no-lightness", "nan", "not-a-number"])
+    def test_anything_else_is_unmeasured(self, text):
+        assert ci._parse_corners(text) is None
