@@ -16,19 +16,28 @@ otherwise. The model behind the verdict is medialib/lib/imagebitrate.py.
 Every conversion is one ImageMagick call whose output is checked and whose stderr
 is silenced, so the tools are asked for up front: a missing ImageMagick would
 otherwise read as a run in which no image could be converted.
+
+Except where a GPU can do it: a plain AVIF run hands every image av1gpu can
+take to the card first, in batches, and what the card did not write goes to
+ImageMagick after it. medialib/lib/av1gpu.py says which images those are.
 """
 
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from typing import NamedTuple
 
 from medialib import commands
 from medialib.lib import (
     adequacy,
+    av1gpu,
     clioptions,
+    encodercalibration,
     enums,
     imagebitrate,
     imagemagick,
@@ -105,6 +114,9 @@ l | <quality> | quality level of the output images
 s | <speed> | av1 speed preset {speeds}, lower is slower, default {speed}
 m | <maxRes> | maximum resolution (height) to keep
 f | <fuzz> | when trimming, how many percent color difference gets still trimmed
+k |  | calibrate: measure what the GPU encoder has to be asked for to
+                    match the CPU, on crops of the images in <inputDir>, and
+                    save it. Works in <outputDir>; converts nothing.
 """.format(formats=_spoken_list(enums.IMAGE_CODECS), default=DEFAULT_FORMAT,
            speeds="0-%d" % MAX_SPEED, speed=DEFAULT_SPEED,
            chromas=" or ".join(CHROMAS), chroma=DEFAULT_CHROMA)
@@ -124,10 +136,10 @@ u | enum:{chromas} | chroma
            chromas="\\|".join(CHROMAS))
 
 OPT_VARS = ("c:crop a:alwaysConvert r:reverse e:outputFormat u:chroma "
-            "j:jobs l:quality s:speedPreset m:maxRes f:fuzz")
+            "j:jobs l:quality s:speedPreset m:maxRes f:fuzz k:calibrate")
 OPT_COLUMN = 20
 OPT_LONG = ("h:help c:crop a:always r:reverse e:encoding u:chroma j:jobs "
-            "l:quality s:speed m:max-resolution f:fuzz")
+            "l:quality s:speed m:max-resolution f:fuzz k:calibrate")
 
 # One conversion spans about this many threads, so the pool is the cores divided
 # by it.
@@ -328,6 +340,35 @@ def trim_verdict(width: int, height: int, cut: tuple[int, int] | None,
     return "converted", "", 0
 
 
+def encode_arguments(options, source, out, extra=()):
+    """The conversion, in whichever format <options> asks for.
+
+    <extra> goes between the source and the resize, which is where an
+    operation on the loaded image has to sit.
+
+    -depth is the one setting that must come AFTER the source. Placed before
+    it, it is a read setting: it tells the decoder how to read the source
+    and the image keeps the source's own depth. The encoder then writes
+    whatever the source had. An 8-bit JPEG came out as 8-bit AVIF, and a
+    16-bit PNG came out as 12-bit AVIF, which is profile 2 and which many
+    decoders cannot play. Placed just before the output, it sets the depth
+    of the image being written, whatever the source was.
+    """
+    chosen = FORMATS[options["format"]]
+    # Named only when it is not the encoder's own default, so a run that
+    # does not ask is the call it always was.
+    chroma = (["-define", "%s=%s" % (CHROMA_DEFINE, options["chroma"])]
+              if options["chroma"] != DEFAULT_CHROMA else [])
+    return ["-format", options["format"],
+            "-quality", str(options["quality"]),
+            "-define", "%s=%d" % (chosen.effort,
+                                  options["effortLevel"]),
+            *chroma,
+            source, *extra,
+            "-resize", options["maxResCommand"],
+            "-depth", str(chosen.depth), out]
+
+
 class Run:
     """One conversion run: the settled options, and the counters its workers
     share through files because they are separate processes."""
@@ -338,19 +379,27 @@ class Run:
         self.counter_dir = counter_dir
         self.options = options
         self.total = total
+        # When the CPU's pool began, which is when the GPU's chunks ended.
+        self.cpu_started = 0.0
 
     # --- the counters and the one progress line ---------------------------
     def record(self, category: str, label: str, path: str,
-               stream=None) -> None:
+               stream=None, pixels: int = 0, road: str = "cpu") -> None:
         """Bump the global counter and this category's, then print one clean
         line. The lock serialises both across the parallel workers - or, without
         flock, takes nothing and the line comes out unnumbered. Under -q only
-        the error line is printed; the counting goes on regardless."""
+        the error line is printed; the counting goes on regardless.
+
+        <pixels> is what an encode was given, added to <road>'s total for the
+        closing report's speed: "cpu" or "gpu"."""
         out = sys.stderr if stream is None else stream
         with open(os.path.join(self.counter_dir, "lock"), "w") as handle, \
                 runlog.take_lock(handle):
                 current = self._bump("current")
                 self._bump(category)
+                if category in ("converted", "trimmed"):
+                    self._bump(road + "Images")
+                    self._bump(road + "Pixels", pixels)
                 line = "%s%s: %s\n" % (
                     runlog.counted_prefix(current, self.total), label, path)
                 if category == "notFound":
@@ -358,14 +407,14 @@ class Run:
                 else:
                     runlog.say(line, out)
 
-    def _bump(self, name: str) -> int:
+    def _bump(self, name: str, amount: int = 1) -> int:
         path = os.path.join(self.counter_dir, name)
         try:
             with open(path) as handle:
                 value = int(handle.read() or "0")
         except (OSError, ValueError):
             value = 0
-        value += 1
+        value += amount
         with open(path, "w") as handle:
             handle.write(str(value))
         return value
@@ -391,33 +440,14 @@ class Run:
             return ""
         return proc.stdout.decode("utf-8", "replace").strip()
 
+    def _pixels(self, source: str) -> int:
+        """The picture's pixel count, from its header, or 0 when it cannot be
+        read - which leaves the image out of the speed and nothing else."""
+        size = _parse_size(self._identify(["-ping", "-format", "%w %h", source]))
+        return size[0] * size[1] if size else 0
+
     def _encode_arguments(self, source, out, extra=()):
-        """The conversion, in whichever format this run writes.
-
-        <extra> goes between the source and the resize, which is where an
-        operation on the loaded image has to sit.
-
-        -depth is the one setting that must come AFTER the source. Placed before
-        it, it is a read setting: it tells the decoder how to read the source
-        and the image keeps the source's own depth. The encoder then writes
-        whatever the source had. An 8-bit JPEG came out as 8-bit AVIF, and a
-        16-bit PNG came out as 12-bit AVIF, which is profile 2 and which many
-        decoders cannot play. Placed just before the output, it sets the depth
-        of the image being written, whatever the source was.
-        """
-        chosen = FORMATS[self.options["format"]]
-        # Named only when it is not the encoder's own default, so a run that
-        # does not ask is the call it always was.
-        chroma = (["-define", "%s=%s" % (CHROMA_DEFINE, self.options["chroma"])]
-                  if self.options["chroma"] != DEFAULT_CHROMA else [])
-        return ["-format", self.options["format"],
-                "-quality", str(self.options["quality"]),
-                "-define", "%s=%d" % (chosen.effort,
-                                      self.options["effortLevel"]),
-                *chroma,
-                source, *extra,
-                "-resize", self.options["maxResCommand"],
-                "-depth", str(chosen.depth), out]
+        return encode_arguments(self.options, source, out, extra)
 
     def crop_convert(self, relative: str) -> None:
         """The -c path: trim, then decide from HOW MUCH came off what the trim
@@ -431,6 +461,7 @@ class Run:
             self._convert(self._encode_arguments(source, out))
             return
         width, height = dimensions
+        pixels = width * height
 
         trimmed = os.path.join(self.counter_dir, "trimmed_%d.miff" % os.getpid())
         self._convert([source, "-fuzz", self.options["fuzzCommand"], "-trim",
@@ -445,12 +476,12 @@ class Run:
                             stream=sys.stderr)
                 return
             if verdict == "trimmed":
-                self.record("trimmed", "TRIM", relative)
+                self.record("trimmed", "TRIM", relative, pixels=pixels)
                 self._convert(self._encode_arguments(
                     "miff:" + trimmed, out,
                     ["-bordercolor", colour, "-border", str(border)]))
                 return
-            self.record("converted", "CONV", relative)
+            self.record("converted", "CONV", relative, pixels=pixels)
             self._convert(self._encode_arguments(source, out))
         finally:
             try:
@@ -504,8 +535,33 @@ class Run:
         if self.options["crop"]:
             self.crop_convert(relative)
             return
-        self.record("converted", "CONV", relative)
+        self.record("converted", "CONV", relative,
+                    pixels=self._pixels(relative))
         self._convert(self._encode_arguments(relative, out))
+
+    def gpu_pixels(self, relative: str) -> int:
+        """The pixel count of this image when it goes to the GPU encoder
+        rather than to the transcode below, and 0 when it does not.
+
+        Everything the transcode would SKIP stays with it - a missing source,
+        an output already there, a starved image - so that it is counted and
+        reported there, the one place that does. What is left goes to the GPU
+        when av1gpu can read it and the picture needs no resize: the extension
+        is free to ask, and alpha and size cost one header read.
+        """
+        if relative.rpartition(".")[2] not in av1gpu.EXTENSIONS:
+            return 0
+        if not os.path.isfile(relative):
+            return 0
+        if os.path.isfile(disambiguated_output(relative, self.options["format"],
+                                               self.input_dir, self.output_dir)):
+            return 0
+        if self.options["skipStarved"] and self.starved(relative):
+            return 0
+        return av1gpu.takes_probe(
+            self._identify(["-ping", "-format", av1gpu.PROBE_FORMAT, relative]),
+            UNBOUNDED_EDGE, self.options["maxHeight"],
+            jpeg=relative.endswith((".jpg", ".jpeg")))
 
     def reverse_to_jpeg(self, relative: str) -> None:
         """The -r path, which the starved check has nothing to say about: -r
@@ -518,7 +574,7 @@ class Run:
                         stream=sys.stderr)
             return
         quality = self.options["quality"] + JPEG_QUALITY_BONUS
-        self.record("converted", "REV", relative)
+        self.record("converted", "REV", relative, pixels=self._pixels(relative))
         geometry = self.options["maxResCommand"]
         if self.options["crop"]:
             self._convert([relative, "-fuzz", self.options["fuzzCommand"],
@@ -609,6 +665,51 @@ def _run_pool(state, work, jobs: int, worker_name: str) -> None:
                    lambda relative: (state, worker_name, relative))
 
 
+def _encode_on_gpu(state, work, jobs: int, encoder: str) -> list:
+    """Hand every image the GPU can take to <encoder>, in chunks of
+    av1gpu.CHUNK_MEGAPIXELS, and return the work that is left for the CPU:
+    what it could not take, what it did not write, and every skip, which the
+    CPU road reports.
+
+    The question of which images it can take is a header read each, asked
+    <jobs> at a time - those are subprocesses, and asked one after another they
+    would cost more than the GPU's own encode of a small page.
+
+    An encoder that ran and wrote nothing at all could not start - no card, no
+    driver, no memory to spare - and it is not asked again this run: every
+    further chunk would pay the same start-up only to fail the same way.
+    """
+    with ThreadPoolExecutor(max_workers=jobs) as pool:
+        sized = [(relative, pixels) for relative, pixels in
+                 zip(work, pool.map(state.gpu_pixels, work)) if pixels]
+    pixels_of = dict(sized)
+    done = set()
+    for chunk in av1gpu.chunks(sized):
+        if safety.abort_requested():
+            break
+        items = [(os.path.join(state.input_dir, relative),
+                  disambiguated_output(relative, state.options["format"],
+                                       state.input_dir, state.output_dir))
+                 for relative in chunk]
+        workdir = tempfile.mkdtemp(prefix="av1gpu_", dir=state.counter_dir)
+        try:
+            written, status = av1gpu.encode_chunk(
+                encoder, items, workdir, state.options["gpuQuality"],
+                state.options["gpuPreset"])
+        finally:
+            shutil.rmtree(workdir, ignore_errors=True)
+        for index in written:
+            relative = chunk[index]
+            state.record("converted", "CONV (GPU)", relative,
+                         pixels=pixels_of[relative], road="gpu")
+            done.add(relative)
+        if not written and status > 0:
+            log("WARNING: %s could not encode (exit status %d) - the rest of "
+                "this run is encoded on the CPU." % (encoder, status))
+            break
+    return [relative for relative in work if relative not in done]
+
+
 def main(argv: list, program: str = "convert-images") -> int:
     declaration = spec(program)
     try:
@@ -630,6 +731,9 @@ def main(argv: list, program: str = "convert-images") -> int:
     if safety.require_separate_output(input_dir, output_dir):
         return 1
 
+    if "k" in result.given:
+        return _calibrate(declaration, program, result, input_dir, output_dir)
+
     crop = "c" in result.given
     always = "a" in result.given
     reverse = "r" in result.given
@@ -642,6 +746,8 @@ def main(argv: list, program: str = "convert-images") -> int:
             % (CHROMA_FORMAT, "jpeg" if reverse else image_format)))
         return 1
     speed = int(result.values["speedPreset"] or DEFAULT_SPEED)
+    max_res = result.values["maxRes"] or str(UNBOUNDED_EDGE)
+    quality = int(result.values["quality"] or 60)
     # -r never asks: converting back to JPEG is about what can open the file, not
     # about what it would cost to store, so the check would only refuse a
     # conversion nobody asked it to judge.
@@ -651,14 +757,26 @@ def main(argv: list, program: str = "convert-images") -> int:
         "skipStarved": skip_starved,
         "format": image_format,
         "chroma": chroma,
-        "quality": int(result.values["quality"] or 60),
+        "quality": quality,
         # Derived once, here: it is the same number for every conversion of the
         # run, and the workers that read it are separate processes.
         "effortLevel": FORMATS[image_format].level(speed),
         "fuzzCommand": "%s%%" % (result.values["fuzz"] or "10"),
-        "maxResCommand": "%dx%s>" % (UNBOUNDED_EDGE,
-                                     result.values["maxRes"] or UNBOUNDED_EDGE),
+        "maxResCommand": "%dx%s>" % (UNBOUNDED_EDGE, max_res),
+        "maxHeight": int(max_res) if max_res.isdigit() else 0,
     }
+    # The GPU writes 8-bit 4:2:0 AVIF of the whole picture, so it is only asked
+    # where that is what the run wants: not for -c, whose trim decides per image
+    # what to encode, and not for an -m it could not read as a height.
+    encoder = ""
+    if (image_format == CHROMA_FORMAT and chroma == DEFAULT_CHROMA
+            and not crop and not reverse and options["maxHeight"]):
+        encoder = av1gpu.binary()
+    # -l and -s mean what they mean on the CPU; what av1gpu has to be asked
+    # for to give the same was measured, not assumed.
+    if encoder:
+        options["gpuPreset"], options["gpuQuality"] = \
+            encodercalibration.active().gpu_settings(speed, quality)
     jobs = int(result.values["jobs"]
                or max(1, int(runlog.cpu_count()
                              / threads_per_conversion(image_format, speed))))
@@ -745,6 +863,11 @@ def main(argv: list, program: str = "convert-images") -> int:
         safety.lower_case_extensions(os.path.realpath(input_dir))
         _mirror_folders(input_dir, output_dir)
 
+        # Resolved BEFORE the move into the input: a relative pair resolved
+        # after it lands inside the input folder, where nothing exists, and
+        # every conversion then fails silently.
+        input_dir, output_dir = (os.path.realpath(input_dir),
+                                 os.path.realpath(output_dir))
         os.chdir(input_dir)
         # Lower-cased above, so the search is case-sensitive from here on.
         work = _images_under(".", extensions, lowercase_only=True)
@@ -755,13 +878,18 @@ def main(argv: list, program: str = "convert-images") -> int:
             return safety.fail_no_relevant_input(input_dir, wanted)
 
         for name in ("current", "converted", "trimmed", "blank", "starved",
-                     "alreadyDone", "notFound"):
+                     "alreadyDone", "notFound", "gpuImages", "gpuPixels",
+                     "cpuImages", "cpuPixels"):
             with open(os.path.join(counter_dir, name), "w") as handle:
                 handle.write("0")
 
-        state = Run(os.path.realpath(input_dir), os.path.realpath(output_dir),
-                    counter_dir, options, total)
+        state = Run(input_dir, output_dir, counter_dir, options, total)
         started = time.time()
+        if encoder:
+            work = _encode_on_gpu(state, work, jobs, encoder)
+        # Each road's speed is over its own stretch of the wall clock: the
+        # GPU's chunks come first, and the CPU's pool runs after them.
+        state.cpu_started = time.time()
         _run_pool(state, work, jobs,
                   "reverse_to_jpeg" if reverse else "transcode")
         safety.exit_if_aborted()
@@ -769,6 +897,243 @@ def main(argv: list, program: str = "convert-images") -> int:
         return workerpool.exit_status()
     finally:
         ramscratch.run_exit_cleanup()
+
+
+# --- --calibrate ---------------------------------------------------------------
+
+# What the measurement is made on: crops rather than whole pictures, because the
+# grid is a few thousand encodes and a crop scores in a second where a 15 MP
+# photo takes twenty. Two from each image - the middle and an off-centre one -
+# of up to CALIBRATION_IMAGES images spread through the input.
+CALIBRATION_IMAGES = 12
+CALIBRATION_CROP = 1280
+
+# The grid. -s 0 and 1 are left out: libaom's slowest speeds take minutes a
+# crop, and they take -s 2's answer (the nearest measured). The GPU's quality
+# steps are finer than the CPU's because they are what is interpolated INTO.
+CALIBRATION_SPEEDS = tuple(range(2, MAX_SPEED + 1))
+CALIBRATION_CPU_QUALITIES = (30, 40, 50, 60, 70, 80, 90)
+CALIBRATION_GPU_QUALITIES = tuple(range(20, 100, 5))
+
+SCORER = "ssimulacra2_rs"
+
+# The options a calibration has no use for: it measures AVIF 4:2:0 at every
+# speed and quality there is, on pictures it cuts itself.
+_NOT_WITH_CALIBRATE = "acremuls"
+
+
+def _calibrate(declaration, program, result, input_dir, output_dir) -> int:
+    """convert-images -k: crop, encode the crops on both roads over the grid,
+    score every encode, and save the mapping the scores say.
+
+    The input is only read. Everything the measurement makes - crops, encodes,
+    decoded pictures, and the scores as a CSV - stays under <outputDir>, which
+    is left for inspection.
+    """
+    clashing = [letter for letter in _NOT_WITH_CALIBRATE
+                if letter in result.given]
+    if clashing:
+        sys.stderr.write(clioptions.usage_error_text(
+            declaration, "-k measures every speed and quality itself; it "
+            "takes no -%s." % ", -".join(clashing)))
+        return 1
+    if safety.require_separate_output(input_dir, output_dir):
+        return 1
+    skip_preflight = bool(os.environ.get("SKIP_TOOL_PREFLIGHT", ""))
+    if tooldeps.require_tools("calibration (-k)",
+                              [imagemagick.CONVERT_SPEC,
+                               imagemagick.IDENTIFY_SPEC, SCORER],
+                              skip_preflight=skip_preflight):
+        return 1
+    if imagemagick.require_format(program, CHROMA_FORMAT,
+                                  skip_preflight=skip_preflight):
+        return 1
+    encoder = av1gpu.binary()
+    if not encoder:
+        sys.stderr.write("\nCannot calibrate: there is no GPU encoder to "
+                         "calibrate (%s is not on PATH, or %s is empty).\n"
+                         "Nothing was changed.\n"
+                         % (av1gpu.DEFAULT_BINARY, av1gpu.ENCODER_VARIABLE))
+        return 1
+    jobs = int(result.values["jobs"] or runlog.cpu_count())
+
+    work = os.path.realpath(output_dir)
+    crops_dir = os.path.join(work, "crops")
+    os.makedirs(crops_dir, exist_ok=True)
+    crops = _calibration_crops(os.path.realpath(input_dir), crops_dir, jobs)
+    if not crops:
+        return safety.fail_no_relevant_input(
+            input_dir, "8-bit JPEG, PNG or WebP images without transparency")
+    runlog.say("Calibrating on %d crops\n" % len(crops))
+
+    started = time.time()
+    encodes = _calibration_gpu(encoder, crops, os.path.join(work, "gpu"))
+    runlog.say("GPU: %d encodes in %.0f seconds\n"
+               % (len(encodes), time.time() - started))
+    started = time.time()
+    cpu = _calibration_cpu(crops, os.path.join(work, "cpu"), jobs)
+    runlog.say("CPU: %d encodes in %.0f seconds\n"
+               % (len(cpu), time.time() - started))
+    encodes += cpu
+    safety.exit_if_aborted()
+
+    started = time.time()
+    decoded = os.path.join(work, "decoded")
+    os.makedirs(decoded, exist_ok=True)
+    with ThreadPoolExecutor(max_workers=runlog.cpu_count()) as pool:
+        scores = list(pool.map(
+            lambda encode: _score(encode, decoded), encodes))
+    rows = [encode[:3] + score for encode, score in zip(encodes, scores)
+            if score is not None]
+    runlog.say("Scored %d of %d encodes in %.0f seconds\n\n"
+               % (len(rows), len(encodes), time.time() - started))
+    with open(os.path.join(work, "scores.csv"), "w") as handle:
+        handle.write("road,setting,quality,bits,pixels,ssimulacra2\n")
+        for row in rows:
+            handle.write("%s,%s,%s,%d,%d,%.4f\n" % row)
+
+    found = encodercalibration.curves(rows)
+    try:
+        calibration = encodercalibration.derive(found)
+    except (KeyError, StopIteration):
+        sys.stderr.write("\nCalibration failed: too few encodes could be "
+                         "scored to compare the two encoders (see %s).\n"
+                         % os.path.join(work, "scores.csv"))
+        return 1
+    runlog.say(encodercalibration.report(found, calibration))
+    runlog.say("\nSaved to %s\n" % encodercalibration.save(calibration))
+    return 0
+
+
+def _calibration_crops(input_dir: str, crops_dir: str, jobs: int) -> list:
+    """The crops, as ``(path, pixels)``: up to CALIBRATION_IMAGES images the
+    GPU can read, spread evenly through the input, two crops each, written as
+    8-bit PNG so both roads read the same picture."""
+    candidates = [os.path.join(input_dir, relative) for relative in
+                  _images_under(input_dir, sorted(av1gpu.EXTENSIONS))]
+
+    def probe(path):
+        answer = subprocess.run(
+            imagemagick.identify_argv(["-ping", "-format", av1gpu.PROBE_FORMAT,
+                                       path]),
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        text = answer.stdout.decode("utf-8", "replace")
+        if not av1gpu.takes_probe(text, UNBOUNDED_EDGE, UNBOUNDED_EDGE,
+                                  jpeg=path.lower().endswith((".jpg", ".jpeg"))):
+            return None
+        _alpha, _depth, width, height, orientation = text.split()
+        # The crop is cut from the picture turned upright, so its corners are
+        # placed on the upright size.
+        if orientation in av1gpu.QUARTER_TURNS:
+            return int(height), int(width)
+        return int(width), int(height)
+
+    with ThreadPoolExecutor(max_workers=jobs) as pool:
+        usable = [(path, size) for path, size in
+                  zip(candidates, pool.map(probe, candidates)) if size]
+    step = max(1, len(usable) // CALIBRATION_IMAGES)
+    chosen = usable[::step][:CALIBRATION_IMAGES]
+
+    crops = []
+    for number, (path, (width, height)) in enumerate(chosen, 1):
+        side_w, side_h = min(CALIBRATION_CROP, width), min(CALIBRATION_CROP,
+                                                           height)
+        corners = {((width - side_w) // 2, (height - side_h) // 2),
+                   (width // 5 if width // 5 + side_w <= width else 0,
+                    height // 5 if height // 5 + side_h <= height else 0)}
+        for letter, (left, top) in zip("ab", sorted(corners)):
+            out = os.path.join(crops_dir, "%02d%s.png" % (number, letter))
+            # Turned upright first: a phone photo's EXIF orientation would
+            # otherwise ride along on the PNG, the CPU encoder would honour it
+            # and av1gpu would not, and the two roads' pictures would be
+            # compared a quarter turn apart.
+            done = subprocess.run(imagemagick.convert_argv(
+                [path, "-auto-orient",
+                 "-crop", "%dx%d+%d+%d" % (side_w, side_h, left, top),
+                 "+repage", "-depth", "8", "-strip", "PNG24:" + out]),
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if done.returncode == 0:
+                crops.append((out, side_w * side_h))
+    return crops
+
+
+def _calibration_gpu(encoder: str, crops, out_dir: str) -> list:
+    """Every crop at every preset and quality, one av1gpu call per pair:
+    ``(road, setting, quality, source, encode, pixels)`` for each written."""
+    encodes: list = []
+    for preset in encodercalibration.GPU_PRESETS:
+        for quality in CALIBRATION_GPU_QUALITIES:
+            if safety.abort_requested():
+                return encodes
+            target = os.path.join(out_dir, "%s_q%d" % (preset, quality))
+            os.makedirs(target, exist_ok=True)
+            items = [(source, os.path.join(target, os.path.basename(source)
+                                           + ".avif")) for source, _ in crops]
+            workdir = tempfile.mkdtemp(prefix="av1gpu_", dir=out_dir)
+            try:
+                written, _status = av1gpu.encode_chunk(
+                    encoder, items, workdir, quality, preset)
+            finally:
+                shutil.rmtree(workdir, ignore_errors=True)
+            encodes += [("gpu", preset, quality, crops[i][0], items[i][1],
+                         crops[i][1]) for i in written]
+    return encodes
+
+
+def _calibration_cpu(crops, out_dir: str, jobs: int) -> list:
+    """Every crop at every speed and quality, through the very call a run
+    makes (:func:`encode_arguments`)."""
+    os.makedirs(out_dir, exist_ok=True)
+    grid = [(speed, quality, source, pixels)
+            for speed in CALIBRATION_SPEEDS
+            for quality in CALIBRATION_CPU_QUALITIES
+            for source, pixels in crops]
+
+    def encode(cell):
+        speed, quality, source, pixels = cell
+        if safety.abort_requested():
+            return None
+        out = os.path.join(out_dir, "s%d_q%d_%s.avif" % (
+            speed, quality, os.path.basename(source)))
+        options = {"format": CHROMA_FORMAT, "chroma": DEFAULT_CHROMA,
+                   "quality": quality,
+                   "effortLevel": FORMATS[CHROMA_FORMAT].level(speed),
+                   "maxResCommand": "%dx%d>" % (UNBOUNDED_EDGE, UNBOUNDED_EDGE)}
+        done = subprocess.run(
+            imagemagick.convert_argv(encode_arguments(options, source, out)),
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if done.returncode != 0 or not _holds_bytes(out):
+            return None
+        return ("cpu", str(speed), quality, source, out, pixels)
+
+    workers = max(1, int(jobs / THREADS_PER_CONVERSION))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        return [found for found in pool.map(encode, grid) if found]
+
+
+def _score(encode, decoded_dir: str):
+    """``(bits, pixels, score)`` for one encode: decoded to 16-bit PNG by
+    ImageMagick - the scorer reads no AVIF - and scored against its source.
+    None when either step fails."""
+    road, setting, quality, source, out, pixels = encode
+    picture = os.path.join(decoded_dir, "%s_%s_q%d_%s" % (
+        road, setting, quality, os.path.basename(source)))
+    done = subprocess.run(
+        imagemagick.convert_argv([out, "-depth", "16", "PNG48:" + picture]),
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if done.returncode != 0:
+        return None
+    answer = subprocess.run([SCORER, "image", source, picture],
+                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    os.remove(picture)
+    text = answer.stdout.decode("utf-8", "replace")
+    if answer.returncode != 0 or "Score:" not in text:
+        return None
+    try:
+        score = float(text.split("Score:")[1].split()[0])
+    except (ValueError, IndexError):
+        return None
+    return os.path.getsize(out) * 8, pixels, score
 
 
 def _print_footer(state, started, values, own_safety_log) -> None:
@@ -787,6 +1152,14 @@ def _print_footer(state, started, values, own_safety_log) -> None:
                    % (encoded, total, runtime))
     if encoded > 0:
         runlog.say("%.3f seconds per image\n" % (runtime / encoded))
+    ended = time.time()
+    cpu_started = state.cpu_started or ended
+    for label, road, seconds in (("GPU", "gpu", cpu_started - started),
+                                 ("CPU", "cpu", ended - cpu_started)):
+        line = _road_line(label, state.counter(road + "Images"),
+                          state.counter(road + "Pixels"), seconds)
+        if line:
+            runlog.say(line)
 
     # The breakdown only once there is one: a run in which every image was
     # plainly converted has said all of it in the line above.
@@ -820,6 +1193,19 @@ def _print_footer(state, started, values, own_safety_log) -> None:
 
     if own_safety_log:
         safety.report_safety_skips()
+
+
+def _road_line(label: str, images: int, pixels: int, seconds: float) -> str:
+    """One road's share of the run and its speed, in megapixels a second of
+    that road's own stretch of the wall clock - or nothing, for a road that
+    encoded nothing."""
+    if images == 0:
+        return ""
+    megapixels = pixels / 1e6
+    speed = (" = %.1f MP/s" % (megapixels / seconds)
+             if seconds > 0 and pixels else "")
+    return "%s: %d image(s), %.0f MP in %.1f seconds%s\n" % (
+        label, images, megapixels, seconds, speed)
 
 
 def cli(argv: list | None = None) -> int:

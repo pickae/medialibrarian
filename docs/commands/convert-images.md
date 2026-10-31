@@ -35,6 +35,80 @@ With no options, a run:
 derived from it, so a lower `-s` is a slower encode whichever format is being
 written.
 
+## On the GPU
+
+**With [av1gpu](https://github.com/maddog107/av1gpu) installed, a plain AVIF
+run encodes on the NVIDIA card first** and ImageMagick takes whatever is left.
+Nothing needs asking for: the run decides per image, and an image the card
+cannot do, or did not write, is encoded on the CPU exactly as without it.
+
+| Goes to the GPU | Stays on the CPU |
+| --- | --- |
+| JPEG, PNG and WebP | every other input format |
+| no alpha channel, 8 bits | a PNG or WebP with transparency, a 16-bit PNG |
+| a JPEG in any orientation, a PNG or WebP stored upright | a PNG or WebP with an EXIF rotation (av1gpu would drop it) |
+| already within `-m` | a picture `-m` shrinks |
+| up to 35.6 megapixels | larger, CMYK or 12-bit JPEGs (av1gpu declines them) |
+
+A run with `-c`, `-u 444`, `-r` or another `-e` is encoded on the CPU
+throughout, since the GPU writes only 4:2:0 AVIF of the whole picture. If the
+card cannot start the encoder at all — no driver, or no memory to spare — the
+run warns once and carries on on the CPU.
+
+**`-l` and `-s` mean what they mean on the CPU, whichever road an image
+takes.** av1gpu has a quality scale of its own and seven presets where libaom
+has ten speeds, so the numbers are not passed through but translated by a
+measurement ([below](#calibrating)):
+
+- **`-l`** becomes the av1gpu quality whose pictures score the same
+  SSIMULACRA2 as the CPU's at that `-l` and `-s` — about four points higher on
+  this machine.
+- **`-s`** keeps its ranking: the default `-s 5` is av1gpu's default `turbo`,
+  slower speeds spread towards `slow` and faster ones towards `turbo3`, each by
+  how much smaller or larger the CPU's files are at that speed.
+
+| `-s` | 2–3 | 4 | 5 | 6 | 7–9 |
+| --- | --- | --- | --- | --- | --- |
+| GPU preset | `slow` | `fast` | `turbo` | `turbo2` | `turbo3` |
+
+Measured here, the GPU's files are smaller than the CPU's at every setting: at
+equal SSIMULACRA2, `turbo3` is 6.6 % below CPU `-s 5` and `slow` 12.7 %, while
+the CPU's own range runs from −1.9 % at `-s 2` to +26 % at `-s 9`. So a lower
+`-s` still buys smaller files on the GPU, and either road's file is at least
+as good as the CPU's would be. The GPU writes 8 bits where ImageMagick writes
+10; the measurement scores the pictures, so that is already counted.
+
+The images go to the card in batches of about 24 gigapixels — about a minute's
+work — since each call costs about two seconds of start-up whatever it holds,
+and progress is printed as each batch finishes. The closing report gives each
+road's images, megapixels and speed:
+
+    GPU: 873 image(s), 12287 MP in 34.4 seconds = 356.7 MP/s
+    CPU: 88 image(s), 4184 MP in 360.6 seconds = 11.6 MP/s
+
+`imageGpuEncoder` names the encoder, by name on `PATH` or by path; set it empty
+(`imageGpuEncoder= convert-images …`) to encode everything on the CPU
+([settings](../settings.md)).
+
+### Calibrating
+
+    convert-images -k <sampleDir> <workDir>
+
+measures the translation above on this machine's encoders and saves it beside
+the [settings file](../settings.md) (`av1gpu-calibration.json`), where every
+later run finds it; until then the one measured when this was written is used.
+Run it again after updating av1gpu or ImageMagick.
+
+It cuts two 1280×1280 crops from each of up to 12 images in `<sampleDir>`,
+encodes them at every `-s` from 2 to 9 and `-l` from 30 to 90 on the CPU and at
+every preset and quality on the GPU, scores each encode against its crop with
+[ssimulacra2_rs](https://github.com/rust-av/ssimulacra2_bin)
+(`cargo install --locked --no-default-features ssimulacra2_rs`), and prints
+what each setting costs and what the GPU will be asked for. `<sampleDir>` is
+only read; the crops, the encodes and `scores.csv` stay in `<workDir>`. It took
+20 minutes here and converts nothing. `-s 0` and `1` are not measured — libaom
+takes minutes a crop there — and take `-s 2`'s answer.
+
 ## Starved images
 
 **An image that is already starved is left alone.** Whether a file is big

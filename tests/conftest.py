@@ -244,6 +244,11 @@ def private_workspace(tmp_path_factory, monkeypatch):
     # box takes the knob back off to look at the real rungs.
     monkeypatch.setenv("ffmpegLadder", str(tmp_path_factory.mktemp("ffmpegladder")))
 
+    # The GPU image encoder likewise: a host that has one would otherwise
+    # encode a case's AVIF on its card instead of through the stub ImageMagick
+    # the case stood on PATH. A case about the GPU road names its own.
+    monkeypatch.setenv("imageGpuEncoder", "")
+
     # The chapter archive and the disc database the same way, at a port nothing
     # listens on: a CLI case that runs a whole ingest over tagged folders would
     # otherwise ask the real ones about every film in its fixture.
