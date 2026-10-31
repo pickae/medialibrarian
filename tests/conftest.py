@@ -30,6 +30,7 @@ ran is the suite the repository holds.
 import locale
 import os
 import pathlib
+import signal
 import sys
 
 import pytest
@@ -211,6 +212,26 @@ def no_imdb_lists(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def interrupt_handlers_put_back():
+    """A command run in-process installs the run's interrupt handler, and
+    nothing in the command takes it off again: a run's process ends with it.
+    The test process does not, so without this every later case in the same
+    worker inherits it - and so does every child it FORKS, where a terminate()
+    then runs the run's handler instead of ending the child. A child signalled
+    before its bootstrap leaves that handler as a copy of the test process
+    itself, and a join on it waits forever.
+    """
+    from medialib.lib import safety
+    numbers = safety.interrupt_signals()
+    handlers = [signal.getsignal(number) for number in numbers]
+    yield
+    for number, handler in zip(numbers, handlers, strict=True):
+        # None: a handler installed outside Python, which it cannot put back.
+        if handler is not None:
+            signal.signal(number, handler)
+
+
+@pytest.fixture(autouse=True)
 def private_workspace(tmp_path_factory, monkeypatch):
     """Point everything that names a place to work at this test's own directory.
 
@@ -243,6 +264,11 @@ def private_workspace(tmp_path_factory, monkeypatch):
     # is then the only place an ffmpeg can come from. The ladder's own white
     # box takes the knob back off to look at the real rungs.
     monkeypatch.setenv("ffmpegLadder", str(tmp_path_factory.mktemp("ffmpegladder")))
+
+    # The GPU image encoder likewise: a host that has one would otherwise
+    # encode a case's AVIF on its card instead of through the stub ImageMagick
+    # the case stood on PATH. A case about the GPU road names its own.
+    monkeypatch.setenv("imageGpuEncoder", "")
 
     # The chapter archive and the disc database the same way, at a port nothing
     # listens on: a CLI case that runs a whole ingest over tagged folders would

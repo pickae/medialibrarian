@@ -23,6 +23,7 @@ worth refusing over. The rest say what they cannot do and the run goes on:
 | `hdr10plus_tool` (or `mkvmerge`) | an HDR10+ source is re-encoded as plain HDR10, with a warning naming the missing tool |
 | poppler (`pdfinfo`/`pdfimages`/`pdftoppm`) | the PDFs that therefore cannot be inspected are reported |
 | `nvidia-smi` | commentary is transcribed, and books are narrated, on the CPU |
+| `av1gpu` | `convert-images` encodes AVIF on the CPU with ImageMagick |
 | `flock` | progress is printed one line per item, without its `[n of total]` position |
 | `wc` | the books census leaves its word and character columns blank, and `read-library` reads in name order instead of longest-first |
 | Calibre's `ebook-convert` | a book whose metadata does not state its language is narrated in the engine's default, and the reading queue is ordered by file size rather than by length |

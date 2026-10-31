@@ -116,6 +116,10 @@ option can never change what a command you already type means.
 - `convert-video -u` additionally needs an NVIDIA GPU and a VapourSynth +
   TensorRT environment of its own, one piece of which has to be built (see
   [`convert-video`](docs/commands/convert-video.md)).
+- `convert-images` encodes AVIF on an NVIDIA GPU when
+  [av1gpu](https://github.com/maddog107/av1gpu) is installed, which has to be
+  built; without it everything is encoded on the CPU (see
+  [`convert-images`](docs/commands/convert-images.md#on-the-gpu)).
 
 What a run does when one of these is missing, what does not work on a Mac yet,
 and which ffmpeg build a run picks are in

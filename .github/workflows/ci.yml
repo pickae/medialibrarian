@@ -10,7 +10,10 @@ permissions:
 
 jobs:
   default-suite:
-    runs-on: ubuntu-latest
+    # Not ubuntu-latest: setup-python only has the builds actions/python-versions
+    # published for each image, and 3.11.4 - the floor below - was never built
+    # for 26.04, which ubuntu-latest became. 24.04 is the newest image that has it.
+    runs-on: ubuntu-24.04
     # Well clear of the ~4.5 minutes this job takes, and far under the 6 HOURS
     # GitHub allows a step by default. A suite this full of child processes can
     # wait on one that never returns, and the default turns that into a runner

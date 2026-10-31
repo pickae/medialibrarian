@@ -117,6 +117,9 @@ SETTINGS: tuple[Setting, ...] = (
             "separated as `PATH` is - there for the test suite", _FFMPEG,
             "`~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, `/opt/ffmpeg/bin`, "
             "`/usr/bin`"),
+    Setting("imageGpuEncoder", "The GPU AVIF encoder (av1gpu) tried before "
+            "ImageMagick, by name or path; empty to encode every image on the CPU",
+            ("convert-images",), "`av1gpu`"),
     Setting("upscaleHome", "The VapourSynth environment `convert-video -u` upscales "
             "with", ("convert-video",), "`~/vapoursynth`"),
     Setting("upscaleModel", "The upscaling model: a path, or a file name under "
