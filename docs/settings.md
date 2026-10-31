@@ -32,7 +32,7 @@ the two disagree.
 | `dvdCompareSite` | The disc database's address - there for the test suite | `http://www.dvdcompare.net/comparisons/` | `ingest-movies` |
 | `ffmpegLadder` | The directories searched for ffmpeg after `PATH`, separated as `PATH` is - there for the test suite | `~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, `/opt/ffmpeg/bin`, `/usr/bin` | `concat-audio`, `content-census`, `convert-and-concat`, `convert-audio`, `convert-video`, `ingest-movies`, `ingest-music`, `read-library`, `transcribe-audio`, `ytdlp` |
 | `ffmpegOverride` | The ffmpeg every run uses, by its path; a run refuses to start when it is not executable | unset | `concat-audio`, `content-census`, `convert-and-concat`, `convert-audio`, `convert-video`, `ingest-movies`, `ingest-music`, `read-library`, `transcribe-audio`, `ytdlp` |
-| `imageGpuEncoder` | The GPU AVIF encoder (av1gpu) tried before ImageMagick, by name or path; empty to encode every image on the CPU | `av1gpu` | `convert-images` |
+| `imageGpuEncoder` | The GPU AVIF encoder (av1gpu) tried before ImageMagick, by name or path; empty to encode every image on the CPU | `av1gpu` | `convert-comics`, `convert-images` |
 | `musicRamBase` | ingest-music's scratch, ahead of `ramScratchBase` | `ramScratchBase` | `ingest-music` |
 | `narrationChannel` | The engine's channel layout | mono | `read-library` |
 | `narrationEngineLanguages` | Which languages each engine speaks, as `engine:codes` | XTTS's seventeen | `read-library` |

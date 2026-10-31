@@ -359,17 +359,21 @@ class TestTheChromaReachesTheConversion:
         real = cc.commands.command_line
         monkeypatch.setattr(
             cc.commands, "command_line",
-            lambda name, argv, **kwargs: calls.append((name, argv))
+            lambda name, argv, **kwargs: calls.append((name, argv, kwargs))
             or real(name, argv, **kwargs))
         monkeypatch.setattr(cc.toolcapture, "run", lambda *a, **k: None)
         state = cc.Run(counters=cc.Counters(str(tmp_path)), script_dir="",
                        quality="45", chroma=chroma, speed_preset="4",
                        pages_per_book=4,
-                       max_res=2960, fuzz="10")
+                       max_res=2960, fuzz="10",
+                       stats_file=str(tmp_path / "pageStats"))
         state._convert_pages(str(tmp_path / "pages"), str(tmp_path / "avif"),
                              "book.cbz")
-        [(name, argv)] = calls
+        [(name, argv, kwargs)] = calls
         assert name == "convert-images"
+        # Handed to the child by name: a worker started by a forkserver has
+        # the environment of the forkserver's start, before the run set it.
+        assert kwargs["env"]["imageStatsFile"] == str(tmp_path / "pageStats")
         return argv
 
     @pytest.mark.parametrize("chroma", ["420", "444"])

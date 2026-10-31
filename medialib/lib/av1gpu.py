@@ -6,9 +6,8 @@ card's CUDA cores, several times faster than libaom on every CPU thread at the
 same file size, and leaves the CPU nearly idle. It is not a replacement for the
 ImageMagick call, only a faster road for the images it can carry:
 
-- it writes 8-bit 4:2:0 and nothing else - no alpha, no 4:4:4, no 10-bit;
-- it reads JPEG on the GPU, PNG and WebP on the CPU, and nothing else - and
-  misreads a 16-bit PNG;
+- it writes 4:2:0 or 4:4:4 at 8 or 10 bits, and no alpha;
+- it reads JPEG on the GPU, PNG and WebP on the CPU, and nothing else;
 - it cannot resize or crop.
 
 So the caller decides per image, and everything it does not take - and
@@ -121,17 +120,13 @@ def takes_probe(text: str, max_width: int, max_height: int,
                 jpeg: bool = True) -> int:
     """The pixel count of an image whose ``identify -ping -format
     PROBE_FORMAT`` answered <text>, when it can go to the GPU - and 0 when it
-    cannot. It can when it has no alpha channel, 8 bits a sample, and is small
-    enough that the CPU road would not have resized it and av1gpu will not
+    cannot. It can when it has no alpha channel, up to 16 bits a sample, and
+    is small enough that the CPU road would not have resized it and av1gpu will not
     decline it. An answer that cannot be read keeps it on the CPU, which can do
     everything the GPU can.
 
-    The depth is av1gpu's own shortfall rather than its format's: it reads a
-    16-bit PNG without complaint and writes the colours wrong - a mid-grey
-    sample came back at nearly three quarters - where the JPEGs and 8-bit PNGs
-    and WebPs of the same picture came back right.
-
-    So is the orientation: it writes a JPEG's EXIF orientation into the AVIF,
+    The orientation is av1gpu's own shortfall rather than its format's: it
+    writes a JPEG's EXIF orientation into the AVIF,
     as the CPU road does, but not a PNG's or a WebP's, which would come out
     displayed the way they are stored rather than the way they are meant. Such
     a file - not a <jpeg> - with any orientation but upright stays on the CPU.
@@ -148,7 +143,7 @@ def takes_probe(text: str, max_width: int, max_height: int,
         depth_bits, columns, rows = int(depth), int(width), int(height)
     except ValueError:
         return 0
-    if depth_bits > 8 or columns > max_width or rows > max_height:
+    if depth_bits > 16 or columns > max_width or rows > max_height:
         return 0
     pixels = columns * rows
     return pixels if 0 < pixels <= MAX_PIXELS else 0
@@ -171,11 +166,14 @@ def chunks(sized, budget: int = CHUNK_MEGAPIXELS * 1_000_000):
 
 
 def encode_chunk(encoder: str, items, workdir: str, quality: int,
-                 preset: str) -> tuple[list[int], int]:
+                 preset: str, chroma: str = "420",
+                 depth: int = 10) -> tuple[list[int], int]:
     """Encode one chunk. <items> is a list of ``(source, destination)``, both
     absolute; <workdir> an empty directory for the call's own files.
     <quality> and <preset> are av1gpu's own - what a CPU -l and -s turn into
-    is medialib/lib/encodercalibration.py's to say.
+    is medialib/lib/encodercalibration.py's to say. <chroma> is "420" or
+    "444", and <depth> 8 or 10 - 10 by default, which is what the CPU road
+    writes.
 
     Returns the indices into <items> whose destination was written, and the
     encoder's exit status. A destination is only written once the encoder has
@@ -206,7 +204,8 @@ def encode_chunk(encoder: str, items, workdir: str, quality: int,
     status = subprocess.run(
         [encoder, "--batch", listing, "--outdir", outputs,
          "--quality", str(quality), "--preset", preset,
-         "--small-preset", small_preset(preset)],
+         "--small-preset", small_preset(preset),
+         "--yuv", chroma, "--depth", str(depth)],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode
     if status < 0:
         return [], status
