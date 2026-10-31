@@ -403,6 +403,20 @@ class TestThePage:
             page = v.viewer_html("T", ["video:" + str(csv)],
                                  base=base, version=version)
             assert "integrity=" not in page, (base, version)
+            assert 'const integrity = "";' in page, (base, version)
+
+    def test_the_engine_s_worker_is_started_by_the_page_with_its_hash(
+            self, tmp_path):
+        """On a file:// page Perspective would otherwise run its worker source
+        through Function(), which the policy refuses, and the page never gets
+        past "Loading". The page fetches that source itself, pinned by hash."""
+        page = self._page(tmp_path)
+        assert v.asset_url(v.PERSPECTIVE_WORKER) in page
+        assert 'const integrity = "%s";' % v.PERSPECTIVE_SRI[v.PERSPECTIVE_WORKER] \
+            in page
+        assert "unsafe-eval'" not in v.viewer_csp(v.CDN_BASE).replace(
+            "wasm-unsafe-eval'", "")
+        assert "@@" not in page
 
 
 class TestTheAssetUrls:

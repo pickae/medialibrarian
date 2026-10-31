@@ -323,6 +323,42 @@ class TestTheDelegateProbeAgreesWithTheTool:
         assert "cannot write HEIC" in capsys.readouterr().err
 
 
+class TestTheCornerProbeAgainstImageMagick:
+    """What the probe answers for a page of each colour, measured by the
+    ImageMagick on this host."""
+
+    @pytest.mark.parametrize("colour,margin", [
+        ("white", True),
+        ("#f5ecd7", True),                  # cream paper
+        ("#d0e8ff", True),                  # a pale tint
+        ("gray80", True),
+        ("gray79", False),
+        ("red", False),
+        ("yellow", False),
+        ("#2050a0", False),                 # dark blue
+        ("#8b0000", False),                 # dark red
+        ("#231f20", False),                 # near-black with a warm tint
+    ])
+    def test_only_paper_is_light_enough(self, tmp_path, colour, margin):
+        page = tmp_path / "page.png"
+        subprocess.run(imagemagick.convert_argv(
+            ["-size", "8x8", "xc:" + colour, str(page)]), check=True)
+        found = ci.Run._identify_corner(None, str(page))
+        assert found is not None
+        assert (found[1] >= ci.LIGHTNESS_THRESHOLD) is margin
+
+    def test_the_colour_is_one_a_border_can_be_drawn_in(self, tmp_path):
+        page = tmp_path / "page.png"
+        subprocess.run(imagemagick.convert_argv(
+            ["-size", "8x8", "xc:#f5ecd7", str(page)]), check=True)
+        colour = ci.Run._identify_corner(None, str(page))[0]
+        bordered = subprocess.run(imagemagick.convert_argv(
+            [str(page), "-bordercolor", colour, "-border", "1",
+             "-format", "%[pixel:p{0,0}]", "info:"]),
+            stdout=subprocess.PIPE, check=True)
+        assert bordered.stdout.decode() == colour
+
+
 def test_the_environment_really_is_the_one_being_claimed():
     """A guard on the tier itself: these cases mean nothing if they quietly
     ran against no tool at all."""

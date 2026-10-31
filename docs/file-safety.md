@@ -137,9 +137,9 @@ which is less obvious:
   request's address, which is where its API takes it.
 - **`content-census-bi`** writes an `.html` page that loads the Perspective
   engine from jsDelivr when you open it, pinned to an exact release with the
-  stylesheet checked against a hash. Your census data is not uploaded anywhere:
-  it is embedded in the file, and the page's content-security policy allows no
-  destination but that one origin. The engine's four scripts are ES modules,
+  stylesheet and the engine's worker checked against a hash. Your census data is
+  not uploaded anywhere: it is embedded in the file, and the page's
+  content-security policy allows no destination but that one origin. The engine's four scripts are ES modules,
   which have nowhere to carry a hash, so they are pinned by version and not by
   content — code jsDelivr serves runs in the page and can read the figures in
   it. Set `viewerCdnBase` to a folder holding that release to get a page that
