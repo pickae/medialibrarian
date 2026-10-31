@@ -26,6 +26,9 @@ Options:
                     maximum resolution (height) to keep
     -f, --fuzz <fuzz>
                     when trimming, how many percent color difference gets still trimmed
+    -k, --calibrate calibrate: measure what the GPU encoder has to be asked for to
+                    match the CPU, on crops of the images in <inputDir>, and
+                    save it. Works in <outputDir>; converts nothing.
     -v, --verbose   Also say why each item was handled the way it was, and on a
                     failure print the tool's whole output rather than its last
                     lines.

@@ -88,6 +88,10 @@ _TOOL_NOTES = {
     "adb": "reaching the files on the attached phone|apt install android-tools-adb",
     # The xHE-AAC encoder. No distribution packages it, so the hint names the
     # source to build rather than an apt line that would fail.
+    "av1gpu": "encoding AVIF on an NVIDIA GPU"
+              "|https://github.com/maddog107/av1gpu (cmake build)",
+    "ssimulacra2_rs": "scoring encodes for convert-images --calibrate"
+                      "|cargo install --locked --no-default-features ssimulacra2_rs",
     "exhale": "encoding xHE-AAC"
               "|https://gitlab.com/ecodis/exhale (make release)",
 }
@@ -149,6 +153,8 @@ _MACOS_HINTS = {
     "pipx": "brew install pipx",
     "python3": "brew install python",
     "adb": "brew install --cask android-platform-tools",
+    "av1gpu": "needs an NVIDIA GPU, which no Mac has",
+    "ssimulacra2_rs": "cargo install --locked --no-default-features ssimulacra2_rs",
     # Not in Homebrew either, so the same source on both hosts.
     "exhale": "https://gitlab.com/ecodis/exhale (make release)",
     "subcleaner": "git clone https://github.com/KBlixt/subcleaner, then chmod +x"
