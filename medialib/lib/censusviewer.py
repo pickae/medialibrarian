@@ -46,6 +46,7 @@ __all__ = [
     "viewer_html_escape",
     "asset_url",
     "sri_attribute",
+    "sri_digest",
     "asset_origin",
     "viewer_csp",
     "viewer_html",
@@ -61,16 +62,20 @@ PERSPECTIVE_VERSION = "5.3.0"
 # Subresource Integrity for what that release serves, so the browser refuses a
 # file that is not the one the hash was taken from.
 #
-# The stylesheet, and only the stylesheet: the four scripts are ES modules, an
-# `import` has nowhere to carry an integrity, and giving it one through a
-# <link rel="modulepreload" integrity> makes the browser load Perspective twice
-# over so the grid never renders. The version pin above covers those four.
+# The stylesheet and the engine's worker, which the page fetches itself: the four
+# scripts are ES modules, an `import` has nowhere to carry an integrity, and
+# giving it one through a <link rel="modulepreload" integrity> makes the browser
+# load Perspective twice over so the grid never renders. The version pin above
+# covers those four.
 PERSPECTIVE_SRI = {
     "@perspective-dev/viewer/dist/css/themes.css":
         "sha384-qk6T9jdsblsY4NN8njc0IjEtqAmPyiQ2Z+Nu/cXEbGZ+/ZQKDZFMCDHPmTXndrjA",
+    "@perspective-dev/client/dist/cdn/perspective-server.worker.js":
+        "sha384-+0kzeoFIRHWduJpGqmlL2pll2LYrLd4m9XjuGJHmcpLRcXCSanVJqCs4YZeRX+AZ",
 }
 
 PERSPECTIVE_STYLESHEET = "@perspective-dev/viewer/dist/css/themes.css"
+PERSPECTIVE_WORKER = "@perspective-dev/client/dist/cdn/perspective-server.worker.js"
 
 # The two scalings, spelled once so the SQL and the page's own hint cannot drift
 # apart. Seconds to hours, and bytes to the DECIMAL gigabyte - 10^9 and not 2^30,
@@ -319,10 +324,33 @@ const DATA = {
 
 _PAGE_TAIL = """};
 
+// The engine's worker is started here rather than left to perspective.worker().
+// On a file:// page the library will not start one at all: it runs the engine on
+// this thread by handing its worker source to Function(), which the policy above
+// refuses - and the page then waits on an engine that never comes up. Fetched
+// and started from a blob: it is the same code, in a real worker, with the policy
+// intact. A base the page cannot fetch from (a local folder, on file://) gets the
+// library's own path instead.
+const startEngine = async () => {
+    const url = "@@BASE@@/@perspective-dev/client@@@VER@@/dist/cdn/perspective-server.worker.js";
+    const integrity = "@@WORKERHASH@@";
+    try {
+        const response = await fetch(url, integrity ? { integrity } : {});
+        if (!response.ok) throw new Error(response.status + " " + url);
+        const source = URL.createObjectURL(
+            new Blob([await response.text()], { type: "text/javascript" }));
+        return await perspective.worker(
+            new Worker(source, { type: "module", name: "perspective-server" }));
+    } catch (error) {
+        console.warn("Starting the Perspective worker by hand failed", error);
+        return await perspective.worker();
+    }
+};
+
 const main = document.querySelector("main");
 const tabs = document.getElementById("tabs");
 const loading = document.getElementById("loading");
-const worker = await perspective.worker();
+const worker = await startEngine();
 const viewers = {};
 let active = null;
 
@@ -545,10 +573,17 @@ def sri_attribute(asset, base, version):
     through the environment: the hash is of one release from one CDN, and a page
     carrying it for a different build would not load at all.
     """
+    digest = sri_digest(asset, base, version)
+    return ' integrity="%s"' % digest if digest else ""
+
+
+def sri_digest(asset, base, version):
+    """The bare hash for one asset, or ``""`` - for the page's own fetch, which
+    takes it as an option rather than an attribute. The same rule as
+    ``sri_attribute``: no hash for a build the run has been pointed at."""
     if base != CDN_BASE or version != PERSPECTIVE_VERSION:
         return ""
-    digest = PERSPECTIVE_SRI.get(asset)
-    return ' integrity="%s"' % digest if digest else ""
+    return PERSPECTIVE_SRI.get(asset, "")
 
 
 def asset_origin(base):
@@ -619,6 +654,9 @@ def viewer_html(title, pairs, base=None, version=None):
     if version is None:
         version = os.environ.get("viewerPerspectiveVersion",
                                  PERSPECTIVE_VERSION)
+    tail = (_PAGE_TAIL.replace("@@WORKERHASH@@",
+                               sri_digest(PERSPECTIVE_WORKER, base, version))
+            .replace("@@BASE@@", base).replace("@@VER@@", version))
     head = (_PAGE_HEAD.replace("@@TITLE@@", viewer_html_escape(title))
             .replace("@@CSP@@", viewer_html_escape(viewer_csp(base)))
             .replace("@@CSSHASH@@",
@@ -632,4 +670,4 @@ def viewer_html(title, pairs, base=None, version=None):
                     % (content, viewer_title(content), viewer_schema(content),
                        viewer_default_config(content),
                        viewer_base64(path) or ""))
-    return head + "".join(rows) + _PAGE_TAIL
+    return head + "".join(rows) + tail
