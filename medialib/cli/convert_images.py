@@ -528,9 +528,14 @@ class Run:
         colour, and the left and top edges can only move in whole blocks of 8
         or 16 pixels, so up to that much more of the margin stays.
 
-        What the card cannot take - taller than -m even cut, not a JPEG, no
-        jpegtran - is listed for the lane's CPU encoders, with the call that
-        trims and encodes it.
+        A PNG or WebP is cut by ImageMagick, exactly as the CPU's trim cuts
+        it, into a PNG at zlib's fastest level: a decode and a quick write,
+        a small share of what encoding it on the CPU would cost. Only one the
+        card would take uncut - its alpha, depth and orientation - is cut.
+
+        What the card cannot take - taller than -m even cut, a format av1gpu
+        does not read, a JPEG without jpegtran - is listed for the lane's CPU
+        encoders, with the call that trims and encodes it.
         """
         pixels = width * height
         box = _parse_box(self._identify(
@@ -562,6 +567,23 @@ class Run:
             done = subprocess.run(
                 ["jpegtran", "-copy", "all", "-crop", geometry,
                  "-outfile", cropped, relative],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if done.returncode == 0 and self._to_lane(
+                    relative, out, cropped, "trimmed", "TRIM (GPU)"):
+                return
+            os.remove(cropped)
+        elif (relative.endswith((".png", ".webp"))
+              and av1gpu.takes_probe(
+                  self._identify(["-ping", "-format", av1gpu.PROBE_FORMAT,
+                                  relative]),
+                  UNBOUNDED_EDGE, UNBOUNDED_EDGE, jpeg=False)):
+            descriptor, cropped = tempfile.mkstemp(
+                suffix=".png", dir=self.options["gpuLane"])
+            os.close(descriptor)
+            done = subprocess.run(
+                imagemagick.convert_argv(
+                    [relative, *trim, "-define", "png:compression-level=1",
+                     cropped]),
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             if done.returncode == 0 and self._to_lane(
                     relative, out, cropped, "trimmed", "TRIM (GPU)"):
@@ -651,12 +673,12 @@ class Run:
         that run owns the card and encodes the pages of many of these runs
         together, so this one only writes down where each page is.
 
-        Only what the card encodes fastest goes: a JPEG - decoded on the card,
-        where a PNG or WebP is decoded on a single CPU thread that left the
-        card waiting at a third of its speed - that is encoded whole: within
-        -m and without alpha. Nothing is re-encoded to make it fit. <gpu_input>
-        is what the card is given in place of the page itself: the page
-        losslessly cropped by :meth:`_crop_for_lane`.
+        What av1gpu reads goes - a JPEG, decoded on the card, or a PNG or WebP,
+        decoded on several CPU threads at about 80 % of a JPEG's speed - when
+        it is encoded whole: within -m, without alpha, and for a PNG or WebP
+        upright (see :func:`av1gpu.takes_probe`). Nothing is resized to make
+        it fit. <gpu_input> is what the card is given in place of the page
+        itself: the page cropped by :meth:`_crop_for_lane`.
 
         Each line of the manifest is the card's input, the output, its pixels,
         and the ImageMagick call that encodes that input on the CPU - which the
@@ -665,11 +687,12 @@ class Run:
         """
         lane = self.options.get("gpuLane", "")
         source = gpu_input or relative
-        if not lane or not source.endswith((".jpg", ".jpeg")):
+        if not lane or source.rpartition(".")[2] not in av1gpu.EXTENSIONS:
             return False
         pixels = av1gpu.takes_probe(
             self._identify(["-ping", "-format", av1gpu.PROBE_FORMAT, source]),
-            UNBOUNDED_EDGE, self.options["maxHeight"])
+            UNBOUNDED_EDGE, self.options["maxHeight"],
+            jpeg=source.endswith((".jpg", ".jpeg")))
         if not pixels:
             return False
         source, out = os.path.abspath(source), os.path.abspath(out)

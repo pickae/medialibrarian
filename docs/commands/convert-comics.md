@@ -37,14 +37,16 @@ only thing written to disk.
 **With [av1gpu](https://github.com/maddog107/av1gpu) installed, the pages are
 encoded on the NVIDIA card and the CPU at once**, both kept busy:
 
-- The card takes JPEG pages that fit within `-m`, decoded on the card itself.
-  A page the trim cuts is cut losslessly by `jpegtran` - the same pixels, no
-  second lossy encode - and goes to the card when that brings it within `-m`.
-  Its margin is the page's own rather than a flat border, and the left and top
-  edges keep up to 15 pixels more of it.
-- The CPU takes everything else - pages still taller than `-m`, PNG and WebP
-  pages, pages the card did not write - and, when it has none of its own,
-  some of the card's.
+- The card takes JPEG, PNG and WebP pages that fit within `-m`, have no
+  transparency and, for a PNG or WebP, are stored upright. A JPEG page the
+  trim cuts is cut losslessly by `jpegtran` - the same pixels, no second lossy
+  encode - and goes to the card when that brings it within `-m`. Its margin is
+  the page's own rather than a flat border, and the left and top edges keep up
+  to 15 pixels more of it. A PNG or WebP page is cut exactly as the CPU would
+  cut it, into a PNG for the card.
+- The CPU takes everything else - pages still taller than `-m`, pages with
+  transparency, pages the card did not write - and, when it has none of its
+  own, some of the card's.
 - Books are unpacked for whichever side is short of work: the card's from the
   books with the smallest pages (in MB a page, from the archive's listing),
   the CPU's from those with the largest. The card comes first, and the CPU's

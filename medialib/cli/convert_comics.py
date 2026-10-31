@@ -152,9 +152,9 @@ IMAGES_PER_BOOK = 4
 OVERSUBSCRIBE = 2
 
 # Under the lane a book worker only sorts its pages - a header read, the trim's
-# box and, for a JPEG it cut, a lossless crop - and the lane encodes them. That
-# is what feeds the card, so it is run wider than the encoding it replaced: this
-# many books at once, this many pages of each.
+# box and, for a page it cut, the crop the card is given - and the lane encodes
+# them. That is what feeds the card, so it is run wider than the encoding it
+# replaced: this many books at once, this many pages of each.
 LANE_BOOKS = 4
 LANE_PAGES_PER_BOOK = 8
 
