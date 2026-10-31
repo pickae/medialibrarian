@@ -137,6 +137,7 @@ while [ $# -gt 0 ]; do
         *) echo "$1" >> "$(dirname "$0")/args"; shift ;;
     esac
 done
+echo "$GP_FALLBACK_WORKERS" > "$(dirname "$0")/threads"
 while IFS= read -r input; do
     target=$(readlink "$input")
     case "${target##*/}" in decline*) continue ;; esac
@@ -177,6 +178,7 @@ class TestAChunk:
 
         encode.outputs = outputs
         encode.args = tool.parent / "args"
+        encode.threads = tool.parent / "threads"
         return encode
 
     def test_each_output_reaches_its_own_image_s_destination(self, chunk):
@@ -212,3 +214,13 @@ class TestAChunk:
         assert chunk.args.read_text().split() == [
             "--quality", "60", "--preset", "turbo", "--small-preset", "base",
             "--yuv", "420", "--depth", "10"]
+
+    def test_png_and_webp_are_decoded_on_more_threads_than_its_own(
+            self, chunk, monkeypatch):
+        monkeypatch.delenv(av1gpu.DECODE_THREADS_VARIABLE, raising=False)
+        chunk()
+        assert chunk.threads.read_text() == "8\n"
+
+    def test_a_number_the_environment_names_is_kept(self, chunk):
+        chunk(GP_FALLBACK_WORKERS="3")
+        assert chunk.threads.read_text() == "3\n"
