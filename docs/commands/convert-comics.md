@@ -34,6 +34,29 @@ With no options, a run:
 Pages and AVIFs are intermediate and never leave RAM: the `.cbz` files are the
 only thing written to disk.
 
+**With [av1gpu](https://github.com/maddog107/av1gpu) installed, the pages are
+encoded on the NVIDIA card and the CPU at once**, both kept busy:
+
+- The card takes JPEG pages that fit within `-m`, decoded on the card itself.
+  A page the trim cuts is cut losslessly by `jpegtran` - the same pixels, no
+  second lossy encode - and goes to the card when that brings it within `-m`.
+  Its margin is the page's own rather than a flat border, and the left and top
+  edges keep up to 15 pixels more of it.
+- The CPU takes everything else - pages still taller than `-m`, PNG and WebP
+  pages, pages the card did not write - and, when it has none of its own,
+  some of the card's.
+- Books are unpacked for whichever side is short of work: the card's from the
+  books with the smallest pages (in MB a page, from the archive's listing),
+  the CPU's from those with the largest. The card comes first, and the CPU's
+  encodes run at lower priority than the work that feeds it. How far ahead
+  books are unpacked is bounded by the RAM free at the time.
+- `-l` means what it means on the CPU: the card is asked for the quality whose
+  pages scored the same SSIMULACRA2 as the CPU's on comic pages, with its
+  `turbo` preset, whose files came out 6 % larger than its slower `fast` at
+  twice the speed.
+
+With no card the run is the CPU run it always was.
+
 ## PDFs
 
 A comic that arrived as a **PDF** is treated as the same book in a different
