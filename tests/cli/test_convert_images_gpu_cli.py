@@ -44,17 +44,22 @@ out="${!#}"
 echo "CPU ${src##*/}" > "$out"
 '''
 
-# Batch mode: each listed link becomes <outdir>/<link name>.avif naming the file
-# it points at, except a target called decline*, which it skips. $STUB_STATUS
-# makes it an encoder that cannot start: nothing written, a failing status.
+# Batch mode: each listed link (a line up to its first TAB) becomes
+# <outdir>/<link name>.avif naming the file it points at, except a target called
+# decline*, which it skips; the list is kept as bin/list. $STUB_STATUS makes it
+# an encoder that cannot start: nothing written, a failing status. --help names
+# the option an av1gpu that crops and resizes has.
 _AV1GPU = '''
+[ "$1" = --help ] && { echo "  --max-input-mp MP"; exit 0; }
 echo "$*" >> "$(dirname "$0")/args"
 while [ $# -gt 0 ]; do
     case "$1" in --batch) list=$2 ;; --outdir) out=$2 ;; esac; shift
 done
 echo called >> "$(dirname "$0")/calls"
+cp "$list" "$(dirname "$0")/list"
 [ -n "$STUB_STATUS" ] && exit "$STUB_STATUS"
-while IFS= read -r input; do
+while IFS= read -r line; do
+    input=${line%%$'\\t'*}
     target=$(readlink "$input")
     case "${target##*/}" in decline*) continue ;; esac
     echo "GPU ${target##*/}" > "$out/${input##*/}.avif"
@@ -65,20 +70,10 @@ _PAGES = ("a/cover.jpg", "b/cover.jpg", "photo.jpeg", "flat.png",
           "alpha.png", "deep.png", "scan.bmp", "decline.jpg")
 
 
-# The lossless crop: the geometry asked for, and the source copied through.
-_JPEGTRAN = '''
-echo "$*" >> "$(dirname "$0")/crops"
-while [ $# -gt 1 ]; do
-    case "$1" in -outfile) out=$2; shift ;; esac; shift
-done
-cp "$1" "$out"
-'''
-
 
 @pytest.fixture
 def run(sandbox, tmp_path):
     sandbox.with_tool("identify", _IDENTIFY)
-    sandbox.with_tool("jpegtran", _JPEGTRAN)
     sandbox.with_tool("convert", _CONVERT)
     sandbox.with_tool("av1gpu", _AV1GPU)
     sandbox.with_tool("fdupes", "exit 0")
@@ -153,10 +148,16 @@ def test_a_run_the_card_cannot_serve_never_asks_it(run, options, environment):
     assert set(written.values()) <= {"CPU"}
 
 
-def test_a_picture_m_would_shrink_stays_on_the_cpu(run):
+def test_a_picture_m_would_shrink_is_shrunk_by_the_card(run, sandbox):
     written, called, _ = run("-m", "1000")
-    assert set(written.values()) == {"CPU"}
-    assert called == 0
+    assert written["photo.avif"] == "GPU" and called == 1
+    lines = (sandbox.bin / "list").read_text().splitlines()
+    assert lines and all(line.endswith("\tmax-size=x1000") for line in lines)
+
+
+def test_a_picture_within_m_is_not_asked_to_shrink(run, sandbox):
+    run()
+    assert "\t" not in (sandbox.bin / "list").read_text()
 
 
 def test_a_rerun_finds_the_card_s_work_already_done(run):
@@ -205,52 +206,45 @@ def test_under_a_lane_the_pages_are_sorted_and_none_encoded(run, tmp_path):
     assert entries["photo.avif"]["cpu"][-1] == entries["photo.avif"]["output"]
 
 
-def test_under_a_lane_a_page_taller_than_m_is_the_cpu_s(run, tmp_path):
+def _manifest(lane):
+    return {os.path.basename(entry["output"]): entry for entry in (
+        json.loads(line) for line in (lane / "manifest").read_text().splitlines())}
+
+
+def test_under_a_lane_a_page_taller_than_m_is_shrunk_by_the_card(run,
+                                                                 tmp_path):
     lane = tmp_path / "lane"
     lane.mkdir()
     written, _, _ = run("-c", "-m", "1000", imageGpuLane=str(lane))
-    lines = [json.loads(line)
-             for line in (lane / "manifest").read_text().splitlines()]
-    assert written == {} and len(lines) == 8
-    assert not [line for line in lines if "input" in line]
+    entries = _manifest(lane)
+    assert written == {}
+    assert len((lane / "manifest").read_text().splitlines()) == 8
+    photo = entries["photo.avif"]
+    assert photo["maxSize"] == "x1000" and photo["crop"] == ""
+    assert photo["pixels"] == 667 * 1000
+    # The CPU's call for it shrinks it the same way.
+    assert "10000x1000>" in photo["cpu"]
 
 
-def test_under_a_lane_a_trimmed_jpeg_is_cropped_losslessly_for_the_card(
-        run, sandbox, tmp_path):
+def test_under_a_lane_a_trimmed_page_is_cropped_by_the_card(run, tmp_path):
     """The trim's box, widened by the margin the CPU's border would give
-    back, is cut out of the JPEG by jpegtran, and that crop is what the card
-    is given."""
+    back, is the card's crop of the page itself - a JPEG, a PNG alike - and
+    the CPU's call for that page cuts the same box."""
     lane = tmp_path / "lane"
     lane.mkdir()
-    (tmp_path / "in" / "margin.jpg").write_text("margin.jpg")
+    for name in ("margin.jpg", "margin.png", "alpha-margin.png"):
+        (tmp_path / "in" / name).write_text(name)
     run("-c", imageGpuLane=str(lane))
-    assert "-crop 920x1420+40+40" in (sandbox.bin / "crops").read_text()
-    entry = next(entry for entry in (
-        json.loads(line) for line in (lane / "manifest").read_text().splitlines())
-        if entry["output"].endswith("/margin.avif"))
-    assert entry["input"].startswith(str(lane)) and entry["input"].endswith(
-        ".jpg")
-    with open(entry["input"]) as cropped:
-        assert cropped.read() == "margin.jpg"
-
-
-def test_under_a_lane_a_trimmed_png_is_cut_by_imagemagick_for_the_card(
-        run, sandbox, tmp_path):
-    """A PNG has no lossless crop of its own: ImageMagick cuts it exactly as
-    the CPU's trim would, into a PNG in the lane, and that is what the card
-    is given."""
-    lane = tmp_path / "lane"
-    lane.mkdir()
-    (tmp_path / "in" / "margin.png").write_text("margin.png")
-    (tmp_path / "in" / "alpha-margin.png").write_text("alpha-margin.png")
-    run("-c", imageGpuLane=str(lane))
-    entries = {os.path.basename(entry["output"]): entry for entry in (
-        json.loads(line) for line in (lane / "manifest").read_text().splitlines())}
-    entry = entries["margin.avif"]
-    assert entry["input"].startswith(str(lane)) and entry["input"].endswith(
-        ".png")
-    with open(entry["input"]) as cropped:
-        assert cropped.read() == "CPU margin.png\n"
-    # One the card would not take uncut is not cut for it.
-    assert "input" not in entries["alpha-margin.avif"]
-    assert "-crop" in " ".join(entries["alpha-margin.avif"]["cpu"])
+    entries = {name: entry for name, entry in _manifest(lane).items()
+               if "margin" in name}
+    for name in ("margin.jpg", "margin.png"):
+        entry = next(entry for entry in entries.values()
+                     if entry.get("input", "").endswith("/" + name))
+        assert entry["crop"] == "920x1420+40+40" and entry["maxSize"] == ""
+        assert entry["pixels"] == 920 * 1420
+        cpu = entry["cpu"]
+        assert cpu[cpu.index("-crop") + 1] == "920x1420+40+40"
+    # One the card would not take is trimmed on the CPU, with its border.
+    alpha = entries["alpha-margin.avif"]
+    assert "input" not in alpha and "-border" in alpha["cpu"]
+    assert not list(lane.glob("*.jpg")) and not list(lane.glob("*.png"))

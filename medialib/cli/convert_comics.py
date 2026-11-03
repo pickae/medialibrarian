@@ -1357,7 +1357,7 @@ def _run(result, declaration, program: str, script_dir: str,
     # and the lane encodes them - the card's and the CPU's at once, across
     # books. -l and -s are the CPU's; what av1gpu has to be asked for to match
     # them on comic pages was measured (COMIC_CALIBRATION).
-    encoder = av1gpu.binary()
+    encoder = av1gpu.binary(log)
     if encoder:
         lane_root, lane_status = ramscratch.ram_scratch_dir("convertComics.gpu")
         if lane_status == 0 and lane_root:

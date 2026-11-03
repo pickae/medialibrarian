@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 
 import pytest
 
@@ -108,3 +109,46 @@ def test_a_page_for_the_cpu_alone_is_encoded_there(lane_run, tmp_path):
     assert finished == ["one"]
     assert outputs == {"p1.jpg": "GPU", "cpu_big.png": "CPU"}
     assert lane.cpu_pages == 1
+
+
+def test_a_page_is_encoded_while_its_book_is_still_being_sorted(tmp_path):
+    """The lane takes each page as its line is written, not when the book's
+    run exits; the book itself comes back only after READY. A line still being
+    written is left for the next look."""
+    tool = tmp_path / "av1gpu"
+    tool.write_text(_ENCODER)
+    tool.chmod(0o755)
+    root = tmp_path / "lane"
+    root.mkdir()
+    finished = []
+    lane = gpulane.Lane(str(tool), str(root), 60, "turbo", "444",
+                        finished.append, 1, lambda line: None)
+    folder = lane.folder()
+    lane.expect(folder, "book")
+
+    def line(page):
+        source, output = tmp_path / page, tmp_path / (page + ".avif")
+        source.write_text(page)
+        return json.dumps({"input": str(source), "output": str(output),
+                           "pixels": 1_000_000,
+                           "cpu": ["sh", "-c", 'echo CPU > "$0"', str(output)]})
+
+    def wait_for(condition):
+        deadline = time.time() + 10
+        while not condition() and time.time() < deadline:
+            time.sleep(0.05)
+        return condition()
+
+    second = line("p2.jpg")
+    with open(f"{folder}/{gpulane.MANIFEST}", "w") as manifest:
+        manifest.write(line("p1.jpg") + "\n" + second[:10])
+    assert wait_for(lambda: (tmp_path / "p1.jpg.avif").exists())
+    assert not (tmp_path / "p2.jpg.avif").exists() and finished == []
+    with open(f"{folder}/{gpulane.MANIFEST}", "a") as manifest:
+        manifest.write(second[10:] + "\n")
+    assert wait_for(lambda: (tmp_path / "p2.jpg.avif").exists())
+    assert finished == []
+    open(f"{folder}/{gpulane.READY}", "w").close()
+    lane.close()
+    assert finished == ["book"]
+    assert (tmp_path / "p2.jpg.avif").read_text().strip() == "GPU"

@@ -31,6 +31,7 @@ else echo picture > "$out"; fi
 '''
 
 _AV1GPU = '''
+[ "$1" = --help ] && { echo "  --max-input-mp MP"; exit 0; }
 while [ $# -gt 0 ]; do
     case "$1" in --batch) list=$2 ;; --outdir) out=$2 ;; --quality) q=$2 ;; esac
     shift

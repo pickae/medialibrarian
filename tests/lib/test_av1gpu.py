@@ -1,8 +1,9 @@
 """The white box for medialib/lib/av1gpu.py.
 
 Three things are pinned. An image only goes to the card when its header says
-the CPU road would have written the same picture - no alpha, no resize - and an
-answer that cannot be read keeps it on the CPU. A chunk is measured in
+the card can write the picture the CPU road would - no alpha, within its size,
+any resize asked of the card - and an answer that cannot be read keeps it on
+the CPU. A chunk is measured in
 megapixels, not images. And a chunk hands back exactly the outputs the encoder
 wrote, under the right names, and none at all from an encoder that died
 mid-chunk.
@@ -34,29 +35,29 @@ class TestTheSmallPreset:
 class TestTheProbe:
     pytestmark = pytest.mark.pure
 
-    @pytest.mark.parametrize("text,pixels", [
-        ("False 8 1000 1500 Undefined", 1_500_000),
-        ("Undefined 8 1000 1500 Undefined", 1_500_000),  # a JPEG
-        ("True 8 1000 1500 Undefined", 0),        # transparency
-        ("Blend 8 1000 1500 Undefined", 0),
-        ("False 16 1000 1500 Undefined", 1_500_000),  # a 16-bit PNG
-        ("False 32 1000 1500 Undefined", 0),      # a float TIFF's depth
-        ("False 8 1000 1501 Undefined", 0),       # -m would shrink it
-        ("False 8 10001 1500 Undefined", 0),      # so would the width cap
-        ("False 8 1000 1500 Undefined\n", 1_500_000),
-        ("", 0),                                  # unreadable: CPU
-        ("False 8 1000 1500", 0),                 # no orientation
-        ("False 8 wide tall Undefined", 0),
+    @pytest.mark.parametrize("text,size", [
+        ("False 8 1000 1500 Undefined", (1000, 1500)),
+        ("Undefined 8 1000 1500 Undefined", (1000, 1500)),  # a JPEG
+        ("True 8 1000 1500 Undefined", None),     # transparency
+        ("Blend 8 1000 1500 Undefined", None),
+        ("False 16 1000 1500 Undefined", (1000, 1500)),  # a 16-bit PNG
+        ("False 32 1000 1500 Undefined", None),   # a float TIFF's depth
+        ("False 8 30000 1500 Undefined", (30000, 1500)),  # the card shrinks it
+        ("False 8 1000 1500 Undefined\n", (1000, 1500)),
+        ("", None),                               # unreadable: CPU
+        ("False 8 1000 1500", None),              # no orientation
+        ("False 8 wide tall Undefined", None),
+        ("False 8 0 1500 Undefined", None),
     ])
-    def test_the_header_decides(self, text, pixels):
-        assert av1gpu.takes_probe(text, 10000, 1500) == pixels
+    def test_the_header_decides(self, text, size):
+        probed = av1gpu.takes_probe(text)
+        assert (probed and probed[:2]) == size
 
-    def test_one_av1gpu_would_decline_is_not_offered(self):
-        """8000 x 6000 is 48 MP, past its 35.6."""
-        assert av1gpu.takes_probe("False 8 8000 6000 Undefined",
-                                  10000, 10000) == 0
-        assert av1gpu.takes_probe("False 8 5965 5968 Undefined",
-                                  10000, 10000) > 0
+    def test_up_to_a_hundred_megapixels_are_offered(self):
+        """Not av1gpu's own 35.6: it is asked for 100."""
+        assert av1gpu.takes_probe("False 8 8000 6000 Undefined")
+        assert av1gpu.takes_probe("False 8 10000 10000 Undefined")
+        assert av1gpu.takes_probe("False 8 10000 10001 Undefined") is None
 
     @pytest.mark.parametrize("orientation,jpeg,takes", [
         ("RightTop", True, True),       # av1gpu writes a JPEG's into the AVIF
@@ -67,7 +68,31 @@ class TestTheProbe:
     def test_an_orientation_only_a_jpeg_carries_across(self, orientation,
                                                        jpeg, takes):
         text = "False 8 1000 1500 " + orientation
-        assert bool(av1gpu.takes_probe(text, 10000, 1500, jpeg=jpeg)) is takes
+        assert bool(av1gpu.takes_probe(text, jpeg=jpeg)) is takes
+
+
+class TestTheShrink:
+    """The card's -m: ImageMagick's size, and its box turned where av1gpu
+    turns it."""
+
+    pytestmark = pytest.mark.pure
+
+    @pytest.mark.parametrize("size,cap,fitted", [
+        ((2000, 3000), 1500, (1000, 1500)),
+        ((2035, 2961), 2960, (2034, 2960)),
+        ((1000, 1500), 1500, (1000, 1500)),     # never enlarged
+        ((1000, 1500), 0, (1000, 1500)),        # no cap
+    ])
+    def test_the_size_is_imagemagick_s(self, size, cap, fitted):
+        assert av1gpu.fitted_size(*size, cap) == fitted
+
+    @pytest.mark.parametrize("orientation,box", [
+        ("Undefined", "x2960"), ("TopLeft", "x2960"),
+        ("RightTop", "2960x"), ("LeftBottom", "2960x")])
+    def test_the_cap_is_on_the_stored_rows(self, orientation, box):
+        """av1gpu's box is the displayed size; ImageMagick's -resize caps the
+        stored rows, which a quarter turn displays as the width."""
+        assert av1gpu.max_size(2960, orientation) == box
 
 
 class TestTheChunks:
@@ -98,6 +123,10 @@ class TestTheChunks:
         assert len(list(av1gpu.chunks(sized))) == 1
 
 
+# What --help of an av1gpu that crops and resizes says, as far as it is read.
+_HELP = '#!/bin/sh\necho "  --max-input-mp MP       largest source decoded"\n'
+
+
 class TestTheBinary:
     pytestmark = pytest.mark.fs
 
@@ -111,21 +140,33 @@ class TestTheBinary:
 
     def test_a_path_that_is_executable_is_used(self, monkeypatch, tmp_path):
         tool = tmp_path / "av1gpu"
-        tool.write_text("#!/bin/sh\n")
+        tool.write_text(_HELP)
         tool.chmod(0o755)
         monkeypatch.setenv(av1gpu.ENCODER_VARIABLE, str(tool))
         assert av1gpu.binary() == str(tool)
 
     def test_unset_it_is_looked_for_on_path(self, monkeypatch, tmp_path):
         tool = tmp_path / av1gpu.DEFAULT_BINARY
-        tool.write_text("#!/bin/sh\n")
+        tool.write_text(_HELP)
         tool.chmod(0o755)
         monkeypatch.delenv(av1gpu.ENCODER_VARIABLE)
         monkeypatch.setenv("PATH", str(tmp_path))
         assert av1gpu.binary() == av1gpu.DEFAULT_BINARY
 
+    def test_one_that_cannot_crop_or_resize_means_the_cpu(self, monkeypatch,
+                                                          tmp_path):
+        """An av1gpu older than 0.7.0, which is said once."""
+        tool = tmp_path / "av1gpu"
+        tool.write_text("#!/bin/sh\necho '  --batch LIST|DIR'\n")
+        tool.chmod(0o755)
+        monkeypatch.setenv(av1gpu.ENCODER_VARIABLE, str(tool))
+        said = []
+        assert av1gpu.binary(said.append) == ""
+        assert len(said) == 1 and "0.7.0" in said[0]
 
-# Batch mode as far as the file system sees it: every listed input becomes
+
+# Batch mode as far as the file system sees it: every listed input (the line up
+# to its first TAB) becomes
 # <outdir>/<its base name>.avif holding the name of the file the link points at,
 # except one whose target is called "decline*", which is skipped. Exits with
 # $STUB_STATUS, or kills itself with $STUB_SIGNAL after writing.
@@ -138,7 +179,9 @@ while [ $# -gt 0 ]; do
     esac
 done
 echo "$GP_FALLBACK_WORKERS" > "$(dirname "$0")/threads"
-while IFS= read -r input; do
+cp "$list" "$(dirname "$0")/list"
+while IFS= read -r line; do
+    input=${line%%$'\t'*}
     target=$(readlink "$input")
     case "${target##*/}" in decline*) continue ;; esac
     echo "GPU ${target##*/}" > "$out/${input##*/}.avif"
@@ -165,7 +208,8 @@ class TestAChunk:
         (outputs / "a").mkdir(parents=True)
         (outputs / "b").mkdir()
         items = [(str(sources / "a/cover.jpg"), str(outputs / "a/cover.avif")),
-                 (str(sources / "b/cover.jpg"), str(outputs / "b/cover.avif")),
+                 (str(sources / "b/cover.jpg"), str(outputs / "b/cover.avif"),
+                  "900x1400+40+40", "x1000"),
                  (str(sources / "decline.png"), str(outputs / "decline.avif"))]
 
         def encode(**environment):
@@ -178,6 +222,7 @@ class TestAChunk:
 
         encode.outputs = outputs
         encode.args = tool.parent / "args"
+        encode.list = tool.parent / "list"
         encode.threads = tool.parent / "threads"
         return encode
 
@@ -213,7 +258,16 @@ class TestAChunk:
         chunk()
         assert chunk.args.read_text().split() == [
             "--quality", "60", "--preset", "turbo", "--small-preset", "base",
-            "--tiles", "2,2,2", "--yuv", "420", "--depth", "10"]
+            "--tiles", "2,2,2", "--yuv", "420", "--depth", "10",
+            "--max-mp", "100", "--max-input-mp", "100"]
+
+    def test_the_crop_and_shrink_ride_on_their_image_s_line(self, chunk):
+        chunk()
+        lines = [line.split("\t") for line in
+                 chunk.list.read_text().splitlines()]
+        assert [line[1:] for line in lines] == [
+            [], ["crop=900x1400+40+40", "max-size=x1000"], []]
+        assert lines[1][0].endswith("/000001.jpg")
 
     def test_png_and_webp_are_decoded_on_more_threads_than_its_own(
             self, chunk, monkeypatch):

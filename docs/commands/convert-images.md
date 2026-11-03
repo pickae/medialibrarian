@@ -47,12 +47,14 @@ cannot do, or did not write, is encoded on the CPU exactly as without it.
 | JPEG, PNG and WebP | every other input format |
 | no alpha channel | a PNG or WebP with transparency |
 | a JPEG in any orientation, a PNG or WebP stored upright | a PNG or WebP with an EXIF rotation (av1gpu would drop it) |
-| already within `-m` | a picture `-m` shrinks |
-| up to 35.6 megapixels | larger, CMYK or 12-bit JPEGs (av1gpu declines them) |
+| any size `-m` allows, shrunk by the card to `-m` | |
+| up to 100 megapixels | larger, CMYK or 12-bit JPEGs (av1gpu declines them) |
 
 The GPU writes the same 10-bit AVIF as the CPU, at 4:2:0 or, with `-u 444`,
-4:4:4. A run with `-c`, `-r` or another `-e` is encoded on the CPU throughout,
-since the GPU encodes the whole picture as it is. If the
+4:4:4. The card shrinks to `-m` itself (av1gpu 0.7.0 or newer, with ImageMagick's
+size and filter; an older one is not used). A run with `-c`, `-r` or another
+`-e` is encoded on the CPU throughout, as the trim decides per image what to
+encode. If the
 card cannot start the encoder at all — no driver, or no memory to spare — the
 run warns once and carries on on the CPU.
 

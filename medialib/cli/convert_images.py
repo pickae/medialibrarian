@@ -556,22 +556,15 @@ class Run:
                        height: int) -> None:
         """The -c path under a GPU lane: each page sorted, none encoded here.
 
-        The trim is measured as a box rather than written out. A JPEG it cuts
-        is cut by jpegtran: on the JPEG's own coefficients, so the page the
-        card is given is the same pixels as the source, still a JPEG the card
-        decodes itself. Two things differ from the CPU's trim. The margin
-        given back is the page's own rather than a border of the corner's
-        colour, and the left and top edges can only move in whole blocks of 8
-        or 16 pixels, so up to that much more of the margin stays.
+        The trim is measured as a box rather than written out, and a page it
+        cuts that the card can take is given to the card whole, with the box
+        as its crop: av1gpu cuts it after its own decode, so the page is
+        decoded once and nothing lossy is written in between. One thing
+        differs from the CPU's trim: the margin given back is the page's own
+        rather than a border of the corner's colour.
 
-        A PNG or WebP is cut by ImageMagick, exactly as the CPU's trim cuts
-        it, into a PNG at zlib's fastest level: a decode and a quick write,
-        a small share of what encoding it on the CPU would cost. Only one the
-        card would take uncut - its alpha, depth and orientation - is cut.
-
-        What the card cannot take - taller than -m even cut, a format av1gpu
-        does not read, a JPEG without jpegtran - is listed for the lane's CPU
-        encoders, with the call that trims and encodes it.
+        What the card cannot take - see :meth:`_to_lane` - is listed for the
+        lane's CPU encoders, with the call that trims and encodes it.
         """
         pixels = width * height
         box = _parse_box(self._identify(
@@ -588,43 +581,15 @@ class Run:
                                   pixels)
             return
         assert box is not None
+        cut_w, cut_h, left, top = box
+        left, top = max(0, left - border), max(0, top - border)
+        right = min(width, box[2] + cut_w + border)
+        bottom = min(height, box[3] + cut_h + border)
+        if self._to_lane(relative, out, (right - left, bottom - top, left, top),
+                         "trimmed", "TRIM (GPU)"):
+            return
         trim = ["-crop", "%dx%d+%d+%d" % box, "+repage",
                 "-bordercolor", colour, "-border", str(border)]
-        if (self.options.get("losslessCrop")
-                and relative.endswith((".jpg", ".jpeg"))):
-            cut_w, cut_h, left, top = box
-            left, top = max(0, left - border), max(0, top - border)
-            right = min(width, box[2] + cut_w + border)
-            bottom = min(height, box[3] + cut_h + border)
-            geometry = "%dx%d+%d+%d" % (right - left, bottom - top, left, top)
-            descriptor, cropped = tempfile.mkstemp(
-                suffix=".jpg", dir=self.options["gpuLane"])
-            os.close(descriptor)
-            done = subprocess.run(
-                ["jpegtran", "-copy", "all", "-crop", geometry,
-                 "-outfile", cropped, relative],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            if done.returncode == 0 and self._to_lane(
-                    relative, out, cropped, "trimmed", "TRIM (GPU)"):
-                return
-            os.remove(cropped)
-        elif (relative.endswith((".png", ".webp"))
-              and av1gpu.takes_probe(
-                  self._identify(["-ping", "-format", av1gpu.PROBE_FORMAT,
-                                  relative]),
-                  UNBOUNDED_EDGE, UNBOUNDED_EDGE, jpeg=False)):
-            descriptor, cropped = tempfile.mkstemp(
-                suffix=".png", dir=self.options["gpuLane"])
-            os.close(descriptor)
-            done = subprocess.run(
-                imagemagick.convert_argv(
-                    [relative, *trim, "-define", "png:compression-level=1",
-                     cropped]),
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            if done.returncode == 0 and self._to_lane(
-                    relative, out, cropped, "trimmed", "TRIM (GPU)"):
-                return
-            os.remove(cropped)
         self._cpu_to_lane(relative, out, trim, "trimmed", "TRIM", pixels)
 
     def _cpu_to_lane(self, relative: str, out: str, extra, category: str,
@@ -706,7 +671,7 @@ class Run:
                     pixels=self._pixels(relative))
         self._convert(self._encode_arguments(relative, out))
 
-    def _to_lane(self, relative: str, out: str, gpu_input: str = "",
+    def _to_lane(self, relative: str, out: str, crop=None,
                  category: str = "converted",
                  label: str = "CONV (GPU)") -> bool:
         """Hand this image to the GPU lane of the run that started this one,
@@ -716,56 +681,78 @@ class Run:
 
         What av1gpu reads goes - a JPEG, decoded on the card, or a PNG or WebP,
         decoded on several CPU threads at about 80 % of a JPEG's speed - when
-        it is encoded whole: within -m, without alpha, and for a PNG or WebP
-        upright (see :func:`av1gpu.takes_probe`). Nothing is resized to make
-        it fit. <gpu_input> is what the card is given in place of the page
-        itself: the page cropped by :meth:`_crop_for_lane`.
+        it has no alpha and, for a PNG or WebP, is upright (see
+        :func:`av1gpu.takes_probe`). <crop>, ``(width, height, left, top)``,
+        and the -m cap are done by the card after the decode.
 
-        Each line of the manifest is the card's input, the output, its pixels,
-        and the ImageMagick call that encodes that input on the CPU - which the
-        lane runs for a page the card did not write, or one a CPU encoder
-        takes while the card has more than it can start on.
+        Each line of the manifest is the card's input, the output, its pixels
+        once cropped and shrunk, the card's crop and max-size, and the
+        ImageMagick call that does the same on the CPU - which the lane runs
+        for a page the card did not write, or one a CPU encoder takes while the
+        card has more than it can start on.
         """
         lane = self.options.get("gpuLane", "")
-        source = gpu_input or relative
-        if not lane or source.rpartition(".")[2] not in av1gpu.EXTENSIONS:
+        if not lane:
             return False
-        pixels = av1gpu.takes_probe(
-            self._identify(["-ping", "-format", av1gpu.PROBE_FORMAT, source]),
-            UNBOUNDED_EDGE, self.options["maxHeight"],
-            jpeg=source.endswith((".jpg", ".jpeg")))
-        if not pixels:
+        job = self._gpu_job(relative, crop)
+        if job is None:
             return False
-        source, out = os.path.abspath(source), os.path.abspath(out)
+        pixels, geometry, fit = job
+        source, out = os.path.abspath(relative), os.path.abspath(out)
+        extra = ["-crop", geometry, "+repage"] if geometry else []
         self._list({"input": source, "output": out, "pixels": pixels,
+                    "crop": geometry, "maxSize": fit,
                     "cpu": imagemagick.convert_argv(
-                        self._encode_arguments(source, out))})
+                        self._encode_arguments(source, out, extra))})
         self.record(category, label, relative, pixels=pixels, road="gpu")
         return True
 
-    def gpu_pixels(self, relative: str) -> int:
-        """The pixel count of this image when it goes to the GPU encoder
-        rather than to the transcode below, and 0 when it does not.
+    def _gpu_job(self, relative: str, crop=None):
+        """What the card is asked to do with this image: ``(pixels, crop,
+        max_size)``, the pixels being those it encodes and the other two
+        av1gpu's own geometry, "" for none - or None when it cannot take it.
+        One header read."""
+        if relative.rpartition(".")[2] not in av1gpu.EXTENSIONS:
+            return None
+        probed = av1gpu.takes_probe(
+            self._identify(["-ping", "-format", av1gpu.PROBE_FORMAT, relative]),
+            jpeg=relative.endswith((".jpg", ".jpeg")))
+        if probed is None:
+            return None
+        width, height, orientation = probed
+        geometry = ""
+        if crop:
+            width, height = crop[0], crop[1]
+            geometry = "%dx%d+%d+%d" % tuple(crop)
+        max_height = self.options["maxHeight"]
+        fit = (av1gpu.max_size(max_height, orientation)
+               if max_height and height > max_height else "")
+        width, height = av1gpu.fitted_size(width, height, max_height)
+        if width * height > av1gpu.MAX_PIXELS:
+            return None
+        return width * height, geometry, fit
+
+    def gpu_job(self, relative: str):
+        """``(pixels, max_size)`` of this image when it goes to the GPU encoder
+        rather than to the transcode below, and None when it does not.
 
         Everything the transcode would SKIP stays with it - a missing source,
         an output already there, a starved image - so that it is counted and
         reported there, the one place that does. What is left goes to the GPU
-        when av1gpu can read it and the picture needs no resize: the extension
-        is free to ask, and alpha and size cost one header read.
+        when av1gpu can read it, -m done by the card: the extension is free to
+        ask, and alpha and size cost one header read.
         """
         if relative.rpartition(".")[2] not in av1gpu.EXTENSIONS:
-            return 0
+            return None
         if not os.path.isfile(relative):
-            return 0
+            return None
         if os.path.isfile(disambiguated_output(relative, self.options["format"],
                                                self.input_dir, self.output_dir)):
-            return 0
+            return None
         if self.options["skipStarved"] and self.starved(relative):
-            return 0
-        return av1gpu.takes_probe(
-            self._identify(["-ping", "-format", av1gpu.PROBE_FORMAT, relative]),
-            UNBOUNDED_EDGE, self.options["maxHeight"],
-            jpeg=relative.endswith((".jpg", ".jpeg")))
+            return None
+        job = self._gpu_job(relative)
+        return None if job is None else (job[0], job[2])
 
     def reverse_to_jpeg(self, relative: str) -> None:
         """The -r path, which the starved check has nothing to say about: -r
@@ -884,16 +871,18 @@ def _encode_on_gpu(state, work, jobs: int, encoder: str) -> list:
     further chunk would pay the same start-up only to fail the same way.
     """
     with ThreadPoolExecutor(max_workers=jobs) as pool:
-        sized = [(relative, pixels) for relative, pixels in
-                 zip(work, pool.map(state.gpu_pixels, work)) if pixels]
-    pixels_of = dict(sized)
+        jobs_of = {relative: job for relative, job in
+                   zip(work, pool.map(state.gpu_job, work)) if job}
+    sized = [(relative, jobs_of[relative][0]) for relative in work
+             if relative in jobs_of]
     done = set()
     for chunk in av1gpu.chunks(sized):
         if safety.abort_requested():
             break
         items = [(os.path.join(state.input_dir, relative),
                   disambiguated_output(relative, state.options["format"],
-                                       state.input_dir, state.output_dir))
+                                       state.input_dir, state.output_dir),
+                  "", jobs_of[relative][1])
                  for relative in chunk]
         workdir = tempfile.mkdtemp(prefix="av1gpu_", dir=state.counter_dir)
         try:
@@ -905,7 +894,7 @@ def _encode_on_gpu(state, work, jobs: int, encoder: str) -> list:
         for index in written:
             relative = chunk[index]
             state.record("converted", "CONV (GPU)", relative,
-                         pixels=pixels_of[relative], road="gpu")
+                         pixels=jobs_of[relative][0], road="gpu")
             done.add(relative)
         if not written and status > 0:
             log("WARNING: %s could not encode (exit status %d) - the rest of "
@@ -969,20 +958,17 @@ def main(argv: list, program: str = "convert-images") -> int:
         "maxResCommand": "%dx%s>" % (UNBOUNDED_EDGE, max_res),
         "maxHeight": int(max_res) if max_res.isdigit() else 0,
     }
-    # The GPU encodes the whole picture as it is, so this run only asks it
-    # where that is what is wanted: not for -c, whose trim decides per image
-    # what to encode, and not for an -m it could not read as a height. Under a
-    # lane the run that set it asks instead, -c included: a page the trim does
-    # not cut is encoded whole, as the card would.
+    # This run only asks the GPU where the card can do the whole of what is
+    # wanted: not for -c, whose trim decides per image what to encode, and not
+    # for an -m it could not read as a height. Under a lane the run that set it
+    # asks instead, -c included: the trim is measured here and done by the card.
     encoder = ""
     lane = os.environ.get(LANE_VARIABLE, "")
     if image_format == CHROMA_FORMAT and not reverse and options["maxHeight"]:
         if lane:
             options["gpuLane"] = lane
-            # The trim done losslessly, where jpegtran is there to do it.
-            options["losslessCrop"] = bool(shutil.which("jpegtran"))
         elif not crop:
-            encoder = av1gpu.binary()
+            encoder = av1gpu.binary(log)
     # -l and -s mean what they mean on the CPU; what av1gpu has to be asked
     # for to give the same was measured, not assumed.
     if encoder:
@@ -1159,7 +1145,7 @@ def _calibrate(declaration, program, result, input_dir, output_dir) -> int:
     if imagemagick.require_format(program, CHROMA_FORMAT,
                                   skip_preflight=skip_preflight):
         return 1
-    encoder = av1gpu.binary()
+    encoder = av1gpu.binary(log)
     if not encoder:
         sys.stderr.write("\nCannot calibrate: there is no GPU encoder to "
                          "calibrate (%s is not on PATH, or %s is empty).\n"
@@ -1228,16 +1214,17 @@ def _calibration_crops(input_dir: str, crops_dir: str, jobs: int) -> list:
             imagemagick.identify_argv(["-ping", "-format", av1gpu.PROBE_FORMAT,
                                        path]),
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-        text = answer.stdout.decode("utf-8", "replace")
-        if not av1gpu.takes_probe(text, UNBOUNDED_EDGE, UNBOUNDED_EDGE,
-                                  jpeg=path.lower().endswith((".jpg", ".jpeg"))):
+        probed = av1gpu.takes_probe(
+            answer.stdout.decode("utf-8", "replace"),
+            jpeg=path.lower().endswith((".jpg", ".jpeg")))
+        if probed is None:
             return None
-        _alpha, _depth, width, height, orientation = text.split()
+        width, height, orientation = probed
         # The crop is cut from the picture turned upright, so its corners are
         # placed on the upright size.
         if orientation in av1gpu.QUARTER_TURNS:
-            return int(height), int(width)
-        return int(width), int(height)
+            return height, width
+        return width, height
 
     with ThreadPoolExecutor(max_workers=jobs) as pool:
         usable = [(path, size) for path, size in
