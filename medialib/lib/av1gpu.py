@@ -11,7 +11,9 @@ ImageMagick call, only a faster road for the images it can carry:
   older av1gpu drops it;
 - it reads JPEG on the GPU, PNG and WebP on the CPU (on
   :data:`DECODE_THREADS` threads), and nothing else;
-- it cannot resize or crop.
+- it crops and shrinks on the card after the decode (since av1gpu 0.7.0), with
+  ImageMagick's ``-crop`` and ``-resize 'WxH>'`` geometry and filter, so a page
+  the CPU would have trimmed or resized is still the card's.
 
 So the caller decides per image, and everything it does not take - and
 everything it was given and did not write - goes to ImageMagick as before.
@@ -60,6 +62,9 @@ __all__ = [
     "EXTENSIONS",
     "CHUNK_MEGAPIXELS",
     "MAX_PIXELS",
+    "transforms",
+    "fitted_size",
+    "max_size",
     "DECODE_THREADS_VARIABLE",
     "DECODE_THREADS",
     "chunks",
@@ -82,9 +87,19 @@ EXTENSIONS = frozenset(("jpg", "jpeg", "png", "webp"))
 
 CHUNK_MEGAPIXELS = 24000
 
-# Above this av1gpu declines an image itself; asking first keeps such an image
-# out of a chunk's budget.
-MAX_PIXELS = 35_600_000
+# The largest picture handed to the card, before and after its crop and
+# resize: av1gpu is asked to take up to this much (--max-mp, --max-input-mp)
+# rather than its own 35.6 MP, the most AV1 level 6.3 allows, so that its limit
+# does not decide which road a scan takes. Above 35.6 MP the stream says level
+# 31, which dav1d and libavif decode. Asking first keeps a larger image out of
+# a chunk's budget.
+MAX_PIXELS = 100_000_000
+MAX_MEGAPIXELS = "100"
+
+# What an av1gpu that crops and resizes lists in its --help; one older than
+# that (0.7.0) is not used at all.
+_TRANSFORM_OPTION = "--max-input-mp"
+_capable: dict[str, bool] = {}
 
 # The CPU threads av1gpu decodes PNG and WebP on, in place of its own 4, unless
 # the environment already names a number. On 40 comic pages of 2035x2960 at
@@ -94,14 +109,34 @@ MAX_PIXELS = 35_600_000
 DECODE_THREADS_VARIABLE = "GP_FALLBACK_WORKERS"
 DECODE_THREADS = 8
 
-def binary() -> str:
+def binary(log=None) -> str:
     """The encoder to run, or ``""`` when this host has none - or was told not
-    to use one."""
+    to use one, or has one too old to crop and resize, which <log> is told."""
     name = os.environ.get(ENCODER_VARIABLE, DEFAULT_BINARY)
     if not name:
         return ""
     name = os.path.expanduser(name)
-    return name if tooldeps.tool_present(name) else ""
+    if not tooldeps.tool_present(name):
+        return ""
+    if not transforms(name):
+        if log:
+            log("WARNING: %s predates av1gpu 0.7.0 and cannot crop or resize "
+                "- encoding on the CPU; update it to use the card." % name)
+        return ""
+    return name
+
+
+def transforms(encoder: str) -> bool:
+    """Whether <encoder> crops and resizes, from its --help; asked once."""
+    if encoder not in _capable:
+        try:
+            answer = subprocess.run([encoder, "--help"], capture_output=True,
+                                    timeout=30)
+            text = answer.stdout + answer.stderr
+        except (OSError, subprocess.SubprocessError):
+            text = b""
+        _capable[encoder] = _TRANSFORM_OPTION.encode() in text
+    return _capable[encoder]
 
 
 # av1gpu encodes images below 1 MP with a preset of their own, `base` by
@@ -146,14 +181,12 @@ UPRIGHT = ("Undefined", "TopLeft")
 QUARTER_TURNS = ("LeftTop", "RightTop", "RightBottom", "LeftBottom")
 
 
-def takes_probe(text: str, max_width: int, max_height: int,
-                jpeg: bool = True) -> int:
-    """The pixel count of an image whose ``identify -ping -format
-    PROBE_FORMAT`` answered <text>, when it can go to the GPU - and 0 when it
-    cannot. It can when it has no alpha channel, up to 16 bits a sample, and
-    is small enough that the CPU road would not have resized it and av1gpu will not
-    decline it. An answer that cannot be read keeps it on the CPU, which can do
-    everything the GPU can.
+def takes_probe(text: str, jpeg: bool = True) -> tuple[int, int, str] | None:
+    """``(width, height, orientation)`` of an image whose ``identify -ping
+    -format PROBE_FORMAT`` answered <text>, when it can go to the GPU - and None
+    when it cannot. It can when it has no alpha channel, up to 16 bits a sample,
+    and no more than :data:`MAX_PIXELS`. An answer that cannot be read keeps it
+    on the CPU, which can do everything the GPU can.
 
     The orientation is av1gpu's own shortfall rather than its format's: it
     writes a JPEG's EXIF orientation into the AVIF,
@@ -163,20 +196,37 @@ def takes_probe(text: str, max_width: int, max_height: int,
     """
     words = text.split()
     if len(words) != 5:
-        return 0
+        return None
     alpha, depth, width, height, orientation = words
     if alpha not in ("False", "Undefined"):
-        return 0
+        return None
     if not jpeg and orientation not in UPRIGHT:
-        return 0
+        return None
     try:
         depth_bits, columns, rows = int(depth), int(width), int(height)
     except ValueError:
-        return 0
-    if depth_bits > 16 or columns > max_width or rows > max_height:
-        return 0
-    pixels = columns * rows
-    return pixels if 0 < pixels <= MAX_PIXELS else 0
+        return None
+    if depth_bits > 16 or not 0 < columns * rows <= MAX_PIXELS:
+        return None
+    return columns, rows, orientation
+
+
+def fitted_size(width: int, height: int, max_height: int) -> tuple[int, int]:
+    """<width> x <height> shrunk to at most <max_height> rows, aspect kept,
+    never enlarged: ImageMagick's ``-resize 'x<max_height>>'``, which av1gpu
+    matches - so the card's output is the size the CPU's would be."""
+    if not max_height or height <= max_height:
+        return width, height
+    return max(1, round(width * max_height / height)), max_height
+
+
+def max_size(max_height: int, orientation: str) -> str:
+    """av1gpu's max-size for a cap of <max_height> stored rows. Its box is the
+    DISPLAYED size, ImageMagick's -resize the stored one, so for a picture its
+    EXIF orientation turns a quarter the cap is put on the displayed width."""
+    if orientation in QUARTER_TURNS:
+        return "%dx" % max_height
+    return "x%d" % max_height
 
 
 def chunks(sized, budget: int = CHUNK_MEGAPIXELS * 1_000_000):
@@ -199,7 +249,9 @@ def encode_chunk(encoder: str, items, workdir: str, quality: int,
                  preset: str, chroma: str = "420",
                  depth: int = 10) -> tuple[list[int], int]:
     """Encode one chunk. <items> is a list of ``(source, destination)``, both
-    absolute; <workdir> an empty directory for the call's own files.
+    absolute, or ``(source, destination, crop, max_size)``: av1gpu's own
+    ``WxH+X+Y`` and ``WxH`` / ``xH``, either one "" for none, done on the card
+    after the decode; <workdir> an empty directory for the call's own files.
     <quality> and <preset> are av1gpu's own - what a CPU -l and -s turn into
     is medialib/lib/encodercalibration.py's to say. <chroma> is "420" or
     "444", and <depth> 8 or 10 - 10 by default, which is what the CPU road
@@ -220,14 +272,19 @@ def encode_chunk(encoder: str, items, workdir: str, quality: int,
     os.makedirs(inputs)
     os.makedirs(outputs)
     staged = []
-    for index, (source, _destination) in enumerate(items):
+    lines = []
+    for index, (source, _destination, *transform) in enumerate(items):
         name = "%06d.%s" % (index, source.rpartition(".")[2])
         os.symlink(source, os.path.join(inputs, name))
         staged.append(name)
+        crop, fit = transform if transform else ("", "")
+        lines.append("\t".join([os.path.join(inputs, name)]
+                               + (["crop=" + crop] if crop else [])
+                               + (["max-size=" + fit] if fit else [])))
     listing = os.path.join(workdir, "list")
     with open(listing, "w") as handle:
-        for name in staged:
-            handle.write(os.path.join(inputs, name) + "\n")
+        for line in lines:
+            handle.write(line + "\n")
 
     # The process group's Ctrl+C reaches it as it reaches ImageMagick; stderr
     # names what it skipped and why, which the fallback does not need.
@@ -237,7 +294,8 @@ def encode_chunk(encoder: str, items, workdir: str, quality: int,
         [encoder, "--batch", listing, "--outdir", outputs,
          "--quality", str(quality), "--preset", preset,
          "--small-preset", small_preset(preset), "--tiles", TILES,
-         "--yuv", chroma, "--depth", str(depth)],
+         "--yuv", chroma, "--depth", str(depth),
+         "--max-mp", MAX_MEGAPIXELS, "--max-input-mp", MAX_MEGAPIXELS],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         env=environment).returncode
     if status < 0:

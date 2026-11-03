@@ -6,10 +6,10 @@ about 2 s per book, and several would share the card at once for no gain
 (medialib/lib/av1gpu.py has the measurements); and were each to encode its own
 CPU pages, a book of pages too large for the card would hold its worker for
 minutes while the card waited for the next book. So under a lane the per-book
-runs only SORT their pages - the card's, losslessly cropped where the trim cut
-them, and the CPU's, each with its ImageMagick call - into a manifest in a
-folder of their own, and the lane, threads in the run's own process, encodes
-them, pages from every book ready at once:
+runs only SORT their pages - the card's, with the crop and resize the card does
+after its decode, and the CPU's, each with its ImageMagick call - into a
+manifest in a folder of their own, and the lane, threads in the run's own process, encodes
+them as they are listed, pages from every book at once:
 
 - the card's pages in chunks, one av1gpu call started the moment the card has
   nothing to do and something is waiting, a second beside it once a full
@@ -89,6 +89,10 @@ class _Book:
         self.folder = folder
         self.item = item
         self.outstanding = 0
+        # How far into its manifest the lane has read, and whether its run
+        # has exited, after which the manifest is complete.
+        self.read = 0
+        self.ready = False
 
 
 class Lane:
@@ -202,8 +206,7 @@ class Lane:
                 closing = self.closing
                 waiting = list(self.expected.values())
             for book in waiting:
-                if os.path.exists(os.path.join(book.folder, READY)):
-                    self._collect(book)
+                self._collect(book)
             if closing:
                 with self.room:
                     self.dropped = list(self.expected.values())
@@ -213,23 +216,37 @@ class Lane:
             time.sleep(_POLL_SECONDS)
 
     def _collect(self, book: _Book) -> None:
+        """The pages <book>'s run has listed since the last look, queued at
+        once rather than when the run exits: a book of several hundred pages
+        takes its sorters tens of seconds, and the card sat idle for them.
+        Only whole lines are taken - the run may be writing the next one.
+        READY is looked for first, so the read after it sees every line."""
+        ready = os.path.exists(os.path.join(book.folder, READY))
         entries = []
         try:
-            with open(os.path.join(book.folder, MANIFEST)) as handle:
-                entries = [json.loads(line) for line in handle if line.strip()]
+            with open(os.path.join(book.folder, MANIFEST), "rb") as handle:
+                handle.seek(book.read)
+                text = handle.read()
+            whole = text[:text.rfind(b"\n") + 1]
+            book.read += len(whole)
+            entries = [json.loads(line) for line in whole.splitlines()
+                       if line.strip()]
         except (OSError, ValueError):
             pass
         with self.room:
-            del self.expected[book.folder]
-            book.outstanding = len(entries)
+            book.outstanding += len(entries)
             for entry in entries:
                 if "input" in entry and not self.broken:
                     self.pending.append((book, entry))
                     self.pending_pixels += entry["pixels"]
                 else:
                     self.cpu_queue.append((book, entry))
+            if ready:
+                del self.expected[book.folder]
+                book.ready = True
+            done = ready and book.outstanding == 0
             self.room.notify_all()
-        if not entries:
+        if done:
             self._finished(book)
 
     # --- the card -----------------------------------------------------------
@@ -265,7 +282,8 @@ class Lane:
             chunk = self._take()
             if chunk is None:
                 break
-            items = [(entry["input"], entry["output"]) for _book, entry in chunk]
+            items = [(entry["input"], entry["output"], entry.get("crop", ""),
+                      entry.get("maxSize", "")) for _book, entry in chunk]
             workdir = tempfile.mkdtemp(prefix="av1gpu_", dir=self.root)
             try:
                 written, status = av1gpu.encode_chunk(
@@ -351,10 +369,11 @@ class Lane:
 
     # --- books ----------------------------------------------------------------
     def _page_done(self, book: _Book) -> bool:
-        """One page of <book> has an output; whether it was the last. Called
-        under the lock."""
+        """One page of <book> has an output; whether it was the last - which
+        it cannot be while the book's run may still list more. Called under
+        the lock."""
         book.outstanding -= 1
-        return book.outstanding == 0
+        return book.ready and book.outstanding == 0
 
     def _finished(self, book: _Book) -> None:
         shutil.rmtree(book.folder, ignore_errors=True)
