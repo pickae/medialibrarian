@@ -14,6 +14,7 @@ reporting a difference between two coreutils as a defect in this module; the
 cases above it pin the behaviours themselves and run everywhere.
 """
 
+import functools
 import random
 import shutil
 import subprocess
@@ -21,6 +22,7 @@ import sys
 
 import pytest
 
+from medialib.lib.versionsort import filevercmp, version_key
 from medialib.lib.versionsort import version_sorted as order
 
 pytestmark = pytest.mark.pure
@@ -82,6 +84,44 @@ class TestTheTieBreakThisMachineUses:
 
     def test_and_a_bare_name_beats_its_own_suffixed_form(self):
         assert order(["1.mp3", "1"]) == ["1", "1.mp3"]
+
+
+class TestTheKeyIsTheComparator:
+    """``version_key`` precomputes what ``filevercmp`` works out per comparison,
+    so it is held to ``filevercmp`` itself - here, on any host, and over the
+    corners a key could get wrong: the end of a name against "~", trailing
+    zeros, dotfiles, the empty name, and the non-ASCII digits the key hands back
+    to the comparator."""
+
+    PIECES = ["a", "b", "Z", "1", "9", "10", "01", "0", "00", "~", "-", " ",
+              ".", "..", "/", ".mp3", ".tar", "é", "–", "³",
+              "٣", "一"]
+
+    def _sign(self, number):
+        return (number > 0) - (number < 0)
+
+    def test_every_pair_compares_the_same(self):
+        rng = random.Random(20261104)
+        for _ in range(20000):
+            a, b = ("".join(rng.choice(self.PIECES)
+                            for _ in range(rng.randint(0, 6))) for _ in "ab")
+            key_a, key_b = version_key(a), version_key(b)
+            want = self._sign(filevercmp(a, b))
+            assert (key_a < key_b, key_a == key_b, key_a > key_b) == \
+                (want < 0, want == 0, want > 0), (a, b)
+
+    def test_and_so_does_every_sort(self):
+        rng = random.Random(20261105)
+        comparator = functools.cmp_to_key(filevercmp)
+        for _ in range(500):
+            names = ["".join(rng.choice(self.PIECES)
+                             for _ in range(rng.randint(0, 6)))
+                     for _ in range(rng.randint(2, 20))]
+            assert order(names) == sorted(names, key=comparator), names
+
+    def test_the_end_of_a_name_sorts_after_a_tilde_past_trailing_zeros(self):
+        # "a" ends where "a0~" still has a "~" to compare, and "~" sorts first
+        assert order(["a", "a0~"]) == ["a0~", "a"]
 
 
 # --- the oracle ---------------------------------------------------------------
