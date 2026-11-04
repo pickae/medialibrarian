@@ -182,7 +182,7 @@ def _fast_key(text: str):
     parts = _DIGIT_RUN.split(stem)
     if len(parts) > 1 and not parts[-1] and not parts[-2].lstrip("0"):
         del parts[-2:]
-    flat = []
+    flat: list[int | str] = []
     for index, part in enumerate(parts):
         if index % 2:
             digits = part.lstrip("0")
@@ -207,7 +207,6 @@ class _VersionKey:
     """
 
     __slots__ = ("text", "key")
-    __hash__ = None
 
     def __init__(self, text: str):
         self.text = text
