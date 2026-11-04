@@ -25,7 +25,6 @@ the tests pipe a generated corpus through this and the installed ``sort -V``
 and compare name by name.
 """
 
-import functools
 import re
 
 __all__ = ["version_key", "filevercmp", "version_sorted"]
@@ -127,7 +126,117 @@ def filevercmp(a: str, b: str) -> int:
     return (a > b) - (a < b)
 
 
-version_key = functools.cmp_to_key(filevercmp)
+# --- the same order as a key --------------------------------------------------
+#
+# ``filevercmp`` as a sort comparator costs a regex search per side and a Python
+# loop over both strings - the whole PATH, shared directory and all - for every
+# one of the n log n comparisons. The key below does that work once per name and
+# leaves the comparisons to tuple comparison in C. ``filevercmp`` stays the
+# definition, and the key is held to it by the tests.
+
+# A digit run, ASCII only: ``\d`` would also take the Unicode digits, which are
+# exactly the strings the key does not handle (see ``_fast_key``).
+_DIGIT_RUN = re.compile(r"([0-9]+)")
+
+# ``_order`` for every ASCII non-digit; anything else is ``ord + 256``.
+_ASCII_ORDER = {chr(code): _order(chr(code)) for code in range(128)
+                if not chr(code).isdigit()}
+
+# What the end of a string compares as, past its last non-digit stretch: an
+# empty digit run, then a non-digit stretch that ends at once. Appended to every
+# key so that a key which runs out is not simply "smaller" - the end of a name
+# sorts AFTER "~", and a bare tuple prefix would say otherwise.
+_END = (0, "", 0)
+
+
+def _fast_key(text: str):
+    """A tuple that orders as ``filevercmp`` does, or None where it cannot.
+
+    The stem becomes alternating stretches: a non-digit stretch as its collating
+    values closed by 0 (what the end of the stretch compares as), a digit run as
+    its length and digits once the leading zeros are gone. Trailing zeros that
+    end the stem are dropped, since ``_verrevcmp`` skips them to nothing.
+
+    None for a stem holding a non-ASCII digit, "³" or "٣" say. ``_verrevcmp``
+    walks those as digits but collates them as ``ord + 256`` where they meet a
+    letter, which no fixed tuple reproduces; those names take the comparator.
+    """
+    # filevercmp's own special cases, as a leading rank. Its empty-string branch
+    # puts "" after everything, so that is what the rank says too.
+    if not text:
+        return (5,)
+    if text[0] == ".":
+        if text == ".":
+            return (1,)
+        if text == "..":
+            return (2,)
+        rank, text = 3, text[1:]
+    else:
+        rank = 4
+
+    stem = _stem(text)
+    if not stem.isascii() and any(
+            char.isdigit() and not char.isascii() for char in stem):
+        return None
+
+    parts = _DIGIT_RUN.split(stem)
+    if len(parts) > 1 and not parts[-1] and not parts[-2].lstrip("0"):
+        del parts[-2:]
+    flat = []
+    for index, part in enumerate(parts):
+        if index % 2:
+            digits = part.lstrip("0")
+            flat.append(len(digits))
+            flat.append(digits)
+        elif part.isascii():
+            flat.extend(map(_ASCII_ORDER.__getitem__, part))
+            flat.append(0)
+        else:
+            flat.extend(_ASCII_ORDER.get(char) or ord(char) + 256 for char in part)
+            flat.append(0)
+    flat.extend(_END)
+    # The byte order of the whole name settles a tie, as in filevercmp.
+    return (rank, tuple(flat), text)
+
+
+class _VersionKey:
+    """``functools.cmp_to_key(filevercmp)``, with the key precomputed.
+
+    Two names with a fast key compare as tuples; a pair where either has none
+    falls back to ``filevercmp`` itself, so the order is the same either way.
+    """
+
+    __slots__ = ("text", "key")
+    __hash__ = None
+
+    def __init__(self, text: str):
+        self.text = text
+        self.key = _fast_key(text)
+
+    def _cmp(self, other) -> int:
+        if self.key is not None and other.key is not None:
+            return (self.key > other.key) - (self.key < other.key)
+        return filevercmp(self.text, other.text)
+
+    def __lt__(self, other):
+        if self.key is not None and other.key is not None:
+            return self.key < other.key
+        return filevercmp(self.text, other.text) < 0
+
+    def __gt__(self, other):
+        return self._cmp(other) > 0
+
+    def __le__(self, other):
+        return self._cmp(other) <= 0
+
+    def __ge__(self, other):
+        return self._cmp(other) >= 0
+
+    def __eq__(self, other):
+        return self._cmp(other) == 0
+
+
+version_key = _VersionKey
 
 
 def version_sorted(names):
