@@ -54,7 +54,7 @@ import os
 import shutil
 import subprocess
 
-from medialib.lib import tooldeps
+from medialib.lib import errorlog, runlog, safety, toolcapture, tooldeps
 
 __all__ = [
     "ENCODER_VARIABLE",
@@ -286,19 +286,25 @@ def encode_chunk(encoder: str, items, workdir: str, quality: int,
         for line in lines:
             handle.write(line + "\n")
 
-    # The process group's Ctrl+C reaches it as it reaches ImageMagick; stderr
-    # names what it skipped and why, which the fallback does not need.
+    # The process group's Ctrl+C reaches it as it reaches ImageMagick. Its
+    # stderr names what it skipped and why: the fallback does not need it, but
+    # the error log does, for an image it left unwritten.
     environment = dict(os.environ)
     environment.setdefault(DECODE_THREADS_VARIABLE, str(DECODE_THREADS))
-    status = subprocess.run(
-        [encoder, "--batch", listing, "--outdir", outputs,
-         "--quality", str(quality), "--preset", preset,
-         "--small-preset", small_preset(preset), "--tiles", TILES,
-         "--yuv", chroma, "--depth", str(depth),
-         "--max-mp", MAX_MEGAPIXELS, "--max-input-mp", MAX_MEGAPIXELS],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        env=environment).returncode
+    argv = [encoder, "--batch", listing, "--outdir", outputs,
+            "--quality", str(quality), "--preset", preset,
+            "--small-preset", small_preset(preset), "--tiles", TILES,
+            "--yuv", chroma, "--depth", str(depth),
+            "--max-mp", MAX_MEGAPIXELS, "--max-input-mp", MAX_MEGAPIXELS]
+    said = toolcapture.ToolOutput()
+    process = subprocess.Popen(argv, stdin=subprocess.DEVNULL,
+                               stdout=subprocess.DEVNULL,
+                               stderr=subprocess.PIPE, env=environment)
+    assert process.stderr is not None
+    said.drain(process.stderr)
+    status = process.wait()
     if status < 0:
+        _report_unwritten(argv, status, said, items, set())
         return [], status
 
     done = []
@@ -314,4 +320,34 @@ def encode_chunk(encoder: str, items, workdir: str, quality: int,
         shutil.move(produced, partial)
         os.replace(partial, destination)
         done.append(index)
+    _report_unwritten(argv, status, said, items, set(done))
     return done, status
+
+
+def _report_unwritten(argv: list, status: int, said, items,
+                      done: set) -> None:
+    """Warn about the images a call left unwritten, and keep them - each one
+    named by the file it was made from, the comic a page was unpacked from -
+    with everything the encoder said. Nothing for a call that wrote them all,
+    or one the run's own interrupt stopped."""
+    missing = [items[index][0] for index in range(len(items))
+               if index not in done]
+    if not missing or safety.abort_requested():
+        return
+    run = toolcapture.finished(argv, status, said, tool="av1gpu")
+    ended = run.failure or "exited 0"
+    origins = list(dict.fromkeys(
+        os.path.basename(errorlog.origin_of(source) or source)
+        for source in missing))
+    message = ("av1gpu left %d of %d image(s) unwritten (%s), of %s - "
+               "they go to the CPU" % (len(missing), len(items), ended,
+                                       ", ".join(origins[:5])
+                                       + (" and %d more" % (len(origins) - 5)
+                                          if len(origins) > 5 else "")))
+    path = errorlog.record(
+        "tool-skipped", message, files=missing, tool_argv=argv,
+        tool_status=ended, tool_output=said.lines(), tool_lines=said.total,
+        causes=toolcapture.causes(run))
+    runlog.warn(message)
+    if path and runlog.verbosity() >= runlog.NORMAL:
+        runlog.error_continued("         what it said is kept in %s" % path)

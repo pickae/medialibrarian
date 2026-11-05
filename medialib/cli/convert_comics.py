@@ -665,8 +665,12 @@ class Run:
         self.counters.progress("Converting: %s"
                                % os.path.join(self.in_path, partial_path))
 
-        unpacked = extract(os.path.join(self.in_path, partial_path), book_temp,
-                           self.max_res)
+        # The pages unpacked into RAM, and the encodes made from them, name the
+        # comic they came from in any error about one of them.
+        source = os.path.join(self.in_path, partial_path)
+        errorlog.note_origin(book_temp, source)
+        errorlog.note_origin(os.path.join(self.avif_path, partial_path), source)
+        unpacked = extract(source, book_temp, self.max_res)
 
         if not os.path.isdir(book_temp):
             if unpacked is not None and not unpacked.ok:
@@ -749,6 +753,9 @@ class Run:
                     pass
         if broken:
             self.counters.bump("pagesBroken", broken)
+            runlog.error("%d page(s) of %s came out broken and were left out "
+                         "of it" % (broken, file_name), kind="output-check",
+                         files=[os.path.join(self.in_path, partial_path)])
 
         if not _files_matching(book_avif, ("avif",)):
             self.counters.note("Skip (nothing converted): %s" % file_name,

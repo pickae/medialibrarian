@@ -48,7 +48,7 @@ from medialib import commands
 
 __all__ = ["CAUSES", "ERROR_DIR", "KINDS", "NOTABLE", "Kind", "Notable",
            "crash_kind", "current_file", "install_hooks", "note_origin",
-           "notable_lines", "record", "record_crash", "redact", "start_run",
+           "notable_lines", "origin_of", "record", "record_crash", "redact", "start_run",
            "subject", "working_on"]
 
 ERROR_DIR = "error"
@@ -343,6 +343,11 @@ def _absolute(path: str) -> str:
         return str(path)
 
 
+def origin_of(path: str) -> str:
+    """The hard-drive file a scratch path was made from, or ``""``."""
+    return _origin_of(path)
+
+
 def _origin_of(path: str) -> str:
     """The hard-drive file a scratch path was made from, by it or by any
     folder it sits in; empty when nothing said."""
@@ -463,13 +468,16 @@ def _file_lines(files: Iterable[str], tool_argv: list) -> list[str]:
     lines = []
     for path in seen[:40]:
         notes = []
-        if _in_scratch(path, roots):
+        scratch = _in_scratch(path, roots)
+        if scratch:
             notes.append("RAM scratch")
-            origin = _origin_of(path)
-            if origin:
-                notes.append("made from %s" % origin)
-            elif subject()[1]:
-                notes.append("made while working on the input above")
+        # Named wherever it is known, the scratch or not: a page unpacked to
+        # a disk spill is as far from its comic as one in RAM.
+        origin = _origin_of(path)
+        if origin and origin != path:
+            notes.append("made from %s" % origin)
+        elif scratch and subject()[1]:
+            notes.append("made while working on the input above")
         notes.append("exists" if os.path.lexists(path) else "not there")
         lines.append("  %s  [%s]" % (path, ", ".join(notes)))
     if len(seen) > 40:

@@ -41,13 +41,12 @@ import collections
 import json
 import os
 import shutil
-import subprocess
 import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from medialib.lib import av1gpu, safety
+from medialib.lib import av1gpu, errorlog, safety, toolcapture
 
 __all__ = ["READY", "MANIFEST", "Lane"]
 
@@ -348,8 +347,14 @@ class Lane:
             if taken is None:
                 break
             book, entry = taken
-            subprocess.run(NICE + entry["cpu"], stdout=subprocess.DEVNULL,
-                           stderr=subprocess.DEVNULL)
+            # A page that fails here is missing from its book, so the failure
+            # is replayed and kept, named by the book it was unpacked from.
+            page = entry["cpu"][-1] if entry["cpu"] else ""
+            source = errorlog.origin_of(page) if page else ""
+            toolcapture.run(NICE + entry["cpu"],
+                            label=os.path.basename(source or page),
+                            tool=os.path.basename(entry["cpu"][0])
+                            if entry["cpu"] else "")
             with self.room:
                 self.cpu_pages += 1
                 self.cpu_pixels += entry["pixels"]
