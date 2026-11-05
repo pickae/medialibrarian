@@ -235,10 +235,12 @@ def _files_matching(root: str, extensions, exact_case: bool = False) -> list:
     return found
 
 
-def input_holds_extension(root: str, extension: str) -> bool:
-    """Whether this input holds the format that needs a particular extractor - a
-    library of .cbz should not have to have unrar and 7-Zip installed."""
-    return bool(_files_matching(root, (extension,)))
+def containers_held(root: str) -> set:
+    """The archive types (``zip``, ``rar``, ``7z``) this input's comic archives
+    really are - which extractors it needs. A library of .cbz should not have to
+    have unrar and 7-Zip installed, and one whose .cbz is really a RAR does."""
+    return {comic_container(path)
+            for path in _files_matching(root, _COMIC_CONTAINERS)} - {""}
 
 
 class Counters:
@@ -310,6 +312,23 @@ def pretreat_input(in_path: str, skips: safety.SkipLog) -> None:
         safety.safe_rename(path, safety.clean_input_path(path), skips)
 
     safety.lower_case_extensions(in_path, skips)
+    name_by_content(in_path, skips)
+
+
+def name_by_content(in_path: str, skips: safety.SkipLog) -> None:
+    """Every comic archive renamed to the extension of what it really is: a
+    zip called .cbr becomes .cbz, a RAR called .cbz becomes .cbr. Its listing
+    and unpacking go by what it is either way; the rename is so the library
+    stops saying otherwise. A name already taken is left alone and recorded."""
+    for path in _files_matching(in_path, _COMIC_CONTAINERS, exact_case=True):
+        real = archives.archive_type_by_content(path)
+        stem, _, ext = path.rpartition(".")
+        if not real or _COMIC_CONTAINERS[ext] == real:
+            continue
+        renamed = stem + "." + _COMIC_EXTENSION_OF[real]
+        if safety.safe_rename(path, renamed, skips):
+            log('  renamed "%s" to "%s": it is a %s archive'
+                % (os.path.basename(path), os.path.basename(renamed), real))
 
 
 COMIC_INPUT_EXTENSIONS = tuple(enums.COMIC_EXTENSIONS) + tuple(
@@ -317,6 +336,17 @@ COMIC_INPUT_EXTENSIONS = tuple(enums.COMIC_EXTENSIONS) + tuple(
 
 # Which archive each comic container really is, for the member check below.
 _COMIC_CONTAINERS = {"cbz": "zip", "cbr": "rar", "cb7": "7z"}
+_COMIC_EXTENSION_OF = {kind: ext for ext, kind in _COMIC_CONTAINERS.items()}
+
+
+def comic_container(path: str) -> str:
+    """The archive a comic container is - by its first bytes, and by its
+    extension only when those match no archive - or ``""`` for one that is not
+    a comic container at all (a PDF)."""
+    ext = path.rsplit(".", 1)[-1].lower()
+    if ext not in _COMIC_CONTAINERS:
+        return ""
+    return archives.archive_type_by_content(path) or _COMIC_CONTAINERS[ext]
 
 
 def extract(archive: str, destination: str, max_res: int):
@@ -331,14 +361,15 @@ def extract(archive: str, destination: str, max_res: int):
     to replay - there, or beside the pages it did get out. None when no
     unpacker ran.
     """
-    os.makedirs(destination, exist_ok=True)
     lowered = archive.lower()
     unpacked = None
 
     # A comic container is a zip, a rar or a 7z under another name, and is held
     # to the same rule: a book asking to write outside its own folder is read
-    # before an unpacker starts, and not unpacked at all.
-    container = _COMIC_CONTAINERS.get(lowered.rsplit(".", 1)[-1], "")
+    # before an unpacker starts, and not unpacked at all. Which of the three it
+    # is comes from its contents, not its name. A refused book gets no folder,
+    # which is what stops it here rather than at an empty conversion.
+    container = comic_container(archive)
     if container:
         refused = archives.unsafe_members(archive, container)
         if refused:
@@ -347,14 +378,15 @@ def extract(archive: str, destination: str, max_res: int):
                          % (os.path.basename(archive), refused[0][1],
                             refused[0][0]), files=[archive])
             return None
+    os.makedirs(destination, exist_ok=True)
 
-    if lowered.endswith(".cbr"):
+    if container == "rar":
         unpacked = toolcapture.run(["unrar", "e", "--", archive, destination],
                                    report=False)
-    elif lowered.endswith(".cbz"):
+    elif container == "zip":
         unpacked = toolcapture.run(
             ["unzip", "-o", "-d", destination, "--", archive], report=False)
-    elif lowered.endswith(".cb7"):
+    elif container == "7z":
         # 7-Zip's binary has three names in the wild - 7z from p7zip, 7zz in the
         # official build, 7za where only the reduced package is installed. None
         # present leaves the last name to fail on its own, which lands the book in
@@ -390,7 +422,12 @@ def extract(archive: str, destination: str, max_res: int):
 def _flatten(destination: str) -> None:
     """The archive's nested layout flattened, then everything that is not a page
     pruned. Two same-named pages from different sub-folders would clobber each
-    other, so a colliding file is given a " (N)" suffix instead."""
+    other, so a colliding file is given a " (N)" suffix instead.
+
+    The resource forks a Mac leaves in an archive - ``__MACOSX/`` and ``._``
+    files, which carry a page's name and none of its picture - go first and
+    without a word: they are not pages, and no encoder can read one."""
+    _drop_apple_double(destination)
     for parent, _dirs, names in os.walk(destination):
         if os.path.abspath(parent) == os.path.abspath(destination):
             continue
@@ -421,6 +458,19 @@ def _flatten(destination: str) -> None:
             os.rmdir(parent)
         except OSError:
             pass
+
+
+def _drop_apple_double(destination: str) -> None:
+    for parent, dirs, names in os.walk(destination):
+        for name in [name for name in dirs if name == "__MACOSX"]:
+            shutil.rmtree(os.path.join(parent, name), ignore_errors=True)
+            dirs.remove(name)
+        for name in names:
+            if name.startswith("._"):
+                try:
+                    os.remove(os.path.join(parent, name))
+                except OSError:
+                    pass
 
 
 def same_picture(first: str, second: str) -> bool:
@@ -1229,9 +1279,10 @@ def _run(result, declaration, program: str, script_dir: str,
     # holds the format that needs them.
     tools = ["zip", "unzip", imagemagick.CONVERT_SPEC,
              imagemagick.IDENTIFY_SPEC]
-    if input_holds_extension(in_path, "cbr"):
+    held = containers_held(in_path)
+    if "rar" in held:
         tools.append("unrar")
-    if input_holds_extension(in_path, "cb7"):
+    if "7z" in held:
         tools.append("7z|7zz|7za")
     if tooldeps.require_tools(program, tools):
         return 1

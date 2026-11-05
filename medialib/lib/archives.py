@@ -34,6 +34,7 @@ from medialib.lib.enums import ARCHIVE_EXTENSIONS, shell_lower
 
 __all__ = [
     "archive_extension_of",
+    "archive_type_by_content",
     "is_archive_file",
     "archive_base_name",
     "archive_tool_specs",
@@ -89,6 +90,32 @@ def archive_extension_of(name: str) -> str:
         ):
             match = ext
     return match
+
+
+# The first bytes of each archive the comic containers can be, which is what
+# the file IS whatever its name says: a .cbr that is a zip is common, since a
+# reader opens either and nobody who renamed it ever noticed.
+_SIGNATURES = (
+    (b"PK\x03\x04", "zip"),
+    (b"PK\x05\x06", "zip"),
+    (b"PK\x07\x08", "zip"),
+    (b"Rar!\x1a\x07", "rar"),
+    (b"7z\xbc\xaf\x27\x1c", "7z"),
+)
+
+
+def archive_type_by_content(path: str) -> str:
+    """``zip``, ``rar`` or ``7z`` by the file's first bytes, or ``""`` when it
+    starts like none of them or cannot be read."""
+    try:
+        with open(path, "rb") as handle:
+            head = handle.read(8)
+    except OSError:
+        return ""
+    for signature, kind in _SIGNATURES:
+        if head.startswith(signature):
+            return kind
+    return ""
 
 
 def is_archive_file(name: str) -> bool:
