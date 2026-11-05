@@ -515,6 +515,45 @@ class TestTheDroppedDuplicatesAreSaidOncePerBook:
         assert extract([]) == []
 
 
+class TestACbzIsUnpackedInThreads:
+    """A sound .cbz is unpacked by the run's own threads; anything zipfile
+    will not read whole goes to unzip, whose words report a damaged book."""
+
+    def test_every_page_comes_out_without_unzip(self, tmp_path, stub_bin):
+        _stub(str(stub_bin), "unzip", "exit 99\n")
+        archive = tmp_path / "book.cbz"
+        with zipfile.ZipFile(str(archive), "w") as packed:
+            for n in range(20):
+                packed.writestr("Book/%02d.jpg" % n, "page %d" % n)
+        destination = tmp_path / "pages"
+        assert cc.extract(str(archive), str(destination), 2960) is None
+        assert sorted(os.listdir(destination)) == [
+            "%02d.jpg" % n for n in range(20)]
+
+    def test_a_link_member_is_not_a_page(self, tmp_path):
+        archive = tmp_path / "book.cbz"
+        with zipfile.ZipFile(str(archive), "w") as packed:
+            packed.writestr("01.jpg", "page")
+            link = zipfile.ZipInfo("02.jpg")
+            link.external_attr = (stat.S_IFLNK | 0o777) << 16
+            packed.writestr(link, "/etc/passwd")
+        destination = tmp_path / "pages"
+        assert cc._unzip_in_threads(str(archive), str(destination))
+        assert os.listdir(destination) == ["01.jpg"]
+
+    def test_a_damaged_member_goes_to_unzip_from_an_empty_folder(
+            self, tmp_path):
+        archive = tmp_path / "book.cbz"
+        with zipfile.ZipFile(str(archive), "w") as packed:
+            packed.writestr("01.jpg", "first page")
+            packed.writestr("02.jpg", "second page")
+        data = archive.read_bytes()
+        archive.write_bytes(data.replace(b"second page", b"second PAGE"))
+        destination = tmp_path / "pages"
+        assert not cc._unzip_in_threads(str(archive), str(destination))
+        assert os.listdir(destination) == []
+
+
 class TestAnArchiveThatWouldNotUnpack:
     def test_the_unpackers_run_is_handed_back_for_the_replay(self, tmp_path,
                                                             monkeypatch):
@@ -655,19 +694,11 @@ class TestTheInputIsRenamedToWhatItIs:
 
 class TestMacResourceForksAreNotPages:
     @pytest.fixture
-    def book(self, tmp_path, stub_bin):
-        _stub(str(stub_bin), "unzip", '''
-dest=""; prev=""
-for a in "$@"; do [[ "$prev" == "-d" ]] && dest="$a"; prev="$a"; done
-mkdir -p "$dest/__MACOSX/sub" "$dest/sub"
-printf a > "$dest/sub/01.jpg"
-printf b > "$dest/__MACOSX/sub/._01.jpg"
-printf c > "$dest/._02.jpg"
-printf d > "$dest/02.jpg"
-''')
+    def book(self, tmp_path):
         destination = tmp_path / "work" / "book.cbz"
-        cc.extract(str(_zip_named(tmp_path / "book.cbz")), str(destination),
-                   2960)
+        archive = _zip_named(tmp_path / "book.cbz", (
+            "sub/01.jpg", "__MACOSX/sub/._01.jpg", "._02.jpg", "02.jpg"))
+        cc.extract(str(archive), str(destination), 2960)
         return destination
 
     def test_only_the_pages_are_left(self, book):

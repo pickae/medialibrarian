@@ -36,9 +36,12 @@ not a book, it is a bag of pages, and no reader shows it as one.
 
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import time
+import zipfile
+from concurrent.futures import ThreadPoolExecutor
 
 from medialib import commands
 from medialib.cli.convert_images import (
@@ -177,6 +180,14 @@ COMIC_CALIBRATION = encodercalibration.Calibration(
 # unpacked in RAM, so the buffer is kept to what a freed worker needs to start
 # again at once.
 BOOKS_BUFFERED_PER_WORKER = 1
+
+# Threads one book's preparation is spread over: the unpacking of a .cbz and
+# the header probe of every page. The preparation runs in the run's own process,
+# one book at a time, and the workers can only start a book once it is
+# prepared, so a serial unzip - 3.6 s of one core for a 360 MB book, against
+# 0.3 s on eight - left the workers waiting for it on every book that encodes
+# faster than it unpacks.
+PREPARE_THREADS = 8
 
 # The record separator between a book and the output path it is destined for: a
 # comic's name may contain anything else.
@@ -359,7 +370,7 @@ def extract(archive: str, destination: str, max_res: int):
     extractor that fails lands the book in the "no pages" case, exactly where a
     corrupt archive lands, and the unpacker's run is handed back for the caller
     to replay - there, or beside the pages it did get out. None when no
-    unpacker ran.
+    unpacker tool ran - a .cbz the threads unpacked whole included.
     """
     lowered = archive.lower()
     unpacked = None
@@ -384,8 +395,10 @@ def extract(archive: str, destination: str, max_res: int):
         unpacked = toolcapture.run(["unrar", "e", "--", archive, destination],
                                    report=False)
     elif container == "zip":
-        unpacked = toolcapture.run(
-            ["unzip", "-o", "-d", destination, "--", archive], report=False)
+        if not _unzip_in_threads(archive, destination):
+            unpacked = toolcapture.run(
+                ["unzip", "-o", "-d", destination, "--", archive],
+                report=False)
     elif container == "7z":
         # 7-Zip's binary has three names in the wild - 7z from p7zip, 7zz in the
         # official build, 7za where only the reduced package is installed. None
@@ -417,6 +430,41 @@ def extract(archive: str, destination: str, max_res: int):
                 "another format: %s" % (os.path.basename(archive),
                                         len(dropped), ", ".join(dropped)))
     return unpacked
+
+
+def _unzip_in_threads(archive: str, destination: str) -> bool:
+    """A .cbz unpacked across PREPARE_THREADS, or False with <destination>
+    left empty for unzip to do it instead.
+
+    Anything out of the ordinary goes to unzip - a damaged or encrypted
+    member, a format zipfile does not read - because unzip's status and words
+    are what the run reports a damaged book with. A link member is left out,
+    as the unzip path prunes it afterwards: zipfile would write it as a file
+    holding the link's target, and that file would pass for a page.
+    """
+    try:
+        with zipfile.ZipFile(archive) as book:
+            members = [member for member in book.infolist()
+                       if not member.is_dir()
+                       and not stat.S_ISLNK(member.external_attr >> 16)]
+        if not members:
+            return False
+
+        def unpack(share: list) -> None:
+            with zipfile.ZipFile(archive) as book:
+                for member in share:
+                    book.extract(member, destination)
+
+        threads = min(PREPARE_THREADS, len(members))
+        with ThreadPoolExecutor(threads) as pool:
+            for _ in pool.map(unpack, [members[n::threads]
+                                       for n in range(threads)]):
+                pass
+        return True
+    except Exception:  # noqa: BLE001 - any failure is unzip's to report
+        shutil.rmtree(destination, ignore_errors=True)
+        os.makedirs(destination, exist_ok=True)
+        return False
 
 
 def _flatten(destination: str) -> None:
@@ -553,14 +601,17 @@ def starved_pages(book_dir: str) -> tuple[int, int]:
     """``(starved, measured)`` over the pages of one unpacked book.
 
     One ``identify -ping`` per page - the header and nothing else - so this is a
-    read of a few hundred bytes per page against a book that is already in RAM.
+    read of a few hundred bytes per page against a book that is already in RAM,
+    PREPARE_THREADS of them at once.
     Pages nothing could measure are left out of BOTH counts rather than counted
     as sound: the share is what decides the book's fate, and an unreadable page
     is evidence about neither side of it.
     """
     starved = measured = 0
-    for page in _files_matching(book_dir, enums.IMAGE_EXTENSIONS):
-        verdict = imagebitrate.image_adequacy(page)
+    pages = _files_matching(book_dir, enums.IMAGE_EXTENSIONS)
+    with ThreadPoolExecutor(PREPARE_THREADS) as pool:
+        verdicts = list(pool.map(imagebitrate.image_adequacy, pages))
+    for verdict in verdicts:
         if verdict == adequacy.UNKNOWN:
             continue
         measured += 1
