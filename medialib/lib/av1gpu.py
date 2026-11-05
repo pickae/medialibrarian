@@ -286,8 +286,9 @@ def encode_chunk(encoder: str, items, workdir: str, quality: int,
         for line in lines:
             handle.write(line + "\n")
 
-    # The process group's Ctrl+C reaches it as it reaches ImageMagick. Its
-    # stderr names what it skipped and why: the fallback does not need it, but
+    # The process group's Ctrl+C reaches it as it reaches ImageMagick. What it
+    # prints - stderr names what it skipped and why - is kept whole, both
+    # streams in the order it wrote them: the fallback does not need it, but
     # the error log does, for an image it left unwritten.
     environment = dict(os.environ)
     environment.setdefault(DECODE_THREADS_VARIABLE, str(DECODE_THREADS))
@@ -298,10 +299,10 @@ def encode_chunk(encoder: str, items, workdir: str, quality: int,
             "--max-mp", MAX_MEGAPIXELS, "--max-input-mp", MAX_MEGAPIXELS]
     said = toolcapture.ToolOutput()
     process = subprocess.Popen(argv, stdin=subprocess.DEVNULL,
-                               stdout=subprocess.DEVNULL,
-                               stderr=subprocess.PIPE, env=environment)
-    assert process.stderr is not None
-    said.drain(process.stderr)
+                               stdout=subprocess.PIPE,
+                               stderr=subprocess.STDOUT, env=environment)
+    assert process.stdout is not None
+    said.drain(process.stdout)
     status = process.wait()
     if status < 0:
         _report_unwritten(argv, status, said, items, set())

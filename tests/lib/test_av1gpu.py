@@ -188,6 +188,7 @@ while IFS= read -r line; do
     esac
     echo "GPU ${target##*/}" > "$out/${input##*/}.avif"
 done < "$list"
+echo "batch finished"
 [ -n "$STUB_SIGNAL" ] && kill -"$STUB_SIGNAL" $$
 exit "${STUB_STATUS:-0}"
 '''
@@ -257,6 +258,7 @@ class TestAChunk:
         assert "WARNING  tool-skipped" in text
         assert "made from %s" % (tmp_path / "Book.cbz") in text
         assert "  | skipped decline.png: not decodable" in text
+        assert "  | batch finished" in text     # its stdout too
 
     def test_no_partial_name_is_left_behind(self, chunk):
         chunk()
