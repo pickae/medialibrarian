@@ -159,17 +159,27 @@ def _run(command) -> int:
     return toolcapture.watched(command, stdout=subprocess.DEVNULL).returncode
 
 
-def _capture(command) -> str:
-    """A tool run for what it PRINTS rather than for what it does; ``""`` when it
-    is missing or answers non-zero. Its own stderr goes to the terminal, because
-    a listing that failed is a refusal the user has to be able to explain."""
+def _listing(command) -> toolcapture.ToolRun:
+    """A tool run for what it PRINTS rather than for what it does, with its
+    stderr kept rather than shown: several books are listed at once, and an
+    unattributed "Corrupt header is found" on the terminal names no archive.
+    Nothing is said here - :func:`unsafe_members` reports the run under the
+    archive's name, and every other caller only wants the members."""
+    output = toolcapture.ToolOutput()
     try:
-        done = subprocess.run(command, stdout=subprocess.PIPE)
-    except OSError:
-        return ""
-    if done.returncode != 0:
-        return ""
-    return done.stdout.decode("utf-8", "replace")
+        done = subprocess.run(command, capture_output=True)
+    except OSError as exc:
+        output.feed("%s\n" % exc)
+        failed = toolcapture.finished(command, 127, output)
+        failed.failure = "could not be started: %s" % (exc.strerror or exc)
+        return failed
+    # getattr: a stand-in for subprocess.run may hand back no stderr.
+    said = getattr(done, "stderr", None)
+    if said:
+        output.feed(said)
+    return toolcapture.finished(
+        command, done.returncode, output,
+        stdout=(done.stdout or b"").decode("utf-8", "replace"))
 
 
 # tarfile learned zstd in Python 3.14; before that the zstd binary decompresses
@@ -308,7 +318,7 @@ def _zip_members(file: str) -> list:
     return members
 
 
-def _rar_members(file: str) -> list:
+def _rar_members(text: str) -> list:
     """Every member of a rar as (name, kind, target), from ``unrar vt``.
 
     The technical listing is the only one that names a member's TYPE, which is
@@ -318,7 +328,6 @@ def _rar_members(file: str) -> list:
     ``-idc`` and not ``-idq``: unrar 7 counts the listing itself as the noise
     ``-idq`` silences, and answers an empty page with status 0.
     """
-    text = _capture(["unrar", "vt", "-idc", "--", file])
     members = []
     name = ""
     for line in text.split("\n"):
@@ -345,7 +354,7 @@ def _rar_members(file: str) -> list:
     return members
 
 
-def _seven_zip_members(file: str, binary: str) -> list:
+def _seven_zip_members(text: str) -> list:
     """Every member of a 7z as (name, kind, target), from ``l -slt``.
 
     The one field that answers the question is ``Attributes``, whose unix half is
@@ -353,7 +362,6 @@ def _seven_zip_members(file: str, binary: str) -> list:
     a folder. An archive packed on Windows has no unix half, and there ``D`` is
     the only type there is to read.
     """
-    text = _capture([binary, "l", "-slt", "--", file])
     members: list = []
     name = ""
     kind = "file"
@@ -406,26 +414,40 @@ def _seven_zip_kind(attributes: str, default: str) -> str:
     return default
 
 
+def _list_members(file: str, ext: str) -> tuple[list | None,
+                                                toolcapture.ToolRun | None]:
+    """The members as :func:`archive_members` gives them, and the listing tool's
+    run - None for a zip, which is read here and not by a tool."""
+    try:
+        if ext == "zip":
+            return _zip_members(file), None
+    except (OSError, zipfile.BadZipFile, RuntimeError):
+        return None, None
+    if ext == "rar":
+        listed = _listing(["unrar", "vt", "-idc", "--", file])
+        members = _rar_members(listed.stdout) if listed.ok else []
+        return members or None, listed
+    if ext == "7z":
+        binary = seven_zip_command()
+        if not binary:
+            return None, None
+        listed = _listing([binary, "l", "-slt", "--", file])
+        members = _seven_zip_members(listed.stdout) if listed.ok else []
+        return members or None, listed
+    return [], None
+
+
 def archive_members(file: str, ext: str = "") -> list | None:
     """Every member of an archive as (name, kind, target), or ``None`` when this
     host's tools cannot list it.
 
     ``None`` is not "empty": an archive whose members cannot be read is one whose
     contents cannot be judged, and the caller refuses it rather than unpacking it
-    unseen.
+    unseen. Whatever the listing tool said is dropped: this is the question
+    asked to rank or name an archive, and the check before it is unpacked,
+    :func:`unsafe_members`, is the one that reports it.
     """
-    ext = ext or archive_extension_of(file)
-    try:
-        if ext == "zip":
-            return _zip_members(file)
-    except (OSError, zipfile.BadZipFile, RuntimeError):
-        return None
-    if ext == "rar":
-        return _rar_members(file) or None
-    if ext == "7z":
-        binary = seven_zip_command()
-        return (_seven_zip_members(file, binary) or None) if binary else None
-    return []
+    return _list_members(file, ext or archive_extension_of(file))[0]
 
 
 def unsafe_members(file: str, ext: str = "") -> list:
@@ -433,8 +455,18 @@ def unsafe_members(file: str, ext: str = "") -> list:
 
     A listing that could not be made is itself one entry, because it is the same
     answer: this archive is not going to be unpacked.
+
+    What the listing tool said is reported under the archive's name and kept in
+    the run's error log as what it is: a tool that failed is an error, and one
+    that listed the archive but said it is damaged a warning.
     """
-    members = archive_members(file, ext)
+    members, listed = _list_members(file, ext or archive_extension_of(file))
+    if listed is not None:
+        listed.label = os.path.basename(file)
+        if not listed.ok:
+            toolcapture.report_failure(listed)
+        else:
+            toolcapture.report_notable(listed)
     if members is None:
         return [(os.path.basename(file),
                  "its contents could not be listed, so they cannot be checked")]

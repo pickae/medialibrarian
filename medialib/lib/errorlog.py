@@ -158,6 +158,15 @@ NOTABLE = (
         r"Truncating packet of size|partial file|"
         r"File ended prematurely|Unexpected end of file|unexpected EOF"),
         "the input is truncated or not what its name says", True),
+    # unrar, 7-Zip and unzip on an archive damaged in transit or on disk.
+    Notable("archive-damaged", re.compile(
+        r"Corrupt header is found|[Aa]rchive header is corrupt|"
+        r"Unexpected end of archive|checksum error|CRC [Ff]ailed|bad CRC|"
+        r"\bData Error\b|\bHeaders Error\b|Unexpected end of data|"
+        r"Can ?not open the file as archive|is not RAR archive|"
+        r"invalid compressed data|bad zipfile offset"),
+        "the archive is damaged: members past the damage may be missing or "
+        "broken", True),
     Notable("empty-output", re.compile(
         r"Output file is empty, nothing was encoded|"
         r"Output file #\d+ does not contain any stream"),

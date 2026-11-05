@@ -114,6 +114,16 @@ def test_a_page_for_the_cpu_alone_is_encoded_there(lane_run, tmp_path):
     assert lane.cpu_pages == 1
 
 
+def test_both_sides_are_timed_for_their_throughput(lane_run):
+    """The closing report's MP/s is pixels over the time a side was working:
+    the card's calls, and the CPU's encoders."""
+    _finished, _outputs, _called, lane = lane_run(
+        {"one": ["p1.jpg", "cpu_big.png", "cpu_other.png"]})
+    assert lane.busy > 0 and lane.pixels == 1_000_000
+    assert lane.cpu_busy > 0 and lane.cpu_pixels == 2_000_000
+    assert lane._cpu_running == 0
+
+
 def test_a_page_the_cpu_wrote_nothing_for_is_missing_from_its_book(
         lane_run, capfd):
     """Its book still comes back, so the run can pack the rest - and say how

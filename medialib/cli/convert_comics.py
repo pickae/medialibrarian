@@ -327,8 +327,9 @@ def extract(archive: str, destination: str, max_res: int):
     would arrive interleaved and unattributed. What matters is whether pages
     appeared, which is decided by looking at the folder afterwards - so an
     extractor that fails lands the book in the "no pages" case, exactly where a
-    corrupt archive lands, and the unpacker's run is handed back for that case
-    to replay. None when no unpacker ran.
+    corrupt archive lands, and the unpacker's run is handed back for the caller
+    to replay - there, or beside the pages it did get out. None when no
+    unpacker ran.
     """
     os.makedirs(destination, exist_ok=True)
     lowered = archive.lower()
@@ -675,6 +676,16 @@ class Run:
             self.counters.note("Skip (no pages): %s"
                                % os.path.basename(partial_path), failed=True)
             return None
+        if unpacked is not None and not unpacked.ok:
+            # Pages came out, but the unpacker did not finish cleanly. Status 1
+            # is unrar's, unzip's and 7-Zip's own word for "done, with
+            # warnings"; anything else gave up partway, and the book goes on
+            # with the pages before the damage - an error, not a footnote.
+            unpacked.label = os.path.basename(partial_path)
+            if unpacked.returncode == 1:
+                toolcapture.report_warnings(unpacked)
+            else:
+                toolcapture.report_failure(unpacked)
         self.counters.bump("pagesFound")
 
         # Judged before a single page is encoded, because the answer decides
@@ -895,59 +906,22 @@ def _run_pool(state: Run, method: str, items: list, jobs: int) -> None:
     workerpool.run(items, jobs, _in_worker, lambda item: (state, method, item))
 
 
-def bytes_per_page(path: str) -> float:
-    """A book's size over its page count, from its archive's listing alone:
-    the crude guess at its pages' size that tells a book of pages the card can
-    take as they are from one of pages too large for it. Manga came out at a
-    quarter of a MB a page, digital comics near one, scans of album pages
-    taller than -m at three to six. A book whose pages cannot be counted - a
-    PDF, rendered rather than unpacked - ranks as the largest."""
-    container = _COMIC_CONTAINERS.get(path.lower().rsplit(".", 1)[-1], "")
-    members = archives.archive_members(path, container) if container else None
-    wanted = tuple("." + extension for extension in enums.IMAGE_EXTENSIONS)
-    pages = sum(1 for name, kind, _target in members or ()
-                if kind == "file" and name.lower().endswith(wanted))
-    if not pages:
-        return float("inf")
-    try:
-        return os.path.getsize(path) / pages
-    except OSError:
-        return float("inf")
-
-
-def _by_page_size(state: Run, book_list: list) -> list:
-    """The books, smallest pages first - each listing read once, several at
-    a time."""
-    from concurrent.futures import ThreadPoolExecutor
-
-    def rank(record: str) -> float:
-        return bytes_per_page(os.path.join(state.in_path,
-                                           record.partition(UNIT)[0]))
-
-    with ThreadPoolExecutor(max_workers=runlog.cpu_count()) as pool:
-        ranks = list(pool.map(rank, book_list))
-    return [record for _rank, _order, record in
-            sorted(zip(ranks, range(len(book_list)), book_list, strict=True))]
-
-
 def _prepared_books(state: Run, book_list: list):
-    """The queue's producer: every book that still needs a worker, prepared.
+    """The queue's producer: every book that still needs a worker, prepared,
+    in the order they were found.
 
     With a lane, a book to be converted gets a lane folder, and the next book
-    is unpacked as soon as either of the lane's sides is short of work - and
-    it is the book likeliest to feed THAT side: the smallest pages left when
-    it is the card, the largest when it is the CPU."""
-    if state.lane is None:
-        ordered = list(book_list)
-    else:
-        ordered = _by_page_size(state, book_list)
+    is unpacked as soon as either of the lane's sides is short of work and
+    there is RAM to hold it. Which side asked does not pick the book: nearly
+    every page goes to the card, and the CPU's encoders take the card's pages
+    when they have none of their own."""
+    ordered = list(book_list)
     while ordered:
-        side = "gpu"
         if state.lane is not None:
-            side = state.lane.wait_for_room()
+            state.lane.wait_for_room()
         if safety.abort_requested():
             return
-        record = ordered.pop(0) if side == "gpu" else ordered.pop()
+        record = ordered.pop(0)
         prepared = state.prepare_book(record)
         if prepared is None:
             continue
@@ -957,6 +931,12 @@ def _prepared_books(state: Run, book_list: list):
             folder = state.lane.folder()
             state.lane.expect(folder, (record, starved, measured, folder))
         yield (record, starved, measured, folder), size
+
+
+def _megapixels_per_second(pixels: int, busy: float) -> str:
+    """", 85.2 MP/s": a side's pixels over the time it was working, or
+    nothing for a side that was never timed."""
+    return ", %.1f MP/s" % (pixels / 1e6 / busy) if busy > 0 else ""
 
 
 def _page_stats(stats_file: str) -> tuple:
@@ -1027,12 +1007,17 @@ def footer(state: Run) -> None:
             share = (" (%.0f%% of the run)" % (100.0 * lane.busy / runtime)
                      if runtime > 0 else "")
             runlog.say("GPU: %d page(s), %.0f MP in %d call(s), busy %.1f "
-                       "seconds%s\n" % (lane.pages, lane.pixels / 1e6,
-                                         lane.calls, lane.busy, share))
+                       "seconds%s%s\n" % (lane.pages, lane.pixels / 1e6,
+                                           lane.calls, lane.busy, share,
+                                           _megapixels_per_second(
+                                               lane.pixels, lane.busy)))
         if lane is not None and lane.cpu_pages:
             runlog.say("CPU: %d page(s), %.0f MP, %d of them taken from the "
-                       "GPU's queue\n" % (lane.cpu_pages, lane.cpu_pixels / 1e6,
-                                          lane.stolen + lane.fallbacks))
+                       "GPU's queue, busy %.1f seconds%s\n"
+                       % (lane.cpu_pages, lane.cpu_pixels / 1e6,
+                          lane.stolen + lane.fallbacks, lane.cpu_busy,
+                          _megapixels_per_second(lane.cpu_pixels,
+                                                 lane.cpu_busy)))
         # Last, so the "of those" above cannot be read as being about these.
         if existing > 0:
             runlog.say("%d already packaged by an earlier run, skipped\n"

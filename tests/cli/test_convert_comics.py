@@ -526,3 +526,59 @@ class TestAnArchiveThatWouldNotUnpack:
         book = tmp_path / "book.cbz"
         book.write_bytes(b"not a zip")
         assert cc.extract(str(book), str(tmp_path / "pages"), 2960) is failed
+
+
+class TestAnArchiveThatUnpackedOnlyInPart:
+    """Pages came out but the unpacker did not finish: the book goes on, and
+    what the unpacker said is reported under the book's name rather than
+    dropped."""
+
+    @pytest.fixture
+    def prepare(self, tmp_path, monkeypatch):
+        from medialib.lib import toolcapture
+        said = []
+        monkeypatch.setattr(cc.toolcapture, "report_failure",
+                            lambda run, **_k: said.append(("error", run.label)))
+        monkeypatch.setattr(cc.toolcapture, "report_warnings",
+                            lambda run, **_k: said.append(("warning",
+                                                           run.label)))
+        monkeypatch.setattr(cc, "starved_pages", lambda _folder: ([], 0))
+        monkeypatch.setattr(cc, "book_is_starved", lambda *_a: False)
+        counters = tmp_path / "counters"
+        counters.mkdir()
+
+        def run(status):
+            def extract(_source, destination, _max_res):
+                os.makedirs(destination)
+                with open(os.path.join(destination, "01.jpg"), "wb") as page:
+                    page.write(b"x")
+                return toolcapture.ToolRun(
+                    ["unrar"], status, toolcapture.ToolOutput(),
+                    failure="exited with status %d" % status if status else "")
+            monkeypatch.setattr(cc, "extract", extract)
+            state = cc.Run(in_path=str(tmp_path / "in"),
+                           temp_path=str(tmp_path / "temp"),
+                           avif_path=str(tmp_path / "avif"), max_res=2960,
+                           counters=cc.Counters(str(counters)))
+            assert state.prepare_book("Series/Book.cbr" + cc.UNIT
+                                      + "Book.cbz") is not None
+            return said
+        return run
+
+    def test_an_unpacker_that_gave_up_is_an_error(self, prepare):
+        assert prepare(3) == [("error", "Book.cbr")]
+
+    def test_status_1_is_the_unpackers_own_warning(self, prepare):
+        assert prepare(1) == [("warning", "Book.cbr")]
+
+    def test_a_clean_unpack_says_nothing(self, prepare):
+        assert prepare(0) == []
+
+
+
+class TestThroughputInTheClosingReport:
+    def test_megapixels_over_the_time_the_side_worked(self):
+        assert cc._megapixels_per_second(170_400_000, 2.0) == ", 85.2 MP/s"
+
+    def test_a_side_never_timed_says_nothing(self):
+        assert cc._megapixels_per_second(1_000_000, 0.0) == ""

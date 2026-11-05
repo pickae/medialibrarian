@@ -166,6 +166,10 @@ class TestKinds:
         ("Error while decoding stream #0:0: Invalid data found when processing "
          "input", "decode-error"),
         ("moov atom not found", "invalid-data"),
+        ("Corrupt header is found", "archive-damaged"),
+        ("Main archive header is corrupt", "archive-damaged"),
+        ("ERROR: Data Error : 01.jpg", "archive-damaged"),
+        ("  bad CRC 1a2b3c4d  (should be 5e6f7a8b)", "archive-damaged"),
         ("av_interleaved_write_frame(): No space left on device", "disk-full"),
         ("RuntimeError: CUDA out of memory. Tried to allocate", "out-of-memory"),
         ("ERROR: [youtube] x: Sign in to confirm you're not a bot", "blocked"),
@@ -222,6 +226,18 @@ class TestToolRuns:
         assert "    | [mp3float @ 0x1] Header missing\n" in err
         assert "    ... and 2 more line(s) like it or worse\n" in err
         assert "WARNING  tool-warning" in only_file(error_dir)
+
+    def test_a_tool_done_with_warnings_is_kept_as_a_warning(self, error_dir,
+                                                             capfd):
+        result = toolcapture.run(tool("print('extra bytes'); raise "
+                                      "SystemExit(1)"), "Book.cbz",
+                                 report=False)
+        toolcapture.report_warnings(result)
+        err = capfd.readouterr().err
+        assert "WARNING: Book.cbz: " in err and "finished with warnings" in err
+        assert "    | extra bytes\n" in err
+        text = only_file(error_dir)
+        assert "WARNING  tool-warning" in text and "tool-failed" not in text
 
     def test_quiet_keeps_the_damage_without_saying_it(self, error_dir, capfd,
                                                       monkeypatch):

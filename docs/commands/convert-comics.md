@@ -45,11 +45,10 @@ encoded on the NVIDIA card and the CPU at once**, both kept busy:
 - The CPU takes everything else - other formats, pages with transparency,
   pages the card did not write - and, when it has none of its own and the card
   has more than a call's worth waiting, some of the card's.
-- Books are unpacked for whichever side is short of work: the card's from the
-  books with the smallest pages (in MB a page, from the archive's listing),
-  the CPU's from those with the largest. The card comes first, and the CPU's
-  encodes run at lower priority than the work that feeds it. How far ahead
-  books are unpacked is bounded by the RAM free at the time.
+- Books are unpacked in the order they were found, the next one as soon as
+  either side is short of work. The CPU's encodes run at lower priority than
+  the work that feeds the card. How far ahead books are unpacked is bounded by
+  the RAM free at the time.
 - `-l` means what it means on the CPU: the card is asked for the quality whose
   pages scored the same SSIMULACRA2 as the CPU's on comic pages, with its
   `turbo` preset, whose files came out 6 % larger than its slower `fast` at
