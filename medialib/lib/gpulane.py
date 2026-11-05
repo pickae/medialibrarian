@@ -83,6 +83,14 @@ NICE = ["nice", "-n", "10"] if shutil.which("nice") else []
 _POLL_SECONDS = 0.2
 
 
+def _written(path: str) -> bool:
+    """Whether an encode left a file with something in it at <path>."""
+    try:
+        return bool(path) and os.path.getsize(path) > 0
+    except OSError:
+        return False
+
+
 class _Book:
     def __init__(self, folder: str, item) -> None:
         self.folder = folder
@@ -128,6 +136,9 @@ class Lane:
         self.cpu_pixels = 0
         self.stolen = 0
         self.fallbacks = 0
+        # The pages whose last encode wrote nothing, by book folder: what the
+        # run says is missing from that book when it packs it.
+        self.missing: dict[str, int] = {}
         self.busy = 0.0
         self._busy_since = 0.0
         self.finishers = ThreadPoolExecutor(max_workers=2)
@@ -349,13 +360,18 @@ class Lane:
             book, entry = taken
             # A page that fails here is missing from its book, so the failure
             # is replayed and kept, named by the book it was unpacked from.
-            page = entry["cpu"][-1] if entry["cpu"] else ""
+            page = entry.get("output") or (entry["cpu"][-1]
+                                           if entry["cpu"] else "")
             source = errorlog.origin_of(page) if page else ""
-            toolcapture.run(NICE + entry["cpu"],
-                            label=os.path.basename(source or page),
-                            tool=os.path.basename(entry["cpu"][0])
-                            if entry["cpu"] else "")
+            made = toolcapture.run(
+                NICE + entry["cpu"], label=os.path.basename(source or page),
+                tool=os.path.basename(entry["cpu"][0]) if entry["cpu"] else "",
+                verify=lambda page=page: "" if _written(page)
+                else "exited 0 but wrote no image")
             with self.room:
+                if not made.ok and not safety.abort_requested():
+                    self.missing[book.folder] = \
+                        self.missing.get(book.folder, 0) + 1
                 self.cpu_pages += 1
                 self.cpu_pixels += entry["pixels"]
                 last = self._page_done(book)

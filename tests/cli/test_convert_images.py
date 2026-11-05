@@ -299,7 +299,7 @@ class TestTheFormatReachesTheOutputName:
 class TestAFailedConversion:
     """An image is counted once ImageMagick has written it, not before."""
 
-    def _run(self, tmp_path, status):
+    def _run(self, tmp_path, status, writes=True):
         counters = tmp_path / "counters"
         counters.mkdir()
         for name in ("current", "converted", "trimmed", "failed"):
@@ -310,7 +310,13 @@ class TestAFailedConversion:
                    "maxResCommand": "10000x10000>"}
         state = ci.Run(str(tmp_path), str(tmp_path / "out"), str(counters),
                        options, 1)
-        state._convert = lambda arguments: status
+        def convert(arguments):
+            if writes:
+                with open(arguments[-1], "w") as out:
+                    out.write("avif")
+            return status
+
+        state._convert = convert
         return state
 
     def test_a_conversion_that_fails_is_counted_as_failed(self, tmp_path,
@@ -334,6 +340,15 @@ class TestAFailedConversion:
         state = self._run(tmp_path, status=0)
         state.transcode("page.jpg")
         assert (state.counter("converted"), state.counter("failed")) == (1, 0)
+
+    def test_an_exit_0_that_wrote_nothing_is_a_failure_too(self, tmp_path,
+                                                           monkeypatch):
+        (tmp_path / "page.jpg").write_bytes(b"x")
+        (tmp_path / "out").mkdir()
+        monkeypatch.chdir(tmp_path)
+        state = self._run(tmp_path, status=0, writes=False)
+        state.transcode("page.jpg")
+        assert (state.counter("converted"), state.counter("failed")) == (0, 1)
 
 
 class TestTheStarvedSkip:
@@ -365,8 +380,16 @@ class TestTheStarvedSkip:
         state = ci.Run(str(tmp_path), str(tmp_path / "out"), str(counters),
                        options, 1)
         state.starved = lambda relative: verdict
-        state._convert = lambda arguments: converted.append(arguments) or 0
         converted = []
+
+        def convert(arguments):
+            # What ImageMagick would leave: the image, at the last argument.
+            converted.append(arguments)
+            with open(arguments[-1], "w") as out:
+                out.write("avif")
+            return 0
+
+        state._convert = convert
         return state, converted
 
     def test_a_starved_image_is_not_converted(self, tmp_path, monkeypatch):

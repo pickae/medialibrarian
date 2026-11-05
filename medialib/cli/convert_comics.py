@@ -123,9 +123,9 @@ OPT_VARS = "l:quality u:chroma s:speedPreset m:maxRes f:fuzz"
 OPT_COLUMN = 20
 OPT_LONG = "h:help l:quality u:chroma s:speed m:max-resolution f:fuzz"
 
-# The smallest an AVIF page can plausibly be, in bytes. A conversion that
-# produced less than this produced no picture - a truncated or empty encode - and
-# the page is dropped rather than shipped inside the finished book.
+# The smallest an AVIF page can plausibly be, in bytes. A page that encodes to
+# less than this is an empty page - nothing on it worth a page in the book - and
+# it is dropped and counted as such. Not a failure: the encode did its job.
 MIN_PAGE_SIZE = 10 * 1024
 
 # How much of a book has to be starved before the book is left as it is, in
@@ -747,7 +747,8 @@ class Run:
             return self._package_pages(item)
 
     def _package_pages(self, item: tuple) -> None:
-        """A converted book: drop its broken pages, number, zip, free."""
+        """A converted book: drop its empty pages, say which are missing,
+        number, zip, free."""
         record = item[0]
         partial_path, _, out_rel = record.partition(UNIT)
         book_temp = os.path.join(self.temp_path, partial_path)
@@ -760,11 +761,11 @@ class Run:
             shutil.rmtree(book_avif, ignore_errors=True)
             return
 
-        # The pages that came out broken, counted as they are dropped: this is the
-        # only place the run learns of them, because the converter counted such a
-        # page as converted - it wrote a file and exited 0 - and only its size
-        # afterwards says otherwise.
-        broken = 0
+        # The empty pages, counted as they are dropped: this is the only place
+        # the run learns of them, because the converter counted such a page as
+        # converted - it wrote a file and exited 0 - and only its size
+        # afterwards says it holds nothing.
+        empty = 0
         for parent, _dirs, names in os.walk(book_avif):
             for name in names:
                 if not name.endswith(".avif"):
@@ -773,13 +774,23 @@ class Run:
                 try:
                     if os.path.getsize(path) < MIN_PAGE_SIZE:
                         os.remove(path)
-                        broken += 1
+                        empty += 1
                 except OSError:
                     pass
-        if broken:
-            self.counters.bump("pagesBroken", broken)
-            runlog.error("%d page(s) of %s came out broken and were left out "
-                         "of it" % (broken, file_name), kind="output-check",
+        if empty:
+            self.counters.bump("pagesEmpty", empty)
+
+        # The pages the lane could not encode at all - the card left them to
+        # the CPU, and the CPU wrote nothing - are missing from the book: an
+        # error, each one's encode already replayed and kept on its own.
+        missing = (self.lane.missing.pop(item[3], 0)
+                   if self.lane is not None and len(item) > 3 and item[3]
+                   else 0)
+        if missing:
+            self.counters.bump("pagesMissing", missing)
+            runlog.error("%d page(s) of %s could not be encoded and are "
+                         "missing from it" % (missing, file_name),
+                         kind="output-check",
                          files=[os.path.join(self.in_path, partial_path)])
 
         if not _files_matching(book_avif, ("avif",)):
@@ -974,7 +985,7 @@ def _page_stats(stats_file: str) -> tuple:
     than to nothing, so a run in which every book was already on disk still lands
     on numbers.
     """
-    totals = [0] * 6
+    totals = [0] * 8
     books = 0
     try:
         with open(stats_file) as handle:
@@ -982,7 +993,7 @@ def _page_stats(stats_file: str) -> tuple:
                 if not line.strip():
                     continue
                 books += 1
-                for index, field in enumerate(line.split()[:6]):
+                for index, field in enumerate(line.split()[:8]):
                     try:
                         totals[index] += int(field)
                     except ValueError:
@@ -1054,19 +1065,23 @@ def footer(state: Run) -> None:
             runlog.say("\n")
             runlog.say("%d page(s) in %d converted book(s), %.3f seconds per "
                        "page\n" % (page_total, books, runtime / page_total))
-            # The five below partition the page total - the converter puts every
+            # The six below partition the page total - the converter puts every
             # page in exactly one of them - so what is printed adds up to 100%.
+            # (The seventh column, starved, is never set here: -a converts
+            # every page of a book that is converted at all.)
             _print_page_stat("converted", totals[1], page_total)
             _print_page_stat("trimmed", totals[2], page_total)
             _print_page_stat("blank, dropped", totals[3], page_total)
             _print_page_stat("already done, skipped", totals[4], page_total)
             _print_page_stat("not found, failed", totals[5], page_total)
-            # Not a sixth category but a subset of the first two, hence "of
-            # those": a page that encoded to something too small to be a picture
-            # was counted as converted by the encoder, which wrote a file and
-            # exited 0 and had no way to know better.
-            _print_page_stat("of those broken, dropped",
-                             counters.read("pagesBroken"), page_total)
+            _print_page_stat("failed, missing", totals[7], page_total)
+            # Not categories of their own but subsets of the first two, hence
+            # "of those": a page counted as converted when it was sorted onto
+            # the GPU lane, which then wrote it empty - or could not write it.
+            _print_page_stat("of those empty, dropped",
+                             counters.read("pagesEmpty"), page_total)
+            _print_page_stat("of those failed, missing",
+                             counters.read("pagesMissing"), page_total)
 
         if os.path.isdir(state.out_path):
             for parent, _dirs, _names in os.walk(state.out_path, topdown=False):
@@ -1371,7 +1386,7 @@ def _run(result, declaration, program: str, script_dir: str,
     state.total = len(book_list)
     counters.total = state.total
     for name in ("current", "pagesFound", "packaged", "existing",
-                 "pagesBroken"):
+                 "pagesEmpty", "pagesMissing"):
         with open(os.path.join(counter_dir, name), "w") as handle:
             handle.write("0")
     # Where each book's page counters are collected: the converter appends one
@@ -1433,7 +1448,7 @@ def _run(result, declaration, program: str, script_dir: str,
                 % enums.extension_list(list(enums.IMAGE_EXTENSIONS)))
         return safety.fail_no_relevant_input(
             in_path, "pages that could be converted to AVIF (all encodes failed "
-            "or came out broken)")
+            "or came out empty)")
 
     safety.print_run_footer()
     return workerpool.exit_status()

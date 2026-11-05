@@ -492,16 +492,23 @@ class Run:
                                    tool="ImageMagick",
                                    stdout=subprocess.DEVNULL).returncode
 
-    def _encode(self, arguments, relative: str, category: str = "converted",
-                label: str = "CONV", pixels: int = 0) -> None:
+    def _encode(self, arguments, relative: str, out: str,
+                category: str = "converted", label: str = "CONV",
+                pixels: int = 0) -> None:
         """One encode, counted by what it did: <category> once ImageMagick has
-        written the image, FAILED when it did not - its replay and the error
-        log say why. Counted after the call, not before, so the closing figures
-        are of images on disk."""
-        if self._convert(arguments) == 0:
+        written <out>, FAILED when it did not - its replay and the error log
+        say why. Counted after the call, not before, so the closing figures
+        are of images on disk; and an exit 0 that left no file is a failure
+        like any other."""
+        status = self._convert(arguments)
+        if status == 0 and _written(out):
             self.record(category, label, relative, pixels=pixels)
-        else:
-            self.record("failed", "FAILED", relative, stream=sys.stderr)
+            return
+        if status == 0:
+            errorlog.record("tool-bad-output", "%s: ImageMagick exited 0 but "
+                            "wrote no image" % relative,
+                            files=[relative, out], tool_argv=arguments)
+        self.record("failed", "FAILED", relative, stream=sys.stderr)
 
     def _identify(self, arguments) -> str:
         proc = subprocess.run(imagemagick.identify_argv(arguments),
@@ -529,7 +536,7 @@ class Run:
         dimensions = _parse_size(self._identify(["-ping", "-format", "%w %h",
                                                  source]))
         if dimensions is None:
-            self._encode(self._encode_arguments(source, out), relative)
+            self._encode(self._encode_arguments(source, out), relative, out)
             return
         width, height = dimensions
         pixels = width * height
@@ -553,11 +560,11 @@ class Run:
                 self._encode(self._encode_arguments(
                     "miff:" + trimmed, out,
                     ["-bordercolor", colour, "-border", str(border)]),
-                    relative, "trimmed", "TRIM", pixels)
+                    relative, out, "trimmed", "TRIM", pixels)
                 return
             if self._to_lane(relative, out):
                 return
-            self._encode(self._encode_arguments(source, out), relative,
+            self._encode(self._encode_arguments(source, out), relative, out,
                          pixels=pixels)
         finally:
             try:
@@ -683,7 +690,7 @@ class Run:
             self._cpu_to_lane(relative, out, (), "converted", "CONV",
                               self._pixels(relative))
             return
-        self._encode(self._encode_arguments(relative, out), relative,
+        self._encode(self._encode_arguments(relative, out), relative, out,
                      pixels=self._pixels(relative))
 
     def _to_lane(self, relative: str, out: str, crop=None,
@@ -784,8 +791,16 @@ class Run:
         trim = (["-fuzz", self.options["fuzzCommand"], "-trim"]
                 if self.options["crop"] else [])
         self._encode([relative, *trim, "-quality", str(quality),
-                      "-resize", geometry, out], relative, label="REV",
+                      "-resize", geometry, out], relative, out, label="REV",
                      pixels=self._pixels(relative))
+
+
+def _written(path: str) -> bool:
+    """Whether an encode left a file with something in it at <path>."""
+    try:
+        return os.path.getsize(path) > 0
+    except OSError:
+        return False
 
 
 # --- the run -------------------------------------------------------------------
@@ -1399,12 +1414,13 @@ def _print_footer(state, started, values, own_safety_log) -> None:
         with open(stats_file + ".lock", "w") as handle, \
                 runlog.take_lock(handle), \
                 open(stats_file, "a") as out:
-            out.write("%d %d %d %d %d %d %d\n" % (
+            out.write("%d %d %d %d %d %d %d %d\n" % (
                 total, state.counter("converted"),
                 state.counter("trimmed"), state.counter("blank"),
                 state.counter("alreadyDone"),
                 state.counter("notFound"),
-                state.counter("starved")))
+                state.counter("starved"),
+                state.counter("failed")))
 
     if own_safety_log:
         safety.report_safety_skips()
