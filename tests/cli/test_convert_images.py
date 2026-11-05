@@ -296,6 +296,46 @@ class TestTheFormatReachesTheOutputName:
         assert "jxl" in ci._SAME_STEM and "JXL" in ci._SAME_STEM
 
 
+class TestAFailedConversion:
+    """An image is counted once ImageMagick has written it, not before."""
+
+    def _run(self, tmp_path, status):
+        counters = tmp_path / "counters"
+        counters.mkdir()
+        for name in ("current", "converted", "trimmed", "failed"):
+            (counters / name).write_text("0")
+        options = {"crop": False, "skipStarved": False, "format": "avif",
+                   "chroma": ci.DEFAULT_CHROMA, "quality": 60,
+                   "effortLevel": 5, "fuzzCommand": "10%",
+                   "maxResCommand": "10000x10000>"}
+        state = ci.Run(str(tmp_path), str(tmp_path / "out"), str(counters),
+                       options, 1)
+        state._convert = lambda arguments: status
+        return state
+
+    def test_a_conversion_that_fails_is_counted_as_failed(self, tmp_path,
+                                                          monkeypatch, capfd):
+        (tmp_path / "page.jpg").write_bytes(b"x")
+        (tmp_path / "out").mkdir()
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("LOG_VERBOSITY", "quiet")
+        state = self._run(tmp_path, status=1)
+        state.transcode("page.jpg")
+        assert state.counter("converted") == 0
+        assert state.counter("failed") == 1
+        # Said even under -q, as every error is.
+        assert "FAILED: page.jpg" in capfd.readouterr().err
+
+    def test_one_that_succeeds_is_counted_as_converted(self, tmp_path,
+                                                       monkeypatch):
+        (tmp_path / "page.jpg").write_bytes(b"x")
+        (tmp_path / "out").mkdir()
+        monkeypatch.chdir(tmp_path)
+        state = self._run(tmp_path, status=0)
+        state.transcode("page.jpg")
+        assert (state.counter("converted"), state.counter("failed")) == (1, 0)
+
+
 class TestTheStarvedSkip:
     """The -a decision, which is what this command does INSTEAD of converting.
 

@@ -461,7 +461,7 @@ class Run:
                     self._bump(road + "Pixels", pixels)
                 line = "%s%s: %s\n" % (
                     runlog.counted_prefix(current, self.total), label, path)
-                if category == "notFound":
+                if category in ("notFound", "failed"):
                     out.write(line)
                 else:
                     runlog.say(line, out)
@@ -492,6 +492,17 @@ class Run:
                                    tool="ImageMagick",
                                    stdout=subprocess.DEVNULL).returncode
 
+    def _encode(self, arguments, relative: str, category: str = "converted",
+                label: str = "CONV", pixels: int = 0) -> None:
+        """One encode, counted by what it did: <category> once ImageMagick has
+        written the image, FAILED when it did not - its replay and the error
+        log say why. Counted after the call, not before, so the closing figures
+        are of images on disk."""
+        if self._convert(arguments) == 0:
+            self.record(category, label, relative, pixels=pixels)
+        else:
+            self.record("failed", "FAILED", relative, stream=sys.stderr)
+
     def _identify(self, arguments) -> str:
         proc = subprocess.run(imagemagick.identify_argv(arguments),
                               stdout=subprocess.PIPE,
@@ -518,8 +529,7 @@ class Run:
         dimensions = _parse_size(self._identify(["-ping", "-format", "%w %h",
                                                  source]))
         if dimensions is None:
-            self.record("converted", "CONV", relative)
-            self._convert(self._encode_arguments(source, out))
+            self._encode(self._encode_arguments(source, out), relative)
             return
         width, height = dimensions
         pixels = width * height
@@ -540,15 +550,15 @@ class Run:
                             stream=sys.stderr)
                 return
             if verdict == "trimmed":
-                self.record("trimmed", "TRIM", relative, pixels=pixels)
-                self._convert(self._encode_arguments(
+                self._encode(self._encode_arguments(
                     "miff:" + trimmed, out,
-                    ["-bordercolor", colour, "-border", str(border)]))
+                    ["-bordercolor", colour, "-border", str(border)]),
+                    relative, "trimmed", "TRIM", pixels)
                 return
             if self._to_lane(relative, out):
                 return
-            self.record("converted", "CONV", relative, pixels=pixels)
-            self._convert(self._encode_arguments(source, out))
+            self._encode(self._encode_arguments(source, out), relative,
+                         pixels=pixels)
         finally:
             try:
                 os.remove(trimmed)
@@ -673,9 +683,8 @@ class Run:
             self._cpu_to_lane(relative, out, (), "converted", "CONV",
                               self._pixels(relative))
             return
-        self.record("converted", "CONV", relative,
-                    pixels=self._pixels(relative))
-        self._convert(self._encode_arguments(relative, out))
+        self._encode(self._encode_arguments(relative, out), relative,
+                     pixels=self._pixels(relative))
 
     def _to_lane(self, relative: str, out: str, crop=None,
                  category: str = "converted",
@@ -771,15 +780,12 @@ class Run:
                         stream=sys.stderr)
             return
         quality = self.options["quality"] + JPEG_QUALITY_BONUS
-        self.record("converted", "REV", relative, pixels=self._pixels(relative))
         geometry = self.options["maxResCommand"]
-        if self.options["crop"]:
-            self._convert([relative, "-fuzz", self.options["fuzzCommand"],
-                           "-trim", "-quality", str(quality),
-                           "-resize", geometry, out])
-        else:
-            self._convert([relative, "-quality", str(quality),
-                           "-resize", geometry, out])
+        trim = (["-fuzz", self.options["fuzzCommand"], "-trim"]
+                if self.options["crop"] else [])
+        self._encode([relative, *trim, "-quality", str(quality),
+                      "-resize", geometry, out], relative, label="REV",
+                     pixels=self._pixels(relative))
 
 
 # --- the run -------------------------------------------------------------------
@@ -1083,8 +1089,8 @@ def main(argv: list, program: str = "convert-images") -> int:
             return safety.fail_no_relevant_input(input_dir, wanted)
 
         for name in ("current", "converted", "trimmed", "blank", "starved",
-                     "alreadyDone", "notFound", "gpuImages", "gpuPixels",
-                     "cpuImages", "cpuPixels"):
+                     "alreadyDone", "notFound", "failed", "gpuImages",
+                     "gpuPixels", "cpuImages", "cpuPixels"):
             with open(os.path.join(counter_dir, name), "w") as handle:
                 handle.write("0")
 
@@ -1099,7 +1105,9 @@ def main(argv: list, program: str = "convert-images") -> int:
                   "reverse_to_jpeg" if reverse else "transcode")
         safety.exit_if_aborted()
         safety.print_run_footer()
-        return workerpool.exit_status()
+        # An image that could not be converted is a run that did not do what
+        # it was asked, and its caller - convert-comics, say - has to know.
+        return workerpool.exit_status(1 if state.counter("failed") else 0)
     finally:
         ramscratch.run_exit_cleanup()
 
@@ -1370,7 +1378,8 @@ def _print_footer(state, started, values, own_safety_log) -> None:
     # The breakdown only once there is one: a run in which every image was
     # plainly converted has said all of it in the line above.
     if total > 0 and state.counter("converted") < total:
-        for label, name in (("input not found", "notFound"),
+        for label, name in (("FAILED", "failed"),
+                            ("input not found", "notFound"),
                             ("already done", "alreadyDone"),
                             ("blank", "blank"),
                             ("starved, left alone", "starved"),
