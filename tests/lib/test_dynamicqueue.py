@@ -111,6 +111,25 @@ def test_a_freed_slot_is_given_the_longest_item_left(tmp_path):
         == ["large", "medium", "small"]
 
 
+def test_each_item_is_reported_once_its_worker_has_ended(tmp_path):
+    """On the dispatch's own thread, after the worker's output is there."""
+    directory = str(tmp_path)
+    ended = []
+
+    def producer():
+        for name in ("a", "b", "c"):
+            yield name, 1
+
+    def seen(name):
+        assert (tmp_path / "dispatched").read_text().count(name + "\n") == 1
+        ended.append((name, threading.current_thread()))
+
+    dynamicqueue.run(producer(), 2, _append, lambda name: (directory, name),
+                     on_done=seen)
+    assert sorted(name for name, _thread in ended) == ["a", "b", "c"]
+    assert {thread for _name, thread in ended} == {threading.current_thread()}
+
+
 def _record_seen(directory: str, name: str) -> None:
     time.sleep(0.05)
     seen = sum(1 for entry in os.listdir(directory)

@@ -12,6 +12,7 @@ import json
 import os
 import re
 import subprocess
+import threading
 from collections.abc import Callable
 from typing import NamedTuple
 
@@ -167,6 +168,23 @@ MAX_REQUESTS_PER_SECOND = 10.0
 _PACER = politepacing.Pacer(1.0 / MAX_REQUESTS_PER_SECOND)
 
 
+# The answers of a run that asks TMDb the same questions twice - a full ingest
+# names its films ahead, on a thread of its own, and again at the end - kept by
+# the question, so the second asking costs nothing. None while nothing asked for
+# them to be kept, which is every other command.
+_ANSWERS: dict | None = None
+_ANSWERS_LOCK = threading.Lock()
+
+
+def remember_answers(on: bool = True) -> None:
+    """Keep every answer TMDb gives from here on, for the rest of the run -
+    or, with ``on`` False, stop and forget them. An answer that never came is
+    not kept, so the question is asked again."""
+    global _ANSWERS
+    with _ANSWERS_LOCK:
+        _ANSWERS = {} if on else None
+
+
 def reset_rate_limit() -> None:
     """Forget when the last request went out, so the next one goes immediately.
     For a test that would otherwise pay the interval."""
@@ -204,6 +222,10 @@ def _curl(url: str, params) -> str | None:
     that window once per candidate folder. On stdin it reaches curl and nothing
     else.
     """
+    question = (url, tuple(tuple(pair) for pair in params))
+    with _ANSWERS_LOCK:
+        if _ANSWERS is not None and question in _ANSWERS:
+            return _ANSWERS[question]
     _PACER.wait()
     lines = ["url = " + _config_value(url), "get", "fail", "silent",
              "show-error"]
@@ -215,7 +237,11 @@ def _curl(url: str, params) -> str | None:
                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     if proc.returncode != 0:
         return None
-    return proc.stdout.decode("utf-8", "replace")
+    answer = proc.stdout.decode("utf-8", "replace")
+    with _ANSWERS_LOCK:
+        if _ANSWERS is not None:
+            _ANSWERS[question] = answer
+    return answer
 
 
 def _as_json(text: str | None):

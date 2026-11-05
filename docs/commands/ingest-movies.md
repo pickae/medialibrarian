@@ -107,6 +107,33 @@ names more folders, so those are handed over too. Commentary naming and
 chapters come last, after the subtitle downloads, and by then the answers are
 usually all in. If a thread is still going, the run says so and waits for it.
 
+The work on the films themselves overlaps the same way, each kind on the part
+of the machine it uses:
+
+- **Subtitles are fetched ahead.** On a thread of its own, the run asks TMDb
+  which film each folder is (the same questions the tagging asks at the end,
+  whose answers it then reuses) and downloads the missing subtitles of every
+  film it got an id for while the rest of the run goes on. They are still
+  fetched one film at a time, and the thread is finished before the tagging
+  renames anything. A film it did not get to is fetched after the tagging, as
+  before.
+- **Opus beside the transcription.** With whisper on the GPU, the Opus transcode
+  runs at the same time as the commentary transcription, one job narrower so
+  whisper keeps its cores. With whisper on the CPU they would only fight over
+  the same cores, so the transcode goes first.
+- **Each film is remuxed as soon as it is ready**: once its own Opus tracks and
+  transcripts are done, one film at a time, while the transcode and the
+  transcription carry on with the others. The films it didn't get to are
+  remuxed after the transcription, as before.
+- **One disk-heavy job at a time per spinning disk.** An Opus transcode, a
+  commentary extract, a remux and a subtitle sync against the film all read a
+  whole film, and on a hard disk two of them at once are slower than one after
+  the other. So they take turns on each spinning disk, which the run detects,
+  encrypted and LVM disks included. An SSD or NVMe disk is shared as before.
+
+Each film's lines from the background work are printed together when that film
+is done, rather than mixed into the other work's output.
+
 ### Subtitles
 
 Subtitles are downloaded after the films are tagged with their IMDb ids, and a

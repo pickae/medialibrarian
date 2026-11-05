@@ -69,6 +69,50 @@ class TestTheCallItselfKeepsTheKeyOffArgv:
         self._record(monkeypatch, rc=22)
         assert tmdblookup._curl("https://example.test/x", []) is None
 
+    def _counting(self, monkeypatch, rcs):
+        calls = []
+
+        def fake_run(argv, input=None, **_kwargs):
+            calls.append(input)
+            return subprocess.CompletedProcess(argv, rcs[len(calls) - 1],
+                                               b"{}", b"")
+
+        monkeypatch.setattr(tmdblookup.subprocess, "run", fake_run)
+        monkeypatch.setattr(tmdblookup, "_PACER",
+                            tmdblookup.politepacing.Pacer(0))
+        return calls
+
+    def test_a_run_that_asks_to_remembers_the_answers(self, monkeypatch):
+        """A full ingest asks the tagging's questions ahead and again at the
+        end: the second asking is free."""
+        calls = self._counting(monkeypatch, [0, 0])
+        tmdblookup.remember_answers()
+        try:
+            for _ in range(2):
+                assert tmdblookup._curl("https://example.test/a",
+                                        [("q", "x")]) == "{}"
+            assert tmdblookup._curl("https://example.test/a",
+                                    [("q", "y")]) == "{}"
+        finally:
+            tmdblookup.remember_answers(False)
+        assert len(calls) == 2
+
+    def test_no_answer_is_not_remembered(self, monkeypatch):
+        calls = self._counting(monkeypatch, [22, 0])
+        tmdblookup.remember_answers()
+        try:
+            assert tmdblookup._curl("https://example.test/a", []) is None
+            assert tmdblookup._curl("https://example.test/a", []) == "{}"
+        finally:
+            tmdblookup.remember_answers(False)
+        assert len(calls) == 2
+
+    def test_nothing_is_remembered_unless_asked(self, monkeypatch):
+        calls = self._counting(monkeypatch, [0, 0])
+        tmdblookup._curl("https://example.test/a", [])
+        tmdblookup._curl("https://example.test/a", [])
+        assert len(calls) == 2
+
     @pytest.mark.parametrize("raw,quoted", [
         ("plain", '"plain"'),
         ('say "hi"', '"say \\"hi\\""'),

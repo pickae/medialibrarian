@@ -50,7 +50,7 @@ _POLL_SECONDS = 0.5
 
 
 def run(producer, jobs: int, target, arguments, buffer_factor: int = 2,
-        log=None) -> "workerpool.Outcome":
+        log=None, on_done=None) -> "workerpool.Outcome":
     """Every prepared item through <target>, <jobs> of them at once.
 
     <producer> is a generator that yields ``(item, size)`` as it prepares the
@@ -65,6 +65,8 @@ def run(producer, jobs: int, target, arguments, buffer_factor: int = 2,
     :func:`workerpool.run`. <buffer_factor> is the buffer in multiples of the
     worker pool - twice its size by default. <log> is the run's logger, for
     the queue's own lines: the pre-fill, the start, and a buffer that ran dry.
+    <on_done>, when given, is called with each item once its worker has ended,
+    however it ended - on the dispatch's thread, which is the caller's.
     """
     if log is None:
         log = _say_nothing
@@ -78,6 +80,12 @@ def run(producer, jobs: int, target, arguments, buffer_factor: int = 2,
     running: list = []
     started = False
     seen = len(workerpool.failed_workers())
+    items_of: dict = {}
+
+    def ended(worker, _reason: str) -> None:
+        item = items_of.pop(id(worker), None)
+        if on_done is not None:
+            on_done(item)
     # What the producer thread and the dispatch share, under <room>: the buffer
     # itself, whether the producer is finished, and what it raised if it did
     # not finish cleanly - handed to the dispatch to raise, as the pull that
@@ -196,8 +204,10 @@ def run(producer, jobs: int, target, arguments, buffer_factor: int = 2,
                 # has left nothing unseen.
                 empty, finished = not heap, done
             for item in taken:
-                running.append(workerpool.start_worker(
-                    target, arguments(item), workerpool.label(item)))
+                worker = workerpool.start_worker(
+                    target, arguments(item), workerpool.label(item))
+                items_of[id(worker)] = item
+                running.append(worker)
             if (empty and not finished and len(running) < jobs and started
                     and not dry_waiting and not safety.abort_requested()):
                 dry_waiting = jobs - len(running)
@@ -205,7 +215,8 @@ def run(producer, jobs: int, target, arguments, buffer_factor: int = 2,
             if not running and (safety.abort_requested()
                                 or (empty and finished)):
                 break
-            running = workerpool.reap_one(running, wake_read, _POLL_SECONDS)
+            running = workerpool.reap_one(running, wake_read, _POLL_SECONDS,
+                                           ended)
             _drain(wake_read)
         raise_failure()
     finally:

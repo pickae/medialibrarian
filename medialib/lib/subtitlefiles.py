@@ -26,6 +26,7 @@ from dataclasses import dataclass
 
 from medialib import helpers
 from medialib.lib import (
+    diskturn,
     donelog,
     languages,
     plexnames,
@@ -46,6 +47,7 @@ __all__ = [
     "sync_subtitle",
     "TimingReference",
     "film_imdb_id",
+    "imdb_of_name",
     "Provider",
     "PROVIDERS",
     "providers_to_ask",
@@ -53,6 +55,7 @@ __all__ = [
     "download_srt",
     "subtitle_movies",
     "download_subs",
+    "download_subs_for",
     "check_srt",
     "check_subs",
 ]
@@ -411,7 +414,9 @@ class TimingReference:
         stream = _reference_stream(self._film)
         if stream is None:
             return None
-        cues = _reference_cues(self._film, stream)
+        # Read through the whole film, so on the disk's turn.
+        with diskturn.turn(self._film):
+            cues = _reference_cues(self._film, stream)
         if len(cues) < MIN_REFERENCE_CUES:
             return None
         try:
@@ -471,8 +476,10 @@ def _sync_to_film(file: str, srt: str, timing: str | None, max_offset: str,
                 shutil.rmtree(scratch, ignore_errors=True)
     measured.clear()
     measured["against"] = "the audio"
-    return sync_subtitle(file, srt, max_offset, quality_offset, quality,
-                         measured)
+    # The film's whole audio is read for this one, so on the disk's turn.
+    with diskturn.turn(file):
+        return sync_subtitle(file, srt, max_offset, quality_offset, quality,
+                             measured)
 
 
 def _said(language_code: str, text: str) -> str:
@@ -508,12 +515,21 @@ def film_imdb_id(file: str) -> str:
     """
     for name in (os.path.basename(file),
                  os.path.basename(os.path.dirname(os.path.abspath(file)))):
-        imdb = _IMDB_TAG.search(name)
+        imdb = imdb_of_name(name)
         if imdb:
-            return imdb.group(1).lower()
-        tmdb = _TMDB_TAG.search(name)
-        if tmdb:
-            return tmdblookup.imdb_of_tmdb(tmdb.group(1))
+            return imdb
+    return ""
+
+
+def imdb_of_name(name: str) -> str:
+    """The IMDb id one name - or one id tag on its own - carries, or ""; a
+    TMDb tag is looked up for the IMDb id it stands for."""
+    imdb = _IMDB_TAG.search(name)
+    if imdb:
+        return imdb.group(1).lower()
+    tmdb = _TMDB_TAG.search(name)
+    if tmdb:
+        return tmdblookup.imdb_of_tmdb(tmdb.group(1))
     return ""
 
 
@@ -641,6 +657,48 @@ def _fetch(file: str, language_code: str, imdb: str, provider: Provider,
     return done.returncode, printed[-1] if printed else ""
 
 
+def _first_tries(file: str, codes: list, imdb: str,
+                 provider: Provider) -> dict:
+    """The first try of several languages from one provider, in one helper
+    call: {language code: (status, subtitle id)} for every language the helper
+    answered for, the way :func:`_fetch` answers for one.
+
+    One call rather than one per language because each call is a ``pipx run``
+    and a subliminal start before it asks anything, and the provider is asked
+    for every language in the one search. A helper that answers nothing usable
+    answers for no language, and each is then tried on its own."""
+    try:
+        done = subprocess.run(
+            ["pipx", "run", helpers.path_of("subliminal_download.py"),
+             ",".join(codes), imdb, file, provider.name],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+            errors="replace")
+    except OSError:
+        return {}
+    if done.returncode != 0:
+        return {}
+    answers: dict = {}
+    for line in (done.stdout or "").splitlines():
+        code, _tab, rest = line.partition("\t")
+        if code not in codes:
+            continue
+        verdict, _tab, subtitle_id = rest.partition("\t")
+        if verdict == "already":
+            answers[code] = (_ALREADY_THERE, "")
+        elif verdict == "saved":
+            answers[code] = (0, subtitle_id)
+        elif verdict == "none":
+            answers[code] = (0, "")
+    return answers
+
+
+def _discard(path: str) -> None:
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
 def _clean(srt: str, language_code: str, log: Callable[[str], None]) -> int:
     """:func:`subtitleads.clean` with what it says put under the language."""
     return subtitleads.clean(srt, language_code,
@@ -655,7 +713,9 @@ def download_srt(file: str, language_code: str, providers: tuple,
                  max_sync_offset: str, max_sync_quality_offset: str,
                  ffsubsync_quality: str,
                  log: Callable[[str], None],
-                 timing: TimingReference | None = None) -> None:
+                 timing: TimingReference | None = None,
+                 imdb: str | None = None,
+                 first: tuple | None = None) -> None:
     """Fetch one missing subtitle for one movie and one language.
 
     A sidecar that already exists is left in place - that is the resume
@@ -675,16 +735,23 @@ def download_srt(file: str, language_code: str, providers: tuple,
     or the alignment it found was refused. It is synced to ``timing``, the
     film's own picture subtitle, where the film has one (see
     :func:`_sync_to_film`); one is read off the film here when none is handed in.
+
+    ``imdb``, when given, is the id the film is searched for by instead of the
+    one its name carries - the id a run has found for a film it has yet to
+    rename. ``first``, when given, is the first provider's answer to the first
+    try, already asked (see :func:`_first_tries`): its sidecar is that answer
+    rather than a resume, and the try is not asked again.
     """
     srt = _sidecar(file, language_code)
-    if os.path.isfile(srt):
+    if first is None and os.path.isfile(srt):
         return
     if timing is None:
         with TimingReference(file) as own:
             return download_srt(file, language_code, providers,
                                 max_sync_offset, max_sync_quality_offset,
-                                ffsubsync_quality, log, own)
-    imdb = film_imdb_id(file)
+                                ffsubsync_quality, log, own, imdb, first)
+    if imdb is None:
+        imdb = film_imdb_id(file)
     tries = 0
     already_there = False
     for provider in providers:
@@ -692,8 +759,12 @@ def download_srt(file: str, language_code: str, providers: tuple,
             break
         thrown: list = []
         while len(thrown) < TRIES_PER_PROVIDER and tries < TRIES_PER_LANGUAGE:
-            status, subtitle_id = _fetch(file, language_code, imdb, provider,
-                                         thrown)
+            if first is not None:
+                status, subtitle_id = first
+                first = None
+            else:
+                status, subtitle_id = _fetch(file, language_code, imdb,
+                                             provider, thrown)
             already_there = status == _ALREADY_THERE
             if already_there or not os.path.isfile(srt):
                 break
@@ -812,10 +883,51 @@ def download_subs(directory: str, providers: tuple,
 def _download_missing(movie: str, providers: tuple,
                       max_sync_offset: str, max_sync_quality_offset: str,
                       ffsubsync_quality: str, log: Callable[[str], None],
-                      timing: TimingReference) -> None:
-    for row in languages.LANGUAGES:
-        download_srt(movie, row.code2, providers, max_sync_offset,
-                     max_sync_quality_offset, ffsubsync_quality, log, timing)
+                      timing: TimingReference,
+                      imdb: str | None = None) -> None:
+    """Every language the film is missing, the first provider asked for all of
+    them in one call before each language goes on through its own tries."""
+    missing = [row.code2 for row in languages.LANGUAGES
+               if not os.path.isfile(_sidecar(movie, row.code2))]
+    if not missing or not providers:
+        return
+    if imdb is None:
+        imdb = film_imdb_id(movie)
+    firsts = (_first_tries(movie, missing, imdb, providers[0])
+              if len(missing) > 1 else {})
+    for code in missing:
+        # A subtitle the helper saved without saying so - it died after the
+        # save, say - is one nobody tested: it goes, and the language is tried
+        # on its own as if the call had never been made.
+        if code not in firsts:
+            _discard(_sidecar(movie, code))
+    for code in missing:
+        download_srt(movie, code, providers, max_sync_offset,
+                     max_sync_quality_offset, ffsubsync_quality, log, timing,
+                     imdb, firsts.get(code))
+
+
+def download_subs_for(films: list, providers: tuple, max_sync_offset: str,
+                      max_sync_quality_offset: str, ffsubsync_quality: str,
+                      log: Callable[[str], None]) -> list:
+    """:func:`download_subs` for films a run has found the ids of before it
+    has named them by them: ``films`` is [(movie, imdb id)], each searched for
+    by its id. Asks nothing of a film without one - those wait for the walk
+    over their names. Stops between films once an interrupt is asked for; the
+    films done, for the caller that wants to know which."""
+    done = []
+    for movie, imdb in films:
+        if safety.abort_requested():
+            break
+        if not imdb or not os.path.isfile(movie):
+            continue
+        log("Subtitles ahead for: " + movie)
+        with TimingReference(movie) as timing:
+            _download_missing(movie, providers, max_sync_offset,
+                              max_sync_quality_offset, ffsubsync_quality, log,
+                              timing, imdb)
+        done.append(movie)
+    return done
 
 
 def check_srt(file: str, srt: str, language_code: str, max_sync_offset: str,

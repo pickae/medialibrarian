@@ -84,6 +84,18 @@ def test_every_item_is_handed_out(tmp_path):
     assert sorted(path.name for path in tmp_path.iterdir()) == items
 
 
+def test_each_item_is_reported_once_its_worker_has_ended(tmp_path):
+    """Which is how a run learns that one film's work is done while the rest
+    is still going on."""
+    directory = str(tmp_path)
+    ended = []
+    workerpool.run(["a", "b", "c"], 2, _mark, lambda item: (directory, item),
+                   on_done=ended.append)
+    assert sorted(ended) == ["a", "b", "c"]
+    for item in ended:
+        assert (tmp_path / item).exists()
+
+
 def _census(directory: str, index: int) -> None:
     # Own pid included, which is why the count is of the children the parent
     # has, not of the siblings this one can see.

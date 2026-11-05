@@ -171,7 +171,7 @@ def exit_status(status: int = 0) -> int:
     return status
 
 
-def reap_one(running: list, wake=None, timeout=None) -> list:
+def reap_one(running: list, wake=None, timeout=None, on_done=None) -> list:
     """Block until one of the started workers has finished, and return the rest.
 
     The finished one is joined here, so a caller never has to remember to: an
@@ -181,7 +181,8 @@ def reap_one(running: list, wake=None, timeout=None) -> list:
 
     <wake>, a readable file descriptor, and <timeout> end the wait early too,
     with every worker still running handed back; draining <wake> is the
-    caller's.
+    caller's. <on_done>, when given, is called with each worker joined here
+    and the reason its exit was abnormal, "" for an ordinary one.
     """
     import multiprocessing.connection
 
@@ -196,7 +197,9 @@ def reap_one(running: list, wake=None, timeout=None) -> list:
     for worker, sentinel in zip(running, sentinels, strict=True):
         if sentinel in ready or not worker.is_alive():
             worker.join()
-            note_exit(worker)
+            reason = note_exit(worker)
+            if on_done is not None:
+                on_done(worker, reason)
         else:
             alive.append(worker)
     return alive
@@ -210,11 +213,13 @@ def join_all(running: list) -> None:
         note_exit(worker)
 
 
-def run(items, jobs: int, target, arguments) -> Outcome:
+def run(items, jobs: int, target, arguments, on_done=None) -> Outcome:
     """Every item through <target> in a worker process, <jobs> of them at once.
 
     ``arguments`` turns one item into that worker's argument tuple, which is
     what differs between the commands - the loop around it does not.
+    ``on_done``, when given, is called with each item once its worker has
+    ended, however it ended.
 
     An interrupt stops the DISPATCH, not the workers: nothing further is handed
     out, and the ones already running are waited for, so a half-written output
@@ -231,13 +236,22 @@ def run(items, jobs: int, target, arguments) -> Outcome:
     running: list = []
     outcome = Outcome()
     seen = len(failed_workers())
+    items_of: dict = {}
+
+    def ended(worker, _reason: str) -> None:
+        item = items_of.pop(id(worker), None)
+        if on_done is not None:
+            on_done(item)
+
     while pending or running:
         while pending and len(running) < jobs and not safety.abort_requested():
             item = pending.popleft()
-            running.append(start_worker(target, arguments(item), label(item)))
+            worker = start_worker(target, arguments(item), label(item))
+            items_of[id(worker)] = item
+            running.append(worker)
         if not running:
             break
-        running = reap_one(running)
+        running = reap_one(running, on_done=ended)
     outcome.failed = failed_workers()[seen:]
     outcome.aborted = bool(pending) or safety.abort_requested()
     return outcome

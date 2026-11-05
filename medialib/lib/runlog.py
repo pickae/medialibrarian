@@ -17,6 +17,7 @@ import contextlib
 import os
 import shutil
 import sys
+import threading
 import time
 
 __all__ = ["log", "say", "result", "detail", "warn", "error", "error_continued",
@@ -24,7 +25,7 @@ __all__ = ["log", "say", "result", "detail", "warn", "error", "error_continued",
            "settle_verbosity",
            "QUIET", "NORMAL", "VERBOSE", "counted_prefix", "film_header",
            "cpu_count", "can_lock", "have_flock", "settle_flock", "take_lock",
-           "warn_uncounted_progress"]
+           "warn_uncounted_progress", "held"]
 
 QUIET, NORMAL, VERBOSE = 0, 1, 2
 
@@ -35,6 +36,11 @@ VERBOSITY_VARIABLE = "LOG_VERBOSITY"
 # its own rather than on the end of the row's text.
 _row_writer = None
 _LEVEL_WORDS = {QUIET: "quiet", NORMAL: "", VERBOSE: "verbose"}
+
+# The lines a thread is holding back under :func:`held`, and the lock that
+# keeps one thread's block from landing in the middle of another's.
+_HELD = threading.local()
+_HELD_LOCK = threading.Lock()
 
 
 def can_lock() -> bool:
@@ -152,10 +158,39 @@ def _write(message: tuple, stream) -> None:
 
 def _emit(text: str, stream) -> None:
     out = sys.stderr if stream is None else stream
+    holding = getattr(_HELD, "lines", None)
+    if holding is not None and out is sys.stderr:
+        holding.append(text)
+        return
+    _emit_now(text, out)
+
+
+def _emit_now(text: str, out) -> None:
     if _row_writer is not None and out is sys.stderr:
         _row_writer(out, text)
     else:
         out.write(text)
+
+
+@contextlib.contextmanager
+def held():
+    """This thread's log lines held back and written as one block at the end.
+
+    For work that runs on a thread beside the run's own output: a film's lines
+    read as a block under its heading rather than threaded through another
+    film's. Each line keeps the time it was logged at.
+    """
+    if getattr(_HELD, "lines", None) is not None:
+        yield
+        return
+    _HELD.lines = []
+    try:
+        yield
+    finally:
+        lines, _HELD.lines = _HELD.lines, None
+        with _HELD_LOCK:
+            for text in lines:
+                _emit_now(text, sys.stderr)
 
 
 def log(*message: object, stream=None) -> None:
