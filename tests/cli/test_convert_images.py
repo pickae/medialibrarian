@@ -648,7 +648,9 @@ class TestATrimThatCannotBeMeasured:
     gets when it cannot be measured at all."""
 
     @pytest.mark.parametrize("answer", ["", "not a size", "800 tall"])
-    def test_the_page_is_converted_whole(self, tmp_path, answer):
+    def test_the_page_is_converted_whole(self, tmp_path, answer, monkeypatch):
+        # The encode is stood in for, so the image it would write is too.
+        monkeypatch.setattr(ci, "_written", lambda path: True)
         counters = tmp_path / "counters"
         counters.mkdir()
         state = _run()
