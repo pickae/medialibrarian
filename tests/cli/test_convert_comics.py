@@ -621,3 +621,115 @@ class TestThroughputInTheClosingReport:
 
     def test_a_side_never_timed_says_nothing(self):
         assert cc._megapixels_per_second(1_000_000, 0.0) == ""
+
+
+def _zip_named(path, names=("01.jpg",)):
+    with zipfile.ZipFile(str(path), "w") as packed:
+        for name in names:
+            packed.writestr(name, "x")
+    return path
+
+
+class TestTheContainerIsWhatItsBytesSay:
+    """A .cbr that is a zip, and a .cbz that is a RAR: common in the wild,
+    since every reader opens either."""
+
+    def test_a_zip_called_cbr_is_a_zip(self, tmp_path):
+        assert cc.comic_container(str(_zip_named(tmp_path / "b.cbr"))) == "zip"
+
+    def test_a_rar_called_cbz_is_a_rar(self, tmp_path):
+        book = tmp_path / "b.cbz"
+        book.write_bytes(b"Rar!\x1a\x07\x00 rest")
+        assert cc.comic_container(str(book)) == "rar"
+
+    def test_unrecognised_bytes_fall_back_to_the_extension(self, tmp_path):
+        book = tmp_path / "b.cb7"
+        book.write_bytes(b"garbage")
+        assert cc.comic_container(str(book)) == "7z"
+
+    def test_a_pdf_is_no_container(self, tmp_path):
+        book = tmp_path / "b.pdf"
+        book.write_bytes(b"PK\x03\x04")
+        assert cc.comic_container(str(book)) == ""
+
+    def test_the_extractors_needed_follow_the_contents(self, tmp_path):
+        _zip_named(tmp_path / "b.cbr")
+        assert cc.containers_held(str(tmp_path)) == {"zip"}
+
+    def test_a_zip_called_cbr_is_unpacked_by_unzip(self, tmp_path, stub_bin):
+        _stub(str(stub_bin), "unzip", '''
+dest=""; prev=""
+for a in "$@"; do [[ "$prev" == "-d" ]] && dest="$a"; prev="$a"; done
+printf a > "$dest/01.jpg"
+''')
+        _stub(str(stub_bin), "unrar", "exit 9\n")
+        destination = tmp_path / "work" / "b.cbr"
+        cc.extract(str(_zip_named(tmp_path / "b.cbr")), str(destination), 2960)
+        assert (destination / "01.jpg").exists()
+
+
+class TestTheInputIsRenamedToWhatItIs:
+    @pytest.fixture
+    def renamed(self, tmp_path):
+        library = tmp_path / "in"
+        library.mkdir()
+        _zip_named(library / "Zip.cbr")
+        (library / "Rar.cbz").write_bytes(b"Rar!\x1a\x07\x00 rest")
+        _zip_named(library / "Right.cbz")
+        (library / "Unknown.cbr").write_bytes(b"garbage")
+        _zip_named(library / "Taken.cbr")
+        _zip_named(library / "Taken.cbz")
+        skips = cc.safety.SkipLog()
+        cc.name_by_content(str(library), skips)
+        return sorted(os.listdir(str(library)))
+
+    @pytest.mark.parametrize("name", ["Zip.cbz", "Rar.cbr", "Right.cbz",
+                                      "Unknown.cbr"])
+    def test_each_ends_in_what_it_is_or_what_it_said(self, renamed, name):
+        assert name in renamed
+
+    def test_a_name_already_taken_is_left_alone(self, renamed):
+        assert "Taken.cbr" in renamed and "Taken.cbz" in renamed
+
+
+class TestMacResourceForksAreNotPages:
+    @pytest.fixture
+    def book(self, tmp_path):
+        destination = tmp_path / "work" / "book.cbz"
+        archive = _zip_named(tmp_path / "book.cbz", (
+            "sub/01.jpg", "__MACOSX/sub/._01.jpg", "._02.jpg", "02.jpg"))
+        cc.extract(str(archive), str(destination), 2960)
+        return destination
+
+    def test_only_the_pages_are_left(self, book):
+        assert sorted(os.listdir(str(book))) == ["01.jpg", "02.jpg"]
+
+
+class TestARefusedBookStopsAtTheUnpack:
+    """Refused before an unpacker runs, it gets no work folder - so it is a
+    book with no pages, not an empty folder sent on to be converted."""
+
+    def test_no_folder_is_made(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(cc.archives, "unsafe_members",
+                            lambda *a: [("b.cbr", "damaged")])
+        monkeypatch.setattr(cc.runlog, "error", lambda *a, **k: None)
+        destination = tmp_path / "work" / "b.cbr"
+        assert cc.extract(str(_zip_named(tmp_path / "b.cbr")),
+                          str(destination), 2960) is None
+        assert not destination.exists()
+
+    def test_the_book_is_not_prepared(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(cc.archives, "unsafe_members",
+                            lambda *a: [("Book.cbr", "damaged")])
+        monkeypatch.setattr(cc.runlog, "error", lambda *a, **k: None)
+        library = tmp_path / "in" / "Series"
+        library.mkdir(parents=True)
+        _zip_named(library / "Book.cbr")
+        counters = tmp_path / "counters"
+        counters.mkdir()
+        state = cc.Run(in_path=str(tmp_path / "in"),
+                       temp_path=str(tmp_path / "temp"),
+                       avif_path=str(tmp_path / "avif"), max_res=2960,
+                       counters=cc.Counters(str(counters)))
+        assert state.prepare_book("Series/Book.cbr" + cc.UNIT
+                                  + "Book.cbz") is None
