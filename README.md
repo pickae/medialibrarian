@@ -14,10 +14,6 @@ the per-machine files — the `data/` tables, the `logs/` logs — live under
 `~/.local/share/medialib` (or `$XDG_DATA_HOME/medialib` if it is set); the
 environment variable `CLI_SCRIPT_DIR` points them somewhere else.
 
-Heavy intermediate work is kept in RAM (`/dev/shm` / tmpfs) wherever possible, so
-only final outputs are written back to disk. Each run gets a scratch directory of
-its own in there, so several can run at once without sharing one.
-
 > **Platform:** these target **Linux**. **macOS** support is **aspirational**:
 > everything is written to work there, but no macOS machine has run it yet, so
 > treat it as untested rather than as broken (see
@@ -25,9 +21,35 @@ its own in there, so several can run at once without sharing one.
 > way to run them. Native Windows is **experimental for now**: the tool-free
 > cases import and run there, but the commands that drive the media tools and
 > POSIX coreutils expect a POSIX host. Neither Windows nor macOS has a
-> RAM-backed filesystem, so the scratch above lands in `%TEMP%` / `$TMPDIR` on a
+> RAM-backed filesystem, so the RAM scratch described below lands in `%TEMP%` / `$TMPDIR` on a
 > normal disk; a RAM disk mounted by hand works if `ramScratchBase` points at
 > it.
+
+## Built to use the whole machine
+
+**These commands are written for an enthusiast desktop, and try to keep all of
+it busy** — a many-core CPU, a large NVIDIA GPU, plenty of RAM, fast disks and a
+network connection — rather than leaving most of it idle while one part works:
+
+- **GPU first, CPU as the fallback.** Where a job has a GPU road, it takes it:
+  AVIF pages and images go to the card through av1gpu, video can encode on
+  NVENC and upscale on TensorRT, whisper transcribes on CUDA. Without the GPU,
+  or for the pieces it declines, the same job runs on the CPU and still
+  finishes.
+- **Different resources at the same time.** Work that leans on different parts
+  of the machine is overlapped instead of queued: GPU transcription beside CPU
+  transcodes, remuxes to disk while the next film is still encoding, slow
+  network lookups on a background thread while the local work carries on (see
+  how [`ingest-movies`](docs/commands/ingest-movies.md) does it).
+- **Parallel where it pays.** CPU-bound work is spread over the cores in jobs
+  sized to them, and kept narrower where it would only fight a GPU job or
+  another encoder for the same cores.
+- **RAM before disk.** Heavy intermediate work is kept in RAM (`/dev/shm` /
+  tmpfs) wherever possible, so only final outputs are written back to disk.
+  Each run gets a scratch directory of its own in there, so several can run at
+  once without sharing one.
+
+A smaller machine runs them too — just with the CPU roads and less overlap.
 
 ## At a glance
 
@@ -116,10 +138,11 @@ option can never change what a command you already type means.
 - `convert-video -u` additionally needs an NVIDIA GPU and a VapourSynth +
   TensorRT environment of its own, one piece of which has to be built (see
   [`convert-video`](docs/commands/convert-video.md)).
-- `convert-images` encodes AVIF on an NVIDIA GPU when
-  [av1gpu](https://github.com/maddog107/av1gpu) is installed, which has to be
-  built; without it everything is encoded on the CPU (see
-  [`convert-images`](docs/commands/convert-images.md#on-the-gpu)).
+- The GPU road for AVIF in `convert-images` and `convert-comics` is
+  [av1gpu](https://github.com/maddog107/av1gpu), which has to be built (see
+  [`convert-images`](docs/commands/convert-images.md#on-the-gpu)); without it
+  they take the CPU road described under
+  [Built to use the whole machine](#built-to-use-the-whole-machine).
 
 What a run does when one of these is missing, what does not work on a Mac yet,
 and which ffmpeg build a run picks are in
