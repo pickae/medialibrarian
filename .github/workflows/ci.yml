@@ -122,13 +122,8 @@ jobs:
   # the one that has the old one to fall back FROM.
   macos:
     runs-on: macos-latest
-    # Reporting rather than gating, until it has been green once: the macOS
-    # support was written without a Mac to try it on, so the first runs are
-    # findings and not regressions. Take this line out the day it passes -
-    # a job that cannot fail is a job nobody reads.
-    continue-on-error: true
-    # `continue-on-error` is about the VERDICT and says nothing about the clock,
-    # and this is the job with a clock worth bounding: its first run spent 47
+    # Gating like the rest: a job that cannot fail is a job nobody reads.
+    # This is also the job with a clock worth bounding: its first run spent 47
     # minutes in pytest against the same suite Linux finishes in four and a
     # half. It was slow rather than stuck - it did reach the end and report -
     # so the limit here is a runaway guard and NOT a target, and it is set well

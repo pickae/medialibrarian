@@ -176,8 +176,7 @@ quietly, so a green run always means the suite really ran.
 
 **macOS** is a POSIX host, so the whole default run is expected to work there —
 bash stubs, symlinks, signals and all — and CI runs it (`macos` in
-`.github/workflows/ci.yml`, reporting rather than gating until it has been green
-once). What it does *not* have is glibc, and three cases turn on that: the
+`.github/workflows/ci.yml`, gating like the Linux jobs). What it does *not* have is glibc, and three cases turn on that: the
 `C.UTF-8` locale, which `conftest.py` assembles from `LC_COLLATE=C` and a UTF-8
 `LC_CTYPE` instead; `iconv`, which is GNU libiconv there and spells accents out
 rather than dropping them, so `normalize_title` folds in Python (one case holds
