@@ -38,6 +38,7 @@ and none is unpacked while less than :data:`RAM_RESERVE` is left.
 from __future__ import annotations
 
 import collections
+import functools
 import json
 import os
 import shutil
@@ -89,6 +90,11 @@ def _written(path: str) -> bool:
         return bool(path) and os.path.getsize(path) > 0
     except OSError:
         return False
+
+
+def _unwritten(path: str) -> str:
+    """Why an encode that exited 0 still failed, or "" when it did not."""
+    return "" if _written(path) else "exited 0 but wrote no image"
 
 
 class _Book:
@@ -366,8 +372,7 @@ class Lane:
             made = toolcapture.run(
                 NICE + entry["cpu"], label=os.path.basename(source or page),
                 tool=os.path.basename(entry["cpu"][0]) if entry["cpu"] else "",
-                verify=lambda page=page: "" if _written(page)
-                else "exited 0 but wrote no image")
+                verify=functools.partial(_unwritten, page))
             with self.room:
                 if not made.ok and not safety.abort_requested():
                     self.missing[book.folder] = \
