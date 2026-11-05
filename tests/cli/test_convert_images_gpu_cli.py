@@ -39,6 +39,11 @@ _CONVERT = '''
 src=""
 for a in "$@"; do [[ -f "$a" ]] && { src="$a"; break; }; done
 out="${!#}"
+# The lane's trim: the box as identify gives it, then the four corners.
+case "$*" in *"%@"*)
+    case "${src##*/}" in *margin*) echo "900x1400+50+50" ;;
+        *) echo "1000x1500+0+0" ;; esac
+    printf "srgb(255,255,255) 100\\n%.0s" 1 2 3 4; exit 0 ;; esac
 [ "$out" = "info:" ] && {
     printf "srgb(255,255,255) 100\\n%.0s" 1 2 3 4; exit 0; }
 echo "CPU ${src##*/}" > "$out"

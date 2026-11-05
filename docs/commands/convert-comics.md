@@ -31,7 +31,7 @@ With no options, a run:
    archive under the wrong extension is renamed in the input** — a zip called
    `.cbr` becomes `.cbz`, a RAR called `.cbz` becomes `.cbr`. The `__MACOSX/`
    and `._` files a Mac leaves in an archive are not pages and are dropped.
-2. The pages are converted to AVIF, trimmed on the sides, skipped if empty, and their names are cleaned and numbered.
+2. The pages are converted to AVIF, trimmed on the sides, skipped if empty; each page keeps the name it had in the archive.
 3. The finished folder of pages is zipped back into one **stored** (level 0 —
    AVIF does not compress further) `.cbz` in its mirrored parent folder.
 

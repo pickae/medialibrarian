@@ -359,6 +359,35 @@ class TestTheCornerProbeAgainstImageMagick:
         assert bordered.stdout.decode() == colour
 
 
+class TestTheBoxAndCornersInOneCall:
+    """The lane's single decode answers what the trim box and the corner probe
+    each answered on their own, for a page in each colour model."""
+
+    @pytest.mark.parametrize("colorspace", ["sRGB", "Gray", "CMYK"])
+    def test_same_answers_as_two_calls(self, tmp_path, colorspace):
+        page = tmp_path / "page.jpg"
+        subprocess.run(imagemagick.convert_argv(
+            ["-size", "200x300", "xc:#f5ecd7", "-fill", "#2050a0",
+             "-draw", "rectangle 20,30 170,260", "-colorspace", colorspace,
+             str(page)]), check=True)
+        run = ci.Run.__new__(ci.Run)
+        run.options = {"fuzzCommand": "10%"}
+        box, corners = run._box_and_corners(str(page))
+        alone = subprocess.run(imagemagick.identify_argv(
+            ["-fuzz", "10%", "-format", "%@", str(page)]),
+            stdout=subprocess.PIPE, check=True).stdout.decode()
+        assert box == ci._parse_box(alone)
+        assert box is not None and box[2:] != (0, 0)
+        assert corners == ci.Run._identify_corner(None, str(page))
+
+    def test_an_unreadable_page_answers_nothing(self, tmp_path):
+        page = tmp_path / "page.jpg"
+        page.write_bytes(b"not a picture")
+        run = ci.Run.__new__(ci.Run)
+        run.options = {"fuzzCommand": "10%"}
+        assert run._box_and_corners(str(page)) == (None, None)
+
+
 def test_the_environment_really_is_the_one_being_claimed():
     """A guard on the tier itself: these cases mean nothing if they quietly
     ran against no tool at all."""
