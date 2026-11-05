@@ -35,15 +35,24 @@ processes, the same abnormal exits counted and said out loud, the same
 Outcome. An interrupt stops the DISPATCH - the preparation included, which is
 work as much as the transcription it prepares - while the workers already
 running are waited for, the way :func:`workerpool.run` ends.
+
+A run whose items are worked one at a time, in this process, has the same
+shape when each item is itself parallel inside - convert-video encodes one
+film at a time across every chunk worker or NVENC engine, and preparing the
+next film is probes of its own. :func:`ahead` is the queue for that run: the
+same producer on the same kind of thread, topping up the same kind of buffer,
+with the items handed to the caller's own loop instead of to forked workers.
 """
 
+import collections
 import heapq
 import os
 import threading
+import time
 
 from medialib.lib import safety, workerpool
 
-__all__ = ["run"]
+__all__ = ["ahead", "run"]
 
 # How often a wait with nothing to wake it looks at the abort flag.
 _POLL_SECONDS = 0.5
@@ -218,6 +227,107 @@ def run(producer, jobs: int, target, arguments, buffer_factor: int = 2,
     with room:
         outcome.aborted = bool(heap) or safety.abort_requested()
     return outcome
+
+
+def ahead(producer, buffer: int = 2, log=None, discard=None):
+    """The items of <producer>, prepared up to <buffer> ahead of the caller.
+
+    The serial twin of :func:`run`: <producer> yields ``(item, size)`` the same
+    way and is consumed on a thread of its own, but the items are handed out
+    here, one at a time, for the caller to work in its own process. The thread
+    keeps up to <buffer> prepared items waiting and prepares the next as soon
+    as one is taken, so a preparation that is slow for one item - or a stretch
+    of items it prepares only to pass over - is spent while the caller is still
+    busy with an earlier one rather than in front of the next.
+
+    The items come out in the order they were prepared and <size> is not used:
+    with one item worked at a time the wall clock is their sum whatever the
+    order, and a run that works through a folder is easier to follow in the
+    folder's own order.
+
+    The generator ends when the producer does, or on an interrupt, and its end
+    - an interrupt, the caller breaking off, or an error - waits for the
+    producer to stop: nothing the preparation registers may land after the
+    run's cleanup. What was prepared and never handed out is given to
+    <discard>, one item at a time, so whatever it holds is let go of. An
+    exception the producer raised is raised here, where the item it was
+    preparing would have been handed out.
+
+    <log> is the run's logger, for the one line the queue says itself: how long
+    the caller waited on an empty buffer, said once the item it waited for
+    arrives.
+    """
+    if log is None:
+        log = _say_nothing
+    if buffer < 1:
+        buffer = 1
+
+    held: collections.deque = collections.deque()
+    room = threading.Condition()
+    done = False
+    stopping = False
+    failure: BaseException | None = None
+
+    def feed() -> None:
+        nonlocal done, failure
+        try:
+            while True:
+                with room:
+                    while (len(held) >= buffer and not stopping
+                           and not safety.abort_requested()):
+                        room.wait(_POLL_SECONDS)
+                    if stopping or safety.abort_requested():
+                        break
+                try:
+                    item, _size = next(producer)
+                except StopIteration:
+                    break
+                with room:
+                    held.append(item)
+                    room.notify_all()
+        except BaseException as raised:  # noqa: BLE001 - re-raised by ahead()
+            failure = raised
+        finally:
+            with room:
+                done = True
+                room.notify_all()
+
+    feeder = threading.Thread(target=feed, name="dynamicqueue-ahead",
+                              daemon=True)
+    feeder.start()
+    handed = 0
+    try:
+        while True:
+            waited_from = 0.0
+            with room:
+                while not held and not done and not safety.abort_requested():
+                    if not waited_from:
+                        waited_from = time.monotonic()
+                    room.wait(_POLL_SECONDS)
+                if safety.abort_requested():
+                    return
+                if not held:
+                    if failure is not None:
+                        raise failure
+                    return
+                item = held.popleft()
+                room.notify_all()
+            # The first item is the run's start, which waits on a preparation
+            # by definition; any later wait is the caller idle on the buffer.
+            waited = time.monotonic() - waited_from if waited_from else 0.0
+            if handed and waited >= 1:
+                log("Queue: buffer ran dry, waited %d s for the next item's "
+                    "preparation" % waited)
+            handed += 1
+            yield item
+    finally:
+        with room:
+            stopping = True
+            room.notify_all()
+        feeder.join()
+        if discard is not None:
+            while held:
+                discard(held.popleft())
 
 
 def _nudge(fd: int) -> None:
