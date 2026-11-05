@@ -426,6 +426,35 @@ class TestTheClosingReport:
         assert "repackaged" not in out
 
 
+class TestTheQueueIsFedOnlyUnfinishedBooks:
+    """The finished books are sorted out by their final names before the
+    queue starts, so it never hands one to a worker."""
+
+    def _split(self, tmp_path, converted=()):
+        out = tmp_path / "out"
+        (out / "Series").mkdir(parents=True)
+        (out / "Series" / "Old.cbz").write_bytes(b"")
+        state = cc.Run(out_path=str(out), converted=set(converted))
+        records = [source + cc.UNIT + name for source, name in (
+            ("Series/old name.cbr", "Series/Old.cbz"),
+            ("Renamed.cbz", "Clean.cbz"),
+            ("New.cbz", "New.cbz"))]
+        return cc.split_packaged(state, records)
+
+    def test_a_book_whose_final_name_is_on_disk_is_set_apart(self, tmp_path):
+        pending, packaged = self._split(tmp_path)
+        assert [r.partition(cc.UNIT)[2] for r in packaged] == ["Series/Old.cbz"]
+        assert [r.partition(cc.UNIT)[2] for r in pending] == [
+            "Clean.cbz", "New.cbz"]
+
+    def test_a_book_recorded_as_a_cbzs_source_is_set_apart(self, tmp_path):
+        """Whatever it would be called this time."""
+        pending, packaged = self._split(tmp_path, converted={"Renamed.cbz"})
+        assert [r.partition(cc.UNIT)[0] for r in packaged] == [
+            "Series/old name.cbr", "Renamed.cbz"]
+        assert [r.partition(cc.UNIT)[0] for r in pending] == ["New.cbz"]
+
+
 class TestThePdfVerdictLine:
     """The numbers a verdict was reached on, and none where there were none."""
 
