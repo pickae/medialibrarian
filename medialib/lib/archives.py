@@ -29,7 +29,7 @@ import tarfile
 import tempfile
 import zipfile
 
-from medialib.lib import treewalk
+from medialib.lib import errorlog, toolcapture, treewalk
 from medialib.lib.enums import ARCHIVE_EXTENSIONS, shell_lower
 
 __all__ = [
@@ -154,8 +154,9 @@ def archive_shadowed_by_folder(file: str, base: str = "") -> bool:
 
 def _run(command) -> int:
     """Run a tool with stdout dropped, stderr kept (it is the one message an
-    archive that will not open is worth), and the tool's exit status returned."""
-    return subprocess.run(command, stdout=subprocess.DEVNULL).returncode
+    archive that will not open is worth) - replayed under the error and kept
+    in the error log - and the tool's exit status returned."""
+    return toolcapture.watched(command, stdout=subprocess.DEVNULL).returncode
 
 
 def _capture(command) -> str:
@@ -587,8 +588,14 @@ def extract_archive(file: str, dest: str) -> int:
     ext = archive_extension_of(file)
     if not ext or not os.path.isdir(dest):
         return 1
+    # What is unpacked into the scratch names the archive it came from, for an
+    # error about a page or a track inside it.
+    errorlog.note_origin(dest, file)
     refused = unsafe_members(file, ext)
     if refused:
+        errorlog.record("error", "refusing to unpack an archive whose members "
+                        "write outside its folder: %s" % refused[0][0],
+                        files=[file], stack=False)
         sys.stderr.write('\nRefusing to unpack "%s": an archive may not write '
                          "outside the folder it is unpacked into.\n" % file)
         for name, reason in refused[:10]:

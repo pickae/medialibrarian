@@ -27,7 +27,7 @@ _IDENTIFY_FLAT = 'echo "1000 1500"'
 
 # Write the output - the last argument, minus a trailing ">" and a leading
 # "miff:" for the in-memory trim target - starting with a line naming the page it
-# came from, then padded past the 10k below which a page reads as a broken encode.
+# came from, then padded past the 10k below which a page reads as an empty page.
 _CONVERT_STAMPING = '''
 src=""
 for a in "$@"; do [[ -f "$a" ]] && { src="$a"; break; }; done
@@ -276,7 +276,7 @@ class TestThePageStatistics:
       *-plain.jpg   trims to nothing         -> converted
       *-trim.jpg    trims 4% off each edge   -> trimmed
       *-blank.jpg   trims away past 99%      -> blank, dropped by convert-images
-      *-broken.jpg  converts to a 1k page    -> converted, then dropped here
+      *-empty.jpg   converts to a 1k page    -> converted, then dropped here
     """
 
     # The page's original size is always 1000x1500; what its TRIM came out as
@@ -302,8 +302,8 @@ esac
     # Three jobs in one, as ImageMagick's own is: asked for "info:" it samples the
     # four corners' colour and lightness - a white margin, so a trimmable page
     # really is trimmed - and otherwise it writes the output stamped with the
-    # page it came from. A *-broken.jpg is written far below the minimum page
-    # size, which is how a truncated encode presents itself.
+    # page it came from. A *-empty.jpg is written far below the minimum page
+    # size, which is how an empty page comes out.
     _CONVERT = '''
 for a in "$@"; do [[ "$a" == "info:" ]] && {
     printf "srgb(255,255,255) 100\\n%.0s" 1 2 3 4; exit 0; }; done
@@ -313,7 +313,7 @@ out="${!#}"; out="${out%\\>}"; out="${out#miff:}"
 name="${src##*/}"
 [[ "$name" == trimmed_* ]] && name="$(head -1 "$src")"
 size=12288
-[[ "$name" == *-broken.jpg ]] && size=1024
+[[ "$name" == *-empty.jpg ]] && size=1024
 { printf "%s\\n" "$name"; head -c "$size" /dev/zero | tr "\\0" a; } > "$out"
 '''
 
@@ -327,7 +327,7 @@ size=12288
         # as "Mixed.cbz"/"Clean.cbz" and these assertions would be about naming.
         _cbz(comics.inputs, "Mixture.cbz",
              {"01-plain.jpg": "a", "02-trim.jpg": "b",
-              "03-blank.jpg": "c", "04-broken.jpg": "d"})
+              "03-blank.jpg": "c", "04-empty.jpg": "d"})
         _cbz(comics.inputs, "Uniform.cbz",
              {"01-plain.jpg": "e", "02-plain.jpg": "f"})
         done = comics.run("convert-comics", comics.inputs, comics.outputs)
@@ -343,8 +343,8 @@ size=12288
             log, re.M), log
 
     def test_one_share_line_per_category_that_occurred(self, run):
-        """4 converted (two plain in one book, two in the other, the broken one
-        among them), 1 trimmed, 1 blank - and the broken page reported again as
+        """4 converted (two plain in one book, two in the other, the empty one
+        among them), 1 trimmed, 1 blank - and the empty page reported again as
         the subset of "converted" that did not survive, since the encoder that
         wrote it counted it as converted."""
         _, log = run
@@ -354,7 +354,7 @@ size=12288
             "converted: 4/6 (66.7%)",
             "trimmed: 1/6 (16.7%)",
             "blank, dropped: 1/6 (16.7%)",
-            "of those broken, dropped: 1/6 (16.7%)"]
+            "of those empty, dropped: 1/6 (16.7%)"]
 
     def test_a_category_nothing_landed_in_is_left_out(self, run):
         """A run of ordinary comics must not carry lines of zeroes."""
@@ -363,7 +363,7 @@ size=12288
         assert "not found, failed" not in log
 
     def test_the_partitioning_categories_add_up_to_the_total(self, run):
-        """The broken line is deliberately not in this sum."""
+        """The empty line is deliberately not in this sum."""
         _, log = run
         counted = sum(int(n) for n in re.findall(
             r"^    (?:converted|trimmed|blank, dropped|already done, skipped"
@@ -371,7 +371,7 @@ size=12288
         assert counted == 6
 
     def test_the_archives_hold_exactly_the_pages_the_report_kept(self, run):
-        """The blank page was dropped by the encoder and the broken one here,
+        """The blank page was dropped by the encoder and the empty one here,
         and both books are packaged either way."""
         comics, _ = run
         assert _entries(comics.outputs / "Mixture.cbz") == ["1.avif", "2.avif"]

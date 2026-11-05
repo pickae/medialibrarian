@@ -35,6 +35,7 @@ from medialib.lib import (
     cuechapters,
     durationcheck,
     enums,
+    errorlog,
     ffmpegselect,
     formatting,
     imagemagick,
@@ -999,15 +1000,10 @@ def _bytes(text: str) -> bytes:
 
 
 def _run(argv: list) -> int:
-    """One tool, its own output silenced. A tool that is not there is a 127
-    rather than an exception."""
-    try:
-        done = subprocess.run(argv, stdin=subprocess.DEVNULL,
-                              stdout=subprocess.DEVNULL,
-                              stderr=subprocess.DEVNULL)
-    except OSError:
-        return 127
-    return done.returncode
+    """One tool, its own output kept for the replay and the error log when
+    it fails. A tool that is not there is a 127 rather than an exception."""
+    return toolcapture.watched(argv, on_missing=127, stdin=subprocess.DEVNULL,
+                               stdout=subprocess.DEVNULL).returncode
 
 
 def _tool(argv: list, label: str):
@@ -1258,7 +1254,8 @@ def _run_pool(state, method: str, items: list, jobs: int) -> None:
         for item in items:
             if safety.abort_requested():
                 return
-            getattr(state, method)(item)
+            with errorlog.work_item(item):
+                getattr(state, method)(item)
         return
 
     workerpool.run(items, jobs, _in_worker, lambda item: (state, method, item))
@@ -1274,8 +1271,8 @@ def main(argv: list, program: str = "ingest-music",
         sys.stdout.write(clioptions.help_text(declaration))
         return 0
     except clioptions.UsageError as error:
-        sys.stderr.write(clioptions.usage_error_text(declaration,
-                                                     error.message))
+        clioptions.refuse_usage(declaration,
+                                error.message)
         return 1
 
     if clioptions.args_out_of_range(len(result.positionals), 2, None):
@@ -1299,8 +1296,8 @@ def main(argv: list, program: str = "ingest-music",
     os.environ["LOG_TIMESTAMPS"] = "1"
 
     if not os.path.isdir(download_dir):
-        sys.stderr.write(clioptions.missing_dir_text(declaration,
-                                                     download_dir))
+        clioptions.refuse_missing_dir(declaration,
+                                      download_dir)
         return 1
 
     # Three folders, so three ways to nest one inside another, and all three
@@ -1674,6 +1671,7 @@ def _run_child(command: str, argv: list, script_dir: str) -> int:
 
 def cli(argv: list | None = None) -> int:
     settings.load()
+    errorlog.start_run(argv)
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, commands.program_name(__spec__.name),

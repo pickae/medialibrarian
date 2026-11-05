@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import pytest
 
-from medialib.lib import av1gpu
+from medialib.lib import av1gpu, errorlog
 
 
 class TestTheSmallPreset:
@@ -183,9 +183,12 @@ cp "$list" "$(dirname "$0")/list"
 while IFS= read -r line; do
     input=${line%%$'\t'*}
     target=$(readlink "$input")
-    case "${target##*/}" in decline*) continue ;; esac
+    case "${target##*/}" in
+        decline*) echo "skipped ${target##*/}: not decodable" >&2; continue ;;
+    esac
     echo "GPU ${target##*/}" > "$out/${input##*/}.avif"
 done < "$list"
+echo "batch finished"
 [ -n "$STUB_SIGNAL" ] && kill -"$STUB_SIGNAL" $$
 exit "${STUB_STATUS:-0}"
 '''
@@ -238,6 +241,24 @@ class TestAChunk:
         done, _ = chunk()
         assert 2 not in done
         assert not (chunk.outputs / "decline.avif").exists()
+
+    def test_what_it_skipped_is_kept_and_named_by_its_book(
+            self, chunk, tmp_path, monkeypatch, capfd):
+        """A page left unwritten is warned about and kept in the error log,
+        named by the comic it was unpacked from, with what av1gpu said."""
+        monkeypatch.setenv("CLI_SCRIPT_DIR", str(tmp_path / "home"))
+        monkeypatch.setattr(errorlog, "_ORIGINS", {})
+        errorlog.note_origin(str(tmp_path / "in"), str(tmp_path / "Book.cbz"))
+        chunk()
+        err = capfd.readouterr().err
+        assert "WARNING: av1gpu left 1 of 3 image(s) unwritten" in err
+        assert "of Book.cbz - they go to the CPU" in err
+        (kept,) = (tmp_path / "home" / "logs" / errorlog.ERROR_DIR).iterdir()
+        text = kept.read_text(encoding="utf-8")
+        assert "WARNING  tool-skipped" in text
+        assert "made from %s" % (tmp_path / "Book.cbz") in text
+        assert "  | skipped decline.png: not decodable" in text
+        assert "  | batch finished" in text     # its stdout too
 
     def test_no_partial_name_is_left_behind(self, chunk):
         chunk()

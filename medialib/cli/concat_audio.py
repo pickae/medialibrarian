@@ -36,6 +36,7 @@ from medialib.lib import (
     cuechapters,
     durationcheck,
     enums,
+    errorlog,
     ffmpegselect,
     formatting,
     imagemagick,
@@ -894,7 +895,8 @@ def _run_pool(state: Run, pairs: list, jobs: int) -> None:
         for input_path, output_path in pairs:
             if safety.abort_requested():
                 return
-            state.process_subfolder(input_path, output_path)
+            with errorlog.work_item(input_path):
+                state.process_subfolder(input_path, output_path)
         return
 
     workerpool.run(pairs, jobs, _in_worker,
@@ -931,8 +933,8 @@ def main(argv: list, program: str = "concat-audio",
         sys.stdout.write(clioptions.help_text(declaration))
         return 0
     except clioptions.UsageError as error:
-        sys.stderr.write(clioptions.usage_error_text(declaration,
-                                                     error.message))
+        clioptions.refuse_usage(declaration,
+                                error.message)
         return 1
 
     if clioptions.args_out_of_range(len(result.positionals), 2, None):
@@ -945,7 +947,7 @@ def main(argv: list, program: str = "concat-audio",
     script_dir = script_dir or commands.script_dir()
 
     if not os.path.isdir(input_dir):
-        sys.stderr.write(clioptions.missing_dir_text(declaration, input_dir))
+        clioptions.refuse_missing_dir(declaration, input_dir)
         return 1
 
     # The two folders, checked before anything runs: the concatenated book is
@@ -1168,6 +1170,7 @@ def _holds_mp3(input_dir: str) -> bool:
 
 def cli(argv: list | None = None) -> int:
     settings.load()
+    errorlog.start_run(argv)
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, program=commands.program_name(__spec__.name),

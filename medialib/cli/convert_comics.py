@@ -56,6 +56,7 @@ from medialib.lib import (
     dynamicqueue,
     encodercalibration,
     enums,
+    errorlog,
     gpulane,
     imagebitrate,
     imagemagick,
@@ -122,9 +123,9 @@ OPT_VARS = "l:quality u:chroma s:speedPreset m:maxRes f:fuzz"
 OPT_COLUMN = 20
 OPT_LONG = "h:help l:quality u:chroma s:speed m:max-resolution f:fuzz"
 
-# The smallest an AVIF page can plausibly be, in bytes. A conversion that
-# produced less than this produced no picture - a truncated or empty encode - and
-# the page is dropped rather than shipped inside the finished book.
+# The smallest an AVIF page can plausibly be, in bytes. A page that encodes to
+# less than this is an empty page - nothing on it worth a page in the book - and
+# it is dropped and counted as such. Not a failure: the encode did its job.
 MIN_PAGE_SIZE = 10 * 1024
 
 # How much of a book has to be starved before the book is left as it is, in
@@ -343,7 +344,7 @@ def extract(archive: str, destination: str, max_res: int):
             # Left alone to keep the library safe, which -q still says.
             runlog.error('not unpacking "%s": %s (%s)'
                          % (os.path.basename(archive), refused[0][1],
-                            refused[0][0]))
+                            refused[0][0]), files=[archive])
             return None
 
     if lowered.endswith(".cbr"):
@@ -575,9 +576,11 @@ def package_book(book_dir: str, out_path: str, out_rel: str,
         # on names would then write a second copy. A comment lives in the central
         # directory: it survives a rename, costs about 30 bytes, and is not an
         # entry, so no reader shows it as a page.
-        subprocess.run(["zip", "-z", "-q", staged],
-                       input=(source_archive + "\n").encode(),
-                       stdout=subprocess.DEVNULL)
+        toolcapture.watched(["zip", "-z", "-q", staged],
+                            input=(source_archive + "\n").encode(),
+                            stdout=subprocess.DEVNULL,
+                            skipped="the archive it came from could not be "
+                                    "written into %s" % os.path.basename(cbz))
 
         destination = os.path.dirname(cbz) or out_path
         os.makedirs(destination, exist_ok=True)
@@ -626,6 +629,17 @@ class Run:
         return state
 
     def prepare_book(self, record: str):
+        """The comic this is about, named for every error recorded meanwhile -
+        a page of it that fails in RAM, or in the convert-images it starts."""
+        with self._about(record):
+            return self._prepare_book(record)
+
+    def _about(self, record: str):
+        partial_path = record.partition(UNIT)[0]
+        return errorlog.working_on(os.path.join(self.in_path, partial_path),
+                                   item=partial_path)
+
+    def _prepare_book(self, record: str):
         """One book's preparation, in the RUN's process: the skip checks, the
         unpacking into RAM and the starved verdict, while the workers encode the
         books prepared before it. ``(item, size)`` for the queue, or None for a
@@ -664,8 +678,12 @@ class Run:
         self.counters.progress("Converting: %s"
                                % os.path.join(self.in_path, partial_path))
 
-        unpacked = extract(os.path.join(self.in_path, partial_path), book_temp,
-                           self.max_res)
+        # The pages unpacked into RAM, and the encodes made from them, name the
+        # comic they came from in any error about one of them.
+        source = os.path.join(self.in_path, partial_path)
+        errorlog.note_origin(book_temp, source)
+        errorlog.note_origin(os.path.join(self.avif_path, partial_path), source)
+        unpacked = extract(source, book_temp, self.max_res)
 
         if not os.path.isdir(book_temp):
             if unpacked is not None and not unpacked.ok:
@@ -689,7 +707,13 @@ class Run:
                    if entry.is_file())
         return (record, starved, measured), size
 
-    def finish_book(self, item: tuple) -> None:
+    def finish_book(self, item: tuple):
+        """The comic this is about, named for every error recorded meanwhile -
+        a page of it that fails in RAM, or in the convert-images it starts."""
+        with self._about(item[0]):
+            return self._finish_book(item)
+
+    def _finish_book(self, item: tuple) -> None:
         """One prepared book, in a worker: convert, number, zip, free.
 
         Under the lane the worker only sorts the pages: each one's encode,
@@ -716,8 +740,15 @@ class Run:
             return
         self.package_pages(item)
 
-    def package_pages(self, item: tuple) -> None:
-        """A converted book: drop its broken pages, number, zip, free."""
+    def package_pages(self, item: tuple):
+        """The comic this is about, named for every error recorded meanwhile -
+        a page of it that fails in RAM, or in the convert-images it starts."""
+        with self._about(item[0]):
+            return self._package_pages(item)
+
+    def _package_pages(self, item: tuple) -> None:
+        """A converted book: drop its empty pages, say which are missing,
+        number, zip, free."""
         record = item[0]
         partial_path, _, out_rel = record.partition(UNIT)
         book_temp = os.path.join(self.temp_path, partial_path)
@@ -730,11 +761,11 @@ class Run:
             shutil.rmtree(book_avif, ignore_errors=True)
             return
 
-        # The pages that came out broken, counted as they are dropped: this is the
-        # only place the run learns of them, because the converter counted such a
-        # page as converted - it wrote a file and exited 0 - and only its size
-        # afterwards says otherwise.
-        broken = 0
+        # The empty pages, counted as they are dropped: this is the only place
+        # the run learns of them, because the converter counted such a page as
+        # converted - it wrote a file and exited 0 - and only its size
+        # afterwards says it holds nothing.
+        empty = 0
         for parent, _dirs, names in os.walk(book_avif):
             for name in names:
                 if not name.endswith(".avif"):
@@ -743,11 +774,24 @@ class Run:
                 try:
                     if os.path.getsize(path) < MIN_PAGE_SIZE:
                         os.remove(path)
-                        broken += 1
+                        empty += 1
                 except OSError:
                     pass
-        if broken:
-            self.counters.bump("pagesBroken", broken)
+        if empty:
+            self.counters.bump("pagesEmpty", empty)
+
+        # The pages the lane could not encode at all - the card left them to
+        # the CPU, and the CPU wrote nothing - are missing from the book: an
+        # error, each one's encode already replayed and kept on its own.
+        missing = (self.lane.missing.pop(item[3], 0)
+                   if self.lane is not None and len(item) > 3 and item[3]
+                   else 0)
+        if missing:
+            self.counters.bump("pagesMissing", missing)
+            runlog.error("%d page(s) of %s could not be encoded and are "
+                         "missing from it" % (missing, file_name),
+                         kind="output-check",
+                         files=[os.path.join(self.in_path, partial_path)])
 
         if not _files_matching(book_avif, ("avif",)):
             self.counters.note("Skip (nothing converted): %s" % file_name,
@@ -862,7 +906,8 @@ def _run_pool(state: Run, method: str, items: list, jobs: int) -> None:
         for item in items:
             if safety.abort_requested():
                 return
-            getattr(state, method)(item)
+            with errorlog.work_item(item):
+                getattr(state, method)(item)
         return
 
     workerpool.run(items, jobs, _in_worker, lambda item: (state, method, item))
@@ -940,7 +985,7 @@ def _page_stats(stats_file: str) -> tuple:
     than to nothing, so a run in which every book was already on disk still lands
     on numbers.
     """
-    totals = [0] * 6
+    totals = [0] * 8
     books = 0
     try:
         with open(stats_file) as handle:
@@ -948,7 +993,7 @@ def _page_stats(stats_file: str) -> tuple:
                 if not line.strip():
                     continue
                 books += 1
-                for index, field in enumerate(line.split()[:6]):
+                for index, field in enumerate(line.split()[:8]):
                     try:
                         totals[index] += int(field)
                     except ValueError:
@@ -1020,19 +1065,23 @@ def footer(state: Run) -> None:
             runlog.say("\n")
             runlog.say("%d page(s) in %d converted book(s), %.3f seconds per "
                        "page\n" % (page_total, books, runtime / page_total))
-            # The five below partition the page total - the converter puts every
+            # The six below partition the page total - the converter puts every
             # page in exactly one of them - so what is printed adds up to 100%.
+            # (The seventh column, starved, is never set here: -a converts
+            # every page of a book that is converted at all.)
             _print_page_stat("converted", totals[1], page_total)
             _print_page_stat("trimmed", totals[2], page_total)
             _print_page_stat("blank, dropped", totals[3], page_total)
             _print_page_stat("already done, skipped", totals[4], page_total)
             _print_page_stat("not found, failed", totals[5], page_total)
-            # Not a sixth category but a subset of the first two, hence "of
-            # those": a page that encoded to something too small to be a picture
-            # was counted as converted by the encoder, which wrote a file and
-            # exited 0 and had no way to know better.
-            _print_page_stat("of those broken, dropped",
-                             counters.read("pagesBroken"), page_total)
+            _print_page_stat("failed, missing", totals[7], page_total)
+            # Not categories of their own but subsets of the first two, hence
+            # "of those": a page counted as converted when it was sorted onto
+            # the GPU lane, which then wrote it empty - or could not write it.
+            _print_page_stat("of those empty, dropped",
+                             counters.read("pagesEmpty"), page_total)
+            _print_page_stat("of those failed, missing",
+                             counters.read("pagesMissing"), page_total)
 
         if os.path.isdir(state.out_path):
             for parent, _dirs, _names in os.walk(state.out_path, topdown=False):
@@ -1136,8 +1185,8 @@ def main(argv: list, program: str = "convert-comics",
         sys.stdout.write(clioptions.help_text(declaration))
         return 0
     except clioptions.UsageError as error:
-        sys.stderr.write(clioptions.usage_error_text(declaration,
-                                                     error.message))
+        clioptions.refuse_usage(declaration,
+                                error.message)
         return 1
 
     script_dir = script_dir or commands.script_dir()
@@ -1238,7 +1287,9 @@ def _run(result, declaration, program: str, script_dir: str,
                enums.extension_list(list(enums.COMIC_PDF_EXTENSIONS))))
 
     if have_fdupes:
-        subprocess.run(["fdupes", "-rdN", in_path], stdout=subprocess.DEVNULL)
+        toolcapture.watched(["fdupes", "-rdN", in_path],
+                            skipped="duplicates were not removed",
+                            stdout=subprocess.DEVNULL)
     # Prune empty folders inside the input, but never the input folder itself.
     for parent, _dirs, _names in os.walk(in_path, topdown=False):
         if parent != in_path:
@@ -1335,7 +1386,7 @@ def _run(result, declaration, program: str, script_dir: str,
     state.total = len(book_list)
     counters.total = state.total
     for name in ("current", "pagesFound", "packaged", "existing",
-                 "pagesBroken"):
+                 "pagesEmpty", "pagesMissing"):
         with open(os.path.join(counter_dir, name), "w") as handle:
             handle.write("0")
     # Where each book's page counters are collected: the converter appends one
@@ -1397,7 +1448,7 @@ def _run(result, declaration, program: str, script_dir: str,
                 % enums.extension_list(list(enums.IMAGE_EXTENSIONS)))
         return safety.fail_no_relevant_input(
             in_path, "pages that could be converted to AVIF (all encodes failed "
-            "or came out broken)")
+            "or came out empty)")
 
     safety.print_run_footer()
     return workerpool.exit_status()
@@ -1432,6 +1483,7 @@ def _settle_fdupes() -> bool:
 
 def cli(argv: list | None = None) -> int:
     settings.load()
+    errorlog.start_run(argv)
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, program=commands.program_name(__spec__.name),

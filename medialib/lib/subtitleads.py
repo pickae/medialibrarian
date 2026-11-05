@@ -15,7 +15,7 @@ import os
 import subprocess
 from collections.abc import Callable
 
-from medialib.lib import tooldeps
+from medialib.lib import toolcapture, tooldeps
 
 TOOL = "subcleaner"
 
@@ -50,9 +50,10 @@ def clean(srt: str, language_code: str, log: Callable[[str], None]) -> int:
         return 0
     before = _cues(srt)
     try:
-        done = subprocess.run(
+        done = toolcapture.watched(
             [TOOL, os.path.abspath(srt), "--language", language_code,
-             "--silent", "--no-log"],
+             "--silent", "--no-log"], announce=False,
+            skipped="the subtitle was not cleaned of adverts",
             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, text=True, errors="replace")
     except OSError:

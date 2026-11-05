@@ -40,12 +40,14 @@ from medialib.lib import (
     clioptions,
     encodercalibration,
     enums,
+    errorlog,
     imagebitrate,
     imagemagick,
     ramscratch,
     runlog,
     safety,
     settings,
+    toolcapture,
     tooldeps,
     workerpool,
 )
@@ -459,7 +461,7 @@ class Run:
                     self._bump(road + "Pixels", pixels)
                 line = "%s%s: %s\n" % (
                     runlog.counted_prefix(current, self.total), label, path)
-                if category == "notFound":
+                if category in ("notFound", "failed"):
                     out.write(line)
                 else:
                     runlog.say(line, out)
@@ -485,9 +487,28 @@ class Run:
 
     # --- the conversions --------------------------------------------------
     def _convert(self, arguments) -> int:
-        return subprocess.run(imagemagick.convert_argv(arguments),
-                              stdout=subprocess.DEVNULL,
-                              stderr=subprocess.DEVNULL).returncode
+        # Replayed and kept when it fails: the image it was making is missing.
+        return toolcapture.watched(imagemagick.convert_argv(arguments),
+                                   tool="ImageMagick",
+                                   stdout=subprocess.DEVNULL).returncode
+
+    def _encode(self, arguments, relative: str, out: str,
+                category: str = "converted", label: str = "CONV",
+                pixels: int = 0) -> None:
+        """One encode, counted by what it did: <category> once ImageMagick has
+        written <out>, FAILED when it did not - its replay and the error log
+        say why. Counted after the call, not before, so the closing figures
+        are of images on disk; and an exit 0 that left no file is a failure
+        like any other."""
+        status = self._convert(arguments)
+        if status == 0 and _written(out):
+            self.record(category, label, relative, pixels=pixels)
+            return
+        if status == 0:
+            errorlog.record("tool-bad-output", "%s: ImageMagick exited 0 but "
+                            "wrote no image" % relative,
+                            files=[relative, out], tool_argv=arguments)
+        self.record("failed", "FAILED", relative, stream=sys.stderr)
 
     def _identify(self, arguments) -> str:
         proc = subprocess.run(imagemagick.identify_argv(arguments),
@@ -515,8 +536,7 @@ class Run:
         dimensions = _parse_size(self._identify(["-ping", "-format", "%w %h",
                                                  source]))
         if dimensions is None:
-            self.record("converted", "CONV", relative)
-            self._convert(self._encode_arguments(source, out))
+            self._encode(self._encode_arguments(source, out), relative, out)
             return
         width, height = dimensions
         pixels = width * height
@@ -537,15 +557,15 @@ class Run:
                             stream=sys.stderr)
                 return
             if verdict == "trimmed":
-                self.record("trimmed", "TRIM", relative, pixels=pixels)
-                self._convert(self._encode_arguments(
+                self._encode(self._encode_arguments(
                     "miff:" + trimmed, out,
-                    ["-bordercolor", colour, "-border", str(border)]))
+                    ["-bordercolor", colour, "-border", str(border)]),
+                    relative, out, "trimmed", "TRIM", pixels)
                 return
             if self._to_lane(relative, out):
                 return
-            self.record("converted", "CONV", relative, pixels=pixels)
-            self._convert(self._encode_arguments(source, out))
+            self._encode(self._encode_arguments(source, out), relative, out,
+                         pixels=pixels)
         finally:
             try:
                 os.remove(trimmed)
@@ -649,6 +669,9 @@ class Run:
         if not os.path.isfile(relative):
             self.record("notFound", "ERROR (not found)", relative,
                         stream=sys.stderr)
+            errorlog.record("input-missing", "not found: %s" % relative,
+                            files=[os.path.join(self.input_dir, relative)],
+                            stack=False)
             return
         if os.path.isfile(out):
             self.record("alreadyDone", "SKIP (already done)", relative,
@@ -667,9 +690,8 @@ class Run:
             self._cpu_to_lane(relative, out, (), "converted", "CONV",
                               self._pixels(relative))
             return
-        self.record("converted", "CONV", relative,
-                    pixels=self._pixels(relative))
-        self._convert(self._encode_arguments(relative, out))
+        self._encode(self._encode_arguments(relative, out), relative, out,
+                     pixels=self._pixels(relative))
 
     def _to_lane(self, relative: str, out: str, crop=None,
                  category: str = "converted",
@@ -765,15 +787,20 @@ class Run:
                         stream=sys.stderr)
             return
         quality = self.options["quality"] + JPEG_QUALITY_BONUS
-        self.record("converted", "REV", relative, pixels=self._pixels(relative))
         geometry = self.options["maxResCommand"]
-        if self.options["crop"]:
-            self._convert([relative, "-fuzz", self.options["fuzzCommand"],
-                           "-trim", "-quality", str(quality),
-                           "-resize", geometry, out])
-        else:
-            self._convert([relative, "-quality", str(quality),
-                           "-resize", geometry, out])
+        trim = (["-fuzz", self.options["fuzzCommand"], "-trim"]
+                if self.options["crop"] else [])
+        self._encode([relative, *trim, "-quality", str(quality),
+                      "-resize", geometry, out], relative, out, label="REV",
+                     pixels=self._pixels(relative))
+
+
+def _written(path: str) -> bool:
+    """Whether an encode left a file with something in it at <path>."""
+    try:
+        return os.path.getsize(path) > 0
+    except OSError:
+        return False
 
 
 # --- the run -------------------------------------------------------------------
@@ -849,7 +876,8 @@ def _run_pool(state, work, jobs: int, worker_name: str) -> None:
         for relative in work:
             if safety.abort_requested():
                 return
-            worker(relative)
+            with errorlog.work_item(relative):
+                worker(relative)
         return
 
     workerpool.run(work, jobs, _in_worker,
@@ -912,8 +940,8 @@ def main(argv: list, program: str = "convert-images") -> int:
         sys.stdout.write(clioptions.help_text(declaration))
         return 0
     except clioptions.UsageError as error:
-        sys.stderr.write(clioptions.usage_error_text(declaration,
-                                                     error.message))
+        clioptions.refuse_usage(declaration,
+                                error.message)
         return 1
 
     if clioptions.args_out_of_range(len(result.positionals), 2, None):
@@ -934,9 +962,9 @@ def main(argv: list, program: str = "convert-images") -> int:
     chroma = result.values["chroma"] or DEFAULT_CHROMA
     # -r writes JPEG whatever -e says, so -u has nothing to act on there either.
     if result.values["chroma"] and (reverse or image_format != CHROMA_FORMAT):
-        sys.stderr.write(clioptions.usage_error_text(
+        clioptions.refuse_usage(
             declaration, "-u only applies when writing %s, not %s."
-            % (CHROMA_FORMAT, "jpeg" if reverse else image_format)))
+            % (CHROMA_FORMAT, "jpeg" if reverse else image_format))
         return 1
     speed = int(result.values["speedPreset"] or DEFAULT_SPEED)
     max_res = result.values["maxRes"] or str(UNBOUNDED_EDGE)
@@ -1052,8 +1080,9 @@ def main(argv: list, program: str = "convert-images") -> int:
         safety.set_run_footer(footer)
 
         if os.environ.get("HAVE_FDUDES"):
-            subprocess.run(["fdupes", "-rdN", input_dir],
-                           stdout=subprocess.DEVNULL)
+            toolcapture.watched(["fdupes", "-rdN", input_dir],
+                                skipped="duplicates were not removed",
+                                stdout=subprocess.DEVNULL)
         os.makedirs(output_dir, exist_ok=True)
         _prune(input_dir)
         _prune(output_dir)
@@ -1075,8 +1104,8 @@ def main(argv: list, program: str = "convert-images") -> int:
             return safety.fail_no_relevant_input(input_dir, wanted)
 
         for name in ("current", "converted", "trimmed", "blank", "starved",
-                     "alreadyDone", "notFound", "gpuImages", "gpuPixels",
-                     "cpuImages", "cpuPixels"):
+                     "alreadyDone", "notFound", "failed", "gpuImages",
+                     "gpuPixels", "cpuImages", "cpuPixels"):
             with open(os.path.join(counter_dir, name), "w") as handle:
                 handle.write("0")
 
@@ -1091,7 +1120,9 @@ def main(argv: list, program: str = "convert-images") -> int:
                   "reverse_to_jpeg" if reverse else "transcode")
         safety.exit_if_aborted()
         safety.print_run_footer()
-        return workerpool.exit_status()
+        # An image that could not be converted is a run that did not do what
+        # it was asked, and its caller - convert-comics, say - has to know.
+        return workerpool.exit_status(1 if state.counter("failed") else 0)
     finally:
         ramscratch.run_exit_cleanup()
 
@@ -1130,9 +1161,9 @@ def _calibrate(declaration, program, result, input_dir, output_dir) -> int:
     clashing = [letter for letter in _NOT_WITH_CALIBRATE
                 if letter in result.given]
     if clashing:
-        sys.stderr.write(clioptions.usage_error_text(
+        clioptions.refuse_usage(
             declaration, "-k measures every speed and quality itself; it "
-            "takes no -%s." % ", -".join(clashing)))
+            "takes no -%s." % ", -".join(clashing))
         return 1
     if safety.require_separate_output(input_dir, output_dir):
         return 1
@@ -1362,7 +1393,8 @@ def _print_footer(state, started, values, own_safety_log) -> None:
     # The breakdown only once there is one: a run in which every image was
     # plainly converted has said all of it in the line above.
     if total > 0 and state.counter("converted") < total:
-        for label, name in (("input not found", "notFound"),
+        for label, name in (("FAILED", "failed"),
+                            ("input not found", "notFound"),
                             ("already done", "alreadyDone"),
                             ("blank", "blank"),
                             ("starved, left alone", "starved"),
@@ -1382,12 +1414,13 @@ def _print_footer(state, started, values, own_safety_log) -> None:
         with open(stats_file + ".lock", "w") as handle, \
                 runlog.take_lock(handle), \
                 open(stats_file, "a") as out:
-            out.write("%d %d %d %d %d %d %d\n" % (
+            out.write("%d %d %d %d %d %d %d %d\n" % (
                 total, state.counter("converted"),
                 state.counter("trimmed"), state.counter("blank"),
                 state.counter("alreadyDone"),
                 state.counter("notFound"),
-                state.counter("starved")))
+                state.counter("starved"),
+                state.counter("failed")))
 
     if own_safety_log:
         safety.report_safety_skips()
@@ -1408,6 +1441,7 @@ def _road_line(label: str, images: int, pixels: int, seconds: float) -> str:
 
 def cli(argv: list | None = None) -> int:
     settings.load()
+    errorlog.start_run(argv)
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, program=commands.program_name(__spec__.name))

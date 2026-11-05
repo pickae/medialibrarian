@@ -10,7 +10,7 @@ there is no help page to ask for and the usage is the whole spec.
 import sys
 
 from medialib import commands
-from medialib.lib import clioptions, cuechapters, settings
+from medialib.lib import clioptions, cuechapters, errorlog, settings
 
 USAGE_HEAD = """Usage:
     {program} <input.cue> <output.chapters>"""
@@ -35,6 +35,9 @@ def main(argv: list, program: str = "cue-to-chapters",
     # least two": a third path would silently be ignored.
     if clioptions.args_out_of_range(len(argv), 2, 2):
         sys.stderr.write(clioptions.no_args_text(declaration))
+        if argv:
+            errorlog.record("usage", "takes exactly two paths, given %d"
+                            % len(argv), stack=False)
         return 1
 
     cuechapters.write_chapters_from_cue(argv[0], argv[1])
@@ -43,6 +46,7 @@ def main(argv: list, program: str = "cue-to-chapters",
 
 def cli(argv: list | None = None) -> int:
     settings.load()
+    errorlog.start_run(argv)
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, commands.program_name(__spec__.name),

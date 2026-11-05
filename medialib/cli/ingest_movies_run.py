@@ -29,6 +29,7 @@ from medialib.lib import (
     dvdcompare,
     dynamicqueue,
     enums,
+    errorlog,
     ffmpegselect,
     fixedpoint,
     imdbdata,
@@ -42,6 +43,7 @@ from medialib.lib import (
     subtitleads,
     subtitlefiles,
     tmdblookup,
+    toolcapture,
     tooldeps,
     workerpool,
 )
@@ -538,8 +540,11 @@ def _scratch_need(film_bytes: int, video_work: bool, stream_size) -> str:
 
 def _mkvmerge(argv: list) -> tuple:
     try:
-        done = subprocess.run(["mkvmerge"] + argv, stdin=subprocess.DEVNULL,
-                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        done = toolcapture.watched(["mkvmerge"] + argv, announce=False,
+                                   skipped="the film was left as it was",
+                                   stdin=subprocess.DEVNULL,
+                                   stdout=subprocess.PIPE,
+                                   stderr=subprocess.STDOUT)
     except OSError:
         return 127, "mkvmerge not found"
     return done.returncode, done.stdout.decode("utf-8",
@@ -561,8 +566,8 @@ def main(argv: list, program: str = "ingest-movies",
         sys.stdout.write(clioptions.help_text(declaration))
         return 0
     except clioptions.UsageError as error:
-        sys.stderr.write(clioptions.usage_error_text(declaration,
-                                                     error.message))
+        clioptions.refuse_usage(declaration,
+                                error.message)
         return 1
 
     if clioptions.args_out_of_range(len(result.positionals), 1, None):
@@ -581,19 +586,19 @@ def main(argv: list, program: str = "ingest-movies",
             if result.values.get(key):
                 # The transcription and the chapter lookup are not dry runs,
                 # so there is nothing for -w to carry out.
-                sys.stderr.write(clioptions.usage_error_text(
+                clioptions.refuse_usage(
                     declaration,
                     "-w has no part in -%s: it carries out the dry run of -t, "
                     "-i or -s, and -%s\nis not a dry run. Drop the -w."
-                    % (letter, letter)))
+                    % (letter, letter))
                 return 1
-        sys.stderr.write(clioptions.usage_error_text(
+        clioptions.refuse_usage(
             declaration,
             "-w on its own does nothing to carry out: it is what turns the dry "
             "run of -t,\n-i or -s into the real thing, and none was given. "
             "Without one of them this is a\nFULL INGEST - converting, "
             "transcribing and remuxing - which -w has no part in.\n\n"
-            "Did you mean -tw, -iw or -sw?"))
+            "Did you mean -tw, -iw or -sw?")
         return 1
 
     # -a is the commentary phase on its own and -t and -i the tagging phase:
@@ -602,11 +607,11 @@ def main(argv: list, program: str = "ingest-movies",
     # order.
     if result.values.get("commentaryOnly") and (result.values.get("tagsOnly")
                                                 or result.values.get("idList")):
-        sys.stderr.write(clioptions.usage_error_text(
+        clioptions.refuse_usage(
             declaration,
             "-a transcribes the commentary tracks and nothing else, and -t and "
             "-i tag and nothing\nelse: they are two runs, not one. Give the "
-            "folders to each of them in turn."))
+            "folders to each of them in turn.")
         return 1
 
     # -s the same, against both: the subtitles are searched for by the id the
@@ -614,12 +619,12 @@ def main(argv: list, program: str = "ingest-movies",
     if result.values.get("subtitlesOnly") and (
             result.values.get("commentaryOnly")
             or result.values.get("tagsOnly") or result.values.get("idList")):
-        sys.stderr.write(clioptions.usage_error_text(
+        clioptions.refuse_usage(
             declaration,
             "-s tests and fetches subtitles and nothing else, and -a, -t and -i "
             "each do a\nphase of their own: they are two runs, not one. Tag "
             "first (-tw), so the\nsubtitles are searched for by the ids it "
-            "gives, then run -s."))
+            "gives, then run -s.")
         return 1
 
     # -n the same, against every other: it names the tracks the transcription
@@ -630,12 +635,12 @@ def main(argv: list, program: str = "ingest-movies",
             or result.values.get("chaptersOnly")
             or result.values.get("subtitlesOnly")
             or result.values.get("tagsOnly") or result.values.get("idList")):
-        sys.stderr.write(clioptions.usage_error_text(
+        clioptions.refuse_usage(
             declaration,
             "-n names the commentary tracks and nothing else, and -a, -c, -s, "
             "-t and -i each do\na phase of their own: they are two runs, not "
             "one. Transcribe first (-a), so the\ntranscripts are there to "
-            "tell the commentaries apart by, then run -n."))
+            "tell the commentaries apart by, then run -n.")
         return 1
 
     # -c the same, against every other phase of its own: the chapters are
@@ -644,12 +649,12 @@ def main(argv: list, program: str = "ingest-movies",
             result.values.get("commentaryOnly") or result.values.get("tagsOnly")
             or result.values.get("idList")
             or result.values.get("subtitlesOnly")):
-        sys.stderr.write(clioptions.usage_error_text(
+        clioptions.refuse_usage(
             declaration,
             "-c looks up chapters and nothing else, and -a, -t, -i and -s each "
             "do a phase\nof their own: they are two runs, not one. Tag first "
             "(-tw), so the chapters are\nlooked up by the titles it gives, "
-            "then run -c."))
+            "then run -c.")
         return 1
 
     script_dir = script_dir or commands.script_dir()
@@ -1049,6 +1054,10 @@ def _tags_only(program: str, script_dir: str, roots: list, names: list,
             % (len(stale), id_list))
         for base in stale:
             sys.stderr.write('  "%s"\t%s\n' % (base, ids[base]))
+        errorlog.record("error", "%d row(s) in %s carry an id but name no film "
+                        "folder that is here: %s"
+                        % (len(stale), id_list, ", ".join(stale[:20])),
+                        files=[id_list], stack=False)
 
     # The ids already in the file are written back beside what is still unnamed:
     # they are the only record anywhere of a lookup someone did by hand, and
@@ -1670,6 +1679,7 @@ def _report_long_names(long_names: tmdblookup.LongNames) -> None:
     cut to fit, the rename still made - is left out under -q; its ERROR section -
     folders left unrenamed - never is."""
     warning = False
+    refused: list[str] = []
     for line in long_names.report():
         # A section opens on an unindented line; the lines under it are indented.
         if not line.startswith(" "):
@@ -1678,6 +1688,11 @@ def _report_long_names(long_names: tmdblookup.LongNames) -> None:
             runlog.say(line + "\n", sys.stderr)
         else:
             sys.stderr.write(line + "\n")
+            refused.append(line)
+    if refused:
+        errorlog.record("error", refused[0][len("ERROR: "):],
+                        files=[folder for folder, _name, _why in long_names.refused],
+                        stack=False)
 
 
 def _report_unfixed_movies(movies: list) -> None:
@@ -1865,7 +1880,7 @@ def _resolve_roots(declaration, arguments: list):
     names: list = []
     for argument in arguments:
         if not os.path.isdir(argument):
-            sys.stderr.write(clioptions.missing_dir_text(declaration, argument))
+            clioptions.refuse_missing_dir(declaration, argument)
             return None, None
         absolute = os.path.realpath(argument)
         if absolute in roots:
@@ -2218,7 +2233,8 @@ def _drain_commentary(state, producer, jobs: int) -> None:
         for record, _size in producer:
             if safety.abort_requested():
                 return
-            _transcribe_one(state, record)
+            with errorlog.work_item(record):
+                _transcribe_one(state, record)
         return
 
     dynamicqueue.run(producer, jobs, _in_transcribe_worker,
@@ -2256,7 +2272,8 @@ def _run_pool(state, movies: list, root: str, jobs: int) -> None:
         for movie in movies:
             if safety.abort_requested():
                 return
-            rules.check_audio_tracks(movie, root)
+            with errorlog.work_item(movie):
+                rules.check_audio_tracks(movie, root)
         return
 
     workerpool.run(movies, jobs, _in_worker,
@@ -2265,6 +2282,7 @@ def _run_pool(state, movies: list, root: str, jobs: int) -> None:
 
 def cli(argv: list | None = None) -> int:
     settings.load()
+    errorlog.start_run(argv)
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, commands.program_name(__spec__.name),

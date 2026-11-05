@@ -60,9 +60,12 @@ def lane_run(tmp_path, monkeypatch):
                     source = tmp_path / page
                     source.write_text(page)
                     output = tmp_path / (page + ".avif")
+                    # One named cpunone* is encoded by a CPU encoder that
+                    # exits 0 and writes nothing.
+                    script = ("exit 0" if page.startswith("cpunone")
+                              else 'echo CPU > "$0"')
                     entry = {"output": str(output), "pixels": 1_000_000,
-                             "cpu": ["sh", "-c", 'echo CPU > "$0"',
-                                     str(output)]}
+                             "cpu": ["sh", "-c", script, str(output)]}
                     # A page named cpu* is listed for the CPU alone.
                     if not page.startswith("cpu"):
                         entry["input"] = str(source)
@@ -109,6 +112,18 @@ def test_a_page_for_the_cpu_alone_is_encoded_there(lane_run, tmp_path):
     assert finished == ["one"]
     assert outputs == {"p1.jpg": "GPU", "cpu_big.png": "CPU"}
     assert lane.cpu_pages == 1
+
+
+def test_a_page_the_cpu_wrote_nothing_for_is_missing_from_its_book(
+        lane_run, capfd):
+    """Its book still comes back, so the run can pack the rest - and say how
+    many of its pages are missing, which the lane keeps by book folder."""
+    finished, outputs, _called, lane = lane_run(
+        {"one": ["p1.jpg", "cpunone.png"]})
+    assert finished == ["one"]
+    assert outputs == {"p1.jpg": "GPU"}
+    assert list(lane.missing.values()) == [1]
+    assert "exited 0 but wrote no image" in capfd.readouterr().err
 
 
 def test_a_page_is_encoded_while_its_book_is_still_being_sorted(tmp_path):

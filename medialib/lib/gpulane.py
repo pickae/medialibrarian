@@ -38,16 +38,16 @@ and none is unpacked while less than :data:`RAM_RESERVE` is left.
 from __future__ import annotations
 
 import collections
+import functools
 import json
 import os
 import shutil
-import subprocess
 import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from medialib.lib import av1gpu, safety
+from medialib.lib import av1gpu, errorlog, safety, toolcapture
 
 __all__ = ["READY", "MANIFEST", "Lane"]
 
@@ -82,6 +82,19 @@ RAM_RESERVE = 16 * 1024 ** 3
 NICE = ["nice", "-n", "10"] if shutil.which("nice") else []
 
 _POLL_SECONDS = 0.2
+
+
+def _written(path: str) -> bool:
+    """Whether an encode left a file with something in it at <path>."""
+    try:
+        return bool(path) and os.path.getsize(path) > 0
+    except OSError:
+        return False
+
+
+def _unwritten(path: str) -> str:
+    """Why an encode that exited 0 still failed, or "" when it did not."""
+    return "" if _written(path) else "exited 0 but wrote no image"
 
 
 class _Book:
@@ -129,6 +142,9 @@ class Lane:
         self.cpu_pixels = 0
         self.stolen = 0
         self.fallbacks = 0
+        # The pages whose last encode wrote nothing, by book folder: what the
+        # run says is missing from that book when it packs it.
+        self.missing: dict[str, int] = {}
         self.busy = 0.0
         self._busy_since = 0.0
         self.finishers = ThreadPoolExecutor(max_workers=2)
@@ -348,9 +364,19 @@ class Lane:
             if taken is None:
                 break
             book, entry = taken
-            subprocess.run(NICE + entry["cpu"], stdout=subprocess.DEVNULL,
-                           stderr=subprocess.DEVNULL)
+            # A page that fails here is missing from its book, so the failure
+            # is replayed and kept, named by the book it was unpacked from.
+            page = entry.get("output") or (entry["cpu"][-1]
+                                           if entry["cpu"] else "")
+            source = errorlog.origin_of(page) if page else ""
+            made = toolcapture.run(
+                NICE + entry["cpu"], label=os.path.basename(source or page),
+                tool=os.path.basename(entry["cpu"][0]) if entry["cpu"] else "",
+                verify=functools.partial(_unwritten, page))
             with self.room:
+                if not made.ok and not safety.abort_requested():
+                    self.missing[book.folder] = \
+                        self.missing.get(book.folder, 0) + 1
                 self.cpu_pages += 1
                 self.cpu_pixels += entry["pixels"]
                 last = self._page_done(book)

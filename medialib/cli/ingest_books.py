@@ -37,6 +37,7 @@ from medialib.lib import (
     booktext,
     clioptions,
     enums,
+    errorlog,
     imagebitrate,
     imagemagick,
     imagesizes,
@@ -532,7 +533,8 @@ def _run_pool(state, work, jobs: int) -> None:
         for relative in work:
             if safety.abort_requested():
                 return
-            state.process_book(relative)
+            with errorlog.work_item(relative):
+                state.process_book(relative)
         return
 
     workerpool.run(work, jobs, _in_worker, lambda relative: (state, relative))
@@ -652,8 +654,8 @@ def main(argv: list, program: str = "ingest-books",
         sys.stdout.write(clioptions.help_text(declaration))
         return 0
     except clioptions.UsageError as error:
-        sys.stderr.write(clioptions.usage_error_text(declaration,
-                                                     error.message))
+        clioptions.refuse_usage(declaration,
+                                error.message)
         return 1
 
     if clioptions.args_out_of_range(len(result.positionals), 2, None):
@@ -802,6 +804,7 @@ def _archive(out_path: str, archive_root: str) -> None:
 
 def cli(argv: list | None = None) -> int:
     settings.load()
+    errorlog.start_run(argv)
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, program=commands.program_name(__spec__.name),

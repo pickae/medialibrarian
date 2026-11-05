@@ -21,6 +21,7 @@ from medialib.lib import (
     censusviewer,
     clioptions,
     cubes,
+    errorlog,
     ramscratch,
     runlog,
     safety,
@@ -292,6 +293,11 @@ def run_build(sql_file: str, build_path: str, db_path: str = "") -> None:
         return
     sys.stderr.write("\nDuckDB refused the build. The statements it was given "
                      "are in:\n  %s\n" % sql_file)
+    errorlog.record("tool-failed", "DuckDB refused the build of %s (exit "
+                    "status %d); its statements are kept in %s"
+                    % (db_path, done.returncode, db_path + ".failed.sql"),
+                    files=[db_path, sql_file], tool_argv=["duckdb", "-bail",
+                                                          build_path])
     # The scratch is in RAM and about to go, so the one thing worth keeping -
     # the SQL that failed - is copied out next to the database first.
     try:
@@ -439,8 +445,8 @@ def main(argv: list, program: str = "content-census-bi") -> int:
         sys.stdout.write(clioptions.help_text(declaration))
         return 0
     except clioptions.UsageError as error:
-        sys.stderr.write(clioptions.usage_error_text(declaration,
-                                                     error.message))
+        clioptions.refuse_usage(declaration,
+                                error.message)
         return 1
 
     if clioptions.args_out_of_range(len(result.positionals), 1, None):
@@ -538,6 +544,7 @@ def main(argv: list, program: str = "content-census-bi") -> int:
 
 def cli(argv: list | None = None) -> int:
     settings.load()
+    errorlog.start_run(argv)
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, program=commands.program_name(__spec__.name))

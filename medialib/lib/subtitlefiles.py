@@ -33,6 +33,7 @@ from medialib.lib import (
     safety,
     subtitleads,
     tmdblookup,
+    toolcapture,
     treewalk,
 )
 from medialib.lib.safety import SkipLog
@@ -266,11 +267,13 @@ def sync_subtitle(reference: str, srt: str, max_offset: str,
         return 1
     try:
         try:
-            ran = subprocess.run(
+            ran = toolcapture.watched(
                 [*command, reference, "-i", srt, "-o", srt,
                  "--max-offset-seconds", max_offset, *quality_args,
                  "--log-dir-path", log_dir],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                tool="ffsubsync", announce=False,
+                skipped="the subtitle was not synced",
+                stdout=subprocess.DEVNULL)
         except OSError:
             return 1
         if ran.returncode != 0:
@@ -541,11 +544,11 @@ def _to_subrip(srt: str, language_code: str, file: str,
         converted = (srt[:-len(".srt")] + ".converted.srt"
                      if srt.endswith(".srt") else srt + ".converted.srt")
         try:
-            made = subprocess.run(
+            made = toolcapture.watched(
                 ["ffmpeg", "-y", "-loglevel", "error", "-nostats",
                  "-i", srt, converted],
-                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL)
+                skipped="the subtitle was left in its own format",
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
             ok = made.returncode == 0
         except OSError:
             ok = False

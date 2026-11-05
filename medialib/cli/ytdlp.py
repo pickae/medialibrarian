@@ -27,6 +27,7 @@ from medialib import commands
 from medialib.lib import (
     clioptions,
     downloadcleanup,
+    errorlog,
     ffmpegselect,
     podcastfeeds,
     ramscratch,
@@ -716,8 +717,8 @@ def main(argv: list, program: str = "ytdlp", script_dir: str = "") -> int:
         sys.stdout.write(clioptions.help_text(declaration))
         return 0
     except clioptions.UsageError as error:
-        sys.stderr.write(clioptions.usage_error_text(declaration,
-                                                     error.message))
+        clioptions.refuse_usage(declaration,
+                                error.message)
         return 1
 
     if result.values["consolidate"]:
@@ -863,7 +864,7 @@ def _consolidate(declaration: clioptions.Spec, result) -> int:
             if fault:
                 break
     if fault:
-        sys.stderr.write(clioptions.usage_error_text(declaration, fault))
+        clioptions.refuse_usage(declaration, fault)
         return 1
 
     lines = set()
@@ -1396,6 +1397,7 @@ def _build_library(state, ingest):
 
 def cli(argv: list | None = None) -> int:
     settings.load()
+    errorlog.start_run(argv)
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, program=commands.program_name(__spec__.name),

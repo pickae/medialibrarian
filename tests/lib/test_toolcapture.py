@@ -10,7 +10,7 @@ import sys
 
 import pytest
 
-from medialib.lib import runlog, statusline, toolcapture
+from medialib.lib import errorlog, runlog, statusline, toolcapture
 from medialib.lib.toolcapture import ToolOutput
 
 
@@ -29,7 +29,7 @@ def logs_home(tmp_path, monkeypatch):
     """Failure logs land under the test's own directory."""
     monkeypatch.setenv("CLI_SCRIPT_DIR", str(tmp_path))
     monkeypatch.delenv("LOG_TIMESTAMPS", raising=False)
-    return tmp_path / "logs" / toolcapture.FAILURE_DIR
+    return tmp_path / "logs" / errorlog.ERROR_DIR
 
 
 @pytest.mark.pure
@@ -142,7 +142,7 @@ class TestRun:
         assert "all 100 line(s) it printed: %s" % result.log_path in err
         with open(result.log_path) as handle:
             kept = handle.read()
-        assert "exited with status 3" in kept and "\n0\n" in kept
+        assert "exited with status 3" in kept and "\n  | 0\n" in kept
 
     def test_quiet_prints_only_the_error_and_where_it_is(self, logs_home,
                                                          capfd, monkeypatch):
@@ -210,7 +210,8 @@ class TestRun:
         monkeypatch.setattr(runlog, "take_lock", recording)
         lock = str(tmp_path / "run.lock")
         toolcapture.run(tool("raise SystemExit(1)"), lock_file=lock)
-        assert held == [lock]
+        # The error log takes a lock of its own, on its own file.
+        assert [name for name in held if name == lock] == [lock]
 
     def test_an_unwritable_log_home_still_prints_the_error(self, tmp_path,
                                                            monkeypatch, capfd):

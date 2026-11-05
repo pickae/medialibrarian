@@ -27,7 +27,7 @@ import tempfile
 from collections.abc import Iterable, Iterator
 from typing import Any
 
-from medialib.lib import runlog
+from medialib.lib import errorlog, runlog
 from medialib.lib.enums import shell_lower
 
 __all__ = [
@@ -513,6 +513,8 @@ def fail_no_relevant_input(path: str, what: str,
         out.write("The folder is not empty, but holds nothing this script "
                   "can work with.\n")
     out.write("Nothing was changed.\n")
+    errorlog.record("input-unusable", "nothing to do: no %s found in %s"
+                    % (what, path), files=[path], stack=False)
     return 1
 
 
@@ -687,6 +689,9 @@ def require_separate_output(input_dir: str, output_dir: str,
               "the cleanup of the input tree\nwould reach into the finished "
               "output. Give an output folder beside it, not\ninside it.\n")
     out.write("Nothing was changed.\n")
+    errorlog.record("output-inside-input",
+                    "refusing to write the output inside the input",
+                    files=[input_dir, output_dir], stack=False)
     return 1
 
 

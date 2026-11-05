@@ -41,6 +41,7 @@ from medialib.lib import (
     cleannamesindividually,
     clioptions,
     enums,
+    errorlog,
     overwrite,
     plurality,
     prefixes,
@@ -480,6 +481,7 @@ def report_name(directory: str) -> str:
 
 def cli(argv: list | None = None) -> int:
     settings.load()
+    errorlog.start_run(argv)
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, program=commands.program_name(__spec__.name))
@@ -495,8 +497,8 @@ def main(argv: list, program: str = "find-gaps",
         sys.stdout.write(clioptions.help_text(declaration))
         return 0
     except clioptions.UsageError as error:
-        sys.stderr.write(clioptions.usage_error_text(declaration,
-                                                     error.message))
+        clioptions.refuse_usage(declaration,
+                                error.message)
         return 1
 
     if clioptions.args_out_of_range(len(result.positionals), 1, 1):
@@ -505,7 +507,7 @@ def main(argv: list, program: str = "find-gaps",
 
     argument = result.positionals[0]
     if not os.path.isdir(argument):
-        sys.stderr.write(clioptions.missing_dir_text(declaration, argument))
+        clioptions.refuse_missing_dir(declaration, argument)
         return 1
     if safety.is_empty_folder(argument):
         return safety.fail_no_relevant_input(

@@ -38,6 +38,7 @@ from medialib.lib import (
     plexnames,
     ramscratch,
     safety,
+    toolcapture,
 )
 from medialib.lib.runlog import log
 
@@ -1499,12 +1500,12 @@ def _duration_of(path: str) -> int:
 # --- the small commands -------------------------------------------------------
 
 def _run(argv: list) -> int:
-    try:
-        done = subprocess.run(argv, stdin=subprocess.DEVNULL,
-                              stdout=subprocess.DEVNULL,
-                              stderr=subprocess.DEVNULL)
-    except OSError:
-        return 127
+    # The callers say a failure in a warning of their own; what the tool
+    # said is kept in the error log beside it.
+    done = toolcapture.watched(argv, announce=False, on_missing=127,
+                               skipped="the film was left as it was",
+                               stdin=subprocess.DEVNULL,
+                               stdout=subprocess.DEVNULL)
     return done.returncode
 
 
@@ -1513,9 +1514,11 @@ def _run_capture(argv: list) -> str:
     non-fatal warnings while still writing the tags, so only 2 and above is a
     failure worth a word."""
     try:
-        done = subprocess.run(argv, stdin=subprocess.DEVNULL,
-                              stdout=subprocess.PIPE,
-                              stderr=subprocess.STDOUT)
+        done = toolcapture.watched(argv, announce=False,
+                                   skipped="the film was left as it was",
+                                   stdin=subprocess.DEVNULL,
+                                   stdout=subprocess.PIPE,
+                                   stderr=subprocess.STDOUT)
     except OSError:
         return "mkvpropedit not found"
     if done.returncode >= 2:

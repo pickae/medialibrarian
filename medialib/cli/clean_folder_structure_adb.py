@@ -27,7 +27,7 @@ import sys
 import tempfile
 
 from medialib import commands
-from medialib.lib import clioptions, runlog, safety, settings
+from medialib.lib import clioptions, errorlog, runlog, safety, settings
 from medialib.lib.runlog import log
 
 USAGE_HEAD = """Usage:
@@ -378,8 +378,8 @@ def main(argv: list, program: str = "clean-folder-structure-adb",
         sys.stdout.write(clioptions.help_text(declaration))
         return 0
     except clioptions.UsageError as error:
-        sys.stderr.write(clioptions.usage_error_text(declaration,
-                                                     error.message))
+        clioptions.refuse_usage(declaration,
+                                error.message)
         return 1
 
     forward = []
@@ -493,6 +493,7 @@ def _install_interrupt(plan: Plan) -> None:
 
 def cli(argv: list | None = None) -> int:
     settings.load()
+    errorlog.start_run(argv)
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, program=commands.program_name(__spec__.name),

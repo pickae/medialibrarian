@@ -15,7 +15,7 @@ import re
 import subprocess
 import tempfile
 
-from medialib.lib import dolbyvisionlevel, runlog
+from medialib.lib import dolbyvisionlevel, runlog, toolcapture
 
 _INT = re.compile(r"^[0-9]+$")
 _FPS = re.compile(r"^[0-9]+([.][0-9]+)?$")
@@ -377,6 +377,9 @@ def extract_video_stream(movie, out, log=runlog.log, run=_subprocess_run):
     _unlink(out)
     log("  WARNING: could not copy the video stream out, leaving the false "
         "Dolby Vision claim: " + movie)
+    toolcapture.keep(getattr(proc, "args", ["ffmpeg"]), proc.returncode,
+                     getattr(proc, "stdout", ""), label=movie,
+                     skipped="the false Dolby Vision claim was left")
     log("    reason: " + _reason(proc.stdout))
     return 1
 
