@@ -2110,10 +2110,11 @@ def _convert(program: str, script_dir: str, input_dir: str, output_dir: str,
 
     # The image files, keeping their modification times so copied cover art
     # matches the source the way the audio outputs do.
-    subprocess.run(["rsync", "-rmt", "--quiet", "--include=*/",
-                    "--include", "*.jpg", "--include", "*.png",
-                    "--include", "*.webp", "--include", "*.avif",
-                    "--exclude=*", input_dir + "/", output_dir])
+    toolcapture.watched(["rsync", "-rmt", "--quiet", "--include=*/",
+                         "--include", "*.jpg", "--include", "*.png",
+                         "--include", "*.webp", "--include", "*.avif",
+                         "--exclude=*", input_dir + "/", output_dir],
+                        skipped="the cover art was not copied")
 
     state.tracks = _scan_tracks(input_dir)
     # Belt and braces: the pre-flight probe is case-INsensitive while this scan

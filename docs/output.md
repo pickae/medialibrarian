@@ -75,6 +75,15 @@ the long form, one record per error:
   and where the traceback was kept; `-v` prints the traceback too, and so does
   any run whose error log could not be written.
 
+Every tool that does work is covered, not only the long ones whose output the
+console replays: an image conversion, a page rendered from a PDF, an archive
+unpacked, a remux, a subtitle sync, a copy. A tool a command only asks a
+question of — a probe of a file's length or codec, a version check — is left
+out, since its failing is usually the answer. A command started by another, the
+way convert-comics runs convert-images over each book, writes into the same
+file, and its records name what the first command was working on: a page that
+fails is traced back to its comic.
+
 Nothing is ever deleted from `logs/error/` by the commands.
 
 These are the kinds of error a run keeps, and each is also said on the console:

@@ -29,7 +29,7 @@ import tarfile
 import tempfile
 import zipfile
 
-from medialib.lib import errorlog, treewalk
+from medialib.lib import errorlog, toolcapture, treewalk
 from medialib.lib.enums import ARCHIVE_EXTENSIONS, shell_lower
 
 __all__ = [
@@ -154,8 +154,9 @@ def archive_shadowed_by_folder(file: str, base: str = "") -> bool:
 
 def _run(command) -> int:
     """Run a tool with stdout dropped, stderr kept (it is the one message an
-    archive that will not open is worth), and the tool's exit status returned."""
-    return subprocess.run(command, stdout=subprocess.DEVNULL).returncode
+    archive that will not open is worth) - replayed under the error and kept
+    in the error log - and the tool's exit status returned."""
+    return toolcapture.watched(command, stdout=subprocess.DEVNULL).returncode
 
 
 def _capture(command) -> str:

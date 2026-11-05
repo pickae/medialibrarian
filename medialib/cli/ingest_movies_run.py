@@ -43,6 +43,7 @@ from medialib.lib import (
     subtitleads,
     subtitlefiles,
     tmdblookup,
+    toolcapture,
     tooldeps,
     workerpool,
 )
@@ -539,8 +540,11 @@ def _scratch_need(film_bytes: int, video_work: bool, stream_size) -> str:
 
 def _mkvmerge(argv: list) -> tuple:
     try:
-        done = subprocess.run(["mkvmerge"] + argv, stdin=subprocess.DEVNULL,
-                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        done = toolcapture.watched(["mkvmerge"] + argv, announce=False,
+                                   skipped="the film was left as it was",
+                                   stdin=subprocess.DEVNULL,
+                                   stdout=subprocess.PIPE,
+                                   stderr=subprocess.STDOUT)
     except OSError:
         return 127, "mkvmerge not found"
     return done.returncode, done.stdout.decode("utf-8",

@@ -45,7 +45,7 @@ from medialib.lib.errorlog import redact
 
 __all__ = ["ToolOutput", "ToolRun", "causes", "ffmpeg_loglevel", "finished",
            "from_log", "pick", "redact", "replay_text", "report_failure",
-           "report_notable", "run"]
+           "report_notable", "run", "watched"]
 
 # What is kept of one run: its first lines, then the last ones.
 HEAD_LINES = 200
@@ -302,6 +302,115 @@ def run(argv, label: str = "", *,
     else:
         report_notable(result, lock_file=lock_file)
     return result
+
+
+# The tools whose exit status 1 is warnings with the work done: mkvtoolnix
+# says so of all of its own, and 2 is its one failure.
+_WARNINGS_ARE_ONE = ("mkvmerge", "mkvpropedit", "mkvextract")
+
+
+def watched(argv, *, label: str = "", tool: str = "", ok=None,
+            announce: bool = True, skipped: str = "",
+            on_missing: int | None = None,
+            **kwargs) -> subprocess.CompletedProcess:
+    """``subprocess.run`` for a tool that does work - converts, muxes,
+    unpacks, copies - with a failure kept in the error log.
+
+    The same call and the same result as ``subprocess.run``: what the caller
+    asked to be given back is given back, and what it sent to the null device
+    or left to the terminal is captured instead - a tool's stderr is what says
+    why it failed - and handed back as nothing, as before. An exit status
+    outside ``ok`` is a failure; left out, it is 0 alone, or 0 and 1 for the
+    mkvtoolnix tools, whose 1 is warnings with the file complete.
+
+    ``announce`` replays a failure the way :func:`run` does; False keeps it in
+    the log without a word, for a caller that prints its own line about it.
+    ``skipped`` is the caller's sentence for a failure it treats as a skip -
+    the step falls back or is left out, the item goes on - which makes it a
+    warning rather than an error.
+
+    A tool that cannot be started raises, as ``subprocess.run`` does, unless
+    ``on_missing`` gives the status to answer with instead.
+    """
+    argv = [str(word) for word in argv]
+    if ok is None:
+        program = os.path.basename(argv[0]) if argv else ""
+        ok = (0, 1) if program.split(".")[0] in _WARNINGS_ARE_ONE else (0,)
+    if kwargs.pop("capture_output", False):
+        kwargs["stdout"] = kwargs["stderr"] = subprocess.PIPE
+    check = kwargs.pop("check", False)
+    asked = kwargs.get("stderr")
+    merged = asked == subprocess.STDOUT
+    if not merged:
+        kwargs["stderr"] = subprocess.PIPE
+    output = ToolOutput()
+    try:
+        done = subprocess.run(argv, **kwargs)
+    except OSError as exc:
+        output.feed("%s\n" % exc)
+        failed = finished(argv, 127, output, label, tool)
+        failed.failure = "could not be started: %s" % (exc.strerror or exc)
+        _settle(failed, announce, skipped)
+        if on_missing is None:
+            raise
+        empty = "" if kwargs.get("text") else b""
+        return subprocess.CompletedProcess(argv, on_missing, empty, empty)
+    except subprocess.TimeoutExpired as exc:
+        for said in (exc.stderr, exc.output if merged else None):
+            if said:
+                output.feed(said)
+        failed = finished(argv, 124, output, label, tool)
+        failed.failure = "did not finish within %s second(s)" % exc.timeout
+        _settle(failed, announce, skipped)
+        raise
+    # getattr: a stand-in for subprocess.run may hand back a status alone.
+    said = getattr(done, "stdout" if merged else "stderr", None)
+    if said:
+        output.feed(said)
+    result = finished(argv, done.returncode, output, label, tool)
+    if done.returncode in ok:
+        result.failure = ""
+        if announce:
+            report_notable(result)
+    elif not safety_stopped():
+        _settle(result, announce, skipped)
+    if asked != subprocess.PIPE and not merged and hasattr(done, "stderr"):
+        done.stderr = None
+    if check and done.returncode not in ok:
+        raise subprocess.CalledProcessError(
+            done.returncode, argv, getattr(done, "stdout", None),
+            getattr(done, "stderr", None))
+    return done
+
+
+def keep(argv, returncode: int, said, *, skipped: str = "", label: str = "",
+         tool: str = "") -> str:
+    """Keep a failure the caller ran the tool for itself and has already
+    said in a line of its own: ``said`` is what the tool printed. The error
+    log's path, or empty."""
+    output = ToolOutput()
+    if said:
+        output.feed(said)
+    result = finished(argv, returncode, output, label, tool)
+    if result.ok:
+        result.failure = "exited 0, but what it made falls short"
+    return _keep(result, skipped)
+
+
+def _settle(result: ToolRun, announce: bool, skipped: str) -> None:
+    """A failed :func:`watched` call, replayed or only kept."""
+    if announce:
+        report_failure(result, warning=skipped)
+    else:
+        result.log_path = _keep(result, skipped)
+
+
+def safety_stopped() -> bool:
+    """Whether the run is being stopped: a tool the interrupt killed did not
+    fail, and is not worth a record."""
+    from medialib.lib import safety
+
+    return safety.abort_requested()
 
 
 def _kind(result: ToolRun, warning: str = "") -> str:

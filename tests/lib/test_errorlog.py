@@ -8,11 +8,13 @@ import errno
 import io
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
+from medialib import commands
 from medialib.lib import errorlog, ramscratch, runlog, statusline, toolcapture
 from tests import blackbox
 
@@ -232,6 +234,80 @@ class TestToolRuns:
         toolcapture.run(tool("print('frame=1 Non-monotonous DTS')"))
         assert capfd.readouterr().err == ""
         assert not error_dir.exists()
+
+
+@pytest.mark.stubbed
+class TestWatched:
+    """toolcapture.watched: subprocess.run for a tool doing work, with a
+    failure replayed and kept."""
+
+    def test_it_answers_as_subprocess_run_does(self, error_dir, capfd):
+        done = toolcapture.watched(
+            tool("import sys; print('out'); sys.stderr.write('chatter')"),
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        assert done.returncode == 0 and done.stdout.strip() == b"out"
+        assert done.stderr is None
+        assert capfd.readouterr().err == ""
+        assert not error_dir.exists()
+
+    def test_a_failure_is_replayed_and_kept_with_what_it_said(self, error_dir,
+                                                              capfd):
+        done = toolcapture.watched(
+            tool("import sys; sys.stderr.write('cannot read page'); "
+                 "sys.exit(2)"), label="Book.cbz", stdout=subprocess.DEVNULL)
+        assert done.returncode == 2
+        err = capfd.readouterr().err
+        assert "ERROR: Book.cbz: " in err and "    | cannot read page" in err
+        text = only_file(error_dir)
+        assert "ERROR  tool-failed" in text and "  | cannot read page" in text
+
+    def test_a_caller_that_says_it_itself_gets_the_record_alone(
+            self, error_dir, capfd):
+        toolcapture.watched(tool("raise SystemExit(1)"), announce=False,
+                            skipped="the subtitle was not synced")
+        assert capfd.readouterr().err == ""
+        assert "WARNING  tool-skipped" in only_file(error_dir)
+
+    def test_the_statuses_that_are_not_failures_keep_nothing(self, error_dir):
+        toolcapture.watched(tool("raise SystemExit(1)"), ok=(0, 1))
+        assert not error_dir.exists()
+
+    def test_mkvtoolnix_s_warnings_are_not_failures(self):
+        assert toolcapture._WARNINGS_ARE_ONE == ("mkvmerge", "mkvpropedit",
+                                                 "mkvextract")
+
+    def test_a_missing_tool_can_answer_with_a_status(self, error_dir,
+                                                     tmp_path):
+        done = toolcapture.watched([str(tmp_path / "nothing")], on_missing=127,
+                                   announce=False)
+        assert done.returncode == 127
+        assert "ERROR  tool-not-started" in only_file(error_dir)
+
+    def test_a_merged_output_is_still_given_back(self, error_dir):
+        done = toolcapture.watched(
+            tool("import sys; print('a'); sys.exit(3)"), announce=False,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        assert done.stdout.strip() == b"a"
+        assert "  | a" in only_file(error_dir)
+
+
+@pytest.mark.fs
+class TestChildren:
+    def test_the_input_in_hand_is_handed_to_a_child(self, tmp_path):
+        comic = tmp_path / "Book.cbz"
+        with errorlog.working_on(str(comic), item="Book.cbz"):
+            _argv, env = commands.command_line("convert-images", ["a", "b"])
+        assert env[errorlog.INPUT_VARIABLE] == str(comic)
+        assert env[errorlog.ITEM_VARIABLE] == "Book.cbz"
+
+    def test_a_child_s_record_names_what_its_parent_worked_on(
+            self, error_dir, tmp_path, monkeypatch):
+        monkeypatch.setenv(errorlog.INPUT_VARIABLE, str(tmp_path / "Book.cbz"))
+        with errorlog.working_on(str(tmp_path / "page1.png"), item="page1.png"):
+            errorlog.record("tool-failed", "boom")
+        text = only_file(error_dir)
+        assert "input:    %s" % (tmp_path / "page1.png") in text
+        assert "for:      %s" % (tmp_path / "Book.cbz") in text
 
 
 @pytest.mark.fs

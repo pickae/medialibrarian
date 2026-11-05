@@ -47,6 +47,7 @@ from medialib.lib import (
     runlog,
     safety,
     settings,
+    toolcapture,
     tooldeps,
     workerpool,
 )
@@ -486,9 +487,10 @@ class Run:
 
     # --- the conversions --------------------------------------------------
     def _convert(self, arguments) -> int:
-        return subprocess.run(imagemagick.convert_argv(arguments),
-                              stdout=subprocess.DEVNULL,
-                              stderr=subprocess.DEVNULL).returncode
+        # Replayed and kept when it fails: the image it was making is missing.
+        return toolcapture.watched(imagemagick.convert_argv(arguments),
+                                   tool="ImageMagick",
+                                   stdout=subprocess.DEVNULL).returncode
 
     def _identify(self, arguments) -> str:
         proc = subprocess.run(imagemagick.identify_argv(arguments),
@@ -1057,8 +1059,9 @@ def main(argv: list, program: str = "convert-images") -> int:
         safety.set_run_footer(footer)
 
         if os.environ.get("HAVE_FDUDES"):
-            subprocess.run(["fdupes", "-rdN", input_dir],
-                           stdout=subprocess.DEVNULL)
+            toolcapture.watched(["fdupes", "-rdN", input_dir],
+                                skipped="duplicates were not removed",
+                                stdout=subprocess.DEVNULL)
         os.makedirs(output_dir, exist_ok=True)
         _prune(input_dir)
         _prune(output_dir)

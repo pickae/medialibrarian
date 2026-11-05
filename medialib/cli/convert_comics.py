@@ -576,9 +576,11 @@ def package_book(book_dir: str, out_path: str, out_rel: str,
         # on names would then write a second copy. A comment lives in the central
         # directory: it survives a rename, costs about 30 bytes, and is not an
         # entry, so no reader shows it as a page.
-        subprocess.run(["zip", "-z", "-q", staged],
-                       input=(source_archive + "\n").encode(),
-                       stdout=subprocess.DEVNULL)
+        toolcapture.watched(["zip", "-z", "-q", staged],
+                            input=(source_archive + "\n").encode(),
+                            stdout=subprocess.DEVNULL,
+                            skipped="the archive it came from could not be "
+                                    "written into %s" % os.path.basename(cbz))
 
         destination = os.path.dirname(cbz) or out_path
         os.makedirs(destination, exist_ok=True)
@@ -627,6 +629,17 @@ class Run:
         return state
 
     def prepare_book(self, record: str):
+        """The comic this is about, named for every error recorded meanwhile -
+        a page of it that fails in RAM, or in the convert-images it starts."""
+        with self._about(record):
+            return self._prepare_book(record)
+
+    def _about(self, record: str):
+        partial_path = record.partition(UNIT)[0]
+        return errorlog.working_on(os.path.join(self.in_path, partial_path),
+                                   item=partial_path)
+
+    def _prepare_book(self, record: str):
         """One book's preparation, in the RUN's process: the skip checks, the
         unpacking into RAM and the starved verdict, while the workers encode the
         books prepared before it. ``(item, size)`` for the queue, or None for a
@@ -694,7 +707,13 @@ class Run:
                    if entry.is_file())
         return (record, starved, measured), size
 
-    def finish_book(self, item: tuple) -> None:
+    def finish_book(self, item: tuple):
+        """The comic this is about, named for every error recorded meanwhile -
+        a page of it that fails in RAM, or in the convert-images it starts."""
+        with self._about(item[0]):
+            return self._finish_book(item)
+
+    def _finish_book(self, item: tuple) -> None:
         """One prepared book, in a worker: convert, number, zip, free.
 
         Under the lane the worker only sorts the pages: each one's encode,
@@ -721,7 +740,13 @@ class Run:
             return
         self.package_pages(item)
 
-    def package_pages(self, item: tuple) -> None:
+    def package_pages(self, item: tuple):
+        """The comic this is about, named for every error recorded meanwhile -
+        a page of it that fails in RAM, or in the convert-images it starts."""
+        with self._about(item[0]):
+            return self._package_pages(item)
+
+    def _package_pages(self, item: tuple) -> None:
         """A converted book: drop its broken pages, number, zip, free."""
         record = item[0]
         partial_path, _, out_rel = record.partition(UNIT)
@@ -1247,7 +1272,9 @@ def _run(result, declaration, program: str, script_dir: str,
                enums.extension_list(list(enums.COMIC_PDF_EXTENSIONS))))
 
     if have_fdupes:
-        subprocess.run(["fdupes", "-rdN", in_path], stdout=subprocess.DEVNULL)
+        toolcapture.watched(["fdupes", "-rdN", in_path],
+                            skipped="duplicates were not removed",
+                            stdout=subprocess.DEVNULL)
     # Prune empty folders inside the input, but never the input folder itself.
     for parent, _dirs, _names in os.walk(in_path, topdown=False):
         if parent != in_path:

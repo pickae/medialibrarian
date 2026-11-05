@@ -328,8 +328,11 @@ def normalise_dolby_vision(relative: str, settings, output_dir: str) -> tuple:
     # --default-duration is not decoration: the raw stream has no timing, and
     # without it mkvmerge falls back to 25 fps - which would misplace every chunk
     # boundary cut from the intermediate.
-    done = _run(["mkvmerge", "--quiet", "-o", prepared, "--default-duration",
-                 "0:%sfps" % fps, hevc], capture=True)
+    done = toolcapture.watched(
+        ["mkvmerge", "--quiet", "-o", prepared, "--default-duration",
+         "0:%sfps" % fps, hevc], announce=False, on_missing=127,
+        skipped="encoding as plain HDR10 instead", stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     # The converted stream has served its purpose the moment it is inside the
     # Matroska; free it before the encode starts rather than holding both.
     _remove(hevc)

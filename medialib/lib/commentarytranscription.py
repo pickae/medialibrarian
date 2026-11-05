@@ -18,7 +18,7 @@ import subprocess
 import tempfile
 import time
 
-from medialib.lib import languages, plexnames, runlog, treewalk
+from medialib.lib import languages, plexnames, runlog, toolcapture, treewalk
 from medialib.lib import whisper as whisper_lib
 from medialib.lib.census import printf_f0
 from medialib.lib.enums import shell_lower
@@ -435,14 +435,16 @@ def transcribe_commentary(record: str, whisper: dict, max_sync_offset: str,
         if srt_dir:
             os.makedirs(srt_dir, exist_ok=True)
         try:
-            ran = _run([*whisper_lib.WHISPER_COMMAND, mka,
+            ran = toolcapture.watched([*whisper_lib.WHISPER_COMMAND, mka,
                         "--output_dir", out_dir, "--model", model,
                         "--task", task, *lang_args,
                         "--compute_type", whisper["computeType"],
                         "--vad_filter", "True", *prompt_args, *batch_args,
                         "--output_format", "srt", "--device", whisper["device"],
                         "--threads", whisper["threads"]],
-                       stdout=subprocess.DEVNULL)
+                       tool="whisper", announce=False,
+                       skipped="the commentary was not transcribed",
+                       stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
             ran_ok = ran.returncode == 0
         except OSError:
             # a missing pipx is a failed run, logged as such
@@ -673,13 +675,16 @@ def export_commentary(directory: str, read_track_info, is_bonus_folder,
                 track_log('extracting "{}"'.format(name))
                 os.makedirs(os.path.dirname(mka), exist_ok=True)
                 index = audio_stream_index(i, types)
-                # this ffmpeg's stderr is left on the script's stderr
+                # this ffmpeg's stderr is replayed under the warning, and
+                # kept in the error log
                 try:
-                    made = subprocess.run(
+                    made = toolcapture.watched(
                         ["ffmpeg", "-y", "-loglevel", "error", "-nostats",
                          "-i", file, "-vn",
                          "-map", "0:a:{}".format(index),
                          "-acodec", "copy", mka],
+                        label=os.path.basename(file),
+                        skipped="the commentary track could not be extracted",
                         stdin=subprocess.DEVNULL)
                     made_ok = made.returncode == 0
                 except OSError:

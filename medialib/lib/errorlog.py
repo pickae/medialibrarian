@@ -58,6 +58,10 @@ ERROR_DIR = "error"
 NAME_VARIABLE = "ERROR_LOG_NAME"
 RUN_VARIABLE = "ERROR_LOG_RUN"
 STARTED_VARIABLE = "ERROR_LOG_STARTED"
+# The item and input file a parent was working on when it started this
+# process, so a child command's records still name the file on disk.
+ITEM_VARIABLE = "ERROR_LOG_ITEM"
+INPUT_VARIABLE = "ERROR_LOG_INPUT"
 
 ERROR, WARNING = "ERROR", "WARNING"
 
@@ -284,7 +288,20 @@ def subject() -> tuple[str, str]:
     """The (item, input file) the work in hand is about, innermost first; both
     empty when nothing has said."""
     stack = _subjects()
-    return stack[-1] if stack else ("", "")
+    if stack:
+        return stack[-1]
+    return (os.environ.get(ITEM_VARIABLE, ""), os.environ.get(INPUT_VARIABLE, ""))
+
+
+def child_environment(environment: dict) -> dict:
+    """``environment`` for a child command, with the item and input file in
+    hand handed down to it."""
+    item, source = subject()
+    if item:
+        environment[ITEM_VARIABLE] = item
+    if source:
+        environment[INPUT_VARIABLE] = source
+    return environment
 
 
 ORIGINS_FILE = ".errorlog-origins"
@@ -560,6 +577,12 @@ def _render(kind, message, files, tool_argv, tool_status, tool_output,
     elif source:
         out.append("input:    %s  [%s]" % (
             source, "exists" if os.path.lexists(source) else "not there"))
+    # A child command's own item sits inside what its parent was working on:
+    # a page in RAM is one of the parent's comic, which is what to look at.
+    handed = os.environ.get(INPUT_VARIABLE, "")
+    if handed and handed != source:
+        out.append("for:      %s  [what the command that started this one "
+                   "was working on]" % handed)
     file_lines = _file_lines(files, tool_argv)
     if file_lines:
         out.append("files:")

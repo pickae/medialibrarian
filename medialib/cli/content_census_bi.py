@@ -293,6 +293,11 @@ def run_build(sql_file: str, build_path: str, db_path: str = "") -> None:
         return
     sys.stderr.write("\nDuckDB refused the build. The statements it was given "
                      "are in:\n  %s\n" % sql_file)
+    errorlog.record("tool-failed", "DuckDB refused the build of %s (exit "
+                    "status %d); its statements are kept in %s"
+                    % (db_path, done.returncode, db_path + ".failed.sql"),
+                    files=[db_path, sql_file], tool_argv=["duckdb", "-bail",
+                                                          build_path])
     # The scratch is in RAM and about to go, so the one thing worth keeping -
     # the SQL that failed - is copied out next to the database first.
     try:

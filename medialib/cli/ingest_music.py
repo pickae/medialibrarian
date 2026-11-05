@@ -1000,15 +1000,10 @@ def _bytes(text: str) -> bytes:
 
 
 def _run(argv: list) -> int:
-    """One tool, its own output silenced. A tool that is not there is a 127
-    rather than an exception."""
-    try:
-        done = subprocess.run(argv, stdin=subprocess.DEVNULL,
-                              stdout=subprocess.DEVNULL,
-                              stderr=subprocess.DEVNULL)
-    except OSError:
-        return 127
-    return done.returncode
+    """One tool, its own output kept for the replay and the error log when
+    it fails. A tool that is not there is a 127 rather than an exception."""
+    return toolcapture.watched(argv, on_missing=127, stdin=subprocess.DEVNULL,
+                               stdout=subprocess.DEVNULL).returncode
 
 
 def _tool(argv: list, label: str):

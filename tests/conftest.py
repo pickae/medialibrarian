@@ -176,6 +176,8 @@ _STATE_KNOBS = (
     "ERROR_LOG_NAME",
     "ERROR_LOG_RUN",
     "ERROR_LOG_STARTED",
+    "ERROR_LOG_ITEM",
+    "ERROR_LOG_INPUT",
 )
 
 

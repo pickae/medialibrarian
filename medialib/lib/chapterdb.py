@@ -43,7 +43,7 @@ import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from typing import NamedTuple
 
-from medialib.lib import plexnames, politepacing, runlog, subtitlefiles, titlematch
+from medialib.lib import plexnames, politepacing, runlog, subtitlefiles, titlematch, toolcapture
 
 __all__ = ["SITE", "ChapterSet", "Existing", "add_chapters", "apply_set",
            "ask_archive",
@@ -455,11 +455,12 @@ def write_chapters(movie: str, chapter_set: ChapterSet) -> bool:
         with os.fdopen(handle, "w", encoding="utf-8") as out:
             out.write(chapters_xml(chapter_set))
         try:
-            done = subprocess.run(["mkvpropedit", "--quiet", movie,
-                                   "--chapters", path],
-                                  stdout=subprocess.PIPE,
-                                  stderr=subprocess.STDOUT,
-                                  stdin=subprocess.DEVNULL)
+            done = toolcapture.watched(["mkvpropedit", "--quiet", movie,
+                                        "--chapters", path],
+                                       skipped="the chapters were not written",
+                                       stdout=subprocess.PIPE,
+                                       stderr=subprocess.STDOUT,
+                                       stdin=subprocess.DEVNULL)
         except OSError:
             return False
         if done.returncode not in (0, 1):

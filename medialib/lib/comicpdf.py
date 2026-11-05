@@ -11,6 +11,7 @@ import re
 import shutil
 import subprocess
 
+from medialib.lib import toolcapture
 from medialib.lib.formatting import awk_number
 
 __all__ = [
@@ -42,9 +43,10 @@ def _run(argv: list[str]) -> int:
     handles.
     """
     try:
-        proc = subprocess.run(
-            argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-        )
+        # Kept in the error log when it fails: pages it did not render are
+        # missing from the book.
+        proc = toolcapture.watched(argv, announce=False,
+                                   stdout=subprocess.DEVNULL)
     except FileNotFoundError:
         return _MISSING
     except PermissionError:

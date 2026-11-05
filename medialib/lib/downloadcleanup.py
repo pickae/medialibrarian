@@ -21,6 +21,7 @@ import stat
 import subprocess
 from collections.abc import Callable, Sequence
 
+from medialib.lib import toolcapture
 from medialib.lib.enums import VIDEO_EXTENSIONS, lower_extension_of
 from medialib.lib.safety import SkipLog, is_empty_folder, lower_case_ending
 
@@ -69,12 +70,13 @@ Runner = Callable[[Sequence[str]], "subprocess.CompletedProcess"]
 
 
 def _run(argv: Sequence[str]) -> subprocess.CompletedProcess:
-    """The real runner: the tool on PATH, its output discarded.
+    """The real runner: the tool on PATH, its output kept only for the error
+    log, where a failure goes with what the tool said.
 
     Only the exit status is read.
     """
-    return subprocess.run(list(argv), stdout=subprocess.DEVNULL,
-                          stderr=subprocess.DEVNULL)
+    return toolcapture.watched(list(argv), stdout=subprocess.DEVNULL,
+                               skipped="the download was left as it is")
 
 
 def download_cleanup_tools(kind: str) -> str:
