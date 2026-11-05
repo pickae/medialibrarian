@@ -25,12 +25,11 @@ manifest line names. A page the card did not write goes to that call; a card
 whose call wrote nothing and failed could not start the encoder at all, and
 every later page goes straight to the CPU.
 
-The run unpacks the next book whenever either side is short of work, and
-:meth:`Lane.wait_for_room` says which: the run then takes the book likeliest to
-feed that side, so a stretch of books with nothing for the card does not leave
-it idle while books further on would feed it. The card comes first - when
-both are short it is the card's book that is unpacked - and the CPU's encodes
-run niced, below the sorting that feeds the card. What bounds the looking
+The run unpacks the next book, in the order the books were found, whenever
+:meth:`Lane.wait_for_room` says either side is short of work. Which side does
+not pick the book: nearly every page is the card's, and the CPU's encoders
+take the card's pages when they have none of their own. The CPU's encodes run
+niced, below the sorting that feeds the card. What bounds the looking
 ahead is RAM, read live: every book unpacked and not yet zipped is held there,
 and none is unpacked while less than :data:`RAM_RESERVE` is left.
 """
@@ -147,6 +146,10 @@ class Lane:
         self.missing: dict[str, int] = {}
         self.busy = 0.0
         self._busy_since = 0.0
+        # The CPU's the same way: wall time while any of its encoders works.
+        self.cpu_busy = 0.0
+        self._cpu_running = 0
+        self._cpu_busy_since = 0.0
         self.finishers = ThreadPoolExecutor(max_workers=2)
         self.threads = [threading.Thread(target=self._watch, daemon=True,
                                          name="lane-watch")]
@@ -369,11 +372,18 @@ class Lane:
             page = entry.get("output") or (entry["cpu"][-1]
                                            if entry["cpu"] else "")
             source = errorlog.origin_of(page) if page else ""
+            with self.room:
+                if self._cpu_running == 0:
+                    self._cpu_busy_since = time.time()
+                self._cpu_running += 1
             made = toolcapture.run(
                 NICE + entry["cpu"], label=os.path.basename(source or page),
                 tool=os.path.basename(entry["cpu"][0]) if entry["cpu"] else "",
                 verify=functools.partial(_unwritten, page))
             with self.room:
+                self._cpu_running -= 1
+                if self._cpu_running == 0:
+                    self.cpu_busy += time.time() - self._cpu_busy_since
                 if not made.ok and not safety.abort_requested():
                     self.missing[book.folder] = \
                         self.missing.get(book.folder, 0) + 1

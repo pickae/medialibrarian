@@ -107,8 +107,9 @@ def number_files_in_folder(directory: str, files,
         return
 
     label = "<none>" if plan.extension == NO_EXTENSION else plan.extension
-    log('  "%s": numbering %d .%s file(s)'
-        % (os.path.basename(directory), plan.total, label))
+    if announce:
+        log('  "%s": numbering %d .%s file(s)'
+            % (os.path.basename(directory), plan.total, label))
 
     # Two phases through unique temporary names, so an overlapping source and
     # target - 10.mp3 becoming 02.mp3 while 2.mp3 is still there - cannot

@@ -580,6 +580,30 @@ def report_failure(result: ToolRun, stream=None, lock_file: str = "",
         _write_block(out, text)
 
 
+def report_warnings(result: ToolRun, stream=None, lock_file: str = "") -> None:
+    """Replay a run whose exit status means it finished with warnings - the
+    work done, but not cleanly - kept as a ``tool-warning`` rather than the
+    failure its non-zero status would otherwise make it."""
+    subject = "%s finished with warnings" % (
+        "%s: %s" % (result.label, result.name) if result.label
+        else result.name)
+    if not result.log_path:
+        result.log_path = errorlog.record(
+            "tool-warning", "%s (%s)" % (subject, result.failure),
+            tool_argv=result.argv, tool_status=result.failure,
+            tool_output=result.output.lines(),
+            tool_lines=result.output.total, causes=causes(result))
+    text = _block(result, runlog.verbosity(), subject)
+    if not text:
+        return
+    out = sys.stderr if stream is None else stream
+    if lock_file:
+        with open(lock_file, "a") as handle, runlog.take_lock(handle):
+            _write_block(out, text)
+    else:
+        _write_block(out, text)
+
+
 def _write_block(out, text: str) -> None:
     """The block on a console row of its own: a status row pinned where it is
     about to go is erased first, and redraws itself under it."""

@@ -1096,3 +1096,70 @@ class TestTheRootFolderAnArchiveCarries:
     def test_a_name_that_is_not_an_archive(self, tmp_path):
         (tmp_path / "notes.txt").write_text("x")
         assert archives.archive_root_folder(str(tmp_path / "notes.txt")) == ""
+
+
+class TestWhatTheListingToolSays:
+    """unrar and 7-Zip complain on stderr. With several books listed at once
+    that line on the terminal named no archive, so it is kept instead and
+    reported under the archive's name - in the run's error log too, as what
+    it is."""
+
+    @pytest.fixture
+    def listing(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CLI_SCRIPT_DIR", str(tmp_path))
+        monkeypatch.delenv("LOG_TIMESTAMPS", raising=False)
+        monkeypatch.delenv("LOG_VERBOSITY", raising=False)
+        from medialib.lib import statusline
+        monkeypatch.setattr(statusline.state, "row", "")
+
+        def answer(status, stdout, stderr):
+            def fake_run(command, **_kwargs):
+                return SimpleNamespace(returncode=status,
+                                       stdout=stdout.encode(),
+                                       stderr=stderr.encode())
+            monkeypatch.setattr(archives.subprocess, "run", fake_run)
+        return answer
+
+    @staticmethod
+    def _log(tmp_path):
+        found = list((tmp_path / "logs" / "error").glob("*.log"))
+        return found[0].read_text(encoding="utf-8") if found else ""
+
+    def test_a_listing_that_failed_is_an_error_naming_the_book(
+            self, listing, tmp_path, capfd):
+        listing(3, "", "Corrupt header is found\n")
+        refused = archives.unsafe_members(str(tmp_path / "Book.cbr"), "rar")
+        assert refused and "could not be listed" in refused[0][1]
+        err = capfd.readouterr().err
+        assert "ERROR: Book.cbr: unrar exited with status 3" in err
+        assert "    | Corrupt header is found\n" in err
+        log = self._log(tmp_path)
+        assert "ERROR  tool-failed" in log
+        assert "Corrupt header is found" in log
+
+    def test_a_listing_that_says_damage_is_a_warning(self, listing, tmp_path,
+                                                     capfd):
+        listing(0, "        Name: 01.jpg\n        Type: File\n",
+                "Corrupt header is found\n")
+        assert archives.unsafe_members(str(tmp_path / "Book.cbr"),
+                                       "rar") == []
+        err = capfd.readouterr().err
+        assert "WARNING: Book.cbr: unrar finished, but the archive is " \
+               "damaged" in err
+        assert "WARNING  tool-warning" in self._log(tmp_path)
+
+    def test_a_clean_listing_says_nothing(self, listing, tmp_path, capfd):
+        listing(0, "        Name: 01.jpg\n        Type: File\n", "")
+        assert archives.unsafe_members(str(tmp_path / "Book.cbr"),
+                                       "rar") == []
+        assert capfd.readouterr().err == ""
+        assert self._log(tmp_path) == ""
+
+    def test_the_members_alone_say_nothing(self, listing, tmp_path, capfd):
+        """Ranking and naming list every book up front; the check before
+        each one is unpacked is the one that reports, once."""
+        listing(3, "", "Corrupt header is found\n")
+        assert archives.archive_members(str(tmp_path / "Book.cbr"),
+                                        "rar") is None
+        assert capfd.readouterr().err == ""
+        assert self._log(tmp_path) == ""

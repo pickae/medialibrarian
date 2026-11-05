@@ -125,6 +125,23 @@ class TestPerformingTheRenames:
         assert "cover.jpg" in self._number(
             tmp_path, ["a.mp3", "b.mp3", "c.mp3", "cover.jpg"])
 
+    @pytest.mark.parametrize("announce, said", [(True, 1), (False, 0)])
+    def test_the_line_is_said_only_when_asked(self, tmp_path, monkeypatch,
+                                              announce, said):
+        """A folder of the caller's own making - a book's pages - is numbered
+        without a line per book; one the user named is announced."""
+        from medialib.lib import numbering
+        lines = []
+        monkeypatch.setattr(numbering, "log", lines.append)
+        names = ["a.mp3", "b.mp3", "c.mp3"]
+        self._folder(tmp_path, names)
+        numbering.number_files_in_folder(
+            str(tmp_path), [str(tmp_path / name) for name in names],
+            announce=announce)
+        assert len(lines) == said
+        assert sorted(p.name for p in tmp_path.iterdir()) == \
+            ["1.mp3", "2.mp3", "3.mp3"]
+
     def test_a_second_run_changes_nothing(self, tmp_path):
         from medialib.lib.numbering import number_files_in_folder
         once = self._number(tmp_path, ["a.mp3", "b.mp3", "c.mp3"])
