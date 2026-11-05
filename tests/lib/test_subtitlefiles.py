@@ -682,9 +682,14 @@ class TestDownloadSrt:
     def test_no_more_than_five_are_tried(self, w, monkeypatch):
         tree = _tree(w)
         monkeypatch.chdir(tree)
+        # A failure for every sync this can run - two a try, to the film's
+        # subtitle and then its audio. A list that ran out would leave the
+        # rest to the stub's own rule, which passes a call whose last argument
+        # - here a temporary folder with a random name - happens to hold "ok".
         have_calls, tree = self._setup(
             w, tree, pipx_write=" ".join(["Movie.en.srt"] * 8),
-            ffprobe="subrip", ffsubsync_rc="1")
+            ffprobe="subrip",
+            ffsubsync_rc=" ".join(["1"] * 2 * subtitlefiles.TRIES_PER_LANGUAGE))
         w.say("pipx", "1\n")
         logs = []
         subtitlefiles.download_srt("Movie.mkv", "en", subtitlefiles.PROVIDERS,

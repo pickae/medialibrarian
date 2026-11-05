@@ -25,6 +25,7 @@ from medialib.lib import (
     clioptions,
     codecs,
     durationcheck,
+    dynamicqueue,
     errorlog,
     ffmpegselect,
     formatting,
@@ -51,6 +52,14 @@ from medialib.lib.runlog import log
 # it is what keeps a mixed Intel-plus-NVIDIA box from mistaking the NVIDIA node for
 # the iGPU.
 INTEL_PCI_VENDOR = "0x8086"
+
+# How many files to convert are kept prepared ahead of the one encoding. Files
+# the preparation passes over - up to date, or not worth converting - do not
+# count, so this is two encodes' worth of slack for a preparation that runs
+# long, at the cost of nothing more than their probes being done early: the
+# one thing a prepared file can hold that is large, a Dolby Vision
+# intermediate, has a slot of its own (Run.dv_slot).
+LOOKAHEAD = 2
 
 
 def _run(argv: list, capture: bool = False):
@@ -969,17 +978,7 @@ class Run:
         # file's: whoever converts one takes this, and the encode that is done
         # reading it hands it back.
         self.dv_slot = threading.Semaphore(1)
-
-    def next_plan(self, sources) -> "Plan | None":
-        """The next file of <sources> that is to be converted, prepared, or None
-        once there is none - the files it passes over were skipped."""
-        for relative in sources:
-            if safety.abort_requested():
-                return None
-            plan = self.prepare(relative)
-            if plan is not None:
-                return plan
-        return None
+        self.tally = threading.Lock()
 
     def prepare(self, relative: str) -> "Plan | None":
         """ONE video's preparation: resume-skip an up-to-date output, ask -t
@@ -1016,7 +1015,7 @@ class Run:
             if duration > 0 and out_duration >= (
                     duration - rules.LENGTH_SLACK_SECONDS):
                 log("Up to date, skipping: " + relative)
-                self.skipped += 1
+                self.count("skipped")
                 return None
 
         directory = plan.directory
@@ -1057,7 +1056,7 @@ class Run:
                                                enc_width, enc_height,
                                                source_grain, settings):
                 shutil.rmtree(directory, ignore_errors=True)
-                self.skipped += 1
+                self.count("skipped")
                 return None
 
         # Checked between the probes, because Ctrl+C only kills the ffmpeg
@@ -1089,7 +1088,7 @@ class Run:
                                         crop_height, fields):
                 self._release_dv(plan)
                 shutil.rmtree(directory, ignore_errors=True)
-                self.skipped += 1
+                self.count("skipped")
                 return None
             if settings.upscale_size:
                 enc_width, enc_height = (
@@ -1143,53 +1142,70 @@ class Run:
         CPU is otherwise idle and even for a software encode the few tracks are
         cheap. Then the MUX.
         """
-        try:
-            return self._convert(plan)
-        finally:
-            self._release_dv(plan)
+        return self.start_convert(plan)()
 
-    def _convert(self, plan: Plan) -> int:
+    def start_convert(self, plan: Plan):
+        """The part of :meth:`convert` the encoder is busy for: the audio
+        started, the video encoded. What is left - waiting for the audio, the
+        mux and the checks of what came out - is handed back as a callable that
+        returns the file's status, so the run can start the NEXT file's video
+        encode while it runs: none of it needs the encoder, and done in front of
+        the next encode it is the encoder sitting idle between two films.
+        """
         settings = plan.settings
         relative, directory = plan.relative, plan.directory
+        try:
+            # The audio starts NOW so it runs alongside the video pass: with
+            # hardware video decode and encode the CPU is otherwise idle, and
+            # even for a software encode the few tracks are cheap, so it
+            # overlaps for free instead of running afterwards. Started the way
+            # every worker is, not forked: the look-ahead and the previous
+            # file's mux are threads of this process.
+            audio = workerpool.start_worker(
+                _audio_worker, (relative, directory, settings),
+                os.path.join(settings.input_dir, relative))
 
-        # The audio starts NOW so it runs alongside the video pass: with hardware
-        # video decode and encode the CPU is otherwise idle, and even for a
-        # software encode the few tracks are cheap, so it overlaps for free
-        # instead of running afterwards.
-        import multiprocessing
-        audio = multiprocessing.Process(
-            target=_audio_worker, args=(relative, directory, settings))
-        audio.start()
-
-        self._encode(settings, relative, directory, plan.video_duration,
-                     plan.bounds,
-                     plan.size_text, scenecuts.describe(plan.cut_kinds))
-        frames, micros, _written = rules.sum_encode_progress(directory)
-
-        # The intermediate has been read for the last time - everything left reads
-        # the ORIGINAL. Handed back per file because it is a whole film's video
-        # stream, and the file prepared ahead may be waiting to convert its own.
-        self._release_dv(plan)
+            self._encode(settings, relative, directory, plan.video_duration,
+                         plan.bounds,
+                         plan.size_text, scenecuts.describe(plan.cut_kinds))
+            frames, micros, _written = rules.sum_encode_progress(directory)
+        finally:
+            # The intermediate has been read for the last time - everything
+            # left reads the ORIGINAL. Handed back per file because it is a
+            # whole film's video stream, and the file prepared ahead may be
+            # waiting to convert its own.
+            self._release_dv(plan)
 
         # Video is done: stop the row and leave it behind on its own console
-        # line, then wait for the audio before muxing.
+        # line. The rest runs without one: its lines scroll above the next
+        # file's row.
         statusline.stop_status_monitor()
-        audio.join()
-        if safety.abort_requested():
-            return safety.INTERRUPTED_EXIT_STATUS
 
-        if self.finish(relative, directory, plan.duration,
-                       audio.exitcode or 0, replacing=plan.replacing,
-                       plan=plan) != 0:
-            return 1
+        def tail() -> int:
+            audio.join()
+            if safety.abort_requested():
+                return safety.INTERRUPTED_EXIT_STATUS
+            if self.finish(relative, directory, plan.duration,
+                           audio.exitcode or 0, replacing=plan.replacing,
+                           plan=plan) != 0:
+                return 1
+            # Only a file that came out complete counts towards the stats: a
+            # skipped or failed one did work that produced nothing, and
+            # averaging it in would report a throughput the finished library
+            # does not reflect.
+            with self.tally:
+                self.converted += 1
+                self.frames += frames
+                self.video_seconds += micros / 1000000
+            return 0
 
-        # Only a file that came out complete counts towards the stats: a skipped
-        # or failed one did work that produced nothing, and averaging it in would
-        # report a throughput the finished library does not reflect.
-        self.converted += 1
-        self.frames += frames
-        self.video_seconds += micros / 1000000
-        return 0
+        return tail
+
+    def count(self, field: str) -> None:
+        """One more file skipped or failed: said from the look-ahead and the
+        mux threads as well as the run's own, so under the tally's lock."""
+        with self.tally:
+            setattr(self, field, getattr(self, field) + 1)
 
     def _release_dv(self, plan: Plan) -> None:
         if plan.scratch:
@@ -2169,11 +2185,17 @@ class _HeldOutput:
 
 def _run_all(settings) -> int:
     """The walk: one file at a time, because the chunk count already saturates the
-    encoder and encoding files in parallel would oversubscribe it. The one thing
-    that runs beside a file's encode is the NEXT file's preparation - its probes,
-    grain and crop measurements and chunk boundaries - so that work is not spent
-    in front of the next encode."""
-    import concurrent.futures
+    encoder and encoding files in parallel would oversubscribe it. What runs
+    beside a file's encode is everything around it that does not need the
+    encoder, so the encoder is not left idle between two files:
+
+    - the NEXT files' preparation - the probes, the -t worthwhileness test, the
+      grain and crop measurements, the Dolby Vision conversion, the HDR10+
+      extraction and the chunk boundaries - fed by the dynamic queue up to
+      LOOKAHEAD files ahead, passing over the files it skips as it goes;
+    - the PREVIOUS file's tail - waiting for its audio, the mux and the checks of
+      the muxed file - on a thread of its own while this file's video encodes.
+    """
     statusline.init_status_line()
 
     # The pause state lives in the RAM scratch because the encoders a keypress has
@@ -2219,41 +2241,83 @@ def _run_all(settings) -> int:
 
     output = _HeldOutput(sys.stderr)
     sys.stderr = output
-    ahead = concurrent.futures.ThreadPoolExecutor(max_workers=1)
 
-    def prepare_next(sources):
+    def prepared():
+        # The dynamic queue's producer, on the queue's own thread: the files
+        # still to convert, each prepared - or passed over - in turn.
         output.ahead = threading.get_ident()
-        return run.next_plan(sources)
-
-    sources = iter(_sources(settings.input_dir))
-    try:
-        pending = ahead.submit(prepare_next, sources)
-        while True:
-            output.live(True)
-            plan = pending.result()
-            # An interrupt stops the walk instead of counting every remaining
-            # file as a failure. The report still goes out, covering the files
-            # that did convert.
+        for relative in _sources(settings.input_dir):
             if safety.abort_requested():
-                if plan is not None:
-                    run._release_dv(plan)
-                sys.stderr.write("\nInterrupted - stopping.\n")
-                safety.print_run_footer()
-                return safety.INTERRUPTED_EXIT_STATUS
+                return
+            plan = run.prepare(relative)
+            if plan is not None:
+                yield plan, plan.duration
+
+    # The previous file's mux, running beside this one's encode: at most one at
+    # a time, so the RAM scratch never holds more than two files' encodes.
+    muxing: threading.Thread | None = None
+    crashed: list = []
+
+    def wait_for_mux() -> None:
+        # What the tail raised is raised here, in the run's own thread, the
+        # way it was when the tail ran in it.
+        nonlocal muxing
+        if muxing is not None:
+            muxing.join()
+            muxing = None
+        if crashed:
+            raise crashed.pop()
+
+    def mux(tail) -> None:
+        # One file that cannot be finished must not cost the rest of the run:
+        # it has already said what went wrong, and kept its video encode where
+        # it could.
+        try:
+            if tail() not in (0, safety.INTERRUPTED_EXIT_STATUS):
+                run.count("failed")
+        except BaseException as raised:  # noqa: BLE001 - re-raised above
+            crashed.append(raised)
+
+    queue = dynamicqueue.ahead(prepared(), LOOKAHEAD, log=log,
+                               discard=run._release_dv)
+    try:
+        while True:
+            # The look-ahead's held lines come out while the run waits on it,
+            # which is also where they would have appeared had the file been
+            # prepared after the one before it.
+            output.live(True)
+            plan = next(queue, None)
             if plan is None:
                 break
             output.live(False)
-            pending = ahead.submit(prepare_next, sources)
-            # One file that cannot be finished must not cost the rest of the run:
-            # it has already said what went wrong, and kept its video encode
-            # where it could.
-            if run.convert(plan) != 0:
-                run.failed += 1
+            if safety.abort_requested():
+                run._release_dv(plan)
+                break
+            tail = run.start_convert(plan)
+            wait_for_mux()
+            if safety.abort_requested():
+                tail()
+                break
+            muxing = threading.Thread(target=mux, args=(tail,),
+                                      name="convert-video-mux")
+            muxing.start()
+        wait_for_mux()
+        # An interrupt stops the walk instead of counting every remaining
+        # file as a failure. The report still goes out, covering the files
+        # that did convert.
+        if safety.abort_requested():
+            queue.close()
+            sys.stderr.write("\nInterrupted - stopping.\n")
+            safety.print_run_footer()
+            return safety.INTERRUPTED_EXIT_STATUS
     finally:
-        # Waited for, so nothing it registers lands after the scratch cleanup:
-        # its probes were interrupted with the rest, and it checks for an
-        # interrupt between files.
-        ahead.shutdown(wait=True, cancel_futures=True)
+        # Closed, and so waited for, before the scratch cleanup: nothing the
+        # look-ahead registers may land after it. Its probes were interrupted
+        # with the rest, and it checks for an interrupt between files; what it
+        # had prepared and the run never reached is let go of.
+        if muxing is not None:
+            muxing.join()
+        queue.close()
         output.live(True)
         sys.stderr = output._stream
         statusline.stop_status_monitor()

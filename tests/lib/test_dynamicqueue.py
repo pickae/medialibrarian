@@ -358,3 +358,104 @@ def test_a_queue_smaller_than_its_buffer_says_it_was_prepared_whole(tmp_path):
         "Queue: pre-filling the buffer of 4 item(s) ...",
         "Queue: all 2 item(s) prepared, starting 2 worker(s)",
     ]
+
+
+# --- ahead: the same queue, worked one item at a time in this process --------
+
+
+def test_ahead_hands_the_items_out_in_the_order_prepared():
+    sizes = [("small", 1), ("large", 9), ("middle", 5)]
+    assert list(dynamicqueue.ahead(iter(sizes), 2)) == [
+        "small", "large", "middle"]
+
+
+def test_ahead_prepares_while_the_caller_works_and_no_further_than_its_buffer():
+    prepared = []
+    more = threading.Event()
+
+    def producer():
+        for name in ("a", "b", "c", "d", "e"):
+            prepared.append(name)
+            more.set()
+            yield name, 0
+
+    queue = dynamicqueue.ahead(producer(), 2)
+    assert next(queue) == "a"
+    # The caller is busy with "a": the buffer fills behind it, and stops full.
+    deadline = time.time() + LIMIT
+    while len(prepared) < 3 and time.time() < deadline:
+        time.sleep(0.01)
+    time.sleep(0.2)
+    assert prepared == ["a", "b", "c"]
+
+    # Taking one makes room for exactly one more.
+    assert next(queue) == "b"
+    deadline = time.time() + LIMIT
+    while len(prepared) < 4 and time.time() < deadline:
+        time.sleep(0.01)
+    time.sleep(0.2)
+    assert prepared == ["a", "b", "c", "d"]
+    assert list(queue) == ["c", "d", "e"]
+
+
+def test_ahead_gives_what_it_never_handed_out_to_discard():
+    pulled = []
+    discarded = []
+
+    def producer():
+        for name in ("a", "b", "c"):
+            pulled.append(name)
+            yield name, 0
+
+    queue = dynamicqueue.ahead(producer(), 2, discard=discarded.append)
+    assert next(queue) == "a"
+    deadline = time.time() + LIMIT
+    while len(pulled) < 3 and time.time() < deadline:
+        time.sleep(0.01)
+    queue.close()
+    assert discarded == ["b", "c"]
+
+
+def test_ahead_raises_what_the_producer_raised_after_what_it_prepared():
+    def producer():
+        yield "a", 0
+        raise RuntimeError("probe failed")
+
+    got = []
+    with pytest.raises(RuntimeError, match="probe failed"):
+        for item in dynamicqueue.ahead(producer(), 2):
+            got.append(item)
+    assert got == ["a"]
+
+
+def test_ahead_says_how_long_the_caller_waited_on_an_empty_buffer():
+    lines = []
+    go = threading.Event()
+
+    def producer():
+        yield "a", 0
+        assert go.wait(LIMIT)
+        time.sleep(1.1)
+        yield "b", 0
+
+    queue = dynamicqueue.ahead(producer(), 2, log=lines.append)
+    assert next(queue) == "a"
+    assert lines == []
+    go.set()
+    assert next(queue) == "b"
+    assert len(lines) == 1
+    assert lines[0].startswith("Queue: buffer ran dry, waited 1 s")
+
+
+def test_ahead_already_aborting_hands_out_nothing(tmp_path, monkeypatch):
+    flag = tmp_path / "abort"
+    flag.write_text("")
+    monkeypatch.setenv("ABORT_FLAG", str(flag))
+    pulled = []
+
+    def producer():
+        pulled.append("a")
+        yield "a", 0
+
+    assert list(dynamicqueue.ahead(producer(), 2)) == []
+    assert pulled == []
