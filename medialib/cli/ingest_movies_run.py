@@ -13,9 +13,11 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 
 from medialib import commands
 from medialib.cli import ingest_movies as rules
+from medialib.cli import ingest_movies_lanes as lanes
 from medialib.cli.ingest_movies import log
 from medialib.lib import (
     chapterdb,
@@ -23,6 +25,7 @@ from medialib.lib import (
     clioptions,
     commentarynames,
     commentarytranscription,
+    diskturn,
     dolbyvision,
     donelog,
     durationcheck,
@@ -82,6 +85,11 @@ class Run:
     ffsubsync_quality: str
     long_names: tmdblookup.LongNames
     unfixed_movies: list
+    # Where the disks' turns are shared with the workers (see diskturn), and
+    # the RAM a remux leaves free for other writers into the scratch. Both are
+    # read with a default: a Run made for one phase has neither.
+    disk_turns: str
+    scratch_headroom: int
 
     def __init__(self, **settings) -> None:
         self.__dict__.update(settings)
@@ -257,10 +265,16 @@ class Run:
         one that would not fit - beside it because that file system already has
         to hold the result, which turns the final move into a rename.
         """
+        need = _scratch_need(rules._size_of(movie), job["wanted"],
+                             job["stream_size"])
+        # Room left over for whatever else is writing into the scratch while
+        # this remux runs: the commentary extracts, while the transcription
+        # still goes on beside the remux lane.
+        headroom = getattr(self, "scratch_headroom", 0)
+        if need and headroom:
+            need = str(int(need) + headroom)
         path, on_disk, status = ramscratch.ram_scratch_dir_for(
-            _scratch_need(rules._size_of(movie), job["wanted"],
-                          job["stream_size"]),
-            "improveMovie", os.path.dirname(movie))
+            need, "improveMovie", os.path.dirname(movie))
         if status != 0:
             return None, False
         return path, on_disk
@@ -455,7 +469,7 @@ class Run:
         return ""
 
 
-def improve_main_movies(state, root: str) -> None:
+def improve_main_movies(state, root: str, skip=(), around=None) -> None:
     """Every film folder's main movie, improved.
 
     Extras subfolders are skipped, as are folders already carrying an improved
@@ -463,7 +477,24 @@ def improve_main_movies(state, root: str) -> None:
     which of those is the feature. Several files of ONE film are improved one by
     one: an edition and a part are each their own container with their own
     tracks, and what makes them one film is that they are named systematically.
+
+    ``skip`` are films already seen to - by the remux lane, in its spelling of
+    them - and ``around``, when given, is what each remux is run inside of: the
+    locks a film is held under while other lanes may still be at work.
     """
+    for movie in main_movies(root):
+        if lanes.key(movie) in skip:
+            continue
+        if around is None:
+            state.improve_main_movie(movie)
+            continue
+        with around(movie):
+            state.improve_main_movie(movie)
+
+
+def main_movies(root: str) -> list:
+    """The films :func:`improve_main_movies` would improve, in its order."""
+    movies = []
     for directory in [root] + rules._folders_below(root):
         if rules.is_bonus_folder(directory):
             continue
@@ -475,7 +506,8 @@ def improve_main_movies(state, root: str) -> None:
             movie = os.path.join(directory, name)
             if _already_improved(movie):
                 continue
-            state.improve_main_movie(movie)
+            movies.append(movie)
+    return movies
 
 
 def _already_improved(movie: str) -> bool:
@@ -764,6 +796,11 @@ def main(argv: list, program: str = "ingest-movies",
 
     safety.init_safety_log(os.path.join(ram_root, "safetySkips.log"))
     durationcheck.init_log(os.path.join(ram_root, "lengthMismatch.log"))
+    # The disks' turns, shared with the workers through the scratch; and
+    # TMDb's answers kept, since the subtitles fetched ahead ask the tagging's
+    # questions long before the tagging does.
+    disk_turns = diskturn.init(os.path.join(ram_root, "diskTurns"))
+    tmdblookup.remember_answers()
     skips = safety.RunSkipLog()
     long_names = tmdblookup.LongNames()
     safety.init_abort_flag(os.path.join(ram_root, "abortRequested"))
@@ -804,13 +841,16 @@ def main(argv: list, program: str = "ingest-movies",
                 fragments_file=fragments_file, whisper=whisper,
                 whisper_said=whisper_said,
                 ffsubsync_quality=ffsubsync_quality, long_names=long_names,
-                unfixed_movies=unfixed_movies)
+                unfixed_movies=unfixed_movies, disk_turns=disk_turns,
+                scratch_headroom=0)
 
     listed = dict(zip(roots, names, strict=True))
     try:
         for root in ingestable:
             _ingest(state, root, subtitle_work, listed[root])
     finally:
+        tmdblookup.remember_answers(False)
+        diskturn.adopt("")
         ramscratch.run_exit_cleanup()
     return workerpool.exit_status(1 if durationcheck.failures() else 0)
 
@@ -2050,33 +2090,21 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
     # for the phases at the end that use them.
     ahead = _start_research(state, root)
 
-    log("Phase: transcoding lossless audio to opus")
-    _transcode_opus(state, root)
-
-    if subtitle_work:
-        log("Phase: extracting and transcribing commentary tracks")
-        jobs = state.whisper["jobs"]
-        commentarytranscription.export_commentary(
-            root, rules.read_track_info, rules.is_bonus_folder,
-            lambda name: rules.rename(name, state.fragments_file),
-            rules.audio_stream_index, state.ram_root, state.whisper,
-            log,
-            lambda producer: _drain_commentary(state, producer, jobs),
-            rules.MAX_WHISPER_SYNC_OFFSET, state.ffsubsync_quality,
-            same_commentary_name=rules._same_commentary,
-            unfixed=state.unfixed_movies)
-        safety.exit_if_aborted()
-    else:
-        log("Phase: extracting and transcribing commentary tracks - SKIPPED "
-            "(no ffsubsync/pipx, see the warning at startup)")
-
-    # An improved copy of each film's main movie, with the original kept as
-    # "<name> (old).mkv".
-    log("Phase: remuxing improved main movie copies")
-    improve_main_movies(state, root)
+    # The subtitles of every film TMDb can name, fetched on a thread of their
+    # own while the films are transcoded, transcribed and remuxed, and finished
+    # before the tagging renames any of them.
+    locks = lanes.FilmLocks()
+    fetching = _start_subtitle_lane(state, root, subtitle_work, locks)
+    try:
+        _films_in_lanes(state, root, subtitle_work, locks)
+    finally:
+        if fetching is not None and safety.abort_requested():
+            fetching.finish()
 
     # Last, once every film is the file it is going to stay: a rename costs
     # nothing to hold back, and the phases above keep the names they gave.
+    if fetching is not None:
+        fetching.finish()
     log("Phase: tagging movies with IMDb ids (Plex/Jellyfin naming)")
     tmdblookup.tag_plex_ids(root, log, state.skips,
                             long_names=state.long_names)
@@ -2121,6 +2149,112 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
 
     safety.print_run_footer()
     log("Ingest complete: " + root)
+
+
+def _films_in_lanes(state, root: str, subtitle_work: bool, locks) -> None:
+    """The opus transcode, the commentary transcription and the improved-copy
+    remux, each on the part of the machine it uses and overlapping where that
+    is safe (see :mod:`medialib.cli.ingest_movies_lanes`).
+
+    The transcode runs BESIDE the transcription only when whisper is on the
+    GPU, a job's worth of cores narrower so whisper and the walk that feeds it
+    keep theirs; with whisper on the CPU the two would only fight over the
+    same cores, and the transcode goes first as it always did. Each film is
+    remuxed by the remux lane as soon as its own transcode and transcripts are
+    done; a film the lane never got is remuxed by the walk after it.
+    """
+    remux = lanes.RemuxLane(main_movies(root), state.improve_main_movie,
+                            locks, subtitle_work, log)
+    beside = subtitle_work and state.whisper.get("device") == "cuda"
+    transcoding = None
+    try:
+        if beside:
+            log("Phase: transcoding lossless audio to opus, beside the "
+                "commentary transcription (whisper is on the GPU)")
+            transcoding = threading.Thread(
+                target=_transcode_opus, args=(state, root),
+                kwargs={"jobs": _opus_jobs_beside_whisper(),
+                        "on_done": remux.opus_done, "exit_on_abort": False},
+                name="ingest-opus", daemon=True)
+            transcoding.start()
+        else:
+            log("Phase: transcoding lossless audio to opus")
+            _transcode_opus(state, root, on_done=remux.opus_done)
+
+        if subtitle_work:
+            log("Phase: extracting and transcribing commentary tracks")
+            jobs = state.whisper["jobs"]
+            tracker = lanes.TranscriptTracker(remux.transcripts_done)
+            state.scratch_headroom = lanes.TRANSCRIBING_RAM_HEADROOM
+            try:
+                commentarytranscription.export_commentary(
+                    root, rules.read_track_info, rules.is_bonus_folder,
+                    lambda name: rules.rename(name, state.fragments_file),
+                    rules.audio_stream_index, state.ram_root, state.whisper,
+                    log,
+                    lambda producer: _drain_commentary(state, producer, jobs,
+                                                       tracker),
+                    rules.MAX_WHISPER_SYNC_OFFSET, state.ffsubsync_quality,
+                    same_commentary_name=rules._same_commentary,
+                    unfixed=state.unfixed_movies,
+                    film_queued=tracker.film_queued)
+            finally:
+                state.scratch_headroom = 0
+        else:
+            log("Phase: extracting and transcribing commentary tracks - "
+                "SKIPPED (no ffsubsync/pipx, see the warning at startup)")
+    finally:
+        # Waited for on every way out: a transcode or a remux cut off halfway
+        # would leave a half-written file behind the run that was making it.
+        if transcoding is not None:
+            transcoding.join()
+        remux.finish()
+    safety.exit_if_aborted()
+
+    # An improved copy of each film's main movie, with the original kept as
+    # "<name> (old).mkv" - every one the remux lane did not get to.
+    log("Phase: remuxing improved main movie copies")
+    improve_main_movies(state, root, skip=remux.done,
+                        around=lambda movie: _film_held(locks, movie))
+
+
+def _film_held(locks, movie: str):
+    """A film held against the other lanes and on the disk's turn, in that
+    order."""
+    import contextlib
+
+    stack = contextlib.ExitStack()
+    stack.enter_context(locks.held(movie))
+    stack.enter_context(diskturn.turn(movie))
+    return stack
+
+
+def _opus_jobs_beside_whisper() -> int:
+    """The transcode's width while whisper runs beside it: one job's worth of
+    cores fewer, for whisper's own process and the walk that feeds it."""
+    return max(1, (runlog.cpu_count() - CORES_PER_JOB) // CORES_PER_JOB)
+
+
+def _start_subtitle_lane(state, root: str, subtitle_work: bool, locks):
+    """The subtitle lane started, or None when there is nothing it could
+    fetch: no subtitle work, or no provider to ask."""
+    if not subtitle_work:
+        return None
+    providers = subtitlefiles.providers_to_ask()
+    if not providers:
+        return None
+
+    def download(films: list) -> list:
+        return subtitlefiles.download_subs_for(
+            films, providers, rules.MAX_SYNC_OFFSET,
+            rules.MAX_SYNC_QUALITY_OFFSET, state.ffsubsync_quality, log)
+
+    lane = lanes.SubtitleLane(root, subtitlefiles.subtitle_movies(root),
+                              download, locks, log)
+    log("Subtitles: fetching ahead, on a thread of their own, for every film "
+        "TMDb can name")
+    lane.start()
+    return lane
 
 
 def _start_research(state, root: str) -> dict:
@@ -2216,7 +2350,7 @@ def _in_transcribe_worker(state, record: str) -> None:
     _transcribe_one(state, record)
 
 
-def _drain_commentary(state, producer, jobs: int) -> None:
+def _drain_commentary(state, producer, jobs: int, tracker=None) -> None:
     """The queue exportCommentary prepared, at ``jobs`` workers - a width that
     is whisper's and not the core count, one run already spanning the GPU or
     every CPU thread.
@@ -2227,18 +2361,39 @@ def _drain_commentary(state, producer, jobs: int) -> None:
     prepared and run in this process one at a time; wider than that the dynamic
     queue runs them, keeping an adequate buffer of prepared items and giving a
     freed slot the next longest one.
+
+    ``tracker``, when given, is told of every record as it is queued and again
+    once it is done - a :class:`lanes.TranscriptTracker`, which is how the
+    remux lane learns which films' transcripts are all on disk.
     """
     producer = _announcing_whisper(state, producer)
+    if tracker is not None:
+        producer = _told_of(tracker, producer)
     if jobs <= 1:
         for record, _size in producer:
             if safety.abort_requested():
                 return
             with errorlog.work_item(record):
                 _transcribe_one(state, record)
+            if tracker is not None:
+                tracker.record_done(record)
         return
 
+    if tracker is None:
+        dynamicqueue.run(producer, jobs, _in_transcribe_worker,
+                         lambda record: (state, record), log=log)
+        return
     dynamicqueue.run(producer, jobs, _in_transcribe_worker,
-                     lambda record: (state, record), log=log)
+                     lambda record: (state, record), log=log,
+                     on_done=tracker.record_done)
+
+
+def _told_of(tracker, producer):
+    """The records of ``producer``, each one told to ``tracker`` as it is
+    queued."""
+    for record, size in producer:
+        tracker.record_queued(record)
+        yield record, size
 
 
 def _announcing_whisper(state, producer):
@@ -2251,33 +2406,45 @@ def _announcing_whisper(state, producer):
         yield item
 
 
-def _transcode_opus(state, root: str) -> None:
+def _transcode_opus(state, root: str, jobs: int | None = None,
+                    on_done=None, exit_on_abort: bool = True) -> None:
     """Every film's tracks checked, one worker per film: usually only one
-    lossless track per file, so the parallelism is at the file level."""
+    lossless track per file, so the parallelism is at the file level.
+
+    ``jobs`` is the width, a job per :data:`CORES_PER_JOB` cores unless the
+    caller leaves some of them to other work; ``on_done`` is told of each film
+    once its tracks are done. On a thread of its own the caller is the one to
+    end the run on an interrupt, not this."""
     movies = rules._files_below(root, matches=lambda name:
                                 name.endswith(".mkv"))
-    jobs = runlog.jobs_per_core(CORES_PER_JOB)
-    _run_pool(state, movies, root, jobs)
-    safety.exit_if_aborted()
+    if jobs is None:
+        jobs = runlog.jobs_per_core(CORES_PER_JOB)
+    _run_pool(state, movies, root, jobs, on_done)
+    if exit_on_abort:
+        safety.exit_if_aborted()
 
 
 def _in_worker(state, movie: str, root: str) -> None:
     safety.trap_worker_abort()
     ramscratch.adopt_ram_base(getattr(state, "ram_base", ""))
+    diskturn.adopt(getattr(state, "disk_turns", ""))
     rules.check_audio_tracks(movie, root)
 
 
-def _run_pool(state, movies: list, root: str, jobs: int) -> None:
+def _run_pool(state, movies: list, root: str, jobs: int,
+              on_done=None) -> None:
     if jobs <= 1:
         for movie in movies:
             if safety.abort_requested():
                 return
             with errorlog.work_item(movie):
                 rules.check_audio_tracks(movie, root)
+            if on_done is not None:
+                on_done(movie)
         return
 
     workerpool.run(movies, jobs, _in_worker,
-                   lambda movie: (state, movie, root))
+                   lambda movie: (state, movie, root), on_done=on_done)
 
 
 def cli(argv: list | None = None) -> int:

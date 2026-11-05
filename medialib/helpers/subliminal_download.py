@@ -5,6 +5,7 @@
 """Download one language's subtitle for one film from one provider.
 
     subliminal_download.py <language> <imdb id or ""> <video> <provider> [<id>...]
+    subliminal_download.py <language>,<language>... <imdb id or ""> <video> <provider>
 
 What ``subliminal download -p <provider> -l <language> <video>`` does, with
 two things its command line has no way to say. The first is WHICH film this
@@ -27,6 +28,12 @@ provider has none to offer, and the exit status is ``ALREADY_THERE`` when the
 video already has the language, beside it or inside it, so that no other
 provider need be asked. The subtitle is saved beside the video as
 ``<video stem>.<language>.srt``.
+
+Given several languages, comma separated, the provider is asked for all of them
+in one search and the best of each is saved; one line is printed per language,
+its code, a tab and what became of it: ``already``, ``none``, or ``saved``, a
+tab and the subtitle's id. The exit status is 0 whatever each language's answer
+was. It is the first try of each, so no ids are thrown out.
 
 A provider's login comes from the environment rather than from argv, which
 every account on the machine can read: ``openSubtitlesUser`` and
@@ -90,21 +97,22 @@ def _scan(path: str):
         return scan_video(os.path.abspath(path), name=os.path.abspath(name))
 
 
-def _subliminal(provider: str, video, language, number: int | None,
+def _subliminal(provider: str, video, languages: set, number: int | None,
                 thrown: list[str]) -> list:
-    """The best subtitle one of subliminal's providers has, downloaded."""
+    """The best subtitle of each language one of subliminal's providers has,
+    downloaded."""
     config: dict[str, dict] = {provider: dict(OPTIONS.get(provider, {}))}
     if provider in LOGINS:
         user, password = LOGINS[provider]
         config[provider].update(username=os.environ.get(user, ""),
                                 password=os.environ.get(password, ""))
     with ProviderPool(providers=[provider], provider_configs=config) as pool:
-        found = [s for s in pool.list_subtitles(video, {language})
+        found = [s for s in pool.list_subtitles(video, set(languages))
                  if str(s.id) not in thrown]
         if number is not None:
             found = [s for s in found
                      if _imdb_number(getattr(s, "movie_imdb_id", None)) == number]
-        return pool.download_best_subtitles(found, video, {language})
+        return pool.download_best_subtitles(found, video, set(languages))
 
 
 def _srt_in(archive: bytes) -> bytes | None:
@@ -156,6 +164,8 @@ def _subdl(language, number: int | None, thrown: list[str]) -> list:
 
 def main(argv: list[str]) -> int:
     code, imdb, path, provider, *thrown = argv
+    if "," in code:
+        return _main_many(code.split(","), imdb, path, provider)
     region.configure("dogpile.cache.memory")
     language = Language.fromietf(code)
     video = _scan(path)
@@ -176,10 +186,47 @@ def main(argv: list[str]) -> int:
     if provider == "subdl":
         best = _subdl(language, number, thrown)
     else:
-        best = _subliminal(provider, video, language, number, thrown)
+        best = _subliminal(provider, video, {language}, number, thrown)
     saved = save_subtitles(video, best, encoding="utf-8")
     if saved:
         print(saved[0].id)
+    return 0
+
+
+def _main_many(codes: list[str], imdb: str, path: str, provider: str) -> int:
+    """The first try of every language in ``codes``, in one search."""
+    region.configure("dogpile.cache.memory")
+    asked = [(code, Language.fromietf(code)) for code in codes if code]
+    video = _scan(path)
+    video.subtitles.extend(search_external_subtitles(video.name).values())
+    wanted = {language for _code, language in asked
+              if check_video(video, languages={language})}
+    if wanted:
+        refine(video, embedded_subtitles=True,
+               providers=[] if provider == "subdl" else [provider],
+               languages=wanted)
+        wanted = {language for language in wanted
+                  if language not in video.subtitle_languages}
+    number = _imdb_number(imdb)
+    if number is not None:
+        video.imdb_id = "tt%07d" % number
+    best: list = []
+    if wanted:
+        if provider == "subdl":
+            for _code, language in asked:
+                if language in wanted:
+                    best += _subdl(language, number, [])
+        else:
+            best = _subliminal(provider, video, wanted, number, [])
+    saved = {subtitle.language: subtitle
+             for subtitle in save_subtitles(video, best, encoding="utf-8")}
+    for code, language in asked:
+        if language not in wanted:
+            print("%s\talready" % code)
+        elif language in saved:
+            print("%s\tsaved\t%s" % (code, saved[language].id))
+        else:
+            print("%s\tnone" % code)
     return 0
 
 

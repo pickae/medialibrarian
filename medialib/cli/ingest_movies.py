@@ -31,6 +31,7 @@ from medialib.lib import (
     cleannamesindividually,
     clioptions,
     commentarytranscription,
+    diskturn,
     durationcheck,
     enums,
     languages,
@@ -1211,16 +1212,22 @@ def check_audio_tracks(movie: str, root: str) -> None:
         if os.path.isfile(opus) and file_duration <= opus_duration:
             continue
 
-        log("Transcoding audio track %d to opus (%sk, %sch): %s"
-            % (position - 1, bitrate, channels,
-               "./" + os.path.relpath(movie, root)))
-        if _run(["ffmpeg", "-y", "-loglevel", "error", "-nostats",
-                 "-i", movie, "-vn", "-map", "0:a:%d" % index,
-                 # Without it the movie's title lands in the opus as a TITLE
-                 # comment, which mkvmerge takes as the track's name.
-                 "-map_metadata", "-1",
-                 "-c:a", "libopus", "-b:a", bitrate + "k"]
-                + layout_args + [opus]) != 0:
+        # The whole film is read for the one track, as fast as the encode
+        # takes it - on a spinning disk faster than it can give it for more
+        # than one film at once, so on the disk's turn.
+        with diskturn.turn(movie):
+            log("Transcoding audio track %d to opus (%sk, %sch): %s"
+                % (position - 1, bitrate, channels,
+                   "./" + os.path.relpath(movie, root)))
+            status = _run(["ffmpeg", "-y", "-loglevel", "error", "-nostats",
+                           "-i", movie, "-vn", "-map", "0:a:%d" % index,
+                           # Without it the movie's title lands in the opus
+                           # as a TITLE comment, which mkvmerge takes as the
+                           # track's name.
+                           "-map_metadata", "-1",
+                           "-c:a", "libopus", "-b:a", bitrate + "k"]
+                          + layout_args + [opus])
+        if status != 0:
             log("WARNING: opus transcode failed (track %d): %s"
                 % (position - 1, movie))
         else:
