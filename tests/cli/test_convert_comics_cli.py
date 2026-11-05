@@ -561,6 +561,9 @@ class TestStreamingBookByBook:
         log = grown.stdout + grown.stderr
         assert log.count("Converting:") == 1
         assert log.count("Skip (exists)") == books
+        # Counted against the one book left to do, not the whole library.
+        assert "[1/1] Converting:" in log
+        assert "[1/%d]" % (books + 1) not in log
         assert len(list(comics.outputs.rglob("*.cbz"))) == books + 1
         assert [name for name in existing
                 if not (comics.outputs / name).exists()] == []

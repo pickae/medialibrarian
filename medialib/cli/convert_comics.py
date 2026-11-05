@@ -640,37 +640,19 @@ class Run:
                                    item=partial_path)
 
     def _prepare_book(self, record: str):
-        """One book's preparation, in the RUN's process: the skip checks, the
-        unpacking into RAM and the starved verdict, while the workers encode the
-        books prepared before it. ``(item, size)`` for the queue, or None for a
-        book that ends here - already on disk, or holding no page.
+        """One book's preparation, in the RUN's process: the unpacking into RAM
+        and the starved verdict, while the workers encode the books prepared
+        before it. ``(item, size)`` for the queue, or None for a
+        book that ends here, holding no page. A book already on disk never
+        gets this far: split_packaged keeps it out of the queue.
 
         Exactly one COUNTED line per book, reported at its START rather than when
         it finishes: with several books converting at once and a big one taking
         minutes, a run that only spoke on completion left the screen silent while
         it was busiest.
         """
-        partial_path, _, out_rel = record.partition(UNIT)
+        partial_path = record.partition(UNIT)[0]
         book_temp = os.path.join(self.temp_path, partial_path)
-
-        # Resume on PROVENANCE rather than on names: every .cbz records the
-        # archive it was made from, which is what survives the collective naming
-        # being set-dependent.
-        if partial_path in self.converted:
-            self.counters.progress("Skip (exists): %s"
-                                   % os.path.basename(out_rel))
-            self.counters.bump("packaged")
-            self.counters.bump("existing")
-            return None
-        # And the same check by name, for archives converted before provenance was
-        # recorded: no comment to go by, but a matching name is still a finished
-        # book.
-        if os.path.exists(os.path.join(self.out_path, out_rel)):
-            self.counters.progress("Skip (exists): %s"
-                                   % os.path.basename(out_rel))
-            self.counters.bump("packaged")
-            self.counters.bump("existing")
-            return None
 
         # The whole path as the user gave it, not just the file name: a collection
         # has several "01.cbz" in different series folders, and with parallel
@@ -1175,6 +1157,31 @@ def _naming_pass(state: Run, archives: list) -> list:
     return books
 
 
+def is_packaged(state: Run, record: str) -> bool:
+    """Whether a named book is already in the output, by PROVENANCE first:
+    every .cbz records the archive it was made from, which survives the
+    collective naming being set-dependent. Then by name, for a .cbz written
+    before provenance was recorded: no comment to go by, but a matching name
+    is still a finished book."""
+    partial_path, _, out_rel = record.partition(UNIT)
+    return (partial_path in state.converted
+            or os.path.exists(os.path.join(state.out_path, out_rel)))
+
+
+def split_packaged(state: Run,
+                   book_list: list) -> tuple[list[str], list[str]]:
+    """The named books as ``(pending, packaged)``, settled in memory before the
+    queue is fed - so the queue, its [n/total] count, the GPU lane and the
+    pages-per-book split are all sized by the books that still need work, and
+    a resumed run of a large library does not walk the finished ones through
+    the workers one by one."""
+    pending: list[str] = []
+    packaged: list[str] = []
+    for record in book_list:
+        (packaged if is_packaged(state, record) else pending).append(record)
+    return pending, packaged
+
+
 def main(argv: list, program: str = "convert-comics",
          script_dir: str = "") -> int:
     declaration = spec(program)
@@ -1380,15 +1387,25 @@ def _run(result, declaration, program: str, script_dir: str,
             if first and first[0].strip():
                 state.converted.add(first[0].strip())
 
-    book_list = _naming_pass(state, books_found)
+    book_list, packaged = split_packaged(state,
+                                         _naming_pass(state, books_found))
 
     runlog.say("\nConverting\n==========\n\n")
-    state.total = len(book_list)
-    counters.total = state.total
-    for name in ("current", "pagesFound", "packaged", "existing",
-                 "pagesEmpty", "pagesMissing"):
+    # The footer reports against every book found; the progress count only
+    # against the ones this run works on.
+    state.total = len(book_list) + len(packaged)
+    counters.total = len(book_list)
+    for name in ("current", "pagesFound", "pagesEmpty", "pagesMissing"):
         with open(os.path.join(counter_dir, name), "w") as handle:
             handle.write("0")
+    for name in ("packaged", "existing"):
+        with open(os.path.join(counter_dir, name), "w") as handle:
+            handle.write(str(len(packaged)))
+    for record in packaged:
+        runlog.say("Skip (exists): %s\n"
+                   % os.path.basename(record.partition(UNIT)[2]))
+    if packaged and book_list:
+        runlog.say("\n")
     # Where each book's page counters are collected: the converter appends one
     # line per book here, because its own report goes into a per-book log this
     # script throws away.
@@ -1408,7 +1425,9 @@ def _run(result, declaration, program: str, script_dir: str,
     # and the lane encodes them - the card's and the CPU's at once, across
     # books. -l and -s are the CPU's; what av1gpu has to be asked for to match
     # them on comic pages was measured (COMIC_CALIBRATION).
-    encoder = av1gpu.binary(log)
+    # Nothing left to convert starts no card: av1gpu's start-up would be all
+    # a resumed run of a finished library spent.
+    encoder = av1gpu.binary(log) if book_list else None
     if encoder:
         lane_root, lane_status = ramscratch.ram_scratch_dir("convertComics.gpu")
         if lane_status == 0 and lane_root:
