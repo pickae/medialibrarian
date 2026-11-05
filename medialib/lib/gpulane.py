@@ -180,12 +180,25 @@ class Lane:
         first. "" once the run is stopping."""
         with self.room:
             while not safety.abort_requested():
-                gpu = (not self.broken
-                       and self.pending_pixels < QUEUED_CHUNKS * self.budget)
-                cpu = len(self.cpu_queue) < QUEUED_PER_ENCODER * self.cpu_jobs
-                if (gpu or cpu) and self._ram_free() > RAM_RESERVE:
-                    return "gpu" if gpu else "cpu"
+                side = self._short_side()
+                if side:
+                    return side
                 self.room.wait(_POLL_SECONDS)
+        return ""
+
+    def has_room(self) -> bool:
+        """Whether another book is worth unpacking now, without waiting."""
+        with self.room:
+            return bool(self._short_side())
+
+    def _short_side(self) -> str:
+        """The side short of work while there is RAM for a book, or "".
+        Called under the lock."""
+        gpu = (not self.broken
+               and self.pending_pixels < QUEUED_CHUNKS * self.budget)
+        cpu = len(self.cpu_queue) < QUEUED_PER_ENCODER * self.cpu_jobs
+        if (gpu or cpu) and self._ram_free() > RAM_RESERVE:
+            return "gpu" if gpu else "cpu"
         return ""
 
     def _ram_free(self) -> int:

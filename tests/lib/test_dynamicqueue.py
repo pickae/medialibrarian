@@ -379,6 +379,32 @@ def test_a_queue_smaller_than_its_buffer_says_it_was_prepared_whole(tmp_path):
     ]
 
 
+def test_an_early_start_runs_the_first_item_before_the_rest_is_prepared(
+        tmp_path):
+    """start_after=1: the first worker is at work while the producer is still
+    holding back the second item - which it only yields once the first
+    worker has left its mark."""
+    directory = str(tmp_path)
+    lines = []
+
+    def producer():
+        yield "first", 0
+        deadline = time.time() + LIMIT
+        while not os.path.exists(os.path.join(directory, "first")):
+            assert time.time() < deadline, "no worker started on the first"
+            time.sleep(0.02)
+        yield "second", 0
+        yield "third", 0
+
+    dynamicqueue.run(producer(), 3, _mark, lambda item: (directory, item),
+                     buffer_factor=1, log=lines.append, start_after=1)
+
+    assert sorted(os.listdir(directory)) == ["first", "second", "third"]
+    assert lines == [
+        "Queue: starting on the first 1 prepared item(s); the buffer of 3 "
+        "fills meanwhile"]
+
+
 # --- ahead: the same queue, worked one item at a time in this process --------
 
 

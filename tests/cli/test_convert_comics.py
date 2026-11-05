@@ -9,6 +9,7 @@ what is being tested is everything after it.
 
 import os
 import stat
+import time
 import zipfile
 
 import pytest
@@ -587,7 +588,7 @@ class TestAnArchiveThatUnpackedOnlyInPart:
         counters.mkdir()
 
         def run(status):
-            def extract(_source, destination, _max_res):
+            def extract(_source, destination, _max_res, source=""):
                 os.makedirs(destination)
                 with open(os.path.join(destination, "01.jpg"), "wb") as page:
                     page.write(b"x")
@@ -598,6 +599,7 @@ class TestAnArchiveThatUnpackedOnlyInPart:
             state = cc.Run(in_path=str(tmp_path / "in"),
                            temp_path=str(tmp_path / "temp"),
                            avif_path=str(tmp_path / "avif"), max_res=2960,
+                           out_path=str(tmp_path / "out"),
                            counters=cc.Counters(str(counters)))
             assert state.prepare_book("Series/Book.cbr" + cc.UNIT
                                       + "Book.cbz") is not None
@@ -730,6 +732,52 @@ class TestARefusedBookStopsAtTheUnpack:
         state = cc.Run(in_path=str(tmp_path / "in"),
                        temp_path=str(tmp_path / "temp"),
                        avif_path=str(tmp_path / "avif"), max_res=2960,
+                       out_path=str(tmp_path / "out"),
                        counters=cc.Counters(str(counters)))
         assert state.prepare_book("Series/Book.cbr" + cc.UNIT
                                   + "Book.cbz") is None
+
+
+class TestTheInputReader:
+    """One thread reads the archives whole into RAM, in order, and runs no
+    further ahead of the unpacking than READ_AHEAD_BYTES."""
+
+    def _archives(self, tmp_path, count):
+        sources = []
+        for number in range(count):
+            path = tmp_path / ("book %d.cbz" % number)
+            path.write_bytes(bytes([number]) * 100)
+            sources.append(str(path))
+        read = tmp_path / "read"
+        read.mkdir()
+        return sources, read
+
+    def test_each_copy_is_the_archive_under_its_own_name(self, tmp_path):
+        sources, read = self._archives(tmp_path, 3)
+        reader = cc._Reader(sources, str(read))
+        for index, source in enumerate(sources):
+            staged, size = reader.take(index)
+            assert os.path.basename(staged) == os.path.basename(source)
+            assert staged.startswith(str(read))
+            with open(staged, "rb") as copy, open(source, "rb") as original:
+                assert copy.read() == original.read()
+            assert size == 100
+            reader.release(size)
+        reader.stop()
+
+    def test_it_waits_for_room_past_the_budget(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(cc, "READ_AHEAD_BYTES", 250)
+        sources, read = self._archives(tmp_path, 5)
+        reader = cc._Reader(sources, str(read))
+        reader.take(2)
+        time.sleep(0.3)
+        assert not reader.copies[3].done()
+        reader.release(100)
+        assert reader.take(3)[1] == 100
+        reader.stop()
+
+    def test_with_nowhere_to_read_to_the_input_is_handed_over(self, tmp_path):
+        sources, _ = self._archives(tmp_path, 2)
+        reader = cc._Reader(sources, "")
+        assert reader.take(1) == (sources[1], 0)
+        reader.stop()

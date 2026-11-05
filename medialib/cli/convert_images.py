@@ -533,15 +533,22 @@ class Run:
         out = disambiguated_output(relative, self.options["format"],
                                    self.input_dir, self.output_dir)
         source = relative
-        dimensions = _parse_size(self._identify(["-ping", "-format", "%w %h",
-                                                 source]))
+        # Under a lane the card's probe is the header read: it holds the size
+        # too, and the page would otherwise be pinged twice.
+        probe = (self._identify(["-ping", "-format", av1gpu.PROBE_FORMAT,
+                                 source])
+                 if self.options.get("gpuLane") else "")
+        words = probe.split()
+        dimensions = (_parse_size(" ".join(words[2:4])) if len(words) == 5
+                      else _parse_size(self._identify(
+                          ["-ping", "-format", "%w %h", source])))
         if dimensions is None:
             self._encode(self._encode_arguments(source, out), relative, out)
             return
         width, height = dimensions
         pixels = width * height
         if self.options.get("gpuLane"):
-            self._crop_for_lane(relative, out, width, height)
+            self._crop_for_lane(relative, out, width, height, probe)
             return
 
         trimmed = os.path.join(self.counter_dir, "trimmed_%d.miff" % os.getpid())
@@ -573,7 +580,7 @@ class Run:
                 pass
 
     def _crop_for_lane(self, relative: str, out: str, width: int,
-                       height: int) -> None:
+                       height: int, probe: str = "") -> None:
         """The -c path under a GPU lane: each page sorted, none encoded here.
 
         The trim is measured as a box rather than written out, and a page it
@@ -585,18 +592,20 @@ class Run:
 
         What the card cannot take - see :meth:`_to_lane` - is listed for the
         lane's CPU encoders, with the call that trims and encodes it.
+
+        The box and the corners come out of one call, which decodes the page
+        once: nearly every scanned page has a margin, so the corners were
+        nearly always asked for, and a call of their own decoded it again.
         """
         pixels = width * height
-        box = _parse_box(self._identify(
-            ["-fuzz", self.options["fuzzCommand"], "-format", "%@", relative]))
+        box, corners = self._box_and_corners(relative)
         verdict, colour, border = trim_verdict(
-            width, height, box[:2] if box else None,
-            lambda: self._identify_corner(relative))
+            width, height, box[:2] if box else None, lambda: corners)
         if verdict == "blank":
             self.record("blank", "SKIP (blank)", relative, stream=sys.stderr)
             return
         if verdict == "converted":
-            if not self._to_lane(relative, out):
+            if not self._to_lane(relative, out, probe=probe):
                 self._cpu_to_lane(relative, out, (), "converted", "CONV",
                                   pixels)
             return
@@ -606,7 +615,7 @@ class Run:
         right = min(width, box[2] + cut_w + border)
         bottom = min(height, box[3] + cut_h + border)
         if self._to_lane(relative, out, (right - left, bottom - top, left, top),
-                         "trimmed", "TRIM (GPU)"):
+                         "trimmed", "TRIM (GPU)", probe):
             return
         trim = ["-crop", "%dx%d+%d+%d" % box, "+repage",
                 "-bordercolor", colour, "-border", str(border)]
@@ -629,6 +638,25 @@ class Run:
                 runlog.take_lock(handle), \
                 open(os.path.join(lane, LANE_MANIFEST), "a") as manifest:
             manifest.write(json.dumps(entry) + "\n")
+
+    def _box_and_corners(self, source: str):
+        """``(box, corners)``: the trim's box as :func:`_parse_box` reads it
+        and the corners as :func:`_parse_corners` does, from one decode - the
+        box measured on the page as stored, the corners after the same sRGB
+        conversion :meth:`_identify_corner` makes. Either is None when it
+        cannot be read, a page of several frames included."""
+        answer = subprocess.run(
+            imagemagick.convert_argv(
+                [source, "-fuzz", self.options["fuzzCommand"],
+                 "-format", "%@\n", "-write", "info:",
+                 "-colorspace", "sRGB", "-format", _CORNER_FORMAT, "info:"]),
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        if answer.returncode != 0:
+            return None, None
+        lines = answer.stdout.decode("utf-8", "replace").strip().split("\n")
+        if len(lines) != 1 + len(_CORNERS):
+            return None, None
+        return _parse_box(lines[0]), _parse_corners("\n".join(lines[1:]))
 
     def _identify_corner(self, source: str):
         """The margin's colour and lightness, from the page's four corner pixels
@@ -695,7 +723,7 @@ class Run:
 
     def _to_lane(self, relative: str, out: str, crop=None,
                  category: str = "converted",
-                 label: str = "CONV (GPU)") -> bool:
+                 label: str = "CONV (GPU)", probe: str = "") -> bool:
         """Hand this image to the GPU lane of the run that started this one,
         and say whether it was taken. Only under a lane (:data:`LANE_VARIABLE`):
         that run owns the card and encodes the pages of many of these runs
@@ -716,7 +744,7 @@ class Run:
         lane = self.options.get("gpuLane", "")
         if not lane:
             return False
-        job = self._gpu_job(relative, crop)
+        job = self._gpu_job(relative, crop, probe)
         if job is None:
             return False
         pixels, geometry, fit = job
@@ -729,15 +757,16 @@ class Run:
         self.record(category, label, relative, pixels=pixels, road="gpu")
         return True
 
-    def _gpu_job(self, relative: str, crop=None):
+    def _gpu_job(self, relative: str, crop=None, probe: str = ""):
         """What the card is asked to do with this image: ``(pixels, crop,
         max_size)``, the pixels being those it encodes and the other two
         av1gpu's own geometry, "" for none - or None when it cannot take it.
-        One header read."""
+        One header read, or none when the caller already made it (<probe>)."""
         if relative.rpartition(".")[2] not in av1gpu.EXTENSIONS:
             return None
         probed = av1gpu.takes_probe(
-            self._identify(["-ping", "-format", av1gpu.PROBE_FORMAT, relative]),
+            probe or self._identify(["-ping", "-format", av1gpu.PROBE_FORMAT,
+                                     relative]),
             jpeg=relative.endswith((".jpg", ".jpeg")))
         if probed is None:
             return None

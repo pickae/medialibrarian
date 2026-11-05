@@ -13,10 +13,11 @@ and only the ones shaped like a scan are taken.
 A few books at a time are in RAM, not one collection. The run's own process
 prepares the next book - unpacks it into RAM, drops its duplicate pages, judges
 whether it is starved - while the workers encode the books prepared before it,
-and a worker takes one prepared book through convert -> number -> zip and then
-frees that book's two RAM folders. One prepared book waits per worker, so peak
-RAM is twice the number of workers times ONE book however many thousands of
-archives the run was handed.
+and a worker takes one prepared book through convert -> zip and then
+frees that book's two RAM folders. One prepared book waits per worker and a
+few more are being prepared behind them, so peak RAM is a small multiple of
+the number of workers times ONE book however many thousands of archives the
+run was handed.
 
 What cannot be decided one book at a time is the collective NAME cleaning, which
 strips the affixes sibling books share and so has to see all of them together.
@@ -34,14 +35,17 @@ conversion is asked for with -a. A book whose pages came out in two formats is
 not a book, it is a bag of pages, and no reader shows it as one.
 """
 
+import collections
 import os
 import shutil
 import stat
 import subprocess
 import sys
+import tempfile
+import threading
 import time
 import zipfile
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 
 from medialib import commands
 from medialib.cli.convert_images import (
@@ -63,7 +67,6 @@ from medialib.lib import (
     gpulane,
     imagebitrate,
     imagemagick,
-    numbering,
     ramscratch,
     runlog,
     safety,
@@ -73,7 +76,6 @@ from medialib.lib import (
     workerpool,
 )
 from medialib.lib.runlog import log
-from medialib.lib.versionsort import version_key
 
 USAGE_HEAD = """Usage:
     {program} [options] <inputDir> <outputDir>
@@ -188,6 +190,17 @@ BOOKS_BUFFERED_PER_WORKER = 1
 # 0.3 s on eight - left the workers waiting for it on every book that encodes
 # faster than it unpacks.
 PREPARE_THREADS = 8
+
+# Books prepared at once. A .cbr is unpacked by unrar on one core - 1.5 s for
+# a 100-page album - and the next books' unpacking and probing overlap it.
+PREPARE_BOOKS = 3
+
+# How far the input reader runs ahead of the unpacking, in bytes of archives
+# read into RAM and not yet unpacked. The input is often a mechanical drive, so
+# one thread reads every archive whole, back to back, in the order they will be
+# prepared: two books read at once would make the heads seek between them, and
+# a read that waited for the unpacking would leave the drive idle meanwhile.
+READ_AHEAD_BYTES = 8 * 1024 ** 3
 
 # The record separator between a book and the output path it is destined for: a
 # comic's name may contain anything else.
@@ -360,7 +373,7 @@ def comic_container(path: str) -> str:
     return archives.archive_type_by_content(path) or _COMIC_CONTAINERS[ext]
 
 
-def extract(archive: str, destination: str, max_res: int):
+def extract(archive: str, destination: str, max_res: int, source: str = ""):
     """One book's pages into <destination>, whatever container they arrived in.
 
     Every extractor's output is kept rather than shown, stdout included: each
@@ -387,7 +400,7 @@ def extract(archive: str, destination: str, max_res: int):
             # Left alone to keep the library safe, which -q still says.
             runlog.error('not unpacking "%s": %s (%s)'
                          % (os.path.basename(archive), refused[0][1],
-                            refused[0][0]), files=[archive])
+                            refused[0][0]), files=[source or archive])
             return None
     os.makedirs(destination, exist_ok=True)
 
@@ -721,6 +734,9 @@ class Run:
     # one setting with a default, since it is made after the rest. It lives in
     # the run's process only: its threads cannot go to a worker.
     lane: "gpulane.Lane | None" = None
+    # Where each archive is read into RAM before it is unpacked; "" reads it
+    # where it is.
+    read_path: str = ""
 
     def __init__(self, **settings) -> None:
         self.__dict__.update(settings)
@@ -730,21 +746,22 @@ class Run:
         state["lane"] = None
         return state
 
-    def prepare_book(self, record: str):
+    def prepare_book(self, record: str, staged: str = ""):
         """The comic this is about, named for every error recorded meanwhile -
         a page of it that fails in RAM, or in the convert-images it starts."""
         with self._about(record):
-            return self._prepare_book(record)
+            return self._prepare_book(record, staged)
 
     def _about(self, record: str):
         partial_path = record.partition(UNIT)[0]
         return errorlog.working_on(os.path.join(self.in_path, partial_path),
                                    item=partial_path)
 
-    def _prepare_book(self, record: str):
+    def _prepare_book(self, record: str, staged: str = ""):
         """One book's preparation, in the RUN's process: the unpacking into RAM
         and the starved verdict, while the workers encode the books prepared
-        before it. ``(item, size)`` for the queue, or None for a
+        before it. <staged> is the archive's copy the reader made in RAM,
+        unpacked in place of the input and removed once it has been. ``(item, size)`` for the queue, or None for a
         book that ends here, holding no page. A book already on disk never
         gets this far: split_packaged keeps it out of the queue.
 
@@ -759,15 +776,23 @@ class Run:
         # The whole path as the user gave it, not just the file name: a collection
         # has several "01.cbz" in different series folders, and with parallel
         # workers interleaving their lines it has to say which is being worked on.
-        self.counters.progress("Converting: %s"
-                               % os.path.join(self.in_path, partial_path))
+        # And the path it is going to, which the collective naming decided.
+        self.counters.progress("Converting: %s\n    into: %s"
+                               % (os.path.join(self.in_path, partial_path),
+                                  os.path.join(self.out_path,
+                                               record.partition(UNIT)[2])))
 
         # The pages unpacked into RAM, and the encodes made from them, name the
         # comic they came from in any error about one of them.
         source = os.path.join(self.in_path, partial_path)
         errorlog.note_origin(book_temp, source)
         errorlog.note_origin(os.path.join(self.avif_path, partial_path), source)
-        unpacked = extract(source, book_temp, self.max_res)
+        staged = staged or source
+        try:
+            unpacked = extract(staged, book_temp, self.max_res, source=source)
+        finally:
+            if staged != source:
+                shutil.rmtree(os.path.dirname(staged), ignore_errors=True)
 
         if not os.path.isdir(book_temp):
             if unpacked is not None and not unpacked.ok:
@@ -808,7 +833,7 @@ class Run:
             return self._finish_book(item)
 
     def _finish_book(self, item: tuple) -> None:
-        """One prepared book, in a worker: convert, number, zip, free.
+        """One prepared book, in a worker: convert, zip, free.
 
         Under the lane the worker only sorts the pages: each one's encode,
         on the card or the CPU, is listed in the book's lane folder, marked
@@ -842,7 +867,7 @@ class Run:
 
     def _package_pages(self, item: tuple) -> None:
         """A converted book: drop its empty pages, say which are missing,
-        number, zip, free."""
+        zip, free."""
         record = item[0]
         partial_path, _, out_rel = record.partition(UNIT)
         book_temp = os.path.join(self.temp_path, partial_path)
@@ -893,15 +918,6 @@ class Run:
             shutil.rmtree(book_avif, ignore_errors=True)
             return
 
-        # Numbering is per folder by nature, so it needs nothing from the other
-        # books and belongs here, while the collective NAME cleaning had to wait
-        # for all of them. Before packaging, so the pages are numbered inside the
-        # archive.
-        numbering.number_files_in_folder(
-            book_avif,
-            sorted((entry.path for entry in os.scandir(book_avif)
-                    if entry.is_file()), key=version_key), announce=False)
-
         if package_book(book_avif, self.out_path, out_rel, partial_path,
                         self.avif_path, self.counters):
             self.counters.bump("packaged")
@@ -914,8 +930,8 @@ class Run:
                         file_name: str, starved: int, measured: int) -> None:
         """A book past the starved share, into a .cbz with its OWN pages.
 
-        The same archive every other book gets - numbered, stored rather than
-        deflated, stamped with the archive it came from - so a library converted
+        The same archive every other book gets - its pages under their own
+        names, stored rather than deflated, stamped with the archive it came from - so a library converted
         by this command is one shelf of .cbz whether or not a given book was
         worth re-encoding. What differs is only that the pages inside it are the
         ones that came out of the original.
@@ -923,10 +939,6 @@ class Run:
         self.counters.note(
             "Repackaged unconverted (%d of %d page(s) already starved): %s"
             % (starved, measured, file_name))
-        numbering.number_files_in_folder(
-            book_temp,
-            sorted((entry.path for entry in os.scandir(book_temp)
-                    if entry.is_file()), key=version_key), announce=False)
         if package_book(book_temp, self.out_path, out_rel, partial_path,
                         self.temp_path, self.counters):
             self.counters.bump("packaged")
@@ -1007,6 +1019,66 @@ def _run_pool(state: Run, method: str, items: list, jobs: int) -> None:
     workerpool.run(items, jobs, _in_worker, lambda item: (state, method, item))
 
 
+class _Reader:
+    """The input's one reader: every archive of the run read whole into
+    <read_path>, in the order given, back to back, up to READ_AHEAD_BYTES
+    ahead of what :meth:`release` has given back. :meth:`take` hands over
+    one archive's copy - ``(path, size)`` - once it is read; the input itself
+    and 0 when there was nowhere to read it to, the copy failed, or the run is
+    stopping, which leaves the unpacker to read it and say what is wrong."""
+
+    def __init__(self, sources: list, read_path: str) -> None:
+        self.read_path = read_path
+        self.room = threading.Condition()
+        self.held = 0
+        self.stopping = False
+        self.copies: list[Future] = [Future() for _ in sources]
+        self.thread = threading.Thread(target=self._read, args=(sources,),
+                                       name="input-reader", daemon=True)
+        self.thread.start()
+
+    def take(self, index: int) -> tuple:
+        return self.copies[index].result()
+
+    def release(self, size: int) -> None:
+        with self.room:
+            self.held -= size
+            self.room.notify_all()
+
+    def stop(self) -> None:
+        with self.room:
+            self.stopping = True
+            self.room.notify_all()
+        self.thread.join()
+
+    def _read(self, sources: list) -> None:
+        for index, source in enumerate(sources):
+            with self.room:
+                # One archive is always let through, however large: the
+                # budget only keeps the reader from running further ahead.
+                while (self.held > 0 and self.held >= READ_AHEAD_BYTES
+                       and not self.stopping
+                       and not safety.abort_requested()):
+                    self.room.wait(0.5)
+                halted = self.stopping or safety.abort_requested()
+            copy = (source, 0) if halted or not self.read_path \
+                else self._copy(source)
+            with self.room:
+                self.held += copy[1]
+            self.copies[index].set_result(copy)
+
+    def _copy(self, source: str) -> tuple:
+        folder = tempfile.mkdtemp(dir=self.read_path)
+        staged = os.path.join(folder, os.path.basename(source))
+        errorlog.note_origin(folder, source)
+        try:
+            shutil.copyfile(source, staged)
+            return staged, os.path.getsize(staged)
+        except OSError:
+            shutil.rmtree(folder, ignore_errors=True)
+            return source, 0
+
+
 def _prepared_books(state: Run, book_list: list):
     """The queue's producer: every book that still needs a worker, prepared,
     in the order they were found.
@@ -1015,23 +1087,52 @@ def _prepared_books(state: Run, book_list: list):
     is unpacked as soon as either of the lane's sides is short of work and
     there is RAM to hold it. Which side asked does not pick the book: nearly
     every page goes to the card, and the CPU's encoders take the card's pages
-    when they have none of their own."""
-    ordered = list(book_list)
-    while ordered:
-        if state.lane is not None:
-            state.lane.wait_for_room()
-        if safety.abort_requested():
-            return
-        record = ordered.pop(0)
-        prepared = state.prepare_book(record)
-        if prepared is None:
-            continue
-        (record, starved, measured), size = prepared
-        folder = ""
-        if state.lane is not None and not book_is_starved(starved, measured):
-            folder = state.lane.folder()
-            state.lane.expect(folder, (record, starved, measured, folder))
-        yield (record, starved, measured, folder), size
+    when they have none of their own.
+
+    PREPARE_BOOKS are prepared at once and handed over in the order they were
+    found, so the next ones go on unpacking while the queue has not yet asked
+    for them. Only the oldest is waited for when the lane has no room - the
+    others start once it has. Their archives are read by the one reader, which
+    goes on reading while they unpack."""
+    ordered = collections.deque(enumerate(book_list))
+    preparing: collections.deque = collections.deque()
+    reader = _Reader([os.path.join(state.in_path, record.partition(UNIT)[0])
+                      for record in book_list], state.read_path)
+
+    def prepare(index: int, record: str):
+        staged, size = reader.take(index)
+        try:
+            if safety.abort_requested():
+                return None
+            return state.prepare_book(record, staged)
+        finally:
+            reader.release(size)
+
+    pool = ThreadPoolExecutor(PREPARE_BOOKS, thread_name_prefix="prepare")
+    try:
+        while ordered or preparing:
+            while ordered and len(preparing) < PREPARE_BOOKS:
+                if state.lane is not None:
+                    if not preparing:
+                        state.lane.wait_for_room()
+                    elif not state.lane.has_room():
+                        break
+                if safety.abort_requested():
+                    return
+                preparing.append(pool.submit(prepare, *ordered.popleft()))
+            prepared = preparing.popleft().result()
+            if prepared is None or safety.abort_requested():
+                continue
+            (record, starved, measured), size = prepared
+            folder = ""
+            if state.lane is not None and not book_is_starved(starved,
+                                                              measured):
+                folder = state.lane.folder()
+                state.lane.expect(folder, (record, starved, measured, folder))
+            yield (record, starved, measured, folder), size
+    finally:
+        reader.stop()
+        pool.shutdown(wait=True, cancel_futures=True)
 
 
 def _megapixels_per_second(pixels: int, busy: float) -> str:
@@ -1223,8 +1324,12 @@ def _naming_pass(state: Run, archives: list) -> list:
                   errors="surrogateescape") as handle:
             handle.write(archive_rel + "\0")
 
-    commands.run_command("clean-folder-structure", [name_root],
-                         script_dir=state.script_dir)
+    # Quiet unless it fails: what it says is about the tree of markers, which
+    # the user never sees - each book's own line says what it is named.
+    argv, env = commands.command_line("clean-folder-structure", [name_root],
+                                      script_dir=state.script_dir)
+    toolcapture.run(argv, "the books' names", tool="clean-folder-structure",
+                    env=env, warning="the books' names could not be cleaned")
 
     books = []
     for parent, _dirs, names in os.walk(name_root):
@@ -1343,14 +1448,19 @@ def _run(result, declaration, program: str, script_dir: str,
 
     # Both work directories live in the RAM base, so no intermediate file ever
     # hits the disk: temp_path holds each book's extracted pages, avif_path
-    # receives its AVIF pages and is where the numbering and zipping happen.
+    # receives its AVIF pages and is where the zipping happens.
     temp_path, temp_status = ramscratch.ram_scratch_dir("convertComics")
     avif_path, avif_status = ramscratch.ram_scratch_dir("convertComics.avif")
+    read_path, read_status = ramscratch.ram_scratch_dir("convertComicsRead")
     if temp_status != 0 or avif_status != 0 or not temp_path or not avif_path:
         sys.stderr.write("\nError: no scratch directory could be made for this "
                          "run.\nNothing was changed.\n")
         return 1
     ramscratch.add_exit_cleanup([temp_path, avif_path])
+    if read_status == 0 and read_path:
+        ramscratch.add_exit_cleanup([read_path])
+    else:
+        read_path = ""
 
     safety.init_safety_log(os.path.join(counter_dir, "safetySkips.log"))
     skips = safety.RunSkipLog()
@@ -1366,6 +1476,7 @@ def _run(result, declaration, program: str, script_dir: str,
         converted=set(), input_list=os.path.join(counter_dir, "inputs"),
         stats_file=os.path.join(counter_dir, "pageStats"),
         phase_start=None, phase_end=None, total=0, lane=None,
+        read_path=read_path,
     )
     safety.set_run_footer(lambda: footer(state))
 
@@ -1474,8 +1585,13 @@ def _run(result, declaration, program: str, script_dir: str,
             if first and first[0].strip():
                 state.converted.add(first[0].strip())
 
-    book_list, packaged = split_packaged(state,
-                                         _naming_pass(state, books_found))
+    named = _naming_pass(state, books_found)
+    book_list, packaged = split_packaged(state, named)
+    cleaner = sum(1 for record in named
+                  if os.path.splitext(record.partition(UNIT)[0])[0]
+                  != record.partition(UNIT)[2][:-len(".cbz")])
+    runlog.say("%d book(s) named, %d of them more cleanly than their "
+               "archive\n" % (len(named), cleaner))
 
     runlog.say("\nConverting\n==========\n\n")
     # The footer reports against every book found; the progress count only
@@ -1531,10 +1647,14 @@ def _run(result, declaration, program: str, script_dir: str,
     # One prepared book waiting per worker: enough that a freed worker starts
     # its next book at once, and no more, because every book waiting is a book
     # held in RAM.
+    # The first worker starts on the first book prepared, not once the buffer
+    # is full: on a cold drive four books took 15 s to read and unpack, and the
+    # card waited for all of them.
     try:
         dynamicqueue.run(_prepared_books(state, book_list), workers, _in_worker,
                          lambda item: (state, "finish_book", item),
-                         buffer_factor=BOOKS_BUFFERED_PER_WORKER, log=log)
+                         buffer_factor=BOOKS_BUFFERED_PER_WORKER, log=log,
+                         start_after=1)
     finally:
         if state.lane is not None:
             state.lane.close()

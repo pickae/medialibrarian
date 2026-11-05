@@ -59,7 +59,7 @@ _POLL_SECONDS = 0.5
 
 
 def run(producer, jobs: int, target, arguments, buffer_factor: int = 2,
-        log=None, on_done=None) -> "workerpool.Outcome":
+        log=None, on_done=None, start_after: int = 0) -> "workerpool.Outcome":
     """Every prepared item through <target>, <jobs> of them at once.
 
     <producer> is a generator that yields ``(item, size)`` as it prepares the
@@ -76,6 +76,10 @@ def run(producer, jobs: int, target, arguments, buffer_factor: int = 2,
     the queue's own lines: the pre-fill, the start, and a buffer that ran dry.
     <on_done>, when given, is called with each item once its worker has ended,
     however it ended - on the dispatch's thread, which is the caller's.
+    <start_after>, when given, starts the workers once that many items are
+    prepared rather than the whole buffer - for a queue whose first items are
+    slow to prepare and whose workers each keep busy a while on one; the rest
+    of the buffer fills while they work.
     """
     if log is None:
         log = _say_nothing
@@ -159,10 +163,11 @@ def run(producer, jobs: int, target, arguments, buffer_factor: int = 2,
         while True:
             with room:
                 have = len(heap)
-            if have and not prefilled:
+            if have and not prefilled and not start_after:
                 prefilled = True
                 log("Queue: pre-filling the buffer of %d item(s) ..." % buffer)
-            if have >= buffer or done or safety.abort_requested():
+            if (have >= (start_after or buffer) or done
+                    or safety.abort_requested()):
                 break
             workerpool.reap_one([], wake_read, _POLL_SECONDS)
             _drain(wake_read)
@@ -174,6 +179,10 @@ def run(producer, jobs: int, target, arguments, buffer_factor: int = 2,
         # empty buffer at the very tail of the run is the run winding down, not
         # a stall - and once per stretch of it.
         dry_waiting = 0
+        # An early start (<start_after>) fills its slots as the items arrive,
+        # and a slot not yet filled once is the ramp-up, not a stall: dry
+        # stretches count from the moment every slot has been busy.
+        ramped = not start_after
         # The run ends when the buffer AND the preparation are spent and no
         # worker is left running: a buffer that empties while the preparation
         # still has items to give is the queue waiting on it, not the end of
@@ -200,6 +209,10 @@ def run(producer, jobs: int, target, arguments, buffer_factor: int = 2,
                     if done:
                         log("Queue: all %d item(s) prepared, starting %d "
                             "worker(s)" % (len(heap), workers))
+                    elif start_after:
+                        log("Queue: starting on the first %d prepared "
+                            "item(s); the buffer of %d fills meanwhile"
+                            % (len(heap), buffer))
                     else:
                         log("Queue: buffer loaded, starting %d worker(s) on "
                             "%d item(s)" % (workers, len(heap)))
@@ -217,8 +230,10 @@ def run(producer, jobs: int, target, arguments, buffer_factor: int = 2,
                     target, arguments(item), workerpool.label(item))
                 items_of[id(worker)] = item
                 running.append(worker)
+            ramped = ramped or len(running) >= jobs
             if (empty and not finished and len(running) < jobs and started
-                    and not dry_waiting and not safety.abort_requested()):
+                    and ramped and not dry_waiting
+                    and not safety.abort_requested()):
                 dry_waiting = jobs - len(running)
 
             if not running and (safety.abort_requested()

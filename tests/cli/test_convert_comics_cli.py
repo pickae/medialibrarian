@@ -17,6 +17,7 @@ import zipfile
 
 import pytest
 
+from medialib.cli import convert_comics
 from tests import blackbox
 
 pytestmark = pytest.mark.stubbed
@@ -122,18 +123,28 @@ class TestThePackaging:
         assert len(re.findall(r"Converting: ", log)) == 2
         assert "Converting: %s" % (comics.inputs / "Series" / "Charlie.cbz") in log
 
+    def test_each_book_says_where_it_goes_and_the_naming_says_no_more(
+            self, run):
+        """The output path under the input path, and none of what the name
+        cleaning says about its tree of markers - only a count."""
+        comics, log, _ = run
+        assert "    into: %s" % (comics.outputs / "Series" / "Charlie.cbz") \
+            in log
+        assert "Cleaning folder structure" not in log
+        assert "2 book(s) named" in log
+
     def test_the_counter_reaches_the_book_total_exactly_once(self, run):
         """The outcome lines a started book can still print are notes, not
         counted lines."""
         _, log, _ = run
         assert len(re.findall(r"\[2/2\] ", log)) == 1
 
-    def test_each_archive_holds_that_books_numbered_pages(self, run):
+    def test_each_archive_holds_its_pages_under_their_own_names(self, run):
         comics, _, _ = run
         assert _entries(comics.outputs / "Alpha.cbz") == [
-            "1.avif", "2.avif", "3.avif"]
+            "01.avif", "02.avif", "03.avif"]
         assert _entries(comics.outputs / "Series" / "Charlie.cbz") == [
-            "1.avif", "2.avif", "3.avif"]
+            "a.avif", "b.avif", "c.avif"]
 
     def test_the_pages_are_stored_rather_than_deflated(self, run):
         """AVIF does not compress further, and some readers page through an
@@ -141,15 +152,15 @@ class TestThePackaging:
         comics, _, _ = run
         with zipfile.ZipFile(comics.outputs / "Alpha.cbz") as opened:
             assert [info.filename for info in opened.infolist()] == [
-                "1.avif", "2.avif", "3.avif"]
+                "01.avif", "02.avif", "03.avif"]
             assert {info.compress_type for info in opened.infolist()} == {
                 zipfile.ZIP_STORED}
 
-    def test_the_nested_page_was_flattened_into_the_last_slot(self, run):
+    def test_the_nested_page_was_flattened_beside_the_others(self, run):
         comics, _, _ = run
         charlie = comics.outputs / "Series" / "Charlie.cbz"
-        assert _first_line(charlie, "1.avif") == "AVIF from a.jpg"
-        assert _first_line(charlie, "3.avif") == "AVIF from c.jpg"
+        assert _first_line(charlie, "a.avif") == "AVIF from a.jpg"
+        assert _first_line(charlie, "c.avif") == "AVIF from c.jpg"
 
     def test_a_second_run_recognises_the_finished_archives(self, run):
         """No rewrite, and above all no " (2)" duplicate of every book."""
@@ -374,14 +385,16 @@ size=12288
         """The blank page was dropped by the encoder and the empty one here,
         and both books are packaged either way."""
         comics, _ = run
-        assert _entries(comics.outputs / "Mixture.cbz") == ["1.avif", "2.avif"]
-        assert _entries(comics.outputs / "Uniform.cbz") == ["1.avif", "2.avif"]
+        assert _entries(comics.outputs / "Mixture.cbz") == [
+            "01-plain.avif", "02-trim.avif"]
+        assert _entries(comics.outputs / "Uniform.cbz") == [
+            "01-plain.avif", "02-plain.avif"]
 
     def test_and_they_are_the_two_that_should_have_survived(self, run):
         comics, _ = run
         mixture = comics.outputs / "Mixture.cbz"
-        assert _first_line(mixture, "1.avif") == "01-plain.jpg"
-        assert _first_line(mixture, "2.avif") == "02-trim.jpg"
+        assert _first_line(mixture, "01-plain.avif") == "01-plain.jpg"
+        assert _first_line(mixture, "02-trim.avif") == "02-trim.jpg"
 
     def test_a_rerun_that_converts_nothing_prints_no_page_section(self, run):
         """"0 page(s)" with a share of nothing would be worse than none."""
@@ -483,19 +496,21 @@ class TestStreamingBookByBook:
 
     def test_the_books_resident_at_once_stay_within_the_pool(self, run):
         """Two folders per book a worker holds - its pages and its AVIFs - and
-        one per prepared book waiting for a worker, one of those per worker: the
-        peak is bounded by three times the pool. The fixture holds more than
+        one per prepared book waiting for a worker, one of those per worker,
+        and the books still being prepared behind those: the peak is bounded by
+        three times the pool and PREPARE_BOOKS - 1. The fixture holds more than
         that in books, so unpacking every book up front would blow straight
         through it."""
         _, samples, workers, _, _ = run
         peak = max((resident for resident, _ in samples), default=0)
-        assert peak <= 3 * workers, "peak %d, pool %d" % (peak, workers)
+        bound = 3 * workers + convert_comics.PREPARE_BOOKS - 1
+        assert peak <= bound, "peak %d, pool %d" % (peak, workers)
 
     def test_the_books_went_through_the_prep_queue(self, run):
         """The queue's own line: the books were prepared ahead of the workers
         rather than each unpacked by the worker that converts it."""
         _, _, _, _, log = run
-        assert "Queue: buffer loaded" in log
+        assert "Queue: starting on the first" in log
 
     def test_and_the_sampler_did_see_something(self, run):
         """A sampler that observed nothing would make the bound above pass for
@@ -522,12 +537,11 @@ class TestStreamingBookByBook:
         assert not [n for n in names if n.startswith("Weekly Comic - ")]
         assert len(set(names)) == books
 
-    def test_the_pages_inside_are_still_numbered_per_book(self, run):
-        """The numbering happens in the worker; the second pass must not have
-        disturbed it."""
+    def test_the_pages_inside_keep_their_own_names(self, run):
+        """The collective naming renames books, never the pages inside them."""
         comics, _, _, _, _ = run
         first = sorted(comics.outputs.glob("*.cbz"))[0]
-        assert _entries(first) == ["1.avif", "2.avif", "3.avif"]
+        assert _entries(first) == ["01.avif", "02.avif", "03.avif"]
 
     def test_a_rerun_skips_every_book_by_the_input_it_recorded(self, run):
         """A book's NAME depends on which other books were in the run, so a
@@ -604,7 +618,7 @@ class TestWithoutFdupes:
                           env=env)
         assert done.returncode == 0, done.stdout + done.stderr
         assert _entries(comics.outputs / "Alpha.cbz") == [
-            "1.avif", "2.avif", "3.avif"]
+            "01.avif", "02.avif", "03.avif"]
         assert "fdupes not found" not in done.stdout + done.stderr
 
     def test_a_run_that_cannot_find_it_warns_once_for_the_whole_run(
@@ -772,9 +786,10 @@ class TestComicsThatArriveAsPdfs:
     def test_the_pdfs_pages_are_the_rendered_ones(self, run):
         comics, _, _ = run
         archive = next(iter(comics.outputs.glob("Series/*.cbz")))
-        assert _entries(archive) == ["1.avif", "2.avif", "3.avif"]
-        assert _first_line(archive, "1.avif") == "AVIF from page-1.jpg"
-        assert _first_line(archive, "3.avif") == "AVIF from page-3.jpg"
+        assert _entries(archive) == [
+            "page-1.avif", "page-2.avif", "page-3.avif"]
+        assert _first_line(archive, "page-1.avif") == "AVIF from page-1.jpg"
+        assert _first_line(archive, "page-3.avif") == "AVIF from page-3.jpg"
         with zipfile.ZipFile(archive) as opened:
             assert {info.compress_type for info in opened.infolist()} == {
                 zipfile.ZIP_STORED}
