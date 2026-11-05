@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from medialib import commands
-from medialib.lib import errorlog, ramscratch, runlog, statusline, toolcapture
+from medialib.lib import errorlog, ramscratch, runlog, safety, statusline, toolcapture
 from tests import blackbox
 
 REPO = Path(__file__).resolve().parents[2]
@@ -23,6 +23,12 @@ REPO = Path(__file__).resolve().parents[2]
 
 def tool(script: str) -> list:
     return [sys.executable, "-c", script]
+
+
+def interrupted_at_start_up() -> None:
+    """A worker body hit by Ctrl+C inside safety.trap_worker_abort, before
+    its handler is installed."""
+    raise KeyboardInterrupt
 
 
 @pytest.fixture(autouse=True)
@@ -372,6 +378,41 @@ class TestConsole:
         assert stopped.value.code == 1
         text = only_file(error_dir)
         assert "item:     film.mkv" in text and "RuntimeError: inside" in text
+
+    def test_an_interrupt_before_the_trap_stops_the_queue_and_keeps_nothing(
+            self, error_dir, tmp_path, monkeypatch):
+        """Ctrl+C landing while the worker is still installing its trap."""
+        monkeypatch.setenv("ABORT_FLAG", str(tmp_path / "flag"))
+
+        def body():
+            raise KeyboardInterrupt
+
+        with pytest.raises(SystemExit) as stopped:
+            errorlog.run_in_worker(body, (), "book.cbz")
+        assert stopped.value.code == safety.XARGS_STOP_EXIT_STATUS
+        assert safety.abort_requested()
+        assert not error_dir.exists()
+
+    def test_a_worker_process_interrupted_at_start_up_exits_quietly(
+            self, error_dir, tmp_path):
+        """The same through a real worker process. Started from a fresh
+        interpreter, so the forkserver it forks from has this test's
+        environment rather than that of whichever test started one first."""
+        env = dict(os.environ, ABORT_FLAG=str(tmp_path / "flag"),
+                   CLI_SCRIPT_DIR=str(tmp_path))
+        done = subprocess.run(tool(
+            "from medialib.lib import workerpool\n"
+            "from tests.lib.test_errorlog import interrupted_at_start_up\n"
+            "worker = workerpool.start_worker(interrupted_at_start_up, (),"
+            " 'book.cbz')\n"
+            "worker.join(60)\n"
+            "print(worker.exitcode)\n"), cwd=REPO, env=env,
+            capture_output=True, text=True, timeout=120)
+        assert done.stdout.strip() == str(safety.XARGS_STOP_EXIT_STATUS), \
+            done.stderr
+        assert "Traceback" not in done.stderr
+        assert (tmp_path / "flag").exists()
+        assert not error_dir.exists()
 
 
 @pytest.mark.fs
