@@ -695,16 +695,28 @@ def install_hooks() -> None:
 def run_in_worker(target, args: tuple, label: str) -> None:
     """A worker's body: its item named for every record made inside it, and an
     exception it did not catch kept before the worker ends with status 1 -
-    which the parent then reports as the worker it lost."""
-    install_hooks()
-    with working_on(label if os.path.exists(label) else "", item=label):
-        try:
-            target(*args)
-        except (KeyboardInterrupt, SystemExit):
-            raise
-        except BaseException as exc:
-            record_crash(exc, where=label)
-            raise SystemExit(1) from exc
+    which the parent then reports as the worker it lost.
+
+    An interrupt that lands before the worker's own trap is in place arrives as
+    a KeyboardInterrupt, and leaves the way the trap would have: the run marked
+    as stopping and the queue told so. Let through, multiprocessing would print
+    it to a stderr the interrupted parent may already have closed, and the
+    BrokenPipeError from that would be kept as a crash."""
+    try:
+        install_hooks()
+        with working_on(label if os.path.exists(label) else "", item=label):
+            try:
+                target(*args)
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except BaseException as exc:
+                record_crash(exc, where=label)
+                raise SystemExit(1) from exc
+    except KeyboardInterrupt:
+        from medialib.lib import safety
+
+        safety.request_abort()
+        raise SystemExit(safety.XARGS_STOP_EXIT_STATUS) from None
 
 
 def signal_cause(returncode: int) -> str:
