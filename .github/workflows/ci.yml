@@ -49,12 +49,39 @@ jobs:
       # The archive, PDF and e-book tools (`p7zip`, `unrar`, `poppler-utils`,
       # `ghostscript`, Calibre) are absent on purpose: they are stubbed at this
       # tier, and only the opt-in `media` tier reaches the real ones.
-      - name: install the external tools
+      #
+      # The .debs come out of the Actions cache rather than the runner's Ubuntu
+      # mirror. That mirror is sometimes slow enough that fetching these 72 MB
+      # takes longer than the whole job is allowed, and the run then gets
+      # cancelled in apt with no tests run, even though the same fetch usually
+      # takes seconds. The key changes weekly, so apt downloads only what was
+      # updated since, and `autoclean` removes the versions that were replaced.
+      - name: key the apt cache
+        id: apt-key
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            ffmpeg mkvtoolnix imagemagick mediainfo fdupes beets \
-            jq rsync tree zip unzip
+          packages="ffmpeg mkvtoolnix imagemagick mediainfo fdupes beets jq rsync tree zip unzip"
+          echo "packages=$packages" >> "$GITHUB_OUTPUT"
+          echo "key=apt-ubuntu-24.04-$(echo "$packages" | sha256sum | cut -c1-12)-$(date +%G-%V)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: ~/apt-archives
+          key: ${{ steps.apt-key.outputs.key }}
+          restore-keys: apt-ubuntu-24.04-
+      - name: install the external tools
+        # A cold cache on a slow mirror still has to get through apt; this makes
+        # that fail as a step that says so, not as a cancelled job.
+        timeout-minutes: 12
+        run: |
+          mkdir -p ~/apt-archives/partial
+          apt_opts="-o Dir::Cache::Archives=$HOME/apt-archives -o Acquire::Retries=3"
+          sudo apt-get update -o Acquire::Retries=3
+          sudo apt-get install -y --no-install-recommends $apt_opts \
+            ${{ steps.apt-key.outputs.packages }}
+          sudo apt-get autoclean $apt_opts
+          # apt leaves its lock and partial/ owned by root, which the cache
+          # cannot read back at the end of the job.
+          sudo rm -rf ~/apt-archives/lock ~/apt-archives/partial
+          sudo chown -R "$(id -u):$(id -g)" ~/apt-archives
 
       # duckdb has no apt package - the release is one gzipped ELF binary.
       # PINNED, because the census hypercubes are built by real SQL and a
