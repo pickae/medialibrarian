@@ -86,8 +86,8 @@ def spec(program: str) -> clioptions.Spec:
 
 def cli(argv: list[str] | None = None) -> int:
     """The module's own entry point, and the console script's."""
-    errorlog.start_run(argv)
     settings.load()
+    errorlog.start_run(argv)
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, program=commands.program_name(__spec__.name),

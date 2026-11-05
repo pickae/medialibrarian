@@ -1396,8 +1396,8 @@ def _build_library(state, ingest):
 
 
 def cli(argv: list | None = None) -> int:
-    errorlog.start_run(argv)
     settings.load()
+    errorlog.start_run(argv)
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, program=commands.program_name(__spec__.name),

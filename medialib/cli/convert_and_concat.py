@@ -702,8 +702,8 @@ def _concat_phase(in_path, out_path, temp_path, stage, only_concat,
 
 
 def cli(argv: list | None = None) -> int:
-    errorlog.start_run(argv)
     settings.load()
+    errorlog.start_run(argv)
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, program=commands.program_name(__spec__.name),

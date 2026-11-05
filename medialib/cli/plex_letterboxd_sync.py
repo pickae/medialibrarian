@@ -455,8 +455,8 @@ def report(result: Plan, to_plex_only: bool) -> None:
 # --- the run ------------------------------------------------------------------
 
 def cli(argv: list | None = None) -> int:
-    errorlog.start_run(argv)
     settings.load()
+    errorlog.start_run(argv)
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, commands.program_name(__spec__.name), commands.script_dir())
