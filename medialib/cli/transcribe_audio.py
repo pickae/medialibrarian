@@ -21,6 +21,7 @@ from medialib.lib import (
     clioptions,
     durationcheck,
     enums,
+    errorlog,
     ffmpegselect,
     ramscratch,
     runlog,
@@ -281,7 +282,8 @@ def _run_queue(state, tracks, jobs: int) -> None:
         for relative in tracks:
             if safety.abort_requested():
                 return
-            state.transcribe_one(relative)
+            with errorlog.work_item(relative):
+                state.transcribe_one(relative)
         return
 
     workerpool.run(tracks, jobs, _in_worker, lambda relative: (state, relative))
@@ -296,8 +298,8 @@ def main(argv: list, program: str = "transcribe-audio") -> int:
         sys.stdout.write(clioptions.help_text(declaration))
         return 0
     except clioptions.UsageError as error:
-        sys.stderr.write(clioptions.usage_error_text(declaration,
-                                                     error.message))
+        clioptions.refuse_usage(declaration,
+                                error.message)
         return 1
 
     if clioptions.args_out_of_range(len(result.positionals), 2, None):
@@ -306,7 +308,7 @@ def main(argv: list, program: str = "transcribe-audio") -> int:
 
     input_dir, output_dir = result.positionals[0], result.positionals[1]
     if not os.path.isdir(input_dir):
-        sys.stderr.write(clioptions.missing_dir_text(declaration, input_dir))
+        clioptions.refuse_missing_dir(declaration, input_dir)
         return 1
 
     # Both paths absolute here, once: the run reads the input tree relative to
@@ -405,6 +407,7 @@ def main(argv: list, program: str = "transcribe-audio") -> int:
 
 
 def cli(argv: list | None = None) -> int:
+    errorlog.start_run(argv)
     settings.load()
     if argv is None:
         argv = sys.argv[1:]

@@ -56,6 +56,7 @@ from medialib.lib import (
     dynamicqueue,
     encodercalibration,
     enums,
+    errorlog,
     gpulane,
     imagebitrate,
     imagemagick,
@@ -343,7 +344,7 @@ def extract(archive: str, destination: str, max_res: int):
             # Left alone to keep the library safe, which -q still says.
             runlog.error('not unpacking "%s": %s (%s)'
                          % (os.path.basename(archive), refused[0][1],
-                            refused[0][0]))
+                            refused[0][0]), files=[archive])
             return None
 
     if lowered.endswith(".cbr"):
@@ -862,7 +863,8 @@ def _run_pool(state: Run, method: str, items: list, jobs: int) -> None:
         for item in items:
             if safety.abort_requested():
                 return
-            getattr(state, method)(item)
+            with errorlog.work_item(item):
+                getattr(state, method)(item)
         return
 
     workerpool.run(items, jobs, _in_worker, lambda item: (state, method, item))
@@ -1136,8 +1138,8 @@ def main(argv: list, program: str = "convert-comics",
         sys.stdout.write(clioptions.help_text(declaration))
         return 0
     except clioptions.UsageError as error:
-        sys.stderr.write(clioptions.usage_error_text(declaration,
-                                                     error.message))
+        clioptions.refuse_usage(declaration,
+                                error.message)
         return 1
 
     script_dir = script_dir or commands.script_dir()
@@ -1431,6 +1433,7 @@ def _settle_fdupes() -> bool:
 
 
 def cli(argv: list | None = None) -> int:
+    errorlog.start_run(argv)
     settings.load()
     if argv is None:
         argv = sys.argv[1:]

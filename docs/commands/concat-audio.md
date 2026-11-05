@@ -29,7 +29,8 @@ joined in.
 
 One progress line per subfolder. ffmpeg's own output is kept rather than
 shown, and replayed only for a book whose join failed or came out short — its
-last lines under the error, all of it kept in `logs/tool-failures/`.
+last lines under the error, all of it kept in
+the run's error log under `logs/error/`.
 
 - `-v` adds each subfolder's steps and replays more of a failed join
 - `-q` prints only failures

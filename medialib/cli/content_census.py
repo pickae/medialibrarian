@@ -10,7 +10,7 @@ import sys
 
 from medialib import commands
 from medialib.cli import census_run
-from medialib.lib import clioptions, settings
+from medialib.lib import clioptions, errorlog, settings
 
 # The name is the caller's to supply: a command started by another one prints the
 # name that command was told, not its own.
@@ -86,6 +86,7 @@ def spec(program: str) -> clioptions.Spec:
 
 def cli(argv: list[str] | None = None) -> int:
     """The module's own entry point, and the console script's."""
+    errorlog.start_run(argv)
     settings.load()
     if argv is None:
         argv = sys.argv[1:]
@@ -109,7 +110,7 @@ def main(argv: list[str], program: str = "content-census",
         sys.stdout.write(clioptions.help_text(declaration))
         return 0
     except clioptions.UsageError as error:
-        sys.stderr.write(clioptions.usage_error_text(declaration, error.message))
+        clioptions.refuse_usage(declaration, error.message)
         return 1
 
     if clioptions.args_out_of_range(len(result.positionals), 1, None):

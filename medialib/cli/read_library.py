@@ -31,6 +31,7 @@ from medialib.lib import (
     booktext,
     clioptions,
     enums,
+    errorlog,
     ffmpegselect,
     formatting,
     imagemagick,
@@ -744,7 +745,8 @@ def _run_pool(state: Run, method: str, items: list, jobs: int) -> list:
         for item in items:
             if safety.abort_requested():
                 return answers
-            answers.append(getattr(state, method)(item))
+            with errorlog.work_item(item):
+                answers.append(getattr(state, method)(item))
         return answers
 
     workerpool.run(items, jobs, _in_worker, lambda item: (state, method, item))
@@ -777,8 +779,8 @@ def main(argv: list, program: str = "read-library",
         sys.stdout.write(clioptions.help_text(declaration))
         return 0
     except clioptions.UsageError as error:
-        sys.stderr.write(clioptions.usage_error_text(declaration,
-                                                     error.message))
+        clioptions.refuse_usage(declaration,
+                                error.message)
         return 1
 
     keep_lossless = "o" not in result.given
@@ -816,7 +818,7 @@ def main(argv: list, program: str = "read-library",
     out_path = os.path.abspath(result.positionals[1].rstrip("/"))
 
     if not os.path.isdir(in_path):
-        sys.stderr.write(clioptions.missing_dir_text(declaration, in_path))
+        clioptions.refuse_missing_dir(declaration, in_path)
         return 1
 
     # An audiobook is not an e-book, so this could not read its own output back
@@ -1183,6 +1185,7 @@ def _settle_mkvtoolnix(opus_wanted: bool) -> None:
 
 
 def cli(argv: list | None = None) -> int:
+    errorlog.start_run(argv)
     settings.load()
     if argv is None:
         argv = sys.argv[1:]

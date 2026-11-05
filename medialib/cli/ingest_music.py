@@ -35,6 +35,7 @@ from medialib.lib import (
     cuechapters,
     durationcheck,
     enums,
+    errorlog,
     ffmpegselect,
     formatting,
     imagemagick,
@@ -1258,7 +1259,8 @@ def _run_pool(state, method: str, items: list, jobs: int) -> None:
         for item in items:
             if safety.abort_requested():
                 return
-            getattr(state, method)(item)
+            with errorlog.work_item(item):
+                getattr(state, method)(item)
         return
 
     workerpool.run(items, jobs, _in_worker, lambda item: (state, method, item))
@@ -1274,8 +1276,8 @@ def main(argv: list, program: str = "ingest-music",
         sys.stdout.write(clioptions.help_text(declaration))
         return 0
     except clioptions.UsageError as error:
-        sys.stderr.write(clioptions.usage_error_text(declaration,
-                                                     error.message))
+        clioptions.refuse_usage(declaration,
+                                error.message)
         return 1
 
     if clioptions.args_out_of_range(len(result.positionals), 2, None):
@@ -1299,8 +1301,8 @@ def main(argv: list, program: str = "ingest-music",
     os.environ["LOG_TIMESTAMPS"] = "1"
 
     if not os.path.isdir(download_dir):
-        sys.stderr.write(clioptions.missing_dir_text(declaration,
-                                                     download_dir))
+        clioptions.refuse_missing_dir(declaration,
+                                      download_dir)
         return 1
 
     # Three folders, so three ways to nest one inside another, and all three
@@ -1673,6 +1675,7 @@ def _run_child(command: str, argv: list, script_dir: str) -> int:
 
 
 def cli(argv: list | None = None) -> int:
+    errorlog.start_run(argv)
     settings.load()
     if argv is None:
         argv = sys.argv[1:]

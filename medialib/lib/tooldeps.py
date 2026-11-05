@@ -23,7 +23,7 @@ import subprocess
 import sys
 from collections.abc import Sequence
 
-from medialib.lib import hostos
+from medialib.lib import errorlog, hostos
 
 __all__ = [
     "tool_present",
@@ -270,6 +270,8 @@ def require_tools(what: str, specs: Sequence[str], *,
                                         _pad_bytes(role, role_width), hint)
     text += "\nInstall the above (or put it on PATH) and run again. Nothing was changed.\n"
     file.write(text)
+    errorlog.record("tool-missing", "Cannot run %s: %s not found"
+                    % (what, ", ".join(names)), stack=False)
     return 1
 
 
@@ -319,4 +321,7 @@ def require_python_module(module: str, what: str, role: str = "used by this scri
     text += "  {}  {}\n".format(" " * len(module), _module_hint(module))
     text += "\nInstall it and run again. Nothing was changed.\n"
     file.write(text)
+    errorlog.record("tool-missing", 'Cannot run %s: the Python "%s" package is '
+                    "not importable by %s" % (what, module, sys.executable),
+                    stack=False)
     return 1

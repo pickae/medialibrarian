@@ -40,6 +40,7 @@ from medialib.lib import (
     clioptions,
     encodercalibration,
     enums,
+    errorlog,
     imagebitrate,
     imagemagick,
     ramscratch,
@@ -649,6 +650,9 @@ class Run:
         if not os.path.isfile(relative):
             self.record("notFound", "ERROR (not found)", relative,
                         stream=sys.stderr)
+            errorlog.record("input-missing", "not found: %s" % relative,
+                            files=[os.path.join(self.input_dir, relative)],
+                            stack=False)
             return
         if os.path.isfile(out):
             self.record("alreadyDone", "SKIP (already done)", relative,
@@ -849,7 +853,8 @@ def _run_pool(state, work, jobs: int, worker_name: str) -> None:
         for relative in work:
             if safety.abort_requested():
                 return
-            worker(relative)
+            with errorlog.work_item(relative):
+                worker(relative)
         return
 
     workerpool.run(work, jobs, _in_worker,
@@ -912,8 +917,8 @@ def main(argv: list, program: str = "convert-images") -> int:
         sys.stdout.write(clioptions.help_text(declaration))
         return 0
     except clioptions.UsageError as error:
-        sys.stderr.write(clioptions.usage_error_text(declaration,
-                                                     error.message))
+        clioptions.refuse_usage(declaration,
+                                error.message)
         return 1
 
     if clioptions.args_out_of_range(len(result.positionals), 2, None):
@@ -934,9 +939,9 @@ def main(argv: list, program: str = "convert-images") -> int:
     chroma = result.values["chroma"] or DEFAULT_CHROMA
     # -r writes JPEG whatever -e says, so -u has nothing to act on there either.
     if result.values["chroma"] and (reverse or image_format != CHROMA_FORMAT):
-        sys.stderr.write(clioptions.usage_error_text(
+        clioptions.refuse_usage(
             declaration, "-u only applies when writing %s, not %s."
-            % (CHROMA_FORMAT, "jpeg" if reverse else image_format)))
+            % (CHROMA_FORMAT, "jpeg" if reverse else image_format))
         return 1
     speed = int(result.values["speedPreset"] or DEFAULT_SPEED)
     max_res = result.values["maxRes"] or str(UNBOUNDED_EDGE)
@@ -1130,9 +1135,9 @@ def _calibrate(declaration, program, result, input_dir, output_dir) -> int:
     clashing = [letter for letter in _NOT_WITH_CALIBRATE
                 if letter in result.given]
     if clashing:
-        sys.stderr.write(clioptions.usage_error_text(
+        clioptions.refuse_usage(
             declaration, "-k measures every speed and quality itself; it "
-            "takes no -%s." % ", -".join(clashing)))
+            "takes no -%s." % ", -".join(clashing))
         return 1
     if safety.require_separate_output(input_dir, output_dir):
         return 1
@@ -1407,6 +1412,7 @@ def _road_line(label: str, images: int, pixels: int, seconds: float) -> str:
 
 
 def cli(argv: list | None = None) -> int:
+    errorlog.start_run(argv)
     settings.load()
     if argv is None:
         argv = sys.argv[1:]

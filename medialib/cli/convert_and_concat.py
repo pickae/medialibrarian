@@ -30,6 +30,7 @@ from medialib.lib import (
     archives,
     clioptions,
     enums,
+    errorlog,
     ffmpegselect,
     imagemagick,
     ramscratch,
@@ -344,8 +345,8 @@ def main(argv: list, program: str = "convert-and-concat",
         sys.stdout.write(clioptions.help_text(declaration))
         return 0
     except clioptions.UsageError as error:
-        sys.stderr.write(clioptions.usage_error_text(declaration,
-                                                     error.message))
+        clioptions.refuse_usage(declaration,
+                                error.message)
         return 1
 
     if clioptions.args_out_of_range(len(result.positionals), 2, None):
@@ -372,7 +373,7 @@ def main(argv: list, program: str = "convert-and-concat",
     in_path = result.positionals[0].rstrip("/")
     out_path = result.positionals[1].rstrip("/")
     if not os.path.isdir(in_path):
-        sys.stderr.write(clioptions.missing_dir_text(declaration, in_path))
+        clioptions.refuse_missing_dir(declaration, in_path)
         return 1
 
     # Absolute, because the concatenating phase runs from INSIDE the tree it
@@ -701,6 +702,7 @@ def _concat_phase(in_path, out_path, temp_path, stage, only_concat,
 
 
 def cli(argv: list | None = None) -> int:
+    errorlog.start_run(argv)
     settings.load()
     if argv is None:
         argv = sys.argv[1:]

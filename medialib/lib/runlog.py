@@ -201,9 +201,21 @@ def warn(*message: object, stream=None) -> None:
         _write(("WARNING:",) + message, stream)
 
 
-def error(*message: object, stream=None) -> None:
-    """An ``ERROR:`` line, printed at every verbosity - ``-q`` included."""
+def error(*message: object, stream=None, kind: str = "error",
+          files=(), persist: bool = True) -> None:
+    """An ``ERROR:`` line, printed at every verbosity - ``-q`` included.
+
+    Every one that reaches the console is also kept in the run's error log
+    (`medialib/lib/errorlog.py`) as ``kind``, with ``files`` named in it, so
+    the two never disagree about what went wrong. A line written into some
+    other stream is a piece of a larger report, kept by whoever writes that.
+    """
     _write(("ERROR:",) + message, stream)
+    if persist and (stream is None or stream is sys.stderr):
+        from medialib.lib import errorlog
+
+        errorlog.record(kind, " ".join(str(part) for part in message),
+                        files=files)
 
 
 def error_continued(*message: object, stream=None) -> None:

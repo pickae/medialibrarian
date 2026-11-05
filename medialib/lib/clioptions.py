@@ -15,11 +15,12 @@ from __future__ import annotations
 
 import dataclasses
 import re
+import sys
 import textwrap
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from medialib.lib import runlog
+from medialib.lib import errorlog, runlog
 
 # The C-locale [[:space:]] set. Python's str.strip() with no argument strips a
 # great deal more than this, and a spec field is allowed to hold any of it.
@@ -407,6 +408,22 @@ def help_text(spec: Spec) -> str:
 def missing_dir_text(spec: Spec, directory: str) -> str:
     """The input-folder refusal, worded the way every script worded it."""
     return f'Directory "{directory}" does not exist.\n\n{page(spec)}\n'
+
+
+def refuse_usage(spec: Spec, message: str = "") -> None:
+    """The usage error written to stderr and kept in the run's error log."""
+    sys.stderr.write(usage_error_text(spec, message))
+    errorlog.record("usage", message or "the command line was refused",
+                    stack=False)
+
+
+def refuse_missing_dir(spec: Spec, directory: str) -> None:
+    """The input-folder refusal written to stderr and kept in the run's error
+    log, naming the folder that is not there."""
+    sys.stderr.write(missing_dir_text(spec, directory))
+    errorlog.record("input-missing",
+                    'Directory "%s" does not exist.' % directory,
+                    files=[directory], stack=False)
 
 
 def verbosity_options(column: int) -> str:

@@ -23,7 +23,7 @@ import collections
 import os
 import sys
 
-from medialib.lib import safety
+from medialib.lib import errorlog, safety
 
 # Every abnormal worker exit this process has seen, as (owner, label, reason).
 # The owner is the pid that recorded it: a worker inherits this list across the
@@ -47,13 +47,17 @@ def start_worker(target, args: tuple, name: str):
     import multiprocessing
     import multiprocessing.process
 
+    # Through errorlog.run_in_worker, which names the item for every error the
+    # worker records and keeps an exception it did not catch.
+    wrapped = (target, tuple(args), name)
     worker: multiprocessing.process.BaseProcess
     if (multiprocessing.get_context().get_start_method() == "fork"
             and "forkserver" in multiprocessing.get_all_start_methods()):
         worker = multiprocessing.get_context("forkserver").Process(
-            target=target, args=args, name=name)
+            target=errorlog.run_in_worker, args=wrapped, name=name)
     else:
-        worker = multiprocessing.Process(target=target, args=args, name=name)
+        worker = multiprocessing.Process(target=errorlog.run_in_worker,
+                                         args=wrapped, name=name)
     worker.start()
     return worker
 
@@ -122,6 +126,10 @@ def note_exit(worker) -> str:
     _FAILURES.append((os.getpid(), label, reason))
     sys.stderr.write("\nWARNING: a worker %s and its item was not finished:\n"
                      "  %s\n" % (reason, label))
+    causes = [errorlog.signal_cause(-worker.exitcode)] if worker.exitcode < 0 else []
+    errorlog.record("worker-died", "a worker %s and its item was not finished: %s"
+                    % (reason, label), files=[label] if os.path.exists(label) else [],
+                    causes=[cause for cause in causes if cause], stack=False)
     return reason
 
 

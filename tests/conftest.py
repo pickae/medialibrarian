@@ -172,6 +172,10 @@ _STATE_KNOBS = (
     "LOG_TIMESTAMPS",
     # Settled by a command's -v or -q for its children, the same way.
     "LOG_VERBOSITY",
+    # The run's error log, settled by the first error and handed to children.
+    "ERROR_LOG_NAME",
+    "ERROR_LOG_RUN",
+    "ERROR_LOG_STARTED",
 )
 
 

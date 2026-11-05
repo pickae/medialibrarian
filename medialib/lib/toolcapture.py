@@ -7,7 +7,13 @@ runs. It is kept instead - the first lines, which hold how a tool set itself up,
 and a rolling window of the last ones, which hold how it ended - and a tool that
 succeeded is never heard from. One that failed is replayed as one block, under
 the run's lock so no other worker's line lands inside it, and its whole kept
-output is copied to `logs/tool-failures/` so it outlives the scratch.
+output goes into the run's error log under `logs/error/`
+(`medialib/lib/errorlog.py`), so it outlives the scratch - with the files it
+was handed, the input they came from, and where in the code it was run from.
+
+A tool that succeeded but said something that tends to mean damage - ffmpeg
+decoding a broken frame and carrying on, say - is the one exception to its
+silence: one warning, and the lines that raised it kept in the error log.
 
 How much is replayed follows the run's verbosity:
 
@@ -31,15 +37,15 @@ import shlex
 import subprocess
 import sys
 import threading
-import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from medialib import commands
-from medialib.lib import runlog, statusline
+from medialib.lib import errorlog, runlog, statusline
+from medialib.lib.errorlog import redact
 
-__all__ = ["ToolOutput", "ToolRun", "ffmpeg_loglevel", "finished", "from_log",
-           "pick", "redact", "replay_text", "report_failure", "run"]
+__all__ = ["ToolOutput", "ToolRun", "causes", "ffmpeg_loglevel", "finished",
+           "from_log", "pick", "redact", "replay_text", "report_failure",
+           "report_notable", "run"]
 
 # What is kept of one run: its first lines, then the last ones.
 HEAD_LINES = 200
@@ -55,35 +61,6 @@ _PENDING_LIMIT = 65536
 
 # Terminal control sequences: colour, cursor movement, erase-line.
 _CSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
-
-# A secret written as name=value or name: value, and a bearer token. What is
-# kept and replayed can contain a request URL or a header, and neither belongs
-# on a terminal or in a log.
-_SECRET = re.compile(
-    r"(?i)\b((?:api[_-]?key|access[_-]?token|auth[_-]?token|token|password|"
-    r"passwd|secret)\s*[=:]\s*)([^\s&\"',;]+)")
-_BEARER = re.compile(r"(?i)\b(authorization\s*:\s*\w+\s+)(\S+)")
-_FLAG_SECRET = re.compile(
-    r"(?i)(--(?:api-?key|token|password|secret)\s+)(\S+)")
-
-# The environment is where the commands are handed their keys and logins, so
-# the value of any variable named like one is starred wherever it turns up,
-# whatever form it was written in.
-_SECRET_NAME = re.compile(r"(?i)key|token|pass|secret")
-_SECRET_MIN = 6
-
-FAILURE_DIR = "tool-failures"
-
-
-def redact(text: str) -> str:
-    """``text`` with the value of every key, token and password starred out."""
-    for name, value in os.environ.items():
-        if len(value) >= _SECRET_MIN and _SECRET_NAME.search(name):
-            text = text.replace(value, "***")
-    text = _SECRET.sub(r"\1***", text)
-    text = _FLAG_SECRET.sub(r"\1***", text)
-    return _BEARER.sub(r"\1***", text)
-
 
 def pick(normal: list, verbose: list) -> list:
     """The tool flags for this run's verbosity: ``verbose`` under ``-v``,
@@ -129,6 +106,10 @@ class ToolOutput:
         self._pending = ""
         self._decoder = codecs.getincrementaldecoder("utf-8")("replace")
         self.total = 0
+        # The lines errorlog.NOTABLE picks out, as (key, line), kept whether
+        # they fell in the head, the tail or between; and how many there were.
+        self.notable: list[tuple[str, str]] = []
+        self.notable_count = 0
 
     def feed(self, data: bytes | str) -> None:
         """Take the next piece of output."""
@@ -164,6 +145,11 @@ class ToolOutput:
 
     def _add(self, line: str) -> None:
         self.total += 1
+        key = errorlog.notable_key(line) if line else ""
+        if key:
+            self.notable_count += 1
+            if len(self.notable) < errorlog.NOTABLE_LIMIT:
+                self.notable.append((key, line))
         if len(self._head) < self._head_limit:
             self._head.append(line)
             return
@@ -277,7 +263,9 @@ def run(argv, label: str = "", *,
     every warning it is not printed under ``-q``.
 
     ``report`` False leaves the replay to the caller, who may want to retry
-    first: :func:`report_failure` is the same replay, called by hand.
+    first: :func:`report_failure` is the same replay, called by hand. A run
+    that succeeded but reported damage is warned about either way: there is
+    no retry to wait for.
     ``lock_file`` is the run's shared lock, so the block is not interleaved with
     another worker's lines.
     """
@@ -307,28 +295,99 @@ def run(argv, label: str = "", *,
             output.drain(process.stdout)
         result = finished(argv, process.wait(), output, label, tool, verify,
                           captured)
-    if result.failure and report:
-        report_failure(result, lock_file=lock_file, warning=warning,
-                       shown_if=shown_if)
+    if result.failure:
+        if report:
+            report_failure(result, lock_file=lock_file, warning=warning,
+                           shown_if=shown_if)
+    else:
+        report_notable(result, lock_file=lock_file)
     return result
 
 
-def _keep(result: ToolRun) -> str:
-    """The failure's whole kept output, in `logs/`; its path, or empty when it
-    could not be written - a full disk is no reason to lose the error line."""
-    tool = re.sub(r"[^A-Za-z0-9._-]+", "-", result.name)
-    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", result.label or tool).strip("-")
-    name = "%s-%d-%s-%s.log" % (time.strftime("%Y%m%d-%H%M%S"), os.getpid(),
-                                tool, slug[:60] or "run")
-    try:
-        path = commands.logs_file(commands.script_dir(),
-                                  os.path.join(FAILURE_DIR, name))
-        with open(path, "w", encoding="utf-8") as handle:
-            handle.write(redact("command: %s\n" % shlex.join(result.argv)))
-            handle.write("%s\n\n" % result.failure)
-            handle.write(redact(result.output.text()))
-    except OSError:
+def _kind(result: ToolRun, warning: str = "") -> str:
+    """Which errorlog kind a failed run is."""
+    if warning:
+        return "tool-skipped"
+    if result.failure.startswith("could not be started"):
+        return "tool-not-started"
+    if result.returncode == 0:
+        return "tool-bad-output"
+    return "tool-failed"
+
+
+def causes(result: ToolRun) -> list[str]:
+    """What the tool's own lines, or the way it ended, say about why it
+    failed: each likely cause once, in the order its first line came."""
+    said = []
+    for key, _line in result.output.notable:
+        sentence = errorlog.CAUSES[key].says
+        if sentence not in said:
+            said.append(sentence)
+    by_signal = errorlog.signal_cause(result.returncode)
+    if by_signal:
+        said.append(by_signal)
+    return said
+
+
+def _subject(result: ToolRun) -> str:
+    """The tool as the error line names it: by the item it worked on - the
+    caller's label, else the item the run has in hand - and its name."""
+    label = result.label or errorlog.subject()[0]
+    return "%s: %s" % (label, result.name) if label else result.name
+
+
+def _keep(result: ToolRun, warning: str = "") -> str:
+    """The failure's whole kept output, in the run's error log; its path, or
+    empty when it could not be written - a full disk is no reason to lose the
+    error line."""
+    message = "%s %s" % (_subject(result), result.failure)
+    if warning:
+        message = "%s (%s)" % (warning, message)
+    return errorlog.record(
+        _kind(result, warning), message, tool_argv=result.argv,
+        tool_status=result.failure, tool_output=result.output.lines(),
+        tool_lines=result.output.total, causes=causes(result))
+
+
+def report_notable(result: ToolRun, stream=None, lock_file: str = "") -> str:
+    """Warn about a run that succeeded but said something that tends to mean
+    damage, and keep the lines that did; the error log's path, or empty when
+    there was nothing to say.
+
+    Kept at every verbosity, printed unless the run is quiet, like any other
+    warning.
+    """
+    if not result.ok:
         return ""
+    worrying = [(key, line) for key, line in result.output.notable
+                if errorlog.CAUSES[key].warn]
+    if not worrying:
+        return ""
+    says = errorlog.CAUSES[worrying[0][0]].says
+    lines = [line for _, line in worrying]
+    path = errorlog.record(
+        "tool-warning", "%s finished, but %s" % (_subject(result), says),
+        tool_argv=result.argv, tool_status="exited 0",
+        tool_output=lines + ["[... the last lines it printed ...]"]
+        + result.output.lines()[-SHOWN_TAIL[runlog.NORMAL]:],
+        causes=[errorlog.CAUSES[key].says
+                for key in dict.fromkeys(key for key, _ in worrying)])
+    if runlog.verbosity() < runlog.NORMAL:
+        return path
+    out = io.StringIO()
+    runlog.warn("%s finished, but %s:" % (_subject(result), says), stream=out)
+    out.write(redact("    | %s\n" % lines[0]))
+    more = max(result.output.notable_count, len(worrying)) - 1
+    if more:
+        out.write("    ... and %d more line(s) like it or worse\n" % more)
+    if path:
+        out.write("    kept in %s\n" % path)
+    target = sys.stderr if stream is None else stream
+    if lock_file:
+        with open(lock_file, "a") as handle, runlog.take_lock(handle):
+            _write_block(target, out.getvalue())
+    else:
+        _write_block(target, out.getvalue())
     return path
 
 
@@ -370,6 +429,8 @@ def _body(result: ToolRun, level: int,
         shown = lines[-tail_count:] if tail_count else []
     for line in shown:
         out.write(redact("    | %s\n" % line))
+    for cause in causes(result):
+        out.write("    likely cause: %s\n" % cause)
     if result.log_path:
         out.write("    all %d line(s) it printed: %s\n"
                   % (output.total, result.log_path)
@@ -398,7 +459,7 @@ def report_failure(result: ToolRun, stream=None, lock_file: str = "",
     why it failed; the log in `logs/` keeps every line regardless.
     """
     if not result.log_path:
-        result.log_path = _keep(result)
+        result.log_path = _keep(result, warning)
     text = _block(result, runlog.verbosity(), warning, shown_if)
     if not text:
         return

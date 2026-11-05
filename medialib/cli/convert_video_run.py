@@ -25,6 +25,7 @@ from medialib.lib import (
     clioptions,
     codecs,
     durationcheck,
+    errorlog,
     ffmpegselect,
     formatting,
     hostos,
@@ -889,7 +890,8 @@ def write_video_only(relative: str, directory: str, reason: str,
             shutil.copy(encoded, output)
         except (OSError, shutil.Error):
             runlog.error("the video-only failsafe could not be written, the "
-                         "video encode is lost: %s" % relative)
+                         "video encode is lost: %s" % relative,
+                         files=[relative, encoded, output])
             return False
     try:
         stamp = os.stat(source)
@@ -1419,7 +1421,8 @@ class Run:
         video_duration = plan.video_duration if plan else duration
         if not rules.video_intermediate_complete(directory, video_duration):
             runlog.error("Video encoding failed (no complete encoded video to "
-                         "keep), skipping: " + relative)
+                         "keep), skipping: " + relative,
+                         kind="tool-bad-output", files=[relative, directory])
             shutil.rmtree(directory, ignore_errors=True)
             return 1
 
@@ -1619,8 +1622,8 @@ def main(argv: list, program: str = "convert-video",
         sys.stdout.write(clioptions.help_text(declaration))
         return 0
     except clioptions.UsageError as error:
-        sys.stderr.write(clioptions.usage_error_text(declaration,
-                                                     error.message))
+        clioptions.refuse_usage(declaration,
+                                error.message)
         return 1
 
     if clioptions.args_out_of_range(len(result.positionals), 2, None):
@@ -1666,12 +1669,12 @@ def main(argv: list, program: str = "convert-video",
 
     refusal = _validate(settings, video_args, grain, engines_override)
     if refusal:
-        sys.stderr.write(clioptions.usage_error_text(declaration, refusal))
+        clioptions.refuse_usage(declaration, refusal)
         return 1
 
     if not os.path.isdir(settings.input_dir):
-        sys.stderr.write(clioptions.missing_dir_text(declaration,
-                                                     settings.input_dir))
+        clioptions.refuse_missing_dir(declaration,
+                                      settings.input_dir)
         return 1
     # Before the output folder is created: a re-encode written inside the input is
     # a video this script would find and re-encode again on the next run.
@@ -2260,6 +2263,7 @@ def _run_all(settings) -> int:
 
 
 def cli(argv: list | None = None) -> int:
+    errorlog.start_run(argv)
     settings.load()
     if argv is None:
         argv = sys.argv[1:]

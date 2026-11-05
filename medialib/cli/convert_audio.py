@@ -55,6 +55,7 @@ from medialib.lib import (
     durationcheck,
     dynamicqueue,
     enums,
+    errorlog,
     ffmpegselect,
     formatting,
     imagemagick,
@@ -990,6 +991,7 @@ class Run:
         tmp_dir, status = ramscratch.ram_scratch_dir("convertAudio")
         if status != 0 or not tmp_dir:
             return
+        errorlog.note_origin(tmp_dir, source)
         try:
             self._produce(relative, source, out, video, mono, bitrate,
                           threshold, source_bitrate, tmp_dir,
@@ -1158,7 +1160,8 @@ class Run:
                 "%s at %d Hz %s):"
                 % (xheaac.EXHALE, formatting.fmt_hms("%.3f" % seconds),
                    formatting.fmt_hms("%.3f" % ceiling), rate,
-                   "mono" if channels == 1 else "%d channels" % channels))
+                   "mono" if channels == 1 else "%d channels" % channels),
+                files=[source])
             runlog.error_continued("       %s" % os.path.basename(source))
             runlog.error_continued("       %s" % self._ceiling_way_out())
             return False
@@ -1867,7 +1870,8 @@ def _run_pool(state, method: str, items: list, jobs: int) -> None:
         for item in items:
             if safety.abort_requested():
                 return
-            getattr(state, method)(item)
+            with errorlog.work_item(item):
+                getattr(state, method)(item)
         return
 
     geometry = statusline.status_geometry()
@@ -1911,8 +1915,8 @@ def main(argv: list, program: str = "convert-audio",
         sys.stdout.write(clioptions.help_text(declaration))
         return 0
     except clioptions.UsageError as error:
-        sys.stderr.write(clioptions.usage_error_text(declaration,
-                                                     error.message))
+        clioptions.refuse_usage(declaration,
+                                error.message)
         return 1
 
     mono = "m" in result.given
@@ -1956,7 +1960,7 @@ def main(argv: list, program: str = "convert-audio",
     input_dir, output_dir = result.positionals[0], result.positionals[1]
 
     if not os.path.isdir(input_dir):
-        sys.stderr.write(clioptions.missing_dir_text(declaration, input_dir))
+        clioptions.refuse_missing_dir(declaration, input_dir)
         return 1
 
     # Both made absolute, once: the run later chdirs into the input folder, so a
@@ -2175,7 +2179,8 @@ def _convert(program: str, script_dir: str, input_dir: str, output_dir: str,
             for token, _size in producer:
                 if safety.abort_requested():
                     break
-                state.encode(token)
+                with errorlog.work_item(token):
+                    state.encode(token)
         else:
             geometry = statusline.status_geometry()
             dynamicqueue.run(producer, jobs, _in_worker,
@@ -2519,6 +2524,7 @@ def _warn_mkvtoolnix(tracks: list) -> None:
 
 
 def cli(argv: list | None = None) -> int:
+    errorlog.start_run(argv)
     settings.load()
     if argv is None:
         argv = sys.argv[1:]

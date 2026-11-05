@@ -206,7 +206,7 @@ first, creating it if it is not there. Nothing is downloaded.
 
 One line per episode, and nothing else. What yt-dlp says is kept rather than
 shown, and only a feed that fails has it replayed — its last lines under the
-error, with all of it kept in `logs/tool-failures/`. `-v` has yt-dlp say more
+error, with all of it kept in the run's error log under `logs/error/`. `-v` has yt-dlp say more
 and replays more of it, its `[debug]` lines left to the kept log. The episodes are counted from what yt-dlp
 reports after all post-processing, so the closing figures are of finished files
 on disk rather than of feeds walked.

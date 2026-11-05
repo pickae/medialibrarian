@@ -346,6 +346,9 @@ def load(stream=None) -> None:
                 % (path, ", ".join(secrets), shlex.quote(path)))
     except (OSError, SettingsError) as error:
         stream.write("==> ERROR: %s\n" % error)
+        from medialib.lib import errorlog
+
+        errorlog.record("config", str(error), files=[path], stack=False)
         raise SystemExit(1) from error
     for name, value in values.items():
         if name not in BY_NAME:

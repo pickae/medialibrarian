@@ -21,6 +21,7 @@ from medialib.lib import (
     censusviewer,
     clioptions,
     cubes,
+    errorlog,
     ramscratch,
     runlog,
     safety,
@@ -439,8 +440,8 @@ def main(argv: list, program: str = "content-census-bi") -> int:
         sys.stdout.write(clioptions.help_text(declaration))
         return 0
     except clioptions.UsageError as error:
-        sys.stderr.write(clioptions.usage_error_text(declaration,
-                                                     error.message))
+        clioptions.refuse_usage(declaration,
+                                error.message)
         return 1
 
     if clioptions.args_out_of_range(len(result.positionals), 1, None):
@@ -537,6 +538,7 @@ def main(argv: list, program: str = "content-census-bi") -> int:
 
 
 def cli(argv: list | None = None) -> int:
+    errorlog.start_run(argv)
     settings.load()
     if argv is None:
         argv = sys.argv[1:]

@@ -30,6 +30,7 @@ from typing import NamedTuple
 from medialib import commands
 from medialib.lib import (
     clioptions,
+    errorlog,
     letterboxd,
     plexserver,
     runlog,
@@ -454,6 +455,7 @@ def report(result: Plan, to_plex_only: bool) -> None:
 # --- the run ------------------------------------------------------------------
 
 def cli(argv: list | None = None) -> int:
+    errorlog.start_run(argv)
     settings.load()
     if argv is None:
         argv = sys.argv[1:]
@@ -470,7 +472,7 @@ def main(argv: list, program: str = "plex-letterboxd-sync",
         sys.stdout.write(clioptions.help_text(declaration))
         return 0
     except clioptions.UsageError as error:
-        sys.stderr.write(clioptions.usage_error_text(declaration, error.message))
+        clioptions.refuse_usage(declaration, error.message)
         return 1
 
     if clioptions.args_out_of_range(len(result.positionals), 1, 1):

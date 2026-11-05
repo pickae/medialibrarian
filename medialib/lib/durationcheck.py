@@ -31,7 +31,7 @@ import subprocess
 import sys
 import tempfile
 
-from medialib.lib import formatting, runlog, safety
+from medialib.lib import errorlog, formatting, runlog, safety
 
 __all__ = [
     "TOLERANCE_SECONDS",
@@ -273,9 +273,10 @@ def verify(name: str, source: str, output: str, source_seconds: object = None,
                formatting.fmt_hms("%.3f" % produced), name))
     # An error, so -q prints it: runlog.error rather than the step log.
     if log is None:
-        runlog.error(said)
+        runlog.error(said, kind="output-check", files=[output])
     else:
         log("ERROR: " + said)
+        errorlog.record("output-check", said, files=[output])
     if remove:
         try:
             os.remove(output)
