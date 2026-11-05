@@ -30,9 +30,13 @@ taken between the threads of this process, and a worker takes none.
 from __future__ import annotations
 
 import contextlib
-import fcntl
 import os
 import threading
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows: the thread lock alone
+    fcntl = None  # type: ignore[assignment]
 
 __all__ = ["init", "adopt", "lock_dir", "turn", "rotational", "device_of"]
 
@@ -87,7 +91,8 @@ def rotational(path: str, sysfs: str = "/sys/dev/block") -> bool:
     it in sysfs; a device-mapper device - an encrypted disk, a logical volume -
     spins when any device under it does, whatever it says of itself."""
     device = device_of(path)
-    if device is None:
+    if device is None or not hasattr(os, "major"):
+        # No device, or no sysfs to read it in: Windows.
         return True
     major, minor = os.major(device), os.minor(device)
     if major == 0:
@@ -173,7 +178,7 @@ def _open_lock_file(device):
     """The lock file of ``device`` in the shared folder, open; None without a
     folder, or with one that has gone - the thread lock alone then."""
     directory = _STATE["dir"]
-    if not directory:
+    if not directory or fcntl is None:
         return None
     try:
         return open(os.path.join(directory, "disk-%d.lock" % device), "a")

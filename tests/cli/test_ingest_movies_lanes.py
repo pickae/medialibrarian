@@ -13,7 +13,7 @@ from medialib.cli import ingest_movies_run as run_module
 from medialib.lib import tmdblookup
 from medialib.lib import whisper as whisper_lib
 
-pytestmark = pytest.mark.pure
+pytestmark = pytest.mark.fs
 
 
 class TestTranscriptTracker:
