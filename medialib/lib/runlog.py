@@ -11,6 +11,9 @@ verbose (that plus the reason behind each decision). An environment variable
 rather than an argument because the workers a run fans out to and the commands
 it starts as children have to say the same amount, and the environment is the
 one thing all of them inherit.
+
+Every line said here is also kept in the run's info log under `logs/info/`, at
+a verbosity of its own (`medialib/lib/infolog.py`).
 """
 
 import contextlib
@@ -146,9 +149,27 @@ def verbosity() -> int:
     return NORMAL
 
 
-def _write(message: tuple, stream) -> None:
-    """One line on stderr, timestamped only when the run asked for it."""
+def _keep(text: str, needs: int, stream) -> None:
+    """``text`` into the run's info log (`medialib/lib/infolog.py`) when it
+    went to the console and the log keeps lines of level ``needs``. A line
+    written into some other stream is a piece of a report, not the console."""
+    if stream is None or stream is sys.stderr or stream is sys.stdout:
+        from medialib.lib import infolog
+
+        infolog.keep(text, needs)
+
+
+def _say_line(message: tuple, stream, needs: int) -> None:
+    """One line: on the console when the run's verbosity reaches ``needs``,
+    and into the info log when its own level does."""
     text = " ".join(str(part) for part in message)
+    if verbosity() >= needs:
+        _write_text(text, stream)
+    _keep(text, needs, stream)
+
+
+def _write_text(text: str, stream) -> None:
+    """One line on stderr, timestamped only when the run asked for it."""
     if os.environ.get("LOG_TIMESTAMPS", ""):
         line = "[%s] %s\n" % (time.strftime("%H:%M:%S"), text)
     else:
@@ -199,8 +220,7 @@ def log(*message: object, stream=None) -> None:
     The arguments are joined with spaces. Silent under ``-q``, so a line that
     has to survive it - an error - goes through :func:`error` instead.
     """
-    if verbosity() >= NORMAL:
-        _write(message, stream)
+    _say_line(message, stream, NORMAL)
 
 
 def say(text: str, stream=None) -> None:
@@ -211,13 +231,14 @@ def say(text: str, stream=None) -> None:
     verbosity prints."""
     if verbosity() >= NORMAL:
         _emit(text, stream)
+    _keep(text, NORMAL, stream)
 
 
 def result(*message: object, stream=None) -> None:
     """A :func:`log` line that is the run's result rather than its progress -
     a dry run's account of what it would change - printed at every
     verbosity."""
-    _write(message, stream)
+    _say_line(message, stream, QUIET)
 
 
 def detail(*message: object, stream=None) -> None:
@@ -226,14 +247,12 @@ def detail(*message: object, stream=None) -> None:
     One whole line per call, like :func:`log`, which is what lets workers print
     these as they go without their lines mixing.
     """
-    if verbosity() >= VERBOSE:
-        _write(message, stream)
+    _say_line(message, stream, VERBOSE)
 
 
 def warn(*message: object, stream=None) -> None:
     """A ``WARNING:`` line: printed unless the run is quiet."""
-    if verbosity() >= NORMAL:
-        _write(("WARNING:",) + message, stream)
+    _say_line(("WARNING:",) + message, stream, NORMAL)
 
 
 def error(*message: object, stream=None, kind: str = "error",
@@ -245,7 +264,7 @@ def error(*message: object, stream=None, kind: str = "error",
     the two never disagree about what went wrong. A line written into some
     other stream is a piece of a larger report, kept by whoever writes that.
     """
-    _write(("ERROR:",) + message, stream)
+    _say_line(("ERROR:",) + message, stream, QUIET)
     if persist and (stream is None or stream is sys.stderr):
         from medialib.lib import errorlog
 
@@ -256,7 +275,7 @@ def error(*message: object, stream=None, kind: str = "error",
 def error_continued(*message: object, stream=None) -> None:
     """A line under an :func:`error` that goes on explaining it, printed
     wherever the error is."""
-    _write(message, stream)
+    _say_line(message, stream, QUIET)
 
 
 def counted_prefix(count: int, total: int | None) -> str:

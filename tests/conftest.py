@@ -173,6 +173,8 @@ _STATE_KNOBS = (
     "LOG_TIMESTAMPS",
     # Settled by a command's -v or -q for its children, the same way.
     "LOG_VERBOSITY",
+    # How much the run's info log keeps, which a host may have set.
+    "infoLogLevel",
     # The run's error log, settled by the first error and handed to children.
     "ERROR_LOG_NAME",
     "ERROR_LOG_RUN",
@@ -262,7 +264,9 @@ def private_workspace(tmp_path_factory, monkeypatch):
         monkeypatch.delenv(name, raising=False)
     # The script directory too, which is where a run keeps its logs - a tool
     # failure's among them. A case that needs one of its own still sets it.
-    monkeypatch.setenv("CLI_SCRIPT_DIR", str(scratch / "scriptDir"))
+    # Apart from the scratch: every run that says anything keeps an info log
+    # there, and the cases that check the scratch was handed back count it.
+    monkeypatch.setenv("CLI_SCRIPT_DIR", str(tmp_path_factory.mktemp("scriptDir")))
     # And a settings file that is not there, so no case - nor a command a case
     # starts - reads the settings of the machine the suite runs on.
     monkeypatch.setenv("CLI_SETTINGS_FILE", str(scratch / "no-settings-file"))

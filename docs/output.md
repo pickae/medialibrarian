@@ -112,6 +112,30 @@ These are the kinds of error a run keeps, and each is also said on the console:
 Help pages, a run with no arguments, and an interrupt are not errors, and
 leave nothing in the log.
 
+## The info log
+
+What a run says on the console is also kept, in `logs/info/`, one file per
+run under the same name as its error log:
+`logs/info/20261105-140211-convert-audio-4242.log`. Each line is stamped to
+the millisecond with the process that said it, and the file opens with the
+command line, when and where it started, and the level it keeps. Like the
+error log, it is made only when the first line arrives, and the workers and
+the commands a run starts write into the same file.
+
+How much it keeps is the `infoLogLevel` setting, chosen apart from `-q` and
+`-v`, so a run can be quiet on the console and still keep everything:
+
+| `infoLogLevel` | Keeps |
+| --- | --- |
+| `off` | nothing; no file is made |
+| `quiet` | errors and results — what `-q` prints |
+| `normal` (the default) | progress, warnings, errors and results — what a run prints by default |
+| `verbose` | that, and the reason behind each decision — what `-v` prints |
+
+A tool's replayed output and a crash's traceback are not repeated here: they
+are in the error log. Nothing is ever deleted from `logs/info/` by the
+commands.
+
 ## Where it goes
 
 Results go to standard output: a report's name, a query's table, the calls a

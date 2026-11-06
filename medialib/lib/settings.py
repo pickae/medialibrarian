@@ -93,6 +93,16 @@ SETTINGS: tuple[Setting, ...] = (
             secret=True),
     Setting("subDlApiKey", "API key of a free SubDL account, asked third for subtitles",
             ("ingest-movies",), secret=True),
+    # --- what a run keeps
+    Setting("infoLogLevel", "How much of what a run says is kept in "
+            "`logs/info/`, one file per run: `off`, `quiet` (errors and results), "
+            "`normal` or `verbose` - apart from the console's `-q` and `-v`",
+            ("clean-folder-structure", "clean-folder-structure-adb", "concat-audio",
+             "content-census", "content-census-bi", "convert-and-concat",
+             "convert-audio", "convert-comics", "convert-images", "convert-video",
+             "cue-to-chapters", "find-fragment-candidates", "find-gaps",
+             "ingest-books", "ingest-movies", "ingest-music", "plex-letterboxd-sync",
+             "read-library", "transcribe-audio", "ytdlp"), "normal"),
     # --- where work is done
     Setting("ramScratchBase", "Where each run's scratch directories go",
             _SCRATCH, "`/dev/shm`, else the system temp directory"),
