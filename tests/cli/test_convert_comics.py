@@ -153,6 +153,53 @@ exit 0
         assert "x -y -o%s" % destination in log.read_text()
 
 
+class TestRar:
+    """The .cbr path, with two chapters whose pages share names - a mislabelled
+    chapter does this in the wild. Unpacked flat, the second page met the first
+    and unrar stopped to ask, aborting the book; the stub does the same with
+    e. Unpacked WITH its folders, the flattening keeps both."""
+
+    @pytest.fixture
+    def book(self, tmp_path, stub_bin):
+        log = tmp_path / "unrar.args"
+        _stub(str(stub_bin), "unrar", '''
+printf "%%s\\n" "$*" >> "%s"
+if [[ "$1" == "vt" ]]; then
+    for m in "ch 1" "ch 1/01.jpg" "ch 2" "ch 2/01.jpg"; do
+        t=File; [[ "$m" == *.jpg ]] || t=Directory
+        printf "        Name: %%s\\n        Type: %%s\\n" "$m" "$t"
+    done
+    exit 0
+fi
+[[ "$1" == "x" ]] || { echo "Read error in the file stdin"; exit 12; }
+dest="${@: -1}"
+mkdir -p "$dest/ch 1" "$dest/ch 2"
+printf a > "$dest/ch 1/01.jpg"
+printf b > "$dest/ch 2/01.jpg"
+exit 0
+''' % log)
+        archive = tmp_path / "volume.cbr"
+        archive.write_bytes(b"Rar!\x1a\x07\x00 rest")
+        destination = tmp_path / "work" / "volume.cbr"
+        unpacked = cc.extract(str(archive), str(destination), 2960)
+        return destination, log, unpacked
+
+    def test_it_unpacks_cleanly(self, book):
+        _destination, _log, unpacked = book
+        assert unpacked.ok
+
+    def test_both_same_named_pages_are_kept(self, book):
+        destination, _log, _unpacked = book
+        pages = sorted(os.listdir(str(destination)))
+        assert len(pages) == 2 and "01.jpg" in pages
+        assert {(destination / p).read_text() for p in pages} == {"a", "b"}
+
+    def test_unrar_extracts_WITH_the_archive_s_paths(self, book):
+        destination, log, _unpacked = book
+        assert "x -o+ -- " in log.read_text()
+        assert log.read_text().rstrip().endswith(str(destination) + "/")
+
+
 class TestBookWorkers:
     """Books, not pages, is what scales with the host - that is the axis costing
     RAM, since one more book worker is one more book resident."""

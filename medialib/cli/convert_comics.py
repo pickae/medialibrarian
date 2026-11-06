@@ -405,8 +405,14 @@ def extract(archive: str, destination: str, max_res: int, source: str = ""):
     os.makedirs(destination, exist_ok=True)
 
     if container == "rar":
-        unpacked = toolcapture.run(["unrar", "e", "--", archive, destination],
-                                   report=False)
+        # x, not e, for the same reason as 7-Zip below: e drops the folders, so
+        # two chapters' same-named pages meet in one place and unrar stops to
+        # ask whether to overwrite - with nobody to answer, it aborts the book.
+        # -o+ only ever meets a name the archive itself holds twice. The
+        # trailing slash makes unrar read the destination as a folder.
+        unpacked = toolcapture.run(
+            ["unrar", "x", "-o+", "--", archive, destination + "/"],
+            report=False)
     elif container == "zip":
         if not _unzip_in_threads(archive, destination):
             unpacked = toolcapture.run(
