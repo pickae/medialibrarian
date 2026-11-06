@@ -136,11 +136,12 @@ def missing_host_tool(message: str) -> None:
 
 # Every environment variable that names somewhere to WORK or somewhere to record
 # state. A test that leaves one of these inherited is asserting about the host.
-# Not ramScratchBase, ramScratchDiskBase or TMPDIR: those are the RESOLUTION
-# INPUTS the scratch picker walks, and which of them wins is itself what
-# test_ramscratch exercises - forcing one overrides the logic under test rather
-# than isolating it. What is forced here is the per-SCRIPT knobs, which name
-# where a run works once the picking is done.
+# Not ramScratchDiskBase or TMPDIR: those are RESOLUTION INPUTS the scratch
+# picker walks, and which of them wins is itself what test_ramscratch exercises.
+# ramScratchBase is one too, but it is forced all the same (see
+# private_workspace): several commands read no knob of their own, and without
+# it their runs land in the machine's /dev/shm. test_ramscratch takes it back
+# off for the cases about the picking.
 _SCRATCH_KNOBS = (
     "ramBase",
     "censusRamBase",
@@ -252,6 +253,11 @@ def private_workspace(tmp_path_factory, monkeypatch):
     scratch = tmp_path_factory.mktemp("workspace")
     for name in _SCRATCH_KNOBS:
         monkeypatch.setenv(name, str(scratch))
+    # Where a run directory lands when its command reads no knob of its own -
+    # in this process or in a command a case starts. A directory of its own,
+    # so what is left in it afterwards is this case's and nobody else's.
+    run_bases = tmp_path_factory.mktemp("runbases")
+    monkeypatch.setenv("ramScratchBase", str(run_bases))
     for name in _STATE_KNOBS:
         monkeypatch.delenv(name, raising=False)
     # The script directory too, which is where a run keeps its logs - a tool
@@ -301,7 +307,15 @@ def private_workspace(tmp_path_factory, monkeypatch):
     titlematch.reset_iconv_flavour()
     yield scratch
     titlematch.reset_iconv_flavour()
-    monkeypatch.setattr(ramscratch._STATE, "ram_base", "", raising=False)
+    # The end of this process's "run": a helper called on its own settles a
+    # base and registers it, and only a command's own exit hands it back.
+    ramscratch.run_exit_cleanup()
+    ramscratch.reset_state()
+    left = sorted(entry.name for entry in run_bases.iterdir()
+                  if ".run." in entry.name)
+    assert not left, (
+        "run directories left behind: %s - on a real run they would stay in "
+        "/dev/shm, holding RAM until reboot" % ", ".join(left))
 
 
 @pytest.fixture

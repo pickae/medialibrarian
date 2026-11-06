@@ -1700,6 +1700,17 @@ def main(argv: list, program: str = "convert-video",
     if safety.require_separate_output(settings.input_dir, settings.output_dir):
         return 1
 
+    try:
+        return _settle_and_run(settings, program, video_args, grain,
+                               engines_override)
+    finally:
+        # The ffmpeg pin and the run directory exist from here on, and every
+        # refusal below them must hand them back, not only the walk's own end.
+        ramscratch.run_exit_cleanup()
+
+
+def _settle_and_run(settings, program: str, video_args: str, grain: str,
+                    engines_override: str) -> int:
     # This script asks ffmpeg for things a distribution's package is often too old
     # to do, so the shared ladder is given a probe that answers "can this build do
     # what THIS run's profile asks" - and, among the builds that can, prefers one
