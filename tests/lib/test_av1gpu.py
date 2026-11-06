@@ -153,6 +153,18 @@ class TestTheBinary:
         monkeypatch.setenv("PATH", str(tmp_path))
         assert av1gpu.binary() == av1gpu.DEFAULT_BINARY
 
+    def test_whether_it_trims_is_read_from_its_help(self, tmp_path):
+        """--trim with the conditions convert-images sets is what makes the
+        card decide a -c trim; an av1gpu without it is given the box."""
+        old, new = tmp_path / "old", tmp_path / "new"
+        old.write_text(_HELP)
+        new.write_text(_HELP + 'echo "  --trim-lightness L      trim only when"\n')
+        for tool in (old, new):
+            tool.chmod(0o755)
+        assert (av1gpu.trims(str(old)), av1gpu.trims(str(new))) == (
+            False, True)
+        assert av1gpu.transforms(str(new))
+
     def test_one_that_cannot_crop_or_resize_means_the_cpu(self, monkeypatch,
                                                           tmp_path):
         """An av1gpu older than 0.7.0, which is said once."""
@@ -185,10 +197,13 @@ while IFS= read -r line; do
     target=$(readlink "$input")
     case "${target##*/}" in
         decline*) echo "skipped ${target##*/}: not decodable" >&2; continue ;;
+        blank*) echo "[av1gpu] skipped $input: blank (--trim would remove more than 99% of its width or height, --skip-blank)" >&2
+                continue ;;
     esac
     echo "GPU ${target##*/}" > "$out/${input##*/}.avif"
 done < "$list"
 echo "batch finished"
+grep -q -- --trim "$(dirname "$0")/args" 2>/dev/null && echo "[av1gpu] trim: 2 images trimmed, 1 skipped as blank" >&2
 [ -n "$STUB_SIGNAL" ] && kill -"$STUB_SIGNAL" $$
 exit "${STUB_STATUS:-0}"
 '''
@@ -215,14 +230,15 @@ class TestAChunk:
                   "900x1400+40+40", "x1000"),
                  (str(sources / "decline.png"), str(outputs / "decline.avif"))]
 
-        def encode(**environment):
+        def encode(extra=(), report=None, **environment):
             for name, value in environment.items():
                 monkeypatch.setenv(name, value)
             workdir = tmp_path / "work"
             workdir.mkdir()
             return av1gpu.encode_chunk(str(tool), items, str(workdir), 60,
-                                       "turbo")
+                                       "turbo", extra=extra, report=report)
 
+        encode.items = items
         encode.outputs = outputs
         encode.args = tool.parent / "args"
         encode.list = tool.parent / "list"
@@ -236,6 +252,27 @@ class TestAChunk:
         assert (done, status) == ([0, 1], 0)
         assert (chunk.outputs / "a/cover.avif").read_text() == "GPU cover.jpg\n"
         assert (chunk.outputs / "b/cover.avif").read_text() == "GPU cover.jpg\n"
+
+    def test_a_blank_page_is_reported_and_is_no_failure(
+            self, chunk, tmp_path, capfd):
+        """What --skip-blank kept from the encode comes back in the report,
+        with the call's count of trims, and is not warned about as an image
+        left unwritten: there is nothing to write."""
+        (tmp_path / "in" / "blank.jpg").write_text("blank")
+        chunk.items.append((str(tmp_path / "in" / "blank.jpg"),
+                            str(chunk.outputs / "blank.avif")))
+        report: dict = {}
+        done, status = chunk(extra=["--trim", "--skip-blank", "99"],
+                             report=report)
+        assert (done, status) == ([0, 1], 0)
+        assert report == {"blank": [3], "trimmed": 2}
+        assert "--trim" in chunk.args.read_text().split()
+        err = capfd.readouterr().err
+        assert "left 1 of 4 image(s) unwritten" in err   # decline.png only
+
+    def test_without_the_trim_options_none_are_passed(self, chunk):
+        chunk()
+        assert "--trim" not in chunk.args.read_text().split()
 
     def test_what_it_skipped_is_not_claimed(self, chunk):
         done, _ = chunk()

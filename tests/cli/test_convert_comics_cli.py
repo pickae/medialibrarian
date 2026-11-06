@@ -139,12 +139,12 @@ class TestThePackaging:
         _, log, _ = run
         assert len(re.findall(r"\[2/2\] ", log)) == 1
 
-    def test_each_archive_holds_its_pages_under_their_own_names(self, run):
+    def test_each_archive_holds_that_books_numbered_pages(self, run):
         comics, _, _ = run
         assert _entries(comics.outputs / "Alpha.cbz") == [
-            "01.avif", "02.avif", "03.avif"]
+            "1.avif", "2.avif", "3.avif"]
         assert _entries(comics.outputs / "Series" / "Charlie.cbz") == [
-            "a.avif", "b.avif", "c.avif"]
+            "1.avif", "2.avif", "3.avif"]
 
     def test_the_pages_are_stored_rather_than_deflated(self, run):
         """AVIF does not compress further, and some readers page through an
@@ -152,15 +152,15 @@ class TestThePackaging:
         comics, _, _ = run
         with zipfile.ZipFile(comics.outputs / "Alpha.cbz") as opened:
             assert [info.filename for info in opened.infolist()] == [
-                "01.avif", "02.avif", "03.avif"]
+                "1.avif", "2.avif", "3.avif"]
             assert {info.compress_type for info in opened.infolist()} == {
                 zipfile.ZIP_STORED}
 
-    def test_the_nested_page_was_flattened_beside_the_others(self, run):
+    def test_the_nested_page_was_flattened_into_the_last_slot(self, run):
         comics, _, _ = run
         charlie = comics.outputs / "Series" / "Charlie.cbz"
-        assert _first_line(charlie, "a.avif") == "AVIF from a.jpg"
-        assert _first_line(charlie, "c.avif") == "AVIF from c.jpg"
+        assert _first_line(charlie, "1.avif") == "AVIF from a.jpg"
+        assert _first_line(charlie, "3.avif") == "AVIF from c.jpg"
 
     def test_a_second_run_recognises_the_finished_archives(self, run):
         """No rewrite, and above all no " (2)" duplicate of every book."""
@@ -385,16 +385,14 @@ size=12288
         """The blank page was dropped by the encoder and the empty one here,
         and both books are packaged either way."""
         comics, _ = run
-        assert _entries(comics.outputs / "Mixture.cbz") == [
-            "01-plain.avif", "02-trim.avif"]
-        assert _entries(comics.outputs / "Uniform.cbz") == [
-            "01-plain.avif", "02-plain.avif"]
+        assert _entries(comics.outputs / "Mixture.cbz") == ["1.avif", "2.avif"]
+        assert _entries(comics.outputs / "Uniform.cbz") == ["1.avif", "2.avif"]
 
     def test_and_they_are_the_two_that_should_have_survived(self, run):
         comics, _ = run
         mixture = comics.outputs / "Mixture.cbz"
-        assert _first_line(mixture, "01-plain.avif") == "01-plain.jpg"
-        assert _first_line(mixture, "02-trim.avif") == "02-trim.jpg"
+        assert _first_line(mixture, "1.avif") == "01-plain.jpg"
+        assert _first_line(mixture, "2.avif") == "02-trim.jpg"
 
     def test_a_rerun_that_converts_nothing_prints_no_page_section(self, run):
         """"0 page(s)" with a share of nothing would be worse than none."""
@@ -537,11 +535,12 @@ class TestStreamingBookByBook:
         assert not [n for n in names if n.startswith("Weekly Comic - ")]
         assert len(set(names)) == books
 
-    def test_the_pages_inside_keep_their_own_names(self, run):
-        """The collective naming renames books, never the pages inside them."""
+    def test_the_pages_inside_are_still_numbered_per_book(self, run):
+        """The numbering happens in the worker; the second pass must not have
+        disturbed it."""
         comics, _, _, _, _ = run
         first = sorted(comics.outputs.glob("*.cbz"))[0]
-        assert _entries(first) == ["01.avif", "02.avif", "03.avif"]
+        assert _entries(first) == ["1.avif", "2.avif", "3.avif"]
 
     def test_a_rerun_skips_every_book_by_the_input_it_recorded(self, run):
         """A book's NAME depends on which other books were in the run, so a
@@ -618,7 +617,7 @@ class TestWithoutFdupes:
                           env=env)
         assert done.returncode == 0, done.stdout + done.stderr
         assert _entries(comics.outputs / "Alpha.cbz") == [
-            "01.avif", "02.avif", "03.avif"]
+            "1.avif", "2.avif", "3.avif"]
         assert "fdupes not found" not in done.stdout + done.stderr
 
     def test_a_run_that_cannot_find_it_warns_once_for_the_whole_run(
@@ -786,10 +785,9 @@ class TestComicsThatArriveAsPdfs:
     def test_the_pdfs_pages_are_the_rendered_ones(self, run):
         comics, _, _ = run
         archive = next(iter(comics.outputs.glob("Series/*.cbz")))
-        assert _entries(archive) == [
-            "page-1.avif", "page-2.avif", "page-3.avif"]
-        assert _first_line(archive, "page-1.avif") == "AVIF from page-1.jpg"
-        assert _first_line(archive, "page-3.avif") == "AVIF from page-3.jpg"
+        assert _entries(archive) == ["1.avif", "2.avif", "3.avif"]
+        assert _first_line(archive, "1.avif") == "AVIF from page-1.jpg"
+        assert _first_line(archive, "3.avif") == "AVIF from page-3.jpg"
         with zipfile.ZipFile(archive) as opened:
             assert {info.compress_type for info in opened.infolist()} == {
                 zipfile.ZIP_STORED}

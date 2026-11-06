@@ -690,6 +690,9 @@ class TestTheTrimVerdict:
         ((10, _H), "converted"),            # exactly 99% across is not blank
         ((9, _H), "blank"),                 # past it is
         ((_W, 14), "blank"),                # down as well as across
+        ((0, 0), "blank"),                  # all border: ImageMagick's 0x0
+        ((0, _H), "converted"),             # two colours split across:
+        ((_W, 0), "converted"),             #   the edges met, nothing blank
         (None, "converted"),                # the trim could not be measured
     ])
     def test_the_share_that_came_off_decides(self, cut, verdict):
@@ -760,3 +763,48 @@ class TestTheCornerProbe:
     ], ids=["nothing", "three", "five", "no-lightness", "nan", "not-a-number"])
     def test_anything_else_is_unmeasured(self, text):
         assert ci._parse_corners(text) is None
+
+
+class TestTheCpuTrimOfACardPage:
+    """A page listed for the card to trim that the CPU encodes after all gets
+    the trim decided there, as if it had never been the card's."""
+
+    pytestmark = pytest.mark.pure
+
+    def _entry(self):
+        return {"input": "/in/page.jpg", "output": "/out/page.avif",
+                "size": [_W, _H], "fuzz": "10%",
+                "cpu": ["magick", "-quality", "45", "/in/page.jpg",
+                        "-resize", "10000x2960>", "/out/page.avif"]}
+
+    @pytest.mark.parametrize("box,verdict", [
+        ((900, 1400, 50, 50), "trimmed"), ((_W, _H, 0, 0), "converted"),
+        ((5, 5, 0, 0), "blank"), (None, "converted")])
+    def test_the_verdict_and_the_call(self, monkeypatch, box, verdict):
+        asked = []
+
+        def measure(source, fuzz):
+            asked.append((source, fuzz))
+            return box, _light()
+        monkeypatch.setattr(ci, "box_and_corners", measure)
+        entry = self._entry()
+        argv, got = ci.cpu_trim(entry)
+        assert got == verdict and asked == [("/in/page.jpg", "10%")]
+        if verdict == "blank":
+            assert argv is None
+        elif verdict == "converted":
+            assert argv == entry["cpu"]
+        else:
+            assert argv == ["magick", "-quality", "45", "/in/page.jpg",
+                            "-crop", "900x1400+50+50", "+repage",
+                            "-bordercolor", _LIGHT, "-border", "10",
+                            "-resize", "10000x2960>", "/out/page.avif"]
+
+    def test_the_card_is_given_the_same_conditions(self):
+        """The share a trim must take, the corners' lightness, the share past
+        which a page is blank and the margin given back - the constants
+        trim_verdict decides by."""
+        assert ci.gpu_trim_arguments("10%") == [
+            "--trim", "--fuzz", "10%", "--trim-margin", "1%",
+            "--trim-limits", "1%,20%", "--trim-lightness", "80",
+            "--skip-blank", "99"]

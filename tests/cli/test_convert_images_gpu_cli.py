@@ -39,8 +39,10 @@ _CONVERT = '''
 src=""
 for a in "$@"; do [[ -f "$a" ]] && { src="$a"; break; }; done
 out="${!#}"
-# The lane's trim: the box as identify gives it, then the four corners.
+# The lane's trim: the box as identify gives it, then the four corners. Each
+# page measured so is named in bin/boxes.
 case "$*" in *"%@"*)
+    echo "${src##*/}" >> "$(dirname "$0")/boxes"
     case "${src##*/}" in *margin*) echo "900x1400+50+50" ;;
         *) echo "1000x1500+0+0" ;; esac
     printf "srgb(255,255,255) 100\\n%.0s" 1 2 3 4; exit 0 ;; esac
@@ -253,3 +255,28 @@ def test_under_a_lane_a_trimmed_page_is_cropped_by_the_card(run, tmp_path):
     alpha = entries["alpha-margin.avif"]
     assert "input" not in alpha and "-border" in alpha["cpu"]
     assert not list(lane.glob("*.jpg")) and not list(lane.glob("*.png"))
+
+
+def test_under_a_lane_whose_card_trims_no_card_page_is_measured(run, tmp_path,
+                                                                sandbox):
+    """With an av1gpu that decides the trim itself, a page the card takes is
+    listed whole, marked for the card's trim with what the CPU needs should it
+    take the page after all - its size and the -fuzz - and is never decoded
+    here. One the card cannot take is still measured and trimmed on the
+    CPU."""
+    lane = tmp_path / "lane"
+    lane.mkdir()
+    for name in ("margin.jpg", "alpha-margin.png"):
+        (tmp_path / "in" / name).write_text(name)
+    run("-c", imageGpuLane=str(lane), imageGpuTrim="1")
+    entries = _manifest(lane)
+    margin = entries["margin.avif"]
+    assert margin["trim"] is True and margin["crop"] == ""
+    assert margin["size"] == [1000, 1500] and margin["fuzz"] == "10%"
+    assert margin["pixels"] == 1000 * 1500
+    assert "-crop" not in margin["cpu"]
+    alpha = entries["alpha-margin.avif"]
+    assert "trim" not in alpha and "-border" in alpha["cpu"]
+    boxes = (sandbox.bin / "boxes").read_text().split()
+    assert boxes and set(boxes) <= {"alpha.png", "alpha-margin.png",
+                                    "scan.bmp"}
