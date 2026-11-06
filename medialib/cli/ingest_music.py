@@ -1312,6 +1312,17 @@ def main(argv: list, program: str = "ingest-music",
     if safety.require_separate_output(ingest_dir, opus_copy_dir):
         return 1
 
+    try:
+        return _settle_and_ingest(program, script_dir, download_dir,
+                                  ingest_dir, opus_copy_dir, jobs)
+    finally:
+        # The ffmpeg pin can make the run directory before init_ram_base
+        # does, and every refusal after it must hand it back.
+        ramscratch.run_exit_cleanup()
+
+
+def _settle_and_ingest(program: str, script_dir: str, download_dir: str,
+                       ingest_dir: str, opus_copy_dir: str, jobs: int) -> int:
     # Which of this machine's ffmpeg builds does the re-encoding - inherited by
     # the convert-audio child, and settled before the preflight below asks
     # whether PATH can reach one.
@@ -1366,7 +1377,6 @@ def main(argv: list, program: str = "ingest-music",
                        opus_copy_dir, counter_dir, skips, jobs)
     finally:
         statusline.stop_status_monitor()
-        ramscratch.run_exit_cleanup()
 
 
 def _ingest(program: str, script_dir: str, download_dir: str, ingest_dir: str,

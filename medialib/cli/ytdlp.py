@@ -788,6 +788,20 @@ def main(argv: list, program: str = "ytdlp", script_dir: str = "") -> int:
         # resolve to the plain name so the run has a defined command.
         ytdlp_command = ["yt-dlp"]
 
+    try:
+        return _settle_and_run(options, tables, profiles, jobs_of, rows_of,
+                               feed_count, output_path, archive_file,
+                               ytdlp_command, platform, host_platform,
+                               script_dir, skip_preflight)
+    finally:
+        # The ffmpeg pin makes the run directory long before _run settles
+        # its own scratch, and every refusal in between must hand it back.
+        ramscratch.run_exit_cleanup()
+
+
+def _settle_and_run(options, tables, profiles, jobs_of, rows_of, feed_count,
+                    output_path, archive_file, ytdlp_command, platform,
+                    host_platform, script_dir, skip_preflight: bool) -> int:
     # The build is named in the startup summary rather than here, with the rest
     # of what this run settled.
     ffmpegselect.select_ffmpeg(_ffmpeg_serves_ytdlp)

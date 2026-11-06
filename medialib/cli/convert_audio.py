@@ -1981,6 +1981,22 @@ def main(argv: list, program: str = "convert-audio",
 
     script_dir = script_dir or commands.script_dir()
 
+    try:
+        return _settle_and_convert(program, script_dir, input_dir, output_dir,
+                                   mono, adaptive, copy, keep, bitrate, jobs,
+                                   codec, chunk_over_ceiling, surround,
+                                   group_depth)
+    finally:
+        # The ffmpeg pin can make the run directory before init_ram_base
+        # does, and every refusal after it must hand it back.
+        ramscratch.run_exit_cleanup()
+
+
+def _settle_and_convert(program: str, script_dir: str, input_dir: str,
+                        output_dir: str, mono: bool, adaptive: bool,
+                        copy: bool, keep: bool, bitrate: int, jobs: int,
+                        codec: str, chunk_over_ceiling: bool, surround: bool,
+                        group_depth: int) -> int:
     ffmpegselect.select_ffmpeg()
     ffmpegselect.report_ffmpeg_selection()
     if tooldeps.require_tools(program, ["ffmpeg", "ffprobe", "rsync",
@@ -2029,7 +2045,6 @@ def main(argv: list, program: str = "convert-audio",
                         surround, group_depth)
     finally:
         statusline.stop_status_monitor()
-        ramscratch.run_exit_cleanup()
         safety.release_abort_flag()
 
 

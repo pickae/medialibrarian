@@ -1289,18 +1289,17 @@ def main(argv: list, program: str = "convert-comics",
     # somewhere else, or a test that needs a private base it can assert on
     # without reading a directory the whole machine shares.
     ramscratch.init_ram_base(os.environ.get("comicsRamBase", ""))
-    counter_dir, status = ramscratch.ram_scratch_dir("counters")
-    if status != 0 or not counter_dir:
-        sys.stderr.write("\nError: no scratch directory could be made for this "
-                         "run.\nNothing was changed.\n")
-        return 1
-    ramscratch.add_exit_cleanup([counter_dir])
-
     try:
+        counter_dir, status = ramscratch.ram_scratch_dir("counters")
+        if status != 0 or not counter_dir:
+            sys.stderr.write("\nError: no scratch directory could be made for "
+                             "this run.\nNothing was changed.\n")
+            return 1
+        ramscratch.add_exit_cleanup([counter_dir])
         return _run(result, declaration, program, script_dir, counter_dir)
     finally:
-        # Both RAM work trees and the counter dir go back to the tmpfs however
-        # this run ends.
+        # The run directory, both RAM work trees and the counter dir go back
+        # to the tmpfs however this run ends.
         ramscratch.run_exit_cleanup()
 
 

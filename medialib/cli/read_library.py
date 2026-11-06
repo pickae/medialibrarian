@@ -830,6 +830,19 @@ def main(argv: list, program: str = "read-library",
 
     script_dir = script_dir or commands.script_dir()
 
+    try:
+        return _settle_and_read(result, program, script_dir, in_path, out_path,
+                                opus_bitrate, keep_lossless,
+                                resume_extensions)
+    finally:
+        # The ffmpeg pin can make the run directory before init_ram_base
+        # does, and every refusal after it must hand it back.
+        ramscratch.run_exit_cleanup()
+
+
+def _settle_and_read(result, program: str, script_dir: str, in_path: str,
+                     out_path: str, opus_bitrate: int, keep_lossless: bool,
+                     resume_extensions: list) -> int:
     # The external tools THIS script drives. The narration's own belong to the
     # checkout and are settled by the narration library below.
     tools = ["ffmpeg", "ffprobe"]
@@ -918,7 +931,6 @@ def main(argv: list, program: str = "read-library",
         # early exit leaves the run without reaching that line, and a refresher
         # that outlived it would keep redrawing over whatever was printed next.
         statusline.stop_status_monitor()
-        ramscratch.run_exit_cleanup()
 
 
 def _scan_books(in_path: str) -> list:
