@@ -531,6 +531,27 @@ class TestACbzIsUnpackedInThreads:
         assert sorted(os.listdir(destination)) == [
             "%02d.jpg" % n for n in range(20)]
 
+    def test_threads_racing_to_make_one_folder_still_unpack_it(
+            self, tmp_path, stub_bin, monkeypatch):
+        """zipfile before 3.13 checks for a member's folder and then makes it
+        without exist_ok; slowed down, every thread but one loses that race."""
+        _stub(str(stub_bin), "unzip", "exit 99\n")
+        real = os.makedirs
+
+        def slow(path, *args, **kwargs):
+            time.sleep(0.01)
+            return real(path, *args, **kwargs)
+
+        monkeypatch.setattr(os, "makedirs", slow)
+        archive = tmp_path / "book.cbz"
+        with zipfile.ZipFile(str(archive), "w") as packed:
+            for n in range(20):
+                packed.writestr("Book/%02d.jpg" % n, "page %d" % n)
+        destination = tmp_path / "pages"
+        assert cc.extract(str(archive), str(destination), 2960) is None
+        assert sorted(os.listdir(destination)) == [
+            "%02d.jpg" % n for n in range(20)]
+
     def test_a_link_member_is_not_a_page(self, tmp_path):
         archive = tmp_path / "book.cbz"
         with zipfile.ZipFile(str(archive), "w") as packed:

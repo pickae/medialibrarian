@@ -956,6 +956,18 @@ def main(argv: list, program: str = "concat-audio",
     if safety.require_separate_output(input_dir, output_dir):
         return 1
 
+    try:
+        return _settle_and_run(input_dir, output_dir, pretreat, program,
+                               script_dir)
+    finally:
+        # However this run ends - a refusal after the ffmpeg pin included - the
+        # run directory and the scratch go back to the tmpfs rather than
+        # staying there.
+        ramscratch.run_exit_cleanup()
+
+
+def _settle_and_run(input_dir: str, output_dir: str, pretreat: bool,
+                    program: str, script_dir: str) -> int:
     # Which of this machine's ffmpeg builds does the work, before the preflight
     # below asks whether PATH can reach one.
     ffmpegselect.select_ffmpeg()
@@ -1003,14 +1015,8 @@ def main(argv: list, program: str = "concat-audio",
                          "run.\nNothing was changed.\n")
         return 1
     ramscratch.add_exit_cleanup([ram_dir])
-
-    try:
-        return _run_with_scratch(ram_dir, input_dir, output_dir, pretreat,
-                                 program, script_dir, have_mkvtoolnix)
-    finally:
-        # However this run ends, the scratch goes back to the tmpfs rather
-        # than staying there.
-        ramscratch.run_exit_cleanup()
+    return _run_with_scratch(ram_dir, input_dir, output_dir, pretreat,
+                             program, script_dir, have_mkvtoolnix)
 
 
 def _run_with_scratch(ram_dir: str, input_dir: str, output_dir: str,

@@ -708,6 +708,17 @@ def main(argv: list, program: str = "ingest-movies",
     if roots is None:
         return 1
 
+    try:
+        return _run_phases(result, program, script_dir, roots, names,
+                           fragments_file)
+    finally:
+        # Every phase below can pin an ffmpeg or settle a run directory, and
+        # each refusal after that must hand it back, not only a finished run.
+        ramscratch.run_exit_cleanup()
+
+
+def _run_phases(result, program: str, script_dir: str, roots: list,
+                names: list, fragments_file: str) -> int:
     # Commentary only is the one phase of the full ingest it names, run on the
     # folders given: the walk and the transcription, and not the rest of the
     # run around them.

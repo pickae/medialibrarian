@@ -325,6 +325,16 @@ def main(argv: list, program: str = "transcribe-audio") -> int:
     jobs = int(result.values["whisperJobs"] or 0)
 
     runlog.settle_flock()
+    try:
+        return _transcribe(program, input_dir, output_dir, fmt, jobs)
+    finally:
+        # The ffmpeg pin can make the run directory before anything below
+        # does, and every refusal after it must hand it back.
+        ramscratch.run_exit_cleanup()
+
+
+def _transcribe(program: str, input_dir: str, output_dir: str, fmt: str,
+                jobs: int) -> int:
     ffmpegselect.select_ffmpeg()
     ffmpegselect.report_ffmpeg_selection()
     if tooldeps.require_tools(
@@ -347,63 +357,59 @@ def main(argv: list, program: str = "transcribe-audio") -> int:
 
     safety.init_abort_flag()
     safety.trap_run_abort()
-    ram_root = ""
-    try:
-        ramscratch.init_ram_base()
-        ram_root, status = ramscratch.ram_scratch_dir("transcribeAudio")
-        if status != 0 or not ram_root:
-            sys.stderr.write("\nError: no scratch directory could be made for "
-                             "this run.\nNothing was changed.\n")
-            return 1
-        ramscratch.add_exit_cleanup([ram_root])
+    ramscratch.init_ram_base()
+    ram_root, status = ramscratch.ram_scratch_dir("transcribeAudio")
+    if status != 0 or not ram_root:
+        sys.stderr.write("\nError: no scratch directory could be made for "
+                         "this run.\nNothing was changed.\n")
+        return 1
+    ramscratch.add_exit_cleanup([ram_root])
 
-        cores = str(runlog.cpu_count())
-        model = whisper.init_whisper_model(cores, ram_root, log)
-        jobs = jobs or model["jobs"]
+    cores = str(runlog.cpu_count())
+    model = whisper.init_whisper_model(cores, ram_root, log)
+    jobs = jobs or model["jobs"]
 
-        started = time.time()
+    started = time.time()
 
-        def footer():
-            total = int(time.time() - started)
-            total = total if total > 0 else 0
-            runlog.say("\nStats\n=====\n")
-            runlog.say("Files:        %d\n" % len(tracks))
-            runlog.say("Total time:   %d s (%s)\n" % (total, fmt_hms(total)))
-            durationcheck.report()
+    def footer():
+        total = int(time.time() - started)
+        total = total if total > 0 else 0
+        runlog.say("\nStats\n=====\n")
+        runlog.say("Files:        %d\n" % len(tracks))
+        runlog.say("Total time:   %d s (%s)\n" % (total, fmt_hms(total)))
+        durationcheck.report()
 
-        durationcheck.init_log()
-        safety.set_run_footer(footer)
+    durationcheck.init_log()
+    safety.set_run_footer(footer)
 
-        _mirror_folders(input_dir, output_dir)
+    _mirror_folders(input_dir, output_dir)
 
-        progress_file, status = ramscratch.ram_scratch_file(
-            "transcribeAudio.progress")
-        if status != 0 or not progress_file:
-            sys.stderr.write("\nError: no scratch file could be made for this "
-                             "run.\nNothing was changed.\n")
-            return 1
-        ramscratch.add_exit_cleanup([progress_file,
-                                     progress_file + ".lock",
-                                     progress_file + ".failed"])
-        with open(progress_file, "w") as handle:
-            handle.write("0\n")
+    progress_file, status = ramscratch.ram_scratch_file(
+        "transcribeAudio.progress")
+    if status != 0 or not progress_file:
+        sys.stderr.write("\nError: no scratch file could be made for this "
+                         "run.\nNothing was changed.\n")
+        return 1
+    ramscratch.add_exit_cleanup([progress_file,
+                                 progress_file + ".lock",
+                                 progress_file + ".failed"])
+    with open(progress_file, "w") as handle:
+        handle.write("0\n")
 
-        state = Run(input_dir, output_dir, fmt, model, ram_root, progress_file,
-                    len(tracks))
-        # The pool is never wider than the work.
-        runlog.say("Transcribing %d file(s) on %d worker(s)...\n"
-                   % (len(tracks), min(int(jobs), len(tracks))))
-        _run_queue(state, tracks, jobs)
-        safety.exit_if_aborted()
-        runlog.say("Done.\n")
-        safety.print_run_footer()
-        # A file that came out with no transcript, or with a short one, means
-        # the run did not do what it was asked, and a caller chaining commands
-        # has to see that.
-        return workerpool.exit_status(
-            1 if durationcheck.failures() or state.any_failed() else 0)
-    finally:
-        ramscratch.run_exit_cleanup()
+    state = Run(input_dir, output_dir, fmt, model, ram_root, progress_file,
+                len(tracks))
+    # The pool is never wider than the work.
+    runlog.say("Transcribing %d file(s) on %d worker(s)...\n"
+               % (len(tracks), min(int(jobs), len(tracks))))
+    _run_queue(state, tracks, jobs)
+    safety.exit_if_aborted()
+    runlog.say("Done.\n")
+    safety.print_run_footer()
+    # A file that came out with no transcript, or with a short one, means
+    # the run did not do what it was asked, and a caller chaining commands
+    # has to see that.
+    return workerpool.exit_status(
+        1 if durationcheck.failures() or state.any_failed() else 0)
 
 
 def cli(argv: list | None = None) -> int:
