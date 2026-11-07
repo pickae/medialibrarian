@@ -1228,6 +1228,10 @@ class Settings:
         # source's grain in place of synthesising it.
         self.svt_av1_hdr = False
         self.grain_tune = False
+        # Why the run's SVT-AV1 build is the one it is, when that is not the
+        # obvious answer: "" when there was no choice between a fork and a
+        # mainline build to explain.
+        self.svt_build_note = ""
         # Per file, not per run: the Dolby Vision decision this file was given,
         # the profile 8.1 intermediate prepared for it, if any, and the crop -c
         # measured on it, as ffmpeg's crop filter takes it.

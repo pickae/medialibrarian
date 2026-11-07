@@ -132,6 +132,48 @@ class TestSvtAv1Hdr:
         assert "Film grain: level 20 for every file (-g)" in log
         assert "tune=6" not in log
 
+    # Two builds at once: mainline on PATH with the newer SVT-AV1, and the fork
+    # one rung further down the ladder with the older one.
+    NEWER_MAINLINE = (MAINLINE[:-len("exit 0")]
+                      + 'case "$*" in *"-loglevel info"*libsvtav1*) echo '
+                      '"Svt[info]: SVT [version]: SVT-AV1 Encoder Lib '
+                      'v4.3.0-106-gabc" >&2;; esac; exit 0')
+    OLDER_FORK = ('case "$*" in *"-loglevel info"*libsvtav1*) echo '
+                  '"Svt[info]: SVT [version]: SVT-AV1-HDR Encoder Lib '
+                  'v4.2.0-1-gdef" >&2;; esac; exit 0')
+
+    def _run_both(self, video, monkeypatch, *options):
+        ladder = video.work / "ladder"
+        ladder.mkdir(exist_ok=True)
+        fork = ladder / "ffmpeg"
+        fork.write_text("#!/usr/bin/env bash\n%s\n" % self.OLDER_FORK)
+        fork.chmod(0o755)
+        monkeypatch.setenv("ffmpegLadder", str(ladder))
+        return self._run(video, self.NEWER_MAINLINE, *options), str(fork)
+
+    def test_a_run_needing_nothing_of_the_fork_takes_the_newer_svt_av1(
+            self, video, monkeypatch):
+        log, fork = self._run_both(video, monkeypatch)
+        assert ("SVT-AV1-HDR: passed over (%s, SVT-AV1 4.2.0)" % fork) in log
+        assert "SVT-AV1 4.3.0 is newer" in log
+        assert "Using ffmpeg: " + fork not in log
+        assert "qm-min=0" in log.split("Video profile:")[1].splitlines()[0]
+
+    def test_av1Grain_keeps_the_fork_over_a_newer_svt_av1(self, video,
+                                                         monkeypatch):
+        log, fork = self._run_both(video, monkeypatch, "-p", "av1Grain")
+        assert ("SVT-AV1-HDR: chosen over the newer mainline SVT-AV1 4.3.0"
+                in log)
+        assert "because this run uses its film grain tune for av1Grain" in log
+        assert "Using ffmpeg: " + fork in log
+        assert "tune=6" in log
+
+    def test_a_profile_without_svt_av1_does_not_reach_for_the_fork(
+            self, video, monkeypatch):
+        log, fork = self._run_both(video, monkeypatch, "-p", "x265Fast")
+        assert "SVT-AV1-HDR" not in log
+        assert "Using ffmpeg: " + fork not in log
+
     def test_the_default_profile_synthesises_on_the_fork_too(self, video):
         log = self._run(video, "exit 0")
         assert ("Film grain: measured per file and synthesised as measured, "

@@ -410,6 +410,47 @@ class TestPreference:
         assert ffmpegselect.selected_preferred() == 1
 
 
+def ranked(ranks):
+    """A preference that ranks each build by what it announces."""
+    def rank(candidate):
+        said = subprocess.run([candidate], stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL)
+        return ranks.get(said.stdout.decode().strip(), 0)
+    return rank
+
+
+class TestRankedPreference:
+    def test_the_highest_ranked_build_wins_over_an_earlier_rung(self, world, monkeypatch):
+        world.stub(world.root / "pathBin", "ffmpeg", "the one on PATH")
+        world.path_dirs.append(str(world.root / "pathBin"))
+        newer = world.stub(world.home / ".local" / "bin", "ffmpeg",
+                           "the newer one")
+        world.enter(monkeypatch)
+        ffmpegselect.select_ffmpeg(takes_everything, prefer=ranked(
+            {"the one on PATH": (4, 2), "the newer one": (4, 3)}))
+        assert ffmpegselect._STATE.selected == newer
+        assert reaches() == "the newer one"
+
+    def test_a_tie_stays_with_the_earlier_rung(self, world, monkeypatch):
+        chosen = world.stub(world.root / "pathBin", "ffmpeg", "the one on PATH")
+        world.path_dirs.append(str(world.root / "pathBin"))
+        world.stub(world.home / ".local" / "bin", "ffmpeg", "the same one")
+        world.enter(monkeypatch)
+        ffmpegselect.select_ffmpeg(takes_everything, prefer=ranked(
+            {"the one on PATH": (4, 3), "the same one": (4, 3)}))
+        assert ffmpegselect._STATE.selected == chosen
+        assert ffmpegselect.selected_preferred() == 1
+
+    def test_a_build_the_probe_rejects_is_not_ranked(self, world, monkeypatch):
+        chosen = world.stub(world.root / "pathBin", "ffmpeg", "the one on PATH")
+        world.path_dirs.append(str(world.root / "pathBin"))
+        world.stub(world.home / ".local" / "bin", "ffmpeg", "the too-old one")
+        world.enter(monkeypatch)
+        ffmpegselect.select_ffmpeg(takes_everything, prefer=ranked(
+            {"the one on PATH": 1, "the too-old one": 9}))
+        assert ffmpegselect._STATE.selected == chosen
+
+
 # --- one decision per run ------------------------------------------------------
 
 class TestOneDecision:

@@ -243,13 +243,17 @@ the preset's own arguments, and the first that takes all of them is used. The ru
 says which build it settled on and warns when that build cannot do everything the
 preset asks.
 
-**An SVT-AV1-HDR build is preferred where there is one.**
+**An AV1 preset picks between an SVT-AV1-HDR build and the newest SVT-AV1.**
 [SVT-AV1-HDR](https://github.com/juliobbv-p/svt-av1-hdr) is SVT-AV1 with
 perceptual tuning of its own, shipped inside community ffmpeg builds rather than as
-an encoder of its own. Among the builds that take the whole preset, one whose SVT-AV1
-is SVT-AV1-HDR wins; without one, the choice is the one it always was. On it the AV1
-presets leave the fork's own quantisation-matrix floor alone, and a PQ source gets
-its PQ-specific curve by itself. The quality levels are still the ones tuned for
+an encoder of its own, and it usually trails the newest mainline SVT-AV1 release.
+Among the builds that take the whole preset, SVT-AV1-HDR wins when the run uses what
+only it does: `av1Grain` without `-g`, or a PQ source among the files not yet
+converted. Otherwise the build with the newest SVT-AV1 release wins, and the fork
+still wins a tie. The startup summary says when one kind was chosen over the other,
+and why. Every other preset takes the first build that can run it. On
+the fork the AV1 presets leave its own quantisation-matrix floor alone, and a PQ
+source gets its PQ-specific curve by itself. The quality levels are still the ones tuned for
 mainline SVT-AV1, and the fork spends bits differently, so sizes differ from a
 mainline encode of the same preset.
 

@@ -13,6 +13,7 @@ written to disk on its own and marked " (video only)".
 """
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -115,6 +116,104 @@ def svt_av1_hdr_works(binary: str) -> bool:
     fork has. A build without libsvtav1 at all fails the encode, and a mainline
     one logs the key as unparsed - both answer False."""
     return ffmpeg_takes_args(binary, rules.SVT_AV1_HDR_PROBE)
+
+
+_SVT_AV1_RELEASE = re.compile(rb"Encoder Lib v(\d+)\.(\d+)\.(\d+)")
+
+
+def svt_av1_release(binary: str) -> tuple:
+    """The SVT-AV1 release that build's libsvtav1 is built on, as (major, minor,
+    patch), or () when it does not say - no libsvtav1, or a library too old to
+    log its banner.
+
+    Read from the banner the library itself logs, since ffmpeg's own version says
+    nothing about it. SVT-AV1-HDR numbers its releases after the mainline one it
+    is based on, so the two compare; the commits a nightly carries past its
+    release are left out, because they are not comparable across the two.
+    """
+    done = _run([binary, "-hide_banner", "-nostdin", "-loglevel", "info",
+                 "-f", "lavfi", "-i", "color=c=black:s=256x256:r=5:d=1",
+                 "-c:v", "libsvtav1", "-frames:v", "1", "-f", "null", "-"],
+                capture=True)
+    found = _SVT_AV1_RELEASE.search(done.stderr or b"")
+    return tuple(int(part) for part in found.groups()) if found else ()
+
+
+class SvtBuildRank:
+    """The rank convert-video's ffmpeg ladder orders SVT-AV1 builds by.
+
+    The fork is worth more than a newer encoder only when the run uses what it
+    does that mainline cannot: its PQ variance-boost curve, or av1Grain's film
+    grain tune. Such a run ranks SVT-AV1-HDR first and the release second; any
+    other ranks the newer release first, with the fork still winning a tie. Each
+    build's answers are kept, for the startup summary and so the build that
+    wins is not asked again.
+    """
+
+    def __init__(self, fork_use: str) -> None:
+        # What the run would use the fork for, "" when nothing.
+        self.fork_use = fork_use
+        self.seen: dict = {}
+
+    def facts(self, binary: str) -> tuple:
+        """(is SVT-AV1-HDR, release) for that build."""
+        if binary not in self.seen:
+            self.seen[binary] = (svt_av1_hdr_works(binary),
+                                 svt_av1_release(binary))
+        return self.seen[binary]
+
+    def __call__(self, binary: str) -> tuple:
+        fork, release = self.facts(binary)
+        return (fork, release) if self.fork_use else (release, fork)
+
+    def note(self, chosen: str) -> str:
+        """Why the build chosen is the SVT-AV1 one it is, when a build of the
+        other kind was also able to run the profile; "" when there was no such
+        choice."""
+        fork, release = self.facts(chosen)
+        others = [(binary, facts) for binary, facts in self.seen.items()
+                  if facts[0] != fork]
+        if not others:
+            return ""
+        other, (_other_fork, other_release) = others[0]
+        if fork:
+            if other_release > release:
+                return ("chosen over the newer mainline SVT-AV1 %s in %s, "
+                        "because this run uses %s"
+                        % (_release_text(other_release), other,
+                           self.fork_use))
+            return ""
+        return ("passed over (%s, SVT-AV1 %s): this run uses neither its PQ "
+                "curve (no PQ source left to convert) nor av1Grain's film "
+                "grain tune, and this build's SVT-AV1 %s is newer"
+                % (other, _release_text(other_release),
+                   _release_text(release)))
+
+
+def _release_text(release: tuple) -> str:
+    return ".".join(str(part) for part in release) if release else "of unknown release"
+
+
+def pq_source_to_convert(settings) -> bool:
+    """Whether any source this run still has to convert is PQ HDR - the one kind
+    of file SVT-AV1-HDR encodes differently by itself.
+
+    A source whose output already exists is passed over: it is usually finished,
+    and a finished HDR file in the folder must not hold every new SDR one to the
+    fork. Without an ffprobe on PATH to ask, the answer is yes, which keeps the
+    fork where it was always preferred.
+    """
+    if not _has_tool("ffprobe"):
+        return True
+    for relative in _sources(settings.input_dir):
+        output = os.path.join(settings.output_dir,
+                              os.path.splitext(relative)[0] + ".mkv")
+        if os.path.isfile(output):
+            continue
+        source = os.path.join(settings.input_dir, relative)
+        if rules.video_color_space(source)[2] == "smpte2084":
+            return True
+    return False
 
 
 def nvenc_works(encoder: str) -> bool:
@@ -1686,12 +1785,20 @@ def main(argv: list, program: str = "convert-video",
 
     # This script asks ffmpeg for things a distribution's package is often too old
     # to do, so the shared ladder is given a probe that answers "can this build do
-    # what THIS run's profile asks" - and, among the builds that can, prefers one
-    # linked against SVT-AV1-HDR. A machine without one settles where it always
-    # did.
+    # what THIS run's profile asks". An SVT-AV1 profile also ranks the builds that
+    # can: SVT-AV1-HDR first when the run uses what only it does, the newest
+    # SVT-AV1 release first otherwise. Any other encoder has nothing to rank.
+    rank = None
+    if rules.encoder_of(video_args) == "libsvtav1":
+        fork_use = ""
+        if settings.video_profile == rules.SVT_AV1_HDR_GRAIN_PROFILE and not grain:
+            fork_use = "its film grain tune for %s" % settings.video_profile
+        elif pq_source_to_convert(settings):
+            fork_use = "its PQ variance-boost curve on a PQ source"
+        rank = SvtBuildRank(fork_use)
     ffmpegselect.select_ffmpeg(
         lambda binary: ffmpeg_takes_profile(binary, video_args),
-        prefer=svt_av1_hdr_works)
+        prefer=rank)
     if tooldeps.require_tools(program, ["ffmpeg", "ffprobe"]):
         return 1
     # Refused rather than degraded, and before the output folder exists: a run
@@ -1713,8 +1820,11 @@ def main(argv: list, program: str = "convert-video",
         return safety.fail_no_relevant_input(settings.input_dir,
                                              "videos (.mkv / .mp4)")
 
-    settings.svt_av1_hdr = (settings.encoder == "libsvtav1"
-                            and ffmpegselect.selected_preferred() == 1)
+    chosen = ffmpegselect.selected_ffmpeg()
+    settings.svt_av1_hdr = bool(rank is not None and chosen
+                                and rank.facts(chosen)[0])
+    if rank is not None and chosen:
+        settings.svt_build_note = rank.note(chosen)
     # An explicit -g is a request for synthesis (or for none), which the grain
     # tune does not do - so asking for it is also opting out of the tune.
     settings.grain_tune = (settings.svt_av1_hdr and not grain
@@ -1978,9 +2088,11 @@ def _summarise(settings, video_args: str, grain: str) -> None:
             "a PQ source gets its PQ variance-boost curve. The quality levels "
             "are tuned for mainline SVT-AV1, so sizes will not match a mainline "
             "encode.")
-    elif settings.encoder == "libsvtav1":
+    elif settings.encoder == "libsvtav1" and not settings.svt_build_note:
         log("SVT-AV1-HDR: not found, encoding with this ffmpeg's own "
             "libsvtav1.")
+    if settings.encoder == "libsvtav1" and settings.svt_build_note:
+        log("SVT-AV1-HDR: " + settings.svt_build_note + ".")
     log("Video profile: %s -> %s" % (settings.video_profile, settled))
 
     # What the run leaves alone is named on one row, with the flag that turns

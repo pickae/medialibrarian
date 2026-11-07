@@ -160,14 +160,16 @@ def select_ffmpeg(probe=None, prefer=None) -> int:
     exactly like one that applies everything, so the caller that cares asks
     the encoder rather than the version number.
 
-    ``prefer`` is a second callable of the same shape, for a build that is
-    better than merely able: the candidates are walked once for one that
-    satisfies the probe AND the preference, and only when none does is the
-    walk above taken as it is, so a machine without a preferred build settles
-    exactly where it would have without one. A preference never wins over the
-    probe - a preferred build that cannot do the run's work is not offered -
-    and never over ``ffmpegOverride``, which is only asked whether it happens
-    to satisfy it.
+    ``prefer`` is a second callable taking a candidate, for a build that is
+    better than merely able. It answers a RANK - true or false, or anything
+    else that compares, such as a version tuple - and among the candidates
+    the probe accepts, the one ranked highest wins, a tie going to the
+    earlier rung. A candidate whose rank is false is not preferred at all,
+    and when none is preferred the walk above is taken as it is, so a machine
+    without a preferred build settles exactly where it would have without
+    one. A preference never wins over the probe - a preferred build that
+    cannot do the run's work is not offered - and never over
+    ``ffmpegOverride``, which is only asked whether it happens to satisfy it.
 
     The chosen pair is reached through a scratch directory holding just
     those two names, at the front of PATH, skipped entirely when the winner
@@ -221,12 +223,18 @@ def select_ffmpeg(probe=None, prefer=None) -> int:
             return fits[candidate]
 
         if prefer is not None:
+            best_rank = None
             for candidate in candidates:
-                if fit(candidate) and prefer(candidate):
+                if not fit(candidate):
+                    continue
+                rank = prefer(candidate)
+                # Strictly higher, so a tie stays with the earlier rung.
+                if rank and (best_rank is None or rank > best_rank):
                     _STATE.selected = candidate
-                    _STATE.full = 1
-                    _STATE.preferred = 1
-                    break
+                    best_rank = rank
+            if _STATE.selected:
+                _STATE.full = 1
+                _STATE.preferred = 1
         first_working = ""
         for candidate in candidates:
             if _STATE.selected:
