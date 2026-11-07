@@ -19,16 +19,24 @@ from medialib.lib import gpulane
 pytestmark = pytest.mark.fs
 
 _ENCODER = r'''#!/usr/bin/env bash
+trim=
 while [ $# -gt 0 ]; do
-    case "$1" in --batch) list=$2 ;; --outdir) out=$2 ;; esac; shift
+    case "$1" in --batch) list=$2 ;; --outdir) out=$2 ;; --trim) trim=1 ;; esac; shift
 done
-echo called >> "$(dirname "$0")/calls"
+echo "called${trim:+ trim}" >> "$(dirname "$0")/calls"
 [ -n "$STUB_STATUS" ] && exit "$STUB_STATUS"
 while IFS= read -r input; do
     target=$(readlink "$input")
     case "${target##*/}" in decline*) continue ;; esac
-    echo "GPU" > "$out/${input##*/}.avif"
+    if [ -n "$trim" ]; then
+        case "${target##*/}" in
+            blank*) echo "[av1gpu] skipped $input: blank (--skip-blank)" >&2; continue ;;
+        esac
+    fi
+    echo "GPU${trim:+ trimmed}" > "$out/${input##*/}.avif"
 done < "$list"
+[ -n "$trim" ] && echo "[av1gpu] trim: 1 images trimmed, 0 skipped as blank" >&2
+exit 0
 '''
 
 
@@ -41,7 +49,7 @@ def lane_run(tmp_path, monkeypatch):
     root = tmp_path / "lane"
     root.mkdir()
 
-    def run(books, **environment):
+    def run(books, resolve=None, **environment):
         for name, value in environment.items():
             monkeypatch.setenv(name, value)
         finished = []
@@ -52,7 +60,9 @@ def lane_run(tmp_path, monkeypatch):
                 finished.append(item)
 
         lane = gpulane.Lane(str(tool), str(root), 60, "turbo", "444",
-                            finish, 2, lambda line: None)
+                            finish, 2, lambda line: None,
+                            trim=["--trim", "--skip-blank", "99"],
+                            resolve=resolve)
         for book, pages in books.items():
             folder = lane.folder()
             with open(f"{folder}/{gpulane.MANIFEST}", "w") as manifest:
@@ -69,6 +79,9 @@ def lane_run(tmp_path, monkeypatch):
                     # A page named cpu* is listed for the CPU alone.
                     if not page.startswith("cpu"):
                         entry["input"] = str(source)
+                    # One named trim* or blank* is the card's to trim.
+                    if page.startswith(("trim", "blank")):
+                        entry["trim"] = True
                     manifest.write(json.dumps(entry) + "\n")
             open(f"{folder}/{gpulane.READY}", "w").close()
             lane.expect(folder, book)
@@ -89,6 +102,49 @@ def test_every_book_comes_back_once_all_its_pages_have_outputs(lane_run):
     assert outputs == {"p1.jpg": "GPU", "p2.jpg": "GPU", "decline.jpg": "CPU"}
     assert 1 <= called <= gpulane.CALLS
     assert (lane.pages, lane.fallbacks) == (2, 1)
+
+
+def test_the_pages_the_card_trims_go_in_calls_of_their_own(lane_run, tmp_path):
+    """One call is given one set of options: the trim's, or none."""
+    finished, outputs, _called, lane = lane_run(
+        {"one": ["trim1.jpg", "p1.jpg"], "two": ["trim2.jpg"]})
+    assert finished == ["one", "two"]
+    assert outputs == {"trim1.jpg": "GPU trimmed", "trim2.jpg": "GPU trimmed",
+                       "p1.jpg": "GPU"}
+    calls = (tmp_path / "bin" / "calls").read_text().splitlines()
+    assert "called trim" in calls and "called" in calls
+    assert lane.trimmed >= 1
+
+
+def test_a_page_the_card_found_blank_finishes_its_book_without_output(
+        lane_run):
+    """Not a page for the CPU to try again: there is nothing on it."""
+    finished, outputs, _called, lane = lane_run(
+        {"one": ["trim1.jpg", "blank.jpg"]})
+    assert finished == ["one"]
+    assert outputs == {"trim1.jpg": "GPU trimmed"}
+    assert (lane.blank, lane.fallbacks, lane.cpu_pages) == (1, 0, 0)
+
+
+def test_the_cpu_decides_the_trim_of_a_card_page_it_takes(lane_run):
+    """When the card cannot start, a page it was to trim is resolved on the
+    CPU: the call it answers is run, and a blank one is done without."""
+    asked = []
+
+    def resolve(entry):
+        asked.append(entry["output"].rpartition("/")[2])
+        if "blank" in entry["output"]:
+            return None, "blank"
+        return ["sh", "-c", 'echo CPU trimmed > "$0"', entry["output"]], \
+            "trimmed"
+
+    finished, outputs, _called, lane = lane_run(
+        {"one": ["trim1.jpg", "blank.jpg", "p1.jpg"]}, resolve=resolve,
+        STUB_STATUS="1")
+    assert finished == ["one"]
+    assert outputs == {"trim1.jpg": "CPU trimmed", "p1.jpg": "CPU"}
+    assert sorted(asked) == ["blank.jpg.avif", "trim1.jpg.avif"]
+    assert (lane.trimmed, lane.blank) == (1, 1)
 
 
 def test_an_encoder_that_cannot_start_sends_it_all_to_the_cpu(lane_run):
@@ -177,3 +233,29 @@ def test_a_page_is_encoded_while_its_book_is_still_being_sorted(tmp_path):
     lane.close()
     assert finished == ["book"]
     assert (tmp_path / "p2.jpg.avif").read_text().strip() == "GPU"
+
+
+def test_the_cpu_never_takes_the_card_s_pages(lane_run, monkeypatch):
+    """However much the card has waiting - here five chunks' worth - its pages
+    are its own: an ImageMagick encode of one took the CPU about as long as
+    the card takes for a book, for no gain in the run's time."""
+    monkeypatch.setattr(gpulane, "CHUNK_MEGAPIXELS", 1)
+    pages = ["p%d.jpg" % n for n in range(5)]
+    finished, outputs, _called, lane = lane_run({"one": pages})
+    assert finished == ["one"]
+    assert outputs == {page: "GPU" for page in pages}
+    assert lane.cpu_pages == 0
+
+
+def test_a_book_is_unpacked_for_the_cpu_only_once_the_card_failed(tmp_path):
+    lane = gpulane.Lane("", str(tmp_path), 60, "turbo", "444",
+                        lambda item: None, 2, lambda line: None)
+    try:
+        lane._ram_free = lambda: gpulane.RAM_RESERVE + 1
+        assert lane.has_room()          # no card: the CPU is the only side
+        lane.broken = False
+        lane.pending_pixels = gpulane.QUEUED_CHUNKS * lane.budget
+        assert not lane.has_room()      # the card has enough; the CPU waits
+    finally:
+        lane.broken = True
+        lane.close()

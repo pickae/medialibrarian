@@ -31,7 +31,7 @@ With no options, a run:
    archive under the wrong extension is renamed in the input** — a zip called
    `.cbr` becomes `.cbz`, a RAR called `.cbz` becomes `.cbr`. The `__MACOSX/`
    and `._` files a Mac leaves in an archive are not pages and are dropped.
-2. The pages are converted to AVIF, trimmed on the sides, skipped if empty; each page keeps the name it had in the archive.
+2. The pages are converted to AVIF, trimmed on the sides, skipped if empty, and numbered `01`, `02`, … in their reading order.
 3. The finished folder of pages is zipped back into one **stored** (level 0 —
    AVIF does not compress further) `.cbz` in its mirrored parent folder.
 
@@ -44,13 +44,16 @@ encoded on the NVIDIA card and the CPU at once**, both kept busy:
 - The card takes JPEG, PNG and WebP pages of up to 100 megapixels that have
   no transparency and, for a PNG or WebP, are stored upright, and it does their
   trim and their shrink to `-m` itself, after its own decode (av1gpu 0.7.0 or
-  newer). The CPU only measures them: the trim's box, the page's size. A
-  trimmed page's margin is the page's own rather than a flat border.
+  newer). av1gpu 0.11.0 or newer also decides the trim on the card - where the
+  margin is, whether it is one, whether the page is blank - so the CPU only
+  reads each page's header; an older one is given the trim's box, measured on
+  the CPU. A trimmed page's margin is the page's own rather than a flat border.
 - The CPU takes everything else - other formats, pages with transparency,
-  pages the card did not write - and, when it has none of its own and the card
-  has more than a call's worth waiting, some of the card's.
+  pages the card did not write - and never the card's own pages: an
+  ImageMagick encode of one takes the CPU about as long as the card takes for
+  a whole book.
 - Books are unpacked in the order they were found, the next one as soon as
-  either side is short of work. The CPU's encodes run at lower priority than
+  the card is short of work. The CPU's encodes run at lower priority than
   the work that feeds the card. How far ahead books are unpacked is bounded by
   the RAM free at the time.
 - `-l` means what it means on the CPU: the card is asked for the quality whose

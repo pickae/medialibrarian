@@ -15,21 +15,28 @@ them as they are listed, pages from every book at once:
   nothing to do and something is waiting, a second beside it once a full
   chunk is waiting - av1gpu reads its whole list before it starts, so the
   second call's start-up is paid while the first is still encoding;
-- the CPU's pages on ``cpu_jobs`` encoders, which take one of the card's
-  pages when they have none of their own and the card has more than a chunk
-  waiting: the whole machine works until the last page.
+- the CPU's pages on ``cpu_jobs`` encoders: the pages the card cannot take,
+  and those it did not write. They never take the card's pages from its queue.
+  Once the card decided the trim itself, the CPU had the time to, and on 6
+  comic albums (1,621 pages) the 16-21 pages it took cost about 550 seconds of
+  CPU for no gain in the run's time (46.1 / 45.3 s without against 48.3 /
+  46.0 s with): an ImageMagick encode of a page takes the CPU about as long
+  as the card takes for a book.
 
 A book is handed back to the run - to be numbered and zipped - once every page
 of it has an output: written by the card, or by the ImageMagick call its
-manifest line names. A page the card did not write goes to that call; a card
+manifest line names. A page whose trim the card decides (``"trim"`` in its
+line) may have none: one the card found blank is done without. Should such a
+page come to the CPU instead, its trim is decided there, just before its
+encode, by the lane's <resolve>. A page the card did not write goes to that call; a card
 whose call wrote nothing and failed could not start the encoder at all, and
 every later page goes straight to the CPU.
 
 The run unpacks the next book, in the order the books were found, whenever
-:meth:`Lane.wait_for_room` says either side is short of work. Which side does
-not pick the book: nearly every page is the card's, and the CPU's encoders
-take the card's pages when they have none of their own. The CPU's encodes run
-niced, below the sorting that feeds the card. What bounds the looking
+:meth:`Lane.wait_for_room` says the card is short of work - or, once the card
+has failed, the CPU. The CPU's own pages come with the books unpacked for the
+card: nearly every page is the card's. The CPU's encodes run niced, below the
+sorting that feeds the card. What bounds the looking
 ahead is RAM, read live: every book unpacked and not yet zipped is held there,
 and none is unpacked while less than :data:`RAM_RESERVE` is left.
 """
@@ -111,11 +118,18 @@ class Lane:
     """The lane for one run. <encoder> is av1gpu, or "" to encode every page
     on the CPU. <finish> is called with a book's item, on a thread of the
     lane's, once all its pages have outputs; <cpu_jobs> is how many CPU
-    encodes run at once."""
+    encodes run at once. <trim> are the encoder's options for the pages whose
+    trim the card decides, and <resolve> is handed such a page's manifest line
+    when the CPU takes it instead: it answers the ImageMagick call that trims
+    and encodes it, or None for a blank page, and the verdict ("trimmed",
+    "converted" or "blank")."""
 
     def __init__(self, encoder: str, root: str, quality: int, preset: str,
-                 chroma: str, finish, cpu_jobs: int, log) -> None:
+                 chroma: str, finish, cpu_jobs: int, log, trim=(),
+                 resolve=None) -> None:
         self.encoder = encoder
+        self.trim = list(trim)
+        self.resolve = resolve
         self.root = root
         self.quality = quality
         self.preset = preset
@@ -139,8 +153,11 @@ class Lane:
         self.pixels = 0
         self.cpu_pages = 0
         self.cpu_pixels = 0
-        self.stolen = 0
         self.fallbacks = 0
+        # The pages whose trim was decided here, on either side, by what it
+        # decided: what convert-images could only count as converted.
+        self.trimmed = 0
+        self.blank = 0
         # The pages whose last encode wrote nothing, by book folder: what the
         # run says is missing from that book when it packs it.
         self.missing: dict[str, int] = {}
@@ -175,9 +192,9 @@ class Lane:
             self.expected[folder] = _Book(folder, item)
 
     def wait_for_room(self) -> str:
-        """Until another book is worth unpacking - a side short of work, and
-        RAM to hold it - and which side it is for: "gpu" or "cpu", the card
-        first. "" once the run is stopping."""
+        """Until another book is worth unpacking - the card short of work, or
+        the CPU once the card has failed, and RAM to hold it - and which side
+        it is for: "gpu" or "cpu". "" once the run is stopping."""
         with self.room:
             while not safety.abort_requested():
                 side = self._short_side()
@@ -193,10 +210,13 @@ class Lane:
 
     def _short_side(self) -> str:
         """The side short of work while there is RAM for a book, or "".
-        Called under the lock."""
+        Called under the lock. While the card works, a book is unpacked for
+        it alone: the CPU's encoders do not take the card's pages, so a book
+        unpacked because they are idle would only wait in RAM."""
         gpu = (not self.broken
                and self.pending_pixels < QUEUED_CHUNKS * self.budget)
-        cpu = len(self.cpu_queue) < QUEUED_PER_ENCODER * self.cpu_jobs
+        cpu = (self.broken
+               and len(self.cpu_queue) < QUEUED_PER_ENCODER * self.cpu_jobs)
         if (gpu or cpu) and self._ram_free() > RAM_RESERVE:
             return "gpu" if gpu else "cpu"
         return ""
@@ -296,9 +316,13 @@ class Lane:
                 if self.closing and not self.pending and not self.expected:
                     return None
                 self.room.wait(_POLL_SECONDS)
+            # One call is given one set of options, so a chunk is either the
+            # pages the card trims or the others.
             chunk, filled = [], 0
+            trims = bool(self.pending[0][1].get("trim"))
             while self.pending and (not chunk or filled + self.pending[0][1][
-                    "pixels"] <= self.budget):
+                    "pixels"] <= self.budget) and bool(
+                        self.pending[0][1].get("trim")) == trims:
                 book, entry = self.pending.pop(0)
                 chunk.append((book, entry))
                 filled += entry["pixels"]
@@ -317,13 +341,17 @@ class Lane:
             items = [(entry["input"], entry["output"], entry.get("crop", ""),
                       entry.get("maxSize", "")) for _book, entry in chunk]
             workdir = tempfile.mkdtemp(prefix="av1gpu_", dir=self.root)
+            report: dict = {}
             try:
                 written, status = av1gpu.encode_chunk(
                     self.encoder, items, workdir, self.quality, self.preset,
-                    chroma=self.chroma)
+                    chroma=self.chroma,
+                    extra=self.trim if chunk[0][1].get("trim") else (),
+                    report=report)
             finally:
                 shutil.rmtree(workdir, ignore_errors=True)
             done = set(written)
+            blank = set(report.get("blank", ()))
             finished = []
             with self.room:
                 self.calls += 1
@@ -335,10 +363,14 @@ class Lane:
                 if self.broken:
                     self.cpu_queue.extend(self.pending)
                     self.pending, self.pending_pixels = [], 0
+                self.trimmed += report.get("trimmed", 0)
                 for index, (book, entry) in enumerate(chunk):
-                    if index in done:
-                        self.pages += 1
-                        self.pixels += entry["pixels"]
+                    if index in done or index in blank:
+                        if index in done:
+                            self.pages += 1
+                            self.pixels += entry["pixels"]
+                        else:
+                            self.blank += 1
                         if self._page_done(book):
                             finished.append(book)
                     else:
@@ -353,22 +385,15 @@ class Lane:
 
     # --- the CPU ------------------------------------------------------------
     def _next_for_cpu(self):
-        """A page for a CPU encoder: its own first, then the last of the
-        card's while the card has more than a chunk waiting without it. None
-        once nothing is left that could come to the CPU."""
+        """A page for a CPU encoder - never one of the card's while the card
+        still has it - or None once nothing is left that could come to the
+        CPU."""
         with self.room:
             while True:
                 if safety.abort_requested():
                     return None
                 if self.cpu_queue:
                     return self.cpu_queue.popleft()
-                if self.pending:
-                    last = self.pending[-1][1]["pixels"]
-                    if self.pending_pixels - last >= self.budget:
-                        self.pending_pixels -= last
-                        self.stolen += 1
-                        self.room.notify_all()
-                        return self.pending.pop()
                 if (self.closing and not self.expected and not self.pending
                         and self.running == 0):
                     return None
@@ -380,18 +405,28 @@ class Lane:
             if taken is None:
                 break
             book, entry = taken
+            argv, verdict = entry["cpu"], ""
+            if entry.get("trim") and self.resolve is not None:
+                argv, verdict = self.resolve(entry)
+            if argv is None:
+                with self.room:
+                    self.blank += 1
+                    last = self._page_done(book)
+                    self.room.notify_all()
+                if last:
+                    self._finished(book)
+                continue
             # A page that fails here is missing from its book, so the failure
             # is replayed and kept, named by the book it was unpacked from.
-            page = entry.get("output") or (entry["cpu"][-1]
-                                           if entry["cpu"] else "")
+            page = entry.get("output") or (argv[-1] if argv else "")
             source = errorlog.origin_of(page) if page else ""
             with self.room:
                 if self._cpu_running == 0:
                     self._cpu_busy_since = time.time()
                 self._cpu_running += 1
             made = toolcapture.run(
-                NICE + entry["cpu"], label=os.path.basename(source or page),
-                tool=os.path.basename(entry["cpu"][0]) if entry["cpu"] else "",
+                NICE + argv, label=os.path.basename(source or page),
+                tool=os.path.basename(argv[0]) if argv else "",
                 verify=functools.partial(_unwritten, page))
             with self.room:
                 self._cpu_running -= 1
@@ -400,6 +435,8 @@ class Lane:
                 if not made.ok and not safety.abort_requested():
                     self.missing[book.folder] = \
                         self.missing.get(book.folder, 0) + 1
+                elif verdict == "trimmed":
+                    self.trimmed += 1
                 self.cpu_pages += 1
                 self.cpu_pixels += entry["pixels"]
                 last = self._page_done(book)

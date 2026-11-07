@@ -51,6 +51,7 @@ to the image it belongs to.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 
@@ -63,6 +64,7 @@ __all__ = [
     "CHUNK_MEGAPIXELS",
     "MAX_PIXELS",
     "transforms",
+    "trims",
     "fitted_size",
     "max_size",
     "DECODE_THREADS_VARIABLE",
@@ -99,7 +101,11 @@ MAX_MEGAPIXELS = "100"
 # What an av1gpu that crops and resizes lists in its --help; one older than
 # that (0.7.0) is not used at all.
 _TRANSFORM_OPTION = "--max-input-mp"
-_capable: dict[str, bool] = {}
+# What an av1gpu that trims on the card (0.11.0 or newer) says in its --help:
+# --trim with the conditions convert-images puts on a trim, of which this is
+# the last added.
+_TRIM_OPTION = "--trim-lightness"
+_help: dict[str, bytes] = {}
 
 # The CPU threads av1gpu decodes PNG and WebP on, in place of its own 4, unless
 # the environment already names a number. On 40 comic pages of 2035x2960 at
@@ -126,17 +132,29 @@ def binary(log=None) -> str:
     return name
 
 
-def transforms(encoder: str) -> bool:
-    """Whether <encoder> crops and resizes, from its --help; asked once."""
-    if encoder not in _capable:
+def _help_text(encoder: str) -> bytes:
+    """<encoder>'s --help, asked once."""
+    if encoder not in _help:
         try:
             answer = subprocess.run([encoder, "--help"], capture_output=True,
                                     timeout=30)
-            text = answer.stdout + answer.stderr
+            _help[encoder] = answer.stdout + answer.stderr
         except (OSError, subprocess.SubprocessError):
-            text = b""
-        _capable[encoder] = _TRANSFORM_OPTION.encode() in text
-    return _capable[encoder]
+            _help[encoder] = b""
+    return _help[encoder]
+
+
+def transforms(encoder: str) -> bool:
+    """Whether <encoder> crops and resizes, from its --help; asked once."""
+    return _TRANSFORM_OPTION.encode() in _help_text(encoder)
+
+
+def trims(encoder: str) -> bool:
+    """Whether <encoder> decides a trim on the card - finds the margin, and
+    keeps or skips the page by the conditions it is given - from its --help.
+    One that cannot is still given every page it takes with the crop measured
+    on the CPU."""
+    return _TRIM_OPTION.encode() in _help_text(encoder)
 
 
 # av1gpu encodes images below 1 MP with a preset of their own, `base` by
@@ -245,9 +263,37 @@ def chunks(sized, budget: int = CHUNK_MEGAPIXELS * 1_000_000):
         yield chunk
 
 
+# What av1gpu says of an image --skip-blank kept from the encode, and of the
+# trims in the whole call.
+_BLANK = re.compile(r"^\[av1gpu\] skipped (.+): blank \(")
+_TRIMMED = re.compile(r"^\[av1gpu\] trim: (\d+) images trimmed")
+
+
+class _Listener(toolcapture.ToolOutput):
+    """The encoder's output kept as any tool's is, and read on the way for
+    the two lines above, which may fall where a long call's capture keeps
+    none."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.blank: set[str] = set()
+        self.trimmed = 0
+
+    def _add(self, line: str) -> None:
+        super()._add(line)
+        found = _BLANK.match(line)
+        if found:
+            self.blank.add(found.group(1))
+            return
+        found = _TRIMMED.match(line)
+        if found:
+            self.trimmed += int(found.group(1))
+
+
 def encode_chunk(encoder: str, items, workdir: str, quality: int,
                  preset: str, chroma: str = "420",
-                 depth: int = 10) -> tuple[list[int], int]:
+                 depth: int = 10, extra=(),
+                 report: dict | None = None) -> tuple[list[int], int]:
     """Encode one chunk. <items> is a list of ``(source, destination)``, both
     absolute, or ``(source, destination, crop, max_size)``: av1gpu's own
     ``WxH+X+Y`` and ``WxH`` / ``xH``, either one "" for none, done on the card
@@ -256,6 +302,11 @@ def encode_chunk(encoder: str, items, workdir: str, quality: int,
     is medialib/lib/encodercalibration.py's to say. <chroma> is "420" or
     "444", and <depth> 8 or 10 - 10 by default, which is what the CPU road
     writes.
+
+    <extra> are further av1gpu options for every image of the call - the trim
+    and its conditions. An image the trim found blank is not written and not a
+    failure: its index goes into ``report["blank"]``, and the number of images
+    the card trimmed into ``report["trimmed"]``, when there is a <report>.
 
     Returns the indices into <items> whose destination was written, and the
     encoder's exit status. A destination is only written once the encoder has
@@ -296,8 +347,9 @@ def encode_chunk(encoder: str, items, workdir: str, quality: int,
             "--quality", str(quality), "--preset", preset,
             "--small-preset", small_preset(preset), "--tiles", TILES,
             "--yuv", chroma, "--depth", str(depth),
-            "--max-mp", MAX_MEGAPIXELS, "--max-input-mp", MAX_MEGAPIXELS]
-    said = toolcapture.ToolOutput()
+            "--max-mp", MAX_MEGAPIXELS, "--max-input-mp", MAX_MEGAPIXELS,
+            *extra]
+    said = _Listener()
     process = subprocess.Popen(argv, stdin=subprocess.DEVNULL,
                                stdout=subprocess.PIPE,
                                stderr=subprocess.STDOUT, env=environment)
@@ -307,6 +359,11 @@ def encode_chunk(encoder: str, items, workdir: str, quality: int,
     if status < 0:
         _report_unwritten(argv, status, said, items, set())
         return [], status
+    blank = {index for index, name in enumerate(staged)
+             if os.path.join(inputs, name) in said.blank}
+    if report is not None:
+        report["blank"] = sorted(blank)
+        report["trimmed"] = said.trimmed
 
     done = []
     for index, name in enumerate(staged):
@@ -321,7 +378,7 @@ def encode_chunk(encoder: str, items, workdir: str, quality: int,
         shutil.move(produced, partial)
         os.replace(partial, destination)
         done.append(index)
-    _report_unwritten(argv, status, said, items, set(done))
+    _report_unwritten(argv, status, said, items, set(done) | blank)
     return done, status
 
 

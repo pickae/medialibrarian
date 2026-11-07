@@ -218,7 +218,7 @@ INTERNAL = frozenset((
     "narrationPython", "narrationDevice", "narrationEnvReady", "narrationVerbose",
     "narrationVoiceMap", "narrationEngine", "censusVideoExtensions",
     "censusPageExtensions", "censusAllExtensions", "imageStatsFile",
-    "imageGpuLane",
+    "imageGpuLane", "imageGpuTrim",
     # The usage text a refusal prints after itself, which only a shell caller
     # ever set.
     "usage",

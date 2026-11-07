@@ -166,6 +166,9 @@ def threads_per_conversion(image_format: str, speed: int) -> float:
 # to the card, which to the CPU, and with what call - and encodes none of them.
 LANE_VARIABLE = "imageGpuLane"
 LANE_MANIFEST = "manifest"
+# Set beside it when the lane's av1gpu decides a -c trim itself (av1gpu.trims):
+# a page the card takes is then listed without being decoded here at all.
+LANE_TRIM_VARIABLE = "imageGpuTrim"
 
 # The width half of every -resize geometry. Only the height is ever capped (-m),
 # so the width is given a value no page can reach: "no limit" and "cap the height
@@ -381,8 +384,14 @@ def trim_verdict(width: int, height: int, cut: tuple[int, int] | None,
     costs a call of its own; what it answers is the colour, and the border is
     the thin margin given back so the content does not end flush with the edge.
     Anything else is converted whole.
+
+    A box with no width but some height, or the other way round, is not
+    blank: ImageMagick's edges met there - the page holds two flat colours,
+    split across it, and each corner's colour runs to the middle. It is kept
+    whole, as av1gpu's --skip-blank keeps it, so the card and the CPU decide
+    such a page alike.
     """
-    if cut is None:
+    if cut is None or (0 in cut and cut != (0, 0)):
         return "converted", "", 0
     width_diff = width - cut[0]
     height_diff = height - cut[1]
@@ -397,6 +406,60 @@ def trim_verdict(width: int, height: int, cut: tuple[int, int] | None,
         if found is not None and found[1] >= LIGHTNESS_THRESHOLD:
             return "trimmed", found[0], min(min_w, min_h)
     return "converted", "", 0
+
+
+def gpu_trim_arguments(fuzz: str) -> list[str]:
+    """av1gpu's options for deciding a -c trim on the card as
+    :func:`trim_verdict` does: the margin given back, the share a trim must
+    take, the corners' lightness, and the share past which a page is blank.
+    <fuzz> is the -fuzz value, "10%"."""
+    return ["--trim", "--fuzz", fuzz,
+            "--trim-margin", "%d%%" % MIN_TRIM_PERCENT,
+            "--trim-limits", "%d%%,%d%%" % (MIN_TRIM_PERCENT, MAX_TRIM_PERCENT),
+            "--trim-lightness", str(LIGHTNESS_THRESHOLD),
+            "--skip-blank", str(BLANK_TRIM_PERCENT)]
+
+
+def box_and_corners(source: str, fuzz: str):
+    """``(box, corners)``: the trim's box as :func:`_parse_box` reads it
+    and the corners as :func:`_parse_corners` does, from one decode - the
+    box measured on the page as stored, the corners after an sRGB conversion,
+    so that a CMYK or greyscale page is measured in the channels the
+    lightness is defined on. Either is None when it cannot be read, a page of
+    several frames included."""
+    answer = subprocess.run(
+        imagemagick.convert_argv(
+            [source, "-fuzz", fuzz,
+             "-format", "%@\n", "-write", "info:",
+             "-colorspace", "sRGB", "-format", _CORNER_FORMAT, "info:"]),
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    if answer.returncode != 0:
+        return None, None
+    lines = answer.stdout.decode("utf-8", "replace").strip().split("\n")
+    if len(lines) != 1 + len(_CORNERS):
+        return None, None
+    return _parse_box(lines[0]), _parse_corners("\n".join(lines[1:]))
+
+
+def cpu_trim(entry: dict):
+    """The CPU's encode of a page listed for the card to trim (``"trim"`` in
+    its manifest line) that the card did not write: the trim decided here, as
+    it would have been had the page never been the card's. ``(argv,
+    verdict)``, argv None for a blank page."""
+    width, height = entry["size"]
+    box, corners = box_and_corners(entry["input"], entry["fuzz"])
+    verdict, colour, border = trim_verdict(
+        width, height, box[:2] if box else None, lambda: corners)
+    argv = entry["cpu"]
+    if verdict == "blank":
+        return None, verdict
+    if verdict == "trimmed":
+        assert box is not None
+        at = argv.index(entry["input"]) + 1
+        argv = argv[:at] + ["-crop", "%dx%d+%d+%d" % box, "+repage",
+                            "-bordercolor", colour, "-border",
+                            str(border)] + argv[at:]
+    return argv, verdict
 
 
 def encode_arguments(options, source, out, extra=()):
@@ -598,6 +661,10 @@ class Run:
         nearly always asked for, and a call of their own decoded it again.
         """
         pixels = width * height
+        if self.options.get("gpuTrim") and self._to_lane(
+                relative, out, category="converted", label="CONV (GPU, -c)",
+                probe=probe, size=(width, height)):
+            return
         box, corners = self._box_and_corners(relative)
         verdict, colour, border = trim_verdict(
             width, height, box[:2] if box else None, lambda: corners)
@@ -640,23 +707,8 @@ class Run:
             manifest.write(json.dumps(entry) + "\n")
 
     def _box_and_corners(self, source: str):
-        """``(box, corners)``: the trim's box as :func:`_parse_box` reads it
-        and the corners as :func:`_parse_corners` does, from one decode - the
-        box measured on the page as stored, the corners after the same sRGB
-        conversion :meth:`_identify_corner` makes. Either is None when it
-        cannot be read, a page of several frames included."""
-        answer = subprocess.run(
-            imagemagick.convert_argv(
-                [source, "-fuzz", self.options["fuzzCommand"],
-                 "-format", "%@\n", "-write", "info:",
-                 "-colorspace", "sRGB", "-format", _CORNER_FORMAT, "info:"]),
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-        if answer.returncode != 0:
-            return None, None
-        lines = answer.stdout.decode("utf-8", "replace").strip().split("\n")
-        if len(lines) != 1 + len(_CORNERS):
-            return None, None
-        return _parse_box(lines[0]), _parse_corners("\n".join(lines[1:]))
+        """:func:`box_and_corners` at this run's -fuzz."""
+        return box_and_corners(source, self.options["fuzzCommand"])
 
     def _identify_corner(self, source: str):
         """The margin's colour and lightness, from the page's four corner pixels
@@ -723,7 +775,8 @@ class Run:
 
     def _to_lane(self, relative: str, out: str, crop=None,
                  category: str = "converted",
-                 label: str = "CONV (GPU)", probe: str = "") -> bool:
+                 label: str = "CONV (GPU)", probe: str = "",
+                 size=None) -> bool:
         """Hand this image to the GPU lane of the run that started this one,
         and say whether it was taken. Only under a lane (:data:`LANE_VARIABLE`):
         that run owns the card and encodes the pages of many of these runs
@@ -740,6 +793,11 @@ class Run:
         ImageMagick call that does the same on the CPU - which the lane runs
         for a page the card did not write, or one a CPU encoder takes while the
         card has more than it can start on.
+
+        With <size>, the page's ``(width, height)``, the card decides its -c
+        trim (:data:`LANE_TRIM_VARIABLE`): the line says so, with the -fuzz,
+        and its ImageMagick call is the untrimmed one, which
+        :func:`cpu_trim` completes should the CPU take the page.
         """
         lane = self.options.get("gpuLane", "")
         if not lane:
@@ -750,10 +808,14 @@ class Run:
         pixels, geometry, fit = job
         source, out = os.path.abspath(relative), os.path.abspath(out)
         extra = ["-crop", geometry, "+repage"] if geometry else []
-        self._list({"input": source, "output": out, "pixels": pixels,
-                    "crop": geometry, "maxSize": fit,
-                    "cpu": imagemagick.convert_argv(
-                        self._encode_arguments(source, out, extra))})
+        entry = {"input": source, "output": out, "pixels": pixels,
+                 "crop": geometry, "maxSize": fit,
+                 "cpu": imagemagick.convert_argv(
+                     self._encode_arguments(source, out, extra))}
+        if size:
+            entry.update(trim=True, size=list(size),
+                         fuzz=self.options["fuzzCommand"])
+        self._list(entry)
         self.record(category, label, relative, pixels=pixels, road="gpu")
         return True
 
@@ -1024,6 +1086,7 @@ def main(argv: list, program: str = "convert-images") -> int:
     if image_format == CHROMA_FORMAT and not reverse and options["maxHeight"]:
         if lane:
             options["gpuLane"] = lane
+            options["gpuTrim"] = bool(os.environ.get(LANE_TRIM_VARIABLE))
         elif not crop:
             encoder = av1gpu.binary(log)
     # -l and -s mean what they mean on the CPU; what av1gpu has to be asked
