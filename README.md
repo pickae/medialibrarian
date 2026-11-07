@@ -14,17 +14,6 @@ the per-machine files — the `data/` tables, the `logs/` logs — live under
 `~/.local/share/medialib` (or `$XDG_DATA_HOME/medialib` if it is set); the
 environment variable `CLI_SCRIPT_DIR` points them somewhere else.
 
-> **Platform:** these target **Linux**. **macOS** support is **aspirational**:
-> everything is written to work there, but no macOS machine has run it yet, so
-> treat it as untested rather than as broken (see
-> [Running on a Mac](docs/requirements.md#running-on-a-mac)). On a Windows machine **WSL2** is the
-> way to run them. Native Windows is **experimental for now**: the tool-free
-> cases import and run there, but the commands that drive the media tools and
-> POSIX coreutils expect a POSIX host. Neither Windows nor macOS has a
-> RAM-backed filesystem, so the RAM scratch described below lands in `%TEMP%` / `$TMPDIR` on a
-> normal disk; a RAM disk mounted by hand works if `ramScratchBase` points at
-> it.
-
 ## Built to use the whole machine
 
 **These commands are written for an enthusiast desktop, and try to keep all of
@@ -50,6 +39,17 @@ network connection — rather than leaving most of it idle while one part works:
   once without sharing one.
 
 A smaller machine runs them too — just with the CPU roads and less overlap.
+
+> **Platform:** these target **Linux**. **macOS** support is **aspirational**:
+> everything is written to work there, but no macOS machine has run it yet, so
+> treat it as untested rather than as broken (see
+> [Running on a Mac](docs/requirements.md#running-on-a-mac)). On a Windows machine **WSL2** is the
+> way to run them. Native Windows is **experimental for now**: the tool-free
+> cases import and run there, but the commands that drive the media tools and
+> POSIX coreutils expect a POSIX host. Neither Windows nor macOS has a
+> RAM-backed filesystem, so the RAM scratch described below lands in `%TEMP%` / `$TMPDIR` on a
+> normal disk; a RAM disk mounted by hand works if `ramScratchBase` points at
+> it.
 
 ## At a glance
 
