@@ -551,3 +551,43 @@ class TestWhetherAFileIsUpscaled:
 
     def test_a_limited_range_source_stays_limited(self, settle):
         assert settle()[1].upscale_range == "limited"
+
+
+class TestThePqSourceThatHoldsTheFork:
+    @pytest.fixture
+    def folder(self, monkeypatch, tmp_path):
+        """An input folder and the transfer each source reports, keyed by name."""
+        transfers = {}
+        (tmp_path / "in").mkdir()
+        (tmp_path / "out").mkdir()
+        monkeypatch.setattr(run_module, "_has_tool", lambda name: True)
+        monkeypatch.setattr(
+            rules, "video_color_space",
+            lambda path: ("", "", transfers[os.path.basename(path)]))
+
+        def make(**files):
+            for name, transfer in files.items():
+                (tmp_path / "in" / name).write_text("")
+                transfers[name] = transfer
+            return rules.Settings(input_dir=str(tmp_path / "in"),
+                                      output_dir=str(tmp_path / "out"))
+        make.out = tmp_path / "out"
+        return make
+
+    def test_a_pq_source_holds_it(self, folder):
+        assert run_module.pq_source_to_convert(folder(**{"a.mkv": "bt709",
+                                                  "b.mkv": "smpte2084"}))
+
+    def test_hlg_and_sdr_do_not(self, folder):
+        assert not run_module.pq_source_to_convert(folder(**{"a.mkv": "bt709",
+                                                      "b.mkv": "arib-std-b67"}))
+
+    def test_a_pq_source_already_converted_does_not(self, folder):
+        settings = folder(**{"a.mkv": "bt709", "b.mkv": "smpte2084"})
+        (folder.out / "b.mkv").write_text("")
+        assert not run_module.pq_source_to_convert(settings)
+
+    def test_without_ffprobe_the_fork_is_kept(self, folder, monkeypatch):
+        settings = folder(**{"a.mkv": "bt709"})
+        monkeypatch.setattr(run_module, "_has_tool", lambda name: False)
+        assert run_module.pq_source_to_convert(settings)
