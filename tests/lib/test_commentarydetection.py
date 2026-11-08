@@ -67,6 +67,19 @@ class TestSuspects:
         assert cd.suspects([_audio("1", "6"), _audio("2", "null")]) == []
 
 
+class TestUnnamed:
+    def test_a_flagged_commentary_without_a_name_is_one(self):
+        audio = [_audio("1", "6"), _audio("2", commentary=True),
+                 _audio("3", name="  ", commentary=True)]
+        assert cd.unnamed(audio) == ["2", "3"]
+
+    def test_a_named_commentary_or_an_unflagged_track_is_not(self):
+        audio = [_audio("1", "6"), _audio("2"),
+                 _audio("3", name="Commentary", commentary=True),
+                 _audio("4", name="English", commentary=True)]
+        assert cd.unnamed(audio) == []
+
+
 class TestWords:
     def test_short_words_and_numbers_are_left_out(self):
         assert cd.words("The cat and 1975 harbour") == {"harbour"}
@@ -178,6 +191,12 @@ class TestCommentaryNames:
                  _audio("3"), _audio("4")]
         assert cd.commentary_names(audio, ["3", "4"]) == {
             "3": "Commentary 2", "4": "Commentary 3"}
+
+    def test_unnamed_and_found_ones_are_numbered_together(self):
+        audio = [_audio("1", "6"), _audio("2"),
+                 _audio("3", commentary=True), _audio("4", commentary=True)]
+        assert cd.commentary_names(audio, ["2", "3", "4"]) == {
+            "2": "Commentary 1", "3": "Commentary 2", "4": "Commentary 3"}
 
     def test_the_only_commentary_is_number_one(self):
         audio = [_audio("1", "6"), _audio("2", name="English")]

@@ -214,7 +214,8 @@ Usage:
     the file does not flag when it is far more speech than the film AND its
     words are mostly not the film's (three minutes of each, heard by whisper),
     flags it and names it "Commentary N" in place before the remux - a track
-    only one of the two says so of is left as it is and listed at the end
+    only one of the two says so of is left as it is and listed at the end;
+    a commentary the file flags but leaves unnamed is numbered the same way
     reads each commentary's language from its track name or mkv language tag, and
     lets whisper detect it when neither says. English gives one "<name>.en.srt",
     another supported language a native "<name>.xx.srt" plus a translated

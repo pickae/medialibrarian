@@ -211,6 +211,11 @@ track only one says so of is left as it is and listed at the end of the run, to
 be listened to. A track flagged for the visually impaired, or named as an audio
 description, a score or music, is not listened to at all.
 
+A commentary the file does flag but leaves without a name is numbered the same
+way, among the others in file order. Otherwise its transcript would be called
+just "Commentary", like every other unnamed one, and the commentary naming
+could not tell them apart.
+
 This needs whisper, so it runs only when the transcription does, and only on
 films that have not been improved yet.
 
