@@ -1805,8 +1805,9 @@ def _detect_commentaries(state, root: str) -> None:
     (see :mod:`medialib.lib.commentarydetection`), and each one found to be a
     commentary flagged and named "Commentary N" in place - a header edit, so
     the remux, the transcription and the commentary naming after it take it
-    for the commentary it is. A film already improved was looked at by the run
-    that improved it, and is not listened to again."""
+    for the commentary it is. A commentary the file flags but leaves unnamed is
+    numbered the same way, so its transcript is too. A film already improved
+    was looked at by the run that improved it, and is not listened to again."""
     for movie in main_movies(root):
         if safety.abort_requested():
             return
@@ -1819,37 +1820,47 @@ def _detect_commentaries(state, root: str) -> None:
                      track.is_commentary, track.visual_impaired == "true")
                  for position, track in enumerate(tracks, start=1)
                  if track.is_audio]
-        suspects = commentarydetection.suspects(audio)
-        if not suspects:
-            continue
-        while state.whisper_said:
-            log(state.whisper_said.pop(0))
-        log("Listening for commentaries: " + movie)
-        measures, why = commentarydetection.probe(movie, audio[0], suspects,
-                                                  state.whisper)
-        if why:
-            log("  WARNING: could not listen to the audio tracks, left as "
-                "they are: " + why)
-            continue
-        found = []
-        for track in suspects:
-            said = "audio track %s (%s)" % (track.id, track.name or "no name")
-            verdict = commentarydetection.judge(measures[audio[0].id],
-                                                measures[track.id])
-            if verdict.kind == commentarydetection.COMMENTARY:
-                found.append(track.id)
-                log("  A commentary: %s - %s" % (said, verdict.why))
-            elif verdict.kind == commentarydetection.UNSURE:
-                log("  Maybe a commentary, left as it is: %s - %s"
-                    % (said, verdict.why))
-                state.unsure_commentaries.append(
-                    "%s: %s - %s" % (movie, said, verdict.why))
-            else:
-                log("  Not a commentary: %s - %s" % (said, verdict.why))
-        if found:
+        found = _listen_for_commentaries(state, movie, audio)
+        unnamed = commentarydetection.unnamed(audio)
+        if unnamed and not found:
+            log("Numbering the commentaries the file does not name: " + movie)
+        if found or unnamed:
             _flag_commentaries(movie, tracks,
-                               commentarydetection.commentary_names(audio,
-                                                                    found))
+                               commentarydetection.commentary_names(
+                                   audio, found + unnamed))
+
+
+def _listen_for_commentaries(state, movie: str, audio: list) -> list:
+    """The ids of the film's suspect audio tracks that are commentaries,
+    each verdict said, and an unsure one kept for the end of the run."""
+    suspects = commentarydetection.suspects(audio)
+    if not suspects:
+        return []
+    while state.whisper_said:
+        log(state.whisper_said.pop(0))
+    log("Listening for commentaries: " + movie)
+    measures, why = commentarydetection.probe(movie, audio[0], suspects,
+                                              state.whisper)
+    if why:
+        log("  WARNING: could not listen to the audio tracks, left as "
+            "they are: " + why)
+        return []
+    found = []
+    for track in suspects:
+        said = "audio track %s (%s)" % (track.id, track.name or "no name")
+        verdict = commentarydetection.judge(measures[audio[0].id],
+                                            measures[track.id])
+        if verdict.kind == commentarydetection.COMMENTARY:
+            found.append(track.id)
+            log("  A commentary: %s - %s" % (said, verdict.why))
+        elif verdict.kind == commentarydetection.UNSURE:
+            log("  Maybe a commentary, left as it is: %s - %s"
+                % (said, verdict.why))
+            state.unsure_commentaries.append(
+                "%s: %s - %s" % (movie, said, verdict.why))
+        else:
+            log("  Not a commentary: %s - %s" % (said, verdict.why))
+    return found
 
 
 def _flag_commentaries(movie: str, tracks: list, names: dict) -> None:
@@ -1861,8 +1872,9 @@ def _flag_commentaries(movie: str, tracks: list, names: dict) -> None:
             arguments += ["--edit", "track:%d" % position,
                           "--set", "name=" + names[track.id],
                           "--set", "flag-commentary=1"]
-            log('  track %s "%s" -> "%s"' % (track.id, track.name,
-                                              names[track.id]))
+            log('  track %s "%s" -> "%s"'
+                % (track.id, "" if track.name == "null" else track.name,
+                   names[track.id]))
     try:
         original = os.stat(movie).st_mtime
     except OSError:

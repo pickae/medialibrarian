@@ -50,6 +50,7 @@ __all__ = [
     "Measure",
     "Verdict",
     "suspects",
+    "unnamed",
     "words",
     "judge",
     "probe",
@@ -146,6 +147,17 @@ def suspects(audio: list[AudioTrack]) -> list[AudioTrack]:
     return found
 
 
+def unnamed(audio: list[AudioTrack]) -> list[str]:
+    """The ids of the tracks the file flags as a commentary but gives no name.
+
+    Their transcripts would be called just "Commentary", one like the other,
+    and the commentary naming cannot tell such tracks apart. So they are
+    numbered in file order, like a commentary this module finds.
+    """
+    return [track.id for track in audio
+            if track.commentary and not (track.name or "").strip()]
+
+
 def words(text: str) -> set[str]:
     """The words of a transcript worth comparing: those of four letters or
     more, folded, so "the" and "and" do not make two unrelated tracks look
@@ -222,7 +234,8 @@ def probe(movie: str, main: AudioTrack, others: list[AudioTrack],
 
 
 def commentary_names(audio: list[AudioTrack], found: list[str]) -> dict:
-    """The name each newly found commentary (by id, in ``found``) is given:
+    """The name each commentary in ``found`` (by id) is given, whether it is
+    newly found or flagged but unnamed:
     "Commentary N", N its place among the film's commentaries in file order -
     the numbered name the commentary naming later replaces with who speaks."""
     names = {}

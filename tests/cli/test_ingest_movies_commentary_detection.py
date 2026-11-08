@@ -74,6 +74,55 @@ def test_a_talked_over_track_is_flagged_and_numbered_in_place(ingest):
                              "--set", "flag-commentary=1"]]
 
 
+def test_flagged_commentaries_without_a_name_are_numbered(ingest):
+    tracks = [_track("0", "video"),
+              _track("1", "audio", "A_TRUEHD", "6", "null"),
+              _track("2", "audio", "A_AC3", "2", "null"),
+              _track("3", "audio", "A_AC3", "2", "null", commentary="true"),
+              _track("4", "audio", "A_AC3", "2", "null", commentary="true"),
+              _track("5", "audio", "A_AAC", "2", "null", commentary="true")]
+    ingest.run(tracks, {"1": FILM, "2": DOWNMIX})
+    assert [others for _m, _main, others in ingest.probed] == [
+        [cd.AudioTrack("2", 1, "2", "", False, False)]]
+    assert ingest.edits == [["mkvpropedit", MOVIE,
+                             "--edit", "track:4", "--set", "name=Commentary 1",
+                             "--set", "flag-commentary=1",
+                             "--edit", "track:5", "--set", "name=Commentary 2",
+                             "--set", "flag-commentary=1",
+                             "--edit", "track:6", "--set", "name=Commentary 3",
+                             "--set", "flag-commentary=1"]]
+
+
+def test_a_found_commentary_is_numbered_among_the_unnamed_ones(ingest):
+    tracks = [_track("0", "audio", "A_TRUEHD", "6"),
+              _track("1", "audio", "A_AC3", "2", "English"),
+              _track("2", "audio", "A_AC3", "2", commentary="true")]
+    ingest.run(tracks, {"0": FILM, "1": TALKED_OVER})
+    assert ingest.edits == [["mkvpropedit", MOVIE,
+                             "--edit", "track:2", "--set", "name=Commentary 1",
+                             "--set", "flag-commentary=1",
+                             "--edit", "track:3", "--set", "name=Commentary 2",
+                             "--set", "flag-commentary=1"]]
+
+
+def test_unnamed_commentaries_are_numbered_when_the_probe_failed(monkeypatch):
+    tracks = [_track("0", "audio", "A_TRUEHD", "8"),
+              _track("1", "audio", "A_AC3", "2"),
+              _track("2", "audio", "A_AC3", "2", commentary="true")]
+    monkeypatch.setattr(cd, "probe", lambda *_a: ({}, "the probe failed (1)"))
+    monkeypatch.setattr(run_module, "main_movies", lambda _root: [MOVIE])
+    monkeypatch.setattr(rules, "_identify", lambda _movie: tracks)
+    edits = []
+    monkeypatch.setattr(rules, "_run_capture",
+                        lambda argv: edits.append(argv) or "")
+    state = SimpleNamespace(whisper={}, whisper_said=[],
+                            unsure_commentaries=[])
+    run_module._detect_commentaries(state, "/library")
+    assert edits == [["mkvpropedit", MOVIE, "--edit", "track:3",
+                      "--set", "name=Commentary 1",
+                      "--set", "flag-commentary=1"]]
+
+
 def test_an_unsure_track_is_left_as_it_is_and_listed(ingest):
     tracks = [_track("0", "audio", "A_TRUEHD", "8"),
               _track("1", "audio", "A_AC3", "2", "Stereo")]
@@ -83,7 +132,8 @@ def test_an_unsure_track_is_left_as_it_is_and_listed(ingest):
     assert state.unsure_commentaries[0].startswith(MOVIE + ": audio track 1")
 
 
-def test_a_film_with_no_suspect_is_not_listened_to(ingest):
+def test_a_film_with_no_suspect_and_named_commentaries_is_left_alone(
+        ingest):
     tracks = [_track("0", "audio", "A_TRUEHD", "8"),
               _track("1", "audio", "A_AC3", "2", "Commentary",
                      commentary="true"),
