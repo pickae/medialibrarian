@@ -537,6 +537,37 @@ class TestTheMarkerAFileManagerLeft:
         assert plexnames.spelling_renames(BASE, [BASE + ".mkv"]) == {}
 
 
+class TestACommentaryFollowsItsFilm:
+    """A transcript is "<film> <track> <name>", and the track's number reads as
+    a sequel's on its own - so it is respelled with its film, not by itself."""
+
+    FOLDER = "Film Of The Night (1983)"
+    TALK = " 2 Commentary By Two People.en.srt"
+
+    def test_a_lower_case_film_keeps_one_year_on_its_transcript(self):
+        film = "film of the night (1983)"
+        assert plexnames.folder_renames(
+            self.FOLDER, TAG, [film + ".mkv", film + self.TALK]) == [
+            (film + self.TALK, self.FOLDER + " " + TAG + self.TALK),
+            (film + ".mkv", self.FOLDER + " " + TAG + ".mkv")]
+
+    def test_a_film_without_the_year_takes_its_transcript_along(self):
+        film = "Film Of The Night"
+        assert plexnames.folder_renames(
+            self.FOLDER, TAG, [film + ".mkv", film + self.TALK]) == [
+            (film + self.TALK, self.FOLDER + " " + TAG + self.TALK),
+            (film + ".mkv", self.FOLDER + " " + TAG + ".mkv")]
+
+    def test_the_folders_year_is_never_left_over(self):
+        assert plexnames.onto_base(
+            self.FOLDER, "film of the night (1983) 2 Commentary.en.srt") == ""
+
+    def test_a_second_run_has_nothing_to_do(self):
+        named = self.FOLDER + " " + TAG
+        assert plexnames.folder_renames(
+            self.FOLDER, TAG, [named + ".mkv", named + self.TALK]) == []
+
+
 class TestTaggingAFolderNothingCanRename:
     """The id is known even where which file is which release is not."""
 

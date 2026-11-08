@@ -588,11 +588,17 @@ def onto_base(base: str, name: str, also=(), typos: bool = False) -> str:
         if stripped != stem and len(stripped) >= len(base):
             return stripped + extension
         return ""
+    year = year_of(base)
     for cut in _boundaries(name):
         head = name[:cut].rstrip()
         if not head:
             continue
         if _numbers_another_film(name[cut:]):
+            continue
+        # The folder's own year left over is the base's year written twice: a
+        # reading that gives it up has matched the title without it, and the
+        # name is this film only where the cut after the year would do.
+        if year and name[cut:].lstrip().startswith("(%s)" % year):
             continue
         for spelling in (base,) + tuple(also):
             if _names_this_film(spelling, head, typos) or _names_this_film(
@@ -809,17 +815,46 @@ def spelling_renames(base: str, names, also=(), typos: bool = False) -> dict:
     closer was found": the guess never gets to claim a name from under a
     reading, nor the name a reading was going to take, because the first pass
     has already held it.
+
+    A sidecar that goes by one of the folder's films is not read on its own:
+    it follows that film, respelled where the film is and left as it is where
+    the film is not. Its own reading would have to find the film's name in front of
+    a commentary's "2 Commentary", which reads as a sequel's number.
     """
     held = set(names)
     corrected: dict[str, str] = {}
+    films = sorted((name[:-len(".mkv")] for name in names
+                    if is_movie_file(name)), key=len, reverse=True)
+    # A name that goes on to say the folder's year after a film that left it off
+    # is the folder's own spelling already, and is read as one.
+    dated = "(%s)" % year_of(base) if year_of(base) else ""
+    followers = {}
+    for name in names:
+        if name.lower().endswith(".mkv"):
+            continue
+        for stem in films:
+            rest = name[len(stem):]
+            if dated and rest.lstrip().startswith(dated):
+                continue
+            if name.startswith(stem) and rest[:1] in (" ", "."):
+                followers[name] = stem
+                break
     for guessing in (False, True) if typos else (False,):
         for name in sorted(names):
-            if name in corrected:
+            if name in corrected or name in followers:
                 continue
             wanted = onto_base(base, name, also, guessing)
             if wanted and wanted != name and wanted not in held:
                 corrected[name] = wanted
                 held.add(wanted)
+    for name, stem in sorted(followers.items()):
+        film = corrected.get(stem + ".mkv")
+        if not film:
+            continue
+        wanted = film[:-len(".mkv")] + name[len(stem):]
+        if wanted != name and wanted not in held:
+            corrected[name] = wanted
+            held.add(wanted)
     return corrected
 
 
