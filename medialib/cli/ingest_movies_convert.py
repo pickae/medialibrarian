@@ -3,10 +3,11 @@ convert-video and written beside it.
 
 A remux is told by its name, which says so, or by its video, which only a disc
 carries: a dual-layer Dolby Vision profile 7 HEVC 2160p stream at a generous
-bitrate, or an SDR H.264 1080p one at a very generous bitrate. The name is
-read before the cleaning takes the word out of it, and the file is known again
-at the end by its inode, which every rename keeps; the video is read from the
-original the improved remux kept, since that remux turns profile 7 into 8.1.
+bitrate, any other HEVC 2160p one at a very generous bitrate, or an SDR H.264
+1080p one at a very generous bitrate. The name is read before the cleaning
+takes the word out of it, and the file is known again at the end by its inode,
+which every rename keeps; the video is read from the original the improved
+remux kept where there is one, since that remux turns profile 7 into 8.1.
 
 The conversion is convert-video's, on its default video settings, with -k:
 the finished video combined with every other track of the ingested film as it
@@ -40,9 +41,10 @@ __all__ = ["convert_remuxes", "kept_original", "named_remuxes", "remux_reason"]
 # The word a release names itself a remux with, in any case.
 REMUX_WORD = "remux"
 
-# How far above adequate an SDR H.264 1080p stream has to be to be a Blu-ray's
-# rather than an encode's: a disc spends 20-40 Mbit/s on a picture an encode
-# gives 8-15, and adequate for 16:9 1080p H.264 is 5.
+# How far above adequate a stream has to be to be a disc's rather than an
+# encode's when nothing else about it says so: a Blu-ray spends 20-40 Mbit/s on
+# a 1080p H.264 picture an encode gives 8-15 (adequate is 5), and a UHD disc
+# 50-100 on a 2160p HEVC one a web release gives 15-40 (adequate is 11).
 VERY_GENEROUS_FACTOR = 4
 
 # The transfer characteristics that make a stream HDR, as ffprobe names them.
@@ -115,6 +117,12 @@ def remux_reason(named: bool, codec: str, width: str, height: str, fps: str,
             and adequacy.verdict(kbit, adequate) == adequacy.GENEROUS):
         return ("Dolby Vision profile 7 in 2160p HEVC at %s kbit/s"
                 % kbit)
+    # HDR10 alone, or profile 8.1 with no "(old)" profile 7 left to read:
+    # nothing but the bitrate tells it from a web release.
+    if (family == "hevc" and tier == "2160p"
+            and adequacy.verdict(kbit, adequate, VERY_GENEROUS_FACTOR)
+            == adequacy.GENEROUS):
+        return "2160p HEVC at %s kbit/s" % kbit
     if (not dv_profile and transfer not in _HDR_TRANSFERS and family == "h264"
             and tier == "1080p"
             and adequacy.verdict(kbit, adequate, VERY_GENEROUS_FACTOR)

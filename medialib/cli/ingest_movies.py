@@ -153,8 +153,9 @@ p |  | Plex comparison only: walks the whole tree the way -t does and
                   no part in it. Best run after -tw.
 r |  | also convert the remuxes, last of all: a film whose name says
                   REMUX, a 2160p HEVC one carrying dual-layer Dolby Vision
-                  profile 7 at a generous bitrate, or an SDR 1080p H.264 one
-                  at a very generous bitrate (four times what it needs) is
+                  profile 7 at a generous bitrate, any other 2160p HEVC one
+                  or an SDR 1080p H.264 one at a very generous bitrate (four
+                  times what it needs) is
                   handed to convert-video, on its default video settings,
                   with -k: the finished video is combined with every audio,
                   subtitle, attachment and chapter of the ingested film as it

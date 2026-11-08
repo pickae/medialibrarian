@@ -751,6 +751,7 @@ as a remux when any of these holds:
 | --- | --- |
 | its name, or a folder above it, contains `remux` | the name it arrived under, before the cleaning removes the word. The film is recognised again at the end by its inode, which renames do not change |
 | 2160p HEVC with dual-layer Dolby Vision profile 7, at a generous bitrate (twice what [`convert-video -t`](convert-video.md#only-what-has-room-to-save--t) counts as adequate) | the original kept as `(old)`, because the remux has turned profile 7 into 8.1 by then |
+| any other 2160p HEVC — HDR10 alone, or profile 8.1 with no `(old)` copy left — at a very generous bitrate (four times adequate: about 45 Mbit/s for 16:9, above what web releases spend) | the same |
 | SDR 1080p H.264 at a very generous bitrate (four times adequate: about 20 Mbit/s for 16:9) | the same |
 
 The remuxes of a folder go to **one** `convert-video -k` run, with convert-video's

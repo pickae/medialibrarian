@@ -69,14 +69,20 @@ class TestWhatIsARemux:
 
     @pytest.mark.parametrize("kbit, profile, codec, height", [
         ("15000", "7", "hevc", "2160"),  # not generous: an encode's bitrate
-        ("55000", "8", "hevc", "2160"),  # a profile an encode carries too
-        ("55000", "", "hevc", "2160"),  # plain HDR10
+        ("35000", "8", "hevc", "2160"),  # a profile an encode carries too
+        ("35000", "", "hevc", "2160"),  # plain HDR10 at a web bitrate
         ("55000", "7", "hevc", "1080"),  # not 2160p
     ])
     def test_but_not_without_all_of_it(self, kbit, profile, codec, height):
         width = "3840" if height == "2160" else "1920"
         assert not convert.remux_reason(False, codec, width, height, "23.976",
                                         kbit, profile, "smpte2084")
+
+    @pytest.mark.parametrize("profile", ["", "8"])
+    def test_any_2160p_hevc_at_a_very_generous_bitrate(self, profile):
+        # HDR10 alone, or 8.1 whose "(old)" profile 7 is gone.
+        assert convert.remux_reason(False, "hevc", "3840", "2160", "23.976",
+                                    "88000", profile, "smpte2084")
 
     def test_sdr_h264_1080p_at_a_very_generous_bitrate(self):
         assert convert.remux_reason(False, "h264", "1920", "1080", "23.976",
