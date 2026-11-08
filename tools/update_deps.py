@@ -47,7 +47,6 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import contextlib
-import fcntl
 import functools
 import hashlib
 import json
@@ -921,6 +920,7 @@ def apply_all(rows: list[Row]) -> None:
 @contextlib.contextmanager
 def single_run():
     """One update at a time: two would race each other's renames."""
+    import fcntl  # POSIX only; imported here so the module loads anywhere
     runtime = os.environ.get("XDG_RUNTIME_DIR") or tempfile.gettempdir()
     with open(Path(runtime) / "medialib-update-deps.lock", "w") as lock:
         try:
