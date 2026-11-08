@@ -24,6 +24,7 @@ given (one level deep, not the whole tree):
 - sorts loose films into a folder each, with extras where Plex looks for them
 - cleans folder, film and subtitle names
 - **transcodes lossless audio to Opus**, leaving lossy tracks as they are
+- **finds commentaries the file does not flag** and flags them before anything else reads the tracks ([details](#commentaries-the-file-does-not-flag))
 - transcribes commentary tracks with whisper, and names numbered ones after who speaks in them (dvdcompare.net)
 - **remuxes each film once into an improved copy**, keeping the original as `<name> (old).mkv` ([details](#what-a-full-ingest-does))
 - tags names with the IMDb id (needs `tmdbApiKey`), looks up chapters, and downloads missing subtitles (needs an OpenSubtitles or SubDL login)
@@ -186,6 +187,32 @@ transcribed **in the language it is spoken in**:
 | English | `<name>.en.srt` |
 | another supported language | the native `<name>.xx.srt` *and* an English translation |
 | anything else | only the English translation |
+
+### Commentaries the file does not flag
+
+A disc's commentary often arrives with neither the flag nor a name that says
+what it is — "English", "Stereo", or no name at all. Left like that it is not
+transcribed, and the remux may even drop it as a lesser copy of the main mix.
+
+So before anything reads the tracks, each film still to be improved has its
+mono and stereo audio tracks after the first one listened to: three minutes,
+in three windows from the middle of the film, of each of them and of the
+film's first audio track, heard by whisper. A commentary gives itself away
+twice over:
+
+| Signal | A commentary | A downmix, the original mono, a dub, a score |
+| --- | --- | --- |
+| how much of it is speech | far more than the film: it is talked over end to end | about as much as the film, or none at all |
+| how many of its words the film's track also has | few: the dialogue is ducked under the commentators | most of them — except a dub, which is in another language |
+
+A track both say so of is flagged as a commentary and named "Commentary N" in
+place, which the commentary naming later replaces with who speaks in it. A
+track only one says so of is left as it is and listed at the end of the run, to
+be listened to. A track flagged for the visually impaired, or named as an audio
+description, a score or music, is not listened to at all.
+
+This needs whisper, so it runs only when the transcription does, and only on
+films that have not been improved yet.
 
 ### The remux
 

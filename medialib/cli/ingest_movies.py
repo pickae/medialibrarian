@@ -252,6 +252,11 @@ USAGE_TAIL = """
     rather than a dry run
     takes a track for a commentary by its mkv flag or by its name, in any of the
     supported languages (\"Audiokommentar\" counts as much as \"Audio Commentary\")
+    takes a stereo or mono track after the first audio track for a commentary
+    the file does not flag when it is far more speech than the film AND its
+    words are mostly not the film's (three minutes of each, heard by whisper),
+    flags it and names it \"Commentary N\" in place before the remux - a track
+    only one of the two says so of is left as it is and listed at the end
     reads each commentary's language from its track name or mkv language tag, and
     lets whisper detect it when neither says. English gives one \"<name>.en.srt\",
     another supported language a native \"<name>.xx.srt\" plus a translated
@@ -514,7 +519,8 @@ class Track:
     """One track of a Matroska file, as mkvmerge reports it."""
 
     FIELDS = ("id", "type", "codec", "channels", "language", "name",
-              "commentary", "default", "forced", "dimensions")
+              "commentary", "default", "forced", "dimensions",
+              "visual_impaired")
 
     # FIELDS is what __init__ sets; these declare what it sets them TO. Every
     # one is text, and an absent field is the empty string rather than a
@@ -531,6 +537,9 @@ class Track:
     # A video track's "<width>x<height>", which is what says whether the file
     # came off a DVD, a Blu-ray or a 4K disc.
     dimensions: str
+    # An audio description's flag, which says the track is not a commentary
+    # however much more of it is speech than the film.
+    visual_impaired: str
 
     def __init__(self, **fields) -> None:
         for field in self.FIELDS:
@@ -593,7 +602,9 @@ def _identify(movie: str) -> list:
             commentary=_as_text(properties.get("flag_commentary")),
             default=_as_text(properties.get("default_track")),
             forced=_as_text(properties.get("forced_track")),
-            dimensions=_as_text(properties.get("pixel_dimensions"))))
+            dimensions=_as_text(properties.get("pixel_dimensions")),
+            visual_impaired=_as_text(
+                properties.get("flag_visual_impaired"))))
     return tracks
 
 
