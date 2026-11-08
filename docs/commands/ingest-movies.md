@@ -12,7 +12,7 @@ commentaries and the chapters the disc had.
 | **Writes** | in place: the improved `.mkv`, `.srt` sidecars and `.opus` tracks; the sweeps also write lists under `logs/ingest-movies/` |
 | **Input** | changed — that is the job; each remuxed original is kept as `<name> (old).mkv` |
 | **Reruns** | a film that already has its `(old)` backup is not remuxed again |
-| **Network** | TMDb, OpenSubtitles, SubDL, IMDb's title lists, ChapterDB and dvdcompare.net — the last two a few seconds apart, with some jitter |
+| **Network** | TMDb, OpenSubtitles, SubDL, IMDb's title lists, ChapterDB and dvdcompare.net — the last two a few seconds apart, with some jitter — and your own Plex server |
 
 ## Default behavior
 
@@ -27,6 +27,7 @@ given (one level deep, not the whole tree):
 - transcribes commentary tracks with whisper, and names numbered ones after who speaks in them (dvdcompare.net)
 - **remuxes each film once into an improved copy**, keeping the original as `<name> (old).mkv` ([details](#what-a-full-ingest-does))
 - tags names with the IMDb id (needs `tmdbApiKey`), looks up chapters, and downloads missing subtitles (needs an OpenSubtitles or SubDL login)
+- last, **compares each film with the copy your Plex library already has**, if any ([details](#plex-comparison--p))
 
 Each phase can also be run on its own, over a whole library: see
 [single-task sweeps](#single-task-sweeps).
@@ -36,7 +37,7 @@ Each phase can also be run on its own, over a whole library: see
 [Naming films](#naming-films--t) · [Feeding ids back](#feeding-ids-back--i) ·
 [Subtitles](#subtitles--s) · [Commentary transcripts](#commentary-transcripts--a) ·
 [Commentary names](#commentary-names--n) · [Chapters](#chapters--c) ·
-[Several folders](#several-folders)
+[Plex comparison](#plex-comparison--p) · [Several folders](#several-folders)
 
 ## Settings
 
@@ -48,6 +49,8 @@ These are read from the environment:
 | `openSubtitlesUser`, `openSubtitlesPassword` | downloading missing subtitles from OpenSubtitles.org, the first source | the other sources below are still asked, and the run says OpenSubtitles was skipped |
 | `openSubtitlesComUser`, `openSubtitlesComPassword` | asking OpenSubtitles.com second — a separate service, with free accounts of its own | it is not asked |
 | `subDlApiKey` | asking SubDL third — the key a free account at subdl.com gets | it is not asked |
+| `plexUrl` | the Plex server the films are compared with | the server on this machine, `http://localhost:32400` |
+| `plexToken` | that server's X-Plex-Token | the server is asked without one, which it refuses unless told to trust this address; the comparison is then skipped |
 
 With none of the three set, no subtitle is downloaded; the ones already beside
 a film are still tested.
@@ -67,6 +70,7 @@ pointed at a library. A full ingest reads only the one level it always did.
 | [`-a`](#commentary-transcripts--a) | transcribing commentary tracks | writes as it goes | refused | transcripts beside the films | — |
 | [`-n`](#commentary-names--n) | naming numbered commentary tracks | dry run | names the tracks | `logs/ingest-movies/ingest-movies-commentarynames-<folder>.txt` | `-a` |
 | [`-c`](#chapters--c) | chapters from the ChapterDB archive | writes as it goes | refused | — | `-tw` |
+| [`-p`](#plex-comparison--p) | comparing with the Plex library | changes nothing | refused | — | `-tw` |
 
 `-s`, `-a`, `-n` and `-c` take the films in name order and open each with
 `[n/total] <film>`, its place in the folder, so a film nothing is done to still
@@ -77,7 +81,8 @@ later and names its own transcript, and so does each chapter write.
 **`-w` on its own is refused.** Without `-t`, `-i`, `-s` or `-n` there is no dry
 run to carry out, and the run it would otherwise start is a full ingest. `-a`
 and `-c` refuse it as well: the transcription and the chapter lookup are not dry
-runs, so there is nothing for `-w` to carry out.
+runs, so there is nothing for `-w` to carry out. Nor is `-p`, which changes
+nothing.
 
 Following those dependencies, a library is brought up to date in this order:
 
@@ -88,6 +93,7 @@ ingest-movies -sw ~/Films     # subtitles, now searched for by id
 ingest-movies -a  ~/Films     # transcribe the commentaries
 ingest-movies -nw ~/Films     # name them from those transcripts
 ingest-movies -c  ~/Films     # chapters for the tagged films
+ingest-movies -p  ~/Films     # which of them the Plex library already has
 ```
 
 ## What a full ingest does
@@ -654,6 +660,52 @@ next film is looked up, so the lookup never waits on a write. The archive is
 asked about three seconds apart, give or take one. The archive takes no new
 sets, so a recent film will not be in it; if it stops answering, the rest of
 the run does without it. Needs `curl`.
+
+## Plex comparison (`-p`)
+
+**Is the film already in the library, and which copy is better?** The full
+ingest asks this last, once each film is the file it will stay; `-p` asks it
+alone, of every film under the folders given. The server is `plexUrl`, or else
+the one on this machine; the library is read once per run. A film is found by
+its id tag — Plex keeps the IMDb and TMDb ids of every film it matched — or, for
+one the tagging could not name, by its title and year. A copy in the film's own
+folder is the film itself, or a version kept beside it on purpose, and does not
+count.
+
+A film not in the library says so. One that is gets the library's file printed,
+so you do not have to search for it, and a verdict:
+
+| Verdict | When |
+| --- | --- |
+| the new file is better | it wins on something and loses on nothing |
+| the existing file is better | the other way round |
+| equivalent | neither wins on anything |
+| **MIXED** | each has something the other lacks — these want you, and the run lists them again at its end |
+| **different version** | the edition tags differ, or the lengths differ by a minute or more (a 4% difference is called out as a PAL speed-up) |
+
+What is weighed: the resolution (2160p, 1080p, 720p, SD — by width as much as
+height, so a scope film's 1920×800 is 1080p), the HDR (Dolby Vision over HDR10+
+over HDR10 over SDR), the soundtrack of each language (channels, then object
+audio, then lossless), a language only one of them has, the number of
+commentaries, the other bonus audio by kind (isolated score, music and effects,
+audio description, interview) and the chapters (named over numbered over
+none). **Subtitles are not weighed.** Whatever either file wins is listed
+under the verdict.
+
+**A few seconds apart is the same cut.** A length difference under a minute is
+most often a studio logo more or less in front of the film. The offset the
+library file's tracks then need — to be muxed into the new file with
+`mkvmerge --sync -1:<ms>` in front of it — is measured on one soundtrack both
+share, at a quarter, half and three quarters of the film: the loudness of the
+two is matched first, which survives a different mix or codec, and then the
+waveform places it to the millisecond. Three offsets that agree to within 40 ms
+are one offset, and printed as that; three that do not mean the cuts differ
+inside the film, and are printed as a warning. The offset is measured whenever
+the existing file has something worth carrying over, or the lengths differ by
+half a second or more. Needs `curl`, `mkvmerge`, `mediainfo`, `ffprobe`,
+`ffmpeg`, and numpy for the offset.
+
+Nothing is changed, on disk or on the server.
 
 ## Several folders
 

@@ -145,6 +145,12 @@ c |  | chapters only: the chapter lookup and nothing else - walks the
                   a few seconds apart, and each film is written while the next
                   is looked up. Not a dry run, and -w has no part in it. Best
                   run after -tw: an untagged folder's title is only a guess.
+p |  | Plex comparison only: walks the whole tree the way -t does and
+                  looks every film up in the Plex library - by its id tag,
+                  by its title and year where it has none - saying where the
+                  library already keeps it and which of the two is better
+                  (see "Plex comparison" below). Changes nothing, and -w has
+                  no part in it. Best run after -tw.
 w |  | with -t or -i, actually perform the renames instead of printing
                   them; with -s, sync, throw out and download; with -n, name
                   the commentaries. On its own it is a usage error rather than
@@ -164,10 +170,10 @@ i | <file> | the hand-written id list filled in and read BACK: tagging and
                   given into that one file."""
 
 OPT_VARS = ("f:fragmentsOverride a:commentaryOnly t:tagsOnly s:subtitlesOnly "
-            "n:commentaryNames c:chaptersOnly w:writeTags i:idList")
+            "n:commentaryNames c:chaptersOnly p:plexOnly w:writeTags i:idList")
 OPT_COLUMN = 18
 OPT_LONG = ("f:fragments a:commentary t:tags-only s:subtitles-only "
-            "n:commentary-names c:chapters w:write i:ids")
+            "n:commentary-names c:chapters p:plex w:write i:ids")
 
 USAGE_TAIL = """
 
@@ -240,6 +246,27 @@ USAGE_TAIL = """
     a film whose chapters have names is left alone
     writes them in place with mkvpropedit, replacing every chapter the film
     had, so a film never carries two sets - and is never remuxed for them
+
+    Plex comparison
+    ---------------
+    -p does this phase and nothing else
+    last, looks each film up in the Plex library (plexUrl, else the server on
+    this machine at localhost:32400, asked with plexToken) by the id tag the
+    tagging gave it, or by its title and year where it has none
+    a film not there is said to be new; one that is has the library's files
+    printed, and the two compared on resolution, HDR, the soundtracks per
+    language (channels, object audio, lossless), the commentaries, the other
+    bonus audio (isolated score, audio description, ...) and the chapters -
+    never the subtitles
+    the verdict: the new file better, the library's better, the two
+    equivalent, or MIXED - each has something the other lacks, listed again at
+    the end since those want a person to decide
+    a DIFFERENT VERSION where the edition tags differ or the lengths differ by
+    a minute or more; a few seconds is a logo more or less in front of the
+    same cut, and the offset the library file's tracks need to be muxed into
+    the new one is measured on the audio at three points of the film - which
+    also catches a cut that differs inside the film
+    changes nothing, on disk or on the server
 
     Tags & commentary
     ------------------

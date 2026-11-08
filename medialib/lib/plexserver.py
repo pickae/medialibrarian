@@ -21,7 +21,8 @@ from typing import NamedTuple
 from medialib.lib import tmdblookup
 from medialib.lib.filmmatch import Film
 
-__all__ = ["PlexError", "Server", "Movie", "Library", "Wanted", "from_environment"]
+__all__ = ["PlexError", "Server", "Movie", "Copy", "Library", "Wanted",
+           "from_environment", "local"]
 
 # The identifier a scrobble or a rating names the library by - the one every
 # Plex server answers to for its own libraries.
@@ -73,6 +74,18 @@ class Movie(NamedTuple):
     section: str
 
 
+class Copy(NamedTuple):
+    """One version of a film in a Plex library - Plex merges several into one
+    film - with its edition and the file or files it is kept in (several for
+    a film split into parts)."""
+
+    key: str
+    film: Film
+    section: str
+    edition: str
+    files: tuple
+
+
 class Wanted(NamedTuple):
     """A film on the account's watchlist: Plex's catalogue id, and the film."""
 
@@ -92,9 +105,10 @@ class Server:
         lines = ["url = " + tmdblookup._config_value(address), "get",
                  "request = " + tmdblookup._config_value(method),
                  "fail", "silent", "show-error", "max-time = 120",
-                 "header = " + tmdblookup._config_value(
-                     "X-Plex-Token: " + self.token),
                  'header = "Accept: application/xml"']
+        if self.token:
+            lines.append("header = " + tmdblookup._config_value(
+                "X-Plex-Token: " + self.token))
         for key, value in params:
             lines.append("data-urlencode = "
                          + tmdblookup._config_value("%s=%s" % (key, value)))
@@ -171,6 +185,22 @@ class Server:
                 days = plays.get(movie.key)
                 found.append(movie._replace(film=movie.film._replace(
                     dates=tuple(sorted(days)))) if days else movie)
+        return found
+
+    def copies(self) -> list[Copy]:
+        """Every version of every film in the movie libraries, with the files
+        it is kept in."""
+        found: list[Copy] = []
+        for key, title in self.movie_sections():
+            for video in self._ask("/library/sections/%s/all" % key,
+                                   (("type", "1"), ("includeGuids", "1"))
+                                   ).iter("Video"):
+                movie = _movie(video, title)
+                for media in video.iter("Media"):
+                    found.append(Copy(movie.key, movie.film, title,
+                                      video.get("editionTitle", ""),
+                                      tuple(part.get("file", "") for part
+                                            in media.iter("Part"))))
         return found
 
     def _plays(self, section: str, since: str = "") -> dict[str, set]:
@@ -315,6 +345,18 @@ def _movie(video: ET.Element, section: str) -> Movie:
                 aliases=(original,) if original else (), rating=rating)
     played = int(video.get("viewCount", "0") or 0) > 0
     return Movie(video.get("ratingKey", ""), film, played, section)
+
+
+# Where a Plex Media Server answers on the machine it runs on.
+LOCAL = "http://localhost:32400"
+
+
+def local() -> Server:
+    """The server ``plexUrl`` names, or else the one on this machine - asked
+    with ``plexToken`` where it is set, and without a token where it is not,
+    which a server lets through only from an address it was told to trust."""
+    return Server(os.environ.get("plexUrl", "") or LOCAL,
+                  os.environ.get("plexToken", ""))
 
 
 def from_environment(account: str = OWNER) -> Server | None:
