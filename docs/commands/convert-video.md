@@ -50,6 +50,13 @@ measured.
 | `-l <level>` | names the quality level yourself, and turns the per-file bias off | [Quality and grain](#quality-and-grain) |
 | `-g <level\|off>` | names the film grain yourself, or turns it off | [Quality and grain](#quality-and-grain) |
 | `-t [percent]` | converts only what has room to save | [Only what has room to save](#only-what-has-room-to-save--t) |
+| `-k` | keeps every track except the video as the source has it (below) | — |
+
+**`-k` keeps everything but the picture.** The audio is not re-encoded, and the
+finished video is combined with the source's audio, subtitles, attachments,
+chapters and tags by `mkvmerge`, which keeps each track's name, language and flags
+(commentary, forced, …) unchanged. It needs `mkvmerge` and is refused together
+with `-a` or `-b`. `ingest-movies -r` uses it.
 
 ## Hardware and parallelism
 

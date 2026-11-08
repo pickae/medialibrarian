@@ -17,6 +17,7 @@ import threading
 
 from medialib import commands
 from medialib.cli import ingest_movies as rules
+from medialib.cli import ingest_movies_convert as convertphase
 from medialib.cli import ingest_movies_lanes as lanes
 from medialib.cli import ingest_movies_plex as plexphase
 from medialib.cli.ingest_movies import log
@@ -523,26 +524,7 @@ def _already_improved(movie: str) -> bool:
     rather than the name it has: it is the one file the tagging leaves alone, so
     it still carries the version name its film was imported under.
     """
-    directory, name = os.path.split(movie)
-    stem = os.path.splitext(name)[0]
-    if os.path.isfile(os.path.join(directory, stem + plexnames.OLD_SUFFIX)):
-        return True
-
-    base, tag = plexnames.untagged_base(os.path.basename(
-        directory.rstrip("/")))
-    for other in rules._names_in(directory):
-        if not other.endswith(plexnames.OLD_SUFFIX):
-            continue
-        kept = other[:-len(plexnames.OLD_SUFFIX)]
-        # Guarded, or a stray "(old)" belonging to nothing would read as the
-        # plain film's copy: an unreadable stem gives no edition and no part,
-        # and that is exactly the plain film's name.
-        if not kept.startswith(base):
-            continue
-        if plexnames.plex_stem(base, tag,
-                               *plexnames.read_stem(base, kept)) == stem:
-            return True
-    return False
+    return bool(convertphase.kept_original(movie))
 
 
 def check_folders(root: str) -> None:
@@ -708,6 +690,21 @@ def main(argv: list, program: str = "ingest-movies",
             "two runs, not one. Tag first\n(-tw), so the films are looked up by "
             "their ids, then run -p.")
         return 1
+
+    # -r is the last phase of a full ingest, and each of these is a run of one
+    # phase of its own that never reaches it.
+    if result.values.get("convertRemuxes"):
+        for letter, key in (("a", "commentaryOnly"), ("n", "commentaryNames"),
+                            ("c", "chaptersOnly"), ("p", "plexOnly"),
+                            ("s", "subtitlesOnly"), ("t", "tagsOnly"),
+                            ("i", "idList")):
+            if result.values.get(key):
+                clioptions.refuse_usage(
+                    declaration,
+                    "-r converts the remuxes at the end of a full ingest, and "
+                    "-%s does one phase\nof its own: give the folders to each "
+                    "of them in turn." % letter)
+                return 1
 
     script_dir = script_dir or commands.script_dir()
 
@@ -882,7 +879,8 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
                 ffsubsync_quality=ffsubsync_quality, long_names=long_names,
                 unfixed_movies=unfixed_movies,
                 unsure_commentaries=unsure_commentaries, disk_turns=disk_turns,
-                scratch_headroom=0)
+                scratch_headroom=0,
+                convert_remuxes=bool(result.values.get("convertRemuxes")))
 
     listed = dict(zip(roots, names, strict=True))
     try:
@@ -2197,6 +2195,10 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
     rules.cleanup(root)
     log("Phase: muxing non-Matroska videos into Matroska")
     rules.mkv_mux(root)
+    # Before the cleaning takes the word out of the names: the films are known
+    # again at the end by what the renames keep.
+    named_remuxes = (convertphase.named_remuxes(root)
+                     if getattr(state, "convert_remuxes", False) else set())
     log("Phase: sorting loose movies into subfolders")
     rules.movies_into_subfolders(root)
     log("Phase: normalising file extensions to lower case")
@@ -2296,6 +2298,15 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
     _commentary_name_phase(state, root, name, ahead)
     _chapter_phase(root, ahead)
     _plex_phase(root)
+
+    # Last of all, once each film is the file it will stay: its converted copy
+    # carries its tracks, names and chapters as they are now, and is written
+    # beside it under the name the tagging gave it.
+    if getattr(state, "convert_remuxes", False):
+        log("Phase: converting the remuxes")
+        convertphase.convert_remuxes(root, named_remuxes, state.ram_root,
+                                     state.script_dir, log)
+        safety.exit_if_aborted()
 
     rules.cleanup(root)
     log("Phase: checking for folders without a movie")

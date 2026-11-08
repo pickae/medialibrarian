@@ -128,11 +128,18 @@ t | [percent] | Test each source before encoding it, and convert only the ones
                   converts anything that can save 30%), and -t 0 keeps only the
                   starved-source check. Audio is left out of the comparison.
                   Off by default: every source is converted.
+k |  | Keep every track but the video exactly as the source has it:
+                  the audio is not re-encoded, and the finished video is
+                  combined with the source's audio, subtitles, attachments,
+                  chapters and tags by mkvmerge, which carries over every
+                  track's name, language and flags the way it found them.
+                  Needs mkvmerge. Not with -a or -b, which say how the audio
+                  is re-encoded.
 """
 
 OPT_LONG = ("h:help j:cores p:profile a:audio-profile b:audio-bitrate "
             "e:nvenc-engines l:quality m:max-resolution u:upscale c:crop "
-            "f:fast-decode g:grain t:test")
+            "f:fast-decode g:grain t:test k:keep-tracks")
 
 USAGE_TAIL = r"""
 
@@ -1217,6 +1224,9 @@ class Settings:
         self.grain_probe_wanted = False
         self.required_saving = DEFAULT_BITRATE_SAVING
         self.test_source_bitrate = False
+        # -k: the audio left alone, and every track but the video taken from
+        # the source by mkvmerge rather than remapped by ffmpeg.
+        self.keep_tracks = False
         self.hardware_encode = False
         self.nvenc_engines = 1
         self.nvenc_tune = NVENC_TUNE_WANTED

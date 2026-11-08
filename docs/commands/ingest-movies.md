@@ -29,6 +29,7 @@ given (one level deep, not the whole tree):
 - **remuxes each film once into an improved copy**, keeping the original as `<name> (old).mkv` ([details](#what-a-full-ingest-does))
 - tags names with the IMDb id (needs `tmdbApiKey`), looks up chapters, and downloads missing subtitles (needs an OpenSubtitles or SubDL login)
 - last, **compares each film with the copy your Plex library already has**, if any ([details](#plex-comparison--p))
+- with `-r`, after all of that, **converts the remuxes** and writes each converted copy beside its film ([details](#remux-conversion--r))
 
 Each phase can also be run on its own, over a whole library: see
 [single-task sweeps](#single-task-sweeps).
@@ -38,7 +39,8 @@ Each phase can also be run on its own, over a whole library: see
 [Naming films](#naming-films--t) · [Feeding ids back](#feeding-ids-back--i) ·
 [Subtitles](#subtitles--s) · [Commentary transcripts](#commentary-transcripts--a) ·
 [Commentary names](#commentary-names--n) · [Chapters](#chapters--c) ·
-[Plex comparison](#plex-comparison--p) · [Several folders](#several-folders)
+[Plex comparison](#plex-comparison--p) · [Remux conversion](#remux-conversion--r) ·
+[Several folders](#several-folders)
 
 ## Settings
 
@@ -733,6 +735,37 @@ half a second or more. Needs `curl`, `mkvmerge`, `mediainfo`, `ffprobe`,
 `ffmpeg`, and numpy for the offset.
 
 Nothing is changed, on disk or on the server.
+
+## Remux conversion (`-r`)
+
+**A full ingest with `-r` converts the remuxes as its last step.** A film counts
+as a remux when any of these holds:
+
+| Test | Read from |
+| --- | --- |
+| its name, or a folder above it, contains `remux` | the name it arrived under, before the cleaning removes the word. The film is recognised again at the end by its inode, which renames do not change |
+| 2160p HEVC with dual-layer Dolby Vision profile 7, at a generous bitrate (twice what [`convert-video -t`](convert-video.md#only-what-has-room-to-save--t) counts as adequate) | the original kept as `(old)`, because the remux has turned profile 7 into 8.1 by then |
+| SDR 1080p H.264 at a very generous bitrate (four times adequate: about 20 Mbit/s for 16:9) | the same |
+
+The remuxes of a folder go to **one** `convert-video -k` run, with convert-video's
+default video settings. Each finished video is combined with the audio,
+subtitles, attachments, chapters and tags of the ingested film, unchanged, and the
+result is written beside the film:
+
+    Film (2020) {imdb-tt0000000}.mkv
+    Film (2020) {imdb-tt0000000} {edition-AV1}.mkv     <- the converted copy
+
+The copy is named as an [edition](#the-plex-names), so Plex shows the two files as
+one film with a version picker. A film that already has an edition gets `AV1`
+added to it (`{edition-Director's Cut AV1}`), and a split film's part token stays
+last, so the converted parts stack.
+
+The film itself is not changed. Later phases and later runs skip the copy in the
+same way they skip the `(old)` original: it is not tagged, transcribed, remuxed or
+fetched subtitles for, and a later `-t` rename does not rename it. Converting the
+same remux again is left to convert-video: a copy as long as its film is skipped,
+and an unfinished one is redone. `-r` is refused alongside any of the
+single-task sweeps.
 
 ## Several folders
 
