@@ -11,8 +11,6 @@ import pytest
 
 from medialib.lib import plexcompare as pc
 
-numpy = pytest.importorskip("numpy")
-
 
 def _audio(language="eng", channels=6, lossless=False, objects=False, name="",
            index=0):
@@ -128,6 +126,7 @@ class TestTheOffset:
         assert not pc.Offset((1.0, 2.0, 3.0), (5000, None, None)).consistent
 
     def test_the_lag_is_found_to_the_sample(self):
+        numpy = pytest.importorskip("numpy")
         rng = numpy.random.default_rng(1)
         haystack = rng.standard_normal(4000)
         lag, score = pc.best_lag(haystack[1234:1834], haystack)
@@ -144,6 +143,7 @@ class TestTheOffset:
 def test_a_logo_in_front_is_measured(tmp_path):
     """The same noise twice, one copy with three and a half seconds of silence
     in front of it: the old file's tracks are that much early."""
+    pytest.importorskip("numpy")
     old = tmp_path / "old.mka"
     new = tmp_path / "new.mka"
     subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i",
