@@ -23,6 +23,7 @@ from medialib.lib import (
     chapterdb,
     cleannamesindividually,
     clioptions,
+    commentarydetection,
     commentarynames,
     commentarytranscription,
     diskturn,
@@ -85,6 +86,9 @@ class Run:
     ffsubsync_quality: str
     long_names: tmdblookup.LongNames
     unfixed_movies: list
+    # The audio tracks that might be a commentary the file does not call one,
+    # but were not sure enough to be flagged: one line each, for the recap.
+    unsure_commentaries: list
     # Where the disks' turns are shared with the workers (see diskturn), and
     # the RAM a remux leaves free for other writers into the scratch. Both are
     # read with a default: a Run made for one phase has neither.
@@ -821,6 +825,7 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
     # end: the name says the film cannot be told from its folder, and the film
     # is what someone has to look at.
     unfixed_movies: list = []
+    unsure_commentaries: list = []
 
     # Named above the phases a Ctrl+C can cut short, so an ingest stopped halfway
     # still recaps the renames it held back instead of leaving them buried in
@@ -830,6 +835,7 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
         durationcheck.report()
         _report_long_names(long_names)
         _report_unfixed_movies(unfixed_movies)
+        _report_unsure_commentaries(unsure_commentaries)
 
     safety.set_run_footer(recap)
 
@@ -852,7 +858,8 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
                 fragments_file=fragments_file, whisper=whisper,
                 whisper_said=whisper_said,
                 ffsubsync_quality=ffsubsync_quality, long_names=long_names,
-                unfixed_movies=unfixed_movies, disk_turns=disk_turns,
+                unfixed_movies=unfixed_movies,
+                unsure_commentaries=unsure_commentaries, disk_turns=disk_turns,
                 scratch_headroom=0)
 
     listed = dict(zip(roots, names, strict=True))
@@ -1762,6 +1769,98 @@ def _report_unfixed_movies(movies: list) -> None:
         sys.stderr.write("  " + movie + "\n")
 
 
+def _detect_commentaries(state, root: str) -> None:
+    """Every film still to be improved, its suspect audio tracks listened to
+    (see :mod:`medialib.lib.commentarydetection`), and each one found to be a
+    commentary flagged and named "Commentary N" in place - a header edit, so
+    the remux, the transcription and the commentary naming after it take it
+    for the commentary it is. A film already improved was looked at by the run
+    that improved it, and is not listened to again."""
+    for movie in main_movies(root):
+        if safety.abort_requested():
+            return
+        tracks = rules._identify(movie)
+        types = [track.type for track in tracks]
+        audio = [commentarydetection.AudioTrack(
+                     track.id, rules.audio_stream_index(position, types),
+                     track.channels,
+                     "" if track.name == "null" else track.name,
+                     track.is_commentary, track.visual_impaired == "true")
+                 for position, track in enumerate(tracks, start=1)
+                 if track.is_audio]
+        suspects = commentarydetection.suspects(audio)
+        if not suspects:
+            continue
+        while state.whisper_said:
+            log(state.whisper_said.pop(0))
+        log("Listening for commentaries: " + movie)
+        measures, why = commentarydetection.probe(movie, audio[0], suspects,
+                                                  state.whisper)
+        if why:
+            log("  WARNING: could not listen to the audio tracks, left as "
+                "they are: " + why)
+            continue
+        found = []
+        for track in suspects:
+            said = "audio track %s (%s)" % (track.id, track.name or "no name")
+            verdict = commentarydetection.judge(measures[audio[0].id],
+                                                measures[track.id])
+            if verdict.kind == commentarydetection.COMMENTARY:
+                found.append(track.id)
+                log("  A commentary: %s - %s" % (said, verdict.why))
+            elif verdict.kind == commentarydetection.UNSURE:
+                log("  Maybe a commentary, left as it is: %s - %s"
+                    % (said, verdict.why))
+                state.unsure_commentaries.append(
+                    "%s: %s - %s" % (movie, said, verdict.why))
+            else:
+                log("  Not a commentary: %s - %s" % (said, verdict.why))
+        if found:
+            _flag_commentaries(movie, tracks,
+                               commentarydetection.commentary_names(audio,
+                                                                    found))
+
+
+def _flag_commentaries(movie: str, tracks: list, names: dict) -> None:
+    """The tracks ``names`` holds flagged as commentaries and given its
+    names, in place, the film's time stamp kept."""
+    arguments = []
+    for position, track in enumerate(tracks, start=1):
+        if track.id in names:
+            arguments += ["--edit", "track:%d" % position,
+                          "--set", "name=" + names[track.id],
+                          "--set", "flag-commentary=1"]
+            log('  track %s "%s" -> "%s"' % (track.id, track.name,
+                                              names[track.id]))
+    try:
+        original = os.stat(movie).st_mtime
+    except OSError:
+        original = None
+    failure = rules._run_capture(["mkvpropedit", movie] + arguments)
+    if failure:
+        log("  WARNING: mkvpropedit could not flag the commentaries: "
+            + failure.replace("\n", " | "))
+        return
+    if original is not None:
+        try:
+            os.utime(movie, (original, original))
+        except OSError:
+            pass
+
+
+def _report_unsure_commentaries(lines: list) -> None:
+    """The audio tracks that may be a commentary but were left as they are,
+    named on stderr at the end of a full ingest, beside the other things a
+    person has to look at. An empty list prints nothing."""
+    if not lines:
+        return
+    sys.stderr.write(
+        "\nMaybe a commentary, left unflagged: only one of the two signals\n"
+        "said so. Listen, and flag the track by hand if it is one.\n")
+    for line in lines:
+        sys.stderr.write("  " + line + "\n")
+
+
 def _write_unfixed_movies(script_dir: str, movies: list) -> None:
     """The movies a -a run left untranscribed because their name carried no dot
     before its extension, one absolute path per line. An empty run writes
@@ -2094,6 +2193,16 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
     log("Phase: refreshing mkv tags and track flags")
     rules.update_tags(root)
     rules.cleanup(root)
+
+    # Before anything reads which tracks are commentaries: the transcription,
+    # the surround ladder that would drop one as a lesser soundtrack, and the
+    # research that asks the disc database about them all go by the flag.
+    if subtitle_work:
+        log("Phase: listening for commentaries the files do not flag")
+        _detect_commentaries(state, root)
+    else:
+        log("Phase: listening for commentaries the files do not flag - "
+            "SKIPPED (no ffsubsync/pipx, see the warning at startup)")
 
     # The names have settled and every film is a Matroska file, which is all
     # the chapter archive and the disc database are asked by: they are asked
