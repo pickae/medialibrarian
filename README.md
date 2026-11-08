@@ -146,7 +146,9 @@ option can never change what a command you already type means.
 
 What a run does when one of these is missing, what does not work on a Mac yet,
 and which ffmpeg build a run picks are in
-[Requirements in detail](docs/requirements.md).
+[Requirements in detail](docs/requirements.md). How to keep all of them up to date with
+one command is under
+[Keeping them up to date](docs/requirements.md#keeping-them-up-to-date).
 
 ## Settings
 
