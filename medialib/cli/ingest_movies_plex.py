@@ -5,7 +5,8 @@ and, where the library has it already, said where, and held up against it
 
 Nothing is changed, on disk or on the server: what to keep, and what to carry
 from one file into the other, is left to whoever reads the verdicts. The mixed
-ones are the reason for the phase, and the closing count lists them again.
+ones are the reason for the phase. The closing count lists every film the
+library has, MIXED first, each with where its library copy is.
 """
 
 from __future__ import annotations
@@ -33,6 +34,11 @@ _VERDICTS = {
 }
 
 
+# The order the closing summary lists the duplicates in: the ones that need
+# work first.
+_INTEREST = ("mixed", "different", "new", "old", "same", "unread")
+
+
 def compare_roots(roots: list, log) -> int:
     """Every film under each folder of ``roots`` compared with the library;
     1 where the server could not be asked at all."""
@@ -50,8 +56,8 @@ def compare_roots(roots: list, log) -> int:
     tally: dict = {}
     for root in roots:
         for movie in films(root):
-            verdict = _compare_film(movie, index, copies, log)
-            tally.setdefault(verdict, []).append(movie)
+            verdict, places = _compare_film(movie, index, copies, log)
+            tally.setdefault(verdict, []).append((movie, places))
     _report(tally, log)
     return 0
 
@@ -107,12 +113,13 @@ def _found(movie: str, index: dict, copies: list) -> tuple:
     return elsewhere, how
 
 
-def _compare_film(movie: str, index: dict, copies: list, log) -> str:
+def _compare_film(movie: str, index: dict, copies: list, log) -> tuple:
+    """The film's verdict, and the files of its library copies."""
     log("Plex: %s" % os.path.basename(movie))
     found, how = _found(movie, index, copies)
     if not found:
         log("  not in the library (looked for %s)" % how)
-        return "absent"
+        return "absent", []
     base, _tag = plexnames.untagged_base(os.path.basename(os.path.dirname(movie)))
     edition, part = plexnames.read_stem(base, os.path.splitext(
         os.path.basename(movie))[0])
@@ -123,11 +130,12 @@ def _compare_film(movie: str, index: dict, copies: list, log) -> str:
         for path in copy.files:
             log("    " + path)
         verdicts.append(_against(movie, new, part, copy, log))
+    places = [path for copy in found for path in copy.files]
     # The film's own verdict: the most interesting of its copies'.
-    for verdict in ("mixed", "different", "new", "old", "same", "unread"):
+    for verdict in _INTEREST:
         if verdict in verdicts:
-            return verdict
-    return "unread"
+            return verdict, places
+    return "unread", places
 
 
 def _against(movie: str, new, part: str, copy, log) -> str:
@@ -211,5 +219,9 @@ def _report(tally: dict, log) -> None:
     log("Plex: " + ", ".join("%d %s" % (len(tally[verdict]), said)
                              for verdict, (_long, said) in _VERDICTS.items()
                              if verdict in tally))
-    for movie in tally.get("mixed", ()):
-        log("Plex: MIXED, needs a look: " + movie)
+    for verdict in _INTEREST:
+        for movie, places in tally.get(verdict, ()):
+            log("Plex: %s: %s" % ("MIXED, needs a look" if verdict == "mixed"
+                                  else _VERDICTS[verdict][1], movie))
+            for path in places:
+                log("Plex:   the library's: " + path)

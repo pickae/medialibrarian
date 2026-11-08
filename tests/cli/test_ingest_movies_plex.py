@@ -86,7 +86,8 @@ class TestTheVerdicts:
         assert "    existing has the better commentaries: 1 (Commentary) vs none" in said
         assert "    in sync: the existing file's tracks can be muxed in as they are" \
             in said
-        assert said[-1] == "Plex: MIXED, needs a look: " + str(new)
+        assert said[-2:] == ["Plex: MIXED, needs a look: " + str(new),
+                             "Plex:   the library's: " + str(old)]
 
     def test_an_untagged_film_is_found_by_title_and_year(self, library, tmp_path):
         new = _film(tmp_path / "in", "Lantern (2007)")
@@ -96,6 +97,8 @@ class TestTheVerdicts:
         _status, said = _compare(tmp_path, tmp_path / "in")
         assert any("found by title and year" in line for line in said)
         assert any("cannot be read from here" in line for line in said)
+        assert said[-2:] == ["Plex: not compared: " + str(new),
+                             "Plex:   the library's: /elsewhere/Lantern.mkv"]
 
     def test_the_copy_in_the_films_own_folder_is_not_a_duplicate(
             self, library, tmp_path):
