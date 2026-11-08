@@ -95,6 +95,12 @@ _YEAR_LEADING = re.compile(r"^\(?[12][0-9]{3}\)?")
 # offer Plex a second edition of every film that has one.
 OLD_SUFFIX = " (old).mkv"
 
+# The edition a remux converted by ingest-movies -r is written under, beside the
+# film it was converted from: Plex offers the two as one film with a picker. A
+# film that already names an edition has this added to it as its last word.
+CONVERTED_EDITION = "AV1"
+_CONVERTED = re.compile(r"\{edition-(?:[^{}]* )?" + CONVERTED_EDITION + r"\}")
+
 # The wrappers a hand-written version name tends to arrive in.
 _WRAPPERS = (("(", ")"), ("[", "]"))
 
@@ -243,14 +249,40 @@ def _fits_or_crops(name: str, wanted: str, tail: str,
 
 
 def is_kept_copy(path: str) -> bool:
-    """Whether ``path`` is the original an improved remux kept, rather than a
-    film to work on: a copy is finished, and anything asked of it would redo
-    what its living sibling has already had done.
+    """Whether ``path`` is the original an improved remux kept, or the
+    converted copy of a remux, rather than a film to work on: a copy is
+    finished, and anything asked of it would redo what its living sibling has
+    already had done.
 
     The suffix comes last, after every tag, so a copy made from an
     already-tagged film answers yes as readily as one made before the tagging.
     """
-    return os.path.basename(path).lower().endswith(OLD_SUFFIX)
+    return (os.path.basename(path).lower().endswith(OLD_SUFFIX)
+            or is_converted_copy(path))
+
+
+def is_converted_copy(path: str) -> bool:
+    """Whether ``path`` is the converted copy of a remux, by the edition
+    :func:`converted_stem` gave it - its video-only failsafe included."""
+    name = os.path.basename(path)
+    return name.lower().endswith(".mkv") and bool(_CONVERTED.search(name))
+
+
+def converted_stem(stem: str) -> str:
+    """The stem the converted copy of the film ``stem`` is written under: the
+    same name, with :data:`CONVERTED_EDITION` as its edition or as the last
+    word of the one it has. A stacking token stays last."""
+    match = EDITION_RE.search(stem)
+    if match:
+        return "%s{edition-%s %s}%s" % (stem[:match.start()], match.group(1),
+                                        CONVERTED_EDITION, stem[match.end():])
+    _edition, part, eaten = _markers(stem)
+    if part:
+        words = stem.split()
+        head = " ".join(words[:len(words) - eaten])
+        return "%s {edition-%s} %s" % (head, CONVERTED_EDITION,
+                                       " ".join(words[len(words) - eaten:]))
+    return "%s {edition-%s}" % (stem, CONVERTED_EDITION)
 
 
 def film_key(stem: str) -> str:

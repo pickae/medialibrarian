@@ -151,6 +151,16 @@ p |  | Plex comparison only: walks the whole tree the way -t does and
                   library already keeps it and which of the two is better
                   (see "Plex comparison" below). Changes nothing, and -w has
                   no part in it. Best run after -tw.
+r |  | also convert the remuxes, last of all: a film whose name says
+                  REMUX, a 2160p HEVC one carrying dual-layer Dolby Vision
+                  profile 7 at a generous bitrate, or an SDR 1080p H.264 one
+                  at a very generous bitrate (four times what it needs) is
+                  handed to convert-video, on its default video settings,
+                  with -k: the finished video is combined with every audio,
+                  subtitle, attachment and chapter of the ingested film as it
+                  is, and written beside it as "<film> {edition-AV1}.mkv", so
+                  Plex offers the two as one film. The film itself is left as
+                  it is. A full ingest only.
 w |  | with -t or -i, actually perform the renames instead of printing
                   them; with -s, sync, throw out and download; with -n, name
                   the commentaries. On its own it is a usage error rather than
@@ -170,10 +180,12 @@ i | <file> | the hand-written id list filled in and read BACK: tagging and
                   given into that one file."""
 
 OPT_VARS = ("f:fragmentsOverride a:commentaryOnly t:tagsOnly s:subtitlesOnly "
-            "n:commentaryNames c:chaptersOnly p:plexOnly w:writeTags i:idList")
+            "n:commentaryNames c:chaptersOnly p:plexOnly r:convertRemuxes "
+            "w:writeTags i:idList")
 OPT_COLUMN = 18
 OPT_LONG = ("f:fragments a:commentary t:tags-only s:subtitles-only "
-            "n:commentary-names c:chapters p:plex w:write i:ids")
+            "n:commentary-names c:chapters p:plex r:convert-remuxes w:write "
+            "i:ids")
 
 USAGE_TAIL = """
 

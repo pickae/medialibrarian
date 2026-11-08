@@ -104,6 +104,14 @@ Options:
                   converts anything that can save 30%), and -t 0 keeps only the
                   starved-source check. Audio is left out of the comparison.
                   Off by default: every source is converted.
+    -k, --keep-tracks
+                  Keep every track but the video exactly as the source has it:
+                  the audio is not re-encoded, and the finished video is
+                  combined with the source's audio, subtitles, attachments,
+                  chapters and tags by mkvmerge, which carries over every
+                  track's name, language and flags the way it found them.
+                  Needs mkvmerge. Not with -a or -b, which say how the audio
+                  is re-encoded.
     -v, --verbose Also say why each item was handled the way it was, and on a
                   failure print the tool's whole output rather than its last
                   lines.

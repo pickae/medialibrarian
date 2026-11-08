@@ -934,6 +934,8 @@ def mux_final(relative: str, directory: str, settings, output: str) -> int:
     in order.
     """
     source = os.path.join(settings.input_dir, relative)
+    if settings.keep_tracks:
+        return _mux_keeping_tracks(relative, directory, source, output)
     audio_args = rules.profile_args(rules.AUDIO_PROFILES,
                                     settings.audio_profile)
 
@@ -967,6 +969,42 @@ def mux_final(relative: str, directory: str, settings, output: str) -> int:
         toolcapture.report_failure(muxed)
         return muxed.returncode
     # The output gets the source's modification time, like the sibling scripts do.
+    try:
+        stamp = os.stat(source)
+        os.utime(output, (stamp.st_atime, stamp.st_mtime))
+    except OSError:
+        pass
+    return 0
+
+
+def _mux_keeping_tracks(relative: str, directory: str, source: str,
+                        output: str) -> int:
+    """-k's final output: the encoded video, then every other track of the
+    source exactly as it is there - audio, subtitles, attachments, chapters,
+    tags - combined by mkvmerge, which keeps each track's name, language and
+    flags where an ffmpeg remap would translate them.
+
+    Only the video comes from the encode, and only the source's video is left
+    out of it, so a Dolby Vision enhancement layer muxed as a track of its own
+    goes with the picture it belonged to.
+    """
+    argv = ["mkvmerge", "--quiet", "-o", output,
+            "--no-audio", "--no-subtitles", "--no-buttons", "--no-attachments",
+            "--no-chapters", "--no-track-tags", "--no-global-tags",
+            os.path.join(directory, "video.mkv"),
+            "--no-video", source]
+    def written(muxed) -> bool:
+        # mkvmerge exits 1 for warnings, with the file written.
+        return muxed.ok or (muxed.returncode == 1 and os.path.isfile(output))
+
+    log("Muxing: " + relative)
+    muxed = toolcapture.run(argv, relative, report=False)
+    # Retried once on a folder that has just gone, as the ffmpeg mux is.
+    if not written(muxed) and restore_output_folder(output):
+        muxed = toolcapture.run(argv, relative, report=False)
+    if not written(muxed):
+        toolcapture.report_failure(muxed)
+        return muxed.returncode or 1
     try:
         stamp = os.stat(source)
         os.utime(output, (stamp.st_atime, stamp.st_mtime))
@@ -1765,6 +1803,7 @@ def main(argv: list, program: str = "convert-video",
         crop_wanted="c" in result.given,
         fast_decode=result.values["videoFastDecode"] or "",
         test_source_bitrate="t" in result.given,
+        keep_tracks="k" in result.given,
         required_saving=saving[0])
     grain = result.values["videoGrain"] or ""
     engines_override = result.values["nvencEnginesOverride"] or ""
@@ -1776,6 +1815,18 @@ def main(argv: list, program: str = "convert-video",
     if ("a" not in result.given and settings.custom_audio_bitrate
             and settings.audio_profile == "opus"):
         settings.audio_profile = "opusCustom"
+
+    # -k leaves the audio as the source has it, which is what the passthrough
+    # profile already means to the audio encode: nothing is written for it.
+    # An -a or -b says how the audio is to be re-encoded, which -k forbids.
+    if settings.keep_tracks:
+        if "a" in result.given or "b" in result.given:
+            clioptions.refuse_usage(
+                declaration,
+                "-k keeps the source's audio exactly as it is, and -a and -b "
+                "say how to re-encode\nit: give one or the other.")
+            return 1
+        settings.audio_profile = "passthrough"
 
     try:
         video_args = rules.profile_args(rules.VIDEO_PROFILES,
@@ -1826,7 +1877,8 @@ def _settle_and_run(settings, program: str, video_args: str, grain: str,
     ffmpegselect.select_ffmpeg(
         lambda binary: ffmpeg_takes_profile(binary, video_args),
         prefer=rank)
-    if tooldeps.require_tools(program, ["ffmpeg", "ffprobe"]):
+    if tooldeps.require_tools(program, ["ffmpeg", "ffprobe"]
+                              + (["mkvmerge"] if settings.keep_tracks else [])):
         return 1
     # Refused rather than degraded, and before the output folder exists: a run
     # that encoded the small files at their own size instead would leave outputs
@@ -2203,7 +2255,11 @@ def _summarise(settings, video_args: str, grain: str) -> None:
     # its own line what happens to it, and a run of files without them says
     # nothing about them at all.
 
-    if settings.audio_profile == "passthrough":
+    if settings.keep_tracks:
+        log("Other tracks: kept as the source has them (-k) - audio, "
+            "subtitles, attachments, chapters and tags combined with the "
+            "encode by mkvmerge")
+    elif settings.audio_profile == "passthrough":
         log("Audio profile: passthrough (source audio copied through, not "
             "re-encoded)")
     elif settings.custom_audio_bitrate:
