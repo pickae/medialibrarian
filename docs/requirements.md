@@ -38,6 +38,40 @@ unaligned. `ffsubsync` is what decides that and `pipx` is what runs the two
 producers, so missing either skips subtitle downloading *and* commentary
 transcription together, and everything else runs normally.
 
+## Keeping them up to date
+
+The tools come from half a dozen places - apt, a snap, pipx venvs, the
+environments `pipx run` caches, cargo, GitHub release binaries and checkouts
+built by hand - and each is updated its own way. `tools/update_deps.py` in the
+checkout does all of them:
+
+```bash
+tools/update_deps.py -n
+```
+
+checks every source and prints what is out of date, changing nothing. Without
+`-n` it prints the same report and asks before it updates anything (`-y` to not
+ask). `--only` and `--skip` take step names (`-h` lists them), and `--no-sudo`
+leaves out what needs root: the apt packages, a snap, an ffmpeg under `/opt`.
+
+It updates only tools these commands use, and only ones already installed, each
+through whoever installed it: pipx for a pipx venv (a nightly yt-dlp with
+`--pre`), cargo with the features a binary was built with, a fast-forward for a
+checkout (one with local commits is left alone), after which av1gpu is rebuilt.
+Along the way:
+
+- **downloads are verified** against the SHA-256 GitHub records for each release
+  asset, and the release's own checksum file where it has one;
+- **a new build must still do what the old one did**: a new ffmpeg keeps every
+  encoder the old one had, a new av1gpu every option, or it is not installed;
+- **the old binary is kept** beside the new one as `<name>.<old version>.bak`,
+  and the swap is a rename, so a run that is using the old one carries on;
+- **a pipx venv in use is left alone**, to be updated once the run is over;
+- **major releases are held** for cargo tools and DuckDB until `--allow-major`.
+
+exhale and the VapourSynth stack for `convert-video -u` are not updated by it:
+exhale is built by hand, and VapourSynth is held at R79 on purpose.
+
 ## Running on a Mac
 
 Everything here is written to work on macOS and nothing is written *only* for

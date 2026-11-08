@@ -195,4 +195,4 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -e . mypy
-      - run: python -m mypy medialib
+      - run: python -m mypy medialib tools
