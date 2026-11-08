@@ -673,14 +673,15 @@ folder is the film itself, or a version kept beside it on purpose, and does not
 count.
 
 A film not in the library says so. One that is gets the library's file printed,
-so you do not have to search for it, and a verdict:
+so you do not have to search for it, and a verdict. The closing count lists
+every such film again with its library copy beside it, MIXED first.
 
 | Verdict | When |
 | --- | --- |
 | the new file is better | it wins on something and loses on nothing |
 | the existing file is better | the other way round |
 | equivalent | neither wins on anything |
-| **MIXED** | each has something the other lacks — these want you, and the run lists them again at its end |
+| **MIXED** | each has something the other lacks — these want you, and the run lists them first at its end |
 | **different version** | the edition tags differ, or the lengths differ by a minute or more (a 4% difference is called out as a PAL speed-up) |
 
 What is weighed: the resolution (2160p, 1080p, 720p, SD — by width as much as
