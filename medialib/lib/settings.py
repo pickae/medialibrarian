@@ -79,9 +79,10 @@ SETTINGS: tuple[Setting, ...] = (
             "folders with an id, or matching them to Letterboxd's; without it the "
             "lookup is skipped", ("ingest-movies", "plex-letterboxd-sync"), secret=True),
     Setting("plexUrl", "The Plex server, e.g. `http://192.168.1.10:32400`",
-            ("plex-letterboxd-sync",)),
-    Setting("plexToken", "That server's X-Plex-Token", ("plex-letterboxd-sync",),
-            secret=True),
+            ("ingest-movies", "plex-letterboxd-sync"),
+            "unset - ingest-movies then asks `http://localhost:32400`"),
+    Setting("plexToken", "That server's X-Plex-Token",
+            ("ingest-movies", "plex-letterboxd-sync"), secret=True),
     Setting("openSubtitlesUser", "OpenSubtitles.org login; with "
             "`openSubtitlesPassword`, subtitles are looked for there first",
             ("ingest-movies",), secret=True),

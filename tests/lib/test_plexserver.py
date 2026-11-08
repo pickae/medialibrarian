@@ -165,3 +165,39 @@ def test_another_account_s_plays_when_asked(curl):
     lantern = [movie for movie in server.movies() if movie.key == "12"][0]
     assert lantern.film.dates == (plexserver._day("1700000000"),)
     assert 'accountID=2' in " ".join(curl)
+
+
+def test_every_version_with_its_files(monkeypatch):
+    answers = {
+        "/library/sections": '<MediaContainer><Directory key="2" type="movie" '
+                             'title="Films"/></MediaContainer>',
+        "/library/sections/2/all": """<MediaContainer>
+<Video ratingKey="11" title="Lantern" year="2007" editionTitle="Director's Cut">
+  <Media><Part file="/films/a/Lantern.mkv"/></Media>
+  <Media><Part file="/films/b/Lantern cd1.mkv"/><Part file="/films/b/Lantern cd2.mkv"/></Media>
+  <Guid id="imdb://tt0101000"/>
+</Video></MediaContainer>"""}
+
+    class Done:
+        returncode = 0
+        stderr = b""
+
+        def __init__(self, stdout):
+            self.stdout = stdout
+
+    monkeypatch.setattr(plexserver.subprocess, "run", lambda argv, input=b"", **_kw:
+                        Done(answers[input.decode().split('"')[1]
+                                     .split("32400")[1]].encode()))
+    one, split = plexserver.Server("http://plex:32400", "t").copies()
+    assert one == plexserver.Copy("11", Film("Lantern", "2007", imdb="tt0101000"),
+                                  "Films", "Director's Cut", ("/films/a/Lantern.mkv",))
+    assert split.files == ("/films/b/Lantern cd1.mkv", "/films/b/Lantern cd2.mkv")
+
+
+def test_the_local_server_without_a_url(monkeypatch, curl):
+    monkeypatch.delenv("plexUrl", raising=False)
+    monkeypatch.delenv("plexToken", raising=False)
+    server = plexserver.local()
+    assert server.url == plexserver.LOCAL
+    server.movie_sections()
+    assert "X-Plex-Token" not in curl[0]

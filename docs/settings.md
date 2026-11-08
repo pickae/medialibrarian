@@ -52,8 +52,8 @@ the two disagree.
 | `openSubtitlesComUser` (secret) | OpenSubtitles.com login - a separate service, asked second | unset | `ingest-movies` |
 | `openSubtitlesPassword` (secret) | OpenSubtitles.org password | unset | `ingest-movies` |
 | `openSubtitlesUser` (secret) | OpenSubtitles.org login; with `openSubtitlesPassword`, subtitles are looked for there first | unset | `ingest-movies` |
-| `plexToken` (secret) | That server's X-Plex-Token | unset | `plex-letterboxd-sync` |
-| `plexUrl` | The Plex server, e.g. `http://192.168.1.10:32400` | unset | `plex-letterboxd-sync` |
+| `plexToken` (secret) | That server's X-Plex-Token | unset | `ingest-movies`, `plex-letterboxd-sync` |
+| `plexUrl` | The Plex server, e.g. `http://192.168.1.10:32400` | unset - ingest-movies then asks `http://localhost:32400` | `ingest-movies`, `plex-letterboxd-sync` |
 | `ramScratchBase` | Where each run's scratch directories go | `/dev/shm`, else the system temp directory | `concat-audio`, `content-census`, `content-census-bi`, `convert-and-concat`, `convert-audio`, `convert-comics`, `convert-images`, `convert-video`, `ingest-books`, `ingest-movies`, `ingest-music`, `read-library`, `transcribe-audio`, `ytdlp` |
 | `ramScratchDiskBase` | Where scratch goes on disk once RAM is nearly full | the cache directory's `ramScratchOverflow` | `concat-audio`, `content-census`, `content-census-bi`, `convert-and-concat`, `convert-audio`, `convert-comics`, `convert-images`, `convert-video`, `ingest-books`, `ingest-movies`, `ingest-music`, `read-library`, `transcribe-audio`, `ytdlp` |
 | `ramScratchMaxPercent` | The largest share of the RAM filesystem, in percent, one intermediate file may take | 50 | `concat-audio`, `content-census`, `content-census-bi`, `convert-and-concat`, `convert-audio`, `convert-comics`, `convert-images`, `convert-video`, `ingest-books`, `ingest-movies`, `ingest-music`, `read-library`, `transcribe-audio`, `ytdlp` |

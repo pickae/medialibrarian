@@ -18,6 +18,7 @@ import threading
 from medialib import commands
 from medialib.cli import ingest_movies as rules
 from medialib.cli import ingest_movies_lanes as lanes
+from medialib.cli import ingest_movies_plex as plexphase
 from medialib.cli.ingest_movies import log
 from medialib.lib import (
     chapterdb,
@@ -618,7 +619,8 @@ def main(argv: list, program: str = "ingest-movies",
             result.values.get("tagsOnly") or result.values.get("idList")
             or result.values.get("subtitlesOnly")
             or result.values.get("commentaryNames")):
-        for letter, key in (("a", "commentaryOnly"), ("c", "chaptersOnly")):
+        for letter, key in (("a", "commentaryOnly"), ("c", "chaptersOnly"),
+                            ("p", "plexOnly")):
             if result.values.get(key):
                 # The transcription and the chapter lookup are not dry runs,
                 # so there is nothing for -w to carry out.
@@ -693,6 +695,20 @@ def main(argv: list, program: str = "ingest-movies",
             "then run -c.")
         return 1
 
+    # -p the same, against every other: it compares the films as the other
+    # phases leave them, so it runs after them rather than beside them.
+    if result.values.get("plexOnly") and any(
+            result.values.get(key) for key in (
+                "commentaryOnly", "commentaryNames", "chaptersOnly",
+                "subtitlesOnly", "tagsOnly", "idList")):
+        clioptions.refuse_usage(
+            declaration,
+            "-p compares the films with the Plex library and nothing else, and "
+            "-a, -n, -c, -s,\n-t and -i each do a phase of their own: they are "
+            "two runs, not one. Tag first\n(-tw), so the films are looked up by "
+            "their ids, then run -p.")
+        return 1
+
     script_dir = script_dir or commands.script_dir()
 
     # This is a long run, so its log lines carry a wall-clock stamp.
@@ -751,6 +767,12 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
 
     if result.values.get("chaptersOnly"):
         return _chapters_only(program, roots)
+
+    if result.values.get("plexOnly"):
+        if tooldeps.require_tools(program, ["curl", "mkvmerge", "mediainfo",
+                                            "ffprobe", "ffmpeg"]):
+            return 1
+        return plexphase.compare_roots(roots, log)
 
     # An id list is only ever read by the tagging phase, so asking for one asks
     # for that phase.
@@ -1294,6 +1316,17 @@ def _chapter_phase(root: str, ahead: dict) -> None:
     outcome = chapterdb.add_chapters(root, log, ahead["chapter pages"])
     _report_chapters({verdict: len(films)
                       for verdict, films in outcome.items()})
+
+
+def _plex_phase(root: str) -> None:
+    """The films as this run leaves them, held up against the Plex library's
+    copies of them - last, once the names, tracks and chapters are final."""
+    if not _has_tool("curl"):
+        log("Phase: comparing with the Plex library - SKIPPED (curl is not "
+            "installed)")
+        return
+    log("Phase: comparing with the Plex library")
+    plexphase.compare_roots([root], log)
 
 
 # How each verdict of the chapter lookup is counted in its closing line.
@@ -2262,6 +2295,7 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
     # through another one.
     _commentary_name_phase(state, root, name, ahead)
     _chapter_phase(root, ahead)
+    _plex_phase(root)
 
     rules.cleanup(root)
     log("Phase: checking for folders without a movie")
