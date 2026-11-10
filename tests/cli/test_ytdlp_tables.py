@@ -34,7 +34,7 @@ def fetched(monkeypatch, tmp_path):
         profiles.append(profile)
         return None
 
-    def spawn(target, args):
+    def spawn(target, args, _name):
         if not server_environment:
             server_environment.update(os.environ)
         current = dict(os.environ)
@@ -48,7 +48,7 @@ def fetched(monkeypatch, tmp_path):
         return _Done()
 
     monkeypatch.setattr(ytdlp.podcastfeeds, "podcast_call", call)
-    monkeypatch.setattr(ytdlp, "_spawn", spawn)
+    monkeypatch.setattr(ytdlp.workerpool, "start_worker", spawn)
     monkeypatch.setattr(ytdlp.workerpool, "reap_one", lambda running: [])
     monkeypatch.setattr(ytdlp.workerpool, "join_all", lambda running: None)
     monkeypatch.setattr(ytdlp.safety, "trap_worker_abort", lambda: None)

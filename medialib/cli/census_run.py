@@ -581,11 +581,9 @@ class Run:
                 # were taken above, in this process, on purpose: the counter
                 # stays one sequence whether or not the books run in parallel,
                 # and the line keeps its place in the library's file order.
-                worker = multiprocessing.Process(
-                    target=self.book_one,
-                    args=(file_index, file_path, scratch, skipped_path))
-                worker.start()
-                running.append(worker)
+                running.append(workerpool.start_worker(
+                    self.book_one,
+                    (file_index, file_path, scratch, skipped_path), file_path))
                 if len(running) >= self.book_jobs:
                     running = workerpool.reap_one(running)
                 continue
@@ -798,10 +796,8 @@ def run(arguments, depth, out_dir, run_bi, separator, extension,
                 "each" % (len(lib_paths), len(worker_roots)))
             workers = []
             for root_index in worker_roots:
-                worker = multiprocessing.Process(target=state.root,
-                                                 args=(root_index,))
-                worker.start()
-                workers.append(worker)
+                workers.append(workerpool.start_worker(
+                    state.root, (root_index,), in_paths[root_index]))
             workerpool.join_all(workers)
         else:
             for root_index in worker_roots:

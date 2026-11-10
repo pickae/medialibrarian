@@ -462,9 +462,9 @@ class Run:
                 self.run_feed(index, subdir, row, provider, root, profile)
                 continue
 
-            running.append(_spawn(_feed_worker,
-                                  (self, index, subdir, row, provider, root,
-                                   profile)))
+            running.append(workerpool.start_worker(
+                _feed_worker, (self, index, subdir, row, provider, root,
+                               profile), subdir))
             if len(running) >= jobs:
                 running = workerpool.reap_one(running)
 
@@ -493,12 +493,6 @@ class Run:
             self.run_table(profile, jobs, tables[index], rows)
 
 
-def _spawn(target, args) -> "Process":
-    import multiprocessing
-
-    process = multiprocessing.Process(target=target, args=args)
-    process.start()
-    return process
 
 
 def _feed_worker(state, index, subdir, row, provider, root,
@@ -1115,9 +1109,9 @@ def _run(options, tables, profiles, jobs_of, rows_of, feed_count, output_path,
         else:
             log("%d provider(s) fetched alongside each other: %s"
                 % (len(order), " ".join(order)))
-            running = [_spawn(_lane_worker,
-                              (state, lanes[lane], tables, profiles, jobs_of))
-                       for lane in order]
+            running = [workerpool.start_worker(
+                _lane_worker, (state, lanes[lane], tables, profiles, jobs_of),
+                lane) for lane in order]
             workerpool.join_all(running)
 
         return _report(state, ingest, started, feed_count)

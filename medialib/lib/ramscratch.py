@@ -71,7 +71,14 @@ class _State:
 
 class _RunState(_State):
     """This process's state, whose scratch root and parents are the run's
-    (`medialib/lib/runcontext.py`): a worker is handed them with the run."""
+    (`medialib/lib/runcontext.py`): a worker is handed them with the run.
+    Made without touching them, so a worker that first imports this module
+    after adopting its run keeps the run's."""
+
+    def __init__(self, script="") -> None:
+        self.cleanup = []
+        self.trap = None
+        self.script = script
 
     @property  # type: ignore[override]
     def ram_base(self):
@@ -182,20 +189,6 @@ def init_ram_base(override="", state=_STATE):
 def ram_base(state=_STATE):
     """The base this process settled on, for handing to a child that has none."""
     return state.ram_base or ""
-
-
-def adopt_ram_base(base, state=_STATE):
-    """Work inside a base a PARENT settled: ``init_ram_base`` returns early on
-    one already set, so the worker works inside the run directory that exists.
-    A worker process shares no module state, so without this it settles a base
-    of its own and leaves a second run directory behind.
-
-    Registers no cleanup, for the reason its creator does not either: only the
-    process that CREATED a directory hands it back.
-    """
-    if base:
-        state.ram_base = base
-        state.bases.append(base)
 
 
 def _unescape_mount(field):

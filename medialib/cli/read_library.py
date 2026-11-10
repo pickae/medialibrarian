@@ -32,7 +32,6 @@ from medialib.lib import (
     clioptions,
     console,
     enums,
-    errorlog,
     ffmpegselect,
     formatting,
     imagemagick,
@@ -715,32 +714,6 @@ def order_books_by_size(scan: list) -> list:
             sorted(scan, key=lambda entry: (-entry[0], entry[1]))]
 
 
-def _in_worker(state: Run, method: str, item) -> None:
-    """One book, in a worker PROCESS. The worker's interrupt handling is installed
-    here rather than in the work, because at width 1 that same work runs in the
-    RUN's own process - where the worker's handler would replace the run's."""
-    safety.trap_worker_abort()
-    state.counters.console.activate()
-    getattr(state, method)(item)
-
-
-def _run_pool(state: Run, method: str, items: list, jobs: int) -> list:
-    """Every item through <method>, up to <jobs> at once. The answers come back
-    only from the serial path; the parallel one is for work whose result is the
-    files and counters it leaves behind."""
-    if jobs <= 1:
-        answers: list = []
-        for item in items:
-            if safety.abort_requested():
-                return answers
-            with errorlog.work_item(item):
-                answers.append(getattr(state, method)(item))
-        return answers
-
-    workerpool.run(items, jobs, _in_worker, lambda item: (state, method, item))
-    return []
-
-
 def _weigh_queue(state: Run, scan: list) -> list:
     """The books, longest first.
 
@@ -1068,10 +1041,10 @@ def _read(result, program: str, script_dir: str, in_path: str, out_path: str,
             "book on its own,")
         log("so the dependency install it triggers happens once instead of in %d "
             "processes at once." % jobs)
-        _run_pool(state, "read_book", books[:1], 1)
+        workerpool.map(books[:1], 1, state.read_book)
         first_book = 1
 
-    _run_pool(state, "read_book", books[first_book:], jobs)
+    workerpool.map(books[first_book:], jobs, state.read_book)
     counters.console.hide()
     safety.exit_if_aborted()
 

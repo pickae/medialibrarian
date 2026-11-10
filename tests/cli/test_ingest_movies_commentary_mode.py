@@ -149,7 +149,8 @@ class TestThePhaseRunsAndNothingElse:
         # The width is whisper's, so the dynamic queue is what runs the
         # records: run them in this process, one at a time, to see what a
         # worker would get.
-        def fake_queue(producer, jobs, target, arguments, log=None):
+        def fake_queue(producer, jobs, target, arguments, log=None,
+                       on_done=None):
             assert jobs == whisper_lib.WHISPER_JOBS
             for record, _size in producer:
                 target(*arguments(record))

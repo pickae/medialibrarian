@@ -36,7 +36,6 @@ from medialib.lib import (
     cuechapters,
     durationcheck,
     enums,
-    errorlog,
     ffmpegselect,
     formatting,
     imagecodecs,
@@ -613,7 +612,6 @@ class Run:
     cover_max_edge: str
     ingested_sources: str
     ingested_pairs: str
-    ram_base: str
     # The run's clocks, each unset until the phase it times has begun.
     run_start: float
     run_end: float | None
@@ -1221,30 +1219,6 @@ def footer(state) -> None:
 
 # --- the run ------------------------------------------------------------------
 
-def _in_worker(state, method: str, item) -> None:
-    """One job, in a worker PROCESS. The interrupt handling is installed here
-    rather than in the work, because at width 1 that same work runs in the run's
-    own process - where the worker's handler would replace the run's. The scratch
-    base is adopted for the same kind of reason: a worker that settled its own
-    would leave a second run directory behind."""
-    safety.trap_worker_abort()
-    ramscratch.adopt_ram_base(getattr(state, "ram_base", ""))
-    state.counters.console.activate()
-    getattr(state, method)(item)
-
-
-def _run_pool(state, method: str, items: list, jobs: int) -> None:
-    if jobs <= 1:
-        for item in items:
-            if safety.abort_requested():
-                return
-            with errorlog.work_item(item):
-                getattr(state, method)(item)
-        return
-
-    workerpool.run(items, jobs, _in_worker, lambda item: (state, method, item))
-
-
 def main(argv: list, program: str = "ingest-music",
          script_dir: str = "") -> int:
     declaration = spec(program)
@@ -1385,7 +1359,6 @@ def _ingest(program: str, script_dir: str, download_dir: str, ingest_dir: str,
         cover_max_edge=imagesizes.height(cover_tier),
         ingested_sources=os.path.join(counter_dir, "ingestedSources"),
         ingested_pairs=os.path.join(counter_dir, "ingestedPairs"),
-        ram_base=ramscratch.ram_base(),
         run_start=run_start, run_end=None,
         encode_start=None, encode_end=None)
     safety.set_run_footer(lambda: footer(state))
@@ -1421,7 +1394,7 @@ def _ingest(program: str, script_dir: str, download_dir: str, ingest_dir: str,
                 "made from" % len(library_flacs))
             counters.start_phase("reading the library", "flacs",
                                  len(library_flacs))
-            _run_pool(state, "read_ingest_source", library_flacs, jobs)
+            workerpool.map(library_flacs, jobs, state.read_ingest_source)
             counters.end_phase()
             safety.exit_if_aborted()
             log("  %d of them name the download they came from"
@@ -1454,7 +1427,7 @@ def _ingest(program: str, script_dir: str, download_dir: str, ingest_dir: str,
         # encoding.
         state.encode_start = time.time()
         counters.start_phase("encoding", "tracks", state.lossless_total, True)
-        _run_pool(state, "encode", lossless_tracks, jobs)
+        workerpool.map(lossless_tracks, jobs, state.encode)
         counters.end_phase()
         safety.exit_if_aborted()
         state.encode_end = time.time()
@@ -1474,7 +1447,7 @@ def _ingest(program: str, script_dir: str, download_dir: str, ingest_dir: str,
             % (len(cover_images),
                _in_parallel(image_jobs, len(cover_images))))
         counters.start_phase("converting", "images", len(cover_images))
-        _run_pool(state, "convert_image", cover_images, image_jobs)
+        workerpool.map(cover_images, image_jobs, state.convert_image)
         counters.end_phase()
         safety.exit_if_aborted()
 

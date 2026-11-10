@@ -7,6 +7,7 @@ the census is: the rules are worth reading on their own, and the run around them
 is mostly plumbing.
 """
 
+import functools
 import json
 import os
 import shutil
@@ -99,9 +100,6 @@ class Run:
     # read with a default: a Run made for one phase has neither.
     disk_turns: str
     scratch_headroom: int
-    # The run's console, which the workers print through; read with a default
-    # like the two above.
-    console: console.Console
 
     def __init__(self, **settings) -> None:
         self.__dict__.update(settings)
@@ -868,7 +866,8 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
         return 1
     ramscratch.add_exit_cleanup([ram_root])
     statusline.init_status_line()
-    run_console = console.Console(ram_root).activate()
+    # The run's console, in the scratch so every worker shares its lock.
+    console.Console(ram_root).activate()
 
     safety.init_safety_log(os.path.join(ram_root, "safetySkips.log"))
     durationcheck.init_log(os.path.join(ram_root, "lengthMismatch.log"))
@@ -921,7 +920,7 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
                 ffsubsync_quality=ffsubsync_quality, long_names=long_names,
                 unfixed_movies=unfixed_movies,
                 unsure_commentaries=unsure_commentaries, disk_turns=disk_turns,
-                scratch_headroom=0, console=run_console,
+                scratch_headroom=0,
                 convert_remuxes=bool(result.values.get("convertRemuxes")))
 
     listed = dict(zip(roots, names, strict=True))
@@ -2307,7 +2306,7 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
     # terminal each lane's lines about a film come out as one block.
     locks = lanes.FilmLocks()
     row = console.LaneRow(("opus", "whisper", "remux", "subs"))
-    run_console = getattr(state, "console", None) or console.current()
+    run_console = console.current()
     run_console.show(row.render, travels=False)
     try:
         fetching = _start_subtitle_lane(state, root, subtitle_work, locks,
@@ -2568,28 +2567,12 @@ def _say_what_was_said(ahead: dict) -> None:
         log(ahead["said"].pop(0))
 
 
-def _transcribe_one(state, record: str) -> None:
-    commentarytranscription.transcribe_commentary(
-        record, state.whisper, rules.MAX_WHISPER_SYNC_OFFSET,
-        state.ffsubsync_quality, state.ram_root, log)
-
-
-def _in_transcribe_worker(state, record: str, lane: str = "") -> None:
-    """One queued transcription, in a worker PROCESS - the interrupt handling
-    belongs here and not in the transcription, which the serial path runs in the
-    RUN's own process."""
-    safety.trap_worker_abort()
-    ramscratch.adopt_ram_base(getattr(state, "ram_base", ""))
-    _adopt_console(state)
+def _transcribe_one(state, record: str, lane: str = "") -> None:
+    """One queued transcription; ``lane`` names it beside the other lanes."""
     with console.about(record, lane):
-        _transcribe_one(state, record)
-
-
-def _adopt_console(state) -> None:
-    """The run's console made this worker's, when the run has one."""
-    run_console = getattr(state, "console", None)
-    if run_console is not None:
-        run_console.activate()
+        commentarytranscription.transcribe_commentary(
+            record, state.whisper, rules.MAX_WHISPER_SYNC_OFFSET,
+            state.ffsubsync_quality, state.ram_root, log)
 
 
 def _drain_commentary(state, producer, jobs: int, tracker=None) -> None:
@@ -2613,23 +2596,20 @@ def _drain_commentary(state, producer, jobs: int, tracker=None) -> None:
     lane = "whisper" if tracker is not None else ""
     if tracker is not None:
         producer = _told_of(tracker, producer)
+    work = functools.partial(_transcribe_one, state, lane=lane)
     if jobs <= 1:
         for record, _size in producer:
             if safety.abort_requested():
                 return
-            with errorlog.work_item(record), console.about(record, lane):
-                _transcribe_one(state, record)
+            with errorlog.work_item(record):
+                work(record)
             if tracker is not None:
                 tracker.record_done(record)
         return
 
-    if tracker is None:
-        dynamicqueue.run(producer, jobs, _in_transcribe_worker,
-                         lambda record: (state, record), log=log)
-        return
-    dynamicqueue.run(producer, jobs, _in_transcribe_worker,
-                     lambda record: (state, record, lane), log=log,
-                     on_done=tracker.record_done)
+    dynamicqueue.run(producer, jobs, workerpool.in_worker,
+                     lambda record: (work, record), log=log,
+                     on_done=None if tracker is None else tracker.record_done)
 
 
 def _told_of(tracker, producer):
@@ -2677,34 +2657,16 @@ def _transcode_opus(state, root: str, jobs: int | None = None,
             row.done("opus")
             if told is not None:
                 told(movie)
-    _run_pool(state, movies, root, jobs, on_done, lane)
+    workerpool.map(movies, jobs, functools.partial(_check_audio, root, lane),
+                   on_done=on_done)
     if exit_on_abort:
         safety.exit_if_aborted()
 
 
-def _in_worker(state, movie: str, root: str, lane: str = "") -> None:
-    safety.trap_worker_abort()
-    ramscratch.adopt_ram_base(getattr(state, "ram_base", ""))
-    diskturn.adopt(getattr(state, "disk_turns", ""))
-    _adopt_console(state)
+def _check_audio(root: str, lane: str, movie: str) -> None:
+    """One film's tracks checked; ``lane`` names it beside the other lanes."""
     with console.about(movie, lane):
         rules.check_audio_tracks(movie, root)
-
-
-def _run_pool(state, movies: list, root: str, jobs: int,
-              on_done=None, lane: str = "") -> None:
-    if jobs <= 1:
-        for movie in movies:
-            if safety.abort_requested():
-                return
-            with errorlog.work_item(movie), console.about(movie, lane):
-                rules.check_audio_tracks(movie, root)
-            if on_done is not None:
-                on_done(movie)
-        return
-
-    workerpool.run(movies, jobs, _in_worker,
-                   lambda movie: (state, movie, root, lane), on_done=on_done)
 
 
 def cli(argv: list | None = None) -> int:

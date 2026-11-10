@@ -39,7 +39,6 @@ from medialib.lib import (
     clioptions,
     console,
     enums,
-    errorlog,
     imagebitrate,
     imagecodecs,
     imagemagick,
@@ -503,14 +502,6 @@ def _newer_than(path: str, marker: str) -> bool:
         return False
 
 
-def _in_worker(state, relative: str) -> None:
-    """One book, in a worker PROCESS - where the worker's interrupt handler
-    belongs, and not in process_book, which the serial path runs inline."""
-    safety.trap_worker_abort()
-    state.console.activate()
-    state.process_book(relative)
-
-
 # --- the run -------------------------------------------------------------------
 
 def _books_under(in_path: str):
@@ -534,18 +525,6 @@ def _books_under(in_path: str):
             found.append((size, os.path.relpath(full, in_path)))
     found.sort(key=lambda item: -item[0])
     return [relative for _size, relative in found]
-
-
-def _run_pool(state, work, jobs: int) -> None:
-    if jobs <= 1:
-        for relative in work:
-            if safety.abort_requested():
-                return
-            with errorlog.work_item(relative):
-                state.process_book(relative)
-        return
-
-    workerpool.run(work, jobs, _in_worker, lambda relative: (state, relative))
 
 
 def _word_count(path: str) -> int:
@@ -763,7 +742,7 @@ def main(argv: list, program: str = "ingest-books",
                 runlog.say("\n")
                 archive_root = in_path
             else:
-                _run_pool(state, books, jobs)
+                workerpool.map(books, jobs, state.process_book)
                 safety.exit_if_aborted()
                 archive_root = out_path
             _text_mode_report(state, books, out_path, temp_path, all_txt,
@@ -780,7 +759,7 @@ def main(argv: list, program: str = "ingest-books",
             runlog.say(discard_summary(discard_extras, image_resolution,
                                        has_pdf, has_reflowable) + "\n")
             runlog.say("\n")
-            _run_pool(state, books, jobs)
+            workerpool.map(books, jobs, state.process_book)
             safety.exit_if_aborted()
 
         if clean_structure:

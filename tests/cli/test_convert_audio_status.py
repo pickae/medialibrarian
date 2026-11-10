@@ -5,12 +5,11 @@ supplies, the erase/re-pin dance around each line it prints, and the settlement 
 worker process has to be handed before it can join in.
 """
 
-import types
 
 import pytest
 
 from medialib.cli import convert_audio as ca
-from medialib.lib import console, statusline
+from medialib.lib import console, statusline, workerpool
 
 pytestmark = pytest.mark.fs
 
@@ -171,10 +170,9 @@ class _Reporter:
 
     def __init__(self, seen_file: str) -> None:
         self.seen_file = seen_file
-        self.counters = types.SimpleNamespace(console=console.Console())
 
     def encode(self, item: str) -> None:
-        row, cols, _interval = console.active().geometry
+        row, cols, _interval = statusline.status_geometry()
         with open(self.seen_file, "w") as seen:
             seen.write("%s %s" % (row or "-", cols))
 
@@ -191,7 +189,7 @@ class TestTheRowInAWorkerProcess:
         monkeypatch.setattr(statusline.state, "row", "1")
         monkeypatch.setattr(statusline.state, "cols", 96)
         seen = tmp_path / "seen"
-        ca._run_pool(_Reporter(str(seen)), "encode", ["track1.m4a"], 2)
+        workerpool.map(["track1.m4a"], 2, _Reporter(str(seen)).encode)
         assert seen.read_text() == "1 96"
 
     def test_off_a_terminal_a_worker_is_handed_no_row_either(
@@ -199,5 +197,5 @@ class TestTheRowInAWorkerProcess:
         monkeypatch.setattr(statusline.state, "row", "")
         monkeypatch.setattr(statusline.state, "cols", 1000)
         seen = tmp_path / "seen"
-        ca._run_pool(_Reporter(str(seen)), "encode", ["track1.m4a"], 2)
+        workerpool.map(["track1.m4a"], 2, _Reporter(str(seen)).encode)
         assert seen.read_text() == "- 1000"

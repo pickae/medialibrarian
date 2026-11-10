@@ -37,7 +37,6 @@ from medialib.lib import (
     cuechapters,
     durationcheck,
     enums,
-    errorlog,
     ffmpegselect,
     formatting,
     imagemagick,
@@ -667,6 +666,10 @@ class Run:
                 pass
         return "", 0
 
+    def process_pair(self, pair: tuple) -> None:
+        """:meth:`process_subfolder` for an (input, output) pair."""
+        self.process_subfolder(*pair)
+
     def process_subfolder(self, input_path: str, output_path: str) -> None:
         name = os.path.basename(output_path.rstrip("/"))
 
@@ -889,33 +892,6 @@ def publish_book(built: str, target: str) -> str:
             pass
 
 
-def _in_worker(state: Run, input_path: str, output_path: str) -> None:
-    """One sub-folder, in a worker PROCESS.
-
-    The worker's interrupt handling is installed here rather than in the work
-    itself, because at width 1 that same work runs in the RUN's own process -
-    where the worker's handler would replace the run's, and a Ctrl+C would leave
-    with the queue-stopping status instead of the run's own and without its
-    closing report.
-    """
-    safety.trap_worker_abort()
-    state.console.activate()
-    state.process_subfolder(input_path, output_path)
-
-
-def _run_pool(state: Run, pairs: list, jobs: int) -> None:
-    if jobs <= 1:
-        for input_path, output_path in pairs:
-            if safety.abort_requested():
-                return
-            with errorlog.work_item(input_path):
-                state.process_subfolder(input_path, output_path)
-        return
-
-    workerpool.run(pairs, jobs, _in_worker,
-                   lambda pair: (state, pair[0], pair[1]))
-
-
 def _has_audio_subfolder(input_dir: str) -> bool:
     """Whether any immediate sub-folder holds audio, at any depth below it.
 
@@ -1097,7 +1073,8 @@ def _run_with_scratch(ram_dir: str, input_dir: str, output_dir: str,
     )
 
     if total:
-        _run_pool(state, list(zip(input_paths, output_paths, strict=True)), jobs)
+        workerpool.map(list(zip(input_paths, output_paths, strict=True)), jobs,
+                       state.process_pair)
         safety.exit_if_aborted()
 
     # By the paths this run made them at, which are all in the scratch: the join

@@ -94,6 +94,8 @@ class Outcome:
     def __init__(self) -> None:
         self.failed: list = []
         self.aborted = False
+        # What the work returned, item by item - on the serial path only.
+        self.results: list = []
 
     @property
     def ok(self) -> bool:
@@ -269,3 +271,44 @@ def run(items, jobs: int, target, arguments, on_done=None) -> Outcome:
     outcome.failed = failed_workers()[seen:]
     outcome.aborted = bool(pending) or safety.abort_requested()
     return outcome
+
+
+def in_worker(work, item):
+    """One item through ``work``, in a worker process: the worker's interrupt
+    handling installed first. Here and not in the work, because the serial
+    path runs that same work in the RUN's own process, where the worker's
+    handler would replace the run's and a Ctrl+C would leave with the
+    queue-stopping status instead of the run's own and without its closing
+    report. The run itself - its scratch, its disk turns, its console - the
+    worker was handed as it started (:func:`run_in_worker`)."""
+    safety.trap_worker_abort()
+    return work(item)
+
+
+def map(items, jobs: int, work, on_done=None) -> Outcome:  # noqa: A001
+    """Every item through ``work``, up to ``jobs`` at once: the one queue the
+    commands share.
+
+    ``work`` is called with one item and must pickle - a bound method of the
+    run's state, or a :func:`functools.partial` over a module-level function.
+    At width 1 or less the items are worked through in this process, one
+    after another, each named for the errors recorded meanwhile, and the
+    queue stops at an interrupt; what ``work`` returns is then kept in the
+    Outcome's ``results``. Wider than that each item gets a worker process
+    (:func:`run`), and the work's result is the files and counters it leaves
+    behind. ``on_done``, when given, is called with each item once it is done,
+    however it ended.
+    """
+    if jobs <= 1:
+        outcome = Outcome()
+        for item in items:
+            if safety.abort_requested():
+                outcome.aborted = True
+                break
+            with errorlog.work_item(item):
+                outcome.results.append(work(item))
+            if on_done is not None:
+                on_done(item)
+        return outcome
+    return run(items, jobs, in_worker, lambda item: (work, item),
+               on_done=on_done)

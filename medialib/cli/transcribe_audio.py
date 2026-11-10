@@ -22,7 +22,6 @@ from medialib.lib import (
     console,
     durationcheck,
     enums,
-    errorlog,
     ffmpegselect,
     ramscratch,
     runlog,
@@ -259,29 +258,6 @@ def _mirror_folders(input_dir: str, output_dir: str) -> None:
         os.makedirs(target, exist_ok=True)
 
 
-def _in_worker(state, relative: str) -> None:
-    """One track, in a worker PROCESS. The worker's interrupt handling belongs
-    here rather than in the transcription itself: the serial path runs that in
-    the RUN's own process, where the worker's handler would replace the run's."""
-    safety.trap_worker_abort()
-    state.console.activate()
-    state.transcribe_one(relative)
-
-
-def _run_queue(state, tracks, jobs: int) -> None:
-    """The queue, at ``jobs`` workers - each spanning all CPU threads or the
-    GPU, which is why the width is whisper's and not the core count."""
-    if jobs <= 1:
-        for relative in tracks:
-            if safety.abort_requested():
-                return
-            with errorlog.work_item(relative):
-                state.transcribe_one(relative)
-        return
-
-    workerpool.run(tracks, jobs, _in_worker, lambda relative: (state, relative))
-
-
 def main(argv: list, program: str = "transcribe-audio") -> int:
     declaration = spec(program)
     try:
@@ -390,7 +366,9 @@ def _transcribe(program: str, input_dir: str, output_dir: str, fmt: str,
     # The pool is never wider than the work.
     runlog.say("Transcribing %d file(s) on %d worker(s)...\n"
                % (len(tracks), min(int(jobs), len(tracks))))
-    _run_queue(state, tracks, jobs)
+    # Each worker spans all CPU threads or the GPU, which is why the width is
+    # whisper's and not the core count.
+    workerpool.map(tracks, jobs, state.transcribe_one)
     safety.exit_if_aborted()
     runlog.say("Done.\n")
     safety.print_run_footer()

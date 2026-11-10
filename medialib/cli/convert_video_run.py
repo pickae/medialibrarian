@@ -766,7 +766,6 @@ def encode_video_chunk(settings, token: str) -> int:
     keyframe-aligned, stream-copy-compatible piece.
     """
     safety.trap_worker_abort()
-    ramscratch.adopt_ram_base(getattr(settings, "ram_base", ""))
     relative, index, total, start, duration = token.split(rules.UNIT)
 
     source = rules.video_source_for(relative, settings.input_dir,
@@ -1704,7 +1703,6 @@ def _audio_worker(relative: str, directory: str, settings) -> None:
     ignored, so without a handler it would survive Ctrl+C outright.
     """
     safety.trap_worker_abort()
-    ramscratch.adopt_ram_base(getattr(settings, "ram_base", ""))
     raise SystemExit(encode_audio_all(relative, directory, settings))
 
 
@@ -1747,12 +1745,9 @@ def _video_duration(path: str, container: float) -> float:
     return container
 
 
-def _in_worker(settings, token: str) -> None:
-    encode_video_chunk(settings, token)
-
-
 def _run_chunk_pool(settings, tokens: list, width: int) -> None:
-    workerpool.run(tokens, width, _in_worker, lambda token: (settings, token))
+    workerpool.run(tokens, width, encode_video_chunk,
+                   lambda token: (settings, token))
 
 
 # --- the run ------------------------------------------------------------------
@@ -2401,7 +2396,6 @@ def _run_all(settings) -> int:
         return 1
     ramscratch.add_exit_cleanup([chunk_root])
     settings.chunk_root = chunk_root
-    settings.ram_base = ramscratch.ram_base()
     if settings.upscale_stack is not None:
         settings.upscale_script = upscale.write_script(chunk_root)
 

@@ -999,33 +999,6 @@ def _mirror_folders(input_dir: str, output_dir: str) -> None:
         os.makedirs(target, exist_ok=True)
 
 
-def _in_worker(state, worker_name: str, relative: str) -> None:
-    """One item, in a worker PROCESS.
-
-    The worker's interrupt handling is installed here and not in the conversion
-    itself, because the serial path runs that same conversion in the RUN's own
-    process - where installing the worker's handler would replace the run's, and
-    a Ctrl+C would leave with the queue-stopping status instead of the run's own
-    and without its closing report.
-    """
-    safety.trap_worker_abort()
-    getattr(state, worker_name)(relative)
-
-
-def _run_pool(state, work, jobs: int, worker_name: str) -> None:
-    if jobs <= 1:
-        worker = getattr(state, worker_name)
-        for relative in work:
-            if safety.abort_requested():
-                return
-            with errorlog.work_item(relative):
-                worker(relative)
-        return
-
-    workerpool.run(work, jobs, _in_worker,
-                   lambda relative: (state, worker_name, relative))
-
-
 def _encode_on_gpu(state, work, jobs: int, encoder: str) -> list:
     """Hand every image the GPU can take to <encoder>, in chunks of
     av1gpu.CHUNK_MEGAPIXELS, and return the work that is left for the CPU:
@@ -1260,8 +1233,8 @@ def main(argv: list, program: str = "convert-images") -> int:
         # Each road's speed is over its own stretch of the wall clock: the
         # GPU's chunks come first, and the CPU's pool runs after them.
         state.cpu_started = time.time()
-        _run_pool(state, work, jobs,
-                  "reverse_to_jpeg" if reverse else "transcode")
+        workerpool.map(work, jobs, state.reverse_to_jpeg if reverse
+                       else state.transcode)
         safety.exit_if_aborted()
         safety.print_run_footer()
         # An image that could not be converted is a run that did not do what

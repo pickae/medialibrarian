@@ -779,7 +779,6 @@ class Run:
     extension: str
     # A geometry, not None: DEFAULT_TIER is a row of the table by construction.
     cover_resolution: str
-    ram_base: str
     tracks: list
     duration_file: str
     chunk_root: str
@@ -1528,12 +1527,12 @@ class Planner:
                     or os.path.isfile(base + ".jobs")):
                 unsettled.append(track)
         if unsettled:
-            _run_pool(self, "classify", unsettled, self.jobs)
+            workerpool.map(unsettled, self.jobs, self.classify)
             safety.exit_if_aborted()
 
         candidates, windows = self.window_jobs(tracks)
         if windows:
-            _run_pool(_Detector(), "detect", windows, self.jobs)
+            workerpool.map(windows, self.jobs, _Detector().detect)
             safety.exit_if_aborted()
         # The shared seek copies have served every window probe; that RAM goes
         # back before the chunk jobs, which need only the gathered midpoints.
@@ -1629,8 +1628,9 @@ class Planner:
         # cheaply as they are get no copy at all.
         copied = [track for track in candidates if not seek_cheap_file(track)]
         if copied:
-            _run_pool(self, "seek_copy", copied,
-                      max(1, min(segments.SEEK_COPY_JOBS, self.jobs)))
+            workerpool.map(copied,
+                           max(1, min(segments.SEEK_COPY_JOBS, self.jobs)),
+                           self.seek_copy)
             safety.exit_if_aborted()
 
         queue = []
@@ -1869,37 +1869,6 @@ def footer(state: Run) -> None:
     durationcheck.report()
 
 
-def _in_worker(state, method: str, item) -> None:
-    """One job, in a worker PROCESS.
-
-    The worker's interrupt handling is installed here rather than in the work,
-    because at width 1 that same work runs in the RUN's own process - where the
-    worker's handler would replace the run's. The run's scratch base and its
-    console are adopted for the same kind of reason: a worker that settled its
-    own would make a second run directory beside the parent's, and one that
-    settled no row would print its counted line onto the end of the pinned row.
-    """
-    safety.trap_worker_abort()
-    ramscratch.adopt_ram_base(getattr(state, "ram_base", ""))
-    counters = getattr(state, "counters", None)
-    if counters is not None:
-        counters.console.activate()
-    getattr(state, method)(item)
-
-
-def _run_pool(state, method: str, items: list, jobs: int) -> None:
-    if jobs <= 1:
-        for item in items:
-            if safety.abort_requested():
-                return
-            with errorlog.work_item(item):
-                getattr(state, method)(item)
-        return
-
-    workerpool.run(items, jobs, _in_worker,
-                   lambda item: (state, method, item))
-
-
 # What makes a file a track: the scan below and the output naming, which has to
 # know which other files in a folder will be converted beside a track.
 _TRACK_SUFFIXES = tuple(
@@ -2130,7 +2099,7 @@ def _convert(program: str, script_dir: str, input_dir: str, output_dir: str,
         # track is glanced at in a track list, not studied, so the floor of the
         # table is the right end of it.
         cover_resolution=imagesizes.geometry(imagesizes.DEFAULT_TIER),
-        ram_base=ramscratch.ram_base(), tracks=[], pre_start=pre_start,
+        tracks=[], pre_start=pre_start,
         conv_start=None, conv_end=None,
         post_start=None, post_end=None, duration_file="", counters=None,
         chunk_root="", plan_root="", rejoined=0, background=background,
@@ -2222,8 +2191,8 @@ def _convert(program: str, script_dir: str, input_dir: str, output_dir: str,
                 with errorlog.work_item(token):
                     state.encode(token)
         else:
-            dynamicqueue.run(producer, jobs, _in_worker,
-                             lambda token: (state, "encode", token),
+            dynamicqueue.run(producer, jobs, workerpool.in_worker,
+                             lambda token: (state.encode, token),
                              buffer_factor=QUEUE_BUFFER_FACTOR, log=log)
         state.counters.console.hide()
         safety.exit_if_aborted()
@@ -2240,7 +2209,7 @@ def _convert(program: str, script_dir: str, input_dir: str, output_dir: str,
     state.rejoined = len(plans_queue)
     if plans_queue:
         runlog.say("Re-concatenating %d split file(s)...\n" % len(plans_queue))
-        _run_pool(state, "reconcat", plans_queue, jobs)
+        workerpool.map(plans_queue, jobs, state.reconcat)
         safety.exit_if_aborted()
     state.post_end = time.time()
     runlog.say("Done.\n")
@@ -2406,7 +2375,7 @@ def _settle_preload(state: Run, planner: Planner) -> tuple:
         # up front, and plan only what it settled as a candidate. What it
         # settled whole is preloaded; what it settled up to date is neither, and
         # wants no job at all.
-        _run_pool(planner, "classify", state.tracks, planner.jobs)
+        workerpool.map(state.tracks, planner.jobs, planner.classify)
         safety.exit_if_aborted()
         for track in state.tracks:
             base = segments.plan_file_for(state.plan_root, track)
