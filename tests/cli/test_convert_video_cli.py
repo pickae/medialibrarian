@@ -815,6 +815,36 @@ class TestUpscale:
         assert log.count("upscale (-u)") == 1
 
 
+class TestWhatCountsAsInput:
+    """The refusal of a folder with nothing to convert, and what it counts."""
+
+    @pytest.fixture
+    def video(self, sandbox, tmp_path):
+        sandbox.with_tool("ffmpeg", "exit 0")
+        sandbox.with_tool("ffprobe", "echo 1.0")
+        sandbox.linking(*_ORDINARY).narrow()
+        sandbox.inputs = tmp_path / "in"
+        sandbox.inputs.mkdir()
+        return sandbox
+
+    def _run(self, video):
+        outputs = video.work / "out"
+        done = video.run("convert-video", video.inputs, outputs, timeout=180)
+        return done, outputs
+
+    def test_a_folder_of_upper_case_extensions_is_not_refused(self, video):
+        (video.inputs / "CLIP.MKV").write_text("")
+        done, _outputs = self._run(video)
+        assert "Nothing to do" not in done.stderr
+
+    def test_a_refused_run_leaves_no_output_folder_behind(self, video):
+        (video.inputs / "notes.txt").write_text("")
+        done, outputs = self._run(video)
+        assert done.returncode == 1
+        assert "Nothing to do: no videos (.mkv / .mp4) found" in done.stderr
+        assert not outputs.exists()
+
+
 class TestQuiet:
     """-q is errors only: the startup summary, the progress and the closing
     figures all go, and a refusal is still said in full."""

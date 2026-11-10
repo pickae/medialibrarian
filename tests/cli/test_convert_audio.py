@@ -253,17 +253,19 @@ class TestTheOutputCodec:
         ("xheaac", "book/track.m4a"),
     ])
     def test_the_output_path_follows_the_codec(self, codec, expected):
-        run = ca.Run(output_dir="out", codec=codec,
+        run = ca.Run(input_dir="in", output_dir="out", codec=codec,
                      extension=enums.AUDIO_CODEC_EXTENSIONS[codec])
         assert run.output_path("book/track.mp3").replace(os.sep, "/") == (
             "out/" + expected)
 
     def test_the_source_extension_is_replaced_and_not_appended(self):
-        run = ca.Run(output_dir="out", codec="xheaac", extension="m4a")
+        run = ca.Run(input_dir="in", output_dir="out", codec="xheaac",
+                     extension="m4a")
         assert run.output_path("a.b.mp3").endswith("a.b.m4a")
 
     def test_a_track_with_no_extension_still_gets_one(self):
-        run = ca.Run(output_dir="out", codec="opus", extension="opus")
+        run = ca.Run(input_dir="in", output_dir="out", codec="opus",
+                     extension="opus")
         assert run.output_path("track").endswith("track.opus")
 
 
@@ -1565,3 +1567,135 @@ class TestAnOutputMeasuredShort:
         run = ca.Run(codec="opus", extension="opus", output_dir="out")
         run._replay("out/never-made.opus", "x")
         assert capfd.readouterr().err == ""
+
+
+class TestTracksSharingAStem:
+    """a.flac and a.mp3 in one folder would both become a.opus, and two
+    workers would write it at once; each gets a name of its own instead."""
+
+    @pytest.fixture
+    def run(self, tmp_path):
+        inputs = tmp_path / "in"
+        (inputs / "sub").mkdir(parents=True)
+        for name in ("a.flac", "a.mp3", "a.jpg", "b.flac", "b.cue",
+                     "sub/a.flac"):
+            (inputs / name).touch()
+        return ca.Run(input_dir=str(inputs), output_dir="out", codec="opus",
+                      extension="opus")
+
+    def _output(self, run, relative):
+        return run.output_path(relative).replace(os.sep, "/")
+
+    def test_each_keeps_its_source_extension_in_the_name(self, run):
+        assert self._output(run, "a.flac") == "out/a-flac.opus"
+        assert self._output(run, "a.mp3") == "out/a-mp3.opus"
+
+    def test_a_cover_or_a_cue_sheet_is_not_a_second_track(self, run):
+        assert self._output(run, "b.flac") == "out/b.opus"
+
+    def test_the_same_stem_in_another_folder_is_no_clash(self, run):
+        assert self._output(run, "sub/a.flac") == "out/sub/a.opus"
+
+
+class _Counters:
+    def __init__(self):
+        self.said = []
+
+    def report_progress(self, *args):
+        self.said.append(args)
+
+
+def _durations(monkeypatch, source, output):
+    """The probe answering <source> seconds for the input and <output> for
+    anything under out/."""
+    def probe(argv):
+        return str(output) if "out" in argv[-1].split(os.sep)[0] \
+            else str(source)
+    monkeypatch.setattr(ca, "_probe", probe)
+
+
+class TestAnOutputWithinTheCheckSlack:
+    """The up-to-date test agrees with the length check: an output that check
+    accepts is finished, not re-encoded by every rerun."""
+
+    @pytest.fixture
+    def whole(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        os.makedirs("out")
+        open(os.path.join("out", "a.opus"), "w").close()
+        monkeypatch.setattr(ca, "source_audio_bitrate", lambda src: 320000)
+        covers = []
+        run = ca.Run(input_dir="in", output_dir="out", codec="opus",
+                     extension="opus", adaptive=False, mono=False,
+                     bitrate=46, threshold=ca.THRESHOLD, group_depth=0,
+                     verdicts={}, counters=_Counters())
+        monkeypatch.setattr(run, "_reapply_sidecar_cover",
+                            lambda *args: covers.append(args))
+        return run, covers
+
+    def test_a_fraction_of_a_second_short_is_up_to_date(self, whole,
+                                                        monkeypatch):
+        run, covers = whole
+        _durations(monkeypatch, 100.0, 99.4)
+        run.encode_whole("a.flac")
+        assert run.counters.said == [("a.flac", "Up to date, skipping")]
+        assert covers == [("a.flac", os.path.join("in", "a.flac"),
+                           os.path.join("out", "a.opus"))]
+
+    def test_short_by_more_than_the_slack_is_encoded_again(self, whole,
+                                                           monkeypatch):
+        run, covers = whole
+        monkeypatch.setattr(ca.ramscratch, "ram_scratch_dir",
+                            lambda name: ("", 1))
+        _durations(monkeypatch, 100.0, 98.5)
+        run.encode_whole("a.flac")
+        assert run.counters.said[0][0] == "a.flac"
+        assert run.counters.said[0][1] != "Up to date, skipping"
+        assert covers == []
+
+
+class TestAChunkCandidateAlreadyConverted:
+    """A long book settled up to date by the planner never reaches the
+    whole-file encode, so the planner re-applies its sidecar cover itself."""
+
+    def _planner(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        os.makedirs("out")
+        os.makedirs("plans")
+        open(os.path.join("out", "book.opus"), "w").close()
+        monkeypatch.setattr(ca, "source_audio_bitrate", lambda src: 320000)
+        run = ca.Run(input_dir="in", output_dir="out", plan_root="plans",
+                     codec="opus", extension="opus", mono=False,
+                     threshold=ca.THRESHOLD, chunked=frozenset(["book.flac"]),
+                     chunk_over_ceiling=False, group_depth=0, verdicts={})
+        covers = []
+        monkeypatch.setattr(run, "_reapply_sidecar_cover",
+                            lambda *args: covers.append(args))
+        return ca.Planner(run, jobs=4), covers
+
+    def test_it_is_skipped_and_its_cover_reapplied(self, tmp_path,
+                                                   monkeypatch):
+        planner, covers = self._planner(tmp_path, monkeypatch)
+        _durations(monkeypatch, 36000, 36000.4)
+        source = os.path.join("in", "book.flac")
+        assert not planner._still_candidate("book.flac", "plans/book",
+                                            source, 36000)
+        assert covers == [("book.flac", source,
+                           os.path.join("out", "book.opus"))]
+        assert not os.path.exists("plans/book.meta")
+
+    def test_within_the_length_checks_slack_it_is_up_to_date(
+            self, tmp_path, monkeypatch):
+        planner, covers = self._planner(tmp_path, monkeypatch)
+        _durations(monkeypatch, 36000, 35990.0)
+        assert not planner._still_candidate("book.flac", "plans/book",
+                                            os.path.join("in", "book.flac"),
+                                            36000)
+
+    def test_a_short_output_is_planned_again(self, tmp_path, monkeypatch):
+        planner, covers = self._planner(tmp_path, monkeypatch)
+        _durations(monkeypatch, 36000, 30000.0)
+        assert planner._still_candidate("book.flac", "plans/book",
+                                        os.path.join("in", "book.flac"),
+                                        36000)
+        assert covers == []

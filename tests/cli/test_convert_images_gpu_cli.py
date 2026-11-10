@@ -19,9 +19,10 @@ pytestmark = pytest.mark.stubbed
 # The GPU's header probe: transparency for any file named alpha*, 16 bits for
 # deep*, and one size for all of them. Any other question - the size the speed
 # is counted in - gets that size alone. The starved check, which asks it too,
-# is stood down by -a.
+# is stood down by -a. Every page arrives after the coder that reads it,
+# "jpeg:photo.jpeg", which is taken off.
 _IDENTIFY = '''
-for a in "$@"; do last="$a"; done
+for a in "$@"; do last="${a#*:}"; done
 case "$*" in
     *"%@"*) case "${last##*/}" in *margin*) echo "900x1400+50+50" ;;
             *) echo "1000x1500+0+0" ;; esac; exit 0 ;;
@@ -37,7 +38,7 @@ esac
 
 _CONVERT = '''
 src=""
-for a in "$@"; do [[ -f "$a" ]] && { src="$a"; break; }; done
+for a in "$@"; do [[ -f "${a#*:}" ]] && { src="${a#*:}"; break; }; done
 out="${!#}"
 # The lane's trim: the box as identify gives it, then the four corners. Each
 # page measured so is named in bin/boxes.

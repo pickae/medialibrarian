@@ -27,6 +27,7 @@ from medialib.lib import (
     codecs,
     durationcheck,
     dynamicqueue,
+    enums,
     errorlog,
     ffmpegselect,
     formatting,
@@ -215,8 +216,8 @@ def pq_source_to_convert(settings) -> bool:
     if not _has_tool("ffprobe"):
         return True
     for relative in _sources(settings.input_dir):
-        output = os.path.join(settings.output_dir,
-                              os.path.splitext(relative)[0] + ".mkv")
+        output = rules.output_path_of(relative, settings.input_dir,
+                                      settings.output_dir)
         if os.path.isfile(output):
             continue
         source = os.path.join(settings.input_dir, relative)
@@ -444,7 +445,7 @@ def normalise_dolby_vision(relative: str, settings, output_dir: str) -> tuple:
     # The converted stream has served its purpose the moment it is inside the
     # Matroska; free it before the encode starts rather than holding both.
     _remove(hevc)
-    if done.returncode > 1:
+    if not toolcapture.warnings_at_most(done.returncode):
         log("Dolby Vision: the profile 8.1 stream could not be muxed (%s), "
             "encoding the source as plain HDR10 instead: %s"
             % (done.stderr.decode("utf-8", "replace").strip() or "no output",
@@ -912,8 +913,8 @@ def output_path_for(relative: str, settings, replacing: bool) -> str:
     out-of-date file from an earlier run, which is what this conversion was started
     to replace.
     """
-    output = os.path.join(settings.output_dir,
-                          os.path.splitext(relative)[0] + ".mkv")
+    output = rules.output_path_of(relative, settings.input_dir,
+                                  settings.output_dir)
     restore_output_folder(output)
     if replacing or not os.path.exists(output):
         return output
@@ -1024,7 +1025,8 @@ def write_video_only(relative: str, directory: str, reason: str,
     already failed can make this step fail as well.
     """
     source = os.path.join(settings.input_dir, relative)
-    output = rules.video_only_path_for(relative, settings.output_dir)
+    output = rules.video_only_path_for(relative, settings.output_dir,
+                                     settings.input_dir)
     log('WARNING: %s: %s - keeping the finished video encode as "%s" (no '
         "audio, subtitles, attachments, chapters or metadata)."
         % (relative, reason, os.path.relpath(output, settings.output_dir)))
@@ -1065,8 +1067,8 @@ class Plan:
         self.relative = relative
         self.settings = settings
         self.source = os.path.join(settings.input_dir, relative)
-        self.output = os.path.join(settings.output_dir,
-                                   os.path.splitext(relative)[0] + ".mkv")
+        self.output = rules.output_path_of(relative, settings.input_dir,
+                                           settings.output_dir)
         self.directory = segments.chunk_dir_for(settings.chunk_root, relative)
         self.duration = 0.0
         # The picture's own length, which can be shorter than the container's.
@@ -1139,18 +1141,18 @@ class Run:
         # now, because after the encode a file at that path is no longer
         # distinguishable from one that turned up while the encode ran.
         #
-        # Up to date means as long as the source, give or take the same slack
-        # the video intermediate was allowed before it was muxed: compared with
-        # no slack at all, an output whose audio ends a few milliseconds before
-        # the source's does is "short", and every rerun encodes the whole
-        # library again. It is only ever SHORT slack - a longer output is not
-        # this check's business - and small enough that an output cut short
-        # still counts as not done.
+        # Up to date means as long as the source by the measure a finished
+        # mux is accepted by: compared with no slack at all, an output whose
+        # audio ends a few milliseconds before the source's does is "short",
+        # and every rerun encodes the whole library again; compared with less
+        # slack than the length check allows, an output that check let through
+        # is encoded again every run. An output cut short by more still counts
+        # as not done.
         plan.replacing = os.path.isfile(plan.output)
         if plan.replacing:
             out_duration = _media_duration(plan.output)
-            if duration > 0 and out_duration >= (
-                    duration - rules.LENGTH_SLACK_SECONDS):
+            if duration > 0 and durationcheck.length_matches(duration,
+                                                             out_duration):
                 log("Up to date, skipping: " + relative)
                 self.count("skipped")
                 return None
@@ -1620,7 +1622,8 @@ class Run:
 
         # This run produced the complete file, so a failsafe left by an earlier
         # run for the same source is now just a duplicate of its video stream.
-        _remove(rules.video_only_path_for(relative, settings.output_dir))
+        _remove(rules.video_only_path_for(relative, settings.output_dir,
+                                          settings.input_dir))
 
         # The encoder embedded the RPU and ffmpeg derives the container's record
         # from that, but both the chunk re-join and the mux are stream copies, so
@@ -1890,14 +1893,16 @@ def _settle_and_run(settings, program: str, video_args: str, grain: str,
                              % (program, settings.upscale_resolution, problem))
             return 1
         settings.upscale_stack = stack
-    os.makedirs(settings.output_dir, exist_ok=True)
-    ramscratch.init_ram_base()
 
     # The name patterns are deliberately the exact ones the conversion loop uses,
-    # so the probe and the loop can never disagree about what counts.
+    # so the probe and the loop can never disagree about what counts. Asked
+    # before the output folder is made, so a run with nothing to convert
+    # leaves nothing behind.
     if not _sources(settings.input_dir):
         return safety.fail_no_relevant_input(settings.input_dir,
                                              "videos (.mkv / .mp4)")
+    os.makedirs(settings.output_dir, exist_ok=True)
+    ramscratch.init_ram_base()
 
     chosen = ffmpegselect.selected_ffmpeg()
     settings.svt_av1_hdr = bool(rank is not None and chosen
@@ -2035,7 +2040,7 @@ def _sources(root: str) -> list:
     for parent, dirs, names in os.walk(root):
         dirs.sort()
         for name in sorted(names):
-            if name.endswith("mkv") or name.endswith("mp4"):
+            if enums.lower_extension_of(name) in rules.SOURCE_EXTENSIONS:
                 found.append(os.path.relpath(os.path.join(parent, name), root))
     return found
 
@@ -2341,7 +2346,7 @@ class _HeldOutput:
         self._lock = threading.Lock()
         self._held: list = []
         self._live = True
-        self.ahead = None
+        self.ahead: int | None = None
 
     def write(self, text: str) -> int:
         with self._lock:

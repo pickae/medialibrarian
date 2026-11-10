@@ -222,6 +222,19 @@ class TestTheFetch:
         assert stale.read_bytes() == b"old"
         assert any("could not fetch" in line for line in logs)
 
+    def test_a_fetch_cut_off_halfway_keeps_the_copy_there_was(
+            self, tmp_path, monkeypatch):
+        """curl fails with part of the list written: the part is thrown away,
+        not moved over the good copy."""
+        stale = tmp_path / imdbdata.BASICS
+        stale.write_bytes(b"old")
+        old = time.time() - (imdbdata.MAX_AGE_DAYS + 1) * 86400
+        os.utime(stale, (old, old))
+        self._curl(monkeypatch, returncode=18, writes=True)
+        imdbdata._fetch(str(tmp_path), imdbdata.BASICS, [].append)
+        assert stale.read_bytes() == b"old"
+        assert os.listdir(tmp_path) == [imdbdata.BASICS]
+
     def test_without_duckdb_nothing_is_fetched(self, tmp_path, monkeypatch):
         monkeypatch.setattr(imdbdata.shutil, "which", lambda _name: None)
         calls = self._curl(monkeypatch)

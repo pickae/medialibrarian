@@ -13,6 +13,7 @@ import pytest
 
 from medialib.cli import convert_video as rules
 from medialib.cli import convert_video_run as run_module
+from medialib.lib import durationcheck
 
 pytestmark = pytest.mark.fs
 
@@ -253,8 +254,9 @@ class TestTheArgumentsOfOneChunk:
 
 class TestTheResumeSkip:
     """An output already in place is skipped when it spans its source - measured
-    with the slack the intermediate was allowed, so a finished file whose audio
-    ends a few milliseconds early is recognised, and one cut short is not."""
+    with the slack the length check accepts a finished mux with, so a finished
+    file whose audio ends a few milliseconds early is recognised, and one cut
+    short is not."""
 
     SOURCE = 40.023
 
@@ -264,7 +266,7 @@ class TestTheResumeSkip:
 
     @pytest.fixture
     def resume(self, monkeypatch, tmp_path):
-        def run(output_seconds):
+        def run(output_seconds, source_seconds=self.SOURCE):
             (tmp_path / "in").mkdir()
             (tmp_path / "in" / "clip.mkv").write_text("")
             (tmp_path / "out").mkdir()
@@ -274,7 +276,8 @@ class TestTheResumeSkip:
                                 lambda *a, **k: None)
             monkeypatch.setattr(
                 run_module, "_media_duration",
-                lambda path: self.SOURCE if "/in/" in path else output_seconds)
+                lambda path: (source_seconds if "/in/" in path
+                              else output_seconds))
 
             def encoded(path):
                 raise self.Encoded()
@@ -304,10 +307,19 @@ class TestTheResumeSkip:
         assert resume(40.008)
 
     def test_up_to_the_slack_short_is_still_up_to_date(self, resume):
-        assert resume(self.SOURCE - rules.LENGTH_SLACK_SECONDS)
+        assert resume(self.SOURCE - durationcheck.TOLERANCE_SECONDS)
 
     def test_an_output_cut_short_is_converted_again(self, resume):
-        assert not resume(self.SOURCE - rules.LENGTH_SLACK_SECONDS - 0.1)
+        assert not resume(self.SOURCE - durationcheck.TOLERANCE_SECONDS - 0.1)
+
+    def test_a_film_is_given_the_length_checks_share_of_its_length(
+            self, resume):
+        # Two hours: the length check accepts a mux 72 seconds short of it, so
+        # an output 30 seconds short is a finished one, not one to redo.
+        assert resume(7170.0, source_seconds=7200.0)
+
+    def test_and_past_that_share_it_is_converted_again(self, resume):
+        assert not resume(7100.0, source_seconds=7200.0)
 
     def test_a_truncated_output_is_converted_again(self, resume):
         assert not resume(self.SOURCE / 2)
@@ -591,3 +603,52 @@ class TestThePqSourceThatHoldsTheFork:
         settings = folder(**{"a.mkv": "bt709"})
         monkeypatch.setattr(run_module, "_has_tool", lambda name: False)
         assert run_module.pq_source_to_convert(settings)
+
+
+class TestWhichFilesAreSources:
+    """The scan the no-input refusal and the conversion loop share: a .mkv or
+    an .mp4, however its extension is spelled."""
+
+    def test_an_upper_case_extension_is_a_source(self, tmp_path):
+        for name in ("A.MKV", "b.Mp4", "notes.txt", "mkv", "clipmkv",
+                     ".hidden.mkv"):
+            (tmp_path / name).write_text("")
+        assert run_module._sources(str(tmp_path)) == ["A.MKV", "b.Mp4"]
+
+
+class TestSourcesSharingAStem:
+    """a.mkv and a.mp4 in one folder would both become a.mkv: one conversion
+    would land on the other's output, or skip as up to date because of it.
+    Each is given a name of its own instead."""
+
+    @pytest.fixture
+    def tree(self, tmp_path):
+        (tmp_path / "in" / "sub").mkdir(parents=True)
+        for name in ("a.mkv", "a.mp4", "a.srt", "b.mkv", "b.nfo",
+                     "sub/a.mkv"):
+            (tmp_path / "in" / name).write_text("")
+        return str(tmp_path / "in")
+
+    def test_each_keeps_its_source_extension_in_the_name(self, tree):
+        assert rules.output_path_of("a.mkv", tree, "/out") == "/out/a-mkv.mkv"
+        assert rules.output_path_of("a.mp4", tree, "/out") == "/out/a-mp4.mkv"
+
+    def test_a_file_that_is_not_a_source_is_no_clash(self, tree):
+        assert rules.output_path_of("b.mkv", tree, "/out") == "/out/b.mkv"
+
+    def test_the_same_stem_in_another_folder_is_no_clash(self, tree):
+        assert rules.output_path_of("sub/a.mkv", tree, "/out") == \
+            "/out/sub/a.mkv"
+
+    def test_the_failsafe_is_kept_apart_the_same_way(self, tree):
+        assert rules.video_only_path_for("a.mp4", "/out", tree) == \
+            "/out/a-mp4 (video only).mkv"
+
+    def test_the_plan_writes_to_the_name_of_its_own(self, tree, tmp_path):
+        settings = rules.Settings(input_dir=tree,
+                                  output_dir=str(tmp_path / "out"),
+                                  chunk_root=str(tmp_path / "chunks"))
+        assert run_module.Plan("a.mp4", settings).output == \
+            os.path.join(str(tmp_path / "out"), "a-mp4.mkv")
+        assert run_module.output_path_for("a.mkv", settings, False) == \
+            os.path.join(str(tmp_path / "out"), "a-mkv.mkv")

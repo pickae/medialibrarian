@@ -34,11 +34,13 @@ import tempfile
 from medialib import commands
 from medialib.lib import (
     adequacy,
+    archives,
     booktext,
     clioptions,
     enums,
     errorlog,
     imagebitrate,
+    imagecodecs,
     imagemagick,
     imagesizes,
     ramscratch,
@@ -189,7 +191,8 @@ def resize_image(path: str, geometry: str,
     if size >= FILE_SIZE_LIMIT and not adequacy.is_starved(verdict_of(path)):
         done = run(
             imagemagick.convert_argv(
-                [path, "-quality", str(IMAGE_QUALITY),
+                [imagecodecs.coder_prefixed(path),
+                 "-quality", str(IMAGE_QUALITY),
                  "-resize", geometry + ">", temporary]),
             stderr=subprocess.DEVNULL)
         if getattr(done, "returncode", 1) != 0:
@@ -453,20 +456,35 @@ class Run:
             # goes to the re-conversion whole, rather than through a round trip
             # that would put back exactly what it took out.
             source_epub = epub
-            if self.options["discardExtras"]:
+            refused = (archives.unsafe_members(epub, "zip")
+                       if self.options["discardExtras"] else [])
+            if refused:
+                # The archive policy every other unpacker here follows: a
+                # member that would land outside the folder is not unpacked,
+                # and neither is the rest. The book goes on whole, as it
+                # would without -d.
+                runlog.error('not unpacking "%s" to clean it: %s (%s)'
+                             % (base, refused[0][1], refused[0][0]),
+                             files=[source])
+            elif self.options["discardExtras"]:
                 unpacked = os.path.join(work, "unpacked")
                 os.makedirs(unpacked, exist_ok=True)
                 toolcapture.run(
                     ["unzip", "-q", "-o", "-d", unpacked, "--", epub], base,
                     warning="could not unpack %s to clean it" % base)
+                # A link member allowed in, one pointing inside the book, is
+                # still a link on disk; a book is files in folders.
+                archives.prune_irregular(unpacked)
 
                 clean_book_folder(unpacked, self.options["imageResolution"])
 
+                # -y: a link stored as a link, never followed into whatever
+                # file it points at.
                 source_epub = os.path.join(work, "repacked.epub")
-                toolcapture.run(["zip", "-q", "-r", "-X", source_epub, "."],
-                                base, cwd=unpacked,
-                                warning="could not repack %s after cleaning it"
-                                % base)
+                toolcapture.run(
+                    ["zip", "-q", "-r", "-X", "-y", source_epub, "."],
+                    base, cwd=unpacked,
+                    warning="could not repack %s after cleaning it" % base)
 
             # Re-converted once more for consistent readability; the epub that
             # went in is the fallback when that heavier step is unavailable.

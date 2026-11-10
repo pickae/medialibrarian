@@ -56,8 +56,8 @@ class _State:
         self.row = ""
         self.cols = 1000
         self.interval = 30
-        self.mon_pid = None
-        self._mon_stop = None
+        self.mon_pid: threading.Thread | None = None
+        self._mon_stop: threading.Event | None = None
 
 
 state = _State()
@@ -318,7 +318,8 @@ def stop_status_monitor() -> int:
     if state.mon_pid is None:
         return 0
     runlog._row_writer = None
-    state._mon_stop.set()
+    if state._mon_stop is not None:
+        state._mon_stop.set()
     state.mon_pid.join()
     state.mon_pid = None
     state._mon_stop = None

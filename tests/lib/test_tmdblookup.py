@@ -65,6 +65,13 @@ class TestTheCallItselfKeepsTheKeyOffArgv:
         assert {"get", "fail", "silent", "show-error"} <= set(lines)
         assert 'data-urlencode = "year=2001"' in lines
 
+    def test_a_stalled_connection_is_given_up_on(self, monkeypatch):
+        """A connection that stops answering would otherwise hold the whole
+        run; given up on, it is a failing curl like any other."""
+        seen = self._record(monkeypatch)
+        tmdblookup._curl("https://example.test/search", [])
+        assert "max-time = 30" in seen["input"].decode().splitlines()
+
     def test_a_failing_curl_is_no_answer(self, monkeypatch):
         self._record(monkeypatch, rc=22)
         assert tmdblookup._curl("https://example.test/x", []) is None
@@ -276,6 +283,15 @@ class TestTmdbImdbId:
         assert [url for url, _params in calls] == [
             _BASE + "/search/movie", _detail_url(1), _detail_url(2)]
 
+    @pytest.mark.parametrize("imdb", [
+        "tt../../etc", "tt0120737/../x", "tt", "tt0120737\n", "tt12a"])
+    def test_an_id_that_is_not_one_is_no_answer(self, monkeypatch, imdb):
+        """The id goes into a folder name and a path: what TMDb holds is taken
+        only when it is IMDb's own shape."""
+        search = json.dumps({"results": [_row(1, "Nighthawk")]})
+        _install(monkeypatch, search, {1: []}, {1: imdb})
+        assert tmdblookup.tmdb_imdb_id("Nighthawk", "1999") == ""
+
     def test_two_matching_candidates_is_no_answer(self, monkeypatch):
         # the second carries the title only on its original title - the whole
         # point of the alternative/original scan
@@ -379,7 +395,8 @@ class TestImdbOfTmdb:
 
     @pytest.mark.parametrize("body", [
         None, "", "not json", '{"imdb_id": null}', '{"imdb_id": ""}',
-        '{"imdb_id": "nm0000001"}'])
+        '{"imdb_id": "nm0000001"}', '{"imdb_id": "tt../../etc"}',
+        '{"imdb_id": "tt"}', '{"imdb_id": "tt0000003\\n"}'])
     def test_no_usable_answer_is_no_id(self, monkeypatch, body):
         self._install(monkeypatch, body)
         assert tmdblookup.imdb_of_tmdb("12345") == ""

@@ -156,6 +156,21 @@ class TestResizeImage:
         assert "1600x1200>" in calls[0]
         assert image.read_bytes() == b"small"      # kept under its old name
 
+    def test_the_image_is_read_by_the_coder_its_name_implies(self, tmp_path):
+        """ImageMagick would otherwise go by the content, and draw a page.jpg
+        that holds SVG; named "jpeg:", it is read as a JPEG or not at all."""
+        image = tmp_path / "page.jpg"
+        image.write_bytes(b"<svg" + b" " * ib.FILE_SIZE_LIMIT + b"/>")
+        calls = []
+
+        class _Failed:
+            returncode = 1
+
+        ib.resize_image(str(image), "1600x1200",
+                        run=lambda argv, **kw: calls.append(argv) or _Failed(),
+                        verdict_of=lambda path: "adequate")
+        assert "jpeg:%s" % image in calls[0]
+
     def test_a_converter_that_fails_leaves_the_original(self, tmp_path):
         image = tmp_path / "page.jpg"
         image.write_bytes(b"x" * (ib.FILE_SIZE_LIMIT + 1))

@@ -111,11 +111,18 @@ def _fetch(where: str, name: str, log: Callable[[str], None]) -> None:
         argv += ["-z", path]
     done = subprocess.run(argv + [BASE_URL + name])
     if done.returncode != 0:
+        # curl may have written part of the list before it failed: a
+        # truncated copy would be built into the database as the whole.
         log("WARNING: could not fetch %s - keeping the copy there is, if any"
             % name)
+        try:
+            os.remove(part)
+        except OSError:
+            pass
+        return
     if os.path.isfile(part):
         os.replace(part, path)
-    elif os.path.isfile(path) and done.returncode == 0:
+    elif os.path.isfile(path):
         # Not modified: the copy is current, and saying so is a touch.
         os.utime(path)
 

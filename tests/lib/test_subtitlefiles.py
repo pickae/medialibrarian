@@ -951,10 +951,10 @@ class TestDownloadSubs:
         assert all(a[5].endswith("/Movie.mkv") for a in pipx_calls)
 
     @pytest.mark.parametrize("folder", [
-        "Others", "Scenes", "Interviews", "Shorts", "Trailers", "Extras",
-        "Featurettes",
+        "Other", "Scenes", "Interviews", "Shorts", "Trailers", "Extras",
+        "Featurettes", "Behind The Scenes", "Deleted Scenes", "Disc extras",
     ])
-    def test_the_extras_words_are_substrings(self, w, monkeypatch, folder):
+    def test_a_bonus_folder_is_left_alone(self, w, monkeypatch, folder):
         tree = _tree(w, (folder, "d"), folder + "/Clip.mkv")
         monkeypatch.chdir(tree)
         w.install("pipx")
@@ -965,6 +965,19 @@ class TestDownloadSubs:
                                     logs.append)
         assert w.calls() == []
         assert logs == []
+
+    @pytest.mark.parametrize("film", [
+        "The Otherwise Quiet Town (2001)", "Scenes from a Lighthouse (1974)",
+        "Extras and Others (2010)"])
+    def test_a_film_whose_name_holds_a_bonus_word_is_a_film(self, tmp_path,
+                                                            film):
+        """A bonus folder is a whole folder name, not a word anywhere in the
+        path: these films get subtitles like any other."""
+        folder = tmp_path / film
+        folder.mkdir()
+        (folder / (film + ".mkv")).write_bytes(b"")
+        assert subtitlefiles.subtitle_movies(str(tmp_path)) \
+            == [str(tmp_path) + "/" + film + "/" + film + ".mkv"]
 
     @pytest.mark.parametrize("kept", [
         "Movie (old).mkv",

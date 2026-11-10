@@ -13,7 +13,9 @@ otherwise; the two differ in the container the concatenating phase then joins,
 The intermediate tree lives entirely in RAM and only the finished book
 reaches the disk. The three phases that are other scripts run as CHILD
 processes: they inherit the run directory through the environment, and a phase
-that exits non-zero ends this run rather than being skipped.
+that exits non-zero ends this run rather than being skipped - except a
+concatenation, which fails only the books it was handed, so the rest are still
+joined and the run ends non-zero after them.
 
 A BOOK is a folder whose audio is all one type, or an archive standing in for
 one. That is asked of the input before the run spends itself on it: mp3 and flac
@@ -243,6 +245,11 @@ class Staging:
         # siblings.
         claimed_by: dict[str, str] = {}
         for path in sorted(_children(parent, want_dirs=False), key=os.fsencode):
+            # The interrupt is only recorded while this phase runs, so it is
+            # looked for between archives: an input of many big ones would
+            # otherwise all be unpacked before the run stopped.
+            if safety.abort_requested():
+                return
             if not archives.is_archive_file(path):
                 continue
             # The name the book was PACKED under when the archive holds one
@@ -477,12 +484,15 @@ def main(argv: list, program: str = "convert-and-concat",
         _stop_if_interrupted()
 
         # PHASE 4
-        _concat_phase(in_path, out_path, temp_path, stage, only_concat,
-                      sub_folders, script_dir)
+        failed = _concat_phase(in_path, out_path, temp_path, stage,
+                               only_concat, sub_folders, script_dir)
 
         if not only_concat or stage:
             progress("Cleaning up RAM temp folder")
             ramscratch.run_exit_cleanup()
+        if failed:
+            shortfall("Finished with books missing. Output in: " + out_path)
+            return 1
         progress("Done. Output in: " + out_path)
         return 0
     finally:
@@ -641,7 +651,9 @@ def _transcode_phase(in_path, temp_path, stage, only_concat, mono, bitrate,
 
 
 def _concat_phase(in_path, out_path, temp_path, stage, only_concat,
-                  sub_folders, script_dir) -> None:
+                  sub_folders, script_dir) -> int:
+    """Every book concatenated; returns how many of the concat-audio runs
+    failed one or more of theirs."""
     os.chdir(temp_path)
     # -p, because the given output can name a path several levels into an empty
     # target disk.
@@ -674,6 +686,7 @@ def _concat_phase(in_path, out_path, temp_path, stage, only_concat,
                 "in for them"
                 % enums.extension_list(list(enums.AUDIO_EXTENSIONS))))
         progress("Found %d subfolder(s) to concatenate" % len(sub_dirs))
+        failed = []
         for index, sub_dir in enumerate(sub_dirs, start=1):
             name = os.path.basename(sub_dir)
             # Sanitised, so the folder's name matches the files placed inside
@@ -684,9 +697,9 @@ def _concat_phase(in_path, out_path, temp_path, stage, only_concat,
                      % (index, len(sub_dirs), name, safe))
             target = os.path.join(out_path, safe)
             os.makedirs(target, exist_ok=True)
-            _run_phase("concat-audio", [sub_dir, target], script_dir)
-            _stop_if_interrupted()
-        return
+            if not _concat_one(sub_dir, target, script_dir):
+                failed.append(name)
+        return _failed_concatenations(failed, len(sub_dirs))
 
     unit_roots = [root for root in roots if holds_concat_unit(root)]
     if not unit_roots:
@@ -695,10 +708,36 @@ def _concat_phase(in_path, out_path, temp_path, stage, only_concat,
             "subfolders each holding the audio files (%s) of one output file, "
             "as folders or as archives standing in for them"
             % enums.extension_list(list(enums.AUDIO_EXTENSIONS))))
+    failed = []
     for root in unit_roots:
         progress("Concatenating single output folder: " + root)
-        _run_phase("concat-audio", [root, out_path], script_dir)
-        _stop_if_interrupted()
+        if not _concat_one(root, out_path, script_dir):
+            failed.append(root)
+    return _failed_concatenations(failed, len(unit_roots))
+
+
+def _concat_one(source: str, target: str, script_dir: str) -> bool:
+    """One concat-audio run; whether it made every book it was handed.
+
+    Unlike the other phases, a concatenation that ends non-zero does not end
+    this run: it has already said which of its books failed, and the trees
+    still to come are other books, which that failure has no bearing on.
+    """
+    done = commands.run_command("concat-audio", [source, target],
+                                script_dir=script_dir).returncode == 0
+    # A concatenation shares this run's abort flag, so an interrupt ends it
+    # non-zero too - and that is this run being stopped, not a failed book.
+    _stop_if_interrupted()
+    return done
+
+
+def _failed_concatenations(failed: list, total: int) -> int:
+    """Said once at the end, since each one's own report may by now be far up
+    the scrollback; returns how many there were."""
+    if failed:
+        shortfall("PHASE 4/4: %d of %d subfolder(s) did not concatenate in "
+                  "full: %s" % (len(failed), total, ", ".join(failed)))
+    return len(failed)
 
 
 def cli(argv: list | None = None) -> int:

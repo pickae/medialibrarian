@@ -42,6 +42,7 @@ from medialib.lib import (
     enums,
     errorlog,
     imagebitrate,
+    imagecodecs,
     imagemagick,
     ramscratch,
     runlog,
@@ -429,7 +430,7 @@ def box_and_corners(source: str, fuzz: str):
     several frames included."""
     answer = subprocess.run(
         imagemagick.convert_argv(
-            [source, "-fuzz", fuzz,
+            [imagecodecs.coder_prefixed(source), "-fuzz", fuzz,
              "-format", "%@\n", "-write", "info:",
              "-colorspace", "sRGB", "-format", _CORNER_FORMAT, "info:"]),
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
@@ -455,7 +456,7 @@ def cpu_trim(entry: dict):
         return None, verdict
     if verdict == "trimmed":
         assert box is not None
-        at = argv.index(entry["input"]) + 1
+        at = argv.index(imagecodecs.coder_prefixed(entry["input"])) + 1
         argv = argv[:at] + ["-crop", "%dx%d+%d+%d" % box, "+repage",
                             "-bordercolor", colour, "-border",
                             str(border)] + argv[at:]
@@ -486,7 +487,7 @@ def encode_arguments(options, source, out, extra=()):
             "-define", "%s=%d" % (chosen.effort,
                                   options["effortLevel"]),
             *chroma,
-            source, *extra,
+            imagecodecs.coder_prefixed(source), *extra,
             "-resize", options["maxResCommand"],
             "-depth", str(chosen.depth), out]
 
@@ -562,15 +563,36 @@ class Run:
         written <out>, FAILED when it did not - its replay and the error log
         say why. Counted after the call, not before, so the closing figures
         are of images on disk; and an exit 0 that left no file is a failure
-        like any other."""
-        status = self._convert(arguments)
-        if status == 0 and _written(out):
-            self.record(category, label, relative, pixels=pixels)
-            return
-        if status == 0:
+        like any other.
+
+        <out>, the last of <arguments>, is written under a hidden name beside
+        it and renamed onto it only once ImageMagick has finished: a run
+        skips any image whose output exists, so the half-written file of an
+        encoder killed midway must never carry the real name."""
+        staged = _staged_output(out)
+        status = self._convert(list(arguments[:-1]) + [staged])
+        if status == 0 and _written(staged):
+            # A rename within one folder: the output's name holds nothing or
+            # the whole image, at every moment. Not safety.replace_file, which
+            # refuses a hidden name - and an input's own hidden name is one an
+            # output may carry.
+            try:
+                os.replace(staged, out)
+                self.record(category, label, relative, pixels=pixels)
+                return
+            except OSError as error:
+                errorlog.record("output-check", "%s: the image could not be "
+                                "moved into place (%s)"
+                                % (relative, error.strerror or error),
+                                files=[relative, out])
+        elif status == 0:
             errorlog.record("tool-bad-output", "%s: ImageMagick exited 0 but "
                             "wrote no image" % relative,
                             files=[relative, out], tool_argv=arguments)
+        try:
+            os.remove(staged)
+        except OSError:
+            pass
         self.record("failed", "FAILED", relative, stream=sys.stderr)
 
     def _identify(self, arguments) -> str:
@@ -584,7 +606,8 @@ class Run:
     def _pixels(self, source: str) -> int:
         """The picture's pixel count, from its header, or 0 when it cannot be
         read - which leaves the image out of the speed and nothing else."""
-        size = _parse_size(self._identify(["-ping", "-format", "%w %h", source]))
+        size = _parse_size(self._identify(
+            ["-ping", "-format", "%w %h", imagecodecs.coder_prefixed(source)]))
         return size[0] * size[1] if size else 0
 
     def _encode_arguments(self, source, out, extra=()):
@@ -595,7 +618,7 @@ class Run:
         meant."""
         out = disambiguated_output(relative, self.options["format"],
                                    self.input_dir, self.output_dir)
-        source = relative
+        source = imagecodecs.coder_prefixed(relative)
         # Under a lane the card's probe is the header read: it holds the size
         # too, and the page would otherwise be pinged twice.
         probe = (self._identify(["-ping", "-format", av1gpu.PROBE_FORMAT,
@@ -720,7 +743,7 @@ class Run:
         measured in the channels the lightness is defined on."""
         answer = subprocess.run(
             imagemagick.convert_argv(
-                [source, "-colorspace", "sRGB",
+                [imagecodecs.coder_prefixed(source), "-colorspace", "sRGB",
                  "-format", _CORNER_FORMAT, "info:"]),
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         if answer.returncode != 0:
@@ -828,7 +851,7 @@ class Run:
             return None
         probed = av1gpu.takes_probe(
             probe or self._identify(["-ping", "-format", av1gpu.PROBE_FORMAT,
-                                     relative]),
+                                     imagecodecs.coder_prefixed(relative)]),
             jpeg=relative.endswith((".jpg", ".jpeg")))
         if probed is None:
             return None
@@ -881,9 +904,36 @@ class Run:
         geometry = self.options["maxResCommand"]
         trim = (["-fuzz", self.options["fuzzCommand"], "-trim"]
                 if self.options["crop"] else [])
-        self._encode([relative, *trim, "-quality", str(quality),
+        self._encode([imagecodecs.coder_prefixed(relative), *trim,
+                      "-quality", str(quality),
                       "-resize", geometry, out], relative, out, label="REV",
                      pixels=self._pixels(relative))
+
+
+# What an encode's output is written under until it is finished: hidden, so
+# no listing of the output takes it for an image, and ending in the output's own
+# name, so ImageMagick still picks the format from the extension.
+PARTIAL_PREFIX = ".partial-"
+
+
+def _staged_output(out: str) -> str:
+    """The hidden name beside <out> its encode is written under, unique to
+    this process so that two workers never share one."""
+    folder, name = os.path.split(out)
+    return os.path.join(folder, "%s%d-%s" % (PARTIAL_PREFIX, os.getpid(), name))
+
+
+def _drop_partials(directory: str) -> None:
+    """The staged outputs of encodes an earlier run was killed in the middle
+    of: nothing will ever finish them, and the images they were for are
+    encoded afresh."""
+    for parent, _dirs, files in os.walk(directory):
+        for name in files:
+            if name.startswith(PARTIAL_PREFIX):
+                try:
+                    os.remove(os.path.join(parent, name))
+                except OSError:
+                    pass
 
 
 def _written(path: str) -> bool:
@@ -991,7 +1041,7 @@ def _encode_on_gpu(state, work, jobs: int, encoder: str) -> list:
     """
     with ThreadPoolExecutor(max_workers=jobs) as pool:
         jobs_of = {relative: job for relative, job in
-                   zip(work, pool.map(state.gpu_job, work)) if job}
+                   zip(work, pool.map(state.gpu_job, work), strict=True) if job}
     sized = [(relative, jobs_of[relative][0]) for relative in work
              if relative in jobs_of]
     done = set()
@@ -1177,6 +1227,7 @@ def main(argv: list, program: str = "convert-images") -> int:
                                 stdout=subprocess.DEVNULL)
         os.makedirs(output_dir, exist_ok=True)
         _prune(input_dir)
+        _drop_partials(output_dir)
         _prune(output_dir)
         safety.lower_case_extensions(os.path.realpath(input_dir))
         _mirror_folders(input_dir, output_dir)
@@ -1303,7 +1354,7 @@ def _calibrate(declaration, program, result, input_dir, output_dir) -> int:
     with ThreadPoolExecutor(max_workers=runlog.cpu_count()) as pool:
         scores = list(pool.map(
             lambda encode: _score(encode, decoded), encodes))
-    rows = [encode[:3] + score for encode, score in zip(encodes, scores)
+    rows = [encode[:3] + score for encode, score in zip(encodes, scores, strict=True)
             if score is not None]
     runlog.say("Scored %d of %d encodes in %.0f seconds\n\n"
                % (len(rows), len(encodes), time.time() - started))
@@ -1335,7 +1386,7 @@ def _calibration_crops(input_dir: str, crops_dir: str, jobs: int) -> list:
     def probe(path):
         answer = subprocess.run(
             imagemagick.identify_argv(["-ping", "-format", av1gpu.PROBE_FORMAT,
-                                       path]),
+                                       imagecodecs.coder_prefixed(path)]),
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         probed = av1gpu.takes_probe(
             answer.stdout.decode("utf-8", "replace"),
@@ -1351,7 +1402,7 @@ def _calibration_crops(input_dir: str, crops_dir: str, jobs: int) -> list:
 
     with ThreadPoolExecutor(max_workers=jobs) as pool:
         usable = [(path, size) for path, size in
-                  zip(candidates, pool.map(probe, candidates)) if size]
+                  zip(candidates, pool.map(probe, candidates), strict=True) if size]
     step = max(1, len(usable) // CALIBRATION_IMAGES)
     chosen = usable[::step][:CALIBRATION_IMAGES]
 
@@ -1362,14 +1413,14 @@ def _calibration_crops(input_dir: str, crops_dir: str, jobs: int) -> list:
         corners = {((width - side_w) // 2, (height - side_h) // 2),
                    (width // 5 if width // 5 + side_w <= width else 0,
                     height // 5 if height // 5 + side_h <= height else 0)}
-        for letter, (left, top) in zip("ab", sorted(corners)):
+        for letter, (left, top) in zip("ab", sorted(corners), strict=False):
             out = os.path.join(crops_dir, "%02d%s.png" % (number, letter))
             # Turned upright first: a phone photo's EXIF orientation would
             # otherwise ride along on the PNG, the CPU encoder would honour it
             # and av1gpu would not, and the two roads' pictures would be
             # compared a quarter turn apart.
             done = subprocess.run(imagemagick.convert_argv(
-                [path, "-auto-orient",
+                [imagecodecs.coder_prefixed(path), "-auto-orient",
                  "-crop", "%dx%d+%d+%d" % (side_w, side_h, left, top),
                  "+repage", "-depth", "8", "-strip", "PNG24:" + out]),
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

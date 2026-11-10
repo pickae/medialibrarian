@@ -318,7 +318,8 @@ class Lane:
                 self.room.wait(_POLL_SECONDS)
             # One call is given one set of options, so a chunk is either the
             # pages the card trims or the others.
-            chunk, filled = [], 0
+            chunk: list = []
+            filled = 0
             trims = bool(self.pending[0][1].get("trim"))
             while self.pending and (not chunk or filled + self.pending[0][1][
                     "pixels"] <= self.budget) and bool(

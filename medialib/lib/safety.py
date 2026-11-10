@@ -18,6 +18,7 @@ improvement and would also be a divergence, so it waits for a later pass.
 """
 
 import atexit
+import errno
 import os
 import random
 import shutil
@@ -281,6 +282,73 @@ def safe_rename(source: str, destination: str, log: SkipLog | None = None) -> bo
     if source_parent != destination_parent:
         _restore_mtime(source_parent, source_parent_at)
     return True
+
+
+def _reason(error: BaseException) -> str:
+    return getattr(error, "strerror", None) or str(error) or type(error).__name__
+
+
+def stage_beside(source: str, target: str) -> tuple[str, str]:
+    """Bring the file ``source`` into ``target``'s folder under a hidden name of
+    its own, ready to be renamed onto ``target``: ``(staged path, "")``, or
+    ``("", reason)`` with ``source`` untouched.
+
+    A rename where one works; across file systems - a tmpfs scratch and a disk
+    library - a full copy first and the source removed only once it is complete,
+    so a full disk leaves a stray partial copy at worst, never a short file
+    under the real name.
+    """
+    folder = _folder_of(target)
+    while True:
+        suffix = "".join(random.choice(_MKTEMP_ALPHABET) for _ in range(10))
+        staged = os.path.join(folder, ".%s.%s.partial"
+                              % (os.path.basename(target), suffix))
+        if not os.path.lexists(staged):
+            break
+    try:
+        os.rename(source, staged)
+        return staged, ""
+    except OSError as error:
+        if error.errno != errno.EXDEV:
+            return "", _reason(error)
+    try:
+        shutil.copy2(source, staged)
+    except (OSError, shutil.Error) as error:
+        try:
+            os.remove(staged)
+        except OSError:
+            pass
+        return "", _reason(error)
+    try:
+        os.remove(source)
+    except OSError:
+        pass
+    return staged, ""
+
+
+def replace_file(source: str, target: str) -> str:
+    """Put the file ``source`` at ``target``, replacing whatever is there, and
+    say why not if it could not: ``""`` when done, else the reason.
+
+    Unlike :func:`safe_rename` this is FOR overwriting - the caller has decided
+    the new file wins - and unlike a bare ``mv`` it reports a failure rather
+    than leaving the caller to find out: ``target`` holds its old content or the
+    whole new file at every moment, and on failure ``source`` is where it was.
+    """
+    if would_hide(target):
+        return "the name would hide it"
+    staged, failure = stage_beside(source, target)
+    if failure:
+        return failure
+    try:
+        os.replace(staged, target)
+    except OSError as error:
+        try:
+            shutil.move(staged, source)
+        except (OSError, shutil.Error):
+            pass
+        return _reason(error)
+    return ""
 
 
 def _split_extension(base: str) -> tuple[str, str]:

@@ -18,14 +18,16 @@ import os
 
 import pytest
 
-from medialib.cli import concat_audio
-from medialib.cli import convert_audio
-from medialib.cli import convert_comics
-from medialib.cli import ingest_movies_run
-from medialib.cli import ingest_music
-from medialib.cli import read_library
-from medialib.cli import transcribe_audio
-from medialib.cli import ytdlp
+from medialib.cli import (
+    concat_audio,
+    convert_audio,
+    convert_comics,
+    ingest_movies_run,
+    ingest_music,
+    read_library,
+    transcribe_audio,
+    ytdlp,
+)
 from medialib.lib import ffmpegselect, ramscratch, tooldeps
 
 pytestmark = pytest.mark.fs

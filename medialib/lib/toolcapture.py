@@ -309,6 +309,13 @@ def run(argv, label: str = "", *,
 _WARNINGS_ARE_ONE = ("mkvmerge", "mkvpropedit", "mkvextract")
 
 
+def warnings_at_most(status: int) -> bool:
+    """Whether a mkvtoolnix exit status means the work is done: 0, or 1 for
+    warnings. A negative status is a kill by signal - the OOM killer's -9 - and
+    is a failure, however complete the half-written file looks."""
+    return status in (0, 1)
+
+
 def watched(argv, *, label: str = "", tool: str = "", ok=None,
             announce: bool = True, skipped: str = "",
             on_missing: int | None = None,

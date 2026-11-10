@@ -315,3 +315,25 @@ class TestTheBonusGuard:
                             lambda path: called.append(path) or [])
         im.check_audio_tracks(movie, str(tmp_path))
         assert called == []
+
+
+class TestTheKeptOriginal:
+    """An improved remux keeps the film it replaced as "Film (old).mkv".
+    That copy is finished: transcoding it again would leave a stray
+    "Film (old)_N.opus" beside the living film."""
+
+    def test_only_the_living_film_is_walked(self, tmp_path, monkeypatch):
+        from medialib.cli import ingest_movies_run as run_module
+
+        folder = tmp_path / "Film (2020)"
+        folder.mkdir()
+        for name in ("Film (2020).mkv", "Film (2020) (old).mkv"):
+            open(str(folder / name), "w").close()
+
+        walked = []
+        monkeypatch.setattr(im, "check_audio_tracks",
+                            lambda movie, root: walked.append(
+                                os.path.basename(movie)))
+        run_module._transcode_opus(None, str(tmp_path), jobs=1,
+                                   exit_on_abort=False)
+        assert walked == ["Film (2020).mkv"]

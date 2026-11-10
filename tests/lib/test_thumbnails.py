@@ -319,7 +319,7 @@ def test_a_large_file_is_converted_with_the_tuning(tmp_path, isolated_env,
     thumbnails.embed_thumbnail(
         str(d), "track01", 100, 90, "1024x1024", 100, False, "ram", "script", run)
     assert run.called("convert") == [
-        ["convert", "-quiet", str(d / "art.jpg"), "-quality", "90",
+        ["convert", "-quiet", "jpeg:%s" % (d / "art.jpg"), "-quality", "90",
          "-resize", "1024x1024>", "ram/track01.output.jpg"]]
 
 
@@ -332,7 +332,7 @@ def test_a_non_jpg_is_converted_however_small(tmp_path, isolated_env, monkeypatc
     monkeypatch.setenv("PATH", _stub_bin(tmp_path, ["convert"]))
     thumbnails.embed_thumbnail(
         str(d), "track01", 100, 90, "1024x1024", 100, False, "ram", "script", run)
-    assert run.called("convert")[0][2] == str(d / "art.png")
+    assert run.called("convert")[0][2] == "png:%s" % (d / "art.png")
 
 
 def test_the_jpg_check_is_case_sensitively_exact(tmp_path, isolated_env, monkeypatch):
@@ -539,8 +539,27 @@ def test_a_large_sidecar_is_scaled_the_big_cover_way(tmp_path, isolated_env,
         "track 01.mp3", "out/track 01.opus", 100, 90, "512x512",
         "in", "out", "tmp", "out/track 01.opus", "script", run)
     assert run.called("convert") == [
-        ["convert", "tmp/tempCover.jpg", "-quality", "90",
+        ["convert", "jpeg:tmp/tempCover.jpg", "-quality", "90",
          "-resize", "512x512>", "tmp/cover.jpg"]]
+
+
+def test_a_webp_sidecar_is_read_as_the_webp_it_is(tmp_path, isolated_env,
+                                                  monkeypatch):
+    """It is copied under the .jpg name, so the name cannot pick its coder;
+    its bytes do, and anything that is not a picture is never let pick one."""
+    d = tmp_path / "case"
+    (d / "in").mkdir(parents=True)
+    (d / "in" / "track 01.webp").write_bytes(
+        b"RIFF\x10\0\0\0WEBPVP8 " + b"\0" * 100)
+    for sub in ("out", "tmp"):
+        (d / sub).mkdir()
+    monkeypatch.chdir(d)
+    run = _Run(writes={"convert": ["tmp/cover.jpg"]})
+    monkeypatch.setenv("PATH", _stub_bin(tmp_path, ["convert"]))
+    thumbnails.apply_cover(
+        "track 01.mp3", "out/track 01.opus", 100, 90, "512x512",
+        "in", "out", "tmp", "out/track 01.opus", "script", run)
+    assert run.called("convert")[0][1] == "webp:tmp/tempCover.jpg"
 
 
 def test_a_sidecar_below_the_threshold_is_copied(tmp_path, isolated_env,

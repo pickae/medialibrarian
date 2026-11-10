@@ -174,6 +174,21 @@ class TestASecondPass:
         assert len(transcribe.whisper_log.read_text().splitlines()) == calls
         assert blackbox.tree_of(outputs) == before
 
+    def test_a_transcribed_video_is_not_extracted_again(self, transcribe,
+                                                         tmp_path):
+        """Lifting a film's audio out takes minutes, so a video whose
+        transcript is already there is passed over before ffmpeg is run."""
+        source = tmp_path / "in"
+        outputs = tmp_path / "out"
+        (source / "b").mkdir(parents=True)
+        (source / "b" / "movie.mkv").touch()
+        transcribe.transcribe(source, outputs)
+        extractions = len(transcribe.ffmpeg_log.read_text().splitlines())
+        log = transcribe.transcribe(source, outputs)
+        assert "already present: b/movie.mkv" in log, log
+        assert len(transcribe.ffmpeg_log.read_text().splitlines()) \
+            == extractions
+
 
 class TestAnEmptyTranscript:
     """A transcript that exists but is 0 bytes is not a finished one - it is a

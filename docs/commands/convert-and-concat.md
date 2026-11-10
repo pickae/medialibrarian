@@ -21,7 +21,8 @@ With no options, a run:
 - then joins one book per subfolder of the input (`-s` for one level deeper; `-c` skips the conversion)
 - unpacks archives into RAM ([below](#archives))
 - does not clean the input folders (`-i`), but the conversion does **lower-case the input's file extensions**
-- converts everything again on a rerun, and fails on a book already in the output
+- converts everything again on a rerun, but skips a book already in the output
+- with `-s`, carries on to the next subfolder when one has a book that fails, and names the failed subfolders at the end (the run then exits non-zero)
 
 Only the finished books are ever written to disk — which is why the output
 folder is given rather than derived: it usually lives on a different disk than

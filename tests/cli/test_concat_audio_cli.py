@@ -395,31 +395,46 @@ class TestAJoinThatFails:
         assert _names(concat.outputs, ".mp3") == []
 
 
-class TestAFileAlreadyAtTheOutputName:
-    """ffmpeg declines to overwrite rather than truncating, so the file in the
-    way is somebody else's - it is reported, never cleared away."""
+class TestABookAlreadyInTheOutput:
+    """A file already at a book's output name before the run started is that
+    book, made by an earlier run: it is passed over as done, so a rerun over a
+    half-finished output carries on where the last one stopped. It is never
+    built again, nor touched."""
 
     @pytest.fixture
-    def run(self, concat):
-        _tree(concat.inputs, "Book/01 - part.mp3", "Book/02 - part.mp3")
+    def run(self, concat, tmp_path):
+        _tree(concat.inputs, "Book/01 - part.mp3", "Book/02 - part.mp3",
+              "Other/01 - part.mp3")
         (concat.outputs / "Book.mp3").write_text("an earlier run's book")
+        written = tmp_path / "ffmpegOutputs"
         concat.with_tool(
             "ffmpeg",
-            'out="${!#}"; [[ "$out" != "-" && -e "$out" ]] &&'
+            'out="${!#}"; echo "$out" >> "%s";'
+            ' [[ "$out" != "-" && -e "$out" ]] &&'
             ' { echo "File exists" >&2; exit 1; };'
-            ' [[ "$out" == "-" ]] || : > "$out"')
+            ' [[ "$out" == "-" ]] || : > "$out"' % written)
         done = concat.run("concat-audio", concat.inputs, concat.outputs)
-        return concat, done
+        return concat, done, written.read_text()
 
-    def test_the_file_that_was_in_the_way_is_untouched(self, run):
-        concat, _ = run
+    def test_the_book_that_was_there_is_untouched(self, run):
+        concat, _, _ = run
         assert (concat.outputs / "Book.mp3").read_text() == (
             "an earlier run's book")
 
-    def test_the_refusal_is_reported_rather_than_passed_over(self, run):
-        _, done = run
-        assert '!!! "Book"' in done.stdout + done.stderr
-        assert done.returncode == 1
+    def test_it_is_not_built_again(self, run):
+        _, _, written = run
+        assert "/Book." not in written, written
+
+    def test_it_is_said_to_be_there_and_the_run_succeeds(self, run):
+        _, done, _ = run
+        log = done.stdout + done.stderr
+        assert "Already in the output" in log, log
+        assert "!!!" not in log, log
+        assert done.returncode == 0, log
+
+    def test_the_other_books_are_still_made(self, run):
+        concat, _, _ = run
+        assert _names(concat.outputs, ".mp3") == ["Book.mp3", "Other.mp3"]
 
 
 class TestTwoFoldersThatCleanToTheSameName:

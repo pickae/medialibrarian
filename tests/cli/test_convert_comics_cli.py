@@ -29,9 +29,10 @@ _IDENTIFY_FLAT = 'echo "1000 1500"'
 # Write the output - the last argument, minus a trailing ">" and a leading
 # "miff:" for the in-memory trim target - starting with a line naming the page it
 # came from, then padded past the 10k below which a page reads as an empty page.
+# The page arrives after the coder that reads it, "jpeg:", which is taken off.
 _CONVERT_STAMPING = '''
 src=""
-for a in "$@"; do [[ -f "$a" ]] && { src="$a"; break; }; done
+for a in "$@"; do [[ -f "${a#*:}" ]] && { src="${a#*:}"; break; }; done
 out="${!#}"; out="${out%\\>}"; out="${out#miff:}"
 { printf "AVIF from %s\\n" "${src##*/}"; head -c 12288 /dev/zero | tr "\\0" "a"; } > "$out"
 exit 0
@@ -210,7 +211,8 @@ class TestAnArchiveThatCannotBeTrusted:
             packed.writestr("../x.jpg", "a page beside the book's folder")
         (comics.inputs / "Corrupt.cbz").write_bytes(b"PK\x03\x04 not a zip")
         done = comics.run("convert-comics", comics.inputs, comics.outputs)
-        assert done.returncode == 0, done.stdout + done.stderr
+        # Two books not made is a run that did not do what it was asked.
+        assert done.returncode == 1, done.stdout + done.stderr
         return comics, done.stdout + done.stderr, tmp_path
 
     def test_the_warning_names_the_escaping_member(self, run):
@@ -244,7 +246,7 @@ class TestAQuietRun:
         _cbz(comics.inputs, "Alpha.cbz", {"01.jpg": "alpha 1"})
         (comics.inputs / "Corrupt.cbz").write_bytes(b"PK\x03\x04 not a zip")
         done = comics.run("convert-comics", "-q", comics.inputs, comics.outputs)
-        assert done.returncode == 0, done.stdout + done.stderr
+        assert done.returncode == 1, done.stdout + done.stderr
         return comics, done
 
     def test_the_book_is_still_made(self, run):
@@ -255,6 +257,10 @@ class TestAQuietRun:
         _, done = run
         assert re.search(r"^    Skip \(.*\): Corrupt\.cbz$", done.stderr,
                          re.MULTILINE), done.stdout
+
+    def test_and_counted(self, run):
+        _, done = run
+        assert "1 book(s) failed and were not packaged" in done.stderr
 
     @pytest.mark.parametrize("line", [
         "Naming\n", "Converting\n", "Converting: ", "[1/2] ", "[2/2] ",
@@ -267,7 +273,8 @@ class TestAQuietRun:
         comics, _ = run
         again = comics.run("convert-comics", "-q", comics.inputs,
                            comics.outputs)
-        assert again.returncode == 0, again.stdout + again.stderr
+        # The corrupt book is tried again, and fails again.
+        assert again.returncode == 1, again.stdout + again.stderr
         assert "Skip (exists)" not in again.stdout + again.stderr
         assert "already packaged" not in again.stdout + again.stderr
 
@@ -319,7 +326,7 @@ esac
 for a in "$@"; do [[ "$a" == "info:" ]] && {
     printf "srgb(255,255,255) 100\\n%.0s" 1 2 3 4; exit 0; }; done
 src=""
-for a in "$@"; do p="${a#miff:}"; [[ -f "$p" ]] && { src="$p"; break; }; done
+for a in "$@"; do p="${a#*:}"; [[ -f "$p" ]] && { src="$p"; break; }; done
 out="${!#}"; out="${out%\\>}"; out="${out#miff:}"
 name="${src##*/}"
 [[ "$name" == trimmed_* ]] && name="$(head -1 "$src")"

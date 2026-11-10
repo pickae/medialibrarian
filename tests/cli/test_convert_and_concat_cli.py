@@ -287,6 +287,62 @@ class TestTheArchivesThatCountUnderTheGroupedMode:
         _assert_no_leak(wrapper)
 
 
+class TestAGroupWithAFailedBook:
+    """Under `-s` every group is its own concatenation, so one book that fails
+    costs its own group's line in the closing report, not every group sorted
+    after it - and the run still ends non-zero, having not made everything."""
+
+    @pytest.fixture
+    def run(self, wrapper, tmp_path):
+        source = tmp_path / "fin"
+        outputs = tmp_path / "fout"
+        _book(source / "Alpha" / "Broken", "mp3")
+        _book(source / "Bravo" / "Fine", "mp3")
+        # The join of the book called Broken writes nothing; every other call
+        # does what the usual stand-in does.
+        wrapper.with_tool(
+            "ffmpeg",
+            'if [[ "$*" == *"-f concat"* && "${!#}" == *Broken* ]]; then\n'
+            '    exit 1\n'
+            'fi\n'
+            'if [[ "${!#}" == -* ]]; then\n'
+            '    [[ "${!#}" == "-version" ]] && echo "ffmpeg version 7.1"\n'
+            '    exit 0\n'
+            'fi\n'
+            ': > "${!#}"')
+        log = wrapper.wrapper("-s", source, outputs, expect=1)
+        return wrapper, outputs, log
+
+    def test_the_groups_after_it_are_still_made(self, run):
+        _, outputs, _ = run
+        assert _names(outputs / "Bravo") == ["Fine.mp3"]
+
+    def test_the_failed_group_is_named_at_the_end(self, run):
+        _, _, log = run
+        assert "1 of 2 subfolder(s) did not concatenate in full: Alpha" \
+            in log, log
+
+    def test_the_unpacking_scratch_is_handed_back(self, run):
+        wrapper, _, _ = run
+        _assert_no_leak(wrapper)
+
+
+class TestARerunOverAFinishedOutput:
+    """The books an earlier run wrote are passed over as done, so running the
+    same command again succeeds and leaves them exactly as they were."""
+
+    def test_it_succeeds_and_changes_nothing(self, wrapper, tmp_path):
+        source = tmp_path / "rrin"
+        outputs = tmp_path / "rrout"
+        _book(source / "Alpha" / "One", "mp3")
+        _book(source / "Bravo" / "Two", "mp3")
+        wrapper.wrapper("-s", source, outputs)
+        before = blackbox.tree_of(outputs)
+        log = wrapper.wrapper("-s", source, outputs)
+        assert "Already in the output" in log, log
+        assert blackbox.tree_of(outputs) == before
+
+
 class TestOnlyConcatenating:
     """`-c` transcodes nothing at all, so an unpacked archive's content IS the
     finished audio - and the input tree is left exactly as it was."""

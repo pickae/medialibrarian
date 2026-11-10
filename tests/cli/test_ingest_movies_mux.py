@@ -166,6 +166,57 @@ class TestAFailedMux:
         assert muxer.released
 
 
+class TestAMuxThatCannotBePutInPlace:
+    """The source goes only once its Matroska is in place: a full library
+    disk, a name the move refuses or one already taken leaves it as it was."""
+
+    def test_a_failed_move_keeps_the_source(self, muxer, monkeypatch):
+        import errno
+        real = os.replace
+
+        def full(source, target):
+            if target.endswith(".mkv"):
+                raise OSError(errno.ENOSPC, "No space left on device")
+            return real(source, target)
+
+        muxer.film("A Film (2020).mp4", MP4)
+        monkeypatch.setattr(os, "replace", full)
+        muxer.run()
+        assert muxer.names() == ["A Film (2020).mp4"]
+
+    def test_a_failed_cross_device_copy_keeps_the_source(self, muxer,
+                                                          monkeypatch):
+        import errno
+        import shutil
+
+        def cross_device(*_a, **_k):
+            raise OSError(errno.EXDEV, "Invalid cross-device link")
+
+        def full(*_a, **_k):
+            raise OSError(errno.ENOSPC, "No space left on device")
+
+        muxer.film("A Film (2020).mp4", MP4)
+        monkeypatch.setattr(os, "rename", cross_device)
+        monkeypatch.setattr(shutil, "copy2", full)
+        muxer.run()
+        assert muxer.names() == ["A Film (2020).mp4"]
+
+    def test_a_mkvmerge_killed_by_a_signal_is_a_failure(self, muxer):
+        muxer.status = -9
+        muxer.film("A Film (2020).mp4", MP4)
+        muxer.run()
+        assert muxer.names() == ["A Film (2020).mp4"]
+
+    def test_an_mkv_already_beside_it_is_not_overwritten(self, muxer):
+        muxer.film("A Film (2020).mp4", MP4)
+        muxer.film("A Film (2020).mkv", MATROSKA + b" the other one")
+        muxer.run()
+        assert muxer.names() == ["A Film (2020).mkv", "A Film (2020).mp4"]
+        with open(os.path.join(muxer.root, "A Film (2020)",
+                               "A Film (2020).mkv"), "rb") as handle:
+            assert handle.read() == MATROSKA + b" the other one"
+
+
 class TestTheScratch:
     def test_it_is_sized_against_the_film(self, muxer, monkeypatch):
         """A remux writes the whole film out again, so the scratch is asked for
@@ -213,3 +264,20 @@ class TestTaggingWhatIsNotMatroska:
 
     def test_a_real_matroska_still_is(self, tagged):
         assert tagged(MATROSKA)
+
+
+class TestTaggingTheKeptOriginal:
+    """The original an improved remux keeps is finished: retitling it would
+    give it its living sibling's name in Plex's eyes, " (old)" and all."""
+
+    def test_it_is_left_alone(self, monkeypatch, tmp_path):
+        calls = []
+        monkeypatch.setattr(im, "_run", lambda argv: calls.append(argv) or 0)
+        monkeypatch.setattr(im, "_run_capture", lambda argv: "")
+        monkeypatch.setattr(im, "_identify", lambda path: [])
+        folder = tmp_path / "A Film (2020)"
+        _write(str(folder / "A Film (2020).mkv"), MATROSKA)
+        _write(str(folder / "A Film (2020) (old).mkv"), MATROSKA)
+        im.update_tags(str(tmp_path))
+        assert [os.path.basename(argv[1]) for argv in calls] == [
+            "A Film (2020).mkv"]

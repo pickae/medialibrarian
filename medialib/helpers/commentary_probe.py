@@ -104,7 +104,8 @@ def main():
     answer = {}
     for stream in args.streams:
         heard = total = 0.0
-        lines, languages = [], Counter()
+        lines: list = []
+        languages: Counter = Counter()
         for start in starts:
             samples = _window(args.movie, stream, start, args.seconds)
             if not len(samples):
