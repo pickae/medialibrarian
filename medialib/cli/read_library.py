@@ -30,6 +30,7 @@ from medialib.lib import (
     bookpublishing,
     booktext,
     clioptions,
+    console,
     enums,
     errorlog,
     ffmpegselect,
@@ -264,13 +265,11 @@ class Counters:
     finishes out of order.
     """
 
-    def __init__(self, counter_dir: str, total: int, render=None) -> None:
+    def __init__(self, counter_dir: str, total: int) -> None:
         self.dir = counter_dir
         self.total = total
-        self.render = render
-
-    def _lock_path(self) -> str:
-        return os.path.join(self.dir, "lock")
+        # The run's console: the lock every reader prints under, and the row.
+        self.console = console.Console(counter_dir)
 
     def read(self, name: str) -> int:
         try:
@@ -286,10 +285,7 @@ class Counters:
     def claim_book_number(self) -> int:
         """The next book's number, claimed under the console lock so two books
         that start at the same moment cannot take the same one."""
-        with open(self._lock_path(), "w") as lock, runlog.take_lock(lock):
-            number = self.read("started") + 1
-            self.write("started", number)
-            return number
+        return self.console.count("started")
 
     def book_line(self, number: int, line: str, failed: bool = False,
                   said: str = "") -> None:
@@ -298,26 +294,16 @@ class Counters:
         afterwards, under the lock the row's own refresher takes before it
         draws. Under -q only a failed book's line is printed - with ``said``,
         what the tool that failed it said, under it."""
-        with open(self._lock_path(), "w") as lock, runlog.take_lock(lock):
-            statusline.clear_status()
-            text = "%s%s\n" % (runlog.counted_prefix(number, self.total), line)
-            if failed:
-                sys.stderr.write(text + said)
-            else:
-                runlog.say(text)
-            sys.stderr.flush()
-            if self.render is not None:
-                statusline.repin_status(self.render)
+        text = "%s%s\n" % (runlog.counted_prefix(number, self.total), line)
+        if failed:
+            self.console.say(text + said, always=True)
+        else:
+            self.console.say(text)
 
     def note(self, line: str) -> None:
         """What a book says between its start and its finish. Indented, so it
         reads as subordinate to the numbered lines rather than as another book."""
-        with open(self._lock_path(), "w") as lock, runlog.take_lock(lock):
-            statusline.clear_status()
-            runlog.say("        %s\n" % line)
-            sys.stderr.flush()
-            if self.render is not None:
-                statusline.repin_status(self.render)
+        self.console.say("        %s\n" % line)
 
     def report_progress(self, category: str, number: int, line: str,
                         said: str = "") -> None:
@@ -327,7 +313,7 @@ class Counters:
         so this is called exactly ONCE per book on every path through it - read,
         skipped or failed - and always as that book's last line.
         """
-        with open(self._lock_path(), "w") as lock, runlog.take_lock(lock):
+        with self.console.locked():
             self.write("current", self.read("current") + 1)
             self.write(category, self.read(category) + 1)
         self.book_line(number, line, failed=category == "failed", said=said)
@@ -733,6 +719,7 @@ def _in_worker(state: Run, method: str, item) -> None:
     here rather than in the work, because at width 1 that same work runs in the
     RUN's own process - where the worker's handler would replace the run's."""
     safety.trap_worker_abort()
+    state.counters.console.activate()
     getattr(state, method)(item)
 
 
@@ -930,7 +917,7 @@ def _settle_and_read(result, program: str, script_dir: str, in_path: str,
         # The refresher is stopped here as well as after the queue drains: an
         # early exit leaves the run without reaching that line, and a refresher
         # that outlived it would keep redrawing over whatever was printed next.
-        statusline.stop_status_monitor()
+        console.hide_active()
 
 
 def _scan_books(in_path: str) -> list:
@@ -1044,7 +1031,6 @@ def _read(result, program: str, script_dir: str, in_path: str, out_path: str,
         narration_engine=narration_engine, run_start=run_start,
         run_start_epoch=int(run_start), run_end=None,
     )
-    counters.render = state.reading_status_text
 
     # Named BEFORE the measuring pass, not after it: the pass is the long step a
     # Ctrl+C lands in, and the abort trap ends the run by printing the closing
@@ -1068,8 +1054,7 @@ def _read(result, program: str, script_dir: str, in_path: str, out_path: str,
     # at a time prints the engine's own output, which would scroll a row that is
     # rewritten in place into litter.
     if os.environ.get("narrationVerbose") == "0":
-        statusline.start_status_monitor(os.path.join(counter_dir, "lock"),
-                                        state.reading_status_text)
+        counters.console.show(state.reading_status_text)
 
     # On a checkout whose environment is not populated yet, the FIRST book is read
     # on its own: that book's run is also the checkout's own dependency install,
@@ -1086,7 +1071,7 @@ def _read(result, program: str, script_dir: str, in_path: str, out_path: str,
         first_book = 1
 
     _run_pool(state, "read_book", books[first_book:], jobs)
-    statusline.stop_status_monitor()
+    counters.console.hide()
     safety.exit_if_aborted()
 
     state.run_end = time.time()

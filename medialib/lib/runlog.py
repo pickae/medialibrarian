@@ -20,30 +20,25 @@ import contextlib
 import os
 import shutil
 import sys
-import threading
 import time
+import typing
 
 __all__ = ["log", "say", "result", "detail", "warn", "error", "error_continued",
-           "verbosity",
+           "verbosity", "keep",
            "settle_verbosity",
            "QUIET", "NORMAL", "VERBOSE", "counted_prefix", "film_header",
            "cpu_count", "can_lock", "have_flock", "settle_flock", "take_lock",
-           "warn_uncounted_progress", "held"]
+           "warn_uncounted_progress"]
 
 QUIET, NORMAL, VERBOSE = 0, 1, 2
 
 VERBOSITY_VARIABLE = "LOG_VERBOSITY"
 
-# Set by the status line while it keeps a row pinned in this process: how a
-# line is written to stderr around that row, so it lands on a console row of
-# its own rather than on the end of the row's text.
-_row_writer = None
+# The run's console (`medialib/lib/console.py`) in this process, once the run
+# has made one: every line for stderr is written through it, so it lands on a
+# console row of its own and in its item's block.
+_console: typing.Any = None
 _LEVEL_WORDS = {QUIET: "quiet", NORMAL: "", VERBOSE: "verbose"}
-
-# The lines a thread is holding back under :func:`held`, and the lock that
-# keeps one thread's block from landing in the middle of another's.
-_HELD = threading.local()
-_HELD_LOCK = threading.Lock()
 
 
 def can_lock() -> bool:
@@ -149,6 +144,12 @@ def verbosity() -> int:
     return NORMAL
 
 
+def keep(text: str, needs: int = NORMAL) -> None:
+    """``text`` into the run's info log, as a console line of level
+    ``needs`` - for a line written to the console some other way."""
+    _keep(text, needs, None)
+
+
 def _keep(text: str, needs: int, stream) -> None:
     """``text`` into the run's info log (`medialib/lib/infolog.py`) when it
     went to the console and the log keeps lines of level ``needs``. A line
@@ -179,39 +180,10 @@ def _write_text(text: str, stream) -> None:
 
 def _emit(text: str, stream) -> None:
     out = sys.stderr if stream is None else stream
-    holding = getattr(_HELD, "lines", None)
-    if holding is not None and out is sys.stderr:
-        holding.append(text)
-        return
-    _emit_now(text, out)
-
-
-def _emit_now(text: str, out) -> None:
-    if _row_writer is not None and out is sys.stderr:
-        _row_writer(out, text)
+    if _console is not None and out is sys.stderr:
+        _console.emit(text)
     else:
         out.write(text)
-
-
-@contextlib.contextmanager
-def held():
-    """This thread's log lines held back and written as one block at the end.
-
-    For work that runs on a thread beside the run's own output: a film's lines
-    read as a block under its heading rather than threaded through another
-    film's. Each line keeps the time it was logged at.
-    """
-    if getattr(_HELD, "lines", None) is not None:
-        yield
-        return
-    _HELD.lines = []
-    try:
-        yield
-    finally:
-        lines, _HELD.lines = _HELD.lines, None
-        with _HELD_LOCK:
-            for text in lines:
-                _emit_now(text, sys.stderr)
 
 
 def log(*message: object, stream=None) -> None:

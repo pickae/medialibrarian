@@ -5,10 +5,12 @@ supplies, the erase/re-pin dance around each line it prints, and the settlement 
 worker process has to be handed before it can join in.
 """
 
+import types
+
 import pytest
 
 from medialib.cli import convert_audio as ca
-from medialib.lib import statusline
+from medialib.lib import console, statusline
 
 pytestmark = pytest.mark.fs
 
@@ -29,8 +31,8 @@ def counters(tmp_path, monkeypatch):
     progress.write_text("12\n")
     duration.write_text(ENCODED + "\n")
     total.write_text("80\n")
-    made = ca.Counters(str(progress), str(duration), str(total),
-                       NOW - ELAPSED)
+    made = ca.Counters(console.Console(str(tmp_path)), str(duration),
+                       str(total), NOW - ELAPSED)
     made.progress = progress
     made.duration = duration
     made.total = total
@@ -136,6 +138,8 @@ class TestPerFileLine:
     def test_the_row_is_erased_for_the_line_and_re_pinned_underneath_it(
             self, counters, capsys, monkeypatch):
         monkeypatch.setattr(statusline.state, "row", "1")
+        counters.console.render = counters.status_text
+        counters.console.pinned = True
         counters.progress.write_text("11\n")
         counters.report_progress("track12.m4a")
         assert capsys.readouterr().err == (
@@ -167,11 +171,12 @@ class _Reporter:
 
     def __init__(self, seen_file: str) -> None:
         self.seen_file = seen_file
+        self.counters = types.SimpleNamespace(console=console.Console())
 
     def encode(self, item: str) -> None:
+        row, cols, _interval = console.active().geometry
         with open(self.seen_file, "w") as seen:
-            seen.write("%s %s" % (statusline.state.row or "-",
-                                  statusline.state.cols))
+            seen.write("%s %s" % (row or "-", cols))
 
 
 class TestTheRowInAWorkerProcess:

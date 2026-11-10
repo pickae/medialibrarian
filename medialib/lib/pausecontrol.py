@@ -30,6 +30,9 @@ import glob
 import os
 import signal as _signal
 import subprocess
+import sys
+
+from medialib.lib import console
 
 __all__ = [
     "init",
@@ -446,17 +449,12 @@ def kill_pausable_jobs() -> None:
 
 def pause_announce(message: str, error=None) -> None:
     """Say something to the console without landing halfway along a live status row,
-    when there is one. The dependency is one-way and optional on purpose: a script
-    that keeps no status row simply prints the line."""
-    from medialib.lib import statusline
-
-    statusline.clear_status()
-    if error is not None:
+    when there is one: through the run's console, which erases the row first and
+    draws it again under the line."""
+    if error is not None and error is not sys.stderr:
         error.write(message + "\n")
     else:
-        import sys
-
-        sys.stderr.write(message + "\n")
+        console.write(message + "\n")
 
 
 def restore_pause_terminal() -> None:

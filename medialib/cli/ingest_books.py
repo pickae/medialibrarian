@@ -37,6 +37,7 @@ from medialib.lib import (
     archives,
     booktext,
     clioptions,
+    console,
     enums,
     errorlog,
     imagebitrate,
@@ -319,6 +320,9 @@ class Run:
         self.in_path = in_path
         self.out_path = out_path
         self.counter_dir = counter_dir
+        # The run's console: the lock every worker prints under, and the count
+        # of books finished.
+        self.console = console.Console(counter_dir)
         # Where emit_output's name claims live: fresh with the run, shared by
         # every worker, gone with it - so a claim can never outlive the run it
         # guarded.
@@ -342,30 +346,15 @@ class Run:
 
         Under -q only a FAILED line is printed; the counting goes on regardless.
         """
-        with open(os.path.join(self.counter_dir, "lock"), "w") as handle, \
-                runlog.take_lock(handle):
-            path = os.path.join(self.counter_dir, "current")
-            try:
-                with open(path) as counter:
-                    current = int(counter.read() or "0") + 1
-            except (OSError, ValueError):
-                current = 1
-            with open(path, "w") as counter:
-                counter.write(str(current))
-            text = "%s%s\n" % (
-                runlog.counted_prefix(current, self.total), line)
-            if line.startswith("FAILED"):
-                sys.stderr.write(text + said)
-            else:
-                runlog.say(text)
+        failed = line.startswith("FAILED")
+        self.console.counted(line, self.total, name="current", always=failed,
+                             after=said if failed else "")
 
     def note(self, line: str) -> None:
         """An UNCOUNTED line about a step inside one book's pipeline, indented
         so it reads as subordinate. Shares progress()'s lock so the two never
         interleave."""
-        with open(os.path.join(self.counter_dir, "lock"), "w") as handle, \
-                runlog.take_lock(handle):
-            runlog.say("        %s\n" % line)
+        self.console.say("        %s\n" % line)
 
     def _output_extension(self, extension: str) -> str:
         if self.options["textMode"]:
@@ -518,6 +507,7 @@ def _in_worker(state, relative: str) -> None:
     """One book, in a worker PROCESS - where the worker's interrupt handler
     belongs, and not in process_book, which the serial path runs inline."""
     safety.trap_worker_abort()
+    state.console.activate()
     state.process_book(relative)
 
 

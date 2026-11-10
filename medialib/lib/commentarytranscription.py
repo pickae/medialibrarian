@@ -18,7 +18,15 @@ import subprocess
 import tempfile
 import time
 
-from medialib.lib import diskturn, languages, plexnames, runlog, toolcapture, treewalk
+from medialib.lib import (
+    console,
+    diskturn,
+    languages,
+    plexnames,
+    runlog,
+    toolcapture,
+    treewalk,
+)
 from medialib.lib import whisper as whisper_lib
 from medialib.lib.census import printf_f0
 from medialib.lib.enums import shell_lower
@@ -507,7 +515,8 @@ def export_commentary(directory: str, read_track_info, is_bonus_folder,
                       whisper: dict, log, drain_queue,
                       max_sync_offset: str, quality: str,
                       discard_existing=None, same_commentary_name=None,
-                      orphans=None, unfixed=None, film_queued=None) -> None:
+                      orphans=None, unfixed=None, film_queued=None,
+                      lane: str = "") -> None:
     """Extract every commentary, and hand the queue to the drain to run.
 
     ``read_track_info`` is the caller's track reader, returning the six
@@ -537,7 +546,9 @@ def export_commentary(directory: str, read_track_info, is_bonus_folder,
     reported. ``film_queued``, when given, is called with each film's absolute
     path once every transcription of it has been yielded - or once it is known
     to have none - which is what lets a caller tell the film whose transcripts
-    are all queued from the film the walk is still on.
+    are all queued from the film the walk is still on. ``lane`` names the walk
+    when it runs beside other work: each film's lines then carry the film (see
+    `medialib/lib/console.py`).
     Everything else is this run's own: the queue spans every movie and every
     language wanted, so the workers stay busy to the last record.
     """
@@ -564,7 +575,8 @@ def export_commentary(directory: str, read_track_info, is_bonus_folder,
         # that can be followed
         found = sorted(films(), key=lambda file: file.split("/"))
         for index, file in enumerate(found, start=1):
-            yield from one_film(index, len(found), file)
+            with console.about(os.path.abspath(file), lane):
+                yield from one_film(index, len(found), file)
             if film_queued is not None:
                 film_queued(os.path.abspath(file))
 

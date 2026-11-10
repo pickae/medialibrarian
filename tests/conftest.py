@@ -309,7 +309,12 @@ def private_workspace(tmp_path_factory, monkeypatch):
     # whichever one runs next.
     from medialib.lib import titlematch
     titlematch.reset_iconv_flavour()
+    # The run's console, which a command or a case makes active in this process
+    # and which would otherwise print the next case's lines.
+    from medialib.lib import console, runlog
     yield scratch
+    console.hide_active()
+    runlog._console = None
     titlematch.reset_iconv_flavour()
     # The end of this process's "run": a helper called on its own settles a
     # base and registers it, and only a command's own exit hands it back.

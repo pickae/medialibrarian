@@ -19,6 +19,7 @@ import time
 from medialib import commands
 from medialib.lib import (
     clioptions,
+    console,
     durationcheck,
     enums,
     errorlog,
@@ -136,13 +137,16 @@ class Run:
     """One transcription run: the settled world its workers inherit."""
 
     def __init__(self, input_dir, output_dir, fmt, model, ram_root,
-                 progress_file, total):
+                 counter_dir, total):
         self.input_dir = input_dir
         self.output_dir = output_dir
         self.fmt = fmt
         self.model = model
         self.ram_root = ram_root
-        self.progress_file = progress_file
+        # The run's console: the lock every worker prints under, and the
+        # count of tracks done.
+        self.console = console.Console(counter_dir)
+        self.failed_file = os.path.join(counter_dir, "failed")
         self.total = total
         # Nought slots is the unbatched path. Only the cued formats want the
         # line flags: a transcript that is read has no cues to spoil.
@@ -163,27 +167,15 @@ class Run:
         unnumbered. Under -q only a <failed> line is printed, but every job
         still counts.
         """
-        with open(self.progress_file + ".lock", "w") as handle, runlog.take_lock(handle):
-            try:
-                with open(self.progress_file) as counter:
-                    current = int(counter.read() or "0") + 1
-            except (OSError, ValueError):
-                current = 1
-            with open(self.progress_file, "w") as counter:
-                counter.write("%d\n" % current)
-            line = "%s%s\n" % (runlog.counted_prefix(current, self.total), label)
-            if failed:
-                sys.stderr.write(line)
-            else:
-                runlog.say(line)
+        self.console.counted(label, self.total, always=failed)
 
     def record_failure(self) -> None:
         """Mark the run as having a failed transcription, in a file because the
         workers are separate processes."""
-        open(self.progress_file + ".failed", "w").close()
+        open(self.failed_file, "w").close()
 
     def any_failed(self) -> bool:
-        return os.path.exists(self.progress_file + ".failed")
+        return os.path.exists(self.failed_file)
 
     def transcribe_one(self, relative: str) -> None:
         """One queued job: this input's speech into its mirrored transcript."""
@@ -212,8 +204,7 @@ class Run:
                      "-i", source, "-map", "0:a:0", "-ac", "1",
                      "-ar", "16000", "-c:a", "pcm_s16le", for_whisper],
                     relative,
-                    warning="no first audio track to transcribe: " + relative,
-                    lock_file=self.progress_file + ".lock")
+                    warning="no first audio track to transcribe: " + relative)
                 if not extracted.ok:
                     self.report_progress("skipped (no audio): " + relative)
                     return
@@ -246,8 +237,7 @@ class Run:
                 # exits 0 after a CUDA out-of-memory error, having written
                 # nothing.
                 verify=lambda: ("" if os.path.isfile(whisper_out)
-                                else "wrote no transcript"),
-                lock_file=self.progress_file + ".lock")
+                                else "wrote no transcript"))
             if done.ok:
                 os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
                 shutil.move(whisper_out, out)
@@ -274,6 +264,7 @@ def _in_worker(state, relative: str) -> None:
     here rather than in the transcription itself: the serial path runs that in
     the RUN's own process, where the worker's handler would replace the run's."""
     safety.trap_worker_abort()
+    state.console.activate()
     state.transcribe_one(relative)
 
 
@@ -386,19 +377,15 @@ def _transcribe(program: str, input_dir: str, output_dir: str, fmt: str,
 
     _mirror_folders(input_dir, output_dir)
 
-    progress_file, status = ramscratch.ram_scratch_file(
+    counter_dir, status = ramscratch.ram_scratch_dir(
         "transcribeAudio.progress")
-    if status != 0 or not progress_file:
+    if status != 0 or not counter_dir:
         sys.stderr.write("\nError: no scratch file could be made for this "
                          "run.\nNothing was changed.\n")
         return 1
-    ramscratch.add_exit_cleanup([progress_file,
-                                 progress_file + ".lock",
-                                 progress_file + ".failed"])
-    with open(progress_file, "w") as handle:
-        handle.write("0\n")
+    ramscratch.add_exit_cleanup([counter_dir])
 
-    state = Run(input_dir, output_dir, fmt, model, ram_root, progress_file,
+    state = Run(input_dir, output_dir, fmt, model, ram_root, counter_dir,
                 len(tracks))
     # The pool is never wider than the work.
     runlog.say("Transcribing %d file(s) on %d worker(s)...\n"

@@ -10,7 +10,7 @@ import pytest
 
 from medialib.cli import ingest_movies_lanes as lanes
 from medialib.cli import ingest_movies_run as run_module
-from medialib.lib import tmdblookup
+from medialib.lib import console, tmdblookup
 from medialib.lib import whisper as whisper_lib
 
 pytestmark = pytest.mark.fs
@@ -146,6 +146,24 @@ class TestRemuxLane:
         assert taken.is_set()
 
 
+class TestTheLaneRow:
+    """What each lane has done, counted where the lane does it."""
+
+    def test_the_remux_and_whisper_lanes_count_on_the_row(self):
+        row = console.LaneRow(("opus", "whisper", "remux", "subs"))
+        remux = lanes.RemuxLane(["/f/A.mkv"], lambda _film: None,
+                                lanes.FilmLocks(), True, lambda _line: None,
+                                row)
+        tracker = lanes.TranscriptTracker(remux.transcripts_done, row)
+        tracker.record_queued("/f/A track 2.mka")
+        tracker.film_queued("/f/A.mkv")
+        assert row.render() == "  whisper 0/1 · remux 0"
+        tracker.record_done("/f/A track 2.mka")
+        remux.opus_done("/f/A.mkv")
+        remux.finish()
+        assert row.render() == "  whisper 1/1 · remux 1"
+
+
 class TestSubtitleLane:
     def _run(self, monkeypatch, tmp_path, tagged, films):
         def tag_plex_ids(directory, log, skip_log, dry_run=False,
@@ -209,7 +227,7 @@ class TestTheMiddleOfTheIngest:
         threads: dict = {}
 
         def transcode(state, root, jobs=None, on_done=None,
-                      exit_on_abort=True):
+                      exit_on_abort=True, row=None):
             threads["opus"] = threading.current_thread()
             threads["opus_jobs"] = jobs
             for film in films:

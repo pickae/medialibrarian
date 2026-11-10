@@ -52,6 +52,7 @@ from medialib.lib import (
     chapters,
     chunkdecision,
     clioptions,
+    console,
     durationcheck,
     dynamicqueue,
     enums,
@@ -656,17 +657,12 @@ def _silence_midpoints(text: str) -> list:
 
 
 class Counters:
-    """The shared counters, the per-file line, and the live status row.
+    """The shared counters, the per-file line, and the live status row - all
+    kept by the run's console, whose lock every worker prints under."""
 
-    The same lock keeps the console coherent: the row is erased before a line is
-    printed and re-pinned underneath it afterwards, and the row's own background
-    refresher takes this very lock before it draws, so the two never write over
-    each other.
-    """
-
-    def __init__(self, progress_file: str, duration_file: str, total_file: str,
-                 run_start_epoch: int) -> None:
-        self.progress_file = progress_file
+    def __init__(self, run_console: console.Console, duration_file: str,
+                 total_file: str, run_start_epoch: int) -> None:
+        self.console = run_console
         self.duration_file = duration_file
         self.total_file = total_file
         self.run_start_epoch = run_start_epoch
@@ -697,19 +693,8 @@ class Counters:
         """One job's counted line. Every job counts, whatever it turns out to
         do, so the position stays a position in the queue's own total - only
         the verb says whether this one is encoded, copied or passed over."""
-        with open(self.progress_file + ".lock", "w") as lock, \
-                runlog.take_lock(lock):
-            try:
-                current = int(self._read(self.progress_file, "0")) + 1
-            except ValueError:
-                current = 1
-            with open(self.progress_file, "w") as handle:
-                handle.write("%d\n" % current)
-            statusline.clear_status()
-            runlog.say("%s%s: %s\n" % (
-                runlog.counted_prefix(current, self._total()), verb, label))
-            sys.stderr.flush()
-            statusline.repin_status(self.status_text)
+        self.console.counted("%s: %s" % (verb, label), self._total(),
+                             name="progress")
 
     def tally_duration(self, add) -> None:
         """The audio-seconds actually encoded, serialised across the parallel
@@ -718,8 +703,7 @@ class Counters:
         once, never doubled with the whole-file figure."""
         if not add:
             return
-        with open(self.duration_file + ".lock", "w") as lock, \
-                runlog.take_lock(lock):
+        with self.console.locked():
             current = formatting.awk_number(self._read(self.duration_file, "0"))
             with open(self.duration_file, "w") as handle:
                 handle.write("%.3f\n" % (current + formatting.awk_number(add)))
@@ -732,12 +716,8 @@ class Counters:
         queue with two jobs left can hold ten seconds of work or ten hours - so
         extrapolating from the position in it would be inventing a number.
         """
-        try:
-            current = int(self._read(self.progress_file, "0"))
-        except ValueError:
-            current = 0
-        with open(self.duration_file + ".lock", "w") as lock, \
-                runlog.take_lock(lock):
+        current = self.console.value("progress")
+        with self.console.locked():
             duration = formatting.awk_number(self._read(self.duration_file, "0"))
 
         elapsed = max(0, int(time.time()) - self.run_start_epoch)
@@ -1888,19 +1868,21 @@ def footer(state: Run) -> None:
     durationcheck.report()
 
 
-def _in_worker(state, method: str, item, status_geometry=None) -> None:
+def _in_worker(state, method: str, item) -> None:
     """One job, in a worker PROCESS.
 
     The worker's interrupt handling is installed here rather than in the work,
     because at width 1 that same work runs in the RUN's own process - where the
     worker's handler would replace the run's. The run's scratch base and its
-    status row are adopted for the same kind of reason: a worker that settled its
+    console are adopted for the same kind of reason: a worker that settled its
     own would make a second run directory beside the parent's, and one that
     settled no row would print its counted line onto the end of the pinned row.
     """
     safety.trap_worker_abort()
     ramscratch.adopt_ram_base(getattr(state, "ram_base", ""))
-    statusline.adopt_status_geometry(status_geometry)
+    counters = getattr(state, "counters", None)
+    if counters is not None:
+        counters.console.activate()
     getattr(state, method)(item)
 
 
@@ -1913,9 +1895,8 @@ def _run_pool(state, method: str, items: list, jobs: int) -> None:
                 getattr(state, method)(item)
         return
 
-    geometry = statusline.status_geometry()
     workerpool.run(items, jobs, _in_worker,
-                   lambda item: (state, method, item, geometry))
+                   lambda item: (state, method, item))
 
 
 # What makes a file a track: the scan below and the output naming, which has to
@@ -2088,7 +2069,7 @@ def _settle_and_convert(program: str, script_dir: str, input_dir: str,
                         codec, chunk_over_ceiling, mkvtoolnix_unsaid,
                         surround, group_depth)
     finally:
-        statusline.stop_status_monitor()
+        console.hide_active()
         safety.release_abort_flag()
 
 
@@ -2210,16 +2191,15 @@ def _convert(program: str, script_dir: str, input_dir: str, output_dir: str,
     # queue is ordered instead.
     seed = jobs * QUEUE_BUFFER_FACTOR if jobs > 1 else 0
 
-    progress_file = os.path.join(plan_root, "progress")
     duration_file = os.path.join(plan_root, "duration")
     total_file = os.path.join(plan_root, "total")
-    for path, value in ((progress_file, "0\n"), (duration_file, "0\n"),
-                        (total_file, "")):
+    for path, value in ((os.path.join(plan_root, "progress"), "0\n"),
+                        (duration_file, "0\n"), (total_file, "")):
         with open(path, "w") as handle:
             handle.write(value)
     state.duration_file = duration_file
-    state.counters = Counters(progress_file, duration_file, total_file,
-                              int(pre_start))
+    state.counters = Counters(console.Console(plan_root), duration_file,
+                              total_file, int(pre_start))
 
     # The queue's own length is not known until the last file is planned, so the
     # headline names no number it would have to promise.
@@ -2227,10 +2207,9 @@ def _convert(program: str, script_dir: str, input_dir: str, output_dir: str,
     state.conv_start = time.time()
     if preload or candidates:
         # The live row, refreshed underneath the per-file lines for as long as
-        # the queue is draining. It shares the progress lock with the per-file
-        # print, so the row and the scrolling lines never interleave mid-line.
-        statusline.start_status_monitor(progress_file + ".lock",
-                                        state.counters.status_text)
+        # the queue is draining, under the console lock the per-file lines are
+        # printed under, so the two never interleave mid-line.
+        state.counters.console.show(state.counters.status_text)
         producer = _encode_producer(state, planner, preload, candidates,
                                     total_file, seed)
         if jobs <= 1:
@@ -2242,11 +2221,10 @@ def _convert(program: str, script_dir: str, input_dir: str, output_dir: str,
                 with errorlog.work_item(token):
                     state.encode(token)
         else:
-            geometry = statusline.status_geometry()
             dynamicqueue.run(producer, jobs, _in_worker,
-                             lambda token: (state, "encode", token, geometry),
+                             lambda token: (state, "encode", token),
                              buffer_factor=QUEUE_BUFFER_FACTOR, log=log)
-        statusline.stop_status_monitor()
+        state.counters.console.hide()
         safety.exit_if_aborted()
     state.conv_end = time.time()
 

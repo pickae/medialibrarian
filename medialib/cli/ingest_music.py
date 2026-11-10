@@ -32,6 +32,7 @@ import time
 from medialib import commands
 from medialib.lib import (
     clioptions,
+    console,
     cuechapters,
     durationcheck,
     enums,
@@ -452,9 +453,10 @@ class Counters:
     def __init__(self, counter_dir: str, run_start_epoch: int) -> None:
         self.counter_dir = counter_dir
         self.run_start_epoch = run_start_epoch
-        self.progress_file = os.path.join(counter_dir, "current")
         self.duration_file = os.path.join(counter_dir, "duration")
-        self.lock_file = os.path.join(counter_dir, "lock")
+        # The run's console: its lock, the phase's position ("current") and
+        # the row, shared with every worker.
+        self.console = console.Console(counter_dir)
         self.label = ""
         self.unit = ""
         self.total = 0
@@ -483,13 +485,13 @@ class Counters:
                     shows_speed: bool = False) -> None:
         self.label, self.unit = label, unit
         self.total, self.shows_speed = total, shows_speed
-        self._write(self.progress_file, "0")
-        statusline.start_status_monitor(self.lock_file, self.status_text)
+        self.console.set("current", 0)
+        self.console.show(self.status_text)
 
     def end_phase(self) -> None:
         """Stop refreshing the row and leave it behind as this phase's last
         word."""
-        statusline.stop_status_monitor()
+        self.console.hide()
 
     def progress(self, line: str) -> None:
         """One counted line, printed under the same lock as the row it displaces.
@@ -502,20 +504,13 @@ class Counters:
         The position counts items STARTED, so an encode announces itself before
         the minutes it takes rather than after them.
         """
-        with open(self.lock_file, "w") as lock, runlog.take_lock(lock):
-            current = self._bump_position()
-            statusline.clear_status()
-            runlog.say("%s%s\n" % (
-                runlog.counted_prefix(current, self.total), line), sys.stderr)
-            sys.stderr.flush()
-            statusline.repin_status(self.status_text)
+        self.console.counted(line, self.total, name="current")
 
     def advance(self) -> None:
         """Bump the position WITHOUT printing, for a phase whose items are too
         many and too quick to deserve a line each - the provenance scan is one
         ffprobe per flac in a library that can hold tens of thousands."""
-        with open(self.lock_file, "w") as lock, runlog.take_lock(lock):
-            self._bump_position()
+        self.console.count("current")
 
     def note(self, line: str, said: str = "") -> None:
         """One UNCOUNTED line about an item that has already announced itself -
@@ -524,19 +519,7 @@ class Counters:
 
         ``said`` is what the tool that failed said, replayed under it in the
         same lock (:func:`toolcapture.replay_text`)."""
-        with open(self.lock_file, "w") as lock, runlog.take_lock(lock):
-            statusline.clear_status()
-            runlog.say("    %s\n%s" % (line, said), sys.stderr)
-            sys.stderr.flush()
-            statusline.repin_status(self.status_text)
-
-    def _bump_position(self) -> int:
-        try:
-            current = int(self._read(self.progress_file)) + 1
-        except ValueError:
-            current = 1
-        self._write(self.progress_file, str(current))
-        return current
+        self.console.say("    %s\n%s" % (line, said))
 
     def bump(self, name: str, amount: int = 1) -> None:
         """Add to one of the tallies. Its own lock per counter, so a worker
@@ -585,10 +568,7 @@ class Counters:
         length, so extrapolating from a position in the queue would be inventing
         a number.
         """
-        try:
-            current = int(self._read(self.progress_file))
-        except ValueError:
-            current = 0
+        current = self.console.value("current")
         elapsed = max(0, int(time.time()) - self.run_start_epoch)
 
         # Without flock the counter can lose increments, so the row says how much
@@ -1248,6 +1228,7 @@ def _in_worker(state, method: str, item) -> None:
     would leave a second run directory behind."""
     safety.trap_worker_abort()
     ramscratch.adopt_ram_base(getattr(state, "ram_base", ""))
+    state.counters.console.activate()
     getattr(state, method)(item)
 
 
@@ -1378,7 +1359,7 @@ def _settle_and_ingest(program: str, script_dir: str, download_dir: str,
         return _ingest(program, script_dir, download_dir, ingest_dir,
                        opus_copy_dir, counter_dir, skips, jobs)
     finally:
-        statusline.stop_status_monitor()
+        console.hide_active()
 
 
 def _ingest(program: str, script_dir: str, download_dir: str, ingest_dir: str,

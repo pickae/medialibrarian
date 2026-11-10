@@ -40,7 +40,7 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from medialib.lib import errorlog, runlog, statusline
+from medialib.lib import console, errorlog, runlog
 from medialib.lib.errorlog import redact
 
 __all__ = ["ToolOutput", "ToolRun", "causes", "ffmpeg_loglevel", "finished",
@@ -499,11 +499,7 @@ def report_notable(result: ToolRun, stream=None, lock_file: str = "") -> str:
     if path:
         out.write("    kept in %s\n" % path)
     target = sys.stderr if stream is None else stream
-    if lock_file:
-        with open(lock_file, "a") as handle, runlog.take_lock(handle):
-            _write_block(target, out.getvalue())
-    else:
-        _write_block(target, out.getvalue())
+    _write_block(target, out.getvalue(), lock_file)
     return path
 
 
@@ -580,11 +576,7 @@ def report_failure(result: ToolRun, stream=None, lock_file: str = "",
     if not text:
         return
     out = sys.stderr if stream is None else stream
-    if lock_file:
-        with open(lock_file, "a") as handle, runlog.take_lock(handle):
-            _write_block(out, text)
-    else:
-        _write_block(out, text)
+    _write_block(out, text, lock_file)
 
 
 def report_warnings(result: ToolRun, stream=None, lock_file: str = "") -> None:
@@ -604,17 +596,19 @@ def report_warnings(result: ToolRun, stream=None, lock_file: str = "") -> None:
     if not text:
         return
     out = sys.stderr if stream is None else stream
-    if lock_file:
+    _write_block(out, text, lock_file)
+
+
+def _write_block(out, text: str, lock_file: str = "") -> None:
+    """The block on console rows of its own: through the run's console when
+    it is for stderr and the run has one, which erases a pinned row first and
+    draws it again under the block; under ``lock_file``'s lock otherwise."""
+    if out is sys.stderr and console.active() is not None:
+        console.write(text)
+    elif lock_file:
         with open(lock_file, "a") as handle, runlog.take_lock(handle):
-            _write_block(out, text)
+            out.write(text)
+            out.flush()
     else:
-        _write_block(out, text)
-
-
-def _write_block(out, text: str) -> None:
-    """The block on a console row of its own: a status row pinned where it is
-    about to go is erased first, and redraws itself under it."""
-    if out is sys.stderr:
-        statusline.clear_status()
-    out.write(text)
-    out.flush()
+        out.write(text)
+        out.flush()
