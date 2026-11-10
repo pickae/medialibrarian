@@ -23,12 +23,7 @@ import collections
 import os
 import sys
 
-from medialib.lib import errorlog, safety
-
-# Every abnormal worker exit this process has seen, as (owner, label, reason).
-# The owner is the pid that recorded it: a worker inherits this list across the
-# fork, and the entries it inherits are the parent's to report, not its own.
-_FAILURES: list = []
+from medialib.lib import errorlog, runcontext, runlog, safety
 
 
 def start_worker(target, args: tuple, name: str):
@@ -47,19 +42,49 @@ def start_worker(target, args: tuple, name: str):
     import multiprocessing
     import multiprocessing.process
 
-    # Through errorlog.run_in_worker, which names the item for every error the
-    # worker records and keeps an exception it did not catch.
-    wrapped = (target, tuple(args), name)
+    # Through run_in_worker, which hands the worker the run, names the item
+    # for every error the worker records and keeps an exception it did not
+    # catch.
+    wrapped = (runcontext.snapshot(), target, tuple(args), name)
     worker: multiprocessing.process.BaseProcess
     if (multiprocessing.get_context().get_start_method() == "fork"
             and "forkserver" in multiprocessing.get_all_start_methods()):
         worker = multiprocessing.get_context("forkserver").Process(
-            target=errorlog.run_in_worker, args=wrapped, name=name)
+            target=run_in_worker, args=wrapped, name=name)
     else:
-        worker = multiprocessing.Process(target=errorlog.run_in_worker,
+        worker = multiprocessing.Process(target=run_in_worker,
                                          args=wrapped, name=name)
     worker.start()
     return worker
+
+
+def run_in_worker(run, target, args: tuple, label: str) -> None:
+    """A worker's body. The parent's run is adopted first - the one place a
+    worker takes on the run's state (`medialib/lib/runcontext.py`) - then its
+    item is named for every record made inside it, and an exception it did
+    not catch is kept before the worker ends with status 1, which the parent
+    then reports as the worker it lost.
+
+    An interrupt that lands before the worker's own trap is in place arrives as
+    a KeyboardInterrupt, and leaves the way the trap would have: the run marked
+    as stopping and the queue told so. Let through, multiprocessing would print
+    it to a stderr the interrupted parent may already have closed, and the
+    BrokenPipeError from that would be kept as a crash."""
+    try:
+        runcontext.adopt(run)
+        runlog.install_hooks()
+        with errorlog.working_on(label if os.path.exists(label) else "",
+                                 item=label):
+            try:
+                target(*args)
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except BaseException as exc:
+                runlog.record_crash(exc, where=label)
+                raise SystemExit(1) from exc
+    except KeyboardInterrupt:
+        safety.request_abort()
+        raise SystemExit(safety.XARGS_STOP_EXIT_STATUS) from None
 
 
 class Outcome:
@@ -75,17 +100,8 @@ class Outcome:
         return not self.failed
 
 
-def label(item) -> str:
-    """The name a worker is given, which is what a failure is reported BY.
-
-    A pair or a record is named by its first field: the commands hand this
-    tuples of (input, output) and objects of their own, and the first field is
-    the one that names the work in every case.
-    """
-    if isinstance(item, tuple | list) and item:
-        item = item[0]
-    text = item if isinstance(item, str) else str(item)
-    return text[:200]
+# The name a worker is given, which is what a failure is reported BY.
+label = runcontext.label
 
 
 def _abnormal_exit(worker) -> str:
@@ -123,7 +139,7 @@ def note_exit(worker) -> str:
     if not reason:
         return ""
     label = worker.name or "a worker"
-    _FAILURES.append((os.getpid(), label, reason))
+    runcontext.current().failures.append((label, reason))
     sys.stderr.write("\nWARNING: a worker %s and its item was not finished:\n"
                      "  %s\n" % (reason, label))
     causes = [errorlog.signal_cause(-worker.exitcode)] if worker.exitcode < 0 else []
@@ -135,14 +151,12 @@ def note_exit(worker) -> str:
 
 def failed_workers() -> list:
     """The abnormal exits THIS process has reaped, as (label, reason)."""
-    mine = os.getpid()
-    return [(label, reason) for owner, label, reason in _FAILURES
-            if owner == mine]
+    return list(runcontext.current().failures)
 
 
 def forget_failures() -> None:
     """Start the tally over. For a process that runs more than one run."""
-    _FAILURES[:] = []
+    runcontext.current().failures[:] = []
 
 
 def report_failures(stream=None) -> int:

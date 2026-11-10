@@ -37,6 +37,7 @@ from medialib.lib import (
     formatting,
     imagemagick,
     ramscratch,
+    runcontext,
     runlog,
     safety,
     settings,
@@ -850,7 +851,7 @@ def _settle_and_read(result, program: str, script_dir: str, in_path: str,
     # The narration library reads the engine from the environment - for the
     # language check just below as much as for the engine's own command line - so
     # -e only selects anything once it is set there.
-    os.environ["narrationEngine"] = narration_engine
+    runcontext.settle("narrationEngine", narration_engine)
     narration_language = ""
     language_arg = result.values["languageArg"]
     if language_arg:
@@ -967,7 +968,7 @@ def _read(result, program: str, script_dir: str, in_path: str, out_path: str,
             result.values["narrationDeviceArg"]) != 0:
         return 1
 
-    device = os.environ.get("narrationDevice", "")
+    device = runcontext.get("narrationDevice", "")
     if result.values["jobs"]:
         jobs = int(result.values["jobs"])
         jobs_from = "-j"
@@ -983,8 +984,8 @@ def _read(result, program: str, script_dir: str, in_path: str, out_path: str,
     # the same output is several books talking over each other. Decided from the
     # job count the run really ended up with, rather than from the -j that was
     # typed. Under -q it is progress like any other, and stays in the log.
-    os.environ["narrationVerbose"] = (
-        "1" if jobs == 1 and runlog.verbosity() >= runlog.NORMAL else "0")
+    runcontext.settle("narrationVerbose", (
+        "1" if jobs == 1 and runlog.verbosity() >= runlog.NORMAL else "0"))
 
     # How many cores the Opus encode of a finished book may use. The narration of
     # the NEXT books runs alongside it, so one full set of cores per reader would
@@ -1016,7 +1017,7 @@ def _read(result, program: str, script_dir: str, in_path: str, out_path: str,
             sys.stderr.write("or omit -r to use the engine's own voice. Nothing "
                              "was changed.\n")
             return 1
-    os.environ["narrationVoiceMap"] = voice_map or ""
+    runcontext.settle("narrationVoiceMap", voice_map or "")
 
     os.makedirs(out_path, exist_ok=True)
 
@@ -1053,7 +1054,7 @@ def _read(result, program: str, script_dir: str, in_path: str, out_path: str,
     # The row is only pinned when it has the console to itself; reading one book
     # at a time prints the engine's own output, which would scroll a row that is
     # rewritten in place into litter.
-    if os.environ.get("narrationVerbose") == "0":
+    if runcontext.get("narrationVerbose", None) == "0":
         counters.console.show(state.reading_status_text)
 
     # On a checkout whose environment is not populated yet, the FIRST book is read
@@ -1061,7 +1062,7 @@ def _read(result, program: str, script_dir: str, in_path: str, out_path: str,
     # and two of those installing into the same environment at once is how a
     # half-written package tree happens - which would break every book after it.
     first_book = 0
-    if (os.environ.get("narrationEnvReady", "1") == "0" and jobs > 1
+    if (runcontext.get("narrationEnvReady", "1") == "0" and jobs > 1
             and total > 1):
         log("The checkout's environment is not populated yet - reading the first "
             "book on its own,")
@@ -1165,11 +1166,11 @@ def _settle_mkvtoolnix(opus_wanted: bool) -> None:
     the cover attached to a Matroska file, and the only file this run hands the
     Opus encoder is the engine's own audiobook - an m4b unless the engine was
     told otherwise, and nothing at all without an Opus copy."""
-    if os.environ.get("HAVE_MKVTOOLNIX") is not None:
+    if runcontext.get("HAVE_MKVTOOLNIX", None) is not None:
         return
     present = all(tooldeps.tool_present(tool) for tool in
                   ("mkvmerge", "mkvpropedit", "mkvextract"))
-    os.environ["HAVE_MKVTOOLNIX"] = "1" if present else ""
+    runcontext.settle("HAVE_MKVTOOLNIX", "1" if present else "")
     narrated_as = os.environ.get("narrationFormat", "m4b").lower()
     if not present and opus_wanted and narrated_as in ("mka", "mkv"):
         log("WARNING: mkvtoolnix not found (apt install mkvtoolnix) - cover art "
@@ -1183,7 +1184,7 @@ def _settle_mkvtoolnix(opus_wanted: bool) -> None:
 
 def cli(argv: list | None = None) -> int:
     settings.load()
-    errorlog.start_run(argv)
+    runlog.start_run(argv)
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, program=commands.program_name(__spec__.name),

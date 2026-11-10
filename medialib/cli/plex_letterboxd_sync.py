@@ -30,7 +30,6 @@ from typing import NamedTuple
 from medialib import commands
 from medialib.lib import (
     clioptions,
-    errorlog,
     letterboxd,
     plexserver,
     runlog,
@@ -456,7 +455,7 @@ def report(result: Plan, to_plex_only: bool) -> None:
 
 def cli(argv: list | None = None) -> int:
     settings.load()
-    errorlog.start_run(argv)
+    runlog.start_run(argv)
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, commands.program_name(__spec__.name), commands.script_dir())

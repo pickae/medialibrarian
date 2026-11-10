@@ -44,6 +44,7 @@ from medialib.lib import (
     plexnames,
     ramscratch,
     research,
+    runcontext,
     runlog,
     safety,
     settings,
@@ -748,7 +749,7 @@ def main(argv: list, program: str = "ingest-movies",
     script_dir = script_dir or commands.script_dir()
 
     # This is a long run, so its log lines carry a wall-clock stamp.
-    os.environ["LOG_TIMESTAMPS"] = "1"
+    runcontext.settle("LOG_TIMESTAMPS", "1")
 
     # Which fragments this run removes. A -f path that cannot be read STOPS the
     # run rather than being ignored: cleaning a whole library without the
@@ -2708,7 +2709,7 @@ def _run_pool(state, movies: list, root: str, jobs: int,
 
 def cli(argv: list | None = None) -> int:
     settings.load()
-    errorlog.start_run(argv)
+    runlog.start_run(argv)
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, commands.program_name(__spec__.name),

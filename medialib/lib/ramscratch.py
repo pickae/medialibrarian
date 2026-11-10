@@ -30,7 +30,7 @@ import tempfile
 import threading
 
 from medialib import commands
-from medialib.lib import hostos, runlog, safety
+from medialib.lib import hostos, runcontext, runlog, safety
 
 _INT = re.compile(r"^[0-9]+$")
 
@@ -38,7 +38,7 @@ _INT = re.compile(r"^[0-9]+$")
 # init_ram_base, because a test about WHERE a run lands has to be able to stand
 # a directory of its own in its place: the machine's real one is shared with
 # every other process on it.
-SHM = "/dev/shm"
+SHM = runcontext.SHM
 
 # The mount table, which is what names a filesystem "tmpfs" rather than a magic
 # number - statfs has the answer but Python exposes no f_type.
@@ -69,7 +69,28 @@ class _State:
         self.script = script
 
 
-_STATE = _State()
+class _RunState(_State):
+    """This process's state, whose scratch root and parents are the run's
+    (`medialib/lib/runcontext.py`): a worker is handed them with the run."""
+
+    @property  # type: ignore[override]
+    def ram_base(self):
+        return runcontext.current().ram_base
+
+    @ram_base.setter
+    def ram_base(self, value) -> None:
+        runcontext.current().ram_base = value
+
+    @property  # type: ignore[override]
+    def bases(self):
+        return runcontext.current().scratch_bases
+
+    @bases.setter
+    def bases(self, value) -> None:
+        runcontext.current().scratch_bases = value
+
+
+_STATE = _RunState()
 
 # A run can register and release scratch from more than one thread at once.
 _CLEANUP_LOCK = threading.Lock()

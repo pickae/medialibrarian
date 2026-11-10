@@ -62,6 +62,7 @@ from medialib.lib import (
     imagemagick,
     imagesizes,
     ramscratch,
+    runcontext,
     runlog,
     safety,
     segments,
@@ -2537,11 +2538,11 @@ def _settle_mkvtoolnix() -> bool:
     True when this run settled it as ABSENT, which leaves the warning owed -
     said by `_warn_mkvtoolnix` once the scan has shown whether it applies.
     """
-    if os.environ.get("HAVE_MKVTOOLNIX") is not None:
+    if runcontext.get("HAVE_MKVTOOLNIX", None) is not None:
         return False
     present = all(tooldeps.tool_present(tool) for tool in
                   ("mkvmerge", "mkvpropedit", "mkvextract"))
-    os.environ["HAVE_MKVTOOLNIX"] = "1" if present else ""
+    runcontext.settle("HAVE_MKVTOOLNIX", "1" if present else "")
     return not present
 
 
@@ -2563,7 +2564,7 @@ def _warn_mkvtoolnix(tracks: list) -> None:
 
 def cli(argv: list | None = None) -> int:
     settings.load()
-    errorlog.start_run(argv)
+    runlog.start_run(argv)
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, program=commands.program_name(__spec__.name),

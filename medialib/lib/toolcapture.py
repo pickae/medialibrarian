@@ -40,7 +40,7 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from medialib.lib import console, errorlog, runlog
+from medialib.lib import console, errorlog, runlog, safety
 from medialib.lib.errorlog import redact
 
 __all__ = ["ToolOutput", "ToolRun", "causes", "ffmpeg_loglevel", "finished",
@@ -415,8 +415,6 @@ def _settle(result: ToolRun, announce: bool, skipped: str) -> None:
 def safety_stopped() -> bool:
     """Whether the run is being stopped: a tool the interrupt killed did not
     fail, and is not worth a record."""
-    from medialib.lib import safety
-
     return safety.abort_requested()
 
 

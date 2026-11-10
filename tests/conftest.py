@@ -252,6 +252,10 @@ def private_workspace(tmp_path_factory, monkeypatch):
     # assert on what tmp_path HOLDS - that a failed extraction left nothing,
     # that exactly one file moved - and an isolation directory sitting in there
     # would be counted as the code under test's own leavings.
+    # A fresh run (medialib/lib/runcontext.py) for every case: what one case's
+    # command settled about its run is not the next case's.
+    from medialib.lib import runcontext
+    runcontext.reset()
     scratch = tmp_path_factory.mktemp("workspace")
     for name in _SCRATCH_KNOBS:
         monkeypatch.setenv(name, str(scratch))
@@ -309,12 +313,11 @@ def private_workspace(tmp_path_factory, monkeypatch):
     # whichever one runs next.
     from medialib.lib import titlematch
     titlematch.reset_iconv_flavour()
+    yield scratch
     # The run's console, which a command or a case makes active in this process
     # and which would otherwise print the next case's lines.
-    from medialib.lib import console, runlog
-    yield scratch
+    from medialib.lib import console
     console.hide_active()
-    runlog._console = None
     titlematch.reset_iconv_flavour()
     # The end of this process's "run": a helper called on its own settles a
     # base and registers it, and only a command's own exit hands it back.

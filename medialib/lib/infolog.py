@@ -26,7 +26,7 @@ import os
 import shlex
 
 from medialib import commands
-from medialib.lib import errorlog
+from medialib.lib import errorlog, runcontext
 
 __all__ = ["INFO_DIR", "LEVELS", "level", "current_file", "keep"]
 
@@ -46,7 +46,7 @@ _OPEN: list = []
 def level() -> int:
     """The verbosity the info log keeps, as a runlog level; -1 for none. A
     word nobody meant is the default, so a typo still keeps the run's lines."""
-    word = os.environ.get(LEVEL_VARIABLE, "").strip().lower()
+    word = runcontext.get(LEVEL_VARIABLE).strip().lower()
     return LEVELS.get(word, LEVELS[DEFAULT_LEVEL])
 
 
@@ -69,15 +69,13 @@ def keep(text: str, needs: int) -> None:
 
 
 def _write(text: str) -> None:
-    from medialib.lib import runlog
-
     lines = [line.rstrip("\r") for line in text.strip("\n").split("\n")]
     if not any(line.strip() for line in lines):
         return
     prefix = "%s [%d] " % (errorlog._stamp(), os.getpid())
     body = "".join(prefix + line + "\n" for line in lines)
     handle = _handle()
-    with runlog.take_lock(handle):
+    with runcontext.take_lock(handle):
         handle.write(errorlog.redact(body))
         handle.flush()
 
@@ -91,9 +89,7 @@ def _handle():
     handle = open(path, "a", encoding="utf-8")  # noqa: SIM115 - kept open for the run
     _OPEN[:] = [(os.getpid(), path, handle)]
     if fresh:
-        from medialib.lib import runlog
-
-        with runlog.take_lock(handle):
+        with runcontext.take_lock(handle):
             if handle.tell() == 0:
                 handle.write(errorlog.redact(_header()))
                 handle.flush()

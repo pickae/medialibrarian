@@ -14,7 +14,7 @@ import threading
 
 import pytest
 
-from medialib.lib import console, runlog
+from medialib.lib import console, runcontext, runlog
 from medialib.lib.statusline import state
 
 pytestmark = pytest.mark.pure
@@ -29,7 +29,6 @@ def _fresh(monkeypatch):
     state.interval = 3600
     yield
     console.hide_active()
-    runlog._console = None
 
 
 def _on_a_terminal(cols: int = 100) -> None:
@@ -219,14 +218,16 @@ def test_a_counter_nobody_bumped_reads_as_nought(tmp_path):
 def test_a_worker_draws_against_the_row_its_parent_settled():
     """A worker process is a fresh interpreter on any host whose start method
     is ``forkserver`` or ``spawn``, so it begins believing there is no
-    terminal; the console it is handed carries the parent's settlement."""
+    terminal; the run it is handed carries the parent's settlement and its
+    console."""
     state.row, state.cols, state.interval = "1", 96, 2
-    run = console.Console()
+    run = console.Console().activate()
     run.pinned = True
-    handed = pickle.loads(pickle.dumps(run))
-    state.row, state.cols, state.interval = "", 1000, 30
-    assert handed.geometry == ("1", 96, 2)
-    assert handed.pinned
+    handed = pickle.loads(pickle.dumps(runcontext.snapshot()))
+    runcontext.adopt(handed)
+    assert console.active() is not run
+    assert console.active().geometry == ("1", 96, 2)
+    assert console.active().pinned
 
 
 def test_a_row_drawn_from_this_process_s_memory_does_not_travel(capsys):

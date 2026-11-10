@@ -16,9 +16,8 @@ because the reading it wants is what is IN the picture, and that costs a decode
 per file; so it is asked for and paid for only under the census's own -a.
 """
 
-import os
 
-from medialib.lib import adequacy, census, imagebitrate, imagecodecs
+from medialib.lib import adequacy, census, imagebitrate, imagecodecs, runcontext
 
 __all__ = ["census_image_row", "census_image_adequacy"]
 
@@ -60,7 +59,7 @@ def census_image_row(path, separator=None):
     written as WIDTHxHEIGHT the way the video report writes one.
     """
     if separator is None:
-        separator = os.environ.get("CENSUS_SEP", census.DEFAULT_SEPARATOR)
+        separator = runcontext.get("CENSUS_SEP", census.DEFAULT_SEPARATOR)
     stats = imagebitrate.image_stats(path).split()
     if len(stats) < 4:
         return None, "no image reader could make sense of it (not an image, " \
@@ -69,7 +68,7 @@ def census_image_row(path, separator=None):
 
     size_bytes = census.file_size(path)
     verdict = ""
-    if os.environ.get("CENSUS_ADEQUACY", ""):
+    if runcontext.get("CENSUS_ADEQUACY", ""):
         verdict = census_image_adequacy(path, image_format, width, height,
                                         colour, size_bytes)
 

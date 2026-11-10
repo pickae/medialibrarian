@@ -41,10 +41,10 @@ from medialib.lib import (
     cleannamesindividually,
     clioptions,
     enums,
-    errorlog,
     overwrite,
     plurality,
     prefixes,
+    runlog,
     safety,
     settings,
 )
@@ -481,7 +481,7 @@ def report_name(directory: str) -> str:
 
 def cli(argv: list | None = None) -> int:
     settings.load()
-    errorlog.start_run(argv)
+    runlog.start_run(argv)
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, program=commands.program_name(__spec__.name))

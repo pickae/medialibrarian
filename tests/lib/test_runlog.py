@@ -11,7 +11,7 @@ import sys
 
 import pytest
 
-from medialib.lib import runlog
+from medialib.lib import runcontext, runlog
 
 try:
     import fcntl
@@ -150,7 +150,7 @@ class TestFlock:
 
     def test_a_host_with_flock_settles_the_flag(self, monkeypatch):
         monkeypatch.delenv("HAVE_FLOCK", raising=False)
-        monkeypatch.setattr(runlog.shutil, "which", lambda name: "/usr/bin/" + name)
+        monkeypatch.setattr(runcontext.shutil, "which", lambda name: "/usr/bin/" + name)
         assert runlog.settle_flock() == "1"
         assert runlog.counted_prefix(1, 2) == "[1/2] "
 
@@ -163,7 +163,7 @@ class TestFlock:
         and one that does not.
         """
         monkeypatch.delenv("HAVE_FLOCK", raising=False)
-        monkeypatch.setattr(runlog.shutil, "which", lambda name: None)
+        monkeypatch.setattr(runcontext.shutil, "which", lambda name: None)
         monkeypatch.setitem(sys.modules, "fcntl", None)
         assert runlog.settle_flock() == ""
         assert runlog.counted_prefix(1, 2) == ""

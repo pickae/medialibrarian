@@ -11,7 +11,7 @@ import os
 
 import pytest
 
-from medialib.lib import durationcheck
+from medialib.lib import durationcheck, runcontext
 
 pytestmark = pytest.mark.fs
 
@@ -254,7 +254,7 @@ class TestTheRecord:
         durationcheck.init_log(str(named))
         assert hooks == []
 
-        monkeypatch.delenv(durationcheck.LOG_VARIABLE)
+        runcontext.forget(durationcheck.LOG_VARIABLE)
         own = durationcheck.init_log()
         for hook, *args in hooks:
             hook(*args)

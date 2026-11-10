@@ -44,6 +44,7 @@ from medialib.lib import (
     imagesizes,
     mutagentags,
     ramscratch,
+    runcontext,
     runlog,
     safety,
     settings,
@@ -1276,7 +1277,7 @@ def main(argv: list, program: str = "ingest-music",
     # whole library, then a second library in Opus - so its log lines carry a
     # wall-clock stamp. Exported, so the child scripts this one ends with stamp
     # their own the same way and the console reads as one run rather than two.
-    os.environ["LOG_TIMESTAMPS"] = "1"
+    runcontext.settle("LOG_TIMESTAMPS", "1")
 
     if not os.path.isdir(download_dir):
         clioptions.refuse_missing_dir(declaration,
@@ -1664,7 +1665,7 @@ def _run_child(command: str, argv: list, script_dir: str) -> int:
 
 def cli(argv: list | None = None) -> int:
     settings.load()
-    errorlog.start_run(argv)
+    runlog.start_run(argv)
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, commands.program_name(__spec__.name),

@@ -28,7 +28,7 @@ import tempfile
 from collections.abc import Iterable, Iterator
 from typing import Any
 
-from medialib.lib import errorlog, runlog
+from medialib.lib import errorlog, runcontext, runlog
 from medialib.lib.enums import shell_lower
 
 __all__ = [
@@ -81,7 +81,7 @@ class RunSkipLog(SkipLog):
 
     def record(self, source: str, destination: str) -> None:
         super().record(source, destination)
-        path = os.environ.get("SAFETY_LOG", "")
+        path = runcontext.get("SAFETY_LOG")
         if not path:
             return
         try:
@@ -514,7 +514,7 @@ def init_abort_flag(path: str | None = None) -> str:
     explicit path in preference would give each layer a private flag the others
     cannot see.
     """
-    inherited = os.environ.get("ABORT_FLAG", "")
+    inherited = runcontext.get("ABORT_FLAG")
     if inherited:
         return inherited
     if not path:
@@ -522,8 +522,8 @@ def init_abort_flag(path: str | None = None) -> str:
         path = os.path.join(
             directory, "abortRequested." + "".join(
                 random.choice(_MKTEMP_ALPHABET) for _ in range(8)))
-    os.environ["ABORT_FLAG"] = path
-    os.environ["ABORT_FLAG_OWNER"] = str(os.getpid())
+    runcontext.settle("ABORT_FLAG", path)
+    runcontext.settle("ABORT_FLAG_OWNER", str(os.getpid()))
     atexit.register(release_abort_flag)
     return path
 
@@ -532,34 +532,17 @@ def release_abort_flag() -> None:
     """``releaseAbortFlag``: remove the flag, if this layer is the one that made
     it. An inner script that deleted an inherited one would tell the wrapper
     above it that the run was never interrupted."""
-    if os.environ.get("ABORT_FLAG_OWNER", "") != str(os.getpid()):
+    if runcontext.get("ABORT_FLAG_OWNER") != str(os.getpid()):
         return
     try:
-        os.remove(os.environ.get("ABORT_FLAG", ""))
+        os.remove(runcontext.get("ABORT_FLAG"))
     except OSError:
         pass
 
 
-def abort_requested() -> bool:
-    """``abortRequested``: has this run been asked to stop?"""
-    flag = os.environ.get("ABORT_FLAG", "")
-    return bool(flag) and os.path.exists(flag)
-
-
-def request_abort() -> None:
-    """``requestAbort``: record an interrupt for the whole run.
-
-    Never raises: it runs inside a signal handler, where a failure would take
-    down the run it exists to end tidily.
-    """
-    flag = os.environ.get("ABORT_FLAG", "")
-    if not flag:
-        return
-    try:
-        with open(flag, "ab"):
-            pass
-    except OSError:
-        pass
+# Kept by the run (`medialib/lib/runcontext.py`), which every worker is handed.
+abort_requested = runcontext.abort_requested
+request_abort = runcontext.request_abort
 
 
 def fail_no_relevant_input(path: str, what: str,
@@ -779,21 +762,21 @@ def init_safety_log(path: str = "") -> str:
     the run falls back to a temporary of its own.
     """
     if path and not os.path.islink(path):
-        os.environ["SAFETY_LOG"] = path
+        runcontext.settle("SAFETY_LOG", path)
         open(path, "w").close()
         return path
     if path:
         runlog.say("\nWARNING: the safety log path is a symlink and was "
                    "not used:\n  %s\n" % path, sys.stderr)
     else:
-        inherited = os.environ.get("SAFETY_LOG", "")
+        inherited = runcontext.get("SAFETY_LOG")
         if inherited and os.path.isfile(inherited) and not os.path.islink(
                 inherited):
             return inherited
     directory = os.environ.get("TMPDIR", "/tmp")
     descriptor, path = tempfile.mkstemp(prefix="safetySkips.", dir=directory)
     os.close(descriptor)
-    os.environ["SAFETY_LOG"] = path
+    runcontext.settle("SAFETY_LOG", path)
     # A temp file of this run's own, so this run takes it away again - at exit,
     # after the footer has read it, whether the run finished or was stopped. A
     # named or inherited log belongs to whoever named or opened it.
@@ -820,7 +803,7 @@ def _remove_if_owner(path: str, owner: int) -> None:
 
 def report_safety_skips(stream=None) -> None:
     out = sys.stderr if stream is None else stream
-    log_path = os.environ.get("SAFETY_LOG", "")
+    log_path = runcontext.get("SAFETY_LOG")
     lines = []
     if log_path and os.path.isfile(log_path):
         with open(log_path, encoding="utf-8", errors="surrogateescape") as fh:

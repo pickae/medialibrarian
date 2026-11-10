@@ -43,6 +43,7 @@ from medialib.lib import (
     imagemagick,
     imagesizes,
     ramscratch,
+    runcontext,
     runlog,
     safety,
     settings,
@@ -1174,13 +1175,13 @@ def _settle_mkvtoolnix(input_dir: str) -> bool:
     chapters without it, and an opus source's embedded cover is copied out by
     ffmpeg when mkvextract is not there to do it.
     """
-    inherited = os.environ.get("HAVE_MKVTOOLNIX")
+    inherited = runcontext.get("HAVE_MKVTOOLNIX", None)
     if inherited is not None:
         return bool(inherited)
 
     present = all(tooldeps.tool_present(tool) for tool in
                   ("mkvmerge", "mkvpropedit", "mkvextract"))
-    os.environ["HAVE_MKVTOOLNIX"] = "1" if present else ""
+    runcontext.settle("HAVE_MKVTOOLNIX", "1" if present else "")
     if not present and _holds_mp3(input_dir):
         log("WARNING: mkvtoolnix not found (apt install mkvtoolnix) - chapters "
             "and titles cannot be embedded in")
@@ -1199,7 +1200,7 @@ def _holds_mp3(input_dir: str) -> bool:
 
 def cli(argv: list | None = None) -> int:
     settings.load()
-    errorlog.start_run(argv)
+    runlog.start_run(argv)
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, program=commands.program_name(__spec__.name),

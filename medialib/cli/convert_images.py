@@ -45,6 +45,7 @@ from medialib.lib import (
     imagecodecs,
     imagemagick,
     ramscratch,
+    runcontext,
     runlog,
     safety,
     settings,
@@ -1166,11 +1167,11 @@ def main(argv: list, program: str = "convert-images") -> int:
     # fdupes is the one tool whose absence changes WHAT happens rather than
     # whether it happens. A parent may have settled it already; inherit that
     # instead of warning a second time.
-    if "HAVE_FDUDES" not in os.environ:
+    if runcontext.get("HAVE_FDUDES", None) is None:
         if tooldeps.tool_present("fdupes"):
-            os.environ["HAVE_FDUDES"] = "1"
+            runcontext.settle("HAVE_FDUDES", "1")
         else:
-            os.environ["HAVE_FDUDES"] = ""
+            runcontext.settle("HAVE_FDUDES", "")
             log("WARNING: fdupes not found (apt install fdupes) - the input "
                 "will not be de-duplicated,")
             log("         so identical files are converted and stored as "
@@ -1196,8 +1197,8 @@ def main(argv: list, program: str = "convert-images") -> int:
     counter_dir = ""
     started = None
     state = None
-    own_safety_log = not (os.environ.get("SAFETY_LOG")
-                          and os.path.isfile(os.environ["SAFETY_LOG"]))
+    own_safety_log = not (runcontext.get("SAFETY_LOG")
+                          and os.path.isfile(runcontext.get("SAFETY_LOG")))
     try:
         ramscratch.init_ram_base()
         counter_dir, status = ramscratch.ram_scratch_dir("counters")
@@ -1221,7 +1222,7 @@ def main(argv: list, program: str = "convert-images") -> int:
 
         safety.set_run_footer(footer)
 
-        if os.environ.get("HAVE_FDUDES"):
+        if runcontext.get("HAVE_FDUDES", None):
             toolcapture.watched(["fdupes", "-rdN", input_dir],
                                 skipped="duplicates were not removed",
                                 stdout=subprocess.DEVNULL)
@@ -1552,7 +1553,7 @@ def _print_footer(state, started, values, own_safety_log) -> None:
     # script once per unit of work and throws each child's output away. Under a
     # lock, because several of those children can finish at once and each one's
     # record has to survive whole.
-    stats_file = os.environ.get("imageStatsFile", "")
+    stats_file = runcontext.get("imageStatsFile", "")
     if stats_file:
         with open(stats_file + ".lock", "w") as handle, \
                 runlog.take_lock(handle), \
@@ -1584,7 +1585,7 @@ def _road_line(label: str, images: int, pixels: int, seconds: float) -> str:
 
 def cli(argv: list | None = None) -> int:
     settings.load()
-    errorlog.start_run(argv)
+    runlog.start_run(argv)
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, program=commands.program_name(__spec__.name))

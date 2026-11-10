@@ -30,11 +30,11 @@ from medialib.lib import (
     cleannamesindividually,
     clioptions,
     cover,
-    errorlog,
     fixedpoint,
     mtp,
     numbering,
     prefixes,
+    runlog,
     safety,
     settings,
     tooldeps,
@@ -557,7 +557,7 @@ def main(argv: list, program: str = "clean-folder-structure",
 
 def cli(argv: list | None = None) -> int:
     settings.load()
-    errorlog.start_run(argv)
+    runlog.start_run(argv)
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, program=commands.program_name(__spec__.name),

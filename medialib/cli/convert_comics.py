@@ -73,6 +73,7 @@ from medialib.lib import (
     imagemagick,
     numbering,
     ramscratch,
+    runcontext,
     runlog,
     safety,
     settings,
@@ -1705,7 +1706,7 @@ def _run(result, declaration, program: str, script_dir: str,
     # The child converter appends one line per book here, so it has to be told
     # where: its own report goes into a per-book log this script throws away, and
     # the closing statistics are summed out of this file.
-    os.environ["imageStatsFile"] = state.stats_file
+    runcontext.settle("imageStatsFile", state.stats_file)
     os.makedirs(out_path, exist_ok=True)
     state.phase_start = time.time()
 
@@ -1791,11 +1792,11 @@ def _settle_fdupes() -> bool:
     duplicates are converted and stored as separate copies, and nothing else is
     lost. Settled once and shared with the per-book children, so the fact is said
     once per run."""
-    inherited = os.environ.get("HAVE_FDUDES")
+    inherited = runcontext.get("HAVE_FDUDES", None)
     if inherited is not None:
         return bool(inherited)
     present = tooldeps.tool_present("fdupes")
-    os.environ["HAVE_FDUDES"] = "1" if present else ""
+    runcontext.settle("HAVE_FDUDES", "1" if present else "")
     if not present:
         log("WARNING: fdupes not found (apt install fdupes) - the input will not "
             "be de-duplicated,")
@@ -1807,7 +1808,7 @@ def _settle_fdupes() -> bool:
 
 def cli(argv: list | None = None) -> int:
     settings.load()
-    errorlog.start_run(argv)
+    runlog.start_run(argv)
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, program=commands.program_name(__spec__.name),

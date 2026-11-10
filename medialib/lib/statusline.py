@@ -14,6 +14,8 @@ way of the lines that scroll past, is the run's console's
 import os
 import subprocess
 
+from medialib.lib import runcontext
+
 __all__ = [
     "STATUS_ROW_MARGIN",
     "state",
@@ -29,16 +31,16 @@ STATUS_ROW_MARGIN = 1
 
 
 class _State:
-    """The settled row.
+    """The settled row, kept by the run (`medialib/lib/runcontext.py`) so a
+    worker is handed the one its parent settled: ``row`` is empty off a
+    terminal and ``"1"`` on one, ``cols`` is the width, and ``interval`` is the
+    seconds between refreshes."""
 
-    ``row`` is empty off a terminal and ``"1"`` on one, ``cols`` is the width,
-    and ``interval`` is the seconds between refreshes.
-    """
+    def __getattr__(self, name: str):
+        return getattr(runcontext.current().terminal, name)
 
-    def __init__(self):
-        self.row = ""
-        self.cols = 1000
-        self.interval = 30
+    def __setattr__(self, name: str, value) -> None:
+        setattr(runcontext.current().terminal, name, value)
 
 
 state = _State()

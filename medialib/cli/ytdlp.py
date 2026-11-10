@@ -27,10 +27,10 @@ from medialib import commands
 from medialib.lib import (
     clioptions,
     downloadcleanup,
-    errorlog,
     ffmpegselect,
     podcastfeeds,
     ramscratch,
+    runcontext,
     runlog,
     safety,
     settings,
@@ -295,9 +295,9 @@ class Run:
             fields[4], fields[5],
             ytdlp_command=self.ytdlp_command,
             profile=profile,
-            date_after=os.environ.get("PODCAST_DATE_AFTER", ""),
-            date_before=os.environ.get("PODCAST_DATE_BEFORE", ""),
-            sponsorblock=os.environ.get("PODCAST_SPONSORBLOCK"),
+            date_after=runcontext.get("PODCAST_DATE_AFTER", ""),
+            date_before=runcontext.get("PODCAST_DATE_BEFORE", ""),
+            sponsorblock=runcontext.get("PODCAST_SPONSORBLOCK", None),
             ffmpeg_location=self.ffmpeg_location)
         if argv is None:
             return
@@ -450,9 +450,9 @@ class Run:
                     root, self.native_archive, subdir, fields[2], fields[3],
                     fields[4], url, ytdlp_command=self.ytdlp_command,
                     profile=profile,
-                    date_after=os.environ.get("PODCAST_DATE_AFTER", ""),
-                    date_before=os.environ.get("PODCAST_DATE_BEFORE", ""),
-                    sponsorblock=os.environ.get("PODCAST_SPONSORBLOCK"),
+                    date_after=runcontext.get("PODCAST_DATE_AFTER", ""),
+                    date_before=runcontext.get("PODCAST_DATE_BEFORE", ""),
+                    sponsorblock=runcontext.get("PODCAST_SPONSORBLOCK", None),
                     ffmpeg_location=self.ffmpeg_location)
                 if argv is not None:
                     print(podcastfeeds.render_call(argv, self.platform))
@@ -685,9 +685,9 @@ def _probe_sponsorblock(ytdlp_command, warn: bool = True) -> None:
     except OSError:
         text = ""
     if "sponsorblock" in text.lower():
-        os.environ["PODCAST_SPONSORBLOCK"] = "1"
+        runcontext.settle("PODCAST_SPONSORBLOCK", "1")
         return
-    os.environ["PODCAST_SPONSORBLOCK"] = ""
+    runcontext.settle("PODCAST_SPONSORBLOCK", "")
     if not warn:
         return
     log("WARNING: this yt-dlp has no SponsorBlock support - the YouTube feeds "
@@ -760,9 +760,9 @@ def main(argv: list, program: str = "ytdlp", script_dir: str = "") -> int:
         return 2
     after, before = settled
     if after:
-        os.environ["PODCAST_DATE_AFTER"] = after
+        runcontext.settle("PODCAST_DATE_AFTER", after)
     if before:
-        os.environ["PODCAST_DATE_BEFORE"] = before
+        runcontext.settle("PODCAST_DATE_BEFORE", before)
 
     profiles, jobs_of, rows_of, feed_count, bad = [], [], [], 0, False
     for table in tables:
@@ -784,7 +784,7 @@ def main(argv: list, program: str = "ytdlp", script_dir: str = "") -> int:
     uname, os_env = _uname(), os.environ.get("OS", "")
     host_platform = podcastfeeds.podcast_platform("", uname, os_env)
     platform = podcastfeeds.podcast_platform(
-        os.environ.get("PODCAST_PLATFORM", ""), uname, os_env)
+        runcontext.get("PODCAST_PLATFORM", ""), uname, os_env)
     ytdlp_command = _resolve_ytdlp(platform, script_dir)
     skip_preflight = bool(os.environ.get("SKIP_TOOL_PREFLIGHT", ""))
     if ytdlp_command is None:
@@ -925,9 +925,9 @@ def _on_opt(letter: str, value: str) -> None:
     feed library reads."""
     if letter == "s":
         if value in ("windows", "linux"):
-            os.environ["PODCAST_PLATFORM"] = value
+            runcontext.settle("PODCAST_PLATFORM", value)
         elif value == "auto":
-            os.environ.pop("PODCAST_PLATFORM", None)
+            runcontext.forget("PODCAST_PLATFORM")
 
 
 def _uname() -> str:
@@ -1182,10 +1182,10 @@ def _announce(state, tables, feed_count, ingest, native_output) -> None:
         if ingest["notIngested"]:
             log("Not converted, downloaded straight to %s: %s"
                 % (native_output, " ".join(ingest["notIngested"])))
-    if os.environ.get("PODCAST_DATE_AFTER"):
-        log("Only uploads after " + os.environ["PODCAST_DATE_AFTER"])
-    if os.environ.get("PODCAST_DATE_BEFORE"):
-        log("Only uploads before " + os.environ["PODCAST_DATE_BEFORE"])
+    if runcontext.get("PODCAST_DATE_AFTER", None):
+        log("Only uploads after " + runcontext.get("PODCAST_DATE_AFTER"))
+    if runcontext.get("PODCAST_DATE_BEFORE", None):
+        log("Only uploads before " + runcontext.get("PODCAST_DATE_BEFORE"))
     log("%d table(s), %d feed(s) in all" % (len(tables), feed_count))
 
 
@@ -1418,7 +1418,7 @@ def _build_library(state, ingest):
 
 def cli(argv: list | None = None) -> int:
     settings.load()
-    errorlog.start_run(argv)
+    runlog.start_run(argv)
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, program=commands.program_name(__spec__.name),

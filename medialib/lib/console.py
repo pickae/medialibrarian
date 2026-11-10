@@ -18,9 +18,9 @@ worker processes - and keeps a status row pinned under what scrolls past. The
   the row's to say; off a terminal, or under ``-v``, each line is written as
   it comes and names its lane and item in front instead.
 
-A Console is pickled to the workers with the rest of a run's state. What
-travels is the directory, the row's geometry and the row's render; a worker
-draws the row the parent settled rather than settling one of its own.
+A Console is the run's (`medialib/lib/runcontext.py`) and is pickled to the
+workers with it. What travels is the directory and the row's render; a worker
+draws against the row geometry its parent settled, which travels with the run.
 """
 
 import contextlib
@@ -29,7 +29,7 @@ import re
 import sys
 import threading
 
-from medialib.lib import runlog, statusline
+from medialib.lib import runcontext, runlog, statusline
 
 __all__ = ["Console", "LaneRow", "about", "active", "current", "hide_active",
            "subject",
@@ -67,27 +67,27 @@ def _lock_for(directory: str) -> _DirectoryLock:
 
 def active() -> "Console | None":
     """The console this process writes its lines through, or None."""
-    return runlog._console
+    return runcontext.current().console
 
 
 def current() -> "Console":
     """The run's console in this process, made and made active the first time
     it is asked for when nothing has made one yet."""
-    console = runlog._console
+    console = runcontext.current().console
     return console if console is not None else Console().activate()
 
 
 def hide_active() -> None:
     """Take down the row of this process's console, if it shows one: what a
     run's cleanup calls on every way out."""
-    console = runlog._console
+    console = runcontext.current().console
     if console is not None:
         console.hide()
 
 
 def write(text: str) -> None:
     """``text`` on stderr, through the run's console when it has one."""
-    console = runlog._console
+    console = runcontext.current().console
     if console is None:
         sys.stderr.write(text)
         sys.stderr.flush()
@@ -101,9 +101,6 @@ class Console:
 
     def __init__(self, directory: str = "", render=None) -> None:
         self.directory = directory
-        # None is this process's own settlement, read as it stands; a worker
-        # holds the one its parent had.
-        self._geometry: tuple | None = None
         self.render = render
         # Whether a row is pinned: a worker erases it for its lines whether or
         # not it can draw it again.
@@ -116,8 +113,8 @@ class Console:
         self._stop: threading.Event | None = None
 
     def __getstate__(self) -> dict:
-        return {"directory": self.directory, "_geometry": self.geometry,
-                "render": self.render, "pinned": self.pinned}
+        return {"directory": self.directory, "render": self.render,
+                "pinned": self.pinned}
 
     def __setstate__(self, state: dict) -> None:
         self.__dict__.update(state)
@@ -125,10 +122,9 @@ class Console:
 
     @property
     def geometry(self) -> tuple:
-        """``(row, cols, interval)`` the row is drawn against."""
-        if self._geometry is None:
-            return statusline.status_geometry()
-        return self._geometry
+        """``(row, cols, interval)`` the row is drawn against: the run's, which
+        a worker is handed with the rest of it."""
+        return statusline.status_geometry()
 
     # --- the lock ------------------------------------------------------------
 
@@ -283,7 +279,7 @@ class Console:
 
     def activate(self) -> "Console":
         """Make this the console this process writes its lines through."""
-        runlog._console = self
+        runcontext.current().console = self
         return self
 
     def show(self, render=None, travels: bool = True) -> None:

@@ -22,7 +22,6 @@ unreadable file, and the difference is a skip reason.
 
 import json
 import math
-import os
 import subprocess
 
 from medialib.lib import (
@@ -30,6 +29,7 @@ from medialib.lib import (
     audiobitrate,
     census,
     dolbyvision,
+    runcontext,
     videobitrate,
 )
 from medialib.lib.enums import lower_extension_of, shell_lower
@@ -315,7 +315,7 @@ def census_audio_row(path, separator=None):
     spoken-word file it differs from the stream's by the cover art alone.
     """
     if separator is None:
-        separator = os.environ.get("CENSUS_SEP", census.DEFAULT_SEPARATOR)
+        separator = runcontext.get("CENSUS_SEP", census.DEFAULT_SEPARATOR)
     text = census_probe_json(path)
     if not text:
         return None, "ffprobe could not read it (not audio, or truncated)"
@@ -467,7 +467,7 @@ def census_video_row(path, separator=None):
     interlaced broadcast as 50fps.
     """
     if separator is None:
-        separator = os.environ.get("CENSUS_SEP", census.DEFAULT_SEPARATOR)
+        separator = runcontext.get("CENSUS_SEP", census.DEFAULT_SEPARATOR)
     text = census_probe_json(path)
     if not text:
         return None, "ffprobe could not read it (not video, or truncated)"
@@ -559,7 +559,7 @@ def _adequacy_wanted():
     Read from the environment per row, because the workers are separate
     processes and a variable one of them holds is one nobody else ever sees.
     """
-    return bool(os.environ.get("CENSUS_ADEQUACY", ""))
+    return bool(runcontext.get("CENSUS_ADEQUACY", ""))
 
 
 def census_bitrate_adequacy(path, codec, width, height, fps, bits):
@@ -635,7 +635,7 @@ def census_dynamic_range(path, transfer, dv_records="0"):
     hdr10plus = False
     hlg = False
 
-    if os.environ.get("CENSUS_HAVE_MEDIAINFO", ""):
+    if runcontext.get("CENSUS_HAVE_MEDIAINFO", ""):
         info = dolbyvision.read_video_info(path)
         dv = dolbyvision.claims_dolby_vision(info["PROFILE"], info["SETTINGS"])
         hdr = dolbyvision.is_hdr(info["TRANSFER"], info["HDR"])

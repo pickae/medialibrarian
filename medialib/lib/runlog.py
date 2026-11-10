@@ -5,122 +5,39 @@ a "[n/total] " counter that appears only when flock is there to keep it honest.
 The eighteen commands say these things the same way, which is what lets one
 command read another's output.
 
-How much is said is the run's verbosity, one of three levels read from
+How much is said is the run's verbosity, one of three levels settled as
 ``LOG_VERBOSITY``: quiet (errors only), normal (what a run has always said),
-verbose (that plus the reason behind each decision). An environment variable
-rather than an argument because the workers a run fans out to and the commands
-it starts as children have to say the same amount, and the environment is the
-one thing all of them inherit.
+verbose (that plus the reason behind each decision). Settled on the run
+(`medialib/lib/runcontext.py`) rather than passed as an argument, because the
+workers a run fans out to and the commands it starts as children have to say
+the same amount: a worker is handed the run, a child its environment.
 
 Every line said here is also kept in the run's info log under `logs/info/`, at
 a verbosity of its own (`medialib/lib/infolog.py`).
 """
 
-import contextlib
 import os
-import shutil
 import sys
+import threading
 import time
-import typing
+import traceback
+
+from medialib.lib import errorlog, infolog, runcontext
+from medialib.lib.runcontext import can_lock, have_flock, settle_flock, take_lock
 
 __all__ = ["log", "say", "result", "detail", "warn", "error", "error_continued",
            "verbosity", "keep",
            "settle_verbosity",
            "QUIET", "NORMAL", "VERBOSE", "counted_prefix", "film_header",
            "cpu_count", "can_lock", "have_flock", "settle_flock", "take_lock",
-           "warn_uncounted_progress"]
+           "warn_uncounted_progress", "keep", "start_run", "record_crash",
+           "install_hooks"]
 
 QUIET, NORMAL, VERBOSE = 0, 1, 2
 
 VERBOSITY_VARIABLE = "LOG_VERBOSITY"
 
-# The run's console (`medialib/lib/console.py`) in this process, once the run
-# has made one: every line for stderr is written through it, so it lands on a
-# console row of its own and in its item's block.
-_console: typing.Any = None
 _LEVEL_WORDS = {QUIET: "quiet", NORMAL: "", VERBOSE: "verbose"}
-
-
-def can_lock() -> bool:
-    """Whether this host can serialise the shared counters at all.
-
-    Two ways, and either will do. ``flock(1)`` on PATH stays the first one
-    asked, so a Linux box that has had the tool
-    taken off it still reads as it always did. Failing that, the C library's
-    own ``flock`` - which is what :func:`take_lock` actually calls - and that
-    is the rung macOS lands on: it has never shipped the util-linux command
-    line tool, but the system call has been there all along, so refusing to
-    count on a Mac would have declined a facility it was already using.
-
-    Windows reaches neither and answers no, which is the honest answer there:
-    ``fcntl`` is a POSIX module and is not built into that interpreter.
-    """
-    if shutil.which("flock"):
-        return True
-    try:
-        import fcntl  # noqa: F401 - probed, not called
-    except ImportError:
-        return False
-    return hasattr(fcntl, "flock")
-
-
-def settle_flock() -> str:
-    """``HAVE_FLOCK``, probed now and left in the environment for the children.
-
-    A run settles it at startup so the workers it fans out to inherit one answer
-    rather than each probing for their own; a run whose halves disagreed about it
-    would print two different kinds of progress line. Correctness does not depend
-    on the call - :func:`have_flock` settles it on first read either way - so a
-    command that takes no lock and starts no worker need not make it.
-    """
-    have = "1" if can_lock() else ""
-    os.environ["HAVE_FLOCK"] = have
-    return have
-
-
-def have_flock() -> bool:
-    """Whether this run locks. The only reader of ``HAVE_FLOCK``.
-
-    An answer already in the environment stands, including an empty one: that is
-    a parent's decision handed down, or a test asking for the countless path.
-    Nothing there at all is nobody having asked yet, and the probe answers it.
-
-    One reader, because a direct read cannot tell an unsettled variable from a
-    settled "no" - and answering "no" on a host with flock costs the run its
-    progress positions and makes its closing counts read low.
-    """
-    value = os.environ.get("HAVE_FLOCK")
-    return bool(settle_flock() if value is None else value)
-
-
-@contextlib.contextmanager
-def take_lock(handle):
-    """``takeLock``: hold the lock on an open file for the block, or hold nothing.
-
-    Gated on HAVE_FLOCK rather than simply calling fcntl unconditionally, and
-    the gate is what keeps the two halves of a run agreeing: a process that
-    locked while its siblings printed the countless progress line would count
-    correctly and say something else. The variable is the whole run's one
-    answer, so a parent that settled "no" is obeyed here even on a host that
-    could lock. Never raises, so the block's body runs either way.
-    """
-    locked = False
-    if have_flock():
-        import fcntl
-
-        try:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-            locked = True
-        except OSError:
-            locked = False
-    try:
-        yield
-    finally:
-        if locked:
-            try:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-            except OSError:
-                pass
 
 
 def settle_verbosity(level: int) -> None:
@@ -129,14 +46,14 @@ def settle_verbosity(level: int) -> None:
     Normal is written as an empty value rather than removed, so a parent's
     "quiet" or "verbose" cannot outlive a child that asked for normal.
     """
-    os.environ[VERBOSITY_VARIABLE] = _LEVEL_WORDS[level]
+    runcontext.settle(VERBOSITY_VARIABLE, _LEVEL_WORDS[level])
 
 
 def verbosity() -> int:
     """The run's verbosity. Anything but the two words is normal, so a value
     nobody set and a value nobody meant both leave a run saying what it always
     said."""
-    value = os.environ.get(VERBOSITY_VARIABLE, "")
+    value = runcontext.get(VERBOSITY_VARIABLE)
     if value == "quiet":
         return QUIET
     if value == "verbose":
@@ -155,8 +72,6 @@ def _keep(text: str, needs: int, stream) -> None:
     went to the console and the log keeps lines of level ``needs``. A line
     written into some other stream is a piece of a report, not the console."""
     if stream is None or stream is sys.stderr or stream is sys.stdout:
-        from medialib.lib import infolog
-
         infolog.keep(text, needs)
 
 
@@ -171,7 +86,7 @@ def _say_line(message: tuple, stream, needs: int) -> None:
 
 def _write_text(text: str, stream) -> None:
     """One line on stderr, timestamped only when the run asked for it."""
-    if os.environ.get("LOG_TIMESTAMPS", ""):
+    if runcontext.get("LOG_TIMESTAMPS"):
         line = "[%s] %s\n" % (time.strftime("%H:%M:%S"), text)
     else:
         line = "==> %s\n" % text
@@ -180,8 +95,9 @@ def _write_text(text: str, stream) -> None:
 
 def _emit(text: str, stream) -> None:
     out = sys.stderr if stream is None else stream
-    if _console is not None and out is sys.stderr:
-        _console.emit(text)
+    console = runcontext.current().console
+    if console is not None and out is sys.stderr:
+        console.emit(text)
     else:
         out.write(text)
 
@@ -238,8 +154,6 @@ def error(*message: object, stream=None, kind: str = "error",
     """
     _say_line(("ERROR:",) + message, stream, QUIET)
     if persist and (stream is None or stream is sys.stderr):
-        from medialib.lib import errorlog
-
         errorlog.record(kind, " ".join(str(part) for part in message),
                         files=files)
 
@@ -318,12 +232,76 @@ def warn_uncounted_progress() -> None:
         return
     if os.environ.get("SKIP_TOOL_PREFLIGHT", ""):
         return
-    if os.environ.get("UNCOUNTED_PROGRESS_WARNED", ""):
+    if runcontext.get("UNCOUNTED_PROGRESS_WARNED"):
         return
-    os.environ["UNCOUNTED_PROGRESS_WARNED"] = "1"
+    runcontext.settle("UNCOUNTED_PROGRESS_WARNED", "1")
     log("WARNING: flock not installed (it ships in util-linux) - progress lines "
         "will be printed one per item")
     log('         without their "[n/total]" position, and the run\'s closing '
         "counts may read low. The")
     log("         work itself is unaffected; nothing is skipped and "
         "nothing is at risk.")
+
+
+# --- a crash ----------------------------------------------------------------------
+
+def start_run(argv: list | None = None) -> None:
+    """Settle this run's error log (`medialib/lib/errorlog.py`), for this
+    process and everything it starts, and install the hooks that keep a
+    crash."""
+    errorlog.settle_run(argv)
+    install_hooks()
+
+
+def record_crash(exc: BaseException, where: str = "") -> str:
+    """Keep an exception nobody caught, and say it on the console: one line,
+    the traceback under -v, and the whole of it always when it could not be
+    kept - a traceback is never lost to a full disk."""
+    kind = errorlog.crash_kind(exc)
+    summary = "%s: %s" % (type(exc).__name__, exc) if str(exc) else type(exc).__name__
+    if where:
+        summary = "%s: %s" % (where, summary)
+    path = errorlog.record(kind, summary, files=errorlog.exception_files(exc),
+                           exc=exc, stack=False)
+    error(summary, persist=False)
+    if path and verbosity() < VERBOSE:
+        error_continued("       the traceback is kept in %s" % path)
+    else:
+        sys.stderr.write("".join(traceback.format_exception(
+            type(exc), exc, exc.__traceback__)))
+        if path:
+            error_continued("       and kept in %s" % path)
+    sys.stderr.flush()
+    return path
+
+
+_HOOKED = False
+
+
+def install_hooks() -> None:
+    """Keep what nobody caught - in the main thread and in any other - before
+    Python prints it. An interrupt is not an error and is left alone."""
+    global _HOOKED
+    if _HOOKED:
+        return
+    _HOOKED = True
+    previous = sys.excepthook
+
+    def hook(kind, value, tb):
+        if issubclass(kind, KeyboardInterrupt | SystemExit) or value is None:
+            previous(kind, value, tb)
+            return
+        if value.__traceback__ is None:
+            value = value.with_traceback(tb)
+        record_crash(value)
+
+    def thread_hook(args):
+        if args.exc_type is SystemExit or args.exc_value is None:
+            return
+        if issubclass(args.exc_type, KeyboardInterrupt):
+            return
+        name = args.thread.name if args.thread is not None else "a thread"
+        record_crash(args.exc_value, where="in %s" % name)
+
+    sys.excepthook = hook
+    threading.excepthook = thread_hook
