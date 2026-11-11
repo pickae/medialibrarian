@@ -12,6 +12,7 @@ import sys
 import pytest
 
 from medialib.cli import convert_video as cv
+from medialib.cli import convert_video_source as videosource
 from medialib.lib import resolutions
 
 pytestmark = pytest.mark.pure
@@ -446,9 +447,11 @@ class TestBuildVideoArgs:
     def build(self, monkeypatch):
         def run(base, colour="", display="", dimensions=("1920", "1080"),
                 **settings):
-            monkeypatch.setattr(cv, "video_color_args", lambda path: colour)
-            monkeypatch.setattr(cv, "hdr_master_display", lambda path: display)
-            monkeypatch.setattr(cv, "video_dimensions",
+            monkeypatch.setattr(videosource, "video_color_args",
+                                lambda path: colour)
+            monkeypatch.setattr(videosource, "hdr_master_display",
+                                lambda path: display)
+            monkeypatch.setattr(videosource, "video_dimensions",
                                 lambda path: dimensions + ("", ""))
             return cv.build_video_args(base, "in.mkv", cv.Settings(**settings))
         return run
@@ -618,19 +621,19 @@ class TestUpscaledColour:
     whatever the source was in."""
 
     def test_the_matrix_and_range_are_stated_the_rest_kept(self):
-        assert cv.upscaled_color_args(
+        assert videosource.upscaled_color_args(
             " -color_primaries smpte170m -color_trc smpte170m "
             "-colorspace smpte170m -color_range pc") == (
             " -color_primaries smpte170m -color_trc smpte170m "
             "-colorspace bt709 -color_range tv")
 
     def test_a_source_that_named_nothing_gets_709_throughout(self):
-        assert cv.upscaled_color_args("") == (
+        assert videosource.upscaled_color_args("") == (
             " -color_primaries bt709 -color_trc bt709 -colorspace bt709 "
             "-color_range tv")
 
     def test_the_filter_carries_the_same_values_in_its_own_spelling(self):
-        assert cv.color_setparams(
+        assert videosource.color_setparams(
             " -color_primaries bt470bg -color_trc bt709 -colorspace bt709 "
             "-color_range tv") == ("setparams=color_primaries=bt470bg:"
                                    "color_trc=bt709:colorspace=bt709:range=tv")
@@ -645,22 +648,22 @@ class TestTheFields:
     ])
     def test_the_verdict_is_the_majority_of_the_classified(self, counts,
                                                            verdict):
-        assert cv.interlace_verdict_of(counts) == verdict
+        assert videosource.interlace_verdict_of(counts) == verdict
 
     def test_a_clean_progressive_source_may_be_upscaled(self):
-        assert cv.upscale_blocked_by_fields((0, 0, 500)) == ""
-        assert cv.upscale_blocked_by_fields((10, 5, 485)) == ""
+        assert videosource.upscale_blocked_by_fields((0, 0, 500)) == ""
+        assert videosource.upscale_blocked_by_fields((10, 5, 485)) == ""
 
     def test_a_telecined_one_is_not_though_the_majority_says_progressive(self):
         """Two woven frames in every five: 40%, and a progressive verdict."""
         counts = (200, 0, 300)
-        assert cv.interlace_verdict_of(counts) == "progressive"
-        assert "40% of its measured frames" in cv.upscale_blocked_by_fields(
-            counts)
+        assert videosource.interlace_verdict_of(counts) == "progressive"
+        assert ("40% of its measured frames"
+                in videosource.upscale_blocked_by_fields(counts))
 
     @pytest.mark.parametrize("counts", [None, (0, 0, 0)])
     def test_nor_one_whose_fields_could_not_be_measured(self, counts):
-        assert cv.upscale_blocked_by_fields(counts) == (
+        assert videosource.upscale_blocked_by_fields(counts) == (
             "its fields could not be measured")
 
 
@@ -687,13 +690,14 @@ class TestVideoIntermediateComplete:
         def run(duration, content="x"):
             if content is not None:
                 (tmp_path / "video.mkv").write_text(content)
-            monkeypatch.setattr(cv, "_probe", lambda argv: str(duration))
+            monkeypatch.setattr(videosource, "_probe",
+                                lambda argv: str(duration))
             return cv.video_intermediate_complete(str(tmp_path), 100)
         return run
 
     def test_a_missing_intermediate_is_not_complete(self, tmp_path,
                                                     monkeypatch):
-        monkeypatch.setattr(cv, "_probe", lambda argv: "100")
+        monkeypatch.setattr(videosource, "_probe", lambda argv: "100")
         assert cv.video_intermediate_complete(str(tmp_path), 100) is False
 
     def test_an_empty_one_is_not_either(self, probe):

@@ -23,7 +23,7 @@ import os
 import shutil
 
 from medialib import commands
-from medialib.cli import convert_video as videorules
+from medialib.cli import convert_video_source as videosource
 from medialib.cli import ingest_movies as rules
 from medialib.cli import ingest_movies_plex as plexphase
 from medialib.lib import (
@@ -146,9 +146,9 @@ def _reason_for(movie: str, named: set) -> str:
         return remux_reason(True, "", "", "", "", "", "", "")
     stats = videobitrate.video_bitrate_stats(original).split(" ")
     codec, fps, kbit = (stats + ["", "", ""])[:3]
-    width, height, _order, _sar = videorules.video_dimensions(original)
-    dv_profile, _el = videorules.dolby_vision_profile(original)
-    _space, _range, transfer = videorules.video_color_space(original)
+    width, height, _order, _sar = videosource.video_dimensions(original)
+    dv_profile, _el = videosource.dolby_vision_profile(original)
+    _space, _range, transfer = videosource.video_color_space(original)
     return remux_reason(False, codec, width, height, fps, kbit, dv_profile,
                         transfer)
 

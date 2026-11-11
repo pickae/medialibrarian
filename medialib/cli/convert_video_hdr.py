@@ -15,6 +15,7 @@ import subprocess
 
 from medialib.cli import convert_video as rules
 from medialib.cli import convert_video_probes as probes
+from medialib.cli import convert_video_source as videosource
 from medialib.lib import codecs, ramscratch, toolcapture
 from medialib.lib.runlog import log
 
@@ -49,7 +50,7 @@ def normalise_dolby_vision(relative: str, settings, output_dir: str) -> tuple:
             % (" and ".join(missing), relative))
         return "", ""
 
-    fps = rules.video_frame_rate(source)
+    fps = videosource.video_frame_rate(source)
     if not fps:
         log("Dolby Vision profile 7 cannot be normalised to 8.1: ffprobe "
             "reports no usable frame rate, and the converted stream has to be "
@@ -119,7 +120,7 @@ def normalise_dolby_vision(relative: str, settings, output_dir: str) -> tuple:
     # Verified before a frame is encoded from it, the same way the source was
     # classified. Anything else is thrown away and the source encoded as it is -
     # which still has its RPU, so nothing is lost that was not lost already.
-    profile, enhancement = rules.dolby_vision_profile(prepared)
+    profile, enhancement = videosource.dolby_vision_profile(prepared)
     reason = ""
     if not profile:
         reason = "the result signals no Dolby Vision at all"
@@ -226,9 +227,10 @@ def prepare_hdr10plus(relative: str, source: str, directory: str, settings,
             "be written back into yet - keeping HDR10 only: %s"
             % (settings.encoder, codec.upper() or "a codec", relative))
         return ""
-    source_codec = rules._probe(["ffprobe", "-v", "error", "-select_streams",
-                                 "v:0", "-show_entries", "stream=codec_name",
-                                 "-of", "default=nk=1:nw=1", source]).strip()
+    source_codec = videosource._probe([
+        "ffprobe", "-v", "error", "-select_streams", "v:0",
+        "-show_entries", "stream=codec_name",
+        "-of", "default=nk=1:nw=1", source]).strip()
     if source_codec != "hevc":
         log("HDR10+: the source carries it in %s, and it can only be read out "
             "of HEVC - keeping HDR10 only: %s"
@@ -243,7 +245,7 @@ def prepare_hdr10plus(relative: str, source: str, directory: str, settings,
                 "mkvmerge (mkvtoolnix)" if name == "mkvmerge" else name
                 for name in missing), relative))
         return ""
-    if not rules.video_frame_rate(source):
+    if not videosource.video_frame_rate(source):
         log("HDR10+: ffprobe reports no usable frame rate, and the stream it is "
             "written back into has to be given one - keeping HDR10 only: %s"
             % relative)
@@ -300,10 +302,11 @@ def restore_hdr10plus(relative: str, directory: str, metadata: str,
     injected = os.path.join(scratch, "video.mkv")
     reason = ""
     if hdr10plus.inject_metadata(video, metadata, injected,
-                                 rules.video_frame_rate(source), scratch,
+                                 videosource.video_frame_rate(source), scratch,
                                  log=log) != 0:
         reason = "it could not be written into the stream"
-    elif probes._media_duration(injected) < probes._media_duration(video) - 1:
+    elif (videosource._media_duration(injected)
+          < videosource._media_duration(video) - 1):
         reason = "the rewritten video came out shorter than the encode"
     elif not hdr10plus.stream_has_hdr10plus(injected):
         reason = "the rewritten video does not signal it"

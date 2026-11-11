@@ -16,6 +16,7 @@ from medialib.cli import convert_video as rules
 from medialib.cli import convert_video_hdr as hdr
 from medialib.cli import convert_video_probes as probes
 from medialib.cli import convert_video_run as run_module
+from medialib.cli import convert_video_source as videosource
 from medialib.lib import hdr10plus
 
 pytestmark = pytest.mark.fs
@@ -38,10 +39,12 @@ def source(monkeypatch, tmp_path):
              "fps": "24000/1001", "windows": 1, "extracted": 0}
     monkeypatch.setattr(hdr10plus, "stream_has_hdr10plus",
                         lambda path, **kw: state["hdr10plus"])
-    monkeypatch.setattr(rules, "_probe", lambda argv: state["codec"] + "\n")
+    monkeypatch.setattr(videosource, "_probe",
+                        lambda argv: state["codec"] + "\n")
     monkeypatch.setattr(probes, "_has_tool",
                         lambda name: name in state["tools"])
-    monkeypatch.setattr(rules, "video_frame_rate", lambda path: state["fps"])
+    monkeypatch.setattr(videosource, "video_frame_rate",
+                        lambda path: state["fps"])
 
     def extract(movie, out, log=print, **kw):
         if state["extracted"]:
@@ -165,7 +168,8 @@ class TestWritingItBack:
                             lambda targets: None)
         monkeypatch.setattr(run_module.ramscratch, "release_exit_cleanup",
                             lambda targets: None)
-        monkeypatch.setattr(rules, "video_frame_rate", lambda path: "24/1")
+        monkeypatch.setattr(videosource, "video_frame_rate",
+                            lambda path: "24/1")
 
         def inject(video, metadata, out, fps, scratch_dir, log=print):
             if state["injected"]:
@@ -179,7 +183,7 @@ class TestWritingItBack:
                 return state["duration"][handle.read().decode()]
 
         monkeypatch.setattr(hdr10plus, "inject_metadata", inject)
-        monkeypatch.setattr(probes, "_media_duration", duration)
+        monkeypatch.setattr(videosource, "_media_duration", duration)
         monkeypatch.setattr(hdr10plus, "stream_has_hdr10plus",
                             lambda path, **kw: state["signals"])
         state["directory"] = str(directory)

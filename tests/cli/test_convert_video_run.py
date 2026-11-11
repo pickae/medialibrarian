@@ -16,6 +16,7 @@ from medialib.cli import convert_video_encode as encode
 from medialib.cli import convert_video_hdr as hdr
 from medialib.cli import convert_video_probes as probes
 from medialib.cli import convert_video_run as run_module
+from medialib.cli import convert_video_source as videosource
 from medialib.cli import convert_video_startup as startup
 from medialib.lib import durationcheck, hostos
 
@@ -36,8 +37,8 @@ def measured(monkeypatch, tmp_path):
 
         monkeypatch.setattr(run_module.pausecontrol, "wait_while_paused",
                             lambda *a, **k: None)
-        monkeypatch.setattr(probes, "_media_duration", lambda path: 600.0)
-        monkeypatch.setattr(rules, "video_dimensions",
+        monkeypatch.setattr(videosource, "_media_duration", lambda path: 600.0)
+        monkeypatch.setattr(videosource, "video_dimensions",
                             lambda path: ("1920", "1080", "progressive", "1:1"))
         monkeypatch.setattr(run_module.videograin, "grain_probe_level",
                             lambda *a, **k: probe)
@@ -279,14 +280,14 @@ class TestTheResumeSkip:
             monkeypatch.setattr(run_module.pausecontrol, "wait_while_paused",
                                 lambda *a, **k: None)
             monkeypatch.setattr(
-                probes, "_media_duration",
+                videosource, "_media_duration",
                 lambda path: (source_seconds if "/in/" in path
                               else output_seconds))
 
             def encoded(path):
                 raise self.Encoded()
 
-            monkeypatch.setattr(rules, "video_dimensions", encoded)
+            monkeypatch.setattr(videosource, "video_dimensions", encoded)
             lines = []
             monkeypatch.setattr(run_module, "log", lines.append)
 
@@ -336,8 +337,8 @@ class TestTheLengthTheVideoIntermediateIsHeldTo:
     @pytest.fixture
     def probed(self, monkeypatch):
         def run(answer, container=7212.736):
-            monkeypatch.setattr(rules, "_probe", lambda args: answer)
-            return probes._video_duration("film.mkv", container)
+            monkeypatch.setattr(videosource, "_probe", lambda args: answer)
+            return videosource._video_duration("film.mkv", container)
         return run
 
     def test_a_matroska_duration_tag_is_read(self, probed):
@@ -517,10 +518,11 @@ class TestWhetherAFileIsUpscaled:
         def run(fields=self.PROGRESSIVE, transfer="bt709", color_range="tv",
                 fps="30000/1001", engine=("/engines/720x480.engine", ""),
                 indexed=True):
-            monkeypatch.setattr(rules, "video_color_space",
+            monkeypatch.setattr(videosource, "video_color_space",
                                 lambda path: ("smpte170m", color_range,
                                               transfer))
-            monkeypatch.setattr(rules, "video_frame_rate", lambda path: fps)
+            monkeypatch.setattr(videosource, "video_frame_rate",
+                                lambda path: fps)
             monkeypatch.setattr(run_module.upscale, "engine_for",
                                 lambda stack, w, h: engine)
             monkeypatch.setattr(run_module.upscale, "index_source",
@@ -578,7 +580,7 @@ class TestThePqSourceThatHoldsTheFork:
         (tmp_path / "out").mkdir()
         monkeypatch.setattr(probes, "_has_tool", lambda name: True)
         monkeypatch.setattr(
-            rules, "video_color_space",
+            videosource, "video_color_space",
             lambda path: ("", "", transfers[os.path.basename(path)]))
 
         def make(**files):

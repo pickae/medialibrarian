@@ -14,6 +14,7 @@ import shutil
 
 from medialib.cli import convert_video as rules
 from medialib.cli import convert_video_probes as probes
+from medialib.cli import convert_video_source as videosource
 from medialib.lib import (
     formatting,
     pausecontrol,
@@ -192,9 +193,10 @@ def encode_audio_all(relative: str, directory: str, settings) -> int:
     if "-c:a copy" in audio_args:
         return 0
 
-    counts = rules._probe(["ffprobe", "-v", "error", "-select_streams", "a",
-                           "-show_entries", "stream=channels",
-                           "-of", "csv=p=0", source]).split()
+    counts = videosource._probe(["ffprobe", "-v", "error",
+                                 "-select_streams", "a",
+                                 "-show_entries", "stream=channels",
+                                 "-of", "csv=p=0", source]).split()
     workers = []
     for index, channels in enumerate(counts):
         track_args, bitrate = rules.audio_track_args(channels, settings)

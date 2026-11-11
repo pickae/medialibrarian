@@ -25,7 +25,7 @@ import subprocess
 
 import pytest
 
-from medialib.cli import convert_video as cv
+from medialib.cli import convert_video_source as videosource
 
 pytestmark = [
     pytest.mark.media,
@@ -184,14 +184,14 @@ class TestTheReadersAgainstARealFile:
     place their input SHAPE is checked against a file an encoder produced."""
 
     def test_the_master_display_is_reassembled_exactly(self, hdr10):
-        assert cv.hdr_master_display(str(hdr10)) == \
+        assert videosource.hdr_master_display(str(hdr10)) == \
             "%s %s" % (MASTER_DISPLAY, MAX_CLL)
 
     def test_the_colour_args_come_back_whole(self, hdr10):
         """Asserted as the full string rather than a prefix, because a silently
         dropped field is exactly what this is here to catch - the colour RANGE
         comes along too, since ffprobe reports it for this stream."""
-        assert cv.video_color_args(str(hdr10)) == (
+        assert videosource.video_color_args(str(hdr10)) == (
             " -color_primaries bt2020 -color_trc smpte2084"
             " -colorspace bt2020nc -color_range tv")
 
@@ -214,11 +214,11 @@ class TestAnHlgSourceCarryingTheSameStaticMetadata:
         assert any("max_luminance" in entry for entry in side)
 
     def test_the_reader_takes_its_static_metadata_too(self, hlg):
-        assert cv.hdr_master_display(str(hlg)) == \
+        assert videosource.hdr_master_display(str(hlg)) == \
             "%s %s" % (MASTER_DISPLAY, MAX_CLL)
 
     def test_and_reads_back_the_hlg_colour_tags(self, hlg):
-        assert cv.video_color_args(str(hlg)) == (
+        assert videosource.video_color_args(str(hlg)) == (
             " -color_primaries bt2020 -color_trc arib-std-b67"
             " -colorspace bt2020nc -color_range tv")
 
@@ -230,4 +230,4 @@ class TestAnSdrSource:
         sdr = _encode(tmp_path_factory.mktemp("sdr") / "sdr source.mkv",
                       "bt709", pix_fmt="yuv420p", static=False,
                       primaries="bt709", matrix="bt709")
-        assert cv.hdr_master_display(str(sdr)) == ""
+        assert videosource.hdr_master_display(str(sdr)) == ""

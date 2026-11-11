@@ -20,8 +20,8 @@ import subprocess
 import pytest
 
 from medialib.cli import convert_video as rules
-from medialib.cli import convert_video_probes as probes
 from medialib.cli import convert_video_run as run_module
+from medialib.cli import convert_video_source as videosource
 from medialib.lib import segments
 
 pytestmark = [
@@ -79,7 +79,7 @@ def chunked(request, tmp_path_factory, monkeypatch_module):
                               video_profile="x265Fast")
     directory = segments.chunk_dir_for(settings.chunk_root, "clip.mkv")
     os.makedirs(directory, exist_ok=True)
-    duration = probes._media_duration(str(source))
+    duration = videosource._media_duration(str(source))
     run_module.Run(settings)._encode(settings, "clip.mkv", directory, duration,
                                      run_module.chunk_bounds(duration, 3), "")
     return request.param, source, directory

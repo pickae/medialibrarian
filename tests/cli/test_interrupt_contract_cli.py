@@ -595,11 +595,12 @@ class TestAVideoRunWaitingForItsDolbyVisionSlot:
         from medialib.cli import convert_video as rules
         from medialib.cli import convert_video_hdr as hdr
         from medialib.cli import convert_video_run as run_module
+        from medialib.cli import convert_video_source as videosource
         from medialib.lib import safety
 
         monkeypatch.setenv("ABORT_FLAG", str(tmp_path / "abortRequested"))
         monkeypatch.setattr(run_module, "log", lambda *a, **k: None)
-        monkeypatch.setattr(rules, "dolby_vision_profile",
+        monkeypatch.setattr(videosource, "dolby_vision_profile",
                             lambda path: ("7", "1"))
         converted = []
         monkeypatch.setattr(hdr, "normalise_dolby_vision",

@@ -18,6 +18,7 @@ import pytest
 from medialib.cli import convert_video as rules
 from medialib.cli import convert_video_hdr as hdr
 from medialib.cli import convert_video_run as run_module
+from medialib.cli import convert_video_source as videosource
 
 pytestmark = pytest.mark.fs
 
@@ -245,7 +246,7 @@ class TestOneDolbyVisionIntermediateAtATime:
     @pytest.fixture
     def run(self, settings, monkeypatch):
         settings.dv_encoder_support = True
-        monkeypatch.setattr(rules, "dolby_vision_profile",
+        monkeypatch.setattr(videosource, "dolby_vision_profile",
                             lambda path: ("8", "") if path.endswith(".dv81")
                             else ("7", "1"))
         converted = []

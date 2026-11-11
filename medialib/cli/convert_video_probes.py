@@ -1,11 +1,9 @@
-"""What convert-video asks its tools before it decides anything.
+"""What this ffmpeg build and this machine can do, for convert-video.
 
-Two kinds of question. What this ffmpeg build and this machine can do: does
-this encoder take that argument, does this GPU open, which render node is
-the Intel one - each answered by running the tool once on nothing and
+Does this encoder take that argument, does this GPU open, which render node
+is the Intel one: each is answered by running the tool once on nothing and
 reading its status, once at startup or per file where the answer depends on
-the file. And what a source is: how long its picture runs, and its geometry
-as the grain probe reads it.
+the file. What a source is, is `convert_video_source.py`.
 
 The small tool helpers the run's other modules share live here too, being
 the lowest of them.
@@ -17,7 +15,8 @@ import shutil
 import subprocess
 
 from medialib.cli import convert_video as rules
-from medialib.lib import enums, formatting
+from medialib.cli import convert_video_source as videosource
+from medialib.lib import enums
 
 # The sysfs PCI vendor id of the iGPU maker this script decodes with. Matching on
 # it is what keeps a mixed Intel-plus-NVIDIA box from mistaking the NVIDIA node for
@@ -64,45 +63,6 @@ def _remove(path: str) -> None:
         os.remove(path)
     except OSError:
         pass
-
-
-def _dimensions_line(path: str) -> str:
-    """The geometry as ``videoDimensions`` PRINTS it, which is what the grain
-    probe reads: it splits the line and takes the first two fields."""
-    return " ".join(rules.video_dimensions(path))
-
-
-def _media_duration(path: str) -> float:
-    return formatting.awk_number(rules._probe([
-        "ffprobe", "-v", "error", "-show_entries", "format=duration",
-        "-of", "default=nk=1:nw=1", path]).strip() or 0)
-
-
-def _video_duration(path: str, container: float) -> float:
-    """How long the source's PICTURE runs, which the video-only intermediate is
-    measured against.
-
-    Not the container's length: that is its longest stream, and an audio track
-    running seconds past the last frame - a dub mastered from another cut - is
-    common, while the video intermediate can only ever be as long as the picture.
-    Matroska keeps the figure in a DURATION tag, MP4 as the stream's duration;
-    a source stating neither, or one past the container, falls back to the
-    container's.
-    """
-    lines = rules._probe([
-        "ffprobe", "-v", "error", "-select_streams", "V:0",
-        "-show_entries", "stream=duration:stream_tags=DURATION",
-        "-of", "default=nk=1:nw=1", path]).split()
-    for line in lines:
-        parts = line.split(":")
-        if not all(formatting.awk_looks_numeric(part) for part in parts):
-            continue
-        seconds = 0.0
-        for part in parts:
-            seconds = seconds * 60 + formatting.awk_number(part)
-        if 0 < seconds <= container:
-            return seconds
-    return container
 
 
 # --- what this build and this machine can do ----------------------------------
@@ -245,7 +205,7 @@ def pq_source_to_convert(settings) -> bool:
         if os.path.isfile(output):
             continue
         source = os.path.join(settings.input_dir, relative)
-        if rules.video_color_space(source)[2] == "smpte2084":
+        if videosource.video_color_space(source)[2] == "smpte2084":
             return True
     return False
 

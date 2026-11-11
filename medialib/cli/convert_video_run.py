@@ -25,6 +25,7 @@ from medialib.cli import convert_video as rules
 from medialib.cli import convert_video_encode as encode
 from medialib.cli import convert_video_hdr as hdr
 from medialib.cli import convert_video_probes as probes
+from medialib.cli import convert_video_source as videosource
 from medialib.cli import convert_video_startup as startup
 from medialib.lib import (
     clioptions,
@@ -141,8 +142,8 @@ class Run:
         # handed back.
         pausecontrol.wait_while_paused()
 
-        plan.duration = duration = probes._media_duration(source)
-        plan.video_duration = probes._video_duration(source, duration)
+        plan.duration = duration = videosource._media_duration(source)
+        plan.video_duration = videosource._video_duration(source, duration)
         # An output already here is the out-of-date result of an earlier run, and
         # replacing it is the whole point of converting this file again. Remembered
         # now, because after the encode a file at that path is no longer
@@ -157,7 +158,7 @@ class Run:
         # as not done.
         plan.replacing = os.path.isfile(plan.output)
         if plan.replacing:
-            out_duration = probes._media_duration(plan.output)
+            out_duration = videosource._media_duration(plan.output)
             if duration > 0 and durationcheck.length_matches(duration,
                                                              out_duration):
                 log("Up to date, skipping: " + relative)
@@ -172,7 +173,7 @@ class Run:
         # planning goes by: a 2160p source scaled down to 1080p does a 1080p
         # file's worth of encoding work. Settled a second time once -c has
         # measured the file, since a crop moves it too.
-        width, height, _order, sar = rules.video_dimensions(source)
+        width, height, _order, sar = videosource.video_dimensions(source)
         enc_width, enc_height = resolutions.capped(width, height,
                                                    settings.max_resolution)
         # With -u the -t test judges the size the file would be enlarged to.
@@ -188,8 +189,8 @@ class Run:
         if settings.grain_probe_wanted:
             pausecontrol.wait_while_paused()
             settings.grain_level = videograin.grain_level_for(
-                source, relative, probes._media_duration,
-                probes._dimensions_line, runlog.jobs_per_core,
+                source, relative, videosource._media_duration,
+                videosource._dimensions_line, runlog.jobs_per_core,
                 settings.decode_accel)
             source_grain = settings.grain_level
 
@@ -197,8 +198,8 @@ class Run:
             if not source_grain:
                 pausecontrol.wait_while_paused()
                 source_grain = videograin.source_grain_for(
-                    source, relative, probes._media_duration,
-                    probes._dimensions_line, runlog.jobs_per_core,
+                    source, relative, videosource._media_duration,
+                    videosource._dimensions_line, runlog.jobs_per_core,
                     settings.decode_accel)
             if not rules.conversion_worthwhile(relative, width, height,
                                                enc_width, enc_height,
@@ -212,7 +213,7 @@ class Run:
         # and every probe started after the interrupt would run to its end.
         if safety.abort_requested():
             return None
-        fields = rules.interlace_counts(source, settings.decode_accel)
+        fields = videosource.interlace_counts(source, settings.decode_accel)
 
         if safety.abort_requested():
             return None
@@ -246,7 +247,7 @@ class Run:
         # come out square.
         if not settings.upscale_size:
             rules.warn_source_geometry(
-                relative, rules.interlace_verdict_of(fields), sar)
+                relative, videosource.interlace_verdict_of(fields), sar)
         plan.size_text = self._size_text(width, height, crop_width,
                                          crop_height, enc_width, enc_height,
                                          upscaled=bool(settings.upscale_size))
@@ -408,7 +409,7 @@ class Run:
         """
         settings = plan.settings
         settings.dolby_vision_source = ""
-        profile, enhancement = rules.dolby_vision_profile(plan.source)
+        profile, enhancement = videosource.dolby_vision_profile(plan.source)
         if (enhancement == "1" and settings.dv_encoder_support
                 and self._take_dv_slot()):
             pausecontrol.wait_while_paused()
@@ -420,7 +421,8 @@ class Run:
                 plan.holds_dv_slot = True
                 # Re-classified rather than assumed, so the mode is decided from
                 # the file that will actually be encoded.
-                profile, enhancement = rules.dolby_vision_profile(prepared)
+                profile, enhancement = videosource.dolby_vision_profile(
+                    prepared)
             else:
                 self.dv_slot.release()
         settings.dolby_vision_mode = hdr.dolby_vision_mode_for(
@@ -453,8 +455,9 @@ class Run:
             return ""
         pausecontrol.wait_while_paused()
         return videocrop.crop_for(
-            source, relative, probes._media_duration, probes._dimensions_line,
-            runlog.jobs_per_core, settings.decode_accel)
+            source, relative, videosource._media_duration,
+            videosource._dimensions_line, runlog.jobs_per_core,
+            settings.decode_accel)
 
     def _settle_upscale(self, plan: Plan, width, height, sar, crop_width,
                         crop_height, fields) -> bool:
@@ -478,19 +481,19 @@ class Run:
                                       settings.upscale_resolution, sar)
         if target is None:
             return True
-        color_space, color_range, transfer = rules.video_color_space(
+        color_space, color_range, transfer = videosource.video_color_space(
             plan.source)
         if transfer in ("smpte2084", "arib-std-b67"):
             log("Upscale: not for an HDR source - no upscaling network is "
                 "trained on HDR - so it keeps its own size: %s" % relative)
             return True
-        blocked = rules.upscale_blocked_by_fields(fields)
+        blocked = videosource.upscale_blocked_by_fields(fields)
         if blocked:
             log("Upscale: skipping %s - %s. An interlaced or telecined picture "
                 "has to be deinterlaced before it is enlarged, which this run "
                 "does not do." % (relative, blocked))
             return False
-        fps = rules.video_frame_rate(plan.source)
+        fps = videosource.video_frame_rate(plan.source)
         if not fps:
             log("Upscale: skipping %s - its frame rate could not be read, and "
                 "the upscaler reads it frame by frame." % relative)
@@ -638,7 +641,7 @@ class Run:
         # from that, but both the chunk re-join and the mux are stream copies, so
         # the cheap check that the output still SIGNALS it is worth making.
         if settings.dolby_vision_mode == "1":
-            out_profile, _el = rules.dolby_vision_profile(output)
+            out_profile, _el = videosource.dolby_vision_profile(output)
             if out_profile:
                 log("Dolby Vision preserved: profile %s -> profile %s: %s"
                     % (source_dv_profile, out_profile, relative))
