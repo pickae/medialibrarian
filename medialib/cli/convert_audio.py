@@ -2034,10 +2034,12 @@ def _settle_and_convert(program: str, script_dir: str, input_dir: str,
     ramscratch.init_ram_base()
 
     try:
-        return _convert(program, script_dir, input_dir, output_dir, probe_what,
-                        skips, mono, adaptive, copy, keep, bitrate, jobs,
-                        codec, chunk_over_ceiling, mkvtoolnix_unsaid,
-                        surround, group_depth)
+        return _convert(input_dir, output_dir, probe_what, skips, jobs,
+                        mkvtoolnix_unsaid, script_dir=script_dir, mono=mono,
+                        surround=surround, adaptive=adaptive, copy=copy,
+                        keep=keep, bitrate=bitrate, codec=codec,
+                        chunk_over_ceiling=chunk_over_ceiling,
+                        group_depth=group_depth)
     finally:
         console.hide_active()
         safety.release_abort_flag()
@@ -2076,13 +2078,14 @@ def _holds_input(input_dir: str) -> bool:
     return False
 
 
-def _convert(program: str, script_dir: str, input_dir: str, output_dir: str,
-             probe_what: str, skips, mono: bool, adaptive: bool, copy: bool,
-             keep: bool, bitrate: int, jobs: int,
-             codec: str = DEFAULT_CODEC,
-             chunk_over_ceiling: bool = False,
-             mkvtoolnix_unsaid: bool = False,
-             surround: bool = False, group_depth: int = 0) -> int:
+def _convert(input_dir: str, output_dir: str, probe_what: str, skips,
+             jobs: int, mkvtoolnix_unsaid: bool, *, script_dir: str,
+             mono: bool, surround: bool, adaptive: bool, copy: bool,
+             keep: bool, bitrate: int, codec: str, chunk_over_ceiling: bool,
+             group_depth: int) -> int:
+    """The run itself, once the tools are checked. The command line's choices
+    are keyword-only: there are too many flags of one type to pass by
+    position."""
     pre_start = time.time()
     # Read before this run has started anything of its own, so what it says is
     # other processes' work.
@@ -2112,19 +2115,7 @@ def _convert(program: str, script_dir: str, input_dir: str, output_dir: str,
         os.chdir(input_dir)
     except OSError:
         return 1
-
-    for parent, _dirs, _names in os.walk(input_dir):
-        os.makedirs(os.path.join(output_dir,
-                                 os.path.relpath(parent, input_dir)),
-                    exist_ok=True)
-
-    # The image files, keeping their modification times so copied cover art
-    # matches the source the way the audio outputs do.
-    toolcapture.watched(["rsync", "-rmt", "--quiet", "--include=*/",
-                         "--include", "*.jpg", "--include", "*.png",
-                         "--include", "*.webp", "--include", "*.avif",
-                         "--exclude=*", input_dir + "/", output_dir],
-                        skipped="the cover art was not copied")
+    _mirror_folders_and_covers(input_dir, output_dir)
 
     state.tracks = _scan_tracks(input_dir)
     # Belt and braces: the pre-flight probe is case-INsensitive while this scan
@@ -2139,19 +2130,59 @@ def _convert(program: str, script_dir: str, input_dir: str, output_dir: str,
     state.verdicts = _judge_groups(state, jobs)
     state.chunked = _decide_chunking(state, jobs)
 
+    if not _settle_scratch(state):
+        return 1
+
+    _encode_all(state, jobs)
+    _rejoin_split_files(state, jobs)
+    runlog.say("Done.\n")
+
+    safety.print_run_footer()
+
+    _remove_empty_folders(input_dir)
+    # A file that came out the wrong length is not a warning: the run did not do
+    # what it was asked, and a caller chaining commands has to see that.
+    return workerpool.exit_status(1 if durationcheck.failures() else 0)
+
+
+def _mirror_folders_and_covers(input_dir: str, output_dir: str) -> None:
+    """The input's folder tree built under the output, and its images copied
+    across."""
+    for parent, _dirs, _names in os.walk(input_dir):
+        os.makedirs(os.path.join(output_dir,
+                                 os.path.relpath(parent, input_dir)),
+                    exist_ok=True)
+
+    # The image files, keeping their modification times so copied cover art
+    # matches the source the way the audio outputs do.
+    toolcapture.watched(["rsync", "-rmt", "--quiet", "--include=*/",
+                         "--include", "*.jpg", "--include", "*.png",
+                         "--include", "*.webp", "--include", "*.avif",
+                         "--exclude=*", input_dir + "/", output_dir],
+                        skipped="the cover art was not copied")
+
+
+def _settle_scratch(state: Run) -> bool:
+    """The run's chunk and plan folders in RAM scratch, or False - said - when
+    either could not be made."""
     chunk_root, chunk_status = ramscratch.ram_scratch_dir("convertAudio.chunks")
     plan_root, plan_status = ramscratch.ram_scratch_dir("convertAudio.plans")
     if chunk_status != 0 or plan_status != 0 or not chunk_root or not plan_root:
         sys.stderr.write("\nError: no scratch directory could be made for this "
                          "run.\nNothing was changed.\n")
-        return 1
+        return False
     state.chunk_root, state.plan_root = chunk_root, plan_root
     # -k asks for the chunks to be left behind, so only a run without it
     # registers them.
-    if not keep:
+    if not state.keep:
         ramscratch.add_exit_cleanup([chunk_root])
     ramscratch.add_exit_cleanup([plan_root])
+    return True
 
+
+def _encode_all(state: Run, jobs: int) -> None:
+    """The conversion phase: every track planned and encoded, the planning
+    running beside the encodes it feeds."""
     planner = Planner(state, jobs)
     preload, candidates = _settle_preload(state, planner)
     # What the queue starts on while the plan is made: a buffer's worth of the
@@ -2161,6 +2192,7 @@ def _convert(program: str, script_dir: str, input_dir: str, output_dir: str,
     # queue is ordered instead.
     seed = jobs * QUEUE_BUFFER_FACTOR if jobs > 1 else 0
 
+    plan_root = state.plan_root
     duration_file = os.path.join(plan_root, "duration")
     total_file = os.path.join(plan_root, "total")
     for path, value in ((os.path.join(plan_root, "progress"), "0\n"),
@@ -2169,7 +2201,7 @@ def _convert(program: str, script_dir: str, input_dir: str, output_dir: str,
             handle.write(value)
     state.duration_file = duration_file
     state.counters = Counters(console.Console(plan_root), duration_file,
-                              total_file, int(pre_start))
+                              total_file, int(state.pre_start))
 
     # The queue's own length is not known until the last file is planned, so the
     # headline names no number it would have to promise.
@@ -2198,9 +2230,11 @@ def _convert(program: str, script_dir: str, input_dir: str, output_dir: str,
         safety.exit_if_aborted()
     state.conv_end = time.time()
 
-    # The split files re-concatenated, only after the whole encode queue has
-    # drained, so all of a file's chunks exist. The plans were written as the
-    # candidates were planned, during the run.
+
+def _rejoin_split_files(state: Run, jobs: int) -> None:
+    """The split files re-concatenated, only after the whole encode queue has
+    drained, so all of a file's chunks exist. The plans were written as the
+    candidates were planned, during the run."""
     plans_queue = []
     for track in state.tracks:
         plans_queue += _records(
@@ -2212,21 +2246,18 @@ def _convert(program: str, script_dir: str, input_dir: str, output_dir: str,
         workerpool.map(plans_queue, jobs, state.reconcat)
         safety.exit_if_aborted()
     state.post_end = time.time()
-    runlog.say("Done.\n")
 
-    safety.print_run_footer()
 
-    # Deepest first, so a folder that only held empty folders collapses too.
-    # The input folder itself stays: a folder the user named must still be there.
+def _remove_empty_folders(input_dir: str) -> None:
+    """Deepest first, so a folder that only held empty folders collapses too.
+    The input folder itself stays: a folder the user named must still be
+    there."""
     for parent, _dirs, _names in os.walk(input_dir, topdown=False):
         if parent != input_dir:
             try:
                 os.rmdir(parent)
             except OSError:
                 pass
-    # A file that came out the wrong length is not a warning: the run did not do
-    # what it was asked, and a caller chaining commands has to see that.
-    return workerpool.exit_status(1 if durationcheck.failures() else 0)
 
 
 def _filesize(state: Run, track: str) -> int:
