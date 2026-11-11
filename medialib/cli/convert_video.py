@@ -27,6 +27,7 @@ from medialib.lib import (
     bitrates,
     clioptions,
     codecs,
+    enums,
     resolutions,
     upscale,
     videobitrate,
@@ -591,14 +592,58 @@ def with_chunk_end(args: str, span: str) -> str:
     return "%s -vf %s" % (args, trim)
 
 
-def video_only_path_for(relative: str, output_dir: str) -> str:
+# The sources this command converts, by lower-cased extension.
+SOURCE_EXTENSIONS = ("mkv", "mp4")
+
+
+def output_stem_for(relative: str, input_dir: str) -> str:
+    """A source's output name relative to the output folder, without the
+    extension every output shares.
+
+    Normally the source's own stem; but when another source in the same folder
+    shares it - a.mkv and a.mp4 would both become a.mkv - the source extension
+    is folded into the name so neither conversion lands on the other's output,
+    or mistakes it for its own finished one. Read off the input folder, so it
+    is stable across reruns and the resume check keeps finding what it made.
+    """
+    stem, extension = os.path.splitext(relative)
+    if not extension:
+        return stem
+    folder, own = os.path.split(stem)
+    sharing = 0
+    try:
+        with os.scandir(os.path.join(input_dir, folder)) as entries:
+            for entry in entries:
+                if (enums.lower_extension_of(entry.name) in SOURCE_EXTENSIONS
+                        and os.path.splitext(entry.name)[0] == own):
+                    sharing += 1
+    except OSError:
+        pass
+    if sharing > 1:
+        return "%s-%s" % (stem, extension[1:])
+    return stem
+
+
+def output_path_of(relative: str, input_dir: str, output_dir: str) -> str:
+    """Where a source's finished conversion goes: the mirrored path, as
+    Matroska, under :func:`output_stem_for`'s name."""
+    return os.path.join(output_dir,
+                        output_stem_for(relative, input_dir) + ".mkv")
+
+
+def video_only_path_for(relative: str, output_dir: str,
+                        input_dir: str = "") -> str:
     """``videoOnlyPathFor``: where the failsafe copy of a finished video encode
     lands - the normal output path with a marker before the extension.
 
     Marked so the incomplete file is obvious, is never mistaken for a finished
-    one, and leaves the real output path free for a later rerun.
+    one, and leaves the real output path free for a later rerun. Given the
+    input folder, two sources sharing a stem are kept apart the way their
+    outputs are.
     """
-    return "%s/%s (video only).mkv" % (output_dir, os.path.splitext(relative)[0])
+    stem = (output_stem_for(relative, input_dir) if input_dir
+            else os.path.splitext(relative)[0])
+    return "%s/%s (video only).mkv" % (output_dir, stem)
 
 
 def video_source_for(relative: str, input_dir: str,

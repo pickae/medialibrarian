@@ -134,11 +134,19 @@ ignore = [
 # wrapping the four longest would break the only thing that makes them readable.
 "medialib/lib/cubes.py" = ["E501"]
 "medialib/lib/censusviewer.py" = ["E501"]
+# Stubs of other programs, quoted as the lines those programs print or run: a
+# message av1gpu writes in one line, and a line of the installer script read
+# back as it is.
+"tests/lib/test_av1gpu.py" = ["E501"]
+"tests/lib/test_booknarration.py" = ["E501"]
 
 [tool.mypy]
 # For the standard library stubs a given interpreter may not ship, and for
 # mutagen, which ships no type information.
 ignore_missing_imports = true
+# The bodies of unannotated functions are checked too: without it, half the
+# code - the half with no annotations - is skipped, and a green run says little.
+check_untyped_defs = true
 
 # There is deliberately no per-module override section: a module that stops
 # passing fails the run rather than joining a list nobody works down.

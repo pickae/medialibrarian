@@ -60,11 +60,6 @@ __all__ = [
     "check_subs",
 ]
 
-# The folder names download_subs leaves alone: the extras that live beside a
-# movie, matched as a substring of the movie folder's path.
-EXTRAS_WORDS = ("Featurettes", "Other", "Scenes", "Interviews",
-                "Shorts", "Trailers", "Extras")
-
 # How far an alignment's best offset must stand out from every offset more than
 # two seconds away from it - in spreads of the agreement across the search
 # window, see medialib/helpers/ffsubsync_confidence.py - to be believed. Over a
@@ -818,11 +813,10 @@ def subtitle_movies(directory: str) -> list:
     """Every movie under the tree that gets subtitles of its own.
 
     A movie is anything named ``*mkv`` (case-sensitively) anywhere under the
-    tree, and one is NOT a movie when its folder's path carries one of the
-    extras words - Featurettes, Other, Scenes, Interviews, Shorts, Trailers,
-    Extras - the folders that hold the material a film comes with, nor when it
-    is the "(old)" copy an improved remux kept: its living sibling is getting
-    these same subtitles.
+    tree, and one is NOT a movie when a folder on its way down from the tree is
+    a bonus folder (:func:`plexnames.is_bonus_folder_name` - a whole folder
+    name, so "The Otherwise Quiet Town (2001)" is a film), nor when it is the "(old)" copy an
+    improved remux kept: its living sibling is getting these same subtitles.
     """
     def spell(rel):
         # how a path under the start point is spelled: a bare "." writes
@@ -838,11 +832,10 @@ def subtitle_movies(directory: str) -> list:
     for entry in treewalk.entries_below(directory):
         if not entry.name.endswith("mkv"):
             continue
-        movie = spell(os.path.relpath(entry.path, directory)
-                      .replace(os.sep, "/"))
-        slash = movie.rfind("/")
-        folder = movie[:slash] if slash != -1 else movie
-        if any(word in folder for word in EXTRAS_WORDS):
+        relative = os.path.relpath(entry.path, directory).replace(os.sep, "/")
+        movie = spell(relative)
+        if any(plexnames.is_bonus_folder_name(folder)
+               for folder in relative.split("/")[:-1]):
             continue
         if plexnames.is_kept_copy(movie):
             continue

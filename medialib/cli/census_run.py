@@ -61,7 +61,8 @@ def resolve_input_paths(arguments):
     Returns (paths, report_names). The same folder named twice is one library:
     censusing it twice would write the same report twice and say nothing new.
     """
-    in_paths, report_names = [], []
+    in_paths: list = []
+    report_names: list = []
     for argument in arguments:
         if not os.path.isdir(argument):
             raise Refusal('\nError: "%s" is not a folder.\n'
@@ -153,7 +154,7 @@ def resolve_libraries(in_paths, report_names, depth):
     # The same refusal one level further in: two libraries found under different
     # shelves can still work out to one report name ("Films" holding "ExtraX"
     # against "FilmsExtra" holding "X"), and a collision is just as silent here.
-    seen_names = {}
+    seen_names: dict = {}
     for index, name in enumerate(lib_names):
         if name in seen_names:
             raise Refusal(
@@ -230,7 +231,9 @@ def collect_files(lib_paths, extensions):
     the run is deterministic and the reports diff against the last one.
     """
     wanted = {extension.lower() for extension in extensions}
-    files, totals, starts = [], [], []
+    files: list = []
+    totals: list = []
+    starts: list = []
     for path in lib_paths:
         starts.append(len(files))
         found = []
@@ -623,7 +626,8 @@ class Run:
                 log("Replacing the existing %s" % os.path.basename(report))
             staged = os.path.join(scratch, content + ".report")
             with open(staged, "w") as out:
-                out.write(census.columns(content, self.separator) + "\n")
+                out.write((census.columns(content, self.separator) or "")
+                          + "\n")
                 with open(rows[content]) as handle:
                     shutil.copyfileobj(handle, out)
             shutil.move(staged, report)

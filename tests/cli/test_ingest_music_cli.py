@@ -420,6 +420,22 @@ class TestAnOutputNestedInTheInput:
         assert not library.exists()
 
 
+class TestTheCoverIsReadAsTheImageItsNameSays:
+    """ImageMagick picks its decoder from a file's content unless told, so the
+    cover's operand names the coder: a cover.jpg holding SVG is read as a
+    JPEG, and fails as one, rather than drawn."""
+
+    def test_the_cover_operand_names_its_coder(self, music, tmp_path):
+        calls = tmp_path / "convert-calls"
+        music.with_tool("convert", 'printf "%%s\\n" "$@" >> %s\n%s'
+                        % (calls, _CONVERT))
+        music.ingest()
+        operands = calls.read_text().splitlines()
+        assert [operand for operand in operands
+                if operand.endswith("cover.jpg")
+                and operand.startswith("jpeg:")], operands
+
+
 class TestAFirstRun:
     """Everything is encoded and converted, and says so."""
 

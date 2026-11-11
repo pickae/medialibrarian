@@ -275,10 +275,15 @@ class Run:
 
     # --- one feed ---------------------------------------------------------
     def run_feed(self, index: int, podcast: str, row: str, provider: str,
-                 root: str) -> None:
+                 root: str, profile: str) -> None:
         """Make one feed's call and record its outcome where the parent reads
         it - a file, because this may run in a background process whose exit
-        code the parent only ever sees through a join."""
+        code the parent only ever sees through a join.
+
+        ``profile`` is an argument and not read from the environment: a
+        forkserver worker keeps the environment the server started with, so a
+        second table's feeds would be fetched with the first table's profile.
+        """
         if safety.abort_requested() or self.provider_blocked(provider):
             return
 
@@ -289,7 +294,7 @@ class Run:
             root, self.native_archive, fields[1], fields[2], fields[3],
             fields[4], fields[5],
             ytdlp_command=self.ytdlp_command,
-            profile=os.environ.get("PODCAST_PROFILE", ""),
+            profile=profile,
             date_after=os.environ.get("PODCAST_DATE_AFTER", ""),
             date_before=os.environ.get("PODCAST_DATE_BEFORE", ""),
             sponsorblock=os.environ.get("PODCAST_SPONSORBLOCK"),
@@ -409,7 +414,6 @@ class Run:
         unit both settings belong to."""
         if not rows:
             return
-        os.environ["PODCAST_PROFILE"] = profile
         provider = podcastfeeds.podcast_profile_provider(profile)
 
         # Where this table's feeds land: its staging folder when the run is
@@ -455,11 +459,12 @@ class Run:
                 continue
 
             if jobs <= 1:
-                self.run_feed(index, subdir, row, provider, root)
+                self.run_feed(index, subdir, row, provider, root, profile)
                 continue
 
             running.append(_spawn(_feed_worker,
-                                  (self, index, subdir, row, provider, root)))
+                                  (self, index, subdir, row, provider, root,
+                                   profile)))
             if len(running) >= jobs:
                 running = workerpool.reap_one(running)
 
@@ -496,14 +501,15 @@ def _spawn(target, args) -> "Process":
     return process
 
 
-def _feed_worker(state, index, subdir, row, provider, root) -> None:
+def _feed_worker(state, index, subdir, row, provider, root,
+                 profile) -> None:
     """One feed, in a worker process.
 
     The handler is installed here because recording the flag is what stops the
     REST of the run.
     """
     safety.trap_worker_abort()
-    state.run_feed(index, subdir, row, provider, root)
+    state.run_feed(index, subdir, row, provider, root, profile)
 
 
 def _archive_location(archive_file: str, script_dir: str) -> str:
@@ -696,7 +702,8 @@ def _lanes(profiles):
     YouTube tables share one lane so they queue behind one another; every other
     table gets a lane to itself so it does not queue behind anything.
     """
-    order, lanes = [], {}
+    order: list = []
+    lanes: dict = {}
     for index, profile in enumerate(profiles):
         provider = podcastfeeds.podcast_profile_provider(profile)
         lane = "youtube" if provider == "youtube" else "%s:%d" % (provider,

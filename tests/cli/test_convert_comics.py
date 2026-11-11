@@ -239,16 +239,16 @@ class TestPagesPerBook:
 
 # identify answers a page's first line as its size; compare calls two pages the
 # same picture when their second lines match. Either fails outright on a page
-# whose first line is "fail".
+# whose first line is "fail". Both take the page after its "jpeg:"-style coder.
 _IDENTIFY = """
-page="${@: -1}"; page="${page%\\[0\\]}"
+page="${@: -1}"; page="${page%\\[0\\]}"; page="${page#*:}"
 size="$(head -n1 "$page")"
 [[ "$size" == fail ]] && exit 1
 printf "%s" "$size"
 """
 _COMPARE = """
 printf "%s\n" "$*" >> "$(dirname "$0")/compare.log"
-a="${3%\\[0\\]}"; b="${4%\\[0\\]}"
+a="${3%\\[0\\]}"; b="${4%\\[0\\]}"; a="${a#*:}"; b="${b#*:}"
 if [[ "$(sed -n 2p "$a")" == "$(sed -n 2p "$b")" ]]; then
     printf "655 (0.01)" >&2
 else
@@ -330,6 +330,18 @@ class TestDropAlternateFormats:
         assert cc.drop_alternate_formats(str(book)) == []
         assert sorted(os.listdir(str(book))) == ["015.jpg", "015.psd"]
 
+    def test_each_page_is_read_by_the_coder_its_name_implies(self, pages,
+                                                             stub_bin):
+        """A page.jpg holding SVG is read as a JPEG, and fails as one, rather
+        than drawn."""
+        book, write = pages
+        write("015.jpg", picture="p15")
+        write("015.psd", picture="p15")
+        cc.drop_alternate_formats(str(book))
+        [line] = (stub_bin / "compare.log").read_text().splitlines()
+        assert "jpeg:%s[0]" % (book / "015.jpg") in line.split()
+        assert "psd:%s[0]" % (book / "015.psd") in line.split()
+
     def test_a_book_without_shared_names_is_not_compared(self, pages,
                                                          stub_bin):
         book, write = pages
@@ -409,7 +421,10 @@ class TestTheChromaReachesTheConversion:
             cc.commands, "command_line",
             lambda name, argv, **kwargs: calls.append((name, argv, kwargs))
             or real(name, argv, **kwargs))
-        monkeypatch.setattr(cc.toolcapture, "run", lambda *a, **k: None)
+        monkeypatch.setattr(
+            cc.toolcapture, "run",
+            lambda argv, *a, **k: cc.toolcapture.ToolRun(
+                argv=argv, returncode=0, output=cc.toolcapture.ToolOutput()))
         state = cc.Run(counters=cc.Counters(str(tmp_path)), script_dir="",
                        quality="45", chroma=chroma, speed_preset="4",
                        pages_per_book=4,
@@ -849,3 +864,56 @@ class TestTheInputReader:
         reader = cc._Reader(sources, "")
         assert reader.take(1) == (sources[1], 0)
         reader.stop()
+
+
+class TestABookMissingPagesIsNotPackaged:
+    """A book some of whose pages could not be encoded is a failed book: it
+    is not packaged, since a .cbz on disk is what a later run takes for a
+    finished one, and the run that left it short ends non-zero."""
+
+    @staticmethod
+    def _finish(tmp_path, monkeypatch, converted_ok):
+        real = cc.toolcapture.run
+
+        def run(argv, *args, **kwargs):
+            if kwargs.get("tool") != "convert-images":
+                return real(argv, *args, **kwargs)
+            # One page written, the other not: what a convert-images that
+            # failed on a page leaves behind, exiting 1 to say so.
+            book_avif = argv[-1]
+            os.makedirs(book_avif, exist_ok=True)
+            with open(os.path.join(book_avif, "01.avif"), "wb") as handle:
+                handle.write(b"\0" * (cc.MIN_PAGE_SIZE + 1))
+            return cc.toolcapture.ToolRun(
+                argv=argv, returncode=0 if converted_ok else 1,
+                output=cc.toolcapture.ToolOutput(),
+                failure="" if converted_ok else "exited with status 1")
+
+        monkeypatch.setattr(cc.toolcapture, "run", run)
+        counters = tmp_path / "counters"
+        counters.mkdir()
+        pages = tmp_path / "temp" / "Book.cbz"
+        pages.mkdir(parents=True)
+        for name in ("01.jpg", "02.jpg"):
+            (pages / name).write_bytes(b"page")
+        state = cc.Run(counters=cc.Counters(str(counters)), script_dir="",
+                       in_path=str(tmp_path / "in"),
+                       out_path=str(tmp_path / "out"),
+                       temp_path=str(tmp_path / "temp"),
+                       avif_path=str(tmp_path / "avif"),
+                       quality="45", chroma="444", speed_preset="4",
+                       pages_per_book=4, max_res=2960, fuzz="10",
+                       stats_file=str(tmp_path / "pageStats"))
+        state._finish_book(("Book.cbz" + cc.UNIT + "Book.cbz", 0, 0, ""))
+        return state
+
+    def test_a_short_book_is_not_written(self, tmp_path, monkeypatch):
+        state = self._finish(tmp_path, monkeypatch, converted_ok=False)
+        assert not (tmp_path / "out" / "Book.cbz").exists()
+        assert state.counters.read("failedBooks") == 1
+        assert not os.listdir(tmp_path / "avif")
+
+    def test_a_whole_book_is(self, tmp_path, monkeypatch):
+        state = self._finish(tmp_path, monkeypatch, converted_ok=True)
+        assert (tmp_path / "out" / "Book.cbz").exists()
+        assert state.counters.read("failedBooks") == 0

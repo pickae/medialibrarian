@@ -13,7 +13,7 @@ import os
 import pytest
 
 from medialib.cli import convert_and_concat as cac
-from medialib.lib import enums
+from medialib.lib import enums, safety
 
 pytestmark = pytest.mark.pure
 
@@ -180,3 +180,57 @@ class TestTheCueSheetsATranscodeHandsOver:
 
         assert sorted(p.name for p in destination.iterdir()) == [
             "sheet.CUE", "sheet.cue"]
+
+
+class TestAnInterruptWhileUnpacking:
+    """A Ctrl+C is only recorded while the archives are unpacked, so the
+    unpacking itself has to look for it: an input of many archives would
+    otherwise be unpacked to the end before the run noticed it had been
+    asked to stop."""
+
+    pytestmark = pytest.mark.fs
+
+    @pytest.fixture
+    def unpacked(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("ABORT_FLAG", raising=False)
+        safety.init_abort_flag(str(tmp_path / "abortRequested"))
+        source = tmp_path / "in"
+        source.mkdir()
+        for name in ("Alpha.zip", "Bravo.zip", "Charlie.zip"):
+            (source / name).touch()
+        started = []
+
+        def extract(path, dest):
+            started.append(os.path.basename(path))
+            # The Ctrl+C lands while the first archive is unpacking.
+            safety.request_abort()
+            return 0
+
+        monkeypatch.setattr(cac.archives, "archive_root_folder",
+                            lambda path: "")
+        monkeypatch.setattr(cac.archives, "archive_shadowed_by_folder",
+                            lambda path, base: False)
+        monkeypatch.setattr(cac.archives, "extract_archive_as_folder",
+                            extract)
+        monkeypatch.setattr(cac, "holds_ingestible_audio", lambda *a: True)
+        return source, started
+
+    def test_no_further_archive_is_started(self, unpacked, tmp_path):
+        source, started = unpacked
+        cac.Staging(str(tmp_path / "stage")).unpack_in(str(source))
+        assert started == ["Alpha.zip"]
+
+    def test_nor_under_s_is_a_further_group(self, unpacked, tmp_path,
+                                            monkeypatch):
+        source, started = unpacked
+        for group in ("One", "Two"):
+            (source / group).mkdir()
+            (source / group / "Book.zip").touch()
+        stage = tmp_path / "stage"
+        stage.mkdir()
+        monkeypatch.setattr(cac.ramscratch, "ram_scratch_dir",
+                            lambda prefix: (str(stage), 0))
+        monkeypatch.setattr(cac.ramscratch, "add_exit_cleanup",
+                            lambda paths: None)
+        cac._unpack_phase(str(source), ["zip"], 2)
+        assert started == ["Book.zip"]

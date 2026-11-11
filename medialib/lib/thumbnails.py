@@ -16,7 +16,14 @@ import os
 import shutil
 from collections.abc import Callable, Iterator, Sequence
 
-from medialib.lib import imagemagick, mutagentags, runlog, toolcapture, treewalk
+from medialib.lib import (
+    imagecodecs,
+    imagemagick,
+    mutagentags,
+    runlog,
+    toolcapture,
+    treewalk,
+)
 from medialib.lib.enums import shell_lower
 
 __all__ = [
@@ -251,7 +258,7 @@ def embed_thumbnail(input_path: str, file_name: str, image_size_limit: int,
         file_size = os.stat(thumb_file).st_size
         if file_size >= image_size_limit or thumb_file[-4:] != ".jpg":
             run(imagemagick.convert_argv(
-                ["-quiet", thumb_file,
+                ["-quiet", imagecodecs.coder_prefixed(thumb_file),
                  "-quality", str(jpg_quality_level),
                  "-resize", f"{thumbnail_resolution}>", output_thumb]))
         else:
@@ -319,7 +326,7 @@ def apply_cover(track: str, target: str | None, cover_threshold: int,
     file_size = os.stat(temp_cover).st_size
     if file_size >= cover_threshold:
         run(imagemagick.convert_argv(
-            [temp_cover,
+            [imagecodecs.coder_prefixed(temp_cover),
              "-quality", str(cover_quality),
              "-resize", f"{cover_resolution}>", cover]))
     else:

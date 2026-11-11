@@ -150,7 +150,7 @@ def classify(found):
     one content-census writes for that type, which is asked of the column
     definitions themselves so the two cannot disagree.
     """
-    by_type = {content: [] for content in cubes.TYPES}
+    by_type: dict[str, list] = {content: [] for content in cubes.TYPES}
     skipped = []
     for path, explicit in found:
         content = cubes.report_type(path)

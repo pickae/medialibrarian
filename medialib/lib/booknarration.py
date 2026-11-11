@@ -903,9 +903,11 @@ def _tee_run(argv, log_file, cwd, env):
                                 stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT,
                                 start_new_session=True)
+        stdout = proc.stdout
+        assert stdout is not None  # stdout=PIPE
         try:
-            with proc.stdout:
-                for chunk in iter(lambda: proc.stdout.read(65536), b""):
+            with stdout:
+                for chunk in iter(lambda: stdout.read(65536), b""):
                     handle.write(chunk)
                     console.write(chunk)
             console.flush()

@@ -19,7 +19,7 @@ With no options, a run:
 - joins each subfolder's audio in name order into one book, **without re-encoding** (FLAC is re-encoded to FLAC); AAC and m4a books come out as `.m4b`
 - passes over a subfolder holding more than one audio format
 - takes chapters from a cue sheet, else makes one per file, and embeds a cover ([below](#chapters-and-cover))
-- **never overwrites an existing book**: that subfolder fails instead
+- **never overwrites an existing book**: one already at its output name is taken to be from an earlier run and skipped, so a rerun picks up where the last stopped; two subfolders of one run that clean to the same name fail the second
 - leaves the input alone (`-p`)
 
 The naming of the files and subfolders should reflect the order they are to be

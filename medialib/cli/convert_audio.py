@@ -823,6 +823,9 @@ class Run:
         # the output has been measured: an encode is judged by what came out
         # rather than by its status, so this is where the reason waits.
         self.tool_runs: dict = {}
+        # The stems shared by more than one track, by folder, read off the
+        # input the first time output_path asks about that folder.
+        self.shared_stems: dict = {}
 
     def _run_tool(self, argv: list, out: str) -> None:
         """One encode or join making ``out``, its output kept for
@@ -849,9 +852,39 @@ class Run:
         the encode, the planner and the up-to-date check, and an .opus spelled
         out at four of them and derived at the fifth is how a second codec ends
         up half-supported.
+
+        When another track in the same folder shares the stem - a.flac and
+        a.mp3 would both become a.opus, written by two workers at once - the
+        source extension is folded into the name, the way convert-images keeps
+        a.jpg and a.png apart. Read off the input folder rather than the queue,
+        so every worker answers the same alone, and a rerun finds the output
+        the last run made.
         """
-        return os.path.join(self.output_dir,
-                            os.path.splitext(relative)[0] + "." + self.extension)
+        stem, extension = os.path.splitext(relative)
+        if extension and stem in self._shared_stems(os.path.dirname(relative)):
+            stem = "%s-%s" % (stem, extension[1:])
+        return os.path.join(self.output_dir, stem + "." + self.extension)
+
+    def _shared_stems(self, folder: str) -> frozenset:
+        """The stems, relative to the input, that more than one track in
+        <folder> has. Counted with the scan's own test of what a track is, so
+        a cover or a cue sheet beside a book never renames its output."""
+        known = self.shared_stems.get(folder)
+        if known is not None:
+            return known
+        seen: dict = {}
+        try:
+            with os.scandir(os.path.join(self.input_dir, folder)) as entries:
+                for entry in entries:
+                    if entry.name.endswith(_TRACK_SUFFIXES):
+                        stem = os.path.join(
+                            folder, os.path.splitext(entry.name)[0])
+                        seen[stem] = seen.get(stem, 0) + 1
+        except OSError:
+            pass
+        known = frozenset(stem for stem, count in seen.items() if count > 1)
+        self.shared_stems[folder] = known
+        return known
 
     def group_of(self, relative: str) -> str:
         """The folder <relative> is judged with under -g, or "" when it is
@@ -960,13 +993,16 @@ class Run:
         input_duration_raw = _probe(
             ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
              "-of", "default=nk=1:nw=1", source])
-        input_duration = round(formatting.awk_number(input_duration_raw))
-        output_duration = round(formatting.awk_number(_probe(
+        output_duration_raw = _probe(
             ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
-             "-of", "default=nk=1:nw=1", out])))
+             "-of", "default=nk=1:nw=1", out])
         source_bitrate = source_audio_bitrate(source)
 
-        if os.path.isfile(out) and input_duration <= output_duration:
+        # Up to date by the measure an encode is accepted by: an output the
+        # check below lets through for being within its slack must not be
+        # encoded again by every rerun for being a fraction of a second short.
+        if os.path.isfile(out) and durationcheck.length_matches(
+                input_duration_raw, output_duration_raw):
             self.counters.report_progress(relative, "Up to date, skipping")
             self._reapply_sidecar_cover(relative, source, out)
             return
@@ -1564,15 +1600,18 @@ class Planner:
             _write_jobs(base, [track])
             return False
 
+        # Up to date the way a whole file is, sidecar cover included: a track
+        # settled here never reaches encode_whole, which is where that check
+        # otherwise lives.
         out = state.output_path(track)
-        if os.path.isfile(out):
-            output_duration = round(formatting.awk_number(_probe(
-                ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
-                 "-of", "default=nk=1:nw=1", out])))
-            if duration <= output_duration:
-                runlog.say("Up to date, skipping: %s\n" % track)
-                sys.stderr.flush()
-                return False
+        if os.path.isfile(out) and durationcheck.length_matches(
+                duration, _probe(
+                    ["ffprobe", "-v", "quiet", "-show_entries",
+                     "format=duration", "-of", "default=nk=1:nw=1", out])):
+            runlog.say("Up to date, skipping: %s\n" % track)
+            sys.stderr.flush()
+            state._reapply_sidecar_cover(track, source, out)
+            return False
 
         with open(base + ".meta", "w") as handle:
             handle.write(str(duration))
@@ -1879,6 +1918,13 @@ def _run_pool(state, method: str, items: list, jobs: int) -> None:
                    lambda item: (state, method, item, geometry))
 
 
+# What makes a file a track: the scan below and the output naming, which has to
+# know which other files in a folder will be converted beside a track.
+_TRACK_SUFFIXES = tuple(
+    "." + extension for extension in
+    tuple(enums.AUDIO_EXTENSIONS) + tuple(enums.VIDEO_EXTENSIONS))
+
+
 def _scan_tracks(input_dir: str) -> list:
     """Every track, LARGEST FILE FIRST.
 
@@ -1888,12 +1934,10 @@ def _scan_tracks(input_dir: str) -> list:
     has drained. The queue is ordered again after planning, on what each JOB is
     worth rather than what its file is.
     """
-    wanted = tuple("." + extension for extension in
-                   tuple(enums.AUDIO_EXTENSIONS) + tuple(enums.VIDEO_EXTENSIONS))
     found = []
     for parent, _dirs, names in os.walk(input_dir):
         for name in names:
-            if not name.endswith(wanted):
+            if not name.endswith(_TRACK_SUFFIXES):
                 continue
             path = os.path.join(parent, name)
             try:

@@ -26,13 +26,19 @@ jobs:
     # the filter the archive extraction depends on in that release - and a job on
     # 3.11.9 would not stand on it.
     #
+    # 3.14 as well, for a difference that is not in the language: it is the
+    # first release whose multiprocessing starts workers by forkserver rather
+    # than fork on Linux, so a worker no longer inherits what the parent put in
+    # os.environ after the fork server started. 3.11 and 3.12 cannot see a bug
+    # of that kind, and the machine the commands run on is on 3.14.
+    #
     # A matrix rather than a job of its own: the tiers below need real tools
     # (ffmpeg, duckdb), so a separate job would be this one's whole setup
     # written out twice and free to drift from it.
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11.4", "3.12"]
+        python-version: ["3.11.4", "3.12", "3.14"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -196,3 +202,18 @@ jobs:
           python-version: "3.12"
       - run: pip install -e . mypy
       - run: python -m mypy medialib tools
+
+  # The linter, with the rules pyproject.toml selects. Configured there and
+  # never run, it had drifted; this is the run that keeps it from drifting.
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Pinned: a new ruff adds checks to the rules selected, and an unpinned one
+      # would turn that into a red run on a change that touched nothing.
+      - run: pip install ruff==0.16.5
+      - run: ruff check .

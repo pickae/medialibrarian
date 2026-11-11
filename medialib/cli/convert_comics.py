@@ -69,6 +69,7 @@ from medialib.lib import (
     errorlog,
     gpulane,
     imagebitrate,
+    imagecodecs,
     imagemagick,
     numbering,
     ramscratch,
@@ -137,6 +138,12 @@ OPT_LONG = "h:help l:quality u:chroma s:speed m:max-resolution f:fuzz"
 # less than this is an empty page - nothing on it worth a page in the book - and
 # it is dropped and counted as such. Not a failure: the encode did its job.
 MIN_PAGE_SIZE = 10 * 1024
+
+# Beside a book's AVIF folder while it is converted: the per-book
+# convert-images said a page of it failed. A file rather than a return value
+# because under the GPU lane the book is packaged by the run's process, after
+# the worker that converted it has gone on to the next book.
+INCOMPLETE_SUFFIX = ".incomplete"
 
 # How much of a book has to be starved before the book is left as it is, in
 # percent of the pages that could be measured. Above four fifths the book IS a
@@ -560,6 +567,10 @@ def same_picture(first: str, second: str) -> bool:
     SAME_PICTURE_RMSE of full scale. Anything that cannot be measured is a
     difference, so a page is only ever dropped on evidence.
     """
+    # Each read by the coder its name or bytes promise, never one its
+    # content picks: a page that is really SVG is not drawn.
+    first, second = (imagecodecs.coder_prefixed(first),
+                     imagecodecs.coder_prefixed(second))
     sizes = set()
     for path in (first, second):
         done = subprocess.run(
@@ -783,8 +794,9 @@ class Run:
         """One book's preparation, in the RUN's process: the unpacking into RAM
         and the starved verdict, while the workers encode the books prepared
         before it. <staged> is the archive's copy the reader made in RAM,
-        unpacked in place of the input and removed once it has been. ``(item, size)`` for the queue, or None for a
-        book that ends here, holding no page. A book already on disk never
+        unpacked in place of the input and removed once it has been.
+        ``(item, size)`` for the queue, or None for a book that ends here,
+        holding no page. A book already on disk never
         gets this far: split_packaged keeps it out of the queue.
 
         Exactly one COUNTED line per book, reported at its START rather than when
@@ -823,6 +835,7 @@ class Run:
                     % os.path.basename(partial_path))
             self.counters.note("Skip (no pages): %s"
                                % os.path.basename(partial_path), failed=True)
+            self.counters.bump("failedBooks")
             return None
         if unpacked is not None and not unpacked.ok:
             # Pages came out, but the unpacker did not finish cleanly. Status 1
@@ -875,7 +888,9 @@ class Run:
             return
 
         os.makedirs(os.path.dirname(book_avif) or self.avif_path, exist_ok=True)
-        self._convert_pages(book_temp, book_avif, file_name, lane_folder)
+        if not self._convert_pages(book_temp, book_avif, file_name,
+                                   lane_folder):
+            open(book_avif + INCOMPLETE_SUFFIX, "w").close()
         if lane_folder:
             open(os.path.join(lane_folder, gpulane.READY), "w").close()
             return
@@ -896,6 +911,11 @@ class Run:
         book_avif = os.path.join(self.avif_path, partial_path)
         file_name = os.path.basename(partial_path)
         shutil.rmtree(book_temp, ignore_errors=True)
+        try:
+            os.remove(book_avif + INCOMPLETE_SUFFIX)
+            incomplete = True
+        except OSError:
+            incomplete = False
         # A book the lane gives back after a Ctrl+C may be missing pages the
         # card never got to; it is not packaged as if it were whole.
         if safety.abort_requested():
@@ -938,12 +958,26 @@ class Run:
         if not _files_matching(book_avif, ("avif",)):
             self.counters.note("Skip (nothing converted): %s" % file_name,
                                failed=True)
+            self.counters.bump("failedBooks")
+            shutil.rmtree(book_avif, ignore_errors=True)
+            return
+
+        # A book short of a page is not packaged at all. Its .cbz would be
+        # taken for the finished book by every later run, which skips any book
+        # whose archive is on disk, so the page would never be tried again; left
+        # out, the book is converted afresh next time.
+        if missing or incomplete:
+            self.counters.note("Not packaged (pages missing): %s" % file_name,
+                               failed=True)
+            self.counters.bump("failedBooks")
             shutil.rmtree(book_avif, ignore_errors=True)
             return
 
         if package_book(book_avif, self.out_path, out_rel, partial_path,
                         self.avif_path, self.counters):
             self.counters.bump("packaged")
+        else:
+            self.counters.bump("failedBooks")
 
         # The pages are inside the archive on disk now: this book's RAM back
         # before the next one is unpacked into it.
@@ -967,14 +1001,20 @@ class Run:
                         self.temp_path, self.counters):
             self.counters.bump("packaged")
             self.counters.bump("repackaged")
+        else:
+            self.counters.bump("failedBooks")
 
     def _convert_pages(self, book_temp: str, book_avif: str,
-                       file_name: str, lane_folder: str = "") -> None:
+                       file_name: str, lane_folder: str = "") -> bool:
         """This book's pages, converted by convert-images as its own process -
         with its output kept rather than shown, because a few dozen books' worth
         of its progress would bury this run's own. Replayed when the conversion
         actually fails. With a <lane_folder>, the pages the GPU can take are
-        only made ready there."""
+        only made ready there.
+
+        Whether it succeeded: convert-images exits non-zero when any page it
+        was given could not be converted, so a failure is a book short of a
+        page."""
         # Named here rather than inherited: this runs in a worker, which a
         # forkserver started with the environment of its own start - before
         # the run set the stats file, when PDFs were vetted first.
@@ -994,8 +1034,9 @@ class Run:
                  "-m", self.max_res, "-l", self.quality, "-s", self.speed_preset,
                  "-f", self.fuzz, book_temp, book_avif],
                 script_dir=self.script_dir, env=environment)
-        toolcapture.run(argv, file_name, tool="convert-images", env=env,
-                        warning="conversion failed for %s" % file_name)
+        done = toolcapture.run(argv, file_name, tool="convert-images", env=env,
+                               warning="conversion failed for %s" % file_name)
+        return done.ok
 
     def vet_pdf(self, relative: str) -> None:
         """Whether one PDF is a comic, with the numbers the verdict was reached
@@ -1257,6 +1298,11 @@ def footer(state: Run) -> None:
                           lane.fallbacks, lane.cpu_busy,
                           _megapixels_per_second(lane.cpu_pixels,
                                                  lane.cpu_busy)))
+        # Said under -q too, as each failed book's own line is.
+        failed = counters.read("failedBooks")
+        if failed > 0:
+            sys.stderr.write("%d book(s) failed and were not packaged\n"
+                             % failed)
         # Last, so the "of those" above cannot be read as being about these.
         if existing > 0:
             runlog.say("%d already packaged by an earlier run, skipped\n"
@@ -1640,7 +1686,8 @@ def _run(result, declaration, program: str, script_dir: str,
     # against the ones this run works on.
     state.total = len(book_list) + len(packaged)
     counters.total = len(book_list)
-    for name in ("current", "pagesFound", "pagesEmpty", "pagesMissing"):
+    for name in ("current", "pagesFound", "pagesEmpty", "pagesMissing",
+                 "failedBooks"):
         with open(os.path.join(counter_dir, name), "w") as handle:
             handle.write("0")
     for name in ("packaged", "existing"):
@@ -1726,7 +1773,9 @@ def _run(result, declaration, program: str, script_dir: str,
             "or came out empty)")
 
     safety.print_run_footer()
-    return workerpool.exit_status()
+    # A book that could not be unpacked, converted whole or packaged is a run
+    # that did not do what it was asked, as it is for convert-images.
+    return workerpool.exit_status(1 if counters.read("failedBooks") else 0)
 
 
 def _missing_pdf_tools() -> str:

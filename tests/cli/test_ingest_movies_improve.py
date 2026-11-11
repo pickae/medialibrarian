@@ -180,6 +180,46 @@ class TestWhatMkvmergeSaysDecides:
             assert handle.read() == ORIGINAL
 
 
+class TestASwapThatFails:
+    """A copy out of the scratch that fails leaves the film as it was, and
+    says so rather than "Improved copy written"."""
+
+    @pytest.fixture
+    def full_disk(self, monkeypatch):
+        import shutil
+
+        def cross_device(*_a, **_k):
+            raise OSError(errno.EXDEV, "Invalid cross-device link")
+
+        def full(*_a, **_k):
+            raise OSError(errno.ENOSPC, "No space left on device")
+
+        real = os.rename
+
+        def rename(source, target):
+            if "scratch" in str(source):
+                cross_device()
+            return real(source, target)
+
+        monkeypatch.setattr(os, "rename", rename)
+        monkeypatch.setattr(shutil, "copy2", full)
+
+    def test_the_original_is_untouched(self, full_disk, request, capsys):
+        remux = request.getfixturevalue("remux")
+        with open(remux["movie"], "rb") as handle:
+            assert handle.read() == ORIGINAL
+        assert not os.path.exists(remux["base"] + " (old).mkv")
+        err = capsys.readouterr().err
+        assert "could not be put in place" in err
+        assert "Improved copy written" not in err
+
+    @pytest.mark.parametrize("remux", [-9], indirect=True)
+    def test_a_mkvmerge_killed_by_a_signal_is_not_swapped_in(self, remux):
+        with open(remux["movie"], "rb") as handle:
+            assert handle.read() == ORIGINAL
+        assert not os.path.exists(remux["base"] + " (old).mkv")
+
+
 class TestTheSwapFromATmpfsScratch:
     """The scratch is a tmpfs and the library is on disk, so putting the
     remux in place is a move across file systems, which a rename refuses."""

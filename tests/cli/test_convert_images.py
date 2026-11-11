@@ -197,7 +197,7 @@ class TestEncodeArguments:
         """-e defaults to avif, so this is the call a bare command line makes."""
         assert _run()._encode_arguments("page.jpg", "/out/page.avif") == [
             "-format", "avif", "-quality", "60",
-            "-define", "heic:speed=5", "page.jpg",
+            "-define", "heic:speed=5", "jpeg:page.jpg",
             "-resize", "10000x10000>", "-depth", "10", "/out/page.avif"]
 
     @pytest.mark.parametrize("name", sorted(ci.FORMATS))
@@ -243,7 +243,7 @@ class TestEncodeArguments:
         image."""
         argv = _run(chroma="444")._encode_arguments("page.jpg",
                                                     "/out/page.avif")
-        assert argv.index("heic:chroma=444") < argv.index("page.jpg")
+        assert argv.index("heic:chroma=444") < argv.index("jpeg:page.jpg")
 
     def test_the_encoder_s_own_default_is_not_named(self):
         """-u 420 is what libheif writes anyway, so it is the same call as no
@@ -349,6 +349,57 @@ class TestAFailedConversion:
         state = self._run(tmp_path, status=0, writes=False)
         state.transcode("page.jpg")
         assert (state.counter("converted"), state.counter("failed")) == (0, 1)
+
+
+    def test_a_killed_encode_leaves_no_output_to_be_taken_as_done(
+            self, tmp_path, monkeypatch):
+        """The encoder writes beside the output under a name of its own, and
+        only a finished file is moved onto the output's, so the next run's
+        "already done" can only ever see a whole image."""
+        (tmp_path / "page.jpg").write_bytes(b"x")
+        (tmp_path / "out").mkdir()
+        monkeypatch.chdir(tmp_path)
+        state = self._run(tmp_path, status=-9)
+        state.transcode("page.jpg")
+        assert os.listdir(tmp_path / "out") == []
+        assert state.counter("failed") == 1
+
+    @pytest.mark.parametrize("worker", ["transcode", "reverse_to_jpeg"])
+    def test_the_source_is_read_by_the_coder_its_name_implies(
+            self, tmp_path, monkeypatch, worker):
+        """Left to itself ImageMagick goes by the content, and would draw a
+        page.jpg that holds SVG; named "jpeg:", it is read as a JPEG or not
+        at all."""
+        (tmp_path / "page.jpg").write_bytes(b"<svg/>")
+        (tmp_path / "out").mkdir()
+        monkeypatch.chdir(tmp_path)
+        state = self._run(tmp_path, status=0)
+        given = []
+        convert = state._convert
+        state._convert = lambda arguments: given.append(arguments) \
+            or convert(arguments)
+        state._identify = lambda arguments: given.append(arguments) or ""
+        getattr(state, worker)("page.jpg")
+        assert given and all("jpeg:page.jpg" in arguments
+                             and "page.jpg" not in arguments
+                             for arguments in given), given
+
+    def test_what_a_killed_run_left_staged_is_cleared(self, tmp_path):
+        (tmp_path / "sub").mkdir()
+        (tmp_path / "sub" / (ci.PARTIAL_PREFIX + "12-page.avif")).write_text("")
+        (tmp_path / "sub" / "page.avif").write_text("avif")
+        ci._drop_partials(str(tmp_path))
+        assert os.listdir(tmp_path / "sub") == ["page.avif"]
+
+    def test_a_finished_encode_is_moved_onto_the_output(self, tmp_path,
+                                                        monkeypatch):
+        (tmp_path / "page.jpg").write_bytes(b"x")
+        (tmp_path / "out").mkdir()
+        monkeypatch.chdir(tmp_path)
+        state = self._run(tmp_path, status=0)
+        state.transcode("page.jpg")
+        assert os.listdir(tmp_path / "out") == ["page.avif"]
+        assert (tmp_path / "out" / "page.avif").read_text() == "avif"
 
 
 class TestTheStarvedSkip:
@@ -651,6 +702,7 @@ class TestATrimThatCannotBeMeasured:
     def test_the_page_is_converted_whole(self, tmp_path, answer, monkeypatch):
         # The encode is stood in for, so the image it would write is too.
         monkeypatch.setattr(ci, "_written", lambda path: True)
+        monkeypatch.setattr(ci.os, "replace", lambda *_a: None)
         counters = tmp_path / "counters"
         counters.mkdir()
         state = _run()
@@ -660,8 +712,10 @@ class TestATrimThatCannotBeMeasured:
         converted = []
         state._convert = lambda arguments: converted.append(arguments) or 0
         state.crop_convert("page.jpg")
-        assert converted[-1] == state._encode_arguments(
-            "page.jpg", OUT + "/page.avif")
+        expected = state._encode_arguments("page.jpg", OUT + "/page.avif")
+        # Written under its staged name, beside the output.
+        assert converted[-1][:-1] == expected[:-1]
+        assert converted[-1][-1] == ci._staged_output(OUT + "/page.avif")
         assert state.counter("converted") == 1
 
 
@@ -774,7 +828,7 @@ class TestTheCpuTrimOfACardPage:
     def _entry(self):
         return {"input": "/in/page.jpg", "output": "/out/page.avif",
                 "size": [_W, _H], "fuzz": "10%",
-                "cpu": ["magick", "-quality", "45", "/in/page.jpg",
+                "cpu": ["magick", "-quality", "45", "jpeg:/in/page.jpg",
                         "-resize", "10000x2960>", "/out/page.avif"]}
 
     @pytest.mark.parametrize("box,verdict", [
@@ -795,7 +849,7 @@ class TestTheCpuTrimOfACardPage:
         elif verdict == "converted":
             assert argv == entry["cpu"]
         else:
-            assert argv == ["magick", "-quality", "45", "/in/page.jpg",
+            assert argv == ["magick", "-quality", "45", "jpeg:/in/page.jpg",
                             "-crop", "900x1400+50+50", "+repage",
                             "-bordercolor", _LIGHT, "-border", "10",
                             "-resize", "10000x2960>", "/out/page.avif"]

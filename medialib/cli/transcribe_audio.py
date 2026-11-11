@@ -191,6 +191,14 @@ class Run:
         out = os.path.join(self.output_dir,
                            os.path.splitext(relative)[0] + "." + self.fmt)
 
+        # Resume: a finished, non-empty transcript is kept where it is, so a
+        # re-run - or one restarted after a Ctrl+C - does not pay for it again.
+        # It is tested before anything else, since lifting a film's audio out
+        # costs minutes the transcript already made unnecessary.
+        if os.path.exists(out) and os.path.getsize(out) > 0:
+            self.report_progress("already present: " + relative)
+            return
+
         # whisper names its output after the input file, so every run gets a
         # directory of its own: the extracted track and the transcript both live
         # there, and it goes when the job does.
@@ -219,12 +227,6 @@ class Run:
                     return
             else:
                 for_whisper = source
-
-            # Resume: a finished, non-empty transcript is kept where it is, so a
-            # re-run - or one restarted after a Ctrl+C - does not pay for it again.
-            if os.path.exists(out) and os.path.getsize(out) > 0:
-                self.report_progress("already present: " + relative)
-                return
 
             log("Transcribing: " + relative)
             name = os.path.basename(for_whisper)

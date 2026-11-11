@@ -163,6 +163,10 @@ def _mixed_formats_note(scan: "Scan") -> str:
             % counts)
 
 
+def _already_present_note() -> str:
+    return "Already in the output, from an earlier run: skipping"
+
+
 def _nothing_found_note() -> str:
     """Why a folder with nothing joinable in it is passed over. It names the
     extensions rather than only saying "nothing", because the usual cause is
@@ -558,6 +562,9 @@ class Run:
     reservation_file: str
     publish_lock: str
     total: int
+    # The output names that held a file before this run started: books an
+    # earlier run made, as opposed to a name another folder of THIS run took.
+    present_before: frozenset
 
     def __init__(self, **settings) -> None:
         self.__dict__.update(settings)
@@ -685,13 +692,24 @@ class Run:
                 self.report_progress(name, _nothing_found_note())
             return
 
-        self.report_progress(name)
-
         fmt, label = present[0]
         target = "%s.%s" % (output_path.rstrip("/"), FORMATS[fmt][1])
+        # A book an earlier run already wrote is done, not in the way: a rerun
+        # over an output that is partly there - after a Ctrl+C, or after a run
+        # that failed on one book - carries on rather than failing every book
+        # it finished last time. The file is never looked into, so one that
+        # merely shares the name is left alone just the same.
+        if target in self.present_before:
+            self.report_progress(name, _already_present_note())
+            return
+
+        self.report_progress(name)
+
         # Asked before any work rather than only at the end, so a book that
-        # could never be written out is not built first. The write-out refuses
-        # a taken name as well, for one taken while this book was building.
+        # could never be written out is not built first. A name taken since
+        # the run started is another folder of this run cleaned to the same
+        # name, which is a collision to report. The write-out refuses a taken
+        # name as well, for one taken while this book was building.
         if os.path.exists(target):
             self.record_failure(name, _name_taken_reason(label))
             return
@@ -1081,6 +1099,7 @@ def _run_with_scratch(ram_dir: str, input_dir: str, output_dir: str,
         reservation_file=os.path.join(ram_dir, "ramReserved"),
         publish_lock=os.path.join(ram_dir, "publish.lock"),
         total=total,
+        present_before=_present_before(output_paths),
     )
 
     if total:
@@ -1126,6 +1145,17 @@ def _run_with_scratch(ram_dir: str, input_dir: str, output_dir: str,
     # handled itself, so the pool never saw it - but the run still asked for a
     # file it did not get, and must not end on the status of one that did.
     return workerpool.exit_status(1 if failed else 0)
+
+
+def _present_before(output_paths: list) -> frozenset:
+    """Every name a book of this run could be written under that is already
+    taken - by any of the output extensions, since which one a folder becomes
+    is only known once its scan has run."""
+    extensions = {spec[1] for spec in FORMATS.values()}
+    return frozenset(
+        candidate for path in output_paths for extension in extensions
+        if os.path.exists(candidate := "%s.%s" % (path.rstrip("/"),
+                                                   extension)))
 
 
 def books_at_once(input_dir: str) -> int:

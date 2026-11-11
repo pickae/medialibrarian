@@ -142,6 +142,7 @@ def _subprocess_pipe(first_argv, second_argv, second_stdout=None,
                       if capture_stderr else None)
         first = subprocess.Popen(list(first_argv), stdin=subprocess.DEVNULL,
                                  stdout=subprocess.PIPE, stderr=first_err)
+        assert first.stdout is not None  # stdout=PIPE
         try:
             second = subprocess.Popen(list(second_argv), stdin=first.stdout,
                                       stdout=second_stdout, stderr=second_err)
@@ -497,6 +498,7 @@ def read_config_level(path, run=_subprocess_run):
     # result.
     try:
         streams = data.get("streams") if isinstance(data, dict) else None
+        stream: dict
         if streams is None:
             stream = {}
         elif isinstance(streams, list):

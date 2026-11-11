@@ -437,10 +437,14 @@ class Run:
                 log("    mkvmerge output: " + output)
             return
 
-        if status <= 1:
+        if toolcapture.warnings_at_most(status):
             old = os.path.splitext(movie)[0] + " (old).mkv"
-            rules._rename_quiet(movie, old)
-            rules._rename_quiet(out, movie)
+            failure = _swap_in(out, movie, old)
+            if failure:
+                rules._remove(out)
+                log("  WARNING: the improved copy could not be put in place "
+                    "(%s), left original untouched: %s" % (failure, movie))
+                return
             log('  Improved copy written (original kept as "%s"): %s'
                 % (os.path.basename(old), movie))
             if output:
@@ -456,7 +460,7 @@ class Run:
         while still being as HDR as the source was. A result that does not is
         thrown away and the source left exactly as it was - still a perfectly
         playable file, if a mislabelled one."""
-        if status > 1 or not job["wanted"]:
+        if not toolcapture.warnings_at_most(status) or not job["wanted"]:
             return ""
         if job["action"] == "convert":
             ok, seen = dolbyvision.is_profile8(out)
@@ -555,6 +559,36 @@ def _scratch_need(film_bytes: int, video_work: bool, stream_size) -> str:
         need += (int(stream_size) if str(stream_size).isdigit()
                  else film_bytes)
     return str(need)
+
+
+def _swap_in(new: str, movie: str, old: str) -> str:
+    """Put ``new`` in ``movie``'s place and keep the original as ``old``:
+    ``""`` when done, else the reason, with ``movie`` as it was.
+
+    The copy out of the scratch - the step a full disk fails - happens first,
+    beside the film; only then do the two renames within its folder run, and a
+    failed second one puts the original back.
+    """
+    if os.path.lexists(old):
+        return '"%s" is already there' % os.path.basename(old)
+    staged, failure = safety.stage_beside(new, movie)
+    if failure:
+        return failure
+    try:
+        os.rename(movie, old)
+    except OSError as error:
+        rules._remove(staged)
+        return error.strerror or str(error)
+    try:
+        os.rename(staged, movie)
+    except OSError as error:
+        try:
+            os.rename(old, movie)
+        except OSError:
+            pass
+        rules._remove(staged)
+        return error.strerror or str(error)
+    return ""
 
 
 def _mkvmerge(argv: list) -> tuple:
@@ -2592,8 +2626,11 @@ def _transcode_opus(state, root: str, jobs: int | None = None,
     caller leaves some of them to other work; ``on_done`` is told of each film
     once its tracks are done. On a thread of its own the caller is the one to
     end the run on an interrupt, not this."""
+    # A kept original is finished: transcoding it again would only leave a
+    # stray "Film (old)_N.opus" beside the living film.
     movies = rules._files_below(root, matches=lambda name:
-                                name.endswith(".mkv"))
+                                name.endswith(".mkv")
+                                and not plexnames.is_kept_copy(name))
     if jobs is None:
         jobs = runlog.jobs_per_core(CORES_PER_JOB)
     _run_pool(state, movies, root, jobs, on_done)

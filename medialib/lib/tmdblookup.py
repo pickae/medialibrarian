@@ -22,6 +22,10 @@ from medialib.lib.titlematch import normalize_title, title_keys
 # The TMDb endpoint everything is relative to.
 _BASE = "https://api.themoviedb.org/3"
 
+# What an IMDb id looks like. The id ends up in folder names and paths, so a
+# value from TMDb's JSON or the dataset is taken only in exactly this shape.
+_IMDB_ID = re.compile(r"tt[0-9]+")
+
 # A movie folder is "Title (Year)" where the Year is 1xxx or 2xxx. The greedy
 # title takes everything up to the LAST "(Year)", so "Nighthawk (1999) (2005)"
 # reads as title "Nighthawk (1999)", year "2005".
@@ -221,6 +225,10 @@ def _curl(url: str, params) -> str | None:
     readable by every account on the machine, and a run over a library opens
     that window once per candidate folder. On stdin it reaches curl and nothing
     else.
+
+    Given up on after thirty seconds, as the other catalogue lookups are: a
+    stalled connection would otherwise hold the whole run, and a curl that
+    gave up is no answer like any other failure.
     """
     question = (url, tuple(tuple(pair) for pair in params))
     with _ANSWERS_LOCK:
@@ -228,7 +236,7 @@ def _curl(url: str, params) -> str | None:
             return _ANSWERS[question]
     _PACER.wait()
     lines = ["url = " + _config_value(url), "get", "fail", "silent",
-             "show-error"]
+             "show-error", "max-time = 30"]
     for key, value in params:
         lines.append("data-urlencode = "
                      + _config_value("{}={}".format(key, value)))
@@ -356,8 +364,15 @@ def imdb_of_tmdb(tmdb_id: str) -> str:
         return ""
     detail = _as_json(_curl(_BASE + "/movie/" + tmdb_id + "/external_ids",
                             [("api_key", api_key)]))
-    imdb = detail.get("imdb_id")
-    return imdb if isinstance(imdb, str) and imdb.startswith("tt") else ""
+    return _imdb_id(detail.get("imdb_id"))
+
+
+def _imdb_id(value) -> str:
+    """``value`` when it is an IMDb id, otherwise "" - which is what an id that
+    is anything else is treated as: none at all."""
+    if isinstance(value, str) and _IMDB_ID.fullmatch(value):
+        return value
+    return ""
 
 
 def identify(title: str, year: str,
@@ -577,7 +592,7 @@ def _imdb_candidate(row: dict, latin: bool = False) -> _Candidate:
                                    or titlematch.in_latin_script(text)))
         - {""},
         runtime=_minutes(row.get("minutes")),
-        imdb=tconst if re.match(r"^tt[0-9]+$", tconst) else "",
+        imdb=_imdb_id(tconst),
         released=year if year.isdigit() else "")
 
 
@@ -1462,7 +1477,6 @@ def _candidate(api_key: str, row: dict, latin: bool = False) -> _Candidate:
         folded |= title_keys(text)
         if text not in written:
             written.append(text)
-    imdb = (detail.get("external_ids") or {}).get("imdb_id")
     return _Candidate(
         years=frozenset(_release_years(row, detail)),
         titles=frozenset(t for t in folded if t),
@@ -1472,7 +1486,7 @@ def _candidate(api_key: str, row: dict, latin: bool = False) -> _Candidate:
                       + _translated_titles(detail)
                       if readable(str(t))) - {""},
         runtime=_minutes(detail.get("runtime")),
-        imdb=imdb if isinstance(imdb, str) and imdb.startswith("tt") else "",
+        imdb=_imdb_id((detail.get("external_ids") or {}).get("imdb_id")),
         released=_primary_year(detail) or _primary_year(row),
         tmdb=_id_token(row.get("id")).replace("null", ""))
 

@@ -411,7 +411,7 @@ def _video_filter(text):
         _tostring(_alt_lazy(lambda: _field(v0, "bit_rate"),
                             lambda: _bps(v0))),
         (_tostring(math.floor(estimated))
-         if _alt(estimated, 0) is not None and _gt(_alt(estimated, 0), 0)
+         if estimated is not None and _gt(_alt(estimated, 0), 0)
          else ""),
         _tostring(_alt(_field(v0, "width"), "")),
         _tostring(_alt(_field(v0, "height"), "")),

@@ -197,7 +197,10 @@ class TestSubtitleLane:
                                   lanes.FilmLocks(), said.append)
         lane.start()
         lane.finish()
-        assert len(said) == 1 and "no network" in said[0]
+        # A lane still running when it is finished first says it waits for
+        # it; how far the thread got by then is the scheduler's to decide.
+        warnings = [line for line in said if not line.startswith("Waiting")]
+        assert len(warnings) == 1 and "no network" in warnings[0]
 
 
 class TestTheMiddleOfTheIngest:

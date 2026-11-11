@@ -1010,14 +1010,22 @@ def mkv_mux(root: str) -> None:
         try:
             target = os.path.join(scratch, "muxed.mkv")
             # The source keeps its own name until a Matroska actually exists,
-            # so that a failed mux leaves no MP4 called ".mkv" behind. mkvmerge
-            # exits 1 on warnings having written the file, so only 2 and above
-            # is a failure.
-            if _run(["mkvmerge", "-q", "-o", target, path]) < 2 \
+            # so that a failed mux leaves no MP4 called ".mkv" behind, and is
+            # removed only once the Matroska is in place under the new one.
+            status = _run(["mkvmerge", "-q", "-o", target, path])
+            if toolcapture.warnings_at_most(status) \
                     and _is_matroska(target) is True:
                 as_mkv = os.path.splitext(path)[0] + ".mkv"
-                _remove(path)
-                _rename_quiet(target, as_mkv)
+                if as_mkv != path and os.path.lexists(as_mkv):
+                    log("WARNING: %s is already there, left as it is: ./%s"
+                        % (os.path.basename(as_mkv), relative))
+                    continue
+                failure = safety.replace_file(target, as_mkv)
+                if failure:
+                    log("WARNING: the remux could not be put in place (%s), "
+                        "left as it is: ./%s" % (failure, relative))
+                elif as_mkv != path:
+                    _remove(path)
             else:
                 log("WARNING: could not remux into Matroska, left as it is: "
                     "./" + relative)
@@ -1057,7 +1065,9 @@ def update_tags(root: str) -> None:
     for movie in _files_below(root, matches=lambda name:
                               name.endswith("mkv")):
         directory = os.path.dirname(movie)
-        if is_bonus_folder(directory):
+        # A kept original is finished; retitling it would hand it the living
+        # film's title, " (old)" and all.
+        if is_bonus_folder(directory) or plexnames.is_kept_copy(movie):
             continue
 
         # Said plainly, because mkvpropedit's own answer for one of these is

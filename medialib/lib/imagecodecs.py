@@ -23,6 +23,9 @@ a spelling listed twice answers by its first row both times.
 
 from __future__ import annotations
 
+import os
+import re
+
 from medialib.lib.enums import shell_lower
 
 __all__ = [
@@ -40,6 +43,8 @@ __all__ = [
     "raster_extensions",
     "family_sql",
     "kind_sql",
+    "magick_coder",
+    "coder_prefixed",
 ]
 
 # What a format does with the pixels it is given.
@@ -180,6 +185,130 @@ def raster_extensions() -> tuple[str, ...]:
             if extension not in out:
                 out.append(extension)
     return tuple(out)
+
+
+# --- the coder ImageMagick is told to read with ---------------------------------
+# Left to itself, ImageMagick picks the decoder from a file's CONTENT, so a page
+# called 001.jpg that is really SVG or MVG is handed to a vector or drawing
+# coder - which can read other files, and fetch URLs, on the page's say-so. An
+# input operand spelled "jpeg:001.jpg" is read by that coder or not at all.
+#
+# The coder is the one the file's first bytes name, when they are one of the
+# raster formats below: a PNG saved as .jpg is common in scanned books, and a
+# webp sidecar is copied under a .jpg name, and both are still pictures. Only
+# when the bytes say nothing listed here does the extension decide - and a
+# file whose extension promises a raster format it does not hold then fails
+# to read rather than being read as something else.
+
+# ImageMagick's coder for each family, where it is not the family name. The
+# VECTOR family is absent on purpose: an SVG is never forced on anything.
+_CODER_NAMES = {"jpeg2000": "jp2", "netpbm": "pnm"}
+
+# (offset, bytes, coder) for the formats a file's opening bytes name outright.
+_SIGNATURES = (
+    (0, b"\xff\xd8\xff", "jpeg"),
+    (0, b"\x89PNG\r\n\x1a\n", "png"),
+    (0, b"GIF87a", "gif"),
+    (0, b"GIF89a", "gif"),
+    (8, b"WEBP", "webp"),
+    (0, b"II*\x00", "tiff"),
+    (0, b"MM\x00*", "tiff"),
+    (0, b"II+\x00", "tiff"),
+    (0, b"MM\x00+", "tiff"),
+    (0, b"8BPS", "psd"),
+    (0, b"\xff\x0a", "jxl"),
+    (0, b"\x00\x00\x00\x0cJXL \r\n\x87\n", "jxl"),
+    (0, b"\x00\x00\x00\x0cjP  \r\n\x87\n", "jp2"),
+    (0, b"\xffO\xffQ", "j2k"),
+    (0, b"BM", "bmp"),
+)
+
+# The ISO media brands at offset 8 of an ftyp box, for the two families that
+# live in that container.
+_FTYP_BRANDS = {b"avif": "avif", b"avis": "avif",
+                b"heic": "heic", b"heix": "heic", b"heim": "heic",
+                b"heis": "heic", b"hevc": "heic", b"mif1": "heic",
+                b"msf1": "heic"}
+
+# A frame or size selector ImageMagick reads off the end of an operand.
+_SELECTOR = re.compile(r"\[[^\[\]]*\]$")
+
+# Every coder an operand may already have been given, here or by a caller
+# naming its own scratch format, so that a second pass leaves it as it is.
+_GIVEN_CODERS = frozenset(
+    [_CODER_NAMES.get(family, family) for family, kind, _e, _a in TABLE
+     if kind != VECTOR]
+    + [coder for _offset, _signature, coder in _SIGNATURES] + ["miff"])
+
+
+def _coder_by_content(path: str) -> str:
+    """The coder the file's opening bytes name, or "" when they name none of
+    the listed formats or the file cannot be read."""
+    try:
+        with open(path, "rb") as handle:
+            head = handle.read(64)
+    except OSError:
+        return ""
+    if head[4:8] == b"ftyp":
+        # The major brand and then the compatible ones, four bytes each after
+        # the minor version: an AVIF often leads with the generic "mif1" and
+        # names itself only further along.
+        brands = [head[8:12]] + [head[at:at + 4]
+                                 for at in range(16, min(len(head),
+                                                         int.from_bytes(
+                                                             head[0:4])), 4)]
+        coders = [_FTYP_BRANDS.get(brand, "") for brand in brands]
+        return "avif" if "avif" in coders else next(
+            (coder for coder in coders if coder), "")
+    for offset, signature, coder in _SIGNATURES:
+        if head[offset:offset + len(signature)] == signature:
+            if coder == "webp" and not head.startswith(b"RIFF"):
+                continue
+            return coder
+    return ""
+
+
+def magick_coder(path: str) -> str:
+    """The ImageMagick coder to read <path> with: the one its bytes name, else
+    the one its extension implies - "" for an extension this table has no
+    raster family for, which leaves ImageMagick to decide as it always has."""
+    coder = _coder_by_content(path)
+    if coder:
+        return coder
+    extension = os.path.basename(path).rpartition(".")[2]
+    if not extension or extension == os.path.basename(path):
+        return ""
+    row = _row(extension)
+    if row is None or row[1] == VECTOR:
+        return ""
+    return _CODER_NAMES.get(row[0], row[0])
+
+
+def coder_prefixed(operand: str) -> str:
+    """An INPUT operand of an ImageMagick call with its coder named in front -
+    ``"jpeg:page.jpg"``, ``"gif:anim.gif[0]"`` - so that what reads it is the
+    raster decoder its name or bytes promised.
+
+    A trailing ``[...]`` selector is kept where ImageMagick looks for it, at
+    the end, unless the whole operand is itself an existing file. ``-`` (the
+    standard input), an empty operand, one that already names a coder and one
+    whose coder cannot be told are returned unchanged. A path is otherwise
+    taken as it is, "./" and all: the prefix ends at the first colon, so
+    nothing after it is read as a coder, and a name starting with "-" is no
+    longer taken for an option. Never for an output: there the extension
+    picks the encoder, which is the caller's choice and not the file's.
+    """
+    if not operand or operand == "-":
+        return operand
+    path = operand
+    if not os.path.exists(operand):
+        if shell_lower(operand.partition(":")[0]) in _GIVEN_CODERS:
+            return operand
+        selector = _SELECTOR.search(operand)
+        if selector:
+            path = operand[:selector.start()]
+    coder = magick_coder(path)
+    return "%s:%s" % (coder, operand) if coder else operand
 
 
 def _case_sql(expression: str, column: str) -> str:

@@ -18,7 +18,7 @@ import os
 import re
 import subprocess
 
-from medialib.lib import dolbyvision, runlog
+from medialib.lib import dolbyvision, runlog, toolcapture
 
 # What ffprobe calls the side data an HDR10+ frame carries.
 SIDE_DATA_TYPE = "SMPTE2094-40"
@@ -151,6 +151,7 @@ def inject_metadata(video, metadata, out, fps, scratch, log=runlog.log,
                 "0:%sfps" % fps, injected])
     dolbyvision._unlink(injected)
     # mkvmerge exits 1 for warnings, with the file written.
-    if done.returncode > 1 or not dolbyvision._nonempty(out):
+    if not toolcapture.warnings_at_most(done.returncode) \
+            or not dolbyvision._nonempty(out):
         return failed(dolbyvision._reason(done.stdout, done.stderr))
     return 0

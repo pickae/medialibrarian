@@ -353,7 +353,7 @@ def _makespan(seed, release, slow, tail, workers, threads, watch=None,
     keeps one clock of progress and each job its finishing point on it.
     """
     now = progress = 0.0
-    finishing = []
+    finishing: list = []
     queue = seed[::-1]
     pending = tail
     edges = [until for until, _pace in slow if until > 0]
@@ -615,7 +615,7 @@ def _decide(tracks, kinds, workers, threads, background=0.0):
     if not lengths:
         return Decision(frozenset(), whole, whole)
     longest, shortest = max(lengths), min(lengths)
-    seen = {frozenset(): whole}
+    seen: dict = {frozenset(): whole}
 
     def value(chunked):
         if chunked not in seen:

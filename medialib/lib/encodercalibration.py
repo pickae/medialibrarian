@@ -107,7 +107,7 @@ class Calibration:
         }, indent=2) + "\n"
 
     @classmethod
-    def from_json(cls, text: str) -> "Calibration":
+    def from_json(cls, text: str) -> Calibration:
         data = json.loads(text)
         presets = {int(k): v for k, v in data["presets"].items()}
         qualities = {int(k): [(float(a), float(b)) for a, b in v]

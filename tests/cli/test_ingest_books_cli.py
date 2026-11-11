@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import re
+import zipfile
 
 import pytest
 
@@ -24,7 +25,11 @@ from tests import blackbox
 
 pytestmark = pytest.mark.stubbed
 
-_EBOOK_CONVERT = r'printf epub > "$2"'
+# An epub is a zip, and -d checks its members before it unpacks one, so the
+# converter's stand-in writes a real (if tiny) one.
+_EBOOK_CONVERT = ('python3 -c "import sys, zipfile; '
+                  "zipfile.ZipFile(sys.argv[1], 'w').writestr("
+                  "'OEBPS/content.opf', 'x')\" \"$2\"")
 
 _GHOSTSCRIPT = r"""
 for a in "$@"; do
@@ -90,6 +95,8 @@ def books(sandbox, tmp_path):
         path = source / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.touch()
+    with zipfile.ZipFile(source / "fiction/story.epub", "w") as packed:
+        packed.writestr("OEBPS/content.opf", "x")
 
     outputs = tmp_path / "out"
 
@@ -492,3 +499,58 @@ class TestDiscardWithNoGhostscript:
         no_gs.ingest()
         assert (no_gs.outputs / "fiction" / "novel.epub").is_file()
         assert (no_gs.outputs / "manuals" / "guide.pdf").is_file()
+
+
+def _epub_with_link(path, link_name, target):
+    """An epub holding one page and one SYMLINK member: what zipfile writes
+    as an ordinary member whose mode says link and whose content is where it
+    points."""
+    import stat
+
+    with zipfile.ZipFile(path, "w") as packed:
+        packed.writestr("mimetype", "application/epub+zip")
+        packed.writestr("OEBPS/content.opf", "the book")
+        link = zipfile.ZipInfo(link_name)
+        link.create_system = 3
+        link.external_attr = (stat.S_IFLNK | 0o777) << 16
+        packed.writestr(link, target)
+
+
+class TestTheCleanerUnpacksAnEpubSafely:
+    """-d unpacks an epub to clean it, with the host's real unzip and zip. A
+    link member is the danger: unpacked, it is a link on disk, and a zip that
+    follows links would pack the file it points at into the library book."""
+
+    @pytest.fixture
+    def secret(self, sandbox, tmp_path):
+        # The real unzip and zip, from the host's PATH behind the stubs.
+        sandbox.with_tool("ebook-convert", r'cat "$1" > "$2"')
+        sandbox.with_tool("gs", _GHOSTSCRIPT)
+        sandbox.with_tool("convert", _CONVERT)
+        secret = tmp_path / "secret.txt"
+        secret.write_text("a file of the user's that is no book's business")
+        return secret
+
+    @staticmethod
+    def _contents(epub):
+        with zipfile.ZipFile(epub) as packed:
+            return [packed.read(info) for info in packed.infolist()]
+
+    def _ingest(self, sandbox, tmp_path, target):
+        source, outputs = tmp_path / "in", tmp_path / "out"
+        source.mkdir()
+        _epub_with_link(source / "novel.epub", "OEBPS/leak.txt", target)
+        done = sandbox.run("ingest-books", "-d", source, outputs,
+                           timeout=600)
+        assert done.returncode == 0, done.stdout + done.stderr
+        return outputs / "novel.epub"
+
+    def test_a_link_out_of_the_book_does_not_pull_the_file_in(
+            self, sandbox, tmp_path, secret):
+        book = self._ingest(sandbox, tmp_path, str(secret))
+        assert secret.read_bytes() not in self._contents(book)
+
+    def test_nor_does_one_reaching_up_through_dot_dot(self, sandbox, tmp_path,
+                                                      secret):
+        book = self._ingest(sandbox, tmp_path, "../" * 40 + str(secret)[1:])
+        assert secret.read_bytes() not in self._contents(book)

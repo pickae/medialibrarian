@@ -7,7 +7,6 @@ sitecustomize goes, which session directory is dropped.
 """
 
 import os
-import re
 import shutil
 import signal
 import subprocess

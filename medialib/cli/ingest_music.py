@@ -38,6 +38,7 @@ from medialib.lib import (
     errorlog,
     ffmpegselect,
     formatting,
+    imagecodecs,
     imagemagick,
     imagesizes,
     mutagentags,
@@ -810,7 +811,8 @@ class Run:
         # 12-bit (profile 2, which many decoders cannot play) from a 16-bit PNG.
         argv = imagemagick.convert_argv(
             ["-format", "avif", "-quality", COVER_AVIF_QUALITY,
-             "-define", "heic:speed=" + COVER_AVIF_SPEED, source,
+             "-define", "heic:speed=" + COVER_AVIF_SPEED,
+             imagecodecs.coder_prefixed(source),
              "-depth", COVER_AVIF_DEPTH, output])
         # Counted by what the image ENDED UP as, not by what was attempted: the
         # fall-back copy is a copy, and a tally that called it an AVIF would say
