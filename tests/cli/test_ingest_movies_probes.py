@@ -17,7 +17,7 @@ from medialib.cli import ingest_movies as rules
 from medialib.cli import ingest_movies_run as run_module
 from medialib.lib import chapterdb, filmrecord, plexcompare
 
-pytestmark = pytest.mark.pure
+pytestmark = pytest.mark.stubbed
 
 TRACKS = {"tracks": [
     {"id": 0, "type": "video",
