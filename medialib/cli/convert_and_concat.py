@@ -396,17 +396,7 @@ def main(argv: list, program: str = "convert-and-concat",
         return 1
 
     if not input_holds_a_book(in_path, sub_folders):
-        where = ("a subfolder of a subfolder of the input" if sub_folders
-                 else "a subfolder of the input")
-        sys.stderr.write("\n")
-        sys.stderr.write('Nothing to concatenate: no %s in "%s" holds a '
-                         "book.\n" % (where, in_path))
-        sys.stderr.write("A book is a folder whose audio files are all one type "
-                         "(all .mp3, all .opus, ...),\nor an archive standing "
-                         "in for one; a folder mixing two types can never be\n"
-                         "joined into a single file, so converting it would be "
-                         "work with nothing to show.\n")
-        sys.stderr.write("Nothing was changed.\n")
+        _say_no_book(in_path, sub_folders)
         return 1
 
     ramscratch.init_ram_base()
@@ -437,33 +427,7 @@ def main(argv: list, program: str = "convert-and-concat",
         if sub_folders:
             _warn_top_level_archives(in_path)
 
-        # The external tools of BOTH called scripts, asked for here once: they
-        # start in the transcoding and concatenating phases, and the transcode is
-        # a full pass over the input, so a tool only the concatenator needs would
-        # otherwise be reported after the long part of the run.
-        chain = ["ffmpeg", "ffprobe", imagemagick.CONVERT_SPEC]
-        if not only_concat:
-            chain += ["rsync"]
-        chain += archive_tools
-        skip = bool(os.environ.get("SKIP_TOOL_PREFLIGHT", ""))
-        ffmpegselect.select_ffmpeg()
-        ffmpegselect.report_ffmpeg_selection()
-        if tooldeps.require_tools(program, chain,
-                                  skip_preflight=skip):
-            return 1
-        # Having ffmpeg is not having an xHE-AAC encoder: ffmpeg cannot produce
-        # the codec at all. Asked here rather than left to the transcoding
-        # phase, which is the THIRD of four - by then the input has been cleaned
-        # and the archives unpacked into RAM for a run that cannot finish.
-        if not only_concat and codec == "xheaac" and xheaac.require_encoder(
-                "%s (-e %s)" % (program, codec), skip_preflight=skip):
-            return 1
-        runlog.warn_uncounted_progress()
-        _settle_mkvtoolnix()
-        if tooldeps.require_python_module(
-                "mutagen", program,
-                "writes the chapter marks and the cover art into the "
-                "concatenated book", skip_preflight=skip):
+        if _missing_tools(program, only_concat, codec, archive_tools):
             return 1
 
         # PHASE 1
@@ -497,6 +461,55 @@ def main(argv: list, program: str = "convert-and-concat",
         return 0
     finally:
         ramscratch.run_exit_cleanup()
+
+
+def _say_no_book(in_path: str, sub_folders: bool) -> None:
+    """Why a run whose input holds no book refuses to start."""
+    where = ("a subfolder of a subfolder of the input" if sub_folders
+             else "a subfolder of the input")
+    sys.stderr.write("\n")
+    sys.stderr.write('Nothing to concatenate: no %s in "%s" holds a '
+                     "book.\n" % (where, in_path))
+    sys.stderr.write("A book is a folder whose audio files are all one type "
+                     "(all .mp3, all .opus, ...),\nor an archive standing "
+                     "in for one; a folder mixing two types can never be\n"
+                     "joined into a single file, so converting it would be "
+                     "work with nothing to show.\n")
+    sys.stderr.write("Nothing was changed.\n")
+
+
+def _missing_tools(program: str, only_concat: bool, codec: str,
+                   archive_tools: list) -> bool:
+    """True, said, when a tool the run's phases need is missing.
+
+    The external tools of BOTH called scripts, asked for here once: they start
+    in the transcoding and concatenating phases, and the transcode is a full
+    pass over the input, so a tool only the concatenator needs would otherwise
+    be reported after the long part of the run.
+    """
+    chain = ["ffmpeg", "ffprobe", imagemagick.CONVERT_SPEC]
+    if not only_concat:
+        chain += ["rsync"]
+    chain += archive_tools
+    skip = bool(os.environ.get("SKIP_TOOL_PREFLIGHT", ""))
+    ffmpegselect.select_ffmpeg()
+    ffmpegselect.report_ffmpeg_selection()
+    if tooldeps.require_tools(program, chain,
+                              skip_preflight=skip):
+        return True
+    # Having ffmpeg is not having an xHE-AAC encoder: ffmpeg cannot produce
+    # the codec at all. Asked here rather than left to the transcoding
+    # phase, which is the THIRD of four - by then the input has been cleaned
+    # and the archives unpacked into RAM for a run that cannot finish.
+    if not only_concat and codec == "xheaac" and xheaac.require_encoder(
+            "%s (-e %s)" % (program, codec), skip_preflight=skip):
+        return True
+    runlog.warn_uncounted_progress()
+    _settle_mkvtoolnix()
+    return bool(tooldeps.require_python_module(
+        "mutagen", program,
+        "writes the chapter marks and the cover art into the "
+        "concatenated book", skip_preflight=skip))
 
 
 def _settle_mkvtoolnix() -> None:
