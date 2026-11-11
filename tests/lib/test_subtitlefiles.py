@@ -867,7 +867,7 @@ class TestFilmImdbId:
             asked.append(tmdb_id)
             return "tt0000003"
 
-        monkeypatch.setattr(subtitlefiles.tmdblookup, "imdb_of_tmdb", fake)
+        monkeypatch.setattr(subtitlefiles.tmdbidentify, "imdb_of_tmdb", fake)
         assert subtitlefiles.film_imdb_id("Movie (1999) {tmdb-12345}.mkv") \
             == "tt0000003"
         assert asked == ["12345"]

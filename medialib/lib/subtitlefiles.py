@@ -33,7 +33,7 @@ from medialib.lib import (
     runlog,
     safety,
     subtitleads,
-    tmdblookup,
+    tmdbidentify,
     toolcapture,
     treewalk,
 )
@@ -524,7 +524,7 @@ def imdb_of_name(name: str) -> str:
         return imdb.group(1).lower()
     tmdb = _TMDB_TAG.search(name)
     if tmdb:
-        return tmdblookup.imdb_of_tmdb(tmdb.group(1))
+        return tmdbidentify.imdb_of_tmdb(tmdb.group(1))
     return ""
 
 
