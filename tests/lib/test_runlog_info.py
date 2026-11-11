@@ -1,5 +1,6 @@
-"""The white box for medialib/lib/infolog.py - what a run said on the console,
-kept under `logs/info/`, one file per run, at a verbosity of its own."""
+"""The white box for the info log in medialib/lib/runlog.py - what a run said
+on the console, kept under `logs/info/`, one file per run, at a verbosity of
+its own."""
 
 import io
 import multiprocessing
@@ -10,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from medialib.lib import errorlog, infolog, runlog, statusline
+from medialib.lib import errorlog, runlog, statusline
 
 pytestmark = pytest.mark.fs
 
@@ -25,9 +26,9 @@ def info_dir(tmp_path, monkeypatch):
     """The run's info log lands under the test's own directory."""
     monkeypatch.setenv("CLI_SCRIPT_DIR", str(tmp_path))
     monkeypatch.delenv("LOG_TIMESTAMPS", raising=False)
-    monkeypatch.delenv(infolog.LEVEL_VARIABLE, raising=False)
-    monkeypatch.setattr(infolog, "_OPEN", [])
-    return tmp_path / "logs" / infolog.INFO_DIR
+    monkeypatch.delenv(runlog.INFO_LEVEL_VARIABLE, raising=False)
+    monkeypatch.setattr(runlog, "_INFO_OPEN", [])
+    return tmp_path / "logs" / runlog.INFO_DIR
 
 
 def kept(info_dir: Path) -> list[str]:
@@ -66,7 +67,7 @@ def test_the_default_keeps_what_the_console_says_by_default(info_dir, capsys):
                  "would rename a to b", "ERROR: it broke"]),
 ])
 def test_the_setting_chooses_how_much(info_dir, monkeypatch, capsys, word, expected):
-    monkeypatch.setenv(infolog.LEVEL_VARIABLE, word)
+    monkeypatch.setenv(runlog.INFO_LEVEL_VARIABLE, word)
     runlog.start_run(["in"])
     say_one_of_each()
     if expected is None:
@@ -76,7 +77,7 @@ def test_the_setting_chooses_how_much(info_dir, monkeypatch, capsys, word, expec
 
 
 def test_a_quiet_console_still_keeps_a_verbose_log(info_dir, monkeypatch, capsys):
-    monkeypatch.setenv(infolog.LEVEL_VARIABLE, "verbose")
+    monkeypatch.setenv(runlog.INFO_LEVEL_VARIABLE, "verbose")
     runlog.settle_verbosity(runlog.QUIET)
     runlog.start_run(["in"])
     say_one_of_each()
