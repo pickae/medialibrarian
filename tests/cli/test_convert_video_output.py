@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from medialib.cli import convert_video as rules
+from medialib.cli import convert_video_encode as encode
 from medialib.cli import convert_video_run as run_module
 from medialib.lib import dolbyvision, toolcapture
 
@@ -34,7 +35,7 @@ def tree(monkeypatch, tmp_path):
 def test_a_deleted_output_folder_is_put_back_to_write_into(tree):
     os.rmdir(os.path.join(tree.output_dir, "Films"))
 
-    chosen = run_module.output_path_for("Films/film.mkv", tree, False)
+    chosen = encode.output_path_for("Films/film.mkv", tree, False)
 
     assert chosen == os.path.join(tree.output_dir, "Films", "film.mkv")
     assert os.path.isdir(os.path.dirname(chosen))
@@ -44,7 +45,7 @@ def test_a_name_taken_during_the_encode_gets_a_sibling(tree):
     taken = os.path.join(tree.output_dir, "Films", "film.mkv")
     Path(taken).write_text("not ours")
 
-    chosen = run_module.output_path_for("Films/film.mkv", tree, False)
+    chosen = encode.output_path_for("Films/film.mkv", tree, False)
 
     assert chosen == os.path.join(tree.output_dir, "Films", "film (2).mkv")
     assert Path(taken).read_text() == "not ours"
@@ -54,7 +55,7 @@ def test_the_out_of_date_output_this_run_replaces_is_written_over(tree):
     stale = os.path.join(tree.output_dir, "Films", "film.mkv")
     Path(stale).write_text("half a film from last time")
 
-    assert run_module.output_path_for("Films/film.mkv", tree, True) == stale
+    assert encode.output_path_for("Films/film.mkv", tree, True) == stale
 
 
 def test_a_mux_that_failed_on_a_missing_folder_is_retried_once(tree, tmp_path,
@@ -73,13 +74,13 @@ def test_a_mux_that_failed_on_a_missing_folder_is_retried_once(tree, tmp_path,
         Path(output).write_text("muxed")
         return toolcapture.ToolRun(argv, 0, toolcapture.ToolOutput())
 
-    monkeypatch.setattr(run_module.toolcapture, "run", fake_run)
+    monkeypatch.setattr(toolcapture, "run", fake_run)
     monkeypatch.setattr(rules, "profile_args", lambda *a, **k: "-c:a copy")
     directory = tmp_path / "chunks"
     directory.mkdir()
     (directory / "video.mkv").write_text("video")
 
-    status = run_module.mux_final("Films/film.mkv", str(directory), tree,
+    status = encode.mux_final("Films/film.mkv", str(directory), tree,
                                   output)
 
     assert status == 0
@@ -94,7 +95,7 @@ def test_the_video_only_failsafe_puts_the_folder_back_to_keep_the_encode(tree,
     directory.mkdir()
     (directory / "video.mkv").write_text("the expensive part")
 
-    kept = run_module.write_video_only("Films/film.mkv", str(directory),
+    kept = encode.write_video_only("Films/film.mkv", str(directory),
                                        "audio encoding failed", tree)
 
     assert kept
@@ -118,7 +119,7 @@ def test_finish_muxes_to_the_sibling_when_the_name_was_taken(tree, tmp_path,
         Path(output).write_text("muxed")
         return 0
 
-    monkeypatch.setattr(run_module, "mux_final", fake_mux)
+    monkeypatch.setattr(encode, "mux_final", fake_mux)
     monkeypatch.setattr(dolbyvision, "normalise_config_level",
                         lambda *a, **k: None)
 
@@ -155,7 +156,7 @@ class TestAFinishThatFailsAfterTheVideoKeepsTheEncode:
 
     def test_a_failed_audio_encode(self, tree, finished, monkeypatch):
         muxed = []
-        monkeypatch.setattr(run_module, "mux_final",
+        monkeypatch.setattr(encode, "mux_final",
                             lambda *a: muxed.append(a) or 0)
 
         status = run_module.Run(tree).finish("Films/film.mkv", finished,
@@ -170,7 +171,7 @@ class TestAFinishThatFailsAfterTheVideoKeepsTheEncode:
             Path(output).write_text("half")
             return 1
 
-        monkeypatch.setattr(run_module, "mux_final", half_a_mux)
+        monkeypatch.setattr(encode, "mux_final", half_a_mux)
 
         status = run_module.Run(tree).finish("Films/film.mkv", finished,
                                              600.0, 0)
@@ -188,7 +189,7 @@ class TestAFinishThatFailsAfterTheVideoKeepsTheEncode:
             Path(output).write_text("half the film")
             return 0
 
-        monkeypatch.setattr(run_module, "mux_final", short_mux)
+        monkeypatch.setattr(encode, "mux_final", short_mux)
 
         status = run_module.Run(tree).finish("Films/film.mkv", finished,
                                              600.0, 0)

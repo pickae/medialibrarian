@@ -13,6 +13,8 @@ import os
 import pytest
 
 from medialib.cli import convert_video as rules
+from medialib.cli import convert_video_hdr as hdr
+from medialib.cli import convert_video_probes as probes
 from medialib.cli import convert_video_run as run_module
 from medialib.lib import hdr10plus
 
@@ -22,7 +24,7 @@ pytestmark = pytest.mark.fs
 @pytest.fixture
 def logged(monkeypatch):
     lines = []
-    monkeypatch.setattr(run_module, "log", lines.append)
+    monkeypatch.setattr(hdr, "log", lines.append)
     return lines
 
 
@@ -37,7 +39,7 @@ def source(monkeypatch, tmp_path):
     monkeypatch.setattr(hdr10plus, "stream_has_hdr10plus",
                         lambda path, **kw: state["hdr10plus"])
     monkeypatch.setattr(rules, "_probe", lambda argv: state["codec"] + "\n")
-    monkeypatch.setattr(run_module, "_has_tool",
+    monkeypatch.setattr(probes, "_has_tool",
                         lambda name: name in state["tools"])
     monkeypatch.setattr(rules, "video_frame_rate", lambda path: state["fps"])
 
@@ -56,7 +58,7 @@ def source(monkeypatch, tmp_path):
 
 def _prepare(state, encoder="libx265", reframed=False):
     settings = rules.Settings(encoder=encoder)
-    return run_module.prepare_hdr10plus("film.mkv", "in/film.mkv",
+    return hdr.prepare_hdr10plus("film.mkv", "in/film.mkv",
                                         state["directory"], settings, reframed)
 
 
@@ -177,7 +179,7 @@ class TestWritingItBack:
                 return state["duration"][handle.read().decode()]
 
         monkeypatch.setattr(hdr10plus, "inject_metadata", inject)
-        monkeypatch.setattr(run_module, "_media_duration", duration)
+        monkeypatch.setattr(probes, "_media_duration", duration)
         monkeypatch.setattr(hdr10plus, "stream_has_hdr10plus",
                             lambda path, **kw: state["signals"])
         state["directory"] = str(directory)
@@ -185,7 +187,7 @@ class TestWritingItBack:
 
     def _restore(self, state):
         settings = rules.Settings(input_dir="in", output_dir="out")
-        kept = run_module.restore_hdr10plus(
+        kept = hdr.restore_hdr10plus(
             "film.mkv", state["directory"], "hdr10plus.json", settings)
         with open(os.path.join(state["directory"], "video.mkv"), "rb") as h:
             return kept, h.read()

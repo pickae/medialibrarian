@@ -17,7 +17,7 @@ What actually differs on macOS, and where it is acted on:
   * there is no ``flock(1)`` and no ``/dev/shm``, and the first of those is a
     capability the C library still has (:mod:`medialib.lib.runlog`);
   * the hardware video path is VideoToolbox rather than VAAPI or NVENC
-    (``medialib/cli/convert_video_run.py``).
+    (``medialib/cli/convert_video_startup.py``).
 
 Read through a function rather than a module-level constant, so a test can say
 what the host is for one case without the import order deciding it.

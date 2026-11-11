@@ -593,6 +593,7 @@ class TestAVideoRunWaitingForItsDolbyVisionSlot:
         import threading
 
         from medialib.cli import convert_video as rules
+        from medialib.cli import convert_video_hdr as hdr
         from medialib.cli import convert_video_run as run_module
         from medialib.lib import safety
 
@@ -601,7 +602,7 @@ class TestAVideoRunWaitingForItsDolbyVisionSlot:
         monkeypatch.setattr(rules, "dolby_vision_profile",
                             lambda path: ("7", "1"))
         converted = []
-        monkeypatch.setattr(run_module, "normalise_dolby_vision",
+        monkeypatch.setattr(hdr, "normalise_dolby_vision",
                             lambda *a: converted.append(a) or ("", ""))
         settings = rules.Settings(input_dir=str(tmp_path / "in"),
                                   chunk_root=str(tmp_path / "work"),

@@ -12,8 +12,12 @@ import os
 import pytest
 
 from medialib.cli import convert_video as rules
+from medialib.cli import convert_video_encode as encode
+from medialib.cli import convert_video_hdr as hdr
+from medialib.cli import convert_video_probes as probes
 from medialib.cli import convert_video_run as run_module
-from medialib.lib import durationcheck
+from medialib.cli import convert_video_startup as startup
+from medialib.lib import durationcheck, hostos
 
 pytestmark = pytest.mark.fs
 
@@ -32,7 +36,7 @@ def measured(monkeypatch, tmp_path):
 
         monkeypatch.setattr(run_module.pausecontrol, "wait_while_paused",
                             lambda *a, **k: None)
-        monkeypatch.setattr(run_module, "_media_duration", lambda path: 600.0)
+        monkeypatch.setattr(probes, "_media_duration", lambda path: 600.0)
         monkeypatch.setattr(rules, "video_dimensions",
                             lambda path: ("1920", "1080", "progressive", "1:1"))
         monkeypatch.setattr(run_module.videograin, "grain_probe_level",
@@ -158,7 +162,7 @@ class TestTheRenderNodeDecodedOn:
         ({}, set(), ""),
     ])
     def test_the_node_chosen(self, vendors, opens, chosen):
-        node = run_module.pick_render_node(
+        node = probes.pick_render_node(
             sorted(vendors), vendors.get,
             lambda path: path.rsplit("/", 1)[1] in opens)
         assert node == ("/dev/dri/" + chosen if chosen else "")
@@ -176,9 +180,9 @@ class TestTheHardwareDecodeLadder:
     pytestmark = pytest.mark.pure
 
     def test_an_intel_igpu_is_taken_first(self, monkeypatch):
-        monkeypatch.setattr(run_module, "intel_render_node",
+        monkeypatch.setattr(probes, "intel_render_node",
                             lambda: "/dev/dri/renderD128")
-        flags, said = run_module._decode_accel()
+        flags, said = startup._decode_accel()
         assert flags == "-hwaccel vaapi -hwaccel_device /dev/dri/renderD128"
         assert "VAAPI" in said
 
@@ -186,10 +190,10 @@ class TestTheHardwareDecodeLadder:
                                                                  monkeypatch):
         """There is no /dev/dri to walk there, and on Apple Silicon there is no
         discrete GPU to fall back on either."""
-        monkeypatch.setattr(run_module, "intel_render_node", lambda: "")
-        monkeypatch.setattr(run_module.hostos, "is_macos", lambda *_a: True)
-        monkeypatch.setattr(run_module, "videotoolbox_works", lambda: True)
-        flags, said = run_module._decode_accel()
+        monkeypatch.setattr(probes, "intel_render_node", lambda: "")
+        monkeypatch.setattr(hostos, "is_macos", lambda *_a: True)
+        monkeypatch.setattr(probes, "videotoolbox_works", lambda: True)
+        flags, said = startup._decode_accel()
         assert flags == "-hwaccel videotoolbox"
         assert "VideoToolbox" in said
 
@@ -197,21 +201,21 @@ class TestTheHardwareDecodeLadder:
             self, monkeypatch):
         """Every Mac has the hardware, so the probe is really asking about the
         BUILD - and a static one fetched from elsewhere may not have it."""
-        monkeypatch.setattr(run_module, "intel_render_node", lambda: "")
-        monkeypatch.setattr(run_module.hostos, "is_macos", lambda *_a: True)
-        monkeypatch.setattr(run_module, "videotoolbox_works", lambda: False)
-        assert run_module._decode_accel() == (
+        monkeypatch.setattr(probes, "intel_render_node", lambda: "")
+        monkeypatch.setattr(hostos, "is_macos", lambda *_a: True)
+        monkeypatch.setattr(probes, "videotoolbox_works", lambda: False)
+        assert startup._decode_accel() == (
             "", "Hardware decode: no usable iGPU found, decoding in software.")
 
     def test_no_other_platform_pays_for_the_macos_probe(self, monkeypatch):
         """It costs an ffmpeg start, and nothing but a Mac has the framework
         to find."""
         probed = []
-        monkeypatch.setattr(run_module, "intel_render_node", lambda: "")
-        monkeypatch.setattr(run_module.hostos, "is_macos", lambda *_a: False)
-        monkeypatch.setattr(run_module, "videotoolbox_works",
+        monkeypatch.setattr(probes, "intel_render_node", lambda: "")
+        monkeypatch.setattr(hostos, "is_macos", lambda *_a: False)
+        monkeypatch.setattr(probes, "videotoolbox_works",
                             lambda: probed.append(1) or True)
-        flags, _said = run_module._decode_accel()
+        flags, _said = startup._decode_accel()
         assert (flags, probed) == ("", [])
 
 
@@ -227,13 +231,13 @@ class TestTheArgumentsOfOneChunk:
         monkeypatch.setattr(run_module.safety, "trap_worker_abort",
                             lambda: None)
         seen = []
-        monkeypatch.setattr(run_module, "run_quiet_encode",
+        monkeypatch.setattr(encode, "run_quiet_encode",
                             lambda argv, *a, **k: seen.append(argv) or 0)
         settings = rules.Settings(input_dir=str(tmp_path / "in"),
                                   chunk_root=str(tmp_path / "chunks"))
 
         def run(index, total, start, span):
-            run_module.encode_video_chunk(settings, rules.UNIT.join(
+            encode.encode_video_chunk(settings, rules.UNIT.join(
                 ["film.mkv", str(index), str(total), start, span]))
             return seen[-1]
         return run
@@ -275,7 +279,7 @@ class TestTheResumeSkip:
             monkeypatch.setattr(run_module.pausecontrol, "wait_while_paused",
                                 lambda *a, **k: None)
             monkeypatch.setattr(
-                run_module, "_media_duration",
+                probes, "_media_duration",
                 lambda path: (source_seconds if "/in/" in path
                               else output_seconds))
 
@@ -333,7 +337,7 @@ class TestTheLengthTheVideoIntermediateIsHeldTo:
     def probed(self, monkeypatch):
         def run(answer, container=7212.736):
             monkeypatch.setattr(rules, "_probe", lambda args: answer)
-            return run_module._video_duration("film.mkv", container)
+            return probes._video_duration("film.mkv", container)
         return run
 
     def test_a_matroska_duration_tag_is_read(self, probed):
@@ -366,16 +370,16 @@ class TestTheFramesEachUpscaledChunkIsGiven:
         monkeypatch.setattr(run_module.console.Console, "show",
                             lambda *a, **k: None)
         monkeypatch.setattr(run_module, "log", lambda *a, **k: None)
-        monkeypatch.setattr(run_module, "reconcat_video_only",
+        monkeypatch.setattr(encode, "reconcat_video_only",
                             lambda *a: 0)
         monkeypatch.setattr(
             run_module, "_run_chunk_pool",
             lambda settings, tokens, width: [
-                run_module.encode_video_chunk(settings, token)
+                encode.encode_video_chunk(settings, token)
                 for token in tokens])
         seen = []
         monkeypatch.setattr(
-            run_module, "run_upscaled_encode",
+            encode, "run_upscaled_encode",
             lambda settings, source, args, progress, out, start, end, label:
             seen.append((start, end)) or 0)
 
@@ -425,10 +429,10 @@ class TestAnUpscaledChunkThatFailed:
                 out.write_text("the frames before vspipe died")
                 return status
 
-            monkeypatch.setattr(run_module, "run_quiet_encode", pipe)
+            monkeypatch.setattr(encode, "run_quiet_encode", pipe)
             settings = rules.Settings(upscale_size="1920x1080",
                                       upscale_fps="24000/1001")
-            returned = run_module.run_upscaled_encode(
+            returned = encode.run_upscaled_encode(
                 settings, "film.mkv", "-c:v libx265",
                 str(tmp_path / "prog.0003"), str(out), 0, 959)
             return returned, out.exists()
@@ -451,7 +455,7 @@ class TestTheDolbyVisionModeAFileIsEncodedWith:
         monkeypatch.setattr(rules, "build_video_args",
                             lambda base, path, settings: "-c:v libsvtav1")
         lines = []
-        monkeypatch.setattr(run_module, "log", lines.append)
+        monkeypatch.setattr(hdr, "log", lines.append)
 
         def run(profile, enhancement="", support=True, probe=(0, b"")):
             status, stderr = probe
@@ -460,11 +464,11 @@ class TestTheDolbyVisionModeAFileIsEncodedWith:
                 returncode = status
 
             Done.stderr = stderr
-            monkeypatch.setattr(run_module, "_run",
+            monkeypatch.setattr(probes, "_run",
                                 lambda argv, capture=False: Done())
             settings = rules.Settings(encoder="libsvtav1",
                                       dv_encoder_support=support)
-            return (run_module.dolby_vision_mode_for(
+            return (hdr.dolby_vision_mode_for(
                 "film.mkv", profile, enhancement, settings), lines)
         return run
 
@@ -572,7 +576,7 @@ class TestThePqSourceThatHoldsTheFork:
         transfers = {}
         (tmp_path / "in").mkdir()
         (tmp_path / "out").mkdir()
-        monkeypatch.setattr(run_module, "_has_tool", lambda name: True)
+        monkeypatch.setattr(probes, "_has_tool", lambda name: True)
         monkeypatch.setattr(
             rules, "video_color_space",
             lambda path: ("", "", transfers[os.path.basename(path)]))
@@ -587,22 +591,22 @@ class TestThePqSourceThatHoldsTheFork:
         return make
 
     def test_a_pq_source_holds_it(self, folder):
-        assert run_module.pq_source_to_convert(folder(**{"a.mkv": "bt709",
+        assert probes.pq_source_to_convert(folder(**{"a.mkv": "bt709",
                                                   "b.mkv": "smpte2084"}))
 
     def test_hlg_and_sdr_do_not(self, folder):
-        assert not run_module.pq_source_to_convert(folder(**{"a.mkv": "bt709",
+        assert not probes.pq_source_to_convert(folder(**{"a.mkv": "bt709",
                                                       "b.mkv": "arib-std-b67"}))
 
     def test_a_pq_source_already_converted_does_not(self, folder):
         settings = folder(**{"a.mkv": "bt709", "b.mkv": "smpte2084"})
         (folder.out / "b.mkv").write_text("")
-        assert not run_module.pq_source_to_convert(settings)
+        assert not probes.pq_source_to_convert(settings)
 
     def test_without_ffprobe_the_fork_is_kept(self, folder, monkeypatch):
         settings = folder(**{"a.mkv": "bt709"})
-        monkeypatch.setattr(run_module, "_has_tool", lambda name: False)
-        assert run_module.pq_source_to_convert(settings)
+        monkeypatch.setattr(probes, "_has_tool", lambda name: False)
+        assert probes.pq_source_to_convert(settings)
 
 
 class TestWhichFilesAreSources:
@@ -613,7 +617,7 @@ class TestWhichFilesAreSources:
         for name in ("A.MKV", "b.Mp4", "notes.txt", "mkv", "clipmkv",
                      ".hidden.mkv"):
             (tmp_path / name).write_text("")
-        assert run_module._sources(str(tmp_path)) == ["A.MKV", "b.Mp4"]
+        assert probes._sources(str(tmp_path)) == ["A.MKV", "b.Mp4"]
 
 
 class TestSourcesSharingAStem:
@@ -650,5 +654,5 @@ class TestSourcesSharingAStem:
                                   chunk_root=str(tmp_path / "chunks"))
         assert run_module.Plan("a.mp4", settings).output == \
             os.path.join(str(tmp_path / "out"), "a-mp4.mkv")
-        assert run_module.output_path_for("a.mkv", settings, False) == \
+        assert encode.output_path_for("a.mkv", settings, False) == \
             os.path.join(str(tmp_path / "out"), "a-mkv.mkv")
