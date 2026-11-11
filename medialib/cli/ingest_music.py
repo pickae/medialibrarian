@@ -1386,27 +1386,8 @@ def _ingest(program: str, script_dir: str, download_dir: str, ingest_dir: str,
     # themselves. Inside this branch because it walks the whole library to answer
     # a question a run of nothing but lossy downloads never asks.
     if lossless_tracks:
-        library_flacs = _find_files(
-            ingest_dir,
-            lambda name: enums.lower_extension_of(name) == "flac")
-        if library_flacs:
-            log("Reading what the %d flac(s) already in the library were "
-                "made from" % len(library_flacs))
-            counters.start_phase("reading the library", "flacs",
-                                 len(library_flacs))
-            workerpool.map(library_flacs, jobs, state.read_ingest_source)
-            counters.end_phase()
-            safety.exit_if_aborted()
-            log("  %d of them name the download they came from"
-                % _record_count(state.ingested_sources))
-            became, ambiguous = build_ingested_folder_map(
-                state.ingested_pairs, ingest_dir)
-            redirects = write_folder_map(
-                download_dir, os.path.join(counter_dir, "folderMap"),
-                became, ambiguous)
-            counters.bump("folderRedirects", redirects)
-            state.folder_map = read_folder_map(
-                os.path.join(counter_dir, "folderMap"))
+        _read_library_folders(state, download_dir, ingest_dir, counter_dir,
+                              jobs)
 
     # The target folders - each one where the library actually keeps it, which is
     # the same path it has in the download unless a previous run's name cleaning
@@ -1418,67 +1399,11 @@ def _ingest(program: str, script_dir: str, download_dir: str, ingest_dir: str,
 
     _copy_the_rest(state, download_dir, ingest_dir, counters)
 
-    if lossless_tracks:
-        log("Encoding %d lossless track(s) to FLAC%s"
-            % (state.lossless_total,
-               _in_parallel(jobs, state.lossless_total)))
-        # Only stamped where there is encoding to time, so the closing report can
-        # tell a run that encoded nothing from one that was stopped while
-        # encoding.
-        state.encode_start = time.time()
-        counters.start_phase("encoding", "tracks", state.lossless_total, True)
-        workerpool.map(lossless_tracks, jobs, state.encode)
-        counters.end_phase()
-        safety.exit_if_aborted()
-        state.encode_end = time.time()
-    else:
-        log("No lossless source to encode - everything here is already lossy")
+    _encode_lossless(state, lossless_tracks, jobs)
 
-    # Cover-image conversion is CPU-heavier per file, so it runs roughly
-    # cores/4 at once instead of one per core. Its own number, so the encoder
-    # jobs (and the -j the user passed) stay intact.
-    image_jobs = runlog.jobs_per_core(IMAGE_THREADS_PER_CONVERSION)
-    cover_images = _find_relative(
-        download_dir,
-        lambda name: enums.lower_extension_of(name)
-        in enums.COVER_IMAGE_EXTENSIONS)
-    if cover_images:
-        log("Converting %d cover image(s), the large ones to AVIF%s"
-            % (len(cover_images),
-               _in_parallel(image_jobs, len(cover_images))))
-        counters.start_phase("converting", "images", len(cover_images))
-        workerpool.map(cover_images, image_jobs, state.convert_image)
-        counters.end_phase()
-        safety.exit_if_aborted()
+    _convert_covers(state, download_dir)
 
-    stray_videos = _find_files(
-        ingest_dir,
-        lambda name: any(name.endswith(suffix)
-                         for suffix in STRAY_VIDEO_SUFFIXES))
-    if stray_videos:
-        log("Remuxing %d stray video file(s) to MKV" % len(stray_videos))
-        counters.start_phase("remuxing", "videos", len(stray_videos))
-        state.mux_video(stray_videos)
-        counters.end_phase()
-
-    # The chapters, while cue and flac still share a base name - before beets and
-    # the name cleaning rename them.
-    cue_sheets = _find_files(
-        ingest_dir, lambda name: enums.lower_extension_of(name) == "cue")
-    if cue_sheets:
-        log("Embedding the chapters of %d cue sheet(s) into the flacs they "
-            "describe" % len(cue_sheets))
-        counters.start_phase("embedding chapters from", "cues",
-                             len(cue_sheets))
-        state.embed_cue_chapters(cue_sheets)
-        counters.end_phase()
-
-    # Only NOW are the leftover cue sheets dropped: the copy brings every cue
-    # across before a single flac has been encoded, so pruning them where the
-    # copy happens threw away every cue in the release - each one an orphan at
-    # that moment. After the encoding and the embedding, the cues that are still
-    # companionless really are.
-    delete_unneeded_cue(ingest_dir, counters)
+    _settle_videos_and_cues(state, ingest_dir)
 
     # Tag and organise with beets, against the OUTPUT so the original input is
     # never renamed. The config travels with the package instead of a personal
@@ -1508,6 +1433,110 @@ def _ingest(program: str, script_dir: str, download_dir: str, ingest_dir: str,
     state.run_end = time.time()
     safety.print_run_footer()
     return workerpool.exit_status(1 if durationcheck.failures() else 0)
+
+
+def _read_library_folders(state: Run, download_dir: str, ingest_dir: str,
+                          counter_dir: str, jobs: int) -> None:
+    """Where the library keeps each release this download holds, read out of
+    the flacs already in it: the folder map the copy and the encode write
+    through."""
+    library_flacs = _find_files(
+        ingest_dir,
+        lambda name: enums.lower_extension_of(name) == "flac")
+    if library_flacs:
+        log("Reading what the %d flac(s) already in the library were "
+            "made from" % len(library_flacs))
+        state.counters.start_phase("reading the library", "flacs",
+                                   len(library_flacs))
+        workerpool.map(library_flacs, jobs, state.read_ingest_source)
+        state.counters.end_phase()
+        safety.exit_if_aborted()
+        log("  %d of them name the download they came from"
+            % _record_count(state.ingested_sources))
+        became, ambiguous = build_ingested_folder_map(
+            state.ingested_pairs, ingest_dir)
+        redirects = write_folder_map(
+            download_dir, os.path.join(counter_dir, "folderMap"),
+            became, ambiguous)
+        state.counters.bump("folderRedirects", redirects)
+        state.folder_map = read_folder_map(
+            os.path.join(counter_dir, "folderMap"))
+
+
+def _encode_lossless(state: Run, lossless_tracks: list, jobs: int) -> None:
+    """The download's lossless tracks encoded to FLAC in the library."""
+    if lossless_tracks:
+        log("Encoding %d lossless track(s) to FLAC%s"
+            % (state.lossless_total,
+               _in_parallel(jobs, state.lossless_total)))
+        # Only stamped where there is encoding to time, so the closing report can
+        # tell a run that encoded nothing from one that was stopped while
+        # encoding.
+        state.encode_start = time.time()
+        state.counters.start_phase("encoding", "tracks",
+                                   state.lossless_total, True)
+        workerpool.map(lossless_tracks, jobs, state.encode)
+        state.counters.end_phase()
+        safety.exit_if_aborted()
+        state.encode_end = time.time()
+    else:
+        log("No lossless source to encode - everything here is already lossy")
+
+
+def _convert_covers(state: Run, download_dir: str) -> None:
+    """The download's cover images converted into the library, the large ones
+    to AVIF."""
+    # Cover-image conversion is CPU-heavier per file, so it runs roughly
+    # cores/4 at once instead of one per core. Its own number, so the encoder
+    # jobs (and the -j the user passed) stay intact.
+    image_jobs = runlog.jobs_per_core(IMAGE_THREADS_PER_CONVERSION)
+    cover_images = _find_relative(
+        download_dir,
+        lambda name: enums.lower_extension_of(name)
+        in enums.COVER_IMAGE_EXTENSIONS)
+    if cover_images:
+        log("Converting %d cover image(s), the large ones to AVIF%s"
+            % (len(cover_images),
+               _in_parallel(image_jobs, len(cover_images))))
+        state.counters.start_phase("converting", "images",
+                                   len(cover_images))
+        workerpool.map(cover_images, image_jobs, state.convert_image)
+        state.counters.end_phase()
+        safety.exit_if_aborted()
+
+
+def _settle_videos_and_cues(state: Run, ingest_dir: str) -> None:
+    """The library's stray videos remuxed to MKV, its cue sheets' chapters
+    embedded in their flacs, and the cue sheets left over dropped."""
+    stray_videos = _find_files(
+        ingest_dir,
+        lambda name: any(name.endswith(suffix)
+                         for suffix in STRAY_VIDEO_SUFFIXES))
+    if stray_videos:
+        log("Remuxing %d stray video file(s) to MKV" % len(stray_videos))
+        state.counters.start_phase("remuxing", "videos",
+                                   len(stray_videos))
+        state.mux_video(stray_videos)
+        state.counters.end_phase()
+
+    # The chapters, while cue and flac still share a base name - before beets and
+    # the name cleaning rename them.
+    cue_sheets = _find_files(
+        ingest_dir, lambda name: enums.lower_extension_of(name) == "cue")
+    if cue_sheets:
+        log("Embedding the chapters of %d cue sheet(s) into the flacs they "
+            "describe" % len(cue_sheets))
+        state.counters.start_phase("embedding chapters from", "cues",
+                                   len(cue_sheets))
+        state.embed_cue_chapters(cue_sheets)
+        state.counters.end_phase()
+
+    # Only NOW are the leftover cue sheets dropped: the copy brings every cue
+    # across before a single flac has been encoded, so pruning them where the
+    # copy happens threw away every cue in the release - each one an orphan at
+    # that moment. After the encoding and the embedding, the cues that are still
+    # companionless really are.
+    delete_unneeded_cue(ingest_dir, state.counters)
 
 
 def _copy_the_rest(state, download_dir: str, ingest_dir: str,
