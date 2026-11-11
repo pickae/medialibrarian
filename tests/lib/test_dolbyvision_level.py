@@ -1,4 +1,4 @@
-"""The white box for medialib.lib.dolbyvisionlevel - the byte surgery that writes
+"""The white box for the byte surgery in medialib.lib.dolbyvision that writes
 a dv_level into a Matroska file's Dolby Vision configuration record.
 
 The correction itself only ever hands the file over, so what happens to the bytes
@@ -13,7 +13,7 @@ import zlib
 
 import pytest
 
-from medialib.lib import dolbyvisionlevel as helper
+from medialib.lib import dolbyvision as helper
 
 pytestmark = pytest.mark.fs
 
@@ -131,14 +131,14 @@ class TestRefusals:
         movie = tmp_path / "notmkv.mkv"
         movie.write_bytes(b"not a matroska file at all")
         assert helper.set_level(str(movie), 6) is False
-        assert helper.main(["dolbyvisionlevel", str(movie), "6"]) == 1
+        assert helper.set_level_main(["dolbyvision", str(movie), "6"]) == 1
         assert movie.read_bytes() == b"not a matroska file at all"
 
     def test_two_records_are_refused_not_guessed_between(self, tmp_path):
         movie = _make_ebml(tmp_path / "two.mkv", 8, 10, count=2)
         before = movie.read_bytes()
         assert helper.set_level(str(movie), 6) is False
-        assert helper.main(["dolbyvisionlevel", str(movie), "6"]) == 1
+        assert helper.set_level_main(["dolbyvision", str(movie), "6"]) == 1
         assert movie.read_bytes() == before
 
     def test_a_block_addition_that_is_not_a_record_is_not_mistaken_for_one(
@@ -162,17 +162,17 @@ class TestMain:
     def test_a_level_out_of_range_writes_nothing(self, tmp_path, bad):
         movie = _make_ebml(tmp_path / "range.mkv", 8, 10)
         before = movie.read_bytes()
-        assert helper.main(["dolbyvisionlevel", str(movie), bad]) == 2
+        assert helper.set_level_main(["dolbyvision", str(movie), bad]) == 2
         assert movie.read_bytes() == before
 
     def test_the_usage_itself_is_a_refusal(self, tmp_path):
-        assert helper.main(["dolbyvisionlevel"]) == 2
+        assert helper.set_level_main(["dolbyvision"]) == 2
 
     def test_a_correction_exits_zero(self, tmp_path):
         movie = _make_ebml(tmp_path / "ok.mkv", 8, 10)
-        assert helper.main(["dolbyvisionlevel", str(movie), "6"]) == 0
+        assert helper.set_level_main(["dolbyvision", str(movie), "6"]) == 0
         assert _read_record(movie) == (8, 6, "101")
 
     def test_a_file_that_is_not_there_is_an_error_not_a_crash(self, tmp_path):
         missing = tmp_path / "gone.mkv"
-        assert helper.main(["dolbyvisionlevel", str(missing), "6"]) == 1
+        assert helper.set_level_main(["dolbyvision", str(missing), "6"]) == 1
