@@ -20,7 +20,7 @@ import re
 import subprocess
 from typing import NamedTuple
 
-from medialib.lib import chapterdb, languages
+from medialib.lib import chapterdb, filmrecord, languages
 
 __all__ = ["Audio", "Profile", "Comparison", "Offset", "read_profile",
            "compare", "measure_offset", "audio_pair", "tier"]
@@ -134,8 +134,7 @@ class Offset(NamedTuple):
 
 def _run_json(argv: list) -> dict:
     try:
-        done = subprocess.run(argv, stdin=subprocess.DEVNULL,
-                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        done = filmrecord.output(argv, argv[-1])
         document = json.loads(done.stdout.decode("utf-8", "surrogateescape"))
     except (OSError, ValueError):
         return {}

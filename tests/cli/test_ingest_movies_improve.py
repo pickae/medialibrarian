@@ -79,7 +79,7 @@ def remux(tmp_path, monkeypatch, request):
                         lambda path, found: _name_only(found))
     # No Dolby Vision anywhere in this fixture.
     monkeypatch.setattr(run_module.dolbyvision, "read_video_info",
-                        lambda path: {"PROFILE": "", "SETTINGS": "", "HDR": "",
+                        lambda path, **_: {"PROFILE": "", "SETTINGS": "", "HDR": "",
                                       "TRANSFER": "", "FPS_SPEC": "",
                                       "STREAM_SIZE": ""})
     monkeypatch.setattr(run_module.dolbyvision, "normalise_config_level",
@@ -572,7 +572,7 @@ class TestWhatAFilmSays:
             monkeypatch.setattr(rules, "_identify", lambda path: tracks)
             monkeypatch.setattr(rules, "_object_flags", lambda *a: None)
             monkeypatch.setattr(run_module.dolbyvision, "read_video_info",
-                                lambda path: {"PROFILE": "", "SETTINGS": "",
+                                lambda path, **_: {"PROFILE": "", "SETTINGS": "",
                                               "HDR": "", "TRANSFER": "",
                                               "FPS_SPEC": "",
                                               "STREAM_SIZE": ""})
@@ -645,7 +645,7 @@ class TestFromARealIdentificationDocument:
         monkeypatch.setattr(rules, "_object_flags",
                             lambda path, found: _name_only(found))
         monkeypatch.setattr(run_module.dolbyvision, "read_video_info",
-                            lambda path: {"PROFILE": "", "SETTINGS": "",
+                            lambda path, **_: {"PROFILE": "", "SETTINGS": "",
                                           "HDR": "", "TRANSFER": "",
                                           "FPS_SPEC": "", "STREAM_SIZE": ""})
         monkeypatch.setattr(run_module.dolbyvision, "normalise_config_level",

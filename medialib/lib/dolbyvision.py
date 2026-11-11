@@ -15,7 +15,7 @@ import re
 import subprocess
 import tempfile
 
-from medialib.lib import dolbyvisionlevel, runlog, toolcapture
+from medialib.lib import dolbyvisionlevel, filmrecord, runlog, toolcapture
 
 _INT = re.compile(r"^[0-9]+$")
 _FPS = re.compile(r"^[0-9]+([.][0-9]+)?$")
@@ -552,7 +552,9 @@ def normalise_config_level(path, report_as=None, script_dir="", log=runlog.log,
         return 0
     if int(declared) <= int(wanted):
         return 0
-    if dolbyvisionlevel.correct_level(path, wanted) != 0:
+    corrected = dolbyvisionlevel.correct_level(path, wanted)
+    filmrecord.forget(path)
+    if corrected != 0:
         log("  WARNING: could not correct the overstated Dolby Vision level "
             "(" + declared + ", should be " + wanted + "): " + name)
         return 1

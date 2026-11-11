@@ -317,3 +317,36 @@ class TestWhisperExitingCleanWithNoTranscript:
         transcribe.with_tool("pipx", _PIPX)
         transcribe.transcribe(outputs.parent / "in", outputs)
         assert (outputs / "talk" / "episode.txt").is_file()
+
+
+class TestTheNextVideoIsExtractedWhileWhisperWorks:
+    """Lifting a film's audio out is minutes of ffmpeg in which whisper would
+    leave the GPU idle, so the next video's extract is made while whisper is
+    still busy with the one before - at one worker and at several. The video
+    looked at is the first no worker would have started on."""
+
+    @pytest.mark.parametrize("jobs, next_one", [("1", "b.mkv"),
+                                                ("2", "c.mkv")])
+    def test_an_extract_is_made_before_whisper_is_done(self, transcribe,
+                                                       tmp_path, jobs,
+                                                       next_one):
+        events = tmp_path / "events"
+        events.write_text("")
+        transcribe.environment["EVENTS"] = str(events)
+        transcribe.with_tool("ffmpeg", _FFMPEG.replace(
+            'out="${!#}"', 'echo "extract $inp" >> "$EVENTS"\nout="${!#}"'))
+        transcribe.with_tool("pipx", _PIPX.replace(
+            'printf \'stub transcript', 'sleep 2\necho "whisper done" '
+            '>> "$EVENTS"\nprintf \'stub transcript'))
+        source = tmp_path / "in"
+        source.mkdir()
+        # Largest first: the order the queue takes them in.
+        for name, size in (("a.mkv", 300), ("b.mkv", 200), ("c.mkv", 100)):
+            (source / name).write_bytes(b"x" * size)
+        transcribe.transcribe("-j", jobs, source, tmp_path / "out")
+        lines = events.read_text().splitlines()
+        assert len(lines) == 6, lines
+        assert lines.index("extract %s" % (source / next_one)) \
+            < lines.index("whisper done"), lines
+        for name in ("a", "b", "c"):
+            assert (tmp_path / "out" / (name + ".txt")).is_file()

@@ -21,6 +21,7 @@ from medialib.lib import (
     clioptions,
     console,
     durationcheck,
+    dynamicqueue,
     enums,
     ffmpegselect,
     ramscratch,
@@ -176,11 +177,32 @@ class Run:
     def any_failed(self) -> bool:
         return os.path.exists(self.failed_file)
 
-    def transcribe_one(self, relative: str) -> None:
-        """One queued job: this input's speech into its mirrored transcript."""
+    def prepared(self, relatives):
+        """Each input made ready for whisper, as ``((relative, for_whisper,
+        work), size)`` for :mod:`medialib.lib.dynamicqueue`.
+
+        This runs on the queue's own thread, beside the workers: lifting a
+        film's audio out is minutes of ffmpeg in which a worker would leave
+        the GPU idle, so it is done for the next input while whisper works on
+        the last. The size is the input's, the queue's order largest first.
+        """
+        for relative in relatives:
+            if safety.abort_requested():
+                return
+            ready = self._prepare(relative)
+            if ready is not None:
+                try:
+                    size = os.path.getsize(
+                        os.path.join(self.input_dir, relative))
+                except OSError:
+                    size = 0
+                yield ready, size
+
+    def _prepare(self, relative: str):
+        """``(relative, for_whisper, work)``, or None when there is nothing
+        for whisper to do: already transcribed, or no usable audio."""
         source = os.path.join(self.input_dir, relative)
-        out = os.path.join(self.output_dir,
-                           os.path.splitext(relative)[0] + "." + self.fmt)
+        out = self._transcript(relative)
 
         # Resume: a finished, non-empty transcript is kept where it is, so a
         # re-run - or one restarted after a Ctrl+C - does not pay for it again.
@@ -188,36 +210,46 @@ class Run:
         # costs minutes the transcript already made unnecessary.
         if os.path.exists(out) and os.path.getsize(out) > 0:
             self.report_progress("already present: " + relative)
-            return
+            return None
 
-        # whisper names its output after the input file, so every run gets a
+        # whisper names its output after the input file, so every input gets a
         # directory of its own: the extracted track and the transcript both live
         # there, and it goes when the job does.
         work = tempfile.mkdtemp(prefix="whisper.", dir=self.ram_root)
-        try:
-            if _is_video(relative):
-                for_whisper = os.path.join(work, "track.wav")
-                extracted = toolcapture.run(
-                    ["ffmpeg", "-nostdin", "-y", "-hide_banner",
-                     *toolcapture.ffmpeg_loglevel(), "-nostats",
-                     "-i", source, "-map", "0:a:0", "-ac", "1",
-                     "-ar", "16000", "-c:a", "pcm_s16le", for_whisper],
-                    relative,
-                    warning="no first audio track to transcribe: " + relative)
-                if not extracted.ok:
-                    self.report_progress("skipped (no audio): " + relative)
-                    return
-                # A short extraction transcribes cleanly and stops early, and a
-                # transcript that simply ends is the hardest kind of wrong to
-                # notice - there is no gap in it to see.
-                if not durationcheck.verify(relative, source, for_whisper):
-                    self.report_progress(
-                        "skipped (audio extracted short): " + relative,
-                        failed=True)
-                    return
-            else:
-                for_whisper = source
+        if not _is_video(relative):
+            return relative, source, work
+        for_whisper = os.path.join(work, "track.wav")
+        extracted = toolcapture.run(
+            ["ffmpeg", "-nostdin", "-y", "-hide_banner",
+             *toolcapture.ffmpeg_loglevel(), "-nostats",
+             "-i", source, "-map", "0:a:0", "-ac", "1",
+             "-ar", "16000", "-c:a", "pcm_s16le", for_whisper],
+            relative,
+            warning="no first audio track to transcribe: " + relative)
+        if not extracted.ok:
+            shutil.rmtree(work, ignore_errors=True)
+            self.report_progress("skipped (no audio): " + relative)
+            return None
+        # A short extraction transcribes cleanly and stops early, and a
+        # transcript that simply ends is the hardest kind of wrong to notice -
+        # there is no gap in it to see.
+        if not durationcheck.verify(relative, source, for_whisper):
+            shutil.rmtree(work, ignore_errors=True)
+            self.report_progress("skipped (audio extracted short): "
+                                 + relative, failed=True)
+            return None
+        return relative, for_whisper, work
 
+    def _transcript(self, relative: str) -> str:
+        return os.path.join(self.output_dir,
+                            os.path.splitext(relative)[0] + "." + self.fmt)
+
+    def transcribe_one(self, ready: tuple) -> None:
+        """One prepared input through whisper into its mirrored transcript;
+        its work directory goes when it is done."""
+        relative, for_whisper, work = ready
+        out = self._transcript(relative)
+        try:
             log("Transcribing: " + relative)
             name = os.path.basename(for_whisper)
             whisper_out = os.path.join(
@@ -246,6 +278,11 @@ class Run:
                 self.report_progress("failed: " + relative, failed=True)
         finally:
             shutil.rmtree(work, ignore_errors=True)
+
+
+def _discard(ready: tuple) -> None:
+    """An input made ready but never transcribed: its extract let go of."""
+    shutil.rmtree(ready[2], ignore_errors=True)
 
 
 def _mirror_folders(input_dir: str, output_dir: str) -> None:
@@ -367,8 +404,20 @@ def _transcribe(program: str, input_dir: str, output_dir: str, fmt: str,
     runlog.say("Transcribing %d file(s) on %d worker(s)...\n"
                % (len(tracks), min(int(jobs), len(tracks))))
     # Each worker spans all CPU threads or the GPU, which is why the width is
-    # whisper's and not the core count.
-    workerpool.map(tracks, jobs, state.transcribe_one)
+    # whisper's and not the core count. The workers start on the first input
+    # made ready; the rest are made ready while they work.
+    if int(jobs) <= 1:
+        queue = dynamicqueue.ahead(state.prepared(tracks), 1,
+                                   discard=_discard)
+        try:
+            workerpool.map(queue, 1, state.transcribe_one)
+        finally:
+            queue.close()
+    else:
+        dynamicqueue.run(state.prepared(tracks), int(jobs),
+                         workerpool.in_worker,
+                         lambda ready: (state.transcribe_one, ready),
+                         start_after=1)
     safety.exit_if_aborted()
     runlog.say("Done.\n")
     safety.print_run_footer()
