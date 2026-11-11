@@ -1517,18 +1517,10 @@ def _run(result, declaration, program: str, script_dir: str,
     # Both work directories live in the RAM base, so no intermediate file ever
     # hits the disk: temp_path holds each book's extracted pages, avif_path
     # receives its AVIF pages and is where the zipping happens.
-    temp_path, temp_status = ramscratch.ram_scratch_dir("convertComics")
-    avif_path, avif_status = ramscratch.ram_scratch_dir("convertComics.avif")
-    read_path, read_status = ramscratch.ram_scratch_dir("convertComicsRead")
-    if temp_status != 0 or avif_status != 0 or not temp_path or not avif_path:
-        sys.stderr.write("\nError: no scratch directory could be made for this "
-                         "run.\nNothing was changed.\n")
+    scratch = _settle_scratch()
+    if scratch is None:
         return 1
-    ramscratch.add_exit_cleanup([temp_path, avif_path])
-    if read_status == 0 and read_path:
-        ramscratch.add_exit_cleanup([read_path])
-    else:
-        read_path = ""
+    temp_path, avif_path, read_path = scratch
 
     safety.init_safety_log(os.path.join(counter_dir, "safetySkips.log"))
     skips = safety.RunSkipLog()
@@ -1559,28 +1551,8 @@ def _run(result, declaration, program: str, script_dir: str,
             % (enums.extension_list(list(enums.COMIC_EXTENSIONS)),
                enums.extension_list(list(enums.COMIC_PDF_EXTENSIONS))))
 
-    if have_fdupes:
-        toolcapture.watched(["fdupes", "-rdN", in_path],
-                            skipped="duplicates were not removed",
-                            stdout=subprocess.DEVNULL)
-    # Prune empty folders inside the input, but never the input folder itself.
-    for parent, _dirs, _names in os.walk(in_path, topdown=False):
-        if parent != in_path:
-            try:
-                os.rmdir(parent)
-            except OSError:
-                pass
-
-    try:
-        os.chdir(in_path)
-    except OSError:
+    if not _tidy_input(in_path, temp_path, have_fdupes, skips):
         return 1
-
-    for parent, _dirs, _names in os.walk(in_path):
-        os.makedirs(os.path.join(temp_path, os.path.relpath(parent, in_path)),
-                    exist_ok=True)
-
-    pretreat_input(in_path, skips)
 
     # The books this run converts: every archive, plus the PDFs that turn out to
     # be comics. Collected into one list rather than re-found later, because the
@@ -1599,31 +1571,7 @@ def _run(result, declaration, program: str, script_dir: str,
                   _files_matching(in_path, enums.COMIC_PDF_EXTENSIONS,
                                   exact_case=True))
     if pdfs:
-        runlog.say("PDFs\n====\n\n")
-        # Asked once and said out loud: with the poppler tools absent every PDF
-        # reads as "no full-page images" and is skipped as not a comic, which is
-        # indistinguishable from a correct verdict on a folder of magazines.
-        missing = _missing_pdf_tools()
-        if missing:
-            runlog.say("WARNING: %s not found - PDFs cannot be inspected and "
-                       "are all skipped.\n\n" % missing, sys.stderr)
-        for name in ("pdf.comic", "pdf.other"):
-            with open(os.path.join(counter_dir, name), "w") as handle:
-                handle.write("0")
-        # At the page-conversion width rather than the book width: reading a
-        # PDF's page and image tables is a short burst of parsing, not a book's
-        # worth of work, and none of it is held in RAM afterwards.
-        workerpool.map(pdfs, max(1, int(runlog.cpu_count()
-                                       / threads_per_conversion("avif", speed))),
-                       state.vet_pdf)
-        safety.exit_if_aborted()
-        runlog.say("\n")
-        # A single PDF's verdict is its own line above; the tally only adds
-        # something once there are several.
-        if len(pdfs) > 1:
-            comic_count = counters.read("pdf.comic")
-            runlog.say("%d of %d PDF(s) taken as comic book(s)\n\n"
-                       % (comic_count, len(pdfs)))
+        _vet_pdfs(state, pdfs, counter_dir, speed)
 
     books_found = _records(state.input_list)
     # Everything found is a PDF and none of them is a comic. Refused here with
@@ -1645,13 +1593,7 @@ def _run(result, declaration, program: str, script_dir: str,
     # guessed from their names. Only .cbz written by a version that records it are
     # listed; older ones fall back to the name check in prepare_book.
     if os.path.isdir(out_path):
-        for existing in _files_matching(out_path, ("cbz",)):
-            done = subprocess.run(["unzip", "-z", "-qq", "--", existing],
-                                  stdout=subprocess.PIPE,
-                                  stderr=subprocess.DEVNULL)
-            first = done.stdout.decode("utf-8", "surrogateescape").split("\n")
-            if first and first[0].strip():
-                state.converted.add(first[0].strip())
+        state.converted.update(_converted_in(out_path))
 
     named = _naming_pass(state, books_found)
     book_list, packaged = split_packaged(state, named)
@@ -1666,27 +1608,8 @@ def _run(result, declaration, program: str, script_dir: str,
     # against the ones this run works on.
     state.total = len(book_list) + len(packaged)
     counters.total = len(book_list)
-    for name in ("current", "pagesFound", "pagesEmpty", "pagesMissing",
-                 "failedBooks"):
-        with open(os.path.join(counter_dir, name), "w") as handle:
-            handle.write("0")
-    for name in ("packaged", "existing"):
-        with open(os.path.join(counter_dir, name), "w") as handle:
-            handle.write(str(len(packaged)))
-    for record in packaged:
-        runlog.say("Skip (exists): %s\n"
-                   % os.path.basename(record.partition(UNIT)[2]))
-    if packaged and book_list:
-        runlog.say("\n")
-    # Where each book's page counters are collected: the converter appends one
-    # line per book here, because its own report goes into a per-book log this
-    # script throws away.
-    open(state.stats_file, "w").close()
-    # The child converter appends one line per book here, so it has to be told
-    # where: its own report goes into a per-book log this script throws away, and
-    # the closing statistics are summed out of this file.
-    runcontext.settle("imageStatsFile", state.stats_file)
-    os.makedirs(out_path, exist_ok=True)
+    _open_converting(state, counter_dir, out_path, packaged,
+                     bool(book_list))
     state.phase_start = time.time()
 
     state.pages_per_book = pages_per_book(runlog.cpu_count(), speed,
@@ -1699,24 +1622,8 @@ def _run(result, declaration, program: str, script_dir: str,
     # them on comic pages was measured (COMIC_CALIBRATION).
     # Nothing left to convert starts no card: av1gpu's start-up would be all
     # a resumed run of a finished library spent.
-    encoder = av1gpu.binary(log) if book_list else None
-    if encoder:
-        lane_root, lane_status = ramscratch.ram_scratch_dir("convertComics.gpu")
-        if lane_status == 0 and lane_root:
-            ramscratch.add_exit_cleanup([lane_root])
-            preset, gpu_quality = COMIC_CALIBRATION.gpu_settings(
-                speed, int(quality))
-            # The trim is decided on the card where it can: the per-book runs
-            # then only read each page's header, and the CPU is left to the
-            # pages the card cannot take.
-            state.gpu_trim = av1gpu.trims(encoder)
-            state.lane = gpulane.Lane(
-                encoder, lane_root, gpu_quality, preset, chroma,
-                state.package_pages, page_slots(runlog.cpu_count(), speed),
-                log,
-                trim=(gpu_trim_arguments("%s%%" % fuzz)
-                      if state.gpu_trim else ()),
-                resolve=cpu_trim)
+    if book_list:
+        _start_gpu_lane(state, speed, quality, chroma, fuzz)
     workers = book_workers(runlog.cpu_count(), speed)
     if state.lane is not None:
         workers, state.pages_per_book = LANE_BOOKS, LANE_PAGES_PER_BOOK
@@ -1757,6 +1664,149 @@ def _run(result, declaration, program: str, script_dir: str,
     # A book that could not be unpacked, converted whole or packaged is a run
     # that did not do what it was asked, as it is for convert-images.
     return workerpool.exit_status(1 if counters.read("failedBooks") else 0)
+
+
+def _settle_scratch() -> "tuple | None":
+    """The run's (temp, avif, read) folders in RAM scratch - read "" when it
+    could not be had - or None, said, when the first two could not."""
+    temp_path, temp_status = ramscratch.ram_scratch_dir("convertComics")
+    avif_path, avif_status = ramscratch.ram_scratch_dir("convertComics.avif")
+    read_path, read_status = ramscratch.ram_scratch_dir("convertComicsRead")
+    if temp_status != 0 or avif_status != 0 or not temp_path or not avif_path:
+        sys.stderr.write("\nError: no scratch directory could be made for this "
+                         "run.\nNothing was changed.\n")
+        return None
+    ramscratch.add_exit_cleanup([temp_path, avif_path])
+    if read_status == 0 and read_path:
+        ramscratch.add_exit_cleanup([read_path])
+    else:
+        read_path = ""
+    return temp_path, avif_path, read_path
+
+
+def _open_converting(state, counter_dir: str, out_path: str, packaged: list,
+                     converting: bool) -> None:
+    """The conversion phase's counters zeroed, the books already packaged
+    said, and the page statistics file and the output folder made."""
+    for name in ("current", "pagesFound", "pagesEmpty", "pagesMissing",
+                 "failedBooks"):
+        with open(os.path.join(counter_dir, name), "w") as handle:
+            handle.write("0")
+    for name in ("packaged", "existing"):
+        with open(os.path.join(counter_dir, name), "w") as handle:
+            handle.write(str(len(packaged)))
+    for record in packaged:
+        runlog.say("Skip (exists): %s\n"
+                   % os.path.basename(record.partition(UNIT)[2]))
+    if packaged and converting:
+        runlog.say("\n")
+    # Where each book's page counters are collected: the converter appends one
+    # line per book here, because its own report goes into a per-book log this
+    # script throws away.
+    open(state.stats_file, "w").close()
+    # The child converter appends one line per book here, so it has to be told
+    # where: its own report goes into a per-book log this script throws away, and
+    # the closing statistics are summed out of this file.
+    runcontext.settle("imageStatsFile", state.stats_file)
+    os.makedirs(out_path, exist_ok=True)
+
+
+def _tidy_input(in_path: str, temp_path: str, have_fdupes: bool,
+                skips) -> bool:
+    """The input de-duplicated, its empty folders pruned and its names
+    pretreated, with the run moved into it and its folder tree mirrored in the
+    scratch. False when the input could not be entered."""
+    if have_fdupes:
+        toolcapture.watched(["fdupes", "-rdN", in_path],
+                            skipped="duplicates were not removed",
+                            stdout=subprocess.DEVNULL)
+    # Prune empty folders inside the input, but never the input folder itself.
+    for parent, _dirs, _names in os.walk(in_path, topdown=False):
+        if parent != in_path:
+            try:
+                os.rmdir(parent)
+            except OSError:
+                pass
+
+    try:
+        os.chdir(in_path)
+    except OSError:
+        return False
+
+    for parent, _dirs, _names in os.walk(in_path):
+        os.makedirs(os.path.join(temp_path, os.path.relpath(parent, in_path)),
+                    exist_ok=True)
+
+    pretreat_input(in_path, skips)
+    return True
+
+
+def _vet_pdfs(state, pdfs: list, counter_dir: str, speed: int) -> None:
+    """Each PDF read for whether it is a comic, the ones that are added to the
+    run's input list."""
+    runlog.say("PDFs\n====\n\n")
+    # Asked once and said out loud: with the poppler tools absent every PDF
+    # reads as "no full-page images" and is skipped as not a comic, which is
+    # indistinguishable from a correct verdict on a folder of magazines.
+    missing = _missing_pdf_tools()
+    if missing:
+        runlog.say("WARNING: %s not found - PDFs cannot be inspected and "
+                   "are all skipped.\n\n" % missing, sys.stderr)
+    for name in ("pdf.comic", "pdf.other"):
+        with open(os.path.join(counter_dir, name), "w") as handle:
+            handle.write("0")
+    # At the page-conversion width rather than the book width: reading a
+    # PDF's page and image tables is a short burst of parsing, not a book's
+    # worth of work, and none of it is held in RAM afterwards.
+    workerpool.map(pdfs, max(1, int(runlog.cpu_count()
+                                   / threads_per_conversion("avif", speed))),
+                   state.vet_pdf)
+    safety.exit_if_aborted()
+    runlog.say("\n")
+    # A single PDF's verdict is its own line above; the tally only adds
+    # something once there are several.
+    if len(pdfs) > 1:
+        comic_count = state.counters.read("pdf.comic")
+        runlog.say("%d of %d PDF(s) taken as comic book(s)\n\n"
+                   % (comic_count, len(pdfs)))
+
+
+def _converted_in(out_path: str) -> set:
+    """The books the .cbz under ``out_path`` say they were converted from."""
+    converted = set()
+    for existing in _files_matching(out_path, ("cbz",)):
+        done = subprocess.run(["unzip", "-z", "-qq", "--", existing],
+                              stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL)
+        first = done.stdout.decode("utf-8", "surrogateescape").split("\n")
+        if first and first[0].strip():
+            converted.add(first[0].strip())
+    return converted
+
+
+def _start_gpu_lane(state, speed: int, quality, chroma: str,
+                    fuzz) -> None:
+    """The card's lane on ``state``, when this host has a card and a scratch
+    for it: owned by this process for the whole run, and fed the pages of
+    every book."""
+    encoder = av1gpu.binary(log)
+    if encoder:
+        lane_root, lane_status = ramscratch.ram_scratch_dir("convertComics.gpu")
+        if lane_status == 0 and lane_root:
+            ramscratch.add_exit_cleanup([lane_root])
+            preset, gpu_quality = COMIC_CALIBRATION.gpu_settings(
+                speed, int(quality))
+            # The trim is decided on the card where it can: the per-book runs
+            # then only read each page's header, and the CPU is left to the
+            # pages the card cannot take.
+            state.gpu_trim = av1gpu.trims(encoder)
+            state.lane = gpulane.Lane(
+                encoder, lane_root, gpu_quality, preset, chroma,
+                state.package_pages, page_slots(runlog.cpu_count(), speed),
+                log,
+                trim=(gpu_trim_arguments("%s%%" % fuzz)
+                      if state.gpu_trim else ()),
+                resolve=cpu_trim)
 
 
 def _missing_pdf_tools() -> str:
