@@ -30,12 +30,13 @@ from medialib.lib import (
     bookpublishing,
     booktext,
     clioptions,
+    console,
     enums,
-    errorlog,
     ffmpegselect,
     formatting,
     imagemagick,
     ramscratch,
+    runcontext,
     runlog,
     safety,
     settings,
@@ -264,13 +265,11 @@ class Counters:
     finishes out of order.
     """
 
-    def __init__(self, counter_dir: str, total: int, render=None) -> None:
+    def __init__(self, counter_dir: str, total: int) -> None:
         self.dir = counter_dir
         self.total = total
-        self.render = render
-
-    def _lock_path(self) -> str:
-        return os.path.join(self.dir, "lock")
+        # The run's console: the lock every reader prints under, and the row.
+        self.console = console.Console(counter_dir)
 
     def read(self, name: str) -> int:
         try:
@@ -286,10 +285,7 @@ class Counters:
     def claim_book_number(self) -> int:
         """The next book's number, claimed under the console lock so two books
         that start at the same moment cannot take the same one."""
-        with open(self._lock_path(), "w") as lock, runlog.take_lock(lock):
-            number = self.read("started") + 1
-            self.write("started", number)
-            return number
+        return self.console.count("started")
 
     def book_line(self, number: int, line: str, failed: bool = False,
                   said: str = "") -> None:
@@ -298,26 +294,16 @@ class Counters:
         afterwards, under the lock the row's own refresher takes before it
         draws. Under -q only a failed book's line is printed - with ``said``,
         what the tool that failed it said, under it."""
-        with open(self._lock_path(), "w") as lock, runlog.take_lock(lock):
-            statusline.clear_status()
-            text = "%s%s\n" % (runlog.counted_prefix(number, self.total), line)
-            if failed:
-                sys.stderr.write(text + said)
-            else:
-                runlog.say(text)
-            sys.stderr.flush()
-            if self.render is not None:
-                statusline.repin_status(self.render)
+        text = "%s%s\n" % (runlog.counted_prefix(number, self.total), line)
+        if failed:
+            self.console.say(text + said, always=True)
+        else:
+            self.console.say(text)
 
     def note(self, line: str) -> None:
         """What a book says between its start and its finish. Indented, so it
         reads as subordinate to the numbered lines rather than as another book."""
-        with open(self._lock_path(), "w") as lock, runlog.take_lock(lock):
-            statusline.clear_status()
-            runlog.say("        %s\n" % line)
-            sys.stderr.flush()
-            if self.render is not None:
-                statusline.repin_status(self.render)
+        self.console.say("        %s\n" % line)
 
     def report_progress(self, category: str, number: int, line: str,
                         said: str = "") -> None:
@@ -327,7 +313,7 @@ class Counters:
         so this is called exactly ONCE per book on every path through it - read,
         skipped or failed - and always as that book's last line.
         """
-        with open(self._lock_path(), "w") as lock, runlog.take_lock(lock):
+        with self.console.locked():
             self.write("current", self.read("current") + 1)
             self.write(category, self.read(category) + 1)
         self.book_line(number, line, failed=category == "failed", said=said)
@@ -728,31 +714,6 @@ def order_books_by_size(scan: list) -> list:
             sorted(scan, key=lambda entry: (-entry[0], entry[1]))]
 
 
-def _in_worker(state: Run, method: str, item) -> None:
-    """One book, in a worker PROCESS. The worker's interrupt handling is installed
-    here rather than in the work, because at width 1 that same work runs in the
-    RUN's own process - where the worker's handler would replace the run's."""
-    safety.trap_worker_abort()
-    getattr(state, method)(item)
-
-
-def _run_pool(state: Run, method: str, items: list, jobs: int) -> list:
-    """Every item through <method>, up to <jobs> at once. The answers come back
-    only from the serial path; the parallel one is for work whose result is the
-    files and counters it leaves behind."""
-    if jobs <= 1:
-        answers: list = []
-        for item in items:
-            if safety.abort_requested():
-                return answers
-            with errorlog.work_item(item):
-                answers.append(getattr(state, method)(item))
-        return answers
-
-    workerpool.run(items, jobs, _in_worker, lambda item: (state, method, item))
-    return []
-
-
 def _weigh_queue(state: Run, scan: list) -> list:
     """The books, longest first.
 
@@ -863,7 +824,7 @@ def _settle_and_read(result, program: str, script_dir: str, in_path: str,
     # The narration library reads the engine from the environment - for the
     # language check just below as much as for the engine's own command line - so
     # -e only selects anything once it is set there.
-    os.environ["narrationEngine"] = narration_engine
+    runcontext.settle("narrationEngine", narration_engine)
     narration_language = ""
     language_arg = result.values["languageArg"]
     if language_arg:
@@ -930,7 +891,7 @@ def _settle_and_read(result, program: str, script_dir: str, in_path: str,
         # The refresher is stopped here as well as after the queue drains: an
         # early exit leaves the run without reaching that line, and a refresher
         # that outlived it would keep redrawing over whatever was printed next.
-        statusline.stop_status_monitor()
+        console.hide_active()
 
 
 def _scan_books(in_path: str) -> list:
@@ -980,7 +941,7 @@ def _read(result, program: str, script_dir: str, in_path: str, out_path: str,
             result.values["narrationDeviceArg"]) != 0:
         return 1
 
-    device = os.environ.get("narrationDevice", "")
+    device = runcontext.get("narrationDevice", "")
     if result.values["jobs"]:
         jobs = int(result.values["jobs"])
         jobs_from = "-j"
@@ -996,8 +957,8 @@ def _read(result, program: str, script_dir: str, in_path: str, out_path: str,
     # the same output is several books talking over each other. Decided from the
     # job count the run really ended up with, rather than from the -j that was
     # typed. Under -q it is progress like any other, and stays in the log.
-    os.environ["narrationVerbose"] = (
-        "1" if jobs == 1 and runlog.verbosity() >= runlog.NORMAL else "0")
+    runcontext.settle("narrationVerbose", (
+        "1" if jobs == 1 and runlog.verbosity() >= runlog.NORMAL else "0"))
 
     # How many cores the Opus encode of a finished book may use. The narration of
     # the NEXT books runs alongside it, so one full set of cores per reader would
@@ -1029,7 +990,7 @@ def _read(result, program: str, script_dir: str, in_path: str, out_path: str,
             sys.stderr.write("or omit -r to use the engine's own voice. Nothing "
                              "was changed.\n")
             return 1
-    os.environ["narrationVoiceMap"] = voice_map or ""
+    runcontext.settle("narrationVoiceMap", voice_map or "")
 
     os.makedirs(out_path, exist_ok=True)
 
@@ -1044,7 +1005,6 @@ def _read(result, program: str, script_dir: str, in_path: str, out_path: str,
         narration_engine=narration_engine, run_start=run_start,
         run_start_epoch=int(run_start), run_end=None,
     )
-    counters.render = state.reading_status_text
 
     # Named BEFORE the measuring pass, not after it: the pass is the long step a
     # Ctrl+C lands in, and the abort trap ends the run by printing the closing
@@ -1067,26 +1027,25 @@ def _read(result, program: str, script_dir: str, in_path: str, out_path: str,
     # The row is only pinned when it has the console to itself; reading one book
     # at a time prints the engine's own output, which would scroll a row that is
     # rewritten in place into litter.
-    if os.environ.get("narrationVerbose") == "0":
-        statusline.start_status_monitor(os.path.join(counter_dir, "lock"),
-                                        state.reading_status_text)
+    if runcontext.get("narrationVerbose", None) == "0":
+        counters.console.show(state.reading_status_text)
 
     # On a checkout whose environment is not populated yet, the FIRST book is read
     # on its own: that book's run is also the checkout's own dependency install,
     # and two of those installing into the same environment at once is how a
     # half-written package tree happens - which would break every book after it.
     first_book = 0
-    if (os.environ.get("narrationEnvReady", "1") == "0" and jobs > 1
+    if (runcontext.get("narrationEnvReady", "1") == "0" and jobs > 1
             and total > 1):
         log("The checkout's environment is not populated yet - reading the first "
             "book on its own,")
         log("so the dependency install it triggers happens once instead of in %d "
             "processes at once." % jobs)
-        _run_pool(state, "read_book", books[:1], 1)
+        workerpool.map(books[:1], 1, state.read_book)
         first_book = 1
 
-    _run_pool(state, "read_book", books[first_book:], jobs)
-    statusline.stop_status_monitor()
+    workerpool.map(books[first_book:], jobs, state.read_book)
+    counters.console.hide()
     safety.exit_if_aborted()
 
     state.run_end = time.time()
@@ -1180,11 +1139,11 @@ def _settle_mkvtoolnix(opus_wanted: bool) -> None:
     the cover attached to a Matroska file, and the only file this run hands the
     Opus encoder is the engine's own audiobook - an m4b unless the engine was
     told otherwise, and nothing at all without an Opus copy."""
-    if os.environ.get("HAVE_MKVTOOLNIX") is not None:
+    if runcontext.get("HAVE_MKVTOOLNIX", None) is not None:
         return
     present = all(tooldeps.tool_present(tool) for tool in
                   ("mkvmerge", "mkvpropedit", "mkvextract"))
-    os.environ["HAVE_MKVTOOLNIX"] = "1" if present else ""
+    runcontext.settle("HAVE_MKVTOOLNIX", "1" if present else "")
     narrated_as = os.environ.get("narrationFormat", "m4b").lower()
     if not present and opus_wanted and narrated_as in ("mka", "mkv"):
         log("WARNING: mkvtoolnix not found (apt install mkvtoolnix) - cover art "
@@ -1198,7 +1157,7 @@ def _settle_mkvtoolnix(opus_wanted: bool) -> None:
 
 def cli(argv: list | None = None) -> int:
     settings.load()
-    errorlog.start_run(argv)
+    runlog.start_run(argv)
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, program=commands.program_name(__spec__.name),

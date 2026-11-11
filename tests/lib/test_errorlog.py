@@ -15,7 +15,16 @@ from pathlib import Path
 import pytest
 
 from medialib import commands
-from medialib.lib import errorlog, ramscratch, runlog, safety, statusline, toolcapture
+from medialib.lib import (
+    errorlog,
+    ramscratch,
+    runcontext,
+    runlog,
+    safety,
+    statusline,
+    toolcapture,
+    workerpool,
+)
 from tests import blackbox
 
 REPO = Path(__file__).resolve().parents[2]
@@ -53,11 +62,11 @@ def only_file(error_dir: Path) -> str:
 @pytest.mark.fs
 class TestRecord:
     def test_nothing_is_written_until_an_error_arrives(self, error_dir):
-        errorlog.start_run(["in", "out"])
+        runlog.start_run(["in", "out"])
         assert not error_dir.exists()
 
     def test_a_record_names_when_what_and_the_run(self, error_dir):
-        errorlog.start_run(["-j", "2", "/in"])
+        runlog.start_run(["-j", "2", "/in"])
         path = errorlog.record("tool-failed", "ffmpeg exited with status 1")
         text = only_file(error_dir)
         assert path == str(error_dir / os.listdir(error_dir)[0])
@@ -69,7 +78,7 @@ class TestRecord:
 
     def test_the_file_is_named_for_the_run_and_shared_by_its_records(
             self, error_dir):
-        errorlog.start_run([])
+        runlog.start_run([])
         first = errorlog.record("usage", "one")
         second = errorlog.record("crash", "two")
         assert first == second
@@ -349,7 +358,7 @@ class TestConsole:
         try:
             raise OSError(errno.ENOSPC, "No space left on device", "/out/x")
         except OSError as exc:
-            path = errorlog.record_crash(exc)
+            path = runlog.record_crash(exc)
         err = capfd.readouterr().err
         assert err.startswith("==> ERROR: OSError: [Errno 28]")
         assert "Traceback" not in err
@@ -365,7 +374,7 @@ class TestConsole:
         try:
             raise ValueError("bad")
         except ValueError as exc:
-            errorlog.record_crash(exc)
+            runlog.record_crash(exc)
         assert "Traceback (most recent call last):" in capfd.readouterr().err
 
     def test_a_worker_that_raises_is_kept_and_ends_with_status_1(
@@ -374,7 +383,7 @@ class TestConsole:
             raise RuntimeError("inside")
 
         with pytest.raises(SystemExit) as stopped:
-            errorlog.run_in_worker(body, (), "film.mkv")
+            workerpool.run_in_worker(runcontext.snapshot(), body, (), "film.mkv")
         assert stopped.value.code == 1
         text = only_file(error_dir)
         assert "item:     film.mkv" in text and "RuntimeError: inside" in text
@@ -388,7 +397,7 @@ class TestConsole:
             raise KeyboardInterrupt
 
         with pytest.raises(SystemExit) as stopped:
-            errorlog.run_in_worker(body, (), "book.cbz")
+            workerpool.run_in_worker(runcontext.snapshot(), body, (), "book.cbz")
         assert stopped.value.code == safety.XARGS_STOP_EXIT_STATUS
         assert safety.abort_requested()
         assert not error_dir.exists()

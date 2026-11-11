@@ -28,6 +28,7 @@ from medialib.lib import (
     censusmedia,
     comicpdf,
     enums,
+    runcontext,
 )
 from medialib.lib.enums import lower_extension_of, shell_lower
 
@@ -106,31 +107,31 @@ def census_init(adequacy_wanted=False):
     The settled values are left in the environment, so the row builders read one
     answer rather than probing again.
     """
-    os.environ["CENSUS_ADEQUACY"] = "1" if adequacy_wanted else ""
-    os.environ["censusVideoExtensions"] = census_video_extensions()
-    os.environ["censusPageExtensions"] = census_page_extensions()
-    os.environ["censusAllExtensions"] = census_all_extensions()
+    runcontext.settle("CENSUS_ADEQUACY", "1" if adequacy_wanted else "")
+    runcontext.settle("censusVideoExtensions", census_video_extensions())
+    runcontext.settle("censusPageExtensions", census_page_extensions())
+    runcontext.settle("censusAllExtensions", census_all_extensions())
 
-    os.environ["CENSUS_HAVE_MEDIAINFO"] = (
-        "1" if shutil.which("mediainfo") else "")
+    runcontext.settle("CENSUS_HAVE_MEDIAINFO", (
+        "1" if shutil.which("mediainfo") else ""))
     # Whether the three tools that decide what a PDF IS are all here.
-    os.environ["CENSUS_HAVE_POPPLER"] = (
-        "1" if _missing_pdf_tools() == "" else "")
-    os.environ["CENSUS_HAVE_EBOOK_CONVERT"] = (
-        "1" if shutil.which("ebook-convert") else "")
+    runcontext.settle("CENSUS_HAVE_POPPLER", (
+        "1" if _missing_pdf_tools() == "" else ""))
+    runcontext.settle("CENSUS_HAVE_EBOOK_CONVERT", (
+        "1" if shutil.which("ebook-convert") else ""))
     # Separate from CENSUS_HAVE_POPPLER: this one is about reading a PDF's TEXT,
     # and it is what makes a PDF's word count affordable - so a host with poppler
     # but without Calibre can still count its PDFs, which is why the two are asked
     # separately rather than folded into one flag.
-    os.environ["CENSUS_HAVE_PDFTOTEXT"] = (
-        "1" if shutil.which("pdftotext") else "")
+    runcontext.settle("CENSUS_HAVE_PDFTOTEXT", (
+        "1" if shutil.which("pdftotext") else ""))
 
     sevenzip = ""
     for candidate in _SEVENZIP_NAMES:
         if shutil.which(candidate):
             sevenzip = candidate
             break
-    os.environ["CENSUS_SEVENZIP"] = sevenzip
+    runcontext.settle("CENSUS_SEVENZIP", sevenzip)
     return 0
 
 
@@ -163,7 +164,7 @@ def census_classify(path):
     comic_pdf = os.environ.get(
         "comicPdfExtensions", " ".join(enums.COMIC_PDF_EXTENSIONS)).split()
     if extension in [shell_lower(e) for e in comic_pdf]:
-        if not os.environ.get("CENSUS_HAVE_POPPLER", ""):
+        if not runcontext.get("CENSUS_HAVE_POPPLER", ""):
             return "books", ""
         # isComicPdf PRINTS its stats whichever way it votes, precisely so one
         # probe answers both questions; the print is captured here.
@@ -177,7 +178,7 @@ def census_classify(path):
     # the way censusdocuments reads censusPageExtensions - so a caller that
     # settled something else is honoured, and one that never called censusInit
     # still gets the answer the module would have given.
-    video = os.environ.get("censusVideoExtensions",
+    video = runcontext.get("censusVideoExtensions",
                            census_video_extensions()).split()
     for names, content in (
             (enums.AUDIO_EXTENSIONS, "audio"),

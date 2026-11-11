@@ -73,6 +73,7 @@ from medialib.lib import (
     imagemagick,
     numbering,
     ramscratch,
+    runcontext,
     runlog,
     safety,
     settings,
@@ -1076,27 +1077,6 @@ def _number_pages(book_dir: str) -> None:
                 if entry.is_file()), key=version_key), announce=False)
 
 
-def _in_worker(state: Run, method: str, item: str) -> None:
-    """One item, in a worker PROCESS. The worker's interrupt handling is
-    installed here rather than in the work, because at width 1 that same work
-    runs in the RUN's own process - where the worker's handler would replace the
-    run's."""
-    safety.trap_worker_abort()
-    getattr(state, method)(item)
-
-
-def _run_pool(state: Run, method: str, items: list, jobs: int) -> None:
-    if jobs <= 1:
-        for item in items:
-            if safety.abort_requested():
-                return
-            with errorlog.work_item(item):
-                getattr(state, method)(item)
-        return
-
-    workerpool.run(items, jobs, _in_worker, lambda item: (state, method, item))
-
-
 class _Reader:
     """The input's one reader: every archive of the run read whole into
     <read_path>, in the order given, back to back, up to READ_AHEAD_BYTES
@@ -1633,9 +1613,9 @@ def _run(result, declaration, program: str, script_dir: str,
         # At the page-conversion width rather than the book width: reading a
         # PDF's page and image tables is a short burst of parsing, not a book's
         # worth of work, and none of it is held in RAM afterwards.
-        _run_pool(state, "vet_pdf", pdfs,
-                  max(1, int(runlog.cpu_count()
-                             / threads_per_conversion("avif", speed))))
+        workerpool.map(pdfs, max(1, int(runlog.cpu_count()
+                                       / threads_per_conversion("avif", speed))),
+                       state.vet_pdf)
         safety.exit_if_aborted()
         runlog.say("\n")
         # A single PDF's verdict is its own line above; the tally only adds
@@ -1705,7 +1685,7 @@ def _run(result, declaration, program: str, script_dir: str,
     # The child converter appends one line per book here, so it has to be told
     # where: its own report goes into a per-book log this script throws away, and
     # the closing statistics are summed out of this file.
-    os.environ["imageStatsFile"] = state.stats_file
+    runcontext.settle("imageStatsFile", state.stats_file)
     os.makedirs(out_path, exist_ok=True)
     state.phase_start = time.time()
 
@@ -1747,8 +1727,9 @@ def _run(result, declaration, program: str, script_dir: str,
     # is full: on a cold drive four books took 15 s to read and unpack, and the
     # card waited for all of them.
     try:
-        dynamicqueue.run(_prepared_books(state, book_list), workers, _in_worker,
-                         lambda item: (state, "finish_book", item),
+        dynamicqueue.run(_prepared_books(state, book_list), workers,
+                         workerpool.in_worker,
+                         lambda item: (state.finish_book, item),
                          buffer_factor=BOOKS_BUFFERED_PER_WORKER, log=log,
                          start_after=1)
     finally:
@@ -1791,11 +1772,11 @@ def _settle_fdupes() -> bool:
     duplicates are converted and stored as separate copies, and nothing else is
     lost. Settled once and shared with the per-book children, so the fact is said
     once per run."""
-    inherited = os.environ.get("HAVE_FDUDES")
+    inherited = runcontext.get("HAVE_FDUDES", None)
     if inherited is not None:
         return bool(inherited)
     present = tooldeps.tool_present("fdupes")
-    os.environ["HAVE_FDUDES"] = "1" if present else ""
+    runcontext.settle("HAVE_FDUDES", "1" if present else "")
     if not present:
         log("WARNING: fdupes not found (apt install fdupes) - the input will not "
             "be de-duplicated,")
@@ -1807,7 +1788,7 @@ def _settle_fdupes() -> bool:
 
 def cli(argv: list | None = None) -> int:
     settings.load()
-    errorlog.start_run(argv)
+    runlog.start_run(argv)
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, program=commands.program_name(__spec__.name),

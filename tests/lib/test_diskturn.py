@@ -7,7 +7,7 @@ import time
 
 import pytest
 
-from medialib.lib import diskturn
+from medialib.lib import diskturn, runcontext
 
 pytestmark = pytest.mark.fs
 
@@ -76,7 +76,7 @@ class TestTurn:
     def _fresh(self, monkeypatch):
         monkeypatch.setattr(diskturn, "_SPINS", {})
         monkeypatch.setattr(diskturn, "_LOCKS", {})
-        monkeypatch.setitem(diskturn._STATE, "dir", "")
+        monkeypatch.setattr(runcontext.current(), "disk_turns", "")
 
     def _overlapped(self, path: str) -> bool:
         """Whether two jobs on ``path`` were ever inside a turn at once."""

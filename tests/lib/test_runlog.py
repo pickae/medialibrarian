@@ -11,7 +11,7 @@ import sys
 
 import pytest
 
-from medialib.lib import runlog
+from medialib.lib import runcontext, runlog
 
 try:
     import fcntl
@@ -51,55 +51,6 @@ class TestLog:
         runlog.log(stream=out)
         assert out.getvalue() == "==> \n"
 
-
-
-class TestHeld:
-    """A thread's lines held back and written as one block, so a film's lines
-    read together however another thread is printing meanwhile."""
-
-    def test_the_lines_wait_for_the_end_of_the_block(self, monkeypatch,
-                                                     capsys):
-        monkeypatch.delenv("LOG_TIMESTAMPS", raising=False)
-        with runlog.held():
-            runlog.log("first")
-            runlog.log("second")
-            assert capsys.readouterr().err == ""
-        assert capsys.readouterr().err == "==> first\n==> second\n"
-
-    def test_another_thread_s_lines_go_straight_out(self, monkeypatch,
-                                                    capsys):
-        import threading
-        monkeypatch.delenv("LOG_TIMESTAMPS", raising=False)
-        with runlog.held():
-            runlog.log("held")
-            other = threading.Thread(target=runlog.log, args=("other",))
-            other.start()
-            other.join()
-            assert capsys.readouterr().err == "==> other\n"
-        assert capsys.readouterr().err == "==> held\n"
-
-    def test_a_block_inside_a_block_is_the_outer_one(self, monkeypatch,
-                                                     capsys):
-        monkeypatch.delenv("LOG_TIMESTAMPS", raising=False)
-        with runlog.held():
-            with runlog.held():
-                runlog.log("inner")
-            assert capsys.readouterr().err == ""
-        assert capsys.readouterr().err == "==> inner\n"
-
-    def test_a_stream_of_its_own_is_not_held(self, monkeypatch, capsys):
-        monkeypatch.delenv("LOG_TIMESTAMPS", raising=False)
-        out = io.StringIO()
-        with runlog.held():
-            runlog.log("aside", stream=out)
-            assert out.getvalue() == "==> aside\n"
-
-    def test_an_exception_still_writes_the_block(self, monkeypatch, capsys):
-        monkeypatch.delenv("LOG_TIMESTAMPS", raising=False)
-        with pytest.raises(RuntimeError), runlog.held():
-            runlog.log("before")
-            raise RuntimeError
-        assert capsys.readouterr().err == "==> before\n"
 
 
 class TestVerbosity:
@@ -199,7 +150,7 @@ class TestFlock:
 
     def test_a_host_with_flock_settles_the_flag(self, monkeypatch):
         monkeypatch.delenv("HAVE_FLOCK", raising=False)
-        monkeypatch.setattr(runlog.shutil, "which", lambda name: "/usr/bin/" + name)
+        monkeypatch.setattr(runcontext.shutil, "which", lambda name: "/usr/bin/" + name)
         assert runlog.settle_flock() == "1"
         assert runlog.counted_prefix(1, 2) == "[1/2] "
 
@@ -212,7 +163,7 @@ class TestFlock:
         and one that does not.
         """
         monkeypatch.delenv("HAVE_FLOCK", raising=False)
-        monkeypatch.setattr(runlog.shutil, "which", lambda name: None)
+        monkeypatch.setattr(runcontext.shutil, "which", lambda name: None)
         monkeypatch.setitem(sys.modules, "fcntl", None)
         assert runlog.settle_flock() == ""
         assert runlog.counted_prefix(1, 2) == ""

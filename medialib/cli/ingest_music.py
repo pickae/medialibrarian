@@ -32,10 +32,10 @@ import time
 from medialib import commands
 from medialib.lib import (
     clioptions,
+    console,
     cuechapters,
     durationcheck,
     enums,
-    errorlog,
     ffmpegselect,
     formatting,
     imagecodecs,
@@ -43,6 +43,7 @@ from medialib.lib import (
     imagesizes,
     mutagentags,
     ramscratch,
+    runcontext,
     runlog,
     safety,
     settings,
@@ -452,9 +453,10 @@ class Counters:
     def __init__(self, counter_dir: str, run_start_epoch: int) -> None:
         self.counter_dir = counter_dir
         self.run_start_epoch = run_start_epoch
-        self.progress_file = os.path.join(counter_dir, "current")
         self.duration_file = os.path.join(counter_dir, "duration")
-        self.lock_file = os.path.join(counter_dir, "lock")
+        # The run's console: its lock, the phase's position ("current") and
+        # the row, shared with every worker.
+        self.console = console.Console(counter_dir)
         self.label = ""
         self.unit = ""
         self.total = 0
@@ -483,13 +485,13 @@ class Counters:
                     shows_speed: bool = False) -> None:
         self.label, self.unit = label, unit
         self.total, self.shows_speed = total, shows_speed
-        self._write(self.progress_file, "0")
-        statusline.start_status_monitor(self.lock_file, self.status_text)
+        self.console.set("current", 0)
+        self.console.show(self.status_text)
 
     def end_phase(self) -> None:
         """Stop refreshing the row and leave it behind as this phase's last
         word."""
-        statusline.stop_status_monitor()
+        self.console.hide()
 
     def progress(self, line: str) -> None:
         """One counted line, printed under the same lock as the row it displaces.
@@ -502,20 +504,13 @@ class Counters:
         The position counts items STARTED, so an encode announces itself before
         the minutes it takes rather than after them.
         """
-        with open(self.lock_file, "w") as lock, runlog.take_lock(lock):
-            current = self._bump_position()
-            statusline.clear_status()
-            runlog.say("%s%s\n" % (
-                runlog.counted_prefix(current, self.total), line), sys.stderr)
-            sys.stderr.flush()
-            statusline.repin_status(self.status_text)
+        self.console.counted(line, self.total, name="current")
 
     def advance(self) -> None:
         """Bump the position WITHOUT printing, for a phase whose items are too
         many and too quick to deserve a line each - the provenance scan is one
         ffprobe per flac in a library that can hold tens of thousands."""
-        with open(self.lock_file, "w") as lock, runlog.take_lock(lock):
-            self._bump_position()
+        self.console.count("current")
 
     def note(self, line: str, said: str = "") -> None:
         """One UNCOUNTED line about an item that has already announced itself -
@@ -524,19 +519,7 @@ class Counters:
 
         ``said`` is what the tool that failed said, replayed under it in the
         same lock (:func:`toolcapture.replay_text`)."""
-        with open(self.lock_file, "w") as lock, runlog.take_lock(lock):
-            statusline.clear_status()
-            runlog.say("    %s\n%s" % (line, said), sys.stderr)
-            sys.stderr.flush()
-            statusline.repin_status(self.status_text)
-
-    def _bump_position(self) -> int:
-        try:
-            current = int(self._read(self.progress_file)) + 1
-        except ValueError:
-            current = 1
-        self._write(self.progress_file, str(current))
-        return current
+        self.console.say("    %s\n%s" % (line, said))
 
     def bump(self, name: str, amount: int = 1) -> None:
         """Add to one of the tallies. Its own lock per counter, so a worker
@@ -585,10 +568,7 @@ class Counters:
         length, so extrapolating from a position in the queue would be inventing
         a number.
         """
-        try:
-            current = int(self._read(self.progress_file))
-        except ValueError:
-            current = 0
+        current = self.console.value("current")
         elapsed = max(0, int(time.time()) - self.run_start_epoch)
 
         # Without flock the counter can lose increments, so the row says how much
@@ -632,7 +612,6 @@ class Run:
     cover_max_edge: str
     ingested_sources: str
     ingested_pairs: str
-    ram_base: str
     # The run's clocks, each unset until the phase it times has begun.
     run_start: float
     run_end: float | None
@@ -1240,29 +1219,6 @@ def footer(state) -> None:
 
 # --- the run ------------------------------------------------------------------
 
-def _in_worker(state, method: str, item) -> None:
-    """One job, in a worker PROCESS. The interrupt handling is installed here
-    rather than in the work, because at width 1 that same work runs in the run's
-    own process - where the worker's handler would replace the run's. The scratch
-    base is adopted for the same kind of reason: a worker that settled its own
-    would leave a second run directory behind."""
-    safety.trap_worker_abort()
-    ramscratch.adopt_ram_base(getattr(state, "ram_base", ""))
-    getattr(state, method)(item)
-
-
-def _run_pool(state, method: str, items: list, jobs: int) -> None:
-    if jobs <= 1:
-        for item in items:
-            if safety.abort_requested():
-                return
-            with errorlog.work_item(item):
-                getattr(state, method)(item)
-        return
-
-    workerpool.run(items, jobs, _in_worker, lambda item: (state, method, item))
-
-
 def main(argv: list, program: str = "ingest-music",
          script_dir: str = "") -> int:
     declaration = spec(program)
@@ -1295,7 +1251,7 @@ def main(argv: list, program: str = "ingest-music",
     # whole library, then a second library in Opus - so its log lines carry a
     # wall-clock stamp. Exported, so the child scripts this one ends with stamp
     # their own the same way and the console reads as one run rather than two.
-    os.environ["LOG_TIMESTAMPS"] = "1"
+    runcontext.settle("LOG_TIMESTAMPS", "1")
 
     if not os.path.isdir(download_dir):
         clioptions.refuse_missing_dir(declaration,
@@ -1378,7 +1334,7 @@ def _settle_and_ingest(program: str, script_dir: str, download_dir: str,
         return _ingest(program, script_dir, download_dir, ingest_dir,
                        opus_copy_dir, counter_dir, skips, jobs)
     finally:
-        statusline.stop_status_monitor()
+        console.hide_active()
 
 
 def _ingest(program: str, script_dir: str, download_dir: str, ingest_dir: str,
@@ -1403,7 +1359,6 @@ def _ingest(program: str, script_dir: str, download_dir: str, ingest_dir: str,
         cover_max_edge=imagesizes.height(cover_tier),
         ingested_sources=os.path.join(counter_dir, "ingestedSources"),
         ingested_pairs=os.path.join(counter_dir, "ingestedPairs"),
-        ram_base=ramscratch.ram_base(),
         run_start=run_start, run_end=None,
         encode_start=None, encode_end=None)
     safety.set_run_footer(lambda: footer(state))
@@ -1439,7 +1394,7 @@ def _ingest(program: str, script_dir: str, download_dir: str, ingest_dir: str,
                 "made from" % len(library_flacs))
             counters.start_phase("reading the library", "flacs",
                                  len(library_flacs))
-            _run_pool(state, "read_ingest_source", library_flacs, jobs)
+            workerpool.map(library_flacs, jobs, state.read_ingest_source)
             counters.end_phase()
             safety.exit_if_aborted()
             log("  %d of them name the download they came from"
@@ -1472,7 +1427,7 @@ def _ingest(program: str, script_dir: str, download_dir: str, ingest_dir: str,
         # encoding.
         state.encode_start = time.time()
         counters.start_phase("encoding", "tracks", state.lossless_total, True)
-        _run_pool(state, "encode", lossless_tracks, jobs)
+        workerpool.map(lossless_tracks, jobs, state.encode)
         counters.end_phase()
         safety.exit_if_aborted()
         state.encode_end = time.time()
@@ -1492,7 +1447,7 @@ def _ingest(program: str, script_dir: str, download_dir: str, ingest_dir: str,
             % (len(cover_images),
                _in_parallel(image_jobs, len(cover_images))))
         counters.start_phase("converting", "images", len(cover_images))
-        _run_pool(state, "convert_image", cover_images, image_jobs)
+        workerpool.map(cover_images, image_jobs, state.convert_image)
         counters.end_phase()
         safety.exit_if_aborted()
 
@@ -1683,7 +1638,7 @@ def _run_child(command: str, argv: list, script_dir: str) -> int:
 
 def cli(argv: list | None = None) -> int:
     settings.load()
-    errorlog.start_run(argv)
+    runlog.start_run(argv)
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, commands.program_name(__spec__.name),

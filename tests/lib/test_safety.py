@@ -19,7 +19,7 @@ import tempfile
 
 import pytest
 
-from medialib.lib import safety
+from medialib.lib import runcontext, safety
 from tests import conftest
 
 pytestmark = pytest.mark.pure
@@ -630,7 +630,7 @@ class TestWhereTheSafetyLogIsMade:
         monkeypatch.setenv("TMPDIR", str(tmp_path))
         monkeypatch.delenv("SAFETY_LOG", raising=False)
         first = safety.init_safety_log()
-        monkeypatch.delenv("SAFETY_LOG", raising=False)
+        runcontext.forget("SAFETY_LOG")
         second = safety.init_safety_log()
 
         assert first != second

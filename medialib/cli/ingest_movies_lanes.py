@@ -37,9 +37,9 @@ import queue
 import threading
 
 from medialib.lib import (
+    console,
     diskturn,
     errorlog,
-    runlog,
     safety,
     subtitlefiles,
     tmdblookup,
@@ -92,8 +92,11 @@ class RemuxLane:
     """
 
     def __init__(self, films: list, improve, locks: FilmLocks,
-                 transcripts: bool, log) -> None:
+                 transcripts: bool, log, row=None) -> None:
         self._films = {key(film): film for film in films}
+        self._row = row
+        if row is not None:
+            row.total("remux")
         self._improve = improve
         self._locks = locks
         self._log = log
@@ -143,12 +146,15 @@ class RemuxLane:
                 self._log("Remux lane: improving main movies as their tracks "
                           "and transcripts are ready")
             try:
-                with runlog.held(), errorlog.work_item(film), \
+                with console.about(film, "remux"), \
+                        errorlog.work_item(film), \
                         self._locks.held(film), diskturn.turn(film):
                     self._improve(film)
             except Exception as error:  # noqa: BLE001 - one film, not the run
                 self._log("WARNING: the remux lane could not improve %s: %s"
                           % (film, error))
+            if self._row is not None:
+                self._row.done("remux")
             # Seen to whatever came of it: the walk after the lane would only
             # do the same thing again.
             self.done.add(key(film))
@@ -172,10 +178,12 @@ class TranscriptTracker:
     says when it has queued the last of a film's (:meth:`film_queued`); the
     queue says when each transcription is done (:meth:`record_done`), on its
     own thread and in any order. A film is done once it has been queued and
-    every transcription queued for it is done - at once, for one with none."""
+    every transcription queued for it is done - at once, for one with none.
+    ``row``, when given, counts the transcriptions queued and done."""
 
-    def __init__(self, done) -> None:
+    def __init__(self, done, row=None) -> None:
         self._done = done
+        self._row = row
         self._guard = threading.Lock()
         self._unclaimed: list = []
         self._finished: set = set()
@@ -185,6 +193,8 @@ class TranscriptTracker:
     def record_queued(self, record: str) -> None:
         with self._guard:
             self._unclaimed.append(record)
+        if self._row is not None:
+            self._row.total("whisper", add=1)
 
     def film_queued(self, movie: str) -> None:
         with self._guard:
@@ -202,6 +212,8 @@ class TranscriptTracker:
     def record_done(self, record) -> None:
         if record is None:
             return
+        if self._row is not None:
+            self._row.done("whisper")
         with self._guard:
             film = self._film_of.pop(record, None)
             if film is None:
@@ -229,9 +241,12 @@ class SubtitleLane:
     """
 
     def __init__(self, root: str, films: list, download, locks: FilmLocks,
-                 log) -> None:
+                 log, row=None) -> None:
         self._root = root
         self._films = films
+        self._row = row
+        if row is not None:
+            row.total("subs", len(films))
         self._download = download
         self._locks = locks
         self._log = log
@@ -252,10 +267,12 @@ class SubtitleLane:
                 imdb = ids.get(key(os.path.dirname(movie)), "")
                 if not imdb:
                     imdb = subtitlefiles.film_imdb_id(movie)
-                if not imdb:
-                    continue
-                with runlog.held(), self._locks.held(movie):
-                    self._download([(movie, imdb)])
+                if imdb:
+                    with console.about(movie, "subs"), \
+                            self._locks.held(movie):
+                        self._download([(movie, imdb)])
+                if self._row is not None:
+                    self._row.done("subs")
         except Exception as error:  # noqa: BLE001 - the walk after it remains
             self._said.append("WARNING: the subtitles fetched ahead stopped "
                               "early (%s); the rest are fetched after the "

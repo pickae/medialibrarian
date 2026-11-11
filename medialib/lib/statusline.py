@@ -1,40 +1,26 @@
-"""The live status row.
-
-The converting wrappers keep one line pinned at the bottom of the console while
-their per-file progress reports scroll past above it. A caller supplies the row's
-CONTENT as a render function that yields one line; everything about where that line
-goes and how often it is refreshed lives here.
+"""The status row's geometry: whether there is a terminal to pin a row on,
+and how wide it is.
 
 The row is a terminal affordance: on a tty each refresh is a carriage return plus an
 erase-to-end-of-line laid exactly over the last one, truncated short of the terminal
 width by ``STATUS_ROW_MARGIN`` (a terminal that wraps on its final column would park
 the cursor on a row of its own). Off a terminal there is no in-place row - the same
 text becomes an ordinary line, appended far more rarely, so a log gets an occasional
-heartbeat rather than one refresh per tick.
+heartbeat rather than one refresh per tick. Drawing it, and keeping it out of the
+way of the lines that scroll past, is the run's console's
+(`medialib/lib/console.py`).
 """
 
-import contextlib
 import os
 import subprocess
-import sys
-import threading
 
-from medialib.lib import runlog
+from medialib.lib import runcontext
 
 __all__ = [
     "STATUS_ROW_MARGIN",
     "state",
     "init_status_line",
-    "draw_status",
-    "clear_status",
-    "end_status",
-    "repin_status",
     "status_geometry",
-    "adopt_status_geometry",
-    "status_tick",
-    "status_monitor",
-    "start_status_monitor",
-    "stop_status_monitor",
     "shorten_path",
 ]
 
@@ -44,20 +30,32 @@ __all__ = [
 STATUS_ROW_MARGIN = 1
 
 
+def _terminal_field(name: str) -> property:
+    """``name`` on the run's terminal, as a property rather than through
+    ``__getattr__``: whatever sets the attribute and later restores it -
+    pytest's monkeypatch included - then writes the old value back instead
+    of deleting it."""
+
+    def get(self):
+        return getattr(runcontext.current().terminal, name)
+
+    def put(self, value) -> None:
+        setattr(runcontext.current().terminal, name, value)
+
+    return property(get, put)
+
+
 class _State:
-    """The settled row.
+    """The settled row, kept by the run (`medialib/lib/runcontext.py`) so a
+    worker is handed the one its parent settled: ``row`` is empty off a
+    terminal and ``"1"`` on one, ``cols`` is the width, and ``interval`` is the
+    seconds between refreshes."""
 
-    ``row`` is empty off a terminal and ``"1"`` on one, ``cols`` is the width,
-    ``interval`` is the seconds between refreshes, and ``mon_pid`` is the
-    background refresher's handle.
-    """
+    __slots__ = ()
 
-    def __init__(self):
-        self.row = ""
-        self.cols = 1000
-        self.interval = 30
-        self.mon_pid: threading.Thread | None = None
-        self._mon_stop: threading.Event | None = None
+    row = _terminal_field("row")
+    cols = _terminal_field("cols")
+    interval = _terminal_field("interval")
 
 
 state = _State()
@@ -131,200 +129,11 @@ def init_status_line() -> int:
     return 0
 
 
-def draw_status(text: str) -> int:
-    """Draw or redraw the row.
-
-    On a terminal: back to the start of the console row, print, then erase whatever a
-    previous, longer refresh left to the right of it - the text truncated short of
-    the terminal width by ``STATUS_ROW_MARGIN``. Off one: one ordinary line.
-    Under -q, nothing: the row is progress.
-    """
-    if runlog.verbosity() < runlog.NORMAL:
-        return 0
-    if state.row:
-        width = state.cols - STATUS_ROW_MARGIN
-        sys.stderr.write("\r%s\033[K" % text[:width])
-    else:
-        sys.stderr.write("%s\n" % text)
-    sys.stderr.flush()
-    return 0
-
-
-def clear_status() -> int:
-    """Erase the row, leaving the cursor at the start of an empty console row.
-
-    A line that is about to scroll past then lands on a clean row rather than half
-    way along the row's text. Off a terminal the heartbeat lines are ordinary output
-    that nothing has to make way for, so this is a no-op.
-    """
-    if runlog.verbosity() < runlog.NORMAL:
-        return 0
-    if state.row:
-        sys.stderr.write("\r\033[K")
-        sys.stderr.flush()
-    return 0
-
-
-def end_status() -> int:
-    """Leave the row where it is and move on to a fresh console row.
-
-    Whatever prints next starts on its own line instead of overwriting the last thing
-    the row said. Off a terminal there is no row to end.
-    """
-    if runlog.verbosity() < runlog.NORMAL:
-        return 0
-    if state.row:
-        sys.stderr.write("\n")
-        sys.stderr.flush()
-    return 0
-
-
-def repin_status(render) -> int:
-    """Put the row back, right after a scrolling line was printed over it.
-
-    Deliberately a no-op off a terminal: there the row is an occasional heartbeat
-    rather than a fixed row, and re-printing it after every line would drown the log.
-    """
-    if not state.row:
-        return 0
-    text = render()
-    if text is None:
-        return 0
-    return draw_status(text)
-
-
 def status_geometry() -> tuple:
-    """What this process settled about the row, for handing to a worker that has
-    none: ``(row, cols, interval)``."""
+    """What this process settled about the row, ``(row, cols, interval)``:
+    what a run's console (`medialib/lib/console.py`) draws against, in this
+    process and in every worker it is handed to."""
     return (state.row, state.cols, state.interval)
-
-
-def adopt_status_geometry(geometry) -> int:
-    """Draw against a row a PARENT settled.
-
-    A worker process shares no module state - it is a fresh interpreter, not a fork,
-    on any host whose default start method is ``forkserver`` or ``spawn`` - so
-    without this it starts out believing there is no terminal. ``clear_status`` then
-    does nothing, and the counted line the worker prints lands on the end of the
-    pinned row instead of on a console row of its own.
-
-    Nothing to adopt (a parent that settled no row, or a caller that passes none)
-    leaves this process as it is.
-    """
-    if not geometry:
-        return 0
-    state.row, state.cols, state.interval = geometry
-    return 0
-
-
-# This process's console: the refresher thread's draw and a line written
-# around the row must not interleave.
-_console = threading.RLock()
-
-
-def _writer_around(render):
-    """How runlog writes a line while the row is pinned: the row erased, the
-    line, the row drawn again under it."""
-    def write(out, text: str) -> None:
-        with _console:
-            clear_status()
-            out.write(text)
-            out.flush()
-            repin_status(render)
-    return write
-
-
-@contextlib.contextmanager
-def _take_lock(lock_file: str):
-    """Take the row's console lock: serialise against the parallel workers' own
-    printing. A no-op where flock is not in play.
-
-    Held for the whole block: closing the descriptor drops the lock, and a refresh
-    drawn without it lands between a worker's erase and the line that erase made
-    room for.
-    """
-    if not lock_file or not runlog.have_flock():
-        yield
-        return
-    import fcntl
-    try:
-        fd = os.open(lock_file, os.O_RDWR | os.O_CREAT, 0o644)
-    except OSError:
-        yield
-        return
-    try:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
-        except OSError:
-            pass
-        yield
-    finally:
-        os.close(fd)
-
-
-def status_tick(lock_file: str, render) -> int:
-    """One refresh: render the row and draw it.
-
-    ``lock_file`` is the file whose lock serialises the console against the workers
-    that print the scrolling lines; pass "" when nothing else prints concurrently.
-    """
-    with _take_lock(lock_file), _console:
-        text = render()
-        if text is None:
-            return 0
-        draw_status(text)
-    return 0
-
-
-def status_monitor(lock_file: str, render, stop_event: threading.Event):
-    """Refresh the row every ``state.interval`` seconds until ``stop_event`` is
-    set.
-
-    The first refresh comes after an interval, not immediately - the caller has
-    already drawn the row once. Stopping is a signal in the ordinary course of things
-    (the work the row reports on finished), not an interrupt, so it ends quietly.
-    """
-    while not stop_event.wait(state.interval):
-        status_tick(lock_file, render)
-
-
-def start_status_monitor(lock_file: str, render) -> int:
-    """Start the background refresher.
-
-    The row is drawn once synchronously first, so it is there from the moment the work
-    starts rather than after the first interval (and so stopping always has a row to
-    finish off). The refresher's handle is left in ``state.mon_pid`` for the caller to
-    stop it.
-    """
-    stop_status_monitor()
-    status_tick(lock_file, render)
-    runlog._row_writer = _writer_around(render)
-    stop_event = threading.Event()
-    thread = threading.Thread(target=status_monitor,
-                              args=(lock_file, render, stop_event),
-                              daemon=True)
-    thread.start()
-    state.mon_pid = thread
-    state._mon_stop = stop_event
-    return 0
-
-
-def stop_status_monitor() -> int:
-    """Stop the refresher and finish the row off with a newline.
-
-    Safe to call when none is running, and always returns 0 so a cleanup that runs
-    twice never trips.
-    """
-    if state.mon_pid is None:
-        return 0
-    runlog._row_writer = None
-    if state._mon_stop is not None:
-        state._mon_stop.set()
-    state.mon_pid.join()
-    state.mon_pid = None
-    state._mon_stop = None
-    end_status()
-    return 0
 
 
 def shorten_path(max_len: str, text: str) -> str:

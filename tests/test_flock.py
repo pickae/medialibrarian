@@ -21,7 +21,7 @@ import sys
 import pytest
 
 from medialib import commands
-from medialib.lib import runlog
+from medialib.lib import runcontext, runlog
 from tests import blackbox
 
 _REPO = blackbox.REPO
@@ -53,7 +53,7 @@ class TestHaveFlock:
 
     def test_nothing_there_at_all_is_probed(self, monkeypatch):
         monkeypatch.delenv("HAVE_FLOCK", raising=False)
-        monkeypatch.setattr(runlog.shutil, "which", lambda tool: "/usr/bin/flock")
+        monkeypatch.setattr(runcontext.shutil, "which", lambda tool: "/usr/bin/flock")
         assert runlog.have_flock() is True
 
     def test_no_tool_but_a_locking_c_library_still_counts(self, monkeypatch):
@@ -63,14 +63,14 @@ class TestHaveFlock:
         using."""
         pytest.importorskip("fcntl")
         monkeypatch.delenv("HAVE_FLOCK", raising=False)
-        monkeypatch.setattr(runlog.shutil, "which", lambda tool: None)
+        monkeypatch.setattr(runcontext.shutil, "which", lambda tool: None)
         assert runlog.have_flock() is True
 
     def test_and_a_probe_that_finds_neither_answers_no(self, monkeypatch):
         """Windows: no tool on PATH, and ``fcntl`` is a POSIX module that
         interpreter does not build."""
         monkeypatch.delenv("HAVE_FLOCK", raising=False)
-        monkeypatch.setattr(runlog.shutil, "which", lambda tool: None)
+        monkeypatch.setattr(runcontext.shutil, "which", lambda tool: None)
         _without_fcntl(monkeypatch)
         assert runlog.have_flock() is False
 
@@ -80,7 +80,7 @@ class TestHaveFlock:
         probing for its own; two halves of one run that disagreed would print
         two different kinds of progress line."""
         monkeypatch.delenv("HAVE_FLOCK", raising=False)
-        monkeypatch.setattr(runlog.shutil, "which", lambda tool: None)
+        monkeypatch.setattr(runcontext.shutil, "which", lambda tool: None)
         _without_fcntl(monkeypatch)
         runlog.have_flock()
         assert os.environ["HAVE_FLOCK"] == ""
@@ -88,14 +88,14 @@ class TestHaveFlock:
     def test_the_probe_happens_once(self, monkeypatch):
         monkeypatch.delenv("HAVE_FLOCK", raising=False)
         probes = []
-        monkeypatch.setattr(runlog.shutil, "which",
+        monkeypatch.setattr(runcontext.shutil, "which",
                             lambda tool: probes.append(tool) or "/usr/bin/flock")
         runlog.have_flock()
         runlog.have_flock()
         assert probes == ["flock"]
 
 
-def test_one_module_reads_the_variable_and_it_is_runlog():
+def test_one_module_reads_the_variable_and_it_is_runcontext():
     """The structural half of the rule. A command cannot read it unsettled if it
     cannot read it at all, which is what makes all eighteen right at once rather
     than eighteen call sites that each have to remember."""
@@ -103,7 +103,7 @@ def test_one_module_reads_the_variable_and_it_is_runlog():
         path.relative_to(_REPO).as_posix()
         for path in _production_modules()
         if "HAVE_FLOCK" in path.read_text(encoding="utf-8"))
-    assert named == ["medialib/lib/runlog.py"]
+    assert named == ["medialib/lib/runcontext.py"]
 
 
 def _production_modules():

@@ -25,10 +25,10 @@ from medialib.cli import convert_video as rules
 from medialib.lib import (
     clioptions,
     codecs,
+    console,
     durationcheck,
     dynamicqueue,
     enums,
-    errorlog,
     ffmpegselect,
     formatting,
     hostos,
@@ -632,7 +632,6 @@ def restore_hdr10plus(relative: str, directory: str, metadata: str,
         return False
     ramscratch.add_exit_cleanup([scratch])
 
-    statusline.clear_status()
     log("HDR10+: writing the source's dynamic metadata back into the encode "
         "(the video is not re-encoded): %s" % relative)
     injected = os.path.join(scratch, "video.mkv")
@@ -767,7 +766,6 @@ def encode_video_chunk(settings, token: str) -> int:
     keyframe-aligned, stream-copy-compatible piece.
     """
     safety.trap_worker_abort()
-    ramscratch.adopt_ram_base(getattr(settings, "ram_base", ""))
     relative, index, total, start, duration = token.split(rules.UNIT)
 
     source = rules.video_source_for(relative, settings.input_dir,
@@ -821,8 +819,7 @@ def reconcat_video_only(relative: str, total: int, settings) -> int:
                          % os.path.join(directory, "%04d.mkv" % index))
 
     # The status row is still live here - the video pass is not over until the
-    # chunks are re-joined - so make an empty console row for this line.
-    statusline.clear_status()
+    # chunks are re-joined - and the console erases it for this line.
     log("Joining %d video chunks: %s" % (total, relative))
     return toolcapture.run(
         ["ffmpeg", "-nostdin", "-hide_banner", *toolcapture.ffmpeg_loglevel(),
@@ -1318,7 +1315,7 @@ class Run:
         # Video is done: stop the row and leave it behind on its own console
         # line. The rest runs without one: its lines scroll above the next
         # file's row.
-        statusline.stop_status_monitor()
+        console.hide_active()
 
         def tail() -> int:
             audio.join()
@@ -1525,14 +1522,13 @@ class Run:
         """
         started = int(time.time())
         paused_at_start = pausecontrol.paused_seconds(started)
-        statusline.start_status_monitor(
-            "", lambda: rules.video_status_text(
+        console.current().show(
+            lambda: rules.video_status_text(
                 directory, duration, relative, started, paused_at_start,
                 cols=statusline.state.cols, paused=pausecontrol.pause_requested(),
                 paused_now=pausecontrol.paused_seconds(int(time.time())),
-                now=int(time.time())))
+                now=int(time.time())), travels=False)
 
-        statusline.clear_status()
         if not bounds:
             log("Encoding whole %s (%s)..." % (relative, size_text))
             encode_video_whole(relative, directory, settings)
@@ -1707,7 +1703,6 @@ def _audio_worker(relative: str, directory: str, settings) -> None:
     ignored, so without a handler it would survive Ctrl+C outright.
     """
     safety.trap_worker_abort()
-    ramscratch.adopt_ram_base(getattr(settings, "ram_base", ""))
     raise SystemExit(encode_audio_all(relative, directory, settings))
 
 
@@ -1750,12 +1745,9 @@ def _video_duration(path: str, container: float) -> float:
     return container
 
 
-def _in_worker(settings, token: str) -> None:
-    encode_video_chunk(settings, token)
-
-
 def _run_chunk_pool(settings, tokens: list, width: int) -> None:
-    workerpool.run(tokens, width, _in_worker, lambda token: (settings, token))
+    workerpool.run(tokens, width, encode_video_chunk,
+                   lambda token: (settings, token))
 
 
 # --- the run ------------------------------------------------------------------
@@ -2404,7 +2396,6 @@ def _run_all(settings) -> int:
         return 1
     ramscratch.add_exit_cleanup([chunk_root])
     settings.chunk_root = chunk_root
-    settings.ram_base = ramscratch.ram_base()
     if settings.upscale_stack is not None:
         settings.upscale_script = upscale.write_script(chunk_root)
 
@@ -2504,7 +2495,7 @@ def _run_all(settings) -> int:
         queue.close()
         output.live(True)
         sys.stderr = output._stream
-        statusline.stop_status_monitor()
+        console.hide_active()
         pausecontrol.stop_pause_keys()
         pausecontrol.kill_pausable_jobs()
         ramscratch.run_exit_cleanup()
@@ -2515,7 +2506,7 @@ def _run_all(settings) -> int:
 
 def cli(argv: list | None = None) -> int:
     settings.load()
-    errorlog.start_run(argv)
+    runlog.start_run(argv)
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, commands.program_name(__spec__.name),

@@ -33,15 +33,16 @@ from medialib.lib import (
     cleannamescollectively,
     cleannamesindividually,
     clioptions,
+    console,
     cuechapters,
     durationcheck,
     enums,
-    errorlog,
     ffmpegselect,
     formatting,
     imagemagick,
     imagesizes,
     ramscratch,
+    runcontext,
     runlog,
     safety,
     settings,
@@ -555,7 +556,7 @@ class Run:
     have_mkvtoolnix: bool
     # A geometry, not None: the tier is a row of the table by construction.
     thumbnail_resolution: str
-    progress_file: str
+    console: console.Console
     failure_file: str
     # The bytes the books now building have claimed in RAM, and the lock that
     # lets one finished book at a time be written to the output.
@@ -578,22 +579,15 @@ class Run:
         written inside the same lock, so it cannot land under another worker's
         heading.
         """
-        with open(self.progress_file + ".lock", "w") as lock, \
-                runlog.take_lock(lock):
-            try:
-                with open(self.progress_file) as handle:
-                    current = int(handle.read().strip() or 0) + 1
-            except (OSError, ValueError):
-                current = 1
-            with open(self.progress_file, "w") as handle:
-                handle.write("%d\n" % current)
+        with self.console.locked():
+            current = self.console.count("concat.progress")
             if runlog.verbosity() < runlog.NORMAL:
                 return
             line = '==> %sProcessing "%s"\n' % (
                 runlog.counted_prefix(current, self.total), name)
             if note:
                 line += "    %s\n" % note
-            sys.stderr.write(line)
+            self.console.write(line)
 
     def record_failure(self, name: str, reason: str) -> None:
         """A sub-folder whose join produced no file: said at once, and recorded
@@ -623,8 +617,7 @@ class Run:
         join.label = name
         if join.ok:
             join.failure = otherwise
-        toolcapture.report_failure(join, lock_file=self.progress_file + ".lock",
-                                   shown_if=_worth_showing)
+        toolcapture.report_failure(join, shown_if=_worth_showing)
 
     def _reserve(self, byte_count: int) -> bool:
         """Claim <byte_count> bytes of the RAM scratch for one book, or say
@@ -672,6 +665,10 @@ class Run:
             except OSError:
                 pass
         return "", 0
+
+    def process_pair(self, pair: tuple) -> None:
+        """:meth:`process_subfolder` for an (input, output) pair."""
+        self.process_subfolder(*pair)
 
     def process_subfolder(self, input_path: str, output_path: str) -> None:
         name = os.path.basename(output_path.rstrip("/"))
@@ -895,32 +892,6 @@ def publish_book(built: str, target: str) -> str:
             pass
 
 
-def _in_worker(state: Run, input_path: str, output_path: str) -> None:
-    """One sub-folder, in a worker PROCESS.
-
-    The worker's interrupt handling is installed here rather than in the work
-    itself, because at width 1 that same work runs in the RUN's own process -
-    where the worker's handler would replace the run's, and a Ctrl+C would leave
-    with the queue-stopping status instead of the run's own and without its
-    closing report.
-    """
-    safety.trap_worker_abort()
-    state.process_subfolder(input_path, output_path)
-
-
-def _run_pool(state: Run, pairs: list, jobs: int) -> None:
-    if jobs <= 1:
-        for input_path, output_path in pairs:
-            if safety.abort_requested():
-                return
-            with errorlog.work_item(input_path):
-                state.process_subfolder(input_path, output_path)
-        return
-
-    workerpool.run(pairs, jobs, _in_worker,
-                   lambda pair: (state, pair[0], pair[1]))
-
-
 def _has_audio_subfolder(input_dir: str) -> bool:
     """Whether any immediate sub-folder holds audio, at any depth below it.
 
@@ -1075,9 +1046,8 @@ def _run_with_scratch(ram_dir: str, input_dir: str, output_dir: str,
     input_paths, output_paths = name_output_files(input_dir, output_dir)
 
     total = len(input_paths)
-    progress_file = os.path.join(ram_dir, "concat.progress")
-    with open(progress_file, "w") as handle:
-        handle.write("0\n")
+    run_console = console.Console(ram_dir).activate()
+    run_console.set("concat.progress", 0)
 
     # The working directory rather than the name given: the run is inside the
     # input by now, and a relative name would be read from the wrong place.
@@ -1094,7 +1064,7 @@ def _run_with_scratch(ram_dir: str, input_dir: str, output_dir: str,
         ffmpeg="ffmpeg",
         have_mkvtoolnix=have_mkvtoolnix,
         thumbnail_resolution=imagesizes.geometry(THUMBNAIL_RESOLUTION_TIER),
-        progress_file=progress_file,
+        console=run_console,
         failure_file=failure_file,
         reservation_file=os.path.join(ram_dir, "ramReserved"),
         publish_lock=os.path.join(ram_dir, "publish.lock"),
@@ -1103,13 +1073,14 @@ def _run_with_scratch(ram_dir: str, input_dir: str, output_dir: str,
     )
 
     if total:
-        _run_pool(state, list(zip(input_paths, output_paths, strict=True)), jobs)
+        workerpool.map(list(zip(input_paths, output_paths, strict=True)), jobs,
+                       state.process_pair)
         safety.exit_if_aborted()
 
     # By the paths this run made them at, which are all in the scratch: the join
     # and the thumbnail leave nothing in the output tree to clean up.
     log("Cleaning up temporary files")
-    for path in (progress_file, progress_file + ".lock",
+    for path in (os.path.join(ram_dir, "concat.progress"), run_console.lock_path,
                  state.reservation_file, state.reservation_file + ".lock",
                  state.publish_lock):
         try:
@@ -1181,13 +1152,13 @@ def _settle_mkvtoolnix(input_dir: str) -> bool:
     chapters without it, and an opus source's embedded cover is copied out by
     ffmpeg when mkvextract is not there to do it.
     """
-    inherited = os.environ.get("HAVE_MKVTOOLNIX")
+    inherited = runcontext.get("HAVE_MKVTOOLNIX", None)
     if inherited is not None:
         return bool(inherited)
 
     present = all(tooldeps.tool_present(tool) for tool in
                   ("mkvmerge", "mkvpropedit", "mkvextract"))
-    os.environ["HAVE_MKVTOOLNIX"] = "1" if present else ""
+    runcontext.settle("HAVE_MKVTOOLNIX", "1" if present else "")
     if not present and _holds_mp3(input_dir):
         log("WARNING: mkvtoolnix not found (apt install mkvtoolnix) - chapters "
             "and titles cannot be embedded in")
@@ -1206,7 +1177,7 @@ def _holds_mp3(input_dir: str) -> bool:
 
 def cli(argv: list | None = None) -> int:
     settings.load()
-    errorlog.start_run(argv)
+    runlog.start_run(argv)
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, program=commands.program_name(__spec__.name),

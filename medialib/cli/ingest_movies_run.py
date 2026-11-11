@@ -7,6 +7,7 @@ the census is: the rules are worth reading on their own, and the run around them
 is mostly plumbing.
 """
 
+import functools
 import json
 import os
 import shutil
@@ -28,6 +29,7 @@ from medialib.lib import (
     commentarydetection,
     commentarynames,
     commentarytranscription,
+    console,
     diskturn,
     dolbyvision,
     donelog,
@@ -43,9 +45,11 @@ from medialib.lib import (
     plexnames,
     ramscratch,
     research,
+    runcontext,
     runlog,
     safety,
     settings,
+    statusline,
     subtitleads,
     subtitlefiles,
     tmdblookup,
@@ -743,7 +747,7 @@ def main(argv: list, program: str = "ingest-movies",
     script_dir = script_dir or commands.script_dir()
 
     # This is a long run, so its log lines carry a wall-clock stamp.
-    os.environ["LOG_TIMESTAMPS"] = "1"
+    runcontext.settle("LOG_TIMESTAMPS", "1")
 
     # Which fragments this run removes. A -f path that cannot be read STOPS the
     # run rather than being ignored: cleaning a whole library without the
@@ -861,6 +865,9 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
     if status != 0:
         return 1
     ramscratch.add_exit_cleanup([ram_root])
+    statusline.init_status_line()
+    # The run's console, in the scratch so every worker shares its lock.
+    console.Console(ram_root).activate()
 
     safety.init_safety_log(os.path.join(ram_root, "safetySkips.log"))
     durationcheck.init_log(os.path.join(ram_root, "lengthMismatch.log"))
@@ -2294,18 +2301,29 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
     # The subtitles of every film TMDb can name, fetched on a thread of their
     # own while the films are transcoded, transcribed and remuxed, and finished
     # before the tagging renames any of them.
+    #
+    # What each lane is doing is the row's to say while they run; on a
+    # terminal each lane's lines about a film come out as one block.
     locks = lanes.FilmLocks()
-    fetching = _start_subtitle_lane(state, root, subtitle_work, locks)
+    row = console.LaneRow(("opus", "whisper", "remux", "subs"))
+    run_console = console.current()
+    run_console.show(row.render, travels=False)
     try:
-        _films_in_lanes(state, root, subtitle_work, locks)
-    finally:
-        if fetching is not None and safety.abort_requested():
-            fetching.finish()
+        fetching = _start_subtitle_lane(state, root, subtitle_work, locks,
+                                        row)
+        try:
+            _films_in_lanes(state, root, subtitle_work, locks, row)
+        finally:
+            if fetching is not None and safety.abort_requested():
+                fetching.finish()
 
-    # Last, once every film is the file it is going to stay: a rename costs
-    # nothing to hold back, and the phases above keep the names they gave.
-    if fetching is not None:
-        fetching.finish()
+        # Last, once every film is the file it is going to stay: a rename
+        # costs nothing to hold back, and the phases above keep the names they
+        # gave.
+        if fetching is not None:
+            fetching.finish()
+    finally:
+        run_console.hide()
     log("Phase: tagging movies with IMDb ids (Plex/Jellyfin naming)")
     tmdblookup.tag_plex_ids(root, log, state.skips,
                             long_names=state.long_names)
@@ -2362,7 +2380,8 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
     log("Ingest complete: " + root)
 
 
-def _films_in_lanes(state, root: str, subtitle_work: bool, locks) -> None:
+def _films_in_lanes(state, root: str, subtitle_work: bool, locks,
+                    row=None) -> None:
     """The opus transcode, the commentary transcription and the improved-copy
     remux, each on the part of the machine it uses and overlapping where that
     is safe (see :mod:`medialib.cli.ingest_movies_lanes`).
@@ -2375,7 +2394,7 @@ def _films_in_lanes(state, root: str, subtitle_work: bool, locks) -> None:
     done; a film the lane never got is remuxed by the walk after it.
     """
     remux = lanes.RemuxLane(main_movies(root), state.improve_main_movie,
-                            locks, subtitle_work, log)
+                            locks, subtitle_work, log, row)
     beside = subtitle_work and state.whisper.get("device") == "cuda"
     transcoding = None
     try:
@@ -2385,17 +2404,18 @@ def _films_in_lanes(state, root: str, subtitle_work: bool, locks) -> None:
             transcoding = threading.Thread(
                 target=_transcode_opus, args=(state, root),
                 kwargs={"jobs": _opus_jobs_beside_whisper(),
-                        "on_done": remux.opus_done, "exit_on_abort": False},
+                        "on_done": remux.opus_done, "exit_on_abort": False,
+                        "row": row},
                 name="ingest-opus", daemon=True)
             transcoding.start()
         else:
             log("Phase: transcoding lossless audio to opus")
-            _transcode_opus(state, root, on_done=remux.opus_done)
+            _transcode_opus(state, root, on_done=remux.opus_done, row=row)
 
         if subtitle_work:
             log("Phase: extracting and transcribing commentary tracks")
             jobs = state.whisper["jobs"]
-            tracker = lanes.TranscriptTracker(remux.transcripts_done)
+            tracker = lanes.TranscriptTracker(remux.transcripts_done, row)
             state.scratch_headroom = lanes.TRANSCRIBING_RAM_HEADROOM
             try:
                 commentarytranscription.export_commentary(
@@ -2408,7 +2428,7 @@ def _films_in_lanes(state, root: str, subtitle_work: bool, locks) -> None:
                     rules.MAX_WHISPER_SYNC_OFFSET, state.ffsubsync_quality,
                     same_commentary_name=rules._same_commentary,
                     unfixed=state.unfixed_movies,
-                    film_queued=tracker.film_queued)
+                    film_queued=tracker.film_queued, lane="commentary")
             finally:
                 state.scratch_headroom = 0
         else:
@@ -2446,7 +2466,8 @@ def _opus_jobs_beside_whisper() -> int:
     return max(1, (runlog.cpu_count() - CORES_PER_JOB) // CORES_PER_JOB)
 
 
-def _start_subtitle_lane(state, root: str, subtitle_work: bool, locks):
+def _start_subtitle_lane(state, root: str, subtitle_work: bool, locks,
+                         row=None):
     """The subtitle lane started, or None when there is nothing it could
     fetch: no subtitle work, or no provider to ask."""
     if not subtitle_work:
@@ -2461,7 +2482,7 @@ def _start_subtitle_lane(state, root: str, subtitle_work: bool, locks):
             rules.MAX_SYNC_QUALITY_OFFSET, state.ffsubsync_quality, log)
 
     lane = lanes.SubtitleLane(root, subtitlefiles.subtitle_movies(root),
-                              download, locks, log)
+                              download, locks, log, row)
     log("Subtitles: fetching ahead, on a thread of their own, for every film "
         "TMDb can name")
     lane.start()
@@ -2546,19 +2567,12 @@ def _say_what_was_said(ahead: dict) -> None:
         log(ahead["said"].pop(0))
 
 
-def _transcribe_one(state, record: str) -> None:
-    commentarytranscription.transcribe_commentary(
-        record, state.whisper, rules.MAX_WHISPER_SYNC_OFFSET,
-        state.ffsubsync_quality, state.ram_root, log)
-
-
-def _in_transcribe_worker(state, record: str) -> None:
-    """One queued transcription, in a worker PROCESS - the interrupt handling
-    belongs here and not in the transcription, which the serial path runs in the
-    RUN's own process."""
-    safety.trap_worker_abort()
-    ramscratch.adopt_ram_base(getattr(state, "ram_base", ""))
-    _transcribe_one(state, record)
+def _transcribe_one(state, record: str, lane: str = "") -> None:
+    """One queued transcription; ``lane`` names it beside the other lanes."""
+    with console.about(record, lane):
+        commentarytranscription.transcribe_commentary(
+            record, state.whisper, rules.MAX_WHISPER_SYNC_OFFSET,
+            state.ffsubsync_quality, state.ram_root, log)
 
 
 def _drain_commentary(state, producer, jobs: int, tracker=None) -> None:
@@ -2578,25 +2592,24 @@ def _drain_commentary(state, producer, jobs: int, tracker=None) -> None:
     remux lane learns which films' transcripts are all on disk.
     """
     producer = _announcing_whisper(state, producer)
+    # Beside the other lanes when a tracker follows it, and its lines then say so.
+    lane = "whisper" if tracker is not None else ""
     if tracker is not None:
         producer = _told_of(tracker, producer)
+    work = functools.partial(_transcribe_one, state, lane=lane)
     if jobs <= 1:
         for record, _size in producer:
             if safety.abort_requested():
                 return
             with errorlog.work_item(record):
-                _transcribe_one(state, record)
+                work(record)
             if tracker is not None:
                 tracker.record_done(record)
         return
 
-    if tracker is None:
-        dynamicqueue.run(producer, jobs, _in_transcribe_worker,
-                         lambda record: (state, record), log=log)
-        return
-    dynamicqueue.run(producer, jobs, _in_transcribe_worker,
-                     lambda record: (state, record), log=log,
-                     on_done=tracker.record_done)
+    dynamicqueue.run(producer, jobs, workerpool.in_worker,
+                     lambda record: (work, record), log=log,
+                     on_done=None if tracker is None else tracker.record_done)
 
 
 def _told_of(tracker, producer):
@@ -2618,7 +2631,8 @@ def _announcing_whisper(state, producer):
 
 
 def _transcode_opus(state, root: str, jobs: int | None = None,
-                    on_done=None, exit_on_abort: bool = True) -> None:
+                    on_done=None, exit_on_abort: bool = True,
+                    row=None) -> None:
     """Every film's tracks checked, one worker per film: usually only one
     lossless track per file, so the parallelism is at the file level.
 
@@ -2633,37 +2647,31 @@ def _transcode_opus(state, root: str, jobs: int | None = None,
                                 and not plexnames.is_kept_copy(name))
     if jobs is None:
         jobs = runlog.jobs_per_core(CORES_PER_JOB)
-    _run_pool(state, movies, root, jobs, on_done)
+    lane = ""
+    if row is not None:
+        lane = "opus"
+        row.total(lane, len(movies))
+        told = on_done
+
+        def on_done(movie) -> None:
+            row.done("opus")
+            if told is not None:
+                told(movie)
+    workerpool.map(movies, jobs, functools.partial(_check_audio, root, lane),
+                   on_done=on_done)
     if exit_on_abort:
         safety.exit_if_aborted()
 
 
-def _in_worker(state, movie: str, root: str) -> None:
-    safety.trap_worker_abort()
-    ramscratch.adopt_ram_base(getattr(state, "ram_base", ""))
-    diskturn.adopt(getattr(state, "disk_turns", ""))
-    rules.check_audio_tracks(movie, root)
-
-
-def _run_pool(state, movies: list, root: str, jobs: int,
-              on_done=None) -> None:
-    if jobs <= 1:
-        for movie in movies:
-            if safety.abort_requested():
-                return
-            with errorlog.work_item(movie):
-                rules.check_audio_tracks(movie, root)
-            if on_done is not None:
-                on_done(movie)
-        return
-
-    workerpool.run(movies, jobs, _in_worker,
-                   lambda movie: (state, movie, root), on_done=on_done)
+def _check_audio(root: str, lane: str, movie: str) -> None:
+    """One film's tracks checked; ``lane`` names it beside the other lanes."""
+    with console.about(movie, lane):
+        rules.check_audio_tracks(movie, root)
 
 
 def cli(argv: list | None = None) -> int:
     settings.load()
-    errorlog.start_run(argv)
+    runlog.start_run(argv)
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, commands.program_name(__spec__.name),

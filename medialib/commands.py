@@ -17,6 +17,8 @@ import os
 import subprocess
 import sys
 
+from medialib.lib import runcontext
+
 __all__ = ["COMMANDS", "MODULES", "command_line", "config_dir", "exec_command",
            "logs_file", "module_for", "package_root", "program_name",
            "run_command", "script_dir"]
@@ -160,9 +162,7 @@ def command_line(command: str, argv, script_dir: str = "",
     """The argv and environment that start another one of these commands as a
     child, for a caller that starts it itself - :func:`run_command` is this
     plus ``subprocess.run``."""
-    from medialib.lib import errorlog
-
-    environment = errorlog.child_environment(dict(env or os.environ))
+    environment = runcontext.child_environment(dict(env or os.environ))
     environment["CLI_PROGRAM"] = command
     if script_dir:
         environment["CLI_SCRIPT_DIR"] = script_dir

@@ -1438,14 +1438,14 @@ class TestSeekCopies:
                              jobs=8)
         pools = []
 
-        def pool(state, method, items, jobs):
-            pools.append((method, list(items), jobs))
+        def pool(items, jobs, work, on_done=None):
+            pools.append((work.__name__, list(items), jobs))
             for item in items:
                 if item not in fails:
                     open(ca.segments.plan_file_for(str(plans), item)
                          + ".seek.mka", "w").close()
 
-        monkeypatch.setattr(ca, "_run_pool", pool)
+        monkeypatch.setattr(ca.workerpool, "map", pool)
         return planner, pools, plans
 
     @staticmethod

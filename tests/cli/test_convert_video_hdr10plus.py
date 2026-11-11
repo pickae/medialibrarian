@@ -163,8 +163,6 @@ class TestWritingItBack:
                             lambda targets: None)
         monkeypatch.setattr(run_module.ramscratch, "release_exit_cleanup",
                             lambda targets: None)
-        monkeypatch.setattr(run_module.statusline, "clear_status",
-                            lambda: None)
         monkeypatch.setattr(rules, "video_frame_rate", lambda path: "24/1")
 
         def inject(video, metadata, out, fps, scratch_dir, log=print):

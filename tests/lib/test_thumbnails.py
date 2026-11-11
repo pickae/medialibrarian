@@ -13,7 +13,7 @@ import sys
 
 import pytest
 
-from medialib.lib import thumbnails
+from medialib.lib import statusline, thumbnails
 
 pytestmark = pytest.mark.stubbed
 
@@ -683,7 +683,7 @@ class TestTheRealRunner:
     @pytest.fixture(autouse=True)
     def plain(self, monkeypatch):
         monkeypatch.delenv("LOG_TIMESTAMPS", raising=False)
-        monkeypatch.setattr(thumbnails.toolcapture.statusline.state, "row", "")
+        monkeypatch.setattr(statusline.state, "row", "")
 
     def _tool(self, script):
         return [sys.executable, "-c", script]

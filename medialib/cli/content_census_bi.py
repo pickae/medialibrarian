@@ -544,7 +544,7 @@ def main(argv: list, program: str = "content-census-bi") -> int:
 
 def cli(argv: list | None = None) -> int:
     settings.load()
-    errorlog.start_run(argv)
+    runlog.start_run(argv)
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, program=commands.program_name(__spec__.name))

@@ -31,7 +31,7 @@ import subprocess
 import sys
 import tempfile
 
-from medialib.lib import errorlog, formatting, runlog, safety
+from medialib.lib import errorlog, formatting, runcontext, runlog, safety
 
 __all__ = [
     "TOLERANCE_SECONDS",
@@ -150,14 +150,14 @@ def init_log(path: str = "") -> str:
     runs two conversions reports both runs' findings once at the end.
     """
     if path and not os.path.islink(path):
-        os.environ[LOG_VARIABLE] = path
+        runcontext.settle(LOG_VARIABLE, path)
         open(path, "w").close()
         return path
     if path:
         sys.stderr.write("\nWARNING: the length log path is a symlink and was "
                          "not used:\n  %s\n" % path)
     else:
-        inherited = os.environ.get(LOG_VARIABLE, "")
+        inherited = runcontext.get(LOG_VARIABLE)
         if inherited and os.path.isfile(inherited) and not os.path.islink(
                 inherited):
             return inherited
@@ -165,7 +165,7 @@ def init_log(path: str = "") -> str:
     descriptor, path = tempfile.mkstemp(prefix="lengthMismatch.",
                                         dir=directory)
     os.close(descriptor)
-    os.environ[LOG_VARIABLE] = path
+    runcontext.settle(LOG_VARIABLE, path)
     # This run's own temp file, so this run removes it at exit. A named or
     # inherited log belongs to whoever named or opened it.
     safety.remove_at_exit(path)
@@ -180,7 +180,7 @@ def record(name: str, source_seconds: object, output_seconds: object) -> None:
     line. A run that never called :func:`init_log` records nothing rather than
     creating a file nobody will read.
     """
-    log_path = os.environ.get(LOG_VARIABLE, "")
+    log_path = runcontext.get(LOG_VARIABLE)
     if not log_path:
         return
     line = _UNIT.join([
@@ -198,7 +198,7 @@ def record(name: str, source_seconds: object, output_seconds: object) -> None:
 
 def failures() -> list[tuple[str, float, float]]:
     """Everything recorded so far, as (name, source seconds, output seconds)."""
-    log_path = os.environ.get(LOG_VARIABLE, "")
+    log_path = runcontext.get(LOG_VARIABLE)
     if not log_path:
         return []
     try:

@@ -316,3 +316,55 @@ def test_no_command_keeps_a_queue_of_its_own():
                 "len(running)" in source and "workerpool." not in source):
             private.append(path.name)
     assert private == []
+
+
+class _Recorder:
+    """Work that leaves a file per item, and says which process did it."""
+
+    def __init__(self, directory: str) -> None:
+        self.directory = directory
+
+    def __call__(self, item: str) -> str:
+        with open(os.path.join(self.directory, item), "w") as handle:
+            handle.write("%d %s" % (os.getpid(),
+                                    ramscratch_base_seen()))
+        return item.upper()
+
+
+def ramscratch_base_seen() -> str:
+    from medialib.lib import ramscratch
+    return ramscratch.ram_base()
+
+
+class TestMap:
+    """One queue for every command: the serial path in this process, the
+    parallel one in workers that are handed the run."""
+
+    def test_at_width_one_the_work_runs_here_and_its_answers_come_back(
+            self, tmp_path):
+        outcome = workerpool.map(["a", "b"], 1, _Recorder(str(tmp_path)))
+        assert outcome.results == ["A", "B"]
+        assert (tmp_path / "a").read_text().split()[0] == str(os.getpid())
+
+    def test_at_width_one_an_interrupt_stops_the_queue(self, tmp_path,
+                                                       monkeypatch):
+        monkeypatch.setattr(workerpool.safety, "abort_requested", lambda: True)
+        outcome = workerpool.map(["a"], 1, _Recorder(str(tmp_path)))
+        assert outcome.aborted and outcome.results == []
+        assert not (tmp_path / "a").exists()
+
+    def test_each_item_is_reported_once_done_on_either_path(self, tmp_path):
+        for jobs in (1, 2):
+            done: list = []
+            workerpool.map(["a%d" % jobs, "b%d" % jobs], jobs,
+                           _Recorder(str(tmp_path)), on_done=done.append)
+            assert sorted(done) == ["a%d" % jobs, "b%d" % jobs]
+
+    def test_wider_the_workers_work_in_the_run_s_own_scratch(self, tmp_path):
+        from medialib.lib import runcontext
+        runcontext.current().ram_base = str(tmp_path)
+        workerpool.map(["a", "b"], 2, _Recorder(str(tmp_path)))
+        for name in ("a", "b"):
+            pid, base = (tmp_path / name).read_text().split()
+            assert pid != str(os.getpid())
+            assert base == str(tmp_path)

@@ -48,12 +48,12 @@ def say_one_of_each() -> None:
 
 
 def test_nothing_is_made_before_the_first_line(info_dir):
-    errorlog.start_run(["in"])
+    runlog.start_run(["in"])
     assert not info_dir.exists()
 
 
 def test_the_default_keeps_what_the_console_says_by_default(info_dir, capsys):
-    errorlog.start_run(["in"])
+    runlog.start_run(["in"])
     say_one_of_each()
     assert kept(info_dir) == ["working on a.flac", "WARNING: a slight problem",
                               "would rename a to b", "ERROR: it broke"]
@@ -67,7 +67,7 @@ def test_the_default_keeps_what_the_console_says_by_default(info_dir, capsys):
 ])
 def test_the_setting_chooses_how_much(info_dir, monkeypatch, capsys, word, expected):
     monkeypatch.setenv(infolog.LEVEL_VARIABLE, word)
-    errorlog.start_run(["in"])
+    runlog.start_run(["in"])
     say_one_of_each()
     if expected is None:
         assert not info_dir.exists()
@@ -78,14 +78,14 @@ def test_the_setting_chooses_how_much(info_dir, monkeypatch, capsys, word, expec
 def test_a_quiet_console_still_keeps_a_verbose_log(info_dir, monkeypatch, capsys):
     monkeypatch.setenv(infolog.LEVEL_VARIABLE, "verbose")
     runlog.settle_verbosity(runlog.QUIET)
-    errorlog.start_run(["in"])
+    runlog.start_run(["in"])
     say_one_of_each()
     assert "working on" not in capsys.readouterr().err
     assert "why it was so" in kept(info_dir)
 
 
 def test_the_file_shares_the_error_logs_name_and_opens_with_the_run(info_dir, capsys):
-    errorlog.start_run(["-j", "2", "/in"])
+    runlog.start_run(["-j", "2", "/in"])
     runlog.log("hello")
     path = next(info_dir.iterdir())
     assert path.name == os.path.basename(errorlog.current_file())
@@ -97,13 +97,13 @@ def test_the_file_shares_the_error_logs_name_and_opens_with_the_run(info_dir, ca
 
 
 def test_a_report_written_elsewhere_is_not_kept(info_dir):
-    errorlog.start_run(["in"])
+    runlog.start_run(["in"])
     runlog.log("into a report", stream=io.StringIO())
     assert not info_dir.exists()
 
 
 def test_a_secret_is_starred_out(info_dir, capsys):
-    errorlog.start_run(["in"])
+    runlog.start_run(["in"])
     runlog.log("GET /x?api_key=abcdef123456")
     assert kept(info_dir) == ["GET /x?api_key=***"]
 
@@ -111,7 +111,7 @@ def test_a_secret_is_starred_out(info_dir, capsys):
 def test_an_unwritable_log_costs_the_run_nothing(info_dir, capsys):
     info_dir.parent.mkdir(parents=True)
     info_dir.write_text("a file where the folder should be")
-    errorlog.start_run(["in"])
+    runlog.start_run(["in"])
     runlog.log("still said")
     assert "still said" in capsys.readouterr().err
 
@@ -121,7 +121,7 @@ def _worker_says(line: str) -> None:
 
 
 def test_a_worker_writes_into_the_runs_file(info_dir, capsys):
-    errorlog.start_run(["in"])
+    runlog.start_run(["in"])
     runlog.log("parent")
     context = multiprocessing.get_context("fork" if sys.platform != "win32" else "spawn")
     child = context.Process(target=_worker_says, args=("worker",))

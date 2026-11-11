@@ -45,6 +45,7 @@ from medialib.lib import (
     imagecodecs,
     imagemagick,
     ramscratch,
+    runcontext,
     runlog,
     safety,
     settings,
@@ -998,33 +999,6 @@ def _mirror_folders(input_dir: str, output_dir: str) -> None:
         os.makedirs(target, exist_ok=True)
 
 
-def _in_worker(state, worker_name: str, relative: str) -> None:
-    """One item, in a worker PROCESS.
-
-    The worker's interrupt handling is installed here and not in the conversion
-    itself, because the serial path runs that same conversion in the RUN's own
-    process - where installing the worker's handler would replace the run's, and
-    a Ctrl+C would leave with the queue-stopping status instead of the run's own
-    and without its closing report.
-    """
-    safety.trap_worker_abort()
-    getattr(state, worker_name)(relative)
-
-
-def _run_pool(state, work, jobs: int, worker_name: str) -> None:
-    if jobs <= 1:
-        worker = getattr(state, worker_name)
-        for relative in work:
-            if safety.abort_requested():
-                return
-            with errorlog.work_item(relative):
-                worker(relative)
-        return
-
-    workerpool.run(work, jobs, _in_worker,
-                   lambda relative: (state, worker_name, relative))
-
-
 def _encode_on_gpu(state, work, jobs: int, encoder: str) -> list:
     """Hand every image the GPU can take to <encoder>, in chunks of
     av1gpu.CHUNK_MEGAPIXELS, and return the work that is left for the CPU:
@@ -1166,11 +1140,11 @@ def main(argv: list, program: str = "convert-images") -> int:
     # fdupes is the one tool whose absence changes WHAT happens rather than
     # whether it happens. A parent may have settled it already; inherit that
     # instead of warning a second time.
-    if "HAVE_FDUDES" not in os.environ:
+    if runcontext.get("HAVE_FDUDES", None) is None:
         if tooldeps.tool_present("fdupes"):
-            os.environ["HAVE_FDUDES"] = "1"
+            runcontext.settle("HAVE_FDUDES", "1")
         else:
-            os.environ["HAVE_FDUDES"] = ""
+            runcontext.settle("HAVE_FDUDES", "")
             log("WARNING: fdupes not found (apt install fdupes) - the input "
                 "will not be de-duplicated,")
             log("         so identical files are converted and stored as "
@@ -1196,8 +1170,8 @@ def main(argv: list, program: str = "convert-images") -> int:
     counter_dir = ""
     started = None
     state = None
-    own_safety_log = not (os.environ.get("SAFETY_LOG")
-                          and os.path.isfile(os.environ["SAFETY_LOG"]))
+    own_safety_log = not (runcontext.get("SAFETY_LOG")
+                          and os.path.isfile(runcontext.get("SAFETY_LOG")))
     try:
         ramscratch.init_ram_base()
         counter_dir, status = ramscratch.ram_scratch_dir("counters")
@@ -1221,7 +1195,7 @@ def main(argv: list, program: str = "convert-images") -> int:
 
         safety.set_run_footer(footer)
 
-        if os.environ.get("HAVE_FDUDES"):
+        if runcontext.get("HAVE_FDUDES", None):
             toolcapture.watched(["fdupes", "-rdN", input_dir],
                                 skipped="duplicates were not removed",
                                 stdout=subprocess.DEVNULL)
@@ -1259,8 +1233,8 @@ def main(argv: list, program: str = "convert-images") -> int:
         # Each road's speed is over its own stretch of the wall clock: the
         # GPU's chunks come first, and the CPU's pool runs after them.
         state.cpu_started = time.time()
-        _run_pool(state, work, jobs,
-                  "reverse_to_jpeg" if reverse else "transcode")
+        workerpool.map(work, jobs, state.reverse_to_jpeg if reverse
+                       else state.transcode)
         safety.exit_if_aborted()
         safety.print_run_footer()
         # An image that could not be converted is a run that did not do what
@@ -1552,7 +1526,7 @@ def _print_footer(state, started, values, own_safety_log) -> None:
     # script once per unit of work and throws each child's output away. Under a
     # lock, because several of those children can finish at once and each one's
     # record has to survive whole.
-    stats_file = os.environ.get("imageStatsFile", "")
+    stats_file = runcontext.get("imageStatsFile", "")
     if stats_file:
         with open(stats_file + ".lock", "w") as handle, \
                 runlog.take_lock(handle), \
@@ -1584,7 +1558,7 @@ def _road_line(label: str, images: int, pixels: int, seconds: float) -> str:
 
 def cli(argv: list | None = None) -> int:
     settings.load()
-    errorlog.start_run(argv)
+    runlog.start_run(argv)
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, program=commands.program_name(__spec__.name))

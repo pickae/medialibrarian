@@ -363,8 +363,8 @@ class TestTheFramesEachUpscaledChunkIsGiven:
                             lambda base, path, settings: "-c:v libx265")
         monkeypatch.setattr(run_module.safety, "trap_worker_abort",
                             lambda: None)
-        monkeypatch.setattr(run_module.statusline, "start_status_monitor",
-                            lambda *a: 0)
+        monkeypatch.setattr(run_module.console.Console, "show",
+                            lambda *a, **k: None)
         monkeypatch.setattr(run_module, "log", lambda *a, **k: None)
         monkeypatch.setattr(run_module, "reconcat_video_only",
                             lambda *a: 0)

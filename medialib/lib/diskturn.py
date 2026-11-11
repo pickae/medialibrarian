@@ -33,6 +33,8 @@ import contextlib
 import os
 import threading
 
+from medialib.lib import runcontext
+
 try:
     import fcntl
 except ImportError:  # pragma: no cover - Windows: the thread lock alone
@@ -40,7 +42,6 @@ except ImportError:  # pragma: no cover - Windows: the thread lock alone
 
 __all__ = ["init", "adopt", "lock_dir", "turn", "rotational", "device_of"]
 
-_STATE = {"dir": ""}
 _LOCKS: dict = {}
 _SPINS: dict = {}
 _GUARD = threading.Lock()
@@ -56,17 +57,17 @@ def init(directory: str) -> str:
         os.makedirs(directory, exist_ok=True)
     except OSError:
         directory = ""
-    _STATE["dir"] = directory
+    runcontext.current().disk_turns = directory
     return directory
 
 
 def adopt(directory: str) -> None:
     """A worker's half of :func:`init`: the folder the run's turns are in."""
-    _STATE["dir"] = directory or ""
+    runcontext.current().disk_turns = directory or ""
 
 
 def lock_dir() -> str:
-    return _STATE["dir"]
+    return runcontext.current().disk_turns
 
 
 def device_of(path: str) -> int | None:
@@ -177,7 +178,7 @@ def turn(path: str):
 def _open_lock_file(device):
     """The lock file of ``device`` in the shared folder, open; None without a
     folder, or with one that has gone - the thread lock alone then."""
-    directory = _STATE["dir"]
+    directory = runcontext.current().disk_turns
     if not directory or fcntl is None:
         return None
     try:

@@ -23,7 +23,7 @@ import stat
 import subprocess
 import sys
 
-from medialib.lib import toolcapture
+from medialib.lib import runcontext, toolcapture
 from medialib.lib.booklanguage import book_language_code
 from medialib.lib.enums import lower_extension_of, shell_lower
 from medialib.lib.formatting import awk_gt, awk_number, fmt_clock
@@ -359,7 +359,7 @@ def narration_job_budget(device=None):
     """How many books this machine should read at once. Never 0 and never a
     fraction; falls back to 1 whenever the answer cannot be established."""
     if device is None:
-        device = os.environ.get("narrationDevice", "")
+        device = runcontext.get("narrationDevice", "")
     if device != "cuda":
         return "1"
     free = narration_free_vram()
@@ -463,7 +463,7 @@ def narration_ensure_venv(log=None):
     interpreter path, or None having printed the refusal."""
     if log is None:
         log = _noop
-    home = os.environ.get("narrationHome", "")
+    home = runcontext.get("narrationHome", "")
     env_dir = home + "/python_env"
     python_exe = env_dir + "/bin/python"
     built = os.path.isfile(python_exe) and os.access(python_exe, os.X_OK)
@@ -515,7 +515,7 @@ def narration_package_series(distribution):
     """The "<major>.<minor>" of an installed package, from its METADATA rather
     than by importing it. Returns the series, or None when it is not
     installed."""
-    python = os.environ.get("narrationPython", "")
+    python = runcontext.get("narrationPython", "")
     if not python:
         return None
     proc = _run([python, "-", distribution], stdout=subprocess.PIPE,
@@ -543,7 +543,7 @@ def narration_ensure_torchcodec(log=None):
     torchcodec that does not match the installed torch on the way."""
     if log is None:
         log = _noop
-    python = os.environ.get("narrationPython", "")
+    python = runcontext.get("narrationPython", "")
     if not python:
         return False
 
@@ -582,7 +582,7 @@ def narration_ensure_torchcodec(log=None):
 def _site_dir():
     """The venv's site directory from the venv python itself, or None when it
     cannot be asked."""
-    python = os.environ.get("narrationPython", "")
+    python = runcontext.get("narrationPython", "")
     if not python:
         return None
     return _python_stdout(python, ["-c",
@@ -662,7 +662,7 @@ def narration_cap_cuda_range(log=None):
     is left exactly as it is."""
     if log is None:
         log = _noop
-    home = os.environ.get("narrationHome", "")
+    home = runcontext.get("narrationHome", "")
     if not home:
         return 0
     try:
@@ -698,7 +698,7 @@ def narration_install_ffmpeg_shim():
     """Put the -thread_queue_size-dropping ffmpeg in the venv's bin, which the
     engine's PATH has first. An ffmpeg there that this repo did not write
     stays."""
-    python = os.environ.get("narrationPython", "")
+    python = runcontext.get("narrationPython", "")
     if not python:
         return 0
     target = os.path.join(os.path.dirname(python), "ffmpeg")
@@ -729,7 +729,7 @@ def init_book_narration(checkout=None, device=None, log=None):
     settled values are left in the environment."""
     if log is None:
         log = _noop
-    checkout = checkout or os.environ.get("narrationHome", "")
+    checkout = checkout or runcontext.get("narrationHome", "")
     if not checkout:
         checkout = os.path.expanduser("~/ebook2audiobook")
 
@@ -748,14 +748,14 @@ def init_book_narration(checkout=None, device=None, log=None):
         return 1
 
     # The checkout is settled to an absolute path, the symlinks still standing.
-    os.environ["narrationHome"] = os.path.abspath(os.path.expanduser(checkout))
+    runcontext.settle("narrationHome", os.path.abspath(os.path.expanduser(checkout)))
 
     narration_cap_cuda_range(log)
 
     python = narration_ensure_venv(log)
     if python is None:
         return 1
-    os.environ["narrationPython"] = python
+    runcontext.settle("narrationPython", python)
 
     # Keep ~/.local out of this env no matter how it is entered.
     os.environ["PYTHONNOUSERSITE"] = "1"
@@ -770,15 +770,15 @@ def init_book_narration(checkout=None, device=None, log=None):
 
     if not device:
         device = "cuda" if narration_has_nvidia() else "cpu"
-    os.environ["narrationDevice"] = device
+    runcontext.settle("narrationDevice", device)
 
     # Is the environment POPULATED, or merely created? torch stands in for the
     # whole stack: it is the largest thing installed and nothing narrates
     # without it.
     if _python_ok(python, ["-c", "import torch"]):
-        os.environ["narrationEnvReady"] = "1"
+        runcontext.settle("narrationEnvReady", "1")
     else:
-        os.environ["narrationEnvReady"] = "0"
+        runcontext.settle("narrationEnvReady", "0")
     return 0
 
 
@@ -810,7 +810,7 @@ def narrate_book(book, out_dir, voice="", language=None, log_file=None):
     # be absolute: a relative one would be resolved against the checkout.
     book = os.path.realpath(book)
 
-    device = os.environ.get("narrationDevice", "")
+    device = runcontext.get("narrationDevice", "")
     args = ["--headless",
             "--device", device,
             "--tts_engine", _config("narrationEngine", "xtts"),
@@ -823,8 +823,8 @@ def narrate_book(book, out_dir, voice="", language=None, log_file=None):
     if language:
         args += ["--language", language]
 
-    python = os.environ.get("narrationPython", "")
-    home = os.environ.get("narrationHome", "")
+    python = runcontext.get("narrationPython", "")
+    home = runcontext.get("narrationHome", "")
     if not python or not home:
         return None
     # The venv's own bin first, exactly as activating the env would - a name
@@ -1052,7 +1052,7 @@ def narration_session_dir(log_file):
     """The engine's private working directory for the conversion that wrote
     this log (<checkout>/tmp/proc-<session>), or None when the log names
     none."""
-    home = os.environ.get("narrationHome", "")
+    home = runcontext.get("narrationHome", "")
     if not (os.path.isfile(log_file) and home):
         return None
     prefix = (home[:-1] if home.endswith("/") else home) + "/tmp/proc-"
@@ -1086,7 +1086,7 @@ def narration_drop_session(log_file):
     All three are named after ONE session id, so the work directory - the only
     one the log spells out - is what finds the other two.
     """
-    home = os.environ.get("narrationHome", "")
+    home = runcontext.get("narrationHome", "")
     if not home:
         return 0
     directory = narration_session_dir(log_file)
@@ -1416,7 +1416,7 @@ def prepare_voice_samples(given, scratch_dir, log=None):
 def voice_sample_for(language=None):
     """The sample to clone for a book in that language: its own if there is one,
     else the fallback, else nothing at all."""
-    voice_map = os.environ.get("narrationVoiceMap", "")
+    voice_map = runcontext.get("narrationVoiceMap", "")
     if not voice_map:
         return ""
     fallback = ""

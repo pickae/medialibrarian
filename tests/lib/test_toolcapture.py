@@ -10,7 +10,7 @@ import sys
 
 import pytest
 
-from medialib.lib import errorlog, runlog, statusline, toolcapture
+from medialib.lib import console, errorlog, runlog, statusline, toolcapture
 from medialib.lib.toolcapture import ToolOutput
 
 
@@ -195,6 +195,8 @@ class TestRun:
                                                             capfd,
                                                             monkeypatch):
         monkeypatch.setattr(statusline.state, "row", "1")
+        console.Console().show(lambda: "row")
+        capfd.readouterr()
         toolcapture.run(tool("raise SystemExit(1)"))
         assert capfd.readouterr().err.startswith("\r\x1b[K==> ERROR: ")
 

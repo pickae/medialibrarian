@@ -37,8 +37,8 @@ from medialib.lib import (
     archives,
     booktext,
     clioptions,
+    console,
     enums,
-    errorlog,
     imagebitrate,
     imagecodecs,
     imagemagick,
@@ -319,6 +319,9 @@ class Run:
         self.in_path = in_path
         self.out_path = out_path
         self.counter_dir = counter_dir
+        # The run's console: the lock every worker prints under, and the count
+        # of books finished.
+        self.console = console.Console(counter_dir)
         # Where emit_output's name claims live: fresh with the run, shared by
         # every worker, gone with it - so a claim can never outlive the run it
         # guarded.
@@ -342,30 +345,15 @@ class Run:
 
         Under -q only a FAILED line is printed; the counting goes on regardless.
         """
-        with open(os.path.join(self.counter_dir, "lock"), "w") as handle, \
-                runlog.take_lock(handle):
-            path = os.path.join(self.counter_dir, "current")
-            try:
-                with open(path) as counter:
-                    current = int(counter.read() or "0") + 1
-            except (OSError, ValueError):
-                current = 1
-            with open(path, "w") as counter:
-                counter.write(str(current))
-            text = "%s%s\n" % (
-                runlog.counted_prefix(current, self.total), line)
-            if line.startswith("FAILED"):
-                sys.stderr.write(text + said)
-            else:
-                runlog.say(text)
+        failed = line.startswith("FAILED")
+        self.console.counted(line, self.total, name="current", always=failed,
+                             after=said if failed else "")
 
     def note(self, line: str) -> None:
         """An UNCOUNTED line about a step inside one book's pipeline, indented
         so it reads as subordinate. Shares progress()'s lock so the two never
         interleave."""
-        with open(os.path.join(self.counter_dir, "lock"), "w") as handle, \
-                runlog.take_lock(handle):
-            runlog.say("        %s\n" % line)
+        self.console.say("        %s\n" % line)
 
     def _output_extension(self, extension: str) -> str:
         if self.options["textMode"]:
@@ -514,13 +502,6 @@ def _newer_than(path: str, marker: str) -> bool:
         return False
 
 
-def _in_worker(state, relative: str) -> None:
-    """One book, in a worker PROCESS - where the worker's interrupt handler
-    belongs, and not in process_book, which the serial path runs inline."""
-    safety.trap_worker_abort()
-    state.process_book(relative)
-
-
 # --- the run -------------------------------------------------------------------
 
 def _books_under(in_path: str):
@@ -544,18 +525,6 @@ def _books_under(in_path: str):
             found.append((size, os.path.relpath(full, in_path)))
     found.sort(key=lambda item: -item[0])
     return [relative for _size, relative in found]
-
-
-def _run_pool(state, work, jobs: int) -> None:
-    if jobs <= 1:
-        for relative in work:
-            if safety.abort_requested():
-                return
-            with errorlog.work_item(relative):
-                state.process_book(relative)
-        return
-
-    workerpool.run(work, jobs, _in_worker, lambda relative: (state, relative))
 
 
 def _word_count(path: str) -> int:
@@ -773,7 +742,7 @@ def main(argv: list, program: str = "ingest-books",
                 runlog.say("\n")
                 archive_root = in_path
             else:
-                _run_pool(state, books, jobs)
+                workerpool.map(books, jobs, state.process_book)
                 safety.exit_if_aborted()
                 archive_root = out_path
             _text_mode_report(state, books, out_path, temp_path, all_txt,
@@ -790,7 +759,7 @@ def main(argv: list, program: str = "ingest-books",
             runlog.say(discard_summary(discard_extras, image_resolution,
                                        has_pdf, has_reflowable) + "\n")
             runlog.say("\n")
-            _run_pool(state, books, jobs)
+            workerpool.map(books, jobs, state.process_book)
             safety.exit_if_aborted()
 
         if clean_structure:
@@ -822,7 +791,7 @@ def _archive(out_path: str, archive_root: str) -> None:
 
 def cli(argv: list | None = None) -> int:
     settings.load()
-    errorlog.start_run(argv)
+    runlog.start_run(argv)
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, program=commands.program_name(__spec__.name),

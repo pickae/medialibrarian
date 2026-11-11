@@ -38,18 +38,26 @@ import os
 import re
 import shlex
 import sys
-import threading
 import time
 import traceback
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 from medialib import commands
+from medialib.lib import runcontext
+from medialib.lib.runcontext import (
+    INPUT_VARIABLE,
+    ITEM_VARIABLE,
+    child_environment,
+    subject,
+    working_on,
+)
 
 __all__ = ["CAUSES", "ERROR_DIR", "KINDS", "NOTABLE", "Kind", "Notable",
-           "crash_kind", "current_file", "install_hooks", "note_origin",
-           "notable_lines", "origin_of", "record", "record_crash", "redact", "start_run",
-           "subject", "working_on"]
+           "child_environment", "crash_kind", "current_file", "exception_files", "note_origin",
+           "notable_lines", "origin_of", "record", "redact", "settle_run",
+           "subject", "work_item", "working_on", "ITEM_VARIABLE",
+           "INPUT_VARIABLE"]
 
 ERROR_DIR = "error"
 
@@ -58,10 +66,6 @@ ERROR_DIR = "error"
 NAME_VARIABLE = "ERROR_LOG_NAME"
 RUN_VARIABLE = "ERROR_LOG_RUN"
 STARTED_VARIABLE = "ERROR_LOG_STARTED"
-# The item and input file a parent was working on when it started this
-# process, so a child command's records still name the file on disk.
-ITEM_VARIABLE = "ERROR_LOG_ITEM"
-INPUT_VARIABLE = "ERROR_LOG_INPUT"
 
 ERROR, WARNING = "ERROR", "WARNING"
 
@@ -254,63 +258,16 @@ def notable_key(line: str) -> str:
     return ""
 
 
-# What the work in hand is about, per thread: the item a worker was handed and
-# the input file it stands for. A stack, so a step inside an item can name a
-# more precise file for as long as it lasts.
-_LOCAL = threading.local()
-
 # Scratch copies and the hard-drive files they were made from, per process.
 _ORIGINS: dict[str, str] = {}
-
-
-def _subjects() -> list:
-    stack = getattr(_LOCAL, "subjects", None)
-    if stack is None:
-        stack = _LOCAL.subjects = []
-    return stack
-
-
-@contextlib.contextmanager
-def working_on(path: str, item: str = "") -> Iterator[None]:
-    """Name the input file the work inside the block is about, so an error
-    recorded meanwhile - by a tool working on a RAM copy of it, say - still
-    names the file on disk that was the culprit."""
-    stack = _subjects()
-    stack.append((item or path, _absolute(path)))
-    try:
-        yield
-    finally:
-        stack.pop()
 
 
 def work_item(work) -> contextlib.AbstractContextManager:
     """The serial path's twin of :func:`run_in_worker`: the item a run works
     on in its own process, named for the errors recorded meanwhile the same
     way a worker's item is."""
-    from medialib.lib import workerpool
-
-    label = workerpool.label(work)
+    label = runcontext.label(work)
     return working_on(label if os.path.exists(label) else "", item=label)
-
-
-def subject() -> tuple[str, str]:
-    """The (item, input file) the work in hand is about, innermost first; both
-    empty when nothing has said."""
-    stack = _subjects()
-    if stack:
-        return stack[-1]
-    return (os.environ.get(ITEM_VARIABLE, ""), os.environ.get(INPUT_VARIABLE, ""))
-
-
-def child_environment(environment: dict) -> dict:
-    """``environment`` for a child command, with the item and input file in
-    hand handed down to it."""
-    item, source = subject()
-    if item:
-        environment[ITEM_VARIABLE] = item
-    if source:
-        environment[INPUT_VARIABLE] = source
-    return environment
 
 
 ORIGINS_FILE = ".errorlog-origins"
@@ -338,11 +295,7 @@ def note_origin(copy: str, source: str) -> None:
 
 
 def _origins_file() -> str:
-    try:
-        from medialib.lib import ramscratch
-        base = ramscratch._STATE.ram_base
-    except Exception:                       # pragma: no cover - import guard
-        return ""
+    base = runcontext.current().ram_base
     return os.path.join(base, ORIGINS_FILE) if base else ""
 
 
@@ -392,13 +345,8 @@ def _origin_of(path: str) -> str:
 def _scratch_roots() -> list[str]:
     """Where this run's scratch can be: its base and spill parents, the
     configured base and the tmpfs every Linux host has."""
-    roots = []
-    try:
-        from medialib.lib import ramscratch
-        roots += [ramscratch._STATE.ram_base or ""] + list(ramscratch._STATE.bases)
-        roots.append(ramscratch.SHM)
-    except Exception:                       # pragma: no cover - import guard
-        pass
+    run = runcontext.current()
+    roots = [run.ram_base or ""] + list(run.scratch_bases) + [runcontext.SHM]
     roots.append(os.environ.get("ramScratchBase", ""))
     return [_absolute(root) for root in roots if root]
 
@@ -409,40 +357,41 @@ def _in_scratch(path: str, roots: list[str]) -> bool:
                for root in roots)
 
 
-def start_run(argv: list | None = None) -> None:
+def settle_run(argv: list | None = None) -> None:
     """Settle this run's error log, for this process and everything it
-    starts, and install the hooks that keep a crash.
+    starts (`medialib/lib/runlog.py`'s ``start_run`` also installs the hooks
+    that keep a crash).
 
-    Settled before any worker or child exists, because they learn it from the
-    environment they start with. A child command finds it settled already and
-    keeps writing to its parent's file - one run, one file - naming its own
-    command line in each record beside the run's.
+    Settled before any worker or child exists, because they are handed it as
+    they start. A child command finds it settled already and keeps writing to
+    its parent's file - one run, one file - naming its own command line in each
+    record beside the run's.
     """
     _settle_name(argv)
-    install_hooks()
 
 
 def current_file() -> str:
     """Where this run's records go. A process nobody started a run in - a
     library call, a test - gets a name of its own the first time it asks."""
     _settle_name()
-    name = os.environ[NAME_VARIABLE]
+    name = runcontext.get(NAME_VARIABLE)
     return os.path.join(commands.script_dir(), "logs", ERROR_DIR, name)
 
 
 def _settle_name(argv: list | None = None) -> None:
     """The run's file name, start time and command line, settled in the
     environment unless a parent settled them already."""
-    if os.environ.get(NAME_VARIABLE):
+    if runcontext.get(NAME_VARIABLE):
         return
     program = commands.current_program()
     if argv is None:
         argv = sys.argv[1:]
     safe = re.sub(r"[^A-Za-z0-9._-]+", "-", program).strip("-") or "run"
-    os.environ[NAME_VARIABLE] = "%s-%s-%d.log" % (
-        time.strftime("%Y%m%d-%H%M%S"), safe, os.getpid())
-    os.environ[STARTED_VARIABLE] = _stamp()
-    os.environ[RUN_VARIABLE] = shlex.join([program] + [str(a) for a in argv])
+    runcontext.settle(NAME_VARIABLE, "%s-%s-%d.log" % (
+        time.strftime("%Y%m%d-%H%M%S"), safe, os.getpid()))
+    runcontext.settle(STARTED_VARIABLE, _stamp())
+    runcontext.settle(RUN_VARIABLE,
+                      shlex.join([program] + [str(a) for a in argv]))
 
 
 def _stamp() -> str:
@@ -470,13 +419,9 @@ def _caller_stack() -> list[str]:
     """Where in the commands this record was asked for from, outermost first:
     the frames inside the package, without the logging's own."""
     package = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    mine = {os.path.abspath(__file__)}
-    try:
-        from medialib.lib import runlog, toolcapture
-        mine |= {os.path.abspath(runlog.__file__),
-                 os.path.abspath(toolcapture.__file__)}
-    except Exception:                       # pragma: no cover - import guard
-        pass
+    here = os.path.dirname(os.path.abspath(__file__))
+    mine = {os.path.join(here, name + ".py")
+            for name in ("errorlog", "runlog", "console", "toolcapture")}
     frames = [frame for frame in traceback.extract_stack()
               if os.path.abspath(frame.filename).startswith(package)
               and os.path.abspath(frame.filename) not in mine]
@@ -575,8 +520,8 @@ def _render(kind, message, files, tool_argv, tool_status, tool_output,
            "means:    %s" % known.means]
     for cause in causes:
         out.append("cause:    %s" % cause)
-    out.append("run:      %s" % os.environ.get(RUN_VARIABLE, ""))
-    out.append("started:  %s    cwd: %s" % (os.environ.get(STARTED_VARIABLE, ""),
+    out.append("run:      %s" % runcontext.get(RUN_VARIABLE))
+    out.append("started:  %s    cwd: %s" % (runcontext.get(STARTED_VARIABLE),
                                            _cwd()))
     out.append("process:  %s" % _process_line())
     if item:
@@ -626,106 +571,22 @@ def _cwd() -> str:
 def _write(text: str) -> str:
     """One record onto the end of the run's file, in one write, under the run's
     lock so a worker writing beside it cannot land inside it."""
-    from medialib.lib import runlog
-
     path = current_file()
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "a", encoding="utf-8") as handle, runlog.take_lock(handle):
+    with open(path, "a", encoding="utf-8") as handle, \
+            runcontext.take_lock(handle):
         handle.write(text)
         handle.flush()
     return path
 
 
-def record_crash(exc: BaseException, where: str = "") -> str:
-    """Keep an exception nobody caught, and say it on the console: one line,
-    the traceback under -v, and the whole of it always when it could not be
-    kept - a traceback is never lost to a full disk."""
-    from medialib.lib import runlog
-
-    kind = crash_kind(exc)
-    summary = "%s: %s" % (type(exc).__name__, exc) if str(exc) else type(exc).__name__
-    if where:
-        summary = "%s: %s" % (where, summary)
-    path = record(kind, summary, files=_exception_files(exc), exc=exc,
-                  stack=False)
-    runlog.error(summary, persist=False)
-    if path and runlog.verbosity() < runlog.VERBOSE:
-        runlog.error_continued("       the traceback is kept in %s" % path)
-    else:
-        sys.stderr.write("".join(traceback.format_exception(
-            type(exc), exc, exc.__traceback__)))
-        if path:
-            runlog.error_continued("       and kept in %s" % path)
-    sys.stderr.flush()
-    return path
-
-
-def _exception_files(exc: BaseException) -> list[str]:
+def exception_files(exc: BaseException) -> list[str]:
     files = []
     for name in ("filename", "filename2"):
         value = getattr(exc, name, None)
         if isinstance(value, str | bytes | os.PathLike) and value:
             files.append(os.fsdecode(value))
     return files
-
-
-_HOOKED = False
-
-
-def install_hooks() -> None:
-    """Keep what nobody caught - in the main thread and in any other - before
-    Python prints it. An interrupt is not an error and is left alone."""
-    global _HOOKED
-    if _HOOKED:
-        return
-    _HOOKED = True
-    previous = sys.excepthook
-
-    def hook(kind, value, tb):
-        if issubclass(kind, KeyboardInterrupt | SystemExit) or value is None:
-            previous(kind, value, tb)
-            return
-        if value.__traceback__ is None:
-            value = value.with_traceback(tb)
-        record_crash(value)
-
-    def thread_hook(args):
-        if args.exc_type is SystemExit or args.exc_value is None:
-            return
-        if issubclass(args.exc_type, KeyboardInterrupt):
-            return
-        name = args.thread.name if args.thread is not None else "a thread"
-        record_crash(args.exc_value, where="in %s" % name)
-
-    sys.excepthook = hook
-    threading.excepthook = thread_hook
-
-
-def run_in_worker(target, args: tuple, label: str) -> None:
-    """A worker's body: its item named for every record made inside it, and an
-    exception it did not catch kept before the worker ends with status 1 -
-    which the parent then reports as the worker it lost.
-
-    An interrupt that lands before the worker's own trap is in place arrives as
-    a KeyboardInterrupt, and leaves the way the trap would have: the run marked
-    as stopping and the queue told so. Let through, multiprocessing would print
-    it to a stderr the interrupted parent may already have closed, and the
-    BrokenPipeError from that would be kept as a crash."""
-    try:
-        install_hooks()
-        with working_on(label if os.path.exists(label) else "", item=label):
-            try:
-                target(*args)
-            except (KeyboardInterrupt, SystemExit):
-                raise
-            except BaseException as exc:
-                record_crash(exc, where=label)
-                raise SystemExit(1) from exc
-    except KeyboardInterrupt:
-        from medialib.lib import safety
-
-        safety.request_abort()
-        raise SystemExit(safety.XARGS_STOP_EXIT_STATUS) from None
 
 
 def signal_cause(returncode: int) -> str:

@@ -28,9 +28,11 @@ _PACKAGE = blackbox.REPO / "medialib"
 _SETTING_SPELLING = re.compile(r"[a-z][A-Za-z0-9]*$")
 
 # The calls that read an environment variable by the name they are given:
-# the environment's own, and the small readers modules keep for their knobs.
+# the environment's own, the run's (medialib/lib/runcontext.py, which reads
+# what the run did not settle from the environment), and the small readers
+# modules keep for their knobs.
 _READERS = {"get", "getenv", "setdefault", "pop", "_config", "_knob", "_env",
-            "_flag", "setenv", "delenv"}
+            "_flag", "setenv", "delenv", "settle", "forget"}
 
 
 def _names_read(tree: ast.AST) -> set:
@@ -80,7 +82,8 @@ def _environ(node) -> bool:
 def _is_environment_read(func) -> bool:
     """A method of an environment, or one of the module-level readers."""
     if isinstance(func, ast.Attribute):
-        return _environ(func.value) or func.attr == "getenv"
+        return _environ(func.value) or func.attr == "getenv" or (
+            isinstance(func.value, ast.Name) and func.value.id == "runcontext")
     return isinstance(func, ast.Name)
 
 

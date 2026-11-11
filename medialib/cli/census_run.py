@@ -22,6 +22,7 @@ from medialib.lib import (
     ffmpegselect,
     imagemagick,
     ramscratch,
+    runcontext,
     runlog,
     safety,
     tooldeps,
@@ -286,7 +287,7 @@ def needed_tools(seen, run_bi):
 
     if any_seen(*enums.AUDIO_EXTENSIONS):
         add("ffprobe")
-    if any_seen(*os.environ.get(
+    if any_seen(*runcontext.get(
             "censusVideoExtensions",
             contentcensus.census_video_extensions()).split()):
         add("ffprobe")
@@ -324,12 +325,12 @@ def warn_optional_tools(seen):
     def any_seen(extensions):
         return any(extension in seen for extension in extensions)
 
-    video = os.environ.get("censusVideoExtensions",
+    video = runcontext.get("censusVideoExtensions",
                            contentcensus.census_video_extensions()).split()
     comic_pdf = os.environ.get(
         "comicPdfExtensions", " ".join(enums.COMIC_PDF_EXTENSIONS)).split()
 
-    if not os.environ.get("CENSUS_HAVE_MEDIAINFO", "") and any_seen(video):
+    if not runcontext.get("CENSUS_HAVE_MEDIAINFO", "") and any_seen(video):
         log("WARNING: mediainfo is not installed, so the video report's "
             "dynamicRange column is")
         log("         read from ffprobe instead: SDR, HLG, HDR10 and Dolby "
@@ -340,7 +341,7 @@ def warn_optional_tools(seen):
     # Only the formats this input holds: the rest lose nothing it would see.
     calibre_books = [extension for extension in _books_needing_calibre()
                      if extension in seen]
-    if not os.environ.get("CENSUS_HAVE_EBOOK_CONVERT", "") and calibre_books:
+    if not runcontext.get("CENSUS_HAVE_EBOOK_CONVERT", "") and calibre_books:
         log("WARNING: ebook-convert is not installed (it ships in Calibre), so "
             "the books")
         log("         report's word and character counts will be empty for %s."
@@ -349,11 +350,11 @@ def warn_optional_tools(seen):
 
     if not any_seen(comic_pdf):
         return
-    have_pdftotext = os.environ.get("CENSUS_HAVE_PDFTOTEXT", "")
-    have_calibre = os.environ.get("CENSUS_HAVE_EBOOK_CONVERT", "")
+    have_pdftotext = runcontext.get("CENSUS_HAVE_PDFTOTEXT", "")
+    have_calibre = runcontext.get("CENSUS_HAVE_EBOOK_CONVERT", "")
     # Both halves missing is poppler-utils missing, which is one package and
     # so one warning, saying everything its absence costs.
-    if not os.environ.get("CENSUS_HAVE_POPPLER", ""):
+    if not runcontext.get("CENSUS_HAVE_POPPLER", ""):
         log("WARNING: poppler-utils is not installed, so no PDF can be "
             "examined: every one")
         log("         of them is counted as a book (never as a comic) and "
@@ -491,7 +492,7 @@ class Run:
                                            "text"))
             return
 
-        os.environ["CENSUS_SCRATCH"] = work
+        runcontext.settle("CENSUS_SCRATCH", work)
         row, reason = contentcensus.census_row("books", path, self.separator)
         if row is not None:
             with open(os.path.join(shared_scratch, "bookrow.%d" % file_index),
@@ -580,11 +581,9 @@ class Run:
                 # were taken above, in this process, on purpose: the counter
                 # stays one sequence whether or not the books run in parallel,
                 # and the line keeps its place in the library's file order.
-                worker = multiprocessing.Process(
-                    target=self.book_one,
-                    args=(file_index, file_path, scratch, skipped_path))
-                worker.start()
-                running.append(worker)
+                running.append(workerpool.start_worker(
+                    self.book_one,
+                    (file_index, file_path, scratch, skipped_path), file_path))
                 if len(running) >= self.book_jobs:
                     running = workerpool.reap_one(running)
                 continue
@@ -647,7 +646,7 @@ class Run:
         """
         scratch = os.path.join(self.scratch, "worker%d" % root_index)
         os.makedirs(scratch, exist_ok=True)
-        os.environ["CENSUS_SCRATCH"] = scratch
+        runcontext.settle("CENSUS_SCRATCH", scratch)
 
         reports_path = os.path.join(self.results, "%d.reports" % root_index)
         skipped_path = os.path.join(self.results, "%d.skipped" % root_index)
@@ -723,19 +722,19 @@ def run(arguments, depth, out_dir, run_bi, separator, extension,
     lib_out_dirs, created_out_root = resolve_out_dirs(lib_paths, out_dir)
     scratch = ""
     try:
-        os.environ["CENSUS_SEP"] = separator
+        runcontext.settle("CENSUS_SEP", separator)
         contentcensus.census_init(adequacy_wanted=adequacy)
         runlog.settle_flock()
 
         files, totals, starts = collect_files(
-            lib_paths, os.environ["censusAllExtensions"].split())
+            lib_paths, runcontext.get("censusAllExtensions").split())
         total = len(files)
         if total == 0:
             # It speaks about one folder, which is the only case it can say
             # anything useful about; several empty ones have each been named
             # above.
             readable = enums.extension_list(
-                os.environ["censusAllExtensions"].split())
+                runcontext.get("censusAllExtensions").split())
             if len(lib_paths) == 1:
                 return safety.fail_no_relevant_input(
                     lib_paths[0],
@@ -797,10 +796,8 @@ def run(arguments, depth, out_dir, run_bi, separator, extension,
                 "each" % (len(lib_paths), len(worker_roots)))
             workers = []
             for root_index in worker_roots:
-                worker = multiprocessing.Process(target=state.root,
-                                                 args=(root_index,))
-                worker.start()
-                workers.append(worker)
+                workers.append(workerpool.start_worker(
+                    state.root, (root_index,), in_paths[root_index]))
             workerpool.join_all(workers)
         else:
             for root_index in worker_roots:

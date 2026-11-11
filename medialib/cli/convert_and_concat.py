@@ -32,10 +32,10 @@ from medialib.lib import (
     archives,
     clioptions,
     enums,
-    errorlog,
     ffmpegselect,
     imagemagick,
     ramscratch,
+    runcontext,
     runlog,
     safety,
     settings,
@@ -363,9 +363,9 @@ def main(argv: list, program: str = "convert-and-concat",
     # The load other processes put on the machine, read before this run's own
     # phases add to it - the unpacking can keep every core busy - and handed
     # to the transcoding phase, whose chunk decision weighs it.
-    if not os.environ.get("BACKGROUND_LOAD"):
+    if not runcontext.get("BACKGROUND_LOAD", None):
         try:
-            os.environ["BACKGROUND_LOAD"] = "%.2f" % os.getloadavg()[0]
+            runcontext.settle("BACKGROUND_LOAD", "%.2f" % os.getloadavg()[0])
         except (AttributeError, OSError):
             pass
 
@@ -509,13 +509,13 @@ def _settle_mkvtoolnix() -> None:
     pull cover art out of a Matroska source, and the concatenating half only for
     the MP3 chapter-and-title detour.
     """
-    if "HAVE_MKVTOOLNIX" in os.environ:
+    if runcontext.get("HAVE_MKVTOOLNIX", None) is not None:
         return
     if all(tooldeps.tool_present(tool)
            for tool in ("mkvmerge", "mkvpropedit", "mkvextract")):
-        os.environ["HAVE_MKVTOOLNIX"] = "1"
+        runcontext.settle("HAVE_MKVTOOLNIX", "1")
         return
-    os.environ["HAVE_MKVTOOLNIX"] = ""
+    runcontext.settle("HAVE_MKVTOOLNIX", "")
     log("WARNING: mkvtoolnix not found (apt install mkvtoolnix) - in the "
         "transcoding phase, cover art")
     log("         embedded in Matroska sources will not be extracted (sidecar "
@@ -742,7 +742,7 @@ def _failed_concatenations(failed: list, total: int) -> int:
 
 def cli(argv: list | None = None) -> int:
     settings.load()
-    errorlog.start_run(argv)
+    runlog.start_run(argv)
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, program=commands.program_name(__spec__.name),
