@@ -30,17 +30,32 @@ __all__ = [
 STATUS_ROW_MARGIN = 1
 
 
+def _terminal_field(name: str) -> property:
+    """``name`` on the run's terminal, as a property rather than through
+    ``__getattr__``: whatever sets the attribute and later restores it -
+    pytest's monkeypatch included - then writes the old value back instead
+    of deleting it."""
+
+    def get(self):
+        return getattr(runcontext.current().terminal, name)
+
+    def put(self, value) -> None:
+        setattr(runcontext.current().terminal, name, value)
+
+    return property(get, put)
+
+
 class _State:
     """The settled row, kept by the run (`medialib/lib/runcontext.py`) so a
     worker is handed the one its parent settled: ``row`` is empty off a
     terminal and ``"1"`` on one, ``cols`` is the width, and ``interval`` is the
     seconds between refreshes."""
 
-    def __getattr__(self, name: str):
-        return getattr(runcontext.current().terminal, name)
+    __slots__ = ()
 
-    def __setattr__(self, name: str, value) -> None:
-        setattr(runcontext.current().terminal, name, value)
+    row = _terminal_field("row")
+    cols = _terminal_field("cols")
+    interval = _terminal_field("interval")
 
 
 state = _State()
