@@ -18,6 +18,7 @@ improvement and would also be a divergence, so it waits for a later pass.
 """
 
 import atexit
+import contextlib
 import errno
 import os
 import random
@@ -658,6 +659,44 @@ def interrupt_signals() -> tuple[int, ...]:
     if hup is not None:
         signals += (hup,)
     return signals
+
+
+@contextlib.contextmanager
+def interrupts_held() -> Iterator[None]:
+    """Hold an interrupt off for the length of the block, and deliver it as the
+    block ends.
+
+    For starting a child whose stopping is the caller's job. An interrupt that
+    lands while subprocess.Popen is still waiting for its child to exec raises
+    out of the constructor, so the caller never gets the process to kill, and
+    the child starts anyway once the run has gone. Held off, the interrupt
+    arrives after the handle exists, where the caller's own cleanup can reach
+    it.
+
+    The hold is a Python-level handler that only records the signal, not a
+    blocked signal mask, because a child inherits the mask across exec and
+    would start deaf to the very signals it is meant to be stopped with. Off
+    the main thread no handler can be installed, and the block runs unguarded
+    as before.
+    """
+    held: list[int] = []
+    previous = {}
+    for number in interrupt_signals():
+        current = signal.getsignal(number)
+        if current is None:     # set outside Python, so it could not be put back
+            continue
+        try:
+            signal.signal(number, lambda caught, _frame: held.append(caught))
+        except (OSError, ValueError):
+            continue
+        previous[number] = current
+    try:
+        yield
+    finally:
+        for number, handler in previous.items():
+            signal.signal(number, handler)
+        if held:
+            signal.raise_signal(held[0])
 
 
 def _install(handler) -> None:
