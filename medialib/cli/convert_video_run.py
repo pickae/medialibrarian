@@ -109,6 +109,15 @@ def chunk_bounds(duration: float, count: int) -> list:
     return bounds if len(bounds) > 2 else []
 
 
+class _NotConverted(Exception):
+    """A file dropped part-way through its preparation: interrupted, or
+    ``skipped`` - refused, and counted as such."""
+
+    def __init__(self, skipped: bool = False) -> None:
+        super().__init__()
+        self.skipped = skipped
+
+
 class Run:
     """The run's mutable state: what the closing report is read out of."""
 
@@ -135,13 +144,45 @@ class Run:
         """
         settings = rules.Settings(**self.settings.__dict__)
         plan = Plan(relative, settings)
-        source = plan.source
 
         # A pause holds the NEXT file off too: preparing it is ffmpeg runs of
         # its own that would otherwise start up on a machine whose CPU was just
         # handed back.
         pausecontrol.wait_while_paused()
 
+        geometry = self._worth_converting(plan)
+        if geometry is None:
+            return None
+
+        # Checked between the probes, because Ctrl+C only kills the ffmpeg
+        # running at that moment: the run waits for this thread on its way out,
+        # and every probe started after the interrupt would run to its end.
+        if safety.abort_requested():
+            return None
+        fields = videosource.interlace_counts(plan.source,
+                                              settings.decode_accel)
+
+        if safety.abort_requested():
+            return None
+        self._settle_dolby_vision(plan)
+
+        # From here the plan may hold the run's one Dolby Vision slot, so every
+        # way out that does not hand the plan on hands the slot back first.
+        try:
+            self._settle_picture(plan, geometry, fields)
+        except _NotConverted as dropped:
+            self._release_dv(plan)
+            if dropped.skipped:
+                shutil.rmtree(plan.directory, ignore_errors=True)
+                self.count("skipped")
+            return None
+        return plan
+
+    def _worth_converting(self, plan: Plan) -> "tuple | None":
+        """The source's (width, height, sar) when it is to be converted, or
+        None when its output is up to date or -t finds the conversion not
+        worth it. Measures the durations and, where asked for, the grain."""
+        settings, relative, source = plan.settings, plan.relative, plan.source
         plan.duration = duration = videosource._media_duration(source)
         plan.video_duration = videosource._video_duration(source, duration)
         # An output already here is the out-of-date result of an earlier run, and
@@ -207,20 +248,16 @@ class Run:
                 shutil.rmtree(directory, ignore_errors=True)
                 self.count("skipped")
                 return None
+        return width, height, sar
 
-        # Checked between the probes, because Ctrl+C only kills the ffmpeg
-        # running at that moment: the run waits for this thread on its way out,
-        # and every probe started after the interrupt would run to its end.
+    def _settle_picture(self, plan: Plan, geometry: tuple, fields) -> None:
+        """The crop, the upscale, the HDR10+ and the chunk boundaries, once the
+        Dolby Vision mode is settled. Raises :class:`_NotConverted` for a file
+        interrupted or refused on the way."""
+        settings, relative, source = plan.settings, plan.relative, plan.source
+        width, height, sar = geometry
         if safety.abort_requested():
-            return None
-        fields = videosource.interlace_counts(source, settings.decode_accel)
-
-        if safety.abort_requested():
-            return None
-        self._settle_dolby_vision(plan)
-        if safety.abort_requested():
-            self._release_dv(plan)
-            return None
+            raise _NotConverted()
 
         # After the Dolby Vision decision, because a file that keeps its RPU
         # cannot be cropped, and after the -t test, so a source this run is not
@@ -235,10 +272,7 @@ class Run:
         if settings.upscale_stack is not None:
             if not self._settle_upscale(plan, width, height, sar, crop_width,
                                         crop_height, fields):
-                self._release_dv(plan)
-                shutil.rmtree(directory, ignore_errors=True)
-                self.count("skipped")
-                return None
+                raise _NotConverted(skipped=True)
             if settings.upscale_size:
                 enc_width, enc_height = (
                     int(side) for side in settings.upscale_size.split("x"))
@@ -255,10 +289,9 @@ class Run:
         # After the crop, because whether the metadata survives it depends on
         # what the frame it describes turns into.
         if safety.abort_requested():
-            self._release_dv(plan)
-            return None
+            raise _NotConverted()
         plan.hdr10plus_metadata = hdr.prepare_hdr10plus(
-            relative, source, directory, settings,
+            relative, source, plan.directory, settings,
             reframed=bool(settings.crop) or (str(enc_width), str(enc_height))
             != (str(width), str(height)))
 
@@ -268,19 +301,17 @@ class Run:
         count = (settings.nvenc_engines if settings.hardware_encode
                  else rules.chunk_count_for(enc_width, enc_height,
                                             settings.cores))
-        plan.bounds = chunk_bounds(duration, count)
+        plan.bounds = chunk_bounds(plan.duration, count)
         # Last, because it reads the video the encode will: the Dolby Vision
         # intermediate where there is one.
         if plan.bounds and safety.abort_requested():
-            self._release_dv(plan)
-            return None
+            raise _NotConverted()
         if plan.bounds:
             pausecontrol.wait_while_paused()
             plan.bounds, plan.cut_kinds = scenecuts.aligned_bounds(
                 rules.video_source_for(relative, settings.input_dir,
                                        settings.dolby_vision_source),
                 plan.bounds, settings.decode_accel)
-        return plan
 
     def convert(self, plan: Plan) -> int:
         """ONE prepared video, produced in three overlapping parts and muxed.
