@@ -43,7 +43,15 @@ import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from typing import NamedTuple
 
-from medialib.lib import plexnames, politepacing, runlog, subtitlefiles, titlematch, toolcapture
+from medialib.lib import (
+    filmrecord,
+    plexnames,
+    politepacing,
+    runlog,
+    subtitlefiles,
+    titlematch,
+    toolcapture,
+)
 
 __all__ = ["SITE", "ChapterSet", "Existing", "add_chapters", "apply_set",
            "ask_archive",
@@ -463,6 +471,8 @@ def write_chapters(movie: str, chapter_set: ChapterSet) -> bool:
                                        stdin=subprocess.DEVNULL)
         except OSError:
             return False
+        finally:
+            filmrecord.forget(movie)
         if done.returncode not in (0, 1):
             return False
     finally:

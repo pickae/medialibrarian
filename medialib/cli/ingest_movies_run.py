@@ -39,6 +39,7 @@ from medialib.lib import (
     enums,
     errorlog,
     ffmpegselect,
+    filmrecord,
     fixedpoint,
     imdbdata,
     overwrite,
@@ -176,7 +177,7 @@ class Run:
         say = say or log
         video_indexes = [position for position, track in enumerate(tracks)
                          if track.is_video]
-        info = dolbyvision.read_video_info(movie)
+        info = dolbyvision.read_video_info(movie, run=filmrecord.run)
         job = {"wanted": False, "action": "", "fps": "", "source_hdr": False,
                "video_index": video_indexes[-1] if video_indexes else -1,
                "video_count": len(video_indexes),
@@ -575,6 +576,7 @@ def _swap_in(new: str, movie: str, old: str) -> str:
     """
     if os.path.lexists(old):
         return '"%s" is already there' % os.path.basename(old)
+    filmrecord.forget(movie)
     staged, failure = safety.stage_beside(new, movie)
     if failure:
         return failure
@@ -1629,6 +1631,7 @@ def _carry_out_commentary_names(plan: dict) -> str:
     except OSError:
         original = None
     failure = rules._run_capture(["mkvpropedit", movie] + plan["arguments"])
+    filmrecord.forget(movie)
     if failure:
         return "mkvpropedit could not rename the tracks: " + \
             failure.replace("\n", " | ")
@@ -1660,19 +1663,26 @@ def _apply_as_prepared(prepared, target) -> list:
     ``target`` in a worker, while the generator goes on preparing the next -
     the dynamic queue, with the preparation as its producer. ``target``'s
     answers come back in the order prepared, None for one whose worker never
-    answered: it was stopped, or died."""
+    answered: it was stopped, or died. Each label is the film the worker
+    writes to, and what this process read of it is forgotten."""
     results = tempfile.mkdtemp(prefix="ingest-movies-results-")
     count = [0]
+    labels: list = []
 
     def items():
         for label, work in prepared:
             count[0] += 1
+            labels.append(label)
             yield (label, count[0] - 1, work, results), 1
 
     try:
-        dynamicqueue.run(items(), APPLY_JOBS, _in_apply_worker,
-                         lambda item: (target, item),
-                         buffer_factor=APPLY_BUFFER_FACTOR, log=log)
+        try:
+            dynamicqueue.run(items(), APPLY_JOBS, _in_apply_worker,
+                             lambda item: (target, item),
+                             buffer_factor=APPLY_BUFFER_FACTOR, log=log)
+        finally:
+            for label in labels:
+                filmrecord.forget(label)
         answers: list = []
         for index in range(count[0]):
             try:
@@ -1921,6 +1931,7 @@ def _flag_commentaries(movie: str, tracks: list, names: dict) -> None:
     except OSError:
         original = None
     failure = rules._run_capture(["mkvpropedit", movie] + arguments)
+    filmrecord.forget(movie)
     if failure:
         log("  WARNING: mkvpropedit could not flag the commentaries: "
             + failure.replace("\n", " | "))
@@ -2651,20 +2662,27 @@ def _transcode_opus(state, root: str, jobs: int | None = None,
     if row is not None:
         lane = "opus"
         row.total(lane, len(movies))
-        told = on_done
+    told = on_done
 
-        def on_done(movie) -> None:
+    def film_done(item: tuple) -> None:
+        if row is not None:
             row.done("opus")
-            if told is not None:
-                told(movie)
-    workerpool.map(movies, jobs, functools.partial(_check_audio, root, lane),
-                   on_done=on_done)
+        if told is not None:
+            told(item[0])
+    # Each film goes with what the run has read of it, so its worker does not
+    # probe it again.
+    workerpool.map([(movie, filmrecord.of(movie)) for movie in movies], jobs,
+                   functools.partial(_check_audio, root, lane),
+                   on_done=film_done)
     if exit_on_abort:
         safety.exit_if_aborted()
 
 
-def _check_audio(root: str, lane: str, movie: str) -> None:
-    """One film's tracks checked; ``lane`` names it beside the other lanes."""
+def _check_audio(root: str, lane: str, item: tuple) -> None:
+    """One film's tracks checked, from the record it was handed with;
+    ``lane`` names it beside the other lanes."""
+    movie, record = item
+    filmrecord.adopt(record)
     with console.about(movie, lane):
         rules.check_audio_tracks(movie, root)
 

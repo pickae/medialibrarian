@@ -34,6 +34,7 @@ from medialib.lib import (
     diskturn,
     durationcheck,
     enums,
+    filmrecord,
     languages,
     objectaudio,
     plexnames,
@@ -618,10 +619,7 @@ def _identify(movie: str) -> list:
     """
     import json
     try:
-        done = subprocess.run(["mkvmerge", "-J", movie],
-                              stdin=subprocess.DEVNULL,
-                              stdout=subprocess.PIPE,
-                              stderr=subprocess.DEVNULL)
+        done = filmrecord.output(["mkvmerge", "-J", movie], movie)
         document = json.loads(done.stdout.decode("utf-8", "surrogateescape"))
     except (OSError, ValueError):
         return []
@@ -685,10 +683,8 @@ def _object_flags(movie: str, tracks: list) -> None:
     import json
     rows = []
     try:
-        done = subprocess.run(["mediainfo", "--Output=JSON", movie],
-                              stdin=subprocess.DEVNULL,
-                              stdout=subprocess.PIPE,
-                              stderr=subprocess.DEVNULL)
+        done = filmrecord.output(["mediainfo", "--Output=JSON", movie],
+                                 movie)
         document = json.loads(done.stdout.decode("utf-8", "surrogateescape"))
         for entry in (document.get("media") or {}).get("track") or []:
             if not isinstance(entry, dict):
@@ -1021,6 +1017,7 @@ def mkv_mux(root: str) -> None:
                         % (os.path.basename(as_mkv), relative))
                     continue
                 failure = safety.replace_file(target, as_mkv)
+                filmrecord.forget(as_mkv)
                 if failure:
                     log("WARNING: the remux could not be put in place (%s), "
                         "left as it is: ./%s" % (failure, relative))
@@ -1094,6 +1091,7 @@ def update_tags(root: str) -> None:
                  "name=" + title]) >= 2:
             log("WARNING: mkvpropedit could not set title/video-track name: "
                 + movie)
+        filmrecord.forget(movie)
 
         tracks = _identify(movie)
         arguments = _tag_arguments(tracks)
@@ -1103,6 +1101,7 @@ def update_tags(root: str) -> None:
                 log("WARNING: mkvpropedit could not apply all track flags: %s "
                     ":: %s" % (movie, failure.replace("\n", " | ")))
 
+        filmrecord.forget(movie)
         if original is not None:
             try:
                 os.utime(movie, (original, original))

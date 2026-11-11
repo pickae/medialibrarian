@@ -254,8 +254,11 @@ def private_workspace(tmp_path_factory, monkeypatch):
     # would be counted as the code under test's own leavings.
     # A fresh run (medialib/lib/runcontext.py) for every case: what one case's
     # command settled about its run is not the next case's.
-    from medialib.lib import runcontext
+    from medialib.lib import filmrecord, runcontext
     runcontext.reset()
+    # And what the probes said about the films of the case before, which
+    # stubs that answer differently would otherwise be answered from.
+    filmrecord.reset()
     scratch = tmp_path_factory.mktemp("workspace")
     for name in _SCRATCH_KNOBS:
         monkeypatch.setenv(name, str(scratch))

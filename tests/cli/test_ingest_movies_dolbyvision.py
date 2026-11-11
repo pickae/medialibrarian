@@ -43,7 +43,7 @@ def decide(monkeypatch):
     """The decision, with the probes answering what the case says."""
     def run(info, has_rpu=True, has_dovi_tool=True, tracks=None, logs=None):
         monkeypatch.setattr(run_module.dolbyvision, "read_video_info",
-                            lambda path: info)
+                            lambda path, **_: info)
         monkeypatch.setattr(run_module.dolbyvision, "stream_has_rpu",
                             lambda path: has_rpu)
         monkeypatch.setattr(run_module, "_has_tool",
