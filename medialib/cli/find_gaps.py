@@ -42,7 +42,6 @@ from medialib.lib import (
     clioptions,
     enums,
     overwrite,
-    plurality,
     prefixes,
     runlog,
     safety,
@@ -161,7 +160,7 @@ def _listing(directory: str) -> tuple[list[str], list[str]]:
 
 def _run_files(files: list[str]) -> list[str]:
     """The files of the commonest kind: what the folder is a run OF."""
-    return [files[i] for i in plurality.plurality_kind_indices(files)]
+    return [files[i] for i in prefixes.plurality_kind_indices(files)]
 
 
 def episodes_of(name: str) -> list[tuple[int, int]]:
