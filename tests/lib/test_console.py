@@ -19,6 +19,11 @@ from medialib.lib.statusline import state
 
 pytestmark = pytest.mark.pure
 
+needs_lock = pytest.mark.skipif(
+    not runlog.can_lock(),
+    reason="a host that cannot lock holds nothing to observe, and fcntl is "
+           "not built into the Windows interpreter")
+
 
 @pytest.fixture(autouse=True)
 def _fresh(monkeypatch):
@@ -141,9 +146,7 @@ def _report_whether_the_lock_is_free(lock_file: str, answer_file: str) -> None:
 
 
 @pytest.mark.fs
-@pytest.mark.skipif(not runlog.can_lock(),
-                    reason="a host that cannot lock holds nothing to observe, and "
-                           "fcntl is not built into the Windows interpreter")
+@needs_lock
 def test_a_refresh_holds_the_lock_while_it_draws(tmp_path, monkeypatch):
     """A refresh must not land between a worker's erase and the line that
     erase made room for, which would put the row and the line on one row."""
@@ -176,6 +179,7 @@ def test_without_flock_the_lock_opens_no_file(tmp_path, monkeypatch, capsys):
 
 
 @pytest.mark.fs
+@needs_lock
 def test_the_lock_can_be_taken_again_by_the_thread_that_holds_it(
         tmp_path, monkeypatch):
     monkeypatch.setenv("HAVE_FLOCK", "1")
@@ -188,6 +192,7 @@ def test_the_lock_can_be_taken_again_by_the_thread_that_holds_it(
 # --- the counters -------------------------------------------------------------
 
 @pytest.mark.fs
+@needs_lock
 def test_a_counted_line_carries_its_position(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("HAVE_FLOCK", "1")
     run = console.Console(str(tmp_path))
@@ -200,12 +205,15 @@ def test_a_counted_line_carries_its_position(tmp_path, monkeypatch, capsys):
 @pytest.mark.fs
 def test_quiet_counts_without_printing_unless_the_line_must_be_said(
         tmp_path, monkeypatch, capsys):
-    monkeypatch.setenv("HAVE_FLOCK", "1")
+    """Without flock, so it runs on every host: the line carries no
+    position then, which the test above covers."""
+    monkeypatch.setenv("HAVE_FLOCK", "")
     monkeypatch.setenv("LOG_VERBOSITY", "quiet")
     run = console.Console(str(tmp_path))
     run.counted("done", 2)
     run.counted("FAILED", 2, always=True, after="  why\n")
-    assert _stderr(capsys) == "[2/2] FAILED\n  why\n"
+    assert _stderr(capsys) == "FAILED\n  why\n"
+    assert run.value("position") == 2
 
 
 def test_a_counter_nobody_bumped_reads_as_nought(tmp_path):
