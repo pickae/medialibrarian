@@ -12,7 +12,7 @@ import pytest
 
 from medialib.lib import filmrecord
 
-pytestmark = pytest.mark.pure
+pytestmark = pytest.mark.stubbed
 
 ANSWER = '{"tracks": []}'
 
