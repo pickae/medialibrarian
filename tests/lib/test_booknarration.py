@@ -1272,6 +1272,55 @@ class TestNarrateBook:
         _assert_dead(int(engine_pid_file.read_text()), "engine")
         _assert_dead(int(helper_pid_file.read_text()), "helper")
 
+    @pytest.mark.skipif(_SLEEP is None, reason="no sleep(1) on this host")
+    @pytest.mark.parametrize("verbose", ["0", "1"])
+    def test_an_interrupt_while_the_engine_is_starting_still_stops_it(
+            self, nb, monkeypatch, verbose):
+        """The window the two cases above step around on purpose: the
+        interrupt lands while the engine's process exists but Popen has not
+        handed it back yet. Popen raising there would leave the call nothing
+        to kill, and the engine would run on after the run had ended - writing
+        into the scratch it had just removed.
+
+        The forked child sends the interrupt itself before it execs, which is
+        exactly that window, and wide on a platform that closes every
+        descriptor up to the limit one by one before exec."""
+        checkout = nb.tmp_path / "checkout"
+        (checkout / "python_env" / "bin").mkdir(parents=True)
+        (checkout / "app.py").write_text("x\n", encoding="ascii")
+        engine_pid_file = nb.tmp_path / "engine.pid"
+        exe = checkout / "python_env" / "bin" / "python"
+        exe.write_text("#!/bin/bash\nexec %s 60\n" % _SLEEP, encoding="ascii")
+        os.chmod(str(exe), 0o755)
+        os.environ["narrationHome"] = str(checkout)
+        os.environ["narrationPython"] = str(exe)
+        os.environ["narrationDevice"] = "cpu"
+        os.environ["narrationVerbose"] = verbose
+
+        def interrupt_the_parent():
+            engine_pid_file.write_text(str(os.getpid()))
+            os.kill(os.getppid(), signal.SIGTERM)
+
+        popen = subprocess.Popen
+        monkeypatch.setattr(
+            bn.subprocess, "Popen",
+            lambda *a, **kw: popen(*a, preexec_fn=interrupt_the_parent, **kw))
+
+        class Interrupted(Exception):
+            pass
+
+        def interrupt(_number, _frame):
+            raise Interrupted
+
+        previous = signal.signal(signal.SIGTERM, interrupt)
+        try:
+            with pytest.raises(Interrupted):
+                bn.narrate_book(str(nb.tmp_path / "book.epub"),
+                                str(nb.tmp_path / "out"))
+        finally:
+            signal.signal(signal.SIGTERM, previous)
+        _assert_dead(int(engine_pid_file.read_text()), "engine")
+
 
 # --- the progress ------------------------------------------------------------------
 

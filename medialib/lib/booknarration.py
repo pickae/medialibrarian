@@ -23,7 +23,7 @@ import stat
 import subprocess
 import sys
 
-from medialib.lib import runcontext, toolcapture
+from medialib.lib import runcontext, safety, toolcapture
 from medialib.lib.booklanguage import book_language_code
 from medialib.lib.enums import lower_extension_of, shell_lower
 from medialib.lib.formatting import awk_gt, awk_number, fmt_clock
@@ -870,19 +870,29 @@ def _kill_engine_tree(proc):
     proc.wait()
 
 
+def _start_engine(argv, cwd, env, stdout):
+    """The engine, in a session of its own. Called inside
+    safety.interrupts_held, with the handle stored before the hold ends: an
+    interrupt that cut the start short would leave the caller nothing to kill,
+    and the engine would go on to run after the run itself had ended."""
+    return subprocess.Popen(list(argv), cwd=cwd, env=env,
+                            stdin=subprocess.DEVNULL, stdout=stdout,
+                            stderr=subprocess.STDOUT, start_new_session=True)
+
+
 def _quiet_run(argv, log_file, cwd, env):
     """The quiet engine call: its output goes only to the log. An interrupt
     arriving while the engine runs kills the engine's whole process group and
     waits for it, as the tee path below does."""
     with open(log_file, "wb") as handle:
-        proc = subprocess.Popen(list(argv), cwd=cwd, env=env,
-                                stdin=subprocess.DEVNULL,
-                                stdout=handle, stderr=subprocess.STDOUT,
-                                start_new_session=True)
+        proc = None
         try:
+            with safety.interrupts_held():
+                proc = _start_engine(argv, cwd, env, handle)
             proc.wait()
         except BaseException:
-            _kill_engine_tree(proc)
+            if proc is not None:
+                _kill_engine_tree(proc)
             raise
         return proc.returncode
 
@@ -898,14 +908,12 @@ def _tee_run(argv, log_file, cwd, env):
     it writes its output, and so would the helpers it had started."""
     with open(log_file, "wb") as handle:
         console = os.fdopen(2, "wb", closefd=False)
-        proc = subprocess.Popen(list(argv), cwd=cwd, env=env,
-                                stdin=subprocess.DEVNULL,
-                                stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT,
-                                start_new_session=True)
-        stdout = proc.stdout
-        assert stdout is not None  # stdout=PIPE
+        proc = None
         try:
+            with safety.interrupts_held():
+                proc = _start_engine(argv, cwd, env, subprocess.PIPE)
+            stdout = proc.stdout
+            assert stdout is not None  # stdout=PIPE
             with stdout:
                 for chunk in iter(lambda: stdout.read(65536), b""):
                     handle.write(chunk)
@@ -913,7 +921,8 @@ def _tee_run(argv, log_file, cwd, env):
             console.flush()
             proc.wait()
         except BaseException:
-            _kill_engine_tree(proc)
+            if proc is not None:
+                _kill_engine_tree(proc)
             raise
         return proc.returncode
 
