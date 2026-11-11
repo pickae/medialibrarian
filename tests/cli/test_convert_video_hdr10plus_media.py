@@ -17,6 +17,7 @@ import subprocess
 import pytest
 
 from medialib.cli import convert_video as rules
+from medialib.cli import convert_video_hdr as hdr
 from medialib.cli import convert_video_run as run_module
 
 FRAMES = 48
@@ -110,11 +111,11 @@ def test_every_frame_gets_its_own_metadata_back(films, monkeypatch):
 
     settings = rules.Settings(encoder="libx265", input_dir=str(source_dir),
                               output_dir=str(tmp_path / "out"))
-    metadata = run_module.prepare_hdr10plus(
+    metadata = hdr.prepare_hdr10plus(
         "film.mkv", str(source_dir / "film.mkv"), str(chunks), settings,
         reframed=False)
     assert metadata
-    assert run_module.restore_hdr10plus("film.mkv", str(chunks), metadata,
+    assert hdr.restore_hdr10plus("film.mkv", str(chunks), metadata,
                                         settings)
 
     expected = [2000 + index for index in range(FRAMES)]
@@ -140,14 +141,14 @@ def test_an_encode_that_lost_frames_is_refused(films, monkeypatch):
     monkeypatch.setattr(run_module.ramscratch, "ram_scratch_dir_for",
                         lambda *a: (str(scratch), 0, 0))
     said = []
-    monkeypatch.setattr(run_module, "log", said.append)
+    monkeypatch.setattr(hdr, "log", said.append)
 
     settings = rules.Settings(encoder="libx265", input_dir=str(source_dir),
                               output_dir=str(tmp_path / "out"))
-    metadata = run_module.prepare_hdr10plus(
+    metadata = hdr.prepare_hdr10plus(
         "film.mkv", str(source_dir / "film.mkv"), str(chunks), settings,
         reframed=False)
-    assert not run_module.restore_hdr10plus("film.mkv", str(chunks), metadata,
+    assert not hdr.restore_hdr10plus("film.mkv", str(chunks), metadata,
                                             settings)
     assert (chunks / "video.mkv").read_bytes() == before
     assert any("the encode has %d frames" % (FRAMES // 2) in line

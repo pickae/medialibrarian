@@ -1088,69 +1088,17 @@ def main(argv: list, program: str = "convert-images") -> int:
     # about what it would cost to store, so the check would only refuse a
     # conversion nobody asked it to judge.
     skip_starved = not always and not reverse
-    options = {
-        "crop": crop,
-        "skipStarved": skip_starved,
-        "format": image_format,
-        "chroma": chroma,
-        "quality": quality,
-        # Derived once, here: it is the same number for every conversion of the
-        # run, and the workers that read it are separate processes.
-        "effortLevel": FORMATS[image_format].level(speed),
-        "fuzzCommand": "%s%%" % (result.values["fuzz"] or "10"),
-        "maxResCommand": "%dx%s>" % (UNBOUNDED_EDGE, max_res),
-        "maxHeight": int(max_res) if max_res.isdigit() else 0,
-    }
-    # This run only asks the GPU where the card can do the whole of what is
-    # wanted: not for -c, whose trim decides per image what to encode, and not
-    # for an -m it could not read as a height. Under a lane the run that set it
-    # asks instead, -c included: the trim is measured here and done by the card.
-    encoder = ""
-    lane = os.environ.get(LANE_VARIABLE, "")
-    if image_format == CHROMA_FORMAT and not reverse and options["maxHeight"]:
-        if lane:
-            options["gpuLane"] = lane
-            options["gpuTrim"] = bool(os.environ.get(LANE_TRIM_VARIABLE))
-        elif not crop:
-            encoder = av1gpu.binary(log)
-    # -l and -s mean what they mean on the CPU; what av1gpu has to be asked
-    # for to give the same was measured, not assumed.
-    if encoder:
-        options["gpuPreset"], options["gpuQuality"] = \
-            encodercalibration.active().gpu_settings(speed, quality)
+    options, encoder = _settle_options(result.values, crop, skip_starved,
+                                       image_format, chroma, quality, speed,
+                                       max_res, reverse)
     jobs = int(result.values["jobs"]
                or max(1, int(runlog.cpu_count()
                              / threads_per_conversion(image_format, speed))))
 
     runlog.settle_flock()
-    tools = [imagemagick.CONVERT_SPEC] + (
-        [imagemagick.IDENTIFY_SPEC] if crop or skip_starved else [])
-    skip_preflight = bool(os.environ.get("SKIP_TOOL_PREFLIGHT", ""))
-    if tooldeps.require_tools(program, tools,
-                              skip_preflight=skip_preflight):
+    if _missing_tools(program, image_format, reverse,
+                      crop or skip_starved):
         return 1
-    # Having ImageMagick is not the same as having an ImageMagick that can do
-    # THIS format: each one is a separate delegate the build was or was not
-    # given, and a build without it converts nothing while failing one image at
-    # a time. -r reads the format instead of writing it, so that is what is
-    # asked about.
-    if imagemagick.require_format(program, image_format, writing=not reverse,
-                                  skip_preflight=skip_preflight):
-        return 1
-    # fdupes is the one tool whose absence changes WHAT happens rather than
-    # whether it happens. A parent may have settled it already; inherit that
-    # instead of warning a second time.
-    if runcontext.get("HAVE_FDUDES", None) is None:
-        if tooldeps.tool_present("fdupes"):
-            runcontext.settle("HAVE_FDUDES", "1")
-        else:
-            runcontext.settle("HAVE_FDUDES", "")
-            log("WARNING: fdupes not found (apt install fdupes) - the input "
-                "will not be de-duplicated,")
-            log("         so identical files are converted and stored as "
-                "separate copies. The")
-            log("         conversion itself is unaffected.")
-    runlog.warn_uncounted_progress()
 
     # Nothing to convert? Say so before the input is de-duplicated, pruned and
     # lower-cased, so a refused run leaves it exactly as it was. A 0-byte image
@@ -1195,16 +1143,7 @@ def main(argv: list, program: str = "convert-images") -> int:
 
         safety.set_run_footer(footer)
 
-        if runcontext.get("HAVE_FDUDES", None):
-            toolcapture.watched(["fdupes", "-rdN", input_dir],
-                                skipped="duplicates were not removed",
-                                stdout=subprocess.DEVNULL)
-        os.makedirs(output_dir, exist_ok=True)
-        _prune(input_dir)
-        _drop_partials(output_dir)
-        _prune(output_dir)
-        safety.lower_case_extensions(os.path.realpath(input_dir))
-        _mirror_folders(input_dir, output_dir)
+        _prepare_folders(input_dir, output_dir)
 
         # Resolved BEFORE the move into the input: a relative pair resolved
         # after it lands inside the input folder, where nothing exists, and
@@ -1242,6 +1181,94 @@ def main(argv: list, program: str = "convert-images") -> int:
         return workerpool.exit_status(1 if state.counter("failed") else 0)
     finally:
         ramscratch.run_exit_cleanup()
+
+
+def _settle_options(values: dict, crop: bool, skip_starved: bool,
+                    image_format: str, chroma: str, quality: int, speed: int,
+                    max_res: str, reverse: bool) -> tuple:
+    """The options every conversion of the run reads, and the av1gpu binary
+    this run encodes on itself ("" for none)."""
+    options = {
+        "crop": crop,
+        "skipStarved": skip_starved,
+        "format": image_format,
+        "chroma": chroma,
+        "quality": quality,
+        # Derived once, here: it is the same number for every conversion of the
+        # run, and the workers that read it are separate processes.
+        "effortLevel": FORMATS[image_format].level(speed),
+        "fuzzCommand": "%s%%" % (values["fuzz"] or "10"),
+        "maxResCommand": "%dx%s>" % (UNBOUNDED_EDGE, max_res),
+        "maxHeight": int(max_res) if max_res.isdigit() else 0,
+    }
+    # This run only asks the GPU where the card can do the whole of what is
+    # wanted: not for -c, whose trim decides per image what to encode, and not
+    # for an -m it could not read as a height. Under a lane the run that set it
+    # asks instead, -c included: the trim is measured here and done by the card.
+    encoder = ""
+    lane = os.environ.get(LANE_VARIABLE, "")
+    if image_format == CHROMA_FORMAT and not reverse and options["maxHeight"]:
+        if lane:
+            options["gpuLane"] = lane
+            options["gpuTrim"] = bool(os.environ.get(LANE_TRIM_VARIABLE))
+        elif not crop:
+            encoder = av1gpu.binary(log)
+    # -l and -s mean what they mean on the CPU; what av1gpu has to be asked
+    # for to give the same was measured, not assumed.
+    if encoder:
+        options["gpuPreset"], options["gpuQuality"] = \
+            encodercalibration.active().gpu_settings(speed, quality)
+    return options, encoder
+
+
+def _missing_tools(program: str, image_format: str, reverse: bool,
+                   identify: bool) -> bool:
+    """True, said, when a tool the run needs is missing; fdupes, which only
+    changes what is done, is settled and warned about instead."""
+    tools = [imagemagick.CONVERT_SPEC] + (
+        [imagemagick.IDENTIFY_SPEC] if identify else [])
+    skip_preflight = bool(os.environ.get("SKIP_TOOL_PREFLIGHT", ""))
+    if tooldeps.require_tools(program, tools,
+                              skip_preflight=skip_preflight):
+        return True
+    # Having ImageMagick is not the same as having an ImageMagick that can do
+    # THIS format: each one is a separate delegate the build was or was not
+    # given, and a build without it converts nothing while failing one image at
+    # a time. -r reads the format instead of writing it, so that is what is
+    # asked about.
+    if imagemagick.require_format(program, image_format, writing=not reverse,
+                                  skip_preflight=skip_preflight):
+        return True
+    # fdupes is the one tool whose absence changes WHAT happens rather than
+    # whether it happens. A parent may have settled it already; inherit that
+    # instead of warning a second time.
+    if runcontext.get("HAVE_FDUDES", None) is None:
+        if tooldeps.tool_present("fdupes"):
+            runcontext.settle("HAVE_FDUDES", "1")
+        else:
+            runcontext.settle("HAVE_FDUDES", "")
+            log("WARNING: fdupes not found (apt install fdupes) - the input "
+                "will not be de-duplicated,")
+            log("         so identical files are converted and stored as "
+                "separate copies. The")
+            log("         conversion itself is unaffected.")
+    runlog.warn_uncounted_progress()
+    return False
+
+
+def _prepare_folders(input_dir: str, output_dir: str) -> None:
+    """The input de-duplicated, pruned and lower-cased, and the output's
+    partial files dropped and its folder tree mirrored from the input."""
+    if runcontext.get("HAVE_FDUDES", None):
+        toolcapture.watched(["fdupes", "-rdN", input_dir],
+                            skipped="duplicates were not removed",
+                            stdout=subprocess.DEVNULL)
+    os.makedirs(output_dir, exist_ok=True)
+    _prune(input_dir)
+    _drop_partials(output_dir)
+    _prune(output_dir)
+    safety.lower_case_extensions(os.path.realpath(input_dir))
+    _mirror_folders(input_dir, output_dir)
 
 
 # --- --calibrate ---------------------------------------------------------------

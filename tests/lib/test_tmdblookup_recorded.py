@@ -52,7 +52,7 @@ import os
 
 import pytest
 
-from medialib.lib import tmdblookup
+from medialib.lib import tmdbclient, tmdblookup
 from medialib.lib.safety import SkipLog
 from tests import blackbox, treefiles
 
@@ -223,7 +223,7 @@ def _replay(recording):
 
 def _record(recording):
     """`_curl` itself, keeping every question and answer as it goes."""
-    real = tmdblookup._curl
+    real = tmdbclient._curl
 
     def curl(url, params):
         body = real(url, params)
@@ -298,7 +298,7 @@ def _tag(root, recording, monkeypatch):
     module attribute put back by hand is put back only when the case passes,
     and a case that failed would leave the next one talking to the network.
     """
-    monkeypatch.setattr(tmdblookup, "_curl",
+    monkeypatch.setattr(tmdbclient, "_curl",
                         (_record if _REGEN else _replay)(recording))
     monkeypatch.chdir(root)
     ambiguous: list = []

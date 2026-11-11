@@ -2,8 +2,10 @@
 
 The decisions - the profile tables, the quality level, the chunk plan, the
 argument string, the -t test - are `medialib/cli/convert_video.py`. This is the
-run around them: the validation and hardware detection that happen once, the
-per-file encode, and the closing report.
+run around them: the per-file plan and its look-ahead, and the closing report.
+What it settles once is `convert_video_startup.py`; what it asks the tools,
+`convert_video_probes.py`; the Dolby Vision and HDR10+ side-work,
+`convert_video_hdr.py`; and the encodes and the mux, `convert_video_encode.py`.
 
 The order of the per-file work is the point of it. The video encode is by far the
 most expensive thing here and lives in RAM until the mux writes it out, so it is
@@ -13,25 +15,25 @@ written to disk on its own and marked " (video only)".
 """
 
 import os
-import re
 import shutil
-import subprocess
 import sys
 import threading
 import time
 
 from medialib import commands
 from medialib.cli import convert_video as rules
+from medialib.cli import convert_video_encode as encode
+from medialib.cli import convert_video_hdr as hdr
+from medialib.cli import convert_video_probes as probes
+from medialib.cli import convert_video_source as videosource
+from medialib.cli import convert_video_startup as startup
 from medialib.lib import (
     clioptions,
-    codecs,
     console,
     durationcheck,
     dynamicqueue,
-    enums,
     ffmpegselect,
     formatting,
-    hostos,
     pausecontrol,
     ramscratch,
     resolutions,
@@ -41,7 +43,6 @@ from medialib.lib import (
     segments,
     settings,
     statusline,
-    toolcapture,
     tooldeps,
     upscale,
     videocrop,
@@ -50,11 +51,6 @@ from medialib.lib import (
 )
 from medialib.lib.runlog import log
 
-# The sysfs PCI vendor id of the iGPU maker this script decodes with. Matching on
-# it is what keeps a mixed Intel-plus-NVIDIA box from mistaking the NVIDIA node for
-# the iGPU.
-INTEL_PCI_VENDOR = "0x8086"
-
 # How many files to convert are kept prepared ahead of the one encoding. Files
 # the preparation passes over - up to date, or not worth converting - do not
 # count, so this is two encodes' worth of slack for a preparation that runs
@@ -62,991 +58,6 @@ INTEL_PCI_VENDOR = "0x8086"
 # one thing a prepared file can hold that is large, a Dolby Vision
 # intermediate, has a slot of its own (Run.dv_slot).
 LOOKAHEAD = 2
-
-
-def _run(argv: list, capture: bool = False):
-    try:
-        return subprocess.run(argv, stdin=subprocess.DEVNULL,
-                              stdout=subprocess.DEVNULL,
-                              stderr=subprocess.PIPE if capture
-                              else subprocess.DEVNULL)
-    except OSError:
-        class Failed:
-            returncode = 127
-            stderr = b""
-        return Failed()
-
-
-def _has_tool(name: str) -> bool:
-    return shutil.which(name) is not None
-
-
-# --- what this build and this machine can do ----------------------------------
-
-def ffmpeg_takes_args(binary: str, args: str) -> bool:
-    """The one-frame encode the build check is made of: true when the build runs
-    it AND does not report a parameter it had to ignore.
-
-    Only one of the two ways a build can be too old is loud. An option ffmpeg
-    itself does not know fails the encode; but a key inside -svtav1-params that the
-    linked SVT-AV1 does not know is logged as "Error parsing option" and then
-    IGNORED. A build that applies half the tuning looks exactly like one that
-    applies all of it, which is why this reads the encoder's complaints rather than
-    comparing version numbers.
-    """
-    done = _run([binary, "-hide_banner", "-nostdin", "-loglevel", "warning",
-                 "-f", "lavfi", "-i", "color=c=black:s=256x256:r=5:d=1"]
-                + args.split() + ["-frames:v", "1", "-f", "null", "-"],
-                capture=True)
-    if done.returncode != 0:
-        return False
-    return b"error parsing option" not in done.stderr.lower()
-
-
-def ffmpeg_takes_profile(binary: str, args: str) -> bool:
-    """True when that build accepts every argument the selected profile asks for.
-
-    The tuning info is the one argument allowed to be negotiated rather than
-    demanded: a row asks for uhq, and a build that does not know the value refuses
-    the encode over it - but the run does not need uhq, it FALLS BACK to hq, so
-    judging a build on the un-demoted row rejects it for a reason that never
-    applies to the encode it would actually run.
-    """
-    if ffmpeg_takes_args(binary, args):
-        return True
-    wanted = " -tune %s " % rules.NVENC_TUNE_WANTED
-    if wanted not in " %s " % args:
-        return False
-    return ffmpeg_takes_args(binary, args.replace(
-        wanted, " -tune %s " % rules.NVENC_TUNE_FALLBACK))
-
-
-def svt_av1_hdr_works(binary: str) -> bool:
-    """True when that build's libsvtav1 is SVT-AV1-HDR: it parses a key only the
-    fork has. A build without libsvtav1 at all fails the encode, and a mainline
-    one logs the key as unparsed - both answer False."""
-    return ffmpeg_takes_args(binary, rules.SVT_AV1_HDR_PROBE)
-
-
-_SVT_AV1_RELEASE = re.compile(rb"Encoder Lib v(\d+)\.(\d+)\.(\d+)")
-
-
-def svt_av1_release(binary: str) -> tuple:
-    """The SVT-AV1 release that build's libsvtav1 is built on, as (major, minor,
-    patch), or () when it does not say - no libsvtav1, or a library too old to
-    log its banner.
-
-    Read from the banner the library itself logs, since ffmpeg's own version says
-    nothing about it. SVT-AV1-HDR numbers its releases after the mainline one it
-    is based on, so the two compare; the commits a nightly carries past its
-    release are left out, because they are not comparable across the two.
-    """
-    done = _run([binary, "-hide_banner", "-nostdin", "-loglevel", "info",
-                 "-f", "lavfi", "-i", "color=c=black:s=256x256:r=5:d=1",
-                 "-c:v", "libsvtav1", "-frames:v", "1", "-f", "null", "-"],
-                capture=True)
-    found = _SVT_AV1_RELEASE.search(done.stderr or b"")
-    return tuple(int(part) for part in found.groups()) if found else ()
-
-
-class SvtBuildRank:
-    """The rank convert-video's ffmpeg ladder orders SVT-AV1 builds by.
-
-    The fork is worth more than a newer encoder only when the run uses what it
-    does that mainline cannot: its PQ variance-boost curve, or av1Grain's film
-    grain tune. Such a run ranks SVT-AV1-HDR first and the release second; any
-    other ranks the newer release first, with the fork still winning a tie. Each
-    build's answers are kept, for the startup summary and so the build that
-    wins is not asked again.
-    """
-
-    def __init__(self, fork_use: str) -> None:
-        # What the run would use the fork for, "" when nothing.
-        self.fork_use = fork_use
-        self.seen: dict = {}
-
-    def facts(self, binary: str) -> tuple:
-        """(is SVT-AV1-HDR, release) for that build."""
-        if binary not in self.seen:
-            self.seen[binary] = (svt_av1_hdr_works(binary),
-                                 svt_av1_release(binary))
-        return self.seen[binary]
-
-    def __call__(self, binary: str) -> tuple:
-        fork, release = self.facts(binary)
-        return (fork, release) if self.fork_use else (release, fork)
-
-    def note(self, chosen: str) -> str:
-        """Why the build chosen is the SVT-AV1 one it is, when a build of the
-        other kind was also able to run the profile; "" when there was no such
-        choice."""
-        fork, release = self.facts(chosen)
-        others = [(binary, facts) for binary, facts in self.seen.items()
-                  if facts[0] != fork]
-        if not others:
-            return ""
-        other, (_other_fork, other_release) = others[0]
-        if fork:
-            if other_release > release:
-                return ("chosen over the newer mainline SVT-AV1 %s in %s, "
-                        "because this run uses %s"
-                        % (_release_text(other_release), other,
-                           self.fork_use))
-            return ""
-        return ("passed over (%s, SVT-AV1 %s): this run uses neither its PQ "
-                "curve (no PQ source left to convert) nor av1Grain's film "
-                "grain tune, and this build's SVT-AV1 %s is newer"
-                % (other, _release_text(other_release),
-                   _release_text(release)))
-
-
-def _release_text(release: tuple) -> str:
-    return ".".join(str(part) for part in release) if release else "of unknown release"
-
-
-def pq_source_to_convert(settings) -> bool:
-    """Whether any source this run still has to convert is PQ HDR - the one kind
-    of file SVT-AV1-HDR encodes differently by itself.
-
-    A source whose output already exists is passed over: it is usually finished,
-    and a finished HDR file in the folder must not hold every new SDR one to the
-    fork. Without an ffprobe on PATH to ask, the answer is yes, which keeps the
-    fork where it was always preferred.
-    """
-    if not _has_tool("ffprobe"):
-        return True
-    for relative in _sources(settings.input_dir):
-        output = rules.output_path_of(relative, settings.input_dir,
-                                      settings.output_dir)
-        if os.path.isfile(output):
-            continue
-        source = os.path.join(settings.input_dir, relative)
-        if rules.video_color_space(source)[2] == "smpte2084":
-            return True
-    return False
-
-
-def nvenc_works(encoder: str) -> bool:
-    """True when a one-frame test encode succeeds: GPU present, driver up, that
-    codec's NVENC block available."""
-    return _run(["ffmpeg", "-hide_banner", "-v", "error", "-f", "lavfi",
-                 "-i", "color=c=black:s=256x256:r=5:d=1", "-c:v", encoder,
-                 "-pix_fmt", "p010le", "-f", "null", "-"]).returncode == 0
-
-
-def nvenc_tune_works(encoder: str, tune: str) -> bool:
-    """True when that encoder will really accept that tuning info.
-
-    Asked by encoding a frame rather than by reading the option's documented
-    range, because the answer depends on the SDK the build was compiled against,
-    the driver and the GPU generation at once - and only an actual encode has all
-    three in play.
-    """
-    return _run(["ffmpeg", "-hide_banner", "-v", "error", "-f", "lavfi",
-                 "-i", "color=c=black:s=256x256:r=5:d=1", "-c:v", encoder,
-                 "-pix_fmt", "p010le", "-preset", "p7", "-tune", tune,
-                 "-f", "null", "-"]).returncode == 0
-
-
-def vaapi_works(node: str) -> bool:
-    """True when a VA display can actually be opened on that node - the true gate
-    for using it as a decode device.
-
-    A functional probe rather than a guess from sysfs, so it reports what the
-    machine can do right now. Only the DEVICE is exercised, not a particular
-    filter, to avoid rejecting a working iGPU over an unrelated missing one.
-    """
-    return _run(["ffmpeg", "-hide_banner", "-v", "error", "-init_hw_device",
-                 "vaapi=va:" + node, "-f", "lavfi",
-                 "-i", "color=c=black:s=64x64:r=1:d=0.1", "-f", "null",
-                 "-"]).returncode == 0
-
-
-def videotoolbox_works() -> bool:
-    """True when a VideoToolbox device can be opened - the macOS answer to the
-    question :func:`vaapi_works` asks on Linux.
-
-    Every Mac has the hardware, Intel and Apple Silicon alike, so what this is
-    really testing is whether the ffmpeg on PATH was built with it: a
-    Homebrew build is, and a static build fetched from elsewhere may not be.
-    The probe is the same shape as the VAAPI one - open the device, decode
-    nothing - so it rejects a build that cannot use the hardware without
-    rejecting one that merely lacks some unrelated filter.
-    """
-    return _run(["ffmpeg", "-hide_banner", "-v", "error", "-init_hw_device",
-                 "videotoolbox=vt", "-f", "lavfi",
-                 "-i", "color=c=black:s=64x64:r=1:d=0.1", "-f", "null",
-                 "-"]).returncode == 0
-
-
-def intel_render_node() -> str:
-    """The Intel render node to decode on, or "".
-
-    The sysfs PCI vendor id is preferred. When the vendor files are absent (some
-    virtualised hosts) it falls back to the first node a VA display can be opened
-    on.
-    """
-    try:
-        nodes = sorted(name for name in os.listdir("/dev/dri")
-                       if name.startswith("renderD"))
-    except OSError:
-        return ""
-
-    def vendor_of(name):
-        try:
-            with open("/sys/class/drm/%s/device/vendor" % name) as handle:
-                return handle.read().strip()
-        except OSError:
-            return ""
-
-    return pick_render_node(nodes, vendor_of, vaapi_works)
-
-
-def pick_render_node(nodes: list, vendor_of, works) -> str:
-    """The node out of <nodes> (``renderD*`` names, in order) to decode on, or "".
-
-    An Intel node a VA display opens on comes first. Only then a node with no
-    vendor to read, the first one that opens; a node whose vendor is known and is
-    not Intel is never taken, whatever VA-API driver may open on it.
-    """
-    for name in nodes:
-        node = "/dev/dri/" + name
-        if vendor_of(name) == INTEL_PCI_VENDOR and works(node):
-            return node
-    for name in nodes:
-        node = "/dev/dri/" + name
-        if vendor_of(name):
-            continue
-        if works(node):
-            return node
-    return ""
-
-
-def encoder_takes_master_display(encoder: str) -> bool:
-    """Whether this nvenc build has the HDR static-metadata options; an older one
-    keeps colour signalling only."""
-    try:
-        done = subprocess.run(["ffmpeg", "-hide_banner", "-h",
-                               "encoder=" + encoder],
-                              stdin=subprocess.DEVNULL,
-                              stdout=subprocess.PIPE,
-                              stderr=subprocess.DEVNULL)
-    except OSError:
-        return False
-    return b"-master_display" in done.stdout
-
-
-def encoder_takes_dolby_vision(encoder: str) -> bool:
-    """Whether the SELECTED encoder can accept a source's RPU and write it back.
-
-    Asked of the encoder rather than assumed from an ffmpeg version: only one that
-    exposes the option can do it (libx265 and libsvtav1 do; the NVENC encoders have
-    no RPU support at all), and an ffmpeg too old to offer it then simply behaves
-    as it did before rather than erroring on an unknown argument.
-    """
-    try:
-        done = subprocess.run(["ffmpeg", "-hide_banner", "-h",
-                               "encoder=" + encoder],
-                              stdin=subprocess.DEVNULL,
-                              stdout=subprocess.PIPE,
-                              stderr=subprocess.DEVNULL)
-    except OSError:
-        return False
-    return b"-dolbyvision" in done.stdout
-
-
-# --- the Dolby Vision preparation ---------------------------------------------
-
-def normalise_dolby_vision(relative: str, settings, output_dir: str) -> tuple:
-    """Bring a dual-layer profile 7 source to single-layer 8.1, so its RPU can
-    ride through the re-encode after all, and answer with the video-only file to
-    encode INSTEAD of the source, plus the scratch holding it.
-
-    Profile 7 carries its RPU in an enhancement layer no encoder here can
-    re-encode; 8.1 is the single-layer form of the very same Dolby Vision, and
-    reaching it needs no re-encode at all. Doing it here is what keeps a conversion
-    from having to be preceded by an ingest: a profile 7 source that is not
-    normalised first loses its dynamic metadata, and whether the user thought of
-    that is not what should decide it.
-
-    Every failure is a fallback to plain HDR10 - the source is never touched, and
-    nothing here can fail the conversion of a file.
-    """
-    from medialib.lib import dolbyvision
-    source = os.path.join(settings.input_dir, relative)
-
-    missing = []
-    if not _has_tool("dovi_tool"):
-        missing.append("dovi_tool")
-    if not _has_tool("mkvmerge"):
-        missing.append("mkvmerge (mkvtoolnix)")
-    if missing:
-        log("Dolby Vision profile 7 cannot be normalised to 8.1 without %s - "
-            "install it to keep Dolby Vision on dual-layer sources: %s"
-            % (" and ".join(missing), relative))
-        return "", ""
-
-    fps = rules.video_frame_rate(source)
-    if not fps:
-        log("Dolby Vision profile 7 cannot be normalised to 8.1: ffprobe "
-            "reports no usable frame rate, and the converted stream has to be "
-            "given one: %s" % relative)
-        return "", ""
-
-    # The container's claim is not proof of an RPU: a file remuxed by a tool that
-    # copied the configuration record while dropping the RPU still reports profile
-    # 7 with nothing behind it. Asked first, from a few frames, because the
-    # alternative is copying a whole 4K video stream out of the file to find out.
-    if not dolbyvision.stream_has_rpu(source):
-        log("Dolby Vision profile 7 is claimed by the container but the video "
-            "carries no RPU, so there is nothing to normalise: %s" % relative)
-        return "", ""
-
-    # Two files exist at once - mkvmerge reads the converted stream while writing
-    # the Matroska around it - and a video stream is most of a film, so the need is
-    # twice the SOURCE's size: an upper bound rather than an estimate, which is the
-    # direction a capacity check has to err in.
-    try:
-        need = str(os.path.getsize(source) * 2)
-    except OSError:
-        need = ""
-    scratch, on_disk, status = ramscratch.ram_scratch_dir_for(
-        need, "convertVideoDv", output_dir)
-    if status != 0:
-        log("Dolby Vision profile 7 cannot be normalised to 8.1: no scratch "
-            "directory could be created: %s" % relative)
-        return "", ""
-    # Registered as well as handed back by the caller: the release is the ordinary
-    # path, the registration is what covers an interrupt landing before it.
-    ramscratch.add_exit_cleanup([scratch])
-    log("Dolby Vision: normalising the dual-layer profile 7 source to "
-        "single-layer profile 8.1 first, so the encode can carry its RPU (the "
-        "video itself is not re-encoded): %s" % relative)
-    if on_disk:
-        log("Dolby Vision: too large for the RAM scratch, preparing it on disk "
-            "beside the output instead: %s" % relative)
-
-    hevc = os.path.join(scratch, "dv81.hevc")
-    prepared = os.path.join(scratch, "dv81.mkv")
-    if dolbyvision.convert_to_profile81(source, hevc, log=log) != 0:
-        log("Dolby Vision: the profile 7 -> 8.1 conversion failed, encoding the "
-            "source as plain HDR10 instead: %s" % relative)
-        ramscratch.release_exit_cleanup([scratch])
-        return "", ""
-
-    # --default-duration is not decoration: the raw stream has no timing, and
-    # without it mkvmerge falls back to 25 fps - which would misplace every chunk
-    # boundary cut from the intermediate.
-    done = toolcapture.watched(
-        ["mkvmerge", "--quiet", "-o", prepared, "--default-duration",
-         "0:%sfps" % fps, hevc], announce=False, on_missing=127,
-        skipped="encoding as plain HDR10 instead", stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-    # The converted stream has served its purpose the moment it is inside the
-    # Matroska; free it before the encode starts rather than holding both.
-    _remove(hevc)
-    if not toolcapture.warnings_at_most(done.returncode):
-        log("Dolby Vision: the profile 8.1 stream could not be muxed (%s), "
-            "encoding the source as plain HDR10 instead: %s"
-            % (done.stderr.decode("utf-8", "replace").strip() or "no output",
-               relative))
-        ramscratch.release_exit_cleanup([scratch])
-        return "", ""
-
-    # Verified before a frame is encoded from it, the same way the source was
-    # classified. Anything else is thrown away and the source encoded as it is -
-    # which still has its RPU, so nothing is lost that was not lost already.
-    profile, enhancement = rules.dolby_vision_profile(prepared)
-    reason = ""
-    if not profile:
-        reason = "the result signals no Dolby Vision at all"
-    elif enhancement == "1":
-        reason = "the result is still dual-layer (profile %s)" % profile
-    if reason:
-        log("Dolby Vision: %s, encoding the source as plain HDR10 instead: %s"
-            % (reason, relative))
-        ramscratch.release_exit_cleanup([scratch])
-        return "", ""
-
-    log("Dolby Vision: the source now reads as single-layer profile %s, and is "
-        "encoded from that: %s" % (profile, relative))
-    return prepared, scratch
-
-
-def dolby_vision_probe(relative: str, settings) -> tuple:
-    """True when this file can really be encoded with its RPU carried through,
-    decided by actually running the encoder for one frame with the exact arguments
-    the real encode would use.
-
-    That covers every way it can fail - a profile ffmpeg cannot map onto the
-    output codec, colour signalling it cannot classify, a build without the
-    feature - in one check, and it costs a single frame. On failure the encoder's
-    first complaint comes back so the caller can report why.
-    """
-    source = rules.video_source_for(relative, settings.input_dir,
-                                    settings.dolby_vision_source)
-    probing = rules.Settings(**dict(settings.__dict__, dolby_vision_mode="1"))
-    args = rules.build_video_args(
-        rules.profile_args(rules.VIDEO_PROFILES, settings.video_profile),
-        source, probing)
-    argv = (["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
-             "-nostats"] + settings.decode_accel.split()
-            + ["-i", source, "-an", "-sn", "-map", "0:v:0", "-frames:v", "1"]
-            + args.split() + ["-f", "null", "-"])
-    done = _run(argv, capture=True)
-    if done.returncode == 0:
-        return True, ""
-    for line in done.stderr.decode("utf-8", "replace").splitlines():
-        if line.strip() and not svt_chatter(line):
-            return False, line
-    return False, ""
-
-
-def dolby_vision_mode_for(relative: str, profile: str, enhancement: str,
-                          settings) -> str:
-    """The mode to encode this file with, as the "1" / "0" / "" value the argument
-    builder takes, with the reason logged.
-
-    The two cases that cannot work are recognised from the source and the encoder
-    rather than attempted; anything else is settled by actually encoding a frame.
-    Note the difference between "" and "0": empty leaves ffmpeg's auto default
-    alone, which is right when there is no RPU to carry, while 0 actively switches
-    DV off for a DV source we have decided against - otherwise auto would enable it
-    by itself and fail an encode already known not to work.
-    """
-    if not profile:
-        return ""
-    if not settings.dv_encoder_support:
-        log("Dolby Vision profile %s present, but %s cannot code an RPU - "
-            "keeping HDR10 only: %s" % (profile, settings.encoder, relative))
-        return ""
-    if enhancement == "1":
-        log("Dolby Vision profile %s is dual-layer, which cannot be re-encoded, "
-            "and could not be normalised to single-layer profile 8.1 here (see "
-            "above) - keeping HDR10 only: %s" % (profile, relative))
-        return "0"
-    worked, reason = dolby_vision_probe(relative, settings)
-    if worked:
-        log("Dolby Vision: carrying the profile %s RPU through the encode: %s"
-            % (profile, relative))
-        return "1"
-    log("Dolby Vision profile %s cannot be encoded here - keeping HDR10 only "
-        "(%s): %s" % (profile, reason or "no reason given", relative))
-    return "0"
-
-
-# --- the HDR10+ round trip ----------------------------------------------------
-
-def prepare_hdr10plus(relative: str, source: str, directory: str, settings,
-                      reframed: bool) -> str:
-    """The source's HDR10+ metadata, read out to a JSON in <directory> so it can
-    be written back into the encode, or "" for a file that does not keep it.
-
-    No encoder here carries HDR10+ through an encode, so it is kept AROUND the
-    encode instead, which works the same with every ffmpeg the run can settle
-    on. Read from the ORIGINAL even when the video is encoded from a Dolby
-    Vision intermediate: the profile 8.1 conversion drops HDR10+ from the stream
-    it writes, and the original still has every frame of it. ``reframed`` is
-    true when the encode is cropped or scaled - which the metadata survives
-    unless it describes processing windows placed in the frame it was graded
-    in.
-
-    Every reason not to keep it is said, and none of them fails the file: what
-    comes out instead is the plain HDR10 the source carries alongside.
-    """
-    from medialib.lib import hdr10plus
-    if not hdr10plus.stream_has_hdr10plus(source):
-        return ""
-    codec = codecs.encoder_codec(settings.encoder)
-    if codec != "hevc":
-        log("HDR10+: the source carries it, but %s writes %s, which it cannot "
-            "be written back into yet - keeping HDR10 only: %s"
-            % (settings.encoder, codec.upper() or "a codec", relative))
-        return ""
-    source_codec = rules._probe(["ffprobe", "-v", "error", "-select_streams",
-                                 "v:0", "-show_entries", "stream=codec_name",
-                                 "-of", "default=nk=1:nw=1", source]).strip()
-    if source_codec != "hevc":
-        log("HDR10+: the source carries it in %s, and it can only be read out "
-            "of HEVC - keeping HDR10 only: %s"
-            % (source_codec.upper() or "an unknown codec", relative))
-        return ""
-    missing = [name for name in ("hdr10plus_tool", "mkvmerge")
-               if not _has_tool(name)]
-    if missing:
-        log("WARNING: HDR10+: the source carries it and %s could keep it, but "
-            "that needs %s - install it to keep HDR10+. Keeping HDR10 only: %s"
-            % (settings.encoder, " and ".join(
-                "mkvmerge (mkvtoolnix)" if name == "mkvmerge" else name
-                for name in missing), relative))
-        return ""
-    if not rules.video_frame_rate(source):
-        log("HDR10+: ffprobe reports no usable frame rate, and the stream it is "
-            "written back into has to be given one - keeping HDR10 only: %s"
-            % relative)
-        return ""
-
-    metadata = os.path.join(directory, "hdr10plus.json")
-    log("HDR10+: reading the source's dynamic metadata, to write it back into "
-        "the encode: %s" % relative)
-    if hdr10plus.extract_metadata(source, metadata, log=log) != 0:
-        log("HDR10+: the metadata could not be read out of the source, keeping "
-            "HDR10 only: %s" % relative)
-        return ""
-    if reframed and hdr10plus.metadata_windows(metadata) > 1:
-        _remove(metadata)
-        log("HDR10+: the metadata places processing windows in the frame it "
-            "was graded in, and this encode is cropped or scaled - keeping "
-            "HDR10 only: %s" % relative)
-        return ""
-    return metadata
-
-
-def restore_hdr10plus(relative: str, directory: str, metadata: str,
-                      settings) -> bool:
-    """The source's HDR10+ <metadata> written into the finished video-only
-    intermediate, in place, without re-encoding it. True when the intermediate
-    now carries it.
-
-    The rewritten video is checked before it replaces anything - as long as
-    the encode, and signalling HDR10+ - so every failure leaves the plain HDR10
-    encode exactly as it was.
-    """
-    from medialib.lib import hdr10plus
-    video = os.path.join(directory, "video.mkv")
-    source = os.path.join(settings.input_dir, relative)
-
-    # The raw stream the metadata is written into, and the Matroska mkvmerge
-    # writes around it, are each about the size of the encode, and the first is
-    # gone before the second is finished - so twice the encode is an upper
-    # bound.
-    try:
-        need = str(os.path.getsize(video) * 2)
-    except OSError:
-        need = ""
-    scratch, _on_disk, status = ramscratch.ram_scratch_dir_for(
-        need, "convertVideoHdr10plus", settings.output_dir)
-    if status != 0:
-        log("HDR10+: no scratch directory could be created, keeping HDR10 "
-            "only: %s" % relative)
-        return False
-    ramscratch.add_exit_cleanup([scratch])
-
-    log("HDR10+: writing the source's dynamic metadata back into the encode "
-        "(the video is not re-encoded): %s" % relative)
-    injected = os.path.join(scratch, "video.mkv")
-    reason = ""
-    if hdr10plus.inject_metadata(video, metadata, injected,
-                                 rules.video_frame_rate(source), scratch,
-                                 log=log) != 0:
-        reason = "it could not be written into the stream"
-    elif _media_duration(injected) < _media_duration(video) - 1:
-        reason = "the rewritten video came out shorter than the encode"
-    elif not hdr10plus.stream_has_hdr10plus(injected):
-        reason = "the rewritten video does not signal it"
-    else:
-        # Moved in beside the encode first and only then renamed over it, so
-        # there is no moment at which neither is there.
-        staged = video + ".hdr10plus"
-        try:
-            shutil.move(injected, staged)
-            os.replace(staged, video)
-        except OSError as error:
-            _remove(staged)
-            reason = "the rewritten video could not replace the encode (%s)" \
-                % error
-    ramscratch.release_exit_cleanup([scratch])
-    if reason:
-        log("HDR10+: %s, keeping HDR10 only: %s" % (reason, relative))
-        return False
-    return True
-
-
-def svt_chatter(line: str) -> bool:
-    """True for a line libsvtav1 wrote about itself rather than about a failure -
-    its banner, the configuration it resolved and its warnings. Its errors are left
-    alone: they are the only thing it says that a caller needs."""
-    return line.startswith(("Svt[info]:", "Svt[warn]:"))
-
-
-def _remove(path: str) -> None:
-    try:
-        os.remove(path)
-    except OSError:
-        pass
-
-
-# --- the encodes --------------------------------------------------------------
-
-def run_quiet_encode(argv: list, label: str = "",
-                     tool: str = "ffmpeg") -> int:
-    """One video encode, with the p/r keys able to stop and continue it and its
-    output kept rather than shown.
-
-    Nothing the encode prints reaches the console while it runs: libsvtav1 alone
-    writes its banner and resolved configuration once per encoder instance -
-    once PER CHUNK of a chunked encode - and parallel chunks would interleave
-    that over the status row. An encode that fails is replayed instead, with the
-    lines that say why, and kept in `logs/`; one that succeeds is never heard
-    from.
-
-    Every video encode goes through here, whole file or chunk, software or NVENC,
-    which is what makes one keypress reach all of them at once.
-    """
-    output = toolcapture.ToolOutput()
-    status = pausecontrol.run_pausable(argv, output=output)
-    if status != 0:
-        toolcapture.report_failure(toolcapture.finished(
-            argv, status, output, label=label, tool=tool))
-    return status
-
-
-def encode_video_whole(relative: str, directory: str, settings) -> int:
-    """The VIDEO of a whole file into a video-only Matroska intermediate.
-
-    Audio, subtitles and attachments are handled separately, so this pass is pure
-    video. Used for files left unchunked - a single chunk, or a clip too short to
-    cut.
-    """
-    source = rules.video_source_for(relative, settings.input_dir,
-                                    settings.dolby_vision_source)
-    args = rules.build_video_args(
-        rules.profile_args(rules.VIDEO_PROFILES, settings.video_profile),
-        source, settings)
-    out = os.path.join(directory, "video.mkv")
-    progress = os.path.join(directory, "prog.0000")
-    if settings.upscale_size:
-        return run_upscaled_encode(settings, source, args, progress, out, 0, -1,
-                                   relative)
-    argv = (["ffmpeg", "-nostdin", "-hide_banner",
-             *toolcapture.ffmpeg_loglevel(), "-nostats", "-progress", progress,
-             "-y"] + settings.decode_accel.split()
-            + ["-i", source, "-an", "-sn", "-map", "0:v:0"] + args.split()
-            + ["-f", "matroska", out])
-    return run_quiet_encode(argv, relative)
-
-
-def run_upscaled_encode(settings, source: str, args: str, progress: str,
-                        out: str, start: int, end: int, label: str = "") -> int:
-    """Frames <start> up to <end> (-1: to the last) of <source> upscaled and
-    encoded into <out>.
-
-    The upscaler reads the source itself, so there is no -ss and no trim here:
-    it is handed frame numbers, and its crop and resize replace ffmpeg's filter
-    chain. A failure removes what was written, because the ffmpeg at the end of
-    the pipe finishes cleanly on whatever it was given, and a chunk that stopped
-    a few frames short would otherwise pass for a whole one.
-    """
-    encode = (["ffmpeg", "-nostdin", "-hide_banner",
-               *toolcapture.ffmpeg_loglevel(), "-nostats", "-progress", progress,
-               "-y",
-               "-f", "yuv4mpegpipe", "-i", "pipe:0"] + args.split()
-              + ["-f", "matroska", out])
-    width, height = settings.upscale_size.split("x")
-    fps_num, _sep, fps_den = settings.upscale_fps.partition("/")
-    values = {"source": source, "cache": settings.upscale_index,
-              "fpsnum": fps_num, "fpsden": fps_den or "1",
-              "start": str(start), "end": str(end),
-              "crop": settings.upscale_crop, "matrix": settings.upscale_matrix,
-              "range": settings.upscale_range, "engine": settings.upscale_engine,
-              "width": width, "height": height}
-    status = run_quiet_encode(upscale.pipeline_argv(
-        settings.upscale_stack, settings.upscale_script, values, encode),
-        label, tool="vspipe | ffmpeg")
-    if status != 0:
-        _remove(out)
-    return status
-
-
-def encode_video_chunk(settings, token: str) -> int:
-    """One time-range of a source into a video-only Matroska chunk: a single
-    parallel job.
-
-    The same profile settings a whole-file encode uses, so every chunk is a
-    keyframe-aligned, stream-copy-compatible piece.
-    """
-    safety.trap_worker_abort()
-    relative, index, total, start, duration = token.split(rules.UNIT)
-
-    source = rules.video_source_for(relative, settings.input_dir,
-                                    settings.dolby_vision_source)
-    directory = segments.chunk_dir_for(settings.chunk_root, relative)
-    os.makedirs(directory, exist_ok=True)
-    out = os.path.join(directory, "%04d.mkv" % int(index))
-
-    args = rules.build_video_args(
-        rules.profile_args(rules.VIDEO_PROFILES, settings.video_profile),
-        source, settings)
-    progress = os.path.join(directory, "prog.%04d" % int(index))
-    chunk_label = "%s (chunk %d of %s)" % (relative, int(index) + 1, total)
-    if settings.upscale_size:
-        # The same boundaries in frames: each chunk ends at the frame the next
-        # one starts at, and the last one runs to the end of the stream. The end
-        # is put back to the boundary as written, millisecond for millisecond,
-        # because the next chunk's first frame is worked out from that text: a
-        # sum a hair either side of a half frame would round the other way.
-        first = upscale.frame_at(start, settings.upscale_fps)
-        end = "%.3f" % (formatting.awk_number(start)
-                        + formatting.awk_number(duration))
-        last = (upscale.frame_at(end, settings.upscale_fps)
-                if int(index) < int(total) - 1 else -1)
-        return run_upscaled_encode(settings, source, args, progress, out,
-                                   first, last, chunk_label)
-    # The last chunk runs to the end of the stream rather than to the container's
-    # duration, so a final frame past that rounded figure is not lost.
-    if int(index) < int(total) - 1:
-        args = rules.with_chunk_end(args, duration)
-    argv = (["ffmpeg", "-nostdin", "-hide_banner",
-             *toolcapture.ffmpeg_loglevel(), "-nostats", "-progress", progress,
-             "-y"]
-            + settings.decode_accel.split()
-            + ["-ss", start, "-i", source, "-an", "-sn",
-               "-map", "0:v:0"] + args.split() + ["-f", "matroska", out])
-    return run_quiet_encode(argv, chunk_label)
-
-
-def reconcat_video_only(relative: str, total: int, settings) -> int:
-    """The chunks re-joined into the video-only intermediate.
-
-    The concat demuxer streams them through verbatim; because every chunk opens
-    with a keyframe and the audio is no longer part of them, the join is seamless.
-    """
-    directory = segments.chunk_dir_for(settings.chunk_root, relative)
-    listing = os.path.join(directory, "concat.txt")
-    with open(listing, "w") as handle:
-        for index in range(total):
-            handle.write("file '%s'\n"
-                         % os.path.join(directory, "%04d.mkv" % index))
-
-    # The status row is still live here - the video pass is not over until the
-    # chunks are re-joined - and the console erases it for this line.
-    log("Joining %d video chunks: %s" % (total, relative))
-    return toolcapture.run(
-        ["ffmpeg", "-nostdin", "-hide_banner", *toolcapture.ffmpeg_loglevel(),
-         "-nostats", "-y", "-safe", "0", "-f", "concat",
-         "-i", listing, "-map", "0:v", "-c", "copy", "-f", "matroska",
-         os.path.join(directory, "video.mkv")], relative).returncode
-
-
-def encode_audio_all(relative: str, directory: str, settings) -> int:
-    """Every audio track transcoded in parallel, one software process per track.
-
-    There are only ever a handful, so this fans out one job each without regard to
-    core count: they are cheap and, with hardware video decode and encode, run
-    while the CPU is otherwise idle. A passthrough profile writes nothing here.
-    Any track above stereo is downmixed to stereo.
-    """
-    import multiprocessing
-    source = os.path.join(settings.input_dir, relative)
-    audio_args = rules.profile_args(rules.AUDIO_PROFILES,
-                                    settings.audio_profile)
-    if "-c:a copy" in audio_args:
-        return 0
-
-    counts = rules._probe(["ffprobe", "-v", "error", "-select_streams", "a",
-                           "-show_entries", "stream=channels",
-                           "-of", "csv=p=0", source]).split()
-    workers = []
-    for index, channels in enumerate(counts):
-        track_args, bitrate = rules.audio_track_args(channels, settings)
-        out = os.path.join(directory, "audio%02d.mka" % index)
-        process = multiprocessing.Process(
-            target=_encode_audio_track,
-            args=(source, str(index), bitrate, track_args, out,
-                  "%s (audio track %d)" % (relative, index + 1)))
-        process.start()
-        workers.append(process)
-
-    status = 0
-    for process in workers:
-        process.join()
-        if process.exitcode != 0:
-            status = 1
-    return status
-
-
-def _encode_audio_track(source: str, index: str, bitrate: str, audio_args: str,
-                        out: str, label: str = "") -> None:
-    """ONE audio track to its own Matroska.
-
-    Mapping a single audio stream carries its metadata, language and disposition
-    across automatically, so the final mux keeps them.
-    """
-    safety.trap_worker_abort()
-    argv = (["ffmpeg", "-nostdin", "-hide_banner",
-             *toolcapture.ffmpeg_loglevel(), "-nostats", "-y", "-i", source,
-             "-map", "0:a:" + index, "-vn", "-sn"] + audio_args.split()
-            + ["-b:a", bitrate + "k", "-f", "matroska", out])
-    raise SystemExit(toolcapture.run(argv, label).returncode)
-
-
-def restore_output_folder(path: str) -> bool:
-    """Recreate the folder ``path`` is about to be written into, and say whether
-    that was needed.
-
-    The output tree is mirrored from the input once, at startup, so a sub-folder
-    deleted while a file was encoding is missing by the time that file comes to be
-    written. Recreating it costs nothing; not recreating it costs the encode.
-    """
-    parent = os.path.dirname(path)
-    if not parent or os.path.isdir(parent):
-        return False
-    try:
-        os.makedirs(parent, exist_ok=True)
-    except OSError:
-        return False
-    log("Output folder gone, recreated to write into: " + parent)
-    return True
-
-
-def output_path_for(relative: str, settings, replacing: bool) -> str:
-    """Where this file's finished encode is written - the normal output path, or a
-    " (N)" sibling of it, with its folder made sure of.
-
-    A name that was free when the run reached this file and is taken by the time
-    the encode is done belongs to a file that appeared meanwhile, from something
-    other than this conversion, so the encode goes NEXT to it. ``replacing`` marks
-    the one case where an existing output is written over on purpose: an
-    out-of-date file from an earlier run, which is what this conversion was started
-    to replace.
-    """
-    output = rules.output_path_of(relative, settings.input_dir,
-                                  settings.output_dir)
-    restore_output_folder(output)
-    if replacing or not os.path.exists(output):
-        return output
-    sibling = safety.unique_suffix_path(output)
-    log('WARNING: %s: the output name was taken during the encode - writing '
-        '"%s" instead.'
-        % (relative, os.path.relpath(sibling, settings.output_dir)))
-    return sibling
-
-
-def mux_final(relative: str, directory: str, settings, output: str) -> int:
-    """The final output: the encoded video, the separately encoded audio, and the
-    source's subtitles, attachments, chapters and metadata, all stream-copied into
-    one Matroska.
-
-    Input 0 is the encoded video, input 1 the original (for the parts only it
-    still has, and for passthrough audio), and any further inputs the encoded audio
-    in order.
-    """
-    source = os.path.join(settings.input_dir, relative)
-    if settings.keep_tracks:
-        return _mux_keeping_tracks(relative, directory, source, output)
-    audio_args = rules.profile_args(rules.AUDIO_PROFILES,
-                                    settings.audio_profile)
-
-    argv = ["ffmpeg", "-nostdin", "-hide_banner",
-            *toolcapture.ffmpeg_loglevel(), "-nostats", "-y",
-            "-i", os.path.join(directory, "video.mkv"),
-            "-i", source]
-    maps = ["-map", "0:v"]
-    if "-c:a copy" in audio_args:
-        maps += ["-map", "1:a?"]
-    else:
-        next_input = 2
-        for name in sorted(os.listdir(directory)):
-            if not (name.startswith("audio") and name.endswith(".mka")):
-                continue
-            argv += ["-i", os.path.join(directory, name)]
-            maps += ["-map", "%d:a" % next_input]
-            next_input += 1
-    maps += ["-map", "1:s?", "-map", "1:t?"]
-
-    log("Muxing: " + relative)
-    argv += maps + ["-map_metadata", "1", "-map_chapters", "1", "-c", "copy",
-                    "-f", "matroska", output]
-    muxed = toolcapture.run(argv, relative, report=False)
-    # A mux that failed on a folder that has just gone is retried, once, on the
-    # folder put back: stream-copying the parts together again is minutes at
-    # most, against the hours of encoding they took to produce.
-    if not muxed.ok and restore_output_folder(output):
-        muxed = toolcapture.run(argv, relative, report=False)
-    if not muxed.ok:
-        toolcapture.report_failure(muxed)
-        return muxed.returncode
-    # The output gets the source's modification time, like the sibling scripts do.
-    try:
-        stamp = os.stat(source)
-        os.utime(output, (stamp.st_atime, stamp.st_mtime))
-    except OSError:
-        pass
-    return 0
-
-
-def _mux_keeping_tracks(relative: str, directory: str, source: str,
-                        output: str) -> int:
-    """-k's final output: the encoded video, then every other track of the
-    source exactly as it is there - audio, subtitles, attachments, chapters,
-    tags - combined by mkvmerge, which keeps each track's name, language and
-    flags where an ffmpeg remap would translate them.
-
-    Only the video comes from the encode, and only the source's video is left
-    out of it, so a Dolby Vision enhancement layer muxed as a track of its own
-    goes with the picture it belonged to.
-    """
-    argv = ["mkvmerge", "--quiet", "-o", output,
-            "--no-audio", "--no-subtitles", "--no-buttons", "--no-attachments",
-            "--no-chapters", "--no-track-tags", "--no-global-tags",
-            os.path.join(directory, "video.mkv"),
-            "--no-video", source]
-    def written(muxed) -> bool:
-        # mkvmerge exits 1 for warnings, with the file written.
-        return muxed.ok or (muxed.returncode == 1 and os.path.isfile(output))
-
-    log("Muxing: " + relative)
-    muxed = toolcapture.run(argv, relative, report=False)
-    # Retried once on a folder that has just gone, as the ffmpeg mux is.
-    if not written(muxed) and restore_output_folder(output):
-        muxed = toolcapture.run(argv, relative, report=False)
-    if not written(muxed):
-        toolcapture.report_failure(muxed)
-        return muxed.returncode or 1
-    try:
-        stamp = os.stat(source)
-        os.utime(output, (stamp.st_atime, stamp.st_mtime))
-    except OSError:
-        pass
-    return 0
-
-
-def write_video_only(relative: str, directory: str, reason: str,
-                     settings) -> bool:
-    """The failsafe for a file whose VIDEO encoded fine but whose finishing steps
-    did not.
-
-    The video encode costs orders of magnitude more than everything else, so it is
-    written to disk rather than thrown away with the RAM scratch when the cheap
-    remaining work fails. Copied out verbatim - a plain copy, so nothing that
-    already failed can make this step fail as well.
-    """
-    source = os.path.join(settings.input_dir, relative)
-    output = rules.video_only_path_for(relative, settings.output_dir,
-                                     settings.input_dir)
-    log('WARNING: %s: %s - keeping the finished video encode as "%s" (no '
-        "audio, subtitles, attachments, chapters or metadata)."
-        % (relative, reason, os.path.relpath(output, settings.output_dir)))
-    encoded = os.path.join(directory, "video.mkv")
-    try:
-        shutil.copy(encoded, output)
-    except (OSError, shutil.Error):
-        # The last thing standing between a deleted folder and hours of lost
-        # encoding: put the folder back and copy once more.
-        try:
-            restore_output_folder(output)
-            shutil.copy(encoded, output)
-        except (OSError, shutil.Error):
-            runlog.error("the video-only failsafe could not be written, the "
-                         "video encode is lost: %s" % relative,
-                         files=[relative, encoded, output])
-            return False
-    try:
-        stamp = os.stat(source)
-        os.utime(output, (stamp.st_atime, stamp.st_mtime))
-    except OSError:
-        pass
-    return True
 
 
 # --- one file -----------------------------------------------------------------
@@ -1098,6 +109,15 @@ def chunk_bounds(duration: float, count: int) -> list:
     return bounds if len(bounds) > 2 else []
 
 
+class _NotConverted(Exception):
+    """A file dropped part-way through its preparation: interrupted, or
+    ``skipped`` - refused, and counted as such."""
+
+    def __init__(self, skipped: bool = False) -> None:
+        super().__init__()
+        self.skipped = skipped
+
+
 class Run:
     """The run's mutable state: what the closing report is read out of."""
 
@@ -1124,15 +144,47 @@ class Run:
         """
         settings = rules.Settings(**self.settings.__dict__)
         plan = Plan(relative, settings)
-        source = plan.source
 
         # A pause holds the NEXT file off too: preparing it is ffmpeg runs of
         # its own that would otherwise start up on a machine whose CPU was just
         # handed back.
         pausecontrol.wait_while_paused()
 
-        plan.duration = duration = _media_duration(source)
-        plan.video_duration = _video_duration(source, duration)
+        geometry = self._worth_converting(plan)
+        if geometry is None:
+            return None
+
+        # Checked between the probes, because Ctrl+C only kills the ffmpeg
+        # running at that moment: the run waits for this thread on its way out,
+        # and every probe started after the interrupt would run to its end.
+        if safety.abort_requested():
+            return None
+        fields = videosource.interlace_counts(plan.source,
+                                              settings.decode_accel)
+
+        if safety.abort_requested():
+            return None
+        self._settle_dolby_vision(plan)
+
+        # From here the plan may hold the run's one Dolby Vision slot, so every
+        # way out that does not hand the plan on hands the slot back first.
+        try:
+            self._settle_picture(plan, geometry, fields)
+        except _NotConverted as dropped:
+            self._release_dv(plan)
+            if dropped.skipped:
+                shutil.rmtree(plan.directory, ignore_errors=True)
+                self.count("skipped")
+            return None
+        return plan
+
+    def _worth_converting(self, plan: Plan) -> "tuple | None":
+        """The source's (width, height, sar) when it is to be converted, or
+        None when its output is up to date or -t finds the conversion not
+        worth it. Measures the durations and, where asked for, the grain."""
+        settings, relative, source = plan.settings, plan.relative, plan.source
+        plan.duration = duration = videosource._media_duration(source)
+        plan.video_duration = videosource._video_duration(source, duration)
         # An output already here is the out-of-date result of an earlier run, and
         # replacing it is the whole point of converting this file again. Remembered
         # now, because after the encode a file at that path is no longer
@@ -1147,7 +199,7 @@ class Run:
         # as not done.
         plan.replacing = os.path.isfile(plan.output)
         if plan.replacing:
-            out_duration = _media_duration(plan.output)
+            out_duration = videosource._media_duration(plan.output)
             if duration > 0 and durationcheck.length_matches(duration,
                                                              out_duration):
                 log("Up to date, skipping: " + relative)
@@ -1162,7 +214,7 @@ class Run:
         # planning goes by: a 2160p source scaled down to 1080p does a 1080p
         # file's worth of encoding work. Settled a second time once -c has
         # measured the file, since a crop moves it too.
-        width, height, _order, sar = rules.video_dimensions(source)
+        width, height, _order, sar = videosource.video_dimensions(source)
         enc_width, enc_height = resolutions.capped(width, height,
                                                    settings.max_resolution)
         # With -u the -t test judges the size the file would be enlarged to.
@@ -1178,36 +230,34 @@ class Run:
         if settings.grain_probe_wanted:
             pausecontrol.wait_while_paused()
             settings.grain_level = videograin.grain_level_for(
-                source, relative, _media_duration, _dimensions_line,
-                runlog.jobs_per_core, settings.decode_accel)
+                source, relative, videosource._media_duration,
+                videosource._dimensions_line, runlog.jobs_per_core,
+                settings.decode_accel)
             source_grain = settings.grain_level
 
         if settings.test_source_bitrate:
             if not source_grain:
                 pausecontrol.wait_while_paused()
                 source_grain = videograin.source_grain_for(
-                    source, relative, _media_duration, _dimensions_line,
-                    runlog.jobs_per_core, settings.decode_accel)
+                    source, relative, videosource._media_duration,
+                    videosource._dimensions_line, runlog.jobs_per_core,
+                    settings.decode_accel)
             if not rules.conversion_worthwhile(relative, width, height,
                                                enc_width, enc_height,
                                                source_grain, settings):
                 shutil.rmtree(directory, ignore_errors=True)
                 self.count("skipped")
                 return None
+        return width, height, sar
 
-        # Checked between the probes, because Ctrl+C only kills the ffmpeg
-        # running at that moment: the run waits for this thread on its way out,
-        # and every probe started after the interrupt would run to its end.
+    def _settle_picture(self, plan: Plan, geometry: tuple, fields) -> None:
+        """The crop, the upscale, the HDR10+ and the chunk boundaries, once the
+        Dolby Vision mode is settled. Raises :class:`_NotConverted` for a file
+        interrupted or refused on the way."""
+        settings, relative, source = plan.settings, plan.relative, plan.source
+        width, height, sar = geometry
         if safety.abort_requested():
-            return None
-        fields = rules.interlace_counts(source, settings.decode_accel)
-
-        if safety.abort_requested():
-            return None
-        self._settle_dolby_vision(plan)
-        if safety.abort_requested():
-            self._release_dv(plan)
-            return None
+            raise _NotConverted()
 
         # After the Dolby Vision decision, because a file that keeps its RPU
         # cannot be cropped, and after the -t test, so a source this run is not
@@ -1222,10 +272,7 @@ class Run:
         if settings.upscale_stack is not None:
             if not self._settle_upscale(plan, width, height, sar, crop_width,
                                         crop_height, fields):
-                self._release_dv(plan)
-                shutil.rmtree(directory, ignore_errors=True)
-                self.count("skipped")
-                return None
+                raise _NotConverted(skipped=True)
             if settings.upscale_size:
                 enc_width, enc_height = (
                     int(side) for side in settings.upscale_size.split("x"))
@@ -1234,7 +281,7 @@ class Run:
         # come out square.
         if not settings.upscale_size:
             rules.warn_source_geometry(
-                relative, rules.interlace_verdict_of(fields), sar)
+                relative, videosource.interlace_verdict_of(fields), sar)
         plan.size_text = self._size_text(width, height, crop_width,
                                          crop_height, enc_width, enc_height,
                                          upscaled=bool(settings.upscale_size))
@@ -1242,10 +289,9 @@ class Run:
         # After the crop, because whether the metadata survives it depends on
         # what the frame it describes turns into.
         if safety.abort_requested():
-            self._release_dv(plan)
-            return None
-        plan.hdr10plus_metadata = prepare_hdr10plus(
-            relative, source, directory, settings,
+            raise _NotConverted()
+        plan.hdr10plus_metadata = hdr.prepare_hdr10plus(
+            relative, source, plan.directory, settings,
             reframed=bool(settings.crop) or (str(enc_width), str(enc_height))
             != (str(width), str(height)))
 
@@ -1255,19 +301,17 @@ class Run:
         count = (settings.nvenc_engines if settings.hardware_encode
                  else rules.chunk_count_for(enc_width, enc_height,
                                             settings.cores))
-        plan.bounds = chunk_bounds(duration, count)
+        plan.bounds = chunk_bounds(plan.duration, count)
         # Last, because it reads the video the encode will: the Dolby Vision
         # intermediate where there is one.
         if plan.bounds and safety.abort_requested():
-            self._release_dv(plan)
-            return None
+            raise _NotConverted()
         if plan.bounds:
             pausecontrol.wait_while_paused()
             plan.bounds, plan.cut_kinds = scenecuts.aligned_bounds(
                 rules.video_source_for(relative, settings.input_dir,
                                        settings.dolby_vision_source),
                 plan.bounds, settings.decode_accel)
-        return plan
 
     def convert(self, plan: Plan) -> int:
         """ONE prepared video, produced in three overlapping parts and muxed.
@@ -1396,11 +440,11 @@ class Run:
         """
         settings = plan.settings
         settings.dolby_vision_source = ""
-        profile, enhancement = rules.dolby_vision_profile(plan.source)
+        profile, enhancement = videosource.dolby_vision_profile(plan.source)
         if (enhancement == "1" and settings.dv_encoder_support
                 and self._take_dv_slot()):
             pausecontrol.wait_while_paused()
-            prepared, scratch = normalise_dolby_vision(
+            prepared, scratch = hdr.normalise_dolby_vision(
                 plan.relative, settings, settings.output_dir)
             if prepared:
                 settings.dolby_vision_source = prepared
@@ -1408,10 +452,11 @@ class Run:
                 plan.holds_dv_slot = True
                 # Re-classified rather than assumed, so the mode is decided from
                 # the file that will actually be encoded.
-                profile, enhancement = rules.dolby_vision_profile(prepared)
+                profile, enhancement = videosource.dolby_vision_profile(
+                    prepared)
             else:
                 self.dv_slot.release()
-        settings.dolby_vision_mode = dolby_vision_mode_for(
+        settings.dolby_vision_mode = hdr.dolby_vision_mode_for(
             plan.relative, profile, enhancement, settings)
         plan.source_dv_profile = profile
 
@@ -1440,9 +485,10 @@ class Run:
                 "%s" % relative)
             return ""
         pausecontrol.wait_while_paused()
-        return videocrop.crop_for(source, relative, _media_duration,
-                                  _dimensions_line, runlog.jobs_per_core,
-                                  settings.decode_accel)
+        return videocrop.crop_for(
+            source, relative, videosource._media_duration,
+            videosource._dimensions_line, runlog.jobs_per_core,
+            settings.decode_accel)
 
     def _settle_upscale(self, plan: Plan, width, height, sar, crop_width,
                         crop_height, fields) -> bool:
@@ -1466,19 +512,19 @@ class Run:
                                       settings.upscale_resolution, sar)
         if target is None:
             return True
-        color_space, color_range, transfer = rules.video_color_space(
+        color_space, color_range, transfer = videosource.video_color_space(
             plan.source)
         if transfer in ("smpte2084", "arib-std-b67"):
             log("Upscale: not for an HDR source - no upscaling network is "
                 "trained on HDR - so it keeps its own size: %s" % relative)
             return True
-        blocked = rules.upscale_blocked_by_fields(fields)
+        blocked = videosource.upscale_blocked_by_fields(fields)
         if blocked:
             log("Upscale: skipping %s - %s. An interlaced or telecined picture "
                 "has to be deinterlaced before it is enlarged, which this run "
                 "does not do." % (relative, blocked))
             return False
-        fps = rules.video_frame_rate(plan.source)
+        fps = videosource.video_frame_rate(plan.source)
         if not fps:
             log("Upscale: skipping %s - its frame rate could not be read, and "
                 "the upscaler reads it frame by frame." % relative)
@@ -1531,7 +577,7 @@ class Run:
 
         if not bounds:
             log("Encoding whole %s (%s)..." % (relative, size_text))
-            encode_video_whole(relative, directory, settings)
+            encode.encode_video_whole(relative, directory, settings)
             return 0
 
         total = len(bounds) - 1
@@ -1551,7 +597,7 @@ class Run:
         # half-encoded chunk set.
         if safety.abort_requested():
             return safety.INTERRUPTED_EXIT_STATUS
-        reconcat_video_only(relative, total, settings)
+        encode.reconcat_video_only(relative, total, settings)
         return 0
 
     def finish(self, relative: str, directory: str, duration: float,
@@ -1581,24 +627,25 @@ class Run:
             return 1
 
         if audio_status != 0:
-            write_video_only(relative, directory, "audio encoding failed",
-                             settings)
+            encode.write_video_only(relative, directory,
+                                    "audio encoding failed", settings)
             shutil.rmtree(directory, ignore_errors=True)
             return 1
 
         # Written into the video before the mux rather than into the finished
         # file, so a failure here costs nothing but the HDR10+ itself.
-        kept_hdr10plus = bool(hdr10plus_metadata) and restore_hdr10plus(
+        kept_hdr10plus = bool(hdr10plus_metadata) and hdr.restore_hdr10plus(
             relative, directory, hdr10plus_metadata, settings)
 
-        output = output_path_for(relative, settings, replacing)
-        if mux_final(relative, directory, settings, output) != 0:
+        output = encode.output_path_for(relative, settings, replacing)
+        if encode.mux_final(relative, directory, settings, output) != 0:
             # A half-written output would only confuse the next run's resume
             # check.
-            _remove(output)
-            write_video_only(relative, directory,
-                             "the final mux failed (audio, subtitles, "
-                             "attachments, chapters or metadata)", settings)
+            probes._remove(output)
+            encode.write_video_only(relative, directory,
+                                    "the final mux failed (audio, subtitles, "
+                                    "attachments, chapters or metadata)",
+                                    settings)
             shutil.rmtree(directory, ignore_errors=True)
             return 1
 
@@ -1610,22 +657,22 @@ class Run:
         if not durationcheck.verify(
                 relative, os.path.join(settings.input_dir, relative), output,
                 duration):
-            write_video_only(relative, directory,
-                             "the muxed output was not as long as the source",
-                             settings)
+            encode.write_video_only(relative, directory,
+                                    "the muxed output was not as long as "
+                                    "the source", settings)
             shutil.rmtree(directory, ignore_errors=True)
             return 1
 
         # This run produced the complete file, so a failsafe left by an earlier
         # run for the same source is now just a duplicate of its video stream.
-        _remove(rules.video_only_path_for(relative, settings.output_dir,
-                                          settings.input_dir))
+        probes._remove(rules.video_only_path_for(relative, settings.output_dir,
+                                                 settings.input_dir))
 
         # The encoder embedded the RPU and ffmpeg derives the container's record
         # from that, but both the chunk re-join and the mux are stream copies, so
         # the cheap check that the output still SIGNALS it is worth making.
         if settings.dolby_vision_mode == "1":
-            out_profile, _el = rules.dolby_vision_profile(output)
+            out_profile, _el = videosource.dolby_vision_profile(output)
             if out_profile:
                 log("Dolby Vision preserved: profile %s -> profile %s: %s"
                     % (source_dv_profile, out_profile, relative))
@@ -1703,50 +750,11 @@ def _audio_worker(relative: str, directory: str, settings) -> None:
     ignored, so without a handler it would survive Ctrl+C outright.
     """
     safety.trap_worker_abort()
-    raise SystemExit(encode_audio_all(relative, directory, settings))
-
-
-def _dimensions_line(path: str) -> str:
-    """The geometry as ``videoDimensions`` PRINTS it, which is what the grain
-    probe reads: it splits the line and takes the first two fields."""
-    return " ".join(rules.video_dimensions(path))
-
-
-def _media_duration(path: str) -> float:
-    return formatting.awk_number(rules._probe([
-        "ffprobe", "-v", "error", "-show_entries", "format=duration",
-        "-of", "default=nk=1:nw=1", path]).strip() or 0)
-
-
-def _video_duration(path: str, container: float) -> float:
-    """How long the source's PICTURE runs, which the video-only intermediate is
-    measured against.
-
-    Not the container's length: that is its longest stream, and an audio track
-    running seconds past the last frame - a dub mastered from another cut - is
-    common, while the video intermediate can only ever be as long as the picture.
-    Matroska keeps the figure in a DURATION tag, MP4 as the stream's duration;
-    a source stating neither, or one past the container, falls back to the
-    container's.
-    """
-    lines = rules._probe([
-        "ffprobe", "-v", "error", "-select_streams", "V:0",
-        "-show_entries", "stream=duration:stream_tags=DURATION",
-        "-of", "default=nk=1:nw=1", path]).split()
-    for line in lines:
-        parts = line.split(":")
-        if not all(formatting.awk_looks_numeric(part) for part in parts):
-            continue
-        seconds = 0.0
-        for part in parts:
-            seconds = seconds * 60 + formatting.awk_number(part)
-        if 0 < seconds <= container:
-            return seconds
-    return container
+    raise SystemExit(encode.encode_audio_all(relative, directory, settings))
 
 
 def _run_chunk_pool(settings, tokens: list, width: int) -> None:
-    workerpool.run(tokens, width, encode_video_chunk,
+    workerpool.run(tokens, width, encode.encode_video_chunk,
                    lambda token: (settings, token))
 
 
@@ -1831,7 +839,7 @@ def main(argv: list, program: str = "convert-video",
         sys.stderr.write(unknown.text())
         return 1
 
-    refusal = _validate(settings, video_args, grain, engines_override)
+    refusal = startup._validate(settings, video_args, grain, engines_override)
     if refusal:
         clioptions.refuse_usage(declaration, refusal)
         return 1
@@ -1866,11 +874,11 @@ def _settle_and_run(settings, program: str, video_args: str, grain: str,
         fork_use = ""
         if settings.video_profile == rules.SVT_AV1_HDR_GRAIN_PROFILE and not grain:
             fork_use = "its film grain tune for %s" % settings.video_profile
-        elif pq_source_to_convert(settings):
+        elif probes.pq_source_to_convert(settings):
             fork_use = "its PQ variance-boost curve on a PQ source"
-        rank = SvtBuildRank(fork_use)
+        rank = probes.SvtBuildRank(fork_use)
     ffmpegselect.select_ffmpeg(
-        lambda binary: ffmpeg_takes_profile(binary, video_args),
+        lambda binary: probes.ffmpeg_takes_profile(binary, video_args),
         prefer=rank)
     if tooldeps.require_tools(program, ["ffmpeg", "ffprobe"]
                               + (["mkvmerge"] if settings.keep_tracks else [])):
@@ -1879,7 +887,7 @@ def _settle_and_run(settings, program: str, video_args: str, grain: str,
     # that encoded the small files at their own size instead would leave outputs
     # that every later run skips as finished, upscaler or not.
     if settings.upscale_resolution:
-        stack, problem = upscale.settle(_gpu_name())
+        stack, problem = upscale.settle(startup._gpu_name())
         if stack is None:
             sys.stderr.write("%s: -u %s needs a working upscaler, and %s.\n"
                              % (program, settings.upscale_resolution, problem))
@@ -1890,7 +898,7 @@ def _settle_and_run(settings, program: str, video_args: str, grain: str,
     # so the probe and the loop can never disagree about what counts. Asked
     # before the output folder is made, so a run with nothing to convert
     # leaves nothing behind.
-    if not _sources(settings.input_dir):
+    if not probes._sources(settings.input_dir):
         return safety.fail_no_relevant_input(settings.input_dir,
                                              "videos (.mkv / .mp4)")
     os.makedirs(settings.output_dir, exist_ok=True)
@@ -1906,418 +914,12 @@ def _settle_and_run(settings, program: str, video_args: str, grain: str,
     settings.grain_tune = (settings.svt_av1_hdr and not grain
                            and settings.video_profile
                            == rules.SVT_AV1_HDR_GRAIN_PROFILE)
-    settings.grain_level, settings.grain_probe_wanted = _settle_grain(
+    settings.grain_level, settings.grain_probe_wanted = startup._settle_grain(
         settings, grain, video_args)
-    _detect_hardware(settings, video_args, engines_override)
-    _summarise(settings, video_args, grain)
+    startup._detect_hardware(settings, video_args, engines_override)
+    startup._summarise(settings, video_args, grain)
 
     return _run_all(settings)
-
-
-def _validate(settings, video_args: str, grain: str,
-              engines_override: str) -> str:
-    """Every refusal that can be decided before a file is touched.
-
-    All of them would otherwise fail per chunk, deep inside a parallel worker.
-    """
-    encoder = rules.encoder_of(rules.apply_video_quality(video_args))
-    if settings.audio_profile == "opusCustom" \
-            and not settings.custom_audio_bitrate:
-        return ("The opusCustom audio profile requires an audio bitrate: "
-                "-b <kbit/s>.")
-    if settings.custom_audio_bitrate and settings.audio_profile != "opusCustom":
-        return ("The -b audio bitrate only applies to the opusCustom profile "
-                "(got -a %s)." % settings.audio_profile)
-    if settings.custom_audio_bitrate and not _positive(
-            settings.custom_audio_bitrate):
-        return ('The -b audio bitrate must be a positive integer in kbit/s '
-                '(got "%s").' % settings.custom_audio_bitrate)
-
-    if settings.quality:
-        if not rules.video_quality_flag(video_args):
-            return ("The -l quality level only applies to the "
-                    "constant-quality profiles; -p %s targets an average "
-                    "bitrate instead." % settings.video_profile)
-        top = rules.video_quality_max(video_args)
-        if not settings.quality.isdigit() or int(settings.quality) > top:
-            return ('The -l quality level must be an integer between 0 and %d '
-                    'for -p %s (got "%s").'
-                    % (top, settings.video_profile, settings.quality))
-
-    if settings.max_resolution:
-        named = resolutions.named(settings.max_resolution)
-        if not named or not resolutions.ceiling(named):
-            return ('Cannot scale to resolution tier "%s". Valid -m tiers: %s.'
-                    % (settings.max_resolution, resolutions.spellings()))
-        settings.max_resolution = named
-
-    if settings.upscale_resolution:
-        named = resolutions.named(settings.upscale_resolution)
-        if not named or not resolutions.ceiling(named):
-            return ('Cannot upscale to resolution tier "%s". Valid -u tiers: %s.'
-                    % (settings.upscale_resolution, resolutions.spellings()))
-        settings.upscale_resolution = named
-        cap_box = resolutions.ceiling(settings.max_resolution or "")
-        upscale_box = resolutions.ceiling(named)
-        if cap_box and upscale_box:
-            if upscale_box[0] > cap_box[0] or upscale_box[1] > cap_box[1]:
-                return ("The -u upscale tier (%s) is above the -m ceiling (%s): "
-                        "a file enlarged to it would only be scaled back down."
-                        % (named, settings.max_resolution))
-
-    saving = str(settings.required_saving)
-    if not (saving.isdigit() and len(saving) <= 2):
-        return ('The -t saving must be a whole percentage between 0 and 99 '
-                '(got "%s").' % saving)
-
-    if engines_override and "nvenc" not in encoder:
-        return ("The -e NVENC engine count only applies to the *Nvenc video "
-                "profiles (got -p %s)." % settings.video_profile)
-    if engines_override and not _positive(engines_override):
-        return ('The -e NVENC engine count must be a positive integer '
-                '(got "%s").' % engines_override)
-
-    if settings.fast_decode and encoder != "libsvtav1":
-        return ("The -f fast-decode level only applies to the AV1 software "
-                "profiles (got -p %s, which encodes with %s)."
-                % (settings.video_profile, encoder))
-    if settings.fast_decode and settings.fast_decode not in ("1", "2"):
-        return ('The -f fast-decode level must be 1 or 2 (got "%s").'
-                % settings.fast_decode)
-    if grain and encoder != "libsvtav1":
-        return ("The -g film grain level only applies to the AV1 software "
-                "profiles (got -p %s, which encodes with %s)."
-                % (settings.video_profile, encoder))
-    if grain and grain != "off" and not (grain.isdigit()
-                                         and 0 <= int(grain) <= 50):
-        return ('The -g film grain level must be off, or an integer between 0 '
-                'and 50 - where 0 asks for the per-source probe (got "%s").'
-                % grain)
-    settings.encoder = encoder
-    return ""
-
-
-def _positive(value: str) -> bool:
-    return value.isdigit() and int(value) > 0
-
-
-def _settle_grain(settings, grain: str, video_args: str) -> tuple:
-    """The grain decision for the whole run.
-
-    No -g leaves the profile's own default in force, an explicit level is what
-    every file gets, "off" is none, and 0 is what asks for the per-file probe. The
-    probe is skipped for the encoders that could not act on the answer; an explicit
-    -g 0 is NOT skipped on any AV1 profile, whatever that profile's own default
-    says, because asking for the probe is asking to be told what the source has.
-    """
-    software_av1 = settings.encoder == "libsvtav1"
-    # The source's own grain is kept, so there is none to synthesise and nothing
-    # to measure for it; -t still measures a source it tests, on its own.
-    if settings.grain_tune:
-        return "0", False
-    if grain == "":
-        default = videograin.grain_default_for(settings.video_profile)
-        if default != "probe":
-            return default, False
-        return "0", software_av1
-    if grain == "0":
-        return "0", software_av1
-    if grain == "off":
-        return "0", False
-    return grain, False
-
-
-def _sources(root: str) -> list:
-    found = []
-    for parent, dirs, names in os.walk(root):
-        dirs.sort()
-        for name in sorted(names):
-            if enums.lower_extension_of(name) in rules.SOURCE_EXTENSIONS:
-                found.append(os.path.relpath(os.path.join(parent, name), root))
-    return found
-
-
-def _detect_hardware(settings, video_args: str, engines_override: str) -> None:
-    """Whether hardware is used, decided ONCE by actually exercising ffmpeg rather
-    than trusting a capability list: only a functional test reflects what this box
-    can really do right now - drivers loaded, device reachable, engine present.
-
-    Two independent things: NVENC encoding on a dedicated NVIDIA GPU, only when a
-    *Nvenc profile is selected, and VAAPI decoding on an Intel iGPU, used whenever
-    available for BOTH paths because hardware decode is a pure time win with no
-    quality tradeoff.
-    """
-    settings.decode_accel, said = _decode_accel()
-    log(said)
-
-    if "nvenc" not in settings.encoder:
-        settings.hardware_encode = False
-        settings.nvenc_engines = 1
-        log("Software encode: %s on the CPU." % settings.encoder)
-    else:
-        settings.hardware_encode = True
-        if not nvenc_works(settings.encoder):
-            log("The %s profile needs a working %s encoder, which this machine "
-                "does not provide." % (settings.video_profile,
-                                       settings.encoder))
-            raise SystemExit(1)
-        if not nvenc_tune_works(settings.encoder, rules.NVENC_TUNE_WANTED):
-            settings.nvenc_tune = rules.NVENC_TUNE_FALLBACK
-        if engines_override:
-            settings.nvenc_engines = int(engines_override)
-            log("Hardware encode: %s on NVENC across %d engine(s) (from -e)."
-                % (settings.encoder, settings.nvenc_engines))
-        else:
-            name = _gpu_name()
-            settings.nvenc_engines = rules.nvenc_engines_for(name)
-            if name:
-                log('Hardware encode: %s on NVENC across %d engine(s) (guessed '
-                    'for "%s"; override with -e).'
-                    % (settings.encoder, settings.nvenc_engines, name))
-            else:
-                log("WARNING: nvidia-smi is unavailable - the NVENC engine "
-                    "count is a blind guess of %d." % settings.nvenc_engines)
-                log("         Use -e <count> to size the parallelism for your "
-                    "card.")
-                log("Hardware encode: %s on NVENC across %d engine(s) (the "
-                    "guess above)." % (settings.encoder, settings.nvenc_engines))
-        if settings.nvenc_tune == rules.NVENC_TUNE_WANTED:
-            log("NVENC tuning: -tune %s, which enables lookahead and the "
-                "temporal filter by itself." % settings.nvenc_tune)
-        else:
-            log("NVENC tuning: -tune %s - this ffmpeg/driver/GPU will not take "
-                "-tune %s, so the profile falls back to it."
-                % (settings.nvenc_tune, rules.NVENC_TUNE_WANTED))
-        settings.nvenc_master_display = encoder_takes_master_display(
-            settings.encoder)
-
-    settings.dv_encoder_support = encoder_takes_dolby_vision(settings.encoder)
-
-
-def _decode_accel() -> tuple[str, str]:
-    """The hardware DECODE flags this run uses, and the line that says so.
-
-    A ladder of one rung per platform's own interface, each behind a probe
-    that opens the device for real:
-
-      * VAAPI on an Intel iGPU, which is the Linux case and the original one;
-      * VideoToolbox on macOS, where there is no ``/dev/dri`` to walk and the
-        iGPU is reached through the framework instead - and where it is worth
-        reaching for on every Mac, since Apple Silicon has no discrete GPU to
-        fall back on;
-      * nothing, and the decoding happens on the CPU.
-
-    Hardware decode is used wherever it is found and for both encode paths,
-    because it is a pure time win with no quality tradeoff - the frames come
-    back to system memory either way.
-
-    The macOS rung is asked only on macOS: the probe costs an ffmpeg start,
-    and no other platform has the framework to find.
-    """
-    node = intel_render_node()
-    if node:
-        return ("-hwaccel vaapi -hwaccel_device " + node,
-                "Hardware decode: Intel iGPU via VAAPI (%s)." % node)
-    if hostos.is_macos() and videotoolbox_works():
-        return ("-hwaccel videotoolbox",
-                "Hardware decode: the GPU via VideoToolbox.")
-    return ("", "Hardware decode: no usable iGPU found, decoding in software.")
-
-
-def _gpu_name() -> str:
-    try:
-        done = subprocess.run(["nvidia-smi", "--query-gpu=name",
-                               "--format=csv,noheader"],
-                              stdin=subprocess.DEVNULL,
-                              stdout=subprocess.PIPE,
-                              stderr=subprocess.DEVNULL)
-    except OSError:
-        return ""
-    lines = done.stdout.decode("utf-8", "replace").splitlines()
-    return lines[0].strip() if lines else ""
-
-
-def _summarise(settings, video_args: str, grain: str) -> None:
-    """Restate the decisions taken, so a run is self-explanatory.
-
-    Stated unconditionally where the other scripts only speak up when a choice
-    overruled PATH: a build that silently drops the psychovisual keys produces a
-    perfectly good encode that is simply not the one that was asked for, and the
-    alternative to this line is finding that out from the file.
-    """
-    ffmpegselect.report_ffmpeg_selection(always=True)
-    if ffmpegselect.selected_full() != 1:
-        log("WARNING: this ffmpeg does not accept every argument of -p %s - "
-            "either it is too old for some of them, or the hardware to test "
-            "them on is missing. Encoding anyway: an encoder parameter it does "
-            "not recognise is dropped, so the result may not be the encode the "
-            "profile describes." % settings.video_profile)
-
-    settled = rules.apply_nvenc_tune(
-        rules.apply_video_quality(video_args, given=settings.quality_given,
-                                  quality=settings.quality),
-        settings.nvenc_tune)
-    if settings.svt_av1_hdr:
-        settled = rules.svt_av1_hdr_args(settled, settings.grain_tune)
-        log("SVT-AV1-HDR: this ffmpeg's libsvtav1 is SVT-AV1-HDR, so the "
-            "profile runs without qm-min=0 (the fork keeps its own minimum) and "
-            "a PQ source gets its PQ variance-boost curve. The quality levels "
-            "are tuned for mainline SVT-AV1, so sizes will not match a mainline "
-            "encode.")
-    elif settings.encoder == "libsvtav1" and not settings.svt_build_note:
-        log("SVT-AV1-HDR: not found, encoding with this ffmpeg's own "
-            "libsvtav1.")
-    if settings.encoder == "libsvtav1" and settings.svt_build_note:
-        log("SVT-AV1-HDR: " + settings.svt_build_note + ".")
-    log("Video profile: %s -> %s" % (settings.video_profile, settled))
-
-    # What the run leaves alone is named on one row, with the flag that turns
-    # each on: a row apiece would bury the few that change the encode.
-    off = []
-
-    if settings.crop_wanted:
-        log("Crop: on (-c) - each source is measured at %d moments across its "
-            "running time and only the smallest black bands any of them found "
-            "come off, symmetrically.%s"
-            % (videocrop.CROP_PROBE_SAMPLES,
-               " A file keeping its Dolby Vision RPU is left whole."
-               if settings.dv_encoder_support else ""))
-    else:
-        off.append("crop (-c)")
-
-    ceiling = (resolutions.ceiling(settings.max_resolution)
-               if settings.max_resolution else None)
-    # The validation refused a tier with no ceiling long before this, so the
-    # guard is here to keep that true rather than because it can fail today.
-    if ceiling:
-        # With -u a smaller source is enlarged instead, which its own row says.
-        log("Resolution: capped at %s (%dx%d), aspect ratio kept%s."
-            % (settings.max_resolution, ceiling[0], ceiling[1],
-               "" if settings.upscale_stack is not None
-               else "; a smaller source keeps its own size"))
-    else:
-        off.append("resolution ceiling (-m)")
-
-    if settings.upscale_stack is not None:
-        target = resolutions.ceiling(settings.upscale_resolution) or (0, 0)
-        log("Upscale: a picture smaller than %s (%dx%d) is enlarged to fill it "
-            "with %s, at the shape it is displayed at and with square pixels. "
-            "An interlaced or telecined source is skipped, and an HDR one keeps "
-            "its own size."
-            % (settings.upscale_resolution, target[0], target[1],
-               settings.upscale_stack.describe()))
-    else:
-        off.append("upscale (-u)")
-
-    # Where the quality level comes from, stated because the bias is otherwise
-    # invisible: the profile row above shows the unbiased level, not the one a
-    # 2160p file will get.
-    if not rules.video_quality_flag(settled):
-        log("Video quality: none to set - %s targets an average bitrate, not a "
-            "quality level." % settings.video_profile)
-    elif settings.quality_given:
-        log("Video quality: %s %s for every file (-l), so no resolution bias "
-            "is applied." % (rules.video_quality_flag(settled),
-                             settings.quality))
-    else:
-        log("Video quality: the %s profile default above, biased per file by "
-            "the tier it is ENCODED at (%s; override with -l)."
-            % (settings.video_profile,
-               rules.quality_bias_spellings(settings.max_resolution)))
-
-    _summarise_grain(settings, grain)
-
-    if settings.fast_decode:
-        log("Fast decode: level %s, trading some compression for a cheaper "
-            "decode." % settings.fast_decode)
-    # The one encoder that has the setting; for the others it is not "off".
-    elif settings.encoder == "libsvtav1":
-        off.append("fast decode (-f)")
-
-    if settings.test_source_bitrate:
-        log("Bitrate test: on (-t) - each source is measured first, and only a "
-            "video that is not already starved AND whose %s encode would still "
-            "be adequate on %s%% less bitrate is converted. Everything else is "
-            "skipped with its figures."
-            % (codecs.encoder_codec(settings.encoder),
-               settings.required_saving))
-    else:
-        off.append("bitrate test (-t)")
-
-    if off:
-        log("Off: %s." % ", ".join(off))
-
-    # Dolby Vision and HDR10+ are not summarised here: whether they can be kept
-    # depends on what a source carries, so each file that has either says on
-    # its own line what happens to it, and a run of files without them says
-    # nothing about them at all.
-
-    if settings.keep_tracks:
-        log("Other tracks: kept as the source has them (-k) - audio, "
-            "subtitles, attachments, chapters and tags combined with the "
-            "encode by mkvmerge")
-    elif settings.audio_profile == "passthrough":
-        log("Audio profile: passthrough (source audio copied through, not "
-            "re-encoded)")
-    elif settings.custom_audio_bitrate:
-        log("Audio profile: %s (%s kbit/s Opus applied to every track, "
-            "surround downmixed to stereo)"
-            % (settings.audio_profile, settings.custom_audio_bitrate))
-    else:
-        log("Audio profile: %s (per-channel Opus bitrate from the shared "
-            "table, surround downmixed to stereo)" % settings.audio_profile)
-
-    if settings.hardware_encode:
-        engines = settings.nvenc_engines
-        log("Video parallelism: hardware - %d NVENC engine(s), so %d chunk(s) "
-            "per file (files run one at a time), with split encode disabled so "
-            "the engines are not also striping single frames."
-            % (engines, engines))
-        # Said up front so an allocation failure reads as a memory ceiling
-        # rather than a broken profile - and only where there is both more than
-        # one session and a 4K encode for them to run out on.
-        if engines > 1 and (not ceiling or ceiling[1] >= 2160):
-            log("Note: %d encode session(s) run at once, so GPU memory is the "
-                "ceiling on 4K sources - a driver allocation failure there "
-                "means lowering -e, not a broken profile." % engines)
-    else:
-        log("Video parallelism: software - resolution-driven chunks per file, "
-            "scaled to %d core(s) (files run one at a time)." % settings.cores)
-
-
-def _summarise_grain(settings, grain: str) -> None:
-    if settings.encoder != "libsvtav1":
-        log("Film grain: not available with %s, none synthesised."
-            % settings.encoder)
-    elif settings.grain_tune:
-        log("Film grain: KEPT - %s on SVT-AV1-HDR encodes the source's own "
-            "grain with the fork's film grain tune (tune 6) rather than "
-            "denoising it and synthesising it again; nothing is measured for "
-            "it (-g puts the profile back on synthesis)."
-            % settings.video_profile)
-    elif settings.grain_probe_wanted and grain:
-        log("Film grain: -g 0 - measured per file and synthesised as measured "
-            "(lossy: the source grain is denoised away and re-generated at "
-            "playback).")
-    elif settings.grain_probe_wanted:
-        log("Film grain: measured per file and synthesised as measured, the %s "
-            "default (-g pins one level for every file, -g off none). Lossy: "
-            "the source grain is denoised away and re-generated at playback."
-            % settings.video_profile)
-    elif int(settings.grain_level or 0) > 0 and grain:
-        log("Film grain: level %s for every file (-g), regardless of source or "
-            "profile (lossy: the source grain is denoised away and re-generated "
-            "at playback)." % settings.grain_level)
-    elif int(settings.grain_level or 0) > 0:
-        log("Film grain: level %s for every file, the %s default (-g pins "
-            "another level, -g 0 measures each source, -g off none). Lossy: the "
-            "source grain is denoised away and re-generated at playback."
-            % (settings.grain_level, settings.video_profile))
-    elif not grain:
-        log("Film grain: none - the %s default is 0 (-g 0 measures each source "
-            "instead)." % settings.video_profile)
-    else:
-        log("Film grain: off (-g off), none synthesised.")
 
 
 class _HeldOutput:
@@ -2421,7 +1023,7 @@ def _run_all(settings) -> int:
         # The dynamic queue's producer, on the queue's own thread: the files
         # still to convert, each prepared - or passed over - in turn.
         output.ahead = threading.get_ident()
-        for relative in _sources(settings.input_dir):
+        for relative in probes._sources(settings.input_dir):
             if safety.abort_requested():
                 return
             plan = run.prepare(relative)

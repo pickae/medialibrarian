@@ -18,7 +18,7 @@ import time
 import xml.etree.ElementTree as ET
 from typing import NamedTuple
 
-from medialib.lib import tmdblookup
+from medialib.lib import tmdbclient
 from medialib.lib.filmmatch import Film
 
 __all__ = ["PlexError", "Server", "Movie", "Copy", "Library", "Wanted",
@@ -102,16 +102,16 @@ class Server:
     def _ask(self, path: str, params=(), method: str = "GET") -> ET.Element:
         """``path`` on the server - or, where it is a whole address, there."""
         address = path if path.startswith("https://") else self.url + path
-        lines = ["url = " + tmdblookup._config_value(address), "get",
-                 "request = " + tmdblookup._config_value(method),
+        lines = ["url = " + tmdbclient._config_value(address), "get",
+                 "request = " + tmdbclient._config_value(method),
                  "fail", "silent", "show-error", "max-time = 120",
                  'header = "Accept: application/xml"']
         if self.token:
-            lines.append("header = " + tmdblookup._config_value(
+            lines.append("header = " + tmdbclient._config_value(
                 "X-Plex-Token: " + self.token))
         for key, value in params:
             lines.append("data-urlencode = "
-                         + tmdblookup._config_value("%s=%s" % (key, value)))
+                         + tmdbclient._config_value("%s=%s" % (key, value)))
         proc = subprocess.run(["curl", "--config", "-"],
                               input="\n".join(lines).encode("utf-8"),
                               capture_output=True)

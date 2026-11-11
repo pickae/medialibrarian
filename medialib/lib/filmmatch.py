@@ -15,7 +15,7 @@ is the answer:
 * an id both sides carry - TMDb's or IMDb's;
 * a title whose keys meet, in the same year;
 * the same title once folded, a year either side - a festival year written
-  where the release year was meant (:data:`medialib.lib.tmdblookup.NEAR_YEARS`).
+  where the release year was meant (:data:`medialib.lib.tmdbidentify.NEAR_YEARS`).
   Only the fold and not every key, because a year apart is already one
   disagreement: "Hound" and "The Hound" a year apart are two films;
 * a title whose keys meet where one side has no year to compare;
@@ -54,7 +54,7 @@ import functools
 from typing import NamedTuple
 
 from medialib.lib import titlematch
-from medialib.lib.tmdblookup import NEAR_YEARS
+from medialib.lib.tmdbidentify import NEAR_YEARS
 
 __all__ = ["Film", "FilmIndex", "Found"]
 

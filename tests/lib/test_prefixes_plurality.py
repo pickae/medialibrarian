@@ -1,5 +1,5 @@
-"""Tests for medialib.lib.plurality - which of a folder's siblings take part in
-the collective name-cleaning pass.
+"""Tests for the plurality group in medialib.lib.prefixes - which of a
+folder's siblings take part in the collective name-cleaning pass.
 
 These pin the contract in its own right - what the behaviour is FOR, and the
 tie-break in particular, because that rule was made explicit during the port
@@ -8,7 +8,7 @@ rather than inherited.
 
 import pytest
 
-from medialib.lib.plurality import plurality_group_indices as group
+from medialib.lib.prefixes import plurality_group_indices as group
 
 pytestmark = pytest.mark.pure
 
@@ -103,14 +103,14 @@ class TestByKind:
     """find-gaps' question: which KIND of file a folder is mostly of."""
 
     def test_two_audio_formats_are_one_kind_and_the_cover_is_not_part(self):
-        from medialib.lib.plurality import plurality_kind_indices as kind
+        from medialib.lib.prefixes import plurality_kind_indices as kind
         assert kind(["01.mp3", "02.m4a", "03.mp3", "cover.jpg"]) == [0, 1, 2]
 
     def test_the_subtitles_beside_a_season_are_left_out(self):
-        from medialib.lib.plurality import plurality_kind_indices as kind
+        from medialib.lib.prefixes import plurality_kind_indices as kind
         assert kind(["e1.mkv", "e1.srt", "e2.mp4", "e2.srt", "e3.mkv"]) == [
             0, 2, 4]
 
     def test_a_tie_goes_to_the_kind_seen_first(self):
-        from medialib.lib.plurality import plurality_kind_indices as kind
+        from medialib.lib.prefixes import plurality_kind_indices as kind
         assert kind(["a.pdf", "b.mp3", "c.epub", "d.flac"]) == [0, 2]

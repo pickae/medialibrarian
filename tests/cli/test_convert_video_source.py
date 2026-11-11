@@ -6,10 +6,11 @@ produce them on real files are in `test_convert_video_media.py`.
 """
 
 import json
+import subprocess
 
 import pytest
 
-from medialib.cli import convert_video as cv
+from medialib.cli import convert_video_source as videosource
 
 pytestmark = pytest.mark.pure
 
@@ -42,8 +43,8 @@ class TestTheMasteringDisplayOfASource:
                 asked.append(argv)
                 return transfer + "\n" if len(asked) == 1 else frames
 
-            monkeypatch.setattr(cv, "_probe", probe)
-            return cv.hdr_master_display("film.mkv")
+            monkeypatch.setattr(videosource, "_probe", probe)
+            return videosource.hdr_master_display("film.mkv")
         return run
 
     def test_a_pq_source_with_both_records(self, display):
@@ -65,8 +66,8 @@ class TestTheMasteringDisplayOfASource:
 
     def test_a_probe_that_printed_nothing_has_none(self, monkeypatch):
         answers = iter(["smpte2084\n", ""])
-        monkeypatch.setattr(cv, "_probe", lambda argv: next(answers))
-        assert cv.hdr_master_display("film.mkv") == ""
+        monkeypatch.setattr(videosource, "_probe", lambda argv: next(answers))
+        assert videosource.hdr_master_display("film.mkv") == ""
 
 
 IDET_TAIL = (
@@ -88,9 +89,9 @@ class TestHowTheFieldsOfASourceWereCounted:
                 pass
 
             Done.stderr = stderr.encode()
-            monkeypatch.setattr(cv.subprocess, "run",
+            monkeypatch.setattr(subprocess, "run",
                                 lambda argv, **kwargs: Done())
-            return cv.interlace_counts("film.mkv")
+            return videosource.interlace_counts("film.mkv")
         return run
 
     def test_the_multi_frame_counts_are_the_ones_taken(self, counts):
@@ -108,5 +109,5 @@ class TestHowTheFieldsOfASourceWereCounted:
         def missing(argv, **kwargs):
             raise FileNotFoundError(2, "No such file or directory: 'ffmpeg'")
 
-        monkeypatch.setattr(cv.subprocess, "run", missing)
-        assert cv.interlace_counts("film.mkv") is None
+        monkeypatch.setattr(subprocess, "run", missing)
+        assert videosource.interlace_counts("film.mkv") is None

@@ -35,7 +35,7 @@ from medialib.lib import (
     runlog,
     settings,
     titlematch,
-    tmdblookup,
+    tmdbidentify,
     tooldeps,
 )
 from medialib.lib.filmmatch import Film, FilmIndex, Found
@@ -132,7 +132,7 @@ _SETTLED = ("id", "title")
 
 
 def name_films(films: list, movies: list, unnamed: list,
-               identify=tmdblookup.identify) -> tuple:
+               identify=tmdbidentify.identify) -> tuple:
     """``films`` with TMDb's ids for the ones Plex's titles do not settle, as
     (films, the films TMDb could not name either).
 
@@ -376,7 +376,7 @@ def _wanted_in_plex(server, film: Film) -> bool:
     which a Letterboxd export does not carry, so TMDb is asked for it first.
     """
     if not (film.tmdb or film.imdb) and os.environ.get("tmdbApiKey", ""):
-        match = tmdblookup.identify(film.title, film.year)
+        match = tmdbidentify.identify(film.title, film.year)
         film = film._replace(tmdb=match.tmdb, imdb=match.imdb)
     try:
         key = server.catalogue_key(film)

@@ -53,7 +53,9 @@ from medialib.lib import (
     statusline,
     subtitleads,
     subtitlefiles,
+    tmdbclient,
     tmdblookup,
+    tmdbworklists,
     toolcapture,
     tooldeps,
     workerpool,
@@ -877,7 +879,7 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
     # TMDb's answers kept, since the subtitles fetched ahead ask the tagging's
     # questions long before the tagging does.
     disk_turns = diskturn.init(os.path.join(ram_root, "diskTurns"))
-    tmdblookup.remember_answers()
+    tmdbclient.remember_answers()
     skips = safety.RunSkipLog()
     long_names = tmdblookup.LongNames()
     safety.init_abort_flag(os.path.join(ram_root, "abortRequested"))
@@ -930,7 +932,7 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
         for root in ingestable:
             _ingest(state, root, subtitle_work, listed[root])
     finally:
-        tmdblookup.remember_answers(False)
+        tmdbclient.remember_answers(False)
         diskturn.adopt("")
         ramscratch.run_exit_cleanup()
     return workerpool.exit_status(1 if durationcheck.failures() else 0)
@@ -1061,7 +1063,7 @@ def _tags_only(program: str, script_dir: str, roots: list, names: list,
     # the whole library back through the lookups that already failed on it,
     # which is the one outcome -i exists to avoid.
     blank: list = []
-    ids = tmdblookup.read_id_list(id_list, blank) if id_list else {}
+    ids = tmdbworklists.read_id_list(id_list, blank) if id_list else {}
     if ids is None:
         sys.stderr.write('The id list "%s" cannot be read.\nNothing was '
                          "changed.\n" % id_list)
@@ -1120,7 +1122,7 @@ def _tags_only(program: str, script_dir: str, roots: list, names: list,
         # what the run did, and a -iw run refuses renames like any other.
         if skips.skips:
             listing = commands.logs_file(script_dir, CONFLICTS_LIST % name)
-            if tmdblookup.write_conflict_list(listing, skips.skips, root, log):
+            if tmdbworklists.write_conflict_list(listing, skips.skips, root, log):
                 log('%d rename(s) in "%s" were held back, the name already '
                     'taken - listed in "%s"' % (len(skips.skips), root, listing))
         if id_list:
@@ -1128,28 +1130,28 @@ def _tags_only(program: str, script_dir: str, roots: list, names: list,
             continue
         if unmatched:
             listing = commands.logs_file(script_dir, UNMATCHED_LIST % name)
-            if tmdblookup.write_id_list(listing, unmatched, None, log):
+            if tmdbworklists.write_id_list(listing, unmatched, None, log):
                 log('%d film(s) in "%s" could not be identified - listed in '
                     '"%s" to fill in by hand' % (len(unmatched), root, listing))
         if ambiguous:
             listing = commands.logs_file(script_dir, AMBIGUOUS_LIST % name)
-            if tmdblookup.write_ambiguous_list(listing, ambiguous, root, log):
+            if tmdbworklists.write_ambiguous_list(listing, ambiguous, root, log):
                 log('%d folder(s) in "%s" hold more than one film - listed in '
                     '"%s"' % (len(ambiguous), root, listing))
         if planned:
             listing = commands.logs_file(script_dir, RENAMES_LIST % name)
-            if tmdblookup.write_rename_list(listing, planned, root, log):
+            if tmdbworklists.write_rename_list(listing, planned, root, log):
                 log('%d rename(s) in "%s" would be made - listed in "%s"'
                     % (len(planned), root, listing))
         if alias_titles:
             listing = commands.logs_file(script_dir, ALIAS_LIST % name)
-            if tmdblookup.write_alias_list(listing, alias_titles, root, log):
+            if tmdbworklists.write_alias_list(listing, alias_titles, root, log):
                 log('%d folder(s) in "%s" hold one film under several of its '
                     'titles - listed in "%s"'
                     % (len(alias_titles), root, listing))
         if near_misses:
             listing = commands.logs_file(script_dir, NEAR_MISS_LIST % name)
-            if tmdblookup.write_near_miss_list(listing, near_misses, root, log):
+            if tmdbworklists.write_near_miss_list(listing, near_misses, root, log):
                 log('%d folder(s) in "%s" were left alone - what was asked and '
                     'what came back is in "%s"'
                     % (len(near_misses), root, listing))
@@ -1158,7 +1160,7 @@ def _tags_only(program: str, script_dir: str, roots: list, names: list,
     duplicates = tmdblookup.duplicate_films(tagged)
     if duplicates:
         listing = commands.logs_file(script_dir, DUPLICATES_LIST)
-        if tmdblookup.write_duplicate_list(listing, duplicates, log):
+        if tmdbworklists.write_duplicate_list(listing, duplicates, log):
             log('WARNING: %d film(s) are kept in more than one folder - listed '
                 'in "%s"' % (len(duplicates), listing))
 
@@ -1186,7 +1188,7 @@ def _tags_only(program: str, script_dir: str, roots: list, names: list,
     # rewrites it, because -i is read while the file is being filled in and a
     # dry run has no business editing the document it was handed.
     if id_list and write:
-        if tmdblookup.write_id_list(id_list, shared, ids, log) and shared:
+        if tmdbworklists.write_id_list(id_list, shared, ids, log) and shared:
             log('%d film(s) could not be identified - listed in "%s" to fill '
                 "in by hand" % (len(shared), id_list))
 

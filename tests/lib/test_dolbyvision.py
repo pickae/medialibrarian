@@ -597,9 +597,9 @@ class TestExtractVideoStream:
 # The level is a capability claim, checked by a player against its hardware
 # before it decodes anything, so one that overstates the file is refused
 # outright - by a device that would have played the same video happily. The
-# byte surgery that corrects it is dolbyvisionlevel.py's, pinned in
-# test_dolbyvisionlevel.py; what is pinned here is which level a video needs,
-# what the record says it declares, and when the correction runs at all.
+# byte surgery that corrects it is pinned in test_dolbyvision_level.py; what
+# is pinned here is which level a video needs, what the record says it
+# declares, and when the correction runs at all.
 
 def _cfg_document(level=10, profile=8, rpu=1, width=3840, height=2160,
                   rate="24/1", side_data=None):
@@ -737,7 +737,7 @@ class TestNormaliseConfigLevel:
             self.corrections.append((path, level))
             return write_rc
 
-        monkeypatch.setattr(dolbyvision.dolbyvisionlevel, "correct_level",
+        monkeypatch.setattr(dolbyvision, "correct_level",
                             correct)
         status = dolbyvision.normalise_config_level(
             "film.mkv", report_as=report_as, script_dir="/repo",

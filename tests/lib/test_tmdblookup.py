@@ -1,5 +1,6 @@
-"""Tests for medialib.lib.tmdblookup - TMDb-backed IMDb id lookup, and
-Plex/Jellyfin id tagging.
+"""Tests for TMDb-backed IMDb id lookup and Plex/Jellyfin id tagging -
+medialib.lib.tmdblookup and the modules it reads through: tmdbclient,
+tmdbidentify, filmfolders and tmdbworklists.
 
 What is pinned here: the exact certainty rule of the id lookup over the jq
 null/empty edge cases (a missing primary title is the
@@ -21,12 +22,21 @@ import subprocess
 
 import pytest
 
-from medialib.lib import politepacing, titlematch, tmdblookup
+from medialib.lib import (
+    filmfolders,
+    imdbdata,
+    politepacing,
+    titlematch,
+    tmdbclient,
+    tmdbidentify,
+    tmdblookup,
+    tmdbworklists,
+)
 from medialib.lib.safety import SkipLog
 
 pytestmark = pytest.mark.stubbed
 
-_BASE = tmdblookup._BASE
+_BASE = tmdbclient._BASE
 
 
 # --- the one way out to the network -------------------------------------------
@@ -45,12 +55,12 @@ class TestTheCallItselfKeepsTheKeyOffArgv:
             seen["input"] = input
             return subprocess.CompletedProcess(argv, rc, out, b"")
 
-        monkeypatch.setattr(tmdblookup.subprocess, "run", fake_run)
+        monkeypatch.setattr(subprocess, "run", fake_run)
         return seen
 
     def test_no_argument_carries_the_key_or_the_query(self, monkeypatch):
         seen = self._record(monkeypatch)
-        tmdblookup._curl("https://example.test/search",
+        tmdbclient._curl("https://example.test/search",
                          [("api_key", "SECRET"), ("query", "Some Movie")])
         assert seen["argv"] == ["curl", "--config", "-"]
         assert not any("SECRET" in argument for argument in seen["argv"])
@@ -58,7 +68,7 @@ class TestTheCallItselfKeepsTheKeyOffArgv:
 
     def test_the_config_asks_for_what_the_flags_did(self, monkeypatch):
         seen = self._record(monkeypatch)
-        tmdblookup._curl("https://example.test/search", [("year", "2001")])
+        tmdbclient._curl("https://example.test/search", [("year", "2001")])
         lines = seen["input"].decode().splitlines()
         assert lines[0] == 'url = "https://example.test/search"'
         # -G -f -s -S, by their long names
@@ -69,12 +79,12 @@ class TestTheCallItselfKeepsTheKeyOffArgv:
         """A connection that stops answering would otherwise hold the whole
         run; given up on, it is a failing curl like any other."""
         seen = self._record(monkeypatch)
-        tmdblookup._curl("https://example.test/search", [])
+        tmdbclient._curl("https://example.test/search", [])
         assert "max-time = 30" in seen["input"].decode().splitlines()
 
     def test_a_failing_curl_is_no_answer(self, monkeypatch):
         self._record(monkeypatch, rc=22)
-        assert tmdblookup._curl("https://example.test/x", []) is None
+        assert tmdbclient._curl("https://example.test/x", []) is None
 
     def _counting(self, monkeypatch, rcs):
         calls = []
@@ -84,40 +94,40 @@ class TestTheCallItselfKeepsTheKeyOffArgv:
             return subprocess.CompletedProcess(argv, rcs[len(calls) - 1],
                                                b"{}", b"")
 
-        monkeypatch.setattr(tmdblookup.subprocess, "run", fake_run)
-        monkeypatch.setattr(tmdblookup, "_PACER",
-                            tmdblookup.politepacing.Pacer(0))
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        monkeypatch.setattr(tmdbclient, "_PACER",
+                            politepacing.Pacer(0))
         return calls
 
     def test_a_run_that_asks_to_remembers_the_answers(self, monkeypatch):
         """A full ingest asks the tagging's questions ahead and again at the
         end: the second asking is free."""
         calls = self._counting(monkeypatch, [0, 0])
-        tmdblookup.remember_answers()
+        tmdbclient.remember_answers()
         try:
             for _ in range(2):
-                assert tmdblookup._curl("https://example.test/a",
+                assert tmdbclient._curl("https://example.test/a",
                                         [("q", "x")]) == "{}"
-            assert tmdblookup._curl("https://example.test/a",
+            assert tmdbclient._curl("https://example.test/a",
                                     [("q", "y")]) == "{}"
         finally:
-            tmdblookup.remember_answers(False)
+            tmdbclient.remember_answers(False)
         assert len(calls) == 2
 
     def test_no_answer_is_not_remembered(self, monkeypatch):
         calls = self._counting(monkeypatch, [22, 0])
-        tmdblookup.remember_answers()
+        tmdbclient.remember_answers()
         try:
-            assert tmdblookup._curl("https://example.test/a", []) is None
-            assert tmdblookup._curl("https://example.test/a", []) == "{}"
+            assert tmdbclient._curl("https://example.test/a", []) is None
+            assert tmdbclient._curl("https://example.test/a", []) == "{}"
         finally:
-            tmdblookup.remember_answers(False)
+            tmdbclient.remember_answers(False)
         assert len(calls) == 2
 
     def test_nothing_is_remembered_unless_asked(self, monkeypatch):
         calls = self._counting(monkeypatch, [0, 0])
-        tmdblookup._curl("https://example.test/a", [])
-        tmdblookup._curl("https://example.test/a", [])
+        tmdbclient._curl("https://example.test/a", [])
+        tmdbclient._curl("https://example.test/a", [])
         assert len(calls) == 2
 
     @pytest.mark.parametrize("raw,quoted", [
@@ -131,7 +141,7 @@ class TestTheCallItselfKeepsTheKeyOffArgv:
             self, raw, quoted):
         """A title carries whatever the folder was named, and an unescaped quote
         in one would end the value early and turn the rest into directives."""
-        assert tmdblookup._config_value(raw) == quoted
+        assert tmdbclient._config_value(raw) == quoted
 
 
 class TestTheIdInAUrlPath:
@@ -139,14 +149,14 @@ class TestTheIdInAUrlPath:
     where a "/" or a "#" asks for something else entirely."""
 
     def test_a_number_is_itself(self):
-        assert tmdblookup._id_token(550) == "550"
+        assert tmdbidentify._id_token(550) == "550"
 
     def test_a_missing_id_is_the_word_jq_prints(self):
-        assert tmdblookup._id_token(None) == "null"
+        assert tmdbidentify._id_token(None) == "null"
 
     @pytest.mark.parametrize("value", ["../../other", "1/2", "1#x", "1 2", ""])
     def test_anything_that_is_not_a_number_is_not_an_id(self, value):
-        assert tmdblookup._id_token(value) == "null"
+        assert tmdbidentify._id_token(value) == "null"
 
 
 # --- the id lookup's certainty rule -------------------------------------------
@@ -199,7 +209,7 @@ def _install(monkeypatch, search, alt_titles, ext_ids, key="apikey",
                            years)
         return None
 
-    monkeypatch.setattr(tmdblookup, "_curl", fake_curl)
+    monkeypatch.setattr(tmdbclient, "_curl", fake_curl)
     return calls
 
 
@@ -210,22 +220,22 @@ def _detail_url(rid) -> str:
 class TestTmdbImdbId:
     def test_no_key_is_no_answer(self, monkeypatch):
         calls = _install(monkeypatch, None, {}, {}, key="")
-        assert tmdblookup.tmdb_imdb_id("Nighthawk", "1999") == ""
+        assert tmdbidentify.tmdb_imdb_id("Nighthawk", "1999") == ""
         assert calls == []
 
     def test_an_unnormalisable_title_is_no_answer(self, monkeypatch):
         calls = _install(monkeypatch, None, {}, {})
-        assert tmdblookup.tmdb_imdb_id("!!!", "1999") == ""
+        assert tmdbidentify.tmdb_imdb_id("!!!", "1999") == ""
         assert calls == []
 
     def test_a_failed_search_is_no_answer(self, monkeypatch):
         calls = _install(monkeypatch, None, {}, {})
-        assert tmdblookup.tmdb_imdb_id("Nighthawk", "1999") == ""
+        assert tmdbidentify.tmdb_imdb_id("Nighthawk", "1999") == ""
         assert len(calls) == 1 and calls[0][0] == _BASE + "/search/movie"
 
     def test_the_search_argv(self, monkeypatch):
         calls = _install(monkeypatch, json.dumps({"results": []}), {}, {})
-        tmdblookup.tmdb_imdb_id("Some Movie", "2001")
+        tmdbidentify.tmdb_imdb_id("Some Movie", "2001")
         url, params = calls[0]
         assert url == _BASE + "/search/movie"
         assert params == [("api_key", "apikey"), ("query", "Some Movie"),
@@ -237,7 +247,7 @@ class TestTmdbImdbId:
         of it happened in. What the year is then worth is the rule's business,
         not the search's."""
         calls = _install(monkeypatch, json.dumps({"results": []}), {}, {})
-        assert tmdblookup.tmdb_imdb_id("Some Movie", "2001") == ""
+        assert tmdbidentify.tmdb_imdb_id("Some Movie", "2001") == ""
         assert [params for _url, params in calls] == [
             [("api_key", "apikey"), ("query", "Some Movie"), ("year", "2001"),
              ("include_adult", "false")],
@@ -251,14 +261,14 @@ class TestTmdbImdbId:
             _row(1, "Nighthawk", date="1966-06-23"),
             _row(2, "Nighthawk", date="2005-06-23")]})
         calls = _install(monkeypatch, search, {1: [], 2: []}, {1: "tt1"})
-        assert tmdblookup.tmdb_imdb_id("Nighthawk", "1989") == ""
+        assert tmdbidentify.tmdb_imdb_id("Nighthawk", "1989") == ""
         assert [url for url, _params in calls] == [
             _BASE + "/search/movie", _detail_url(1), _detail_url(2)]
 
     def test_zero_matching_titles_is_no_answer(self, monkeypatch):
         search = json.dumps({"results": [_row(1, "Not Nighthawk")]})
         calls = _install(monkeypatch, search, {1: []}, {})
-        assert tmdblookup.tmdb_imdb_id("Nighthawk", "1999") == ""
+        assert tmdbidentify.tmdb_imdb_id("Nighthawk", "1999") == ""
         # one candidate in the year, so its document was read
         assert [url for url, _params in calls] == [
             _BASE + "/search/movie", _detail_url(1)]
@@ -266,7 +276,7 @@ class TestTmdbImdbId:
     def test_the_document_is_asked_for_in_one_call(self, monkeypatch):
         calls = _install(monkeypatch, json.dumps({"results": [_row(1, "Nighthawk")]}),
                          {1: []}, {1: "tt0120737"})
-        tmdblookup.tmdb_imdb_id("Nighthawk", "1999")
+        tmdbidentify.tmdb_imdb_id("Nighthawk", "1999")
         url, params = calls[1]
         assert url == _detail_url(1)
         assert params == [("api_key", "apikey"),
@@ -277,7 +287,7 @@ class TestTmdbImdbId:
         search = json.dumps({"results": [
             _row(1, "Nighthawk"), _row(2, "Other", date="1998-01-01")]})
         calls = _install(monkeypatch, search, {1: [], 2: []}, {1: "tt0120737"})
-        assert tmdblookup.tmdb_imdb_id("Nighthawk", "1999") == "tt0120737"
+        assert tmdbidentify.tmdb_imdb_id("Nighthawk", "1999") == "tt0120737"
         # the other release is near enough the year to be worth reading, and
         # turns out to carry a different title
         assert [url for url, _params in calls] == [
@@ -290,7 +300,7 @@ class TestTmdbImdbId:
         only when it is IMDb's own shape."""
         search = json.dumps({"results": [_row(1, "Nighthawk")]})
         _install(monkeypatch, search, {1: []}, {1: imdb})
-        assert tmdblookup.tmdb_imdb_id("Nighthawk", "1999") == ""
+        assert tmdbidentify.tmdb_imdb_id("Nighthawk", "1999") == ""
 
     def test_two_matching_candidates_is_no_answer(self, monkeypatch):
         # the second carries the title only on its original title - the whole
@@ -301,27 +311,27 @@ class TestTmdbImdbId:
         # pair of them is what makes it uncertain.
         calls = _install(monkeypatch, search, {1: [], 2: []},
                          {1: "tt1", 2: "tt2"})
-        assert tmdblookup.tmdb_imdb_id("Nighthawk", "1999") == ""
+        assert tmdbidentify.tmdb_imdb_id("Nighthawk", "1999") == ""
         assert [url for url, _params in calls] == [
             _BASE + "/search/movie", _detail_url(1), _detail_url(2)]
 
     def test_an_alternative_title_is_a_match(self, monkeypatch):
         search = json.dumps({"results": [_row(1, "The Movie")]})
         _install(monkeypatch, search, {1: ["Nighthawk"]}, {1: "tt0000001"})
-        assert tmdblookup.tmdb_imdb_id("Nighthawk", "1999") == "tt0000001"
+        assert tmdbidentify.tmdb_imdb_id("Nighthawk", "1999") == "tt0000001"
 
     def test_an_original_title_is_a_match(self, monkeypatch):
         search = json.dumps({"results": [_row(1, "The Grey Rider",
                                               original="Nighthawk")]})
         _install(monkeypatch, search, {1: []}, {1: "tt0000002"})
-        assert tmdblookup.tmdb_imdb_id("Nighthawk", "1999") == "tt0000002"
+        assert tmdbidentify.tmdb_imdb_id("Nighthawk", "1999") == "tt0000002"
 
     def test_a_missing_primary_is_the_word_null_not_a_match(self, monkeypatch):
         # jq -r prints the literal "null" for a missing title; it is compared
         # (and missed) like any other title, not skipped as if it were empty
         search = json.dumps({"results": [_row(1, None, original="Nighthawk")]})
         _install(monkeypatch, search, {1: []}, {1: "tt0000003"})
-        assert tmdblookup.tmdb_imdb_id("Nighthawk", "1999") == "tt0000003"
+        assert tmdbidentify.tmdb_imdb_id("Nighthawk", "1999") == "tt0000003"
 
     def test_a_null_alternative_is_skipped_not_matched(self, monkeypatch):
         # `.title // empty`: a null/missing alternative is skipped, whereas the
@@ -336,19 +346,19 @@ class TestTmdbImdbId:
                 return json.dumps({"alternative_titles": {"titles": [{}]},
                                    "external_ids": {"imdb_id": "tt0000004"}})
             return None
-        monkeypatch.setattr(tmdblookup, "_curl", fake_curl)
+        monkeypatch.setattr(tmdbclient, "_curl", fake_curl)
         # the null alternative is skipped; the primary "The Movie" does not match
-        assert tmdblookup.tmdb_imdb_id("Nighthawk", "1999") == ""
+        assert tmdbidentify.tmdb_imdb_id("Nighthawk", "1999") == ""
 
     def test_a_non_tt_imdb_id_is_no_answer(self, monkeypatch):
         search = json.dumps({"results": [_row(1, "Nighthawk")]})
         _install(monkeypatch, search, {1: []}, {1: "not-an-id"})
-        assert tmdblookup.tmdb_imdb_id("Nighthawk", "1999") == ""
+        assert tmdbidentify.tmdb_imdb_id("Nighthawk", "1999") == ""
 
     def test_a_missing_imdb_id_is_no_answer(self, monkeypatch):
         search = json.dumps({"results": [_row(1, "Nighthawk")]})
         _install(monkeypatch, search, {1: []}, {})
-        assert tmdblookup.tmdb_imdb_id("Nighthawk", "1999") == ""
+        assert tmdbidentify.tmdb_imdb_id("Nighthawk", "1999") == ""
 
     def test_a_document_that_cannot_be_read_is_no_answer(self, monkeypatch):
         """The one call carries the titles, the id and the dates together, so a
@@ -361,9 +371,9 @@ class TestTmdbImdbId:
             if url == _BASE + "/search/movie":
                 return json.dumps({"results": [_row(1, "Nighthawk")]})
             return None  # the document call fails
-        monkeypatch.setattr(tmdblookup, "_curl", fake_curl)
+        monkeypatch.setattr(tmdbclient, "_curl", fake_curl)
         monkeypatch.setenv("tmdbApiKey", "apikey")
-        assert tmdblookup.tmdb_imdb_id("Nighthawk", "1999") == ""
+        assert tmdbidentify.tmdb_imdb_id("Nighthawk", "1999") == ""
         assert calls[-1] == _detail_url(1)
 
 
@@ -379,18 +389,18 @@ class TestImdbOfTmdb:
             calls.append((url, list(params)))
             return body
 
-        monkeypatch.setattr(tmdblookup, "_curl", fake_curl)
+        monkeypatch.setattr(tmdbclient, "_curl", fake_curl)
         return calls
 
     def test_the_external_ids_are_asked_for_that_film(self, monkeypatch):
         calls = self._install(monkeypatch, '{"imdb_id": "tt0000003"}')
-        assert tmdblookup.imdb_of_tmdb("12345") == "tt0000003"
+        assert tmdbidentify.imdb_of_tmdb("12345") == "tt0000003"
         assert calls == [(_BASE + "/movie/12345/external_ids",
                           [("api_key", "apikey")])]
 
     def test_no_key_asks_nothing(self, monkeypatch):
         calls = self._install(monkeypatch, '{"imdb_id": "tt0000003"}', key="")
-        assert tmdblookup.imdb_of_tmdb("12345") == ""
+        assert tmdbidentify.imdb_of_tmdb("12345") == ""
         assert calls == []
 
     @pytest.mark.parametrize("body", [
@@ -399,11 +409,11 @@ class TestImdbOfTmdb:
         '{"imdb_id": "tt"}', '{"imdb_id": "tt0000003\\n"}'])
     def test_no_usable_answer_is_no_id(self, monkeypatch, body):
         self._install(monkeypatch, body)
-        assert tmdblookup.imdb_of_tmdb("12345") == ""
+        assert tmdbidentify.imdb_of_tmdb("12345") == ""
 
     def test_a_number_that_is_not_one_is_never_put_in_the_url(self, monkeypatch):
         calls = self._install(monkeypatch, '{"imdb_id": "tt0000003"}')
-        assert tmdblookup.imdb_of_tmdb("../search") == ""
+        assert tmdbidentify.imdb_of_tmdb("../search") == ""
         assert calls == []
 
 
@@ -418,14 +428,14 @@ class TestWhatTheLengthSettles:
         search = json.dumps({"results": [_row(1, "Nighthawk", date="1998-09-01")]})
         _install(monkeypatch, search, {1: []}, {1: "tt0000001"},
                  years={1: ["1999"]})
-        assert tmdblookup.tmdb_imdb_id("Nighthawk", "1999") == "tt0000001"
+        assert tmdbidentify.tmdb_imdb_id("Nighthawk", "1999") == "tt0000001"
 
     def test_two_films_of_one_title_and_year_are_told_apart_by_length(
             self, monkeypatch):
         search = json.dumps({"results": [_row(1, "Nighthawk"), _row(2, "Nighthawk")]})
         _install(monkeypatch, search, {1: [], 2: []}, {1: "tt1", 2: "tt2"},
                  runtimes={1: 90, 2: 150})
-        assert tmdblookup.tmdb_imdb_id("Nighthawk", "1999",
+        assert tmdbidentify.tmdb_imdb_id("Nighthawk", "1999",
                                        lambda: 150 * 60.0) == "tt2"
 
     def test_a_candidate_nobody_can_measure_keeps_it_uncertain(self, monkeypatch):
@@ -435,20 +445,20 @@ class TestWhatTheLengthSettles:
         search = json.dumps({"results": [_row(1, "Nighthawk"), _row(2, "Nighthawk")]})
         _install(monkeypatch, search, {1: [], 2: []}, {1: "tt1", 2: "tt2"},
                  runtimes={1: 150})
-        assert tmdblookup.tmdb_imdb_id("Nighthawk", "1999",
+        assert tmdbidentify.tmdb_imdb_id("Nighthawk", "1999",
                                        lambda: 150 * 60.0) == ""
 
     def test_and_so_does_a_film_nothing_on_disk_can_measure(self, monkeypatch):
         search = json.dumps({"results": [_row(1, "Nighthawk"), _row(2, "Nighthawk")]})
         _install(monkeypatch, search, {1: [], 2: []}, {1: "tt1", 2: "tt2"},
                  runtimes={1: 90, 2: 150})
-        assert tmdblookup.tmdb_imdb_id("Nighthawk", "1999", lambda: 0.0) == ""
+        assert tmdbidentify.tmdb_imdb_id("Nighthawk", "1999", lambda: 0.0) == ""
 
     def test_a_length_that_fits_neither_is_no_answer(self, monkeypatch):
         search = json.dumps({"results": [_row(1, "Nighthawk"), _row(2, "Nighthawk")]})
         _install(monkeypatch, search, {1: [], 2: []}, {1: "tt1", 2: "tt2"},
                  runtimes={1: 90, 2: 150})
-        assert tmdblookup.tmdb_imdb_id("Nighthawk", "1999",
+        assert tmdbidentify.tmdb_imdb_id("Nighthawk", "1999",
                                        lambda: 200 * 60.0) == ""
 
     def test_a_year_off_by_one_is_named_when_the_length_agrees(self, monkeypatch):
@@ -457,20 +467,20 @@ class TestWhatTheLengthSettles:
         second = json.dumps({"results": [_row(1, "Nighthawk", date="2000-06-23")]})
         _install(monkeypatch, json.dumps({"results": []}), {1: []},
                  {1: "tt0000009"}, runtimes={1: 120}, second=second)
-        assert tmdblookup.tmdb_imdb_id("Nighthawk", "1999",
+        assert tmdbidentify.tmdb_imdb_id("Nighthawk", "1999",
                                        lambda: 121 * 60.0) == "tt0000009"
 
     def test_and_is_not_named_without_a_length_to_agree(self, monkeypatch):
         second = json.dumps({"results": [_row(1, "Nighthawk", date="2000-06-23")]})
         _install(monkeypatch, json.dumps({"results": []}), {1: []},
                  {1: "tt0000009"}, runtimes={1: 120}, second=second)
-        assert tmdblookup.tmdb_imdb_id("Nighthawk", "1999") == ""
+        assert tmdbidentify.tmdb_imdb_id("Nighthawk", "1999") == ""
 
     def test_nor_when_the_length_disagrees(self, monkeypatch):
         second = json.dumps({"results": [_row(1, "Nighthawk", date="2000-06-23")]})
         _install(monkeypatch, json.dumps({"results": []}), {1: []},
                  {1: "tt0000009"}, runtimes={1: 120}, second=second)
-        assert tmdblookup.tmdb_imdb_id("Nighthawk", "1999",
+        assert tmdbidentify.tmdb_imdb_id("Nighthawk", "1999",
                                        lambda: 90 * 60.0) == ""
 
     def test_a_year_further_off_than_one_is_not_reached_by_a_length(
@@ -478,7 +488,7 @@ class TestWhatTheLengthSettles:
         second = json.dumps({"results": [_row(1, "Nighthawk", date="2003-06-23")]})
         _install(monkeypatch, json.dumps({"results": []}), {1: []},
                  {1: "tt0000009"}, runtimes={1: 120}, second=second)
-        assert tmdblookup.tmdb_imdb_id("Nighthawk", "1999",
+        assert tmdbidentify.tmdb_imdb_id("Nighthawk", "1999",
                                        lambda: 120 * 60.0) == ""
 
     def test_the_disk_is_not_read_when_the_year_settled_it(self, monkeypatch):
@@ -491,7 +501,7 @@ class TestWhatTheLengthSettles:
         def measure():
             asked.append(True)
             return 7200.0
-        assert tmdblookup.tmdb_imdb_id("Nighthawk", "1999", measure) == "tt0000001"
+        assert tmdbidentify.tmdb_imdb_id("Nighthawk", "1999", measure) == "tt0000001"
         assert asked == []
 
     def test_nor_when_there_is_nothing_left_to_settle(self, monkeypatch):
@@ -502,7 +512,7 @@ class TestWhatTheLengthSettles:
         def measure():
             asked.append(True)
             return 7200.0
-        assert tmdblookup.tmdb_imdb_id("Nighthawk", "1999", measure) == ""
+        assert tmdbidentify.tmdb_imdb_id("Nighthawk", "1999", measure) == ""
         assert asked == []
 
     def test_only_the_first_handful_of_results_cost_a_request(self, monkeypatch):
@@ -512,10 +522,10 @@ class TestWhatTheLengthSettles:
         search = json.dumps({"results": [_row(n, "Nighthawk")
                                          for n in range(1, 21)]})
         calls = _install(monkeypatch, search, {}, {})
-        tmdblookup.tmdb_imdb_id("Nighthawk", "1999")
+        tmdbidentify.tmdb_imdb_id("Nighthawk", "1999")
         documents = [url for url, _params in calls
                      if url != _BASE + "/search/movie"]
-        assert len(documents) == tmdblookup.MAX_CANDIDATES
+        assert len(documents) == tmdbidentify.MAX_CANDIDATES
 
     @pytest.mark.parametrize("seconds,minutes,verdict", [
         (100 * 60.0, 100, True),          # exactly what it says
@@ -528,7 +538,7 @@ class TestWhatTheLengthSettles:
     ])
     def test_the_tolerance_is_five_minutes_or_seven_percent(
             self, seconds, minutes, verdict):
-        assert tmdblookup._runtime_agrees(seconds, minutes) is verdict
+        assert tmdbidentify._runtime_agrees(seconds, minutes) is verdict
 
 
 class TestTheLengthOfAFolder:
@@ -616,7 +626,7 @@ def _stub_network(monkeypatch, matches, base="1999-06-23"):
                 if r2 == rid:
                     return json.dumps({"external_ids": {"imdb_id": imdb}})
         return None
-    monkeypatch.setattr(tmdblookup, "_curl", fake_curl)
+    monkeypatch.setattr(tmdbclient, "_curl", fake_curl)
     return calls
 
 
@@ -633,30 +643,30 @@ class TestTheYearNothingCanRead:
         "The Movie\u2014(1999)", "The Movie -(1999)", "The Movie--(1999)",
     ])
     def test_a_separator_where_the_space_should_be(self, broken):
-        assert tmdblookup.repair_year(broken) == "The Movie (1999)"
+        assert filmfolders.repair_year(broken) == "The Movie (1999)"
 
     @pytest.mark.parametrize("broken", ["The Movie  (1999)",
                                         "The Movie   (1999)"])
     def test_a_run_of_spaces_where_one_should_be(self, broken):
         """This one IS read as a film folder - and the title it hands every
         lookup and every rename carries a trailing space."""
-        assert tmdblookup.repair_year(broken) == "The Movie (1999)"
+        assert filmfolders.repair_year(broken) == "The Movie (1999)"
 
     def test_only_the_run_against_the_bracket_is_touched(self):
         """A separator with a space already on either side of it is readable,
         whatever else it is - so the spacing is settled and the separator is
         left where the name put it."""
-        assert tmdblookup.repair_year("The Movie -  (1999)") \
+        assert filmfolders.repair_year("The Movie -  (1999)") \
             == "The Movie - (1999)"
 
     @pytest.mark.parametrize("broken", ["The Movie (1999 )", "The Movie ( 1999)",
                                         "The Movie  ( 1999 )"])
     def test_a_space_inside_the_brackets(self, broken):
-        assert tmdblookup.repair_year(broken) == "The Movie (1999)"
+        assert filmfolders.repair_year(broken) == "The Movie (1999)"
 
     @pytest.mark.parametrize("broken", ["The Movie (1999", "The Movie 1999)"])
     def test_a_year_missing_half_its_brackets(self, broken):
-        assert tmdblookup.repair_year(broken) == "The Movie (1999)"
+        assert filmfolders.repair_year(broken) == "The Movie (1999)"
 
     @pytest.mark.parametrize("name", [
         "The Movie (1999)",
@@ -676,7 +686,7 @@ class TestTheYearNothingCanRead:
         "Extras",
     ])
     def test_a_year_already_readable_is_left_alone(self, name):
-        assert tmdblookup.repair_year(name) == name
+        assert filmfolders.repair_year(name) == name
 
     def test_the_folder_is_renamed_and_then_tagged(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
@@ -793,7 +803,7 @@ class TestTheEditionAFolderNames:
         ("Nighthawk (1999) (2005)", "Nighthawk (1999) (2005)", ""),
     ])
     def test_the_folder_stops_at_its_year(self, name, base, edition):
-        read = tmdblookup.read_folder(name)
+        read = filmfolders.read_folder(name)
         assert (read[0], read[4]) == (base, edition)
 
     def test_the_folder_is_looked_up_and_sheds_the_words(self, monkeypatch,
@@ -998,7 +1008,7 @@ class TestWhatMaySitInsideAnEditionedFolder:
 
     def test_a_folder_whose_shape_cannot_be_read_is_not_a_film(self, tmp_path):
         missing = tmp_path / "The Movie (1999) Extended Edition"
-        assert tmdblookup.is_film_folder(_Entry(missing)) is False
+        assert filmfolders.is_film_folder(_Entry(missing)) is False
 
     def test_a_folder_saying_nothing_after_its_year_is_a_film_unasked(
             self, tmp_path):
@@ -1007,11 +1017,11 @@ class TestWhatMaySitInsideAnEditionedFolder:
         has always been."""
         folder = tmp_path / "The Movie (1999)"
         (folder / "Working Files" / "Deeper").mkdir(parents=True)
-        assert tmdblookup.is_film_folder(_Entry(folder)) is True
+        assert filmfolders.is_film_folder(_Entry(folder)) is True
 
 
 class _Entry:
-    """The two things :func:`tmdblookup.is_film_folder` reads off a scandir
+    """The two things :func:`filmfolders.is_film_folder` reads off a scandir
     entry, for the folders a scandir cannot produce - one that is not there."""
 
     def __init__(self, path):
@@ -1033,19 +1043,19 @@ class TestTheIdList:
     ])
     def test_an_id_is_read_the_way_someone_has_it_to_hand(self, written,
                                                           expected):
-        assert tmdblookup.id_tag_for(written) == expected
+        assert tmdbworklists.id_tag_for(written) == expected
 
     @pytest.mark.parametrize("written", ["", "   ", "nonsense", "tt", "-",
                                          "{imdb-}", "tt12ab34"])
     def test_and_anything_else_is_not_an_id(self, written):
-        assert tmdblookup.id_tag_for(written) == ""
+        assert tmdbworklists.id_tag_for(written) == ""
 
     def test_a_line_still_blank_is_one_still_to_do(self, tmp_path):
         path = tmp_path / "ids.tsv"
         path.write_text("# a comment\n\nDone (1999)\ttt0000001\n"
                         "Not Yet (2001)\t\n", encoding="utf-8")
         blank: list = []
-        assert tmdblookup.read_id_list(str(path), blank) == {
+        assert tmdbworklists.read_id_list(str(path), blank) == {
             "Done (1999)": "{imdb-tt0000001}"}
         assert blank == ["Not Yet (2001)"]
 
@@ -1054,18 +1064,18 @@ class TestTheIdList:
         """The two are different answers. Read as "no ids", a path typed wrong
         throws away every id in the real file and asks the catalogue all the
         questions it has already failed."""
-        assert tmdblookup.read_id_list(str(tmp_path / "nothing.tsv")) is None
+        assert tmdbworklists.read_id_list(str(tmp_path / "nothing.tsv")) is None
         path = tmp_path / "empty.tsv"
         path.write_text("# nothing filled in yet\n", encoding="utf-8")
-        assert tmdblookup.read_id_list(str(path)) == {}
+        assert tmdbworklists.read_id_list(str(path)) == {}
 
     def test_what_was_filled_in_survives_being_rewritten(self, tmp_path):
         """The ids someone looked up by hand are the only record of them
         anywhere: dropping them would un-identify the film on the next run."""
         path = str(tmp_path / "ids.tsv")
-        tmdblookup.write_id_list(path, ["Still Unknown (2001)"],
+        tmdbworklists.write_id_list(path, ["Still Unknown (2001)"],
                                  {"Done (1999)": "{imdb-tt0000001}"})
-        assert tmdblookup.read_id_list(path) == {
+        assert tmdbworklists.read_id_list(path) == {
             "Done (1999)": "{imdb-tt0000001}"}
         with open(path, encoding="utf-8") as handle:
             written = handle.read()
@@ -1079,7 +1089,7 @@ class TestTheIdList:
         _tree(tmp_path, ("Unknown Film (2010)", ["Unknown Film (2010).mkv"]))
         monkeypatch.setenv("tmdbApiKey", "apikey")
         calls = []
-        monkeypatch.setattr(tmdblookup, "_curl",
+        monkeypatch.setattr(tmdbclient, "_curl",
                             lambda url, params: calls.append(url))
         logs = []
         unmatched: list = []
@@ -1102,7 +1112,7 @@ class TestTheIdList:
         _tree(tmp_path, ("Unknown Film (2010)", ["Unknown Film (2010).mkv"]))
         monkeypatch.setenv("tmdbApiKey", "apikey")
         calls = []
-        monkeypatch.setattr(tmdblookup, "_curl",
+        monkeypatch.setattr(tmdbclient, "_curl",
                             lambda url, params: calls.append(url))
         logs = []
         unmatched: list = []
@@ -1122,7 +1132,7 @@ class TestTheIdList:
         monkeypatch.chdir(tmp_path)
         _tree(tmp_path, ("Unknown Film (2010)", ["Unknown Film (2010).mkv"]))
         monkeypatch.setenv("tmdbApiKey", "apikey")
-        monkeypatch.setattr(tmdblookup, "_curl",
+        monkeypatch.setattr(tmdbclient, "_curl",
                             lambda url, params: None)
         unmatched: list = []
         tmdblookup.tag_plex_ids(
@@ -1135,19 +1145,19 @@ class TestTheIdList:
 
 
 _LIST_WRITERS = {
-    "renames": lambda path, log: tmdblookup.write_rename_list(
+    "renames": lambda path, log: tmdbworklists.write_rename_list(
         path, [], "/library", log),
-    "conflicts": lambda path, log: tmdblookup.write_conflict_list(
+    "conflicts": lambda path, log: tmdbworklists.write_conflict_list(
         path, [], "/library", log),
-    "duplicates": lambda path, log: tmdblookup.write_duplicate_list(
+    "duplicates": lambda path, log: tmdbworklists.write_duplicate_list(
         path, [], log),
-    "ambiguous": lambda path, log: tmdblookup.write_ambiguous_list(
+    "ambiguous": lambda path, log: tmdbworklists.write_ambiguous_list(
         path, [], "/library", log),
-    "near misses": lambda path, log: tmdblookup.write_near_miss_list(
+    "near misses": lambda path, log: tmdbworklists.write_near_miss_list(
         path, [], "/library", log),
-    "aliases": lambda path, log: tmdblookup.write_alias_list(
+    "aliases": lambda path, log: tmdbworklists.write_alias_list(
         path, [], "/library", log),
-    "ids": lambda path, log: tmdblookup.write_id_list(path, [], None, log),
+    "ids": lambda path, log: tmdbworklists.write_id_list(path, [], None, log),
 }
 
 
@@ -1184,7 +1194,7 @@ class TestTheRateLimit:
     the external-ids call."""
 
     def test_requests_are_spaced_at_the_limit(self, monkeypatch):
-        tmdblookup.reset_rate_limit()
+        tmdbclient.reset_rate_limit()
         ticks = [0.0]
         slept = []
         monkeypatch.setattr(politepacing.time, "monotonic", lambda: ticks[0])
@@ -1193,24 +1203,24 @@ class TestTheRateLimit:
             slept.append(seconds)
             ticks[0] += seconds
         monkeypatch.setattr(politepacing.time, "sleep", fake_sleep)
-        monkeypatch.setattr(tmdblookup.subprocess, "run",
+        monkeypatch.setattr(subprocess, "run",
                             lambda *a, **k: _Done())
         for _call in range(3):
-            tmdblookup._curl("https://example.invalid", [])
+            tmdbclient._curl("https://example.invalid", [])
         # the first goes straight out, each one after it waits its slot
-        assert slept == [1.0 / tmdblookup.MAX_REQUESTS_PER_SECOND] * 2
+        assert slept == [1.0 / tmdbclient.MAX_REQUESTS_PER_SECOND] * 2
 
     def test_a_caller_that_took_its_time_waits_for_nothing(self, monkeypatch):
-        tmdblookup.reset_rate_limit()
+        tmdbclient.reset_rate_limit()
         ticks = [0.0]
         slept = []
         monkeypatch.setattr(politepacing.time, "monotonic", lambda: ticks[0])
         monkeypatch.setattr(politepacing.time, "sleep", slept.append)
-        monkeypatch.setattr(tmdblookup.subprocess, "run",
+        monkeypatch.setattr(subprocess, "run",
                             lambda *a, **k: _Done())
-        tmdblookup._curl("https://example.invalid", [])
+        tmdbclient._curl("https://example.invalid", [])
         ticks[0] = 5.0
-        tmdblookup._curl("https://example.invalid", [])
+        tmdbclient._curl("https://example.invalid", [])
         assert slept == []
 
 
@@ -1579,7 +1589,7 @@ class TestTagPlexIds:
                 return json.dumps({"runtime": 120,
                                    "external_ids": {"imdb_id": "tt0000123"}})
             return None
-        monkeypatch.setattr(tmdblookup, "_curl", fake_curl)
+        monkeypatch.setattr(tmdbclient, "_curl", fake_curl)
         monkeypatch.setattr(tmdblookup.durationcheck, "total_duration",
                             lambda _paths: 120 * 60.0)
         logs = []
@@ -1850,7 +1860,7 @@ class TestWhatASpellingSettles:
                 return json.dumps({"external_ids": {"imdb_id": imdb}})
             return None
 
-        monkeypatch.setattr(tmdblookup, "_curl", fake_curl)
+        monkeypatch.setattr(tmdbclient, "_curl", fake_curl)
         return queries
 
     def _run(self, monkeypatch, tmp_path, folder, files, **network):
@@ -1955,7 +1965,7 @@ class TestWhatASpellingSettles:
                 return json.dumps({"external_ids": {"imdb_id": "tt0054824"}})
             return None
 
-        monkeypatch.setattr(tmdblookup, "_curl", fake_curl)
+        monkeypatch.setattr(tmdbclient, "_curl", fake_curl)
         tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog())
         assert (tmp_path / "Le seigneur de Val-Mont (1961) "
                            "{imdb-tt0054824}").is_dir()
@@ -1963,13 +1973,13 @@ class TestWhatASpellingSettles:
     def test_a_spelling_no_file_can_be_named_after_is_not_used(self):
         """Trade/Off is a real film and not a real folder, and the id is still
         worth having."""
-        candidate = tmdblookup._Candidate(
-            years=frozenset({"1997"}), titles=tmdblookup.title_keys("Trade/Off"),
+        candidate = tmdbidentify._Candidate(
+            years=frozenset({"1997"}), titles=tmdbidentify.title_keys("Trade/Off"),
             spellings=("Trade/Off",),
-            own=frozenset({tmdblookup.normalize_title("Trade/Off")}),
+            own=frozenset({tmdbidentify.normalize_title("Trade/Off")}),
             runtime=0.0, imdb="tt0119094")
-        settled = tmdblookup._matched(candidate,
-                                      tmdblookup.title_keys("Trade Off"))
+        settled = tmdbidentify._matched(candidate,
+                                      tmdbidentify.title_keys("Trade Off"))
         assert (settled.imdb, settled.title) == ("tt0119094", "")
 
     def test_the_filler_a_library_wrote_in_front_is_asked_around(
@@ -1995,7 +2005,7 @@ class TestTheFolderNothingCanRename:
         monkeypatch.setenv("tmdbApiKey", "apikey")
         # The lookup runs before the folder is judged now, so the network is
         # reached; what these cases are about is that it settles nothing here.
-        monkeypatch.setattr(tmdblookup, "_curl",
+        monkeypatch.setattr(tmdbclient, "_curl",
                             lambda *_a, **_k: json.dumps({"results": []}))
         _tree(tmp_path, (folder, files))
         logs, ambiguous = [], []
@@ -2019,7 +2029,7 @@ class TestTheFolderNothingCanRename:
         # still are, and whether they really could not be settled is the thing
         # somebody has to look at.
         assert self._reasons(ambiguous) == [
-            "holds a film that is not its own" + tmdblookup.TAGGED_ANYWAY]
+            "holds a film that is not its own" + tmdbworklists.TAGGED_ANYWAY]
 
     def test_a_part_with_a_title_after_it_gets_it_too(self, monkeypatch,
                                                        tmp_path):
@@ -2030,7 +2040,7 @@ class TestTheFolderNothingCanRename:
             ["The Film (1961) " + tag + " Part 1 - The Escape.mkv",
              "The Film (1961) Part 2 - The Revenge.mkv"])
         assert self._reasons(ambiguous) == [
-            "is one film in parts that do not stack" + tmdblookup.TAGGED_ANYWAY]
+            "is one film in parts that do not stack" + tmdbworklists.TAGGED_ANYWAY]
         assert (tmp_path / folder
                 / ("The Film (1961) " + tag + " Part 2 - The Revenge.mkv")
                 ).is_file()
@@ -2067,7 +2077,7 @@ class TestTheFolderNothingCanRename:
         # No work to do, and still reported: a run that says nothing about it
         # would be a folder that quietly stopped being on anyone's list.
         assert self._reasons(ambiguous) == [
-            "holds a film that is not its own" + tmdblookup.TAGGED_ANYWAY]
+            "holds a film that is not its own" + tmdbworklists.TAGGED_ANYWAY]
 
     def test_one_film_under_two_spellings_is_reported_as_twice(
             self, monkeypatch, tmp_path):
@@ -2082,7 +2092,7 @@ class TestTheFolderNothingCanRename:
              "Starfall Vol. 2 (2017).mkv"])
         assert [(reason, names) for _p, reason, names in ambiguous] == [(
             "holds the same film twice, spelled two ways"
-            + tmdblookup.TAGGED_ANYWAY,
+            + tmdbworklists.TAGGED_ANYWAY,
             ["Starfall Vol 2 (2017) " + tag + ".mkv",
              "Starfall Vol. 2 (2017).mkv"])]
         # Said once, however many things the tagging then does.
@@ -2097,7 +2107,7 @@ class TestTheFolderNothingCanRename:
              "Starfall Vol. 2 (2017).mkv",
              "Moonrise.mkv"])
         assert [(reason, names) for _p, reason, names in ambiguous] == [
-            ("holds a film that is not its own" + tmdblookup.TAGGED_ANYWAY,
+            ("holds a film that is not its own" + tmdbworklists.TAGGED_ANYWAY,
              ["Moonrise.mkv"])]
 
 
@@ -2109,7 +2119,7 @@ class TestTheNamesAReportAndAProbeSee:
             self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("tmdbApiKey", "apikey")
-        monkeypatch.setattr(tmdblookup, "_curl",
+        monkeypatch.setattr(tmdbclient, "_curl",
                             lambda *_a, **_k: json.dumps({"results": []}))
         _tree(tmp_path, ("The Film (1961)",
                          ["the film (1961) part 1 - the escape.mkv",
@@ -2202,7 +2212,7 @@ class TestHowCloseItCame:
         twice, and the ambiguous list is where this one belongs."""
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("tmdbApiKey", "apikey")
-        monkeypatch.setattr(tmdblookup, "_curl", lambda *_a, **_k: None)
+        monkeypatch.setattr(tmdbclient, "_curl", lambda *_a, **_k: None)
         _tree(tmp_path, ("Box (1999)", ["Box (1999).mkv", "Other Film.mkv"]))
         near, ambiguous = [], []
         tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog(),
@@ -2216,7 +2226,7 @@ class TestHowCloseItCame:
         """The comparison that says whether it was really unfixable goes with
         the folder, in the one list that has it."""
         listing = tmp_path / "ambiguous.txt"
-        tmdblookup.write_ambiguous_list(
+        tmdbworklists.write_ambiguous_list(
             str(listing),
             [(str(tmp_path / "Box (1999)"), "holds a film that is not its own",
               ["Other Film.mkv"])],
@@ -2263,7 +2273,7 @@ class TestWhichResultsTheBudgetGoesOn:
         rows = self._page("Sprint", "2020")
         _install(monkeypatch, json.dumps({"results": rows}), {},
                  {row["id"]: "tt%07d" % row["id"] for row in rows})
-        assert tmdblookup.tmdb_imdb_id("Sprint", "2020") == "tt0000099"
+        assert tmdbidentify.tmdb_imdb_id("Sprint", "2020") == "tt0000099"
 
     def test_and_the_ones_it_did_not_reach_say_which_of_the_two_they_are(
             self, monkeypatch):
@@ -2276,7 +2286,7 @@ class TestWhichResultsTheBudgetGoesOn:
         _install(monkeypatch, json.dumps({"results": rows}), {},
                  {row["id"]: "tt%07d" % row["id"] for row in rows})
         notes: list = []
-        tmdblookup.identify("Sprint", "2020", notes=notes)
+        tmdbidentify.identify("Sprint", "2020", notes=notes)
         crowded = [note for note in notes if "were closer" in note]
         assert len(crowded) == 2 and all("Sprint " in note for note in crowded)
         assert '    passed over: "A Wholly Other Film" (1961) - neither its ' \
@@ -2300,7 +2310,7 @@ class TestWhichResultsTheBudgetGoesOn:
         _install(monkeypatch, json.dumps({"results": rows}),
                  {99: ["Sunfall Reckoning"]},
                  {row["id"]: "tt%07d" % row["id"] for row in rows})
-        assert tmdblookup.tmdb_imdb_id("Sunfall Reckoning", "2019") \
+        assert tmdbidentify.tmdb_imdb_id("Sunfall Reckoning", "2019") \
             == "tt0000099"
 
     def test_a_result_that_says_less_besides_the_title_is_the_nearer_one(self):
@@ -2309,7 +2319,7 @@ class TestWhichResultsTheBudgetGoesOn:
         tight = _row(1, "Hard Border", date="2018-01-01")
         loose = _row(2, "Wad: surviving on the border of water and land",
                      date="2018-01-01")
-        order = tmdblookup._worth_asking(
+        order = tmdbidentify._worth_asking(
             [loose, tight], "2018", titlematch.title_keys("Border"),
             frozenset({"border"}))
         assert [row["id"] for row in order] == [1, 2]
@@ -2327,7 +2337,7 @@ class TestWhichResultsTheBudgetGoesOn:
         begins = _row(1, "Sunfall Reckoning of the Long Grey Winter",
                       date="2019-01-01")
         scattered = _row(2, "The Reckoning of Sunfall", date="2019-01-01")
-        order = tmdblookup._worth_asking(
+        order = tmdbidentify._worth_asking(
             [scattered, begins], "2019",
             titlematch.title_keys("Sunfall Reckoning"),
             frozenset({"sunfall reckoning"}))
@@ -2341,7 +2351,7 @@ class TestWhichResultsTheBudgetGoesOn:
         """
         begins = _row(1, "Sunfall", date="2019-01-01")
         scattered = _row(2, "Redux of the Reckoning", date="2019-01-01")
-        order = tmdblookup._worth_asking(
+        order = tmdbidentify._worth_asking(
             [scattered, begins], "2019",
             titlematch.title_keys("Sunfall Reckoning Redux"),
             frozenset({"sunfall reckoning redux"}))
@@ -2356,7 +2366,7 @@ class TestWhichResultsTheBudgetGoesOn:
             _row(1, "Gorse and Gallows - Part 2", date="2012-01-01")]})
         calls = _install(monkeypatch, search, {}, {})
         notes: list = []
-        assert tmdblookup.identify("Gorse and Gallows - Part 2", "2012",
+        assert tmdbidentify.identify("Gorse and Gallows - Part 2", "2012",
                                    notes=notes).imdb == ""
         assert any("no IMDb id for it" in note for note in notes)
         # and the tail of that name was never a question worth asking
@@ -2392,7 +2402,7 @@ class TestTheFolderAboveAsTheFirstHalfOfTheTitle:
                         return json.dumps({"external_ids": {"imdb_id": imdb}})
             return None
 
-        monkeypatch.setattr(tmdblookup, "_curl", fake_curl)
+        monkeypatch.setattr(tmdbclient, "_curl", fake_curl)
         return asked
 
     def test_the_two_halves_together_name_the_film(self, monkeypatch, tmp_path):
@@ -2498,7 +2508,7 @@ class TestAFolderNamedWithTwoOfItsTitles:
                         return json.dumps({"external_ids": {"imdb_id": imdb}})
             return None
 
-        monkeypatch.setattr(tmdblookup, "_curl", fake_curl)
+        monkeypatch.setattr(tmdbclient, "_curl", fake_curl)
         return asked
 
     def _folder(self, tmp_path, base):
@@ -2579,7 +2589,7 @@ class TestTheFoldsAReportShows:
         the line."""
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("tmdbApiKey", "apikey")
-        monkeypatch.setattr(tmdblookup, "_curl", lambda *_a, **_k: None)
+        monkeypatch.setattr(tmdbclient, "_curl", lambda *_a, **_k: None)
         tag = "{imdb-tt0054824}"
         _tree(tmp_path, ("The Film (1961) " + tag,
                          ["The Film (1961) " + tag + " Part 1 - The Escape.mkv",
@@ -2588,7 +2598,7 @@ class TestTheFoldsAReportShows:
         tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog(),
                                 dry_run=True, ambiguous=ambiguous)
         listing = tmp_path / "ambiguous.txt"
-        tmdblookup.write_ambiguous_list(str(listing), ambiguous, str(tmp_path))
+        tmdbworklists.write_ambiguous_list(str(listing), ambiguous, str(tmp_path))
         written = listing.read_text(encoding="utf-8")
         # The name on disk is quoted verbatim, tag and all - it is what the
         # file is called. What must not carry the tag is the FOLD after it.
@@ -2627,7 +2637,7 @@ class TestOneFilmUnderSeveralOfItsTitles:
                     "release_dates": {"results": []}})
             return None
 
-        monkeypatch.setattr(tmdblookup, "_curl", fake_curl)
+        monkeypatch.setattr(tmdbclient, "_curl", fake_curl)
 
     def test_the_folder_is_tagged_and_every_file_keeps_its_own_language(
             self, monkeypatch, tmp_path):
@@ -2706,7 +2716,7 @@ class TestAYearWithADigitWrong:
         somebody looking for a duplicate that was never there."""
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("tmdbApiKey", "apikey")
-        monkeypatch.setattr(tmdblookup, "_curl",
+        monkeypatch.setattr(tmdbclient, "_curl",
                             lambda *_a, **_k: json.dumps({"results": []}))
         _tree(tmp_path, ("Falcons Forever (1988)",
                          ["Falcons Forever (1998).mkv"]))
@@ -2720,7 +2730,7 @@ class TestAYearWithADigitWrong:
                                                         tmp_path):
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("tmdbApiKey", "apikey")
-        monkeypatch.setattr(tmdblookup, "_curl",
+        monkeypatch.setattr(tmdbclient, "_curl",
                             lambda *_a, **_k: json.dumps({"results": []}))
         _tree(tmp_path, ("The Movie (1999)",
                          ["The Movie (1999).mkv", "The Movie (1999) (1).mkv"]))
@@ -2758,7 +2768,7 @@ class TestAYearWithADigitWrong:
                     _row(1, "Tempest - Rising", date="2017-10-25")]})
             return json.dumps({"external_ids": {"imdb_id": "tt3501632"}})
 
-        monkeypatch.setattr(tmdblookup, "_curl", fake_curl)
+        monkeypatch.setattr(tmdbclient, "_curl", fake_curl)
 
 
 class TestEvidenceOfDifferentStrength:
@@ -2780,7 +2790,7 @@ class TestEvidenceOfDifferentStrength:
         _install(monkeypatch, search, {2: ["The 1815"]},
                  {1: "tt8579674", 2: "tt7520286"},
                  runtimes={1: 119, 2: 124})
-        assert tmdblookup.tmdb_imdb_id("1815", "2019",
+        assert tmdbidentify.tmdb_imdb_id("1815", "2019",
                                        lambda: 119 * 60.0) == "tt8579674"
 
     def test_but_a_second_that_also_carries_it_as_written_still_stops_it(
@@ -2792,7 +2802,7 @@ class TestEvidenceOfDifferentStrength:
             _row(2, "Bramble '15", original="1815", date="2019-01-10")]})
         _install(monkeypatch, search, {}, {1: "tt8579674", 2: "tt7520286"},
                  runtimes={1: 119, 2: 124})
-        assert tmdblookup.tmdb_imdb_id("1815", "2019",
+        assert tmdbidentify.tmdb_imdb_id("1815", "2019",
                                        lambda: 119 * 60.0) == ""
 
     def test_a_films_own_name_beats_one_of_the_names_it_is_also_known_by(
@@ -2808,7 +2818,7 @@ class TestEvidenceOfDifferentStrength:
         _install(monkeypatch, search, {2: ["Bleak Friday"]},
                  {1: "tt0080761", 2: "tt0081645"},
                  runtimes={1: 95, 2: 93})
-        assert tmdblookup.tmdb_imdb_id("Bleak Friday", "1980",
+        assert tmdbidentify.tmdb_imdb_id("Bleak Friday", "1980",
                                        lambda: 95.5 * 60.0) == "tt0080761"
 
     def test_and_a_translated_title_is_one_of_a_films_own_names(self,
@@ -2822,7 +2832,7 @@ class TestEvidenceOfDifferentStrength:
         _install(monkeypatch, search, {2: ["The Boundary"]},
                  {1: "tt5501104", 2: "tt11007024"},
                  runtimes={1: 110, 2: 96})
-        assert tmdblookup.tmdb_imdb_id("The Boundary", "2018",
+        assert tmdbidentify.tmdb_imdb_id("The Boundary", "2018",
                                        lambda: 105.4 * 60.0) == "tt5501104"
 
     def test_two_that_both_carry_it_as_written_are_still_two(self,
@@ -2831,14 +2841,14 @@ class TestEvidenceOfDifferentStrength:
         search = json.dumps({"results": [_row(1, "Nighthawk", date="1999-01-10"),
                                          _row(2, "Nighthawk", date="1999-01-10")]})
         _install(monkeypatch, search, {}, {1: "tt0000001", 2: "tt0000002"})
-        assert tmdblookup.tmdb_imdb_id("Nighthawk", "1999") == ""
+        assert tmdbidentify.tmdb_imdb_id("Nighthawk", "1999") == ""
 
     def test_and_where_none_carries_it_as_written_they_all_stand(self,
                                                                  monkeypatch):
         search = json.dumps({"results": [_row(1, "The Nighthawk",
                                               date="1999-01-10")]})
         _install(monkeypatch, search, {}, {1: "tt0000001"})
-        assert tmdblookup.tmdb_imdb_id("Nighthawk", "1999") == "tt0000001"
+        assert tmdbidentify.tmdb_imdb_id("Nighthawk", "1999") == "tt0000001"
 
     def test_a_re_release_does_not_answer_for_the_film_it_was_timed_to(
             self, monkeypatch):
@@ -2851,7 +2861,7 @@ class TestEvidenceOfDifferentStrength:
                  runtimes={1: 136, 2: 140},
                  years={1: ["2018", "2019", "2021"],
                         2: ["1976", "1977", "1982", "2018"]})
-        assert tmdblookup.tmdb_imdb_id("A Light Is Lit", "2018",
+        assert tmdbidentify.tmdb_imdb_id("A Light Is Lit", "2018",
                                        lambda: 135.8 * 60.0) == "tt1517451"
 
     def test_a_premiere_a_year_before_the_release_is_not_a_re_release(
@@ -2862,7 +2872,7 @@ class TestEvidenceOfDifferentStrength:
         search = json.dumps({"results": [_row(1, "The Film", date="2017-09-01")]})
         _install(monkeypatch, search, {}, {1: "tt0000001"},
                  years={1: ["2017", "2018"]})
-        assert tmdblookup.tmdb_imdb_id("The Film", "2018") == "tt0000001"
+        assert tmdbidentify.tmdb_imdb_id("The Film", "2018") == "tt0000001"
 
     def test_and_where_every_candidate_is_equally_old_they_all_stand(
             self, monkeypatch):
@@ -2871,7 +2881,7 @@ class TestEvidenceOfDifferentStrength:
             _row(2, "The Film", date="1976-01-01")]})
         _install(monkeypatch, search, {}, {1: "tt0000001", 2: "tt0000002"},
                  years={1: ["1976", "2018"], 2: ["1976", "2018"]})
-        assert tmdblookup.tmdb_imdb_id("The Film", "2018") == ""
+        assert tmdbidentify.tmdb_imdb_id("The Film", "2018") == ""
 
 
 class TestWhichListAFolderBelongsTo:
@@ -2907,7 +2917,7 @@ class TestWhichListAFolderBelongsTo:
                 body["alternative_titles"] = {"titles": [{"title": "Blaue"}]}
             return json.dumps(body)
 
-        monkeypatch.setattr(tmdblookup, "_curl", fake_curl)
+        monkeypatch.setattr(tmdbclient, "_curl", fake_curl)
 
     def test_each_folder_is_named_by_exactly_one_report(self, monkeypatch,
                                                          tmp_path):
@@ -2965,7 +2975,7 @@ class TestACandidateThatCouldNotBeTheAnswer:
             _row(2, "忍野さら/Re-Made", date="2016-01-01")]})
         _install(monkeypatch, search, {}, {1: "tt5678110"},
                  runtimes={1: 101, 2: 102})
-        assert tmdblookup.tmdb_imdb_id("Re Made", "2016",
+        assert tmdbidentify.tmdb_imdb_id("Re Made", "2016",
                                        lambda: 100 * 60.0) == "tt5678110"
 
     def test_where_none_of_them_has_one_they_all_stand(self, monkeypatch):
@@ -2975,7 +2985,7 @@ class TestACandidateThatCouldNotBeTheAnswer:
                                          _row(2, "Re Made", date="2016-01-01")]})
         _install(monkeypatch, search, {}, {}, runtimes={1: 101, 2: 102})
         near: list = []
-        assert tmdblookup.identify("Re Made", "2016", lambda: 100 * 60.0,
+        assert tmdbidentify.identify("Re Made", "2016", lambda: 100 * 60.0,
                                    near).imdb == ""
         assert any("does not fit" in note or "fits" in note for note in near)
 
@@ -2987,7 +2997,7 @@ class TestACandidateThatCouldNotBeTheAnswer:
         _install(monkeypatch, search, {}, {1: "tt0000001"},
                  runtimes={1: 101, 2: 102, 3: 103})
         near: list = []
-        tmdblookup.identify("Re Made", "2016", lambda: 0.0, near)
+        tmdbidentify.identify("Re Made", "2016", lambda: 0.0, near)
         assert sum("no IMDb id, so it could not be the answer" in note
                    for note in near) == 2
 
@@ -3002,7 +3012,7 @@ class TestACandidateThatCouldNotBeTheAnswer:
         _install(monkeypatch, search, {},
                  {1: "tt2091935", 2: "tt3812348"},
                  runtimes={1: 95, 2: 79})
-        assert tmdblookup.tmdb_imdb_id("Mr. Blue", "2015",
+        assert tmdbidentify.tmdb_imdb_id("Mr. Blue", "2015",
                                        lambda: 95.5 * 60.0) == "tt2091935"
 
     def test_but_one_that_could_have_been_still_blocks(self, monkeypatch):
@@ -3014,7 +3024,7 @@ class TestACandidateThatCouldNotBeTheAnswer:
             _row(2, "Mr. Blue", date="2015-01-01")]})
         _install(monkeypatch, search, {},
                  {1: "tt2091935", 2: "tt3812348"}, runtimes={1: 95})
-        assert tmdblookup.tmdb_imdb_id("Mr. Blue", "2015",
+        assert tmdbidentify.tmdb_imdb_id("Mr. Blue", "2015",
                                        lambda: 95.5 * 60.0) == ""
 
 
@@ -3047,7 +3057,7 @@ class TestAFolderNamedInAThirdLanguage:
                 "alternative_titles": {"titles": [{"title": t} for t in group]},
                 "release_dates": {"results": []}})
 
-        monkeypatch.setattr(tmdblookup, "_curl", fake_curl)
+        monkeypatch.setattr(tmdbclient, "_curl", fake_curl)
         return asked
 
     def _run(self, monkeypatch, tmp_path, files, titles=None):
@@ -3142,7 +3152,7 @@ class TestALanguageWrittenAsAnEdition:
                                                   for t in self.TITLES]},
                 "release_dates": {"results": []}})
 
-        monkeypatch.setattr(tmdblookup, "_curl", fake_curl)
+        monkeypatch.setattr(tmdbclient, "_curl", fake_curl)
         ambiguous: list = []
         tmdblookup.tag_plex_ids(".", lambda _line: None, SkipLog(),
                                 ambiguous=ambiguous)
@@ -3226,7 +3236,7 @@ class TestTheFoldersARealLibraryLeft:
                     "release_dates": {"results": []}})
             return None
 
-        monkeypatch.setattr(tmdblookup, "_curl", fake_curl)
+        monkeypatch.setattr(tmdbclient, "_curl", fake_curl)
         return asked
 
     def _run(self, monkeypatch, tmp_path, folder, files):
@@ -3503,7 +3513,7 @@ class TestANameThatWillNotFit:
         monkeypatch.setenv("tmdbApiKey", "apikey")
         # Every id is hand-written, so nothing here asks the network what these
         # films are: what is being tested is what their names do.
-        monkeypatch.setattr(tmdblookup, "_curl",
+        monkeypatch.setattr(tmdbclient, "_curl",
                             lambda *_a, **_k: json.dumps({"results": []}))
         _tree(tmp_path, *folders)
         logs: list = []
@@ -3627,7 +3637,7 @@ def _catalogue(monkeypatch, films, found_under=None):
             "translations": {"translations": [
                 {"iso_639_1": "de", "data": {"title": one}}
                 for one in translations]}})
-    monkeypatch.setattr(tmdblookup, "_curl", fake_curl)
+    monkeypatch.setattr(tmdbclient, "_curl", fake_curl)
     return calls
 
 
@@ -3691,10 +3701,10 @@ class TestAFolderThatSaysNoYear:
         asked about is as likely as the one that fitted."""
         films = {rid: ("Moss Harbour", "%d-03-01" % (1950 + rid),
                        80 if rid == 1 else 20, "tt00001%02d" % rid, ())
-                 for rid in range(1, tmdblookup.MAX_CANDIDATES + 2)}
+                 for rid in range(1, tmdbidentify.MAX_CANDIDATES + 2)}
         _catalogue(monkeypatch, films)
         notes: list = []
-        assert tmdblookup.identify("Moss Harbour", "", lambda: 79 * 60.0,
+        assert tmdbidentify.identify("Moss Harbour", "", lambda: 79 * 60.0,
                                    notes).imdb == ""
         assert any("never asked about" in note for note in notes)
 
@@ -3791,7 +3801,7 @@ class TestTheTranslatedTitles:
     def test_the_document_asks_for_them(self, monkeypatch):
         calls = _catalogue(monkeypatch, {
             1: ("Moss Harbour", "1953-03-01", 80, "tt0000101", ())})
-        tmdblookup.identify("Moss Harbour", "1953")
+        tmdbidentify.identify("Moss Harbour", "1953")
         assert "translations" in calls[1][1]["append_to_response"].split(",")
 
     def test_a_title_only_a_translation_carries_is_the_films(
@@ -3799,14 +3809,14 @@ class TestTheTranslatedTitles:
         _catalogue(monkeypatch, {
             1: ("The Pebble Prince", "1983-03-01", 85, "tt0000101",
                 ("Der Kieselprinz",))})
-        settled = tmdblookup.identify("Der Kieselprinz", "1983")
+        settled = tmdbidentify.identify("Der Kieselprinz", "1983")
         assert (settled.imdb, settled.title) == ("tt0000101", "Der Kieselprinz")
 
     def test_an_empty_translation_says_nothing(self):
         detail = {"translations": {"translations": [
             {"data": {"title": ""}}, {"data": {}}, {}, "junk",
             {"data": {"title": "Der Kieselprinz"}}]}}
-        assert tmdblookup._translated_titles(detail) == ["Der Kieselprinz"]
+        assert tmdbidentify._translated_titles(detail) == ["Der Kieselprinz"]
 
 
 class TestTheUmlautsWrittenBack:
@@ -3817,7 +3827,7 @@ class TestTheUmlautsWrittenBack:
         _catalogue(monkeypatch, {
             1: ("Moosröschen", "1971-03-01", 70, "tt0000101", ())},
             found_under={"Moosröschen"})
-        assert tmdblookup.identify("Moosroeschen", "1971").imdb == "tt0000101"
+        assert tmdbidentify.identify("Moosroeschen", "1971").imdb == "tt0000101"
 
 
 class TestTheYearTheCatalogueGives:
@@ -3827,7 +3837,7 @@ class TestTheYearTheCatalogueGives:
     def test_a_year_written_into_the_title_is_the_title(self, monkeypatch):
         _catalogue(monkeypatch, {
             1: ("Kestrel Vane 2017", "2017-03-01", 60, "tt0000101", ())})
-        settled = tmdblookup.identify("Kestrel Vane", "2017")
+        settled = tmdbidentify.identify("Kestrel Vane", "2017")
         assert (settled.imdb, settled.title) == ("tt0000101",
                                                  "Kestrel Vane 2017")
 
@@ -3839,7 +3849,7 @@ class TestTheYearTheCatalogueGives:
                 "tt0000101", ()),
             2: ("Moss Harbour: Live at the Pier", "1971-03-01", 60,
                 "tt0000102", ())})
-        assert tmdblookup.identify("Moss Harbour Live at the Pier",
+        assert tmdbidentify.identify("Moss Harbour Live at the Pier",
                                    "1970").imdb == "tt0000101"
 
     def test_a_length_vouches_for_a_year_further_out(self, monkeypatch,
@@ -3863,13 +3873,13 @@ class TestTheYearTheCatalogueGives:
             self, monkeypatch, minutes):
         _catalogue(monkeypatch, {
             1: ("Moss Harbour", "2018-03-01", 64, "tt0000101", ())})
-        assert tmdblookup.identify("Moss Harbour", "2021",
+        assert tmdbidentify.identify("Moss Harbour", "2021",
                                    lambda: minutes * 60.0).imdb == ""
 
     def test_further_out_than_that_is_no_answer_at_all(self, monkeypatch):
         _catalogue(monkeypatch, {
             1: ("Moss Harbour", "2010-03-01", 64, "tt0000101", ())})
-        assert tmdblookup.identify("Moss Harbour", "2021",
+        assert tmdbidentify.identify("Moss Harbour", "2021",
                                    lambda: 64 * 60.0).imdb == ""
 
 
@@ -3884,7 +3894,7 @@ class TestOnePartOfTheName:
     def test_a_whole_segment_is_the_title(self, monkeypatch, catalogued):
         _catalogue(monkeypatch, {
             1: (catalogued, "2015-03-01", 60, "tt0000101", ())})
-        settled = tmdblookup.identify("Minimal Rooms", "2015")
+        settled = tmdbidentify.identify("Minimal Rooms", "2015")
         # the folder keeps the name it was found under
         assert (settled.imdb, settled.title) == ("tt0000101", "")
 
@@ -3892,20 +3902,20 @@ class TestOnePartOfTheName:
         _catalogue(monkeypatch, {
             1: ("Beyond Minimal Rooms Forever", "2015-03-01", 60, "tt0000101",
                 ())})
-        assert tmdblookup.identify("Minimal Rooms", "2015").imdb == ""
+        assert tmdbidentify.identify("Minimal Rooms", "2015").imdb == ""
 
     def test_a_film_carrying_the_title_whole_comes_first(self, monkeypatch):
         _catalogue(monkeypatch, {
             1: ("Minimal Rooms: The Sequel", "2015-03-01", 60, "tt0000101", ()),
             2: ("Minimal Rooms", "2015-03-01", 60, "tt0000102", ())})
-        assert tmdblookup.identify("Minimal Rooms", "2015").imdb == "tt0000102"
+        assert tmdbidentify.identify("Minimal Rooms", "2015").imdb == "tt0000102"
 
     def test_two_films_with_it_as_half_their_name_are_two(self, monkeypatch):
         _catalogue(monkeypatch, {
             1: ("Minimal Rooms: The First", "2015-03-01", 60, "tt0000101", ()),
             2: ("Minimal Rooms: The Second", "2015-03-01", 60, "tt0000102",
                 ())})
-        assert tmdblookup.identify("Minimal Rooms", "2015").imdb == ""
+        assert tmdbidentify.identify("Minimal Rooms", "2015").imdb == ""
 
 
 class TestAFilmImdbNeverCatalogued:
@@ -3925,14 +3935,14 @@ class TestAFilmImdbNeverCatalogued:
         _catalogue(monkeypatch, {
             7: ("Moss Harbour", "2009-03-01", 60, None, ()),
             8: ("Moss Harbour", "2009-03-01", 60, "tt0000108", ())})
-        assert tmdblookup.identify("Moss Harbour", "2009").tag \
+        assert tmdbidentify.identify("Moss Harbour", "2009").tag \
             == "{imdb-tt0000108}"
 
     def test_a_match_says_which_tag_it_is(self):
-        assert tmdblookup.Match(imdb="tt1").tag == "{imdb-tt1}"
-        assert tmdblookup.Match(tmdb="7").tag == "{tmdb-7}"
-        assert tmdblookup.Match(imdb="tt1", tmdb="7").tag == "{imdb-tt1}"
-        assert tmdblookup.Match().tag == ""
+        assert tmdbidentify.Match(imdb="tt1").tag == "{imdb-tt1}"
+        assert tmdbidentify.Match(tmdb="7").tag == "{tmdb-7}"
+        assert tmdbidentify.Match(imdb="tt1", tmdb="7").tag == "{imdb-tt1}"
+        assert tmdbidentify.Match().tag == ""
 
 
 class TestOnePartOfTheNameAnchored:
@@ -3944,35 +3954,35 @@ class TestOnePartOfTheNameAnchored:
         _catalogue(monkeypatch, {
             1: ("Harbour Tales: Giant Tin Soldier of the Clock Castle",
                 "2006-03-01", 90, "tt0000101", ())})
-        assert tmdblookup.identify("Harbour Tales Giant Tin Soldier",
+        assert tmdbidentify.identify("Harbour Tales Giant Tin Soldier",
                                    "2006").imdb == "tt0000101"
 
     def test_a_name_leading_up_to_the_whole_title_carries_it(
             self, monkeypatch):
         _catalogue(monkeypatch, {
             1: ("Vane and the Giant Kettle", "2011-03-01", 60, "tt0000101", ())})
-        assert tmdblookup.identify("Giant Kettle", "2011").imdb == "tt0000101"
+        assert tmdbidentify.identify("Giant Kettle", "2011").imdb == "tt0000101"
 
     def test_an_article_is_not_a_word_to_anchor_on(self, monkeypatch):
         """ "The Alps" is one word that says anything, and a horror film ending
         in it is not the documentary."""
         _catalogue(monkeypatch, {
             1: ("Moss Curse of the Alps", "2011-03-01", 90, "tt0000101", ())})
-        assert tmdblookup.identify("The Alps", "2011").imdb == ""
+        assert tmdbidentify.identify("The Alps", "2011").imdb == ""
 
     def test_the_folders_subtitle_under_another_heading_of_the_franchise(
             self, monkeypatch):
         _catalogue(monkeypatch, {
             1: ("Turn Harbour II: Moonlight Wake", "2002-03-01", 90,
                 "tt0000101", ())})
-        assert tmdblookup.identify("MSH - Turn Harbour - Movie 02 - "
+        assert tmdbidentify.identify("MSH - Turn Harbour - Movie 02 - "
                                    "Moonlight Wake", "2002").imdb == "tt0000101"
 
     def test_the_same_subtitle_under_another_band_is_another_night(
             self, monkeypatch):
         _catalogue(monkeypatch, {
             1: ("Kestrel Vane - Live at the Pier", "1970-03-01", 90, None, ())})
-        assert tmdblookup.identify("The Moss - Live at the Pier",
+        assert tmdbidentify.identify("The Moss - Live at the Pier",
                                    "1970").tag == ""
 
 
@@ -3994,10 +4004,10 @@ class TestOnePartOfTheNameAnchored:
                          date="2019-01-01")]})
             rid = int(url.rsplit("/", 1)[1])
             return json.dumps({"external_ids": {"imdb_id": "tt000010%d" % rid}})
-        monkeypatch.setattr(tmdblookup, "_curl", fake_curl)
+        monkeypatch.setattr(tmdbclient, "_curl", fake_curl)
         monkeypatch.setattr(tmdblookup.titlematch, "search_titles",
                             lambda title: [title, "Moss Harbour 2"])
-        assert tmdblookup.identify("Moss Harbour Two", "2019").imdb == ""
+        assert tmdbidentify.identify("Moss Harbour Two", "2019").imdb == ""
 
 
 class TestTitlesInAnotherScript:
@@ -4009,7 +4019,7 @@ class TestTitlesInAnotherScript:
         _catalogue(monkeypatch, {
             1: ("\u0e14\u0e23\u0e32\u0e01\u0e49\u0e2d\u0e19 09: "
                 "\u0e1d\u0e48\u0e32", "1993-03-01", 50, "tt0000101", ())})
-        assert tmdblookup.identify("Movie 09 - Moss Unbound", "1993").imdb \
+        assert tmdbidentify.identify("Movie 09 - Moss Unbound", "1993").imdb \
             == ""
 
     def test_nor_is_it_the_spelling_the_folder_is_renamed_onto(
@@ -4017,7 +4027,7 @@ class TestTitlesInAnotherScript:
         _catalogue(monkeypatch, {
             1: ("Moss Unbound", "1993-03-01", 50, "tt0000101",
                 ("\u0e14\u0e23\u0e32 09",))})
-        settled = tmdblookup.identify("Moss Unbound", "1993")
+        settled = tmdbidentify.identify("Moss Unbound", "1993")
         assert (settled.imdb, settled.title) == ("tt0000101", "Moss Unbound")
         assert all(titlematch.in_latin_script(one) for one in settled.aliases)
 
@@ -4025,7 +4035,7 @@ class TestTitlesInAnotherScript:
         cyrillic = "\u041a\u043e\u0440\u0430\u0431\u043b\u044c"
         _catalogue(monkeypatch, {
             1: (cyrillic, "1993-03-01", 50, "tt0000101", ())})
-        assert tmdblookup.identify(cyrillic, "1993").imdb == "tt0000101"
+        assert tmdbidentify.identify(cyrillic, "1993").imdb == "tt0000101"
 
 
 def _imdb_row(tconst, title, year, minutes, kind="movie", akas=()):
@@ -4044,14 +4054,14 @@ class TestTheLocalImdbLists:
         def titles_under(database, keys):
             asked.append((database, set(keys)))
             return rows
-        monkeypatch.setattr(tmdblookup.imdbdata, "titles_under", titles_under)
+        monkeypatch.setattr(imdbdata, "titles_under", titles_under)
         return asked
 
     def test_what_tmdb_cannot_find_the_lists_can(self, monkeypatch):
         _catalogue(monkeypatch, {}, found_under=set())
         asked = self._lists(monkeypatch, [
             _imdb_row("tt0000101", "Moss Harbour", 2016, 177)])
-        settled = tmdblookup.identify("Moss Harbour", "2016", imdb="db")
+        settled = tmdbidentify.identify("Moss Harbour", "2016", imdb="db")
         assert (settled.imdb, settled.title) == ("tt0000101", "Moss Harbour")
         assert asked[0][0] == "db" and "mossharbour" in asked[0][1]
 
@@ -4059,7 +4069,7 @@ class TestTheLocalImdbLists:
         _catalogue(monkeypatch, {
             1: ("Moss Harbour", "2016-03-01", 90, "tt0000101", ())})
         asked = self._lists(monkeypatch, [])
-        assert tmdblookup.identify("Moss Harbour", "2016",
+        assert tmdbidentify.identify("Moss Harbour", "2016",
                                    imdb="db").imdb == "tt0000101"
         assert asked == []
 
@@ -4067,7 +4077,7 @@ class TestTheLocalImdbLists:
         _catalogue(monkeypatch, {}, found_under=set())
         asked = self._lists(monkeypatch, [
             _imdb_row("tt0000101", "Moss Harbour", 2016, 177)])
-        assert tmdblookup.identify("Moss Harbour", "2016").imdb == ""
+        assert tmdbidentify.identify("Moss Harbour", "2016").imdb == ""
         assert asked == []
 
     def test_their_runtimes_settle_a_folder_with_no_year(self, monkeypatch):
@@ -4075,7 +4085,7 @@ class TestTheLocalImdbLists:
         self._lists(monkeypatch, [
             _imdb_row("tt0000101", "Moss Harbour", 1954, 90),
             _imdb_row("tt0000102", "Moss Harbour", 2008, 58)])
-        settled = tmdblookup.identify("Moss Harbour", "", lambda: 57 * 60.0,
+        settled = tmdbidentify.identify("Moss Harbour", "", lambda: 57 * 60.0,
                                       imdb="db")
         assert (settled.imdb, settled.year) == ("tt0000102", "2008")
 
@@ -4084,7 +4094,7 @@ class TestTheLocalImdbLists:
         self._lists(monkeypatch, [
             _imdb_row("tt0000101", "Moss Harbour", 1954, 90),
             _imdb_row("tt0000102", "Moss Harbour", 1925, None, kind="short")])
-        assert tmdblookup.identify("Moss Harbour", "", lambda: 88 * 60.0,
+        assert tmdbidentify.identify("Moss Harbour", "", lambda: 88 * 60.0,
                                    imdb="db").imdb == "tt0000101"
 
     def test_but_it_still_stands_beside_a_short_on_the_disk(self,
@@ -4093,7 +4103,7 @@ class TestTheLocalImdbLists:
         self._lists(monkeypatch, [
             _imdb_row("tt0000101", "Moss Harbour", 1954, 20),
             _imdb_row("tt0000102", "Moss Harbour", 1925, None, kind="short")])
-        assert tmdblookup.identify("Moss Harbour", "", lambda: 20 * 60.0,
+        assert tmdbidentify.identify("Moss Harbour", "", lambda: 20 * 60.0,
                                    imdb="db").imdb == ""
 
 
@@ -4105,7 +4115,7 @@ class TestNotAfterTheFile:
             1: ("Moss Harbour", "1952-03-01", 94, "tt0000101", ()),
             2: ("Moss Harbour", "2024-03-01", 84, "tt0000102", ())})
         notes: list = []
-        assert tmdblookup.identify("Moss Harbour", "", lambda: 85 * 60.0,
+        assert tmdbidentify.identify("Moss Harbour", "", lambda: 85 * 60.0,
                                    notes, written=lambda: "2020").imdb == ""
         assert any("came out after 2020" in note for note in notes)
 
@@ -4113,7 +4123,7 @@ class TestNotAfterTheFile:
         _catalogue(monkeypatch, {
             1: ("Moss Harbour", "1952-03-01", 94, "tt0000101", ()),
             2: ("Moss Harbour", "2024-03-01", 84, "tt0000102", ())})
-        assert tmdblookup.identify("Moss Harbour", "", lambda: 85 * 60.0,
+        assert tmdbidentify.identify("Moss Harbour", "", lambda: 85 * 60.0,
                                    written=lambda: "").imdb == "tt0000102"
 
     @pytest.mark.parametrize("stamp,year", [
@@ -4126,9 +4136,9 @@ class TestNotAfterTheFile:
                                                  year):
         class Done:
             stdout = stamp.encode()
-        monkeypatch.setattr(tmdblookup.subprocess, "run",
+        monkeypatch.setattr(subprocess, "run",
                             lambda *_a, **_k: Done())
-        assert tmdblookup._written_year(["film.mkv"]) == year
+        assert tmdbidentify._written_year(["film.mkv"]) == year
 
     def test_the_earliest_of_several_files_is_the_one(self, monkeypatch):
         stamps = iter([b"2021-01-01T00:00:00Z", b"2019-05-01T00:00:00Z"])
@@ -4136,9 +4146,9 @@ class TestNotAfterTheFile:
         class Done:
             def __init__(self):
                 self.stdout = next(stamps)
-        monkeypatch.setattr(tmdblookup.subprocess, "run",
+        monkeypatch.setattr(subprocess, "run",
                             lambda *_a, **_k: Done())
-        assert tmdblookup._written_year(["a.mkv", "b.mkv"]) == "2019"
+        assert tmdbidentify._written_year(["a.mkv", "b.mkv"]) == "2019"
 
 
 class TestTheSpellingToRenameOnto:
@@ -4146,7 +4156,7 @@ class TestTheSpellingToRenameOnto:
     like it - or the folder's own, where none is written like it at all."""
 
     def test_the_one_written_like_the_folder_wins(self):
-        assert tmdblookup._nearest_spelling(
+        assert tmdbidentify._nearest_spelling(
             ["Harbour Tales 6: Wishmoth, Mestre dos Desejos",
              "Harbour Tales 6: Wishmoth Wish Keeper"],
             frozenset({"harbour tales 6 wishmoth wish keeper"})) \
@@ -4158,11 +4168,11 @@ class TestTheSpellingToRenameOnto:
     ])
     def test_another_keyboards_spelling_is_still_the_folders(self, spelling,
                                                              folder):
-        assert tmdblookup._nearest_spelling([spelling], frozenset({folder})) \
+        assert tmdbidentify._nearest_spelling([spelling], frozenset({folder})) \
             == spelling
 
     def test_none_written_like_the_folder_keeps_the_folders_name(self):
-        assert tmdblookup._nearest_spelling(
+        assert tmdbidentify._nearest_spelling(
             ["Harbour Tales 6: Wishmoth, o efhopoios"],
             frozenset({"harbour tales 6 wishmoth le gardien des voeux"})) == ""
 
@@ -4181,15 +4191,15 @@ class TestASlipAwayInTheImdbLists:
         def titles_near(_database, keys):
             asked.append(("near", frozenset(keys)))
             return list(near)
-        monkeypatch.setattr(tmdblookup.imdbdata, "titles_under", titles_under)
-        monkeypatch.setattr(tmdblookup.imdbdata, "titles_near", titles_near)
+        monkeypatch.setattr(imdbdata, "titles_under", titles_under)
+        monkeypatch.setattr(imdbdata, "titles_near", titles_near)
         return asked
 
     def test_a_slip_nothing_found_is_reached_and_corrected(self, monkeypatch):
         _catalogue(monkeypatch, {}, found_under=set())
         asked = self._lists(monkeypatch, near=[
             _imdb_row("tt0000101", "Kestrelmoor", 2006, 111)])
-        settled = tmdblookup.identify("Kestelmoor", "2006", imdb="db")
+        settled = tmdbidentify.identify("Kestelmoor", "2006", imdb="db")
         assert (settled.imdb, settled.title) == ("tt0000101", "Kestrelmoor")
         assert ("near", frozenset({"kestelmoor", "kestelmoor2006"})) \
             in asked
@@ -4200,7 +4210,7 @@ class TestASlipAwayInTheImdbLists:
             2: ("Moss Harbour", "2019-03-01", 90, "tt0000102", ())})
         asked = self._lists(monkeypatch, near=[
             _imdb_row("tt0000103", "Moss Harbours", 2019, 90)])
-        assert tmdblookup.identify("Moss Harbour", "2019", imdb="db").imdb == ""
+        assert tmdbidentify.identify("Moss Harbour", "2019", imdb="db").imdb == ""
         assert not any(isinstance(one, tuple) for one in asked)
 
     def test_nor_where_the_lists_carry_it_under_its_own_keys(self, monkeypatch):
@@ -4210,14 +4220,14 @@ class TestASlipAwayInTheImdbLists:
             under=[_imdb_row("tt0000101", "Moss Harbour", 2019, 90),
                    _imdb_row("tt0000102", "Moss Harbour", 2019, 90)],
             near=[_imdb_row("tt0000103", "Moss Harbours", 2019, 90)])
-        assert tmdblookup.identify("Moss Harbour", "2019", imdb="db").imdb == ""
+        assert tmdbidentify.identify("Moss Harbour", "2019", imdb="db").imdb == ""
         assert not any(isinstance(one, tuple) for one in asked)
 
     def test_a_digit_is_never_a_slip(self, monkeypatch):
         _catalogue(monkeypatch, {}, found_under=set())
         self._lists(monkeypatch, near=[
             _imdb_row("tt0000101", "Harbour Tales 3", 2019, 90)])
-        assert tmdblookup.identify("Harbour Tales 2", "2019",
+        assert tmdbidentify.identify("Harbour Tales 2", "2019",
                                    imdb="db").imdb == ""
 
     def test_two_near_misses_are_two(self, monkeypatch):
@@ -4225,14 +4235,14 @@ class TestASlipAwayInTheImdbLists:
         self._lists(monkeypatch, near=[
             _imdb_row("tt0000101", "Joseph Harbour", 2018, 90),
             _imdb_row("tt0000102", "Joseph Harbour", 2018, 95)])
-        assert tmdblookup.identify("Joesph Harbour", "2018",
+        assert tmdbidentify.identify("Joesph Harbour", "2018",
                                    imdb="db").imdb == ""
 
     def test_and_the_year_still_has_to_agree(self, monkeypatch):
         _catalogue(monkeypatch, {}, found_under=set())
         self._lists(monkeypatch, near=[
             _imdb_row("tt0000101", "Kestrelmoor", 1980, 111)])
-        assert tmdblookup.identify("Kestelmoor", "2006", imdb="db").imdb == ""
+        assert tmdbidentify.identify("Kestelmoor", "2006", imdb="db").imdb == ""
 
     def test_a_slip_is_not_also_read_as_part_of_a_name(self, monkeypatch):
         """One guess per candidate: a title reached a slip away is not then
@@ -4240,7 +4250,7 @@ class TestASlipAwayInTheImdbLists:
         _catalogue(monkeypatch, {}, found_under=set())
         self._lists(monkeypatch, near=[
             _imdb_row("tt0000101", "Moss Harbour: The Tale", 2019, 90)])
-        assert tmdblookup.identify("Moss Harbour", "2019", imdb="db").imdb == ""
+        assert tmdbidentify.identify("Moss Harbour", "2019", imdb="db").imdb == ""
 
 
 

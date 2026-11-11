@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 
 from medialib.cli import convert_video as rules
+from medialib.cli import convert_video_encode as encode
 from medialib.cli import convert_video_run as run_module
 from medialib.lib import toolcapture
 
@@ -52,9 +53,9 @@ class TestTheMux:
             Path(output).write_text("muxed")
             return toolcapture.ToolRun(argv, 0, toolcapture.ToolOutput())
 
-        monkeypatch.setattr(run_module.toolcapture, "run", fake_run)
+        monkeypatch.setattr(toolcapture, "run", fake_run)
 
-        assert run_module.mux_final("film.mkv", directory, settings,
+        assert encode.mux_final("film.mkv", directory, settings,
                                     output) == 0
         argv = asked[0]
         assert argv[0] == "mkvmerge"
@@ -75,23 +76,23 @@ class TestTheMux:
             return toolcapture.ToolRun(argv, 1, toolcapture.ToolOutput(),
                                        failure="exited with status 1")
 
-        monkeypatch.setattr(run_module.toolcapture, "run", warned)
+        monkeypatch.setattr(toolcapture, "run", warned)
 
-        assert run_module.mux_final("film.mkv", directory, settings,
+        assert encode.mux_final("film.mkv", directory, settings,
                                     output) == 0
 
     def test_a_failure_is_one(self, tree, monkeypatch):
         settings, directory = tree
         output = os.path.join(settings.output_dir, "film.mkv")
         monkeypatch.setattr(
-            run_module.toolcapture, "run",
+            toolcapture, "run",
             lambda argv, *_a, **_k: toolcapture.ToolRun(
                 argv, 2, toolcapture.ToolOutput(),
                 failure="exited with status 2"))
-        monkeypatch.setattr(run_module.toolcapture, "report_failure",
+        monkeypatch.setattr(toolcapture, "report_failure",
                             lambda *_a: None)
 
-        assert run_module.mux_final("film.mkv", directory, settings,
+        assert encode.mux_final("film.mkv", directory, settings,
                                     output) == 2
 
 

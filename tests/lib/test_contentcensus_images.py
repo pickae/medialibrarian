@@ -1,4 +1,4 @@
-"""The white box for medialib/lib/censusimages.py.
+"""The white box for the still-image row in medialib/lib/contentcensus.py.
 
 What is pinned: the argv the probe is handed - one ``-ping`` per row and a second,
 decoding call ONLY under -a - the row's columns in order, and that a file no image
@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from medialib.lib import censusimages as ci
+from medialib.lib import contentcensus as ci
 from tests import blackbox
 
 pytestmark = pytest.mark.stubbed

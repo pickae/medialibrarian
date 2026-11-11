@@ -12,7 +12,7 @@ import sys
 
 import pytest
 
-from medialib.cli import convert_video_run as run_module
+from medialib.cli import convert_video_encode as encode
 
 pytestmark = pytest.mark.stubbed
 
@@ -42,12 +42,12 @@ def plain_lines(monkeypatch):
 
 
 def test_a_successful_encode_says_nothing(capfd):
-    run_module.run_quiet_encode(_encoder(CHATTER), "film.mkv")
+    encode.run_quiet_encode(_encoder(CHATTER), "film.mkv")
     assert capfd.readouterr() == ("", "")
 
 
 def test_a_failure_is_replayed_with_its_reason(capfd):
-    run_module.run_quiet_encode(_encoder(CHATTER + TROUBLE, status=1),
+    encode.run_quiet_encode(_encoder(CHATTER + TROUBLE, status=1),
                                 "film.mkv (chunk 2 of 9)")
     err = capfd.readouterr().err
     assert err.startswith(
@@ -58,4 +58,4 @@ def test_a_failure_is_replayed_with_its_reason(capfd):
 
 
 def test_the_exit_status_is_the_encoder_own(capfd):
-    assert run_module.run_quiet_encode(_encoder(CHATTER, status=69)) == 69
+    assert encode.run_quiet_encode(_encoder(CHATTER, status=69)) == 69

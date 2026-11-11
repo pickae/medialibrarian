@@ -16,7 +16,9 @@ import threading
 import pytest
 
 from medialib.cli import convert_video as rules
+from medialib.cli import convert_video_hdr as hdr
 from medialib.cli import convert_video_run as run_module
+from medialib.cli import convert_video_source as videosource
 
 pytestmark = pytest.mark.fs
 
@@ -244,7 +246,7 @@ class TestOneDolbyVisionIntermediateAtATime:
     @pytest.fixture
     def run(self, settings, monkeypatch):
         settings.dv_encoder_support = True
-        monkeypatch.setattr(rules, "dolby_vision_profile",
+        monkeypatch.setattr(videosource, "dolby_vision_profile",
                             lambda path: ("8", "") if path.endswith(".dv81")
                             else ("7", "1"))
         converted = []
@@ -253,8 +255,8 @@ class TestOneDolbyVisionIntermediateAtATime:
             converted.append(relative)
             return relative + ".dv81", "/scratch/" + relative
 
-        monkeypatch.setattr(run_module, "normalise_dolby_vision", normalise)
-        monkeypatch.setattr(run_module, "dolby_vision_mode_for",
+        monkeypatch.setattr(hdr, "normalise_dolby_vision", normalise)
+        monkeypatch.setattr(hdr, "dolby_vision_mode_for",
                             lambda *a, **k: "1")
         monkeypatch.setattr(run_module.ramscratch, "release_exit_cleanup",
                             lambda paths: None)
@@ -288,7 +290,7 @@ class TestOneDolbyVisionIntermediateAtATime:
 
     def test_a_file_that_keeps_no_intermediate_hands_the_slot_back(
             self, run, monkeypatch):
-        monkeypatch.setattr(run_module, "dolby_vision_mode_for",
+        monkeypatch.setattr(hdr, "dolby_vision_mode_for",
                             lambda *a, **k: "0")
         first = self.plan(run, "a.mkv")
         run._settle_dolby_vision(first)

@@ -17,7 +17,7 @@ import subprocess
 
 import pytest
 
-from medialib.cli import convert_video_run as run
+from medialib.cli import convert_video_source as videosource
 from medialib.lib import videocrop
 
 pytestmark = [
@@ -76,7 +76,8 @@ def changing_shape(tmp_path_factory):
 def _probe(path):
     """The probe wired exactly as the run wires it, so what is exercised is the
     path a conversion takes and not a second arrangement of the same parts."""
-    return videocrop.crop_probe(path, run._media_duration, run._dimensions_line,
+    return videocrop.crop_probe(path, videosource._media_duration,
+                                videosource._dimensions_line,
                                 lambda divisor=1: 2)
 
 
@@ -84,11 +85,11 @@ class TestTheFixturesReallyAreWhatTheyClaim:
 
     def test_the_letterboxed_clip_is_stored_in_the_whole_frame(self,
                                                                letterboxed):
-        assert run._dimensions_line(letterboxed).split()[:2] == [
+        assert videosource._dimensions_line(letterboxed).split()[:2] == [
             str(FRAME[0]), str(FRAME[1])]
 
     def test_and_is_long_enough_to_sample(self, letterboxed):
-        assert run._media_duration(letterboxed) >= SECONDS - 1
+        assert videosource._media_duration(letterboxed) >= SECONDS - 1
 
 
 class TestOneShapeAllTheWayThrough:
@@ -102,7 +103,8 @@ class TestOneShapeAllTheWayThrough:
 
     def test_and_the_run_encodes_through_that_rectangle(self, letterboxed):
         crop = videocrop.crop_for(letterboxed, "letterboxed.mkv",
-                                  run._media_duration, run._dimensions_line,
+                                  videosource._media_duration,
+                                  videosource._dimensions_line,
                                   lambda divisor=1: 2)
         assert crop == "%d:%d:0:%d" % (FRAME[0], PICTURE_HEIGHT, BAND)
 
@@ -119,6 +121,7 @@ class TestAFilmThatChangesShapePartwayThrough:
     def test_and_the_run_says_so_rather_than_cutting_the_wider_scenes(
             self, changing_shape, capsys):
         assert videocrop.crop_for(changing_shape, "changing.mkv",
-                                  run._media_duration, run._dimensions_line,
+                                  videosource._media_duration,
+                                  videosource._dimensions_line,
                                   lambda divisor=1: 2) == ""
         assert "no black bands worth removing" in capsys.readouterr().err
