@@ -1,5 +1,6 @@
-"""Tests for medialib.lib.affix - shrinking a shared affix so removing it
-cannot cut a word or a number in half.
+"""Tests for the affix rule in medialib.lib.cleannamesindividually -
+shrinking a shared affix so removing it cannot cut a word or a number in
+half.
 
 Why the rule exists is what needs saying, and the rule is subtle enough that the
 examples are the documentation: an aligner that is one character out turns
@@ -8,8 +9,8 @@ examples are the documentation: an aligner that is one character out turns
 
 import pytest
 
-from medialib.lib.affix import affix_char_class as klass
-from medialib.lib.affix import align_affix_to_run_boundary as align
+from medialib.lib.cleannamesindividually import affix_char_class as klass
+from medialib.lib.cleannamesindividually import align_affix_to_run_boundary as align
 
 pytestmark = pytest.mark.pure
 

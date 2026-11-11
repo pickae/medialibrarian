@@ -21,7 +21,10 @@ memory, in order, no files:
 Pure string in / string out: no files, no tools.
 """
 
-from medialib.lib.affix import affix_char_class, align_affix_to_run_boundary
+from medialib.lib.cleannamesindividually import (
+    affix_char_class,
+    align_affix_to_run_boundary,
+)
 from medialib.lib.enums import BRACKET_CLOSE, BRACKET_OPEN
 
 __all__ = [
