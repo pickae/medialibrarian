@@ -202,7 +202,9 @@ class TestSubtitleLane:
         movie = str(tmp_path / "Unknown" / "Unknown.mkv")
         asked, said = self._run(monkeypatch, tmp_path, {}, [movie])
         assert asked == []
-        assert said == []
+        # A lane still running when it is finished first says it waits for
+        # it; how far the thread got by then is the scheduler's to decide.
+        assert [line for line in said if not line.startswith("Waiting")] == []
 
     def test_a_lane_that_fails_says_so_when_it_is_finished(
             self, monkeypatch, tmp_path):
