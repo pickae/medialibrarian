@@ -42,6 +42,7 @@ from medialib.lib import (
     filmrecord,
     fixedpoint,
     imdbdata,
+    languages,
     overwrite,
     plexnames,
     ramscratch,
@@ -54,6 +55,7 @@ from medialib.lib import (
     subtitleads,
     subtitlefiles,
     tmdbclient,
+    tmdbidentify,
     tmdblookup,
     tmdbworklists,
     toolcapture,
@@ -103,6 +105,10 @@ class Run:
     # read with a default: a Run made for one phase has neither.
     disk_turns: str
     scratch_headroom: int
+    # Which film each folder of the root being ingested is, before the tagging
+    # names them: what the remux reads a film's original language off. Read
+    # with a default too: a Run made for one phase has none.
+    film_tags: lanes.FilmTags | None
 
     def __init__(self, **settings) -> None:
         self.__dict__.update(settings)
@@ -136,7 +142,22 @@ class Run:
             return
         rules._object_flags(movie, tracks)
 
-        changed = rules.decide_actions(tracks, base)
+        film = self.film_languages(movie)
+        changed = rules.decide_actions(tracks, base, film.original,
+                                       film.spoken)
+        choice = rules.choose_languages(tracks, film.original, film.spoken)
+        if choice.original and choice.first \
+                and not languages.speaks(choice.first, "", choice.original):
+            if not choice.keep_first:
+                say("  Keeping the film's original language (%s, per TMDb) "
+                    "and English, not the first audio track's (%s)"
+                    % (choice.original, choice.first))
+            else:
+                say("  Keeping the film's original language (%s, per TMDb), "
+                    "the first audio track's (%s, %s) and English"
+                    % (choice.original, choice.first,
+                       "which TMDb lists as spoken in it" if film.spoken
+                       else "TMDb lists no spoken languages"))
         for position, winner in rules.apply_surround_ladder(tracks):
             changed = True
             say("  Surround ladder: dropping audio track %s (%s, %s) in favour "
@@ -168,6 +189,33 @@ class Run:
 
         heading()
         self.remux(movie, base, tracks, transcripts, job, subtitles)
+
+    def film_languages(self, movie: str) -> tmdbidentify.FilmLanguages:
+        """What TMDb says the film is spoken in, or nothing - which keeps the
+        first audio track's language, the rule there was before there was a
+        catalogue to ask.
+
+        The film is known by the id tag its own name or its folder's carries,
+        and before the tagging has put one there by what the tagging would
+        put (:class:`lanes.FilmTags`).
+        """
+        if not os.environ.get("tmdbApiKey"):
+            return tmdbidentify.FilmLanguages()
+        stem = os.path.splitext(os.path.basename(movie))[0]
+        folder = os.path.basename(os.path.dirname(os.path.abspath(movie)))
+        found = (plexnames.ID_TAG_RE.search(stem)
+                 or plexnames.ID_TAG_RE.search(folder))
+        tag = found.group(0) if found else ""
+        film_tags = getattr(self, "film_tags", None)
+        try:
+            if not tag and film_tags is not None:
+                tag = film_tags.tag_of(movie)
+            return (tmdbidentify.film_languages(tag) if tag
+                    else tmdbidentify.FilmLanguages())
+        except Exception as error:  # noqa: BLE001 - the old rule still stands
+            log("  WARNING: could not ask TMDb for the film's languages "
+                "(%s); keeping the first audio track's: %s" % (error, movie))
+            return tmdbidentify.FilmLanguages()
 
     def decide_dolby_vision_job(self, movie: str, tracks: list,
                                 say=None) -> dict:
@@ -2362,6 +2410,12 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
     # for the phases at the end that use them.
     ahead = _start_research(state, root)
 
+    # Which film each folder is, asked once for the subtitle lane and the
+    # remux both: the remux keeps the language TMDb says the film was made in.
+    state.film_tags = lanes.FilmTags(root)
+    if os.environ.get("tmdbApiKey"):
+        state.film_tags.start()
+
     # The subtitles of every film TMDb can name, fetched on a thread of their
     # own while the films are transcoded, transcribed and remuxed, and finished
     # before the tagging renames any of them.
@@ -2552,7 +2606,8 @@ def _start_subtitle_lane(state, root: str, subtitle_work: bool, locks,
             rules.MAX_SYNC_QUALITY_OFFSET, state.ffsubsync_quality, log)
 
     lane = lanes.SubtitleLane(root, subtitlefiles.subtitle_movies(root),
-                              download, locks, log, row)
+                              download, locks, log, row,
+                              film_tags=getattr(state, "film_tags", None))
     log("Subtitles: fetching ahead, on a thread of their own, for every film "
         "TMDb can name")
     lane.start()

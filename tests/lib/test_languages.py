@@ -192,3 +192,44 @@ class TestTheGuardThatDecidesNothing:
     def test_and_so_the_walk_would_answer_nothing_for_them_by_itself(self, tag):
         assert not any(tag in (row.code2, row.code3, row.code3b)
                        for row in lang.LANGUAGES)
+
+
+class TestSpeaks:
+    """Whether a track is spoken in the language a catalogue names by its
+    ISO 639-1 code - the film's original language, as TMDb gives it."""
+
+    def test_the_bcp47_tag_places_any_language(self):
+        assert lang.speaks("jpn", "ja", "ja")
+
+    def test_a_region_on_it_changes_nothing(self):
+        assert lang.speaks("ger", "de-CH", "de")
+
+    def test_another_language_is_not_it(self):
+        assert not lang.speaks("ger", "de", "ja")
+
+    @pytest.mark.parametrize("tag", ["ger", "deu", "de"])
+    def test_without_one_the_legacy_tag_is_read_by_the_table(self, tag):
+        assert lang.speaks(tag, "null", "de")
+
+    def test_an_undetermined_bcp47_tag_falls_back_to_the_legacy_one(self):
+        assert lang.speaks("fre", "und", "fr")
+
+    @pytest.mark.parametrize("code", ["cn", "zh"])
+    @pytest.mark.parametrize("ietf", ["yue", "cmn", "zh", "zh-Hant-HK",
+                                      "null"])
+    def test_every_chinese_tag_is_chinese(self, code, ietf):
+        """TMDb's "cn" is Cantonese and "zh" Mandarin; discs say "chi" for
+        both, or "yue" and "cmn" when they are precise."""
+        assert lang.speaks("chi", ietf, code)
+
+    @pytest.mark.parametrize("language, ietf", [("nob", "nb"), ("nno", "nn"),
+                                                ("nor", "no")])
+    def test_tmdb_s_norwegian_is_every_written_norwegian(self, language,
+                                                         ietf):
+        assert lang.speaks(language, ietf, "no")
+
+    def test_a_language_with_no_family_is_only_itself(self):
+        assert not lang.speaks("jpn", "ja", "ko")
+
+    def test_no_code_is_no_language(self):
+        assert not lang.speaks("eng", "en", "")

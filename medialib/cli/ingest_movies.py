@@ -26,6 +26,7 @@ import re
 import shutil
 import subprocess
 import sys
+from typing import NamedTuple
 
 from medialib import commands
 from medialib.lib import (
@@ -557,13 +558,76 @@ def language_allowed(language: str, primary: str) -> bool:
     return folded in ("", "null", "und", "zxx", "eng", "en", primary)
 
 
+def original_on_disc(tracks: list, original: str) -> bool:
+    """Does the file carry the film in its original language - a soundtrack,
+    not only a commentary, spoken in what the catalogue says it was made in?
+
+    Only then is that the language to keep: a release that comes dubbed and
+    nothing else still keeps the dub it has rather than English alone.
+    """
+    return bool(original) and any(
+        track.is_audio and not track.is_commentary
+        and languages.speaks(track.language, track.language_ietf, original)
+        for track in tracks)
+
+
+class LanguageChoice(NamedTuple):
+    """Which languages besides English the improved copy keeps.
+
+    ``original`` is the film's original language when the file has a
+    soundtrack in it, and "" when the first audio track's language decides,
+    the way it did before there was a catalogue to ask. ``first`` is that
+    first audio track's language, and ``keep_first`` whether it is kept beside
+    the original: when TMDb lists it as spoken in the film, or lists nothing.
+    An original language TMDb has wrong - an English one for a film shot in
+    Japanese - is then not the only one left, and a film made in several
+    languages keeps the release mix of one of them.
+    """
+
+    original: str = ""
+    first: str = ""
+    keep_first: bool = True
+
+
+def choose_languages(tracks: list, original: str = "",
+                     spoken: tuple = ()) -> LanguageChoice:
+    """The :class:`LanguageChoice` for a file's tracks, given what TMDb says
+    the film is spoken in."""
+    first_track = next((track for track in tracks if track.is_audio), None)
+    if first_track is None:
+        return LanguageChoice()
+    first = languages.track_language(first_track.language,
+                                     first_track.language_ietf)
+    if not original_on_disc(tracks, original):
+        return LanguageChoice("", first, True)
+    keep_first = not spoken or any(
+        languages.speaks(first_track.language, first_track.language_ietf, code)
+        for code in spoken)
+    return LanguageChoice(original, first, keep_first)
+
+
+def _language_kept(track, primary: str, choice: LanguageChoice) -> bool:
+    """:func:`language_allowed`, with the film's original language - and the
+    first audio track's when in doubt - in place of the first audio track's
+    alone when there is a catalogue to go by."""
+    if not choice.original:
+        return language_allowed(track.language, primary)
+    if language_allowed(track.language, ""):
+        return True
+    if languages.speaks(track.language, track.language_ietf, choice.original):
+        return True
+    return (choice.keep_first and bool(choice.first)
+            and languages.track_language(track.language, track.language_ietf)
+            == choice.first)
+
+
 # --- reading a file's tracks --------------------------------------------------
 
 class Track:
     """One track of a Matroska file, as mkvmerge reports it."""
 
-    FIELDS = ("id", "type", "codec", "channels", "language", "name",
-              "commentary", "default", "forced", "dimensions",
+    FIELDS = ("id", "type", "codec", "channels", "language", "language_ietf",
+              "name", "commentary", "default", "forced", "dimensions",
               "visual_impaired", "hearing_impaired")
 
     # FIELDS is what __init__ sets; these declare what it sets them TO. Every
@@ -574,6 +638,9 @@ class Track:
     codec: str
     channels: str
     language: str
+    # The BCP 47 tag beside it ("ja", "de-CH"), which names every language in
+    # two letters where the legacy tag has three in two spellings.
+    language_ietf: str
     name: str
     commentary: str
     default: str
@@ -642,6 +709,7 @@ def _identify(movie: str) -> list:
             codec=_as_text(properties.get("codec_id")),
             channels=_as_text(properties.get("audio_channels")),
             language=_as_text(properties.get("language")),
+            language_ietf=_as_text(properties.get("language_ietf")),
             name=_as_text(properties.get("track_name")),
             commentary=_as_text(properties.get("flag_commentary")),
             default=_as_text(properties.get("default_track")),
@@ -1567,8 +1635,14 @@ def apply_surround_ladder(tracks: list) -> list:
     return dropped
 
 
-def decide_actions(tracks: list, base: str) -> bool:
+def decide_actions(tracks: list, base: str, original: str = "",
+                   spoken: tuple = ()) -> bool:
     """keep, drop or swap, per track; True when anything changed.
+
+    The languages kept are English and the film's own, as
+    :func:`choose_languages` settles them from ``original`` and ``spoken``,
+    the ISO 639-1 codes TMDb gives for the language the film was made in and
+    the ones spoken in it.
 
     A track "was converted to opus" is decided by the presence of its opus file
     rather than by re-deriving losslessness, which is what makes every exception
@@ -1581,15 +1655,16 @@ def decide_actions(tracks: list, base: str) -> bool:
         if track.is_audio:
             primary = enums.shell_lower(track.language)
             break
+    choice = choose_languages(tracks, original, spoken)
 
     changed = False
     for track in tracks:
         if track.is_audio:
-            # Excessive language: neither the first audio track's nor English.
+            # Excessive language: neither the film's own nor English.
             # Commentary tracks are exempt - a commentary is bonus material
             # rather than a second soundtrack, its language is often the only one
             # it comes in, and its transcript is being kept either way.
-            if (not language_allowed(track.language, primary)
+            if (not _language_kept(track, primary, choice)
                     and not track.is_commentary):
                 track.action = "drop"
             else:
@@ -1607,7 +1682,7 @@ def decide_actions(tracks: list, base: str) -> bool:
                     track.action = "keep"
         elif track.is_subtitle:
             if is_image_sub_codec(track.codec) \
-                    and not language_allowed(track.language, primary):
+                    and not _language_kept(track, primary, choice):
                 track.action = "drop"
         if track.action != "keep":
             changed = True
