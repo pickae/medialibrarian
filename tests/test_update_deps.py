@@ -223,3 +223,35 @@ def test_unknown_steps_are_refused(capsys):
     with pytest.raises(SystemExit):
         u.parse_args(["--only", "nope"])
     assert "unknown step nope" in capsys.readouterr().err
+
+
+def test_run_through_sudo_is_refused(monkeypatch):
+    monkeypatch.setattr(u.os, "geteuid", lambda: 0)
+    monkeypatch.setenv("SUDO_USER", "someone")
+    with pytest.raises(SystemExit) as exit_:
+        u.main(["-n"])
+    assert "not through sudo" in str(exit_.value.code)
+
+
+@pytest.mark.pure
+def test_github_json_falls_back_when_gh_is_not_logged_in(monkeypatch):
+    def gh_fails(cmd, **kwargs):
+        raise u.StepError("gh api exited 4")
+    monkeypatch.setattr(u.shutil, "which", lambda name: "/usr/bin/gh")
+    monkeypatch.setattr(u, "run", gh_fails)
+    monkeypatch.setattr(u, "http_get", lambda url, timeout=30: b'{"ok": 1}')
+    assert u.github_json("repos/a/b/releases") == {"ok": 1}
+
+
+@pytest.mark.pure
+def test_sudo_is_kept_alive_until_stopped(monkeypatch):
+    calls = []
+    stop = u.threading.Event()
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        if len(calls) == 3:
+            stop.set()
+    monkeypatch.setattr(u.subprocess, "run", fake_run)
+    u.keep_sudo_alive(stop, every=0)
+    assert calls == [["sudo", "-n", "-v"]] * 3
