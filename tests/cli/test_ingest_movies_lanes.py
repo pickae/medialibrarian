@@ -436,6 +436,23 @@ class TestFilmTags:
         assert tags.tag_of(str(tmp_path / "Other" / "Other.mkv")) == ""
         assert runs == [str(tmp_path)]
 
+    def test_the_run_still_goes_to_a_worker_process(self, monkeypatch,
+                                                    tmp_path):
+        import pickle
+
+        def tag_plex_ids(directory, log, skip_log, dry_run=False,
+                         tagged=None, **_kwargs):
+            tagged["{imdb-tt0000007}"] = [str(tmp_path / "Movie (1999)")]
+            return 0
+
+        monkeypatch.setattr(lanes.tmdblookup, "tag_plex_ids", tag_plex_ids)
+        tags = lanes.FilmTags(str(tmp_path))
+        tags.tags()
+        state = run_module.Run(script_dir="", film_tags=tags)
+        copy = pickle.loads(pickle.dumps(state)).film_tags
+        movie = str(tmp_path / "Movie (1999)" / "Movie (1999).mkv")
+        assert copy.tag_of(movie) == "{imdb-tt0000007}"
+
 
 class TestTheRemuxAsksForTheFilmsLanguages:
     def _state(self, monkeypatch, tag_of):
