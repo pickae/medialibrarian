@@ -334,8 +334,10 @@ USAGE_TAIL = """
     ---------
     all large temporary media (extracts, remux copies, Dolby Vision streams)
     live in tmpfs
-    only the final outputs (.mkv, .srt, .opus) are written to disk, unless a
-    remux copy is too large for tmpfs
+    the opus tracks too: made in RAM and written to disk only inside the
+    improved copy, never as files beside the film
+    only the final outputs (.mkv, .srt) are written to disk, unless a remux
+    copy is too large for tmpfs
 
     Dependencies
     ------------
@@ -1287,9 +1289,29 @@ _PADDED = {
 }
 
 
-def check_audio_tracks(movie: str, root: str) -> None:
+def opus_path(ram_root: str, movie: str, track_id) -> str:
+    """Where a track's opus waits for the improved copy: in the run's RAM
+    scratch, under a mirror of the film's own path, so the transcode and the
+    remux - in different processes - name it alike and nothing of it is ever
+    written beside the film."""
+    base = os.path.splitext(os.path.realpath(movie))[0]
+    return "%s/opus%s_%s.opus" % (ram_root, base, track_id)
+
+
+def forget_opus(ram_root: str, movie: str) -> None:
+    """The film's opus tracks, gone from RAM once its remux is done with them,
+    whatever came of it."""
+    first = opus_path(ram_root, movie, 0)
+    directory = os.path.dirname(first)
+    start = os.path.basename(first)[:-len("0.opus")]
+    for name in _names_in(directory):
+        if name.startswith(start) and name.endswith(".opus"):
+            _remove(os.path.join(directory, name))
+
+
+def check_audio_tracks(movie: str, root: str, ram_root: str) -> None:
     """``checkAudioTracks``: every lossless track transcoded to opus, at the
-    per-channel target bitrate."""
+    per-channel target bitrate, into the RAM scratch (see :func:`opus_path`)."""
     safety.trap_worker_abort()
     if is_bonus_folder(os.path.dirname(movie)):
         return
@@ -1300,6 +1322,10 @@ def check_audio_tracks(movie: str, root: str) -> None:
 
     for position, track in enumerate(tracks, start=1):
         if not is_lossless_track_codec(track.codec):
+            continue
+        if "flac" in enums.shell_lower(track.codec) and track.channels == "1":
+            # FLAC 1.0: barely worth it, and some TVs choke on opus mono, so
+            # the lossless stays.
             continue
         # mkvtools index the whole matroska while ffmpeg indexes each track type
         # separately and from zero.
@@ -1338,15 +1364,11 @@ def check_audio_tracks(movie: str, root: str) -> None:
                        "./" + os.path.relpath(movie, root)))
                 continue
 
-        opus = "%s_%d.opus" % (os.path.splitext(movie)[0], position - 1)
-        opus_duration = _duration_of(opus)
+        opus = opus_path(ram_root, movie, position - 1)
+        os.makedirs(os.path.dirname(opus), exist_ok=True)
         # The source duration is the same for every track, so probe it once.
         if file_duration is None:
             file_duration = _duration_of(movie)
-
-        # Resume: only when the output is missing or incomplete.
-        if os.path.isfile(opus) and file_duration <= opus_duration:
-            continue
 
         # The whole film is read for the one track, as fast as the encode
         # takes it - on a spinning disk faster than it can give it for more
@@ -1364,13 +1386,15 @@ def check_audio_tracks(movie: str, root: str) -> None:
                            "-c:a", "libopus", "-b:a", bitrate + "k"]
                           + layout_args + [opus])
         if status != 0:
-            log("WARNING: opus transcode failed (track %d): %s"
-                % (position - 1, movie))
+            # Half an opus - a full tmpfs, most likely - would otherwise be
+            # muxed in as the track.
+            _remove(opus)
+            log("WARNING: opus transcode failed, the track stays lossless "
+                "(track %d): %s" % (position - 1, movie))
         else:
             # The status said a file was written, not that the whole track went
-            # into it. The resume check above keeps an opus "of at least the
-            # source's length", so a short one would be kept by this run and
-            # muxed in as the track - which is the failure worth an error.
+            # into it. A short one would be muxed in as the track, so it is
+            # removed, and the track stays lossless.
             durationcheck.verify(
                 "%s (audio track %d)" % ("./" + os.path.relpath(movie, root),
                                          position - 1),
@@ -1635,8 +1659,8 @@ def apply_surround_ladder(tracks: list) -> list:
     return dropped
 
 
-def decide_actions(tracks: list, base: str, original: str = "",
-                   spoken: tuple = ()) -> bool:
+def decide_actions(tracks: list, movie: str, ram_root: str,
+                   original: str = "", spoken: tuple = ()) -> bool:
     """keep, drop or swap, per track; True when anything changed.
 
     The languages kept are English and the film's own, as
@@ -1645,10 +1669,11 @@ def decide_actions(tracks: list, base: str, original: str = "",
     the ones spoken in it.
 
     A track "was converted to opus" is decided by the presence of its opus file
-    rather than by re-deriving losslessness, which is what makes every exception
-    fall out for free: a 3/4-channel source whose layout the probe cannot
-    read, a bed above the libopus ceiling and a non-lossless commentary all
-    simply have no opus, so they stay as they are.
+    in the RAM scratch (:func:`opus_path`) rather than by re-deriving
+    losslessness, which is what makes every exception fall out for free: a
+    3/4-channel source whose layout the probe cannot read, a bed above the
+    libopus ceiling, a FLAC mono and a non-lossless commentary all simply have
+    no opus, so they stay as they are.
     """
     primary = ""
     for track in tracks:
@@ -1668,16 +1693,10 @@ def decide_actions(tracks: list, base: str, original: str = "",
                     and not track.is_commentary):
                 track.action = "drop"
             else:
-                opus = "%s_%s.opus" % (base, track.id)
+                opus = opus_path(ram_root, movie, track.id)
                 if os.path.isfile(opus):
-                    if "flac" in enums.shell_lower(track.codec) \
-                            and track.channels == "1":
-                        # FLAC 1.0: barely worth it, and some TVs choke on opus
-                        # mono, so the lossless stays even though an opus exists.
-                        track.action = "keep"
-                    else:
-                        track.action = "swap"
-                        track.opus = opus
+                    track.action = "swap"
+                    track.opus = opus
                 else:
                     track.action = "keep"
         elif track.is_subtitle:

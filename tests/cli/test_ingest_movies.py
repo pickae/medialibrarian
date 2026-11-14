@@ -263,7 +263,8 @@ class TestTheFilmsOriginalLanguage:
     def _kept(self, tmp_path, tracks, original, spoken=("xx",)):
         """``spoken`` defaults to a list naming none of the tracks, so the
         first audio track is not kept for being spoken in the film."""
-        im.decide_actions(tracks, str(tmp_path / "film"), original, spoken)
+        im.decide_actions(tracks, str(tmp_path / "film.mkv"),
+                          str(tmp_path / "ram"), original, spoken)
         return [t.id for t in tracks if t.action != "drop"]
 
     def test_it_replaces_the_first_audio_track_s(self, tmp_path):

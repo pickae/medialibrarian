@@ -119,7 +119,17 @@ class Run:
         """Remux ONE main movie into an improved copy, keeping the original
         beside it as "<name> (old).mkv" - so nothing is ever lost and a second
         run is a no-op, the "(old)" sibling being what makes the folder skip
-        itself."""
+        itself.
+
+        The film's opus tracks wait in RAM for this one remux and are let go
+        after it, whatever came of it: the improved copy is the only place
+        they are ever written to disk."""
+        try:
+            self._improve_main_movie(movie)
+        finally:
+            rules.forget_opus(self.ram_root, movie)
+
+    def _improve_main_movie(self, movie: str) -> None:
         # The heading is held back until there is something to put under it,
         # so a film that needs nothing done is one line rather than two naming
         # it twice.
@@ -143,8 +153,8 @@ class Run:
         rules._object_flags(movie, tracks)
 
         film = self.film_languages(movie)
-        changed = rules.decide_actions(tracks, base, film.original,
-                                       film.spoken)
+        changed = rules.decide_actions(tracks, movie, self.ram_root,
+                                       film.original, film.spoken)
         choice = rules.choose_languages(tracks, film.original, film.spoken)
         if choice.original and choice.first \
                 and not languages.speaks(choice.first, "", choice.original):
@@ -2765,11 +2775,10 @@ def _transcode_opus(state, root: str, jobs: int | None = None,
     caller leaves some of them to other work; ``on_done`` is told of each film
     once its tracks are done. On a thread of its own the caller is the one to
     end the run on an interrupt, not this."""
-    # A kept original is finished: transcoding it again would only leave a
-    # stray "Film (old)_N.opus" beside the living film.
-    movies = rules._files_below(root, matches=lambda name:
-                                name.endswith(".mkv")
-                                and not plexnames.is_kept_copy(name))
+    # Only the films the improve pass will remux: an opus is made for the
+    # improved copy and for nothing else, so one for a kept original, an extra
+    # or a film already improved would only sit in RAM until the run ends.
+    movies = main_movies(root)
     if jobs is None:
         jobs = runlog.jobs_per_core(CORES_PER_JOB)
     lane = ""
@@ -2786,19 +2795,20 @@ def _transcode_opus(state, root: str, jobs: int | None = None,
     # Each film goes with what the run has read of it, so its worker does not
     # probe it again.
     workerpool.map([(movie, filmrecord.of(movie)) for movie in movies], jobs,
-                   functools.partial(_check_audio, root, lane),
+                   functools.partial(_check_audio, root, state.ram_root,
+                                     lane),
                    on_done=film_done)
     if exit_on_abort:
         safety.exit_if_aborted()
 
 
-def _check_audio(root: str, lane: str, item: tuple) -> None:
+def _check_audio(root: str, ram_root: str, lane: str, item: tuple) -> None:
     """One film's tracks checked, from the record it was handed with;
     ``lane`` names it beside the other lanes."""
     movie, record = item
     filmrecord.adopt(record)
     with console.about(movie, lane):
-        rules.check_audio_tracks(movie, root)
+        rules.check_audio_tracks(movie, root, ram_root)
 
 
 def cli(argv: list | None = None) -> int:

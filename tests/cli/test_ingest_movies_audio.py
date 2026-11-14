@@ -68,8 +68,10 @@ def run(tmp_path, monkeypatch):
         return 0
     monkeypatch.setattr(im, "_run", encode)
 
-    im.check_audio_tracks(movie, str(tmp_path))
-    return movie, str(folder / "Film (2020)"), calls
+    ram = str(tmp_path / "ram")
+    im.check_audio_tracks(movie, str(tmp_path), ram)
+    # Where the opus of track N lands is this base + "_N.opus".
+    return movie, im.opus_path(ram, movie, 0)[:-len("_0.opus")], calls
 
 
 class TestWhichTracksAreTranscoded:
@@ -88,6 +90,11 @@ class TestWhichTracksAreTranscoded:
         assert os.path.isfile(base + "_6.opus")      # 7 channels
         assert not os.path.exists(base + "_7.opus")  # lossy
         assert not os.path.exists(base + "_8.opus")  # layout unreadable
+
+    def test_in_ram_and_never_beside_the_film(self, run):
+        movie, _base, _calls = run
+        assert [name for name in os.listdir(os.path.dirname(movie))
+                if name.endswith(".opus")] == []
 
     def test_a_track_kept_for_its_layout_says_so(self, capsys, run):
         """capsys comes first so it is already capturing when the phase runs."""
@@ -173,7 +180,7 @@ def _encode_one(tmp_path, monkeypatch, channels, layout):
         open(argv[-1], "w").close()
         return 0
     monkeypatch.setattr(im, "_run", encode)
-    im.check_audio_tracks(movie, str(tmp_path))
+    im.check_audio_tracks(movie, str(tmp_path), str(tmp_path / "ram"))
     return calls, probed
 
 
@@ -253,51 +260,60 @@ class TestEveryLayout:
         assert not any("stream=channel_layout" in argv for argv in probed)
 
 
-class TestResume:
-    """A finished output is not made twice."""
+class TestWhatIsNotMuxedIn:
+    """An opus that did not come out whole is not left for the remux to swap
+    in: the track stays lossless."""
 
-    def test_a_complete_opus_is_left_alone(self, tmp_path, monkeypatch):
+    def _film(self, tmp_path, monkeypatch, status, length):
         folder = tmp_path / "Film (2020)"
         folder.mkdir()
         movie = str(folder / "Film (2020).mkv")
         open(movie, "w").close()
-        base = str(folder / "Film (2020)")
-        open(base + "_1.opus", "w").close()
-
         monkeypatch.setattr(im, "_identify", lambda path: [
             im.Track(id="0", type="video", codec="hevc", channels="null"),
             im.Track(id="1", type="audio", codec="A_DTS", channels="6")])
-        # Both the source and the existing output report the same length, so the
-        # output is complete.
         monkeypatch.setattr(im, "_probe", lambda argv:
                             "5.1\n" if "stream=channel_layout" in argv
                             else "7200\n")
+        monkeypatch.setattr(im.durationcheck, "media_duration",
+                            lambda path: length if path.endswith(".opus")
+                            else 7200.0)
+
+        def encode(argv):
+            with open(argv[-1], "w") as handle:
+                handle.write("half an opus")
+            return status
+        monkeypatch.setattr(im, "_run", encode)
+        ram = str(tmp_path / "ram")
+        im.check_audio_tracks(movie, str(tmp_path), ram)
+        return im.opus_path(ram, movie, 1)
+
+    def test_a_failed_encode_leaves_nothing(self, tmp_path, monkeypatch):
+        assert not os.path.exists(self._film(tmp_path, monkeypatch, 1, 7200.0))
+
+    def test_a_short_one_is_removed(self, tmp_path, monkeypatch):
+        monkeypatch.delenv(im.durationcheck.SKIP_VARIABLE, raising=False)
+        assert not os.path.exists(self._film(tmp_path, monkeypatch, 0, 10.0))
+
+    def test_a_whole_one_stays_for_the_remux(self, tmp_path, monkeypatch):
+        assert os.path.isfile(self._film(tmp_path, monkeypatch, 0, 7200.0))
+
+
+class TestTheMonoFlac:
+    """Barely worth it, and some TVs choke on opus mono: never transcoded."""
+
+    def test_is_left_lossless(self, tmp_path, monkeypatch):
+        folder = tmp_path / "Film (2020)"
+        folder.mkdir()
+        movie = str(folder / "Film (2020).mkv")
+        open(movie, "w").close()
+        monkeypatch.setattr(im, "_identify", lambda path: [
+            im.Track(id="0", type="video", codec="hevc", channels="null"),
+            im.Track(id="1", type="audio", codec="A_FLAC", channels="1")])
         calls = []
         monkeypatch.setattr(im, "_run", lambda argv: calls.append(argv) or 0)
-
-        im.check_audio_tracks(movie, str(tmp_path))
+        im.check_audio_tracks(movie, str(tmp_path), str(tmp_path / "ram"))
         assert calls == []
-
-    def test_a_truncated_opus_is_encoded_again(self, tmp_path, monkeypatch):
-        folder = tmp_path / "Film (2020)"
-        folder.mkdir()
-        movie = str(folder / "Film (2020).mkv")
-        open(movie, "w").close()
-        base = str(folder / "Film (2020)")
-        open(base + "_1.opus", "w").close()
-
-        monkeypatch.setattr(im, "_identify", lambda path: [
-            im.Track(id="0", type="video", codec="hevc", channels="null"),
-            im.Track(id="1", type="audio", codec="A_DTS", channels="6")])
-        monkeypatch.setattr(im, "_probe", lambda argv:
-                            "5.1\n" if "stream=channel_layout" in argv
-                            else "10\n" if argv[-1].endswith(".opus")
-                            else "7200\n")
-        calls = []
-        monkeypatch.setattr(im, "_run", lambda argv: calls.append(argv) or 0)
-
-        im.check_audio_tracks(movie, str(tmp_path))
-        assert len(calls) == 1
 
 
 class TestTheBonusGuard:
@@ -313,27 +329,33 @@ class TestTheBonusGuard:
         called = []
         monkeypatch.setattr(im, "_identify",
                             lambda path: called.append(path) or [])
-        im.check_audio_tracks(movie, str(tmp_path))
+        im.check_audio_tracks(movie, str(tmp_path), str(tmp_path / "ram"))
         assert called == []
 
 
-class TestTheKeptOriginal:
-    """An improved remux keeps the film it replaced as "Film (old).mkv".
-    That copy is finished: transcoding it again would leave a stray
-    "Film (old)_N.opus" beside the living film."""
+class TestOnlyTheFilmsToImprove:
+    """An opus is made for the improved copy and nothing else: a film already
+    improved - its "(old)" copy beside it - and a kept original are not
+    transcoded at all."""
 
-    def test_only_the_living_film_is_walked(self, tmp_path, monkeypatch):
+    def test_only_the_film_still_to_improve_is_walked(self, tmp_path,
+                                                      monkeypatch):
+        import types
+
         from medialib.cli import ingest_movies_run as run_module
 
-        folder = tmp_path / "Film (2020)"
-        folder.mkdir()
-        for name in ("Film (2020).mkv", "Film (2020) (old).mkv"):
-            open(str(folder / name), "w").close()
+        done = tmp_path / "Done (2019)"
+        done.mkdir()
+        for name in ("Done (2019).mkv", "Done (2019) (old).mkv"):
+            open(str(done / name), "w").close()
+        fresh = tmp_path / "Film (2020)"
+        fresh.mkdir()
+        open(str(fresh / "Film (2020).mkv"), "w").close()
 
         walked = []
         monkeypatch.setattr(im, "check_audio_tracks",
-                            lambda movie, root: walked.append(
+                            lambda movie, root, ram_root: walked.append(
                                 os.path.basename(movie)))
-        run_module._transcode_opus(None, str(tmp_path), jobs=1,
-                                   exit_on_abort=False)
+        run_module._transcode_opus(types.SimpleNamespace(ram_root="/ram"),
+                                   str(tmp_path), jobs=1, exit_on_abort=False)
         assert walked == ["Film (2020).mkv"]

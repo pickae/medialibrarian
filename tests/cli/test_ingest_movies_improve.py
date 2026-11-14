@@ -62,10 +62,13 @@ def remux(tmp_path, monkeypatch, request):
     with open(movie, "wb") as handle:
         handle.write(ORIGINAL)
 
-    # The sidecars that drive the swap, the FLAC exception and the appends.
-    for name in ("_0.opus",                       # track 0 -> swap
-                 "_1.opus",                       # track 1 transcoded, FLAC 1.0
-                 " 7 Commentary by Director.srt",  # a legacy transcript
+    # The opus waiting in RAM that drives the swap - the mono FLAC of track 1
+    # is never transcoded - and the sidecars that drive the appends.
+    ram = str(tmp_path / "ram")
+    opus = rules.opus_path(ram, movie, 0)
+    os.makedirs(os.path.dirname(opus))
+    open(opus, "w").close()
+    for name in (" 7 Commentary by Director.srt",  # a legacy transcript
                  " 8 Commentary Dutch.nl.srt",     # the native transcript
                  " 8 Commentary Dutch.en.srt"):    # and its translation
         open(base + name, "w").close()
@@ -112,10 +115,10 @@ def remux(tmp_path, monkeypatch, request):
         return mkvmerge_status, "a message" if mkvmerge_status else ""
     monkeypatch.setattr(run_module, "_mkvmerge", stub)
 
-    state = run_module.Run(script_dir="", ram_root=str(tmp_path),
+    state = run_module.Run(script_dir="", ram_root=ram,
                            skips=None, fragments_file="", whisper={})
     run_module.improve_main_movies(state, str(tmp_path))
-    return {"root": str(tmp_path), "movie": movie, "base": base,
+    return {"root": str(tmp_path), "movie": movie, "base": base, "opus": opus,
             "argv": recorded[0] if recorded else [], "calls": recorded,
             "state": state, "scratch": scratch}
 
@@ -147,11 +150,22 @@ class TestTheSwap:
         assert os.path.isfile(remux["movie"])
 
     def test_the_swapped_opus_is_a_remux_input(self, remux):
-        assert remux["base"] + "_0.opus" in remux["argv"]
+        assert remux["opus"] in remux["argv"]
+
+    def test_the_opus_is_let_go_once_the_remux_is_done(self, remux):
+        assert not os.path.exists(remux["opus"])
+
+    def test_no_opus_is_ever_written_beside_the_film(self, remux):
+        assert [name for name in os.listdir(os.path.dirname(remux["movie"]))
+                if name.endswith(".opus")] == []
+
+    @pytest.mark.parametrize("remux", [2], indirect=True)
+    def test_nor_kept_in_ram_when_the_remux_fails(self, remux):
+        assert not os.path.exists(remux["opus"])
 
     def test_the_swapped_opus_keeps_the_track_s_name(self, remux):
         argv = remux["argv"]
-        at = argv.index(remux["base"] + "_0.opus")
+        at = argv.index(remux["opus"])
         assert argv[argv.index("--track-name", at - 12) + 1] == "0:TrueHD 7.1"
 
     def test_a_nameless_track_stays_nameless(self, monkeypatch, request):
@@ -163,7 +177,7 @@ class TestTheSwap:
                             [nameless] + FIXTURE[1:])
         remux = request.getfixturevalue("remux")
         argv = remux["argv"]
-        at = argv.index(remux["base"] + "_0.opus")
+        at = argv.index(remux["opus"])
         assert argv[argv.index("--track-name", at - 12) + 1] == "0:"
 
 
@@ -684,7 +698,9 @@ class TestWhatAFilmSays:
                                 "normalise_config_level", level)
             logs: list = []
             monkeypatch.setattr(run_module, "log", logs.append)
-            run_module.Run(script_dir="").improve_main_movie(movie)
+            run_module.Run(script_dir="",
+                           ram_root=str(tmp_path / "ram")).improve_main_movie(
+                               movie)
             return movie, logs
         return run
 
@@ -748,8 +764,11 @@ class TestFromARealIdentificationDocument:
         movie = str(folder / "Film (2020).mkv")
         base = str(folder / "Film (2020)")
         open(movie, "w").close()
-        for name in ("_0.opus", "_1.opus",
-                     " 7 Commentary by Director.srt",
+        ram = str(tmp_path / "ram")
+        opus = rules.opus_path(ram, movie, 0)
+        os.makedirs(os.path.dirname(opus))
+        open(opus, "w").close()
+        for name in (" 7 Commentary by Director.srt",
                      " 8 Commentary Dutch.nl.srt",
                      " 8 Commentary Dutch.en.srt"):
             open(base + name, "w").close()
@@ -791,7 +810,7 @@ class TestFromARealIdentificationDocument:
             return 0, ""
         monkeypatch.setattr(run_module, "_mkvmerge", stub)
 
-        state = run_module.Run(script_dir="", ram_root=str(tmp_path),
+        state = run_module.Run(script_dir="", ram_root=ram,
                                skips=None, fragments_file="", whisper={})
         run_module.improve_main_movies(state, str(tmp_path))
         return recorded[0] if recorded else []

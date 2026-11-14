@@ -9,7 +9,7 @@ commentaries and the chapters the disc had.
 | At a glance | |
 | --- | --- |
 | **Takes** | one or more folders of films |
-| **Writes** | in place: the improved `.mkv`, `.srt` sidecars and `.opus` tracks; the sweeps also write lists under `logs/ingest-movies/` |
+| **Writes** | in place: the improved `.mkv` and `.srt` sidecars (the Opus tracks are made in RAM and only ever land inside the improved `.mkv`); the sweeps also write lists under `logs/ingest-movies/` |
 | **Input** | changed — that is the job; each remuxed original is kept as `<name> (old).mkv` |
 | **Reruns** | a film that already has its `(old)` backup is not remuxed again |
 | **Network** | TMDb, OpenSubtitles, SubDL, IMDb's title lists, ChapterDB and dvdcompare.net — the last two a few seconds apart, with some jitter — and your own Plex server |
@@ -234,7 +234,7 @@ call, so the film is remuxed once and only one output exists at a time:
 
 | What | What the remux does |
 | --- | --- |
-| Lossless audio converted to Opus | swapped in place, keeping index, language, name and flags |
+| Lossless audio converted to Opus | swapped in place, keeping index, language, name and flags. The Opus is encoded into RAM and never written beside the film; a run cut short encodes it again next time |
 | Excessive audio and image-subtitle tracks | dropped: everything not in English or the film's own language. That is TMDb's original language (with `tmdbApiKey` set), asked by the id the folder carries or the tagging would give it, and the first audio track's as well when TMDb lists it as spoken in the film or lists no spoken languages - TMDb has some films' original language wrong, and some films are made in several. With no answer, or no soundtrack in the original language, it is the first audio track's alone. Chinese varieties (Cantonese, Mandarin, ...) count as one language, as do the written Norwegians, Serbo-Croatian, Arabic, Persian and Malay, since discs tag them unevenly. Commentary **audio** is exempt from the excessive-language rule, so a foreign-language commentary is never dropped from the film its subtitles were just made for |
 | Downloaded subtitles (`<name>.xx.srt`) that passed the sync test | muxed in, placed after the other subtitles and before the commentary ones — unless the film already carries a plain text subtitle in that language. A picture subtitle, or a forced, SDH or commentary one, doesn't count, so the download goes in beside it. The `.srt` stays beside the film |
 | Commentary audio | moved below the other audio tracks |
