@@ -131,9 +131,9 @@ of the machine it uses:
   whisper keeps its cores. With whisper on the CPU they would only fight over
   the same cores, so the transcode goes first.
 - **Each film is remuxed as soon as it is ready**: once its own Opus tracks and
-  transcripts are done, one film at a time, while the transcode and the
-  transcription carry on with the others. The films it didn't get to are
-  remuxed after the transcription, as before.
+  transcripts are done and the subtitle thread is past it, one film at a
+  time, while the transcode and the transcription carry on with the others.
+  The films it didn't get to are remuxed after the transcription, as before.
 - **One disk-heavy job at a time per spinning disk.** An Opus transcode, a
   commentary extract, a remux and a subtitle sync against the film all read a
   whole film, and on a hard disk two of them at once are slower than one after
@@ -236,6 +236,8 @@ call, so the film is remuxed once and only one output exists at a time:
 | --- | --- |
 | Lossless audio converted to Opus | swapped in place, keeping index, language, name and flags |
 | Excessive audio and image-subtitle tracks | dropped. Commentary **audio** is exempt from the excessive-language rule, so a foreign-language commentary is never dropped from the film its subtitles were just made for |
+| Downloaded subtitles (`<name>.xx.srt`) that passed the sync test | muxed in, placed after the other subtitles and before the commentary ones — unless the film already carries a plain text subtitle in that language. A picture subtitle, or a forced, SDH or commentary one, doesn't count, so the download goes in beside it. The `.srt` stays beside the film |
+| Commentary audio | moved below the other audio tracks |
 | Commentary transcripts | appended, each tagged with its own language |
 | Dual-layer Dolby Vision profile 7 | **normalised to single-layer profile 8.1**, so DV survives on hardware that cannot read the enhancement layer. Metadata only — the video is **never re-encoded** |
 | Profile 5, profile 8.x, HDR10, HDR10+ and SDR | left untouched |

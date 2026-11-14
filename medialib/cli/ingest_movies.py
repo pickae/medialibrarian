@@ -12,7 +12,9 @@ copy with the original kept beside it as "<name> (old).mkv".
 The improvement is the interesting half, and it is one mkvmerge call: each
 lossless track that was converted swaps for its opus in place, excessive audio
 and image-subtitle tracks are dropped, at most one surround tier survives per
-language, the commentary transcripts are appended as subtitle tracks, and a
+language, the downloaded subtitles the film has no plain text track of are
+muxed in, the commentary audio moves below the other audio, the commentary
+transcripts are appended as subtitle tracks, and a
 dual-layer Dolby Vision profile 7 is normalised to single-layer 8.1 - or, when
 the video turns out to carry no Dolby Vision behind the container's claim, that
 claim is dropped.
@@ -562,7 +564,7 @@ class Track:
 
     FIELDS = ("id", "type", "codec", "channels", "language", "name",
               "commentary", "default", "forced", "dimensions",
-              "visual_impaired")
+              "visual_impaired", "hearing_impaired")
 
     # FIELDS is what __init__ sets; these declare what it sets them TO. Every
     # one is text, and an absent field is the empty string rather than a
@@ -582,6 +584,9 @@ class Track:
     # An audio description's flag, which says the track is not a commentary
     # however much more of it is speech than the film.
     visual_impaired: str
+    # A subtitle's SDH flag: the captions for the deaf, which a plain subtitle
+    # of the same language is something else than.
+    hearing_impaired: str
 
     def __init__(self, **fields) -> None:
         for field in self.FIELDS:
@@ -643,7 +648,9 @@ def _identify(movie: str) -> list:
             forced=_as_text(properties.get("forced_track")),
             dimensions=_as_text(properties.get("pixel_dimensions")),
             visual_impaired=_as_text(
-                properties.get("flag_visual_impaired"))))
+                properties.get("flag_visual_impaired")),
+            hearing_impaired=_as_text(
+                properties.get("flag_hearing_impaired"))))
     return tracks
 
 
@@ -1465,6 +1472,55 @@ def _same_commentary(have: str, want: str, siblings: list) -> bool:
     if not long.startswith(short):
         return False
     return _identifies_one(short, siblings)
+
+
+def gather_downloaded_subtitles(base: str, tracks: list, say=None) -> list:
+    """The ``<movie>.<xx>.srt`` sidecars to mux into the improved copy, as
+    (srt, language) pairs in the table's order.
+
+    What is still beside the film has passed the alignment test - one out of
+    step is thrown out rather than kept - so every sidecar there is one worth
+    carrying. One whose language the film already carries as a plain text
+    subtitle is left out, the two would only be the same subtitle twice; a
+    picture subtitle, or a forced, SDH or commentary one of that language, is
+    a different thing, and the sidecar goes in beside it. The sidecar itself
+    stays where it is.
+    """
+    say = say or log
+    found = []
+    for row in languages.LANGUAGES:
+        srt = "%s.%s.srt" % (base, row.code2)
+        if os.path.islink(srt) or not os.path.isfile(srt) \
+                or not _size_of(srt):
+            continue
+        if any(_is_plain_text_subtitle(track, row.code2) for track in tracks):
+            say("  %s subtitle already a text track in the file, not muxing "
+                "the sidecar: %s" % (row.sub_word, os.path.basename(srt)))
+            continue
+        found.append((srt, row.code2))
+    return found
+
+
+# The words a track name says SDH or forced with, where the flag does not.
+_SDH_NAME = re.compile(r"\bsdh\b|\bcc\b|hearing|deaf|malentendant|"
+                       r"h[oö]rgesch[aä]digt|doven|slechthorend", re.I)
+_FORCED_NAME = re.compile(r"forced|forc[ée]s?\b|erzwungen|geforceerd", re.I)
+
+
+def _is_plain_text_subtitle(track, language: str) -> bool:
+    """Whether a track is a text subtitle of this language that is none of
+    forced, SDH or commentary - the one a downloaded sidecar would duplicate.
+    A subtitle the improvement drops does not count."""
+    if not (track.is_subtitle and track.action != "drop"
+            and track.codec.upper().startswith("S_TEXT")):
+        return False
+    if not languages.same_language_tag(track.language, language):
+        return False
+    if track.is_commentary or track.forced == "true" \
+            or track.hearing_impaired == "true":
+        return False
+    name = track.name if track.name != "null" else ""
+    return not (_SDH_NAME.search(name) or _FORCED_NAME.search(name))
 
 
 def apply_surround_ladder(tracks: list) -> list:

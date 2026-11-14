@@ -118,6 +118,44 @@ class TestRemuxLane:
         assert improved == []
         assert lane.done == set()
 
+    class _Subtitles:
+        """A subtitle lane that has every film still to come, and says it is
+        past one when the test does."""
+
+        def __init__(self, coming):
+            self.coming = {lanes.key(film) for film in coming}
+            self.watchers = []
+
+        def watch(self, callback):
+            self.watchers.append(callback)
+            return set(self.coming)
+
+        def past(self, film):
+            for callback in self.watchers:
+                callback(film)
+
+    def test_a_film_waits_for_the_subtitle_lane_to_be_past_it(self):
+        subtitles = self._Subtitles(["/f/A.mkv"])
+        improved = []
+        lane = lanes.RemuxLane(["/f/A.mkv"], improved.append,
+                               lanes.FilmLocks(), False, lambda _line: None,
+                               subtitles=subtitles)
+        lane.opus_done("/f/A.mkv")
+        assert lane.done == set() and improved == []
+        subtitles.past("/f/./A.mkv")
+        lane.finish()
+        assert improved == ["/f/A.mkv"]
+
+    def test_a_film_the_subtitle_lane_will_not_come_to_does_not_wait(self):
+        subtitles = self._Subtitles([])
+        improved = []
+        lane = lanes.RemuxLane(["/f/A.mkv"], improved.append,
+                               lanes.FilmLocks(), False, lambda _line: None,
+                               subtitles=subtitles)
+        lane.opus_done("/f/A.mkv")
+        lane.finish()
+        assert improved == ["/f/A.mkv"]
+
     def test_the_lane_holds_the_film_against_the_other_lanes(self):
         locks = lanes.FilmLocks()
         inside = threading.Event()
@@ -206,6 +244,35 @@ class TestSubtitleLane:
         # it; how far the thread got by then is the scheduler's to decide.
         assert [line for line in said if not line.startswith("Waiting")] == []
 
+    def test_every_film_is_said_to_its_watchers_once_the_lane_is_past_it(
+            self, monkeypatch, tmp_path):
+        monkeypatch.setattr(lanes.tmdblookup, "tag_plex_ids",
+                            lambda *a, **k: 0)
+        films = [str(tmp_path / "Unknown" / "Unknown.mkv"),
+                 str(tmp_path / "F {imdb-tt0000009}" / "F {imdb-tt0000009}.mkv")]
+        lane = lanes.SubtitleLane(str(tmp_path), films, lambda films: None,
+                                  lanes.FilmLocks(), lambda _line: None)
+        past = []
+        assert lane.watch(past.append) == {lanes.key(f) for f in films}
+        lane.start()
+        lane.finish()
+        assert past == films
+        assert lane.watch(lambda _film: None) == set()
+
+    def test_a_lane_finished_twice_says_its_warning_once(
+            self, monkeypatch, tmp_path):
+        def broken(*_args, **_kwargs):
+            raise RuntimeError("no network")
+
+        monkeypatch.setattr(lanes.tmdblookup, "tag_plex_ids", broken)
+        said = []
+        lane = lanes.SubtitleLane(str(tmp_path), [], lambda films: None,
+                                  lanes.FilmLocks(), said.append)
+        lane.start()
+        lane.finish()
+        lane.finish()
+        assert sum("no network" in line for line in said) == 1
+
     def test_a_lane_that_fails_says_so_when_it_is_finished(
             self, monkeypatch, tmp_path):
         def broken(*_args, **_kwargs):
@@ -281,6 +348,30 @@ class TestTheMiddleOfTheIngest:
         assert "remux B.mkv" not in order
         assert walked == [str(tmp_path / "B" / "B.mkv")]
         assert state.scratch_headroom == 0
+
+    def test_the_walk_after_the_lanes_waits_for_the_subtitle_lane(
+            self, monkeypatch, tmp_path):
+        """So what the subtitle lane kept is there to be muxed in by the
+        walk as well as by the remux lane."""
+        events = []
+
+        class Fetching:
+            def watch(self, _callback):
+                return set()
+
+            def finish(self):
+                events.append("subtitles finished")
+
+        monkeypatch.setattr(run_module, "improve_main_movies",
+                            lambda *a, **k: events.append("walk"))
+        monkeypatch.setattr(run_module, "_transcode_opus",
+                            lambda *a, **k: None)
+        monkeypatch.setattr(run_module, "main_movies", lambda root: [])
+        monkeypatch.setattr(run_module, "log", lambda *a, **k: None)
+        state = run_module.Run(whisper={"device": "cpu"})
+        run_module._films_in_lanes(state, str(tmp_path), False,
+                                   lanes.FilmLocks(), fetching=Fetching())
+        assert events == ["subtitles finished", "walk"]
 
     def test_with_whisper_on_the_gpu_the_transcode_runs_beside_it(
             self, monkeypatch, tmp_path):
