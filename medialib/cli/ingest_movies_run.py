@@ -168,6 +168,9 @@ class Run:
                                                           say=say)
         if transcripts:
             changed = True
+        subtitles = rules.gather_downloaded_subtitles(base, tracks, say=say)
+        if subtitles:
+            changed = True
 
         job = self.decide_dolby_vision_job(movie, tracks, say=say)
 
@@ -185,7 +188,7 @@ class Run:
             return
 
         heading()
-        self.remux(movie, base, tracks, transcripts, job)
+        self.remux(movie, base, tracks, transcripts, job, subtitles)
 
     def film_languages(self, movie: str) -> tmdbidentify.FilmLanguages:
         """What TMDb says the film is spoken in, or nothing - which keeps the
@@ -283,7 +286,7 @@ class Run:
         return job
 
     def remux(self, movie: str, base: str, tracks: list, transcripts: list,
-              job: dict) -> None:
+              job: dict, subtitles: tuple | list = ()) -> None:
         """The improved copy itself: ONE mkvmerge call, however many of the
         improvements apply."""
         scratch, on_disk = self._scratch_for(movie, job)
@@ -301,12 +304,12 @@ class Run:
             if job["wanted"] and not hevc:
                 job["wanted"] = False
                 if not any(track.action != "keep" for track in tracks) \
-                        and not transcripts:
+                        and not transcripts and not subtitles:
                     log("  No other improvements needed, left untouched: "
                         + movie)
                     return
             argv, order = self._mkvmerge_command(movie, tracks, transcripts,
-                                                 job, hevc)
+                                                 job, hevc, subtitles)
             self._run_and_swap(movie, scratch, argv, order, job, hevc)
         finally:
             # Handed back now rather than at exit, on every outcome: a run over a
@@ -377,15 +380,19 @@ class Run:
         return hevc if done else ""
 
     def _mkvmerge_command(self, movie: str, tracks: list, transcripts: list,
-                          job: dict, hevc: str) -> tuple:
+                          job: dict, hevc: str,
+                          subtitles: tuple | list = ()) -> tuple:
         """File 0 is the original with unwanted tracks deselected; each swapped
-        opus and each commentary srt is an extra input whose single track
-        inherits the right language, name and flags.
+        opus, each downloaded subtitle and each commentary srt is an extra input
+        whose single track inherits the right language, name and flags.
 
         File ids are assigned deterministically - 0 the movie, then the prepared
         video stream, then the swapped opus inputs in track order, then the
-        commentary subtitles - and ``--track-order`` puts every track back in its
-        original slot, with the commentary subtitles appended at the very end.
+        downloaded subtitles, then the commentary subtitles. ``--track-order``
+        puts every track back in its original slot, except that the commentary
+        audio tracks move below the other audio, the downloaded subtitles go in
+        just before the first commentary subtitle (after the last subtitle when
+        there is none), and the commentary transcripts come at the very end.
         """
         extra, next_fid = [], 1
         video_fid = ""
@@ -428,6 +435,13 @@ class Run:
                 extra += ["--commentary-flag", "0:1"]
             extra += ["--no-chapters", track.opus]
 
+        sub_fids = []
+        for srt, language in subtitles:
+            sub_fids.append(next_fid)
+            next_fid += 1
+            extra += ["--language", "0:" + language,
+                      "--default-track-flag", "0:0", "--no-chapters", srt]
+
         comm_fids = []
         for srt, language, title in transcripts:
             comm_fids.append(next_fid)
@@ -452,14 +466,18 @@ class Run:
             # contributes every track except its video one.
             selection += ["-D"]
 
-        order = []
+        placed = []
         for position, track in enumerate(tracks):
             if video_fid and position == job["video_index"]:
-                order.append("%s:0" % video_fid)
+                placed.append((track, "%s:0" % video_fid))
             elif track.action == "keep":
-                order.append("0:" + track.id)
+                placed.append((track, "0:" + track.id))
             elif track.action == "swap":
-                order.append("%s:0" % opus_fid[track.id])
+                placed.append((track, "%s:0" % opus_fid[track.id]))
+        placed = _commentary_audio_last(placed)
+        placed = _insert_before_commentary_subtitles(
+            placed, [(None, "%s:0" % fid) for fid in sub_fids])
+        order = [slot for _track, slot in placed]
         order += ["%s:0" % fid for fid in comm_fids]
 
         return selection + [movie] + extra, order
@@ -532,6 +550,39 @@ class Run:
                         % (seen_profile or seen_settings))
             return "remux lost the HDR metadata the source had"
         return ""
+
+
+def _commentary_audio_last(placed: list) -> list:
+    """The (track, slot) pairs with every commentary audio track moved to just
+    below the last of the other audio tracks, each kind keeping its own order.
+    With no other audio there is nothing to move them below."""
+    commentary = [pair for pair in placed
+                  if pair[0].is_audio and pair[0].is_commentary]
+    rest = [pair for pair in placed if pair not in commentary]
+    main = [index for index, (track, _slot) in enumerate(rest)
+            if track.is_audio]
+    if not commentary or not main:
+        return placed
+    after = main[-1] + 1
+    return rest[:after] + commentary + rest[after:]
+
+
+def _insert_before_commentary_subtitles(placed: list, new: list) -> list:
+    """``new`` put in just before the first commentary subtitle, after the last
+    subtitle where none is a commentary, and at the end where there is no
+    subtitle at all."""
+    if not new:
+        return placed
+    subtitles = [index for index, (track, _slot) in enumerate(placed)
+                 if track.is_subtitle]
+    commentary = [index for index in subtitles if placed[index][0].is_commentary]
+    if commentary:
+        at = commentary[0]
+    elif subtitles:
+        at = subtitles[-1] + 1
+    else:
+        at = len(placed)
+    return placed[:at] + new + placed[at:]
 
 
 def improve_main_movies(state, root: str, skip=(), around=None) -> None:
@@ -2379,7 +2430,8 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
         fetching = _start_subtitle_lane(state, root, subtitle_work, locks,
                                         row)
         try:
-            _films_in_lanes(state, root, subtitle_work, locks, row)
+            _films_in_lanes(state, root, subtitle_work, locks, row,
+                            fetching=fetching)
         finally:
             if fetching is not None and safety.abort_requested():
                 fetching.finish()
@@ -2448,7 +2500,7 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
 
 
 def _films_in_lanes(state, root: str, subtitle_work: bool, locks,
-                    row=None) -> None:
+                    row=None, fetching=None) -> None:
     """The opus transcode, the commentary transcription and the improved-copy
     remux, each on the part of the machine it uses and overlapping where that
     is safe (see :mod:`medialib.cli.ingest_movies_lanes`).
@@ -2458,10 +2510,13 @@ def _films_in_lanes(state, root: str, subtitle_work: bool, locks,
     keep theirs; with whisper on the CPU the two would only fight over the
     same cores, and the transcode goes first as it always did. Each film is
     remuxed by the remux lane as soon as its own transcode and transcripts are
-    done; a film the lane never got is remuxed by the walk after it.
+    done and ``fetching``, the subtitle lane, has had its turn at it; a film
+    the lane never got is remuxed by the walk after it, once the subtitle lane
+    is finished, so the subtitles it kept are muxed in either way.
     """
     remux = lanes.RemuxLane(main_movies(root), state.improve_main_movie,
-                            locks, subtitle_work, log, row)
+                            locks, subtitle_work, log, row,
+                            subtitles=fetching)
     beside = subtitle_work and state.whisper.get("device") == "cuda"
     transcoding = None
     try:
@@ -2511,6 +2566,8 @@ def _films_in_lanes(state, root: str, subtitle_work: bool, locks,
 
     # An improved copy of each film's main movie, with the original kept as
     # "<name> (old).mkv" - every one the remux lane did not get to.
+    if fetching is not None:
+        fetching.finish()
     log("Phase: remuxing improved main movie copies")
     improve_main_movies(state, root, skip=remux.done,
                         around=lambda movie: _film_held(locks, movie))

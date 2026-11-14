@@ -59,6 +59,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -165,6 +166,14 @@ def sudo(cmd: list[str]) -> list[str]:
     return cmd if os.geteuid() == 0 else ["sudo", *cmd]
 
 
+def keep_sudo_alive(stop: threading.Event, every: float = 60) -> None:
+    """Refresh sudo's timestamp until ``stop``: a slow download can outlast
+    it, and the step that needs root then sits at a password prompt."""
+    while not stop.wait(every):
+        subprocess.run(["sudo", "-n", "-v"], stdin=subprocess.DEVNULL,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
 def urlopen(url: str, timeout: float, accept: str | None = None):
     """``urlopen`` that tries three times, a few seconds apart: a release CDN
     answering 5xx for a moment is common and not worth a failed step."""
@@ -190,9 +199,13 @@ def http_get(url: str, timeout: float = 30) -> bytes:
 
 def github_json(path: str):
     """A GitHub API answer: through ``gh`` when it is there (authenticated, so
-    no rate limit to speak of), else anonymously."""
+    no rate limit to speak of), else anonymously - also when ``gh`` is there
+    but not logged in."""
     if shutil.which("gh"):
-        return json.loads(run(["gh", "api", path], timeout=60))
+        try:
+            return json.loads(run(["gh", "api", path], timeout=60))
+        except StepError:
+            pass
     return json.loads(http_get("https://api.github.com/" + path))
 
 
@@ -968,17 +981,27 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    if os.geteuid() == 0 and os.environ.get("SUDO_USER"):
+        # As root, ~ is root's home: the user's pipx venvs, ~/.local/bin and
+        # gh login are not the ones checked.
+        sys.exit("Run this as yourself, not through sudo: it asks for sudo "
+                 "itself for the updates that need root.")
     OPTS.dry_run, OPTS.yes, OPTS.sudo = args.dry_run, args.yes, not args.no_sudo
     OPTS.allow_major, OPTS.force = args.allow_major, args.force
     steps = [s for s in (args.only or STEPS) if s not in args.skip]
     load_settings()
 
-    with single_run():
+    with single_run(), contextlib.ExitStack() as stack:
         if "apt" in steps and OPTS.sudo and not OPTS.dry_run and os.geteuid() != 0:
             # Asked for once, up front, so the parallel checks never prompt.
             if subprocess.run(["sudo", "-v"]).returncode != 0:
                 print("No sudo: leaving out the updates that need root.")
                 OPTS.sudo = False
+            else:
+                stop_keepalive = threading.Event()
+                threading.Thread(target=keep_sudo_alive, args=(stop_keepalive,),
+                                 daemon=True).start()
+                stack.callback(stop_keepalive.set)
         print("Checking %s ..." % ", ".join(steps), flush=True)
         rows = check_all(steps)
         if not OPTS.sudo:

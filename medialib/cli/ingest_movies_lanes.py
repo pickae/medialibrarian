@@ -8,9 +8,11 @@ download on the network. Run one after the other, each leaves the other three
 idle for as long as it lasts. Here they overlap where that is safe:
 
 - The REMUX LANE remuxes a film as soon as its own opus tracks and
-  transcripts are done, one film at a time on a thread of its own, while the
-  transcode and the transcription go on with the rest. A film it never heard
-  was ready is remuxed by the walk after it, the way every film used to be.
+  transcripts are done, and the subtitle lane has had its turn at it (the
+  subtitles it kept are muxed in), one film at a time on a thread of its
+  own, while the transcode and the transcription go on with the rest. A film
+  it never heard was ready is remuxed by the walk after it, the way every
+  film used to be.
 - The SUBTITLE LANE asks TMDb which film each folder is - a dry run of the
   tagging the run does at its end, its answers remembered for that - and
   downloads the missing subtitles of every film it got an id for, one film
@@ -84,15 +86,17 @@ class RemuxLane:
     everything it waits for is done.
 
     ``films`` are the main movies the remux walk would improve, as it spells
-    them. A film waits for its opus transcode always, and for its transcripts
-    when ``transcripts`` is True; :meth:`opus_done` and :meth:`transcripts_done`
-    say a film's are, from whichever thread finished them. ``improve`` is the
+    them. A film waits for its opus transcode always, for its transcripts
+    when ``transcripts`` is True, and for the ``subtitles`` lane's turn at it
+    when one is given and has the film still to come; :meth:`opus_done`,
+    :meth:`transcripts_done` and :meth:`subtitles_done` say a film's are, from
+    whichever thread finished them. ``improve`` is the
     remux of one film. :attr:`done` are the films this lane has seen to,
     whatever came of each, for the walk after it to pass over.
     """
 
     def __init__(self, films: list, improve, locks: FilmLocks,
-                 transcripts: bool, log, row=None) -> None:
+                 transcripts: bool, log, row=None, subtitles=None) -> None:
         self._films = {key(film): film for film in films}
         self._row = row
         if row is not None:
@@ -103,10 +107,17 @@ class RemuxLane:
         self._guard = threading.Lock()
         self._waiting_opus = set(self._films)
         self._waiting_transcripts = set(self._films) if transcripts else set()
+        self._waiting_subtitles: set = set()
         self._queue: queue.Queue = queue.Queue()
         self._thread: threading.Thread | None = None
         self._said = False
         self.done: set = set()
+        if subtitles is not None:
+            # Under the guard, so a film the subtitle lane finishes while this
+            # is being asked waits for the set to be filled before it leaves it.
+            with self._guard:
+                coming = subtitles.watch(self.subtitles_done)
+                self._waiting_subtitles = coming & set(self._films)
 
     def opus_done(self, movie) -> None:
         if movie is None:
@@ -120,10 +131,16 @@ class RemuxLane:
             self._waiting_transcripts.discard(key(movie))
         self._maybe(key(movie))
 
+    def subtitles_done(self, movie: str) -> None:
+        with self._guard:
+            self._waiting_subtitles.discard(key(movie))
+        self._maybe(key(movie))
+
     def _maybe(self, film: str) -> None:
         with self._guard:
             if (film not in self._films or film in self._waiting_opus
-                    or film in self._waiting_transcripts):
+                    or film in self._waiting_transcripts
+                    or film in self._waiting_subtitles):
                 return
             # Queued once: a film both of whose waits end is not queued
             # again by the second.
@@ -284,7 +301,7 @@ class SubtitleLane:
     for, by that id, one film at a time. ``download`` is
     :func:`subtitlefiles.download_subs_for` with the run's settings bound.
     :meth:`finish` waits for it, and must be called before anything renames
-    the films.
+    the films. :meth:`watch` says each film once the lane is past it.
     """
 
     def __init__(self, root: str, films: list, download, locks: FilmLocks,
@@ -302,9 +319,27 @@ class SubtitleLane:
                                         name="ingest-subtitle-lane",
                                         daemon=True)
         self._said: list = []
+        self._guard = threading.Lock()
+        self._coming = {key(movie) for movie in films}
+        self._watchers: list = []
 
     def start(self) -> None:
         self._thread.start()
+
+    def watch(self, callback) -> set:
+        """The films the lane has still to come to, and ``callback`` called
+        with each of them once it is past it. One it stops before is never
+        called back."""
+        with self._guard:
+            self._watchers.append(callback)
+            return set(self._coming)
+
+    def _past(self, movie: str) -> None:
+        with self._guard:
+            self._coming.discard(key(movie))
+            watchers = list(self._watchers)
+        for callback in watchers:
+            callback(movie)
 
     def _run(self) -> None:
         try:
@@ -321,6 +356,7 @@ class SubtitleLane:
                         self._download([(movie, imdb)])
                 if self._row is not None:
                     self._row.done("subs")
+                self._past(movie)
         except Exception as error:  # noqa: BLE001 - the walk after it remains
             self._said.append("WARNING: the subtitles fetched ahead stopped "
                               "early (%s); the rest are fetched after the "
@@ -340,7 +376,9 @@ class SubtitleLane:
             self._log("Waiting for the subtitles fetched ahead to finish")
         if self._thread.ident is not None:
             self._thread.join()
-        for line in self._said:
+        # Said once, however often it is finished.
+        said, self._said = self._said, []
+        for line in said:
             self._log(line)
 
 

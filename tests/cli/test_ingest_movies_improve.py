@@ -49,8 +49,12 @@ REMUXED = b"the film as mkvmerge wrote it"
 def remux(tmp_path, monkeypatch, request):
     """One film through the improvement, with mkvmerge recording rather than
     running: what comes back is the argv it was handed. mkvmerge exits with
-    the status the test parametrizes it with, 0 when it does not."""
-    mkvmerge_status = getattr(request, "param", 0)
+    the status the test parametrizes it with, 0 when it does not - or, for a
+    dict, its "status", with its "sidecars" written beside the film too."""
+    param = getattr(request, "param", 0)
+    if not isinstance(param, dict):
+        param = {"status": param}
+    mkvmerge_status = param.get("status", 0)
     folder = tmp_path / "Film (2020)"
     folder.mkdir()
     movie = str(folder / "Film (2020).mkv")
@@ -65,6 +69,9 @@ def remux(tmp_path, monkeypatch, request):
                  " 8 Commentary Dutch.nl.srt",     # the native transcript
                  " 8 Commentary Dutch.en.srt"):    # and its translation
         open(base + name, "w").close()
+    for name in param.get("sidecars", ()):
+        with open(base + name, "w") as handle:
+            handle.write("1\n00:00:01,000 --> 00:00:02,000\nHello\n")
 
     tracks = [rules.Track(id=str(id), type=kind, codec=codec,
                           channels=channels, language=language, name=name,
@@ -262,9 +269,10 @@ class TestWhatSurvives:
         assert _after(remux["argv"], "-s") == "6,11"
 
     def test_the_track_order_puts_the_opus_in_its_losslesss_slot(self, remux):
-        """And appends the two new commentary subtitles at the very end."""
+        """Moves the commentary audio below the other audio, and appends the
+        two new commentary subtitles at the very end."""
         assert _after(remux["argv"], "--track-order") == \
-            "1:0,0:1,0:6,0:7,0:8,0:9,0:10,0:11,2:0,3:0"
+            "1:0,0:1,0:6,0:9,0:10,0:7,0:8,0:11,2:0,3:0"
 
 
 class TestTheCommentaryTranscripts:
@@ -291,6 +299,97 @@ class TestTheCommentaryTranscripts:
             remux["argv"], remux["base"] + " 8 Commentary Dutch.en.srt") == [
             "--language", "0:en", "--track-name", "0:Commentary Dutch (EN)",
             "--commentary-flag", "0:1", "--default-track-flag", "0:0"]
+
+
+class TestTheDownloadedSubtitles:
+    """The good ``<movie>.xx.srt`` sidecars, muxed in where the film has no
+    plain text subtitle of that language."""
+
+    SIDECARS = {"sidecars": (".nl.srt", ".en.srt", ".fr.srt")}
+
+    @pytest.mark.parametrize("remux", [SIDECARS], indirect=True)
+    def test_one_in_a_language_the_film_has_no_text_track_of_is_muxed(
+            self, remux):
+        srt = remux["base"] + ".nl.srt"
+        assert srt in remux["argv"]
+        at = remux["argv"].index(srt)
+        assert remux["argv"][at - 5:at] == [
+            "--language", "0:nl", "--default-track-flag", "0:0",
+            "--no-chapters"]
+
+    @pytest.mark.parametrize("remux", [SIDECARS], indirect=True)
+    def test_one_the_film_already_has_as_plain_text_is_not(self, remux):
+        """Track 6 is an English text subtitle."""
+        assert remux["base"] + ".en.srt" not in remux["argv"]
+
+    @pytest.mark.parametrize("remux", [SIDECARS], indirect=True)
+    def test_they_go_before_the_commentary_subtitles(self, remux):
+        """File 2 is the Dutch sidecar and 3 the French, both just before
+        track 11 - the commentary subtitle - and the transcripts after it."""
+        assert _after(remux["argv"], "--track-order") == \
+            "1:0,0:1,0:6,0:9,0:10,0:7,0:8,2:0,3:0,0:11,4:0,5:0"
+
+    @pytest.mark.parametrize("remux", [SIDECARS], indirect=True)
+    def test_the_sidecars_stay_beside_the_film(self, remux):
+        for name in self.SIDECARS["sidecars"]:
+            assert os.path.isfile(remux["base"] + name)
+
+    def test_with_no_commentary_subtitle_they_follow_the_last_subtitle(
+            self):
+        """And a commentary audio track ahead of the main one moves below
+        it, past the subtitle that sat between them."""
+        tracks = [rules.Track(id=str(id), type=kind, codec=codec,
+                              name=name, commentary=commentary)
+                  for id, kind, codec, name, commentary in [
+                      (0, "video", "V_MPEGH/ISO/HEVC", "", "false"),
+                      (1, "audio", "A_AC3", "Director", "true"),
+                      (2, "subtitles", "S_TEXT/UTF8", "English", "false"),
+                      (3, "audio", "A_EAC3", "Main", "false")]]
+        placed = [(track, "0:" + track.id) for track in tracks]
+        placed = run_module._commentary_audio_last(placed)
+        placed = run_module._insert_before_commentary_subtitles(
+            placed, [(None, "9:0")])
+        assert [slot for _track, slot in placed] == \
+            ["0:0", "0:2", "9:0", "0:3", "0:1"]
+
+    def _track(self, **fields):
+        base = {"id": "0", "type": "subtitles", "codec": "S_TEXT/UTF8",
+                "language": "eng", "name": "", "commentary": "false",
+                "forced": "false", "hearing_impaired": "false"}
+        base.update(fields)
+        return rules.Track(**base)
+
+    @pytest.mark.parametrize("fields", [
+        {"codec": "S_HDMV/PGS"},
+        {"forced": "true"},
+        {"hearing_impaired": "true"},
+        {"commentary": "true"},
+        {"name": "English SDH"},
+        {"name": "English (Forced)"},
+        {"name": "Commentary"},
+        {"language": "ger"},
+    ])
+    def test_these_do_not_stop_a_sidecar(self, fields):
+        assert not rules._is_plain_text_subtitle(self._track(**fields), "en")
+
+    @pytest.mark.parametrize("fields", [
+        {},
+        {"language": "en"},
+        {"codec": "S_TEXT/ASS", "name": "English"},
+    ])
+    def test_a_plain_text_subtitle_does(self, fields):
+        assert rules._is_plain_text_subtitle(self._track(**fields), "en")
+
+    def test_one_the_improvement_drops_does_not(self):
+        track = self._track()
+        track.action = "drop"
+        assert not rules._is_plain_text_subtitle(track, "en")
+
+    def test_an_empty_sidecar_is_not_muxed(self, tmp_path):
+        base = str(tmp_path / "Film (2020)")
+        open(base + ".nl.srt", "w").close()
+        assert rules.gather_downloaded_subtitles(base, [],
+                                                 say=lambda _l: None) == []
 
 
 class TestTheScratchSize:
@@ -705,7 +804,7 @@ class TestFromARealIdentificationDocument:
 
     def test_and_the_same_track_order_comes_out(self, argv):
         assert _after(argv, "--track-order") == \
-            "1:0,0:1,0:6,0:7,0:8,0:9,0:10,0:11,2:0,3:0"
+            "1:0,0:1,0:6,0:9,0:10,0:7,0:8,0:11,2:0,3:0"
 
 
 def _properties(codec, channels, language, name, commentary, default):
