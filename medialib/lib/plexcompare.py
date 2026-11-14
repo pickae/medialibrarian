@@ -5,12 +5,14 @@ into the other: the picture (resolution tier, HDR), the soundtracks per
 language, the commentaries and other bonus audio, and the chapters. Subtitles
 are left out on purpose - they are fetched and synced per file anyway.
 
-Before any of that, the two have to be the same cut. Their edition tags differ,
-or their lengths differ by a minute or more, and they are two versions of the
-film rather than two copies of one. A difference of a few seconds is a studio
-logo more or less in front of the film: the same version, whose tracks need an
-offset to be muxed from one file into the other - which :func:`measure_offset`
-finds by cross-correlating the audio of the two files at several points.
+Before any of that, the two have to be the same cut. Their edition tags differ
+and they are two versions of the film rather than two copies of one. Otherwise
+the audio decides: :func:`measure_offset` cross-correlates the two soundtracks
+at several points of the film, and where the offsets found lie on one straight
+line (:meth:`Offset.timing`) the two are one cut - a logo more or less in front
+is the line's start, and a copy running at another speed (24 against 23.976
+frames a second, or PAL's 25) is its slope. Only without that measurement do
+the lengths decide, a minute or more apart being two versions.
 """
 
 from __future__ import annotations
@@ -22,8 +24,8 @@ from typing import NamedTuple
 
 from medialib.lib import chapterdb, filmrecord, languages
 
-__all__ = ["Audio", "Profile", "Comparison", "Offset", "read_profile",
-           "compare", "measure_offset", "audio_pair", "tier"]
+__all__ = ["Audio", "Profile", "Comparison", "Offset", "Timing",
+           "read_profile", "compare", "measure_offset", "audio_pair", "tier"]
 
 # Two lengths this far apart are two cuts of the film, not one cut with a
 # different logo in front of it.
@@ -42,14 +44,22 @@ SAME_LENGTH = 0.5
 NEGLIGIBLE_MS = 40
 
 # How far apart the offsets measured at different points may be and still be
-# one offset - beyond it, something was cut or added inside the film.
+# one offset - beyond it, something was cut or added inside the film. The same
+# bound holds for how far any of them may stray from the straight line the
+# others make with it.
 CONSISTENT_MS = 40
+
+# How far two copies may drift apart over the whole film and still count as
+# running at one speed: below it a track is muxed across with an offset alone.
+STEADY_DRIFT = 0.02
 
 # The audio cross-correlated: mono, at a rate that keeps a minute of it small
 # and still places a match to an eighth of a millisecond.
 _RATE = 8000
 _WINDOW = 20.0
-_POINTS = (0.25, 0.5, 0.75)
+# Five points rather than three: two of them fix the line, and the other three
+# are what says it is one.
+_POINTS = (0.1, 0.3, 0.5, 0.7, 0.9)
 # How far either side of where the new window starts the old one is searched,
 # beyond the length difference itself.
 _REACH = 30.0
@@ -74,7 +84,10 @@ _HDR_RANK = {"SDR": 0, "HLG": 1, "HDR10": 1, "HDR10+": 2, "Dolby Vision": 3}
 
 class Audio(NamedTuple):
     """One audio track: its 0-based index among the file's audio streams
-    (what ffmpeg's ``-map 0:a:N`` takes), and what it is."""
+    (what ffmpeg's ``-map 0:a:N`` takes), and what it is. ``track`` is its id
+    in the file (what mkvmerge's ``-a`` takes), ``ietf`` its BCP 47 tag and
+    ``rate`` its sample rate - all three what carrying it into another file
+    needs."""
 
     stream: int
     language: str
@@ -82,6 +95,9 @@ class Audio(NamedTuple):
     lossless: bool
     objects: bool
     name: str
+    track: int = -1
+    ietf: str = ""
+    rate: int = 0
 
 
 class Profile(NamedTuple):
@@ -130,6 +146,79 @@ class Offset(NamedTuple):
     def ms_median(self) -> int:
         found = sorted(self.measured)
         return found[len(found) // 2]
+
+    def timing(self) -> Timing | None:
+        """Where the old file's moments fall in the new one, when the offsets
+        measured lie on one straight line - None when fewer than three points
+        matched, or one of them strays from the line: then the film was cut
+        differently somewhere inside it."""
+        points = [(at, ms) for at, ms in zip(self.at, self.ms, strict=True)
+                  if ms is not None]
+        if len(points) < 3:
+            return None
+        count = len(points)
+        mean_at = sum(at for at, _ms in points) / count
+        mean_ms = sum(ms for _at, ms in points) / count
+        spread = sum((at - mean_at) ** 2 for at, _ms in points)
+        if not spread:
+            return None
+        slope = sum((at - mean_at) * (ms - mean_ms)
+                    for at, ms in points) / spread
+        start = mean_ms - slope * mean_at
+        if any(abs(ms - (start + slope * at)) > CONSISTENT_MS
+               for at, ms in points):
+            return None
+        # The offset at a moment of the new file is new - old there, so
+        # old = new * (1 - k) - a, with k and a in seconds per second and
+        # seconds; turned round, new = (old + a) / (1 - k).
+        drift = slope / 1000.0
+        speed = 1.0 / (1.0 - drift)
+        return Timing(start / 1000.0 * speed, speed)
+
+
+class Timing(NamedTuple):
+    """Where a moment of the old file falls in the new one: ``start`` plus
+    ``speed`` times it, in seconds - the logo more or less in front, and the
+    other speed the copy runs at."""
+
+    start: float
+    speed: float
+
+    def to_new(self, seconds: float) -> float:
+        return self.start + self.speed * seconds
+
+    def steady(self, seconds: float) -> bool:
+        """Whether the two run at one speed over a film this long: what an
+        offset alone puts in sync."""
+        return abs(self.speed - 1.0) * seconds < STEADY_DRIFT
+
+    def describe(self, seconds: float) -> str:
+        """The timing in words, for a film this long."""
+        said = "%+d ms" % round(self.start * 1000)
+        if self.steady(seconds):
+            return "the same cut, the existing file's tracks %s off" % said
+        rate = _rates(self.speed)
+        return ("the same cut at another speed: the existing file %s %s, "
+                "and %s off at its start" % (
+                    "runs faster than the new one" if self.speed > 1
+                    else "runs slower than the new one",
+                    rate or "by %.2f%%" % (abs(self.speed - 1) * 100), said))
+
+
+# The speeds a film is sold at, and the ratios between them that a copy running
+# at one against the other shows.
+_FILM_RATES = (("24", 24.0), ("23.976", 24000 / 1001), ("25", 25.0))
+
+
+def _rates(speed: float) -> str:
+    """The two frame rates a speed ratio - the old file's rate over the new
+    one's - is, as "(24 fps against the new file's 23.976)", or "" for one
+    that is not two of the rates films are sold at."""
+    for name, rate in _FILM_RATES:
+        for other_name, other in _FILM_RATES:
+            if rate != other and abs(rate / other - speed) < 0.0002:
+                return "(%s fps against the new file's %s)" % (name, other_name)
+    return ""
 
 
 def _run_json(argv: list) -> dict:
@@ -195,7 +284,9 @@ def read_profile(path: str, edition: str = "") -> Profile | None:
             str(row.get("Compression_Mode") or "") == "Lossless",
             "Atmos" in commercial or "DTS:X" in commercial
             or bool(_number((row.get("extra") or {}).get("NumberOfDynamicObjects"))),
-            name)
+            name, _number(track.get("id"), int),
+            str(properties.get("language_ietf") or ""),
+            _number(properties.get("audio_sampling_frequency")))
         index += 1
         if properties.get("flag_commentary") or languages.is_commentary_name(name):
             commentaries.append(audio)
@@ -261,12 +352,36 @@ def _length(seconds: float) -> str:
     return "%.1fs" % seconds
 
 
-def different_versions(new: Profile, old: Profile) -> list:
-    """Why the two are not one cut - nothing, where they are."""
+def editions_differ(new: Profile, old: Profile) -> str:
+    """Why the two are two editions of the film, or ""."""
+    if new.edition.casefold() == old.edition.casefold():
+        return ""
+    return "editions differ: %s vs %s" % (new.edition or "no edition",
+                                          old.edition or "no edition")
+
+
+def worth_measuring(new: Profile, old: Profile) -> bool:
+    """Whether the two could be one cut, as far as their editions and lengths
+    say: what the offset is measured for. A minute apart is still measured
+    where the ratio is PAL's, which the measurement then confirms."""
+    if editions_differ(new, old) or not (new.seconds and old.seconds):
+        return False
+    ratio = max(new.seconds, old.seconds) / min(new.seconds, old.seconds)
+    return (abs(new.seconds - old.seconds) < VERSION_GAP
+            or abs(ratio - PAL_SPEEDUP) < 0.004)
+
+
+def different_versions(new: Profile, old: Profile,
+                       timing: Timing | None = None) -> list:
+    """Why the two are not one cut - nothing, where they are. ``timing``, the
+    measurement that the two soundtracks line up, settles it whatever the
+    lengths say."""
     reasons = []
-    if new.edition.casefold() != old.edition.casefold():
-        reasons.append("editions differ: %s vs %s" % (
-            new.edition or "no edition", old.edition or "no edition"))
+    edition = editions_differ(new, old)
+    if edition:
+        reasons.append(edition)
+    if timing is not None:
+        return reasons
     if new.seconds and old.seconds:
         gap = new.seconds - old.seconds
         ratio = max(new.seconds, old.seconds) / min(new.seconds, old.seconds)
@@ -280,7 +395,8 @@ def different_versions(new: Profile, old: Profile) -> list:
     return reasons
 
 
-def compare(new: Profile, old: Profile) -> Comparison:
+def compare(new: Profile, old: Profile,
+            timing: Timing | None = None) -> Comparison:
     new_better: list = []
     old_better: list = []
 
@@ -322,7 +438,7 @@ def compare(new: Profile, old: Profile) -> Comparison:
           (old.chapters > 0, old.named_chapters),
           _chapters(new), _chapters(old))
 
-    versions = different_versions(new, old)
+    versions = different_versions(new, old, timing)
     if versions:
         verdict = "different"
     elif new_better and old_better:

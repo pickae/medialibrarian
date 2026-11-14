@@ -18,6 +18,7 @@ import threading
 
 from medialib import commands
 from medialib.cli import ingest_movies as rules
+from medialib.cli import ingest_movies_carry as carryphase
 from medialib.cli import ingest_movies_convert as convertphase
 from medialib.cli import ingest_movies_lanes as lanes
 from medialib.cli import ingest_movies_plex as plexphase
@@ -109,6 +110,9 @@ class Run:
     # names them: what the remux reads a film's original language off. Read
     # with a default too: a Run made for one phase has none.
     film_tags: lanes.FilmTags | None
+    # What each film takes from its copy in the Plex library, looked up while
+    # the run does its first phases. Read with a default too.
+    carry: carryphase.LibraryCarry | None
 
     def __init__(self, **settings) -> None:
         self.__dict__.update(settings)
@@ -181,6 +185,13 @@ class Run:
         subtitles = rules.gather_downloaded_subtitles(base, tracks, say=say)
         if subtitles:
             changed = True
+        carried = self.carried_inputs(movie)
+        for item in carried:
+            changed = True
+            say("  Carried over from the library's copy: %s" % (
+                "its transcript (%s) of %s" % (item.language,
+                                               _carried_said(item.carried))
+                if item.is_transcript else _carried_said(item.carried)))
 
         job = self.decide_dolby_vision_job(movie, tracks, say=say)
 
@@ -198,7 +209,46 @@ class Run:
             return
 
         heading()
-        self.remux(movie, base, tracks, transcripts, job, subtitles)
+        self.remux(movie, base, tracks, transcripts, job, subtitles, carried)
+
+    def carried_inputs(self, movie: str) -> list:
+        """What the film takes from its copy in the Plex library, as remux
+        inputs (:class:`carryphase.Input`) - nothing, without a carry-over."""
+        carry = getattr(self, "carry", None)
+        if carry is None:
+            return []
+        return carry.inputs_for(movie, getattr(self, "ram_root", ""))
+
+    def carry_keeps(self, movie: str):
+        """Which of a library copy's soundtracks the film's improved copy
+        would keep: its rule for its own tracks, asked of a
+        :class:`plexcompare.Audio`."""
+        tracks = rules._identify(movie)
+        film = self.film_languages(movie)
+        primary = next((enums.shell_lower(track.language) for track in tracks
+                        if track.is_audio), "")
+        choice = rules.choose_languages(tracks, film.original, film.spoken)
+
+        def keeps(audio) -> bool:
+            return rules._language_kept(
+                rules.Track(language=audio.language, language_ietf=audio.ietf),
+                primary, choice)
+        return keeps
+
+    def carry_names(self, movie: str, names: list) -> str:
+        """The film's commentaries given the names a carry-over says, in
+        place - with the subtitle tracks and the sidecars named after them -
+        and "" when they were, or why not."""
+        tracks = rules._identify(movie)
+        commentaries = [track for track in tracks
+                        if track.is_audio and track.is_commentary]
+        renames = [(str(track_id), name) for track_id, name in names]
+        plan, why = _commentary_rename_plan(movie, tracks, commentaries,
+                                            renames, self.fragments_file,
+                                            "the library's copy", say=False)
+        if plan is None:
+            return why
+        return _carry_out_commentary_names(plan)
 
     def film_languages(self, movie: str) -> tmdbidentify.FilmLanguages:
         """What TMDb says the film is spoken in, or nothing - which keeps the
@@ -296,7 +346,8 @@ class Run:
         return job
 
     def remux(self, movie: str, base: str, tracks: list, transcripts: list,
-              job: dict, subtitles: tuple | list = ()) -> None:
+              job: dict, subtitles: tuple | list = (),
+              carried: tuple | list = ()) -> None:
         """The improved copy itself: ONE mkvmerge call, however many of the
         improvements apply."""
         scratch, on_disk = self._scratch_for(movie, job)
@@ -314,13 +365,14 @@ class Run:
             if job["wanted"] and not hevc:
                 job["wanted"] = False
                 if not any(track.action != "keep" for track in tracks) \
-                        and not transcripts and not subtitles:
+                        and not transcripts and not subtitles and not carried:
                     log("  No other improvements needed, left untouched: "
                         + movie)
                     return
-            argv, order = self._mkvmerge_command(movie, tracks, transcripts,
-                                                 job, hevc, subtitles)
-            self._run_and_swap(movie, scratch, argv, order, job, hevc)
+            argv, order, slots = self._mkvmerge_command(
+                movie, tracks, transcripts, job, hevc, subtitles, carried)
+            if self._run_and_swap(movie, scratch, argv, order, job, hevc):
+                self._after_carrying(movie, base, carried, order, slots)
         finally:
             # Handed back now rather than at exit, on every outcome: a run over a
             # folder would otherwise hold one abandoned copy of every film it
@@ -391,7 +443,8 @@ class Run:
 
     def _mkvmerge_command(self, movie: str, tracks: list, transcripts: list,
                           job: dict, hevc: str,
-                          subtitles: tuple | list = ()) -> tuple:
+                          subtitles: tuple | list = (),
+                          carried: tuple | list = ()) -> tuple:
         """File 0 is the original with unwanted tracks deselected; each swapped
         opus, each downloaded subtitle and each commentary srt is an extra input
         whose single track inherits the right language, name and flags.
@@ -403,6 +456,11 @@ class Run:
         audio tracks move below the other audio, the downloaded subtitles go in
         just before the first commentary subtitle (after the last subtitle when
         there is none), and the commentary transcripts come at the very end.
+
+        What is carried over from the library's copy comes after all of
+        those: its audio below the film's own (a commentary below its
+        commentaries), its transcripts after the film's. Each slot of those
+        is returned with the input it is, for what is done after the swap.
         """
         extra, next_fid = [], 1
         video_fid = ""
@@ -452,6 +510,36 @@ class Run:
             extra += ["--language", "0:" + language,
                       "--default-track-flag", "0:0", "--no-chapters", srt]
 
+        carried_audio, carried_text = [], []
+        for item in carried:
+            fid = next_fid
+            next_fid += 1
+            audio = item.carried.audio
+            within = item.track
+            extra += ["--sync", "%d:%s" % (within, item.sync)]
+            if item.is_transcript:
+                title = audio.name or "Commentary"
+                if sum(1 for other in carried if other.is_transcript
+                       and other.carried == item.carried) > 1:
+                    title = "%s (%s)" % (title, item.language.upper())
+                extra += ["--language", "0:" + item.language, "--track-name",
+                          "0:" + title, "--commentary-flag", "0:1",
+                          "--default-track-flag", "0:0", item.path]
+                carried_text.append(("%d:0" % fid, item))
+                continue
+            extra += ["--language", "%d:%s" % (within, audio.language or "und"),
+                      "--track-name", "%d:%s" % (within, audio.name),
+                      "--default-track-flag", "%d:0" % within]
+            if item.carried.kind == "commentary":
+                extra += ["--commentary-flag", "%d:1" % within]
+            if not item.path.lower().endswith(".opus"):
+                # Straight out of the library's copy: that one track of it,
+                # and nothing else it holds.
+                extra += ["-a", str(within), "-D", "-S", "-B", "-M", "-T",
+                          "--no-global-tags"]
+            extra += ["--no-chapters", item.path]
+            carried_audio.append(("%d:%d" % (fid, within), item))
+
         comm_fids = []
         for srt, language, title in transcripts:
             comm_fids.append(next_fid)
@@ -484,21 +572,34 @@ class Run:
                 placed.append((track, "0:" + track.id))
             elif track.action == "swap":
                 placed.append((track, "%s:0" % opus_fid[track.id]))
+        if carried_audio:
+            last_audio = max((index for index, (track, _slot)
+                              in enumerate(placed) if track.is_audio),
+                             default=len(placed) - 1)
+            placed = (placed[:last_audio + 1]
+                      + [(rules.Track(type="audio", commentary="true"
+                                      if item.carried.kind == "commentary"
+                                      else "false"), slot)
+                         for slot, item in carried_audio]
+                      + placed[last_audio + 1:])
         placed = _commentary_audio_last(placed)
         placed = _insert_before_commentary_subtitles(
             placed, [(None, "%s:0" % fid) for fid in sub_fids])
         order = [slot for _track, slot in placed]
         order += ["%s:0" % fid for fid in comm_fids]
+        order += [slot for slot, _item in carried_text]
 
-        return selection + [movie] + extra, order
+        return (selection + [movie] + extra, order,
+                dict(carried_audio + carried_text))
 
     def _run_and_swap(self, movie: str, scratch: str, argv: list, order: list,
-                      job: dict, hevc: str) -> None:
+                      job: dict, hevc: str) -> bool:
         """Remux into the scratch, then swap the files on disk.
 
         mkvmerge exits 0 on success, 1 on non-fatal WARNINGS while still
         producing a valid file, and 2 on real errors, so 0 and 1 are both success
-        - with any warning surfaced either way.
+        - with any warning surfaced either way. True when the improved copy
+        is in place.
         """
         out = os.path.join(scratch, "improve", os.path.basename(movie))
         os.makedirs(os.path.dirname(out), exist_ok=True)
@@ -518,7 +619,7 @@ class Run:
             log("  WARNING: %s, left original untouched: %s" % (reject, movie))
             if output:
                 log("    mkvmerge output: " + output)
-            return
+            return False
 
         if toolcapture.warnings_at_most(status):
             old = os.path.splitext(movie)[0] + " (old).mkv"
@@ -527,15 +628,47 @@ class Run:
                 rules._remove(out)
                 log("  WARNING: the improved copy could not be put in place "
                     "(%s), left original untouched: %s" % (failure, movie))
-                return
+                return False
             log('  Improved copy written (original kept as "%s"): %s'
                 % (os.path.basename(old), movie))
             if output:
                 log("    mkvmerge warnings (ignored): " + output)
+            return True
         else:
             rules._remove(out)
             log("  WARNING: mkvmerge failed, left original untouched: " + movie)
             log("    reason: " + (output or "<no output>"))
+        return False
+
+    def _after_carrying(self, movie: str, base: str, carried,
+                        order: list, slots: dict) -> None:
+        """Once the improved copy is in place: each carried commentary's
+        transcripts written beside it, named after the track as the
+        transcription names its own, and the opus the carry-over encoded
+        thrown away."""
+        position = {slot: index for index, slot in enumerate(order)}
+        audio_at = {id(item.carried): position[slot]
+                    for slot, item in slots.items() if not item.is_transcript}
+        extracts = []
+        for slot, item in slots.items():
+            if not item.is_transcript or id(item.carried) not in audio_at:
+                continue
+            name = item.carried.audio.name or "Commentary"
+            name = rules.rename(name.replace("/", "").replace("&", "and"),
+                                self.fragments_file)
+            stem = commentarytranscription.commentary_stem(
+                base, audio_at[id(item.carried)], name)
+            extracts.append("%d:%s.%s.srt" % (position[slot], stem,
+                                               item.language))
+        if extracts:
+            failure = rules._run_capture(["mkvextract", movie, "tracks"]
+                                         + extracts)
+            if failure:
+                log("  WARNING: the carried transcripts were not written "
+                    "beside the film: " + failure.replace("\n", " | "))
+        for item in carried:
+            if item.path.endswith(".opus") and not item.is_transcript:
+                rules._remove(item.path)
 
     def _dolby_vision_reject(self, out: str, job: dict, status: int) -> str:
         """The Dolby Vision work, verified BEFORE the original is touched: a
@@ -560,6 +693,13 @@ class Run:
                         % (seen_profile or seen_settings))
             return "remux lost the HDR metadata the source had"
         return ""
+
+
+def _carried_said(carried) -> str:
+    """A carried track in words, for the remux's lines."""
+    audio = carried.audio
+    return "the %s %s" % (carried.kind, '"%s"' % audio.name if audio.name
+                          else "(%s)" % audio.language)
 
 
 def _commentary_audio_last(placed: list) -> list:
@@ -920,7 +1060,8 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
         if tooldeps.require_tools(program, ["curl", "mkvmerge", "mediainfo",
                                             "ffprobe", "ffmpeg"]):
             return 1
-        return plexphase.compare_roots(roots, log)
+        return plexphase.compare_roots(roots, log,
+                                       keeps_for=Run().carry_keeps)
 
     # An id list is only ever read by the tagging phase, so asking for one asks
     # for that phase.
@@ -1470,15 +1611,19 @@ def _chapter_phase(root: str, ahead: dict) -> None:
                       for verdict, films in outcome.items()})
 
 
-def _plex_phase(root: str) -> None:
+def _plex_phase(root: str, state=None) -> None:
     """The films as this run leaves them, held up against the Plex library's
-    copies of them - last, once the names, tracks and chapters are final."""
+    copies of them - last, once the names, tracks and chapters are final, and
+    each said with what it carried over from its copy."""
     if not _has_tool("curl"):
         log("Phase: comparing with the Plex library - SKIPPED (curl is not "
             "installed)")
         return
     log("Phase: comparing with the Plex library")
-    plexphase.compare_roots([root], log)
+    carry = getattr(state, "carry", None)
+    plexphase.compare_roots([root], log,
+                            keeps_for=state.carry_keeps if state else None,
+                            carried=carry.plans if carry is not None else None)
 
 
 # How each verdict of the chapter lookup is counted in its closing line.
@@ -1691,11 +1836,23 @@ def _plan_commentary_names(movie: str, base: str, lookup,
         _commentary_transcripts(stem, file_tracks), title)
     if not decision.names:
         return None, decision.reason
+    return _commentary_rename_plan(movie, tracks, commentaries,
+                                   list(decision.names), fragments_file,
+                                   decision.source)
 
-    new = dict(decision.names)
+
+def _commentary_rename_plan(movie: str, tracks: list, commentaries: list,
+                            renames: list, fragments_file: str, source: str,
+                            say: bool = True) -> tuple:
+    """The commentary tracks ``renames`` names, as ``(track id, name)``, each
+    with its transcripts' subtitle tracks and sidecars: (the plan, "") or
+    (None, why not). ``source`` is who listed the names; ``say`` whether the
+    renames are said as they are planned."""
+    stem = os.path.splitext(movie)[0]
+    new = dict(renames)
     old = {track.id: track.name for track in commentaries}
     subtitles, why = commentarynames.subtitle_renames(
-        tracks, [(old[track_id], name) for track_id, name in decision.names])
+        tracks, [(old[track_id], name) for track_id, name in renames])
     if why:
         return None, why
 
@@ -1706,19 +1863,20 @@ def _plan_commentary_names(movie: str, base: str, lookup,
     directory = os.path.dirname(movie)
     sidecars = commentarynames.sidecar_renames(
         rules._names_in(directory), os.path.basename(stem),
-        [(track_id, old[track_id], name) for track_id, name in decision.names],
+        [(track_id, old[track_id], name) for track_id, name in renames],
         clean)
 
     lines = ['track %s "%s" -> "%s"' % (track_id, old[track_id], name)
-             for track_id, name in decision.names]
+             for track_id, name in renames]
     subtitle_names = dict(subtitles)
     lines += ['subtitle track %s "%s" -> "%s"'
               % (track.id, track.name, subtitle_names[track.id])
               for track in tracks if track.id in subtitle_names]
     lines += ['"%s" -> "%s"' % pair for pair in sidecars]
-    lines.append("(listed by: %s)" % decision.source)
-    for line in lines:
-        log("  " + line)
+    lines.append("(listed by: %s)" % source)
+    if say:
+        for line in lines:
+            log("  " + line)
 
     arguments = []
     for position, track in enumerate(tracks, start=1):
@@ -2396,6 +2554,22 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
     log("Phase: conforming mangled movie names to their folders'")
     rules.conform_movie_names(root, state.skips)
 
+    # Which film each folder is, asked once for the subtitle lane, the remux
+    # and the carry-over from the Plex library: the remux keeps the language
+    # TMDb says the film was made in. Asked as soon as the names have settled.
+    state.film_tags = lanes.FilmTags(root)
+    if os.environ.get("tmdbApiKey"):
+        state.film_tags.start()
+    # The library's copies looked up and measured against from now on, while
+    # the phases up to the lanes run: what each film takes from its copy is
+    # settled before any lane writes it.
+    state.carry = None
+    if _has_tool("curl"):
+        state.carry = carryphase.LibraryCarry(
+            root, lambda: main_movies(root), state.film_tags, log,
+            state.ram_root)
+        state.carry.start()
+
     log("Phase: moving and renaming pre-existing subtitles")
     subtitlefiles.move_subs(root)
     subtitlefiles.rename_subs(root, state.skips)
@@ -2414,17 +2588,21 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
         log("Phase: listening for commentaries the files do not flag - "
             "SKIPPED (no ffsubsync/pipx, see the warning at startup)")
 
+    # Once the commentaries are flagged, the carry-over is settled: the names
+    # it gives the commentaries are what the transcription names their
+    # transcripts after, and its chapters are written before any lane opens
+    # the film.
+    if state.carry is not None:
+        log("Phase: settling what each film carries over from the Plex "
+            "library's copy")
+        state.carry.settle(state.carry_keeps, state.carry_names,
+                           subtitle_work)
+
     # The names have settled and every film is a Matroska file, which is all
     # the chapter archive and the disc database are asked by: they are asked
     # now, at their polite pace, on threads of their own, and the answers wait
     # for the phases at the end that use them.
     ahead = _start_research(state, root)
-
-    # Which film each folder is, asked once for the subtitle lane and the
-    # remux both: the remux keeps the language TMDb says the film was made in.
-    state.film_tags = lanes.FilmTags(root)
-    if os.environ.get("tmdbApiKey"):
-        state.film_tags.start()
 
     # The subtitles of every film TMDb can name, fetched on a thread of their
     # own while the films are transcoded, transcribed and remuxed, and finished
@@ -2490,7 +2668,7 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
     # through another one.
     _commentary_name_phase(state, root, name, ahead)
     _chapter_phase(root, ahead)
-    _plex_phase(root)
+    _plex_phase(root, state)
 
     # Last of all, once each film is the file it will stay: its converted copy
     # carries its tracks, names and chapters as they are now, and is written
@@ -2524,9 +2702,10 @@ def _films_in_lanes(state, root: str, subtitle_work: bool, locks,
     the lane never got is remuxed by the walk after it, once the subtitle lane
     is finished, so the subtitles it kept are muxed in either way.
     """
+    carry = getattr(state, "carry", None)
     remux = lanes.RemuxLane(main_movies(root), state.improve_main_movie,
                             locks, subtitle_work, log, row,
-                            subtitles=fetching)
+                            subtitles=fetching, carry=carry)
     beside = subtitle_work and state.whisper.get("device") == "cuda"
     transcoding = None
     try:
@@ -2547,7 +2726,8 @@ def _films_in_lanes(state, root: str, subtitle_work: bool, locks,
         if subtitle_work:
             log("Phase: extracting and transcribing commentary tracks")
             jobs = state.whisper["jobs"]
-            tracker = lanes.TranscriptTracker(remux.transcripts_done, row)
+            tracker = _CarryTracker(
+                lanes.TranscriptTracker(remux.transcripts_done, row), carry)
             state.scratch_headroom = lanes.TRANSCRIBING_RAM_HEADROOM
             try:
                 commentarytranscription.export_commentary(
@@ -2555,8 +2735,8 @@ def _films_in_lanes(state, root: str, subtitle_work: bool, locks,
                     lambda name: rules.rename(name, state.fragments_file),
                     rules.audio_stream_index, state.ram_root, state.whisper,
                     log,
-                    lambda producer: _drain_commentary(state, producer, jobs,
-                                                       tracker),
+                    lambda producer: _drain_commentary(
+                        state, _with_carried(state, producer), jobs, tracker),
                     rules.MAX_WHISPER_SYNC_OFFSET, state.ffsubsync_quality,
                     same_commentary_name=rules._same_commentary,
                     unfixed=state.unfixed_movies,
@@ -2571,6 +2751,8 @@ def _films_in_lanes(state, root: str, subtitle_work: bool, locks,
         # would leave a half-written file behind the run that was making it.
         if transcoding is not None:
             transcoding.join()
+        if carry is not None:
+            carry.finish()
         remux.finish()
     safety.exit_if_aborted()
 
@@ -2581,6 +2763,39 @@ def _films_in_lanes(state, root: str, subtitle_work: bool, locks,
     log("Phase: remuxing improved main movie copies")
     improve_main_movies(state, root, skip=remux.done,
                         around=lambda movie: _film_held(locks, movie))
+
+
+class _CarryTracker:
+    """The whisper lane's records told to whichever is waiting for them: a
+    carried commentary's to the carry-over, every other to ``tracker``."""
+
+    def __init__(self, tracker, carry) -> None:
+        self._tracker = tracker
+        self._carry = carry
+
+    def record_queued(self, record: str) -> None:
+        if self._carry is None or not self._carry.owns(record):
+            self._tracker.record_queued(record)
+
+    def film_queued(self, movie: str) -> None:
+        self._tracker.film_queued(movie)
+
+    def record_done(self, record) -> None:
+        if self._carry is not None and record is not None \
+                and self._carry.owns(record):
+            self._carry.record_done(record)
+            return
+        self._tracker.record_done(record)
+
+
+def _with_carried(state, producer):
+    """The commentary walk's records, then the carried commentaries' that
+    have no transcript beside the library's copy."""
+    yield from producer
+    carry = getattr(state, "carry", None)
+    if carry is not None:
+        yield from carry.transcription_records(state.ram_root, state.whisper,
+                                               log)
 
 
 def _film_held(locks, movie: str):

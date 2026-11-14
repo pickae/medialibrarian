@@ -109,7 +109,8 @@ Usage:
     -p, --plex    Plex comparison only: walks the whole tree the way -t does and
                   looks every film up in the Plex library - by its id tag,
                   by its title and year where it has none - saying where the
-                  library already keeps it and which of the two is better
+                  library already keeps it, which of the two is better, and
+                  what a full ingest would carry over from the library's copy
                   (see "Plex comparison" below). Changes nothing, and -w has
                   no part in it. Best run after -tw.
     -r, --convert-remuxes
@@ -219,24 +220,30 @@ Usage:
 
     Plex comparison
     ---------------
-    -p does this phase and nothing else
-    last, looks each film up in the Plex library (plexUrl, else the server on
-    this machine at localhost:32400, asked with plexToken) by the id tag the
-    tagging gave it, or by its title and year where it has none
-    a film not there is said to be new; one that is has the library's files
-    printed, and the two compared on resolution, HDR, the soundtracks per
-    language (channels, object audio, lossless), the commentaries, the other
-    bonus audio (isolated score, audio description, ...) and the chapters -
-    never the subtitles
-    the verdict: the new file better, the library's better, the two
-    equivalent, or MIXED - each has something the other lacks, listed again at
-    the end since those want a person to decide
-    a DIFFERENT VERSION where the edition tags differ or the lengths differ by
-    a minute or more; a few seconds is a logo more or less in front of the
-    same cut, and the offset the library file's tracks need to be muxed into
-    the new one is measured on the audio at three points of the film - which
-    also catches a cut that differs inside the film
-    changes nothing, on disk or on the server
+    -p does this phase and nothing else, and changes nothing
+    as soon as the names have settled, looks each film up in the Plex library
+    (plexUrl, else the server on this machine at localhost:32400, asked with
+    plexToken) by its id tag, or the one the tagging will give it, or by its
+    title and year where it has none, and measures the offset between the two
+    soundtracks at five points of the film: on one straight line, the two are
+    one cut - a logo more or less in front, or another speed (24 against 23.976
+    fps, or PAL) - whatever their lengths; a different edition tag is a
+    different version, kept beside it
+    before any lane writes a film, carries over from the library's copy what it
+    lacks: the names of commentaries it only numbers (as many, same languages),
+    named chapters where it has numbered or none (moved to its time), and the
+    audio it lacks - a soundtrack in a language it keeps, commentaries with the
+    transcripts beside the library's copy (or transcribed by whisper), an
+    isolated score or audio description - taken in by the one remux at the
+    measured offset; a lossless track goes to opus, put to the film's speed
+    where the two differ; a lossy one at another speed is left
+    never the picture, the subtitles, or a better soundtrack in a language the
+    film already has: those stay for a person to decide
+    last, the films as the run leaves them are compared on resolution, HDR, the
+    soundtracks per language, the commentaries, the other bonus audio and the
+    chapters: the new file better, the library's better, the two equivalent,
+    MIXED - each has something the other lacks, with what could not be carried
+    over and why, listed again at the end - or a DIFFERENT VERSION
 
     Tags & commentary
     ------------------
