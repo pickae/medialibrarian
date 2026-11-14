@@ -69,6 +69,7 @@ class _Candidate(NamedTuple):
     imdb: str               # "" when it has no usable IMDb id
     released: str = ""      # the year of its primary release date, or ""
     tmdb: str = ""          # TMDb's own number for it
+    lead: frozenset = frozenset()  # its primary and original titles, folded
 
 
 class Match(NamedTuple):
@@ -412,7 +413,11 @@ def _imdb_candidate(row: dict, latin: bool = False) -> _Candidate:
         - {""},
         runtime=_minutes(row.get("minutes")),
         imdb=_imdb_id(tconst),
-        released=year if year.isdigit() else "")
+        released=year if year.isdigit() else "",
+        lead=frozenset(normalize_title(text) for text in lead
+                       if text and (not latin
+                                    or titlematch.in_latin_script(text)))
+        - {""})
 
 
 def _settle_the_year(title: str, year: str, others: list,
@@ -899,6 +904,9 @@ def _that_can_answer(named: list, notes: list | None = None) -> list:
 # reaches is the best evidence there is and the rest of the ladder is already
 # in it.
 _EVIDENCE = (
+    (lambda row, plainly: bool(row.lead & plainly),
+     "it carries the title only as a translation, and another carries it as "
+     "its primary or original title"),
     (lambda row, plainly: bool(row.own & plainly),
      "it is one of the OTHER names this film is known by, and another "
      "carries the title as its own"),
@@ -916,7 +924,7 @@ def _the_best_evidence(named: list, plainly: frozenset,
 
     Two candidates are not equally likely just because both survived the rules,
     and weighing them as though they were is what leaves an obvious film
-    unnamed. There are two ways to be the weaker of a pair:
+    unnamed. There are three ways to be the weaker of a pair:
 
     * **through a reading.** A folder called "1815" is offered the film "1815",
       which folds to exactly what the folder does, alongside a "Bramble '15"
@@ -929,11 +937,18 @@ def _the_best_evidence(named: list, plainly: frozenset,
       original one has a word of the folder's in it, and it was still weighed
       as the equal of the film itself.
 
-    A film's OWN titles are its original one and the one the catalogue leads
-    with in the asking language - which is why this does not strand a film
-    found under a translation: the catalogue's English title is one of its own
-    two, so a folder named in English meets a Swedish film there and not among
-    its alternatives.
+    * **as a translation.** A folder called "Gull Tide" is offered the film of
+      that name alongside a documentary whose primary title is "Gull Tide: A
+      Portrait" but whose translations write it plain "Gull Tide". Both
+      lengths fit, and a translation is one of a film's own names, so both
+      carried it as their own and neither was the weaker.
+
+    A film's OWN titles are its original one, the one the catalogue leads with
+    in the asking language, and its translations - which is why this does not
+    strand a film found under a translation: the catalogue's English title is
+    one of its own two, so a folder named in English meets a Swedish film
+    there and not among its alternatives. A translation loses only to a
+    candidate holding the title as its primary or original one.
 
     It narrows and never widens: two films that really do share a title on the
     same rung are still two, and still answered by naming neither.
@@ -1307,7 +1322,10 @@ def _candidate(api_key: str, row: dict, latin: bool = False) -> _Candidate:
         runtime=_minutes(detail.get("runtime")),
         imdb=_imdb_id((detail.get("external_ids") or {}).get("imdb_id")),
         released=_primary_year(detail) or _primary_year(row),
-        tmdb=_id_token(row.get("id")).replace("null", ""))
+        tmdb=_id_token(row.get("id")).replace("null", ""),
+        lead=frozenset(normalize_title(str(t))
+                       for t in _row_titles(detail) + _row_titles(row)
+                       if readable(str(t))) - {""})
 
 
 def _primary_year(document: dict) -> str:

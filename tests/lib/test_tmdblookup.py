@@ -3812,6 +3812,18 @@ class TestTheTranslatedTitles:
         settled = tmdbidentify.identify("Der Kieselprinz", "1983")
         assert (settled.imdb, settled.title) == ("tt0000101", "Der Kieselprinz")
 
+    def test_but_it_loses_to_a_film_whose_own_primary_title_it_is(
+            self, monkeypatch):
+        """A documentary whose translations write its title plain stood beside
+        the film of that name, both lengths fitting, and the folder was left
+        unnamed."""
+        _catalogue(monkeypatch, {
+            1: ("Gull Tide", "2006-05-24", 123, "tt0000101", ()),
+            2: ("Gull Tide: A Portrait", "2006-11-13", 120, "tt0000102",
+                ("Gull Tide",))})
+        assert tmdbidentify.identify("Gull Tide", "2006",
+                                     lambda: 123 * 60.0).imdb == "tt0000101"
+
     def test_an_empty_translation_says_nothing(self):
         detail = {"translations": {"translations": [
             {"data": {"title": ""}}, {"data": {}}, {}, "junk",
