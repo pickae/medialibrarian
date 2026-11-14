@@ -325,3 +325,68 @@ def test_an_interrupt_still_waits_for_the_lanes(monkeypatch, tmp_path):
         run_module._films_in_lanes(state, str(tmp_path), False,
                                    lanes.FilmLocks())
     assert finished == ["remux"]
+
+
+class TestFilmTags:
+    def test_the_dry_run_is_asked_once_for_every_lane(self, monkeypatch,
+                                                     tmp_path):
+        runs = []
+
+        def tag_plex_ids(directory, log, skip_log, dry_run=False,
+                         tagged=None, **_kwargs):
+            runs.append(directory)
+            tagged["{imdb-tt0000007}"] = [str(tmp_path / "Movie (1999)")]
+            return 0
+
+        monkeypatch.setattr(lanes.tmdblookup, "tag_plex_ids", tag_plex_ids)
+        tags = lanes.FilmTags(str(tmp_path))
+        movie = str(tmp_path / "Movie (1999)" / "Movie (1999).mkv")
+        assert tags.tag_of(movie) == "{imdb-tt0000007}"
+        assert tags.tag_of(str(tmp_path / "Other" / "Other.mkv")) == ""
+        assert runs == [str(tmp_path)]
+
+
+class TestTheRemuxAsksForTheFilmsLanguages:
+    def _state(self, monkeypatch, tag_of):
+        monkeypatch.setenv("tmdbApiKey", "k")
+        asked = []
+        answer = run_module.tmdbidentify.FilmLanguages("ja", ("ja",))
+
+        def languages(tag):
+            asked.append(tag)
+            return answer
+        monkeypatch.setattr(run_module.tmdbidentify, "film_languages",
+                            languages)
+
+        class Tags:
+            def tag_of(self, movie):
+                return tag_of(movie)
+        return run_module.Run(script_dir="", film_tags=Tags()), asked, answer
+
+    def test_by_the_tag_the_name_already_carries(self, monkeypatch):
+        state, asked, answer = self._state(monkeypatch,
+                                           lambda movie: "{tmdb-9}")
+        assert state.film_languages(
+            "/f/F {imdb-tt0000001}/F {imdb-tt0000001}.mkv") == answer
+        assert asked == ["{imdb-tt0000001}"]
+
+    def test_by_the_tag_the_tagging_would_give_it_otherwise(self,
+                                                            monkeypatch):
+        state, asked, answer = self._state(monkeypatch,
+                                           lambda movie: "{tmdb-9}")
+        assert state.film_languages("/f/F (2001)/F (2001).mkv") == answer
+        assert asked == ["{tmdb-9}"]
+
+    def test_not_at_all_for_a_film_nothing_names(self, monkeypatch):
+        state, asked, _answer = self._state(monkeypatch, lambda movie: "")
+        assert state.film_languages("/f/F/F.mkv") \
+            == run_module.tmdbidentify.FilmLanguages()
+        assert asked == []
+
+    def test_a_failed_asking_keeps_the_old_rule(self, monkeypatch):
+        def broken(movie):
+            raise RuntimeError("no network")
+        state, _asked, _answer = self._state(monkeypatch, broken)
+        monkeypatch.setattr(run_module, "log", lambda line: None)
+        assert state.film_languages("/f/F/F.mkv") \
+            == run_module.tmdbidentify.FilmLanguages()

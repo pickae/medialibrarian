@@ -45,8 +45,8 @@ from medialib.lib import (
     tmdblookup,
 )
 
-__all__ = ["FilmLocks", "RemuxLane", "SubtitleLane", "TranscriptTracker",
-           "key"]
+__all__ = ["FilmLocks", "FilmTags", "RemuxLane", "SubtitleLane",
+           "TranscriptTracker", "key"]
 
 # The RAM a remux leaves free while the transcription may still be extracting
 # commentary into the same scratch: a few commentary tracks' worth, each a
@@ -228,6 +228,53 @@ class TranscriptTracker:
         self._done(film)
 
 
+class FilmTags:
+    """Which film each folder under a root is, asked once and shared.
+
+    A dry run of the tagging the run does at its end, which says nothing and
+    renames nothing: the subtitle lane searches by its ids, and the remux
+    reads each film's original language off them, both long before the
+    tagging puts the ids into the names. Asked the first time either wants
+    it, and the other waits for that one asking rather than repeating it; an
+    asking that failed is tried again by the next to want it.
+    """
+
+    def __init__(self, root: str) -> None:
+        self._root = root
+        self._lock = threading.Lock()
+        self._tags: dict | None = None
+
+    def start(self) -> None:
+        """Ask now, on a thread of its own, so a remux that wants the answer
+        finds it waiting rather than asking while it holds the disk's turn."""
+        def ask() -> None:
+            try:
+                self.tags()
+            except Exception:  # noqa: BLE001 - the next to want it asks again
+                pass
+        threading.Thread(target=ask, name="ingest-film-tags",
+                         daemon=True).start()
+
+    def tags(self) -> dict:
+        """{folder: id tag}, keyed the way :func:`key` spells a path."""
+        with self._lock:
+            if self._tags is None:
+                self._tags = self._ask()
+            return self._tags
+
+    def tag_of(self, movie: str) -> str:
+        """The id tag of the film folder ``movie`` is in, or ""."""
+        return self.tags().get(key(os.path.dirname(movie)), "")
+
+    def _ask(self) -> dict:
+        tagged: dict = {}
+        tmdblookup.tag_plex_ids(self._root, _quiet, safety.SkipLog(),
+                                dry_run=True, tagged=tagged,
+                                long_names=tmdblookup.LongNames())
+        return {key(folder): tag for tag, folders in tagged.items()
+                for folder in folders}
+
+
 class SubtitleLane:
     """The subtitle download, run ahead on a thread of its own.
 
@@ -241,8 +288,9 @@ class SubtitleLane:
     """
 
     def __init__(self, root: str, films: list, download, locks: FilmLocks,
-                 log, row=None) -> None:
+                 log, row=None, film_tags: FilmTags | None = None) -> None:
         self._root = root
+        self._film_tags = film_tags or FilmTags(root)
         self._films = films
         self._row = row
         if row is not None:
@@ -279,18 +327,12 @@ class SubtitleLane:
                               "tagging" % error)
 
     def _ids(self) -> dict:
-        """{folder: IMDb id} for every film folder the tagging would name,
-        asked in a dry run that says nothing and renames nothing."""
-        tagged: dict = {}
-        tmdblookup.tag_plex_ids(self._root, _quiet, safety.SkipLog(),
-                                dry_run=True, tagged=tagged,
-                                long_names=tmdblookup.LongNames())
+        """{folder: IMDb id} for every film folder the tagging would name."""
         ids = {}
-        for tag, folders in tagged.items():
+        for folder, tag in self._film_tags.tags().items():
             imdb = subtitlefiles.imdb_of_name(tag)
-            for folder in folders:
-                if imdb:
-                    ids[key(folder)] = imdb
+            if imdb:
+                ids[folder] = imdb
         return ids
 
     def finish(self) -> None:

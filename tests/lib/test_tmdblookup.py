@@ -4313,3 +4313,54 @@ class TestTheSameFilmKeptTwice:
         tagged = {"{imdb-tt1}": ["/a/One (1999)"],
                   "{imdb-tt2}": ["/b/Two (1999)"]}
         assert tmdblookup.duplicate_films(tagged) == []
+
+
+class TestFilmLanguages:
+    """What TMDb says a film is spoken in, asked by the tag its folder
+    carries or would carry."""
+
+    def _asking(self, monkeypatch, answers):
+        monkeypatch.setenv("tmdbApiKey", "k")
+        asked = []
+
+        def curl(url, params):
+            asked.append((url, dict(params)))
+            return json.dumps(answers.get(url.rsplit("/3", 1)[1], {}))
+        monkeypatch.setattr(tmdbidentify.tmdbclient, "_curl", curl)
+        return asked
+
+    def test_a_tmdb_tag_is_asked_by_its_number(self, monkeypatch):
+        self._asking(monkeypatch, {"/movie/4242": {
+            "original_language": "ja",
+            "spoken_languages": [{"iso_639_1": "ja"}, {"iso_639_1": "en"}]}})
+        assert tmdbidentify.film_languages("{tmdb-4242}") \
+            == tmdbidentify.FilmLanguages("ja", ("ja", "en"))
+
+    def test_an_imdb_tag_is_found_by_its_external_id_first(self,
+                                                          monkeypatch):
+        asked = self._asking(monkeypatch, {
+            "/find/tt0000042": {"movie_results": [{"id": 4242}]},
+            "/movie/4242": {"original_language": "ja",
+                           "spoken_languages": [{"iso_639_1": "ja"}]}})
+        assert tmdbidentify.film_languages("{imdb-tt0000042}") \
+            == tmdbidentify.FilmLanguages("ja", ("ja",))
+        assert asked[0][1]["external_source"] == "imdb_id"
+
+    def test_no_language_is_none(self, monkeypatch):
+        self._asking(monkeypatch, {"/movie/1": {
+            "original_language": "xx",
+            "spoken_languages": [{"iso_639_1": "xx"}]}})
+        assert tmdbidentify.film_languages("{tmdb-1}") \
+            == tmdbidentify.FilmLanguages()
+
+    def test_no_answer_is_none(self, monkeypatch):
+        self._asking(monkeypatch, {})
+        assert tmdbidentify.film_languages("{imdb-tt0000001}") \
+            == tmdbidentify.FilmLanguages()
+
+    def test_without_a_key_nothing_is_asked(self, monkeypatch):
+        asked = self._asking(monkeypatch, {})
+        monkeypatch.delenv("tmdbApiKey")
+        assert tmdbidentify.film_languages("{tmdb-1}") \
+            == tmdbidentify.FilmLanguages()
+        assert asked == []

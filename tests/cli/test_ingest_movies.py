@@ -238,6 +238,88 @@ class TestLanguageAllowed:
         assert im.language_allowed(language, "ger") is False
 
 
+class TestTheFilmsOriginalLanguage:
+    """With TMDb's word for the language a film was made in, that language and
+    English are kept in place of the first audio track's."""
+
+    def _tracks(self):
+        return [
+            im.Track(id="0", type="video", codec="V_MPEGH/ISO/HEVC"),
+            im.Track(id="1", type="audio", codec="A_AC3", channels="6",
+                     language="ger", language_ietf="de", default="true"),
+            im.Track(id="2", type="audio", codec="A_AC3", channels="6",
+                     language="jpn", language_ietf="ja"),
+            im.Track(id="3", type="audio", codec="A_AC3", channels="6",
+                     language="eng", language_ietf="en"),
+            im.Track(id="4", type="audio", codec="A_AC3", channels="2",
+                     language="fre", language_ietf="fr",
+                     name="Commentary", commentary="true"),
+            im.Track(id="5", type="subtitles", codec="S_HDMV/PGS",
+                     language="ger", language_ietf="de"),
+            im.Track(id="6", type="subtitles", codec="S_HDMV/PGS",
+                     language="jpn", language_ietf="ja"),
+        ]
+
+    def _kept(self, tmp_path, tracks, original, spoken=("xx",)):
+        """``spoken`` defaults to a list naming none of the tracks, so the
+        first audio track is not kept for being spoken in the film."""
+        im.decide_actions(tracks, str(tmp_path / "film"), original, spoken)
+        return [t.id for t in tracks if t.action != "drop"]
+
+    def test_it_replaces_the_first_audio_track_s(self, tmp_path):
+        assert self._kept(tmp_path, self._tracks(), "ja", ("ja",)) \
+            == ["0", "2", "3", "4", "6"]
+
+    def test_an_english_film_keeps_english_alone(self, tmp_path):
+        assert self._kept(tmp_path, self._tracks(), "en", ("en",)) \
+            == ["0", "3", "4"]
+
+    def test_the_first_track_s_is_kept_too_when_spoken_in_the_film(
+            self, tmp_path):
+        """TMDb has some films' original language wrong, and some films are
+        made in several: a first track TMDb lists as spoken is kept."""
+        assert self._kept(tmp_path, self._tracks(), "en", ("de", "en")) \
+            == ["0", "1", "3", "4", "5"]
+
+    def test_and_when_tmdb_lists_no_spoken_languages(self, tmp_path):
+        assert self._kept(tmp_path, self._tracks(), "ja", ()) \
+            == ["0", "1", "2", "3", "4", "5", "6"]
+
+    def test_chinese_tracks_are_one_language_however_tagged(self, tmp_path):
+        """Cantonese and Mandarin: "chi" alike on most discs, "yue" and
+        "cmn" on precise ones, "cn" and "zh" to TMDb."""
+        tracks = [
+            im.Track(id="0", type="video", codec="V_MPEGH/ISO/HEVC"),
+            im.Track(id="1", type="audio", codec="A_AC3", channels="6",
+                     language="chi", language_ietf="yue"),
+            im.Track(id="2", type="audio", codec="A_AC3", channels="6",
+                     language="chi", language_ietf="cmn"),
+            im.Track(id="3", type="audio", codec="A_AC3", channels="6",
+                     language="chi", language_ietf="zh-Hant-HK"),
+            im.Track(id="4", type="audio", codec="A_AC3", channels="6",
+                     language="eng", language_ietf="en"),
+        ]
+        for original in ("cn", "zh"):
+            assert self._kept(tmp_path, tracks, original, (original,)) \
+                == ["0", "1", "2", "3", "4"]
+
+    def test_one_the_file_has_no_soundtrack_in_keeps_the_old_rule(
+            self, tmp_path):
+        """A dubbed-only release keeps the dub it leads with."""
+        assert self._kept(tmp_path, self._tracks(), "ko") \
+            == ["0", "1", "3", "4", "5"]
+
+    def test_a_commentary_in_it_is_no_soundtrack_in_it(self, tmp_path):
+        """French is only the commentary's: the film is not on the disc in
+        French, so the first audio track's language stands."""
+        assert self._kept(tmp_path, self._tracks(), "fr") \
+            == ["0", "1", "3", "4", "5"]
+
+    def test_without_one_the_first_audio_track_s_stands(self, tmp_path):
+        assert self._kept(tmp_path, self._tracks(), "") \
+            == ["0", "1", "3", "4", "5"]
+
+
 class TestReadTrackInfo:
     """The mkvmerge identification folded into per-track fields.
 

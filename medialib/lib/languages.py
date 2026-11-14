@@ -115,6 +115,63 @@ def code_from_tag(tag: str) -> str:
     return ""
 
 
+# The languages that are several to a precise tag and one to a catalogue or a
+# disc, each under the one code they are compared by: the macrolanguage's
+# ISO 639-1 code, then every spelling of it and of its members a track or TMDb
+# may carry. Most Chinese discs tag Cantonese and Mandarin alike as "chi";
+# precise ones say "yue" and "cmn", and TMDb says "cn" for Cantonese and "zh"
+# for Mandarin, sometimes for a film that mixes both. Norwegian is "no" to
+# TMDb and "nb" on most discs. Telling the members apart would drop a track
+# for a distinction the tags make unevenly, so they count as one language.
+LANGUAGE_FAMILIES = (
+    ("zh", ("zh", "cn", "chi", "zho", "yue", "cmn", "nan", "hak", "wuu",
+            "gan", "hsn", "cdo", "cjy", "cpx", "czh", "czo", "mnp", "lzh")),
+    ("no", ("no", "nb", "nn", "nor", "nob", "nno")),
+    ("sh", ("sh", "sr", "hr", "bs", "srp", "hrv", "bos", "scc", "scr", "cnr")),
+    ("ar", ("ar", "ara", "arb", "arz", "apc", "ajp", "acm", "apd", "ary",
+            "aeb", "afb", "ayl")),
+    ("fa", ("fa", "fas", "per", "pes", "prs")),
+    ("ms", ("ms", "msa", "may", "zsm")),
+)
+
+
+def _family(code: str) -> str:
+    """The code a language is compared by: its family's, the table's
+    two-letter code for one of the table's three-letter tags, or itself."""
+    code = shell_lower(code)
+    for family, members in LANGUAGE_FAMILIES:
+        if code in members:
+            return family
+    return code_from_tag(code) or code
+
+
+def track_language(language: str, ietf: str) -> str:
+    """The language a track is spoken in, as :func:`speaks` compares it, or ""
+    for a track whose tags name none.
+
+    ``ietf`` is the BCP 47 tag mkvmerge reports beside the legacy
+    ``language`` and leads with the two-letter subtag wherever one exists,
+    which is what makes any language comparable rather than only the
+    table's; a file without it is read by its legacy tag.
+    """
+    subtag = shell_lower(ietf).split("-")[0]
+    if is_real_language_tag(subtag):
+        return _family(subtag)
+    if is_real_language_tag(language):
+        return _family(language)
+    return ""
+
+
+def speaks(language: str, ietf: str, code: str) -> bool:
+    """Is a track spoken in the language a catalogue names by ``code``?
+
+    ``code`` is ISO 639-1, as TMDb writes a film's languages; a language of
+    :data:`LANGUAGE_FAMILIES` is matched by any of its members.
+    """
+    spoken = track_language(language, ietf)
+    return bool(spoken) and bool(code) and spoken == _family(code)
+
+
 def same_language_tag(tag_a: str, tag_b: str) -> bool:
     """``sameLanguageTag``: do two mkv language tags name one language?
 

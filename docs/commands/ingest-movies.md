@@ -235,7 +235,7 @@ call, so the film is remuxed once and only one output exists at a time:
 | What | What the remux does |
 | --- | --- |
 | Lossless audio converted to Opus | swapped in place, keeping index, language, name and flags |
-| Excessive audio and image-subtitle tracks | dropped. Commentary **audio** is exempt from the excessive-language rule, so a foreign-language commentary is never dropped from the film its subtitles were just made for |
+| Excessive audio and image-subtitle tracks | dropped: everything not in English or the film's own language. That is TMDb's original language (with `tmdbApiKey` set), asked by the id the folder carries or the tagging would give it, and the first audio track's as well when TMDb lists it as spoken in the film or lists no spoken languages - TMDb has some films' original language wrong, and some films are made in several. With no answer, or no soundtrack in the original language, it is the first audio track's alone. Chinese varieties (Cantonese, Mandarin, ...) count as one language, as do the written Norwegians, Serbo-Croatian, Arabic, Persian and Malay, since discs tag them unevenly. Commentary **audio** is exempt from the excessive-language rule, so a foreign-language commentary is never dropped from the film its subtitles were just made for |
 | Commentary transcripts | appended, each tagged with its own language |
 | Dual-layer Dolby Vision profile 7 | **normalised to single-layer profile 8.1**, so DV survives on hardware that cannot read the enhancement layer. Metadata only — the video is **never re-encoded** |
 | Profile 5, profile 8.x, HDR10, HDR10+ and SDR | left untouched |

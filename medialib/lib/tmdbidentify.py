@@ -124,6 +124,68 @@ def imdb_of_tmdb(tmdb_id: str) -> str:
     return _imdb_id(detail.get("imdb_id"))
 
 
+_ID_TAG = re.compile(r"\{(imdb|tmdb)-([^{}]*)\}", re.I)
+
+# TMDb's spelling of a language with no spoken content.
+_NO_LANGUAGE = "xx"
+
+
+class FilmLanguages(NamedTuple):
+    """What TMDb says a film is spoken in, as ISO 639-1 codes (so "ja", "de",
+    and "cn" for Cantonese). Either may be wrong, and the spoken ones list a
+    line of dialogue as readily as a soundtrack's worth; both are empty when
+    there was no key, no answer, or nothing TMDb knows."""
+
+    original: str = ""
+    spoken: tuple = ()
+
+
+def film_languages(tag: str) -> FilmLanguages:
+    """The original and spoken languages of the film an id tag names.
+
+    ``tag`` is an id tag as a folder carries it, "{imdb-tt...}" or
+    "{tmdb-NNN}": an IMDb id is found through TMDb's own lookup by external
+    id, whose answer has the original language but not the spoken ones, so
+    the film is asked for by its TMDb number after it.
+    """
+    api_key = os.environ.get("tmdbApiKey", "")
+    match = _ID_TAG.search(tag or "")
+    if not api_key or not match:
+        return FilmLanguages()
+    kind, value = match.group(1).lower(), match.group(2).strip().lower()
+    if kind == "imdb":
+        if not _IMDB_ID.fullmatch(value):
+            return FilmLanguages()
+        found = tmdbclient._as_json(tmdbclient._curl(
+            tmdbclient._BASE + "/find/" + value,
+            [("api_key", api_key), ("external_source", "imdb_id")]))
+        movies = found.get("movie_results")
+        first = movies[0] if isinstance(movies, list) and movies else {}
+        value = (_id_token(first.get("id")) if isinstance(first, dict)
+                 else "")
+    if not value.isdigit():
+        return FilmLanguages()
+    document = tmdbclient._as_json(tmdbclient._curl(
+        tmdbclient._BASE + "/movie/" + value, [("api_key", api_key)]))
+    spoken = document.get("spoken_languages")
+    return FilmLanguages(
+        original=_language_code(document.get("original_language")),
+        spoken=tuple(code for code in (
+            _language_code(row.get("iso_639_1")) for row in
+            (spoken if isinstance(spoken, list) else [])
+            if isinstance(row, dict)) if code))
+
+
+def _language_code(value) -> str:
+    """``value`` when it is a two-letter code naming a language, else ""."""
+    if not isinstance(value, str):
+        return ""
+    value = value.strip().lower()
+    if not re.fullmatch(r"[a-z]{2}", value) or value == _NO_LANGUAGE:
+        return ""
+    return value
+
+
 def _imdb_id(value) -> str:
     """``value`` when it is an IMDb id, otherwise "" - which is what an id that
     is anything else is treated as: none at all."""
