@@ -11,6 +11,7 @@ IMDb datasets, is :mod:`medialib.lib.tmdbidentify` over
 
 import functools
 import os
+import re
 from collections.abc import Callable
 
 from medialib.lib import (
@@ -22,6 +23,21 @@ from medialib.lib import (
     tmdbidentify,
     tmdbworklists,
 )
+
+
+def without_its_own_year(title: str, year: str) -> str:
+    """``title`` without a trailing " <year>" or " (<year>)" that is the film's
+    own release year, so that adding " (<year>)" does not write it twice.
+
+    A catalogue sometimes keeps the year in the title itself. A title that is
+    nothing but a year, or ends in some other year, is the film's real name and
+    is left whole.
+    """
+    if not year:
+        return title
+    match = re.match(r"^(.*\S) +(?:{0}|\({0}\))$".format(re.escape(year)),
+                     title)
+    return match.group(1) if match else title
 
 
 class LongNames:
@@ -270,7 +286,8 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
                 # renamed to nothing and a line about renaming it would be a
                 # line about something that did not happen.
                 if tag:
-                    spelled = "%s (%s)" % (found.title or title, year)
+                    spelled = "%s (%s)" % (
+                        without_its_own_year(found.title or title, year), year)
                     if spelled != base:
                         # The name it had goes on the list of names it answers
                         # to, rather than the files being re-based onto the new
@@ -308,6 +325,11 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
         # and more names say theirs than say its. Taken BEFORE the readings
         # below, so the folder is renamed onto its films rather than every
         # file that had it right being renamed onto the folder's mistake.
+        # A folder tagged by an earlier run that wrote the year twice, because
+        # the catalogue's title already ended in it: brought back to one.
+        if had_tag and without_its_own_year(title, year) != title:
+            also += (base,)
+            base = "%s (%s)" % (without_its_own_year(title, year), year)
         if had_tag:
             theirs, said = plexnames.films_own_spelling(base, names)
             if theirs and said > 1:
