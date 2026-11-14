@@ -431,3 +431,62 @@ class TestTagArguments:
 
     def test_two_lower_priority_words_still_give_one_tag(self):
         assert self._languages("Italian dub of the Spanish cut") == ["spa"]
+
+
+class TestAudioDescriptions:
+    """A narration for the blind is dropped where its language has a
+    soundtrack of its own, and kept where it is all a kept language has."""
+
+    def _dropped(self, *tracks):
+        tracks = [im.Track(id="0", type="video", codec="V_MPEGH/ISO/HEVC"),
+                  *tracks]
+        return [tracks[position].id
+                for position in im.drop_audio_descriptions(tracks)]
+
+    @staticmethod
+    def _audio(id, language, ietf, **fields):
+        return im.Track(id=id, type="audio", codec="A_AC3", channels="6",
+                        language=language, language_ietf=ietf, **fields)
+
+    def test_one_beside_its_language_s_soundtrack_is_dropped(self):
+        assert self._dropped(
+            self._audio("1", "eng", "en"),
+            self._audio("2", "eng", "en", visual_impaired="true")) == ["2"]
+
+    @pytest.mark.parametrize("name", ["Audio Description", "Descriptive Audio",
+                                      "Audiodescription", "Audiodeskription",
+                                      "English AD"])
+    def test_it_is_known_by_its_name_too(self, name):
+        assert self._dropped(
+            self._audio("1", "eng", "en"),
+            self._audio("2", "eng", "en", name=name)) == ["2"]
+
+    def test_the_only_track_in_a_language_stays(self):
+        assert self._dropped(
+            self._audio("1", "eng", "en"),
+            self._audio("2", "fre", "fr", visual_impaired="true")) == []
+
+    def test_a_commentary_is_no_soundtrack_to_stand_in_for_it(self):
+        assert self._dropped(
+            self._audio("1", "eng", "en", name="Audio Description"),
+            self._audio("2", "eng", "en", name="Commentary",
+                        commentary="true")) == []
+
+    def test_a_dropped_soundtrack_does_not_count(self):
+        soundtrack = self._audio("1", "fre", "fr")
+        soundtrack.action = "drop"
+        assert self._dropped(
+            soundtrack,
+            self._audio("2", "fre", "fr", visual_impaired="true")) == []
+
+    def test_an_untagged_one_goes_beside_any_soundtrack(self):
+        assert self._dropped(
+            self._audio("1", "eng", "en"),
+            self._audio("2", "und", "und", name="Audio Description")) == ["2"]
+
+    def test_a_named_commentary_is_not_one(self):
+        """A commentary whose name says "describing" is still a commentary."""
+        assert self._dropped(
+            self._audio("1", "eng", "en"),
+            self._audio("2", "eng", "en", name="Commentary describing scenes",
+                        commentary="true")) == []

@@ -172,6 +172,12 @@ class Run:
                     % (choice.original, choice.first,
                        "which TMDb lists as spoken in it" if film.spoken
                        else "TMDb lists no spoken languages"))
+        for position in rules.drop_audio_descriptions(tracks):
+            changed = True
+            say("  Dropping audio description %s (%s, %s): the language has "
+                "a soundtrack of its own" % (tracks[position].id,
+                                             tracks[position].name,
+                                             tracks[position].language))
         for position, winner in rules.apply_surround_ladder(tracks):
             changed = True
             say("  Surround ladder: dropping audio track %s (%s, %s) in favour "
