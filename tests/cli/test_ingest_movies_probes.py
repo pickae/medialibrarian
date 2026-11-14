@@ -105,9 +105,10 @@ def test_the_transcode_worker_reads_the_tracks_it_was_handed(film,
     handed = (film.path, filmrecord.of(film.path))
     filmrecord.reset()
     seen = []
-    monkeypatch.setattr(rules, "check_audio_tracks", lambda movie, root:
+    monkeypatch.setattr(rules, "check_audio_tracks",
+                        lambda movie, root, ram_root:
                         seen.append(rules._identify(movie)))
-    run_module._check_audio(film.root, "", handed)
+    run_module._check_audio(film.root, "/ram", "", handed)
     assert [t.codec for t in seen[0]] == ["V_MPEG4/ISO/AVC", "A_FLAC"]
     assert film.asked("mkvmerge") == 1
 
