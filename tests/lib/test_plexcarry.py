@@ -167,6 +167,23 @@ class TestCarriedAudio:
         (item,) = _plan(_profile(), old).audio
         assert (item.kind, item.audio) == ("other", score)
 
+    def test_no_audio_description_beside_a_soundtrack_in_its_language(self):
+        """The improved copy would drop it again."""
+        described = _audio("fre", 2, "Audio Description", track=3)
+        old = _profile(path="old.mkv", others=[described])
+        found = _plan(_profile(), old)
+        assert found.audio == ()
+        assert found.left == (
+            'the audio description track "Audio Description": the improved '
+            "copy keeps no audio description beside a soundtrack in its "
+            "language",)
+
+    def test_an_audio_description_in_a_language_without_one_is_taken(self):
+        described = _audio("ger", 2, "Audio Description", track=3)
+        old = _profile(path="old.mkv", others=[described])
+        (item,) = _plan(_profile(), old).audio
+        assert (item.kind, item.audio) == ("other", described)
+
 
 class TestChapters:
 

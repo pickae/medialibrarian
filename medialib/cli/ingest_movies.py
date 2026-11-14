@@ -689,6 +689,20 @@ class Track:
         return (self.commentary == "true"
                 or languages.is_commentary_name(self.name))
 
+    @property
+    def is_audio_description(self) -> bool:
+        """A narration of the picture for the blind over the film's own mix:
+        flagged for the visually impaired, or named as one."""
+        if self.is_commentary:
+            return False
+        return (self.visual_impaired == "true"
+                or bool(_AUDIO_DESCRIPTION_NAME.search(self.name)))
+
+
+# "Audio Description", "audiodescription", "Audiodeskription", "AD" - the last
+# in capitals only, where a lower-case "ad" is a word in more than one language.
+_AUDIO_DESCRIPTION_NAME = re.compile(r"(?i:descri|deskri)|\bAD\b")
+
 
 def _identify(movie: str) -> list:
     """``mkvmerge -J``, read into tracks.
@@ -1683,6 +1697,35 @@ def apply_surround_ladder(tracks: list) -> list:
         if points < best[language] or winner[language] != position:
             track.action = "drop"
             dropped.append((position, winner[language]))
+    return dropped
+
+
+def drop_audio_descriptions(tracks: list) -> list:
+    """Each audio description still kept dropped where its language has a
+    soundtrack kept beside it; the positions of those dropped.
+
+    One that is all the file has in a language it keeps stays: it still
+    carries the film's mix, under the narration. One whose tags name no
+    language goes beside any soundtrack, and a soundtrack whose tags name none
+    stands for every language.
+    """
+    def language(track) -> str:
+        return languages.track_language(track.language, track.language_ietf)
+
+    def kept(track) -> bool:
+        return track.is_audio and track.action != "drop"
+
+    spoken = {language(track) for track in tracks
+              if kept(track) and not track.is_commentary
+              and not track.is_audio_description}
+    dropped = []
+    for position, track in enumerate(tracks):
+        if not (kept(track) and track.is_audio_description):
+            continue
+        if spoken and ("" in spoken or not language(track)
+                       or language(track) in spoken):
+            track.action = "drop"
+            dropped.append(position)
     return dropped
 
 

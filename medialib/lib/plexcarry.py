@@ -12,9 +12,10 @@ can take from it:
   times carried over the measured timing, so the two must be one cut;
 - the audio the new copy LACKS: a soundtrack in a language the improved copy
   keeps, the commentaries (with their transcripts), an isolated score or an
-  audio description. Muxed across at the measured offset; a copy that runs at
-  another speed is only bridged where the track is being encoded anyway - a
-  lossless one, on its way to opus - and a lossy one is left where it is.
+  audio description in a language neither copy has a soundtrack in. Muxed
+  across at the measured offset; a copy that runs at another speed is only
+  bridged where the track is being encoded anyway - a lossless one, on its
+  way to opus - and a lossy one is left where it is.
 
 Never the picture, never the subtitles, and never a soundtrack swapped for a
 better one in a language the new copy already has: those stay the verdict's
@@ -167,6 +168,12 @@ def plan(new: Profile, old: Profile, timing: Timing | None, untimed: str,
         if kind in new_kinds:
             continue
         what = "the %s track %s" % (kind, _said(track))
+        spoken = mine | {_language(item.audio) for item in audio
+                         if item.kind == "soundtrack"}
+        if kind == "audio description" and _language(track) in spoken:
+            left.append("%s: the improved copy keeps no audio description "
+                        "beside a soundtrack in its language" % what)
+            continue
         if not keeps(track):
             left.append("%s: not a language the improved copy keeps" % what)
             continue
