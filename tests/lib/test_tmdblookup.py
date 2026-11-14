@@ -4376,3 +4376,83 @@ class TestFilmLanguages:
         assert tmdbidentify.film_languages("{tmdb-1}") \
             == tmdbidentify.FilmLanguages()
         assert asked == []
+
+
+class TestATitleThatEndsInItsOwnYear:
+    """A catalogue that keeps the release year in the title itself must not
+    get the year written twice onto the folder and its files."""
+
+    @pytest.mark.parametrize("title,year,wanted", [
+        ("Kestrel Pond 2025", "2025", "Kestrel Pond"),
+        ("Kestrel Pond (2025)", "2025", "Kestrel Pond"),
+        ("Kestrel Pond", "2025", "Kestrel Pond"),
+        # A title that is only a year is the film's name.
+        ("2214", "2214", "2214"),
+        # A trailing number that is not the release year belongs to the title.
+        ("Harbour Run 2088", "2017", "Harbour Run 2088"),
+        ("2140", "2009", "2140"),
+        ("Kestrel Pond (2025", "2025", "Kestrel Pond (2025"),
+    ])
+    def test_which_years_are_dropped(self, title, year, wanted):
+        assert tmdblookup.without_its_own_year(title, year) == wanted
+
+    def _catalogue(self, monkeypatch, spelled, year, imdb="tt0000001"):
+        monkeypatch.setenv("tmdbApiKey", "apikey")
+
+        def fake_curl(url, params):
+            if url == _BASE + "/search/movie":
+                return json.dumps({"results": [
+                    _row(1, spelled, date=year + "-06-23")]})
+            if url == _BASE + "/movie/1":
+                return json.dumps({"external_ids": {"imdb_id": imdb}})
+            return None
+        monkeypatch.setattr(tmdbclient, "_curl", fake_curl)
+
+    def _run(self, monkeypatch, tmp_path, folder, files):
+        monkeypatch.chdir(tmp_path)
+        _tree(tmp_path, (folder, files))
+        logs = []
+        tmdblookup.tag_plex_ids(".", logs.append, SkipLog())
+        return logs, sorted(str(path.relative_to(tmp_path))
+                            for path in tmp_path.rglob("*"))
+
+    def test_the_folder_is_named_with_the_year_once(self, monkeypatch,
+                                                     tmp_path):
+        self._catalogue(monkeypatch, "Kestrel Pond 2025", "2025")
+        logs, listing = self._run(monkeypatch, tmp_path, "Kestrel Pond (2025)",
+                                  ["Kestrel Pond (2025).mkv"])
+        tagged = "Kestrel Pond (2025) {imdb-tt0000001}"
+        assert listing == [tagged, tagged + "/" + tagged + ".mkv"]
+        assert not any("TMDb spells it" in line for line in logs)
+
+    def test_a_number_that_is_not_the_year_stays(self, monkeypatch,
+                                                  tmp_path):
+        self._catalogue(monkeypatch, "Harbour Run 2088", "2017")
+        _logs, listing = self._run(monkeypatch, tmp_path,
+                                   "Harbour Run 2088 (2017)",
+                                   ["Harbour Run 2088 (2017).mkv"])
+        tagged = "Harbour Run 2088 (2017) {imdb-tt0000001}"
+        assert listing == [tagged, tagged + "/" + tagged + ".mkv"]
+
+    def test_a_title_that_is_only_the_year_stays(self, monkeypatch, tmp_path):
+        self._catalogue(monkeypatch, "2214", "2214")
+        _logs, listing = self._run(monkeypatch, tmp_path, "2214 (2214)",
+                                   ["2214 (2214).mkv"])
+        tagged = "2214 (2214) {imdb-tt0000001}"
+        assert listing == [tagged, tagged + "/" + tagged + ".mkv"]
+
+    def test_a_folder_already_tagged_twice_over_is_brought_back(
+            self, monkeypatch, tmp_path):
+        """What an earlier run wrote is corrected, folder and files, without
+        asking the catalogue again."""
+        monkeypatch.setenv("tmdbApiKey", "apikey")
+        monkeypatch.setattr(tmdbclient, "_curl", lambda url, params: None)
+        doubled = "Kestrel Pond 2025 (2025) {imdb-tt0000001}"
+        logs, listing = self._run(
+            monkeypatch, tmp_path, doubled,
+            [doubled + ".mkv", doubled + ".en.srt"])
+        tagged = "Kestrel Pond (2025) {imdb-tt0000001}"
+        assert listing == [tagged, tagged + "/" + tagged + ".en.srt",
+                           tagged + "/" + tagged + ".mkv"]
+        assert '  already {imdb-tt0000001}: "Kestrel Pond (2025)" - bringing ' \
+            "its files into line" in logs
