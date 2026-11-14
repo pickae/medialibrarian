@@ -51,6 +51,7 @@ def library(monkeypatch, tmp_path):
                         lambda path, edition="": held["profiles"].get(str(path)))
     monkeypatch.setattr(phase.plexcompare, "measure_offset", lambda *a: plexcompare.Offset(
         (1.0, 2.0, 3.0), (0, 0, 0)))
+    monkeypatch.setattr(phase.chapterdb, "existing_chapters", lambda path: None)
     return held
 
 
@@ -84,8 +85,9 @@ class TestTheVerdicts:
         assert "  MIXED: each has something the other lacks" in said
         assert "    new has the better resolution: 2160p vs 1080p" in said
         assert "    existing has the better commentaries: 1 (Commentary) vs none" in said
-        assert "    in sync: the existing file's tracks can be muxed in as they are" \
-            in said
+        assert "    the same cut, the existing file's tracks +0 ms off" in said
+        assert ('    an ingest would carry from it: the commentary "Commentary", '
+                "whisper transcribing it") in said
         assert said[-2:] == ["Plex: MIXED, needs a look: " + str(new),
                              "Plex:   the library's: " + str(old)]
 
@@ -108,6 +110,52 @@ class TestTheVerdicts:
         _status, said = _compare(tmp_path, tmp_path / "lib")
         assert said[-1] == "Plex: 1 not in the library"
 
+    def test_what_could_not_be_carried_says_why(self, library, tmp_path,
+                                                monkeypatch):
+        """Cut differently inside: the commentary stays the verdict's, and
+        the would-be carry-over says why."""
+        new = _film(tmp_path / "in", "Lantern (2007) {imdb-tt0101000}")
+        old = _film(tmp_path / "lib", "Lantern (2007) {imdb-tt0101000}")
+        library["copies"] = [plexserver.Copy(
+            "1", Film("Lantern", "2007", imdb="tt0101000"), "Films", "",
+            (str(old),))]
+        library["profiles"] = {
+            str(new): _profile(new, width=3840),
+            str(old): _profile(old, commentaries=[
+                plexcompare.Audio(1, "eng", 2, False, False, "Commentary")])}
+        monkeypatch.setattr(phase.plexcompare, "measure_offset",
+                            lambda *a: plexcompare.Offset(
+                                (600.0, 3000.0, 5400.0), (0, 9000, 9000)))
+        _status, said = _compare(tmp_path, tmp_path / "in")
+        assert any(line.startswith("    not in sync: the offset changes along "
+                                   "the film") for line in said)
+        assert any(line.startswith('    an ingest would not carry: the '
+                                   'commentary "Commentary", whisper '
+                                   "transcribing it: the two cannot be put in "
+                                   "sync") for line in said)
+
+    def test_a_carry_over_made_is_said_rather_than_guessed(
+            self, library, tmp_path):
+        new = _film(tmp_path / "in", "Lantern (2007) {imdb-tt0101000}")
+        old = _film(tmp_path / "lib", "Lantern (2007) {imdb-tt0101000}")
+        library["copies"] = [plexserver.Copy(
+            "1", Film("Lantern", "2007", imdb="tt0101000"), "Films", "",
+            (str(old),))]
+        library["profiles"] = {str(new): _profile(new, width=3840),
+                               str(old): _profile(old)}
+        made = phase.plexcarry.NOTHING._replace(
+            library=str(old), timing=plexcompare.Timing(1.5, 1.0),
+            carried=("the 12 named chapters, to the new file's time",),
+            left=("the better eng soundtrack (7.1 against 5.1): ...",))
+        said: list = []
+        phase.compare_roots([str(tmp_path / "in")], said.append,
+                            carried={phase.folder_key(str(new)): made})
+        assert "    the same cut, the existing file's tracks +1500 ms off" in said
+        assert ("    carried from it: the 12 named chapters, to the new "
+                "file's time") in said
+        assert ("    not carried: the better eng soundtrack (7.1 against "
+                "5.1): ...") in said
+
     def test_an_unreachable_server_skips_the_phase(self, library, tmp_path):
         library["fail"] = "connection refused"
         status, said = _compare(tmp_path, tmp_path)
@@ -123,7 +171,7 @@ class TestTheMode:
         calls: list = []
         monkeypatch.setattr(run.tooldeps, "require_tools", lambda *_a: 0)
         monkeypatch.setattr(run.plexphase, "compare_roots",
-                            lambda roots, _log: calls.append(roots) or 0)
+                            lambda roots, _log, **_kw: calls.append(roots) or 0)
         return calls
 
     def test_p_compares_and_does_nothing_else(self, stubbed, tmp_path):

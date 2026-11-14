@@ -97,6 +97,25 @@ class TestVersions:
         assert found.verdict == "different"
         assert found.versions == ["editions differ: Director's Cut vs no edition"]
 
+    def test_audio_that_lines_up_is_one_cut_whatever_the_lengths(self):
+        """A copy with a minute of logos and trailers in front still lines up
+        with the other: the measurement settles it."""
+        found = pc.compare(_profile(seconds=6000), _profile(seconds=6063),
+                           pc.Timing(-63.0, 1.0))
+        assert found.verdict == "same" and found.versions == []
+
+    def test_lined_up_audio_does_not_unite_two_editions(self):
+        found = pc.compare(_profile(edition="Director's Cut"), _profile(),
+                           pc.Timing(0.0, 1.0))
+        assert found.verdict == "different"
+
+    def test_a_pal_transfer_is_worth_measuring(self):
+        assert pc.worth_measuring(_profile(seconds=6000 / pc.PAL_SPEEDUP),
+                                  _profile(seconds=6000))
+        assert not pc.worth_measuring(_profile(seconds=6000),
+                                      _profile(seconds=6600))
+        assert not pc.worth_measuring(_profile(edition="Extended"), _profile())
+
     def test_a_pal_transfer_is_named_as_one(self):
         found = pc.compare(_profile(seconds=6000 / pc.PAL_SPEEDUP),
                            _profile(seconds=6000))
@@ -124,6 +143,29 @@ class TestTheOffset:
 
     def test_one_point_alone_is_not_enough(self):
         assert not pc.Offset((1.0, 2.0, 3.0), (5000, None, None)).consistent
+
+    def test_a_steady_offset_is_a_line_without_a_slope(self):
+        timing = pc.Offset((600.0, 1800.0, 3000.0, 4200.0, 5400.0),
+                           (5010, 5000, 5030, 5000, 5020)).timing()
+        assert timing is not None and timing.steady(6000)
+        assert abs(timing.start - 5.012) < 0.01
+
+    def test_another_frame_rate_is_a_line_with_one(self):
+        """24 against 23.976 fps: the offset shrinks a millisecond a second."""
+        at = (595.0, 1786.0, 2977.0, 4168.0, 5359.0)
+        timing = pc.Offset(at, tuple(round(7917 - 0.999 * t) for t in at)).timing()
+        assert timing is not None and not timing.steady(5955)
+        assert abs(timing.speed - 1 / 1.000999) < 1e-6
+        assert "23.976 fps against the new file's 24" in timing.describe(5955)
+        # The old file's moment found where the measurement found it.
+        assert abs(timing.to_new(2977 - 4.952) - 2977) < 0.01
+
+    def test_a_cut_inside_the_film_is_no_line(self):
+        assert pc.Offset((600.0, 1800.0, 3000.0, 4200.0, 5400.0),
+                         (5000, 5000, 5000, 9000, 9000)).timing() is None
+
+    def test_two_points_are_no_line(self):
+        assert pc.Offset((1.0, 2.0, 3.0), (5000, 5000, None)).timing() is None
 
     def test_the_lag_is_found_to_the_sample(self):
         numpy = pytest.importorskip("numpy")
@@ -158,3 +200,26 @@ def test_a_logo_in_front_is_measured(tmp_path):
                                (_audio(), _audio()))
     assert offset.consistent
     assert abs(offset.ms_median - 3500) <= 2
+
+
+@pytest.mark.media
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg")
+def test_another_speed_is_measured(tmp_path):
+    """The same noise played a thousandth faster, the way a 24 fps copy of a
+    23.976 fps film is: the line's slope is that thousandth."""
+    pytest.importorskip("numpy")
+    old = tmp_path / "old.mka"
+    new = tmp_path / "new.mka"
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i",
+                    "anoisesrc=d=600:c=pink:r=48000:seed=7,"
+                    "volume='0.2+0.8*abs(sin(t*1.3))':eval=frame",
+                    "-c:a", "flac", str(old)], check=True, stdin=subprocess.DEVNULL)
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(old), "-af",
+                    "asetrate=48048,aresample=48000,adelay=2000:all=1",
+                    "-c:a", "flac", str(new)], check=True, stdin=subprocess.DEVNULL)
+    timing = pc.measure_offset(_profile(seconds=601.4, path=str(new)),
+                               _profile(seconds=600, path=str(old)),
+                               (_audio(), _audio())).timing()
+    assert timing is not None
+    assert abs(timing.speed - 48000 / 48048) < 2e-5
+    assert abs(timing.start - 2.0) < 0.02

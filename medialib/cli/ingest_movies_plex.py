@@ -3,10 +3,13 @@ by the id tag the tagging gave it, by its title and year where it has none -
 and, where the library has it already, said where, and held up against it
 (see :mod:`medialib.lib.plexcompare`).
 
-Nothing is changed, on disk or on the server: what to keep, and what to carry
-from one file into the other, is left to whoever reads the verdicts. The mixed
-ones are the reason for the phase. The closing count lists every film the
-library has, MIXED first, each with where its library copy is.
+On its own (-p) nothing is changed, on disk or on the server: each film says
+what an ingest would take from the library's copy (:mod:`medialib.lib.plexcarry`),
+and what it would not and why. In a full ingest the carry-over has been made
+by then (:mod:`medialib.cli.ingest_movies_carry`), and the verdict is of the
+film as the run leaves it - a MIXED one still MIXED for what could not be
+carried, said under it. The closing count lists every film the library has,
+MIXED first, each with where its library copy is.
 """
 
 from __future__ import annotations
@@ -15,9 +18,16 @@ import os
 import re
 
 from medialib.cli import ingest_movies as rules
-from medialib.lib import plexcompare, plexnames, plexserver
+from medialib.lib import (
+    chapterdb,
+    commentarytranscription,
+    plexcarry,
+    plexcompare,
+    plexnames,
+    plexserver,
+)
 
-__all__ = ["compare_roots"]
+__all__ = ["compare_roots", "folder_key", "timing_of", "transcripts_beside"]
 
 # How each verdict is said, and counted at the end.
 _VERDICTS = {
@@ -39,9 +49,15 @@ _VERDICTS = {
 _INTEREST = ("mixed", "different", "new", "old", "same", "unread")
 
 
-def compare_roots(roots: list, log) -> int:
+def compare_roots(roots: list, log, keeps_for=None, carried=None) -> int:
     """Every film under each folder of ``roots`` compared with the library;
-    1 where the server could not be asked at all."""
+    1 where the server could not be asked at all.
+
+    ``keeps_for`` says, of a film, which of the library copy's soundtracks
+    its improved copy would keep (every language, when not given) - what the
+    carry-over an ingest would make is worked out with. ``carried`` are the
+    carry-overs a full ingest made, by :func:`folder_key`: a film with one is
+    said with what it took rather than what it would."""
     server = plexserver.local()
     log("Plex: reading the library at %s" % server.url)
     try:
@@ -56,7 +72,8 @@ def compare_roots(roots: list, log) -> int:
     tally: dict = {}
     for root in roots:
         for movie in films(root):
-            verdict, places = _compare_film(movie, index, copies, log)
+            verdict, places = _compare_film(movie, index, copies, log,
+                                            keeps_for, carried or {})
             tally.setdefault(verdict, []).append((movie, places))
     _report(tally, log)
     return 0
@@ -77,6 +94,16 @@ def films(root: str) -> list:
     return found
 
 
+def folder_key(movie: str) -> tuple:
+    """A film as its carry-over is known by from the moment it is made to the
+    end of the run: its folder's inode, which the tagging's renames keep."""
+    try:
+        found = os.stat(os.path.dirname(os.path.abspath(movie)))
+    except OSError:
+        return ()
+    return found.st_dev, found.st_ino
+
+
 def _fold(title: str) -> str:
     return re.sub(r"[^0-9a-z]+", "", title.casefold())
 
@@ -90,16 +117,18 @@ def _index(copies: list) -> dict:
     return index
 
 
-def _found(movie: str, index: dict, copies: list) -> tuple:
+def _found(movie: str, index: dict, copies: list, tag: str = "") -> tuple:
     """The library's copies of the film, and how they were found. A copy kept
     in the film's own folder is the film itself, or a version beside it on
-    purpose, and is not a duplicate."""
+    purpose, and is not a duplicate. ``tag`` is the id the tagging will give a
+    folder that carries none yet."""
     directory = os.path.dirname(os.path.abspath(movie))
     stem = os.path.splitext(os.path.basename(movie))[0]
     match = (plexnames.ID_TAG_RE.search(stem)
              or plexnames.ID_TAG_RE.search(os.path.basename(directory)))
-    if match:
-        candidates, how = index.get(match.group(0), []), "by its id " + match.group(0)
+    found_tag = match.group(0) if match else tag
+    if found_tag:
+        candidates, how = index.get(found_tag, []), "by its id " + found_tag
     else:
         base, _tag = plexnames.untagged_base(os.path.basename(directory))
         year = plexnames.year_of(base)
@@ -113,7 +142,8 @@ def _found(movie: str, index: dict, copies: list) -> tuple:
     return elsewhere, how
 
 
-def _compare_film(movie: str, index: dict, copies: list, log) -> tuple:
+def _compare_film(movie: str, index: dict, copies: list, log,
+                  keeps_for=None, carried=None) -> tuple:
     """The film's verdict, and the files of its library copies."""
     log("Plex: %s" % os.path.basename(movie))
     found, how = _found(movie, index, copies)
@@ -124,12 +154,15 @@ def _compare_film(movie: str, index: dict, copies: list, log) -> tuple:
     edition, part = plexnames.read_stem(base, os.path.splitext(
         os.path.basename(movie))[0])
     new = None if part else plexcompare.read_profile(movie, edition)
+    made = (carried or {}).get(folder_key(movie))
     verdicts = []
     for copy in found:
         log("  in the library (%s), found %s:" % (copy.section, how))
         for path in copy.files:
             log("    " + path)
-        verdicts.append(_against(movie, new, part, copy, log))
+        verdicts.append(_against(
+            movie, new, part, copy, log, keeps_for,
+            made if made is not None and made.library in copy.files else None))
     places = [path for copy in found for path in copy.files]
     # The film's own verdict: the most interesting of its copies'.
     for verdict in _INTEREST:
@@ -138,7 +171,8 @@ def _compare_film(movie: str, index: dict, copies: list, log) -> tuple:
     return "unread", places
 
 
-def _against(movie: str, new, part: str, copy, log) -> str:
+def _against(movie: str, new, part: str, copy, log, keeps_for=None,
+             made: plexcarry.Plan | None = None) -> str:
     if part or len(copy.files) > 1:
         log("  a film split into parts: not compared")
         return "unread"
@@ -151,7 +185,11 @@ def _against(movie: str, new, part: str, copy, log) -> str:
         log("  the library's file cannot be read from here (is its disk "
             "mounted?): not compared")
         return "unread"
-    comparison = plexcompare.compare(new, old)
+    if made is not None and made.timing is not None:
+        timing, untimed = made.timing, ""
+    else:
+        timing, untimed = timing_of(new, old)
+    comparison = plexcompare.compare(new, old, timing)
     log("  " + _VERDICTS[comparison.verdict][0])
     for reason in comparison.versions:
         log("    " + reason)
@@ -159,11 +197,77 @@ def _against(movie: str, new, part: str, copy, log) -> str:
                          ("existing", comparison.old_better)):
         for point in points:
             log("    %s has %s" % (said, _the(point)))
-    if comparison.verdict != "different" and (
-            comparison.verdict in ("mixed", "old")
-            or abs(new.seconds - old.seconds) >= plexcompare.SAME_LENGTH):
-        _sync(new, old, log)
+    if timing is not None:
+        log("    " + timing.describe(new.seconds))
+    elif untimed and comparison.verdict != "different":
+        log("    not in sync: " + untimed)
+    if made is not None:
+        for line in made.carried:
+            log("    carried from it: " + line)
+        for line in made.left:
+            log("    not carried: " + line)
+    elif comparison.verdict in ("mixed", "old"):
+        would = plexcarry.plan(
+            new, old, timing, untimed,
+            keeps_for(movie) if keeps_for is not None else lambda _audio: True,
+            transcripts_beside(old.path), chapterdb.existing_chapters(old.path))
+        for line in would.carried:
+            log("    an ingest would carry from it: " + line)
+        for line in would.left:
+            log("    an ingest would not carry: " + line)
     return comparison.verdict
+
+
+def timing_of(new, old) -> tuple:
+    """Where the old file's moments fall in the new one, and "" - or None,
+    and why the two cannot be put in sync."""
+    if not plexcompare.worth_measuring(new, old):
+        return None, (plexcompare.editions_differ(new, old)
+                      or "their lengths are a version apart")
+    pair = plexcompare.audio_pair(new, old)
+    if pair is None:
+        return None, "one of them has no soundtrack"
+    try:
+        offset = plexcompare.measure_offset(new, old, pair)
+    except ImportError:
+        return None, "numpy is not installed to measure it"
+    if not offset.measured:
+        return None, "no stretch of the two soundtracks matched"
+    timing = offset.timing()
+    if timing is None:
+        return None, ("the offset changes along the film (%s): cut "
+                      "differently inside it" % ", ".join(
+                          "%s at %s" % ("%+d ms" % ms if ms is not None
+                                        else "no match", _clock(at))
+                          for at, ms in zip(offset.at, offset.ms, strict=True)))
+    return timing, ""
+
+
+def transcripts_beside(library: str):
+    """What finds a commentary's transcripts beside the library's copy at
+    ``library``: ``(srt, two-letter language)`` for each, by the track number
+    the transcription named them after."""
+    directory = os.path.dirname(library)
+    stem = os.path.splitext(os.path.basename(library))[0]
+    try:
+        names = sorted(os.listdir(directory))
+    except OSError:
+        names = []
+
+    def find(audio) -> tuple:
+        prefix = commentarytranscription.commentary_prefix(stem, audio.track)
+        best: dict = {}
+        for name in names:
+            if not (name.startswith(prefix) and name.endswith(".srt")):
+                continue
+            language = name[:-len(".srt")].rpartition(".")[2]
+            if len(language) != 2 or not language.isalpha():
+                continue
+            if len(name) >= len(best.get(language, "")):
+                best[language] = name
+        return tuple((os.path.join(directory, name), language)
+                     for language, name in sorted(best.items()))
+    return find
 
 
 def _the(point: str) -> str:
@@ -174,37 +278,6 @@ def _the(point: str) -> str:
             or point.split(":")[0].endswith(" audio"):
         return "the better " + point
     return point
-
-
-def _sync(new, old, log) -> None:
-    gap = new.seconds - old.seconds
-    if abs(gap) >= plexcompare.SAME_LENGTH:
-        log("    the lengths differ by %.1fs (logos in front, most likely)" % gap)
-    pair = plexcompare.audio_pair(new, old)
-    if pair is None:
-        log("    sync not measured: one of them has no soundtrack")
-        return
-    try:
-        offset = plexcompare.measure_offset(new, old, pair)
-    except ImportError:
-        log("    sync not measured: numpy is not installed")
-        return
-    if not offset.measured:
-        log("    sync not measured: no stretch of the two soundtracks matched")
-        return
-    if not offset.consistent:
-        log("    WARNING: the offset changes along the film (%s): cut differently "
-            "inside it, not only in front - muxing across needs a closer look"
-            % ", ".join("%s at %s" % ("%+d ms" % ms if ms is not None else "no match",
-                                      _clock(at))
-                        for at, ms in zip(offset.at, offset.ms, strict=True)))
-        return
-    ms = offset.ms_median
-    if abs(ms) < plexcompare.NEGLIGIBLE_MS:
-        log("    in sync: the existing file's tracks can be muxed in as they are")
-        return
-    log("    WARNING: out of sync by %+d ms - mux the existing file's tracks in "
-        "with mkvmerge --sync -1:%d in front of it" % (ms, ms))
 
 
 def _clock(seconds: float) -> str:

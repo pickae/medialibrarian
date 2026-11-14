@@ -152,7 +152,8 @@ c |  | chapters only: the chapter lookup and nothing else - walks the
 p |  | Plex comparison only: walks the whole tree the way -t does and
                   looks every film up in the Plex library - by its id tag,
                   by its title and year where it has none - saying where the
-                  library already keeps it and which of the two is better
+                  library already keeps it, which of the two is better, and
+                  what a full ingest would carry over from the library's copy
                   (see "Plex comparison" below). Changes nothing, and -w has
                   no part in it. Best run after -tw.
 r |  | also convert the remuxes, last of all: a film whose name says
@@ -266,24 +267,30 @@ USAGE_TAIL = """
 
     Plex comparison
     ---------------
-    -p does this phase and nothing else
-    last, looks each film up in the Plex library (plexUrl, else the server on
-    this machine at localhost:32400, asked with plexToken) by the id tag the
-    tagging gave it, or by its title and year where it has none
-    a film not there is said to be new; one that is has the library's files
-    printed, and the two compared on resolution, HDR, the soundtracks per
-    language (channels, object audio, lossless), the commentaries, the other
-    bonus audio (isolated score, audio description, ...) and the chapters -
-    never the subtitles
-    the verdict: the new file better, the library's better, the two
-    equivalent, or MIXED - each has something the other lacks, listed again at
-    the end since those want a person to decide
-    a DIFFERENT VERSION where the edition tags differ or the lengths differ by
-    a minute or more; a few seconds is a logo more or less in front of the
-    same cut, and the offset the library file's tracks need to be muxed into
-    the new one is measured on the audio at three points of the film - which
-    also catches a cut that differs inside the film
-    changes nothing, on disk or on the server
+    -p does this phase and nothing else, and changes nothing
+    as soon as the names have settled, looks each film up in the Plex library
+    (plexUrl, else the server on this machine at localhost:32400, asked with
+    plexToken) by its id tag, or the one the tagging will give it, or by its
+    title and year where it has none, and measures the offset between the two
+    soundtracks at five points of the film: on one straight line, the two are
+    one cut - a logo more or less in front, or another speed (24 against 23.976
+    fps, or PAL) - whatever their lengths; a different edition tag is a
+    different version, kept beside it
+    before any lane writes a film, carries over from the library's copy what it
+    lacks: the names of commentaries it only numbers (as many, same languages),
+    named chapters where it has numbered or none (moved to its time), and the
+    audio it lacks - a soundtrack in a language it keeps, commentaries with the
+    transcripts beside the library's copy (or transcribed by whisper), an
+    isolated score or audio description - taken in by the one remux at the
+    measured offset; a lossless track goes to opus, put to the film's speed
+    where the two differ; a lossy one at another speed is left
+    never the picture, the subtitles, or a better soundtrack in a language the
+    film already has: those stay for a person to decide
+    last, the films as the run leaves them are compared on resolution, HDR, the
+    soundtracks per language, the commentaries, the other bonus audio and the
+    chapters: the new file better, the library's better, the two equivalent,
+    MIXED - each has something the other lacks, with what could not be carried
+    over and why, listed again at the end - or a DIFFERENT VERSION
 
     Tags & commentary
     ------------------
@@ -887,7 +894,8 @@ def rename_folders(root: str, fragments_file: str, skips) -> int:
 
 
 def rename_movies(root: str, fragments_file: str, skips) -> int:
-    """``renameMovies``: each movie renamed once, carrying its subtitles along.
+    """``renameMovies``: each movie renamed once, carrying its subtitles and
+    its commentary transcripts along.
 
     A bare ".srt" belongs to the English track - the assumption the whole
     subtitle convention rests on.
@@ -929,6 +937,12 @@ def rename_movies(root: str, fragments_file: str, skips) -> int:
                 skips.record(source, target)
             else:
                 _rename_quiet(source, target)
+        # Everything else that goes by the film's stem goes with it - the
+        # commentary transcripts above all ("<film> 2 <commentary>.en.srt"),
+        # which the transcription would otherwise not know for this film's
+        # and make again.
+        if new_movie != movie:
+            _follow_sidecars(directory, base, new_base, skips)
     return renamed
 
 
@@ -1309,6 +1323,39 @@ def forget_opus(ram_root: str, movie: str) -> None:
             _remove(os.path.join(directory, name))
 
 
+def opus_encoding(movie: str, index: int, channels: str,
+                  bitrate: str) -> tuple | str:
+    """How audio stream ``index`` of ``movie`` is encoded to opus: (the
+    ffmpeg options that keep its layout, the channels and the bitrate it is
+    encoded at) - or why it cannot be, "" where that is not worth a word.
+
+    Mono and stereo need nothing. Past that the source's layout is encoded as
+    it is where opus has it, and padded out to 5.1 / 7.1 where it does not.
+    One the probe cannot name is left to ffmpeg's default for its count from
+    five channels up, which is opus's own; at three or four that default is a
+    layout opus refuses, so it is kept lossless, as is an unusual layout
+    neither table knows."""
+    if channels in ("1", "2"):
+        return ["-ac", channels], channels, bitrate
+    source_layout = _probe([
+        "ffprobe", "-v", "quiet", "-select_streams", "a:%d" % index,
+        "-show_entries", "stream=channel_layout",
+        "-of", "default=nk=1:nw=1", movie]).strip()
+    unnamed = re.fullmatch(r"(\d+ channels)?", source_layout)
+    if (channels, source_layout) in _OPUS_NATIVE:
+        return _OPUS_NATIVE[(channels, source_layout)], channels, bitrate
+    if (channels, source_layout) in _PADDED:
+        padded_channels, pan = _PADDED[(channels, source_layout)]
+        padded = bitrates.audio_bitrate(padded_channels, "normal")
+        if not padded:
+            return ""
+        return ["-af", pan], padded_channels, padded
+    if not (unnamed and int(channels) >= 5):
+        return ("its %s-channel layout %r has no opus equivalent"
+                % (channels, source_layout or "unknown"))
+    return ["-ac", channels], channels, bitrate
+
+
 def check_audio_tracks(movie: str, root: str, ram_root: str) -> None:
     """``checkAudioTracks``: every lossless track transcoded to opus, at the
     per-channel target bitrate, into the RAM scratch (see :func:`opus_path`)."""
@@ -1335,34 +1382,14 @@ def check_audio_tracks(movie: str, root: str, ram_root: str) -> None:
         if not bitrate:
             continue
 
-        # Mono and stereo need nothing. Past that the source's layout is
-        # encoded as it is where opus has it, and padded out to 5.1 / 7.1 where
-        # it does not. One the probe cannot name is left to ffmpeg's default
-        # for its count from five channels up, which is opus's own; at three or
-        # four that default is a layout opus refuses, so it is kept lossless,
-        # as is an unusual layout neither table knows.
-        layout_args = ["-ac", channels]
-        if channels not in ("1", "2"):
-            source_layout = _probe([
-                "ffprobe", "-v", "quiet", "-select_streams", "a:%d" % index,
-                "-show_entries", "stream=channel_layout",
-                "-of", "default=nk=1:nw=1", movie]).strip()
-            unnamed = re.fullmatch(r"(\d+ channels)?", source_layout)
-            if (channels, source_layout) in _OPUS_NATIVE:
-                layout_args = _OPUS_NATIVE[(channels, source_layout)]
-            elif (channels, source_layout) in _PADDED:
-                padded_channels, pan = _PADDED[(channels, source_layout)]
-                padded = bitrates.audio_bitrate(padded_channels, "normal")
-                if not padded:
-                    continue
-                layout_args = ["-af", pan]
-                channels, bitrate = padded_channels, padded
-            elif not (unnamed and int(channels) >= 5):
-                log("WARNING: audio track %d kept as it is, its %s-channel "
-                    "layout %r has no opus equivalent: %s"
-                    % (position - 1, channels, source_layout or "unknown",
+        encoding = opus_encoding(movie, index, channels, bitrate)
+        if isinstance(encoding, str):
+            if encoding:
+                log("WARNING: audio track %d kept as it is, %s: %s"
+                    % (position - 1, encoding,
                        "./" + os.path.relpath(movie, root)))
-                continue
+            continue
+        layout_args, channels, bitrate = encoding
 
         opus = opus_path(ram_root, movie, position - 1)
         os.makedirs(os.path.dirname(opus), exist_ok=True)
