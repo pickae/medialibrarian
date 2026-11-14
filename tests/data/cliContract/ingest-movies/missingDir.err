@@ -287,8 +287,10 @@ Usage:
     ---------
     all large temporary media (extracts, remux copies, Dolby Vision streams)
     live in tmpfs
-    only the final outputs (.mkv, .srt, .opus) are written to disk, unless a
-    remux copy is too large for tmpfs
+    the opus tracks too: made in RAM and written to disk only inside the
+    improved copy, never as files beside the film
+    only the final outputs (.mkv, .srt) are written to disk, unless a remux
+    copy is too large for tmpfs
 
     Dependencies
     ------------
