@@ -261,6 +261,15 @@ class FilmTags:
         self._lock = threading.Lock()
         self._tags: dict | None = None
 
+    def __getstate__(self) -> dict:
+        # The run is handed to its worker processes with this inside it: they
+        # get the answer as far as it is known, and a lock of their own.
+        return {"_root": self._root, "_tags": self._tags}
+
+    def __setstate__(self, state: dict) -> None:
+        self.__dict__.update(state)
+        self._lock = threading.Lock()
+
     def start(self) -> None:
         """Ask now, on a thread of its own, so a remux that wants the answer
         finds it waiting rather than asking while it holds the disk's turn."""
