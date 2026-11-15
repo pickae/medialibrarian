@@ -31,8 +31,9 @@ def _profile(audio=None, commentaries=(), others=(), chapters=0, named=False,
 
 
 def _plan(new, old, timing=STEADY, untimed="", keeps=lambda _a: True,
-          transcripts=lambda _a: (), chapters=None):
-    return pcy.plan(new, old, timing, untimed, keeps, transcripts, chapters)
+          transcripts=lambda _a: (), chapters=None, keep_all=False):
+    return pcy.plan(new, old, timing, untimed, keeps, transcripts, chapters,
+                    keep_all)
 
 
 NAMED = chapterdb.Existing(5942.0, ("Prologue", "Opening credits", "Harbour"),
@@ -118,6 +119,25 @@ class TestCarriedAudio:
                    lossless=True)])
         (item,) = _plan(_profile(), old, timing=DRIFTING).audio
         assert item.encode and item.stretch
+
+    def test_keeping_everything_takes_a_lossless_track_as_it_is(self):
+        old = _profile(path="old.mkv", commentaries=[
+            _audio(channels=2, name="With the director", track=2,
+                   lossless=True)])
+        (item,) = _plan(_profile(), old, keep_all=True).audio
+        assert not item.encode and not item.stretch
+        assert "to opus" not in _plan(_profile(), old,
+                                      keep_all=True).carried[0]
+
+    def test_keeping_everything_leaves_a_lossless_track_at_another_speed(
+            self):
+        old = _profile(path="old.mkv", commentaries=[
+            _audio(channels=2, name="With the director", track=2,
+                   lossless=True)])
+        found = _plan(_profile(), old, timing=DRIFTING, keep_all=True)
+        assert found.audio == ()
+        assert "a lossless track cannot be put to the new one's" \
+            in found.left[0]
 
     def test_numbered_commentaries_against_more_named_ones_are_left(self):
         new = _profile(commentaries=[_audio(channels=2, name="Commentary 1",

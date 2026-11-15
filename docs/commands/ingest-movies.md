@@ -39,7 +39,7 @@ Each phase can also be run on its own, over a whole library: see
 [Naming films](#naming-films--t) · [Feeding ids back](#feeding-ids-back--i) ·
 [Subtitles](#subtitles--s) · [Commentary transcripts](#commentary-transcripts--a) ·
 [Commentary names](#commentary-names--n) · [Chapters](#chapters--c) ·
-[Plex comparison](#plex-comparison--p) · [Remux conversion](#remux-conversion--r) ·
+[Plex comparison](#plex-comparison--p) · [Remux conversion](#remux-conversion--r) · [Keeping everything](#keeping-everything--k) ·
 [Several folders](#several-folders)
 
 ## Settings
@@ -775,6 +775,21 @@ fetched subtitles for, and a later `-t` rename does not rename it. Converting th
 same remux again is left to convert-video: a copy as long as its film is skipped,
 and an unfinished one is redone. `-r` is refused alongside any of the
 single-task sweeps.
+
+## Keeping everything (`-k`)
+
+**A full ingest with `-k` takes nothing away.** No audio or subtitle track is
+dropped (other languages, image subtitles, audio descriptions and the lesser
+surround tier all stay), lossless audio is not encoded to opus, and Dolby Vision
+profile 7 keeps its enhancement layer. Everything additive or corrective still
+happens: cleaning, renaming and tagging, track names and flags, downloaded
+subtitles, commentary transcripts, chapters, and fixing a false Dolby Vision
+claim or an overstated level.
+
+What is carried over from the Plex library's copy is taken as it is, in every
+language, lossless tracks included. A track that would have to be encoded to
+match the new file's speed is left. `-k` is refused with `-r` (which encodes) and
+with the single-task sweeps.
 
 ## Several folders
 

@@ -359,3 +359,25 @@ class TestOnlyTheFilmsToImprove:
         run_module._transcode_opus(types.SimpleNamespace(ram_root="/ram"),
                                    str(tmp_path), jobs=1, exit_on_abort=False)
         assert walked == ["Film (2020).mkv"]
+
+
+class TestKeepEverythingTranscodesNothing:
+    def test_every_film_is_ready_for_the_remux_at_once(self, tmp_path,
+                                                       monkeypatch):
+        import types
+
+        from medialib.cli import ingest_movies_run as run_module
+
+        fresh = tmp_path / "Film (2020)"
+        fresh.mkdir()
+        open(str(fresh / "Film (2020).mkv"), "w").close()
+
+        walked, ready = [], []
+        monkeypatch.setattr(im, "check_audio_tracks",
+                            lambda movie, root, ram_root: walked.append(movie))
+        run_module._transcode_opus(
+            types.SimpleNamespace(ram_root="/ram", keep_all=True),
+            str(tmp_path), jobs=1, on_done=ready.append, exit_on_abort=False)
+        assert walked == []
+        assert [os.path.basename(movie) for movie in ready] \
+            == ["Film (2020).mkv"]

@@ -167,6 +167,21 @@ r |  | also convert the remuxes, last of all: a film whose name says
                   is, and written beside it as "<film> {edition-AV1}.mkv", so
                   Plex offers the two as one film. The film itself is left as
                   it is. A full ingest only.
+k |  | keep everything: a full ingest that takes nothing away. No audio or
+                  subtitle track is dropped - not another language, not an
+                  image subtitle, not an audio description, not the lesser of
+                  two surround tiers - lossless audio stays lossless rather
+                  than going to opus, and a dual-layer Dolby Vision profile 7
+                  keeps its enhancement layer. Everything that only adds or
+                  corrects still happens: the cleaning, renaming and IMDb
+                  tagging, the track names and flags, the subtitles downloaded
+                  and the commentary transcripts muxed in, the chapters, a false
+                  Dolby Vision claim or an overstated level corrected, and what
+                  is carried over from the Plex library's copy - its soundtracks
+                  in every language, lossless as they are. A track of the
+                  library's copy that would need encoding (put to another
+                  speed) is not carried. Cannot be combined with -r, which
+                  encodes.
 w |  | with -t or -i, actually perform the renames instead of printing
                   them; with -s, sync, throw out and download; with -n, name
                   the commentaries. On its own it is a usage error rather than
@@ -187,11 +202,11 @@ i | <file> | the hand-written id list filled in and read BACK: tagging and
 
 OPT_VARS = ("f:fragmentsOverride a:commentaryOnly t:tagsOnly s:subtitlesOnly "
             "n:commentaryNames c:chaptersOnly p:plexOnly r:convertRemuxes "
-            "w:writeTags i:idList")
+            "w:writeTags i:idList k:keepAll")
 OPT_COLUMN = 18
 OPT_LONG = ("f:fragments a:commentary t:tags-only s:subtitles-only "
             "n:commentary-names c:chapters p:plex r:convert-remuxes w:write "
-            "i:ids")
+            "i:ids k:keep")
 
 USAGE_TAIL = """
 
@@ -317,6 +332,13 @@ USAGE_TAIL = """
     transcription workers
     transcribes on the GPU when whisper can use it, picking the largest model
     the free VRAM fits, and falls back to all CPU threads on base.en if not
+
+    Keep everything (-k)
+    --------------------
+    a full ingest that takes nothing away: no track dropped, no lossless audio
+    encoded to opus, no Dolby Vision enhancement layer discarded. All the
+    additions and corrections still happen, and the carry-over from the Plex
+    library's copy takes lossless soundtracks as they are, in every language
 
     Asking the web politely
     -----------------------
@@ -1730,8 +1752,12 @@ def drop_audio_descriptions(tracks: list) -> list:
 
 
 def decide_actions(tracks: list, movie: str, ram_root: str,
-                   original: str = "", spoken: tuple = ()) -> bool:
+                   original: str = "", spoken: tuple = (),
+                   keep_all: bool = False) -> bool:
     """keep, drop or swap, per track; True when anything changed.
+
+    With ``keep_all`` every track is kept as it is: nothing is dropped and
+    no opus is swapped in.
 
     The languages kept are English and the film's own, as
     :func:`choose_languages` settles them from ``original`` and ``spoken``,
@@ -1745,6 +1771,11 @@ def decide_actions(tracks: list, movie: str, ram_root: str,
     libopus ceiling, a FLAC mono and a non-lossless commentary all simply have
     no opus, so they stay as they are.
     """
+    if keep_all:
+        for track in tracks:
+            track.action = "keep"
+        return False
+
     primary = ""
     for track in tracks:
         if track.is_audio:

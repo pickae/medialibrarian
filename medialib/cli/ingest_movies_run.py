@@ -156,11 +156,12 @@ class Run:
             return
         rules._object_flags(movie, tracks)
 
+        keep_all = getattr(self, "keep_all", False)
         film = self.film_languages(movie)
         changed = rules.decide_actions(tracks, movie, self.ram_root,
-                                       film.original, film.spoken)
+                                       film.original, film.spoken, keep_all)
         choice = rules.choose_languages(tracks, film.original, film.spoken)
-        if choice.original and choice.first \
+        if choice.original and choice.first and not keep_all \
                 and not languages.speaks(choice.first, "", choice.original):
             if not choice.keep_first:
                 say("  Keeping the film's original language (%s, per TMDb) "
@@ -172,13 +173,15 @@ class Run:
                     % (choice.original, choice.first,
                        "which TMDb lists as spoken in it" if film.spoken
                        else "TMDb lists no spoken languages"))
-        for position in rules.drop_audio_descriptions(tracks):
+        for position in ([] if keep_all
+                         else rules.drop_audio_descriptions(tracks)):
             changed = True
             say("  Dropping audio description %s (%s, %s): the language has "
                 "a soundtrack of its own" % (tracks[position].id,
                                              tracks[position].name,
                                              tracks[position].language))
-        for position, winner in rules.apply_surround_ladder(tracks):
+        for position, winner in ([] if keep_all
+                                 else rules.apply_surround_ladder(tracks)):
             changed = True
             say("  Surround ladder: dropping audio track %s (%s, %s) in favour "
                 "of %s" % (tracks[position].id, tracks[position].name,
@@ -236,6 +239,8 @@ class Run:
         choice = rules.choose_languages(tracks, film.original, film.spoken)
 
         def keeps(audio) -> bool:
+            if getattr(self, "keep_all", False):
+                return True
             return rules._language_kept(
                 rules.Track(language=audio.language, language_ietf=audio.ietf),
                 primary, choice)
@@ -318,7 +323,11 @@ class Run:
         elif dolbyvision.stream_has_rpu(movie):
             # Real Dolby Vision. Only dual-layer profile 7 has anything to gain;
             # profile 5 and 8.x are left exactly as they are.
-            if is_profile7:
+            if is_profile7 and getattr(self, "keep_all", False):
+                # Converting drops the enhancement layer.
+                say("  Keeping Dolby Vision profile 7 as it is, enhancement "
+                    "layer and all: " + movie)
+            elif is_profile7:
                 job["action"] = "convert"
         else:
             # The container advertises Dolby Vision the video does not carry,
@@ -988,6 +997,28 @@ def main(argv: list, program: str = "ingest-movies",
             "their ids, then run -p.")
         return 1
 
+    # -k changes what a full ingest takes away, and -r encodes the picture.
+    if result.values.get("keepAll") and result.values.get("convertRemuxes"):
+        clioptions.refuse_usage(
+            declaration,
+            "-k keeps everything as it is, and -r converts the remuxes by "
+            "encoding them: they\ncontradict each other. Drop one.")
+        return 1
+    # -k is the full ingest's alone: each of these is a phase of its own that
+    # never takes anything away.
+    if result.values.get("keepAll"):
+        for letter, key in (("a", "commentaryOnly"), ("n", "commentaryNames"),
+                            ("c", "chaptersOnly"), ("p", "plexOnly"),
+                            ("s", "subtitlesOnly"), ("t", "tagsOnly"),
+                            ("i", "idList")):
+            if result.values.get(key):
+                clioptions.refuse_usage(
+                    declaration,
+                    "-k keeps every track through a full ingest, and -%s does "
+                    "one phase\nof its own, which takes none away anyway. "
+                    "Drop the -k." % letter)
+                return 1
+
     # -r is the last phase of a full ingest, and each of these is a run of one
     # phase of its own that never reaches it.
     if result.values.get("convertRemuxes"):
@@ -1181,7 +1212,8 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
                 unfixed_movies=unfixed_movies,
                 unsure_commentaries=unsure_commentaries, disk_turns=disk_turns,
                 scratch_headroom=0,
-                convert_remuxes=bool(result.values.get("convertRemuxes")))
+                convert_remuxes=bool(result.values.get("convertRemuxes")),
+                keep_all=bool(result.values.get("keepAll")))
 
     listed = dict(zip(roots, names, strict=True))
     try:
@@ -1629,7 +1661,8 @@ def _plex_phase(root: str, state=None) -> None:
     carry = getattr(state, "carry", None)
     plexphase.compare_roots([root], log,
                             keeps_for=state.carry_keeps if state else None,
-                            carried=carry.plans if carry is not None else None)
+                            carried=carry.plans if carry is not None else None,
+                            keep_all=getattr(state, "keep_all", False))
 
 
 # How each verdict of the chapter lookup is counted in its closing line.
@@ -2573,7 +2606,7 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
     if _has_tool("curl"):
         state.carry = carryphase.LibraryCarry(
             root, lambda: main_movies(root), state.film_tags, log,
-            state.ram_root)
+            state.ram_root, getattr(state, "keep_all", False))
         state.carry.start()
 
     log("Phase: moving and renaming pre-existing subtitles")
@@ -3000,6 +3033,16 @@ def _transcode_opus(state, root: str, jobs: int | None = None,
     # improved copy and for nothing else, so one for a kept original, an extra
     # or a film already improved would only sit in RAM until the run ends.
     movies = main_movies(root)
+    if getattr(state, "keep_all", False):
+        # Lossless audio stays as it is: nothing to encode, so every film is
+        # ready for the remux lane at once.
+        log("Keeping lossless audio as it is: nothing to transcode")
+        for movie in movies:
+            if on_done is not None:
+                on_done(movie)
+            if row is not None:
+                row.done("opus")
+        return
     if jobs is None:
         jobs = runlog.jobs_per_core(CORES_PER_JOB)
     lane = ""
