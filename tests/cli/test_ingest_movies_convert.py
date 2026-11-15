@@ -207,3 +207,26 @@ class TestRefusals:
         errors = capsys.readouterr().err
         assert "-r converts the remuxes at the end of a full ingest" in errors
         assert "Nothing was changed." in errors
+
+
+class TestKeepEverything:
+    pytestmark = pytest.mark.fs
+
+    def test_it_contradicts_converting_the_remuxes(self, tmp_path, capsys):
+        folder = tmp_path / "Films" / "Film (2020)"
+        folder.mkdir(parents=True)
+        (folder / "Film (2020).mkv").touch()
+
+        assert run.main(["-k", "-r", str(tmp_path / "Films")]) == 1
+        assert "contradict each other" in capsys.readouterr().err
+
+    @pytest.mark.parametrize("other", [["-t"], ["-s"], ["-a"], ["-c"],
+                                       ["-p"], ["-n"]])
+    def test_it_is_a_full_ingest_s_alone(self, other, tmp_path, capsys):
+        folder = tmp_path / "Films" / "Film (2020)"
+        folder.mkdir(parents=True)
+        (folder / "Film (2020).mkv").touch()
+
+        assert run.main(["-k"] + other + [str(tmp_path / "Films")]) == 1
+        assert "-k keeps every track through a full ingest" \
+            in capsys.readouterr().err

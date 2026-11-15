@@ -123,6 +123,21 @@ Usage:
                   is, and written beside it as "<film> {edition-AV1}.mkv", so
                   Plex offers the two as one film. The film itself is left as
                   it is. A full ingest only.
+    -k, --keep    keep everything: a full ingest that takes nothing away. No audio or
+                  subtitle track is dropped - not another language, not an
+                  image subtitle, not an audio description, not the lesser of
+                  two surround tiers - lossless audio stays lossless rather
+                  than going to opus, and a dual-layer Dolby Vision profile 7
+                  keeps its enhancement layer. Everything that only adds or
+                  corrects still happens: the cleaning, renaming and IMDb
+                  tagging, the track names and flags, the subtitles downloaded
+                  and the commentary transcripts muxed in, the chapters, a false
+                  Dolby Vision claim or an overstated level corrected, and what
+                  is carried over from the Plex library's copy - its soundtracks
+                  in every language, lossless as they are. A track of the
+                  library's copy that would need encoding (put to another
+                  speed) is not carried. Cannot be combined with -r, which
+                  encodes.
     -w, --write   with -t or -i, actually perform the renames instead of printing
                   them; with -s, sync, throw out and download; with -n, name
                   the commentaries. On its own it is a usage error rather than
@@ -268,6 +283,13 @@ Usage:
     transcription workers
     transcribes on the GPU when whisper can use it, picking the largest model
     the free VRAM fits, and falls back to all CPU threads on base.en if not
+
+    Keep everything (-k)
+    --------------------
+    a full ingest that takes nothing away: no track dropped, no lossless audio
+    encoded to opus, no Dolby Vision enhancement layer discarded. All the
+    additions and corrections still happen, and the carry-over from the Plex
+    library's copy takes lossless soundtracks as they are, in every language
 
     Asking the web politely
     -----------------------

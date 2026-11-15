@@ -490,3 +490,12 @@ class TestAudioDescriptions:
             self._audio("1", "eng", "en"),
             self._audio("2", "eng", "en", name="Commentary describing scenes",
                         commentary="true")) == []
+
+
+class TestKeepEverythingDropsNothing:
+    def test_no_track_is_dropped_or_swapped(self, tmp_path):
+        tracks = TestTheFilmsOriginalLanguage()._tracks()
+        assert im.decide_actions(tracks, str(tmp_path / "film.mkv"),
+                                 str(tmp_path / "ram"), "en", ("en",),
+                                 keep_all=True) is False
+        assert [t.action for t in tracks] == ["keep"] * len(tracks)

@@ -79,8 +79,9 @@ class LibraryCarry:
     """
 
     def __init__(self, root: str, films, film_tags, log,
-                 ram_root: str = "") -> None:
+                 ram_root: str = "", keep_all: bool = False) -> None:
         self._root = root
+        self._keep_all = keep_all
         self._ram_root = ram_root
         self._films = films
         self._film_tags = film_tags
@@ -233,7 +234,7 @@ class LibraryCarry:
             plan = plexcarry.plan(
                 new, item.old, item.timing, item.untimed, keeps,
                 plexphase.transcripts_beside(item.old.path),
-                chapterdb.existing_chapters(item.old.path))
+                chapterdb.existing_chapters(item.old.path), self._keep_all)
             if best is None or len(plan.carried) > len(best.carried):
                 best = plan
         return best
