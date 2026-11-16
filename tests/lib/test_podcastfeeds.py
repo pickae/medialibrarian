@@ -3,12 +3,13 @@
 The feed table and the yt-dlp call it builds. What is pinned here: the exact argv
 each profile assembles, the fault report a malformed table earns line for line,
 the counter read-increment behaviour, the two quoting styles a rendered call can
-take, and that every table in the checkout parses.
+take, and that every table the repository is responsible for parses.
 """
 
 import glob
 import io
 import os
+import subprocess
 
 import pytest
 
@@ -1042,34 +1043,65 @@ def test_the_columns_are_the_ones_the_hand_edited_tables_hold():
     assert pf.PODCAST_COLUMNS == ("active", "subdir", "nameTemplate",
                                   "playlistEnd", "extraArgs", "url")
 
-# --- the tables that ship with the repository --------------------------------
-# They are data, and data is where a typo hides. EVERY table found, not one named
-# table: they are edited by hand and by the importer, and a check of only the
-# first would be quietest about the ones nobody looks at. The real ones live in a
-# folder the repository does not track - one machine's library, not code - so a
-# checkout without them is normal. The sample beside the package is always
-# there, and a fault in it would be copied into every table made from it.
+# --- the tables the repository is responsible for ------------------------------
+# They are data, and data is where a typo hides. EVERY table the repository is
+# responsible for, not one named table: they are edited by hand and by the
+# importer, and a check of only the first would be quietest about the ones nobody
+# looks at. Responsibility is git's to decide: a table the repository's own
+# .gitignore keeps out - the local ones in data/podcasts/ are one machine's
+# library, not code - cannot fail the suite of a checkout that does not own it,
+# and the ytdlp command checks it the day it reads it. The sample beside the
+# package is always there, and a fault in it would be copied into every table
+# made from it.
 
 _REPO = str(blackbox.REPO)
 _SAMPLE = os.path.join(commands.config_dir(), "podcasts.example.tsv")
 
 
-def _shipped_tables():
+def _git_ignored(path: str, root: str) -> bool:
+    """Whether the repository at ``root`` keeps this file out by its own rules.
+
+    git's answer, asked at the repository's root. A path no repository keeps
+    out is not ignored: a checkout that is not one has nothing to keep it out.
+    """
+    try:
+        return subprocess.run(["git", "-C", root, "check-ignore", "-q",
+                               path]).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def _checked_tables():
     found = [_SAMPLE]
     for pattern in (os.path.join(_REPO, "data", "podcasts", "*.tsv"),
                     os.path.join(_REPO, "*.tsv")):
         found += sorted(glob.glob(pattern))
-    return [p for p in found if os.path.isfile(p)]
+    return [p for p in found
+            if os.path.isfile(p) and not _git_ignored(p, _REPO)]
 
 
 def test_the_sample_table_ships_with_the_repository():
     assert os.path.isfile(_SAMPLE)
 
 
-@pytest.mark.parametrize("table", _shipped_tables(),
+@pytest.mark.parametrize("table", _checked_tables(),
                          ids=lambda p: os.path.basename(p))
 def test_a_table_in_this_checkout_is_valid(table):
     faults = io.StringIO()
     _rows, _profile, _jobs, status = pf.read_podcast_table(table,
                                                            stderr=faults)
     assert status == 0, faults.getvalue()
+
+
+def test_gitignored_tables_are_kept_out_of_the_check(tmp_path):
+    """The rule the local tables once broke: what the repository's own
+    .gitignore keeps out is one machine's library, and the suite checks what
+    the repository is responsible for - so a table the checkout ignores
+    cannot fail the suite of a checkout that does not own it."""
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / ".gitignore").write_text("data/\n", encoding="utf-8")
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "ignored.tsv").write_text("", encoding="utf-8")
+    (tmp_path / "kept.tsv").write_text("", encoding="utf-8")
+    assert _git_ignored(str(tmp_path / "data" / "ignored.tsv"), str(tmp_path))
+    assert not _git_ignored(str(tmp_path / "kept.tsv"), str(tmp_path))
