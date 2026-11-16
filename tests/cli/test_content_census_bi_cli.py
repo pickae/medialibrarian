@@ -118,7 +118,7 @@ class TestWhatIsRefused:
     silently did not do it is worse than one that did not start."""
 
     def test_an_unknown_option_is_refused_with_the_usage(self, bi):
-        log = bi.bi("-x", bi.reports, expect=1)
+        log = bi.bi("--no-such-option", bi.reports, expect=1)
         assert "Usage:" in log
         assert "Nothing was changed" in log
 

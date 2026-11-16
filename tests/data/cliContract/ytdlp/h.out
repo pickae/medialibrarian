@@ -78,6 +78,11 @@ Options:
                     failure print the tool's whole output rather than its last
                     lines.
     -q, --quiet     Print errors only - no progress and no warnings.
+    -x, --set <name=value>
+                    Override a setting for this run: name=value, repeatable. The
+                    value is held where the environment holds it, so it wins
+                    over the settings file; a secret is refused - the settings
+                    file is where it goes. The settings page lists the names.
 
 A table says what it is with a "#!profile <name>" line, one of:
     youtubeAudio    (the default) audio only, SponsorBlock segments cut out,

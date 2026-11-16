@@ -124,7 +124,7 @@ def test_one_letter_never_gets_two_names_or_one_name_two_letters():
         assert len(set(names)) == len(names), f"{stem}: name twice"
 
 
-# --- the shared -v and -q -----------------------------------------------------
+# --- the shared -v, -q and -x -------------------------------------------------
 # One meaning on every page: a letter that says "quiet" in one command and
 # "quality" in the next is the thing these replaced.
 
@@ -132,25 +132,81 @@ def test_one_letter_never_gets_two_names_or_one_name_two_letters():
 _NO_OPTIONS = {"cue_to_chapters"}
 
 
-def test_every_command_takes_the_shared_v_and_q():
+def test_every_command_takes_the_shared_options():
     missing = []
     for stem, declaration in _cli_modules():
         if stem in _NO_OPTIONS:
             continue
         longs = dict(clioptions.long_pairs(declaration))
-        if longs.get("v") != "verbose" or longs.get("q") != "quiet":
+        if longs.get("v") != "verbose" or longs.get("q") != "quiet" \
+                or longs.get("x") != "set":
             missing.append(stem)
-    assert not missing, "without the shared -v/-q: %s" % missing
+    assert not missing, "without the shared -v/-q/-x: %s" % missing
 
 
 def test_and_words_them_the_shared_way():
-    """Built through clioptions.with_verbosity rather than written out, so a
-    page cannot drift into its own wording of the two."""
+    """Built through clioptions.with_shared_options rather than written out,
+    so a page cannot drift into its own wording of the three."""
     drifted = []
     for stem, declaration in _cli_modules():
         if stem in _NO_OPTIONS:
             continue
-        if clioptions.verbosity_options(declaration.column) \
+        if clioptions.shared_option_lines(declaration.column) \
                 not in declaration.options:
             drifted.append(stem)
-    assert not drifted, "-v/-q worded their own way: %s" % drifted
+    assert not drifted, "-v/-q/-x worded their own way: %s" % drifted
+
+
+# --- -x through a real run ------------------------------------------------------
+# The spec-level checks above settle what every page says; these settle what a
+# run the option was typed on does with it.
+
+
+class TestTheSettingOverrideInARealRun:
+    """A value the registry does not know is refused before the run does
+    anything, and one it does is in force for the run that typed it."""
+
+    @pytest.mark.parametrize("value, needle", [
+        ("tmdbApiKey=abc",
+         "is a secret and is not taken on the command line"),
+        ("tmdbApiKe=abc", 'did you mean "tmdbApiKey"'),
+        ("nope=1", 'The -x setting "nope" is not known'),
+        ("notasetting", "name=value"),
+    ])
+    def test_a_refused_value_changes_nothing(self, sandbox, value, needle):
+        done = sandbox.run("concat-audio", "-x", value, "no-such-dir", "out")
+        assert done.returncode == 1
+        assert needle in done.stderr
+        assert "Nothing was changed." in done.stderr
+
+    def test_a_known_value_is_accepted_and_the_run_goes_on(self, sandbox):
+        done = sandbox.run("concat-audio", "-x", "infoLogLevel=quiet",
+                           "no-such-dir", "out")
+        assert done.returncode == 1
+        assert 'Directory "no-such-dir" does not exist.' in done.stderr
+
+    def test_a_value_is_in_force_for_the_run_that_typed_it(self, sandbox):
+        """The override lands in the run's environment as the parse ends, and
+        the run reads its settings after it parses: the run's own info log
+        carries the level the override settled."""
+        import shutil
+        from pathlib import Path
+
+        from medialib.lib import runlog
+        if not shutil.which("duckdb"):
+            pytest.fail("the host has no duckdb: the info log is what is "
+                        "under test")
+        reports = sandbox.work / "reports"
+        reports.mkdir()
+        (reports / "booksShelf.csv").write_text(
+            "path,sizeBytes,pages,words,characters\n"
+            "%s/Books/a.txt,50000,300,80000,450000\n" % sandbox.work,
+            encoding="utf-8")
+        done = sandbox.run("content-census-bi", "-x", "infoLogLevel=verbose",
+                           "-s", str(reports))
+        assert done.returncode == 0, done.stdout + done.stderr
+        log_dir = Path(os.environ["CLI_SCRIPT_DIR"]) / "logs" \
+            / runlog.INFO_DIR
+        files = list(log_dir.iterdir())
+        assert len(files) == 1, files
+        assert "keeps:    verbose" in files[0].read_text(encoding="utf-8")

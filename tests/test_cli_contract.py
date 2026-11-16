@@ -33,8 +33,9 @@ pytestmark = pytest.mark.fs
 _FIXTURES = blackbox.DATA / "cliContract"
 _REGEN = bool(os.environ.get("REGEN", ""))
 
-# `cue-to-chapters` parses no options at all, so -x there is a path name and it
-# has no unknown-flag shape to pin; and with no options there is no help page.
+# `cue-to-chapters` parses no options at all, so a flag there is a path name and
+# it has no unknown-flag shape to pin; and with no options there is no help
+# page.
 _NO_OPTIONS = {"cue-to-chapters"}
 
 # The one argument position every one of these checks before doing anything. A
@@ -59,7 +60,8 @@ def _scenarios():
             yield command, "h", ["-h"]
         yield command, "noargs", []
         if command not in _NO_OPTIONS:
-            yield command, "errUnknown", ["-x"]
+            # -x is the shared override, so the unknown flag is asked for long.
+            yield command, "errUnknown", ["--no-such-option"]
         if command in _MISSING_DIR:
             yield command, "missingDir", _MISSING_DIR[command]
 

@@ -7,6 +7,11 @@ that is set) - one `name=value` per line, the way a shell profile writes
 it, `export` and quotes allowed. The environment wins, so one run can
 override the file without editing it.
 
+Every command that takes options can override a setting for one run
+with `-x name=value`, repeatable: the value lands in the run's
+environment and wins over the file. A secret is not taken there - the
+file is where it goes.
+
 A file that holds a secret (marked below) must be readable by you alone -
 `chmod 600` - or every command refuses to start. A name in the file that
 no command reads is warned about.

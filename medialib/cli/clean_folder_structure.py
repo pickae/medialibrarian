@@ -91,7 +91,7 @@ DATE_PREFIX = r"^([12][0-9]{3})[ ./_-]([01][0-9])[ ./_-]([0-3][0-9])[ ./_-](.+)$
 
 
 def spec(program: str) -> clioptions.Spec:
-    return clioptions.with_verbosity(clioptions.Spec(
+    return clioptions.with_shared_options(clioptions.Spec(
         head=USAGE_HEAD.format(program=program),
         options=OPT_SPEC,
         long=OPT_LONG,

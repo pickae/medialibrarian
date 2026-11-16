@@ -6,6 +6,7 @@ they have to be reproduced at all.
 """
 
 import inspect
+import os
 
 import pytest
 
@@ -564,21 +565,21 @@ class TestRenderingTheLongForms:
             "    -c, --clean     clean")
 
 
-class TestTheSharedVerbosityFlags:
-    """-v and -q, worded once and settled for the whole run."""
+class TestTheSharedFlags:
+    """-v, -q and -x, worded once; -v and -q settled for the whole run."""
 
-    def verbosity_spec(self, column=20):
-        return spec(options=cli.verbosity_options(column) + "h |  | help.\n",
-                    long=cli.VERBOSITY_LONG + " h:help", column=column)
+    def shared_spec(self, column=20):
+        return spec(options=cli.shared_option_lines(column) + "h |  | help.\n",
+                    long=cli.SHARED_LONG + " h:help", column=column)
 
     @pytest.mark.parametrize("column", [12, 18, 20])
     def test_the_lines_fit_80_columns_at_any_column(self, column):
-        page = cli.render_options(self.verbosity_spec(column))
+        page = cli.render_options(self.shared_spec(column))
         assert "--verbose" in page and "--quiet" in page
         assert max(len(line) for line in page.split("\n")) <= 80
 
     def test_continuation_lines_start_at_the_column(self):
-        page = cli.render_options(self.verbosity_spec(20))
+        page = cli.render_options(self.shared_spec(20))
         for line in page.split("\n"):
             if not line.lstrip().startswith("-"):
                 assert line.startswith(" " * 20) and line[20] != " "
@@ -589,36 +590,126 @@ class TestTheSharedVerbosityFlags:
     def test_the_level_is_settled_for_the_run(self, monkeypatch, argv, level):
         from medialib.lib import runlog
         monkeypatch.delenv("LOG_VERBOSITY", raising=False)
-        result = cli.parse(self.verbosity_spec(), argv)
+        result = cli.parse(self.shared_spec(), argv)
         assert cli.settle_verbosity(result) == level
         assert runlog.verbosity() == level
 
     def test_neither_keeps_the_level_a_parent_handed_down(self, monkeypatch):
         from medialib.lib import runlog
         monkeypatch.setenv("LOG_VERBOSITY", "quiet")
-        result = cli.parse(self.verbosity_spec(), [])
+        result = cli.parse(self.shared_spec(), [])
         assert cli.settle_verbosity(result) == runlog.QUIET
         assert runlog.verbosity() == runlog.QUIET
 
     def test_both_at_once_is_refused(self, monkeypatch):
         monkeypatch.delenv("LOG_VERBOSITY", raising=False)
-        result = cli.parse(self.verbosity_spec(), ["-vq"])
+        result = cli.parse(self.shared_spec(), ["-vq"])
         with pytest.raises(cli.UsageError, match="-v and -q"):
             cli.settle_verbosity(result)
 
 
 
-class TestWithVerbosity:
+class TestWithSharedOptions:
     def test_the_shared_lines_end_the_block_and_the_names_join_the_long(self):
-        built = cli.with_verbosity(spec(options="a |  | Something.\n",
-                                        long="a:something", column=20))
+        built = cli.with_shared_options(spec(options="a |  | Something.\n",
+                                             long="a:something", column=20))
         assert built.options.startswith("a |  | Something.\n")
         letters = [cli._entry_letter(line)
                    for line in built.options.split("\n")]
-        assert [letter for letter in letters if letter] == ["a", "v", "q"]
-        assert built.long == "a:something v:verbose q:quiet"
+        assert [letter for letter in letters if letter] == ["a", "v", "q",
+                                                            "x"]
+        assert built.long == "a:something v:verbose q:quiet x:set"
 
     def test_a_block_without_its_final_break_gets_one(self):
-        built = cli.with_verbosity(spec(options="a |  | Something.",
-                                        column=20))
+        built = cli.with_shared_options(spec(options="a |  | Something.",
+                                             column=20))
         assert "Something.\nv |  |" in built.options
+
+    def test_the_override_is_repeatable_and_marked_for_application(self):
+        built = cli.with_shared_options(spec(options="a |  | Something.\n",
+                                             column=20))
+        assert "repeat:x" in built.flags and "override:x" in built.flags
+        assert built.vars.split()[-1] == "x:setValues"
+
+
+class TestTheSettingOverride:
+    """-x name=value, the one-run override of a setting.
+
+    The value lands in this process's environment, where the settings are
+    read from; the environment wins over the settings file, so the override
+    wins over the file without the file being edited.
+    """
+
+    def spec(self):
+        return cli.with_shared_options(spec(options="a |  | Something.\n",
+                                            long="a:something", column=20))
+
+    def test_the_value_lands_in_the_environment(self, monkeypatch):
+        monkeypatch.delenv("infoLogLevel", raising=False)
+        result = cli.parse(self.spec(), ["-x", "infoLogLevel=quiet", "dir"])
+        assert os.environ["infoLogLevel"] == "quiet"
+        assert result.values["setValues"] == ["infoLogLevel=quiet"]
+        assert result.positionals == ["dir"]
+
+    @pytest.mark.parametrize("argv", [
+        ["--set", "imageGpuEncoder=none"],
+        ["--set=imageGpuEncoder=none"],
+    ])
+    def test_the_long_forms_take_it(self, monkeypatch, argv):
+        monkeypatch.delenv("imageGpuEncoder", raising=False)
+        cli.parse(self.spec(), argv)
+        assert os.environ["imageGpuEncoder"] == "none"
+
+    def test_repeatable_and_the_last_wins(self, monkeypatch):
+        monkeypatch.delenv("infoLogLevel", raising=False)
+        cli.parse(self.spec(), ["-x", "infoLogLevel=quiet",
+                                "-x", "infoLogLevel=verbose"])
+        assert os.environ["infoLogLevel"] == "verbose"
+
+    def test_a_value_may_itself_hold_equals(self, monkeypatch):
+        monkeypatch.delenv("plexUrl", raising=False)
+        cli.parse(self.spec(), ["-x", "plexUrl=http://host:32400/x?a=b"])
+        assert os.environ["plexUrl"] == "http://host:32400/x?a=b"
+
+    def test_an_empty_value_sets_an_empty_setting(self, monkeypatch):
+        monkeypatch.setenv("imageGpuEncoder", "av1gpu")
+        cli.parse(self.spec(), ["-x", "imageGpuEncoder="])
+        assert os.environ["imageGpuEncoder"] == ""
+
+    def test_the_override_wins_over_the_settings_file(self, monkeypatch,
+                                                      tmp_path):
+        from medialib.lib import settings
+        settings_file = tmp_path / "settings"
+        settings_file.write_text("infoLogLevel=verbose\n", encoding="utf-8")
+        monkeypatch.setenv("CLI_SETTINGS_FILE", str(settings_file))
+        monkeypatch.delenv("infoLogLevel", raising=False)
+        settings.load()
+        assert os.environ["infoLogLevel"] == "verbose"
+        cli.parse(self.spec(), ["-x", "infoLogLevel=off"])
+        assert os.environ["infoLogLevel"] == "off"
+
+    def test_a_value_without_equals_is_refused(self):
+        with pytest.raises(cli.UsageError,
+                           match=r'name=value \(got "foo"\)'):
+            cli.parse(self.spec(), ["-x", "foo"])
+
+    def test_an_unknown_setting_is_refused_suggesting_the_nearest(self):
+        with pytest.raises(cli.UsageError,
+                           match=r'not known - did you mean "infoLogLevel"'):
+            cli.parse(self.spec(), ["-x", "infoLogLevl=quiet"])
+
+    def test_an_unknown_setting_far_from_any_is_refused_without_a_guess(self):
+        with pytest.raises(cli.UsageError,
+                           match=r'The -x setting "zzz" is not known\.$'):
+            cli.parse(self.spec(), ["-x", "zzz=1"])
+
+    def test_a_secret_is_refused_for_the_settings_file(self):
+        with pytest.raises(cli.UsageError,
+                           match=r'is a secret and is not taken on the '
+                           r'command line'):
+            cli.parse(self.spec(), ["-x", "plexToken=abc"])
+
+    def test_a_spec_without_the_shared_options_does_not_take_x(self):
+        plain = spec(options="a |  | Something.\n", column=20)
+        with pytest.raises(cli.UsageError, match="Unknown option: -x"):
+            cli.parse(plain, ["-x", "infoLogLevel=quiet"])

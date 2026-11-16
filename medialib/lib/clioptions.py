@@ -14,13 +14,15 @@ happens at ``--``. So it is implemented here, in silent mode.
 from __future__ import annotations
 
 import dataclasses
+import difflib
+import os
 import re
 import sys
 import textwrap
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from medialib.lib import errorlog, runlog
+from medialib.lib import errorlog, runlog, settings
 
 # The C-locale [[:space:]] set. Python's str.strip() with no argument strips a
 # great deal more than this, and a spec field is allowed to hold any of it.
@@ -35,14 +37,22 @@ _ENTRY = re.compile(r"[a-zA-Z][ \t\n\v\f\r]*\|")
 DEFAULT_CREDITS = "David Ernst"
 DEFAULT_COLUMN = 20
 
-# The -v and -q every command shares, worded once. The long names go into a
+# The -v, -q and -x every command shares, worded once. The long names go into a
 # spec's ``long`` field as they are; the option lines come from
-# :func:`verbosity_options`, which wraps them for the spec's own column.
-VERBOSITY_LONG = "v:verbose q:quiet"
-_VERBOSITY_HELP = (
-    ("v", "Also say why each item was handled the way it was, and on a "
+# :func:`shared_option_lines`, which wraps them for the spec's own column. -x
+# is the only one of the three that takes a value: name=value, repeatable,
+# validated against the settings registry as the parse ends and applied to
+# this process's environment, where the settings are read from.
+SHARED_LONG = "v:verbose q:quiet x:set"
+_SHARED_HELP = (
+    ("v", "", "Also say why each item was handled the way it was, and on a "
           "failure print the tool's whole output rather than its last lines."),
-    ("q", "Print errors only - no progress and no warnings."),
+    ("q", "", "Print errors only - no progress and no warnings."),
+    ("x", "<name=value>",
+          "Override a setting for this run: name=value, repeatable. The value "
+          "is held where the environment holds it, so it wins over the "
+          "settings file; a secret is refused - the settings file is where it "
+          "goes. The settings page lists the names."),
 )
 
 
@@ -89,6 +99,7 @@ class Tables:
     check_kind: dict = field(default_factory=dict)
     check_label: dict = field(default_factory=dict)
     long_letter: dict = field(default_factory=dict)
+    setting_override: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -154,6 +165,10 @@ def flag_tables(spec: Spec, tables: Tables | None = None) -> Tables:
                 # rest[1] is the separating colon, skipped without being checked -
                 # a malformed entry declares a regex, not an error.
                 tables.opt_regex[rest[0]] = rest[2:]
+        elif flag.startswith("override:"):
+            # The option whose value overrides a setting, applied to this
+            # process's environment as the parse ends; see parse().
+            tables.setting_override[flag[len("override:"):]] = 1
     for line in _lines(spec.options):
         letter = _entry_letter(line)
         # The skip is a memo on "already known to take an argument", not on
@@ -426,31 +441,39 @@ def refuse_missing_dir(spec: Spec, directory: str) -> None:
                     files=[directory], stack=False)
 
 
-def verbosity_options(column: int) -> str:
-    """The -v and -q option lines, wrapped to 80 columns at ``column``.
+def shared_option_lines(column: int) -> str:
+    """The shared -v, -q and -x option lines, wrapped to 80 columns at
+    ``column``.
 
-    A spec appends this to its own ``options`` and :data:`VERBOSITY_LONG` to its
-    ``long``, so every command's page words the two the same way. Wrapped here
-    and not written out because a continuation line is emitted as it stands,
-    and each spec has its own column to indent it to.
+    A spec appends this to its own ``options`` and :data:`SHARED_LONG` to its
+    ``long``, so every command's page words the three the same way. Wrapped
+    here and not written out because a continuation line is emitted as it
+    stands, and each spec has its own column to indent it to.
     """
     lines = []
-    for letter, help_text in _VERBOSITY_HELP:
+    for letter, placeholder, help_text in _SHARED_HELP:
         wrapped = textwrap.wrap(help_text, width=80 - column)
-        lines.append(f"{letter} |  | {wrapped[0]}")
+        lines.append(f"{letter} | {placeholder} | {wrapped[0]}")
         lines.extend(" " * column + rest for rest in wrapped[1:])
     return "\n".join(lines) + "\n"
 
 
-def with_verbosity(spec: Spec) -> Spec:
-    """``spec`` with the shared -v and -q added: their lines at the end of its
-    option block, their long names after its own. Every command's page is
-    built through this, so the two read the same everywhere."""
+def with_shared_options(spec: Spec) -> Spec:
+    """``spec`` with the shared -v, -q and -x added: their lines at the end of
+    its option block, their long names after its own. Every command's page is
+    built through this, so the three read the same everywhere.
+
+    -x declares a repeatable value in a variable of its own and marks its
+    letter for the application :func:`parse` makes at the end of it, so a
+    command gets the override without saying anything about it."""
     options = spec.options if spec.options.endswith("\n") \
         else spec.options + "\n"
+    flags = spec.flags + (" " if spec.flags else "") + "repeat:x override:x"
     return dataclasses.replace(
-        spec, options=options + verbosity_options(spec.column),
-        long=(spec.long + " " + VERBOSITY_LONG).strip())
+        spec, options=options + shared_option_lines(spec.column),
+        long=(spec.long + " " + SHARED_LONG).strip(),
+        vars=(spec.vars + " x:setValues").strip(),
+        flags=flags)
 
 
 def settle_verbosity(result: Result) -> int:
@@ -691,8 +714,48 @@ def parse(
             break
         positionals.append(remaining[0])
         remaining = remaining[1:]
+    for letter in tables.setting_override:
+        name = _variable_for(spec, letter)
+        if name is not None:
+            for value in result.values.get(name, ()):
+                _apply_setting_override(value)
     result.positionals = positionals
     return result
+
+
+def _variable_for(spec: Spec, letter: str) -> str | None:
+    """The variable a letter assigns to: the first of its pairs, the same
+    rule the assignment below follows."""
+    for pair_letter, name in var_pairs(spec):
+        if pair_letter == letter:
+            return name
+    return None
+
+
+def _apply_setting_override(value: str) -> None:
+    """One -x value, name=value: validated against the settings registry and
+    written to this process's environment, where the settings are read from.
+
+    The environment wins over the settings file - settings.load() set the
+    file under what the environment already said - so a value applied here
+    wins over the file without the file being edited. It lands before the
+    command reads any of its settings, which is what makes it an override
+    rather than a second settings source: a run reads nothing of its settings
+    between its start and its parse.
+    """
+    name, sep, setting_value = value.partition("=")
+    if not sep or not name:
+        raise UsageError(f'The -x value must be name=value (got "{value}").')
+    setting = settings.BY_NAME.get(name)
+    if setting is None:
+        near = difflib.get_close_matches(name, settings.BY_NAME, n=1)
+        hint = f' - did you mean "{near[0]}"?' if near else ""
+        raise UsageError(f'The -x setting "{name}" is not known{hint}.')
+    if setting.secret:
+        raise UsageError(
+            f'The setting "{name}" is a secret and is not taken on the '
+            f'command line - put it in the settings file instead.')
+    os.environ[name] = setting_value
 
 
 def _one_option(spec, tables, result, state, got, on_opt) -> None:
