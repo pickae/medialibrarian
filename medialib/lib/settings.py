@@ -95,6 +95,10 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("subDlApiKey", "API key of a free SubDL account, asked third for subtitles",
             ("ingest-movies",), secret=True),
     # --- what a run keeps
+    Setting("keepLanguages", "The languages ingest-movies' improved copy keeps "
+            "beside the film's own language: a comma list of ISO 639-1 codes "
+            "the language table knows; the film's own language is kept "
+            "whatever it says", ("ingest-movies",), "en"),
     Setting("infoLogLevel", "How much of what a run says is kept in "
             "`logs/info/`, one file per run: `off`, `quiet` (errors and results), "
             "`normal` or `verbose` - apart from the console's `-q` and `-v`",

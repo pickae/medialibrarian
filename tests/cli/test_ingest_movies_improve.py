@@ -730,7 +730,36 @@ class TestWhatAFilmSays:
         _movie, logs = improve(tracks)
         assert ("  Keeping the film's original language (ja, per TMDb), the "
                 "first audio track's (de, which TMDb lists as spoken in it) "
-                "and English") in logs
+                "and the kept languages (en)") in logs
+        assert [t.action for t in tracks[1:]] == ["keep", "keep", "drop"]
+
+    def test_the_kept_languages_are_the_run_s(self, improve, monkeypatch):
+        """The run's kept languages keep what they name: with de in place of
+        the default en, the German track is kept and the English one is not,
+        and the run says the list it kept by."""
+        monkeypatch.setattr(run_module.Run, "keep_languages", ("de",),
+                            raising=False)
+        monkeypatch.setattr(
+            run_module.Run, "film_languages",
+            lambda self, movie: run_module.tmdbidentify.FilmLanguages(
+                "ja", ("ja", "de")))
+        monkeypatch.setattr(run_module.Run, "remux", lambda *a: None)
+        tracks = [rules.Track(id="0", type="video", codec="V_MPEG4/ISO/AVC"),
+                  rules.Track(id="1", type="audio", codec="A_AC3",
+                              channels="6", language="ger",
+                              language_ietf="de"),
+                  rules.Track(id="2", type="audio", codec="A_AC3",
+                              channels="6", language="jpn",
+                              language_ietf="ja"),
+                  rules.Track(id="3", type="audio", codec="A_AC3",
+                              channels="6", language="eng",
+                              language_ietf="en")]
+        _movie, logs = improve(tracks)
+        assert ("  Keeping the film's original language (ja, per TMDb), the "
+                "first audio track's (de, which TMDb lists as spoken in it) "
+                "and the kept languages (de)") in logs
+        # German is kept whether the setting names it or the film speaks it;
+        # English no longer is.
         assert [t.action for t in tracks[1:]] == ["keep", "keep", "drop"]
 
     def test_a_film_that_needs_nothing_is_one_line(self, improve):

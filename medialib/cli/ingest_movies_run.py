@@ -157,22 +157,27 @@ class Run:
         rules._object_flags(movie, tracks)
 
         keep_all = getattr(self, "keep_all", False)
+        kept = getattr(self, "keep_languages", ("en",))
         film = self.film_languages(movie)
         changed = rules.decide_actions(tracks, movie, self.ram_root,
-                                       film.original, film.spoken, keep_all)
+                                       film.original, film.spoken, keep_all,
+                                       kept)
         choice = rules.choose_languages(tracks, film.original, film.spoken)
         if choice.original and choice.first and not keep_all \
                 and not languages.speaks(choice.first, "", choice.original):
             if not choice.keep_first:
                 say("  Keeping the film's original language (%s, per TMDb) "
-                    "and English, not the first audio track's (%s)"
-                    % (choice.original, choice.first))
+                    "and the kept languages (%s), not the first audio "
+                    "track's (%s)"
+                    % (choice.original, ", ".join(kept), choice.first))
             else:
                 say("  Keeping the film's original language (%s, per TMDb), "
-                    "the first audio track's (%s, %s) and English"
+                    "the first audio track's (%s, %s) and the kept languages "
+                    "(%s)"
                     % (choice.original, choice.first,
                        "which TMDb lists as spoken in it" if film.spoken
-                       else "TMDb lists no spoken languages"))
+                       else "TMDb lists no spoken languages",
+                       ", ".join(kept)))
         for position in ([] if keep_all
                          else rules.drop_audio_descriptions(tracks)):
             changed = True
@@ -237,13 +242,14 @@ class Run:
         primary = next((enums.shell_lower(track.language) for track in tracks
                         if track.is_audio), "")
         choice = rules.choose_languages(tracks, film.original, film.spoken)
+        kept = getattr(self, "keep_languages", ("en",))
 
         def keeps(audio) -> bool:
             if getattr(self, "keep_all", False):
                 return True
             return rules._language_kept(
                 rules.Track(language=audio.language, language_ietf=audio.ietf),
-                primary, choice)
+                primary, choice, kept)
         return keeps
 
     def carry_names(self, movie: str, names: list) -> str:
@@ -899,6 +905,15 @@ def main(argv: list, program: str = "ingest-movies",
         sys.stderr.write(clioptions.no_args_text(declaration))
         return 1
 
+    # The languages the improved copy keeps beside a film's own, read once
+    # here, before any film is touched: a code the language table does not
+    # know is refused with the page, like a bad option.
+    try:
+        kept = rules.kept_languages()
+    except clioptions.UsageError as error:
+        clioptions.refuse_usage(declaration, error.message)
+        return 1
+
     # -w carries out a dry run, and without -t, -i or -s there is none to
     # carry out. Refused rather than ignored: a -tw typed as -w would otherwise
     # be a full ingest, hours of converting and remuxing, on a library asked
@@ -1055,7 +1070,7 @@ def main(argv: list, program: str = "ingest-movies",
 
     try:
         return _run_phases(result, program, script_dir, roots, names,
-                           fragments_file)
+                           fragments_file, kept)
     finally:
         # Every phase below can pin an ffmpeg or settle a run directory, and
         # each refusal after that must hand it back, not only a finished run.
@@ -1063,7 +1078,8 @@ def main(argv: list, program: str = "ingest-movies",
 
 
 def _run_phases(result, program: str, script_dir: str, roots: list,
-                names: list, fragments_file: str) -> int:
+                names: list, fragments_file: str,
+                kept: tuple = ("en",)) -> int:
     # Commentary only is the one phase of the full ingest it names, run on the
     # folders given: the walk and the transcription, and not the rest of the
     # run around them.
@@ -1098,7 +1114,8 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
                                             "ffprobe", "ffmpeg"]):
             return 1
         return plexphase.compare_roots(roots, log,
-                                       keeps_for=Run().carry_keeps)
+                                       keeps_for=Run(
+                                           keep_languages=kept).carry_keeps)
 
     # An id list is only ever read by the tagging phase, so asking for one asks
     # for that phase.
@@ -1213,7 +1230,8 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
                 unsure_commentaries=unsure_commentaries, disk_turns=disk_turns,
                 scratch_headroom=0,
                 convert_remuxes=bool(result.values.get("convertRemuxes")),
-                keep_all=bool(result.values.get("keepAll")))
+                keep_all=bool(result.values.get("keepAll")),
+                keep_languages=kept)
 
     listed = dict(zip(roots, names, strict=True))
     try:
