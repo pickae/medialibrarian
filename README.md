@@ -155,9 +155,10 @@ one command is under
 Logins, API keys and the knobs the commands are tuned with are environment
 variables, read from the environment a command starts in or from one settings
 file, `~/.config/medialib/settings`, written the way a shell profile writes
-them. A file that holds a secret has to be private (`chmod 600`). Every
-setting, what it does and which commands read it is listed in
-[Settings](docs/settings.md).
+them. One run overrides a setting with `-x name=value` on any command line,
+repeatable — secrets excepted, which stay in the file. A file that holds a
+secret has to be private (`chmod 600`). Every setting, what it does and which
+commands read it is listed in [Settings](docs/settings.md).
 
 ## File safety
 

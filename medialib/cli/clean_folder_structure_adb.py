@@ -64,7 +64,7 @@ _PRIMARY_WORDS = frozenset(("phone", "shared", "primary"))
 
 
 def spec(program: str) -> clioptions.Spec:
-    return clioptions.with_verbosity(clioptions.Spec(
+    return clioptions.with_shared_options(clioptions.Spec(
         head=USAGE_HEAD.format(program=program),
         options=OPT_SPEC,
         long=OPT_LONG,

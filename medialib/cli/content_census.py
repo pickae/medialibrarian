@@ -74,7 +74,7 @@ OPT_LONG = "d:depth o:output-dir a:adequacy b:build-cubes t:tsv h:help"
 
 def spec(program: str) -> clioptions.Spec:
     """The script's declaration, with the program name it is started under."""
-    return clioptions.with_verbosity(clioptions.Spec(
+    return clioptions.with_shared_options(clioptions.Spec(
         head=USAGE_HEAD.format(program=program),
         options=OPT_SPEC,
         long=OPT_LONG,

@@ -50,7 +50,7 @@ class TestTheContract:
     @pytest.mark.parametrize("scenario,argv", [
         ("h", ["-h"]),
         ("noargs", []),
-        ("errUnknown", ["-x"]),
+        ("errUnknown", ["--no-such-option"]),
     ])
     def test_the_recorded_scenario_is_reproduced_byte_for_byte(self, scenario,
                                                                argv):
