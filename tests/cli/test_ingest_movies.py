@@ -8,6 +8,7 @@ rules this script owns.
 import pytest
 
 from medialib.cli import ingest_movies as im
+from medialib.lib import clioptions
 
 pytestmark = pytest.mark.pure
 
@@ -216,10 +217,10 @@ class TestBonusCategoryFor:
 
 class TestLanguageAllowed:
     """Which languages the improved copy keeps: the first audio track's and
-    English, plus the ones there is nothing to judge."""
+    the kept languages, plus the ones there is nothing to judge."""
 
     @pytest.mark.parametrize("language", ["eng", "en", "ENG"])
-    def test_english_is_always_kept(self, language):
+    def test_english_is_kept_by_default(self, language):
         assert im.language_allowed(language, "ger") is True
 
     def test_and_so_is_the_first_audio_tracks_own_language(self):
@@ -236,6 +237,60 @@ class TestLanguageAllowed:
     @pytest.mark.parametrize("language", ["fra", "spa", "ita"])
     def test_any_other_language_is_excessive(self, language):
         assert im.language_allowed(language, "ger") is False
+
+    @pytest.mark.parametrize("language", ["de", "deu", "ger"])
+    def test_a_kept_language_is_kept_however_it_is_spelled(self, language):
+        """The match goes through languages.speaks: the two-letter code, the
+        639-2/T and the 639-2/B spelling are all the same German."""
+        assert im.language_allowed(language, "jpn", ("de",)) is True
+
+    @pytest.mark.parametrize("language", ["ita", "spa", "fra"])
+    def test_a_language_not_kept_is_excessive_with_another_setting(self, language):
+        assert im.language_allowed(language, "jpn", ("de",)) is False
+
+    def test_english_is_kept_only_while_the_setting_names_it(self):
+        assert im.language_allowed("eng", "jpn", ("de",)) is False
+        assert im.language_allowed("eng", "jpn", ("de", "en")) is True
+
+    def test_every_language_the_setting_names_is_kept(self):
+        assert im.language_allowed("ita", "jpn", ("de", "it")) is True
+        assert im.language_allowed("fra", "jpn", ("de", "it")) is False
+
+
+class TestTheKeptLanguagesSetting:
+    """keepLanguages: the setting's value, read once and held as a tuple of
+    codes, refused when the language table does not know a code."""
+
+    def test_unset_is_english(self, monkeypatch):
+        monkeypatch.delenv("keepLanguages", raising=False)
+        assert im.kept_languages() == ("en",)
+
+    def test_empty_is_the_unset_one(self, monkeypatch):
+        monkeypatch.setenv("keepLanguages", "")
+        assert im.kept_languages() == ("en",)
+
+    def test_the_list_is_held_in_order_and_the_commas_and_spaces_are_gone(
+            self, monkeypatch):
+        monkeypatch.setenv("keepLanguages", " de , fr,it")
+        assert im.kept_languages() == ("de", "fr", "it")
+
+    def test_a_code_is_read_the_way_the_table_spells_it(self, monkeypatch):
+        monkeypatch.setenv("keepLanguages", "DE")
+        assert im.kept_languages() == ("de",)
+
+    def test_a_code_the_table_does_not_know_is_refused(self, monkeypatch):
+        monkeypatch.setenv("keepLanguages", "en,pt")
+        with pytest.raises(clioptions.UsageError) as error:
+            im.kept_languages()
+        assert '"pt"' in error.value.message
+        assert "de, en, es, fr, it, nl" in error.value.message
+
+    def test_every_refusal_names_every_unknown_code(self, monkeypatch):
+        monkeypatch.setenv("keepLanguages", "pt,xx")
+        with pytest.raises(clioptions.UsageError) as error:
+            im.kept_languages()
+        assert '"pt"' in error.value.message
+        assert '"xx"' in error.value.message
 
 
 class TestTheFilmsOriginalLanguage:
