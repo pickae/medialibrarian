@@ -18,7 +18,7 @@ library, plus Opus copies to carry around.
 With no options, a run:
 
 - **de-duplicates the download folder and splits multi-disc rips there**, deleting identical files
-- re-encodes lossless tracks to 16-bit FLAC at most 48 kHz, and copies the rest
+- re-encodes lossless tracks to 16-bit FLAC at most 48 kHz (the source's own resolution with `-k`), and copies the rest
 - **tags and fetches covers, lyrics and genres with beets** (online)
 - cleans the names with [`clean-folder-structure`](clean-folder-structure.md)
 - makes 120 kbps Opus copies into `<ingestDir>opus` (`[opusCopyDir]`)
@@ -31,7 +31,7 @@ Each phase is in the [table below](#what-it-does).
 | Phase | What happens |
 | --- | --- |
 | Split | multi-disc CUE+image rips sharing one folder are split into a subfolder each (de-duplicating with `fdupes` first) |
-| Encode | every lossless source (FLAC/APE/ALAC/WAV/WavPack) is re-encoded to a normalised 16-bit FLAC (capped at 48 kHz, embedded cover scaled to at most fullHD), keeping its source's modification time; everything else is copied across with `rsync` |
+| Encode | every lossless source (FLAC/APE/ALAC/WAV/WavPack) is re-encoded to a normalised 16-bit FLAC (capped at 48 kHz - the source's own bit depth and sample rate with `-k` - embedded cover scaled to at most fullHD), keeping its source's modification time; everything else is copied across with `rsync` |
 | Tidy | large cover images become AVIF, stray video files are remuxed to MKV, and cue-sheet chapters are embedded into the flacs they describe. Cue sheets are read for their chapters first, and only the ones still without a FLAC of their own are then dropped |
 | Tag | the assembled output is tagged and organised with `beets`, using the config that ships with the package, with the import log written to `logs/beets.log` |
 | Clean | passed through [`clean-folder-structure`](clean-folder-structure.md) for final name cleanup and empty-folder pruning |

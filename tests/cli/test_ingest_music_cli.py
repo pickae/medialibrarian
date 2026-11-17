@@ -579,3 +579,300 @@ class TestALibraryRenamedInBetween:
         settled = blackbox.tree_of(music.library)
         music.ingest()
         assert blackbox.tree_of(music.library) == settled
+
+
+# --- -k resolution ------------------------------------------------------------
+# The one part this command keeps: the source's bit depth and sample rate.
+# The cases want the encoder's own call rather than the run's report, so the
+# ffmpeg stand-in records every call it is handed, argument by argument.
+
+# The ffprobe stub, with the source above the hearing threshold: the default
+# run's -ar is then the threshold itself, which is what the kept run's encode
+# must not carry. The stream also states a bitrate, because without one the
+# Opus copy step would judge the library flac "unknown" and copy it instead of
+# encoding it - and the encoder's call is what that step's cases assert on.
+_FFPROBE_HIRES = r"""
+file=""; prev=""
+for a in "$@"; do [[ "$prev" == "-i" ]] && file="$a"; prev="$a"; done
+[[ -n "$file" ]] || file="${!#}"
+[[ -e "$file" ]] || exit 0
+json=0; entries=""; prev=""
+for a in "$@"; do
+  [[ "$a" == "json" ]] && json=1
+  [[ "$prev" == "-show_entries" ]] && entries="$a"
+  prev="$a"
+done
+if (( json )); then
+  printf '{"streams":[{"codec_name":"flac","codec_type":"audio",'
+  printf '"sample_rate":"96000","bit_rate":"1000000"}],'
+  printf '"format":{"duration":"600.000"}}\n'
+  exit 0
+fi
+if [[ "$entries" == format_tags=* ]]; then
+  wanted="${entries#format_tags=}"
+  recorded="$(sed -n 2p -- "$file")"
+  [[ "$recorded" == "$wanted="* ]] && printf '%s\n' "${recorded#*=}"
+  exit 0
+fi
+[[ -n "$entries" ]] && { echo "600.000"; exit 0; }
+printf 'duration=600.000\n'
+"""
+
+
+@pytest.fixture
+def keep_music(sandbox, tmp_path):
+    """One 96 kHz lossless track, the whole release, with the encoder's calls
+    recorded: the -k cases are about what the ffmpeg is told, and the Opus
+    case is about what it is not told differently."""
+    for tool in _TOOLS:
+        if shutil.which(tool) is None:
+            conftest.missing_host_tool(
+                "the host has no %s: the command needs it to report what is "
+                "asserted here" % tool)
+    calls = sandbox.work / "ffmpeg-calls"
+    sandbox.with_tool("ffprobe", _FFPROBE_HIRES)
+    sandbox.with_tool("ffmpeg", _FFMPEG_CALLS(str(calls)))
+    sandbox.with_tool("convert", _CONVERT)
+    sandbox.with_tool("mkvmerge", _MKVMERGE)
+    sandbox.with_tools("fdupes", "beet", "mkvpropedit", "mkvextract")
+
+    download = tmp_path / "download"
+    album = download / "Album"
+    album.mkdir(parents=True)
+    (album / "one.flac").write_text("one")
+
+    library = tmp_path / "library"
+    opus = tmp_path / "libraryopus"
+
+    def run(*options, positionals=None):
+        done = sandbox.run("ingest-music", "-j", "2", *options,
+                           *(positionals or (download, library, opus)),
+                           timeout=900)
+        return done
+
+    sandbox.ffmpeg_calls = calls
+    sandbox.download = download
+    sandbox.library = library
+    sandbox.opus = opus
+    sandbox.ingest = run
+    return sandbox
+
+
+def _FFMPEG_CALLS(calls_file: str) -> str:
+    """The ffmpeg stand-in, with every call it gets recorded, argument by
+    argument, ahead of what it does with it."""
+    return (
+        "printf '%s\\n' \"$*\" >> " + calls_file + "\n"
+        + "out=\"${!#}\"; meta=\"\"; prev=\"\"\n"
+        + "for a in \"$@\"; do [[ \"$prev\" == \"-metadata\" ]] && "
+        + "meta=\"$a\"; prev=\"$a\"; done\n"
+        + "printf 'flac\\n%s\\n' \"$meta\" > \"$out\"\n")
+
+
+def _recorded_calls(calls_file) -> list[list[str]]:
+    """The ffmpeg calls the stand-in recorded, one list of arguments a line."""
+    if not calls_file.exists():
+        return []
+    return [line.split(" ") for line in calls_file.read_text().splitlines()
+            if line.strip()]
+
+
+def _encodes(calls: list[list[str]], suffix: str) -> list[list[str]]:
+    """The recorded calls that ENCODE a file ending in ``suffix``: an output
+    that is the last argument and an audio codec in the call, so a probe about
+    such a file is not one of them."""
+    return [argv for argv in calls
+            if len(argv) > 1 and argv[-1].endswith(suffix)
+            and "-c:a" in argv]
+
+
+class TestTheKeptResolution:
+    """-k resolution keeps the source's bit depth and sample rate: the track
+    is still re-encoded to FLAC - that is what makes the formats uniform - but
+    -sample_fmt and -ar are left out of the call, and the Opus copies made from
+    the finished library afterwards are not affected."""
+
+    def test_the_default_encode_is_sixteen_bit_capped_at_the_threshold(
+            self, keep_music):
+        done = keep_music.ingest()
+        assert done.returncode == 0, done.stdout + done.stderr
+        argv = _encodes(_recorded_calls(keep_music.ffmpeg_calls),
+                        ".flac")[0]
+        assert argv[argv.index("-sample_fmt") + 1] == "s16", argv
+        # The source is 96 kHz: the default run's rate is the threshold, not
+        # the source's.
+        assert argv[argv.index("-ar") + 1] == "48000", argv
+
+    def test_the_part_leaves_the_sample_arguments_out_of_the_call(
+            self, keep_music):
+        done = keep_music.ingest("-k", "resolution")
+        assert done.returncode == 0, done.stdout + done.stderr
+        argv = _encodes(_recorded_calls(keep_music.ffmpeg_calls),
+                        ".flac")[0]
+        assert "-sample_fmt" not in argv, argv
+        assert "-ar" not in argv, argv
+
+    def test_a_bare_k_keeps_every_part(self, keep_music):
+        """There is one part today, so the bare flag and the named one are the
+        same run - and they stay the same when the later parts land."""
+        done = keep_music.ingest("-k")
+        assert done.returncode == 0, done.stdout + done.stderr
+        argv = _encodes(_recorded_calls(keep_music.ffmpeg_calls),
+                        ".flac")[0]
+        assert "-sample_fmt" not in argv, argv
+        assert "-ar" not in argv, argv
+
+    def test_the_track_is_still_reencoded_to_flac(self, keep_music):
+        """What the part takes away is the normalisation, not the re-encode:
+        the call is the same FLAC encode with two arguments less."""
+        done = keep_music.ingest("-k", "resolution")
+        assert done.returncode == 0, done.stdout + done.stderr
+        argv = _encodes(_recorded_calls(keep_music.ffmpeg_calls),
+                        ".flac")[0]
+        assert argv[argv.index("-c:a") + 1] == "flac", argv
+        assert argv[argv.index("-f") + 1] == "flac", argv
+
+    def test_the_opus_call_is_unchanged_by_the_part(self, keep_music):
+        """The Opus copies are made from the finished library by the convert-
+        audio child, which the run hands the same arguments in both modes -
+        so the encoder's call is the one the modes cannot move. The copies are
+        deleted between the runs, because a second run over the first's
+        finished copies would skip them as up to date and hand the case one
+        call rather than two."""
+        keep_music.ingest()
+        calls = _recorded_calls(keep_music.ffmpeg_calls)
+        default_opus = _encodes(calls, ".opus")[0]
+        shutil.rmtree(keep_music.opus)
+        keep_music.ingest("-k", "resolution")
+        calls = _recorded_calls(keep_music.ffmpeg_calls)
+        kept_opus = _encodes(calls, ".opus")[-1]
+        assert default_opus == kept_opus
+        assert kept_opus[kept_opus.index("-c:a") + 1] == "libopus"
+        assert kept_opus[kept_opus.index("-b:a") + 1] == "120k"
+
+
+class TestTheWordAfterTheFlag:
+    """-k claims the word after it only when that word is a part, the way -t
+    claims a number: a part is claimed and the folder is left, a folder is
+    left and the run is a bare -k, and a clustered flag claims nothing at
+    all - because the word the option sits in is not a part."""
+
+    def test_a_folder_that_is_not_the_part_stays_a_folder(self, keep_music):
+        """The bare -k keeps every part, and the download directory is still
+        the first positional: the run has its three folders and takes
+        nothing away."""
+        done = keep_music.ingest("-k")
+        assert done.returncode == 0, done.stdout + done.stderr
+        argv = _encodes(_recorded_calls(keep_music.ffmpeg_calls),
+                        ".flac")[0]
+        assert "-ar" not in argv, argv
+        assert (keep_music.library / "Album" / "one.flac").is_file()
+
+    def test_the_named_part_is_claimed_and_the_folder_is_left(self,
+                                                              keep_music):
+        done = keep_music.ingest("-k", "resolution")
+        assert done.returncode == 0, done.stdout + done.stderr
+        argv = _encodes(_recorded_calls(keep_music.ffmpeg_calls),
+                        ".flac")[0]
+        assert "-ar" not in argv, argv
+        assert (keep_music.library / "Album" / "one.flac").is_file()
+
+    def test_the_long_form_says_the_same(self, keep_music):
+        done = keep_music.ingest("--keep=resolution")
+        assert done.returncode == 0, done.stdout + done.stderr
+        argv = _encodes(_recorded_calls(keep_music.ffmpeg_calls),
+                        ".flac")[0]
+        assert "-ar" not in argv, argv
+        assert (keep_music.library / "Album" / "one.flac").is_file()
+
+    def test_a_clustered_flag_keeps_the_folder_and_the_verbosity(
+            self, keep_music):
+        """-kv: the k claims nothing, because the cluster's own word is not a
+        part, and the v is the verbosity - so the run is a bare -k, said
+        more."""
+        done = keep_music.ingest("-kv")
+        assert done.returncode == 0, done.stdout + done.stderr
+        argv = _encodes(_recorded_calls(keep_music.ffmpeg_calls),
+                        ".flac")[0]
+        assert "-ar" not in argv, argv
+        assert (keep_music.library / "Album" / "one.flac").is_file()
+
+    def test_a_download_folder_literally_named_resolution(self, keep_music):
+        """The one name the flag would eat: written ./resolution, the word is
+        not the part, so the folder is the first positional after all."""
+        download = keep_music.work / "resolution"
+        (download / "Album").mkdir(parents=True)
+        (download / "Album" / "one.flac").write_text("one")
+        done = keep_music.ingest("-k",
+                                 positionals=("./resolution",
+                                              str(keep_music.library),
+                                              str(keep_music.opus)))
+        assert done.returncode == 0, done.stdout + done.stderr
+        assert (keep_music.library / "Album" / "one.flac").is_file()
+
+    def test_and_the_bare_name_is_the_part_not_the_folder(self, keep_music):
+        """The same folder written resolution, with no ./ to keep it from
+        being the part: the word goes to -k, the run's first positional is
+        the library - which does not exist yet, and the refusal names it."""
+        download = keep_music.work / "resolution"
+        (download / "Album").mkdir(parents=True)
+        (download / "Album" / "one.flac").write_text("one")
+        done = keep_music.ingest("-k", "resolution",
+                                 positionals=(str(keep_music.library),
+                                              str(keep_music.opus)))
+        log = done.stdout + done.stderr
+        assert done.returncode == 1, log
+        assert 'Directory "%s" does not exist' % str(keep_music.library) \
+            in log, log
+
+
+class TestAnUnknownPart:
+    """A part the run will not keep is refused with the page, like a bad
+    option. The part the value names is checked the one place that knows
+    the command's parts; what reaches it that is not one of them says so
+    and changes nothing."""
+
+    def test_the_long_form_refuses_a_part_the_command_does_not_keep(
+            self, sandbox):
+        done = sandbox.run("ingest-music", "--keep=covers")
+        log = done.stdout + done.stderr
+        assert done.returncode == 1, log
+        assert 'Option --keep does not take "covers"' in log, log
+        assert "Usage:" in log, log
+        assert "Nothing was changed." in log
+
+    def test_and_a_list_with_an_unknown_part_in_it(self, sandbox):
+        """The value is a comma list of parts, and one not among them is the
+        refusal: the page is printed and nothing is changed."""
+        done = sandbox.run("ingest-music", "--keep=resolution,covers")
+        log = done.stdout + done.stderr
+        assert done.returncode == 1, log
+        assert 'Option --keep does not take "resolution,covers"' in log, log
+        assert "Nothing was changed." in log
+
+
+class TestAReRunInTheOtherMode:
+    """A track ingested with the source's resolution kept is recognised, when
+    the next run is in the default mode, by the INGESTSOURCE tag the encoder
+    wrote into it - and the tag is the download the track came from, which
+    does not change with the mode the run is in. The library is renamed in
+    between, because the name is the check the tag exists to replace: a
+    recognition that survived the rename is the tag's, not the name's."""
+
+    @pytest.mark.parametrize("first,second", [
+        (["-k", "resolution"], []),
+        ([], ["-k", "resolution"]),
+    ], ids=["kept then default", "default then kept"])
+    def test_the_other_mode_recognises_what_this_one_ingested(
+            self, keep_music, first, second):
+        done = keep_music.ingest(*first)
+        assert done.returncode == 0, done.stdout + done.stderr
+        album = keep_music.library / "Album"
+        (album / "one.flac").rename(album / "renamed one.flac")
+        album.rename(keep_music.library / "Cleaned Album")
+        done = keep_music.ingest(*second)
+        log = done.stdout + done.stderr
+        assert done.returncode == 0, log
+        assert _stat(log, "  up to date") == "1", log
+        assert _stat(log, "  encoded") is None, log
+        assert len(list(keep_music.library.rglob("*.flac"))) == 1

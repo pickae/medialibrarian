@@ -1,8 +1,9 @@
 """ingest-music: a folder of freshly downloaded music, ingested into a clean
 lossless library.
 
-Every lossless source is re-encoded to a normalised FLAC, everything else is
-copied across, large cover images become AVIF, stray videos are remuxed to MKV,
+Every lossless source is re-encoded to a normalised FLAC (16-bit at 48 kHz or
+less, the source's own resolution with -k), everything else is copied across,
+large cover images become AVIF, stray videos are remuxed to MKV,
 cue sheets give up their chapters into the flacs they describe, and beets and
 `clean-folder-structure` finish the names off. The download tree itself is never
 renamed.
@@ -41,6 +42,7 @@ from medialib.lib import (
     imagecodecs,
     imagemagick,
     imagesizes,
+    keepparts,
     mutagentags,
     ramscratch,
     runcontext,
@@ -69,11 +71,18 @@ OPT_SPEC = """
 h |  | Print this help page.
 j | <jobs> | Run up to <jobs> encoder processes in parallel
                   (default: the number of CPU cores).
+k | [part] | keep <part>: takes nothing away. The one part is resolution:
+                  the source's bit depth and sample rate, which a run otherwise
+                  turns into 16-bit at 48 kHz or less. Kept, the lossless copy
+                  stays at the source's resolution; the Opus copies are not
+                  affected. A bare -k keeps every part, which today is this
+                  one. A folder literally named "resolution" is written
+                  ./resolution: the word after -k is the part when it is one.
 """
 
-OPT_VARS = "j:jobs"
+OPT_VARS = "j:jobs k:keepParts"
 OPT_COLUMN = 18
-OPT_LONG = "h:help j:jobs"
+OPT_LONG = "h:help j:jobs k:keep"
 
 USAGE_TAIL = """
 
@@ -124,6 +133,7 @@ def spec(program: str) -> "clioptions.Spec":
         options=OPT_SPEC,
         long=OPT_LONG,
         vars=OPT_VARS,
+        flags="optionalArg:k:^resolution$",
         column=OPT_COLUMN,
         tail=USAGE_TAIL,
     ))
@@ -604,6 +614,9 @@ class Run:
     script_dir: str
     counters: "Counters"
     skips: safety.RunSkipLog
+    # The -k parts this run was told to keep: what a run would otherwise take
+    # away is left as the source has it.
+    keep_parts: frozenset
     # Where each download folder's tracks actually landed, filled in as the
     # library is read.
     folder_map: dict
@@ -648,7 +661,8 @@ class Run:
 
     def encode(self, relative: str) -> None:
         """One lossless track re-encoded into a normalised FLAC: 16-bit samples,
-        capped at 48 kHz, any embedded cover re-encoded as MJPEG and scaled.
+        capped at 48 kHz - the source's bit depth and sample rate when
+        resolution is kept - any embedded cover re-encoded as MJPEG and scaled.
 
         Every track leaves exactly ONE counted line behind, on all four paths
         through here - encoded, already up to date, not lossless after all, or
@@ -691,8 +705,15 @@ class Run:
             self.counters.progress("Skip (already ingested): " + relative)
             return
 
-        # Ultrasound music files are useless.
-        rate = min(rate, HEARING_THRESHOLD) if rate else HEARING_THRESHOLD
+        # The two things the normalisation takes away from the source, or
+        # nothing at all when the run keeps the source's resolution: the track
+        # is still re-encoded to FLAC, which is what makes the formats uniform.
+        if "resolution" in getattr(self, "keep_parts", frozenset()):
+            sample_args = []
+        else:
+            # Ultrasound music files are useless.
+            rate = min(rate, HEARING_THRESHOLD) if rate else HEARING_THRESHOLD
+            sample_args = ["-sample_fmt", "s16", "-ar", str(rate)]
 
         # Announced before the encode, not after it: a single track is minutes of
         # work, and a line that only appears once it is over says nothing about
@@ -706,7 +727,7 @@ class Run:
                 *toolcapture.ffmpeg_loglevel(),
                 "-y", "-i", source, "-map", "0:a:0", "-map", "0:v:0?",
                 "-filter:v", scale, "-c:v", "mjpeg", "-c:a", "flac",
-                "-sample_fmt", "s16", "-ar", str(rate),
+                *sample_args,
                 "-compression_level", EXPERIMENTAL_FLAC_LEVEL,
                 # The provenance the resume check above reads. It survives what
                 # happens to the file afterwards - the mutagen chapter write,
@@ -1225,6 +1246,13 @@ def main(argv: list, program: str = "ingest-music",
     try:
         result = clioptions.parse(declaration, argv)
         clioptions.settle_verbosity(result)
+        # The -k parts this run is told to keep, settled with the rest of the
+        # command line: a part the run will not keep is refused with the page,
+        # like a bad option. A bare -k keeps them all; without the flag the
+        # run takes its normal measures and keeps none.
+        keep_parts = (keepparts.parse(result.values["keepParts"],
+                                      ("resolution",))
+                      if "k" in result.given else frozenset())
     except clioptions.HelpRequested:
         sys.stdout.write(clioptions.help_text(declaration))
         return 0
@@ -1272,7 +1300,8 @@ def main(argv: list, program: str = "ingest-music",
 
     try:
         return _settle_and_ingest(program, script_dir, download_dir,
-                                  ingest_dir, opus_copy_dir, jobs)
+                                  ingest_dir, opus_copy_dir, jobs,
+                                  keep_parts)
     finally:
         # The ffmpeg pin can make the run directory before init_ram_base
         # does, and every refusal after it must hand it back.
@@ -1280,7 +1309,8 @@ def main(argv: list, program: str = "ingest-music",
 
 
 def _settle_and_ingest(program: str, script_dir: str, download_dir: str,
-                       ingest_dir: str, opus_copy_dir: str, jobs: int) -> int:
+                       ingest_dir: str, opus_copy_dir: str, jobs: int,
+                       keep_parts: frozenset) -> int:
     # Which of this machine's ffmpeg builds does the re-encoding - inherited by
     # the convert-audio child, and settled before the preflight below asks
     # whether PATH can reach one.
@@ -1332,13 +1362,14 @@ def _settle_and_ingest(program: str, script_dir: str, download_dir: str,
 
     try:
         return _ingest(program, script_dir, download_dir, ingest_dir,
-                       opus_copy_dir, counter_dir, skips, jobs)
+                       opus_copy_dir, counter_dir, skips, jobs, keep_parts)
     finally:
         console.hide_active()
 
 
 def _ingest(program: str, script_dir: str, download_dir: str, ingest_dir: str,
-            opus_copy_dir: str, counter_dir: str, skips, jobs: int) -> int:
+            opus_copy_dir: str, counter_dir: str, skips, jobs: int,
+            keep_parts: frozenset) -> int:
     # Stamped here rather than at the top of the run proper, because the closing
     # report divides by it and the pretreatment below - de-duplicating, splitting
     # discs, copying - is already part of what the run cost.
@@ -1355,6 +1386,7 @@ def _ingest(program: str, script_dir: str, download_dir: str, ingest_dir: str,
     state = Run(
         download_dir=download_dir, ingest_dir=ingest_dir,
         script_dir=script_dir, counters=counters, skips=skips,
+        keep_parts=keep_parts,
         folder_map={}, lossless_total=0,
         cover_max_edge=imagesizes.height(cover_tier),
         ingested_sources=os.path.join(counter_dir, "ingestedSources"),
