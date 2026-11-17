@@ -67,6 +67,13 @@ b | <kbit/s> | Opus bitrate applied to every audio track, overriding the
                   per-channel table. Implies -a opusCustom when no audio profile
                   is given explicitly; required by, and only valid with, that
                   profile.
+s |  | Keep the source's channels up to 7.1: an audio track above stereo
+                  is re-encoded at its own channel count instead of being
+                  folded to stereo - a layout libopus does not take in that
+                  shape is re-labelled to the one it does (a 5.1(side) comes
+                  out 5.1), a 2.1 or 3.1 is still downmixed, and a wider
+                  source is folded to 7.1. Not with -k, which does not
+                  re-encode the audio at all.
 e | <count> | NVENC engine count to parallelise hardware encoding across,
                   overriding the built-in per-GPU guess. Only affects the *Nvenc
                   profiles.
@@ -134,13 +141,13 @@ k |  | Keep every track but the video exactly as the source has it:
                   combined with the source's audio, subtitles, attachments,
                   chapters and tags by mkvmerge, which carries over every
                   track's name, language and flags the way it found them.
-                  Needs mkvmerge. Not with -a or -b, which say how the audio
-                  is re-encoded.
+                  Needs mkvmerge. Not with -a, -b or -s, which say how the
+                  audio is re-encoded.
 """
 
 OPT_LONG = ("h:help j:cores p:profile a:audio-profile b:audio-bitrate "
-            "e:nvenc-engines l:quality m:max-resolution u:upscale c:crop "
-            "f:fast-decode g:grain t:test k:keep-tracks")
+            "s:surround e:nvenc-engines l:quality m:max-resolution "
+            "u:upscale c:crop f:fast-decode g:grain t:test k:keep-tracks")
 
 USAGE_TAIL = r"""
 
@@ -964,6 +971,10 @@ class Settings:
         self.video_profile = "av1BluRay"
         self.audio_profile = "opus"
         self.custom_audio_bitrate = ""
+        # -s: a track above stereo is re-encoded at the source's own channel
+        # count, settled by the shared layout decision up to the widest the
+        # table has a row for, instead of being folded to stereo.
+        self.surround = False
         self.encoder = ""
         self.quality = ""
         self.quality_given = False
@@ -1083,19 +1094,30 @@ def video_status_text(directory: str, total_seconds, label: str, start: int,
     return prefix + statusline.shorten_path(str(budget), label) + fields
 
 
-def audio_track_args(channels: str, settings) -> tuple:
+def audio_track_args(channels: str, settings, layout: str = "") -> tuple:
     """What ONE audio track is encoded with: (extra arguments, bitrate).
 
-    Anything above stereo is downmixed, because libopus refuses a 5.1(side)
-    layout - what AC3 surround commonly decodes to - outright, and is then priced
-    as the stereo track it has become. A count that could not be read is left as
-    it is rather than guessed at, and falls back to the stereo bitrate the way the
-    lookup already does.
+    Without -s, anything above stereo is downmixed, because libopus refuses a
+    5.1(side) layout - what AC3 surround commonly decodes to - outright, and is
+    then priced as the stereo track it has become. With -s the shared layout
+    decision settles the count the encode carries instead: a layout libopus
+    takes in another shape is re-labelled to the one it does, a 2.1 or 3.1 is
+    still downmixed to stereo, and a wider source is folded to 7.1 - and the
+    track is priced at the count it comes out at. <layout> is the track's own,
+    and is read only for three and four channels. A count that could not
+    be read is left as it is rather than guessed at, and falls back to the
+    stereo bitrate the way the lookup already does.
     """
     audio_args = profile_args(AUDIO_PROFILES, settings.audio_profile)
     if channels.isdigit() and int(channels) > 2:
-        audio_args = "-ac 2 " + audio_args
-        channels = "2"
+        if settings.surround:
+            channels, args = bitrates.opus_channel_args(int(channels),
+                                                        layout)
+            audio_args = " ".join(args) + " " + audio_args
+            channels = str(channels)
+        else:
+            audio_args = "-ac 2 " + audio_args
+            channels = "2"
     if settings.custom_audio_bitrate:
         return audio_args, settings.custom_audio_bitrate
     bitrate = (bitrates.audio_bitrate(channels, "normal")

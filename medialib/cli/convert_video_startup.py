@@ -28,6 +28,9 @@ def _validate(settings, video_args: str, grain: str,
     All of them would otherwise fail per chunk, deep inside a parallel worker.
     """
     encoder = rules.encoder_of(rules.apply_video_quality(video_args))
+    if settings.keep_tracks and settings.surround:
+        return ("-s re-encodes the audio to keep the source's channels, and "
+                "-k does not re-encode it at all: give one or the other.")
     if settings.audio_profile == "opusCustom" \
             and not settings.custom_audio_bitrate:
         return ("The opusCustom audio profile requires an audio bitrate: "
@@ -359,12 +362,16 @@ def _summarise(settings, video_args: str, grain: str) -> None:
         log("Audio profile: passthrough (source audio copied through, not "
             "re-encoded)")
     elif settings.custom_audio_bitrate:
-        log("Audio profile: %s (%s kbit/s Opus applied to every track, "
-            "surround downmixed to stereo)"
-            % (settings.audio_profile, settings.custom_audio_bitrate))
+        log("Audio profile: %s (%s kbit/s Opus applied to every track, %s)"
+            % (settings.audio_profile, settings.custom_audio_bitrate,
+               "surround kept up to 7.1 (-s)" if settings.surround
+               else "surround downmixed to stereo"))
     else:
         log("Audio profile: %s (per-channel Opus bitrate from the shared "
-            "table, surround downmixed to stereo)" % settings.audio_profile)
+            "table, %s)"
+            % (settings.audio_profile,
+               "surround kept up to 7.1 (-s)" if settings.surround
+               else "surround downmixed to stereo"))
 
     if settings.hardware_encode:
         engines = settings.nvenc_engines

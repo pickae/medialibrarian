@@ -12,8 +12,9 @@ import sys
 import pytest
 
 from medialib.cli import convert_video as cv
+from medialib.cli import convert_video_encode as encode
 from medialib.cli import convert_video_source as videosource
-from medialib.lib import resolutions
+from medialib.lib import resolutions, toolcapture
 
 pytestmark = pytest.mark.pure
 
@@ -716,13 +717,17 @@ class TestVideoIntermediateComplete:
 
 
 class TestTheAudioTracks:
-    """What each track is encoded with: a track above stereo is downmixed -
-    libopus refuses a 5.1(side) layout outright - and is then priced as the stereo
-    track it has become."""
+    """What each track is encoded with: without -s a track above stereo is
+    downmixed - libopus refuses a 5.1(side) layout outright - and is then
+    priced as the stereo track it has become. With -s the shared layout
+    decision settles the count the encode carries instead, and the track is
+    priced at that count."""
 
-    def _args(self, channels, profile="opus", custom=""):
+    def _args(self, channels, profile="opus", custom="", surround=False,
+              layout=""):
         return cv.audio_track_args(channels, cv.Settings(
-            audio_profile=profile, custom_audio_bitrate=custom))
+            audio_profile=profile, custom_audio_bitrate=custom,
+            surround=surround), layout)
 
     @pytest.mark.parametrize("channels", ["6", "8"])
     def test_a_surround_track_is_downmixed_to_stereo(self, channels):
@@ -730,6 +735,38 @@ class TestTheAudioTracks:
         assert args == "-ac 2 -c:a libopus"
         # And priced as stereo, not as the surround track it was.
         assert bitrate == "120"
+
+    @pytest.mark.parametrize("channels, bitrate", [
+        ("5", "220"), ("6", "250"), ("7", "285"), ("8", "320")])
+    def test_surround_keeps_the_count_and_prices_it_as_it_comes_out(
+            self, channels, bitrate):
+        args, found = self._args(channels, surround=True)
+        assert args == "-ac %s -c:a libopus" % channels
+        assert found == bitrate
+
+    @pytest.mark.parametrize("channels, layout, named, bitrate", [
+        ("3", "3.0", "3.0", "150"), ("4", "quad", "quad", "185"),
+        ("4", "quad(side)", "quad", "185")])
+    def test_surround_names_a_layout_libopus_takes_another_shape(
+            self, channels, layout, named, bitrate):
+        args, found = self._args(channels, surround=True, layout=layout)
+        assert args == "-channel_layout %s -c:a libopus" % named
+        assert found == bitrate
+
+    @pytest.mark.parametrize("channels, layout", [
+        ("3", "2.1"), ("4", "3.1"), ("3", "unknown"), ("4", "")])
+    def test_surround_still_downmixes_a_layout_libopus_will_not_take(
+            self, channels, layout):
+        args, found = self._args(channels, surround=True, layout=layout)
+        assert args == "-ac 2 -c:a libopus"
+        assert found == "120"
+
+    @pytest.mark.parametrize("channels", ["9", "12"])
+    def test_surround_folds_a_wider_source_down_to_seven_one(self, channels):
+        """Past eight channels Opus has no layout to offer at all."""
+        args, found = self._args(channels, surround=True)
+        assert args == "-ac 8 -c:a libopus"
+        assert found == "320"
 
     @pytest.mark.parametrize("channels,bitrate", [("2", "120"), ("1", "100")])
     def test_stereo_and_mono_keep_their_channels_and_their_own_bitrate(
@@ -756,6 +793,118 @@ class TestTheAudioTracks:
         """Which is what makes the run skip the audio pass entirely."""
         args, _bitrate = self._args("6", profile="passthrough")
         assert "-c:a copy" in args
+
+    @pytest.mark.parametrize("channels,bitrate", [("2", "120"), ("1", "100")])
+    def test_surround_leaves_stereo_and_mono_alone(self, channels, bitrate):
+        """Nothing is ever widened, so -s has nothing to do for them."""
+        args, found = self._args(channels, surround=True)
+        assert "-ac " not in args
+        assert found == bitrate
+
+    def test_surround_leaves_an_unreadable_count_alone(self):
+        args, bitrate = self._args("N/A", surround=True)
+        assert "-ac " not in args
+        assert bitrate == "120"
+
+    def test_a_pinned_bitrate_still_keeps_the_channels(self):
+        """-b says nothing about channels, and -s's decision stands on its own."""
+        args, bitrate = self._args("6", profile="opusCustom", custom="96",
+                                   surround=True)
+        assert args == "-ac 6 -c:a libopus"
+        assert bitrate == "96"
+
+
+class TestTheAudioPass:
+    """The per-track processes of the audio pass: what the probe is asked, and
+    the ffmpeg each track is given - the seam between the shared layout
+    decision and the encode."""
+
+    def _runs(self, surround, probed, monkeypatch):
+        """ONE file's audio pass, the probe and the processes stubbed,
+        handing back the probe's argv and each track's (bitrate, track args)."""
+        import multiprocessing
+
+        settings = cv.Settings(input_dir="/in", surround=surround)
+        asked = []
+        tracks = []
+
+        def prober(argv):
+            asked.append(argv)
+            return probed
+
+        class _Process:
+            def __init__(self, target, args):
+                self._target = target
+                self._args = args
+                self.exitcode = 0
+
+            def start(self):
+                tracks.append(self._args)
+
+            def join(self):
+                pass
+
+        monkeypatch.setattr(videosource, "_probe", prober)
+        monkeypatch.setattr(multiprocessing, "Process", _Process)
+        encode.encode_audio_all("film.mkv", "/chunks", settings)
+        return asked, tracks
+
+    @pytest.mark.parametrize("probed, expected", [
+        ("6,5.1(side)", ("250", "-ac 6 -c:a libopus")),
+        ("3,3.0", ("150", "-channel_layout 3.0 -c:a libopus")),
+        ("3,2.1", ("120", "-ac 2 -c:a libopus")),
+        ("9,unknown", ("320", "-ac 8 -c:a libopus")),
+        ("2,stereo", ("120", "-c:a libopus"))])
+    def test_surround_gives_each_track_its_own_call(self, monkeypatch,
+                                                    probed, expected):
+        _asked, tracks = self._runs(True, probed, monkeypatch)
+        assert len(tracks) == 1
+        _source, index, bitrate, track_args, _out, _label = tracks[0]
+        assert index == "0"
+        assert (bitrate, track_args) == expected
+
+    @pytest.mark.parametrize("probed, expected", [
+        ("6", ("120", "-ac 2 -c:a libopus")),
+        ("1", ("100", "-c:a libopus"))])
+    def test_without_surround_the_pass_is_what_it_was(self, monkeypatch,
+                                                      probed, expected):
+        _asked, tracks = self._runs(False, probed, monkeypatch)
+        assert len(tracks) == 1
+        _source, index, bitrate, track_args, _out, _label = tracks[0]
+        assert index == "0"
+        assert (bitrate, track_args) == expected
+
+    def test_the_probe_asks_for_the_layout_only_when_its_needed(
+            self, monkeypatch):
+        asked, _ = self._runs(True, "6,5.1", monkeypatch)
+        assert asked[0][asked[0].index("-show_entries") + 1] == \
+            "stream=channels,channel_layout"
+        asked, _ = self._runs(False, "6", monkeypatch)
+        assert asked[0][asked[0].index("-show_entries") + 1] == \
+            "stream=channels"
+
+    def test_the_track_argv_is_the_fixed_prefix_around_the_track_args(
+            self, monkeypatch):
+        """What -s moves is the middle of the argv - the channel flags and the
+        rate - and the map and the mux around them stay where they were."""
+        asked = []
+
+        def tool(argv, label):
+            asked.append(argv)
+            return toolcapture.ToolRun(argv, 0, toolcapture.ToolOutput())
+
+        monkeypatch.setattr(encode.toolcapture, "run", tool)
+        monkeypatch.setattr(encode.safety, "trap_worker_abort", lambda: None)
+        with pytest.raises(SystemExit):
+            encode._encode_audio_track("/in/film.mkv", "0", "250",
+                                       "-ac 6 -c:a libopus",
+                                       "/chunks/audio00.mka")
+        assert len(asked) == 1
+        argv = asked[0]
+        assert argv[0] == "ffmpeg"
+        assert argv[argv.index("-map") + 1:] == [
+            "0:a:0", "-vn", "-sn", "-ac", "6", "-c:a", "libopus", "-b:a",
+            "250k", "-f", "matroska", "/chunks/audio00.mka"]
 
 
 class TestWarnSourceGeometry:

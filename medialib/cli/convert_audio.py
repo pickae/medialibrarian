@@ -157,10 +157,6 @@ g | posInt | group depth
 DEFAULT_BITRATE = 46
 MONO_BITRATE = 32
 
-# The widest layout a source here is taken to carry, for the probe-free half of
-# the "can this be encoded in one go" test. 7.1 - the widest layout the bitrate
-# table has a row for.
-WIDEST_LAYOUT = 8
 THRESHOLD = 90000
 MONO_THRESHOLD = 50000
 COVER_THRESHOLD = 500000
@@ -493,8 +489,8 @@ def too_long_for_one_encode(source: str, duration: float,
     says so by name - a file left unconverted with a reason, never a file
     quietly cut short.
     """
-    if duration <= xheaac.wave_seconds_ceiling(max(xheaac.SAMPLE_RATES),
-                                               WIDEST_LAYOUT):
+    if duration <= xheaac.wave_seconds_ceiling(
+            max(xheaac.SAMPLE_RATES), bitrates.WIDEST_LAYOUT):
         return False
     rate = xheaac.input_sample_rate(source_sample_rate(source))
     channels = 1 if mono else output_channels(source_channels(source),
@@ -530,7 +526,7 @@ def output_channels(channels: int, surround: bool) -> int:
     it in.
     """
     channels = max(1, channels)
-    return min(channels, WIDEST_LAYOUT if surround else 2)
+    return min(channels, bitrates.WIDEST_LAYOUT if surround else 2)
 
 
 def source_channel_layout(src: str) -> str:
@@ -543,48 +539,6 @@ def source_channel_layout(src: str) -> str:
     return _probe(["ffprobe", "-v", "quiet", "-select_streams", "a:0",
                    "-show_entries", "stream=channel_layout",
                    "-of", "default=nk=1:nw=1", src]).split("\n")[0].strip()
-
-
-def opus_channel_args(channels: int, layout: str = "") -> tuple:
-    """(channels, argv): how many channels an Opus encode of this source comes
-    out with, and the ffmpeg options that get it there. <layout> is the
-    source's own, and is read only for three and four channels.
-
-    ffmpeg's libopus wrapper encodes past stereo only in the Vorbis channel
-    orders - one fixed layout per count, 5.1 for six channels - and refuses to
-    open on anything else, with nothing written at all. That is not a rare
-    corner: the 5.1(side) that EAC3 (and so every Atmos audiobook) decodes to is
-    the SIDE variant, and so are 5.0(side), 6.1(back) and 7.1(wide); none is
-    what the encoder wants, and without this each of them was left unconverted
-    with the reason thrown away on a silenced stderr.
-
-    From five channels up `-ac` with the source's own count is the whole fix:
-    ffmpeg's default layout for 5 to 8 channels is exactly the Vorbis one, so
-    asking for the count re-labels side speakers as back ones (a 5.1(side)
-    comes out 5.1, every channel at full level) and leaves a layout that was
-    already right alone. Three and four are the exception the shared bitrate
-    table already knows: their defaults, 2.1 and 4.0, are refused too, so the
-    layout is named outright - but only for a source with no LFE, since naming
-    3.0 over a 2.1 would play its LFE out of a full-range speaker. A 2.1 or 3.1,
-    or one whose layout the probe cannot say, is downmixed to stereo instead.
-    Past eight channels Opus has no layout to offer at all, so the source is
-    folded down to 7.1 - a book encoded narrower than its source rather than
-    not encoded.
-
-    Stereo and below need nothing, and get nothing: their call is the one every
-    existing library was made with.
-    """
-    if channels <= 2:
-        return channels, []
-    if channels > WIDEST_LAYOUT:
-        return WIDEST_LAYOUT, ["-ac", str(WIDEST_LAYOUT)]
-    named = bitrates.audio_opus_layout(str(channels))
-    if named is None:
-        return channels, ["-ac", str(channels)]
-    if (channels, layout) in ((3, "3.0"), (4, "4.0"), (4, "quad"),
-                              (4, "quad(side)")):
-        return channels, ["-channel_layout", named]
-    return 2, ["-ac", "2"]
 
 
 def surround_bitrate(bitrate: int, channels: int) -> int:
@@ -1108,7 +1062,8 @@ class Run:
             else:
                 probed = (source_channel_layout(source)
                           if channels in (3, 4) else "")
-                channels, layout = opus_channel_args(channels, probed)
+                channels, layout = bitrates.opus_channel_args(channels,
+                                                              probed)
                 if not self.adaptive:
                     bitrate = surround_bitrate(bitrate, channels)
         return layout + ["-c:a", "libopus", "-b:a", "%dk" % bitrate]

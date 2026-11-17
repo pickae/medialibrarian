@@ -22,7 +22,7 @@ With no options, a run:
 - **measures each film's grain, denoises it out and synthesises it back** (`-g`)
 - **keeps the picture as it is**: no cropping, scaling or deinterlacing (`-c`, `-m`, `-u`)
 - keeps the first video stream only, and drops data streams
-- **re-encodes every audio track to Opus, surround downmixed to stereo**, 120 kbps for stereo (`-a`, `-b`)
+- **re-encodes every audio track to Opus, surround downmixed to stereo**, 120 kbps for stereo (`-a`, `-b`; `-s` keeps the source's channels up to 7.1)
 - copies subtitles, attachments, chapters and metadata across
 - keeps HDR10, Dolby Vision and HDR10+ where the tools allow ([details](#hdr-and-dolby-vision))
 - converts every file, whether or not it saves much (`-t`)
@@ -56,7 +56,7 @@ measured.
 finished video is combined with the source's audio, subtitles, attachments,
 chapters and tags by `mkvmerge`, which keeps each track's name, language and flags
 (commentary, forced, …) unchanged. It needs `mkvmerge` and is refused together
-with `-a` or `-b`. `ingest-movies -r` uses it.
+with `-a`, `-b` or `-s`. `ingest-movies -r` uses it.
 
 ## Hardware and parallelism
 

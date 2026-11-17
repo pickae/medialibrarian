@@ -5,9 +5,14 @@ It is a mapping, and the only copy.
 Channel counts are strings, not numbers, and matched as text: a track reported
 as "01" channels finds no row, and neither does one reported as "2.0". Reading
 them as numbers would answer where a string lookup declines.
+
+The layout an Opus encode carries for a channel count is settled here as well:
+ffmpeg's libopus wrapper takes one layout per count, and every command that
+encodes Opus past stereo needs that same decision.
 """
 
-__all__ = ["COLUMNS", "audio_bitrate", "audio_opus_layout"]
+__all__ = ["COLUMNS", "WIDEST_LAYOUT", "audio_bitrate", "audio_opus_layout",
+           "opus_channel_args"]
 
 # A column with "-" in it means "leave this alone", not "zero".
 _NOT_SET = "-"
@@ -60,3 +65,51 @@ def audio_opus_layout(channels: str) -> str | None:
     silently remapped onto a regular speaker.
     """
     return _LAYOUTS.get(channels)
+
+
+# The widest layout the table has a row for, and the widest ffmpeg's libopus
+# wrapper encodes at all: 7.1. A source wider than it has no layout to be kept
+# at, and is folded down to it.
+WIDEST_LAYOUT = 8
+
+
+def opus_channel_args(channels: int, layout: str = "") -> tuple:
+    """(channels, argv): how many channels an Opus encode of this source comes
+    out with, and the ffmpeg options that get it there. <layout> is the
+    source's own, and is read only for three and four channels.
+
+    ffmpeg's libopus wrapper encodes past stereo only in the Vorbis channel
+    orders - one fixed layout per count, 5.1 for six channels - and refuses to
+    open on anything else, with nothing written at all. That is not a rare
+    corner: the 5.1(side) that EAC3 (and so every Atmos audiobook) decodes to is
+    the SIDE variant, and so are 5.0(side), 6.1(back) and 7.1(wide); none is
+    what the encoder wants, and without this each of them was left unconverted
+    with the reason thrown away on a silenced stderr.
+
+    From five channels up `-ac` with the source's own count is the whole fix:
+    ffmpeg's default layout for 5 to 8 channels is exactly the Vorbis one, so
+    asking for the count re-labels side speakers as back ones (a 5.1(side)
+    comes out 5.1, every channel at full level) and leaves a layout that was
+    already right alone. Three and four are the exception the shared bitrate
+    table already knows: their defaults, 2.1 and 4.0, are refused too, so the
+    layout is named outright - but only for a source with no LFE, since naming
+    3.0 over a 2.1 would play its LFE out of a full-range speaker. A 2.1 or 3.1,
+    or one whose layout the probe cannot say, is downmixed to stereo instead.
+    Past eight channels Opus has no layout to offer at all, so the source is
+    folded down to 7.1 - a book encoded narrower than its source rather than
+    not encoded.
+
+    Stereo and below need nothing, and get nothing: their call is the one every
+    existing library was made with.
+    """
+    if channels <= 2:
+        return channels, []
+    if channels > WIDEST_LAYOUT:
+        return WIDEST_LAYOUT, ["-ac", str(WIDEST_LAYOUT)]
+    named = audio_opus_layout(str(channels))
+    if named is None:
+        return channels, ["-ac", str(channels)]
+    if (channels, layout) in ((3, "3.0"), (4, "4.0"), (4, "quad"),
+                              (4, "quad(side)")):
+        return channels, ["-channel_layout", named]
+    return 2, ["-ac", "2"]
