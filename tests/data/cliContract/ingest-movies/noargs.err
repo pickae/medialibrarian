@@ -143,6 +143,22 @@ Usage:
                   literally named "audio" is written ./audio: the word after -k
                   goes to -k when it is a part. Cannot be combined with -r,
                   which encodes.
+    -o, --omit [phase]
+                  omit <phase> from a full ingest: junk, subtitles, commentary,
+                  chapters, plex and tagging, comma-separated, and a bare -o
+                  omits all six. junk: the junk files are left. subtitles: the
+                  subtitles are not fetched and the missing ones are not
+                  downloaded. commentary: the commentaries are not listened
+                  for, not transcribed and not named. chapters: the chapter
+                  archive is not asked. plex: the films are not compared with
+                  the Plex library and nothing is carried over from it.
+                  tagging: the films are not tagged with their IMDb ids. The
+                  phases not named run as they always have. A phase the run
+                  will not omit is refused with the page, like a bad option. A
+                  folder literally named after one of them - "plex" is the
+                  likeliest - is written ./plex: the word after -o goes to -o
+                  when it is a phase. Cannot be combined with -a, -n, -c, -p,
+                  -s, -t or -i, which do a phase of their own.
     -w, --write   with -t or -i, actually perform the renames instead of printing
                   them; with -s, sync, throw out and download; with -n, name
                   the commentaries. On its own it is a usage error rather than

@@ -31,6 +31,7 @@ given (one level deep, not the whole tree):
 - tags names with the IMDb id (needs `tmdbApiKey`), looks up chapters, and downloads missing subtitles (needs an OpenSubtitles or SubDL login)
 - last, **compares each film with the copy your Plex library already has**, if any ([details](#plex-comparison--p))
 - with `-r`, after all of that, **converts the remuxes** and writes each converted copy beside its film ([details](#remux-conversion--r))
+- with `-o`, any of the phases above is left out, the rest going on as they always have ([details](#leaving-phases-out--o))
 
 Each phase can also be run on its own, over a whole library: see
 [single-task sweeps](#single-task-sweeps).
@@ -41,6 +42,7 @@ Each phase can also be run on its own, over a whole library: see
 [Subtitles](#subtitles--s) · [Commentary transcripts](#commentary-transcripts--a) ·
 [Commentary names](#commentary-names--n) · [Chapters](#chapters--c) ·
 [Plex comparison](#plex-comparison--p) · [Remux conversion](#remux-conversion--r) · [Keeping everything](#keeping-everything--k) ·
+[Leaving phases out](#leaving-phases-out--o) ·
 [Several folders](#several-folders)
 
 ## Settings
@@ -804,6 +806,25 @@ in, the chapters, a false Dolby Vision claim or an overstated level corrected.
 The word after `-k` is claimed by `-k` when it is a part, the way `-t` claims
 a number: a folder literally named `audio` is written `./audio`. `-k` is
 refused with `-r` (which encodes) and with the single-task sweeps.
+
+## Leaving phases out (`-o`)
+
+**A full ingest with `-o` does everything except the phase it names.** The
+phases are `junk` (the release junk is left where it is), `subtitles` (nothing
+is fetched and the missing subtitles are not downloaded), `commentary`
+(commentaries are not listened for, transcribed or named), `chapters` (the
+chapter archive is not asked), `plex` (the films are not compared with the Plex
+library and nothing is carried over from its copy) and `tagging` (the films are
+not tagged with their IMDb ids). A bare `-o` leaves them all out, and the phases
+not named run as they always have.
+
+The phases are comma-separated, in any order, and a phase the run will not omit
+is refused with the page, like a bad option. A folder literally named after one
+of them — `plex` is the likeliest — is written `./plex`: the word after `-o`
+goes to `-o` when it is a phase. `-o` is refused with the single-task sweeps,
+which do a phase of their own rather than leaving one out of a full ingest.
+Omitting `tagging` is the one with a downstream effect: the later phases then
+see untagged folders, which they already handle.
 
 ## Several folders
 
