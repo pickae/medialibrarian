@@ -5,12 +5,13 @@ Loose movies go into one folder each, names are cleaned until they stop
 changing, bonus material is sorted into the folders Plex recognises, each film is
 looked up on TMDb for its IMDb id, subtitles are moved, renamed, downloaded and
 aligned, the mkv tags and track flags are refreshed from the track layout,
-lossless audio is transcoded to opus, commentary tracks are extracted and
-transcribed, and finally every film's main movie is remuxed once into an improved
-copy with the original kept beside it as "<name> (old).mkv".
+lossless audio is transcoded to the run's lossless audio target - opus by
+default - and commentary tracks are extracted and transcribed, and finally
+every film's main movie is remuxed once into an improved copy with the original
+kept beside it as "<name> (old).mkv".
 
 The improvement is the interesting half, and it is one mkvmerge call: each
-lossless track that was converted swaps for its opus in place, excessive audio
+lossless track that was converted swaps for its conversion in place, excessive audio
 and image-subtitle tracks are dropped, at most one surround tier survives per
 language, the downloaded subtitles the film has no plain text track of are
 muxed in, the commentary audio moves below the other audio, the commentary
@@ -184,7 +185,8 @@ r |  | also convert the remuxes, last of all: a film whose name says
                   it is. A full ingest only.
 k | [part] | keep <part>: takes nothing away. The parts are audio, tracks and
                   dv, comma-separated, and a bare -k keeps all three. audio:
-                  lossless audio stays lossless rather than going to opus, and
+                  lossless audio stays lossless rather than going to the
+                  target codec, and
                   a track of the library's copy that would need encoding (put
                   to another speed) is not carried. tracks: no audio or
                   subtitle track is dropped - not another language, not an
@@ -348,8 +350,8 @@ USAGE_TAIL = """
     audio it lacks - a soundtrack in a language it keeps, commentaries with the
     transcripts beside the library's copy (or transcribed by whisper), an
     isolated score or audio description - taken in by the one remux at the
-    measured offset; a lossless track goes to opus, put to the film's speed
-    where the two differ; a lossy one at another speed is left
+    measured offset; a lossless track goes to the target codec, put to the
+    film's speed where the two differ; a lossy one at another speed is left
     never the picture, the subtitles, or a better soundtrack in a language the
     film already has: those stay for a person to decide
     last, the films as the run leaves them are compared on resolution, HDR, the
@@ -361,8 +363,9 @@ USAGE_TAIL = """
     Tags & commentary
     ------------------
     reads the track layout once and refreshes the mkv tags from it
-    transcodes lossless audio to opus at a per-channel target bitrate, and
-    leaves lossy tracks as they are
+    transcodes lossless audio to the target codec - opus by default, at the
+    per-channel target bitrate; flac takes the channels as they are, up to
+    eight - and leaves lossy tracks as they are
     extracts commentary tracks and transcribes them into .srt beside the film
     names commentary tracks that are only numbered after who speaks in each,
     the way dvdcompare.net lists them - all that -n does, carried out
@@ -387,7 +390,7 @@ USAGE_TAIL = """
     Keep everything (-k)
     --------------------
     a full ingest that takes nothing away: no track dropped, no lossless audio
-    encoded to opus, no Dolby Vision enhancement layer discarded. All the
+    transcoded, no Dolby Vision enhancement layer discarded. All the
     additions and corrections still happen, and the carry-over from the Plex
     library's copy takes lossless soundtracks as they are, in every language
 
@@ -414,8 +417,8 @@ USAGE_TAIL = """
     ---------
     all large temporary media (extracts, remux copies, Dolby Vision streams)
     live in tmpfs
-    the opus tracks too: made in RAM and written to disk only inside the
-    improved copy, never as files beside the film
+    the converted lossless tracks too: made in RAM and written to disk only
+    inside the improved copy, never as files beside the film
     only the final outputs (.mkv, .srt) are written to disk, unless a remux
     copy is too large for tmpfs
 
@@ -600,7 +603,7 @@ def is_image_sub_codec(codec: str) -> bool:
 
 def is_lossless_track_codec(codec: str) -> bool:
     """``isLosslessTrackCodec``: is this Matroska codec_id one of the lossless
-    ones transcoded to opus?
+    ones transcoded to the run's target?
 
     Matched as a SUBSTRING, because mkvmerge wraps the codec in a prefix and
     sometimes a suffix - "A_TRUEHD", "A_PCM/INT/LIT" - so the enum lists the
@@ -660,6 +663,23 @@ def kept_languages() -> tuple:
             % (", ".join('"%s"' % code for code in unknown),
                ", ".join(sorted(known))))
     return codes
+
+
+def lossless_audio_target() -> str:
+    """The codec the improved copy converts the lossless audio to, read from
+    the ``losslessAudioTarget`` setting.
+
+    ``opus`` - the default, at the per-channel target bitrate - or ``flac``,
+    which takes the channels as they are, up to eight of them. A value the
+    run does not know is refused at the run's start, like a bad option.
+    """
+    target = enums.shell_lower(
+        os.environ.get("losslessAudioTarget", "opus").strip())
+    if target not in ("opus", "flac"):
+        raise clioptions.UsageError(
+            'The losslessAudioTarget setting names "%s". The lossless audio '
+            "is converted to opus or flac." % target)
+    return target
 
 
 def language_allowed(language: str, primary: str,
@@ -788,7 +808,7 @@ class Track:
         self.objects = ""
         self.ex = ""
         self.action = "keep"
-        self.opus = ""
+        self.lossless = ""
 
     @property
     def is_audio(self) -> bool:
@@ -1437,23 +1457,26 @@ _PADDED = {
 }
 
 
-def opus_path(ram_root: str, movie: str, track_id) -> str:
-    """Where a track's opus waits for the improved copy: in the run's RAM
-    scratch, under a mirror of the film's own path, so the transcode and the
-    remux - in different processes - name it alike and nothing of it is ever
-    written beside the film."""
+def lossless_path(ram_root: str, movie: str, track_id) -> str:
+    """Where a track's converted lossless audio waits for the improved copy:
+    in the run's RAM scratch, under a mirror of the film's own path, so the
+    transcode and the remux - in different processes - name it alike and
+    nothing of it is ever written beside the film. The extension is the run's
+    lossless audio target: .opus or .flac."""
     base = os.path.splitext(os.path.realpath(movie))[0]
-    return "%s/opus%s_%s.opus" % (ram_root, base, track_id)
+    return "%s/lossless%s_%s.%s" % (ram_root, base, track_id,
+                                    lossless_audio_target())
 
 
-def forget_opus(ram_root: str, movie: str) -> None:
-    """The film's opus tracks, gone from RAM once its remux is done with them,
-    whatever came of it."""
-    first = opus_path(ram_root, movie, 0)
+def forget_lossless(ram_root: str, movie: str) -> None:
+    """The film's converted lossless tracks, gone from RAM once its remux is
+    done with them, whatever came of it: the opus and the flac alike, so the
+    target differing between the two cannot leave the other behind in RAM."""
+    first = lossless_path(ram_root, movie, 0)
     directory = os.path.dirname(first)
-    start = os.path.basename(first)[:-len("0.opus")]
+    start = os.path.basename(first)[:-len("0." + lossless_audio_target())]
     for name in _names_in(directory):
-        if name.startswith(start) and name.endswith(".opus"):
+        if name.startswith(start) and name.endswith((".opus", ".flac")):
             _remove(os.path.join(directory, name))
 
 
@@ -1490,13 +1513,34 @@ def opus_encoding(movie: str, index: int, channels: str,
     return ["-ac", channels], channels, bitrate
 
 
+def flac_encoding(channels: str) -> tuple | str:
+    """How a lossless track is encoded to flac: () - flac takes the channels
+    as they are, so there is nothing to keep - or why it cannot be, "" where
+    that is not worth a word.
+
+    Up to flac's eight of them. Past that, or a count the probe cannot give,
+    the lossless stays."""
+    if channels.isdigit() and int(channels) <= 8:
+        return ()
+    return "its %s-channel audio is past flac's eight channels" % channels
+
+
 def check_audio_tracks(movie: str, root: str, ram_root: str) -> None:
-    """``checkAudioTracks``: every lossless track transcoded to opus, at the
-    per-channel target bitrate, into the RAM scratch (see :func:`opus_path`)."""
+    """``checkAudioTracks``: every lossless track transcoded to the run's
+    lossless audio target (see :func:`lossless_audio_target`), into the RAM
+    scratch (see :func:`lossless_path`): opus, the default, at the per-channel
+    target bitrate, or flac, which takes the channels as they are, up to eight
+    of them.
+
+    A track the target cannot take - a 3/4-channel source whose layout the
+    probe cannot read for opus, a bed above flac's eight channels - is kept
+    lossless and said so, and a track the target is already in - flac, when
+    the target is flac - is left alone without a word."""
     safety.trap_worker_abort()
     if is_bonus_folder(os.path.dirname(movie)):
         return
 
+    target = lossless_audio_target()
     tracks = _identify(movie)
     types = [track.type for track in tracks]
     file_duration = None
@@ -1504,29 +1548,49 @@ def check_audio_tracks(movie: str, root: str, ram_root: str) -> None:
     for position, track in enumerate(tracks, start=1):
         if not is_lossless_track_codec(track.codec):
             continue
-        if "flac" in enums.shell_lower(track.codec) and track.channels == "1":
-            # FLAC 1.0: barely worth it, and some TVs choke on opus mono, so
-            # the lossless stays.
-            continue
         # mkvtools index the whole matroska while ffmpeg indexes each track type
         # separately and from zero.
         index = audio_stream_index(position, types)
         channels = track.channels
-        bitrate = bitrates.audio_bitrate(channels, "normal")
-        if not bitrate:
-            continue
+        if target == "flac":
+            # Already the target, mono included: nothing to convert. The
+            # mono-TV quirk that keeps an opus run from converting a FLAC 1.0
+            # mono is the opus mono's, not the flac's.
+            if "flac" in enums.shell_lower(track.codec):
+                continue
+            encoding = flac_encoding(channels)
+            if isinstance(encoding, str):
+                if encoding:
+                    log("WARNING: audio track %d kept as it is, %s: %s"
+                        % (position - 1, encoding,
+                           "./" + os.path.relpath(movie, root)))
+                continue
+            convert_args = ["-c:a", "flac"]
+            what = "to flac (%sch)" % channels
+            failed = "flac transcode failed, the track stays lossless"
+        else:
+            if "flac" in enums.shell_lower(track.codec) and channels == "1":
+                # FLAC 1.0: barely worth it, and some TVs choke on opus mono, so
+                # the lossless stays.
+                continue
+            bitrate = bitrates.audio_bitrate(channels, "normal")
+            if not bitrate:
+                continue
+            encoding = opus_encoding(movie, index, channels, bitrate)
+            if isinstance(encoding, str):
+                if encoding:
+                    log("WARNING: audio track %d kept as it is, %s: %s"
+                        % (position - 1, encoding,
+                           "./" + os.path.relpath(movie, root)))
+                continue
+            layout_args, channels, bitrate = encoding
+            convert_args = (["-c:a", "libopus", "-b:a", bitrate + "k"]
+                            + layout_args)
+            what = "to opus (%sk, %sch)" % (bitrate, channels)
+            failed = "opus transcode failed, the track stays lossless"
 
-        encoding = opus_encoding(movie, index, channels, bitrate)
-        if isinstance(encoding, str):
-            if encoding:
-                log("WARNING: audio track %d kept as it is, %s: %s"
-                    % (position - 1, encoding,
-                       "./" + os.path.relpath(movie, root)))
-            continue
-        layout_args, channels, bitrate = encoding
-
-        opus = opus_path(ram_root, movie, position - 1)
-        os.makedirs(os.path.dirname(opus), exist_ok=True)
+        converted = lossless_path(ram_root, movie, position - 1)
+        os.makedirs(os.path.dirname(converted), exist_ok=True)
         # The source duration is the same for every track, so probe it once.
         if file_duration is None:
             file_duration = _duration_of(movie)
@@ -1535,23 +1599,22 @@ def check_audio_tracks(movie: str, root: str, ram_root: str) -> None:
         # takes it - on a spinning disk faster than it can give it for more
         # than one film at once, so on the disk's turn.
         with diskturn.turn(movie):
-            log("Transcoding audio track %d to opus (%sk, %sch): %s"
-                % (position - 1, bitrate, channels,
+            log("Transcoding audio track %d %s: %s"
+                % (position - 1, what,
                    "./" + os.path.relpath(movie, root)))
             status = _run(["ffmpeg", "-y", "-loglevel", "error", "-nostats",
                            "-i", movie, "-vn", "-map", "0:a:%d" % index,
-                           # Without it the movie's title lands in the opus
-                           # as a TITLE comment, which mkvmerge takes as the
-                           # track's name.
-                           "-map_metadata", "-1",
-                           "-c:a", "libopus", "-b:a", bitrate + "k"]
-                          + layout_args + [opus])
+                           # Without it the movie's title lands in the
+                           # converted track as a TITLE comment, which
+                           # mkvmerge would take as the track's name.
+                           "-map_metadata", "-1"]
+                          + convert_args + [converted])
         if status != 0:
-            # Half an opus - a full tmpfs, most likely - would otherwise be
-            # muxed in as the track.
-            _remove(opus)
-            log("WARNING: opus transcode failed, the track stays lossless "
-                "(track %d): %s" % (position - 1, movie))
+            # Half a conversion - a full tmpfs, most likely - would otherwise
+            # be muxed in as the track.
+            _remove(converted)
+            log("WARNING: %s (track %d): %s"
+                % (failed, position - 1, movie))
         else:
             # The status said a file was written, not that the whole track went
             # into it. A short one would be muxed in as the track, so it is
@@ -1559,7 +1622,7 @@ def check_audio_tracks(movie: str, root: str, ram_root: str) -> None:
             durationcheck.verify(
                 "%s (audio track %d)" % ("./" + os.path.relpath(movie, root),
                                          position - 1),
-                movie, opus, file_duration)
+                movie, converted, file_duration)
 
 
 # --- the improved copy --------------------------------------------------------
@@ -1856,10 +1919,10 @@ def decide_actions(tracks: list, movie: str, ram_root: str,
     """keep, drop or swap, per track; True when anything changed.
 
     The ``-k`` parts the run was told to keep, of which this decides two:
-    with ``audio`` a lossless track is not swapped for its opus, and with
-    ``tracks`` no audio or subtitle track is dropped. With both - the bare
-    -k - every track is kept as it is: nothing is dropped and no opus is
-    swapped in.
+    with ``audio`` a lossless track is not swapped for its conversion, and
+    with ``tracks`` no audio or subtitle track is dropped. With both - the
+    bare -k - every track is kept as it is: nothing is dropped and no
+    converted lossless audio is swapped in.
 
     The languages kept are ``kept`` - the ``keepLanguages`` setting, read
     once at the run's start - and the film's own, as
@@ -1867,12 +1930,13 @@ def decide_actions(tracks: list, movie: str, ram_root: str,
     the ISO 639-1 codes TMDb gives for the language the film was made in and
     the ones spoken in it.
 
-    A track "was converted to opus" is decided by the presence of its opus file
-    in the RAM scratch (:func:`opus_path`) rather than by re-deriving
-    losslessness, which is what makes every exception fall out for free: a
-    3/4-channel source whose layout the probe cannot read, a bed above the
-    libopus ceiling, a FLAC mono and a non-lossless commentary all simply have
-    no opus, so they stay as they are.
+    A track "was converted to the target" is decided by the presence of its
+    converted file in the RAM scratch (:func:`lossless_path`) rather than by
+    re-deriving losslessness, which is what makes every exception fall out
+    for free: a 3/4-channel source whose layout the probe cannot read for
+    opus, a bed above flac's eight channels, a FLAC mono on the opus target
+    and a track the target is already in all simply have no converted file,
+    so they stay as they are.
     """
     keep_audio = "audio" in keep_parts
     keep_tracks = "tracks" in keep_parts
@@ -1902,10 +1966,10 @@ def decide_actions(tracks: list, movie: str, ram_root: str,
             elif keep_audio:
                 track.action = "keep"
             else:
-                opus = opus_path(ram_root, movie, track.id)
-                if os.path.isfile(opus):
+                converted = lossless_path(ram_root, movie, track.id)
+                if os.path.isfile(converted):
                     track.action = "swap"
-                    track.opus = opus
+                    track.lossless = converted
                 else:
                     track.action = "keep"
         elif track.is_subtitle:

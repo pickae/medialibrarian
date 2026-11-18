@@ -60,7 +60,7 @@ def stubbed(monkeypatch, tmp_path):
     monkeypatch.setattr(run.commentarytranscription, "export_commentary",
                         _never)
     monkeypatch.setattr(run.ramscratch, "ram_scratch_dir", _never)
-    for name in ("_transcode_opus", "improve_main_movies", "check_folders",
+    for name in ("_transcode_lossless", "improve_main_movies", "check_folders",
                  "_ingest"):
         monkeypatch.setattr(run, name, _never)
 

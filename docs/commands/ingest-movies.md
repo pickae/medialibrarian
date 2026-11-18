@@ -2,15 +2,15 @@
 
 Sorts, cleans and improves a movie library in place: one folder per film, Plex
 names with the IMDb id, subtitles in the languages the `spokenLanguages`
-setting names (six by default), Opus audio, transcribed commentaries and the
-chapters the disc had.
+setting names (six by default), lossless audio converted to the target codec,
+transcribed commentaries and the chapters the disc had.
 
     ingest-movies [options] <movieDir>...
 
 | At a glance | |
 | --- | --- |
 | **Takes** | one or more folders of films |
-| **Writes** | in place: the improved `.mkv` and `.srt` sidecars (the Opus tracks are made in RAM and only ever land inside the improved `.mkv`); the sweeps also write lists under `logs/ingest-movies/` |
+| **Writes** | in place: the improved `.mkv` and `.srt` sidecars (the converted lossless audio is made in RAM and only ever lands inside the improved `.mkv`); the sweeps also write lists under `logs/ingest-movies/` |
 | **Input** | changed — that is the job; each remuxed original is kept as `<name> (old).mkv` |
 | **Reruns** | a film that already has its `(old)` backup is not remuxed again |
 | **Network** | TMDb, OpenSubtitles, SubDL, IMDb's title lists, ChapterDB and dvdcompare.net — the last two a few seconds apart, with some jitter — and your own Plex server |
@@ -24,7 +24,7 @@ given (one level deep, not the whole tree):
 - **remuxes non-Matroska video** (avi, mp4, mov, …) into `.mkv`, deleting the source
 - sorts loose films into a folder each, with extras where Plex looks for them
 - cleans folder, film and subtitle names
-- **transcodes lossless audio to Opus**, leaving lossy tracks as they are
+- **transcodes lossless audio to Opus** — or FLAC, the `losslessAudioTarget` setting — leaving lossy tracks as they are
 - **finds commentaries the file does not flag** and flags them before anything else reads the tracks ([details](#commentaries-the-file-does-not-flag))
 - transcribes commentary tracks with whisper, and names numbered ones after who speaks in them (dvdcompare.net)
 - **remuxes each film once into an improved copy**, keeping the original as `<name> (old).mkv` ([details](#what-a-full-ingest-does))
@@ -57,6 +57,7 @@ These are read from the environment:
 | `subDlApiKey` | asking SubDL third — the key a free account at subdl.com gets | it is not asked |
 | `spokenLanguages` | the languages whose subtitles are fetched and tested | the six it knows by default (en, de, fr, nl, es, it) |
 | `mediaServerNaming` | the server the names are written for | `plex`; the names are then written and read the way that server spells them |
+| `losslessAudioTarget` | the codec the lossless audio is converted to | `opus`, at a per-channel target bitrate; `flac` takes the channels as they are, up to eight of them |
 | `plexUrl` | the Plex server the films are compared with | the server on this machine, `http://localhost:32400` |
 | `plexToken` | that server's X-Plex-Token | the server is asked without one, which it refuses unless told to trust this address; the comparison is then skipped |
 
@@ -111,7 +112,7 @@ ingest-movies -dw ~/Films     # drop the (old) originals the checks passed
 Sorts loose movie files into per-movie subfolders (Plex layout), cleans
 folder/movie/subtitle names, renames/downloads subtitles for the languages the
 `spokenLanguages` setting names (six by default),
-refreshes mkv tags, transcodes lossless audio to Opus, transcribes commentary tracks,
+refreshes mkv tags, transcodes lossless audio to the target codec, transcribes commentary tracks,
 names numbered commentary tracks after who speaks in them, and gives films
 without named chapters the ones their disc had.
 
@@ -134,15 +135,16 @@ of the machine it uses:
   fetched one film at a time, and the thread is finished before the tagging
   renames anything. A film it did not get to is fetched after the tagging, as
   before.
-- **Opus beside the transcription.** With whisper on the GPU, the Opus transcode
-  runs at the same time as the commentary transcription, one job narrower so
-  whisper keeps its cores. With whisper on the CPU they would only fight over
-  the same cores, so the transcode goes first.
-- **Each film is remuxed as soon as it is ready**: once its own Opus tracks and
-  transcripts are done and the subtitle thread is past it, one film at a
+- **The lossless transcode beside the transcription.** With whisper on the GPU, the
+  transcode runs at the same time as the commentary transcription, one job
+  narrower so whisper keeps its cores. With whisper on the CPU they would only
+  fight over the same cores, so the transcode goes first.
+- **Each film is remuxed as soon as it is ready**: once its own converted
+  lossless tracks and transcripts are done and the subtitle thread is past it,
+  one film at a
   time, while the transcode and the transcription carry on with the others.
   The films it didn't get to are remuxed after the transcription, as before.
-- **One disk-heavy job at a time per spinning disk.** An Opus transcode, a
+- **One disk-heavy job at a time per spinning disk.** A lossless transcode, a
   commentary extract, a remux and a subtitle sync against the film all read a
   whole film, and on a hard disk two of them at once are slower than one after
   the other. So they take turns on each spinning disk, which the run detects,
@@ -242,7 +244,7 @@ call, so the film is remuxed once and only one output exists at a time:
 
 | What | What the remux does |
 | --- | --- |
-| Lossless audio converted to Opus | swapped in place, keeping index, language, name and flags. The Opus is encoded into RAM and never written beside the film; a run cut short encodes it again next time |
+| Lossless audio converted to the target codec | the `losslessAudioTarget` setting: `opus`, the default, at a per-channel target bitrate, or `flac`, which takes the channels as they are, up to eight of them. A track the target cannot take stays lossless. A TrueHD Atmos bed loses its objects either way, since both carry the discrete bed. The conversion is swapped in place, keeping index, language, name and flags; it is encoded into RAM and never written beside the film, and a run cut short encodes it again next time |
 | Excessive audio and image-subtitle tracks | dropped: everything not in a kept language - the `keepLanguages` setting, a comma list of ISO 639-1 codes, `en` by default - or the film's own language. That is TMDb's original language (with `tmdbApiKey` set), asked by the id the folder carries or the tagging would give it, and the first audio track's as well when TMDb lists it as spoken in the film or lists no spoken languages - TMDb has some films' original language wrong, and some films are made in several. With no answer, or no soundtrack in the original language, it is the first audio track's alone. Chinese varieties (Cantonese, Mandarin, ...) count as one language, as do the written Norwegians, Serbo-Croatian, Arabic, Persian and Malay, since discs tag them unevenly. Commentary **audio** is exempt from the excessive-language rule, so a foreign-language commentary is never dropped from the film its subtitles were just made for |
 | Downloaded subtitles (`<name>.xx.srt`) that passed the sync test | muxed in, placed after the other subtitles and before the commentary ones — unless the film already carries a plain text subtitle in that language. A picture subtitle, or a forced, SDH or commentary one, doesn't count, so the download goes in beside it. The `.srt` stays beside the film |
 | Commentary audio | moved below the other audio tracks |
@@ -839,15 +841,16 @@ the other single-task sweeps.
 **A full ingest with `-k` takes nothing away.** The `-k` is given in parts -
 `audio`, `tracks` and `dv`, comma-separated - and a bare `-k` keeps all three.
 `audio` encodes nothing of what it carries: lossless audio stays lossless
-rather than going to opus, and a track of the library's copy that would need
+rather than going to the target codec, and a track of the library's copy that
+would need
 encoding (put to another speed) is not carried. `tracks` drops nothing: no
 audio or subtitle track is dropped - not another language, not an image
 subtitle, not an audio description, not the lesser of two surround tiers - and
 what is carried over from the Plex library's copy is its soundtracks in every
 language, lossless as they are. `dv` keeps the enhancement layer of a
 dual-layer Dolby Vision profile 7. A part settles only its own measure, so
-`-k audio` still drops the excessive languages, and `-k tracks` still encodes
-the lossless audio to opus. Everything that only adds or corrects still
+`-k audio` still drops the excessive languages, and `-k tracks` still converts
+the lossless audio to the target codec. Everything that only adds or corrects still
 happens with every part: the cleaning, renaming and IMDb tagging, the track
 names and flags, the subtitles downloaded and the commentary transcripts muxed
 in, the chapters, a false Dolby Vision claim or an overstated level corrected.

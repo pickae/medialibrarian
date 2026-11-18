@@ -17,7 +17,8 @@ replaced. The passes that write a film also :func:`forget` it outright, so a
 file system with coarse time stamps cannot hand back a stale answer either.
 
 What a probe printed is kept as bytes, not as the objects read from it: the
-callers change the tracks they are given (an action, an opus beside it), and
+callers change the tracks they are given (an action, a converted lossless
+path beside it), and
 each read builds its own.
 
 The records live in this process. A worker is handed its film's record with

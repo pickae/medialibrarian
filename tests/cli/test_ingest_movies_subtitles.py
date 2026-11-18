@@ -131,7 +131,7 @@ def ingested(monkeypatch):
                                 lambda *a, **k: None)
         monkeypatch.setattr(run_module.tmdblookup, "tag_plex_ids",
                             lambda *a, **k: None)
-        for name in ("_transcode_opus", "improve_main_movies",
+        for name in ("_transcode_lossless", "improve_main_movies",
                      "_start_research", "_research_again",
                      "_commentary_name_phase", "_chapter_phase",
                      "check_folders"):

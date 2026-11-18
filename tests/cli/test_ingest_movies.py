@@ -562,9 +562,9 @@ class TestKeepEverythingDropsNothing:
         """The opus of track 3 waiting in the ram scratch, the way the
         transcode leaves it: isfile, the only way decide_actions sees it, is
         stubbed, because the mirror of the film's own path under the scratch
-        that opus_path works out is not a directory every platform can make."""
+        that lossless_path works out is not a directory every platform can make."""
         movie = str(tmp_path / "film.mkv")
-        opus = im.opus_path(str(tmp_path / "ram"), movie, "3")
+        opus = im.lossless_path(str(tmp_path / "ram"), movie, "3")
         real = os.path.isfile
 
         def isfile(path):

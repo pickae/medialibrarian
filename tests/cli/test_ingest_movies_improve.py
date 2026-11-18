@@ -65,7 +65,7 @@ def remux(tmp_path, monkeypatch, request):
     # The opus waiting in RAM that drives the swap - the mono FLAC of track 1
     # is never transcoded - and the sidecars that drive the appends.
     ram = str(tmp_path / "ram")
-    opus = rules.opus_path(ram, movie, 0)
+    opus = rules.lossless_path(ram, movie, 0)
     os.makedirs(os.path.dirname(opus))
     open(opus, "w").close()
     for name in (" 7 Commentary by Director.srt",  # a legacy transcript
@@ -794,7 +794,7 @@ class TestFromARealIdentificationDocument:
         base = str(folder / "Film (2020)")
         open(movie, "w").close()
         ram = str(tmp_path / "ram")
-        opus = rules.opus_path(ram, movie, 0)
+        opus = rules.lossless_path(ram, movie, 0)
         os.makedirs(os.path.dirname(opus))
         open(opus, "w").close()
         for name in (" 7 Commentary by Director.srt",

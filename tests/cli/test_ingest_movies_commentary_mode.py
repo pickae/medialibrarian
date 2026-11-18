@@ -80,7 +80,7 @@ class TestThePhaseRunsAndNothingElse:
         for name in ("move_subs", "rename_subs", "download_subs"):
             monkeypatch.setattr(run.subtitlefiles, name, _never)
         monkeypatch.setattr(run.tmdblookup, "tag_plex_ids", _never)
-        for name in ("_transcode_opus", "improve_main_movies", "check_folders",
+        for name in ("_transcode_lossless", "improve_main_movies", "check_folders",
                      "_ingest"):
             monkeypatch.setattr(run, name, _never)
 
@@ -335,7 +335,7 @@ class TestTheOrphanReport:
                     "jobs": whisper_lib.WHISPER_JOBS, "batchSlots": 0}
 
         monkeypatch.setattr(whisper_lib, "init_whisper_model", fake_init)
-        for name in ("_transcode_opus", "improve_main_movies", "check_folders",
+        for name in ("_transcode_lossless", "improve_main_movies", "check_folders",
                      "_ingest"):
             monkeypatch.setattr(run, name, _never)
         monkeypatch.setattr(run.commentarytranscription,
@@ -434,7 +434,7 @@ class TestTheUnfixedReport:
                     "jobs": whisper_lib.WHISPER_JOBS, "batchSlots": 0}
 
         monkeypatch.setattr(whisper_lib, "init_whisper_model", fake_init)
-        for name in ("_transcode_opus", "improve_main_movies", "check_folders",
+        for name in ("_transcode_lossless", "improve_main_movies", "check_folders",
                      "_ingest"):
             monkeypatch.setattr(run, name, _never)
         monkeypatch.setattr(run.commentarytranscription,

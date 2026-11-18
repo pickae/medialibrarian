@@ -144,7 +144,8 @@ Usage:
     -k, --keep [part]
                   keep <part>: takes nothing away. The parts are audio, tracks and
                   dv, comma-separated, and a bare -k keeps all three. audio:
-                  lossless audio stays lossless rather than going to opus, and
+                  lossless audio stays lossless rather than going to the
+                  target codec, and
                   a track of the library's copy that would need encoding (put
                   to another speed) is not carried. tracks: no audio or
                   subtitle track is dropped - not another language, not an
@@ -302,8 +303,8 @@ Usage:
     audio it lacks - a soundtrack in a language it keeps, commentaries with the
     transcripts beside the library's copy (or transcribed by whisper), an
     isolated score or audio description - taken in by the one remux at the
-    measured offset; a lossless track goes to opus, put to the film's speed
-    where the two differ; a lossy one at another speed is left
+    measured offset; a lossless track goes to the target codec, put to the
+    film's speed where the two differ; a lossy one at another speed is left
     never the picture, the subtitles, or a better soundtrack in a language the
     film already has: those stay for a person to decide
     last, the films as the run leaves them are compared on resolution, HDR, the
@@ -315,8 +316,9 @@ Usage:
     Tags & commentary
     ------------------
     reads the track layout once and refreshes the mkv tags from it
-    transcodes lossless audio to opus at a per-channel target bitrate, and
-    leaves lossy tracks as they are
+    transcodes lossless audio to the target codec - opus by default, at the
+    per-channel target bitrate; flac takes the channels as they are, up to
+    eight - and leaves lossy tracks as they are
     extracts commentary tracks and transcribes them into .srt beside the film
     names commentary tracks that are only numbered after who speaks in each,
     the way dvdcompare.net lists them - all that -n does, carried out
@@ -341,7 +343,7 @@ Usage:
     Keep everything (-k)
     --------------------
     a full ingest that takes nothing away: no track dropped, no lossless audio
-    encoded to opus, no Dolby Vision enhancement layer discarded. All the
+    transcoded, no Dolby Vision enhancement layer discarded. All the
     additions and corrections still happen, and the carry-over from the Plex
     library's copy takes lossless soundtracks as they are, in every language
 
@@ -368,8 +370,8 @@ Usage:
     ---------
     all large temporary media (extracts, remux copies, Dolby Vision streams)
     live in tmpfs
-    the opus tracks too: made in RAM and written to disk only inside the
-    improved copy, never as files beside the film
+    the converted lossless tracks too: made in RAM and written to disk only
+    inside the improved copy, never as files beside the film
     only the final outputs (.mkv, .srt) are written to disk, unless a remux
     copy is too large for tmpfs
 
