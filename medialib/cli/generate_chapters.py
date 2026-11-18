@@ -22,6 +22,7 @@ from medialib import commands
 from medialib.lib import (
     aichapters,
     chapterllm,
+    chapters,
     clioptions,
     enums,
     ramscratch,
@@ -165,6 +166,13 @@ def _run(program: str, script_dir: str, input_dir: str, output_dir: str,
     for relative in inputs:
         if relative not in todo:
             runlog.say("already present: %s\n" % relative)
+    # Too short for two chapters of the shortest length: not transcribed only
+    # to be turned down, and so not again on every rerun either.
+    short = [relative for relative in todo if aichapters.too_short(
+        chapters.duration_ms(os.path.join(input_dir, relative)), min_minutes)]
+    for relative in short:
+        runlog.say("too short for chapters: %s\n" % relative)
+    todo = [relative for relative in todo if relative not in short]
     untranscribed = [(relative, os.path.join(input_dir, relative))
                      for relative in todo if not transcript(relative)]
 

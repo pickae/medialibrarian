@@ -1105,3 +1105,28 @@ def test_gitignored_tables_are_kept_out_of_the_check(tmp_path):
     (tmp_path / "kept.tsv").write_text("", encoding="utf-8")
     assert _git_ignored(str(tmp_path / "data" / "ignored.tsv"), str(tmp_path))
     assert not _git_ignored(str(tmp_path / "kept.tsv"), str(tmp_path))
+
+
+def test_no_captions_are_asked_for_unless_transcripts_are_wanted():
+    assert "--write-auto-subs" not in _call()
+
+
+def test_the_captions_come_before_the_rows_own_arguments():
+    """So a feed whose captions are no use can still say --no-write-subs."""
+    call = pf.podcast_call("/library", "a.log", "x", "", "", "--no-write-subs",
+                           "https://u", ytdlp_command=["yt-dlp"],
+                           profile="youtubeAudio", transcripts=("de", "en"))
+    assert call.index("--write-auto-subs") < call.index("--no-write-subs")
+    assert call[call.index("--sub-langs") + 1] == "de.*-orig,en.*"
+
+
+def test_measured_bytes_stand_for_episodes_renamed_since(tmp_path):
+    """The library copy renames episodes during the run; what they weighed
+    when they arrived is what the figures say."""
+    (tmp_path / "one.opus").write_bytes(b"\0" * 10)
+    manifests = tmp_path / "m3"
+    manifests.mkdir()
+    (manifests / "feed1").write_text(f"{tmp_path / 'one.opus'}\n")
+    pf.record_manifest_bytes(str(manifests / "feed1"))
+    (tmp_path / "one.opus").rename(tmp_path / "renamed.opus")
+    assert pf.podcast_download_stats(str(manifests)) == (1, 10)

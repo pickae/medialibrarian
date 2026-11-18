@@ -16,7 +16,7 @@ import sys
 import time
 from collections.abc import Sequence
 
-from medialib.lib import runlog, toolcapture
+from medialib.lib import feedtranscripts, runlog, toolcapture
 from medialib.lib.enums import shell_lower
 from medialib.lib.formatting import fmt_bytes
 
@@ -576,7 +576,8 @@ def podcast_call(output_root: str, archive_file: str, subdir: str,
                  profile: str = "", date_after: str = "",
                  date_before: str = "",
                  sponsorblock: str | None = None,
-                 ffmpeg_location: str = "") -> list[str] | None:
+                 ffmpeg_location: str = "",
+                 transcripts: Sequence[str] = ()) -> list[str] | None:
     """The complete argv for one feed, or None when the profile is unknown.
 
     ``sponsorblock`` carries the caller's settled answer as three states: None
@@ -588,6 +589,9 @@ def podcast_call(output_root: str, archive_file: str, subdir: str,
     for work it does through ffmpeg - extracting the audio, merging the two
     streams into mkv, embedding the thumbnail, the metadata and the chapters -
     and it searches PATH for that ffmpeg by a rule of its own.
+
+    ``transcripts`` are the languages the user speaks, given when each
+    episode's captions are to be fetched with it - see feedtranscripts.
     """
     output_root = output_root.removesuffix("/")
     subdir = subdir.removesuffix("/")
@@ -607,6 +611,8 @@ def podcast_call(output_root: str, archive_file: str, subdir: str,
     if playlist_end != str(PODCAST_UNLIMITED_PLAYLIST_END):
         call += ["--playlist-end", playlist_end]
     call += list(profile_args)
+    if transcripts:
+        call += feedtranscripts.ytdlp_args(transcripts)
     # Ahead of the row's extraArgs, which is what lets a feed name a build of
     # its own: yt-dlp keeps the LAST --ffmpeg-location it is given.
     if ffmpeg_location:
@@ -889,7 +895,8 @@ def podcast_download_stats(manifest_dir: str) -> tuple[int, int]:
 
     A line whose file is no longer there still counts as a file (it WAS
     fetched) but adds no bytes, so a missing one can never make the run look
-    like it failed.
+    like it failed. A manifest whose episodes were measured before they were
+    renamed (:func:`record_manifest_bytes`) counts what was measured.
     """
     file_count = 0
     byte_count = 0
@@ -902,20 +909,49 @@ def podcast_download_stats(manifest_dir: str) -> tuple[int, int]:
         manifest = os.path.join(manifest_dir, name)
         if not os.path.isfile(manifest):
             continue
-        with open(manifest, encoding="utf-8") as handle:
-            content = handle.read()
-        # A final line without its newline is read too.
-        paths = content.split("\n")
-        if paths and paths[-1] == "":
-            paths = paths[:-1]
+        paths = manifest_paths(manifest)
+        file_count += len(paths)
+        measured = _measured_bytes(manifest)
+        if measured is not None:
+            byte_count += measured
+            continue
         for path in paths:
-            path = path[:-1] if path.endswith("\r") else path
-            if not path:
-                continue
-            file_count += 1
-            size = _file_size(path)
-            byte_count += size
+            byte_count += _file_size(path)
     return (file_count, byte_count)
+
+
+def manifest_paths(manifest: str) -> list[str]:
+    """The episodes one manifest lists, in its order."""
+    try:
+        with open(manifest, encoding="utf-8", errors="surrogateescape") as handle:
+            content = handle.read()
+    except OSError:
+        return []
+    # A final line without its newline is read too.
+    return [line[:-1] if line.endswith("\r") else line
+            for line in content.split("\n") if line.rstrip("\r")]
+
+
+def _bytes_file(manifest: str) -> str:
+    folder, name = os.path.split(manifest)
+    return os.path.join(folder, "." + name + ".bytes")
+
+
+def record_manifest_bytes(manifest: str) -> None:
+    """The size of a manifest's episodes kept beside it, for the figures at
+    the end of a run - measured now, before a library copy built during the
+    run renames them."""
+    total = sum(_file_size(path) for path in manifest_paths(manifest))
+    with open(_bytes_file(manifest), "w", encoding="utf-8") as handle:
+        handle.write("%d\n" % total)
+
+
+def _measured_bytes(manifest: str) -> int | None:
+    try:
+        with open(_bytes_file(manifest), encoding="utf-8") as handle:
+            return int(handle.read().strip())
+    except (OSError, ValueError):
+        return None
 
 
 _SAFE_POSIX = re.compile(r"^[A-Za-z0-9_@%+=:,./-]+$")

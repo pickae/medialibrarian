@@ -22,7 +22,7 @@ import subprocess
 
 from medialib.lib import aichapters, chapters, mutagentags, toolcapture
 
-__all__ = ["LYRICS_TAG", "SIDECAR_SUFFIXES", "find_sidecar", "lrc_text",
+__all__ = ["LYRICS_TAG", "SIDECAR_SUFFIXES", "find_sidecar", "sidecar_stems", "lrc_text",
            "embed_transcript", "has_transcript"]
 
 LYRICS_TAG = "LYRICS"
@@ -58,6 +58,20 @@ def find_sidecar(stem: str) -> str:
             if _LANGUAGE.fullmatch(middle) and os.path.getsize(path) > 0:
                 return path
     return ""
+
+
+def sidecar_stems(name: str) -> tuple:
+    """The stems a file called ``name`` would be the transcript sidecar of,
+    longest first: ``show.srt`` is ``show``'s, ``show.en.srt`` is ``show.en``'s
+    or ``show``'s. Empty for a name that is no transcript sidecar."""
+    for suffix in SIDECAR_SUFFIXES:
+        if name.lower().endswith(suffix) and len(name) > len(suffix):
+            stem = name[:-len(suffix)]
+            language = _LANGUAGE.search(stem)
+            if language and language.start() > 0:
+                return (stem, stem[:language.start()])
+            return (stem,)
+    return ()
 
 
 def lrc_text(cues) -> str:

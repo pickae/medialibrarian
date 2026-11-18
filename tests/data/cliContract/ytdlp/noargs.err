@@ -47,15 +47,17 @@ Options:
     -i, --ingest    Build the phone's library from the run instead of leaving the
                     downloads as they came off the network. <outputPath> becomes
                     the parent of two trees: the raw downloads land in
-                    <outputPath>/Staging/<kind>, and when the run is over their
-                    names are cleaned (clean-folder-structure) and they are
-                    converted into <outputPath>/Ingested (convert-audio) - one
-                    staging folder per conversion, all of them into that one
-                    library. The raw downloads are KEPT: they are what a re-run
-                    would otherwise have to fetch again. Normally given with -c,
-                    so the sidecars are gone before the library is built.
-                    Every staging folder with files in it is converted, including
-                    the folders of conversions no table in this run downloads into.
+                    <outputPath>/Staging/<kind>, and while the other feeds are
+                    still downloading, a finished feed's names are cleaned
+                    (clean-folder-structure) and it is converted into
+                    <outputPath>/Ingested (convert-audio), a few episodes at a
+                    time - one staging folder per conversion, all of them into
+                    that one library. The raw downloads are KEPT: they are what
+                    a re-run would otherwise have to fetch again. Normally given
+                    with -c, so the sidecars are gone before the library is
+                    built. When the downloads are over, every staging folder
+                    with files in it is converted, including the folders of
+                    conversions no table in this run downloads into.
                     A video table ignores -i and downloads to <outputPath> as
                     usual - an audio converter would throw its picture away.
     -m, --match <match>
@@ -65,6 +67,16 @@ Options:
                     Build the calls for "windows" or "linux" instead of for
                     this host. Only useful with -p, to read off what the other
                     machine would run.
+    -g, --ai-chapters
+                    With -i: chapters for every episode in the library that has
+                    none, worked out by a language model (the chapterLlm
+                    settings) from a transcript, which is written into the
+                    episode as well (convert-audio -t). A YouTube episode's
+                    transcript is YouTube's own captions, fetched with it in
+                    the episode's language when the spokenLanguages setting
+                    names it and in English when it does not, and written into
+                    the episode even when it has chapters; an RSS episode is
+                    transcribed on this machine.
     -l, --consolidate
                     Consolidate archives instead of downloading: every line of
                     every <archiveFile> given, sorted and with duplicates

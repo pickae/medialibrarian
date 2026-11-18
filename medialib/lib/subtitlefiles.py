@@ -854,8 +854,8 @@ def download_subs(directory: str, providers: tuple,
     :func:`subtitle_movies` and every language the run wants. Sequential by
     design: rapid-fire downloads get throttled.
 
-    ``wanted`` is the run's :func:`languages.wanted_subtitles` - the
-    ``subtitleLanguages`` setting - and the setting's default, where a run
+    ``wanted`` is the run's :func:`languages.spoken_languages` - the
+    ``spokenLanguages`` setting - and the setting's default, where a run
     does not say.
     A provider left out for want of its login is said once for the folder
     (see :func:`missing_login_warning`) rather than once per film and
@@ -863,7 +863,7 @@ def download_subs(directory: str, providers: tuple,
     ask, nothing is walked.
     """
     if wanted is None:
-        wanted = languages.wanted_subtitles()
+        wanted = languages.spoken_languages()
     movies = subtitle_movies(directory)
     warning = missing_login_warning(providers)
     if warning and any(not os.path.isfile(_sidecar(movie, row.code2))
@@ -887,10 +887,10 @@ def _download_missing(movie: str, providers: tuple,
                       wanted: tuple | None = None) -> None:
     """Every wanted language the film is missing, the first provider asked
     for all of them in one call before each language goes on through its own
-    tries. ``wanted`` is the run's :func:`languages.wanted_subtitles`, and
+    tries. ``wanted`` is the run's :func:`languages.spoken_languages`, and
     the setting's default, where a run does not say."""
     if wanted is None:
-        wanted = languages.wanted_subtitles()
+        wanted = languages.spoken_languages()
     missing = [row.code2 for row in wanted
                if not os.path.isfile(_sidecar(movie, row.code2))]
     if not missing or not providers:
@@ -921,7 +921,7 @@ def download_subs_for(films: list, providers: tuple, max_sync_offset: str,
     over their names. Stops between films once an interrupt is asked for; the
     films done, for the caller that wants to know which."""
     if wanted is None:
-        wanted = languages.wanted_subtitles()
+        wanted = languages.spoken_languages()
     done = []
     for movie, imdb in films:
         if safety.abort_requested():
@@ -1030,8 +1030,8 @@ def check_subs(directory: str, max_sync_offset: str,
     download would have written, and so never a commentary transcript, whose
     name carries the track number after the movie's.
 
-    ``wanted`` is the run's :func:`languages.wanted_subtitles` - the
-    ``subtitleLanguages`` setting - and the setting's default, where a run
+    ``wanted`` is the run's :func:`languages.spoken_languages` - the
+    ``spokenLanguages`` setting - and the setting's default, where a run
     does not say; the sidecars of a language the run does not want are not
     tested, having been fetched and tested by the run that named it.
 
@@ -1049,7 +1049,7 @@ def check_subs(directory: str, max_sync_offset: str,
     "untested": [...]}``.
     """
     if wanted is None:
-        wanted = languages.wanted_subtitles()
+        wanted = languages.spoken_languages()
     codes = tuple(row.code2 for row in wanted)
     verdicts: dict = {"kept": [], "discarded": [], "untested": []}
     movies = subtitle_movies(directory)

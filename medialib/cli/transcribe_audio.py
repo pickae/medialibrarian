@@ -8,6 +8,9 @@ the video stream. An audio file is handed over as it is.
 The queue is ordered LARGEST FILE FIRST, because byte size is a cheap probe-free
 proxy for how much speech there is: the long transcriptions start at the front
 instead of one huge file landing last and pinning a worker to the end.
+
+Several inputs share one whisper process, which loads the model once for all
+of them; a film goes alone - see :func:`_groups`.
 """
 
 import os
@@ -212,13 +215,15 @@ class Run:
             self.report_progress("already present: " + relative)
             return None
 
-        # whisper names its output after the input file, so every input gets a
-        # directory of its own: the extracted track and the transcript both live
-        # there, and it goes when the job does.
+        # Every input gets a directory of its own: the extracted track lives
+        # there, and it goes when the job does. The extract is named after
+        # that directory, because one whisper call writes the transcripts of
+        # all its inputs into one folder, by input name, and two extracts
+        # called the same would overwrite each other's.
         work = tempfile.mkdtemp(prefix="whisper.", dir=self.ram_root)
         if not _is_video(relative):
             return relative, source, work
-        for_whisper = os.path.join(work, "track.wav")
+        for_whisper = os.path.join(work, os.path.basename(work) + ".track.wav")
         extracted = toolcapture.run(
             ["ffmpeg", "-nostdin", "-y", "-hide_banner",
              *toolcapture.ffmpeg_loglevel(), "-nostats",
@@ -244,25 +249,39 @@ class Run:
         return os.path.join(self.output_dir,
                             os.path.splitext(relative)[0] + "." + self.fmt)
 
+    def _whisper(self, inputs: list, output_dir: str) -> list:
+        """The whisper command for ``inputs``, transcribed into
+        ``output_dir`` - one process, so one load of the model for them all."""
+        return [*whisper.WHISPER_COMMAND, *inputs,
+                "--output_dir", output_dir,
+                "--model", self.model["modelMulti"],
+                "--output_format", self.fmt,
+                "--device", self.model["device"],
+                "--compute_type", self.model["computeType"],
+                "--threads", str(self.model["threads"]),
+                "--vad_filter", "True", *self.batch_args]
+
+    def _whisper_out(self, for_whisper: str, output_dir: str) -> str:
+        """Where whisper writes the transcript of ``for_whisper``: named after
+        the input, original extension dropped."""
+        name = os.path.splitext(os.path.basename(for_whisper))[0]
+        return os.path.join(output_dir, name + "." + self.fmt)
+
+    def _keep(self, relative: str, whisper_out: str) -> None:
+        out = self._transcript(relative)
+        os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+        shutil.move(whisper_out, out)
+        self.report_progress("transcribed: " + relative)
+
     def transcribe_one(self, ready: tuple) -> None:
         """One prepared input through whisper into its mirrored transcript;
         its work directory goes when it is done."""
         relative, for_whisper, work = ready
-        out = self._transcript(relative)
         try:
             log("Transcribing: " + relative)
-            name = os.path.basename(for_whisper)
-            whisper_out = os.path.join(
-                work, os.path.splitext(name)[0] + "." + self.fmt)
+            whisper_out = self._whisper_out(for_whisper, work)
             done = toolcapture.run(
-                [*whisper.WHISPER_COMMAND, for_whisper,
-                 "--output_dir", work,
-                 "--model", self.model["modelMulti"],
-                 "--output_format", self.fmt,
-                 "--device", self.model["device"],
-                 "--compute_type", self.model["computeType"],
-                 "--threads", str(self.model["threads"]),
-                 "--vad_filter", "True", *self.batch_args],
+                self._whisper([for_whisper], work),
                 relative, tool="whisper",
                 # The status alone is not the evidence: whisper-ctranslate2
                 # exits 0 after a CUDA out-of-memory error, having written
@@ -270,19 +289,118 @@ class Run:
                 verify=lambda: ("" if os.path.isfile(whisper_out)
                                 else "wrote no transcript"))
             if done.ok:
-                os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
-                shutil.move(whisper_out, out)
-                self.report_progress("transcribed: " + relative)
+                self._keep(relative, whisper_out)
             else:
                 self.record_failure()
                 self.report_progress("failed: " + relative, failed=True)
         finally:
             shutil.rmtree(work, ignore_errors=True)
 
+    def transcribe_group(self, group: tuple) -> None:
+        """Several prepared inputs through ONE whisper process, so the model
+        is loaded into memory once for them all rather than once a file.
+
+        ``group`` is ``(label, members)`` - see :func:`_groups`. A group of
+        one is :meth:`transcribe_one`. whisper-ctranslate2 transcribes its
+        inputs one after the other and writes each transcript as that input
+        is done; an input it cannot transcribe - a CUDA out-of-memory error
+        among them - it reports and passes over, and it still exits 0. So the
+        evidence is again each input's own transcript: every one that is
+        there is kept, and every one that is not is tried once more in a call
+        of its own, which is the call today's failure is reported from. What
+        a failed group costs is that retry, never the inputs it did finish.
+        """
+        label, members = group
+        if len(members) == 1:
+            self.transcribe_one(members[0])
+            return
+        retry = []
+        output_dir = tempfile.mkdtemp(prefix="whisper.group.",
+                                      dir=self.ram_root)
+        try:
+            for relative, _for_whisper, _work in members:
+                log("Transcribing: " + relative)
+            outs = [self._whisper_out(for_whisper, output_dir)
+                    for _relative, for_whisper, _work in members]
+            # Not reported here: a file this call missed is tried again on
+            # its own, and only that call's failure is the file's.
+            toolcapture.run(
+                self._whisper([m[1] for m in members], output_dir),
+                label, tool="whisper", report=False,
+                verify=lambda: ("" if all(os.path.isfile(o) for o in outs)
+                                else "wrote no transcript for some files"))
+            for member, whisper_out in zip(members, outs, strict=True):
+                if os.path.isfile(whisper_out):
+                    self._keep(member[0], whisper_out)
+                    shutil.rmtree(member[2], ignore_errors=True)
+                else:
+                    retry.append(member)
+        finally:
+            shutil.rmtree(output_dir, ignore_errors=True)
+        for member in retry:
+            if safety.abort_requested():
+                # Stopped: not a failure, and not worth a second start.
+                _discard(member)
+                continue
+            log("Retrying alone: " + member[0])
+            self.transcribe_one(member)
+
 
 def _discard(ready: tuple) -> None:
     """An input made ready but never transcribed: its extract let go of."""
     shutil.rmtree(ready[2], ignore_errors=True)
+
+
+def _discard_group(group: tuple) -> None:
+    for member in group[1]:
+        _discard(member)
+
+
+def group_size(files: int, jobs: int) -> int:
+    """How many inputs one whisper process is given: the files spread evenly
+    over the workers, so a second run is not left idle while the first holds
+    them all, and never more than :data:`whisper.WHISPER_GROUP_FILES`."""
+    jobs = max(int(jobs), 1)
+    even = -(-files // jobs)
+    return max(1, min(even, whisper.WHISPER_GROUP_FILES))
+
+
+def _groups(prepared, size: int):
+    """The items of ``prepared`` - ``(ready, bytes)`` pairs - gathered into
+    groups of up to ``size`` for one whisper process each, as
+    ``((label, members), bytes)``.
+
+    A group is handed on as soon as it is full, its sources add up to
+    :data:`whisper.WHISPER_GROUP_BYTES`, or the next input would be written
+    under a name already in it (whisper names a transcript after its input,
+    and every input of a call writes into one folder). A source that large -
+    a film - therefore goes alone and at once: its own transcription dwarfs a
+    reload of the model, and holding it back for the next extraction would
+    only leave the GPU idle.
+    """
+    members: list = []
+    names: set = set()
+    total = 0
+
+    def handed():
+        label = members[0][0]
+        if len(members) > 1:
+            label += " (+%d more)" % (len(members) - 1)
+        return (label, tuple(members)), total
+
+    for ready, size_bytes in prepared:
+        name = os.path.splitext(os.path.basename(ready[1]))[0].casefold()
+        if members and name in names:
+            yield handed()
+            members, names, total = [], set(), 0
+        members.append(ready)
+        names.add(name)
+        total += size_bytes
+        if len(members) >= size or total >= whisper.WHISPER_GROUP_BYTES:
+            yield handed()
+            members, names, total = [], set(), 0
+    if members:
+        yield handed()
 
 
 def _mirror_folders(input_dir: str, output_dir: str) -> None:
@@ -405,18 +523,20 @@ def _transcribe(program: str, input_dir: str, output_dir: str, fmt: str,
                % (len(tracks), min(int(jobs), len(tracks))))
     # Each worker spans all CPU threads or the GPU, which is why the width is
     # whisper's and not the core count. The workers start on the first input
-    # made ready; the rest are made ready while they work.
+    # made ready; the rest are made ready while they work. The inputs go to
+    # whisper in groups, one process - one load of the model - a group.
+    groups = _groups(state.prepared(tracks), group_size(len(tracks),
+                                                        int(jobs)))
     if int(jobs) <= 1:
-        queue = dynamicqueue.ahead(state.prepared(tracks), 1,
-                                   discard=_discard)
+        queue = dynamicqueue.ahead(groups, 1, discard=_discard_group)
         try:
-            workerpool.map(queue, 1, state.transcribe_one)
+            workerpool.map(queue, 1, state.transcribe_group)
         finally:
             queue.close()
     else:
-        dynamicqueue.run(state.prepared(tracks), int(jobs),
+        dynamicqueue.run(groups, int(jobs),
                          workerpool.in_worker,
-                         lambda ready: (state.transcribe_one, ready),
+                         lambda group: (state.transcribe_group, group),
                          start_after=1)
     safety.exit_if_aborted()
     runlog.say("Done.\n")

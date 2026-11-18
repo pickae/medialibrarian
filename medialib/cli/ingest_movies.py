@@ -98,7 +98,7 @@ t |  | tags only: the Plex/Jellyfin naming and nothing else - the IMDb id,
                   The films kept in more than one folder, across all of those
                   given, are listed once in
                   logs/ingest-movies/ingest-movies-duplicates.txt.
-s |  | subtitles only: the subtitles the subtitleLanguages setting names,
+s |  | subtitles only: the subtitles the spokenLanguages setting names,
                   and nothing else -
                   walks the whole tree the way -t does, and tests every
                   "<movie>.xx.srt" already beside a film (never a commentary
@@ -258,7 +258,7 @@ USAGE_TAIL = """
 
     Languages & subtitles
     ---------------------
-    the subtitles fetched and tested are the ones the subtitleLanguages
+    the subtitles fetched and tested are the ones the spokenLanguages
     setting names - a comma list of ISO 639-1 codes the language table knows,
     en, de, fr, nl, es, it by default, and a code the table does not know
     stops the run before a film is touched; the table knows pt, pl, sv, da,

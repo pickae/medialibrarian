@@ -254,3 +254,17 @@ def test_rows_are_ogm():
 
 def test_time_label():
     assert aichapters.time_label(3723999) == "1:02:03"
+
+
+@pytest.mark.parametrize("duration, short", [
+    (0, False),                # unknown: asked about, not turned away
+    (3 * 60_000, True),        # under two shortest chapters
+    (4 * 60_000, False),
+    (60 * 60_000, False),
+])
+def test_too_short_is_known_before_any_transcript(duration, short):
+    assert aichapters.too_short(duration) is short
+
+
+def test_too_short_follows_the_shortest_chapter():
+    assert aichapters.too_short(9 * 60_000, min_minutes=5)

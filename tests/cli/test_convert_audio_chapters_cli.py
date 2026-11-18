@@ -103,3 +103,13 @@ def test_t_without_a_model_is_refused_before_anything_is_encoded(convert, tmp_pa
     said = _run(convert, tmp_path, "-t", env=environment, expect=1)
     assert "chapterLlmUrl is not set" in said
     assert not (tmp_path / "out" / "plain.opus").exists()
+
+
+def test_an_output_too_short_for_chapters_is_not_transcribed(convert, tmp_path):
+    """Two chapters of the shortest length do not fit in it, so the model would
+    turn it down whatever was said; transcribing it would be paid for on
+    every rerun."""
+    convert.with_tool("ffprobe", _FFPROBE.replace("echo 1200.000", "echo 100.000"))
+    _run(convert, tmp_path, "-t")
+    assert (tmp_path / "whisper.calls").read_text() == ""
+    assert (tmp_path / "model.calls").read_text() == ""

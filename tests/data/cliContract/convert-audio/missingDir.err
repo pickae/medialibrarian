@@ -56,6 +56,10 @@ Options:
                     the output as well. A transcript sidecar is used rather
                     than transcribing again.
                     Default false
+    -r, --only <folder>
+                    Only the files under <inputDir>/<folder>, converted to
+                    where a run over all of <inputDir> would put them. May
+                    be given more than once.
     -v, --verbose   Also say why each item was handled the way it was, and on a
                     failure print the tool's whole output rather than its last
                     lines.

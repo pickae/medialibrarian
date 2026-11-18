@@ -918,7 +918,7 @@ def main(argv: list, program: str = "ingest-movies",
     # too: a code the language table does not know is refused the same way,
     # and the setting's order is the order the sources are asked in.
     try:
-        wanted = languages.wanted_subtitles()
+        wanted = languages.spoken_languages()
     except clioptions.UsageError as error:
         clioptions.refuse_usage(declaration, error.message)
         return 1
@@ -1542,7 +1542,7 @@ def _subtitles_only(program: str, script_dir: str, roots: list, names: list,
     and are never one of the sidecars tested.
     """
     if wanted is None:
-        wanted = languages.wanted_subtitles()
+        wanted = languages.spoken_languages()
     log = _preview_log(write)
     # Which ffmpeg of the ones installed, before the preflight asks whether PATH
     # can reach one.
@@ -1580,7 +1580,7 @@ def _subtitles_only(program: str, script_dir: str, roots: list, names: list,
     # A line written before the scope was recorded is one the table's
     # default languages were done for.
     done = donelog.DoneLog(commands.logs_file(script_dir, SUBTITLES_DONE),
-                           default_scope=languages.SUBTITLE_DEFAULT)
+                           default_scope=languages.SPOKEN_DEFAULT)
     totals = {"kept": 0, "discarded": 0, "untested": 0}
     for root, name in zip(roots, names, strict=True):
         log('Phase: testing the subtitles already beside the films in "%s"'

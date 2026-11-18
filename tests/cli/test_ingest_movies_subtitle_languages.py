@@ -1,4 +1,4 @@
-"""subtitleLanguages: the languages a run fetches and tests subtitles for.
+"""spokenLanguages: the languages a run fetches and tests subtitles for.
 
 Read once at the run's start: a code the language table does not know
 refuses the run before a film is touched, and the codes it knows, in the
@@ -31,18 +31,18 @@ class TestTheRefusal:
     def test_a_code_the_table_does_not_know_is_refused(
             self, monkeypatch, tmp_path, capsys):
         (tmp_path / "Films").mkdir()
-        monkeypatch.setenv("subtitleLanguages", "xx")
+        monkeypatch.setenv("spokenLanguages", "xx")
         assert run.main(["-s", str(tmp_path / "Films")],
                         script_dir=str(tmp_path / "script")) == 1
         errors = capsys.readouterr().err
-        assert "subtitleLanguages" in errors
+        assert "spokenLanguages" in errors
         assert '"xx"' in errors
         assert "Nothing was changed." in errors
 
     def test_every_unknown_code_is_named(self, monkeypatch, tmp_path,
                                          capsys):
         (tmp_path / "Films").mkdir()
-        monkeypatch.setenv("subtitleLanguages", "xx,yy")
+        monkeypatch.setenv("spokenLanguages", "xx,yy")
         assert run.main(["-s", str(tmp_path / "Films")],
                         script_dir=str(tmp_path / "script")) == 1
         errors = capsys.readouterr().err
@@ -56,11 +56,11 @@ class TestTheRefusal:
         """The setting is read where keepLanguages is read: once, at the
         run's start, on a run asked for nothing but the tags."""
         _library(tmp_path, "Films")
-        monkeypatch.setenv("subtitleLanguages", "xx")
+        monkeypatch.setenv("spokenLanguages", "xx")
         assert run.main(["-t", str(tmp_path / "Films")],
                         script_dir=str(tmp_path / "script")) == 1
         errors = capsys.readouterr().err
-        assert "subtitleLanguages" in errors
+        assert "spokenLanguages" in errors
         assert "Nothing was changed." in errors
 
 
@@ -97,7 +97,7 @@ class TestTheRunThatIngests:
     def test_the_run_carries_the_setting(self, monkeypatch, tmp_path):
         states = self._stubbed(monkeypatch, tmp_path)
         _library(tmp_path, "Films")
-        monkeypatch.setenv("subtitleLanguages", "pt,en")
+        monkeypatch.setenv("spokenLanguages", "pt,en")
         assert run.main([str(tmp_path / "Films")]) == 0
         wanted = states[0].subtitle_languages
         assert [row.code2 for row in wanted] == ["pt", "en"]
@@ -106,7 +106,7 @@ class TestTheRunThatIngests:
             self, monkeypatch, tmp_path):
         states = self._stubbed(monkeypatch, tmp_path)
         _library(tmp_path, "Films")
-        monkeypatch.delenv("subtitleLanguages", raising=False)
+        monkeypatch.delenv("spokenLanguages", raising=False)
         assert run.main([str(tmp_path / "Films")]) == 0
         wanted = states[0].subtitle_languages
         assert [row.code2 for row in wanted] \

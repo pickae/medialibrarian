@@ -139,7 +139,7 @@ option can never change what a command you already type means.
 - `convert-video -u` additionally needs an NVIDIA GPU and a VapourSynth +
   TensorRT environment of its own, one piece of which has to be built (see
   [`convert-video`](docs/commands/convert-video.md)).
-- `generate-chapters` and `convert-audio -t` additionally need a language model to
+- `generate-chapters`, `convert-audio -t` and `ytdlp -g` additionally need a language model to
   ask: any server speaking OpenAI's chat protocol, local (Ollama, llama.cpp,
   vLLM…) or hosted, or Claude through the `anthropic` package (`pip install
   anthropic`) (see [`generate-chapters`](docs/commands/generate-chapters.md#which-model)).

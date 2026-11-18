@@ -38,7 +38,7 @@ class TestTheTableItself:
         assert differing == {"de", "fr", "nl", "zh"}
 
     def test_the_rows_the_setting_may_name_beside_the_default_six(self):
-        """The ``subtitleLanguages`` setting may name these beside the six a
+        """The ``spokenLanguages`` setting may name these beside the six a
         run fetches by default, and a row's codes are what a track is stamped
         with and read back from, so each is pinned by every spelling."""
         expected = {
@@ -276,49 +276,49 @@ class TestSpeaks:
 
 
 class TestWantedSubtitles:
-    """The ``subtitleLanguages`` setting read by
-    :func:`medialib.lib.languages.wanted_subtitles`: the languages a run
+    """The ``spokenLanguages`` setting read by
+    :func:`medialib.lib.languages.spoken_languages`: the languages a run
     fetches and tests subtitles for, in the order the setting names them."""
 
     def test_the_setting_unset_fetches_what_a_run_always_fetched(
             self, monkeypatch):
-        monkeypatch.delenv("subtitleLanguages", raising=False)
-        wanted = lang.wanted_subtitles()
-        assert [row.code2 for row in wanted] == list(lang.SUBTITLE_DEFAULT)
+        monkeypatch.delenv("spokenLanguages", raising=False)
+        wanted = lang.spoken_languages()
+        assert [row.code2 for row in wanted] == list(lang.SPOKEN_DEFAULT)
         assert wanted == tuple(row for row in lang.LANGUAGES
-                               if row.code2 in lang.SUBTITLE_DEFAULT)
+                               if row.code2 in lang.SPOKEN_DEFAULT)
 
     def test_an_empty_setting_names_nothing(self, monkeypatch):
-        monkeypatch.setenv("subtitleLanguages", "")
-        assert [row.code2 for row in lang.wanted_subtitles()] \
-            == list(lang.SUBTITLE_DEFAULT)
+        monkeypatch.setenv("spokenLanguages", "")
+        assert [row.code2 for row in lang.spoken_languages()] \
+            == list(lang.SPOKEN_DEFAULT)
 
     def test_the_setting_s_order_is_the_order_the_sources_are_asked_in(
             self, monkeypatch):
-        monkeypatch.setenv("subtitleLanguages", "pt,ja")
-        assert [row.code2 for row in lang.wanted_subtitles()] == ["pt", "ja"]
+        monkeypatch.setenv("spokenLanguages", "pt,ja")
+        assert [row.code2 for row in lang.spoken_languages()] == ["pt", "ja"]
 
     def test_a_code_named_twice_is_one_language(self, monkeypatch):
-        monkeypatch.setenv("subtitleLanguages", "pt, pt ,PT,en")
-        assert [row.code2 for row in lang.wanted_subtitles()] == ["pt", "en"]
+        monkeypatch.setenv("spokenLanguages", "pt, pt ,PT,en")
+        assert [row.code2 for row in lang.spoken_languages()] == ["pt", "en"]
 
     def test_the_case_of_a_code_does_not_matter(self, monkeypatch):
-        monkeypatch.setenv("subtitleLanguages", "ZH,En")
-        assert [row.code2 for row in lang.wanted_subtitles()] == ["zh", "en"]
+        monkeypatch.setenv("spokenLanguages", "ZH,En")
+        assert [row.code2 for row in lang.spoken_languages()] == ["zh", "en"]
 
     def test_a_code_the_table_does_not_know_is_refused(self, monkeypatch):
         from medialib.lib import clioptions
-        monkeypatch.setenv("subtitleLanguages", "xx")
+        monkeypatch.setenv("spokenLanguages", "xx")
         with pytest.raises(clioptions.UsageError) as refused:
-            lang.wanted_subtitles()
+            lang.spoken_languages()
         assert '"xx"' in refused.value.message
         assert "It knows:" in refused.value.message
 
     def test_every_unknown_code_is_named(self, monkeypatch):
         from medialib.lib import clioptions
-        monkeypatch.setenv("subtitleLanguages", "xx,yy")
+        monkeypatch.setenv("spokenLanguages", "xx,yy")
         with pytest.raises(clioptions.UsageError) as refused:
-            lang.wanted_subtitles()
+            lang.spoken_languages()
         message = refused.value.message
         assert '"xx"' in message and '"yy"' in message
         # the codes the table has, so the one who set it can pick a real one

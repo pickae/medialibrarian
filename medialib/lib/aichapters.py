@@ -537,6 +537,14 @@ def _settle(cues: Sequence[Cue], chosen: Sequence[tuple[int, str]],
     return marks if len(marks) > 1 else []
 
 
+def too_short(duration: int, min_minutes: int = DEFAULT_MIN_MINUTES) -> bool:
+    """Whether a recording of ``duration`` ms is too short for two chapters -
+    asked before it is transcribed, since :func:`generate` would answer
+    nothing for it whatever its transcript said. An unknown length (0) is
+    not too short."""
+    return 0 < duration < 2 * min_minutes * _MS_PER_MINUTE
+
+
 def generate(cues: Sequence[Cue], llm, *, min_minutes: int = DEFAULT_MIN_MINUTES,
              typical_minutes: int = DEFAULT_TYPICAL_MINUTES,
              log: Callable[[str], None] = lambda line: None) -> list[tuple[int, str]]:

@@ -1,7 +1,7 @@
 # `ingest-movies`
 
 Sorts, cleans and improves a movie library in place: one folder per film, Plex
-names with the IMDb id, subtitles in the languages the `subtitleLanguages`
+names with the IMDb id, subtitles in the languages the `spokenLanguages`
 setting names (six by default), Opus audio, transcribed commentaries and the
 chapters the disc had.
 
@@ -53,7 +53,7 @@ These are read from the environment:
 | `openSubtitlesUser`, `openSubtitlesPassword` | downloading missing subtitles from OpenSubtitles.org, the first source | the other sources below are still asked, and the run says OpenSubtitles was skipped |
 | `openSubtitlesComUser`, `openSubtitlesComPassword` | asking OpenSubtitles.com second — a separate service, with free accounts of its own | it is not asked |
 | `subDlApiKey` | asking SubDL third — the key a free account at subdl.com gets | it is not asked |
-| `subtitleLanguages` | the languages whose subtitles are fetched and tested | the six it knows by default (en, de, fr, nl, es, it) |
+| `spokenLanguages` | the languages whose subtitles are fetched and tested | the six it knows by default (en, de, fr, nl, es, it) |
 | `plexUrl` | the Plex server the films are compared with | the server on this machine, `http://localhost:32400` |
 | `plexToken` | that server's X-Plex-Token | the server is asked without one, which it refuses unless told to trust this address; the comparison is then skipped |
 
@@ -105,7 +105,7 @@ ingest-movies -p  ~/Films     # which of them the Plex library already has
 
 Sorts loose movie files into per-movie subfolders (Plex layout), cleans
 folder/movie/subtitle names, renames/downloads subtitles for the languages the
-`subtitleLanguages` setting names (six by default),
+`spokenLanguages` setting names (six by default),
 refreshes mkv tags, transcodes lossless audio to Opus, transcribes commentary tracks,
 names numbered commentary tracks after who speaks in them, and gives films
 without named chapters the ones their disc had.
@@ -556,7 +556,7 @@ the file up to date.
 is put to the test a downloaded subtitle is kept by: its best alignment with the
 film's speech has to stand out from every other. Commentary transcripts are
 never tested — they are named after their track — and neither are forced
-subtitles or the languages the `subtitleLanguages` setting does not name.
+subtitles or the languages the `spokenLanguages` setting does not name.
 
 | | Dry run (`-s`) | `-sw` |
 | --- | --- | --- |
@@ -593,7 +593,7 @@ finished. A film is known by its `{imdb-…}` or `{tmdb-…}` tag, plus its
 edition and part when it has them, so moving or renaming it does not undo the
 record. Each line also records the languages its run got through, and a later
 run skips a film only when that list holds every language it wants — a
-language added to the `subtitleLanguages` setting is fetched for a film once,
+language added to the `spokenLanguages` setting is fetched for a film once,
 the first run after the change, and never again. These films are never recorded:
 
 - a film with no id tag, since its name is only a guess at which film it is
