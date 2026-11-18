@@ -25,9 +25,12 @@ if TYPE_CHECKING:
 
 from medialib import commands
 from medialib.lib import (
+    chapterllm,
     clioptions,
     downloadcleanup,
+    feedtranscripts,
     ffmpegselect,
+    languages,
     podcastfeeds,
     ramscratch,
     runcontext,
@@ -89,15 +92,17 @@ c |  | Tidy up after the run: the sidecars each finished episode
 i |  | Build the phone's library from the run instead of leaving the
                     downloads as they came off the network. <outputPath> becomes
                     the parent of two trees: the raw downloads land in
-                    <outputPath>/Staging/<kind>, and when the run is over their
-                    names are cleaned (clean-folder-structure) and they are
-                    converted into <outputPath>/Ingested (convert-audio) - one
-                    staging folder per conversion, all of them into that one
-                    library. The raw downloads are KEPT: they are what a re-run
-                    would otherwise have to fetch again. Normally given with -c,
-                    so the sidecars are gone before the library is built.
-                    Every staging folder with files in it is converted, including
-                    the folders of conversions no table in this run downloads into.
+                    <outputPath>/Staging/<kind>, and while the other feeds are
+                    still downloading, a finished feed's names are cleaned
+                    (clean-folder-structure) and it is converted into
+                    <outputPath>/Ingested (convert-audio), a few episodes at a
+                    time - one staging folder per conversion, all of them into
+                    that one library. The raw downloads are KEPT: they are what
+                    a re-run would otherwise have to fetch again. Normally given
+                    with -c, so the sidecars are gone before the library is
+                    built. When the downloads are over, every staging folder
+                    with files in it is converted, including the folders of
+                    conversions no table in this run downloads into.
                     A video table ignores -i and downloads to <outputPath> as
                     usual - an audio converter would throw its picture away.
 m | <match> | Only the feeds whose subdir or URL contains <match>
@@ -105,6 +110,15 @@ m | <match> | Only the feeds whose subdir or URL contains <match>
 s | <system> | Build the calls for "windows" or "linux" instead of for
                     this host. Only useful with -p, to read off what the other
                     machine would run.
+g |  | With -i: chapters for every episode in the library that has
+                    none, worked out by a language model (the chapterLlm
+                    settings) from a transcript, which is written into the
+                    episode as well (convert-audio -t). A YouTube episode's
+                    transcript is YouTube's own captions, fetched with it in
+                    the episode's language when the spokenLanguages setting
+                    names it and in English when it does not, and written into
+                    the episode even when it has chapters; an RSS episode is
+                    transcribed on this machine.
 l |  | Consolidate archives instead of downloading: every line of
                     every <archiveFile> given, sorted and with duplicates
                     dropped, is written into the FIRST one, which is created if
@@ -119,7 +133,7 @@ l |  | Consolidate archives instead of downloading: every line of
 # tables can be read in one run. The rest assign once, last flag winning.
 OPT_FLAGS = "repeat:t"
 OPT_VARS = ("t:tables j:jobCap p:dryRun a:includeInactive c:cleanUp i:ingest m:match "
-            "l:consolidate")
+            "l:consolidate g:aiChapters")
 
 # -j caps a table's own parallelism and 0 means "no cap", so zero belongs in the
 # range; -s is the one option whose accepted values are words rather than a
@@ -131,7 +145,7 @@ s | enum:windows\\|linux\\|auto | system
 """
 
 OPT_LONG = ("h:help t:table j:jobs p:preview a:include-inactive "
-            "c:clean-up i:ingest m:match s:system l:consolidate")
+            "c:clean-up i:ingest m:match s:system l:consolidate g:ai-chapters")
 
 USAGE_TAIL = """
 
@@ -245,6 +259,10 @@ class Run:
 
     # Handed over once the tables have been read, by the run that read them.
     rows_of: list[list[str]]
+    # The -i plan, when the library is built during the run, and the
+    # languages a YouTube transcript is taken in, when -g fetches them.
+    ingest: dict | None = None
+    spoken: tuple = ()
 
     def __init__(self, options, ytdlp_command, platform, native_output,
                  native_archive, manifest_dir, native_manifest_dir, status_dir,
@@ -273,6 +291,15 @@ class Run:
         return bool(self.status_dir) and os.path.exists(
             os.path.join(self.status_dir, "blocked." + provider))
 
+    def transcripts_for(self, profile: str) -> tuple:
+        """The languages a feed of this profile fetches its captions in:
+        the spoken ones, for a YouTube feed whose episodes -g chapters - and
+        none for the rest, whose episodes are transcribed here."""
+        if (self.options.get("aiChapters") and profile in self.staging_for_profile
+                and podcastfeeds.podcast_profile_provider(profile) == "youtube"):
+            return self.spoken
+        return ()
+
     # --- one feed ---------------------------------------------------------
     def run_feed(self, index: int, podcast: str, row: str, provider: str,
                  root: str, profile: str) -> None:
@@ -298,7 +325,8 @@ class Run:
             date_after=runcontext.get("PODCAST_DATE_AFTER", ""),
             date_before=runcontext.get("PODCAST_DATE_BEFORE", ""),
             sponsorblock=runcontext.get("PODCAST_SPONSORBLOCK", None),
-            ffmpeg_location=self.ffmpeg_location)
+            ffmpeg_location=self.ffmpeg_location,
+            transcripts=self.transcripts_for(profile))
         if argv is None:
             return
 
@@ -342,6 +370,26 @@ class Run:
             os.replace(part, os.path.join(self.status_dir, str(index)))
         except OSError:
             return
+        self._queue_for_library(index, podcast, profile, manifest)
+
+    def _queue_for_library(self, index: int, podcast: str, profile: str,
+                           manifest: str) -> None:
+        """A feed that brought episodes, handed to the library copy that runs
+        beside the downloads - whatever became of the feed, since what it did
+        download is there all the same."""
+        if (self.ingest is None or profile not in self.staging_for_profile
+                or not podcastfeeds.manifest_paths(manifest)):
+            return
+        queue = os.path.join(self.status_dir, LIBRARY_QUEUE)
+        try:
+            os.makedirs(queue, exist_ok=True)
+            entry = os.path.join(queue, "%06d" % index)
+            with open(entry + ".part", "w", encoding="utf-8") as handle:
+                handle.write("%s\n%s\n" % (profile, podcast.strip("/")))
+            os.replace(entry + ".part", entry)
+        except OSError:
+            # The catch-all pass at the end converts it all the same.
+            pass
 
     def _download(self, argv, manifest: str, podcast: str, block_flag: str,
                   provider: str, retriable: bool = False):
@@ -453,7 +501,8 @@ class Run:
                     date_after=runcontext.get("PODCAST_DATE_AFTER", ""),
                     date_before=runcontext.get("PODCAST_DATE_BEFORE", ""),
                     sponsorblock=runcontext.get("PODCAST_SPONSORBLOCK", None),
-                    ffmpeg_location=self.ffmpeg_location)
+                    ffmpeg_location=self.ffmpeg_location,
+                    transcripts=self.transcripts_for(profile))
                 if argv is not None:
                     print(podcastfeeds.render_call(argv, self.platform))
                 continue
@@ -504,6 +553,162 @@ def _feed_worker(state, index, subdir, row, provider, root,
     """
     safety.trap_worker_abort()
     state.run_feed(index, subdir, row, provider, root, profile)
+
+
+# The folder of the run's scratch the downloads hand their finished feeds to the
+# library copy through, one file each, and the flag that says no more will come.
+LIBRARY_QUEUE = "library"
+DOWNLOADS_DONE = "downloadsDone"
+
+# How many new episodes a batch of the library copy waits for. Each batch is
+# one convert-audio, and with -g one transcription and one round of the model:
+# its whisper starts once, with the probe that settles the GPU, and the model
+# and whisper take turns on the card once a batch and not once an episode. A
+# few is enough for that; more only leaves the card idle longer while the
+# downloads wait on a provider.
+LIBRARY_BATCH = 5
+
+# How often, in seconds, the library copy looks for a finished feed.
+LIBRARY_POLL = 2
+
+
+class LibraryQueue:
+    """The library copy, built while the downloads go on.
+
+    The downloads wait on the network and on the pauses a provider asks for,
+    and leave the processor all but idle; the conversion - and with -g the
+    transcription and the model, which take far longer - is work that would
+    otherwise begin only once the last feed is fetched. So each feed that
+    brought episodes is taken up as soon as it is finished: its captions
+    chosen, its sidecars tidied, its names cleaned, and then, a few episodes
+    at a time, the folders of a staging kind converted with one convert-audio
+    (-r for each). The pass over every staging folder at the end of the run
+    then finds them done.
+
+    One process, and one batch at a time: the batches share the card, and a
+    second convert-audio would load a second whisper beside the first.
+    """
+
+    def __init__(self, state: Run):
+        self.state = state
+        self.ingest = state.ingest or {}
+        self.queue = os.path.join(state.status_dir, LIBRARY_QUEUE)
+        self.taken: set = set()
+        self.waiting: dict = {}  # kind -> [(subdir, episode count)]
+        self.batch = 0
+
+    def run(self) -> None:
+        while not safety.abort_requested():
+            # Read before the folder is: a feed queued after it was set is
+            # one the listing below still sees.
+            downloads_over = os.path.exists(
+                os.path.join(self.state.status_dir, DOWNLOADS_DONE))
+            fresh = self._fresh()
+            for name in fresh:
+                self._take(name)
+            for kind in list(self.waiting):
+                if sum(count for _subdir, count in self.waiting[kind]) >= LIBRARY_BATCH:
+                    self._convert(kind)
+            if downloads_over and not fresh:
+                for kind in list(self.waiting):
+                    if safety.abort_requested():
+                        return
+                    self._convert(kind)
+                return
+            if not fresh:
+                time.sleep(LIBRARY_POLL)
+
+    def _fresh(self) -> list:
+        try:
+            names = os.listdir(self.queue)
+        except OSError:
+            return []
+        fresh = sorted(name for name in names
+                       if name.isdigit() and name not in self.taken)
+        self.taken.update(fresh)
+        return fresh
+
+    def _take(self, name: str) -> None:
+        """One finished feed made ready for its conversion."""
+        try:
+            with open(os.path.join(self.queue, name), encoding="utf-8") as handle:
+                profile, subdir = handle.read().split("\n")[:2]
+        except (OSError, ValueError):
+            return
+        state = self.state
+        kind = (podcastfeeds.podcast_profile_ingest(profile) or "").partition(" ")[0]
+        if kind not in self.ingest.get("staging", {}):
+            return
+        feed = "feed%d" % int(name)
+        manifest = os.path.join(state.manifest_dir, feed)
+        episodes = podcastfeeds.manifest_paths(manifest)
+        # Measured now: the names are about to change under the manifest.
+        podcastfeeds.record_manifest_bytes(manifest)
+        spoken = state.transcripts_for(profile)
+        for episode in episodes if spoken else ():
+            choice = feedtranscripts.choose(episode, spoken)
+            log("%s: transcript %s" % (os.path.basename(episode),
+                                       choice.language if choice else "none on YouTube"))
+        if state.options["cleanUp"]:
+            files = sidecars = remuxed = 0
+            for episode in episodes:
+                _where, removed, was_remuxed = downloadcleanup.clean_downloaded_file(
+                    episode, keep_transcript=bool(spoken))
+                files += 1
+                sidecars += removed
+                remuxed += 1 if was_remuxed else 0
+            _write(os.path.join(state.status_dir, TIDIED + feed),
+                   "%d %d %d\n" % (files, remuxed, sidecars))
+        self.waiting.setdefault(kind, []).append((subdir, len(episodes)))
+
+    def _convert(self, kind: str) -> None:
+        """The waiting feeds of one staging kind, named and converted."""
+        feeds = self.waiting.pop(kind, [])
+        subdirs = list(dict.fromkeys(subdir for subdir, _count in feeds))
+        if not subdirs:
+            return
+        state, staging = self.state, self.ingest["staging"][kind]
+        self.batch += 1
+        failures = []
+        for subdir in subdirs:
+            folder = os.path.join(staging, subdir)
+            if os.path.isdir(folder) and commands.run_command(
+                    "clean-folder-structure", [folder],
+                    script_dir=state.script_dir).returncode != 0:
+                failures.append(subdir + " names")
+        present = [subdir for subdir in subdirs
+                   if os.path.isdir(os.path.join(staging, subdir))]
+        log("Library copy, batch %d: %d episode(s) of %s"
+            % (self.batch, sum(count for _subdir, count in feeds), ", ".join(present)))
+        only = [argument for subdir in present for argument in ("-r", subdir)]
+        if present and not safety.abort_requested() and commands.run_command(
+                "convert-audio",
+                self.ingest["args"][kind].split() + only + [staging, self.ingest["root"]],
+                script_dir=state.script_dir).returncode != 0:
+            failures.append(kind + " audio (%s)" % ", ".join(present))
+        if failures:
+            _write(os.path.join(state.status_dir, LIBRARY_FAILED + str(self.batch)),
+                   "".join(failure + "\n" for failure in failures))
+
+
+# What the library copy leaves in the scratch for the summary: a feed it tidied
+# (with its figures), and the steps of a batch that failed.
+TIDIED = "tidied."
+LIBRARY_FAILED = "libraryFailed."
+
+
+def _write(path: str, text: str) -> None:
+    try:
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(text)
+    except OSError:
+        pass
+
+
+def _library_worker(state) -> None:
+    """The library copy, in a process of its own beside the downloads."""
+    safety.trap_worker_abort()
+    LibraryQueue(state).run()
 
 
 def _archive_location(archive_file: str, script_dir: str) -> str:
@@ -744,7 +949,19 @@ def main(argv: list, program: str = "ytdlp", script_dir: str = "") -> int:
         "match": result.values["match"],
         "jobCap": int(result.values["jobCap"] or 0),
         "outputPath": output_path,
+        "aiChapters": bool(result.values["aiChapters"]),
+        "spoken": (),
     }
+    if options["aiChapters"]:
+        if not options["ingest"]:
+            clioptions.refuse_usage(declaration, "-g chapters the library copy, "
+                                    "so it needs -i")
+            return 1
+        try:
+            options["spoken"] = tuple(row.code2 for row in languages.spoken_languages())
+        except clioptions.UsageError as error:
+            clioptions.refuse_usage(declaration, error.message)
+            return 1
 
     # EVERY table, the date range and the tools are checked up front and each
     # reports every fault at once: the alternative is finding out about the
@@ -836,6 +1053,12 @@ def _settle_and_run(options, tables, profiles, jobs_of, rows_of, feed_count,
             ytdlp_command,
             warn=any(podcastfeeds.podcast_profile_provider(profile) == "youtube"
                      for profile in profiles))
+
+    # Asked before anything is fetched: a model that cannot be reached is
+    # better found out now than after the first batch has been converted.
+    if (options["aiChapters"] and not options["dryRun"]
+            and chapterllm.require("ytdlp") is None):
+        return 1
 
     if options["cleanUp"] and not options["dryRun"]:
         kind = "audio"
@@ -1039,6 +1262,9 @@ def _run(options, tables, profiles, jobs_of, rows_of, feed_count, output_path,
         # modules of this package rather than files that can be missing from a
         # checkout, which is what the check that stood here was for.
         ingest = _plan_ingest(output_path, profiles, script_dir)
+        if options["aiChapters"]:
+            for kind in ingest["args"]:
+                ingest["args"][kind] += " -t"
 
     if not options["dryRun"]:
         os.makedirs(output_path, exist_ok=True)
@@ -1096,9 +1322,17 @@ def _run(options, tables, profiles, jobs_of, rows_of, feed_count, output_path,
                     status_dir, counter_file, counters, staging_for_profile,
                     script_dir, native_ffmpeg)
         state.rows_of = rows_of
+        state.spoken = options["spoken"]
+        # Built during the downloads only where there is a scratch to hand
+        # it the finished feeds through: never on a dry run.
+        library = None
+        if ingest and state.native_manifest_dir:
+            state.ingest = ingest
 
         started = time.time()
         _announce(state, tables, feed_count, ingest, native_output)
+        if state.ingest:
+            library = workerpool.start_worker(_library_worker, (state,), "library")
 
         order, lanes = _lanes(profiles)
         if len(order) == 1 or options["dryRun"]:
@@ -1113,6 +1347,12 @@ def _run(options, tables, profiles, jobs_of, rows_of, feed_count, output_path,
                 _lane_worker, (state, lanes[lane], tables, profiles, jobs_of),
                 lane) for lane in order]
             workerpool.join_all(running)
+
+        if library is not None:
+            _write(os.path.join(status_dir, DOWNLOADS_DONE), "")
+            if library.is_alive():
+                log("Downloads over - finishing the library copy of the last feeds")
+            workerpool.join_all([library])
 
         return _report(state, ingest, started, feed_count)
     finally:
@@ -1173,6 +1413,9 @@ def _announce(state, tables, feed_count, ingest, native_output) -> None:
                 % (kind, ingest["staging"][kind]))
         if ingest["kinds"] or ingest["carried"]:
             log("Library built in: " + ingest["root"])
+        if state.options.get("aiChapters"):
+            log("Chapters for the episodes with none; YouTube transcripts in "
+                "%s, else en" % ",".join(state.spoken))
         if ingest["notIngested"]:
             log("Not converted, downloaded straight to %s: %s"
                 % (native_output, " ".join(ingest["notIngested"])))
@@ -1219,6 +1462,10 @@ def _report(state, ingest, started, feed_count) -> int:
         for entry in sorted(os.listdir(state.status_dir), key=os.fsencode):
             if entry.startswith("blocked."):
                 blocked_providers.append(entry[len("blocked."):])
+            elif entry.startswith(LIBRARY_FAILED):
+                with open(os.path.join(state.status_dir, entry),
+                          encoding="utf-8") as handle:
+                    ingest_failures += handle.read().splitlines()
 
     if options["dryRun"]:
         if ingest:
@@ -1273,12 +1520,14 @@ def _report(state, ingest, started, feed_count) -> int:
         _tidy_up(state)
 
     if ingest and not interrupted:
+        # The pass over every staging folder tries again what a batch during
+        # the downloads failed at, so its answer is the one that stands.
         ingest_failures = _build_library(state, ingest)
     elif ingest and (ingest["kinds"] or ingest["carried"]):
         # An interrupted run is a run the user stopped. Starting an hour of
         # encoding at that moment is the opposite of what was asked.
-        log("Interrupted before the library copy - the downloads are in "
-            "%s/Staging, -i again ingests them" % ingest["base"])
+        log("Interrupted before the library copy was finished - the downloads "
+            "are in %s/Staging, -i again ingests them" % ingest["base"])
 
     _skips(skipped_inactive, skipped_unmatched, options["match"])
 
@@ -1325,6 +1574,16 @@ def _tidy_up(state) -> None:
         for name in sorted(os.listdir(state.manifest_dir), key=os.fsencode):
             manifest = os.path.join(state.manifest_dir, name)
             if not os.path.isfile(manifest):
+                continue
+            # A feed the library copy tidied during the run, before it
+            # renamed its episodes: counted, and not looked for again.
+            tidied = os.path.join(state.status_dir, TIDIED + name)
+            if os.path.isfile(tidied):
+                with open(tidied, encoding="utf-8") as handle:
+                    figures = [int(figure) for figure in handle.read().split()]
+                files += figures[0]
+                remuxed += figures[1]
+                sidecars += figures[2]
                 continue
             with open(manifest, encoding="utf-8",
                       errors="surrogateescape") as handle:

@@ -146,17 +146,21 @@ def _attach_download_sidecars(target: str, stem: str, run: Runner) -> None:
         run(["mkvpropedit", target, "--add-attachment", sidecar])
 
 
-def _remove_download_sidecars(path: str) -> int:
+def _remove_download_sidecars(path: str, keep_transcript: bool = False) -> int:
     """Everything that shares the episode's name and is not the episode.
 
     Matched on the stem, so the cover art of a folder - which shares no name with
     any episode - is never in the list. Returns how many were removed.
+
+    ``keep_transcript`` spares ``<stem>.srt``: the transcript a library copy
+    reads into the episode's output.
     """
     stem = _stem_of(path)
+    kept = f"{stem}.srt" if keep_transcript else ""
     removed = 0
     for extension in DOWNLOAD_SIDECARS + DOWNLOAD_PARTIALS:
         sidecar = f"{stem}.{extension}"
-        if os.path.isfile(sidecar) and sidecar != path:
+        if os.path.isfile(sidecar) and sidecar not in (path, kept):
             os.unlink(sidecar)
             removed += 1
 
@@ -173,7 +177,7 @@ def _remove_download_sidecars(path: str) -> int:
                 if not entry.is_file(follow_symlinks=False):
                     continue
                 name = entry.name
-                if name == os.path.basename(path):
+                if name in (os.path.basename(path), os.path.basename(kept)):
                     continue
                 if any(fnmatch.fnmatch(name, f"{stem_base}.*{suffix}")
                        for suffix in _SUBTITLE_SIDEcar_SUFFIXES):
@@ -183,7 +187,8 @@ def _remove_download_sidecars(path: str) -> int:
 
 
 def clean_downloaded_file(path: str, run: Runner = _run,
-                          skip_log: SkipLog | None = None) -> tuple[str, int, bool]:
+                          skip_log: SkipLog | None = None,
+                          keep_transcript: bool = False) -> tuple[str, int, bool]:
     """Tidy one finished episode; return (where it ended up, sidecars removed,
     whether the container changed).
 
@@ -217,7 +222,7 @@ def clean_downloaded_file(path: str, run: Runner = _run,
             path = new_path
             cleaned_path = new_path
 
-    sidecars = _remove_download_sidecars(path)
+    sidecars = _remove_download_sidecars(path, keep_transcript)
     return cleaned_path, sidecars, remuxed
 
 

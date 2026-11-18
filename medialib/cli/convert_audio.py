@@ -146,15 +146,19 @@ t |  | Add chapters to every output whose source has none, worked
                     the output as well. A transcript sidecar is used rather
                     than transcribing again.
                     Default false
+r | <folder> | Only the files under <inputDir>/<folder>, converted to
+                    where a run over all of <inputDir> would put them. May
+                    be given more than once.
 """.format(codecs=" or ".join(enums.AUDIO_CODECS),
            encoders=xheaac.ENCODER_SPEC,
            codec=DEFAULT_CODEC)
 
 OPT_VARS = ("m:mono u:surround a:adaptive c:copy k:keep e:outputCodec "
-            "b:bitrate j:jobs g:groupDepth")
+            "b:bitrate j:jobs g:groupDepth r:only")
+OPT_FLAGS = "repeat:r"
 OPT_COLUMN = 20
 OPT_LONG = ("h:help m:mono u:surround a:adaptive k:keep c:copy-others "
-            "e:encoding b:bitrate j:jobs g:group t:ai-chapters")
+            "e:encoding b:bitrate j:jobs g:group t:ai-chapters r:only")
 
 # The codec has to be one this command can write, or a typo would only surface
 # as a per-file failure deep into a run. The choices are joined with an ESCAPED
@@ -199,10 +203,22 @@ def spec(program: str) -> clioptions.Spec:
         options=OPT_SPEC,
         long=OPT_LONG,
         vars=OPT_VARS,
+        flags=OPT_FLAGS,
         checks=OPT_CHECKS,
         column=OPT_COLUMN,
         credits=CREDITS_LINE,
     ))
+
+
+def _roots(input_dir: str, only=()) -> list:
+    """The folders a run reads: the input, or the -r folders inside it."""
+    return [os.path.join(input_dir, folder) for folder in only] or [input_dir]
+
+
+def _walk(input_dir: str, only=()):
+    """os.walk over every folder a run reads."""
+    for root in _roots(input_dir, only):
+        yield from os.walk(root)
 
 
 def _probe(argv: list) -> str:
@@ -1843,7 +1859,7 @@ _TRACK_SUFFIXES = tuple(
     tuple(enums.AUDIO_EXTENSIONS) + tuple(enums.VIDEO_EXTENSIONS))
 
 
-def _scan_tracks(input_dir: str) -> list:
+def _scan_tracks(input_dir: str, only=()) -> list:
     """Every track, LARGEST FILE FIRST.
 
     Byte size is a cheap, probe-free proxy for encode time, and starting the long
@@ -1853,7 +1869,7 @@ def _scan_tracks(input_dir: str) -> list:
     worth rather than what its file is.
     """
     found = []
-    for parent, _dirs, names in os.walk(input_dir):
+    for parent, _dirs, names in _walk(input_dir, only):
         for name in names:
             if not name.endswith(_TRACK_SUFFIXES):
                 continue
@@ -1892,6 +1908,7 @@ def main(argv: list, program: str = "convert-audio",
     jobs = int(result.values["jobs"] or runlog.cpu_count())
     group_depth = int(result.values["groupDepth"] or 0)
     ai_chapters = "t" in result.given
+    only = tuple(result.values["only"] or ())
 
     # Adaptive mode owns the channel and bitrate decision per file, so a global
     # -m or -b would contradict it. It also keeps files whole: the split queue
@@ -1931,6 +1948,12 @@ def main(argv: list, program: str = "convert-audio",
     # instead of the caller's and point at itself.
     input_dir = os.path.abspath(input_dir)
     output_dir = os.path.abspath(output_dir)
+    for folder in only:
+        inside = os.path.abspath(os.path.join(input_dir, folder))
+        if os.path.commonpath([inside, input_dir]) != input_dir \
+                or not os.path.isdir(inside):
+            clioptions.refuse_missing_dir(declaration, os.path.join(input_dir, folder))
+            return 1
 
     # Every output format here is also an INPUT format - .opus and .m4a are both
     # in AUDIO_EXTENSIONS - so an output folder inside the input would hand the
@@ -1948,7 +1971,7 @@ def main(argv: list, program: str = "convert-audio",
         return _settle_and_convert(program, script_dir, input_dir, output_dir,
                                    mono, adaptive, copy, keep, bitrate, jobs,
                                    codec, chunk_over_ceiling, surround,
-                                   group_depth, ai_chapters)
+                                   group_depth, ai_chapters, only)
     finally:
         # The ffmpeg pin can make the run directory before init_ram_base
         # does, and every refusal after it must hand it back.
@@ -1959,7 +1982,7 @@ def _settle_and_convert(program: str, script_dir: str, input_dir: str,
                         output_dir: str, mono: bool, adaptive: bool,
                         copy: bool, keep: bool, bitrate: int, jobs: int,
                         codec: str, chunk_over_ceiling: bool, surround: bool,
-                        group_depth: int, ai_chapters: bool) -> int:
+                        group_depth: int, ai_chapters: bool, only=()) -> int:
     ffmpegselect.select_ffmpeg()
     ffmpegselect.report_ffmpeg_selection()
     if tooldeps.require_tools(program, ["ffmpeg", "ffprobe", "rsync",
@@ -1993,7 +2016,7 @@ def _settle_and_convert(program: str, script_dir: str, input_dir: str,
     probe_what = ("audio files (%s) or video files to take the audio from (%s)"
                   % (enums.extension_list(list(enums.AUDIO_EXTENSIONS)),
                      enums.extension_list(list(enums.VIDEO_EXTENSIONS))))
-    if not _holds_input(input_dir):
+    if not _holds_input(input_dir, only):
         return safety.fail_no_relevant_input(input_dir, probe_what)
 
     os.makedirs(output_dir, exist_ok=True)
@@ -2012,7 +2035,7 @@ def _settle_and_convert(program: str, script_dir: str, input_dir: str,
                         surround=surround, adaptive=adaptive, copy=copy,
                         keep=keep, bitrate=bitrate, codec=codec,
                         chunk_over_ceiling=chunk_over_ceiling,
-                        group_depth=group_depth, llm=llm)
+                        group_depth=group_depth, llm=llm, only=only)
     finally:
         console.hide_active()
         safety.release_abort_flag()
@@ -2041,11 +2064,11 @@ def _report_encoder(codec: str, bitrate: int, mono: bool,
                   "mono" if channels == 1 else "stereo", note))
 
 
-def _holds_input(input_dir: str) -> bool:
+def _holds_input(input_dir: str, only=()) -> bool:
     """Case-insensitively, because extensions are only lower-cased later."""
     wanted = tuple("." + extension.lower() for extension in
                    tuple(enums.AUDIO_EXTENSIONS) + tuple(enums.VIDEO_EXTENSIONS))
-    for _parent, _dirs, names in os.walk(input_dir):
+    for _parent, _dirs, names in _walk(input_dir, only):
         if any(name.lower().endswith(wanted) for name in names):
             return True
     return False
@@ -2055,7 +2078,7 @@ def _convert(input_dir: str, output_dir: str, probe_what: str, skips,
              jobs: int, mkvtoolnix_unsaid: bool, *, script_dir: str,
              mono: bool, surround: bool, adaptive: bool, copy: bool,
              keep: bool, bitrate: int, codec: str, chunk_over_ceiling: bool,
-             group_depth: int, llm=None) -> int:
+             group_depth: int, llm=None, only=()) -> int:
     """The run itself, once the tools are checked. The command line's choices
     are keyword-only: there are too many flags of one type to pass by
     position."""
@@ -2082,15 +2105,15 @@ def _convert(input_dir: str, output_dir: str, probe_what: str, skips,
     )
     safety.set_run_footer(lambda: footer(state))
 
-    _pretreat_input(input_dir, skips)
+    _pretreat_input(input_dir, skips, only)
 
     try:
         os.chdir(input_dir)
     except OSError:
         return 1
-    _mirror_folders_and_covers(input_dir, output_dir)
+    _mirror_folders_and_covers(input_dir, output_dir, only)
 
-    state.tracks = _scan_tracks(input_dir)
+    state.tracks = _scan_tracks(input_dir, only)
     # Belt and braces: the pre-flight probe is case-INsensitive while this scan
     # is not, so a file whose extension could not be lower-cased would slip past
     # the probe and leave the queue empty here.
@@ -2113,7 +2136,7 @@ def _convert(input_dir: str, output_dir: str, probe_what: str, skips,
 
     safety.print_run_footer()
 
-    _remove_empty_folders(input_dir)
+    _remove_empty_folders(input_dir, only)
     # A file that came out the wrong length is not a warning: the run did not do
     # what it was asked, and a caller chaining commands has to see that.
     return workerpool.exit_status(1 if durationcheck.failures() else 0)
@@ -2148,6 +2171,11 @@ def _add_transcripts_and_chapters(state: Run, llm) -> None:
                            % (os.path.basename(sidecar), track))
         if llm is not None and chapters.chapter_count(source) < 2 \
                 and chapters.chapter_count(out) < 2:
+            # Too short for two chapters: not transcribed only to be turned
+            # down, and so not again on every rerun either.
+            if aichapters.too_short(chapters.duration_ms(out)):
+                runlog.detail("Too short for chapters: %s" % track)
+                continue
             pending.append((track, source, out, sidecar))
     if not pending:
         return
@@ -2209,21 +2237,23 @@ def _rewrite(source: str, out: str, change) -> int:
         _touch_from(source, out)
 
 
-def _mirror_folders_and_covers(input_dir: str, output_dir: str) -> None:
+def _mirror_folders_and_covers(input_dir: str, output_dir: str, only=()) -> None:
     """The input's folder tree built under the output, and its images copied
     across."""
-    for parent, _dirs, _names in os.walk(input_dir):
+    for parent, _dirs, _names in _walk(input_dir, only):
         os.makedirs(os.path.join(output_dir,
                                  os.path.relpath(parent, input_dir)),
                     exist_ok=True)
 
     # The image files, keeping their modification times so copied cover art
     # matches the source the way the audio outputs do.
-    toolcapture.watched(["rsync", "-rmt", "--quiet", "--include=*/",
-                         "--include", "*.jpg", "--include", "*.png",
-                         "--include", "*.webp", "--include", "*.avif",
-                         "--exclude=*", input_dir + "/", output_dir],
-                        skipped="the cover art was not copied")
+    for root in _roots(input_dir, only):
+        toolcapture.watched(["rsync", "-rmt", "--quiet", "--include=*/",
+                             "--include", "*.jpg", "--include", "*.png",
+                             "--include", "*.webp", "--include", "*.avif",
+                             "--exclude=*", root + "/",
+                             os.path.join(output_dir, os.path.relpath(root, input_dir))],
+                            skipped="the cover art was not copied")
 
 
 def _settle_scratch(state: Run) -> bool:
@@ -2312,10 +2342,15 @@ def _rejoin_split_files(state: Run, jobs: int) -> None:
     state.post_end = time.time()
 
 
-def _remove_empty_folders(input_dir: str) -> None:
+def _remove_empty_folders(input_dir: str, only=()) -> None:
     """Deepest first, so a folder that only held empty folders collapses too.
     The input folder itself stays: a folder the user named must still be
-    there."""
+    there - and so does each -r folder."""
+    for root in _roots(input_dir, only):
+        _remove_empty_below(root)
+
+
+def _remove_empty_below(input_dir: str) -> None:
     for parent, _dirs, _names in os.walk(input_dir, topdown=False):
         if parent != input_dir:
             try:
@@ -2584,9 +2619,10 @@ class _Detector:
         detect_window(token, SILENCE_NOISE, SILENCE_MIN_DUR)
 
 
-def _pretreat_input(input_dir: str, skips) -> None:
-    safety.lower_case_extensions(input_dir, skips)
-    for parent, _dirs, names in os.walk(input_dir):
+def _pretreat_input(input_dir: str, skips, only=()) -> None:
+    for root in _roots(input_dir, only):
+        safety.lower_case_extensions(root, skips)
+    for parent, _dirs, names in _walk(input_dir, only):
         for name in names:
             if name.endswith(".jpeg"):
                 path = os.path.join(parent, name)

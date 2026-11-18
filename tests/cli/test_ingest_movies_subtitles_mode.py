@@ -317,7 +317,7 @@ class TestTheCombosItRefuses:
 
 
 class TestTheLanguagesItChecksFor:
-    """The check runs for the languages the ``subtitleLanguages`` setting
+    """The check runs for the languages the ``spokenLanguages`` setting
     names, and for what it always ran for - the table's first six - where the
     setting names none."""
 
@@ -332,7 +332,7 @@ class TestTheLanguagesItChecksFor:
     def test_and_the_setting_s_when_it_is(self, stubbed, tmp_path,
                                           monkeypatch):
         films = _library(tmp_path, "Films")
-        monkeypatch.setenv("subtitleLanguages", "pt,ja")
+        monkeypatch.setenv("spokenLanguages", "pt,ja")
         _main(stubbed, "-s", str(films))
         wanted = stubbed["wanteds"][0]
         assert [row.code2 for row in wanted] == ["pt", "ja"]

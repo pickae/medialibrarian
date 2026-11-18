@@ -38,6 +38,7 @@ from medialib.lib import (
     safety,
     settings,
     tooldeps,
+    transcripttags,
 )
 from medialib.lib.runlog import log
 from medialib.lib.versionsort import version_key
@@ -120,6 +121,9 @@ def rename_siblings(directory: str, mode: str, fragments_file: str,
     if not os.path.isdir(directory):
         return 0
     items = siblings(directory, mode)
+    companions: dict = {}
+    if mode == "files":
+        items, companions = _transcript_companions(items)
     if not items:
         return 0
 
@@ -141,11 +145,49 @@ def rename_siblings(directory: str, mode: str, fragments_file: str,
                                                    group)
 
     return _apply(directory, item_prefixes, clean_names, extensions, items,
-                  skips)
+                  skips, companions)
+
+
+# What a transcript's owner is when one stem has several files: what is
+# transcribed is the recording, not its cover.
+_NOT_AN_OWNER = (".jpg", ".jpeg", ".png", ".webp", ".gif")
+
+
+def _transcript_companions(items: list) -> tuple:
+    """The files cleaned on their own merit, and the transcript sidecars that
+    follow one of them instead.
+
+    ``Episode.srt`` or ``Episode.en.vtt`` beside ``Episode.opus`` is the
+    transcript convert-audio reads into that episode's output, and finds by
+    the shared stem. Cleaned as a group of their own, the sidecars would come
+    out under other names than their recordings, so they take their owner's
+    new name instead. A sidecar with no file of its stem beside it is an
+    ordinary file and cleaned like one.
+    """
+    owners: dict = {}
+    for path in items:
+        name = os.path.basename(path)
+        if transcripttags.sidecar_stems(name):
+            continue
+        stem, extension = os.path.splitext(name)
+        if stem not in owners or (owners[stem][1] and
+                                  extension.lower() not in _NOT_AN_OWNER):
+            owners[stem] = (path, extension.lower() in _NOT_AN_OWNER)
+    kept: list = []
+    companions: dict = {}
+    for path in items:
+        name = os.path.basename(path)
+        stem = next((stem for stem in transcripttags.sidecar_stems(name)
+                     if stem in owners), None)
+        if stem is None:
+            kept.append(path)
+            continue
+        companions.setdefault(owners[stem][0], []).append((path, name[len(stem):]))
+    return kept, companions
 
 
 def _apply(directory: str, item_prefixes, clean_names, extensions, items,
-           skips: safety.SkipLog) -> int:
+           skips: safety.SkipLog, companions=None) -> int:
     """The last step, kept apart so the passes above read as the sequence of
     decisions they are and this reads as the one place that touches disk."""
     changes = 0
@@ -175,6 +217,10 @@ def _apply(directory: str, item_prefixes, clean_names, extensions, items,
         # decided inside safe_rename, which records the second.
         if safety.safe_rename(items[index], path, skips):
             changes += 1
+            for sidecar, tail in (companions or {}).get(items[index], ()):
+                if safety.safe_rename(sidecar, os.path.join(directory, name + tail),
+                                      skips):
+                    changes += 1
     return changes
 
 

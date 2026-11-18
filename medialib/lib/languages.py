@@ -60,37 +60,38 @@ LANGUAGES = (
     Language("zh", "chi", "Chinese", ("chinese", "zhongwen", "中文"), "zho"),
 )
 
-# The subtitle languages a run fetches and tests when the
-# ``subtitleLanguages`` setting names none of its own: the table's first six,
-# in the table's order - the languages a run fetched before the setting
-# existed, so a run that does not set it fetches what it always fetched.
-SUBTITLE_DEFAULT = ("en", "de", "fr", "nl", "es", "it")
+# The languages the user speaks when the ``spokenLanguages`` setting names
+# none of its own: the table's first six, in the table's order - the
+# languages ingest-movies fetched subtitles for before the setting existed,
+# so a run that does not set it fetches what it always fetched.
+SPOKEN_DEFAULT = ("en", "de", "fr", "nl", "es", "it")
 
 
-def wanted_subtitles() -> tuple:
-    """The rows a run fetches and tests subtitles for: the
-    ``subtitleLanguages`` setting's codes, in the order it names them, each
+def spoken_languages() -> tuple:
+    """The languages the user speaks - the ones ingest-movies fetches and
+    tests subtitles for, and the ones ytdlp takes a YouTube transcript in:
+    the ``spokenLanguages`` setting's codes, in the order it names them, each
     as its row of :data:`LANGUAGES`.
 
     A setting that names nothing - unset or empty - names the default
-    :data:`SUBTITLE_DEFAULT`, a code named twice is one language, and a code
+    :data:`SPOKEN_DEFAULT`, a code named twice is one language, and a code
     the table does not know is refused, naming it and the codes the table
     has, because a language this collection does not recognise would be
     fetched for and read back with no one to have been told.
     """
-    raw = os.environ.get("subtitleLanguages", "")
+    raw = os.environ.get("spokenLanguages", "")
     codes: list = []
     for entry in raw.split(","):
         code = shell_lower(entry.strip())
         if code and code not in codes:
             codes.append(code)
     if not codes:
-        codes = list(SUBTITLE_DEFAULT)
+        codes = list(SPOKEN_DEFAULT)
     by_code = {row.code2: row for row in LANGUAGES}
     unknown = [code for code in codes if code not in by_code]
     if unknown:
         raise clioptions.UsageError(
-            "The subtitleLanguages setting names %s, which the language "
+            "The spokenLanguages setting names %s, which the language "
             "table does not know. It knows: %s."
             % (", ".join('"%s"' % code for code in unknown),
                ", ".join(sorted(by_code))))

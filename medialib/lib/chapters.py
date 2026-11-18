@@ -39,6 +39,7 @@ __all__ = [
     "attach_chapters",
     "attach_mp4_chapters",
     "chapter_count",
+    "duration_ms",
     "write_chapters",
 ]
 
@@ -704,6 +705,15 @@ def _move_over(src: str, dst: str) -> int:
     except OSError:
         _remove_quiet(src)
         return 1
+
+def duration_ms(path: str) -> int:
+    """How long a file plays, in milliseconds, by ffprobe's reading of it -
+    0 when it cannot be read."""
+    try:
+        return _duration_ms(_probe_duration(path))
+    except ValueError:
+        return 0
+
 
 def chapter_count(path: str,
                   probe: Callable[[str], str] = _flat_chapters) -> int:

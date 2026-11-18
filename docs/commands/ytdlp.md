@@ -145,6 +145,7 @@ the two systems and is worked out at run time:
 | `-q` | prints only failures: no episode lines and no warnings |
 | [`-c`](#tidying-up-after-a-run--c) | tidies up after the run |
 | [`-i`](#building-the-phones-library-from-the-run--i) | builds the phone's library from the run |
+| [`-g`](#chapters-for-the-library--g) | with `-i`, chapters every episode in the library that has none |
 | [`-l`](#merging-archives--l) | merges archives; downloads nothing |
 
 ### Tidying up after a run (`-c`)
@@ -175,8 +176,9 @@ enough to carry around — so with `-i` they are not the same tree either.
     phone/Staging/Music/…
     phone/Ingested/…             the library, built out of both
 
-When the run is over, each staging folder's names are cleaned
-(`clean-folder-structure`) and its episodes converted into that one library:
+While the other feeds are still downloading, each finished feed's names are
+cleaned (`clean-folder-structure`) and its episodes converted into that one
+library:
 
 | Staging folder | Converted with |
 | --- | --- |
@@ -193,6 +195,39 @@ re-run of the last step rather than of the whole night. A video table ignores
 throw its picture away. Normally given together with `-c`, so the embedded
 thumbnail is gone before the library is built out of the folder it was sitting
 in.
+
+The library copy runs beside the downloads rather than after them. A download
+waits on the network and on the pauses a provider asks for, and leaves the
+processor idle; the conversion — and with `-g` the transcription and the
+language model, which take far longer — is started as soon as a feed is
+finished. Feeds are converted a few episodes at a time, one `convert-audio`
+over the folders of all of them (`-r` each), so whisper and the model each
+start once per batch and take turns on the graphics card once per batch, not
+once per episode. When the downloads are over, the last batch is converted and
+every staging folder is passed over once more, which finds the feeds done and
+converts the folders no table in this run downloads into.
+
+### Chapters for the library (`-g`)
+
+With `-i`, `-g` adds `-t` to every conversion: every episode in the library
+that has no chapters gets some, worked out by a language model from a
+transcript of the speech ([`convert-audio -t`](convert-audio.md#chapters-for-what-has-none--t),
+with the `chapterLlm` settings). That covers the episodes already in a feed's
+staging folder as well as the new ones, so the first run with `-g` chapters a
+feed's back catalogue too. A run whose model cannot be reached is refused
+before anything is fetched.
+
+Where the transcript comes from depends on the feed:
+
+| Feed | Transcript |
+| --- | --- |
+| YouTube | YouTube's own captions, fetched with the episode: in the episode's own language when the `spokenLanguages` setting names it, in English when it does not. No speech recognition is run; the model is asked for chapters only. The captions are written into the episode as lyrics even when it has chapters. |
+| RSS | transcribed on this machine by `transcribe-audio` |
+
+Only the original-language track of each spoken language and the English ones
+are asked for: every caption track is one more request to a provider that
+throttles a client asking for too much. The track kept is written beside the
+download as `<episode>.srt` and survives `-c`.
 
 ### Merging archives (`-l`)
 

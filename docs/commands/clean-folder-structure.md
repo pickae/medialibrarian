@@ -49,6 +49,12 @@ too:
 3. **Hidden-prefix recovery** — restore prefixes the collective pass would
    otherwise have hidden.
 
+A transcript beside a recording (`<name>.srt`, `.vtt` or `.lrc`, with or
+without a language code: `<name>.en.srt`) is not cleaned as a name of its own:
+it takes its recording's new name, since `convert-audio` finds it by that name
+alone. A transcript with no recording of its name beside it is cleaned like
+any other file.
+
 Fragment removal and affix stripping are **word/number aware**: nothing is
 removed when doing so would slice through the middle of a word or a number, so
 `must be better` is never mangled by a `tt` fragment.

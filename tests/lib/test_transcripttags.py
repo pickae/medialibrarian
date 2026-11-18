@@ -44,3 +44,15 @@ def test_a_container_that_takes_no_transcript_is_left_alone(tmp_path):
     assert transcripttags.embed_transcript(str(tmp_path / "a.mp3"),
                                            str(tmp_path / "a.srt"), str(tmp_path)) == 1
     assert transcripttags.has_transcript(str(tmp_path / "a.mp3"))
+
+
+@pytest.mark.parametrize("name, stems", [
+    ("show.srt", ("show",)),
+    ("show.en.srt", ("show.en", "show")),
+    ("show.pt-BR.VTT", ("show.pt-BR", "show")),
+    ("show.lrc", ("show",)),
+    ("show.opus", ()),
+    (".srt", ()),
+])
+def test_the_stems_a_name_would_be_the_sidecar_of(name, stems):
+    assert transcripttags.sidecar_stems(name) == stems

@@ -108,6 +108,13 @@ of its own keeps them and is not sent to the model. A rerun tries again only for
 outputs that still have none. Without a usable model, `-t` is refused before
 anything is encoded.
 
+## Some folders of the input (`-r`)
+
+`-r <folder>` converts only what is under `<inputDir>/<folder>`, into the
+place a run over all of `<inputDir>` would put it. It may be given more than
+once, and is how `ytdlp -i` converts the feeds a batch has finished while it
+fetches the rest.
+
 ## Every conversion is measured
 
 Every conversion is measured afterwards, here and in the other commands that

@@ -400,3 +400,16 @@ class TestPruneEmptyFolders:
 
     def test_not_a_directory(self, tmp_path):
         assert downloadcleanup.prune_empty_folders(str(tmp_path / "nope")) == 0
+
+
+def test_the_kept_transcript_survives_the_tidy_up(tmp_path):
+    """The one transcript the library copy reads into the episode's output;
+    every other sidecar goes as before."""
+    _write(tmp_path, "Episode.opus")
+    _write(tmp_path, "Episode.srt")
+    _write(tmp_path, "Episode.en.vtt")
+    _write(tmp_path, "Episode.jpg")
+    _cleaned, sidecars, _remuxed = downloadcleanup.clean_downloaded_file(
+        str(tmp_path / "Episode.opus"), keep_transcript=True)
+    assert sidecars == 2
+    assert sorted(os.listdir(tmp_path)) == ["Episode.opus", "Episode.srt"]
