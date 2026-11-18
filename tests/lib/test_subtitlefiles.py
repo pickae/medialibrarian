@@ -849,6 +849,8 @@ class TestFilmImdbId:
     @pytest.mark.parametrize("path,want", [
         ("Movie (1999) {imdb-tt0000003}.mkv", "tt0000003"),
         ("Movie (1999) {IMDB-TT0000003} {edition-Extended}.mkv", "tt0000003"),
+        ("Movie (1999) [imdbid-tt0000003].mkv", "tt0000003"),
+        ("Movie (1999) [imdb-tt0000003] - Extended.mkv", "tt0000003"),
         ("Movie (1999) {imdb-tt0000003}/Movie (1999).mkv", "tt0000003"),
         ("Movie (1999)/Movie (1999).mkv", ""),
         ("Movie (1999) {imdb-}.mkv", ""),

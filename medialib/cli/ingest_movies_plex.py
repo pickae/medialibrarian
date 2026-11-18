@@ -131,7 +131,7 @@ def _found(movie: str, index: dict, copies: list, tag: str = "") -> tuple:
     stem = os.path.splitext(os.path.basename(movie))[0]
     match = (plexnames.ID_TAG_RE.search(stem)
              or plexnames.ID_TAG_RE.search(os.path.basename(directory)))
-    found_tag = match.group(0) if match else tag
+    found_tag = (plexnames.canonical_id(match.group(0)) if match else tag)
     if found_tag:
         candidates, how = index.get(found_tag, []), "by its id " + found_tag
     else:

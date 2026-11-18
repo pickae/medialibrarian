@@ -15,7 +15,7 @@ import subprocess
 from collections.abc import Callable
 from typing import NamedTuple
 
-from medialib.lib import imdbdata, titlematch, tmdbclient
+from medialib.lib import imdbdata, plexnames, titlematch, tmdbclient
 from medialib.lib.titlematch import normalize_title, title_keys
 
 # What an IMDb id looks like. The id ends up in folder names and paths, so a
@@ -100,10 +100,11 @@ class Match(NamedTuple):
     @property
     def tag(self) -> str:
         """The id tag this match names a folder with, or "" for no match:
-        IMDb's where there is one, and TMDb's own where there is not."""
+        IMDb's where there is one, and TMDb's own where there is not,
+        written the way the mediaServerNaming setting writes ids."""
         if self.imdb:
-            return "{imdb-" + self.imdb + "}"
-        return "{tmdb-" + self.tmdb + "}" if self.tmdb else ""
+            return plexnames.id_tag("imdb", self.imdb)
+        return plexnames.id_tag("tmdb", self.tmdb) if self.tmdb else ""
 
 
 def tmdb_imdb_id(title: str, year: str,
@@ -125,8 +126,6 @@ def imdb_of_tmdb(tmdb_id: str) -> str:
     return _imdb_id(detail.get("imdb_id"))
 
 
-_ID_TAG = re.compile(r"\{(imdb|tmdb)-([^{}]*)\}", re.I)
-
 # TMDb's spelling of a language with no spoken content.
 _NO_LANGUAGE = "xx"
 
@@ -144,16 +143,16 @@ class FilmLanguages(NamedTuple):
 def film_languages(tag: str) -> FilmLanguages:
     """The original and spoken languages of the film an id tag names.
 
-    ``tag`` is an id tag as a folder carries it, "{imdb-tt...}" or
-    "{tmdb-NNN}": an IMDb id is found through TMDb's own lookup by external
-    id, whose answer has the original language but not the spoken ones, so
-    the film is asked for by its TMDb number after it.
+    ``tag`` is an id tag as a folder carries it, written either way - an IMDb
+    id is found through TMDb's own lookup by external id, whose answer has
+    the original language but not the spoken ones, so the film is asked for
+    by its TMDb number after it.
     """
     api_key = os.environ.get("tmdbApiKey", "")
-    match = _ID_TAG.search(tag or "")
-    if not api_key or not match:
+    kind, value = plexnames.id_of(tag or "")
+    if not api_key or not kind:
         return FilmLanguages()
-    kind, value = match.group(1).lower(), match.group(2).strip().lower()
+    value = value.strip().lower()
     if kind == "imdb":
         if not _IMDB_ID.fullmatch(value):
             return FilmLanguages()

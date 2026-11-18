@@ -1,5 +1,5 @@
-"""Tests for medialib.lib.plexnames - the Plex naming conventions a movie
-folder is renamed into.
+"""Tests for medialib.lib.plexnames - the naming conventions a movie folder
+is renamed into, for whichever server the run writes for.
 
 What is pinned here is the part that cannot be read off any one name: the ORDER
 the three conventions go in (a stacking token has to stay last or the parts stop
@@ -11,7 +11,7 @@ already named.
 
 import pytest
 
-from medialib.lib import plexnames
+from medialib.lib import clioptions, plexnames
 
 pytestmark = pytest.mark.pure
 
@@ -1096,3 +1096,180 @@ class TestIdKey:
     def test_an_untagged_film_has_no_key(self):
         assert plexnames.id_key("Films/The Movie (1999)/The Movie (1999).mkv") \
             == ""
+
+
+class TestTheNamingSetting:
+    """The mediaServerNaming setting: which server the names are written for."""
+
+    def test_the_default_is_plex(self):
+        assert plexnames.naming_style() == "plex"
+
+    def test_the_value_is_read_case_insensitively(self, monkeypatch):
+        monkeypatch.setenv("mediaServerNaming", "JELLYFIN")
+        assert plexnames.naming_style() == "jellyfin"
+
+    def test_a_server_the_table_does_not_know_is_refused(self, monkeypatch):
+        monkeypatch.setenv("mediaServerNaming", "kodi")
+        with pytest.raises(clioptions.UsageError) as error:
+            plexnames.naming_style()
+        assert '"kodi"' in error.value.message
+        assert "plex" in error.value.message
+        assert "jellyfin" in error.value.message
+
+    def test_an_empty_setting_is_refused_too(self, monkeypatch):
+        monkeypatch.setenv("mediaServerNaming", "")
+        with pytest.raises(clioptions.UsageError):
+            plexnames.naming_style()
+
+
+class TestWritingForJellyfin:
+    """The names as the run writes them with the setting on jellyfin."""
+
+    def test_the_id_tag_is_written_its_way(self, monkeypatch):
+        monkeypatch.setenv("mediaServerNaming", "jellyfin")
+        assert plexnames.id_tag("imdb", "tt0120737") == "[imdbid-tt0120737]"
+        assert plexnames.id_tag("tmdb", "12345") == "[tmdbid-12345]"
+
+    def test_the_edition_is_written_as_a_version_label(self, monkeypatch):
+        monkeypatch.setenv("mediaServerNaming", "jellyfin")
+        assert plexnames.plex_stem(
+            "Film (2020)", "[imdbid-tt0120737]", "Colorized", "") \
+            == "Film (2020) [imdbid-tt0120737] - Colorized"
+        assert plexnames.plex_stem(
+            "Film (2020)", "[imdbid-tt0120737]", "Colorized", "Part1") \
+            == "Film (2020) [imdbid-tt0120737] - Colorized Part1"
+        assert plexnames.plex_stem("Film (2020)", "", "Colorized", "") \
+            == "Film (2020) - Colorized"
+
+    def test_the_converted_copy_is_marked_its_way(self, monkeypatch):
+        monkeypatch.setenv("mediaServerNaming", "jellyfin")
+        assert plexnames.converted_stem("Film (2020) [imdbid-tt0120737]") \
+            == "Film (2020) [imdbid-tt0120737] - AV1"
+        assert plexnames.converted_stem(
+            "Film (2020) [imdbid-tt0120737] - Colorized") \
+            == "Film (2020) [imdbid-tt0120737] - Colorized AV1"
+        assert plexnames.converted_stem(
+            "Film (2020) [imdbid-tt0120737] - Colorized Part1") \
+            == "Film (2020) [imdbid-tt0120737] - Colorized AV1 Part1"
+        assert plexnames.converted_stem(
+            "Film (2020) [imdbid-tt0120737] Part1") \
+            == "Film (2020) [imdbid-tt0120737] - AV1 Part1"
+
+    def test_the_mark_is_read_back_its_way(self, monkeypatch):
+        monkeypatch.setenv("mediaServerNaming", "jellyfin")
+        assert plexnames.is_converted_copy(
+            "Film (2020) [imdbid-tt0120737] - AV1.mkv")
+        assert plexnames.is_converted_copy(
+            "Film (2020) [imdbid-tt0120737] - Colorized AV1 Part1.mkv")
+        assert not plexnames.is_converted_copy(
+            "Film (2020) [imdbid-tt0120737] - Colorized.mkv")
+        # ...and the Plex mark still is, whatever the setting writes now.
+        assert plexnames.is_converted_copy(
+            "Film (2020) {imdb-tt0120737} {edition-AV1}.mkv")
+
+
+class TestReadingEitherWay:
+    """Names written either way, read back by a run set for either."""
+
+    def test_a_jellyfin_folder_is_read_back(self):
+        assert plexnames.untagged_base(
+            "Film (2020) [imdbid-tt0120737]") \
+            == ("Film (2020)", "[imdbid-tt0120737]")
+        assert plexnames.untagged_base(
+            "Film (2020) [imdb-tt0120737]") \
+            == ("Film (2020)", "[imdb-tt0120737]")
+        assert plexnames.untagged_base(
+            "Film (2020) {tmdbid-12345}") == ("Film (2020)", "{tmdbid-12345}")
+
+    def test_the_version_label_is_read_as_an_edition(self):
+        assert plexnames.read_stem(
+            "Film (2020)", "Film (2020) [imdbid-tt0120737] - Colorized") \
+            == ("Colorized", "")
+        assert plexnames.read_stem(
+            "Film (2020)", "Film (2020) [imdbid-tt0120737] - colorized") \
+            == ("Colorized", "")
+        assert plexnames.read_stem(
+            "Film (2020)",
+            "Film (2020) [imdbid-tt0120737] - Colorized Part1") \
+            == ("Colorized", "Part1")
+
+    def test_the_label_comes_off_the_film_key_where_a_tag_is_written(self):
+        assert plexnames.film_key(
+            "Film (2020) [imdbid-tt0120737] - Colorized") == "Film (2020)"
+        assert plexnames.film_key(
+            "Film (2020) [imdbid-tt0120737] - Colorized Part1") \
+            == "Film (2020)"
+        assert plexnames.film_key(
+            "Film (2020) %s {edition-Colorized}" % TAG) == "Film (2020)"
+
+    def test_a_part_s_own_name_is_not_a_version_label(self):
+        assert plexnames.film_key(
+            "The Film (1961) %s Part 1 - The Escape" % TAG) \
+            == "The Film (1961) Part 1 - The Escape"
+
+    def test_a_dash_with_no_tag_on_either_side_stays(self):
+        assert plexnames.film_key("Film (2020) - The Sequel") \
+            == "Film (2020) - The Sequel"
+
+    def test_the_id_is_read_the_same_under_either_writing(self):
+        assert plexnames.id_of("Film (2020) [imdbid-tt0120737]") \
+            == ("imdb", "tt0120737")
+        assert plexnames.id_of("Film (2020) {tmdbid-12345}") \
+            == ("tmdb", "12345")
+        assert plexnames.canonical_id("[imdbid-tt0120737]") \
+            == "{imdb-tt0120737}"
+        assert plexnames.canonical_id("[tmdb-12345]") == "{tmdb-12345}"
+        assert plexnames.canonical_id("{imdb-tt0120737}") \
+            == "{imdb-tt0120737}"
+
+    def test_the_key_follows_the_film_across_a_switch(self):
+        assert plexnames.id_key(
+            "F/Film (2020) [imdbid-tt0120737]/"
+            "Film (2020) [imdbid-tt0120737] - Colorized.mkv") \
+            == "{imdb-tt0120737} {edition-Colorized}"
+        assert plexnames.id_key(
+            "F/Film (2020) {imdb-tt0120737}/"
+            "Film (2020) {imdb-tt0120737} {edition-Colorized}.mkv") \
+            == "{imdb-tt0120737} {edition-Colorized}"
+
+    def test_a_name_is_tagged_after_the_year_its_way(self):
+        assert plexnames.retag("Film (2020)", "[imdbid-tt0120737]") \
+            == "Film (2020) [imdbid-tt0120737]"
+        assert plexnames.retag("Film (2020) - Colorized", "[imdbid-tt0120737]") \
+            == "Film (2020) [imdbid-tt0120737] - Colorized"
+        assert plexnames.retag("The Film (1961) Part 1 - The Escape", TAG) \
+            == "The Film (1961) %s Part 1 - The Escape" % TAG
+
+    def test_a_label_is_kept_whole_from_the_name_cleaner(self):
+        assert plexnames.split_tags(
+            "Film (2020) [imdbid-tt0120737] - Director's Cut") \
+            == ("Film (2020)", "[imdbid-tt0120737] - Director's Cut")
+
+
+class TestSwitchingTheServer:
+    """A library named for one server, met by a run set for the other."""
+
+    def test_plain_names_are_written_its_way(self, monkeypatch):
+        monkeypatch.setenv("mediaServerNaming", "jellyfin")
+        plan = plexnames.folder_renames(
+            "Film (2020)", "[imdbid-tt0120737]",
+            ["Film (2020).mkv", "Film (2020) - Colorized.mkv"])
+        assert plan == [("Film (2020) - Colorized.mkv",
+                         "Film (2020) [imdbid-tt0120737] - Colorized.mkv"),
+                        ("Film (2020).mkv",
+                         "Film (2020) [imdbid-tt0120737].mkv")]
+
+    def test_the_names_a_run_wrote_are_its_own_output(self, monkeypatch):
+        monkeypatch.setenv("mediaServerNaming", "jellyfin")
+        assert plexnames.folder_renames(
+            "Film (2020)", "[imdbid-tt0120737]",
+            ["Film (2020) [imdbid-tt0120737] - Colorized.mkv",
+             "Film (2020) [imdbid-tt0120737].mkv"]) == []
+
+    def test_a_plex_library_is_met_its_way(self, monkeypatch):
+        monkeypatch.setenv("mediaServerNaming", "jellyfin")
+        plan = plexnames.folder_renames(
+            "Film (2020)", "[imdbid-tt0120737]",
+            ["Film (2020) {imdb-tt0120737} {edition-Colorized}.mkv"])
+        assert plan == [("Film (2020) {imdb-tt0120737} {edition-Colorized}.mkv",
+                         "Film (2020) [imdbid-tt0120737] - Colorized.mkv")]

@@ -110,6 +110,12 @@ SETTINGS: tuple[Setting, ...] = (
             "beside the film's own language: a comma list of ISO 639-1 codes "
             "the language table knows; the film's own language is kept "
             "whatever it says", ("ingest-movies",), "en"),
+    Setting("mediaServerNaming", "The server the names are written for: "
+            "`plex` or `jellyfin`. The id tag is written the way that server "
+            "reads it - `{imdb-tt…}` and `[imdbid-tt…]` - and an edition as its "
+            "tag, or its version label after the name; names written either "
+            "way are read back whatever it says, so a library can be "
+            "switched", ("ingest-movies",), "plex"),
     Setting("movieJunkExtensions", "The file suffixes ingest-movies deletes "
             "from a release as junk, space-separated; empty deletes none - the "
             "sample clips, the tiny .mkv files and the .unwanted folders go "

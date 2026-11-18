@@ -951,6 +951,14 @@ def main(argv: list, program: str = "ingest-movies",
         clioptions.refuse_usage(declaration, error.message)
         return 1
 
+    # The server the names are written for, settled here too: a value the
+    # naming table does not know is refused with the page, like a bad option.
+    try:
+        plexnames.naming_style()
+    except clioptions.UsageError as error:
+        clioptions.refuse_usage(declaration, error.message)
+        return 1
+
     # -w carries out a dry run, and without -t, -i or -s there is none to
     # carry out. Refused rather than ignored: a -tw typed as -w would otherwise
     # be a full ingest, hours of converting and remuxing, on a library asked

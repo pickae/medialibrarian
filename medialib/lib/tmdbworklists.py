@@ -38,8 +38,8 @@ def id_tag_for(text: str) -> str:
     if not match:
         return ""
     if match.group(2):
-        return "{imdb-" + match.group(2).lower() + "}"
-    return "{tmdb-" + match.group(4) + "}"
+        return plexnames.id_tag("imdb", match.group(2).lower())
+    return plexnames.id_tag("tmdb", match.group(4))
 
 
 def write_rename_list(path: str, renames, root: str,
