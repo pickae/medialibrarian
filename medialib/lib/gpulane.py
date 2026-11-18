@@ -147,6 +147,11 @@ class Lane:
         self.running = 0
         self.closing = False
         self.broken = not encoder
+        # A lane thread ended by an exception: what it held - a chunk
+        # running, a book still expected - would otherwise be waited for
+        # forever, so every wait gives up on it, and the books it held are
+        # not finished.
+        self.failed = False
         # What the closing report says.
         self.calls = 0
         self.pages = 0
@@ -168,15 +173,14 @@ class Lane:
         self._cpu_running = 0
         self._cpu_busy_since = 0.0
         self.finishers = ThreadPoolExecutor(max_workers=2)
-        self.threads = [threading.Thread(target=self._watch, daemon=True,
-                                         name="lane-watch")]
+        targets = [("lane-watch", self._watch)]
         if encoder:
-            self.threads += [threading.Thread(target=self._feed, daemon=True,
-                                              name="lane-gpu-%d" % n)
-                             for n in range(CALLS)]
-        self.threads += [threading.Thread(target=self._encode, daemon=True,
-                                          name="lane-cpu-%d" % n)
-                         for n in range(self.cpu_jobs)]
+            targets += [("lane-gpu-%d" % n, self._feed) for n in range(CALLS)]
+        targets += [("lane-cpu-%d" % n, self._encode)
+                    for n in range(self.cpu_jobs)]
+        self.threads = [threading.Thread(target=self._guarded, args=(target,),
+                                         daemon=True, name=name)
+                        for name, target in targets]
         for thread in self.threads:
             thread.start()
 
@@ -196,7 +200,7 @@ class Lane:
         the CPU once the card has failed, and RAM to hold it - and which side
         it is for: "gpu" or "cpu". "" once the run is stopping."""
         with self.room:
-            while not safety.abort_requested():
+            while not safety.abort_requested() and not self.failed:
                 side = self._short_side()
                 if side:
                     return side
@@ -250,6 +254,19 @@ class Lane:
         self.finishers.shutdown(wait=True)
         for book in self.dropped:
             shutil.rmtree(book.folder, ignore_errors=True)
+
+    def _guarded(self, target) -> None:
+        """Run a lane thread's <target>; should it raise, say so and mark the
+        lane failed, so that no other thread waits for what it held."""
+        try:
+            target()
+        except Exception as error:
+            self.log("WARNING: the lane's %s stopped: %r - books it held are "
+                     "not finished." % (threading.current_thread().name,
+                                        error))
+            with self.room:
+                self.failed = True
+                self.room.notify_all()
 
     # --- collecting ready books --------------------------------------------
     def _watch(self) -> None:
@@ -307,7 +324,7 @@ class Lane:
         while there is nothing worth a call."""
         with self.room:
             while True:
-                if safety.abort_requested() or self.broken:
+                if safety.abort_requested() or self.broken or self.failed:
                     return None
                 if self.pending and (self.running == 0
                                      or self.pending_pixels >= self.budget
@@ -341,16 +358,27 @@ class Lane:
                 break
             items = [(entry["input"], entry["output"], entry.get("crop", ""),
                       entry.get("maxSize", "")) for _book, entry in chunk]
-            workdir = tempfile.mkdtemp(prefix="av1gpu_", dir=self.root)
             report: dict = {}
+            workdir = ""
+            # A call that raises - the encoder cannot be started, its inputs
+            # cannot be linked, the scratch disk is full - is one that wrote
+            # nothing and failed: its pages go to the CPU like any other's.
+            # Were the exception to end this thread, the chunk would stay
+            # running forever and close() would wait on it forever.
             try:
+                workdir = tempfile.mkdtemp(prefix="av1gpu_", dir=self.root)
                 written, status = av1gpu.encode_chunk(
                     self.encoder, items, workdir, self.quality, self.preset,
                     chroma=self.chroma,
                     extra=self.trim if chunk[0][1].get("trim") else (),
                     report=report)
+            except Exception as error:
+                self.log("WARNING: %s could not be run: %s"
+                         % (self.encoder, error))
+                written, status, report = [], 1, {}
             finally:
-                shutil.rmtree(workdir, ignore_errors=True)
+                if workdir:
+                    shutil.rmtree(workdir, ignore_errors=True)
             done = set(written)
             blank = set(report.get("blank", ()))
             finished = []
@@ -395,8 +423,9 @@ class Lane:
                     return None
                 if self.cpu_queue:
                     return self.cpu_queue.popleft()
-                if (self.closing and not self.expected and not self.pending
-                        and self.running == 0):
+                if self.closing and (self.failed or (
+                        not self.expected and not self.pending
+                        and self.running == 0)):
                     return None
                 self.room.wait(_POLL_SECONDS)
 
@@ -406,9 +435,14 @@ class Lane:
             if taken is None:
                 break
             book, entry = taken
-            argv, verdict = entry["cpu"], ""
+            argv, verdict = entry.get("cpu"), ""
             if entry.get("trim") and self.resolve is not None:
-                argv, verdict = self.resolve(entry)
+                try:
+                    argv, verdict = self.resolve(entry)
+                except Exception as error:
+                    self.log("WARNING: could not decide the trim of %s: %s"
+                             % (entry.get("output", "a page"), error))
+                    argv, verdict = [], ""
             if argv is None:
                 with self.room:
                     self.blank += 1
@@ -425,21 +459,30 @@ class Lane:
                 if self._cpu_running == 0:
                     self._cpu_busy_since = time.time()
                 self._cpu_running += 1
-            made = toolcapture.run(
-                NICE + argv, label=os.path.basename(source or page),
-                tool=os.path.basename(argv[0]) if argv else "",
-                verify=functools.partial(_unwritten, page))
+            ok = False
+            try:
+                if argv:
+                    ok = toolcapture.run(
+                        NICE + argv, label=os.path.basename(source or page),
+                        tool=os.path.basename(argv[0]),
+                        verify=functools.partial(_unwritten, page)).ok
+                else:
+                    self.log("WARNING: no CPU encode listed for %s"
+                             % (page or "a page"))
+            except Exception as error:
+                self.log("WARNING: could not encode %s: %s"
+                         % (page or "a page", error))
             with self.room:
                 self._cpu_running -= 1
                 if self._cpu_running == 0:
                     self.cpu_busy += time.time() - self._cpu_busy_since
-                if not made.ok and not safety.abort_requested():
+                if not ok and not safety.abort_requested():
                     self.missing[book.folder] = \
                         self.missing.get(book.folder, 0) + 1
                 elif verdict == "trimmed":
                     self.trimmed += 1
                 self.cpu_pages += 1
-                self.cpu_pixels += entry["pixels"]
+                self.cpu_pixels += entry.get("pixels", 0)
                 last = self._page_done(book)
                 self.room.notify_all()
             if last:
