@@ -65,7 +65,10 @@ already keeps the cores busy. That order is also close to the best one for the
 wall clock - the longest cases start first and the short ones fill the end - and
 shuffling it was measured to lose: with `pytest-randomly` on a 20-thread laptop
 the default run took 4:38-5:06 over three seeds against 3:54 in order, with an
-identical set of failing cases every time.
+identical set of failing cases every time. The search for a case that passes
+only because of what ran before it is left to CI instead: once a week the Linux
+job runs shuffled, with the seed in its header, and
+`pytest --randomly-seed=<seed>` (with `pytest-randomly` installed) replays it.
 
 ## A green run is a whole run
 
