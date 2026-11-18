@@ -62,6 +62,40 @@ class TestTheJunk:
         assert _left(tmp_path) == THE_FILM
 
 
+class TestTheJunkExtensionsSetting:
+    def test_the_setting_replaces_the_default(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("movieJunkExtensions", "log")
+        _sized(tmp_path / "Film (2020)" / "Film (2020).mkv", im.MIN_MOVIE_BYTES)
+        _sized(tmp_path / "Film (2020)" / "Film.log", 10)
+        _sized(tmp_path / "Film (2020)" / "Film.nfo", 10)
+
+        im.cleanup(str(tmp_path))
+
+        assert _left(tmp_path) == THE_FILM + ["Film (2020)/Film.nfo"]
+
+    def test_the_suffixes_it_names_are_case_insensitive(self, tmp_path,
+                                                        monkeypatch):
+        monkeypatch.setenv("movieJunkExtensions", "NFO")
+        _sized(tmp_path / "Film (2020)" / "Film (2020).mkv", im.MIN_MOVIE_BYTES)
+        _sized(tmp_path / "Film (2020)" / "Film.NFO", 10)
+
+        im.cleanup(str(tmp_path))
+
+        assert _left(tmp_path) == THE_FILM
+
+    def test_an_empty_setting_deletes_none_by_extension(self, tmp_path,
+                                                        monkeypatch):
+        # But the sample clip is the junk phase's own, not an extension's.
+        monkeypatch.setenv("movieJunkExtensions", "")
+        _sized(tmp_path / "Film (2020)" / "Film (2020).mkv", im.MIN_MOVIE_BYTES)
+        _sized(tmp_path / "Film (2020)" / "Film.nfo", 10)
+        _sized(tmp_path / "Film (2020)" / "sample.mkv", 10)
+
+        im.cleanup(str(tmp_path))
+
+        assert _left(tmp_path) == THE_FILM + ["Film (2020)/Film.nfo"]
+
+
 class TestWhatStays:
     def test_an_mkv_exactly_at_the_threshold_is_a_film(self, tmp_path):
         _sized(tmp_path / "Short (2020)" / "Short (2020).mkv",

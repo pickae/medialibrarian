@@ -236,8 +236,9 @@ USAGE_TAIL = """
 
     Default behavior
     ----------------
-    deletes release junk: .txt/.nfo/.exe/.sfv files, samples, .mkv files under
-    1000 KiB, folders named \".unwanted\", and folders left empty
+    deletes release junk: files with the movieJunkExtensions suffixes (the
+    default: txt nfo exe doc sfv), samples, .mkv files under 1000 KiB, folders
+    named \".unwanted\", and folders left empty
     remuxes non-Matroska video into .mkv, deleting the source
     sorts loose movie files into one subfolder each (Plex layout)
     cleans up folder, movie and subtitle names
@@ -468,9 +469,10 @@ IMAGE_SUB_CODECS = ("S_HDMV/PGS", "S_VOBSUB", "S_DVBSUB")
 # reads as the film being missing when it is right there.
 MATROSKA_MAGIC = b"\x1a\x45\xdf\xa3"
 
-# The junk a release ships with, deleted before anything else runs. Matched
-# case-insensitively: a release folder is as likely to ship Film.NFO as
-# Film.nfo, and a film's .DOC is junk whatever case it wears.
+# The junk a release ships with, deleted before anything else runs - the
+# default the movieJunkExtensions setting takes. Matched case-insensitively:
+# a release folder is as likely to ship Film.NFO as Film.nfo, and a film's
+# .DOC is junk whatever case it wears.
 JUNK_EXTENSIONS = ("txt", "nfo", "exe", "doc", "sfv")
 SAMPLE_NAMES = ("sample.mkv", "Sample.mkv", "SAMPLE.mkv")
 
@@ -908,11 +910,13 @@ def _object_flags(movie: str, tracks: list) -> None:
 def cleanup(root: str) -> None:
     """The junk a release ships with, and the folders left empty by removing
     it."""
+    junk = tuple(enums.shell_lower(part) for part in os.environ.get(
+        "movieJunkExtensions", " ".join(JUNK_EXTENSIONS)).split())
     for parent, _dirs, names in os.walk(root):
         for name in names:
             path = os.path.join(parent, name)
             extension = enums.lower_extension_of(name) if "." in name else ""
-            if extension in JUNK_EXTENSIONS or name in SAMPLE_NAMES:
+            if extension in junk or name in SAMPLE_NAMES:
                 _remove(path)
                 continue
             # The sample clips are not always NAMED sample: an .mkv this small

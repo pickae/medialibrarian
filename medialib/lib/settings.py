@@ -110,6 +110,10 @@ SETTINGS: tuple[Setting, ...] = (
             "beside the film's own language: a comma list of ISO 639-1 codes "
             "the language table knows; the film's own language is kept "
             "whatever it says", ("ingest-movies",), "en"),
+    Setting("movieJunkExtensions", "The file suffixes ingest-movies deletes "
+            "from a release as junk, space-separated; empty deletes none - the "
+            "sample clips, the tiny .mkv files and the .unwanted folders go "
+            "whatever it says", ("ingest-movies",), "txt nfo exe doc sfv"),
     Setting("infoLogLevel", "How much of what a run says is kept in "
             "`logs/info/`, one file per run: `off`, `quiet` (errors and results), "
             "`normal` or `verbose` - apart from the console's `-q` and `-v`",
