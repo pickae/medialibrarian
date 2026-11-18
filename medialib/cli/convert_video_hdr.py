@@ -151,7 +151,7 @@ def dolby_vision_probe(relative: str, settings) -> tuple:
                                     settings.dolby_vision_source)
     probing = rules.Settings(**dict(settings.__dict__, dolby_vision_mode="1"))
     args = rules.build_video_args(
-        rules.profile_args(rules.VIDEO_PROFILES, settings.video_profile),
+        rules.profile_args(rules.video_profiles(), settings.video_profile),
         source, probing)
     argv = (["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
              "-nostats"] + settings.decode_accel.split()

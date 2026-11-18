@@ -868,6 +868,72 @@ class TestWhatCountsAsInput:
         assert not outputs.exists()
 
 
+class TestUserProfileFiles:
+    """~/.config/medialib/video-profiles and audio-profiles, over the
+    built-ins: a row with a built-in's name replaces it, and the run says
+    when a user profile is in use."""
+
+    @pytest.fixture
+    def video(self, sandbox, tmp_path):
+        sandbox.with_tool("ffmpeg", "exit 0")
+        sandbox.with_tool("ffprobe", "echo 1.0")
+        sandbox.linking(*_ORDINARY).narrow()
+        sandbox.inputs = tmp_path / "in"
+        sandbox.inputs.mkdir()
+        (sandbox.inputs / "clip.mkv").write_text("")
+        sandbox.profile_home = tmp_path / "config" / "medialib"
+        sandbox.profile_home.mkdir(parents=True)
+        return sandbox
+
+    def _run(self, video, *options):
+        import os as _os
+        outputs = video.work / ("out%d" % len(options))
+        done = video.run("convert-video", *options, video.inputs, outputs,
+                         env=dict(_os.environ,
+                                  XDG_CONFIG_HOME=str(video.profile_home.parent)),
+                         timeout=180)
+        return done, outputs
+
+    def test_a_user_video_profile_is_said_in_the_summary(self, video):
+        (video.profile_home / "video-profiles").write_text(
+            "x264|-c:v libx264 -crf 18\n")
+        done, _outputs = self._run(video, "-p", "x264")
+        assert "Video profile: x264" in done.stderr
+        assert "the video-profiles file defines it" in done.stderr
+
+    def test_a_user_audio_profile_is_said_in_the_summary(self, video):
+        (video.profile_home / "audio-profiles").write_text(
+            "myAac|-c:a aac\n")
+        done, _outputs = self._run(video, "-a", "myAac")
+        assert ("Audio profile: myAac - the audio-profiles file defines it."
+                in done.stderr)
+
+    def test_an_unknown_profile_lists_the_users_rows_too(self, video):
+        (video.profile_home / "video-profiles").write_text(
+            "x264|-c:v libx264 -crf 18\n")
+        done, _outputs = self._run(video, "-p", "nope")
+        assert done.returncode == 1
+        assert 'Unknown profile "nope"' in done.stderr
+        assert "x264" in done.stderr
+        assert "av1BluRay" in done.stderr
+
+    def test_a_malformed_user_file_refuses_the_run(self, video):
+        (video.profile_home / "video-profiles").write_text("fast\n")
+        done, outputs = self._run(video)
+        assert done.returncode == 1
+        assert "video-profiles, line 1: not a name|arguments line" \
+            in done.stderr
+        assert not outputs.exists()
+
+    def test_a_grain_level_on_a_user_profile_is_refused_naming_the_encoder(
+            self, video):
+        (video.profile_home / "video-profiles").write_text(
+            "x264|-c:v libx264 -crf 18\n")
+        done, _outputs = self._run(video, "-p", "x264", "-g", "10")
+        assert done.returncode == 1
+        assert "which encodes with libx264" in done.stderr
+
+
 class TestQuiet:
     """-q is errors only: the startup summary, the progress and the closing
     figures all go, and a refusal is still said in full."""

@@ -29,6 +29,7 @@ from medialib.lib import (
     codecs,
     enums,
     resolutions,
+    settings,
     upscale,
     videobitrate,
 )
@@ -222,6 +223,7 @@ SVT_AV1_HDR_GRAIN_PROFILE = "av1Grain"
 AUDIO_PROFILES = """
 opus|-c:a libopus
 opusCustom|-c:a libopus
+aac|-c:a aac
 passthrough|-c:a copy
 """
 
@@ -332,6 +334,87 @@ def encoder_of(args: str) -> str:
     hevc_nvenc - the *nvenc* suffix being what flags a hardware encode."""
     found = _ENCODER.search(args)
     return found.group(1) if found else ""
+
+
+# --- the user's profile files -------------------------------------------------
+
+def video_profile_file() -> str:
+    """Where the user's video-profiles file is, whether or not there is one."""
+    return os.path.join(settings.config_home(), "video-profiles")
+
+
+def audio_profile_file() -> str:
+    """Where the user's audio-profiles file is, whether or not there is one."""
+    return os.path.join(settings.config_home(), "audio-profiles")
+
+
+class UserProfileError(Exception):
+    """The user's profile file cannot be used as it stands."""
+
+    def __init__(self, path: str, number: int) -> None:
+        super().__init__()
+        self.path, self.number = path, number
+
+    def text(self) -> str:
+        return ('%s, line %d: not a name|arguments line' % (self.path,
+                                                            self.number))
+
+
+def user_rows(path: str) -> list:
+    """The rows in a profile file at ``path``: name|arguments per line,
+    '#' comments and blank lines ignored, and the later of two rows with
+    one name the one that stands. No file at all, no rows; a line that is
+    not a row is a :class:`UserProfileError` naming the file and the line,
+    so the run refuses it before a source is touched."""
+    try:
+        with open(path, encoding="utf-8") as handle:
+            lines = handle.readlines()
+    except FileNotFoundError:
+        return []
+    rows: dict = {}
+    for number, line in enumerate(lines, 1):
+        text = line.strip()
+        if not text or text.startswith("#"):
+            continue
+        name, sep, args = text.partition("|")
+        if not sep or not name.strip() or not args.strip():
+            raise UserProfileError(path, number)
+        rows[name.strip()] = args.strip()
+    return list(rows.items())
+
+
+def user_video_profile_names() -> list:
+    """The names the user's video-profiles file defines, built-in or not."""
+    return [name for name, _args in user_rows(video_profile_file())]
+
+
+def user_audio_profile_names() -> list:
+    """The names the user's audio-profiles file defines, built-in or not."""
+    return [name for name, _args in user_rows(audio_profile_file())]
+
+
+def _profiles_over(table: str, path: str) -> str:
+    """The table with the user's file at ``path`` over it: a user row with
+    one of the table's names replaces that row, and one with a new name is
+    added after the built-ins, in the file's order - so a refusal that lists
+    the known profiles lists the user's too, and the built-ins keep theirs."""
+    overrides = dict(user_rows(path))
+    rows = [(name, overrides.pop(name, args))
+            for name, _sep, args in _rows(table)]
+    rows.extend(overrides.items())
+    return "\n".join("%s|%s" % (name, args) for name, args in rows)
+
+
+def video_profiles() -> str:
+    """The video profiles as this host has them: the built-ins with the
+    user's video-profiles file over them."""
+    return _profiles_over(VIDEO_PROFILES, video_profile_file())
+
+
+def audio_profiles() -> str:
+    """The audio profiles as this host has them: the built-ins with the
+    user's audio-profiles file over them."""
+    return _profiles_over(AUDIO_PROFILES, audio_profile_file())
 
 
 # --- the quality level --------------------------------------------------------
@@ -1108,7 +1191,7 @@ def audio_track_args(channels: str, settings, layout: str = "") -> tuple:
     be read is left as it is rather than guessed at, and falls back to the
     stereo bitrate the way the lookup already does.
     """
-    audio_args = profile_args(AUDIO_PROFILES, settings.audio_profile)
+    audio_args = profile_args(audio_profiles(), settings.audio_profile)
     if channels.isdigit() and int(channels) > 2:
         if settings.surround:
             channels, args = bitrates.opus_channel_args(int(channels),

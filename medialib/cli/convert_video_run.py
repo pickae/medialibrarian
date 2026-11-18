@@ -834,11 +834,17 @@ def main(argv: list, program: str = "convert-video",
         settings.audio_profile = "passthrough"
 
     try:
-        video_args = rules.profile_args(rules.VIDEO_PROFILES,
+        video_args = rules.profile_args(rules.video_profiles(),
                                         settings.video_profile)
-        rules.profile_args(rules.AUDIO_PROFILES, settings.audio_profile)
+        rules.profile_args(rules.audio_profiles(), settings.audio_profile)
     except rules.UnknownProfile as unknown:
         sys.stderr.write(unknown.text())
+        return 1
+    except rules.UserProfileError as malformed:
+        # The run's own configuration is what is being refused, so the
+        # refusal names the file and the line, the way the settings file's
+        # does.
+        sys.stderr.write(malformed.text() + "\n")
         return 1
 
     refusal = startup._validate(settings, video_args, grain, engines_override)

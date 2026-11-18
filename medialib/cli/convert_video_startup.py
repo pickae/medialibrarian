@@ -271,7 +271,14 @@ def _summarise(settings, video_args: str, grain: str) -> None:
             "libsvtav1.")
     if settings.encoder == "libsvtav1" and settings.svt_build_note:
         log("SVT-AV1-HDR: " + settings.svt_build_note + ".")
-    log("Video profile: %s -> %s" % (settings.video_profile, settled))
+    # A profile the built-ins do not ship is the user's own: said, because the
+    # rows the summary restates - the level, the encoder the hardware settles
+    # on - then run on arguments the run was not built around.
+    if settings.video_profile in rules.user_video_profile_names():
+        log("Video profile: %s -> %s (the video-profiles file defines it)"
+            % (settings.video_profile, settled))
+    else:
+        log("Video profile: %s -> %s" % (settings.video_profile, settled))
 
     # What the run leaves alone is named on one row, with the flag that turns
     # each on: a row apiece would bury the few that change the encode.
@@ -326,6 +333,10 @@ def _summarise(settings, video_args: str, grain: str) -> None:
             "the tier it is ENCODED at (%s; override with -l)."
             % (settings.video_profile,
                rules.quality_bias_spellings(settings.max_resolution)))
+
+    if settings.audio_profile in rules.user_audio_profile_names():
+        log("Audio profile: %s - the audio-profiles file defines it."
+            % settings.audio_profile)
 
     _summarise_grain(settings, grain)
 

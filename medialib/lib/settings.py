@@ -290,14 +290,21 @@ INTERNAL = frozenset((
 BY_NAME = {setting.name: setting for setting in SETTINGS}
 
 
+def config_home() -> str:
+    """The medialib configuration home: ``$XDG_CONFIG_HOME/medialib`` where
+    that is set, ``~/.config/medialib`` where it is not - where the settings
+    file and the user's profile files live."""
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(
+        os.path.expanduser("~"), ".config")
+    return os.path.join(base, "medialib")
+
+
 def settings_file() -> str:
     """Where the settings file is, whether or not there is one."""
     named = os.environ.get(FILE_VARIABLE, "")
     if named:
         return named
-    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(
-        os.path.expanduser("~"), ".config")
-    return os.path.join(base, "medialib", "settings")
+    return os.path.join(config_home(), "settings")
 
 
 def read_file(path: str) -> dict[str, str]:

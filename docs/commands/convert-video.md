@@ -202,6 +202,29 @@ Synthesis is **lossy and irreversible**: the grain is denoised out of the stored
 picture and a player re-generates a similar-looking one, so what comes back is an
 imitation of it.
 
+## User profiles
+
+The presets above are what ships, and the `video-profiles` and `audio-profiles`
+files beside the settings file — `~/.config/medialib/`, or
+`$XDG_CONFIG_HOME/medialib` where that is set — let a host keep its own beside
+them: one profile per line in the same `name|ffmpeg arguments` form, `#`
+comments and blank lines ignored. A line with a built-in's name replaces it,
+and a line with a new name adds to the list, so `-p` and `-a` accept either,
+and the refusal a typo gets lists the file's rows with the shipped ones:
+
+    # ~/.config/medialib/video-profiles
+    x264|-c:v libx264 -crf 18 -preset slow
+
+Whatever a row names is what a run then does with it, the way it does with a
+built-in: the encoder the row names is the one the hardware settles on, the
+level it states is the one the resolution bias moves, a row without a level
+is one `-l` does not apply to, and a VAAPI or QSV row takes the pixel format
+the hardware encoders take. The startup summary says when the profile in use
+is the file's rather than a shipped row.
+
+The audio table ships an `aac` row beside its opus ones, for a host that would
+rather keep its soundtracks AAC: `aac|-c:a aac`.
+
 ## Only what has room to save (`-t`)
 
 **`-t` converts only what has room to save.** A re-encode is worth its hours when the

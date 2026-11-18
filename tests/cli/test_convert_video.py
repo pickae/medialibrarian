@@ -46,6 +46,109 @@ class TestProfileArgs:
         for name, _sep, args in cv._rows(cv.VIDEO_PROFILES):
             assert cv.encoder_of(args), name
 
+    def test_every_shipped_audio_profile_is_a_row_that_names_an_audio_encoder(self):
+        """The audio table's own way of saying it: a row whose arguments name
+        no -c:a would let ffmpeg pick the audio codec itself."""
+        for name, _sep, args in cv._rows(cv.AUDIO_PROFILES):
+            assert "-c:a" in args, name
+
+    def test_aac_is_shipped_with_the_audio_profiles(self):
+        assert cv.profile_args(cv.AUDIO_PROFILES, "aac") == "-c:a aac"
+
+
+class TestUserProfileFiles:
+    """~/.config/medialib/video-profiles and audio-profiles: the rows a host
+    keeps over the built-ins, in the built-ins' own name|arguments form."""
+
+    pytestmark = pytest.mark.fs
+
+    @pytest.fixture
+    def profile_home(self, tmp_path, monkeypatch):
+        home = tmp_path / "config" / "medialib"
+        home.mkdir(parents=True)
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+        return home
+
+    def test_a_user_video_row_is_added_after_the_builtins(self, profile_home):
+        (profile_home / "video-profiles").write_text(
+            "x264|-c:v libx264 -crf 18\n")
+        merged = [name for name, _sep, _args in cv._rows(cv.video_profiles())]
+        builtins = [name for name, _sep, _args
+                    in cv._rows(cv.VIDEO_PROFILES)]
+        assert merged[:len(builtins)] == builtins
+        assert merged[len(builtins):] == ["x264"]
+        assert cv.profile_args(cv.video_profiles(), "x264") \
+            == "-c:v libx264 -crf 18"
+
+    def test_a_user_row_with_a_builtins_name_replaces_it(self, profile_home):
+        (profile_home / "video-profiles").write_text(
+            "av1BluRay|-c:v libx265 -crf 10\n")
+        merged = cv.video_profiles()
+        assert cv.profile_args(merged, "av1BluRay") == "-c:v libx265 -crf 10"
+        # A row the file does not touch keeps its built-in arguments.
+        builtins = {name: args for name, _sep, args
+                    in cv._rows(cv.VIDEO_PROFILES)}
+        assert cv.profile_args(merged, "av1Grain") == builtins["av1Grain"]
+
+    def test_comments_and_blank_lines_are_ignored(self, profile_home):
+        (profile_home / "video-profiles").write_text(
+            "# the host's own rows\n\nx264|-c:v libx264 -crf 18\n   \n")
+        assert cv.user_video_profile_names() == ["x264"]
+
+    def test_the_later_of_two_rows_with_one_name_stands(self, profile_home):
+        (profile_home / "video-profiles").write_text(
+            "x264|-c:v libx264 -crf 18\nx264|-c:v libx264 -crf 30\n")
+        assert cv.profile_args(cv.video_profiles(), "x264") \
+            == "-c:v libx264 -crf 30"
+
+    def test_the_audio_file_is_read_the_same_way(self, profile_home):
+        (profile_home / "audio-profiles").write_text(
+            "myAac|-c:a aac -b:a 96k\n")
+        assert cv.user_audio_profile_names() == ["myAac"]
+        assert cv.profile_args(cv.audio_profiles(), "myAac") \
+            == "-c:a aac -b:a 96k"
+
+    def test_without_a_file_the_builtins_are_whole(self, profile_home):
+        assert cv._rows(cv.video_profiles()) == cv._rows(cv.VIDEO_PROFILES)
+        assert cv._rows(cv.audio_profiles()) == cv._rows(cv.AUDIO_PROFILES)
+
+    @pytest.mark.parametrize("line", ["fast", "fast|", " |-c:v libx264"])
+    def test_a_line_that_is_not_a_row_refuses_naming_the_line(
+            self, profile_home, line):
+        (profile_home / "video-profiles").write_text(
+            "# header\nx264|-c:v libx264 -crf 18\n%s\n" % line)
+        with pytest.raises(cv.UserProfileError) as raised:
+            cv.video_profiles()
+        assert raised.value.number == 3
+        text = raised.value.text()
+        assert "video-profiles" in text
+        assert "line 3" in text
+
+
+class TestEncodersTheRowsHaveNeverSeen:
+    """A user row may name whatever encoder it names - x264, QSV: the
+    machinery that keys behaviour on the encoder inside the arguments
+    degrades for them the way it should."""
+
+    def test_the_x264_row_runs_on_the_software_machinery(self):
+        args = "-c:v libx264 -crf 18 -preset slow"
+        assert cv.encoder_of(args) == "libx264"
+        assert cv.video_quality_flag(args) == "-crf"
+        assert cv.video_quality_max(args) == 51
+        assert cv.pix_fmt_for(args) == "yuv420p10le"
+        # The resolution bias moves its level like any crf profile's.
+        assert cv.apply_video_quality(args, width=3840,
+                                      height=2160) == \
+            "-c:v libx264 -crf 20 -preset slow"
+
+    def test_a_qsv_row_takes_the_hardware_pixel_format(self):
+        assert cv.pix_fmt_for("-c:v h264_qsv -b:v 4M") == "p010le"
+
+    def test_a_row_with_no_quality_level_is_left_where_the_profile_put_it(self):
+        args = "-c:v libx264 -b:v 4M"
+        assert cv.video_quality_flag(args) == ""
+        assert cv.apply_video_quality(args, width=3840, height=2160) == args
+
 
 class TestQualityBias:
     """Signed, and to be ADDED, so positive means a higher CRF/CQ: softer and
