@@ -1292,7 +1292,8 @@ class Run:
                         os.path.splitext(relative)[0] + suffix))
 
     def _online_cover(self, relative: str, source: str, tmp_dir: str,
-                      seconds: float, mono: bool, channels: int) -> None:
+                      seconds: float | None = None, mono: bool | None = None,
+                      channels: int = 0) -> None:
         """Look online for a cover the source did not carry, where the track
         is the odd one out rather than one of an album's - see
         :func:`medialib.lib.onlinecover.track_wants_search`. A sidecar sharing
@@ -1301,13 +1302,21 @@ class Run:
         Whether the track is encoded in stereo goes with it: podcast length in
         stereo is most likely a full-cast drama, and is looked for where
         audiobooks are. ``channels`` is the source's count where the run
-        already probed it, 0 where it did not."""
+        already probed it, 0 where it did not.
+
+        ``seconds`` None is probed here and ``mono`` None is the run's own -m -
+        both only once the search is known to run, so a run with it switched
+        off pays nothing for it."""
         stem = os.path.splitext(relative)[0]
         if any(os.path.isfile(os.path.join(self.input_dir, stem + suffix))
                for suffix in (".webp", ".jpg")):
             return
         if not onlinecover.enabled():
             return
+        if seconds is None:
+            seconds = onlinecover.media_seconds(source)
+        if mono is None:
+            mono = self.mono
         stereo = not mono and output_channels(
             channels or source_channels(source), self.surround) >= 2
         onlinecover.track_cover(source, seconds, tmp_dir, stereo=stereo)
@@ -1392,10 +1401,8 @@ class Run:
             if not is_video_file(relative):
                 thumbnails.extract_source_cover(source, tmp_dir)
                 # A split file is never adaptive, so the run's own -m is
-                # what decides its channels.
-                self._online_cover(relative, source, tmp_dir,
-                                   onlinecover.media_seconds(source),
-                                   self.mono, 0)
+                # what decides its channels: no mono passed.
+                self._online_cover(relative, source, tmp_dir)
             thumbnails.apply_cover(relative, stage, COVER_THRESHOLD,
                                    COVER_QUALITY, self.cover_resolution,
                                    self.input_dir, self.output_dir, tmp_dir,
