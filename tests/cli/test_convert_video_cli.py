@@ -246,6 +246,21 @@ class TestPairingTheAudioProfileWithItsBitrate:
         assert message in log
 
 
+class TestTheSurroundOption:
+    """-s re-encodes the audio keeping the source's channels up to 7.1, and the
+    run's summary says so rather than downmixing in silence."""
+
+    def test_the_run_says_what_it_does_to_surround_tracks(self, video_cli):
+        _status, log = video_cli.start("-s")
+        assert ("Audio profile: opus (per-channel Opus bitrate from the "
+                "shared table, surround kept up to 7.1 (-s))") in log
+
+    def test_without_it_the_summary_says_what_it_always_did(self, video_cli):
+        _status, log = video_cli.start()
+        assert ("Audio profile: opus (per-channel Opus bitrate from the "
+                "shared table, surround downmixed to stereo)") in log
+
+
 class TestFlagsOnlySomeProfilesCanUse:
     """-f and -g are both libsvtav1 settings. Accepting one for an x265 or NVENC
     profile and then ignoring it would encode at settings nobody asked for and

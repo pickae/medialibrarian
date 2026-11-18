@@ -109,6 +109,21 @@ def test_an_audio_option_beside_it_is_refused(audio, tmp_path, capsys):
     assert not (tmp_path / "out").exists()
 
 
+@pytest.mark.fs
+@pytest.mark.parametrize("surround", [["-s"], ["--surround"]])
+def test_the_surround_option_beside_it_is_refused(surround, tmp_path,
+                                                  capsys):
+    """-s re-encodes the audio to keep the source's channels, which is the one
+    thing -k does not do."""
+    (tmp_path / "in").mkdir()
+    (tmp_path / "in" / "film.mkv").touch()
+
+    assert run_module.main(["-k"] + surround
+                           + [str(tmp_path / "in"), str(tmp_path / "out")]) == 1
+    assert "-k does not re-encode it at all" in capsys.readouterr().err
+    assert not (tmp_path / "out").exists()
+
+
 def _has_svt():
     if shutil.which("ffmpeg") is None:
         return False

@@ -44,6 +44,39 @@ class TestTheBitrateTable:
             assert int(comment) < int(normal)
 
 
+class TestOpusChannelArgs:
+    """The layout decision on its own, one row per case libopus treats
+    differently. Every channel count 1 to 8 and above, and the three and four
+    channel cases the source's own layout settles."""
+
+    @pytest.mark.parametrize("channels", [1, 2])
+    def test_stereo_and_below_need_nothing(self, channels):
+        assert bitrates.opus_channel_args(channels) == (channels, [])
+
+    @pytest.mark.parametrize("channels", [5, 6, 7, 8])
+    def test_five_to_eight_ask_for_their_own_count(self, channels):
+        assert bitrates.opus_channel_args(channels) == (channels,
+                                                        ["-ac", str(channels)])
+
+    @pytest.mark.parametrize("channels, layout, named", [
+        (3, "3.0", "3.0"), (4, "4.0", "quad"), (4, "quad", "quad"),
+        (4, "quad(side)", "quad")])
+    def test_three_and_four_without_an_lfe_are_named_outright(
+            self, channels, layout, named):
+        assert bitrates.opus_channel_args(channels, layout) == (
+            channels, ["-channel_layout", named])
+
+    @pytest.mark.parametrize("channels, layout", [
+        (3, "2.1"), (4, "3.1"), (3, ""), (4, ""), (3, "unknown"), (4, "unknown")])
+    def test_an_lfe_or_an_unknown_layout_is_downmixed_to_stereo(
+            self, channels, layout):
+        assert bitrates.opus_channel_args(channels, layout) == (2, ["-ac", "2"])
+
+    def test_past_eight_the_source_is_folded_down_to_seven_one(self):
+        assert bitrates.opus_channel_args(9) == (8, ["-ac", "8"])
+        assert bitrates.opus_channel_args(12) == (8, ["-ac", "8"])
+
+
 class TestTheImageTiers:
     @pytest.mark.parametrize("tier,geometry,height", [
         ("fullHD", "1920x1080", "1080"),

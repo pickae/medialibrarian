@@ -184,7 +184,10 @@ def encode_audio_all(relative: str, directory: str, settings) -> int:
     There are only ever a handful, so this fans out one job each without regard to
     core count: they are cheap and, with hardware video decode and encode, run
     while the CPU is otherwise idle. A passthrough profile writes nothing here.
-    Any track above stereo is downmixed to stereo.
+    Any track above stereo is downmixed to stereo, unless -s keeps the
+    source's channels, in which case each track's own layout is probed beside
+    its count, since the shared layout decision reads it for three and four
+    channels.
     """
     import multiprocessing
     source = os.path.join(settings.input_dir, relative)
@@ -193,13 +196,23 @@ def encode_audio_all(relative: str, directory: str, settings) -> int:
     if "-c:a copy" in audio_args:
         return 0
 
-    counts = videosource._probe(["ffprobe", "-v", "error",
-                                 "-select_streams", "a",
-                                 "-show_entries", "stream=channels",
-                                 "-of", "csv=p=0", source]).split()
+    entries = ("stream=channels"
+               + (",channel_layout" if settings.surround else ""))
+    text = videosource._probe(["ffprobe", "-v", "error",
+                               "-select_streams", "a",
+                               "-show_entries", entries,
+                               "-of", "csv=p=0", source])
+    tracks = []
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        parts = line.split(",", 1)
+        tracks.append((parts[0].strip(),
+                       parts[1].strip() if len(parts) > 1 else ""))
     workers = []
-    for index, channels in enumerate(counts):
-        track_args, bitrate = rules.audio_track_args(channels, settings)
+    for index, (channels, layout) in enumerate(tracks):
+        track_args, bitrate = rules.audio_track_args(channels, settings,
+                                                     layout)
         out = os.path.join(directory, "audio%02d.mka" % index)
         process = multiprocessing.Process(
             target=_encode_audio_track,
