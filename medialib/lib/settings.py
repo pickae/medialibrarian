@@ -151,6 +151,13 @@ SETTINGS: tuple[Setting, ...] = (
             "with", ("convert-video",), "`~/vapoursynth`"),
     Setting("upscaleModel", "The upscaling model: a path, or a file name under "
             "`<upscaleHome>/models`", ("convert-video",), "`2xLiveActionV1_SPAN_490000.onnx`"),
+    Setting("coverSearch", "Whether a cover nothing local supplied is looked for "
+            "online - for a book always, for a converted track only when it is a "
+            "long or dated one among tracks that carry covers: `on` or `off`",
+            ("concat-audio", "convert-and-concat", "convert-audio"), "on"),
+    Setting("coverSearchTable", "The table of where that search looks, in what "
+            "order, by its path", ("concat-audio", "convert-and-concat", "convert-audio"),
+            "the shipped `medialib/config/coverproviders.tsv`"),
     Setting("chapterDbSite", "The chapter database's address - there for the test "
             "suite", ("ingest-movies",), "`https://chapterdb.plex.tv`"),
     Setting("dvdCompareSite", "The disc database's address - there for the test suite",

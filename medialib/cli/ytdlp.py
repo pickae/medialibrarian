@@ -771,30 +771,7 @@ def _resolve_ytdlp(platform: str, script_dir: str):
     """How to run yt-dlp here, resolved rather than assumed: a downloaded .exe
     beside the script on Windows, and on Linux a nightly install ahead of the
     apt/pip/pipx release one."""
-    present, executable, importable = set(), set(), set()
-    for name in ("yt-dlp-nightly", "yt-dlp", "yt-dlp.exe",
-                 "python3", "python", "py"):
-        if shutil.which(name):
-            present.add(name)
-    local_bin = os.path.join(os.path.expanduser("~"), ".local", "bin")
-    for candidate in (os.path.join(script_dir, "yt-dlp.exe"), "./yt-dlp.exe",
-                      os.path.join(local_bin, "yt-dlp-nightly"),
-                      os.path.join(local_bin, "yt-dlp")):
-        if os.access(candidate, os.X_OK):
-            executable.add(candidate)
-    for name in ("python3", "python", "py"):
-        if name not in present:
-            continue
-        try:
-            if subprocess.run([name, "-c", "import yt_dlp"],
-                              stdout=subprocess.DEVNULL,
-                              stderr=subprocess.DEVNULL).returncode == 0:
-                importable.add(name)
-        except OSError:
-            pass
-    return podcastfeeds.resolve_ytdlp(
-        os.environ.get("YTDLP", ""), platform, os.path.expanduser("~"),
-        script_dir, os.getcwd(), present, executable, importable)
+    return podcastfeeds.locate_ytdlp(platform, script_dir)
 
 
 def _ytdlp_version(ytdlp_command) -> str:

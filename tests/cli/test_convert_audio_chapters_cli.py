@@ -72,6 +72,16 @@ def test_only_an_output_whose_source_has_no_chapters_is_transcribed(convert, tmp
     assert len((tmp_path / "model.calls").read_text().splitlines()) == 2
 
 
+def test_an_output_with_chapters_of_its_own_is_left_alone(convert, tmp_path):
+    # A rerun after chapters were written: the sources have none, but every
+    # output (.opus) already has two, so nothing is transcribed or rewritten.
+    convert.with_tool("ffprobe", _FFPROBE.replace("*chaptered*", "*.opus"))
+    said = _run(convert, tmp_path, "-t")
+    assert (tmp_path / "whisper.calls").read_text() == ""
+    assert (tmp_path / "model.calls").read_text() == ""
+    assert "Chaptering" not in said
+
+
 def test_a_sidecar_is_the_transcript_and_nothing_is_transcribed(convert, tmp_path):
     (tmp_path / "in" / "plain.en.srt").write_text("".join(
         "%d\n00:%02d:%02d,000 --> 00:%02d:%02d,500\nwords\n\n"

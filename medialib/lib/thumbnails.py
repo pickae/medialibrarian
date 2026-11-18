@@ -20,11 +20,19 @@ from medialib.lib import (
     imagecodecs,
     imagemagick,
     mutagentags,
+    onlinecover,
     runlog,
     toolcapture,
     treewalk,
 )
-from medialib.lib.enums import shell_lower
+from medialib.lib.enums import (
+    AUDIO_EXTENSIONS,
+    LOSSLESS_AUDIO_EXTENSIONS,
+    lower_extension_of,
+    shell_lower,
+)
+
+_AUDIO_EXTENSIONS = frozenset((*AUDIO_EXTENSIONS, *LOSSLESS_AUDIO_EXTENSIONS))
 
 __all__ = [
     "choose_thumbnail",
@@ -230,6 +238,21 @@ def extract_thumbnail(input_path: str, file_name: str, dpi: int,
     return 0
 
 
+def _online_thumbnail(input_path: str, outputs: Sequence[str],
+                      ram_base: str) -> str:
+    """A cover found online for the book joined from <input_path>, or "".
+
+    The book's length is read off the joined output, the tags off its first
+    source track: both say what the book probably is and which answer is it.
+    """
+    tracks = [path for path in _regular_files(input_path)
+              if lower_extension_of(path) in _AUDIO_EXTENSIONS]
+    seconds = next((onlinecover.media_seconds(path) for path in outputs
+                    if os.path.isfile(path)), 0.0)
+    return onlinecover.book_cover(input_path, tracks[:1], seconds,
+                                  f"{ram_base}.online")
+
+
 def embed_thumbnail(input_path: str, file_name: str, image_size_limit: int,
                     jpg_quality_level: int, thumbnail_resolution: str,
                     dpi: int, have_mkvtoolnix: bool, ram_dir: str,
@@ -249,6 +272,11 @@ def embed_thumbnail(input_path: str, file_name: str, image_size_limit: int,
     if not os.path.isfile(thumb_file):
         extract_thumbnail(input_path, ram_base, dpi, have_mkvtoolnix, run)
         thumb_file = f"{ram_base}.jpg"
+
+    # and online, the last rung, when none of the local ones held a cover
+    if not os.path.isfile(thumb_file):
+        thumb_file = _online_thumbnail(
+            input_path, (opus_file, mp3_file, m4b_file, flac_file), ram_base)
 
     # The temp name is keyed on ramBase (the unique per-subfolder output stem),
     # NOT on the source image's basename: parallel workers share one ram_dir.

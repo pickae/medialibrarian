@@ -94,6 +94,8 @@ USAGE_TAIL = """
     embed cover from image file(s) in input folder
     fallback: extract from pdf documents instead
     fallback: extract from audio files themselves
+    fallback: look online, by what the book probably is - a podcast, an
+              audiobook - and only for an answer with the same title
 
     Dependencies
     ------------
