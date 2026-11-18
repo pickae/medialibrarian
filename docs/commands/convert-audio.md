@@ -20,7 +20,7 @@ With no options, a run:
 - writes **Opus at 46 kbps**, keeping the source's channel count (`-e`, `-b`, `-m`, `-a`)
 - re-encodes only what is at or above 90 kbps, or in a format not worth keeping, and **leaves smaller files out of the output** ([below](#what-gets-re-encoded); `-c` copies them)
 - **splits files longer than 10000 s** into chunks that encode in parallel (`-s`)
-- carries chapters and cover art over, and copies images across
+- carries chapters and cover art over, and copies images across ([below](#cover-art))
 - writes a transcript found beside a source into its output ([below](#transcripts))
 - **lower-cases file extensions in the input**, and renames `.jpeg` to `.jpg`
 - runs one encoder per CPU thread (`-j`)
@@ -107,6 +107,30 @@ that transcript goes into the output with the chapters. A source with chapters
 of its own keeps them and is not sent to the model. A rerun tries again only for
 outputs that still have none. Without a usable model, `-t` is refused before
 anything is encoded.
+
+## Cover art
+
+A converted file keeps the cover its source carries. An image beside it with
+the same name (`track.jpg` / `track.webp`) replaces that cover. A folder image
+such as `cover.jpg` or `folder.jpg` is copied across but **not** embedded: an
+album's tracks would each carry their own copy of it, and for music
+`ingest-music` already leaves the folder image players read.
+
+A track with no cover is looked for **online** only when it is the odd one out:
+
+| Searched | Not searched |
+| --- | --- |
+| at least 30 minutes long, or named with a leading `yyyymmdd` date or a trailing `[YouTube id]` | shorter, undated and without an id (album-style tracks) |
+| no image in its folder | a folder image is there |
+| most of the other tracks in its folder carry a cover, or it is alone | most of them carry none (the album case) |
+
+The search works the way [concat-audio's](concat-audio.md#chapters-and-cover)
+does: a dated name or 30–200 minutes reads as a podcast, longer as an
+audiobook, and an answer is taken only when it is the same title. One
+difference: 30–200 minutes encoded in **stereo** (not `-m`, and not a mono
+source under `-a`) reads as a full-cast drama, and is looked for where
+audiobooks are. The
+`coverSearch` [setting](../settings.md) switches it off.
 
 ## Every conversion is measured
 

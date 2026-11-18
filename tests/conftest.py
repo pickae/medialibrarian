@@ -298,6 +298,10 @@ def private_workspace(tmp_path_factory, monkeypatch):
     # otherwise ask the real ones about every film in its fixture.
     monkeypatch.setenv("chapterDbSite", "http://127.0.0.1:9")
     monkeypatch.setenv("dvdCompareSite", "http://127.0.0.1:9/")
+    # And no cover is looked for online: a fixture book or track without one
+    # would otherwise ask the real catalogues. The search's own cases turn it
+    # back on and stand in for the network.
+    monkeypatch.setenv("coverSearch", "off")
 
     # And every site's pacing from scratch, so a case does not wait out the gap
     # the one before it left behind.

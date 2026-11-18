@@ -1,0 +1,59 @@
+# Cover search providers - read by concat-audio and convert-audio when nothing
+# local gave a book or a long track a cover.
+#
+# This is the shipped table. To change it, copy it anywhere, edit the copy and
+# point the coverSearchTable setting at it.
+#
+# One TAB-separated row per search, five columns. Blank lines and # lines are
+# ignored. The rows are tried top to bottom among those whose content matches,
+# and the first image a row finds is the cover: put the searches you trust most
+# first.
+#
+# The columns:
+#   content   what the audio probably is: podcast, audiobook or other. A file
+#             name ending in a [YouTube id] - yt-dlp's default - or starting
+#             with a yyyymmdd date, or a length from 30 to 200 minutes, reads
+#             as a podcast; anything longer as an audiobook; a shorter one
+#             as other. convert-audio reads 30 to 200 minutes it encodes in
+#             stereo as an audiobook too: most likely a full-cast drama.
+#   provider  how the answer is read: audible, amazon, itunes, openlibrary or
+#             youtube. A new site needs a reader in medialib/lib/onlinecover.py;
+#             a new address for a known one only needs a row.
+#   match     how sure the answer has to be:
+#               id      none: the address names the very video the file came
+#                       from, by the {youtube_id} in its name.
+#               strict  the title, and nothing that contradicts it - an author
+#                       or channel, a running time - and at least one of those
+#                       agreeing when the title alone is short.
+#               loose   the title alone: another edition, another language, or
+#                       the printed book instead of the audiobook.
+#               show    the podcast's own name, for the show's artwork rather
+#                       than the episode's.
+#   pace      seconds between two requests to this provider, at least.
+#   address   the request. {title}, {creator}, {query} (both together) and
+#             {youtube_id} are filled in, URL-encoded; a row that needs one the
+#             file does not have is passed over. youtube's address is handed
+#             to yt-dlp: a ytsearchN: search, or a watch address.
+#
+# podcast: the video the name's id points at, when it has one - only the
+# thumbnail download failed; else the episode searched on YouTube, where it
+# usually came from; then the show's artwork.
+podcast	youtube	id	3	https://www.youtube.com/watch?v={youtube_id}
+podcast	youtube	strict	3	ytsearch5:{title}
+podcast	itunes	show	3	https://itunes.apple.com/search?term={creator}&media=podcast&limit=10
+podcast	youtube	strict	3	ytsearch5:{query}
+#
+# audiobook: the audiobook's own cover, then any edition of the book.
+audiobook	audible	strict	2	https://api.audible.com/1.0/catalog/products?keywords={query}&num_results=10&response_groups=media,contributors,product_attrs&image_sizes=1215
+audiobook	amazon	strict	6	https://www.amazon.com/s?k={query}&i=audible
+audiobook	itunes	strict	3	https://itunes.apple.com/search?term={query}&media=audiobook&limit=10
+audiobook	audible	strict	2	https://api.audible.com/1.0/catalog/products?title={title}&num_results=10&response_groups=media,contributors,product_attrs&image_sizes=1215
+audiobook	audible	loose	2	https://api.audible.de/1.0/catalog/products?title={title}&num_results=10&response_groups=media,contributors,product_attrs&image_sizes=1215
+audiobook	audible	loose	2	https://api.audible.fr/1.0/catalog/products?title={title}&num_results=10&response_groups=media,contributors,product_attrs&image_sizes=1215
+audiobook	amazon	loose	6	https://www.amazon.com/s?k={query}&i=stripbooks
+audiobook	openlibrary	loose	2	https://openlibrary.org/search.json?q={query}&limit=10&fields=title,author_name,cover_i
+#
+# other: short and undated - most likely a short book or a single episode.
+other	audible	strict	2	https://api.audible.com/1.0/catalog/products?keywords={query}&num_results=10&response_groups=media,contributors,product_attrs&image_sizes=1215
+other	itunes	strict	3	https://itunes.apple.com/search?term={query}&media=audiobook&limit=10
+other	youtube	strict	3	ytsearch5:{query}
