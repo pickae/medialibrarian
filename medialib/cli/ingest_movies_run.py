@@ -938,6 +938,19 @@ def main(argv: list, program: str = "ingest-movies",
         clioptions.refuse_usage(declaration, error.message)
         return 1
 
+    # The phases the run is told to omit from the full ingest, settled here
+    # too: a phase the run will not omit is refused with the page, like a bad
+    # option. A bare -o omits them all; without the flag the run does every
+    # phase, as it always has.
+    try:
+        omit_phases = (keepparts.parse(result.values["omitPhases"],
+                                       rules.OMIT_PHASES, flag="-o",
+                                       word="phase")
+                       if "o" in result.given else frozenset())
+    except clioptions.UsageError as error:
+        clioptions.refuse_usage(declaration, error.message)
+        return 1
+
     # -w carries out a dry run, and without -t, -i or -s there is none to
     # carry out. Refused rather than ignored: a -tw typed as -w would otherwise
     # be a full ingest, hours of converting and remuxing, on a library asked
@@ -1058,6 +1071,21 @@ def main(argv: list, program: str = "ingest-movies",
                     "anyway. Drop the -k." % letter)
                 return 1
 
+    # -o changes what a full ingest leaves out, and each of these does its
+    # phase alone: there is no full ingest here to leave a phase out of.
+    if "o" in result.given:
+        for letter, key in (("a", "commentaryOnly"), ("n", "commentaryNames"),
+                            ("c", "chaptersOnly"), ("p", "plexOnly"),
+                            ("s", "subtitlesOnly"), ("t", "tagsOnly"),
+                            ("i", "idList")):
+            if result.values.get(key):
+                clioptions.refuse_usage(
+                    declaration,
+                    "-o leaves a phase out of a full ingest, and -%s does its "
+                    "phase of\nits own: there is no full ingest here to leave "
+                    "it out of.\nDrop the -o." % letter)
+                return 1
+
     # -r is the last phase of a full ingest, and each of these is a run of one
     # phase of its own that never reaches it.
     if result.values.get("convertRemuxes"):
@@ -1094,7 +1122,8 @@ def main(argv: list, program: str = "ingest-movies",
 
     try:
         return _run_phases(result, program, script_dir, roots, names,
-                           fragments_file, kept, wanted, keep_parts)
+                           fragments_file, kept, wanted, keep_parts,
+                           omit_phases)
     finally:
         # Every phase below can pin an ffmpeg or settle a run directory, and
         # each refusal after that must hand it back, not only a finished run.
@@ -1105,7 +1134,8 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
                 names: list, fragments_file: str,
                 kept: tuple = ("en",),
                 wanted: tuple | None = None,
-                keep_parts: frozenset = frozenset()) -> int:
+                keep_parts: frozenset = frozenset(),
+                omit_phases: frozenset = frozenset()) -> int:
     # Commentary only is the one phase of the full ingest it names, run on the
     # folders given: the walk and the transcription, and not the rest of the
     # run around them.
@@ -1258,6 +1288,7 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
                 scratch_headroom=0,
                 convert_remuxes=bool(result.values.get("convertRemuxes")),
                 keep_parts=keep_parts,
+                omit_phases=omit_phases,
                 keep_languages=kept, subtitle_languages=wanted)
 
     listed = dict(zip(roots, names, strict=True))
@@ -1704,6 +1735,9 @@ def _plex_phase(root: str, state=None) -> None:
     """The films as this run leaves them, held up against the Plex library's
     copies of them - last, once the names, tracks and chapters are final, and
     each said with what it carried over from its copy."""
+    if "plex" in getattr(state, "omit_phases", frozenset()):
+        log("Phase: comparing with the Plex library - OMITTED (-o plex)")
+        return
     if not _has_tool("curl"):
         log("Phase: comparing with the Plex library - SKIPPED (curl is not "
             "installed)")
@@ -2613,10 +2647,17 @@ def _settle_ffsubsync_quality(judged: str = "a downloaded subtitle",
 
 
 def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
+    # The phases the run was told to omit: every phase entry below is
+    # guarded by them, and an omitted one is said so at its place, the way
+    # a phase skipped for want of its tool is.
+    omit: frozenset = getattr(state, "omit_phases", frozenset())
     log("Starting ingest: " + root)
 
-    log("Phase: cleaning up junk files")
-    rules.cleanup(root)
+    if "junk" in omit:
+        log("Phase: cleaning up junk files - OMITTED (-o junk)")
+    else:
+        log("Phase: cleaning up junk files")
+        rules.cleanup(root)
     log("Phase: muxing non-Matroska videos into Matroska")
     rules.mkv_mux(root)
     # Before the cleaning takes the word out of the names: the films are known
@@ -2655,7 +2696,7 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
     # the phases up to the lanes run: what each film takes from its copy is
     # settled before any lane writes it.
     state.carry = None
-    if _has_tool("curl"):
+    if _has_tool("curl") and "plex" not in omit:
         state.carry = carryphase.LibraryCarry(
             root, lambda: main_movies(root), state.film_tags, log,
             state.ram_root, getattr(state, "keep_parts", frozenset()))
@@ -2667,14 +2708,18 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
 
     log("Phase: refreshing mkv tags and track flags")
     rules.update_tags(root)
-    rules.cleanup(root)
+    if "junk" not in omit:
+        rules.cleanup(root)
 
     # Before anything reads which tracks are commentaries: the transcription,
     # the surround ladder that would drop one as a lesser soundtrack, and the
     # research that asks the disc database about them all go by the flag.
-    if subtitle_work:
+    if subtitle_work and "commentary" not in omit:
         log("Phase: listening for commentaries the files do not flag")
         _detect_commentaries(state, root)
+    elif subtitle_work:
+        log("Phase: listening for commentaries the files do not flag - "
+            "OMITTED (-o commentary)")
     else:
         log("Phase: listening for commentaries the files do not flag - "
             "SKIPPED (no ffsubsync/pipx, see the warning at startup)")
@@ -2688,12 +2733,15 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
             "library's copy")
         state.carry.settle(state.carry_keeps, state.carry_names,
                            subtitle_work)
+    elif "plex" in omit:
+        log("Phase: settling what each film carries over from the Plex "
+            "library's copy - OMITTED (-o plex)")
 
     # The names have settled and every film is a Matroska file, which is all
     # the chapter archive and the disc database are asked by: they are asked
     # now, at their polite pace, on threads of their own, and the answers wait
     # for the phases at the end that use them.
-    ahead = _start_research(state, root)
+    ahead = _start_research(state, root, omit)
 
     # The subtitles of every film TMDb can name, fetched on a thread of their
     # own while the films are transcoded, transcribed and remuxed, and finished
@@ -2706,11 +2754,18 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
     run_console = console.current()
     run_console.show(row.render, travels=False)
     try:
-        fetching = _start_subtitle_lane(state, root, subtitle_work, locks,
-                                        row)
+        if "subtitles" in omit:
+            fetching = None
+            if subtitle_work:
+                log("Subtitles: not fetched (-o subtitles)")
+        else:
+            fetching = _start_subtitle_lane(state, root, subtitle_work,
+                                            locks, row)
         try:
             _films_in_lanes(state, root, subtitle_work, locks, row,
-                            fetching=fetching)
+                            fetching=fetching,
+                            commentary_work=subtitle_work
+                            and "commentary" not in omit)
         finally:
             if fetching is not None and safety.abort_requested():
                 fetching.finish()
@@ -2722,9 +2777,13 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
             fetching.finish()
     finally:
         run_console.hide()
-    log("Phase: tagging movies with IMDb ids (Plex/Jellyfin naming)")
-    tmdblookup.tag_plex_ids(root, log, state.skips,
-                            long_names=state.long_names)
+    if "tagging" in omit:
+        log("Phase: tagging movies with IMDb ids (Plex/Jellyfin naming) - "
+            "OMITTED (-o tagging)")
+    else:
+        log("Phase: tagging movies with IMDb ids (Plex/Jellyfin naming)")
+        tmdblookup.tag_plex_ids(root, log, state.skips,
+                                long_names=state.long_names)
 
     # The tagging gave every folder its id, and a mangled name that the first
     # pass could not anchor on a tag can now be conformed. The transcription is
@@ -2742,12 +2801,16 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
     # After the tagging, so a film is searched for by the id its name now
     # carries rather than by a title a remake or a namesake also answers to.
     if subtitle_work:
-        log("Phase: downloading missing subtitles")
-        subtitlefiles.download_subs(
-            root, subtitlefiles.providers_to_ask(),
-            rules.MAX_SYNC_OFFSET, rules.MAX_SYNC_QUALITY_OFFSET,
-            state.ffsubsync_quality, log,
-            wanted=getattr(state, "subtitle_languages", None))
+        if "subtitles" in omit:
+            log("Phase: downloading missing subtitles - OMITTED "
+                "(-o subtitles)")
+        else:
+            log("Phase: downloading missing subtitles")
+            subtitlefiles.download_subs(
+                root, subtitlefiles.providers_to_ask(),
+                rules.MAX_SYNC_OFFSET, rules.MAX_SYNC_QUALITY_OFFSET,
+                state.ffsubsync_quality, log,
+                wanted=getattr(state, "subtitle_languages", None))
     else:
         log("Phase: downloading missing subtitles - SKIPPED (no "
             "ffsubsync/pipx, see the warning at startup)")
@@ -2758,8 +2821,16 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
     # tell several commentaries apart; and after the remux, whose copy the
     # names and the chapters are written into in place rather than carried
     # through another one.
-    _commentary_name_phase(state, root, name, ahead)
-    _chapter_phase(root, ahead)
+    if "commentary" in omit:
+        log("Phase: naming numbered commentary tracks - OMITTED "
+            "(-o commentary)")
+    else:
+        _commentary_name_phase(state, root, name, ahead)
+    if "chapters" in omit:
+        log("Phase: looking up chapters for films without named ones - "
+            "OMITTED (-o chapters)")
+    else:
+        _chapter_phase(root, ahead)
     _plex_phase(root, state)
 
     # Last of all, once each film is the file it will stay: its converted copy
@@ -2771,7 +2842,8 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
                                      state.script_dir, log)
         safety.exit_if_aborted()
 
-    rules.cleanup(root)
+    if "junk" not in omit:
+        rules.cleanup(root)
     log("Phase: checking for folders without a movie")
     check_folders(root)
 
@@ -2780,10 +2852,16 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
 
 
 def _films_in_lanes(state, root: str, subtitle_work: bool, locks,
-                    row=None, fetching=None) -> None:
+                    row=None, fetching=None,
+                    commentary_work: bool | None = None) -> None:
     """The opus transcode, the commentary transcription and the improved-copy
     remux, each on the part of the machine it uses and overlapping where that
     is safe (see :mod:`medialib.cli.ingest_movies_lanes`).
+
+    ``subtitle_work`` is the subtitle work the run settled at its start;
+    ``commentary_work`` is whether the transcription runs at all - the same,
+    unless the run was told to omit the commentary phase - and it is what
+    decides the opus transcode's place.
 
     The transcode runs BESIDE the transcription only when whisper is on the
     GPU, a job's worth of cores narrower so whisper and the walk that feeds it
@@ -2794,11 +2872,13 @@ def _films_in_lanes(state, root: str, subtitle_work: bool, locks,
     the lane never got is remuxed by the walk after it, once the subtitle lane
     is finished, so the subtitles it kept are muxed in either way.
     """
+    if commentary_work is None:
+        commentary_work = subtitle_work
     carry = getattr(state, "carry", None)
     remux = lanes.RemuxLane(main_movies(root), state.improve_main_movie,
-                            locks, subtitle_work, log, row,
+                            locks, commentary_work, log, row,
                             subtitles=fetching, carry=carry)
-    beside = subtitle_work and state.whisper.get("device") == "cuda"
+    beside = commentary_work and state.whisper.get("device") == "cuda"
     transcoding = None
     try:
         if beside:
@@ -2815,7 +2895,7 @@ def _films_in_lanes(state, root: str, subtitle_work: bool, locks,
             log("Phase: transcoding lossless audio to opus")
             _transcode_opus(state, root, on_done=remux.opus_done, row=row)
 
-        if subtitle_work:
+        if commentary_work:
             log("Phase: extracting and transcribing commentary tracks")
             jobs = state.whisper["jobs"]
             tracker = _CarryTracker(
@@ -2835,6 +2915,9 @@ def _films_in_lanes(state, root: str, subtitle_work: bool, locks,
                     film_queued=tracker.film_queued, lane="commentary")
             finally:
                 state.scratch_headroom = 0
+        elif subtitle_work:
+            log("Phase: extracting and transcribing commentary tracks - "
+                "OMITTED (-o commentary)")
         else:
             log("Phase: extracting and transcribing commentary tracks - "
                 "SKIPPED (no ffsubsync/pipx, see the warning at startup)")
@@ -2932,10 +3015,11 @@ def _start_subtitle_lane(state, root: str, subtitle_work: bool, locks,
     return lane
 
 
-def _start_research(state, root: str) -> dict:
+def _start_research(state, root: str, omit: frozenset = frozenset()) -> dict:
     """The chapter archive and the disc database asked about every film under
     ``root`` that will want them, each on a thread of its own - or neither,
-    without curl to ask them with.
+    without curl to ask them with, or the phase they serve omitted: the
+    thread of an omitted phase is not started.
 
     The chapters are remembered page by page rather than film by film: the
     remux and the opus transcode can move a film's length by a few
@@ -2944,31 +3028,40 @@ def _start_research(state, root: str) -> dict:
     """
     if not _has_tool("curl"):
         return {}
-    chapter_pages = research.Research(
-        "chapter", chapterdb.ask_archive, keep=lambda body: body is not None)
+    ahead: dict = {}
+    if "chapters" not in omit:
+        chapter_pages = research.Research(
+            "chapter", chapterdb.ask_archive,
+            keep=lambda body: body is not None)
 
-    def fetch(path: str, params=()):
-        return chapter_pages(path, tuple(params))
+        def fetch(path: str, params=()):
+            return chapter_pages(path, tuple(params))
 
-    said: list = []
-    site = dvdcompare.Site(dvdcompare.directory(state.script_dir),
-                           said.append)
-    ahead = {"chapters": chapter_pages, "chapter pages": fetch,
-             "names": research.Research("commentary name", site.releases),
-             "said": said}
-    _research_again(ahead, root)
+        ahead["chapters"] = chapter_pages
+        ahead["chapter pages"] = fetch
+    if "commentary" not in omit:
+        said: list = []
+        site = dvdcompare.Site(dvdcompare.directory(state.script_dir),
+                               said.append)
+        ahead["names"] = research.Research("commentary name", site.releases)
+        ahead["said"] = said
+    if ahead:
+        _research_again(ahead, root)
     return ahead
 
 
 def _research_again(ahead: dict, root: str) -> None:
     """Every film under ``root`` handed to the research, again: a film already
     asked about is answered from memory, so this only reaches the ones whose
-    question changed."""
+    question changed. A research the run was told to omit is not asked of at
+    all - its key is not in ``ahead``."""
     if not ahead:
         return
-    ahead["chapters"].ahead(lambda: _chapter_questions(root,
-                                                       ahead["chapter pages"]))
-    ahead["names"].ahead(lambda: _commentary_questions(root, ahead["names"]))
+    if "chapters" in ahead:
+        ahead["chapters"].ahead(lambda: _chapter_questions(root,
+                                                           ahead["chapter pages"]))
+    if "names" in ahead:
+        ahead["names"].ahead(lambda: _commentary_questions(root, ahead["names"]))
 
 
 def _chapter_questions(root: str, fetch) -> None:

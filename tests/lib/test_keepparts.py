@@ -1,4 +1,6 @@
-"""Tests for medialib.lib.keepparts - the -k parts a run is told to keep."""
+"""Tests for medialib.lib.keepparts - the named parts an option's value
+carries: the -k parts a run is told to keep, the -o phases it is told to
+omit."""
 
 import pytest
 
@@ -57,3 +59,23 @@ def test_the_result_is_a_set_and_comes_back_equal():
     kept = keepparts.parse("tracks", PARTS)
     assert type(kept) is frozenset
     assert "tracks" in kept and "audio" not in kept
+
+
+PHASES = ("junk", "subtitles", "commentary", "chapters", "plex", "tagging")
+
+
+def test_the_refusal_says_the_flag_and_the_word_it_is_given():
+    """-k says "-k part", and -o says "-o phase": the refusal is the
+    option's own, not the helper's."""
+    with pytest.raises(clioptions.UsageError, match=r'^The -k part '):
+        keepparts.parse("bogus", PARTS)
+    with pytest.raises(clioptions.UsageError,
+                       match=r'^The -o phase must be one of: '
+                             r'junk, subtitles, commentary, chapters, '
+                             r'plex, tagging \(got "subs"\)'):
+        keepparts.parse("subs", PHASES, flag="-o", word="phase")
+
+
+def test_the_bare_flag_names_everything_whatever_the_flag_is():
+    assert keepparts.parse("", PHASES, flag="-o", word="phase") \
+        == frozenset(PHASES)

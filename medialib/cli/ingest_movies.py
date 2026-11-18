@@ -186,6 +186,21 @@ k | [part] | keep <part>: takes nothing away. The parts are audio, tracks and
                   literally named "audio" is written ./audio: the word after -k
                   goes to -k when it is a part. Cannot be combined with -r,
                   which encodes.
+o | [phase] | omit <phase> from a full ingest: junk, subtitles, commentary,
+                  chapters, plex and tagging, comma-separated, and a bare -o
+                  omits all six. junk: the junk files are left. subtitles: the
+                  subtitles are not fetched and the missing ones are not
+                  downloaded. commentary: the commentaries are not listened
+                  for, not transcribed and not named. chapters: the chapter
+                  archive is not asked. plex: the films are not compared with
+                  the Plex library and nothing is carried over from it.
+                  tagging: the films are not tagged with their IMDb ids. The
+                  phases not named run as they always have. A phase the run
+                  will not omit is refused with the page, like a bad option. A
+                  folder literally named after one of them - "plex" is the
+                  likeliest - is written ./plex: the word after -o goes to -o
+                  when it is a phase. Cannot be combined with -a, -n, -c, -p,
+                  -s, -t or -i, which do a phase of their own.
 w |  | with -t or -i, actually perform the renames instead of printing
                   them; with -s, sync, throw out and download; with -n, name
                   the commentaries. On its own it is a usage error rather than
@@ -206,11 +221,16 @@ i | <file> | the hand-written id list filled in and read BACK: tagging and
 
 OPT_VARS = ("f:fragmentsOverride a:commentaryOnly t:tagsOnly s:subtitlesOnly "
             "n:commentaryNames c:chaptersOnly p:plexOnly r:convertRemuxes "
-            "w:writeTags i:idList k:keepParts")
+            "w:writeTags i:idList k:keepParts o:omitPhases")
 OPT_COLUMN = 18
 OPT_LONG = ("f:fragments a:commentary t:tags-only s:subtitles-only "
             "n:commentary-names c:chapters p:plex r:convert-remuxes w:write "
-            "i:ids k:keep")
+            "i:ids k:keep o:omit")
+
+# The phases a full ingest can be told to omit with -o, in the order the page
+# lists them: the page and the parser's arm must name the same ones.
+OMIT_PHASES = ("junk", "subtitles", "commentary", "chapters", "plex",
+               "tagging")
 
 USAGE_TAIL = """
 
@@ -467,12 +487,17 @@ _LANGUAGE_MARKER = re.compile(r"\s*\([A-Za-z]{2,3}\)$")
 
 
 def spec(program: str) -> "clioptions.Spec":
+    # The -o value: a comma list of the phases, a bare -o claiming nothing.
+    # Built from OMIT_PHASES so the arm and the page name the same ones.
+    omit_arm = ("^(" + "|".join(OMIT_PHASES) + ")(,("
+                + "|".join(OMIT_PHASES) + "))*$")
     return clioptions.with_shared_options(clioptions.Spec(
         head=USAGE_HEAD.format(program=program),
         options=OPT_SPEC,
         long=OPT_LONG,
         vars=OPT_VARS,
-        flags="optionalArg:k:^(audio|tracks|dv)(,(audio|tracks|dv))*$",
+        flags=("optionalArg:k:^(audio|tracks|dv)(,(audio|tracks|dv))*$"
+               " optionalArg:o:" + omit_arm),
         column=OPT_COLUMN,
         tail=USAGE_TAIL,
         no_args_with_credits=False,
