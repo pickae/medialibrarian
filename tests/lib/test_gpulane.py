@@ -9,6 +9,7 @@ stand-in medialib/lib/av1gpu.py is tested with.
 from __future__ import annotations
 
 import json
+import sys
 import threading
 import time
 
@@ -17,6 +18,20 @@ import pytest
 from medialib.lib import gpulane
 
 pytestmark = pytest.mark.fs
+
+# The stand-in encoder is a shell script, handed its pages as symlinks:
+# Windows can start neither without privileges a test run does not have.
+_STUB_RUNS = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="the stand-in encoder is a shell script fed symlinks")
+
+
+def _close(lane, seconds=30):
+    """lane.close(), failed rather than waited for should it hang."""
+    closer = threading.Thread(target=lane.close, daemon=True)
+    closer.start()
+    closer.join(seconds)
+    assert not closer.is_alive(), "the lane did not close in %d s" % seconds
 
 _ENCODER = r'''#!/usr/bin/env bash
 trim=
@@ -42,6 +57,8 @@ exit 0
 
 @pytest.fixture
 def lane_run(tmp_path, monkeypatch):
+    if sys.platform == "win32":
+        pytest.skip("the stand-in encoder is a shell script fed symlinks")
     tool = tmp_path / "bin" / "av1gpu"
     tool.parent.mkdir()
     tool.write_text(_ENCODER)
@@ -85,7 +102,7 @@ def lane_run(tmp_path, monkeypatch):
                     manifest.write(json.dumps(entry) + "\n")
             open(f"{folder}/{gpulane.READY}", "w").close()
             lane.expect(folder, book)
-        lane.close()
+        _close(lane)
         outputs = {path.name[:-len(".avif")]: path.read_text().strip()
                    for path in tmp_path.glob("*.avif")}
         calls = tool.parent / "calls"
@@ -192,6 +209,7 @@ def test_a_page_the_cpu_wrote_nothing_for_is_missing_from_its_book(
     assert "exited 0 but wrote no image" in capfd.readouterr().err
 
 
+@_STUB_RUNS
 def test_a_page_is_encoded_while_its_book_is_still_being_sorted(tmp_path):
     """The lane takes each page as its line is written, not when the book's
     run exits; the book itself comes back only after READY. A line still being
@@ -230,7 +248,7 @@ def test_a_page_is_encoded_while_its_book_is_still_being_sorted(tmp_path):
     assert wait_for(lambda: (tmp_path / "p2.jpg.avif").exists())
     assert finished == []
     open(f"{folder}/{gpulane.READY}", "w").close()
-    lane.close()
+    _close(lane)
     assert finished == ["book"]
     assert (tmp_path / "p2.jpg.avif").read_text().strip() == "GPU"
 
@@ -258,4 +276,64 @@ def test_a_book_is_unpacked_for_the_cpu_only_once_the_card_failed(tmp_path):
         assert not lane.has_room()      # the card has enough; the CPU waits
     finally:
         lane.broken = True
-        lane.close()
+        _close(lane)
+
+
+def _cpu_book(lane, tmp_path, pages):
+    """A book of <pages> for the card, each with a CPU encode that writes
+    "CPU" to its output - one any platform can run."""
+    folder = lane.folder()
+    with open(f"{folder}/{gpulane.MANIFEST}", "w") as manifest:
+        for page in pages:
+            source, output = tmp_path / page, tmp_path / (page + ".avif")
+            source.write_text(page)
+            manifest.write(json.dumps({
+                "input": str(source), "output": str(output),
+                "pixels": 1_000_000,
+                "cpu": [sys.executable, "-c",
+                        "import sys; open(sys.argv[1], 'w').write('CPU')",
+                        str(output)]}) + "\n")
+    open(f"{folder}/{gpulane.READY}", "w").close()
+    return folder
+
+
+def test_an_encoder_that_cannot_be_run_at_all_sends_it_all_to_the_cpu(
+        tmp_path):
+    """Not one that starts and fails, but one whose call raises - here, it is
+    not there. Its chunk was once left running forever, and close() waited
+    for it."""
+    finished: list = []
+    said: list[str] = []
+    root = tmp_path / "lane"
+    root.mkdir()
+    lane = gpulane.Lane(str(tmp_path / "no-such-encoder"), str(root), 60,
+                        "turbo", "444", finished.append, 2, said.append)
+    lane.expect(_cpu_book(lane, tmp_path, ["p1.jpg", "p2.jpg"]), "one")
+    _close(lane)
+    assert finished == ["one"]
+    assert lane.broken and not lane.failed
+    assert lane.cpu_pages == 2 and not lane.missing
+    assert {path.name: path.read_text() for path in tmp_path.glob("*.avif")} \
+        == {"p1.jpg.avif": "CPU", "p2.jpg.avif": "CPU"}
+    assert any("could not be run" in line for line in said)
+
+
+def test_a_lane_thread_that_dies_does_not_hang_the_close(tmp_path,
+                                                          monkeypatch):
+    """Whatever a dead thread held is given up on, said, and the lane still
+    closes: the watcher here, with its book never collected."""
+    said: list[str] = []
+
+    def collect(_self, _book):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(gpulane.Lane, "_collect", collect)
+    root = tmp_path / "lane"
+    root.mkdir()
+    lane = gpulane.Lane(str(tmp_path / "no-such-encoder"), str(root), 60,
+                        "turbo", "444", lambda item: None, 2, said.append)
+    lane.expect(_cpu_book(lane, tmp_path, ["p1.jpg"]), "one")
+    _close(lane, seconds=10)
+    assert lane.failed
+    assert any("lane-watch stopped" in line for line in said)
+    assert lane.wait_for_room() == ""
