@@ -806,9 +806,11 @@ def _already_improved(movie: str) -> bool:
 
     The "(old)" copy beside it says so, matched by the name it WOULD be given
     rather than the name it has: it is the one file the tagging leaves alone, so
-    it still carries the version name its film was imported under.
+    it still carries the version name its film was imported under. Where a
+    drop-backups run has verified the copy and deleted that original, the tag
+    it wrote in the copy's place says it.
     """
-    return bool(convertphase.kept_original(movie))
+    return convertphase.is_ingested(movie)
 
 
 def check_folders(root: str) -> None:
@@ -966,7 +968,8 @@ def main(argv: list, program: str = "ingest-movies",
     if result.values.get("writeTags") and not (
             result.values.get("tagsOnly") or result.values.get("idList")
             or result.values.get("subtitlesOnly")
-            or result.values.get("commentaryNames")):
+            or result.values.get("commentaryNames")
+            or result.values.get("dropBackups")):
         for letter, key in (("a", "commentaryOnly"), ("c", "chaptersOnly"),
                             ("p", "plexOnly")):
             if result.values.get(key):
@@ -981,10 +984,10 @@ def main(argv: list, program: str = "ingest-movies",
         clioptions.refuse_usage(
             declaration,
             "-w on its own does nothing to carry out: it is what turns the dry "
-            "run of -t,\n-i or -s into the real thing, and none was given. "
+            "run of -t,\n-i, -s or -d into the real thing, and none was given. "
             "Without one of them this is a\nFULL INGEST - converting, "
             "transcribing and remuxing - which -w has no part in.\n\n"
-            "Did you mean -tw, -iw or -sw?")
+            "Did you mean -tw, -iw, -sw or -dw?")
         return 1
 
     # -a is the commentary phase on its own and -t and -i the tagging phase:
@@ -1070,7 +1073,7 @@ def main(argv: list, program: str = "ingest-movies",
         for letter, key in (("a", "commentaryOnly"), ("n", "commentaryNames"),
                             ("c", "chaptersOnly"), ("p", "plexOnly"),
                             ("s", "subtitlesOnly"), ("t", "tagsOnly"),
-                            ("i", "idList")):
+                            ("i", "idList"), ("d", "dropBackups")):
             if result.values.get(key):
                 clioptions.refuse_usage(
                     declaration,
@@ -1085,7 +1088,7 @@ def main(argv: list, program: str = "ingest-movies",
         for letter, key in (("a", "commentaryOnly"), ("n", "commentaryNames"),
                             ("c", "chaptersOnly"), ("p", "plexOnly"),
                             ("s", "subtitlesOnly"), ("t", "tagsOnly"),
-                            ("i", "idList")):
+                            ("i", "idList"), ("d", "dropBackups")):
             if result.values.get(key):
                 clioptions.refuse_usage(
                     declaration,
@@ -1100,7 +1103,7 @@ def main(argv: list, program: str = "ingest-movies",
         for letter, key in (("a", "commentaryOnly"), ("n", "commentaryNames"),
                             ("c", "chaptersOnly"), ("p", "plexOnly"),
                             ("s", "subtitlesOnly"), ("t", "tagsOnly"),
-                            ("i", "idList")):
+                            ("i", "idList"), ("d", "dropBackups")):
             if result.values.get(key):
                 clioptions.refuse_usage(
                     declaration,
@@ -1108,6 +1111,21 @@ def main(argv: list, program: str = "ingest-movies",
                     "-%s does one phase\nof its own: give the folders to each "
                     "of them in turn." % letter)
                 return 1
+
+    # -d is a run of its own phase, and each of these is one too: the originals
+    # it drops are beside the films the tagging settled, so it runs after them
+    # rather than beside them.
+    if result.values.get("dropBackups") and any(
+            result.values.get(key) for key in (
+                "commentaryOnly", "commentaryNames", "chaptersOnly",
+                "plexOnly", "subtitlesOnly", "tagsOnly", "idList")):
+        clioptions.refuse_usage(
+            declaration,
+            "-d drops the originals the improved remuxes were kept beside and "
+            "nothing else, and\n-a, -n, -c, -p, -s, -t and -i each do a phase "
+            "of their own: they are two\nruns, not one. Tag first (-tw), so the "
+            "copies are settled, then run -d.")
+        return 1
 
     script_dir = script_dir or commands.script_dir()
 
@@ -1181,6 +1199,12 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
         return plexphase.compare_roots(roots, log,
                                        keeps_for=Run(
                                            keep_languages=kept).carry_keeps)
+
+    if result.values.get("dropBackups"):
+        if not _may_overwrite(script_dir, names, (BACKUPS_LIST,)):
+            return 1
+        return _drop_backups(program, script_dir, roots, names,
+                             bool(result.values.get("writeTags")), kept)
 
     # An id list is only ever read by the tagging phase, so asking for one asks
     # for that phase.
@@ -1362,6 +1386,11 @@ SUBTITLES_LIST = os.path.join(LOGS, "ingest-movies-subtitles-%s.txt")
 # on. One file for every folder, appended to rather than replaced - a film is
 # known by its id however it has since been moved or renamed.
 SUBTITLES_DONE = os.path.join(LOGS, "ingest-movies-subtitles-done.txt")
+
+# And the (old) originals a -d run kept because the improved copy failed its
+# check, with the reason: the worklist of a dry run, and under -w the record
+# of what was not dropped.
+BACKUPS_LIST = os.path.join(LOGS, "ingest-movies-backups-%s.txt")
 
 # And the commentary tracks a -n run named, or would name, and the films it
 # left alone with the reason for each.
@@ -1679,6 +1708,92 @@ def _subtitle_totals(totals: dict) -> str:
     if totals["untested"]:
         line += ", %d could not be tested" % totals["untested"]
     return line
+
+
+def _drop_backups(program: str, script_dir: str, roots: list, names: list,
+                  write: bool, kept: tuple) -> int:
+    """The drop-backups sweep: the "(old)" originals kept beside the improved
+    copies, asked the three things the copy was asked by, and dropped where it
+    stands up to them.
+
+    A dry run unless -w: the answer for each original is the check's - dropped
+    or not, and why not. With -w the copy that passes is tagged first, so a
+    later run does not remux the film again, and only then is the original
+    dropped: a tag that cannot be written keeps the original, since it is what
+    would then stand in for it.
+    """
+    tools = ["mkvmerge", "ffprobe"] + (["mkvpropedit"] if write else [])
+    if tooldeps.require_tools(program, tools):
+        return 1
+    log = _preview_log(write)
+    dropped = 0
+    held_back = 0
+    for root, name in zip(roots, names, strict=True):
+        log('Phase: checking the "(old)" originals kept beside the improved '
+            'copies in "%s"' % root
+            + ("" if write else " - DRY RUN, nothing will be changed"))
+        held: list = []
+        candidates = convertphase.drop_candidates([root])
+        if not candidates:
+            log("  No (old) original kept beside an improved copy")
+        for movie, old in candidates:
+            place = "./" + os.path.relpath(old, root)
+            reason = convertphase.backup_is_whole(movie, old, kept)
+            if not reason and write:
+                failure = convertphase.mark_ingested(movie)
+                if failure:
+                    reason = "the ingested tag could not be written: " + failure
+            if reason:
+                log("  %s - %s, %s"
+                    % (place, "kept" if write else "would be kept", reason))
+                held.append((place, reason))
+                held_back += 1
+            else:
+                if write:
+                    rules._remove(old)
+                log("  %s - %s" % (place, "dropped" if write
+                                   else "would be dropped"))
+                dropped += 1
+        _write_backup_list(commands.logs_file(script_dir, BACKUPS_LIST % name),
+                           root, held, write)
+        safety.exit_if_aborted()
+    if not write:
+        if dropped:
+            log("Dry run: nothing was changed. Pass -w to drop the %d "
+                "original%s." % (dropped, "s" if dropped != 1 else ""))
+        return 0
+    if dropped and held_back:
+        log("Dropped %d (old) original%s; %d kept, the copy failing its "
+            "check." % (dropped, "s" if dropped != 1 else "", held_back))
+    elif dropped:
+        log("Dropped %d (old) original%s."
+            % (dropped, "s" if dropped != 1 else ""))
+    elif held_back:
+        log("No (old) original dropped: %d kept, the copy failing its check."
+            % held_back)
+    return 0
+
+
+def _write_backup_list(listing: str, root: str, held: list,
+                       write: bool) -> None:
+    """The (old) originals one folder kept because the improved copy failed
+    its check, with the reason. A folder that dropped everything, or had
+    nothing to check, leaves no list - and removes the one an earlier run left,
+    which would otherwise read as still standing."""
+    if not held:
+        try:
+            os.remove(listing)
+        except OSError:
+            pass
+        return
+    with open(listing, "w", encoding="utf-8") as handle:
+        handle.write("# %s, the copy failing its check:\n"
+                     % ("Kept" if write else "Would be kept"))
+        for place, reason in held:
+            handle.write(place + "\n")
+            handle.write("    " + reason + "\n")
+    log('%d (old) original(s) in "%s" %s - listed in "%s"'
+        % (len(held), root, "kept" if write else "would be kept", listing))
 
 
 def _chapters_only(program: str, roots: list) -> int:

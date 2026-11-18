@@ -79,6 +79,7 @@ pointed at a library. A full ingest reads only the one level it always did.
 | [`-n`](#commentary-names--n) | naming numbered commentary tracks | dry run | names the tracks | `logs/ingest-movies/ingest-movies-commentarynames-<folder>.txt` | `-a` |
 | [`-c`](#chapters--c) | chapters from the ChapterDB archive | writes as it goes | refused | — | `-tw` |
 | [`-p`](#plex-comparison--p) | comparing with the Plex library | changes nothing | refused | — | `-tw` |
+| [`-d`](#dropping-the-old-backups--d) | dropping the `(old)` originals the checks passed | dry run: says which would be dropped and which would stay, with the reason | tags the copies and drops the originals | `logs/ingest-movies/ingest-movies-backups-<folder>.txt` | `-tw` |
 
 `-s`, `-a`, `-n` and `-c` take the films in name order and open each with
 `[n/total] <film>`, its place in the folder, so a film nothing is done to still
@@ -86,10 +87,10 @@ shows up. What is said about that film follows, indented under it. For `-a`
 that is one line per commentary track. Each transcription finishes in a worker
 later and names its own transcript, and so does each chapter write.
 
-**`-w` on its own is refused.** Without `-t`, `-i`, `-s` or `-n` there is no dry
-run to carry out, and the run it would otherwise start is a full ingest. `-a`
-and `-c` refuse it as well: the transcription and the chapter lookup are not dry
-runs, so there is nothing for `-w` to carry out. Nor is `-p`, which changes
+**`-w` on its own is refused.** Without `-t`, `-i`, `-s`, `-n` or `-d` there is
+no dry run to carry out, and the run it would otherwise start is a full ingest.
+`-a` and `-c` refuse it as well: the transcription and the chapter lookup are not
+dry runs, so there is nothing for `-w` to carry out. Nor is `-p`, which changes
 nothing.
 
 Following those dependencies, a library is brought up to date in this order:
@@ -102,6 +103,7 @@ ingest-movies -a  ~/Films     # transcribe the commentaries
 ingest-movies -nw ~/Films     # name them from those transcripts
 ingest-movies -c  ~/Films     # chapters for the tagged films
 ingest-movies -p  ~/Films     # which of them the Plex library already has
+ingest-movies -dw ~/Films     # drop the (old) originals the checks passed
 ```
 
 ## What a full ingest does
@@ -257,7 +259,10 @@ is thrown away and the original left alone.
 
 The original is preserved as `<name> (old).mkv`, so nothing is lost and a rerun
 is a no-op — which is also what makes the Dolby Vision work a one-time job per
-film: a film that already has its `(old)` backup is not remuxed again.
+film: a film that already has its `(old)` backup is not remuxed again. Once the
+copy has stood the checks, [`-d`](#dropping-the-old-backups--d) drops that
+backup, and the tag it wrote in the backup's place is what keeps the film done
+from then on.
 
 ### The Plex names
 
@@ -796,6 +801,38 @@ fetched subtitles for, and a later `-t` rename does not rename it. Converting th
 same remux again is left to convert-video: a copy as long as its film is skipped,
 and an unfinished one is redone. `-r` is refused alongside any of the
 single-task sweeps.
+
+## Dropping the `(old)` backups (`-d`)
+
+**`-d` drops the `(old)` originals the improved copies were kept beside, and
+nothing else.** It is the end of the remux's work: a film whose original still
+stands beside it as `<name> (old).mkv` is asked about its copy, and the backup
+goes where the copy is the whole of the original.
+
+The copy is asked three things:
+
+| Check | Standard |
+| --- | --- |
+| the same length as the original | the library's own length measure — the one the ingest applied when it accepted the copy |
+| a video stream | the copy is the film, not a soundtrack that lost its picture |
+| at least the tracks the rules keep | the rules' own answer for the original's tracks — the same decision the copy was made by. A copy the rules would not have made is not the one that stands in for the original |
+
+**A dry run unless `-w` is given.** It says which original would be dropped and
+which would stay, with the reason, and changes nothing on disk. The ones kept
+are listed per folder, one per line under a heading that says why:
+
+    logs/ingest-movies/ingest-movies-backups-<folder>.txt
+
+With `-w` the copy that passes is tagged first — `MEDIALIB_INGESTED`, written
+with mkvpropedit the way the tagging writes and the file's time put back — and
+only then is its original dropped. A copy the tag cannot be written on keeps
+its original: the tag is what would stand in for the backup, and the backup is
+not dropped in favour of nothing.
+
+The tag is what tells a later run the film is done: the "already remuxed" check
+accepts either the `(old)` backup or the tag in its place, so a film whose
+backup has been dropped is not remuxed a second time. `-d` is refused alongside
+the other single-task sweeps.
 
 ## Keeping everything (`-k`)
 

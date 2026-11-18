@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import tempfile
 
 from medialib import commands
 from medialib.cli import convert_video_source as videosource
@@ -29,6 +30,8 @@ from medialib.cli import ingest_movies_plex as plexphase
 from medialib.lib import (
     adequacy,
     codecs,
+    durationcheck,
+    filmrecord,
     plexnames,
     ramscratch,
     resolutions,
@@ -36,7 +39,14 @@ from medialib.lib import (
     videobitrate,
 )
 
-__all__ = ["convert_remuxes", "kept_original", "named_remuxes", "remux_reason"]
+__all__ = ["backup_is_whole", "convert_remuxes", "drop_candidates",
+           "has_ingested_tag", "is_ingested", "kept_original", "mark_ingested",
+           "named_remuxes", "remux_reason"]
+
+# The tag the drop-backups sweep writes onto a film whose "(old)" original has
+# been verified and deleted, so the "already remuxed" check still answers yes
+# once the backup that used to say it is gone.
+INGESTED_TAG = "MEDIALIB_INGESTED"
 
 # The word a release names itself a remux with, in any case.
 REMUX_WORD = "remux"
@@ -209,3 +219,134 @@ def convert_remuxes(root: str, named: set, ram_root: str, script_dir: str,
         log("  WARNING: convert-video ended with status %d; what it finished "
             "is kept beside its film" % status)
     return status
+
+
+# --- the (old) backups the drop-backups sweep is asked about ------------------
+
+def drop_candidates(roots: list) -> list:
+    """``(movie, old)`` for every film under the roots that has the ``(old)``
+    copy its improved original was kept beside, in walk order - the films the
+    drop-backups sweep is asked about.
+
+    Walked the way the improve phase walks: one film per folder, and the film
+    is the file the tagging left living while its original was kept to one
+    side.
+    """
+    pairs = []
+    for root in roots:
+        for directory in [root] + rules._folders_below(root):
+            if rules.is_bonus_folder(directory):
+                continue
+            base, _tag = plexnames.untagged_base(os.path.basename(
+                directory.rstrip("/")))
+            names = [name for name in rules._names_in(directory)
+                     if os.path.isfile(os.path.join(directory, name))]
+            for name in plexnames.one_film_in(base, names):
+                movie = os.path.join(directory, name)
+                old = kept_original(movie)
+                if old:
+                    pairs.append((movie, old))
+    return pairs
+
+
+def backup_is_whole(movie: str, old: str, kept: tuple = ("en",)) -> str:
+    """``""`` when the improved copy ``movie`` is the whole of the original
+    ``old`` it was kept from, else the reason it is not.
+
+    The three things a drop-backups run asks of the copy before the original
+    goes: the same length, a video stream, and at least the tracks the rules
+    keep. The length is the library's own measure - the one the ingest applied
+    when it accepted the copy - and the kept tracks are the rules' own answer
+    for the original's tracks, the same decision the copy was made by: a copy
+    the rules would not have made is not the one that stands in for the
+    original.
+    """
+    new_length = durationcheck.media_duration(movie)
+    old_length = durationcheck.media_duration(old)
+    if old_length <= 0 or new_length <= 0:
+        return "the length of one of the two could not be read"
+    if not durationcheck.length_matches(old_length, new_length):
+        return ("the copy is not the same length as the original (%d s "
+                "against %d s)" % (round(new_length), round(old_length)))
+    tracks = rules._identify(movie)
+    if not tracks:
+        return "the copy's tracks could not be read"
+    if not any(track.is_video for track in tracks):
+        return "the copy has no video stream"
+    original = rules._identify(old)
+    if not original:
+        return "the original's tracks could not be read"
+    rules._object_flags(old, original)
+    rules.decide_actions(original, movie, "", original="", spoken=(),
+                         kept=kept)
+    rules.drop_audio_descriptions(original)
+    rules.apply_surround_ladder(original)
+    kept_audio = sum(1 for track in original
+                     if track.is_audio and track.action != "drop")
+    kept_subtitles = sum(1 for track in original
+                         if track.is_subtitle and track.action != "drop")
+    audio = sum(1 for track in tracks if track.is_audio)
+    subtitles = sum(1 for track in tracks if track.is_subtitle)
+    if audio < kept_audio:
+        return ("the copy has %d audio track%s where the rules keep %d"
+                % (audio, "s" if audio != 1 else "", kept_audio))
+    if subtitles < kept_subtitles:
+        return ("the copy has %d subtitle track%s where the rules keep %d"
+                % (subtitles, "s" if subtitles != 1 else "", kept_subtitles))
+    return ""
+
+
+def has_ingested_tag(movie: str) -> bool:
+    """Whether the file carries the ingested tag the drop-backups sweep writes,
+    read the way every other tag here is read: off the file itself."""
+    text = rules._probe(["ffprobe", "-v", "quiet", "-show_entries",
+                         "format_tags", "-of", "default=nw=1", movie])
+    for line in text.splitlines():
+        name, sep, _value = line.partition("=")
+        if not sep:
+            continue
+        name = name[len("TAG:"):]
+        if name.strip().lower() == INGESTED_TAG.lower():
+            return True
+    return False
+
+
+def mark_ingested(movie: str) -> str:
+    """Write the ingested tag onto ``movie``; "" when done, else the reason.
+
+    Written with mkvpropedit the way the tagging writes, and the file's
+    modification time put back, so the tag does not count as an edit of the
+    film.
+    """
+    xml = ('<?xml version="1.0" encoding="UTF-8"?>\n<Tags>\n  <Tag>\n'
+           '    <Simple>\n      <Name>%s</Name>\n      <String>1</String>\n'
+           '    </Simple>\n  </Tag>\n</Tags>\n' % INGESTED_TAG)
+    descriptor, tag = tempfile.mkstemp(prefix="medialib-ingested-",
+                                       suffix=".xml")
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(xml)
+        try:
+            original = os.stat(movie).st_mtime
+        except OSError:
+            original = None
+        failure = rules._run_capture(["mkvpropedit", movie, "--tags",
+                                      "global:" + tag])
+        filmrecord.forget(movie)
+        if original is not None:
+            try:
+                os.utime(movie, (original, original))
+            except OSError:
+                pass
+        return failure
+    finally:
+        rules._remove(tag)
+
+
+def is_ingested(movie: str) -> bool:
+    """Whether this film's improved copy is known to exist: the ``(old)`` copy
+    it was kept from, or the tag the drop-backups sweep writes once that copy
+    is gone."""
+    if kept_original(movie):
+        return True
+    return has_ingested_tag(movie)
