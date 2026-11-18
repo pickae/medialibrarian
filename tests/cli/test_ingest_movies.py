@@ -5,6 +5,8 @@ are library functions with white boxes of their own, so what is here is the five
 rules this script owns.
 """
 
+import os
+
 import pytest
 
 from medialib.cli import ingest_movies as im
@@ -552,5 +554,58 @@ class TestKeepEverythingDropsNothing:
         tracks = TestTheFilmsOriginalLanguage()._tracks()
         assert im.decide_actions(tracks, str(tmp_path / "film.mkv"),
                                  str(tmp_path / "ram"), "en", ("en",),
-                                 keep_all=True) is False
+                                 keep_parts=frozenset({"audio", "tracks"})) \
+            is False
         assert [t.action for t in tracks] == ["keep"] * len(tracks)
+
+    def _with_the_opus_of_track_three_in_ram(self, tmp_path, monkeypatch):
+        """The opus of track 3 waiting in the ram scratch, the way the
+        transcode leaves it: isfile, the only way decide_actions sees it, is
+        stubbed, because the mirror of the film's own path under the scratch
+        that opus_path works out is not a directory every platform can make."""
+        movie = str(tmp_path / "film.mkv")
+        opus = im.opus_path(str(tmp_path / "ram"), movie, "3")
+        real = os.path.isfile
+
+        def isfile(path):
+            return path == opus or real(path)
+        monkeypatch.setattr(im.os.path, "isfile", isfile)
+        return movie
+
+    def test_the_audio_part_swaps_nothing_but_still_drops(
+            self, tmp_path, monkeypatch):
+        """The part takes away the opus swap, not the drops: the excessive
+        languages still go, and the lossless track that stays is not swapped
+        for its opus."""
+        tracks = TestTheFilmsOriginalLanguage()._tracks()
+        movie = self._with_the_opus_of_track_three_in_ram(tmp_path,
+                                                          monkeypatch)
+        assert im.decide_actions(tracks, movie, str(tmp_path / "ram"),
+                                 "en", ("en",),
+                                 keep_parts=frozenset({"audio"}))
+        assert [t.action for t in tracks] == [
+            "keep", "drop", "drop", "keep", "keep", "drop", "drop"]
+
+    def test_without_it_the_lossless_track_is_swapped_for_its_opus(
+            self, tmp_path, monkeypatch):
+        tracks = TestTheFilmsOriginalLanguage()._tracks()
+        movie = self._with_the_opus_of_track_three_in_ram(tmp_path,
+                                                          monkeypatch)
+        assert im.decide_actions(tracks, movie, str(tmp_path / "ram"),
+                                 "en", ("en",))
+        assert [t.action for t in tracks] == [
+            "keep", "drop", "drop", "swap", "keep", "drop", "drop"]
+
+    def test_the_tracks_part_drops_nothing_but_still_swaps(self, tmp_path,
+                                                           monkeypatch):
+        """The part takes away the drops, not the opus: every track stays,
+        and the lossless one is swapped for its opus the way a run that
+        keeps its languages does."""
+        tracks = TestTheFilmsOriginalLanguage()._tracks()
+        movie = self._with_the_opus_of_track_three_in_ram(tmp_path,
+                                                          monkeypatch)
+        assert im.decide_actions(tracks, movie, str(tmp_path / "ram"),
+                                 "en", ("en",),
+                                 keep_parts=frozenset({"tracks"}))
+        assert [t.action for t in tracks] == [
+            "keep", "keep", "keep", "swap", "keep", "keep", "keep"]

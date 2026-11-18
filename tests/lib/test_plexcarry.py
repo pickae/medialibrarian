@@ -31,9 +31,10 @@ def _profile(audio=None, commentaries=(), others=(), chapters=0, named=False,
 
 
 def _plan(new, old, timing=STEADY, untimed="", keeps=lambda _a: True,
-          transcripts=lambda _a: (), chapters=None, keep_all=False):
+          transcripts=lambda _a: (), chapters=None, keep_audio=False,
+          keep_tracks=False):
     return pcy.plan(new, old, timing, untimed, keeps, transcripts, chapters,
-                    keep_all)
+                    keep_audio, keep_tracks)
 
 
 NAMED = chapterdb.Existing(5942.0, ("Prologue", "Opening credits", "Harbour"),
@@ -120,21 +121,28 @@ class TestCarriedAudio:
         (item,) = _plan(_profile(), old, timing=DRIFTING).audio
         assert item.encode and item.stretch
 
-    def test_keeping_everything_takes_a_lossless_track_as_it_is(self):
+    def test_the_audio_part_takes_a_lossless_track_as_it_is(self):
         old = _profile(path="old.mkv", commentaries=[
             _audio(channels=2, name="With the director", track=2,
                    lossless=True)])
-        (item,) = _plan(_profile(), old, keep_all=True).audio
+        (item,) = _plan(_profile(), old, keep_audio=True).audio
         assert not item.encode and not item.stretch
         assert "to opus" not in _plan(_profile(), old,
-                                      keep_all=True).carried[0]
+                                      keep_audio=True).carried[0]
 
-    def test_keeping_everything_leaves_a_lossless_track_at_another_speed(
+    def test_and_the_other_parts_encode_it(self):
+        old = _profile(path="old.mkv", commentaries=[
+            _audio(channels=2, name="With the director", track=2,
+                   lossless=True)])
+        (item,) = _plan(_profile(), old, keep_tracks=True).audio
+        assert item.encode and not item.stretch
+
+    def test_the_audio_part_leaves_a_lossless_track_at_another_speed(
             self):
         old = _profile(path="old.mkv", commentaries=[
             _audio(channels=2, name="With the director", track=2,
                    lossless=True)])
-        found = _plan(_profile(), old, timing=DRIFTING, keep_all=True)
+        found = _plan(_profile(), old, timing=DRIFTING, keep_audio=True)
         assert found.audio == ()
         assert "a lossless track cannot be put to the new one's" \
             in found.left[0]
@@ -202,6 +210,14 @@ class TestCarriedAudio:
         described = _audio("ger", 2, "Audio Description", track=3)
         old = _profile(path="old.mkv", others=[described])
         (item,) = _plan(_profile(), old).audio
+        assert (item.kind, item.audio) == ("other", described)
+
+    def test_the_tracks_part_takes_it_beside_a_soundtrack_in_its_language(
+            self):
+        """The part takes away the drop, so the description goes across."""
+        described = _audio("fre", 2, "Audio Description", track=3)
+        old = _profile(path="old.mkv", others=[described])
+        (item,) = _plan(_profile(), old, keep_tracks=True).audio
         assert (item.kind, item.audio) == ("other", described)
 
 

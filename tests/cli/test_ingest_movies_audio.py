@@ -361,7 +361,7 @@ class TestOnlyTheFilmsToImprove:
         assert walked == ["Film (2020).mkv"]
 
 
-class TestKeepEverythingTranscodesNothing:
+class TestTheKeptAudioTranscodesNothing:
     def test_every_film_is_ready_for_the_remux_at_once(self, tmp_path,
                                                        monkeypatch):
         import types
@@ -376,7 +376,8 @@ class TestKeepEverythingTranscodesNothing:
         monkeypatch.setattr(im, "check_audio_tracks",
                             lambda movie, root, ram_root: walked.append(movie))
         run_module._transcode_opus(
-            types.SimpleNamespace(ram_root="/ram", keep_all=True),
+            types.SimpleNamespace(ram_root="/ram",
+                                  keep_parts=frozenset({"audio"})),
             str(tmp_path), jobs=1, on_done=ready.append, exit_on_abort=False)
         assert walked == []
         assert [os.path.basename(movie) for movie in ready] \
