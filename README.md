@@ -7,7 +7,7 @@ described under [File safety](docs/file-safety.md). What they print, and the `-v
 `-q` that set how much, is described under
 [What a run prints](docs/output.md).
 
-Each is an installed command. From a checkout, `pip install .` puts all twenty
+Each is an installed command. From a checkout, `pip install .` puts all twenty-one
 on your PATH; `pip install -e .` does the same and keeps them running the
 checkout, which is what you want while editing it. Under a plain `pip install .`
 the per-machine files — the `data/` tables, the `logs/` logs — live under
@@ -67,6 +67,7 @@ apply to it.
 | [`convert-audio`](docs/commands/convert-audio.md) | Spoken-word audio → low-bitrate Opus or xHE-AAC |
 | [`convert-and-concat`](docs/commands/convert-and-concat.md) | The two above chained, intermediate tree in RAM |
 | [`transcribe-audio`](docs/commands/transcribe-audio.md) | Audio and video → whisper transcripts in a mirrored folder |
+| [`generate-chapters`](docs/commands/generate-chapters.md) | Chapter marks and titles for spoken word, by a language model reading its transcript |
 | [`ingest-music`](docs/commands/ingest-music.md) | Downloads → clean lossless FLAC library |
 | [`ytdlp`](docs/commands/ytdlp.md) | Download tables of podcast feeds as audio or video, Windows or Linux |
 
@@ -124,7 +125,7 @@ option can never change what a command you already type means.
   `pdfinfo`, `pdfimages`, `pdftotext`),
   `whisper-ctranslate2`, `ffsubsync`, `tree`, `beets`, Calibre's `ebook-convert`,
   Ghostscript (`gs`), `duckdb`, [subcleaner](https://github.com/KBlixt/subcleaner),
-  `curl` (for TheMovieDB, Plex and Letterboxd) and `wc` — that last one being the
+  `curl` (for TheMovieDB, Plex, Letterboxd and the chapter model) and `wc` — that last one being the
   only piece of coreutils anything here still shells out to.
 - `convert-audio -o xheaac` additionally needs
   [exhale](https://gitlab.com/ecodis/exhale), which ffmpeg cannot stand in for:
@@ -138,6 +139,10 @@ option can never change what a command you already type means.
 - `convert-video -u` additionally needs an NVIDIA GPU and a VapourSynth +
   TensorRT environment of its own, one piece of which has to be built (see
   [`convert-video`](docs/commands/convert-video.md)).
+- `generate-chapters` and `convert-audio -t` additionally need a language model to
+  ask: any server speaking OpenAI's chat protocol, local (Ollama, llama.cpp,
+  vLLM…) or hosted, or Claude through the `anthropic` package (`pip install
+  anthropic`) (see [`generate-chapters`](docs/commands/generate-chapters.md#which-model)).
 - The GPU road for AVIF in `convert-images` and `convert-comics` is
   [av1gpu](https://github.com/maddog107/av1gpu), which has to be built (see
   [`convert-images`](docs/commands/convert-images.md#on-the-gpu)); without it

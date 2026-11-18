@@ -38,6 +38,8 @@ __all__ = [
     "extract_chapters",
     "attach_chapters",
     "attach_mp4_chapters",
+    "chapter_count",
+    "write_chapters",
 ]
 
 Runner = Callable[..., "toolcapture.ToolRun"]
@@ -702,3 +704,38 @@ def _move_over(src: str, dst: str) -> int:
     except OSError:
         _remove_quiet(src)
         return 1
+
+def chapter_count(path: str,
+                  probe: Callable[[str], str] = _flat_chapters) -> int:
+    """How many chapters a file carries, by ffprobe's reading of it."""
+    return len(_flat_entries(probe(path)))
+
+
+def write_chapters(target: str, chapter_lines: Sequence[str], tmp_dir: str,
+                   run: Runner = _run) -> int:
+    """The rows written into a finished file IN PLACE, replacing whatever
+    chapters it had and keeping every other tag.
+
+    A Vorbis-comment file takes them with mutagen; an MP4 takes a chapter
+    track, rewritten by ffmpeg into ``tmp_dir`` and moved over the target, its
+    own tags mapped across - unlike :func:`_embed_mp4_chapters`, which builds a
+    book whose tags are the ones this module writes.
+    """
+    rows = os.path.join(tmp_dir, "generated.chapters.txt")
+    with open(rows, "w", encoding="utf-8") as handle:
+        handle.write("\n".join(chapter_lines) + "\n")
+    if not _is_mp4(target):
+        return mutagentags.embed_chapters(target, rows, force=True)
+    duration = _duration_ms(_probe_duration(target))
+    metadata_file = os.path.join(tmp_dir, "generated.ffmetadata")
+    with open(metadata_file, "w", encoding="utf-8") as handle:
+        handle.write(ffmetadata_chapters(chapter_lines, "", duration))
+    staged = os.path.join(tmp_dir, "generated" + os.path.splitext(target)[1])
+    _remove_quiet(staged)
+    run(["ffmpeg", "-nostdin", "-hide_banner", *toolcapture.ffmpeg_loglevel(),
+         "-y", "-i", target, "-i", metadata_file, "-map", "0", "-map_metadata", "0",
+         "-map_chapters", "1", "-c", "copy", staged])
+    if not os.path.isfile(staged) or os.path.getsize(staged) <= 0:
+        _remove_quiet(staged)
+        return 1
+    return _move_over(staged, target)

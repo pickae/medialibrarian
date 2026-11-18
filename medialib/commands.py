@@ -1,4 +1,4 @@
-"""The twenty commands: what each is called, and which module is it.
+"""The twenty-one commands: what each is called, and which module is it.
 
 One table, because three separate things need exactly this mapping and must not
 disagree about it - the console scripts ``pyproject.toml`` installs, the program
@@ -37,6 +37,7 @@ COMMANDS = {
     "cue-to-chapters": "medialib.cli.cue_to_chapters",
     "find-fragment-candidates": "medialib.cli.find_fragment_candidates",
     "find-gaps": "medialib.cli.find_gaps",
+    "generate-chapters": "medialib.cli.generate_chapters",
     "ingest-books": "medialib.cli.ingest_books",
     "ingest-movies": "medialib.cli.ingest_movies_run",
     "ingest-music": "medialib.cli.ingest_music",

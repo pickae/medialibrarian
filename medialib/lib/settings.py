@@ -70,8 +70,11 @@ _FFMPEG = ("concat-audio", "content-census", "convert-and-concat", "convert-audi
 # Every command that keeps scratch in RAM.
 _SCRATCH = ("concat-audio", "content-census", "content-census-bi", "convert-and-concat",
             "convert-audio", "convert-comics", "convert-images", "convert-video",
-            "ingest-books", "ingest-movies", "ingest-music", "read-library",
+            "generate-chapters", "ingest-books", "ingest-movies", "ingest-music", "read-library",
             "transcribe-audio", "ytdlp")
+
+# Every command that asks a language model for chapters.
+_AI_CHAPTERS = ("convert-audio", "generate-chapters")
 
 SETTINGS: tuple[Setting, ...] = (
     # --- logins and keys
@@ -111,7 +114,8 @@ SETTINGS: tuple[Setting, ...] = (
              "content-census", "content-census-bi", "convert-and-concat",
              "convert-audio", "convert-comics", "convert-images", "convert-video",
              "cue-to-chapters", "find-fragment-candidates", "find-gaps",
-             "ingest-books", "ingest-movies", "ingest-music", "plex-letterboxd-sync",
+             "generate-chapters", "ingest-books", "ingest-movies", "ingest-music",
+             "plex-letterboxd-sync",
              "read-library", "transcribe-audio", "ytdlp"), "normal"),
     # --- where work is done
     Setting("ramScratchBase", "Where each run's scratch directories go",
@@ -153,6 +157,30 @@ SETTINGS: tuple[Setting, ...] = (
             "`https://cdn.jsdelivr.net/npm`"),
     Setting("viewerPerspectiveVersion", "Which release of that engine the page loads",
             ("content-census-bi",), "5.3.0"),
+    # --- chapters made by a language model
+    Setting("chapterLlmApi", "The protocol the chapter model is asked over: `openai` "
+            "for any server speaking OpenAI's chat protocol - Ollama, llama.cpp, vLLM, "
+            "LM Studio and most hosted APIs - or `anthropic` for Claude",
+            _AI_CHAPTERS, "`openai`"),
+    Setting("chapterLlmUrl", "That server's address, up to and including the `/v1`, "
+            "e.g. `http://localhost:11434/v1`; for `anthropic`, only to reach another "
+            "endpoint than Anthropic's own", _AI_CHAPTERS,
+            "unset - required for `openai`"),
+    Setting("chapterLlmModel", "The model's name as that server knows it",
+            _AI_CHAPTERS, "unset - required for `openai`; `claude-opus-5-5` for "
+            "`anthropic`"),
+    Setting("chapterLlmKey", "The API key, where the server asks for one; for "
+            "`anthropic`, `ANTHROPIC_API_KEY` or an `ant auth login` profile does too",
+            _AI_CHAPTERS, secret=True),
+    Setting("chapterLlmContext", "How many tokens the model's context window holds, "
+            "as the server runs it: a transcript longer than fits is summarised in "
+            "parts before it is chaptered", _AI_CHAPTERS, "32000"),
+    Setting("chapterLlmOptions", "More fields for every request over the `openai` "
+            "protocol, as a JSON object - whatever that server takes, e.g. "
+            "`{\"reasoning_effort\": \"low\"}` or `{\"temperature\": 0.2}`; an output "
+            "limit given here replaces the one the run works out", _AI_CHAPTERS),
+    Setting("chapterLlmJobs", "How many requests are sent to the model at once",
+            _AI_CHAPTERS, "2"),
     # --- comic PDFs
     Setting("comicPdfExtensions", "The file suffixes that may be comic PDFs, "
             "space-separated", ("content-census",), "pdf"),

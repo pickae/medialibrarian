@@ -11,7 +11,7 @@ over chapters and cover art.
 | **Writes** | the converted files under `<outputDir>`; with `-c`, the rest copied verbatim beside them |
 | **Input** | file extensions lower-cased and `.jpeg` renamed to `.jpg`; nothing else is changed |
 | **Reruns** | an up-to-date output is skipped |
-| **Network** | none |
+| **Network** | none, except the language model's server under `-t` |
 
 ## Default behavior
 
@@ -21,6 +21,7 @@ With no options, a run:
 - re-encodes only what is at or above 90 kbps, or in a format not worth keeping, and **leaves smaller files out of the output** ([below](#what-gets-re-encoded); `-c` copies them)
 - **splits files longer than 10000 s** into chunks that encode in parallel (`-s`)
 - carries chapters and cover art over, and copies images across
+- writes a transcript found beside a source into its output ([below](#transcripts))
 - **lower-cases file extensions in the input**, and renames `.jpeg` to `.jpg`
 - runs one encoder per CPU thread (`-j`)
 
@@ -84,6 +85,28 @@ length to the sample.
 No distribution packages exhale, so it has to be built from its
 [repository](https://gitlab.com/ecodis/exhale). A run that asks for this codec
 without it says where to build it from and offers `-e opus` instead.
+
+## Transcripts
+
+A transcript beside a source, named after it (`<name>.srt`, `.vtt` or `.lrc`,
+or with a language code in front: `<name>.en.srt`), is written into the output.
+An Opus or FLAC file takes it as timed lyrics (LRC in the `LYRICS` comment),
+which audio players show in step with the playback. Ogg has no subtitle stream
+ffmpeg can write, so lyrics are how a transcript fits in an Opus file without
+switching it to Matroska. An `.m4a` takes it as a subtitle track. An output
+that carries a transcript already is left as it is.
+
+## Chapters for what has none (`-t`)
+
+With `-t`, every output whose source has no chapters gets some, worked out by a
+language model from a transcript of the speech, exactly as
+[`generate-chapters`](generate-chapters.md) does it and with the same
+settings. The transcript is the sidecar where there is one. Otherwise the
+outputs are transcribed by `transcribe-audio` once all the encoding is done, and
+that transcript goes into the output with the chapters. A source with chapters
+of its own keeps them and is not sent to the model. A rerun tries again only for
+outputs that still have none. Without a usable model, `-t` is refused before
+anything is encoded.
 
 ## Every conversion is measured
 

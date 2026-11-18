@@ -48,7 +48,9 @@ import time
 
 from medialib import commands
 from medialib.lib import (
+    aichapters,
     bitrates,
+    chapterllm,
     chapters,
     chunkdecision,
     clioptions,
@@ -71,6 +73,7 @@ from medialib.lib import (
     thumbnails,
     toolcapture,
     tooldeps,
+    transcripttags,
     workerpool,
     xheaac,
 )
@@ -80,6 +83,9 @@ USAGE_HEAD = """Usage:
     {program} [options] <inputDir> <outputDir>
 Video files are ingested as well: their audio stream is extracted and converted
 like any other input.
+A transcript beside a source (<name>.srt, .vtt or .lrc, or with a language code:
+<name>.en.srt) is written into its output: as timed lyrics in an Opus file, as a
+subtitle track in an .m4a.
 Options:"""
 
 CREDITS_LINE = "ingest spoken word audio files"
@@ -134,6 +140,12 @@ g | <depth> | Judge the files under each folder <depth> levels into
                     out half converted. A video, or a format that is always
                     converted, has its whole folder converted with it.
                     Cannot be combined with -a.
+t |  | Add chapters to every output whose source has none, worked
+                    out by a language model (the chapterLlm settings) from a
+                    transcript of the speech, and write the transcript into
+                    the output as well. A transcript sidecar is used rather
+                    than transcribing again.
+                    Default false
 """.format(codecs=" or ".join(enums.AUDIO_CODECS),
            encoders=xheaac.ENCODER_SPEC,
            codec=DEFAULT_CODEC)
@@ -142,7 +154,7 @@ OPT_VARS = ("m:mono u:surround a:adaptive c:copy k:keep e:outputCodec "
             "b:bitrate j:jobs g:groupDepth")
 OPT_COLUMN = 20
 OPT_LONG = ("h:help m:mono u:surround a:adaptive k:keep c:copy-others "
-            "e:encoding b:bitrate j:jobs g:group")
+            "e:encoding b:bitrate j:jobs g:group t:ai-chapters")
 
 # The codec has to be one this command can write, or a typo would only surface
 # as a per-file failure deep into a run. The choices are joined with an ESCAPED
@@ -1879,6 +1891,7 @@ def main(argv: list, program: str = "convert-audio",
     codec = result.values["outputCodec"] or DEFAULT_CODEC
     jobs = int(result.values["jobs"] or runlog.cpu_count())
     group_depth = int(result.values["groupDepth"] or 0)
+    ai_chapters = "t" in result.given
 
     # Adaptive mode owns the channel and bitrate decision per file, so a global
     # -m or -b would contradict it. It also keeps files whole: the split queue
@@ -1935,7 +1948,7 @@ def main(argv: list, program: str = "convert-audio",
         return _settle_and_convert(program, script_dir, input_dir, output_dir,
                                    mono, adaptive, copy, keep, bitrate, jobs,
                                    codec, chunk_over_ceiling, surround,
-                                   group_depth)
+                                   group_depth, ai_chapters)
     finally:
         # The ffmpeg pin can make the run directory before init_ram_base
         # does, and every refusal after it must hand it back.
@@ -1946,7 +1959,7 @@ def _settle_and_convert(program: str, script_dir: str, input_dir: str,
                         output_dir: str, mono: bool, adaptive: bool,
                         copy: bool, keep: bool, bitrate: int, jobs: int,
                         codec: str, chunk_over_ceiling: bool, surround: bool,
-                        group_depth: int) -> int:
+                        group_depth: int, ai_chapters: bool) -> int:
     ffmpegselect.select_ffmpeg()
     ffmpegselect.report_ffmpeg_selection()
     if tooldeps.require_tools(program, ["ffmpeg", "ffprobe", "rsync",
@@ -1966,6 +1979,11 @@ def _settle_and_convert(program: str, script_dir: str, input_dir: str,
                                   skip_preflight=skip_preflight):
             return 1
         _report_encoder(codec, bitrate, mono, adaptive)
+    # Asked before anything is encoded: a model that cannot be reached is
+    # better found out now than after the last encode.
+    llm = chapterllm.require(program) if ai_chapters else None
+    if ai_chapters and llm is None:
+        return 1
     runlog.warn_uncounted_progress()
     mkvtoolnix_unsaid = _settle_mkvtoolnix()
 
@@ -1994,7 +2012,7 @@ def _settle_and_convert(program: str, script_dir: str, input_dir: str,
                         surround=surround, adaptive=adaptive, copy=copy,
                         keep=keep, bitrate=bitrate, codec=codec,
                         chunk_over_ceiling=chunk_over_ceiling,
-                        group_depth=group_depth)
+                        group_depth=group_depth, llm=llm)
     finally:
         console.hide_active()
         safety.release_abort_flag()
@@ -2037,7 +2055,7 @@ def _convert(input_dir: str, output_dir: str, probe_what: str, skips,
              jobs: int, mkvtoolnix_unsaid: bool, *, script_dir: str,
              mono: bool, surround: bool, adaptive: bool, copy: bool,
              keep: bool, bitrate: int, codec: str, chunk_over_ceiling: bool,
-             group_depth: int) -> int:
+             group_depth: int, llm=None) -> int:
     """The run itself, once the tools are checked. The command line's choices
     are keyword-only: there are too many flags of one type to pass by
     position."""
@@ -2090,6 +2108,7 @@ def _convert(input_dir: str, output_dir: str, probe_what: str, skips,
 
     _encode_all(state, jobs)
     _rejoin_split_files(state, jobs)
+    _add_transcripts_and_chapters(state, llm)
     runlog.say("Done.\n")
 
     safety.print_run_footer()
@@ -2098,6 +2117,96 @@ def _convert(input_dir: str, output_dir: str, probe_what: str, skips,
     # A file that came out the wrong length is not a warning: the run did not do
     # what it was asked, and a caller chaining commands has to see that.
     return workerpool.exit_status(1 if durationcheck.failures() else 0)
+
+
+def _add_transcripts_and_chapters(state: Run, llm) -> None:
+    """The last phase, over every output this run's codec wrote, encoded now
+    or by an earlier run: a transcript sidecar beside its source written into
+    it, and - with -t - chapters for one whose source has none.
+
+    Chapters are worked out in two steps over the whole lot, so the GPU does
+    one thing at a time: every transcript that is missing is made first, by
+    transcribe-audio, from the outputs themselves - audio only, and exactly as
+    long as their sources - and the model is asked after. A transcript made
+    here is written into the output with the chapters. An output that has
+    chapters already, from a run before, is left alone, so a rerun only
+    retries what failed.
+    """
+    pending = []
+    for track in state.tracks:
+        if safety.abort_requested():
+            return
+        out = state.output_path(track)
+        if not os.path.isfile(out):
+            continue
+        source = os.path.join(state.input_dir, track)
+        sidecar = transcripttags.find_sidecar(os.path.splitext(source)[0])
+        if sidecar and not transcripttags.has_transcript(out):
+            if _rewrite(source, out, lambda tmp, out=out, sidecar=sidecar:
+                        transcripttags.embed_transcript(out, sidecar, tmp)) == 0:
+                runlog.log("Transcript added from %s: %s"
+                           % (os.path.basename(sidecar), track))
+        if llm is not None and chapters.chapter_count(source) < 2 \
+                and chapters.chapter_count(out) < 2:
+            pending.append((track, source, out, sidecar))
+    if not pending:
+        return
+
+    transcript_root, status = ramscratch.ram_scratch_dir("convertAudio.transcripts")
+    stage, stage_status = ramscratch.ram_scratch_dir("convertAudio.stage")
+    if status != 0 or stage_status != 0 or not transcript_root or not stage:
+        runlog.error("no scratch for the transcripts, so no chapters were added")
+        return
+    ramscratch.add_exit_cleanup([transcript_root, stage])
+    untranscribed = [(os.path.relpath(out, state.output_dir), out)
+                     for _track, _source, out, sidecar in pending if not sidecar]
+    if untranscribed:
+        runlog.say("Transcribing %d file(s) for their chapters...\n" % len(untranscribed))
+        aichapters.transcribe(untranscribed, stage, transcript_root, state.script_dir)
+        safety.exit_if_aborted()
+
+    runlog.say("Chaptering %d file(s) with %s...\n" % (len(pending), llm.describe()))
+    for number, (track, source, out, sidecar) in enumerate(pending, 1):
+        safety.exit_if_aborted()
+        made = os.path.join(transcript_root, os.path.splitext(
+            os.path.relpath(out, state.output_dir))[0] + ".srt")
+        transcript = sidecar or (made if os.path.isfile(made) else "")
+        label = "[%d/%d] %s" % (number, len(pending), track)
+        if not transcript:
+            runlog.error("%s: no transcript, so no chapters" % label)
+            continue
+        marks = aichapters.generate(aichapters.read_transcript(transcript), llm,
+                                    log=runlog.log)
+        if not marks:
+            runlog.error("%s: no chapters (too short, or the model gave no usable "
+                         "outline)" % label)
+            continue
+        rows = aichapters.chapter_rows(marks)
+
+        def write(tmp, out=out, rows=rows, transcript=transcript, sidecar=sidecar):
+            status = chapters.write_chapters(out, rows, tmp)
+            if not sidecar and not transcripttags.has_transcript(out):
+                transcripttags.embed_transcript(out, transcript, tmp)
+            return status
+
+        if _rewrite(source, out, write) == 0:
+            runlog.say("%s: %d chapters\n" % (label, len(marks)))
+        if state.keep:
+            shutil.copyfile(transcript, os.path.splitext(out)[0] + ".transcript"
+                            + os.path.splitext(transcript)[1])
+
+
+def _rewrite(source: str, out: str, change) -> int:
+    """``change(tmp_dir)`` made to a finished output in a scratch directory of
+    its own, and the source's time put back on the output after it."""
+    tmp_dir, status = ramscratch.ram_scratch_dir("convertAudio.tags")
+    if status != 0 or not tmp_dir:
+        return 1
+    try:
+        return change(tmp_dir)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        _touch_from(source, out)
 
 
 def _mirror_folders_and_covers(input_dir: str, output_dir: str) -> None:
