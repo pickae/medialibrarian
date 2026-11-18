@@ -19,6 +19,7 @@ import shutil
 
 import pytest
 
+from medialib.lib import whisper
 from tests import blackbox
 
 pytestmark = pytest.mark.stubbed
@@ -36,11 +37,15 @@ out="${!#}"
 exit 0
 """
 
-# Writes the transcript named after the input file - basename, original extension
-# dropped - into the given output directory, exactly as the real one does.
+# Writes one transcript per input file - every argument after the helper up to
+# the first option - named after it (basename, original extension dropped) into
+# the given output directory, exactly as the real one does. An input whose name
+# carries "nowhisper" is passed over without a transcript and the exit is still
+# 0, which is what the real one does with a file it cannot transcribe.
 _PIPX = r"""
 printf '%s\n' "$*" >> "$WHISPERLOG"
-input="$3"
+inputs=()
+for a in "${@:3}"; do [[ "$a" == --* ]] && break; inputs+=("$a"); done
 outDir=""; fmt="txt"; prev=""
 for a in "$@"; do
     case "$prev" in
@@ -49,8 +54,16 @@ for a in "$@"; do
     esac
     prev="$a"
 done
-base="${input##*/}"
-printf 'stub transcript\n' > "$outDir/${base%.*}.$fmt"
+for input in "${inputs[@]}"; do
+    case "$input" in
+        *nowhisper*)
+            if (( ${#inputs[@]} > 1 )); then
+                echo "Error: Unable to process file: $input" >&2; continue
+            fi ;;
+    esac
+    base="${input##*/}"
+    printf 'stub transcript\n' > "$outDir/${base%.*}.$fmt"
+done
 exit 0
 """
 
@@ -323,7 +336,9 @@ class TestTheNextVideoIsExtractedWhileWhisperWorks:
     """Lifting a film's audio out is minutes of ffmpeg in which whisper would
     leave the GPU idle, so the next video's extract is made while whisper is
     still busy with the one before - at one worker and at several. The video
-    looked at is the first no worker would have started on."""
+    looked at is the first no worker would have started on. Films, which is
+    what this is about, go to whisper one per call: their transcription dwarfs
+    a reload of the model."""
 
     @pytest.mark.parametrize("jobs, next_one", [("1", "b.mkv"),
                                                 ("2", "c.mkv")])
@@ -340,9 +355,14 @@ class TestTheNextVideoIsExtractedWhileWhisperWorks:
             '>> "$EVENTS"\nprintf \'stub transcript'))
         source = tmp_path / "in"
         source.mkdir()
-        # Largest first: the order the queue takes them in.
-        for name, size in (("a.mkv", 300), ("b.mkv", 200), ("c.mkv", 100)):
-            (source / name).write_bytes(b"x" * size)
+        # Largest first: the order the queue takes them in. Film-sized, so
+        # each goes to whisper alone rather than held for the next extract:
+        # sparse, so they cost no disk.
+        cap = whisper.WHISPER_GROUP_BYTES
+        for name, size in (("a.mkv", 3 * cap), ("b.mkv", 2 * cap),
+                           ("c.mkv", cap)):
+            with open(source / name, "wb") as handle:
+                handle.truncate(size)
         transcribe.transcribe("-j", jobs, source, tmp_path / "out")
         lines = events.read_text().splitlines()
         assert len(lines) == 6, lines
@@ -350,3 +370,78 @@ class TestTheNextVideoIsExtractedWhileWhisperWorks:
             < lines.index("whisper done"), lines
         for name in ("a", "b", "c"):
             assert (tmp_path / "out" / (name + ".txt")).is_file()
+
+
+def _whisper_starts(transcribe) -> list:
+    return [line for line in transcribe.whisper_log.read_text().splitlines()
+            if line]
+
+
+class TestSeveralFilesShareOneWhisper:
+    """Every whisper process loads the model's weights into memory again, so
+    several inputs go to one process: N files start whisper fewer than N
+    times, and each still gets its own mirrored transcript."""
+
+    def test_n_files_start_whisper_fewer_than_n_times(self, transcribe,
+                                                      tmp_path):
+        source = tmp_path / "in"
+        names = ["show/ep%d.mp3" % n for n in range(1, 6)]
+        names.append("film/clip.mkv")
+        for relative in names:
+            path = source / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"x" * 100)
+        log = transcribe.transcribe("-j", "1", source, tmp_path / "out")
+        starts = _whisper_starts(transcribe)
+        assert 1 <= len(starts) < len(names), starts
+        for relative in names:
+            stem = os.path.splitext(relative)[0]
+            assert (tmp_path / "out" / (stem + ".txt")).is_file(), log
+            assert "transcribed: " + relative in log, log
+
+    def test_two_inputs_of_the_same_name_never_share_a_call(self, transcribe,
+                                                            tmp_path):
+        """whisper names a transcript after its input, in one folder per
+        call: two episode.mp3 in one call would leave one transcript."""
+        source = tmp_path / "in"
+        for folder in ("a", "b"):
+            (source / folder).mkdir(parents=True)
+            (source / folder / "episode.mp3").write_bytes(b"x")
+        transcribe.transcribe("-j", "1", source, tmp_path / "out")
+        for line in _whisper_starts(transcribe):
+            assert line.count("episode.mp3") == 1, line
+        for folder in ("a", "b"):
+            assert (tmp_path / "out" / folder / "episode.txt").is_file()
+
+    def test_a_file_the_group_missed_is_retried_alone(self, transcribe,
+                                                      tmp_path):
+        """whisper passes over a file it cannot do and exits 0: the files it
+        did are kept, and only the missed one is started again."""
+        source = tmp_path / "in"
+        source.mkdir()
+        for name in ("one.mp3", "nowhisper.mp3", "three.mp3"):
+            (source / name).write_bytes(b"x")
+        log = transcribe.transcribe("-j", "1", source, tmp_path / "out")
+        starts = _whisper_starts(transcribe)
+        assert len(starts) == 2, starts
+        assert starts[1].count(".mp3") == 1, starts
+        assert "nowhisper.mp3" in starts[1], starts
+        for stem in ("one", "nowhisper", "three"):
+            assert (tmp_path / "out" / (stem + ".txt")).is_file(), log
+        assert "failed:" not in log, log
+        assert "ERROR" not in log, log
+
+    def test_a_group_with_nothing_written_fails_each_file_once(
+            self, transcribe, tmp_path):
+        source = tmp_path / "in"
+        source.mkdir()
+        for name in ("one.mp3", "two.mp3"):
+            (source / name).write_bytes(b"x")
+        transcribe.with_tool("pipx", _PIPX_OUT_OF_MEMORY)
+        log = transcribe.transcribe("-j", "1", source, tmp_path / "out",
+                                    expect=1)
+        # One group call, then each file alone.
+        assert len(_whisper_starts(transcribe)) == 3
+        for name in ("one.mp3", "two.mp3"):
+            assert "failed: " + name in log, log
+            assert ("ERROR: %s: whisper wrote no transcript" % name) in log, log

@@ -27,6 +27,8 @@ __all__ = [
     "WHISPER_BATCH_SLOTS",
     "WHISPER_BATCH_MIN_SLOTS",
     "WHISPER_VRAM_SHARE",
+    "WHISPER_GROUP_FILES",
+    "WHISPER_GROUP_BYTES",
     "WHISPER_LINE_WIDTH",
     "WHISPER_LINE_COUNT",
     "WHISPER_GPU_MODELS",
@@ -60,6 +62,21 @@ WHISPER_BATCH_MIN_SLOTS = 2
 # the moment a browser opens a tab, and whisper-ctranslate2 answers that with
 # a traceback and an exit status of 0 - a transcript silently not made.
 WHISPER_VRAM_SHARE = 85
+
+# The most inputs one whisper process is handed. Each process copies the
+# model's weights into memory again - into VRAM on the GPU - and starts pipx and
+# a CUDA context besides, seconds that a run of short episodes pays per file.
+# whisper-ctranslate2 loads the model once for every input it is given, writes
+# each transcript as that input is done and passes over one it cannot do, so a
+# failure costs a retry of the files it missed and nothing it finished. The cap
+# is for the progress and the tail: a group's transcripts reach the output
+# folder when its process ends, and the last group is what the run waits on.
+WHISPER_GROUP_FILES = 8
+
+# The source size at which a group is handed on without waiting for more: a
+# file this large - a film - transcribes for long enough that one reload of the
+# model is nothing beside it.
+WHISPER_GROUP_BYTES = 1024 * 1024 * 1024
 
 # The subtitle shape the batched path is asked for. Batching decides its own
 # segments from the voice detection, and left alone it writes one cue per
