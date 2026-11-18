@@ -4,6 +4,9 @@ Usage:
     convert-audio [options] <inputDir> <outputDir>
 Video files are ingested as well: their audio stream is extracted and converted
 like any other input.
+A transcript beside a source (<name>.srt, .vtt or .lrc, or with a language code:
+<name>.en.srt) is written into its output: as timed lyrics in an Opus file, as a
+subtitle track in an .m4a.
 Options:
     -h, --help      Print this help page.
     -m, --mono      Force mono output.
@@ -46,6 +49,13 @@ Options:
                     out half converted. A video, or a format that is always
                     converted, has its whole folder converted with it.
                     Cannot be combined with -a.
+    -t, --ai-chapters
+                    Add chapters to every output whose source has none, worked
+                    out by a language model (the chapterLlm settings) from a
+                    transcript of the speech, and write the transcript into
+                    the output as well. A transcript sidecar is used rather
+                    than transcribing again.
+                    Default false
     -v, --verbose   Also say why each item was handled the way it was, and on a
                     failure print the tool's whole output rather than its last
                     lines.

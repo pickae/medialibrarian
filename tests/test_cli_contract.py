@@ -46,6 +46,7 @@ _MISSING_DIR = {
     "convert-and-concat": ["no-such-dir", "out"],
     "convert-audio": ["no-such-dir", "out"],
     "transcribe-audio": ["no-such-dir", "out"],
+    "generate-chapters": ["no-such-dir", "out"],
     "convert-video": ["no-such-dir", "out"],
     "ingest-music": ["no-such-dir", "out"],
     "read-library": ["no-such-dir", "out"],

@@ -1,0 +1,92 @@
+# `generate-chapters`
+
+Gives spoken-word audio and video chapter marks — start times and titles — that a
+language model works out from a transcript of what is said.
+
+    generate-chapters [options] <inputDir> <outputDir>
+
+| At a glance | |
+| --- | --- |
+| **Takes** | a folder of audio and video |
+| **Writes** | per input, under `<outputDir>` in the same sub-folders: `<name>.chapters.txt` (OGM chapter rows) and `<name>.srt`, the transcript |
+| **Input** | never modified |
+| **Reruns** | a chapter file already present is kept (`-f` makes it again); a transcript already present is reused |
+| **Network** | the language model's server, wherever the settings point: on this machine or a hosted API |
+
+## Two phases
+
+1. **Transcribing.** Every input without a transcript goes through
+   [`transcribe-audio`](transcribe-audio.md), run as that command, and its
+   transcript is kept in `<outputDir>`. A transcript some other recogniser wrote
+   is used as it is: `<name>.srt`, `.vtt`, `.tsv`, `.json` (whisper's or the
+   OpenAI transcription API's) or `.lrc`, in `<outputDir>` or beside the input.
+2. **Chaptering.** The model reads each transcript and answers which lines
+   chapters start on. All transcription is done before the model is asked
+   anything, so whisper and a model on the same GPU never compete for it.
+
+The model never writes a time. Every line it is shown has an id, it answers with
+ids, and the times are the transcript's own. Each mark is then moved into the
+pause before the first word.
+
+## How the model is asked
+
+A chapter list is a division of the whole recording, so it is made in two passes:
+
+- **The outline** reads the whole transcript at once, as passages of about 20
+  seconds, and divides all of it. It writes a short summary too. A transcript too
+  long for the model's window (`chapterLlmContext`) is first summarised part by
+  part, and the outline is drawn from those summaries. That way it still sees the
+  whole recording, at a coarser grain.
+- **The second look** takes each chapter start again, line by line, in the few
+  minutes around it, with the whole outline and the summary beside it. It moves
+  the start to the line where the new topic really begins, corrects a title that
+  does not fit what is said there, or drops a start that turns out not to be a
+  change of topic.
+
+A recording made of parts, such as several episodes in a row each with its own
+segments, comes out as one flat list. Each part gets its own chapter where it
+starts, and the titles say which part they belong to.
+
+`-l` steers how long a chapter usually is (8 minutes by default) and `-m` sets the
+shortest one allowed (2 minutes). A chapter shorter than that is merged into the
+one before it.
+
+## Which model
+
+Any model behind one of two protocols, chosen with the
+[settings](../settings.md) `chapterLlmApi`, `chapterLlmUrl`, `chapterLlmModel`
+and `chapterLlmKey`:
+
+| `chapterLlmApi` | Reaches |
+| --- | --- |
+| `openai` (default) | any server speaking OpenAI's chat protocol: Ollama, llama.cpp, vLLM, LM Studio and other local servers, OpenAI, Groq, Mistral, OpenRouter, Gemini's compatibility endpoint… |
+| `anthropic` | Claude, through the `anthropic` Python package (`pip install anthropic`) |
+
+For example, a local Ollama:
+
+    chapterLlmUrl=http://localhost:11434/v1
+    chapterLlmModel=qwen3:32b
+    chapterLlmContext=32000
+
+`chapterLlmContext` should be the window the server really runs the model with,
+which is often smaller than the model allows. Ollama, for one, uses a small
+window unless it is told otherwise. `chapterLlmJobs` sets how many requests are
+sent at once.
+
+The model does not have to reason. On a three-hour recording of seven
+episodes, 28 chapters in all, a mixture-of-experts model with thinking turned off
+(`chapterLlmOptions={"reasoning_effort": "none"}`, where the server takes that
+field) found every chapter in 8 seconds. A dense reasoning model on the same
+card found the same chapters in 3½ minutes. Letting the small model think at a
+low effort made it slower and its titles worse.
+
+A run with no usable model is refused before anything is transcribed.
+
+---
+
+**Options:** `generate-chapters -h` lists every option and its default. **Shared
+rules:** [file safety](../file-safety.md) ·
+[stopping a run](../file-safety.md#stopping-a-run) ·
+[missing tools](../requirements.md#missing-tools-are-refused-up-front) ·
+[what a run prints](../output.md) ·
+[settings](../settings.md)

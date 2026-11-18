@@ -34,7 +34,7 @@ import base64
 import os
 import sys
 
-__all__ = ["MP4_SUFFIXES", "embed_chapters", "embed_cover"]
+__all__ = ["MP4_SUFFIXES", "embed_chapters", "embed_cover", "has_tag", "set_tag"]
 
 # The containers whose metadata is MP4's rather than a Vorbis comment's: a cover
 # is a `covr` atom, and chapters are a track this module cannot write at all.
@@ -115,6 +115,26 @@ def _open(audio: str):
     from mutagen.flac import FLAC
 
     return FLAC(audio)
+
+
+def has_tag(audio: str, name: str) -> bool:
+    """Whether an Opus or FLAC file holds this Vorbis comment, non-empty."""
+    try:
+        return any(value.strip() for value in _open(audio).get(name) or [])
+    except Exception:
+        return False
+
+
+def set_tag(audio: str, name: str, value: str) -> int:
+    """One Vorbis comment of an Opus or FLAC file set to ``value``, replacing
+    whatever it held."""
+    try:
+        handle = _open(audio)
+        handle[name] = value
+        handle.save()
+        return 0
+    except Exception:
+        return 1
 
 
 def _chapter_keys(handle) -> list[str]:

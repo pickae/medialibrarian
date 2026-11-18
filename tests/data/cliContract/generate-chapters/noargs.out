@@ -1,0 +1,35 @@
+chapter spoken-word audio with a language model
+
+Usage:
+    generate-chapters [options] <inputDir> <outputDir>
+
+Each input gets a chapter file and a transcript in <outputDir>, in the same
+sub-folder structure:
+    <inputDir>/a/show.mp3    ->   <outputDir>/a/show.chapters.txt
+                                  <outputDir>/a/show.srt
+A transcript already in <outputDir>, or beside the input, as .srt, .vtt, .tsv,
+.json or .lrc, is used instead of transcribing again.
+
+The language model is set with the chapterLlm settings: any server speaking the
+OpenAI chat protocol (local or hosted) or Claude.
+
+Options:
+    -h, --help      Print this help page.
+    -f, --force     Make the chapter files again, over the ones already there.
+                    Default false
+    -m, --min-length <minutes>
+                    The shortest chapter.
+                    Default 2
+    -l, --length <minutes>
+                    The length of chapter the model is steered towards.
+                    Default 8
+    -v, --verbose   Also say why each item was handled the way it was, and on a
+                    failure print the tool's whole output rather than its last
+                    lines.
+    -q, --quiet     Print errors only - no progress and no warnings.
+    -x, --set <name=value>
+                    Override a setting for this run: name=value, repeatable. The
+                    value is held where the environment holds it, so it wins
+                    over the settings file; a secret is refused - the settings
+                    file is where it goes. The settings page lists the names.
+
