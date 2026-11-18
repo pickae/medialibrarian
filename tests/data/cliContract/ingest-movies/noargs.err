@@ -112,6 +112,20 @@ Usage:
                   what a full ingest would carry over from the library's copy
                   (see "Plex comparison" below). Changes nothing, and -w has
                   no part in it. Best run after -tw.
+    -d, --drop-backups
+                  drop the "(old)" originals the improved remuxes were kept beside, and
+                   nothing else: for each film whose improved copy kept its
+                   original beside it as "<name> (old).mkv", the copy is
+                   checked - the same length as the original, a video stream,
+                   and at least the tracks the rules keep - and the original
+                   is dropped where it passes. A DRY RUN unless -w is given:
+                   it says which original would go and which would stay, with
+                   the reason, and changes nothing on disk. With -w each
+                   original that passes is first tagged on the copy, so a
+                   later run does not remux the film again, and then deleted.
+                   Walks the whole tree, so it can be pointed at a library.
+                   Best run after -tw, so the films are tagged and the copies
+                   are settled.
     -r, --convert-remuxes
                   also convert the remuxes, last of all: a film whose name says
                   REMUX, a 2160p HEVC one carrying dual-layer Dolby Vision

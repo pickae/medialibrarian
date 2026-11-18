@@ -157,6 +157,19 @@ p |  | Plex comparison only: walks the whole tree the way -t does and
                   what a full ingest would carry over from the library's copy
                   (see "Plex comparison" below). Changes nothing, and -w has
                   no part in it. Best run after -tw.
+d |  | drop the "(old)" originals the improved remuxes were kept beside, and
+                   nothing else: for each film whose improved copy kept its
+                   original beside it as "<name> (old).mkv", the copy is
+                   checked - the same length as the original, a video stream,
+                   and at least the tracks the rules keep - and the original
+                   is dropped where it passes. A DRY RUN unless -w is given:
+                   it says which original would go and which would stay, with
+                   the reason, and changes nothing on disk. With -w each
+                   original that passes is first tagged on the copy, so a
+                   later run does not remux the film again, and then deleted.
+                   Walks the whole tree, so it can be pointed at a library.
+                   Best run after -tw, so the films are tagged and the copies
+                   are settled.
 r |  | also convert the remuxes, last of all: a film whose name says
                   REMUX, a 2160p HEVC one carrying dual-layer Dolby Vision
                   profile 7 at a generous bitrate, any other 2160p HEVC one
@@ -221,11 +234,13 @@ i | <file> | the hand-written id list filled in and read BACK: tagging and
                   given into that one file."""
 
 OPT_VARS = ("f:fragmentsOverride a:commentaryOnly t:tagsOnly s:subtitlesOnly "
-            "n:commentaryNames c:chaptersOnly p:plexOnly r:convertRemuxes "
+            "n:commentaryNames c:chaptersOnly p:plexOnly d:dropBackups "
+            "r:convertRemuxes "
             "w:writeTags i:idList k:keepParts o:omitPhases")
 OPT_COLUMN = 18
 OPT_LONG = ("f:fragments a:commentary t:tags-only s:subtitles-only "
-            "n:commentary-names c:chapters p:plex r:convert-remuxes w:write "
+            "n:commentary-names c:chapters p:plex d:drop-backups "
+            "r:convert-remuxes w:write "
             "i:ids k:keep o:omit")
 
 # The phases a full ingest can be told to omit with -o, in the order the page
