@@ -32,7 +32,7 @@ What gets re-encoded is decided per file:
 | Input | What happens |
 | --- | --- |
 | above the bitrate threshold | re-encoded |
-| a format the output should not keep at all (`m4a`/`m4b`/`mka`) | re-encoded |
+| `mka`, a container `concat-audio` cannot join - a book of them copied through `convert-and-concat` would fail at the join | re-encoded |
 | a video | its audio stream is extracted and converted like any other input |
 | a video whose soundtrack is *already* a small enough Opus | stream-copied out of its container rather than encoded a second time into the same thing |
 | anything else | small enough already: copied verbatim with `-c`, otherwise left alone |

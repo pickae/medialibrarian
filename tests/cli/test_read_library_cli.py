@@ -90,6 +90,20 @@ out="${!#}"
 [[ "$out" == "-" ]] || printf x > "$out"
 """
 
+# The engine's m4b holds what a book really holds: the rate the probe reads is
+# the rate an engine writes, so the convert-audio the run points at it judges
+# it the way it judges a book of the engine's.
+_FFPROBE = r"""
+if [[ "$*" == *"-print_format json"* ]]; then
+  doc='{"format": {"bit_rate": "128000", "duration": "123.456"}, "streams": ['
+  doc+='{"codec_name": "aac", "codec_type": "audio", "bit_rate": "128000",'
+  doc+='"channels": 2, "duration": "123.456", "sample_rate": "44100"}]}'
+  printf '%s' "$doc"
+else
+  echo "123.456"
+fi
+"""
+
 # The book-to-text step the queue is ordered by, stubbed as a copy - so a
 # fixture's word count is simply the words written into it, and the ordering is
 # decided here rather than by whether the host has Calibre and poppler.
@@ -118,6 +132,7 @@ def library(sandbox, tmp_path, private_workspace):
 
     sandbox.with_media_stubs()
     sandbox.with_tool("ffmpeg", _FFMPEG)
+    sandbox.with_tool("ffprobe", _FFPROBE)
     sandbox.with_tool("jq", "echo 0")
     sandbox.with_tool("rsync", ":")
     sandbox.with_tool("ebook-convert", _EBOOK_CONVERT)

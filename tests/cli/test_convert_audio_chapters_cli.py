@@ -30,6 +30,15 @@ for a in "$@"; do
     exit 0
   fi
 done
+if [[ "$*" == *"-print_format json"* ]]; then
+  case "$last" in
+    *.m4a|*.m4b)
+      printf '{"format": {}, "streams": [{%s}]}' \
+        '"codec_name": "aac", "codec_type": "audio", "bit_rate": "128000", "channels": 2'
+      ;;
+  esac
+  exit 0
+fi
 for a in "$@"; do [[ "$a" == *duration* ]] && { echo 1200.000; exit 0; }; done
 exit 0
 '''

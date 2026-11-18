@@ -49,13 +49,18 @@ class TestIsVideoFile:
 
 class TestAlwaysTranscodeFile:
     """The formats re-encoded however small they already are, because it is their
-    CONTAINER that is unwanted in the output rather than their size."""
+    CONTAINER that is unwanted in the output rather than their size: mka,
+    which concat-audio cannot join, so a book of them copied through
+    convert-and-concat would fail at the join. m4a and m4b are judged on
+    their bitrate like anything else: a 32 kbps HE-AAC book is not put
+    through a second lossy encode for the container's sake."""
 
-    @pytest.mark.parametrize("name", ["a.m4a", "A.M4A", "a.m4b", "a.mka"])
+    @pytest.mark.parametrize("name", ["a.mka", "A.MKA"])
     def test_a_listed_container_is_always_transcoded(self, name):
         assert ca.always_transcode_file(name) is True
 
-    @pytest.mark.parametrize("name", ["a.mp3", "a.opus", "a.flac"])
+    @pytest.mark.parametrize("name", ["a.mp3", "a.opus", "a.flac",
+                                      "a.m4a", "A.M4A", "a.m4b"])
     def test_others_are_judged_on_their_bitrate_instead(self, name):
         assert ca.always_transcode_file(name) is False
 
@@ -551,7 +556,7 @@ class TestAFolderJudgedWhole:
         assert not state.transcodes("loose.mp3", 64000, ca.THRESHOLD)
 
     def test_a_format_always_converted_converts_its_folder_unmeasured(self):
-        state = self._run(["Book/1.m4b"], {})
+        state = self._run(["Book/1.mka"], {})
         assert ca._judge_groups(state, 1) == {"Book": True}
 
     def test_a_folder_whose_rates_cannot_be_read_gets_no_verdict(self):

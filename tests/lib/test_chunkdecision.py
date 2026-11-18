@@ -40,30 +40,30 @@ class TestNothingToDecide:
 
 class TestFewLongFiles:
     def test_a_lone_long_book_is_cut(self):
-        """Sixty hours on one core of thirty-two is the whole machine waiting
-        on one encode."""
-        decision = _decide([("m4b", 2 * GB)])
+        """Sixteen hours on one core of thirty-two is the whole machine
+        waiting on one encode."""
+        decision = _decide([("flac", 2 * GB)])
         assert decision.chunked == {0}
         assert decision.expected < decision.whole / 4
 
     def test_as_many_long_books_as_cores_are_cut_on_a_big_machine(self):
-        tracks = [("m4b", 1 * GB)] * 4
+        tracks = [("flac", 1 * GB)] * 4
         assert _decide(tracks, workers=32).chunked == {0, 1, 2, 3}
 
     def test_a_pool_narrower_than_the_machine_still_cuts(self):
         """Four workers on thirty-two threads each run faster than a full
         house would, and the balanced queue that chunking is weighed against
         has to be measured at that pace too."""
-        tracks = [("m4b", 5 * GB)] * 2
+        tracks = [("flac", 5 * GB)] * 2
         assert _decide(tracks, workers=4, threads=32).chunked == {0, 1}
 
     def test_but_not_on_a_quad_core(self):
         """Four books on four cores already keep every core busy to the end."""
-        tracks = [("m4b", 1 * GB)] * 4
+        tracks = [("flac", 1 * GB)] * 4
         assert _decide(tracks, workers=4).chunked == frozenset()
 
     def test_a_long_book_among_short_tracks_is_the_one_cut(self):
-        tracks = [("m4b", 2 * GB)] + [("m4b", 30 * MB)] * 200
+        tracks = [("flac", 2 * GB)] + [("m4a", 30 * MB)] * 200
         assert _decide(tracks).chunked == {0}
 
 
@@ -77,7 +77,7 @@ class TestManyFiles:
         """The longest starts at once and finishes while the eight books that
         found no core at first are still encoding: the end of the run is not
         waiting on it alone."""
-        assert _decide([("m4b", 300 * MB)] * 40).chunked == frozenset()
+        assert _decide([("flac", 300 * MB)] * 40).chunked == frozenset()
 
     def test_short_tracks_alone_are_never_cut(self):
         tracks = [("m4a", 20 * MB)] * 500
@@ -94,9 +94,11 @@ class TestManyFiles:
 
 
 class TestABusyMachine:
-    """A tail encoded whole is quick because the machine has drained and the
-    last jobs have it to themselves. Beside another process's work it has not
-    drained, and the long books then cost their full-load time to the end."""
+    """The shelf's books are judged on the rate the probe reads off them, not
+    on their format: the ones it confirms at the long rate are the ones a cut
+    could win. Beside another process's work the machine has not drained, and
+    the long books then cost their full-load time to the end - so more of the
+    shelf is worth cutting for it."""
 
     # A shelf of books of uneven length, about as many as the cores: the
     # longest is twice what each core gets of the whole shelf.
@@ -110,14 +112,36 @@ class TestABusyMachine:
                        probe=lambda i: ("aac", 2, 128000, hours[i] * 3600),
                        background=background)
 
-    def test_on_an_idle_machine_the_shelf_is_encoded_whole(self):
-        assert self._shelf(0.0).chunked == frozenset()
-
-    def test_beside_other_work_its_longest_books_are_cut(self):
-        decision = self._shelf(8.0)
+    def test_on_an_idle_machine_the_confirmed_books_are_cut(self):
+        """The probe is asked of the top of the shelf - the books the census
+        cannot rule out - and the ones it confirms are cut; the rest of the
+        shelf is copied, and a copied shelf has no long tail to cut."""
+        decision = self._shelf(0.0)
         assert 0 in decision.chunked
         assert len(self.HOURS) - 1 not in decision.chunked
         assert decision.expected < decision.whole
+
+    def test_beside_other_work_more_of_the_shelf_is_cut(self):
+        idle = self._shelf(0.0)
+        busy = self._shelf(8.0)
+        assert len(busy.chunked) > len(idle.chunked)
+        assert 0 in busy.chunked
+        assert len(self.HOURS) - 1 not in busy.chunked
+        assert busy.expected < busy.whole
+
+    def test_the_shortest_book_is_never_probed(self):
+        """Asked only of the books a cut could win on: the one that is never
+        cut is never probed at all."""
+        hours = self.HOURS
+        asked = []
+
+        def probe(index):
+            asked.append(index)
+            return ("aac", 2, 128000, hours[index] * 3600)
+
+        _decide([("m4b", int(h * 3600 * 128000 / 8)) for h in hours],
+                probe=probe, background=8.0)
+        assert len(hours) - 1 not in asked
 
 
 class TestWhatTheBytesSay:
@@ -127,14 +151,14 @@ class TestWhatTheBytesSay:
         tracks = [("opus", 2 * GB)] + [("opus", 30 * MB)] * 100
         assert _decide(tracks).chunked == frozenset()
 
-    def test_the_same_bytes_in_a_format_that_is_always_encoded_are(self):
-        tracks = [("m4b", 2 * GB)] + [("m4b", 30 * MB)] * 100
+    def test_the_same_bytes_in_a_format_the_census_encodes_are(self):
+        tracks = [("flac", 2 * GB)] + [("flac", 30 * MB)] * 100
         assert _decide(tracks).chunked == {0}
 
     def test_an_empty_file_beside_a_long_book_is_no_obstacle(self):
         """An empty file holds nothing a cutoff could fall below, so the
         search that walks the cutoff down has to stop short of it."""
-        assert _decide([("m4b", 0), ("m4b", 300 * MB)]).chunked == {1}
+        assert _decide([("flac", 0), ("flac", 300 * MB)]).chunked == {1}
 
     def test_a_run_of_nothing_but_empty_files_cuts_nothing(self):
         assert _decide([("m4b", 0)] * 3).chunked == frozenset()
@@ -175,10 +199,10 @@ class TestProbingTheCandidates:
 
     def test_a_file_shorter_than_its_bytes_suggest_moves_the_estimate(self):
         """Twice the rate is half the audio, and half the wall clock."""
-        tracks = [("m4b", 2 * GB)] + [("m4b", 30 * MB)] * 200
+        tracks = [("flac", 2 * GB)] + [("m4a", 30 * MB)] * 200
         guessed = _decide(tracks)
-        probe, _asked = self._probe({0: ("aac", 2, 138000,
-                                         2 * GB * 8 / 138000)})
+        probe, _asked = self._probe({0: ("flac", 2, 576000,
+                                         2 * GB * 8 / 576000)})
         measured = _decide(tracks, probe=probe)
         assert measured.whole < guessed.whole * 0.7
 
