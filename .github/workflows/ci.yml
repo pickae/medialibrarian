@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Weekly, the Linux suite runs again in a shuffled order (see the step in
+  # default-suite); every other job sits that run out. workflow_dispatch starts
+  # the same run by hand.
+  schedule:
+    - cron: "0 4 * * 1"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -109,14 +115,29 @@ jobs:
       # shared path, which is the whole cost of `-n` paid up front. Most of the
       # wall clock here is starting child processes - the ~1460 cases under
       # tests/cli each start a command - and that is the shape that parallelises
-      # best.
-      - run: pip install -e . pytest pytest-xdist
-      - run: python -m pytest -n auto
+      # best. `-n auto` is in pyproject.toml's addopts, so a bare run has it.
+      - run: pip install -e ".[test]"
+      # The weekly run shuffles the order, to find a case that passes only
+      # because of what ran before it - something an in-order run can never
+      # show. Not every run: the collected order is also close to the fastest
+      # one (tests.md has the measurement), so shuffling stays out of the
+      # runs people wait on. The seed is the run's id with the matrix leg's
+      # index appended, so the three Pythons try three orders; the header
+      # prints it, and `pytest --randomly-seed=<seed>` with pytest-randomly
+      # installed replays the exact order. Pinned like ruff, so a new release
+      # cannot turn the job red on a week nothing changed.
+      - name: shuffle the order
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: |
+          pip install pytest-randomly==5.1.0
+          echo "PYTEST_ADDOPTS=--randomly-seed=${{ github.run_id }}${{ strategy.job-index }}" >> "$GITHUB_ENV"
+      - run: python -m pytest
 
   # The import canary: collecting the pure tier imports the whole package, so
   # a POSIX-only module-scope import fails here. The pure cases then run - the
   # tier is disk- and tool-free, so it holds on any platform.
   windows-pure:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
     runs-on: windows-latest
     timeout-minutes: 15
     steps:
@@ -124,8 +145,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -e . pytest pytest-xdist
-      - run: python -m pytest -m pure -n auto
+      - run: pip install -e ".[test]"
+      - run: python -m pytest -m pure
       # And the scratch module on top of the pure tier: it drives the
       # filesystem directly rather than through coreutils, so its cases are
       # disk-only and hold here too - and it is the module Windows differs from
@@ -133,7 +154,7 @@ jobs:
       # to gate it on the platform rather than to reason about it.
       # Serial, unlike the run above it: one file of disk-only cases is over
       # before `-n` has finished starting its workers.
-      - run: python -m pytest tests/lib/test_ramscratch.py
+      - run: python -m pytest -n 0 tests/lib/test_ramscratch.py
 
   # macOS, whose support is aspirational: nobody's machine is behind it. The
   # job is the whole default suite, not a tier of it: a Mac IS a POSIX host, so
@@ -154,6 +175,7 @@ jobs:
   # modern flag is what gets used, so both spellings want a host - and this is
   # the one that has the old one to fall back FROM.
   macos:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
     runs-on: macos-latest
     # Gating like the rest: a job that cannot fail is a job nobody reads.
     # This is also the job with a clock worth bounding: its first run spent 47
@@ -178,7 +200,7 @@ jobs:
           brew install --quiet ffmpeg mkvtoolnix imagemagick media-info \
             fdupes beets jq rsync tree zstd sevenzip duckdb
 
-      - run: pip install -e . pytest pytest-xdist
+      - run: pip install -e ".[test]"
       # `-n auto` matters most here: this is the host where starting a child
       # process is dearest, and starting them is most of what the suite does.
       #
@@ -187,12 +209,13 @@ jobs:
       # uniformly slower at spawning from one case sitting on a timeout. The
       # list names it, and `-n` does not blur it: a duration is measured per
       # case whichever worker ran it.
-      - run: python -m pytest -n auto --durations=25
+      - run: python -m pytest --durations=25
 
   # The type checker. pyproject.toml's mypy section says a module that stops
   # passing should fail the run rather than join a list nobody works down -
   # this is the run that makes that true.
   types:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -206,6 +229,7 @@ jobs:
   # The linter, with the rules pyproject.toml selects. Configured there and
   # never run, it had drifted; this is the run that keeps it from drifting.
   lint:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

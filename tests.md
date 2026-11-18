@@ -27,14 +27,15 @@ synthetic ones alias.
 ## Running the suite
 
 ```bash
-pytest                    # everything but media
-pytest -n auto            # the same, across every core - what CI runs
+pip install -e ".[test]"  # pytest and pytest-xdist
+pytest                    # everything but media, across worker processes
 pytest -m media           # the real-tool tier: ffmpeg, mkvmerge, dovi_tool, ...
 pytest -m 'fs or pure'    # one tier, when narrowing something down
+pytest -n 0 tests/lib/test_cubes.py   # serially: for --pdb, or one small file
 ```
 
-`-m 'not media'` is the default, set in `pyproject.toml`, so a plain `pytest`
-can never start encoding video.
+`-m 'not media' -n auto` is the default, set in `pyproject.toml`, so a plain
+`pytest` can never start encoding video and always runs in parallel.
 
 Two rules keep the suite safe to run concurrently, and neither is left to
 review: `tests/conftest.py` points every environment knob that names a place to
@@ -45,11 +46,29 @@ the builds the host keeps in `/opt/ffmpeg/bin`, `/usr/local/bin`, `/usr/bin` or
 `~/.local/bin` are never the answer to which ffmpeg a case runs: only the one on
 the case's own `PATH` is.
 
-`-n auto` needs `pytest-xdist`, and it is worth it: most of the wall clock is
-starting child processes — the ~1460 cases under `tests/cli` each start a
-command — which is the shape that parallelises best. It is what all three test
-jobs in CI run, and the macOS one is where it counts, that being the host where
-starting a process is dearest.
+`-n` is worth it: most of the wall clock is starting child processes — the
+~1460 cases under `tests/cli` each start a command — which is the shape that
+parallelises best. The macOS job in CI is where it counts most, that being the
+host where starting a process is dearest.
+
+`auto` is not xdist's one worker per core. `tests/conftest.py` starts half the
+logical cores on a desktop, because each command under test sizes its own pool
+from the same core count, and a worker per core pegs every core and freezes the
+desktop without finishing any sooner. Under CI (`CI` set) it is every core.
+`PYTEST_XDIST_AUTO_NUM_WORKERS=N` overrides both, and an explicit `-n N` wins
+over all of it.
+
+Cases run in the order they are collected, and `tests/cli` sorts first, so a
+run starts with the process-heavy cases and ends on the pure ones. Nothing
+reorders them deliberately: xdist hands cases out as workers free up, which
+already keeps the cores busy. That order is also close to the best one for the
+wall clock - the longest cases start first and the short ones fill the end - and
+shuffling it was measured to lose: with `pytest-randomly` on a 20-thread laptop
+the default run took 4:38-5:06 over three seeds against 3:54 in order, with an
+identical set of failing cases every time. The search for a case that passes
+only because of what ran before it is left to CI instead: once a week the Linux
+job runs shuffled, with the seed in its header, and
+`pytest --randomly-seed=<seed>` (with `pytest-randomly` installed) replays it.
 
 ## A green run is a whole run
 
