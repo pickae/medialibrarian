@@ -1426,9 +1426,17 @@ class TestCommentaryLanguage:
     def test_whisper_answers_with_the_code_when_there_is_one(self, w):
         assert self._lang(w, "Commentary", "eng", "Dutch") == ("nl", "nl")
 
+    def test_a_language_the_table_now_has_answers_with_its_code(self, w):
+        """Japanese is a row of the table: the same answer the Dutch line
+        above gets, by its code."""
+        assert self._lang(w, "Commentary", "eng", "Japanese") == ("ja", "ja")
+
     def test_and_with_the_name_when_there_is_not(self, w):
-        assert self._lang(w, "Commentary", "eng", "Japanese") == \
-            ("Japanese", "")
+        """A language the table has no row for is handed to whisper by its
+        English name and gets no code: no native transcript is worth writing
+        for a language this collection does not recognise."""
+        assert self._lang(w, "Commentary", "eng", "Arabic") == \
+            ("Arabic", "")
 
     def test_an_inconclusive_whisper_is_no_answer_at_all(self, w):
         ram = w.tmp_path / "ram"

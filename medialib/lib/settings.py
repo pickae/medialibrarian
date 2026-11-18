@@ -94,6 +94,11 @@ SETTINGS: tuple[Setting, ...] = (
             secret=True),
     Setting("subDlApiKey", "API key of a free SubDL account, asked third for subtitles",
             ("ingest-movies",), secret=True),
+    Setting("subtitleLanguages", "The languages ingest-movies fetches and tests "
+            "subtitles for: a comma list of ISO 639-1 codes the language table "
+            "knows, in the order to fetch them; the table knows the six this "
+            "defaults to plus pt, pl, sv, da, no, fi, cs, hu, ro, el, tr, ru, "
+            "ja, ko and zh", ("ingest-movies",), "en,de,fr,nl,es,it"),
     # --- what a run keeps
     Setting("keepLanguages", "The languages ingest-movies' improved copy keeps "
             "beside the film's own language: a comma list of ISO 639-1 codes "

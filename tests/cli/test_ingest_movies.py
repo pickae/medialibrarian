@@ -279,18 +279,18 @@ class TestTheKeptLanguagesSetting:
         assert im.kept_languages() == ("de",)
 
     def test_a_code_the_table_does_not_know_is_refused(self, monkeypatch):
-        monkeypatch.setenv("keepLanguages", "en,pt")
+        monkeypatch.setenv("keepLanguages", "en,xx")
         with pytest.raises(clioptions.UsageError) as error:
             im.kept_languages()
-        assert '"pt"' in error.value.message
-        assert "de, en, es, fr, it, nl" in error.value.message
+        assert '"xx"' in error.value.message
+        assert "cs, da, de, el, en, es" in error.value.message
 
     def test_every_refusal_names_every_unknown_code(self, monkeypatch):
-        monkeypatch.setenv("keepLanguages", "pt,xx")
+        monkeypatch.setenv("keepLanguages", "xx,yy")
         with pytest.raises(clioptions.UsageError) as error:
             im.kept_languages()
-        assert '"pt"' in error.value.message
         assert '"xx"' in error.value.message
+        assert '"yy"' in error.value.message
 
 
 class TestTheFilmsOriginalLanguage:

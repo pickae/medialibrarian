@@ -98,7 +98,8 @@ t |  | tags only: the Plex/Jellyfin naming and nothing else - the IMDb id,
                   The films kept in more than one folder, across all of those
                   given, are listed once in
                   logs/ingest-movies/ingest-movies-duplicates.txt.
-s |  | subtitles only: the six languages' subtitles and nothing else -
+s |  | subtitles only: the subtitles the subtitleLanguages setting names,
+                  and nothing else -
                   walks the whole tree the way -t does, and tests every
                   "<movie>.xx.srt" already beside a film (never a commentary
                   transcript) by the alignment a download is kept by. A DRY
@@ -257,7 +258,12 @@ USAGE_TAIL = """
 
     Languages & subtitles
     ---------------------
-    six languages are supported out of the box (en, de, fr, nl, es, it)
+    the subtitles fetched and tested are the ones the subtitleLanguages
+    setting names - a comma list of ISO 639-1 codes the language table knows,
+    en, de, fr, nl, es, it by default, and a code the table does not know
+    stops the run before a film is touched; the table knows pt, pl, sv, da,
+    no, fi, cs, hu, ro, el, tr, ru, ja, ko and zh besides, so the setting may
+    name them
     renames pre-existing subtitles to the .xx.srt convention
     downloads missing subtitles - from OpenSubtitles.org, then OpenSubtitles.com
     and SubDL, each asked only once its login is set - takes the adverts out of

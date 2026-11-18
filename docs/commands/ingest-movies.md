@@ -1,8 +1,9 @@
 # `ingest-movies`
 
 Sorts, cleans and improves a movie library in place: one folder per film, Plex
-names with the IMDb id, subtitles in six languages, Opus audio, transcribed
-commentaries and the chapters the disc had.
+names with the IMDb id, subtitles in the languages the `subtitleLanguages`
+setting names (six by default), Opus audio, transcribed commentaries and the
+chapters the disc had.
 
     ingest-movies [options] <movieDir>...
 
@@ -52,6 +53,7 @@ These are read from the environment:
 | `openSubtitlesUser`, `openSubtitlesPassword` | downloading missing subtitles from OpenSubtitles.org, the first source | the other sources below are still asked, and the run says OpenSubtitles was skipped |
 | `openSubtitlesComUser`, `openSubtitlesComPassword` | asking OpenSubtitles.com second — a separate service, with free accounts of its own | it is not asked |
 | `subDlApiKey` | asking SubDL third — the key a free account at subdl.com gets | it is not asked |
+| `subtitleLanguages` | the languages whose subtitles are fetched and tested | the six it knows by default (en, de, fr, nl, es, it) |
 | `plexUrl` | the Plex server the films are compared with | the server on this machine, `http://localhost:32400` |
 | `plexToken` | that server's X-Plex-Token | the server is asked without one, which it refuses unless told to trust this address; the comparison is then skipped |
 
@@ -102,7 +104,8 @@ ingest-movies -p  ~/Films     # which of them the Plex library already has
 ## What a full ingest does
 
 Sorts loose movie files into per-movie subfolders (Plex layout), cleans
-folder/movie/subtitle names, renames/downloads subtitles for six languages,
+folder/movie/subtitle names, renames/downloads subtitles for the languages the
+`subtitleLanguages` setting names (six by default),
 refreshes mkv tags, transcodes lossless audio to Opus, transcribes commentary tracks,
 names numbered commentary tracks after who speaks in them, and gives films
 without named chapters the ones their disc had.
@@ -326,7 +329,7 @@ wrong in several ways at once is still found:
 - a possessive `'s` that one side has and the other does not;
 - an article gone from anywhere in the name, or several of them, or moved to
   the end the way a catalogue that sorts by the first real word moves it;
-- `&` written out, in any of the six languages;
+- `&` written out, in any of the Latin-script languages the table knows;
 - upper case, lower case, or any mixture;
 - a letter from the wrong keyboard — a Cyrillic or Greek letter that is the
   same *shape* as a Latin one reads as the Latin one, so a name that looks
@@ -553,7 +556,7 @@ the file up to date.
 is put to the test a downloaded subtitle is kept by: its best alignment with the
 film's speech has to stand out from every other. Commentary transcripts are
 never tested — they are named after their track — and neither are forced
-subtitles or languages outside the six.
+subtitles or the languages the `subtitleLanguages` setting does not name.
 
 | | Dry run (`-s`) | `-sw` |
 | --- | --- | --- |
@@ -588,7 +591,10 @@ finished, and every later `-s` or `-sw` run skips the films recorded there,
 saying how many it skipped. A run that is stopped halfway keeps every film it
 finished. A film is known by its `{imdb-…}` or `{tmdb-…}` tag, plus its
 edition and part when it has them, so moving or renaming it does not undo the
-record. These films are never recorded:
+record. Each line also records the languages its run got through, and a later
+run skips a film only when that list holds every language it wants — a
+language added to the `subtitleLanguages` setting is fetched for a film once,
+the first run after the change, and never again. These films are never recorded:
 
 - a film with no id tag, since its name is only a guess at which film it is
 - a film with a subtitle ffsubsync could not align at all
@@ -629,8 +635,9 @@ A transcript already beside a film is left alone, with two exceptions:
 menu. `-n` looks the film up on [dvdcompare.net](https://www.dvdcompare.net),
 which lists every release's commentaries by who speaks in them, and gives each
 track its real name: `Commentary by director …`. Only a film whose every
-commentary is still merely numbered is touched — in any of the six languages,
-and spelled a letter wrong or not (`Kommentar 2`, `Audiosommentary 3`) — and
+commentary is still merely numbered is touched — in any of the languages the
+table knows, and spelled a letter wrong or not (`Kommentar 2`,
+`Audiosommentary 3`) — and
 nothing else is done. It is a **dry run** unless `-w` is given.
 
 It names a film only when it is sure:
