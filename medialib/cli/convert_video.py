@@ -590,7 +590,7 @@ def with_chunk_end(args: str, span: str) -> str:
 
 
 # The sources this command converts, by lower-cased extension.
-SOURCE_EXTENSIONS = ("mkv", "mp4")
+SOURCE_EXTENSIONS = enums.VIDEO_EXTENSIONS
 
 
 def output_stem_for(relative: str, input_dir: str) -> str:
