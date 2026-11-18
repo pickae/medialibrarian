@@ -363,7 +363,13 @@ class TestMap:
     def test_wider_the_workers_work_in_the_run_s_own_scratch(self, tmp_path):
         from medialib.lib import runcontext
         runcontext.current().ram_base = str(tmp_path)
-        workerpool.map(["a", "b"], 2, _Recorder(str(tmp_path)))
+        outcome = workerpool.map(["a", "b"], 2, _Recorder(str(tmp_path)))
+        # Said first, so a worker that never wrote its file is reported as
+        # the reason it ended, not as the file that is missing.
+        assert (outcome.failed, outcome.aborted) == ([], False), (
+            "workers lost: %r; start method %s; left behind: %r"
+            % (outcome.failed, multiprocessing.get_start_method(),
+               sorted(path.name for path in tmp_path.iterdir())))
         for name in ("a", "b"):
             pid, base = (tmp_path / name).read_text().split()
             assert pid != str(os.getpid())
