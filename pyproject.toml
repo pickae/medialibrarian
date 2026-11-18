@@ -20,6 +20,11 @@ authors = [{ name = "David Ernst" }]
 # Vorbis-comment chapters ffmpeg has no way to write (medialib/lib/mutagentags.py).
 dependencies = ["mutagen"]
 
+# What running the suite takes: `pip install -e ".[test]"`. pytest-xdist is not
+# optional on top of pytest, because the addopts below ask for `-n`.
+[project.optional-dependencies]
+test = ["pytest", "pytest-xdist"]
+
 # The twenty-one commands. medialib/commands.py holds the same mapping for the
 # other two things that need it - the name a help page prints, and how one
 # command starts another - and tests/test_commands.py fails if the two ever
@@ -72,7 +77,10 @@ markers = [
     "media: the real heavy tools; opt-in, never in a default run",
     "imdb_lists: lets a case reach imdbdata.prepare, which the suite stands down",
 ]
-addopts = "-m 'not media'"
+# `-n auto`: every run is spread across worker processes, sized by
+# pytest_xdist_auto_num_workers in tests/conftest.py. `-n 0` runs serially
+# (for --pdb, or one small file); a later `-n` on the command line wins.
+addopts = "-m 'not media' -n auto"
 
 # Coverage, for `pytest --cov` or `coverage run -m pytest`. The black-box tier
 # runs each command as a child python, and the commands fan out to worker

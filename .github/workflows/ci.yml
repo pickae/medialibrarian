@@ -109,9 +109,9 @@ jobs:
       # shared path, which is the whole cost of `-n` paid up front. Most of the
       # wall clock here is starting child processes - the ~1460 cases under
       # tests/cli each start a command - and that is the shape that parallelises
-      # best.
-      - run: pip install -e . pytest pytest-xdist
-      - run: python -m pytest -n auto
+      # best. `-n auto` is in pyproject.toml's addopts, so a bare run has it.
+      - run: pip install -e ".[test]"
+      - run: python -m pytest
 
   # The import canary: collecting the pure tier imports the whole package, so
   # a POSIX-only module-scope import fails here. The pure cases then run - the
@@ -124,8 +124,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -e . pytest pytest-xdist
-      - run: python -m pytest -m pure -n auto
+      - run: pip install -e ".[test]"
+      - run: python -m pytest -m pure
       # And the scratch module on top of the pure tier: it drives the
       # filesystem directly rather than through coreutils, so its cases are
       # disk-only and hold here too - and it is the module Windows differs from
@@ -133,7 +133,7 @@ jobs:
       # to gate it on the platform rather than to reason about it.
       # Serial, unlike the run above it: one file of disk-only cases is over
       # before `-n` has finished starting its workers.
-      - run: python -m pytest tests/lib/test_ramscratch.py
+      - run: python -m pytest -n 0 tests/lib/test_ramscratch.py
 
   # macOS, whose support is aspirational: nobody's machine is behind it. The
   # job is the whole default suite, not a tier of it: a Mac IS a POSIX host, so
@@ -178,7 +178,7 @@ jobs:
           brew install --quiet ffmpeg mkvtoolnix imagemagick media-info \
             fdupes beets jq rsync tree zstd sevenzip duckdb
 
-      - run: pip install -e . pytest pytest-xdist
+      - run: pip install -e ".[test]"
       # `-n auto` matters most here: this is the host where starting a child
       # process is dearest, and starting them is most of what the suite does.
       #
@@ -187,7 +187,7 @@ jobs:
       # uniformly slower at spawning from one case sitting on a timeout. The
       # list names it, and `-n` does not blur it: a duration is measured per
       # case whichever worker ran it.
-      - run: python -m pytest -n auto --durations=25
+      - run: python -m pytest --durations=25
 
   # The type checker. pyproject.toml's mypy section says a module that stops
   # passing should fail the run rather than join a list nobody works down -

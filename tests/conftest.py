@@ -445,6 +445,29 @@ def sandbox(tmp_path):
     return Sandbox()
 
 
+# --- how many workers `-n auto` starts ---------------------------------------
+# pyproject.toml's addopts ask for `-n auto`, and xdist's own answer is one
+# worker per core. That is too many on a machine somebody is sitting at: a case
+# under tests/cli starts a command, and the command sizes its own pool from the
+# same core count, so twenty workers each fanning out pegs every core and the
+# desktop stops responding. Measured on a 20-thread laptop, the default run took
+# 3:50 at 20, 14 and 10 workers alike - the wall clock is held up by the slowest
+# cases, not the worker count - but only at 10 did the CPU stay off 100%. At 6
+# it took 4:18.
+#
+# So half the cores, except under CI: a runner is a machine nobody is using, and
+# with GitHub's four cores halving would double the run.
+# PYTEST_XDIST_AUTO_NUM_WORKERS still overrides both, as it does in xdist.
+def pytest_xdist_auto_num_workers(config):
+    forced = os.environ.get("PYTEST_XDIST_AUTO_NUM_WORKERS")
+    if forced:
+        return int(forced)
+    cores = os.cpu_count() or 1
+    if os.environ.get("CI"):
+        return cores
+    return max(1, cores // 2)
+
+
 # --- the suite is the whole suite --------------------------------------------
 # A runner counts what it DISCOVERS, so "all passed" is not by itself a claim
 # that the suite ran: this repository's bash runner once reported 90 files
