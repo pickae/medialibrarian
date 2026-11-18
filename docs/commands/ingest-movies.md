@@ -785,18 +785,25 @@ single-task sweeps.
 
 ## Keeping everything (`-k`)
 
-**A full ingest with `-k` takes nothing away.** No audio or subtitle track is
-dropped (other languages, image subtitles, audio descriptions and the lesser
-surround tier all stay), lossless audio is not encoded to opus, and Dolby Vision
-profile 7 keeps its enhancement layer. Everything additive or corrective still
-happens: cleaning, renaming and tagging, track names and flags, downloaded
-subtitles, commentary transcripts, chapters, and fixing a false Dolby Vision
-claim or an overstated level.
+**A full ingest with `-k` takes nothing away.** The `-k` is given in parts -
+`audio`, `tracks` and `dv`, comma-separated - and a bare `-k` keeps all three.
+`audio` encodes nothing of what it carries: lossless audio stays lossless
+rather than going to opus, and a track of the library's copy that would need
+encoding (put to another speed) is not carried. `tracks` drops nothing: no
+audio or subtitle track is dropped - not another language, not an image
+subtitle, not an audio description, not the lesser of two surround tiers - and
+what is carried over from the Plex library's copy is its soundtracks in every
+language, lossless as they are. `dv` keeps the enhancement layer of a
+dual-layer Dolby Vision profile 7. A part settles only its own measure, so
+`-k audio` still drops the excessive languages, and `-k tracks` still encodes
+the lossless audio to opus. Everything that only adds or corrects still
+happens with every part: the cleaning, renaming and IMDb tagging, the track
+names and flags, the subtitles downloaded and the commentary transcripts muxed
+in, the chapters, a false Dolby Vision claim or an overstated level corrected.
 
-What is carried over from the Plex library's copy is taken as it is, in every
-language, lossless tracks included. A track that would have to be encoded to
-match the new file's speed is left. `-k` is refused with `-r` (which encodes) and
-with the single-task sweeps.
+The word after `-k` is claimed by `-k` when it is a part, the way `-t` claims
+a number: a folder literally named `audio` is written `./audio`. `-k` is
+refused with `-r` (which encodes) and with the single-task sweeps.
 
 ## Several folders
 

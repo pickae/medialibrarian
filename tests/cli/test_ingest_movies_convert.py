@@ -220,6 +220,16 @@ class TestKeepEverything:
         assert run.main(["-k", "-r", str(tmp_path / "Films")]) == 1
         assert "contradict each other" in capsys.readouterr().err
 
+    @pytest.mark.parametrize("keep", [["-k", "audio"], ["-k", "dv"],
+                                      ["--keep=tracks"]])
+    def test_and_so_does_every_form_of_it(self, keep, tmp_path, capsys):
+        folder = tmp_path / "Films" / "Film (2020)"
+        folder.mkdir(parents=True)
+        (folder / "Film (2020).mkv").touch()
+
+        assert run.main(keep + ["-r", str(tmp_path / "Films")]) == 1
+        assert "contradict each other" in capsys.readouterr().err
+
     @pytest.mark.parametrize("other", [["-t"], ["-s"], ["-a"], ["-c"],
                                        ["-p"], ["-n"]])
     def test_it_is_a_full_ingest_s_alone(self, other, tmp_path, capsys):
@@ -228,5 +238,15 @@ class TestKeepEverything:
         (folder / "Film (2020).mkv").touch()
 
         assert run.main(["-k"] + other + [str(tmp_path / "Films")]) == 1
-        assert "-k keeps every track through a full ingest" \
+        assert "-k says take nothing away through a full ingest" \
             in capsys.readouterr().err
+
+    @pytest.mark.parametrize("keep", [["-k", "audio"], ["-k", "tracks,dv"]])
+    @pytest.mark.parametrize("other", [["-t"], ["-s"]])
+    def test_and_every_form_of_it_is(self, keep, other, tmp_path, capsys):
+        folder = tmp_path / "Films" / "Film (2020)"
+        folder.mkdir(parents=True)
+        (folder / "Film (2020).mkv").touch()
+
+        assert run.main(keep + other + [str(tmp_path / "Films")]) == 1
+        assert "takes none away anyway" in capsys.readouterr().err

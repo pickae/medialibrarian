@@ -97,15 +97,16 @@ def _said(audio: Audio) -> str:
 def plan(new: Profile, old: Profile, timing: Timing | None, untimed: str,
          keeps: Keeps, transcripts: Transcripts,
          old_chapters: chapterdb.Existing | None = None,
-         keep_all: bool = False) -> Plan:
+         keep_audio: bool = False, keep_tracks: bool = False) -> Plan:
     """What the new copy takes from ``old``. ``timing`` is the measured line
     between the two, None with ``untimed`` saying why there is none; ``keeps``
     says whether the improved copy keeps a soundtrack's language;
     ``transcripts`` finds a commentary's beside the library's copy; and
     ``old_chapters`` are its chapters as :func:`chapterdb.existing_chapters`
-    reads them. With ``keep_all`` nothing is encoded: a lossless track goes
+    reads them. With ``keep_audio`` nothing is encoded: a lossless track goes
     across as it is, and one at another speed, which only encoding could
-    bridge, is left; an audio description is taken whatever the soundtracks."""
+    bridge, is left. With ``keep_tracks`` an audio description is taken
+    whatever the soundtracks."""
     edition = editions_differ(new, old)
     if edition:
         return NOTHING._replace(library=old.path, left=(
@@ -126,13 +127,13 @@ def plan(new: Profile, old: Profile, timing: Timing | None, untimed: str,
             needs_sync(what)
             return
         steady = timing.steady(new.seconds)
-        if not steady and (keep_all or not track.lossless):
+        if not steady and (keep_audio or not track.lossless):
             left.append("%s: the existing file runs at another speed, and a "
                         "%s track cannot be put to the new one's without "
                         "encoding it again" % (
                             what, "lossless" if track.lossless else "lossy"))
             return
-        encode = track.lossless and not keep_all
+        encode = track.lossless and not keep_audio
         audio.append(Carried(track, kind, encode, not steady, found))
         carried.append(what + (" (to opus%s)" % (
             "" if steady else ", put to the new file's speed")
@@ -175,7 +176,7 @@ def plan(new: Profile, old: Profile, timing: Timing | None, untimed: str,
         what = "the %s track %s" % (kind, _said(track))
         spoken = mine | {_language(item.audio) for item in audio
                          if item.kind == "soundtrack"}
-        if (kind == "audio description" and not keep_all
+        if (kind == "audio description" and not keep_tracks
                 and _language(track) in spoken):
             left.append("%s: the improved copy keeps no audio description "
                         "beside a soundtrack in its language" % what)

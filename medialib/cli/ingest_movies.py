@@ -168,21 +168,24 @@ r |  | also convert the remuxes, last of all: a film whose name says
                   is, and written beside it as "<film> {edition-AV1}.mkv", so
                   Plex offers the two as one film. The film itself is left as
                   it is. A full ingest only.
-k |  | keep everything: a full ingest that takes nothing away. No audio or
+k | [part] | keep <part>: takes nothing away. The parts are audio, tracks and
+                  dv, comma-separated, and a bare -k keeps all three. audio:
+                  lossless audio stays lossless rather than going to opus, and
+                  a track of the library's copy that would need encoding (put
+                  to another speed) is not carried. tracks: no audio or
                   subtitle track is dropped - not another language, not an
                   image subtitle, not an audio description, not the lesser of
-                  two surround tiers - lossless audio stays lossless rather
-                  than going to opus, and a dual-layer Dolby Vision profile 7
-                  keeps its enhancement layer. Everything that only adds or
-                  corrects still happens: the cleaning, renaming and IMDb
-                  tagging, the track names and flags, the subtitles downloaded
-                  and the commentary transcripts muxed in, the chapters, a false
-                  Dolby Vision claim or an overstated level corrected, and what
-                  is carried over from the Plex library's copy - its soundtracks
-                  in every language, lossless as they are. A track of the
-                  library's copy that would need encoding (put to another
-                  speed) is not carried. Cannot be combined with -r, which
-                  encodes.
+                  two surround tiers - and what is carried over from the Plex
+                  library's copy is its soundtracks in every language, lossless
+                  as they are. dv: a dual-layer Dolby Vision profile 7 keeps
+                  its enhancement layer. Everything that only adds or corrects
+                  still happens: the cleaning, renaming and IMDb tagging, the
+                  track names and flags, the subtitles downloaded and the
+                  commentary transcripts muxed in, the chapters, a false Dolby
+                  Vision claim or an overstated level corrected. A folder
+                  literally named "audio" is written ./audio: the word after -k
+                  goes to -k when it is a part. Cannot be combined with -r,
+                  which encodes.
 w |  | with -t or -i, actually perform the renames instead of printing
                   them; with -s, sync, throw out and download; with -n, name
                   the commentaries. On its own it is a usage error rather than
@@ -203,7 +206,7 @@ i | <file> | the hand-written id list filled in and read BACK: tagging and
 
 OPT_VARS = ("f:fragmentsOverride a:commentaryOnly t:tagsOnly s:subtitlesOnly "
             "n:commentaryNames c:chaptersOnly p:plexOnly r:convertRemuxes "
-            "w:writeTags i:idList k:keepAll")
+            "w:writeTags i:idList k:keepParts")
 OPT_COLUMN = 18
 OPT_LONG = ("f:fragments a:commentary t:tags-only s:subtitles-only "
             "n:commentary-names c:chapters p:plex r:convert-remuxes w:write "
@@ -469,6 +472,7 @@ def spec(program: str) -> "clioptions.Spec":
         options=OPT_SPEC,
         long=OPT_LONG,
         vars=OPT_VARS,
+        flags="optionalArg:k:^(audio|tracks|dv)(,(audio|tracks|dv))*$",
         column=OPT_COLUMN,
         tail=USAGE_TAIL,
         no_args_with_credits=False,
@@ -1797,11 +1801,15 @@ def drop_audio_descriptions(tracks: list) -> list:
 
 def decide_actions(tracks: list, movie: str, ram_root: str,
                    original: str = "", spoken: tuple = (),
-                   keep_all: bool = False, kept: tuple = ("en",)) -> bool:
+                   keep_parts: frozenset = frozenset(),
+                   kept: tuple = ("en",)) -> bool:
     """keep, drop or swap, per track; True when anything changed.
 
-    With ``keep_all`` every track is kept as it is: nothing is dropped and
-    no opus is swapped in.
+    The ``-k`` parts the run was told to keep, of which this decides two:
+    with ``audio`` a lossless track is not swapped for its opus, and with
+    ``tracks`` no audio or subtitle track is dropped. With both - the bare
+    -k - every track is kept as it is: nothing is dropped and no opus is
+    swapped in.
 
     The languages kept are ``kept`` - the ``keepLanguages`` setting, read
     once at the run's start - and the film's own, as
@@ -1816,7 +1824,9 @@ def decide_actions(tracks: list, movie: str, ram_root: str,
     libopus ceiling, a FLAC mono and a non-lossless commentary all simply have
     no opus, so they stay as they are.
     """
-    if keep_all:
+    keep_audio = "audio" in keep_parts
+    keep_tracks = "tracks" in keep_parts
+    if keep_audio and keep_tracks:
         for track in tracks:
             track.action = "keep"
         return False
@@ -1835,9 +1845,12 @@ def decide_actions(tracks: list, movie: str, ram_root: str,
             # Commentary tracks are exempt - a commentary is bonus material
             # rather than a second soundtrack, its language is often the only one
             # it comes in, and its transcript is being kept either way.
-            if (not _language_kept(track, primary, choice, kept)
+            if (not keep_tracks and not _language_kept(
+                    track, primary, choice, kept)
                     and not track.is_commentary):
                 track.action = "drop"
+            elif keep_audio:
+                track.action = "keep"
             else:
                 opus = opus_path(ram_root, movie, track.id)
                 if os.path.isfile(opus):
@@ -1846,8 +1859,8 @@ def decide_actions(tracks: list, movie: str, ram_root: str,
                 else:
                     track.action = "keep"
         elif track.is_subtitle:
-            if is_image_sub_codec(track.codec) \
-                    and not _language_kept(track, primary, choice, kept):
+            if (not keep_tracks and is_image_sub_codec(track.codec)
+                    and not _language_kept(track, primary, choice, kept)):
                 track.action = "drop"
         if track.action != "keep":
             changed = True

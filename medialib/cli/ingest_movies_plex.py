@@ -50,7 +50,7 @@ _INTEREST = ("mixed", "different", "new", "old", "same", "unread")
 
 
 def compare_roots(roots: list, log, keeps_for=None, carried=None,
-                  keep_all: bool = False) -> int:
+                  keep_parts: frozenset = frozenset()) -> int:
     """Every film under each folder of ``roots`` compared with the library;
     1 where the server could not be asked at all.
 
@@ -58,8 +58,10 @@ def compare_roots(roots: list, log, keeps_for=None, carried=None,
     its improved copy would keep (every language, when not given) - what the
     carry-over an ingest would make is worked out with. ``carried`` are the
     carry-overs a full ingest made, by :func:`folder_key`: a film with one is
-    said with what it took rather than what it would. ``keep_all`` is a
-    keep-everything ingest's, which encodes nothing."""
+    said with what it took rather than what it would. ``keep_parts`` are the
+    -k parts a full ingest was told to keep, of which this decides two:
+    ``audio`` encodes nothing of what it carries, and ``tracks`` takes an
+    audio description whatever the soundtracks."""
     server = plexserver.local()
     log("Plex: reading the library at %s" % server.url)
     try:
@@ -76,7 +78,7 @@ def compare_roots(roots: list, log, keeps_for=None, carried=None,
         for movie in films(root):
             verdict, places = _compare_film(movie, index, copies, log,
                                             keeps_for, carried or {},
-                                            keep_all)
+                                            keep_parts)
             tally.setdefault(verdict, []).append((movie, places))
     _report(tally, log)
     return 0
@@ -146,7 +148,8 @@ def _found(movie: str, index: dict, copies: list, tag: str = "") -> tuple:
 
 
 def _compare_film(movie: str, index: dict, copies: list, log,
-                  keeps_for=None, carried=None, keep_all: bool = False) -> tuple:
+                  keeps_for=None, carried=None,
+                  keep_parts: frozenset = frozenset()) -> tuple:
     """The film's verdict, and the files of its library copies."""
     log("Plex: %s" % os.path.basename(movie))
     found, how = _found(movie, index, copies)
@@ -166,7 +169,7 @@ def _compare_film(movie: str, index: dict, copies: list, log,
         verdicts.append(_against(
             movie, new, part, copy, log, keeps_for,
             made if made is not None and made.library in copy.files else None,
-            keep_all))
+            keep_parts))
     places = [path for copy in found for path in copy.files]
     # The film's own verdict: the most interesting of its copies'.
     for verdict in _INTEREST:
@@ -177,7 +180,7 @@ def _compare_film(movie: str, index: dict, copies: list, log,
 
 def _against(movie: str, new, part: str, copy, log, keeps_for=None,
              made: plexcarry.Plan | None = None,
-             keep_all: bool = False) -> str:
+             keep_parts: frozenset = frozenset()) -> str:
     if part or len(copy.files) > 1:
         log("  a film split into parts: not compared")
         return "unread"
@@ -216,7 +219,8 @@ def _against(movie: str, new, part: str, copy, log, keeps_for=None,
             new, old, timing, untimed,
             keeps_for(movie) if keeps_for is not None else lambda _audio: True,
             transcripts_beside(old.path), chapterdb.existing_chapters(old.path),
-            keep_all)
+            keep_audio="audio" in keep_parts,
+            keep_tracks="tracks" in keep_parts)
         for line in would.carried:
             log("    an ingest would carry from it: " + line)
         for line in would.left:
