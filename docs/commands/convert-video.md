@@ -17,7 +17,8 @@ x265 (**always 10-bit**), audio to Opus, everything else copied across.
 
 With no options, a run:
 
-- picks up `.mkv` and `.mp4` files only, and writes every output as `.mkv`
+- picks up `.mp4`, `.mkv`, `.avi`, `.mov`, `.webm`, `.m4v`, `.flv`, `.mpg`,
+  `.mpeg`, `.wmv` and `.ts` files only, and writes every output as `.mkv`
 - encodes video with the `av1BluRay` preset: SVT-AV1, 10-bit, quality shifted by resolution (`-p`, `-l`; [details](#quality-and-grain))
 - **measures each film's grain, denoises it out and synthesises it back** (`-g`)
 - **keeps the picture as it is**: no cropping, scaling or deinterlacing (`-c`, `-m`, `-u`)

@@ -32,6 +32,7 @@ from medialib.lib import (
     console,
     durationcheck,
     dynamicqueue,
+    enums,
     ffmpegselect,
     formatting,
     pausecontrol,
@@ -900,8 +901,9 @@ def _settle_and_run(settings, program: str, video_args: str, grain: str,
     # before the output folder is made, so a run with nothing to convert
     # leaves nothing behind.
     if not probes._sources(settings.input_dir):
-        return safety.fail_no_relevant_input(settings.input_dir,
-                                             "videos (.mkv / .mp4)")
+        return safety.fail_no_relevant_input(
+            settings.input_dir, "videos (%s)"
+            % enums.extension_list(list(enums.VIDEO_EXTENSIONS)))
     os.makedirs(settings.output_dir, exist_ok=True)
     ramscratch.init_ram_base()
 

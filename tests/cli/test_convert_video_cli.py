@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from medialib.lib import enums
 from tests import blackbox
 
 pytestmark = pytest.mark.stubbed
@@ -852,11 +853,18 @@ class TestWhatCountsAsInput:
         done, _outputs = self._run(video)
         assert "Nothing to do" not in done.stderr
 
+    def test_one_of_the_other_video_extensions_is_counted(self, video):
+        (video.inputs / "CLIP.avi").write_text("")
+        done, _outputs = self._run(video)
+        assert "Nothing to do" not in done.stderr
+
     def test_a_refused_run_leaves_no_output_folder_behind(self, video):
         (video.inputs / "notes.txt").write_text("")
         done, outputs = self._run(video)
         assert done.returncode == 1
-        assert "Nothing to do: no videos (.mkv / .mp4) found" in done.stderr
+        what = "videos (%s)" % enums.extension_list(
+            list(enums.VIDEO_EXTENSIONS))
+        assert ("Nothing to do: no %s found" % what) in done.stderr
         assert not outputs.exists()
 
 
