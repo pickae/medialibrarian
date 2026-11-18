@@ -63,6 +63,7 @@ from medialib.lib import (
     formatting,
     imagemagick,
     imagesizes,
+    onlinecover,
     ramscratch,
     runcontext,
     runlog,
@@ -1256,6 +1257,9 @@ class Run:
             # Skipped for a video, whose "video stream" is not cover art.
             if not video:
                 thumbnails.extract_source_cover(source, tmp_dir)
+                self._online_cover(relative, source, tmp_dir,
+                                   _seconds(input_duration_raw),
+                                   mono, channels)
             cover_target = out
         elif self.copy:
             copied = os.path.join(self.output_dir, relative)
@@ -1286,6 +1290,27 @@ class Run:
                     shutil.copyfile(kept, os.path.join(
                         self.output_dir,
                         os.path.splitext(relative)[0] + suffix))
+
+    def _online_cover(self, relative: str, source: str, tmp_dir: str,
+                      seconds: float, mono: bool, channels: int) -> None:
+        """Look online for a cover the source did not carry, where the track
+        is the odd one out rather than one of an album's - see
+        :func:`medialib.lib.onlinecover.track_wants_search`. A sidecar sharing
+        the track's name is a cover already, and is never searched past.
+
+        Whether the track is encoded in stereo goes with it: podcast length in
+        stereo is most likely a full-cast drama, and is looked for where
+        audiobooks are. ``channels`` is the source's count where the run
+        already probed it, 0 where it did not."""
+        stem = os.path.splitext(relative)[0]
+        if any(os.path.isfile(os.path.join(self.input_dir, stem + suffix))
+               for suffix in (".webp", ".jpg")):
+            return
+        if not onlinecover.enabled():
+            return
+        stereo = not mono and output_channels(
+            channels or source_channels(source), self.surround) >= 2
+        onlinecover.track_cover(source, seconds, tmp_dir, stereo=stereo)
 
     def _reapply_sidecar_cover(self, relative: str, source: str,
                                existing: str) -> None:
@@ -1366,6 +1391,11 @@ class Run:
             # whole-file encode follows.
             if not is_video_file(relative):
                 thumbnails.extract_source_cover(source, tmp_dir)
+                # A split file is never adaptive, so the run's own -m is
+                # what decides its channels.
+                self._online_cover(relative, source, tmp_dir,
+                                   onlinecover.media_seconds(source),
+                                   self.mono, 0)
             thumbnails.apply_cover(relative, stage, COVER_THRESHOLD,
                                    COVER_QUALITY, self.cover_resolution,
                                    self.input_dir, self.output_dir, tmp_dir,
@@ -1439,6 +1469,14 @@ def _touch_from(source: str, target: str) -> None:
         os.utime(target, (stamp.st_atime, stamp.st_mtime))
     except OSError:
         pass
+
+
+def _seconds(raw: object) -> float:
+    """A probed duration as seconds, 0 when it was not one."""
+    try:
+        return float(str(raw).strip() or 0)
+    except ValueError:
+        return 0.0
 
 
 class Planner:

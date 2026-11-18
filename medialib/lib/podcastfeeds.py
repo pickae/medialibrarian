@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
+import subprocess
 import sys
 import time
 from collections.abc import Sequence
@@ -35,6 +37,7 @@ __all__ = [
     "podcast_platform",
     "native_path",
     "resolve_ytdlp",
+    "locate_ytdlp",
     "is_nightly_version",
     "ytdlp_upgrade_command",
     "split_tabs",
@@ -278,6 +281,36 @@ def resolve_ytdlp(ytdlp_env: str, platform: str, home: str, script_home: str,
             return [candidate, "-m", "yt_dlp"]
 
     return None
+
+
+def locate_ytdlp(platform: str, script_dir: str) -> list[str] | None:
+    """:func:`resolve_ytdlp` asked of this host: what is on PATH, what is
+    executable where a download would put it, and which interpreters can
+    import it."""
+    present, executable, importable = set(), set(), set()
+    for name in ("yt-dlp-nightly", "yt-dlp", "yt-dlp.exe",
+                 "python3", "python", "py"):
+        if shutil.which(name):
+            present.add(name)
+    local_bin = os.path.join(os.path.expanduser("~"), ".local", "bin")
+    for candidate in (os.path.join(script_dir, "yt-dlp.exe"), "./yt-dlp.exe",
+                      os.path.join(local_bin, "yt-dlp-nightly"),
+                      os.path.join(local_bin, "yt-dlp")):
+        if os.access(candidate, os.X_OK):
+            executable.add(candidate)
+    for name in ("python3", "python", "py"):
+        if name not in present:
+            continue
+        try:
+            if subprocess.run([name, "-c", "import yt_dlp"],
+                              stdout=subprocess.DEVNULL,
+                              stderr=subprocess.DEVNULL).returncode == 0:
+                importable.add(name)
+        except OSError:
+            pass
+    return resolve_ytdlp(
+        os.environ.get("YTDLP", ""), platform, os.path.expanduser("~"),
+        script_dir, os.getcwd(), present, executable, importable)
 
 
 # A nightly's version carries the build time as a fourth component
