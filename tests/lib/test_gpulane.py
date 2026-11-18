@@ -12,6 +12,7 @@ import json
 import sys
 import threading
 import time
+import traceback
 
 import pytest
 
@@ -26,12 +27,22 @@ _STUB_RUNS = pytest.mark.skipif(
     reason="the stand-in encoder is a shell script fed symlinks")
 
 
-def _close(lane, seconds=30):
-    """lane.close(), failed rather than waited for should it hang."""
+def _close(lane, seconds=120):
+    """lane.close(), failed rather than waited for should it hang. The
+    deadline is generous: a CPU encode is a process start-up, slow on a
+    machine every worker of a parallel run is loading."""
     closer = threading.Thread(target=lane.close, daemon=True)
     closer.start()
     closer.join(seconds)
-    assert not closer.is_alive(), "the lane did not close in %d s" % seconds
+    if not closer.is_alive():
+        return
+    # Where each lane thread is stuck is what such a failure has to say.
+    frames = sys._current_frames()
+    stuck = "\n".join(
+        "%s:\n%s" % (thread.name,
+                     "".join(traceback.format_stack(frames[thread.ident])))
+        for thread in lane.threads if thread.ident in frames)
+    pytest.fail("the lane did not close in %d s:\n%s" % (seconds, stuck))
 
 _ENCODER = r'''#!/usr/bin/env bash
 trim=
