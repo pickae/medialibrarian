@@ -31,23 +31,24 @@ class TestTheRefusal:
     def test_a_code_the_table_does_not_know_is_refused(
             self, monkeypatch, tmp_path, capsys):
         (tmp_path / "Films").mkdir()
-        monkeypatch.setenv("keepLanguages", "pt")
+        monkeypatch.setenv("keepLanguages", "xx")
         assert run.main(["-p", str(tmp_path / "Films")],
                         script_dir=str(tmp_path / "script")) == 1
         errors = capsys.readouterr().err
         assert "keepLanguages" in errors
-        assert '"pt"' in errors
+        assert '"xx"' in errors
         assert "Nothing was changed." in errors
 
     def test_every_unknown_code_is_named(self, monkeypatch, tmp_path, capsys):
         (tmp_path / "Films").mkdir()
-        monkeypatch.setenv("keepLanguages", "pt,xx")
+        monkeypatch.setenv("keepLanguages", "xx,yy")
         assert run.main(["-p", str(tmp_path / "Films")],
                         script_dir=str(tmp_path / "script")) == 1
         errors = capsys.readouterr().err
-        assert '"pt"' in errors
         assert '"xx"' in errors
-        assert "de, en, es, fr, it, nl" in errors
+        assert '"yy"' in errors
+        assert "cs, da, de, el, en, es" in errors
+        assert "ja, ko, nl, no, pl, pt" in errors
 
 
 class TestTheRunThatRemuxes:

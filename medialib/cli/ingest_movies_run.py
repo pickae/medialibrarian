@@ -914,6 +914,15 @@ def main(argv: list, program: str = "ingest-movies",
         clioptions.refuse_usage(declaration, error.message)
         return 1
 
+    # The languages the run fetches and tests subtitles for, read once here
+    # too: a code the language table does not know is refused the same way,
+    # and the setting's order is the order the sources are asked in.
+    try:
+        wanted = languages.wanted_subtitles()
+    except clioptions.UsageError as error:
+        clioptions.refuse_usage(declaration, error.message)
+        return 1
+
     # -w carries out a dry run, and without -t, -i or -s there is none to
     # carry out. Refused rather than ignored: a -tw typed as -w would otherwise
     # be a full ingest, hours of converting and remuxing, on a library asked
@@ -1070,7 +1079,7 @@ def main(argv: list, program: str = "ingest-movies",
 
     try:
         return _run_phases(result, program, script_dir, roots, names,
-                           fragments_file, kept)
+                           fragments_file, kept, wanted)
     finally:
         # Every phase below can pin an ffmpeg or settle a run directory, and
         # each refusal after that must hand it back, not only a finished run.
@@ -1079,7 +1088,8 @@ def main(argv: list, program: str = "ingest-movies",
 
 def _run_phases(result, program: str, script_dir: str, roots: list,
                 names: list, fragments_file: str,
-                kept: tuple = ("en",)) -> int:
+                kept: tuple = ("en",),
+                wanted: tuple | None = None) -> int:
     # Commentary only is the one phase of the full ingest it names, run on the
     # folders given: the walk and the transcription, and not the rest of the
     # run around them.
@@ -1104,7 +1114,8 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
         if not _may_overwrite(script_dir, names, (SUBTITLES_LIST,)):
             return 1
         return _subtitles_only(program, script_dir, roots, names,
-                               bool(result.values.get("writeTags")))
+                               bool(result.values.get("writeTags")),
+                               wanted)
 
     if result.values.get("chaptersOnly"):
         return _chapters_only(program, roots)
@@ -1153,7 +1164,7 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
     # named in the same breath and are not answerable for it. One folder on its
     # own still gets the full refusal, which is the whole of what it was asked
     # to do.
-    wanted = "movies (.mkv, or a video to remux into Matroska: %s)" % (
+    expected = "movies (.mkv, or a video to remux into Matroska: %s)" % (
         enums.extension_list(list(enums.SOURCE_VIDEO_EXTENSIONS)))
     ingestable = [root for root in roots
                   if rules._files_below(root, matches=lambda name:
@@ -1163,7 +1174,7 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
     for root in roots:
         if root not in ingestable:
             if len(roots) == 1:
-                return safety.fail_no_relevant_input(root, wanted)
+                return safety.fail_no_relevant_input(root, expected)
             log('Nothing this ingest can read under "%s" - skipped' % root)
     if not ingestable:
         return 1
@@ -1231,7 +1242,7 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
                 scratch_headroom=0,
                 convert_remuxes=bool(result.values.get("convertRemuxes")),
                 keep_all=bool(result.values.get("keepAll")),
-                keep_languages=kept)
+                keep_languages=kept, subtitle_languages=wanted)
 
     listed = dict(zip(roots, names, strict=True))
     try:
@@ -1512,7 +1523,7 @@ def _tags_only(program: str, script_dir: str, roots: list, names: list,
 
 
 def _subtitles_only(program: str, script_dir: str, roots: list, names: list,
-                    write: bool) -> int:
+                    write: bool, wanted: tuple | None = None) -> int:
     """The subtitle phase on its own, and a test of the subtitles already there.
 
     Every ``<movie>.xx.srt`` beside a film anywhere under each folder given is
@@ -1530,6 +1541,8 @@ def _subtitles_only(program: str, script_dir: str, roots: list, names: list,
     renaming, and no commentary - its transcripts are named after their track
     and are never one of the sidecars tested.
     """
+    if wanted is None:
+        wanted = languages.wanted_subtitles()
     log = _preview_log(write)
     # Which ffmpeg of the ones installed, before the preflight asks whether PATH
     # can reach one.
@@ -1564,7 +1577,10 @@ def _subtitles_only(program: str, script_dir: str, roots: list, names: list,
                "tested"))
     _warn_without_subcleaner()
 
-    done = donelog.DoneLog(commands.logs_file(script_dir, SUBTITLES_DONE))
+    # A line written before the scope was recorded is one the table's
+    # default languages were done for.
+    done = donelog.DoneLog(commands.logs_file(script_dir, SUBTITLES_DONE),
+                           default_scope=languages.SUBTITLE_DEFAULT)
     totals = {"kept": 0, "discarded": 0, "untested": 0}
     for root, name in zip(roots, names, strict=True):
         log('Phase: testing the subtitles already beside the films in "%s"'
@@ -1572,7 +1588,8 @@ def _subtitles_only(program: str, script_dir: str, roots: list, names: list,
             + ("" if write else " - DRY RUN, nothing will be changed"))
         verdicts = subtitlefiles.check_subs(
             root, rules.MAX_SYNC_OFFSET, rules.MAX_SYNC_QUALITY_OFFSET,
-            ffsubsync_quality, write, log, providers or None, done)
+            ffsubsync_quality, write, log, providers or None, done,
+            wanted=wanted)
         for verdict, found in verdicts.items():
             totals[verdict] += len(found)
         _write_subtitle_list(commands.logs_file(script_dir,
@@ -2712,7 +2729,8 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
         subtitlefiles.download_subs(
             root, subtitlefiles.providers_to_ask(),
             rules.MAX_SYNC_OFFSET, rules.MAX_SYNC_QUALITY_OFFSET,
-            state.ffsubsync_quality, log)
+            state.ffsubsync_quality, log,
+            wanted=getattr(state, "subtitle_languages", None))
     else:
         log("Phase: downloading missing subtitles - SKIPPED (no "
             "ffsubsync/pipx, see the warning at startup)")
@@ -2885,7 +2903,8 @@ def _start_subtitle_lane(state, root: str, subtitle_work: bool, locks,
     def download(films: list) -> list:
         return subtitlefiles.download_subs_for(
             films, providers, rules.MAX_SYNC_OFFSET,
-            rules.MAX_SYNC_QUALITY_OFFSET, state.ffsubsync_quality, log)
+            rules.MAX_SYNC_QUALITY_OFFSET, state.ffsubsync_quality, log,
+            wanted=getattr(state, "subtitle_languages", None))
 
     lane = lanes.SubtitleLane(root, subtitlefiles.subtitle_movies(root),
                               download, locks, log, row,

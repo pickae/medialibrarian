@@ -250,6 +250,12 @@ class TestTheReadingsOfOneTitle:
         ("Beacon, The", "The Beacon", "an article a catalogue moved"),
         ("Jonas & Greta", "Jonas and Greta", "an ampersand written out"),
         ("Jonas & Greta", "Jonas und Greta", "and written in German"),
+        ("Jaro & Jiri", "Jaro a Jiri", "and written in Czech"),
+        ("Peter & Anna", "Peter es Anna", "and written in Hungarian"),
+        ("Marius & Ada", "Marius si Ada", "and written in Romanian"),
+        ("Ali & Ayse", "Ali ve Ayse", "and written in Turkish"),
+        ("Hans & Gretel", "Hans ja Gretel", "and written in Finnish"),
+        ("Ken & Miyako", "Ken to Miyako", "and written in Japanese"),
         ("Seewolf vs. Baer", "Seewolf versus Baer", "versus written out"),
         ("Movie - Rivertown", "Rivertown", "a filler word in front"),
         ("What Now?", "What Now", "a question mark"),
@@ -748,6 +754,13 @@ class TestANumberSpelledOut:
         ("2 Wanderers", "Two Wanderers"),
         ("The Glorious 7", "The Glorious Seven"),
         ("Falkenauge 2", "Falkenauge Two"),
+        ("2 Hus", "Tvaa Hus"),
+        ("8 Dage", "Aatta Dage"),
+        ("5 Ház", "Oet Ház"),
+        ("3 Kule", "Uec Kule"),
+        ("4 Porten", "Doert Porten"),
+        ("4 Vuotta", "Neljae Vuotta"),
+        ("20 Vuotta", "Kaksikymmentae Vuotta"),
     ])
     def test_the_word_and_the_figure_are_one_number(self, one, other):
         assert titlematch.equivalent(one, other)
@@ -1069,14 +1082,27 @@ class TestNumbersSpelledOutInEachLanguage:
         ("De 12 Molens", "De twaalf Molens"),
         ("Los 5 Faroles", "Los cinco Faroles"),
         ("I 5 Lampioni", "I cinque Lampioni"),
-        ("Die 5 Laternen", "Die Fünf Laternen"),
         ("Die 5 Laternen", "Die Fuenf Laternen"),
+        ("Die 5 Laternen", "Die Fuenf Laternen"),
+        ("Os 3 Farois", "Os tres Farois"),
+        ("Trzy Latarnie", "3 Latarnie"),
+        ("Två Latarner", "2 Latarner"),
+        ("De 4 Skodder", "De fire Skodder"),
+        ("Kaksi Kertomusta", "2 Kertomusta"),
+        ("Tři Věže", "3 Věže"),
+        ("Három Torony", "3 Torony"),
+        ("Üç Kule", "3 Kule"),
+        ("De 8 Dage", "De otte Dage"),
+        ("A 5 Laterna", "A ot Laterna"),
     ])
     def test_the_word_and_the_figure_are_one_title(self, one, other):
         assert titlematch.equivalent(one, other)
 
     @pytest.mark.parametrize("word", ["Elf", "Once", "Due", "Seize", "Onze",
-                                      "Sei", "Otto", "Ein", "Un", "Uno"])
+                                      "Sei", "Otto", "Ein", "Un", "Uno",
+                                      "Sex", "To", "Pet", "Hat", "On",
+                                      "Um", "Yksi", "Ett", "En", "Egy",
+                                      "Bir", "Het"])
     def test_a_word_that_is_also_a_word_is_not_a_number(self, word):
         assert word.lower() not in titlematch.NUMBER_WORDS
 

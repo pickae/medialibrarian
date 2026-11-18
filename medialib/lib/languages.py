@@ -7,10 +7,11 @@ whisper output - so supporting another language is a row here and nothing else.
 
 from __future__ import annotations
 
+import os
 import re
 from typing import NamedTuple
 
-from medialib.lib import titlematch
+from medialib.lib import clioptions, titlematch
 from medialib.lib.enums import shell_lower
 
 
@@ -20,7 +21,8 @@ class Language(NamedTuple):
     ``code3b`` is ISO 639-2/B, which is what mkvmerge REPORTS where ``code3``
     (639-2/T) is what it is FED: a track muxed as "deu" reads back as "ger", so a
     lookup on the fed code alone would recognise no German, French or Dutch track
-    at all. Only those three have two codes; the rest repeat the one they have.
+    at all. Only those three and Chinese have two codes (it is fed "chi" and
+    reports "zho"); the rest repeat the one they have.
     """
 
     code2: str
@@ -41,7 +43,59 @@ LANGUAGES = (
     Language("nl", "nld", "Dutch", ("dutch", "nederlands"), "dut"),
     Language("es", "spa", "Spanish", ("spanish", "espagnol"), "spa"),
     Language("it", "ita", "Italian", ("italian", "italien"), "ita"),
+    Language("pt", "por", "Portuguese", ("portuguese", "português", "portugues"), "por"),
+    Language("pl", "pol", "Polish", ("polish", "polski"), "pol"),
+    Language("sv", "swe", "Swedish", ("swedish", "svenska"), "swe"),
+    Language("da", "dan", "Danish", ("danish", "dansk"), "dan"),
+    Language("no", "nor", "Norwegian", ("norwegian", "norsk"), "nor"),
+    Language("fi", "fin", "Finnish", ("finnish", "suomi"), "fin"),
+    Language("cs", "ces", "Czech", ("czech", "česky", "cesky"), "ces"),
+    Language("hu", "hun", "Hungarian", ("hungarian", "magyar"), "hun"),
+    Language("ro", "ron", "Romanian", ("romanian", "română", "romana"), "ron"),
+    Language("el", "ell", "Greek", ("greek", "ελληνικά", "ellinika"), "ell"),
+    Language("tr", "tur", "Turkish", ("turkish", "türkçe", "turkce"), "tur"),
+    Language("ru", "rus", "Russian", ("russian", "русский"), "rus"),
+    Language("ja", "jpn", "Japanese", ("japanese", "nihongo", "にほんご"), "jpn"),
+    Language("ko", "kor", "Korean", ("korean", "hangugeo", "한국어"), "kor"),
+    Language("zh", "chi", "Chinese", ("chinese", "zhongwen", "中文"), "zho"),
 )
+
+# The subtitle languages a run fetches and tests when the
+# ``subtitleLanguages`` setting names none of its own: the table's first six,
+# in the table's order - the languages a run fetched before the setting
+# existed, so a run that does not set it fetches what it always fetched.
+SUBTITLE_DEFAULT = ("en", "de", "fr", "nl", "es", "it")
+
+
+def wanted_subtitles() -> tuple:
+    """The rows a run fetches and tests subtitles for: the
+    ``subtitleLanguages`` setting's codes, in the order it names them, each
+    as its row of :data:`LANGUAGES`.
+
+    A setting that names nothing - unset or empty - names the default
+    :data:`SUBTITLE_DEFAULT`, a code named twice is one language, and a code
+    the table does not know is refused, naming it and the codes the table
+    has, because a language this collection does not recognise would be
+    fetched for and read back with no one to have been told.
+    """
+    raw = os.environ.get("subtitleLanguages", "")
+    codes: list = []
+    for entry in raw.split(","):
+        code = shell_lower(entry.strip())
+        if code and code not in codes:
+            codes.append(code)
+    if not codes:
+        codes = list(SUBTITLE_DEFAULT)
+    by_code = {row.code2: row for row in LANGUAGES}
+    unknown = [code for code in codes if code not in by_code]
+    if unknown:
+        raise clioptions.UsageError(
+            "The subtitleLanguages setting names %s, which the language "
+            "table does not know. It knows: %s."
+            % (", ".join('"%s"' % code for code in unknown),
+               ", ".join(sorted(by_code))))
+    return tuple(by_code[code] for code in codes)
+
 
 # The words that mark an audio track as a commentary, in the spellings track names
 # really use. A Matroska should say this with the commentary FLAG, and many do, but
@@ -50,7 +104,10 @@ LANGUAGES = (
 # "Audio Commentary". Anything not recognised here gets no commentary flag and no
 # transcript, so this list is what "every commentary track" means.
 COMMENTARY_KEYWORDS = ("comment", "kommentar", "commentaar", "commentaire",
-                       "comentario", "commento")
+                       "comentario", "comentário", "commento", "komentarz",
+                       "kommentointi", "komentář", "komentár", "kommentár",
+                       "comentariu", "yorum", "комментарий", "σχόλιο",
+                       "解説", "해설", "解说")
 
 # mkvmerge reports an unset language as "und", and a missing property renders as the
 # literal "null"; "mis", "qaa" and "zxx" are uncoded, reserved and "no linguistic
@@ -68,7 +125,10 @@ def is_real_language_tag(tag: str) -> bool:
 # them: a word that short is a letter from far too many others, and the keyword
 # above already finds it spelled right.
 COMMENTARY_WORDS = ("commentary", "commentaries", "kommentar", "kommentare",
-                    "commentaire", "commentaar", "comentario", "commento")
+                    "commentaire", "commentaar", "comentario", "comentário",
+                    "commento", "komentarz", "kommentointi", "komentář",
+                    "kommentár", "comentariu", "yorum", "комментарий",
+                    "σχόλιο", "解説", "해설", "解说")
 
 # "audio" glued on in front, the way "Audiokommentar" is spelled.
 _AUDIO_PREFIX = "audio"

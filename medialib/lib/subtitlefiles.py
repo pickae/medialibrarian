@@ -848,20 +848,26 @@ def subtitle_movies(directory: str) -> list:
 def download_subs(directory: str, providers: tuple,
                   max_sync_offset: str, max_sync_quality_offset: str,
                   ffsubsync_quality: str,
-                  log: Callable[[str], None]) -> None:
+                  log: Callable[[str], None],
+                  wanted: tuple | None = None) -> None:
     """Do the one-language download for every movie of
-    :func:`subtitle_movies` and every language. Sequential by design:
-    rapid-fire downloads get throttled.
+    :func:`subtitle_movies` and every language the run wants. Sequential by
+    design: rapid-fire downloads get throttled.
 
+    ``wanted`` is the run's :func:`languages.wanted_subtitles` - the
+    ``subtitleLanguages`` setting - and the setting's default, where a run
+    does not say.
     A provider left out for want of its login is said once for the folder
     (see :func:`missing_login_warning`) rather than once per film and
     language, and not at all where no subtitle is missing; with none left to
     ask, nothing is walked.
     """
+    if wanted is None:
+        wanted = languages.wanted_subtitles()
     movies = subtitle_movies(directory)
     warning = missing_login_warning(providers)
     if warning and any(not os.path.isfile(_sidecar(movie, row.code2))
-                       for movie in movies for row in languages.LANGUAGES):
+                       for movie in movies for row in wanted):
         log(warning)
     if not providers:
         return
@@ -870,17 +876,22 @@ def download_subs(directory: str, providers: tuple,
         with TimingReference(movie) as timing:
             _download_missing(movie, providers, max_sync_offset,
                               max_sync_quality_offset, ffsubsync_quality, log,
-                              timing)
+                              timing, wanted=wanted)
 
 
 def _download_missing(movie: str, providers: tuple,
                       max_sync_offset: str, max_sync_quality_offset: str,
                       ffsubsync_quality: str, log: Callable[[str], None],
                       timing: TimingReference,
-                      imdb: str | None = None) -> None:
-    """Every language the film is missing, the first provider asked for all of
-    them in one call before each language goes on through its own tries."""
-    missing = [row.code2 for row in languages.LANGUAGES
+                      imdb: str | None = None,
+                      wanted: tuple | None = None) -> None:
+    """Every wanted language the film is missing, the first provider asked
+    for all of them in one call before each language goes on through its own
+    tries. ``wanted`` is the run's :func:`languages.wanted_subtitles`, and
+    the setting's default, where a run does not say."""
+    if wanted is None:
+        wanted = languages.wanted_subtitles()
+    missing = [row.code2 for row in wanted
                if not os.path.isfile(_sidecar(movie, row.code2))]
     if not missing or not providers:
         return
@@ -902,12 +913,15 @@ def _download_missing(movie: str, providers: tuple,
 
 def download_subs_for(films: list, providers: tuple, max_sync_offset: str,
                       max_sync_quality_offset: str, ffsubsync_quality: str,
-                      log: Callable[[str], None]) -> list:
+                      log: Callable[[str], None],
+                      wanted: tuple | None = None) -> list:
     """:func:`download_subs` for films a run has found the ids of before it
     has named them by them: ``films`` is [(movie, imdb id)], each searched for
     by its id. Asks nothing of a film without one - those wait for the walk
     over their names. Stops between films once an interrupt is asked for; the
     films done, for the caller that wants to know which."""
+    if wanted is None:
+        wanted = languages.wanted_subtitles()
     done = []
     for movie, imdb in films:
         if safety.abort_requested():
@@ -918,7 +932,7 @@ def download_subs_for(films: list, providers: tuple, max_sync_offset: str,
         with TimingReference(movie) as timing:
             _download_missing(movie, providers, max_sync_offset,
                               max_sync_quality_offset, ffsubsync_quality, log,
-                              timing, imdb)
+                              timing, imdb, wanted=wanted)
         done.append(movie)
     return done
 
@@ -1009,30 +1023,40 @@ def check_subs(directory: str, max_sync_offset: str,
                max_sync_quality_offset: str, ffsubsync_quality: str,
                write: bool, log: Callable[[str], None],
                providers: tuple | None = None,
-               done: donelog.DoneLog | None = None) -> dict:
+               done: donelog.DoneLog | None = None,
+               wanted: tuple | None = None) -> dict:
     """:func:`check_srt` for every ``<movie>.<xx>.srt`` beside every movie of
-    :func:`subtitle_movies`, in every language of the table - the sidecars a
+    :func:`subtitle_movies`, in every language the run wants - the sidecars a
     download would have written, and so never a commentary transcript, whose
     name carries the track number after the movie's.
+
+    ``wanted`` is the run's :func:`languages.wanted_subtitles` - the
+    ``subtitleLanguages`` setting - and the setting's default, where a run
+    does not say; the sidecars of a language the run does not want are not
+    tested, having been fetched and tested by the run that named it.
 
     With ``providers`` (see :func:`providers_to_ask`) each film then has what
     is missing downloaded before the walk goes on to the next, so one thrown
     out is fetched again straight away.
 
-    With ``done``, a film it holds is not walked at all, and with ``write`` and
-    ``providers`` as well each film is recorded in it once it has been
-    through both - unless one of its subtitles could not be tested, or the run
-    was interrupted, either of which may have left it half done.
+    With ``done``, a film it holds for every wanted code is not walked at
+    all, and with ``write`` and ``providers`` as well each film is recorded
+    in it for the wanted codes once it has been through both - unless one of
+    its subtitles could not be tested, or the run was interrupted, either of
+    which may have left it half done.
 
     Returns the sidecars by verdict: ``{"kept": [...], "discarded": [...],
     "untested": [...]}``.
     """
+    if wanted is None:
+        wanted = languages.wanted_subtitles()
+    codes = tuple(row.code2 for row in wanted)
     verdicts: dict = {"kept": [], "discarded": [], "untested": []}
     movies = subtitle_movies(directory)
     if done is not None:
-        skipped = [movie for movie in movies if done.has(movie)]
+        skipped = [movie for movie in movies if done.has(movie, codes)]
         if skipped:
-            movies = [movie for movie in movies if not done.has(movie)]
+            movies = [movie for movie in movies if not done.has(movie, codes)]
             log('{} film(s) skipped, done in an earlier run - recorded in '
                 '"{}"'.format(len(skipped), done.path))
     record = write and bool(providers)
@@ -1040,7 +1064,7 @@ def check_subs(directory: str, max_sync_offset: str,
         log(runlog.film_header(index, len(movies), directory, movie))
         untested = len(verdicts["untested"])
         with TimingReference(movie) as timing:
-            for row in languages.LANGUAGES:
+            for row in wanted:
                 srt = _sidecar(movie, row.code2)
                 if os.path.islink(srt) or not os.path.isfile(srt):
                     continue
@@ -1051,9 +1075,9 @@ def check_subs(directory: str, max_sync_offset: str,
             if providers:
                 _download_missing(movie, providers, max_sync_offset,
                                   max_sync_quality_offset, ffsubsync_quality,
-                                  log, timing)
+                                  log, timing, wanted=wanted)
         if (done is not None and record
                 and len(verdicts["untested"]) == untested
                 and not safety.abort_requested()):
-            done.add(movie)
+            done.add(movie, codes)
     return verdicts

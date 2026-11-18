@@ -66,23 +66,26 @@ def stubbed(monkeypatch, tmp_path):
 
     calls: list = []
     dones: list = []
+    wanteds: list = []
     verdicts = {"kept": [], "discarded": [], "untested": []}
 
     def check_subs(directory, max_offset, quality_offset, quality, write,
-                   log, providers=None, done=None):
+                   log, providers=None, done=None, wanted=None):
         calls.append(("check", directory, quality, write,
                       providers and [p.name for p in providers]))
         dones.append(done)
+        wanteds.append(wanted)
         return {key: list(found) for key, found in verdicts.items()}
 
     def download_subs(directory, providers, max_offset, quality_offset,
-                      quality, log):
+                      quality, log, wanted=None):
         calls.append(("download", directory, quality))
 
     monkeypatch.setattr(run.subtitlefiles, "check_subs", check_subs)
     monkeypatch.setattr(run.subtitlefiles, "download_subs", download_subs)
     script = tmp_path / "script"
     return {"calls": calls, "tools": tools, "logs": logs, "dones": dones,
+            "wanteds": wanteds,
             "verdicts": verdicts, "script": str(script)}
 
 
@@ -311,3 +314,25 @@ class TestTheCombosItRefuses:
         films = _library(tmp_path, "Films")
         assert run.main(["-w", str(films)]) == 1
         assert "-sw" in capsys.readouterr().err
+
+
+class TestTheLanguagesItChecksFor:
+    """The check runs for the languages the ``subtitleLanguages`` setting
+    names, and for what it always ran for - the table's first six - where the
+    setting names none."""
+
+    def test_without_the_setting_it_checks_the_default_six(self, stubbed,
+                                                           tmp_path):
+        films = _library(tmp_path, "Films")
+        _main(stubbed, "-s", str(films))
+        wanted = stubbed["wanteds"][0]
+        assert [row.code2 for row in wanted] \
+            == ["en", "de", "fr", "nl", "es", "it"]
+
+    def test_and_the_setting_s_when_it_is(self, stubbed, tmp_path,
+                                          monkeypatch):
+        films = _library(tmp_path, "Films")
+        monkeypatch.setenv("subtitleLanguages", "pt,ja")
+        _main(stubbed, "-s", str(films))
+        wanted = stubbed["wanteds"][0]
+        assert [row.code2 for row in wanted] == ["pt", "ja"]

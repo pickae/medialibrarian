@@ -9,6 +9,7 @@ import os
 import re
 import shlex
 import shutil
+import string
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -239,15 +240,14 @@ class TestRenameSubs:
                                    "The Movie/The Movie.en.srt")]
 
     def test_every_language_of_the_table(self, w):
-        tree = _tree(w, ("The Movie", "d"),
-                     "The Movie/a english.srt", "The Movie/b german.srt",
-                     "The Movie/c french.srt", "The Movie/d dutch.srt",
-                     "The Movie/e spanish.srt", "The Movie/f italian.srt",
-                     "The Movie/g.txt")
+        entries = ["The Movie/%s %s.srt" % (letter, row.sub_word.lower())
+                   for letter, row in zip(string.ascii_lowercase,
+                                          languages.LANGUAGES, strict=False)]
+        tree = _tree(w, ("The Movie", "d"), *entries, "The Movie/x.txt")
         subtitlefiles.rename_subs(str(tree))
         for row in languages.LANGUAGES:
             assert (tree / "The Movie/The Movie.{}.srt".format(row.code2)).is_file()
-        assert (tree / "The Movie/g.txt").is_file()
+        assert (tree / "The Movie/x.txt").is_file()
 
     def test_a_linked_movie_is_not_walked(self, w):
         # find -P -type d: a link to the movie folder is not a movie of its
@@ -936,13 +936,15 @@ class TestDownloadSubs:
         w.install("ffsubsync")
         # The first call asks for every language at once and answers for
         # none of them, so each is then asked on its own.
-        w.write("pipx", "- Movie.en.srt - - - - -")
+        w.write("pipx",
+                " ".join(["-"] + ["Movie.en.srt"] + ["-"] * 20))
         w.rc("ffsubsync", "0")
         w.say("ffsubsync", _GOOD_LOG)
         w.write("ffsubsync", "${--log-dir-path}/ffsubsync.log")
         logs = []
         subtitlefiles.download_subs(str(tree), _ORG, "600", "60", "yes",
-                                    logs.append)
+                                    logs.append,
+                                    wanted=tuple(languages.LANGUAGES))
         assert (tree / "Movie.en.srt").is_file()
         assert not (tree / "Featurettes/Clip.en.srt").exists()
         pipx_calls = [a for a in w.calls() if a[0] == "pipx"]
@@ -1007,7 +1009,8 @@ class TestDownloadSubs:
         w.install("pipx")
         logs = []
         subtitlefiles.download_subs(str(tree), _NO_ORG, "600", "60", "yes",
-                                    logs.append)
+                                    logs.append,
+                                    wanted=tuple(languages.LANGUAGES))
         assert logs[0] == ("WARNING: openSubtitlesUser/openSubtitlesPassword "
                            "not set, OpenSubtitles skipped")
         assert sum("OpenSubtitles skipped" in line for line in logs) == 1
@@ -1033,14 +1036,19 @@ class TestDownloadSubs:
         w.rc("pipx", "0")
         w.write("pipx", "Movie.en.srt")
         w.say("pipx", self._answers(en="saved\t7", de="none", fr="none",
-                                    nl="none", es="none", it="already"))
+                                    nl="none", es="none", it="already",
+                                    **{row.code2: "none"
+                                       for row in languages.LANGUAGES
+                                       if row.code2 not in
+                                       ("en", "de", "fr", "nl", "es", "it")}))
         w.say("ffprobe", "subrip")
         w.rc("ffsubsync", "0")
         w.say("ffsubsync", _GOOD_LOG)
         w.write("ffsubsync", "${--log-dir-path}/ffsubsync.log")
         logs = []
         subtitlefiles.download_subs(str(tree), _ORG, "600", "60", "yes",
-                                    logs.append)
+                                    logs.append,
+                                    wanted=tuple(languages.LANGUAGES))
         pipx_calls = [a for a in w.calls() if a[0] == "pipx"]
         assert [a[3] for a in pipx_calls] == [
             ",".join(row.code2 for row in languages.LANGUAGES)]
@@ -1154,12 +1162,13 @@ class TestCheckSubs:
                 " ".join(["${--log-dir-path}/ffsubsync.log"] * calls))
         return tree
 
-    def _check(self, tree, write):
+    def _check(self, tree, write, wanted=None):
         """The verdicts and what was said about the subtitles, each film's
         header left out: the headers are tested on their own below."""
         logs = []
         verdicts = subtitlefiles.check_subs(str(tree), "600", "60", "yes",
-                                            write, logs.append)
+                                            write, logs.append,
+                                            wanted=wanted)
         return verdicts, [line for line in logs
                           if not re.match(r"\[\d+/\d+\] ", line)]
 
@@ -1186,7 +1195,8 @@ class TestCheckSubs:
         w.install("pipx")
         logs = []
         subtitlefiles.check_subs(str(tree), "600", "60", "yes", True,
-                                 logs.append, _ORG)
+                                 logs.append, _ORG,
+                                 wanted=tuple(languages.LANGUAGES))
         second = logs.index("[2/2] " + os.path.join("Films", "Second", "Second.mkv"))
         first = logs[:second]
         assert first[0] == "[1/2] " + os.path.join("Films", "Movie", "Movie.mkv")
@@ -1286,8 +1296,8 @@ class TestCheckSubs:
     def test_every_language_and_nothing_but_the_movie_s_own_sidecars(
             self, w, monkeypatch):
         """A commentary transcript carries the track after the movie's name,
-        and a forced subtitle or one in a language outside the table is not
-        one a download would write, so none of them is tested. Nor is a
+        and a forced subtitle or one in a language the run does not want is
+        not one a download would write, so none of them is tested. Nor is a
         subtitle in an extras folder, nor one beside the copy an improvement
         kept."""
         own = ["Films/Movie/Movie.%s.srt" % row.code2
@@ -1296,15 +1306,47 @@ class TestCheckSubs:
             w, monkeypatch, *own,
             "Films/Movie/Movie 2 Audio Commentary.en.srt",
             "Films/Movie/Movie.en.forced.srt",
-            "Films/Movie/Movie.pt.srt",
+            "Films/Movie/Movie.kk.srt",
             "Films/Movie/Featurettes/Clip.mkv",
             "Films/Movie/Featurettes/Clip.en.srt",
             "Films/Movie/Movie (old).mkv",
             "Films/Movie/Movie (old).en.srt",
             calls=len(own))
-        verdicts, _logs = self._check(tree, write=False)
+        verdicts, _logs = self._check(tree, write=False,
+                                      wanted=tuple(languages.LANGUAGES))
         assert verdicts["kept"] == [str(tree / path) for path in own]
         assert len(self._synced(w)) == len(own)
+
+    def test_the_sidecar_of_a_language_the_run_does_not_want_is_not_tested(
+            self, w, monkeypatch):
+        """It was fetched and tested by the run that named it, and re-testing
+        it would re-sync a subtitle a later run no longer fetches at all."""
+        tree = self._library(
+            w, monkeypatch,
+            "Films/Movie/Movie.en.srt", "Films/Movie/Movie.pt.srt",
+            calls=1)
+        english = tuple(row for row in languages.LANGUAGES
+                        if row.code2 == "en")
+        verdicts, logs = self._check(tree, write=False, wanted=english)
+        assert verdicts == {"kept": [str(tree / "Films/Movie/Movie.en.srt")],
+                            "discarded": [], "untested": []}
+        assert logs == ["  English: in step with the audio (shifted +5.0 s) "
+                        "- would be kept"]
+
+    def test_the_download_asks_only_for_the_wanted_languages(
+            self, w, monkeypatch):
+        """The missing is asked per film, every wanted language in one call
+        before each goes on through its own tries - a language the run does
+        not want is not among them."""
+        tree = _tree(w, "Films/Movie/Movie.mkv")
+        monkeypatch.setenv("TMPDIR", str(w.tmp_path))
+        w.install("pipx")
+        english = tuple(row for row in languages.LANGUAGES
+                        if row.code2 in ("en", "de"))
+        subtitlefiles.check_subs(str(tree), "600", "60", "yes", True,
+                                 [].append, _ORG, wanted=english)
+        pipx = [argv[5] for argv in w.calls() if argv[0] == "pipx"]
+        assert pipx == [str(tree / "Films/Movie/Movie.mkv")] * (1 + len(english))
 
     def test_the_walk_reaches_a_nested_library(self, w, monkeypatch):
         nested = "Films/Westerns/Classics/Old/Old"
@@ -1380,12 +1422,14 @@ class TestCheckSubsDoneLog:
             self, w, monkeypatch):
         tree = self._tree(w, monkeypatch)
         subtitlefiles.check_subs(str(tree), "600", "60", "yes", True,
-                                 [].append, _ORG, self._done(w))
+                                 [].append, _ORG, self._done(w),
+                                 wanted=tuple(languages.LANGUAGES))
         searched = len(w.calls())
         assert searched == 1 + len(languages.LANGUAGES)
         logs = []
         subtitlefiles.check_subs(str(tree), "600", "60", "yes", True,
-                                 logs.append, _ORG, self._done(w))
+                                 logs.append, _ORG, self._done(w),
+                                 wanted=tuple(languages.LANGUAGES))
         assert len(w.calls()) == searched
         assert logs == ['1 film(s) skipped, done in an earlier run - recorded '
                         'in "%s"' % (w.tmp_path / "done.txt")]

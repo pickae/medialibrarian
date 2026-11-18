@@ -308,6 +308,8 @@ SYMBOL_WORDS = (
 CONJUNCTIONS = {
     "and": "and", "und": "and", "et": "and", "en": "and", "y": "and",
     "e": "and", "ed": "and", "i": "and", "og": "and", "och": "and",
+    "ja": "and", "a": "and", "es": "and", "si": "and", "ve": "and",
+    "to": "and",
     "vs": "vs", "v": "vs", "versus": "vs", "gegen": "vs", "contre": "vs",
 }
 
@@ -389,14 +391,20 @@ NUMBER_LABELS = frozenset((
 # words are two and three tokens long - "twenty five" - and reading those would
 # be arithmetic rather than a reading.
 #
-# In every language the library's audio is recognised in - the six of
-# :data:`medialib.lib.languages.LANGUAGES` - written as the fold leaves them:
-# accents dropped, and German's umlauts spelled out as well. A few are left out
-# on purpose. The ones are the articles of their languages ("ein", "un", "een",
-# "uno"), and :data:`ARTICLES` has them. And a word that is also an ordinary
-# word or a name somewhere else is not a number there: "once", "elf", "due" and
-# "seize" are English, "onze" is Dutch for "our", "sei" German for "be", and
-# "Otto" is a first name. French "dix" is a roman
+# In every Latin-script language the library's audio is recognised in -
+# :data:`medialib.lib.languages.LANGUAGES` minus the Greek, Cyrillic and CJK
+# ones the fold drops - written as the fold leaves them: accents dropped, and
+# the umlauts, the å and the ö spelled out as well. A few are left out on
+# purpose. The ones are the articles of their languages ("ein", "un", "een",
+# "uno"), and :data:`ARTICLES` has them - and the ones that are their
+# languages' "a" are left out the same way: "um" is Portuguese, "yksi"
+# Finnish, "ett" Swedish and Danish, "en" Danish and Norwegian, "egy"
+# Hungarian, "bir" Turkish. And a word that is also an ordinary word or a name
+# somewhere else is not a number there: "once", "elf", "due", "seize", "sex",
+# "to", "pet" and "hat" are English, "onze" is Dutch for "our", "sei" German
+# for "be", "on" is the Turkish preposition, "het" is Dutch for "the" and
+# "Otto" is a first name.
+# French "dix" is a roman
 # numeral spelled correctly - DIX is 509 - and the roman reading comes first.
 NUMBER_WORDS = {
     # English
@@ -430,6 +438,51 @@ NUMBER_WORDS = {
     "undici": 11, "dodici": 12, "tredici": 13, "quattordici": 14,
     "quindici": 15, "sedici": 16, "diciassette": 17, "diciotto": 18,
     "diciannove": 19, "venti": 20,
+    # Portuguese
+    "dois": 2, "duas": 2, "quatro": 4, "sete": 7, "oito": 8, "dez": 10,
+    "doze": 12, "treze": 13, "dezasseis": 16, "dezesseis": 16,
+    "dezassete": 17, "dezessete": 17, "dezoito": 18, "dezenove": 19,
+    "vinte": 20,
+    # Polish
+    "jeden": 1, "jedna": 1, "dwa": 2, "dwie": 2, "trzy": 3, "cztery": 4,
+    "piec": 5, "szesc": 6, "siedem": 7, "osm": 8, "dziewiec": 9,
+    "dziesiec": 10, "jedenascie": 11, "dwanascie": 12, "trzynascie": 13,
+    "czternascie": 14, "pietnascie": 15, "szesnascie": 16,
+    "siedemnascie": 17, "osiemnascie": 18, "dziewietnascie": 19,
+    "dwadziescia": 20,
+    # Swedish
+    "tva": 2, "tvaa": 2, "fyra": 4, "fem": 5, "sju": 7, "atta": 8,
+    "aatta": 8, "nio": 9, "tio": 10, "elva": 11, "tolv": 12,
+    "tretton": 13, "fjorton": 14, "femton": 15, "sexton": 16,
+    "sjutton": 17, "arton": 18, "nitton": 19, "tjugo": 20,
+    # Danish
+    "fire": 4, "seks": 6, "syv": 7, "otte": 8, "ni": 9, "ti": 10,
+    "tretten": 13, "fjorten": 14, "seksten": 16, "sytten": 17,
+    "atten": 18, "nitten": 19, "tyve": 20,
+    # Norwegian
+    "syve": 7, "atte": 8, "aette": 8, "att": 8, "atty": 18,
+    "tjue": 20, "tju": 20,
+    # Finnish
+    "kaksi": 2, "kolme": 3, "nelja": 4, "neljae": 4, "viisi": 5,
+    "kuusi": 6, "seitseman": 7, "seitsemaen": 7, "kahdeksan": 8,
+    "yhdeksan": 9, "yhdeksaen": 9, "kymmenen": 10, "yksitoista": 11,
+    "kaksitoista": 12, "kolmitoista": 13, "neljatoista": 14,
+    "viisitoista": 15, "kuusitoista": 16, "seitsemantoista": 17,
+    "seitsemaentoista": 17, "kahdeksantoista": 18, "yhdeksantoista": 19,
+    "yhdeksaentoista": 19, "kaksikymmenta": 20, "kaksikymmentae": 20,
+    # Czech
+    "dve": 2, "tri": 3, "ctyri": 4, "sest": 6, "sedm": 7, "devet": 9,
+    "deset": 10, "jedenact": 11, "dvanact": 12, "trinact": 13,
+    "ctrnact": 14, "patnact": 15, "sestnact": 16, "sedmnact": 17,
+    "osmnact": 18, "devetenact": 19, "dvacet": 20,
+    # Hungarian
+    "ketto": 2, "harom": 3, "negy": 4, "ot": 5, "oet": 5, "nyolc": 8,
+    "kilenc": 9, "tiz": 10, "tizenegy": 11, "tizenketto": 12,
+    "tizenharom": 13, "tizennegy": 14, "tizenot": 15, "tizenhat": 16,
+    "tizenhet": 17, "tizenkilenc": 19, "husz": 20,
+    # Turkish
+    "iki": 2, "uc": 3, "uec": 3, "dort": 4, "doert": 4, "bes": 5,
+    "alti": 6, "yedi": 7, "sekiz": 8, "dokuz": 9, "yirmi": 20,
 }
 
 # The letters a language spells OUT when it cannot write the accent, rather than

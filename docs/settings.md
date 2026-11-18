@@ -66,6 +66,7 @@ the two disagree.
 | `ramScratchMinFreeBytes` | With this little free in RAM, new scratch goes to disk instead | 1073741824 | `concat-audio`, `content-census`, `content-census-bi`, `convert-and-concat`, `convert-audio`, `convert-comics`, `convert-images`, `convert-video`, `ingest-books`, `ingest-movies`, `ingest-music`, `read-library`, `transcribe-audio`, `ytdlp` |
 | `readLibraryRamBase` | read-library's scratch, ahead of `ramScratchBase` | `ramScratchBase` | `read-library` |
 | `subDlApiKey` (secret) | API key of a free SubDL account, asked third for subtitles | unset | `ingest-movies` |
+| `subtitleLanguages` | The languages ingest-movies fetches and tests subtitles for: a comma list of ISO 639-1 codes the language table knows, in the order to fetch them; the table knows the six this defaults to plus pt, pl, sv, da, no, fi, cs, hu, ro, el, tr, ru, ja, ko and zh | en,de,fr,nl,es,it | `ingest-movies` |
 | `tmdbApiKey` (secret) | TheMovieDB API key, for naming films - and tagging their folders with an id, or matching them to Letterboxd's; without it the lookup is skipped | unset | `ingest-movies`, `plex-letterboxd-sync` |
 | `upscaleHome` | The VapourSynth environment `convert-video -u` upscales with | `~/vapoursynth` | `convert-video` |
 | `upscaleModel` | The upscaling model: a path, or a file name under `<upscaleHome>/models` | `2xLiveActionV1_SPAN_490000.onnx` | `convert-video` |

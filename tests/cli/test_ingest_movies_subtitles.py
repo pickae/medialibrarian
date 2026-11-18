@@ -139,7 +139,8 @@ def ingested(monkeypatch):
         monkeypatch.setattr(run_module, "log", lambda *a, **k: None)
 
         def download_subs(directory, providers, max_offset,
-                          max_quality_offset, ffsubsync_quality, log):
+                          max_quality_offset, ffsubsync_quality, log,
+                          wanted=None):
             seen["download"] = ffsubsync_quality
 
         def export_commentary(directory, *args, **_kw):
