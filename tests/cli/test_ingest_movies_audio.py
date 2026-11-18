@@ -71,7 +71,7 @@ def run(tmp_path, monkeypatch):
     ram = str(tmp_path / "ram")
     im.check_audio_tracks(movie, str(tmp_path), ram)
     # Where the opus of track N lands is this base + "_N.opus".
-    return movie, im.opus_path(ram, movie, 0)[:-len("_0.opus")], calls
+    return movie, im.lossless_path(ram, movie, 0)[:-len("_0.opus")], calls
 
 
 class TestWhichTracksAreTranscoded:
@@ -286,7 +286,7 @@ class TestWhatIsNotMuxedIn:
         monkeypatch.setattr(im, "_run", encode)
         ram = str(tmp_path / "ram")
         im.check_audio_tracks(movie, str(tmp_path), ram)
-        return im.opus_path(ram, movie, 1)
+        return im.lossless_path(ram, movie, 1)
 
     def test_a_failed_encode_leaves_nothing(self, tmp_path, monkeypatch):
         assert not os.path.exists(self._film(tmp_path, monkeypatch, 1, 7200.0))
@@ -356,7 +356,7 @@ class TestOnlyTheFilmsToImprove:
         monkeypatch.setattr(im, "check_audio_tracks",
                             lambda movie, root, ram_root: walked.append(
                                 os.path.basename(movie)))
-        run_module._transcode_opus(types.SimpleNamespace(ram_root="/ram"),
+        run_module._transcode_lossless(types.SimpleNamespace(ram_root="/ram"),
                                    str(tmp_path), jobs=1, exit_on_abort=False)
         assert walked == ["Film (2020).mkv"]
 
@@ -375,7 +375,7 @@ class TestTheKeptAudioTranscodesNothing:
         walked, ready = [], []
         monkeypatch.setattr(im, "check_audio_tracks",
                             lambda movie, root, ram_root: walked.append(movie))
-        run_module._transcode_opus(
+        run_module._transcode_lossless(
             types.SimpleNamespace(ram_root="/ram",
                                   keep_parts=frozenset({"audio"})),
             str(tmp_path), jobs=1, on_done=ready.append, exit_on_abort=False)

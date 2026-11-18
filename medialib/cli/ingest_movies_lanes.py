@@ -2,12 +2,12 @@
 the part of the machine it uses.
 
 The middle of a full ingest is four kinds of work on every film, and each
-leans on something else: the opus transcode on the CPU, the commentary
+leans on something else: the lossless transcode on the CPU, the commentary
 transcription on the GPU, the improved-copy remux on the disk, the subtitle
 download on the network. Run one after the other, each leaves the other three
 idle for as long as it lasts. Here they overlap where that is safe:
 
-- The REMUX LANE remuxes a film as soon as its own opus tracks and
+- The REMUX LANE remuxes a film as soon as its own converted lossless tracks and
   transcripts are done, the subtitle lane has had its turn at it (the
   subtitles it kept are muxed in) and what it carries over from the Plex
   library's copy is ready, one film at a time on a thread of its
@@ -87,11 +87,11 @@ class RemuxLane:
     everything it waits for is done.
 
     ``films`` are the main movies the remux walk would improve, as it spells
-    them. A film waits for its opus transcode always, for its transcripts
+    them. A film waits for its lossless transcode always, for its transcripts
     when ``transcripts`` is True, and for the ``subtitles`` lane's turn at it
     when one is given and has the film still to come, and for the ``carry``
     over from the Plex library (:mod:`medialib.cli.ingest_movies_carry`)
-    likewise; :meth:`opus_done`, :meth:`transcripts_done`,
+    likewise; :meth:`lossless_done`, :meth:`transcripts_done`,
     :meth:`subtitles_done` and :meth:`carry_done` say a film's are, from
     whichever thread finished them. ``improve`` is the
     remux of one film. :attr:`done` are the films this lane has seen to,
@@ -109,7 +109,7 @@ class RemuxLane:
         self._locks = locks
         self._log = log
         self._guard = threading.Lock()
-        self._waiting_opus = set(self._films)
+        self._waiting_lossless = set(self._films)
         self._waiting_transcripts = set(self._films) if transcripts else set()
         self._waiting_subtitles: set = set()
         self._waiting_carry: set = set()
@@ -128,11 +128,11 @@ class RemuxLane:
                 coming = carry.watch(self.carry_done)
                 self._waiting_carry = coming & set(self._films)
 
-    def opus_done(self, movie) -> None:
+    def lossless_done(self, movie) -> None:
         if movie is None:
             return
         with self._guard:
-            self._waiting_opus.discard(key(movie))
+            self._waiting_lossless.discard(key(movie))
         self._maybe(key(movie))
 
     def transcripts_done(self, movie: str) -> None:
@@ -152,7 +152,7 @@ class RemuxLane:
 
     def _maybe(self, film: str) -> None:
         with self._guard:
-            if (film not in self._films or film in self._waiting_opus
+            if (film not in self._films or film in self._waiting_lossless
                     or film in self._waiting_transcripts
                     or film in self._waiting_subtitles
                     or film in self._waiting_carry):

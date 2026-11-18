@@ -135,7 +135,7 @@ class TestTheRemuxLane:
         lane = lanes.RemuxLane(["/f/A.mkv"], improved.append,
                                lanes.FilmLocks(), False, lambda _line: None,
                                carry=carry)
-        lane.opus_done("/f/A.mkv")
+        lane.lossless_done("/f/A.mkv")
         assert improved == []
         carry.done("/f/A.mkv")
         lane.finish()

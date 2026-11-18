@@ -383,7 +383,7 @@ class TestTheLanePlacement:
             threads["opus"] = threading.current_thread()
             threads["jobs"] = jobs
 
-        monkeypatch.setattr(run, "_transcode_opus", transcode)
+        monkeypatch.setattr(run, "_transcode_lossless", transcode)
         monkeypatch.setattr(run, "main_movies", lambda root: [])
         monkeypatch.setattr(run, "improve_main_movies",
                             lambda *a, **k: None)
@@ -412,7 +412,7 @@ class TestTheLanePlacement:
         def export_commentary(directory, *args, film_queued=None, **_kw):
             threads["whisper"] = threading.current_thread()
 
-        monkeypatch.setattr(run, "_transcode_opus", transcode)
+        monkeypatch.setattr(run, "_transcode_lossless", transcode)
         monkeypatch.setattr(run.commentarytranscription,
                             "export_commentary", export_commentary)
         monkeypatch.setattr(run, "main_movies", lambda root: [])

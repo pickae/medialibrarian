@@ -110,6 +110,11 @@ SETTINGS: tuple[Setting, ...] = (
             "beside the film's own language: a comma list of ISO 639-1 codes "
             "the language table knows; the film's own language is kept "
             "whatever it says", ("ingest-movies",), "en"),
+    Setting("losslessAudioTarget", "The codec ingest-movies' improved copy "
+            "converts the lossless audio to: `opus` (the default, at a "
+            "per-channel target bitrate) or `flac`, which takes the channels "
+            "as they are, up to eight of them",
+            ("ingest-movies",), "opus"),
     Setting("mediaServerNaming", "The server the names are written for: "
             "`plex` or `jellyfin`. The id tag is written the way that server "
             "reads it - `{imdb-tt…}` and `[imdbid-tt…]` - and an edition as its "

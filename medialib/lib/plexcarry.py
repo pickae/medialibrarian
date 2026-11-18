@@ -15,7 +15,7 @@ can take from it:
   audio description in a language neither copy has a soundtrack in. Muxed
   across at the measured offset; a copy that runs at another speed is only
   bridged where the track is being encoded anyway - a lossless one, on its
-  way to opus - and a lossy one is left where it is.
+  way to the target codec - and a lossy one is left where it is.
 
 Never the picture, never the subtitles, and never a soundtrack swapped for a
 better one in a language the new copy already has: those stay the verdict's
@@ -45,8 +45,9 @@ class Carried(NamedTuple):
     """One audio track of the library's copy, carried into the new one.
 
     ``kind`` is "soundtrack", "commentary" or "other"; ``encode`` that it is
-    lossless and goes to opus on its way in, ``stretch`` that it is put to
-    the new copy's speed while it does. ``transcripts`` are the commentary's
+    lossless and goes to the run's lossless audio target on its way in,
+    ``stretch`` that it is put to the new copy's speed while it does.
+    ``transcripts`` are the commentary's
     transcripts beside the library's copy, as ``(srt, two-letter language)``
     - none for a commentary whisper is to transcribe."""
 
@@ -97,16 +98,18 @@ def _said(audio: Audio) -> str:
 def plan(new: Profile, old: Profile, timing: Timing | None, untimed: str,
          keeps: Keeps, transcripts: Transcripts,
          old_chapters: chapterdb.Existing | None = None,
-         keep_audio: bool = False, keep_tracks: bool = False) -> Plan:
+         keep_audio: bool = False, keep_tracks: bool = False,
+         lossless_target: str = "opus") -> Plan:
     """What the new copy takes from ``old``. ``timing`` is the measured line
     between the two, None with ``untimed`` saying why there is none; ``keeps``
     says whether the improved copy keeps a soundtrack's language;
     ``transcripts`` finds a commentary's beside the library's copy; and
     ``old_chapters`` are its chapters as :func:`chapterdb.existing_chapters`
-    reads them. With ``keep_audio`` nothing is encoded: a lossless track goes
-    across as it is, and one at another speed, which only encoding could
-    bridge, is left. With ``keep_tracks`` an audio description is taken
-    whatever the soundtracks."""
+    reads them. ``lossless_target`` is the codec the carried lossless tracks
+    are encoded to on the way. With ``keep_audio`` nothing is encoded: a
+    lossless track goes across as it is, and one at another speed, which only
+    encoding could bridge, is left. With ``keep_tracks`` an audio description
+    is taken whatever the soundtracks."""
     edition = editions_differ(new, old)
     if edition:
         return NOTHING._replace(library=old.path, left=(
@@ -135,7 +138,8 @@ def plan(new: Profile, old: Profile, timing: Timing | None, untimed: str,
             return
         encode = track.lossless and not keep_audio
         audio.append(Carried(track, kind, encode, not steady, found))
-        carried.append(what + (" (to opus%s)" % (
+        carried.append(what + (" (to %s%s)" % (
+            lossless_target,
             "" if steady else ", put to the new file's speed")
             if encode else ""))
 

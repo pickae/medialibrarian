@@ -14,10 +14,12 @@ Concluded EARLY, so that each film is still written once:
   made then and there - the commentaries' names, so the transcription names
   its transcripts after them, and the named chapters.
 - What needs PREPARING is prepared on a thread while the lanes run: a carried
-  lossless track is encoded to opus in the RAM scratch (put to its speed where
+  lossless track is encoded to the run's lossless audio target in the RAM
+  scratch (put to its speed where
   the two run at different ones), and a carried commentary with no transcript
   beside the library's copy is handed to the whisper lane. The remux lane
-  waits for a film's preparation as it waits for its opus and transcripts,
+  waits for a film's preparation as it waits for its converted lossless
+  tracks and transcripts,
   and its one mkvmerge call takes the carried tracks in.
 """
 
@@ -236,7 +238,8 @@ class LibraryCarry:
                 plexphase.transcripts_beside(item.old.path),
                 chapterdb.existing_chapters(item.old.path),
                 keep_audio="audio" in self._keep_parts,
-                keep_tracks="tracks" in self._keep_parts)
+                keep_tracks="tracks" in self._keep_parts,
+                lossless_target=rules.lossless_audio_target())
             if best is None or len(plan.carried) > len(best.carried):
                 best = plan
         return best
@@ -276,7 +279,7 @@ class LibraryCarry:
 
     def _inputs_of(self, movie: str, plan: plexcarry.Plan) -> list:
         """A film's carried tracks as remux inputs, each lossless one encoded
-        to opus in the RAM scratch on the way."""
+        to the run's lossless audio target in the RAM scratch on the way."""
         timing = plan.timing
         if timing is None:
             return []
@@ -285,43 +288,55 @@ class LibraryCarry:
         for carried in plan.audio:
             audio = carried.audio
             if carried.encode:
-                opus = self.opus_for(self._ram_root, movie, audio)
-                if self._encode(plan.library, audio, opus, carried.stretch,
-                                timing.speed):
-                    inputs.append(Input(opus, 0, "%d" % delay, carried))
+                converted = self.lossless_for(self._ram_root, movie, audio)
+                if self._encode(plan.library, audio, converted,
+                                carried.stretch, timing.speed):
+                    inputs.append(Input(converted, 0, "%d" % delay, carried))
                     continue
                 if carried.stretch:
                     self._log("  WARNING: %s could not be encoded to the new "
                               "file's speed: not carried: %s"
                               % (_said(audio), movie))
                     continue
-            # A lossy track, or a lossless one opus cannot take as it is,
+            # A lossy track, or a lossless one the target cannot take as it is,
             # muxed straight out of the library's copy.
             inputs.append(Input(plan.library, audio.track, "%d" % delay,
                                 carried))
         return inputs
 
     @staticmethod
-    def opus_for(ram_root: str, movie: str, audio: plexcompare.Audio) -> str:
-        """Where a carried track's opus waits for the remux: in the RAM
-        scratch beside the film's own (:func:`rules.opus_path`), and let go
-        of with them."""
-        return rules.opus_path(ram_root, movie, "library%d" % audio.track)
+    def lossless_for(ram_root: str, movie: str, audio: plexcompare.Audio) -> str:
+        """Where a carried track's converted lossless audio waits for the
+        remux: in the RAM scratch beside the film's own
+        (:func:`rules.lossless_path`), and let go of with them."""
+        return rules.lossless_path(ram_root, movie, "library%d" % audio.track)
 
-    def _encode(self, library: str, audio: plexcompare.Audio, opus: str,
-                stretch: bool, speed: float) -> bool:
+    def _encode(self, library: str, audio: plexcompare.Audio,
+                converted: str, stretch: bool, speed: float) -> bool:
         channels = str(audio.channels)
-        bitrate = bitrates.audio_bitrate(channels, "normal")
-        if not bitrate:
-            return False
-        encoding = rules.opus_encoding(library, audio.stream, channels, bitrate)
-        if isinstance(encoding, str):
-            return False
-        layout, channels, bitrate = encoding
+        target = rules.lossless_audio_target()
         filters = []
-        if layout[:1] == ["-af"]:
-            filters.append(layout[1])
-            layout = []
+        if target == "flac":
+            encoding = rules.flac_encoding(channels)
+            if isinstance(encoding, str):
+                return False
+            convert_args = ["-c:a", "flac"]
+            rate = " (%sch)" % channels
+        else:
+            bitrate = bitrates.audio_bitrate(channels, "normal")
+            if not bitrate:
+                return False
+            encoding = rules.opus_encoding(library, audio.stream, channels,
+                                           bitrate)
+            if isinstance(encoding, str):
+                return False
+            layout, channels, bitrate = encoding
+            if layout[:1] == ["-af"]:
+                filters.append(layout[1])
+                layout = []
+            convert_args = (["-c:a", "libopus", "-b:a", bitrate + "k"]
+                            + layout)
+            rate = " (%sk, %sch)" % (bitrate, channels)
         if stretch:
             if not audio.rate:
                 return False
@@ -329,28 +344,28 @@ class LibraryCarry:
             # was made: the pitch moves with the speed, and back again here.
             filters += ["asetrate=%.6f" % (audio.rate / speed),
                         "aresample=%d" % audio.rate]
-        if os.path.isfile(opus):
-            # Resumed: an opus a run before this one finished.
+        if os.path.isfile(converted):
+            # Resumed: a conversion a run before this one finished.
             return True
-        os.makedirs(os.path.dirname(opus), exist_ok=True)
-        partial = opus + ".part"
+        os.makedirs(os.path.dirname(converted), exist_ok=True)
+        partial = converted + ".part"
         with diskturn.turn(library):
-            self._log("Encoding the library's %s to opus (%sk, %sch)%s"
-                      % (_said(audio), bitrate, channels,
+            self._log("Encoding the library's %s to %s%s%s"
+                      % (_said(audio), target, rate,
                          ", put to the new file's speed" if stretch else ""))
             done = toolcapture.watched(
                 ["ffmpeg", "-y", "-loglevel", "error", "-nostats",
                  "-i", library, "-vn", "-map", "0:a:%d" % audio.stream,
-                 "-map_metadata", "-1", "-c:a", "libopus", "-b:a",
-                 bitrate + "k"] + layout
+                 "-map_metadata", "-1"]
+                + convert_args
                 + (["-af", ",".join(filters)] if filters else [])
-                + ["-f", "opus", partial],
+                + ["-f", target, partial],
                 announce=False, skipped="the track was not carried",
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
         if done.returncode != 0:
             rules._remove(partial)
             return False
-        os.replace(partial, opus)
+        os.replace(partial, converted)
         return True
 
     # --- the whisper lane's part -------------------------------------------

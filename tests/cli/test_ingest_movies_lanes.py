@@ -63,7 +63,7 @@ class TestRemuxLane:
 
     def test_a_film_waits_for_its_opus_and_its_transcripts(self):
         lane, improved, _said = self._lane(["/f/A.mkv", "/f/B.mkv"])
-        lane.opus_done("/f/A.mkv")
+        lane.lossless_done("/f/A.mkv")
         lane.transcripts_done("/f/B.mkv")
         lane.transcripts_done("/f/A.mkv")
         lane.finish()
@@ -72,23 +72,23 @@ class TestRemuxLane:
 
     def test_without_transcription_the_opus_is_all_it_waits_for(self):
         lane, improved, _said = self._lane(["/f/A.mkv"], transcripts=False)
-        lane.opus_done("/f/A.mkv")
+        lane.lossless_done("/f/A.mkv")
         lane.finish()
         assert improved == ["/f/A.mkv"]
 
     def test_a_film_is_remuxed_once_whichever_wait_ends_last(self):
         lane, improved, _said = self._lane(["/f/A.mkv"])
         lane.transcripts_done("/f/A.mkv")
-        lane.opus_done("/f/A.mkv")
-        lane.opus_done("/f/A.mkv")
+        lane.lossless_done("/f/A.mkv")
+        lane.lossless_done("/f/A.mkv")
         lane.transcripts_done("/f/A.mkv")
         lane.finish()
         assert improved == ["/f/A.mkv"]
 
     def test_a_film_that_is_not_a_main_movie_is_left_alone(self):
         lane, improved, _said = self._lane(["/f/A.mkv"], transcripts=False)
-        lane.opus_done("/f/Featurettes/Clip.mkv")
-        lane.opus_done(None)
+        lane.lossless_done("/f/Featurettes/Clip.mkv")
+        lane.lossless_done(None)
         lane.finish()
         assert improved == []
         assert lane.done == set()
@@ -102,8 +102,8 @@ class TestRemuxLane:
         improved: list = []
         lane, _unused, said = self._lane(["/f/A.mkv", "/f/B.mkv"],
                                          transcripts=False, improve=improve)
-        lane.opus_done("/f/A.mkv")
-        lane.opus_done("/f/B.mkv")
+        lane.lossless_done("/f/A.mkv")
+        lane.lossless_done("/f/B.mkv")
         lane.finish()
         assert improved == ["/f/B.mkv"]
         assert any("could not improve /f/A.mkv: broken" in line
@@ -113,7 +113,7 @@ class TestRemuxLane:
     def test_after_an_interrupt_nothing_more_is_started(self, monkeypatch):
         monkeypatch.setattr(lanes.safety, "abort_requested", lambda: True)
         lane, improved, _said = self._lane(["/f/A.mkv"], transcripts=False)
-        lane.opus_done("/f/A.mkv")
+        lane.lossless_done("/f/A.mkv")
         lane.finish()
         assert improved == []
         assert lane.done == set()
@@ -140,7 +140,7 @@ class TestRemuxLane:
         lane = lanes.RemuxLane(["/f/A.mkv"], improved.append,
                                lanes.FilmLocks(), False, lambda _line: None,
                                subtitles=subtitles)
-        lane.opus_done("/f/A.mkv")
+        lane.lossless_done("/f/A.mkv")
         assert lane.done == set() and improved == []
         subtitles.past("/f/./A.mkv")
         lane.finish()
@@ -152,7 +152,7 @@ class TestRemuxLane:
         lane = lanes.RemuxLane(["/f/A.mkv"], improved.append,
                                lanes.FilmLocks(), False, lambda _line: None,
                                subtitles=subtitles)
-        lane.opus_done("/f/A.mkv")
+        lane.lossless_done("/f/A.mkv")
         lane.finish()
         assert improved == ["/f/A.mkv"]
 
@@ -167,7 +167,7 @@ class TestRemuxLane:
 
         lane = lanes.RemuxLane(["/f/A.mkv"], improve, locks, False,
                                lambda _line: None)
-        lane.opus_done("/f/A.mkv")
+        lane.lossless_done("/f/A.mkv")
         assert inside.wait(5)
         taken = threading.Event()
 
@@ -197,7 +197,7 @@ class TestTheLaneRow:
         tracker.film_queued("/f/A.mkv")
         assert row.render() == "  whisper 0/1 · remux 0"
         tracker.record_done("/f/A track 2.mka")
-        remux.opus_done("/f/A.mkv")
+        remux.lossless_done("/f/A.mkv")
         remux.finish()
         assert row.render() == "  whisper 1/1 · remux 1"
 
@@ -300,10 +300,10 @@ class TestTheMiddleOfTheIngest:
 
         def transcode(state, root, jobs=None, on_done=None,
                       exit_on_abort=True, row=None):
-            threads["opus"] = threading.current_thread()
-            threads["opus_jobs"] = jobs
+            threads["lossless"] = threading.current_thread()
+            threads["lossless_jobs"] = jobs
             for film in films:
-                order.append("opus " + os.path.basename(film))
+                order.append("lossless " + os.path.basename(film))
                 on_done(film)
 
         def export_commentary(directory, *args, film_queued=None, **_kw):
@@ -321,7 +321,7 @@ class TestTheMiddleOfTheIngest:
             walked.extend(film for film in films
                           if lanes.key(film) not in skip)
 
-        monkeypatch.setattr(run_module, "_transcode_opus", transcode)
+        monkeypatch.setattr(run_module, "_transcode_lossless", transcode)
         monkeypatch.setattr(run_module, "main_movies", lambda root: films)
         monkeypatch.setattr(run_module, "improve_main_movies", walk)
         monkeypatch.setattr(run_module.commentarytranscription,
@@ -364,7 +364,7 @@ class TestTheMiddleOfTheIngest:
 
         monkeypatch.setattr(run_module, "improve_main_movies",
                             lambda *a, **k: events.append("walk"))
-        monkeypatch.setattr(run_module, "_transcode_opus",
+        monkeypatch.setattr(run_module, "_transcode_lossless",
                             lambda *a, **k: None)
         monkeypatch.setattr(run_module, "main_movies", lambda root: [])
         monkeypatch.setattr(run_module, "log", lambda *a, **k: None)
@@ -377,16 +377,16 @@ class TestTheMiddleOfTheIngest:
             self, monkeypatch, tmp_path):
         _order, _walked, threads, _state = self._stubbed(monkeypatch,
                                                          tmp_path, "cuda")
-        assert threads["opus"] is not threads["whisper"]
-        assert threads["opus_jobs"] == run_module._opus_jobs_beside_whisper()
+        assert threads["lossless"] is not threads["whisper"]
+        assert threads["lossless_jobs"] == run_module._lossless_jobs_beside_whisper()
 
     def test_with_whisper_on_the_cpu_the_transcode_goes_first(
             self, monkeypatch, tmp_path):
         order, _walked, threads, _state = self._stubbed(monkeypatch, tmp_path,
                                                         "cpu")
-        assert threads["opus"] is threads["whisper"]
-        assert order.index("opus B.mkv") < order.index("transcribed A.mkv")
-        assert threads["opus_jobs"] is None
+        assert threads["lossless"] is threads["whisper"]
+        assert order.index("lossless B.mkv") < order.index("transcribed A.mkv")
+        assert threads["lossless_jobs"] is None
 
 
 def test_an_interrupt_still_waits_for_the_lanes(monkeypatch, tmp_path):
@@ -397,7 +397,7 @@ def test_an_interrupt_still_waits_for_the_lanes(monkeypatch, tmp_path):
         def __init__(self, *args, **kwargs):
             pass
 
-        def opus_done(self, _movie):
+        def lossless_done(self, _movie):
             pass
 
         def finish(self):
@@ -409,7 +409,7 @@ def test_an_interrupt_still_waits_for_the_lanes(monkeypatch, tmp_path):
     def interrupted(*_args, **_kwargs):
         raise SystemExit(130)
 
-    monkeypatch.setattr(run_module, "_transcode_opus", interrupted)
+    monkeypatch.setattr(run_module, "_transcode_lossless", interrupted)
     monkeypatch.setattr(run_module, "log", lambda *a, **k: None)
     state = run_module.Run(whisper={"device": "cpu"})
     with pytest.raises(SystemExit):

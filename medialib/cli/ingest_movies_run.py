@@ -126,13 +126,13 @@ class Run:
         run is a no-op, the "(old)" sibling being what makes the folder skip
         itself.
 
-        The film's opus tracks wait in RAM for this one remux and are let go
-        after it, whatever came of it: the improved copy is the only place
-        they are ever written to disk."""
+        The film's converted lossless tracks wait in RAM for this one remux
+        and are let go after it, whatever came of it: the improved copy is the
+        only place they are ever written to disk."""
         try:
             self._improve_main_movie(movie)
         finally:
-            rules.forget_opus(self.ram_root, movie)
+            rules.forget_lossless(self.ram_root, movie)
 
     def _improve_main_movie(self, movie: str) -> None:
         # The heading is held back until there is something to put under it,
@@ -469,13 +469,15 @@ class Run:
                           job: dict, hevc: str,
                           subtitles: tuple | list = (),
                           carried: tuple | list = ()) -> tuple:
-        """File 0 is the original with unwanted tracks deselected; each swapped
-        opus, each downloaded subtitle and each commentary srt is an extra input
+        """File 0 is the original with unwanted tracks deselected; each
+        swapped converted lossless track, each downloaded subtitle and each
+        commentary srt is an extra input
         whose single track inherits the right language, name and flags.
 
         File ids are assigned deterministically - 0 the movie, then the prepared
-        video stream, then the swapped opus inputs in track order, then the
-        downloaded subtitles, then the commentary subtitles. ``--track-order``
+        video stream, then the swapped converted lossless inputs in track
+        order, then the downloaded subtitles, then the commentary subtitles.
+        ``--track-order``
         puts every track back in its original slot, except that the commentary
         audio tracks move below the other audio, the downloaded subtitles go in
         just before the first commentary subtitle (after the last subtitle when
@@ -507,16 +509,16 @@ class Run:
             extra += ["--default-duration", "0:" + job["fps"],
                       "--no-chapters", hevc]
 
-        opus_fid = {}
+        lossless_fid = {}
         for track in tracks:
             if track.action != "swap":
                 continue
-            opus_fid[track.id] = next_fid
+            lossless_fid[track.id] = next_fid
             next_fid += 1
             extra += ["--language", "0:" + (track.language or "und")]
-            # Always given, even empty: an opus left by an older run can still
-            # carry the movie's title, which mkvmerge would otherwise take as
-            # the name of a track that had none.
+            # Always given, even empty: a conversion left by an older run can
+            # still carry the movie's title, which mkvmerge would otherwise
+            # take as the name of a track that had none.
             name = track.name if track.name and track.name != "null" else ""
             extra += ["--track-name", "0:" + name]
             extra += ["--default-track-flag",
@@ -525,7 +527,7 @@ class Run:
                 extra += ["--forced-display-flag", "0:1"]
             if track.is_commentary:
                 extra += ["--commentary-flag", "0:1"]
-            extra += ["--no-chapters", track.opus]
+            extra += ["--no-chapters", track.lossless]
 
         sub_fids = []
         for srt, language in subtitles:
@@ -556,7 +558,7 @@ class Run:
                       "--default-track-flag", "%d:0" % within]
             if item.carried.kind == "commentary":
                 extra += ["--commentary-flag", "%d:1" % within]
-            if not item.path.lower().endswith(".opus"):
+            if not item.path.lower().endswith((".opus", ".flac")):
                 # Straight out of the library's copy: that one track of it,
                 # and nothing else it holds.
                 extra += ["-a", str(within), "-D", "-S", "-B", "-M", "-T",
@@ -595,7 +597,7 @@ class Run:
             elif track.action == "keep":
                 placed.append((track, "0:" + track.id))
             elif track.action == "swap":
-                placed.append((track, "%s:0" % opus_fid[track.id]))
+                placed.append((track, "%s:0" % lossless_fid[track.id]))
         if carried_audio:
             last_audio = max((index for index, (track, _slot)
                               in enumerate(placed) if track.is_audio),
@@ -668,8 +670,8 @@ class Run:
                         order: list, slots: dict) -> None:
         """Once the improved copy is in place: each carried commentary's
         transcripts written beside it, named after the track as the
-        transcription names its own, and the opus the carry-over encoded
-        thrown away."""
+        transcription names its own, and the converted lossless tracks the
+        carry-over encoded thrown away."""
         position = {slot: index for index, slot in enumerate(order)}
         audio_at = {id(item.carried): position[slot]
                     for slot, item in slots.items() if not item.is_transcript}
@@ -691,7 +693,7 @@ class Run:
                 log("  WARNING: the carried transcripts were not written "
                     "beside the film: " + failure.replace("\n", " | "))
         for item in carried:
-            if item.path.endswith(".opus") and not item.is_transcript:
+            if item.path.endswith((".opus", ".flac")) and not item.is_transcript:
                 rules._remove(item.path)
 
     def _dolby_vision_reject(self, out: str, job: dict, status: int) -> str:
@@ -957,6 +959,14 @@ def main(argv: list, program: str = "ingest-movies",
     # naming table does not know is refused with the page, like a bad option.
     try:
         plexnames.naming_style()
+    except clioptions.UsageError as error:
+        clioptions.refuse_usage(declaration, error.message)
+        return 1
+
+    # The codec the lossless audio is converted to, settled here too: a value
+    # the run does not know is refused with the page, like a bad option.
+    try:
+        rules.lossless_audio_target()
     except clioptions.UsageError as error:
         clioptions.refuse_usage(declaration, error.message)
         return 1
@@ -2495,10 +2505,11 @@ def _commentary_only(program: str, script_dir: str, roots: list,
     every folder given, the track test, the check for a transcript already
     beside the film and the queue drained over the whisper workers - and what
     does not is everything the full run runs around it: no subtitle
-    downloading, no renaming of titles, no opus, no improved copies and no
-    tagging. The one exception is conforming a mangled movie's name to its
-    folder's spelling, which IS done: a movie whose name never got the dot
-    before its mkv has no stem a transcript can be named from, and it must be
+    downloading, no renaming of titles, no lossless transcoding, no
+    improved copies and no tagging. The one exception is conforming a
+    mangled movie's name to its folder's spelling, which IS done: a movie
+    whose name never got the dot before its mkv has no stem a transcript
+    can be named from, and it must be
     put right or reported before anything is transcribed. A
     transcript that is written is written next to the film, and a second run
     over the same library finds every commentary already has its sidecar and
@@ -2696,7 +2707,7 @@ def _settle_subtitle_work(commentary_only: bool = False) -> bool:
         log("         Both produce a subtitle that only ffsubsync can prove is "
             "in step with the audio, and an unverified")
         log("         subtitle track is worse than none. Everything else "
-            "(naming, tags, opus, Dolby Vision, remuxing) runs.")
+            "(naming, tags, lossless transcoding, Dolby Vision, remuxing) runs.")
     # Only the step that is missing: a host with pipx already on it has no use
     # for the apt line, and one with ffsubsync already installed for the other.
     if missing == ["pipx"]:
@@ -2873,7 +2884,8 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
     # What each lane is doing is the row's to say while they run; on a
     # terminal each lane's lines about a film come out as one block.
     locks = lanes.FilmLocks()
-    row = console.LaneRow(("opus", "whisper", "remux", "subs"))
+    row = console.LaneRow((rules.lossless_audio_target(), "whisper", "remux",
+                           "subs"))
     run_console = console.current()
     run_console.show(row.render, travels=False)
     try:
@@ -2977,14 +2989,14 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
 def _films_in_lanes(state, root: str, subtitle_work: bool, locks,
                     row=None, fetching=None,
                     commentary_work: bool | None = None) -> None:
-    """The opus transcode, the commentary transcription and the improved-copy
-    remux, each on the part of the machine it uses and overlapping where that
-    is safe (see :mod:`medialib.cli.ingest_movies_lanes`).
+    """The lossless transcode, the commentary transcription and the
+    improved-copy remux, each on the part of the machine it uses and
+    overlapping where that is safe (see :mod:`medialib.cli.ingest_movies_lanes`).
 
     ``subtitle_work`` is the subtitle work the run settled at its start;
     ``commentary_work`` is whether the transcription runs at all - the same,
     unless the run was told to omit the commentary phase - and it is what
-    decides the opus transcode's place.
+    decides the lossless transcode's place.
 
     The transcode runs BESIDE the transcription only when whisper is on the
     GPU, a job's worth of cores narrower so whisper and the walk that feeds it
@@ -3003,20 +3015,22 @@ def _films_in_lanes(state, root: str, subtitle_work: bool, locks,
                             subtitles=fetching, carry=carry)
     beside = commentary_work and state.whisper.get("device") == "cuda"
     transcoding = None
+    target = rules.lossless_audio_target()
     try:
         if beside:
-            log("Phase: transcoding lossless audio to opus, beside the "
-                "commentary transcription (whisper is on the GPU)")
+            log("Phase: transcoding lossless audio to %s, beside the "
+                "commentary transcription (whisper is on the GPU)" % target)
             transcoding = threading.Thread(
-                target=_transcode_opus, args=(state, root),
-                kwargs={"jobs": _opus_jobs_beside_whisper(),
-                        "on_done": remux.opus_done, "exit_on_abort": False,
+                target=_transcode_lossless, args=(state, root),
+                kwargs={"jobs": _lossless_jobs_beside_whisper(),
+                        "on_done": remux.lossless_done, "exit_on_abort": False,
                         "row": row},
-                name="ingest-opus", daemon=True)
+                name="ingest-lossless", daemon=True)
             transcoding.start()
         else:
-            log("Phase: transcoding lossless audio to opus")
-            _transcode_opus(state, root, on_done=remux.opus_done, row=row)
+            log("Phase: transcoding lossless audio to %s" % target)
+            _transcode_lossless(state, root, on_done=remux.lossless_done,
+                                row=row)
 
         if commentary_work:
             log("Phase: extracting and transcribing commentary tracks")
@@ -3107,7 +3121,7 @@ def _film_held(locks, movie: str):
     return stack
 
 
-def _opus_jobs_beside_whisper() -> int:
+def _lossless_jobs_beside_whisper() -> int:
     """The transcode's width while whisper runs beside it: one job's worth of
     cores fewer, for whisper's own process and the walk that feeds it."""
     return max(1, (runlog.cpu_count() - CORES_PER_JOB) // CORES_PER_JOB)
@@ -3145,7 +3159,7 @@ def _start_research(state, root: str, omit: frozenset = frozenset()) -> dict:
     thread of an omitted phase is not started.
 
     The chapters are remembered page by page rather than film by film: the
-    remux and the opus transcode can move a film's length by a few
+    remux and the lossless transcode can move a film's length by a few
     milliseconds, and the lookup, asked again at the end, has to land on the
     same pages whatever length it is handed.
     """
@@ -3289,9 +3303,9 @@ def _announcing_whisper(state, producer):
         yield item
 
 
-def _transcode_opus(state, root: str, jobs: int | None = None,
-                    on_done=None, exit_on_abort: bool = True,
-                    row=None) -> None:
+def _transcode_lossless(state, root: str, jobs: int | None = None,
+                        on_done=None, exit_on_abort: bool = True,
+                        row=None) -> None:
     """Every film's tracks checked, one worker per film: usually only one
     lossless track per file, so the parallelism is at the file level.
 
@@ -3299,7 +3313,7 @@ def _transcode_opus(state, root: str, jobs: int | None = None,
     caller leaves some of them to other work; ``on_done`` is told of each film
     once its tracks are done. On a thread of its own the caller is the one to
     end the run on an interrupt, not this."""
-    # Only the films the improve pass will remux: an opus is made for the
+    # Only the films the improve pass will remux: a conversion is made for the
     # improved copy and for nothing else, so one for a kept original, an extra
     # or a film already improved would only sit in RAM until the run ends.
     movies = main_movies(root)
@@ -3311,19 +3325,19 @@ def _transcode_opus(state, root: str, jobs: int | None = None,
             if on_done is not None:
                 on_done(movie)
             if row is not None:
-                row.done("opus")
+                row.done(rules.lossless_audio_target())
         return
     if jobs is None:
         jobs = runlog.jobs_per_core(CORES_PER_JOB)
     lane = ""
     if row is not None:
-        lane = "opus"
+        lane = rules.lossless_audio_target()
         row.total(lane, len(movies))
     told = on_done
 
     def film_done(item: tuple) -> None:
         if row is not None:
-            row.done("opus")
+            row.done(lane)
         if told is not None:
             told(item[0])
     # Each film goes with what the run has read of it, so its worker does not
