@@ -93,10 +93,6 @@ _OFFSET = re.compile(r"^offset seconds: (-?[0-9.]+)$", re.M)
 # How far off the best fit was, in the line ffsubsync refuses it with.
 _REFUSED_OFFSET = re.compile(r"\|offset\| ([0-9.]+)s")
 
-# The two id tags a Plex name carries, read for the number in them.
-_IMDB_TAG = re.compile(r"\{imdb-(tt[0-9]+)\}", re.I)
-_TMDB_TAG = re.compile(r"\{tmdb-([0-9]+)\}", re.I)
-
 
 def _move(source: str, destination: str) -> None:
     """A destination that is a directory receives the source under its own
@@ -517,14 +513,13 @@ def film_imdb_id(file: str) -> str:
 
 
 def imdb_of_name(name: str) -> str:
-    """The IMDb id one name - or one id tag on its own - carries, or ""; a
-    TMDb tag is looked up for the IMDb id it stands for."""
-    imdb = _IMDB_TAG.search(name)
-    if imdb:
-        return imdb.group(1).lower()
-    tmdb = _TMDB_TAG.search(name)
-    if tmdb:
-        return tmdbidentify.imdb_of_tmdb(tmdb.group(1))
+    """The IMDb id one name - or one id tag on its own, written either way -
+    carries, or ""; a TMDb tag is looked up for the IMDb id it stands for."""
+    provider, number = plexnames.id_of(name)
+    if provider == "imdb":
+        return number.lower()
+    if provider == "tmdb":
+        return tmdbidentify.imdb_of_tmdb(number)
     return ""
 
 

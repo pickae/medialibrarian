@@ -122,3 +122,35 @@ def test_one_language_is_still_the_call_it_always_was(monkeypatch, capsys):
     assert helper.main(["en", "tt0000007", "Movie.mkv", "opensubtitles"]) == 0
     assert searches == [{"en"}]
     assert capsys.readouterr().out == "41\n"
+
+
+class TestTheNameTheGuesserIsGiven:
+    """The id tag and the edition are nothing a guesser can read, so the
+    search is by the title alone - whatever server the name was written for."""
+
+    def _names(self, monkeypatch):
+        helper, _searches = _load(monkeypatch, has=set(), offered={})
+        return helper._guess_name
+
+    def test_the_plex_tags_come_off(self, monkeypatch):
+        names = self._names(monkeypatch)
+        assert names("Film (2020) {imdb-tt0120737}.mkv") == "Film (2020).mkv"
+        assert names("Film (2020) {imdb-tt0120737} {edition-Colorized} Part1.mkv") \
+            == "Film (2020) Part1.mkv"
+
+    def test_a_dash_with_no_id_tag_is_the_name_s_own(self, monkeypatch):
+        names = self._names(monkeypatch)
+        assert names("Film (2020) - The Sequel.mkv") == "Film (2020) - The Sequel.mkv"
+
+    def test_the_jellyfin_id_and_label_come_off(self, monkeypatch):
+        names = self._names(monkeypatch)
+        assert names("Film (2020) [imdbid-tt0120737].mkv") == "Film (2020).mkv"
+        assert names("Film (2020) [imdbid-tt0120737] - Colorized.mkv") \
+            == "Film (2020).mkv"
+        assert names("Film (2020) [tmdbid-12345] - Colorized.mkv") \
+            == "Film (2020).mkv"
+
+    def test_the_jellyfin_label_leaves_the_part_token(self, monkeypatch):
+        names = self._names(monkeypatch)
+        assert names("Film (2020) [imdbid-tt0120737] - Colorized Part1.mkv") \
+            == "Film (2020) Part1.mkv"

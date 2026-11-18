@@ -103,3 +103,15 @@ def test_a_rewritten_line_leaves_the_other_films_where_they_are(tmp_path):
     assert len(lines) == 2
     assert "{imdb-tt0000002}" in lines[0]
     assert lines[1].endswith("en,pt")
+
+
+def test_a_record_follows_the_film_across_a_server_switch(tmp_path):
+    """The film's name is retagged for the other server: the record a run
+    kept naming it the way the names used to be written still answers it."""
+    path = str(tmp_path / "done.txt")
+    assert donelog.DoneLog(path).add(TAGGED)
+    later = donelog.DoneLog(path)
+    assert later.has("Films/The Movie (1999) [imdbid-tt0000001]/"
+                     "The Movie (1999) [imdbid-tt0000001].mkv")
+    assert not later.has("Films/The Movie (1999) [imdbid-tt0000001]/"
+                         "The Movie (1999) [imdbid-tt0000001] - Colorized.mkv")

@@ -1,10 +1,16 @@
-"""The names Plex reads a movie folder by, and the renames that produce them.
+"""The names Plex and Jellyfin read a movie folder by, and the renames that
+produce them.
 
 Three conventions live in one file name, and they do not commute:
 
-* ``{imdb-ttXXXXXXX}`` / ``{tmdb-NNN}`` forces the match to one film.
-* ``{edition-Name}`` separates different RELEASES of that film - a director's
-  cut, a colourised print, a reissue with another soundtrack - which Plex
+* The id tag - ``{imdb-ttXXXXXXX}`` / ``{tmdb-NNN}`` for Plex,
+  ``[imdbid-ttXXXXXXX]`` / ``[tmdbid-NNN]`` for Jellyfin - forces the match to
+  one film. Written whichever server the mediaServerNaming setting names, and
+  read back either way, so a library may be named for one while a run is set
+  for the other.
+* The edition - ``{edition-Name}`` for Plex, a " - Name" after the whole name
+  for Jellyfin - separates different RELEASES of that film - a director's cut,
+  a colourised print, a reissue with another soundtrack - which the server
   collapses into one item with a named picker.
 * ``Part1`` / ``cd1`` / ``disc1`` stacks a film SPLIT across several files back
   into one playable item.
@@ -22,16 +28,90 @@ import os
 import re
 from collections import Counter
 
-from medialib.lib import languages, titlematch
+from medialib.lib import clioptions, languages, titlematch
 from medialib.lib.enums import PART_WORDS, SOURCE_PART_WORDS, shell_lower
 
-# A film's id tag, anywhere in the name. Plex reads the tag whether it sits on
-# the folder or the file, and is indifferent to the order tags come in.
-ID_TAG_RE = re.compile(r"\{(?:imdb|tmdb)-[^{}]*\}")
+# The two servers the names are written for, and the id tag each of them
+# writes. The mediaServerNaming setting names one; jellyfin.org documents the
+# other spellings its scanner accepts - the provider keys without the "id",
+# and the parentheses and curly braces - and this library reads all of them
+# back, whatever it writes.
+# https://jellyfin.org/docs/general/server/metadata/identifiers/
+NAMING = {
+    "plex": {
+        "imdb": "{imdb-%s}",
+        "tmdb": "{tmdb-%s}",
+    },
+    "jellyfin": {
+        "imdb": "[imdbid-%s]",
+        "tmdb": "[tmdbid-%s]",
+    },
+}
 
-# The edition tag, which needs a Plex Pass to be DISPLAYED but is harmless
-# without one.
+
+def naming_style() -> str:
+    """The server the names are written for: the mediaServerNaming setting.
+
+    A value the table does not know is refused with the page, like a bad
+    option - read once at the start of the run, before any film is touched.
+    """
+    style = shell_lower(os.environ.get("mediaServerNaming", "plex").strip())
+    if style not in NAMING:
+        raise clioptions.UsageError(
+            'The mediaServerNaming setting names "%s". The names are written '
+            "for plex or jellyfin." % style)
+    return style
+
+
+# A film's id tag, anywhere in the name, written either way. The server reads
+# the tag whether it sits on the folder or the file, and is indifferent to
+# the order tags come in.
+ID_TAG_RE = re.compile(
+    r"\{(?:imdbid|tmdbid|imdb|tmdb)-[^{}]*\}"
+    r"|\[(?:imdbid|tmdbid|imdb|tmdb)-[^\[\]]*\]"
+    r"|\((?:imdbid|tmdbid|imdb|tmdb)-[^\(\)]*\)",
+    re.I)
+
+# The Plex edition tag, which needs a Plex Pass to be DISPLAYED but is
+# harmless without one. Jellyfin writes the same edition as a version label
+# after the whole name instead, which _edition_span finds.
 EDITION_RE = re.compile(r"\{edition-([^{}]*)\}")
+
+# The provider key and number of an id tag, whichever way it is written.
+_ID_PARTS = re.compile(r"[(\[{](imdbid|tmdbid|imdb|tmdb)-(.+)[)\]}]$", re.I)
+
+
+def _id_parts(tag: str) -> tuple:
+    """An id tag, written either way, as (provider, number): ("imdb",
+    "tt0120737"), ("tmdb", "12345") - ("", "") where it is not one."""
+    match = _ID_PARTS.match(tag)
+    if not match:
+        return "", ""
+    provider = ("imdb" if match.group(1).lower().startswith("imdb")
+                else "tmdb")
+    return provider, match.group(2)
+
+
+def id_tag(provider: str, number: str) -> str:
+    """The id tag ``provider``'s ``number`` is written under, in the style
+    the mediaServerNaming setting writes for."""
+    return NAMING[naming_style()][provider] % number
+
+
+def id_of(name: str) -> tuple:
+    """The id ``name`` carries, read either way: ("imdb", "tt…") or
+    ("tmdb", "…"), the first tag in the name - ("", "") where it carries
+    none."""
+    match = ID_TAG_RE.search(name)
+    return _id_parts(match.group(0)) if match else ("", "")
+
+
+def canonical_id(tag: str) -> str:
+    """An id tag, written either way, as the one key the done log and the
+    comparisons index it under: the Plex spelling. A film named for Jellyfin
+    so answers a log a run kept while its names still wore the other."""
+    provider, number = _id_parts(tag)
+    return "{%s-%s}" % (provider, number) if provider else tag
 
 # The tokens Plex's scanner stacks on, as one trailing word: the keyword, an
 # optional dot, and a number. Matched case-insensitively, the way the scanner
@@ -96,10 +176,16 @@ _YEAR_LEADING = re.compile(r"^\(?[12][0-9]{3}\)?")
 OLD_SUFFIX = " (old).mkv"
 
 # The edition a remux converted by ingest-movies -r is written under, beside the
-# film it was converted from: Plex offers the two as one film with a picker. A
-# film that already names an edition has this added to it as its last word.
+# film it was converted from: the server offers the two as one film with a
+# picker. A film that already names an edition has this added to it as its last
+# word.
 CONVERTED_EDITION = "AV1"
-_CONVERTED = re.compile(r"\{edition-(?:[^{}]* )?" + CONVERTED_EDITION + r"\}")
+# The marker either way: the Plex edition tag that ends on it, or the Jellyfin
+# version label that does - the stacking token, where the film has one, still
+# standing after it.
+_CONVERTED = re.compile(
+    r"\{edition-(?:[^{}]* )?" + CONVERTED_EDITION + r"\}"
+    r"|\s+-\s+(?:\S+ )*AV1(?=\s|\.|$)")
 
 # The wrappers a hand-written version name tends to arrive in.
 _WRAPPERS = (("(", ")"), ("[", "]"))
@@ -271,17 +357,32 @@ def is_converted_copy(path: str) -> bool:
 def converted_stem(stem: str) -> str:
     """The stem the converted copy of the film ``stem`` is written under: the
     same name, with :data:`CONVERTED_EDITION` as its edition or as the last
-    word of the one it has. A stacking token stays last."""
+    word of the one it has, written the way the film writes its edition - or
+    the way the mediaServerNaming setting writes it where the film has none.
+    A stacking token stays last."""
     match = EDITION_RE.search(stem)
     if match:
         return "%s{edition-%s %s}%s" % (stem[:match.start()], match.group(1),
                                         CONVERTED_EDITION, stem[match.end():])
     _edition, part, eaten = _markers(stem)
+    span = _edition_span(stem)
+    if span:
+        start, _end, label = span
+        words = label.split()
+        head = " ".join(words[:len(words) - eaten])
+        tail = " ".join(words[len(words) - eaten:])
+        return "%s - %s %s%s" % (stem[:start].rstrip(), head, CONVERTED_EDITION,
+                                 " " + tail if tail else "")
     if part:
         words = stem.split()
         head = " ".join(words[:len(words) - eaten])
+        if naming_style() == "jellyfin":
+            return "%s - %s %s" % (head, CONVERTED_EDITION,
+                                   " ".join(words[len(words) - eaten:]))
         return "%s {edition-%s} %s" % (head, CONVERTED_EDITION,
                                        " ".join(words[len(words) - eaten:]))
+    if naming_style() == "jellyfin":
+        return "%s - %s" % (stem, CONVERTED_EDITION)
     return "%s {edition-%s}" % (stem, CONVERTED_EDITION)
 
 
@@ -291,10 +392,23 @@ def film_key(stem: str) -> str:
     Two files answering the same key are the same film - two editions of it, two
     parts of it, or one of each - which is what lets a folder holding several
     movie files be told from a folder holding several movies.
+
+    The edition comes off too - the Plex tag, or the version label a film
+    named for Jellyfin writes it in, where the name carries an id tag: a dash
+    with no tag on either side is the release's own writing of itself, and
+    stays.
     """
-    _edition, _part, eaten = _markers(stem)
-    words = ID_TAG_RE.sub(" ", EDITION_RE.sub(" ", stem)).split()
-    return " ".join(words[:len(words) - eaten])
+    _edition, part, eaten = _markers(stem)
+    words = stem.split()
+    if eaten:
+        words = words[:len(words) - eaten]
+    text = " ".join(words)
+    if ID_TAG_RE.search(text):
+        span = _edition_span(text)
+        if span:
+            text = text[:span[0]] + text[span[1]:]
+    words = ID_TAG_RE.sub(" ", EDITION_RE.sub(" ", text)).split()
+    return " ".join(words)
 
 
 def _markers(stem: str) -> tuple:
@@ -371,12 +485,44 @@ def edition_name(text: str) -> str:
     return text
 
 
+def _edition_span(stem: str) -> tuple:
+    """Where the edition is written in ``stem``, either way: (start, end,
+    text), or () where it is written nowhere.
+
+    The Plex tag is found by :data:`EDITION_RE`. The Jellyfin label is the
+    name's last " - …", searched only after its last tag and its last year:
+    the label is the last thing in the name, and a dash earlier in it is the
+    name's own. A part token standing just before the dash names the part's
+    own edition - "Part 1 - The Escape" - and is not one.
+    """
+    match = EDITION_RE.search(stem)
+    if match:
+        return match.start(), match.end(), match.group(1)
+    last = 0
+    for match in ID_TAG_RE.finditer(stem):
+        last = max(last, match.end())
+    for match in _YEAR_IN_NAME.finditer(stem):
+        last = max(last, match.end())
+    start = stem.rfind(" - ", last)
+    if start < 0:
+        return ()
+    if re.search(r"(?:" + _WORDS + r")[._\- ]*[0-9]+\s*$", stem[last:start],
+                 re.I):
+        return ()
+    return start, len(stem), stem[start + 3:]
+
+
 def plex_stem(base: str, tag: str, edition: str, part: str) -> str:
-    """The name Plex wants, assembled in the one order that works: the film,
-    its id, its edition, and the stacking token last."""
+    """The name the server wants, assembled in the one order that works: the
+    film, its id, its edition, and the stacking token last. The edition is
+    written the way the mediaServerNaming setting writes editions - the
+    server's own tag, or its version label after the name."""
     stem = base + " " + tag if tag else base
     if edition:
-        stem += " {edition-" + edition + "}"
+        if naming_style() == "jellyfin":
+            stem += " - " + edition
+        else:
+            stem += " {edition-" + edition + "}"
     if part:
         stem += " " + part
     return stem
@@ -872,22 +1018,30 @@ def ids_in(names) -> set:
 
 def id_key(movie: str) -> str:
     """The one movie file of a film a record kept across runs knows it by:
-    its id tag, then its edition and stacking token when it has them - so two
+    its id, then its edition and stacking token when it has them - so two
     versions of one film, or two parts of it, are never taken for each other.
 
     The id is read off the file's own name, or off its folder's where only
-    the folder carries one; a film with neither has no key, "" - its name is
-    only a guess at which film it is, and it would stop answering to that
-    guess once the tagging named it.
+    the folder carries one - written either way, read as the Plex spelling,
+    so the record follows the film across a switch of the server the names
+    are written for. A film with neither has no key, "" - its name is only a
+    guess at which film it is, and it would stop answering to that guess once
+    the tagging named it.
     """
     stem, _extension = os.path.splitext(os.path.basename(movie))
+    folder = os.path.basename(os.path.dirname(movie))
     match = (ID_TAG_RE.search(stem)
-             or ID_TAG_RE.search(os.path.basename(os.path.dirname(movie))))
+             or ID_TAG_RE.search(folder))
     if not match:
         return ""
-    edition, part, _eaten = _markers(stem)
+    base, _tag = untagged_base(folder)
+    if stem.startswith(base):
+        edition, part = read_stem(base, stem)
+    else:
+        edition, part, _eaten = _markers(stem)
     return " ".join(word for word in (
-        match.group(0), "{edition-%s}" % edition if edition else "", part)
+        canonical_id(match.group(0)),
+        "{edition-%s}" % edition if edition else "", part)
         if word)
 
 
@@ -908,8 +1062,8 @@ def conform_to_folder(base: str, tag: str, stem: str) -> tuple:
     accepted as the folder's own film only if it carries that folder's tag, and
     once the tag and a trailing stacking token are taken off what is left must
     be the folder's own words plus nothing but a year said a second time. Then
-    the name is rebuilt the way Plex spells it - the film, its id, and the
-    token last - and handed back.
+    the name is rebuilt the way the server spells it - the film, its id, and
+    the token last - and handed back.
 
     What comes back is ``(new stem, unfixable)``. ``("", False)`` is not the
     folder's film to conform - it carries no tag, or a DIFFERENT tag, so the
@@ -1044,9 +1198,9 @@ def retag(stem: str, tag: str) -> str:
     cuts = []
     for match in _YEAR_IN_NAME.finditer(stem):
         cuts = [match.end()]
-    edition = EDITION_RE.search(stem)
-    if edition:
-        cuts.append(edition.start())
+    span = _edition_span(stem)
+    if span:
+        cuts.append(span[0])
     _edition, part, eaten = _markers(stem)
     if part:
         cuts.append(_word_start(stem, eaten))
@@ -1106,11 +1260,14 @@ def split_tags(name: str) -> tuple:
 
     Every rule the name cleaner has is wrong about a tag: "{edition-Director's
     Cut}" with its apostrophe cleaned away is a DIFFERENT edition, and its
-    sidecars are left behind under the old spelling. A name with no tag comes
-    back whole.
+    sidecars are left behind under the old spelling, and the same for the
+    label a film named for Jellyfin puts its edition in. A name with no tag
+    comes back whole.
     """
-    starts = [match.start() for match in
-              (ID_TAG_RE.search(name), EDITION_RE.search(name)) if match]
+    starts = [match.start() for match in (ID_TAG_RE.search(name),) if match]
+    span = _edition_span(name)
+    if span:
+        starts.append(span[0])
     if not starts:
         return name, ""
     cut = min(starts)

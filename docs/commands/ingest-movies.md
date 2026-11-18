@@ -56,6 +56,7 @@ These are read from the environment:
 | `openSubtitlesComUser`, `openSubtitlesComPassword` | asking OpenSubtitles.com second — a separate service, with free accounts of its own | it is not asked |
 | `subDlApiKey` | asking SubDL third — the key a free account at subdl.com gets | it is not asked |
 | `spokenLanguages` | the languages whose subtitles are fetched and tested | the six it knows by default (en, de, fr, nl, es, it) |
+| `mediaServerNaming` | the server the names are written for | `plex`; the names are then written and read the way that server spells them |
 | `plexUrl` | the Plex server the films are compared with | the server on this machine, `http://localhost:32400` |
 | `plexToken` | that server's X-Plex-Token | the server is asked without one, which it refuses unless told to trust this address; the comparison is then skipped |
 
@@ -71,7 +72,7 @@ pointed at a library. A full ingest reads only the one level it always did.
 
 | Flag | Does only | By default | With `-w` | Leaves behind | Run it after |
 | --- | --- | --- | --- | --- | --- |
-| [`-t`](#naming-films--t) | the Plex naming: IMDb id, editions, stacking token | dry run: prints every rename | carries the renames out | [lists](#the-lists--t-writes) in `logs/ingest-movies/` | — |
+| [`-t`](#naming-films--t) | the server naming: IMDb id, editions, stacking token | dry run: prints every rename | carries the renames out | [lists](#the-lists--t-writes) in `logs/ingest-movies/` | — |
 | [`-i <file>`](#feeding-ids-back--i) | the same naming, from the id list you filled in | dry run: prints, writes only the conflicts and duplicates lists | renames, and brings the file up to date | — | `-t` |
 | [`-s`](#subtitles--s) | testing the subtitles already there | dry run: says which would be kept | syncs, deletes the out-of-step ones, downloads the missing | `logs/ingest-movies/ingest-movies-subtitles-<folder>.txt` | `-tw` |
 | [`-a`](#commentary-transcripts--a) | transcribing commentary tracks | writes as it goes | refused | transcripts beside the films | — |
@@ -261,13 +262,23 @@ film: a film that already has its `(old)` backup is not remuxed again.
 ### The Plex names
 
 Last, once each film is the file it is going to stay, the folder and everything
-in it are renamed — renamed only, in place — into the three names Plex reads:
+in it are renamed — renamed only, in place — into the three names the server
+reads:
 
 | Name | Goes on | What it does |
 | --- | --- | --- |
 | `{imdb-ttXXXXXXX}` | the folder and every file | forces the match |
-| `{edition-...}` | a folder's second, third and fourth *version* of one film | Plex collapses them into one film with a named picker: `Your Film (2020) colorized.mkv` becomes `Your Film (2020) {imdb-tt0000000} {edition-Colorized}.mkv` |
-| `Part1` / `cd1` | a split film's parts | stays **last**, because that is where Plex's scanner reads it — a tag appended after it would stop the parts stacking at all |
+| `{edition-...}` | a folder's second, third and fourth *version* of one film | the server collapses them into one film with a named picker: `Your Film (2020) colorized.mkv` becomes `Your Film (2020) {imdb-tt0000000} {edition-Colorized}.mkv` |
+| `Part1` / `cd1` | a split film's parts | stays **last**, because that is where the server's scanner reads it — a tag appended after it would stop the parts stacking at all |
+
+The `mediaServerNaming` setting names the server the names are written for —
+`plex` (the default) or `jellyfin`. For Jellyfin the id tag is written
+`[imdbid-ttXXXXXXX]` or `[tmdbid-XXXXXXX]`, and an edition as a version label
+after the whole name instead of a tag: `Your Film (2020) [imdbid-tt0000000]
+- Colorized.mkv`. A name written either way is read back the same, so a library
+may be switched to the other server and the run still tells every film apart:
+the id is read off both spellings, and the record a run keeps across runs
+answers a film under either of its names.
 
 Every sidecar follows its own film, including a commentary transcript whose name
 extends the film's. The `(old)` backup keeps its own name, and running the
@@ -773,9 +784,10 @@ result is written beside the film:
     Film (2020) {imdb-tt0000000}.mkv
     Film (2020) {imdb-tt0000000} {edition-AV1}.mkv     <- the converted copy
 
-The copy is named as an [edition](#the-plex-names), so Plex shows the two files as
-one film with a version picker. A film that already has an edition gets `AV1`
-added to it (`{edition-Director's Cut AV1}`), and a split film's part token stays
+The copy is named as an [edition](#the-plex-names), written the way the server
+writes editions, so it shows the two files as one film with a version picker.
+A film that already has an edition gets `AV1` added to it
+(`{edition-Director's Cut AV1}`), and a split film's part token stays
 last, so the converted parts stack.
 
 The film itself is not changed. Later phases and later runs skip the copy in the

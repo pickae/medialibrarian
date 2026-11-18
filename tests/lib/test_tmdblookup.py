@@ -159,6 +159,27 @@ class TestTheIdInAUrlPath:
         assert tmdbidentify._id_token(value) == "null"
 
 
+class TestTheTagASettledMatchCarries:
+    """The id tag the tagging writes the film with, in the style the
+    mediaServerNaming setting writes for."""
+
+    def test_an_imdb_id_is_written_its_way(self, monkeypatch):
+        match = tmdbidentify.Match(imdb="tt0120737")
+        assert match.tag == "{imdb-tt0120737}"
+        monkeypatch.setenv("mediaServerNaming", "jellyfin")
+        assert match.tag == "[imdbid-tt0120737]"
+
+    def test_a_film_imdb_never_catalogued_is_tagged_with_tmdb_s_own(self,
+                                                                     monkeypatch):
+        match = tmdbidentify.Match(tmdb="12345")
+        assert match.tag == "{tmdb-12345}"
+        monkeypatch.setenv("mediaServerNaming", "jellyfin")
+        assert match.tag == "[tmdbid-12345]"
+
+    def test_and_no_match_carries_no_tag(self):
+        assert tmdbidentify.Match().tag == ""
+
+
 # --- the id lookup's certainty rule -------------------------------------------
 
 
@@ -1049,6 +1070,11 @@ class TestTheIdList:
                                          "{imdb-}", "tt12ab34"])
     def test_and_anything_else_is_not_an_id(self, written):
         assert tmdbworklists.id_tag_for(written) == ""
+
+    def test_the_id_is_written_the_way_the_server_reads_it(self, monkeypatch):
+        monkeypatch.setenv("mediaServerNaming", "jellyfin")
+        assert tmdbworklists.id_tag_for("tt0000002") == "[imdbid-tt0000002]"
+        assert tmdbworklists.id_tag_for("12345") == "[tmdbid-12345]"
 
     def test_a_line_still_blank_is_one_still_to_do(self, tmp_path):
         path = tmp_path / "ids.tsv"

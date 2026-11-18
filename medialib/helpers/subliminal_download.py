@@ -9,10 +9,11 @@
 
 What ``subliminal download -p <provider> -l <language> <video>`` does, with
 two things its command line has no way to say. The first is WHICH film this
-is. The name a film carries its IMDb id in - ``{imdb-tt0000001}`` - reads to
-subliminal's guesser as a release group, so the id is dropped and the search
-is by title, which a remake, a same-named film of another year or a title the
-catalogue spells differently all answer. Given the id, a subtitle the provider
+is. The name a film carries its IMDb id in - ``{imdb-tt0000001}`` for Plex,
+``[imdbid-tt0000001]`` for Jellyfin - reads to subliminal's guesser as a
+release group, so the id is dropped and the search is by title, which a
+remake, a same-named film of another year or a title the catalogue spells
+differently all answer. Given the id, a subtitle the provider
 files under any other film is not downloaded at all: none is better than the
 wrong one.
 
@@ -76,9 +77,35 @@ _SUBDL_SEARCH = "https://api.subdl.com/api/v1/subtitles"
 _SUBDL_FILES = "https://dl.subdl.com"
 _TIMEOUT = 30
 
-# The tags a Plex name carries - the id, an edition - which are nothing a
-# guesser can read, so it is handed the name without them.
-_TAG = re.compile(r"\s*\{[^{}]*\}")
+# The tags a server name carries - the id, written the way either server reads
+# it, and the edition - which are nothing a guesser can read, so the guesser is
+# handed the name without them.
+_CURLY_TAG = re.compile(r"\s*\{[^{}]*\}")
+_BRACKET_ID = re.compile(r"\s*\[(?:imdbid|tmdbid|imdb|tmdb)-[^\[\]]*\]", re.I)
+_PART_TAIL = r"(\s+(?:cd|dvd|part|pt|disk|disc)[\s._-]*[0-9]+)?(\.[A-Za-z0-9]+)?$"
+
+
+def _guess_name(path: str) -> str:
+    """``path`` with the id tag and the edition off: the title the search is
+    by.
+
+    The id tag reads to a guesser as a release group - the Plex curlies and the
+    Jellyfin brackets alike - so it is dropped, and the edition comes off with
+    it: the Plex tag is among the curlies, and the version label a Jellyfin
+    name writes after its id is the name's last " - ...", a part token where
+    the name ends on one kept, the way the curlies keep it. A dash with no id
+    tag on either side is the name's own, and stays.
+    """
+    last = None
+    for tag in _BRACKET_ID.finditer(path):
+        last = tag
+    if last:
+        title, tail = path[:last.start()], path[last.end():]
+        match = re.match(r"(?:\s*-\s*)?(.*?)" + _PART_TAIL, tail, re.I | re.S)
+        if match:
+            tail = (match.group(2) or "") + (match.group(3) or "")
+        path = title + tail
+    return _CURLY_TAG.sub("", _BRACKET_ID.sub("", path))
 
 
 def _imdb_number(value) -> int | None:
@@ -88,7 +115,7 @@ def _imdb_number(value) -> int | None:
 
 
 def _scan(path: str):
-    name = _TAG.sub("", path)
+    name = _guess_name(path)
     try:
         return scan_video(path, name=name)
     except ValueError:
