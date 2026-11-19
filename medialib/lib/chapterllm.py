@@ -64,7 +64,7 @@ __all__ = ["API_VARIABLE", "URL_VARIABLE", "MODEL_VARIABLE", "KEY_VARIABLE",
            "SERVE_VARIABLE", "SERVE_MIB_VARIABLE",
            "HARNESS_VARIABLE", "HARNESS_MODEL_VARIABLE", "SERVE_MIB", "APIS", "DEFAULT_API",
            "DEFAULT_ANTHROPIC_MODEL", "DEFAULT_CONTEXT_TOKENS", "DEFAULT_JOBS",
-           "THOROUGH_EFFORT", "LlmError", "Llm", "from_environment", "require",
+           "THOROUGH_EFFORT", "LlmError", "Tally", "Llm", "from_environment", "require",
            "is_local", "first_json"]
 
 # The settings, by the names a user gives them.
@@ -160,6 +160,39 @@ _THINKING = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 
 class LlmError(Exception):
     """The model could not be asked, or did not answer."""
+
+
+@dataclass
+class Tally:
+    """What the requests counted into it took: how many answered, the seconds
+    each was under way summed, and the tokens the model wrote, from those
+    whose server reported them (``counted`` of them, over ``counted_seconds``).
+    A harness reports none. Safe to add to from many threads."""
+
+    requests: int = 0
+    seconds: float = 0.0
+    tokens: int = 0
+    counted: int = 0
+    counted_seconds: float = 0.0
+    _lock: threading.Lock = field(default_factory=threading.Lock, init=False,
+                                  repr=False, compare=False)
+
+    def add(self, seconds: float, tokens: int | None) -> None:
+        with self._lock:
+            self.requests += 1
+            self.seconds += seconds
+            if tokens is not None:
+                self.tokens += tokens
+                self.counted += 1
+                self.counted_seconds += seconds
+
+    def merge(self, other: Tally) -> None:
+        with self._lock:
+            self.requests += other.requests
+            self.seconds += other.seconds
+            self.tokens += other.tokens
+            self.counted += other.counted
+            self.counted_seconds += other.counted_seconds
 
 
 @dataclass
@@ -302,34 +335,38 @@ class Llm:
         bound._slots = self._slots
         return bound
 
-    def ask(self, system: str, prompt: str) -> str:
+    def ask(self, system: str, prompt: str, tally: Tally | None = None) -> str:
         """The model's text answer, its thinking taken out. LlmError when no
         answer came after the retries. Safe to call from many threads: the
-        requests in flight never pass :attr:`jobs`."""
+        requests in flight never pass :attr:`jobs`. Every answer, a retried
+        one too, is counted into ``tally``, timed from when its request held
+        a slot."""
         last = ""
         for attempt in range(RETRIES + 1):
             if attempt:
                 time.sleep(RETRY_WAIT_SECONDS * 2 ** (attempt - 1))
             try:
-                if self._slots is None:
-                    text = self._ask_once(system, prompt)
-                else:
-                    with self._slots:
-                        text = self._ask_once(system, prompt)
+                with self._slots or contextlib.nullcontext():
+                    started = time.monotonic()
+                    text, tokens = self._ask_once(system, prompt)
             except LlmError as error:
                 last = str(error)
                 continue
+            if tally is not None:
+                tally.add(time.monotonic() - started, tokens)
             text = _THINKING.sub("", text).strip()
             if text:
                 return text
             last = "an empty answer"
         raise LlmError(last)
 
-    def _ask_once(self, system: str, prompt: str) -> str:
+    def _ask_once(self, system: str, prompt: str) -> tuple[str, int | None]:
+        """The answer and the tokens the model wrote for it, None where they
+        were not reported."""
         if self.harness:
             try:
                 return llmharness.ask(self.harness, self.harness_model, system,
-                                      prompt, REQUEST_SECONDS)
+                                      prompt, REQUEST_SECONDS), None
             except llmharness.HarnessError as error:
                 raise LlmError(str(error)) from error
         if self.api == "anthropic":
@@ -502,7 +539,7 @@ def _positive(environ, name: str, default: int) -> int:
     return int(value)
 
 
-def _ask_openai(llm: Llm, system: str, prompt: str) -> str:
+def _ask_openai(llm: Llm, system: str, prompt: str) -> tuple[str, int | None]:
     """One Chat Completions request through curl.
 
     Nothing beyond the messages and an output limit is asked for - no
@@ -532,7 +569,7 @@ class _LimitRefused(Exception):
     """The server refused the name the output limit was sent under."""
 
 
-def _post_openai(llm: Llm, system: str, prompt: str, tried: int) -> str:
+def _post_openai(llm: Llm, system: str, prompt: str, tried: int) -> tuple[str, int | None]:
     request: dict = dict(llm.options)
     if llm.effort:
         request["reasoning_effort"] = llm.effort
@@ -579,14 +616,17 @@ def _post_openai(llm: Llm, system: str, prompt: str, tried: int) -> str:
     if not status.startswith("2"):
         raise LlmError("%s answered HTTP %s: %s" % (llm.url, status, _error_text(text)))
     try:
-        message = json.loads(text)["choices"][0]["message"]
+        reply = json.loads(text)
+        message = reply["choices"][0]["message"]
     except (ValueError, KeyError, IndexError, TypeError) as error:
         raise LlmError("%s: not a chat completion: %s" % (llm.url, text[:200])) from error
     content = message.get("content") if isinstance(message, dict) else None
     if isinstance(content, list):
         content = "".join(part.get("text", "") for part in content
                           if isinstance(part, dict))
-    return content or ""
+    usage = reply.get("usage") if isinstance(reply, dict) else None
+    tokens = usage.get("completion_tokens") if isinstance(usage, dict) else None
+    return content or "", tokens if isinstance(tokens, int) else None
 
 
 def _error_text(body: str) -> str:
@@ -600,7 +640,7 @@ def _error_text(body: str) -> str:
     return str(error or body)[:300]
 
 
-def _ask_anthropic(llm: Llm, system: str, prompt: str) -> str:
+def _ask_anthropic(llm: Llm, system: str, prompt: str) -> tuple[str, int | None]:
     """One Messages request through the official SDK, streamed, because a long
     transcript is a long request.
 
@@ -628,6 +668,7 @@ def _ask_anthropic(llm: Llm, system: str, prompt: str) -> str:
         request["tools"] = [{"type": "web_search_20260209", "name": "web_search",
                              "max_uses": MAX_SEARCHES}]
     messages: list = [{"role": "user", "content": prompt}]
+    tokens: int | None = None
     for _ in range(MAX_CONTINUATIONS + 1):
         try:
             with client.beta.messages.stream(
@@ -642,13 +683,16 @@ def _ask_anthropic(llm: Llm, system: str, prompt: str) -> str:
                            % (error.status_code, error.message)) from error
         except anthropic.APIConnectionError as error:
             raise LlmError("the Claude API could not be reached: %s" % error) from error
+        written = getattr(getattr(message, "usage", None), "output_tokens", None)
+        if isinstance(written, int):
+            tokens = (tokens or 0) + written
         if message.stop_reason != "pause_turn":
             break
         messages = [{"role": "user", "content": prompt},
                     {"role": "assistant", "content": message.content}]
     if message.stop_reason == "refusal":
         raise LlmError("the model declined to answer")
-    return "".join(block.text for block in message.content if block.type == "text")
+    return "".join(block.text for block in message.content if block.type == "text"), tokens
 
 
 def first_json(text: str):

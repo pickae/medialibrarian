@@ -55,7 +55,8 @@ else:
     later = [pid for pid, at in ids if at == "0:10:00"][0]
     answer = {"summary": "s", "chapters": [{"start": ids[0][0], "title": "First half"},
                                            {"start": later, "title": "Middle"}]}
-print(json.dumps({"choices": [{"message": {"content": json.dumps(answer)}}]}))
+print(json.dumps({"choices": [{"message": {"content": json.dumps(answer)}}],
+                  "usage": {"completion_tokens": 25}}))
 print("200", end="")
 ' "$MODELLOG"
 """
@@ -98,7 +99,7 @@ def _tree(tmp_path, *names):
 
 def test_a_tree_gets_transcripts_and_chapter_files(chaptering, tmp_path):
     source, out = _tree(tmp_path, "a/show.mp3", "b/talk.opus")
-    chaptering.chapter(source, out)
+    log = chaptering.chapter(source, out)
     for stem in ("a/show", "b/talk"):
         assert (out / (stem + ".srt")).is_file()
         assert (out / (stem + ".chapters.txt")).read_text() == (
@@ -106,6 +107,10 @@ def test_a_tree_gets_transcripts_and_chapter_files(chaptering, tmp_path):
             "CHAPTER02=00:09:59.500\nCHAPTER02NAME=Second half\n")
     # One outline and one second look per file.
     assert len(chaptering.model_log.read_text().splitlines()) == 4
+    assert log.count("model outline:") == 2
+    assert "model refine:" in log
+    assert "Model time over the run:" in log
+    assert "100 token(s) written" in log
 
 
 def test_a_hosted_model_chapters_each_file_as_it_is_transcribed(chaptering, tmp_path):

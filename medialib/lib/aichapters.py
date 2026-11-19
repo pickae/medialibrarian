@@ -34,7 +34,7 @@ import os
 import re
 import threading
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import TypeVar
@@ -43,7 +43,7 @@ from medialib import commands
 from medialib.lib import chapterllm, cuechapters, safety
 
 __all__ = ["TRANSCRIPT_SUFFIXES", "Cue", "read_transcript", "find_transcript",
-           "Passage", "passages", "generate", "chapter_rows", "time_label",
+           "Passage", "passages", "generate", "PHASES", "Meter", "chapter_rows", "time_label",
            "DEFAULT_MIN_MINUTES", "DEFAULT_TYPICAL_MINUTES", "span_label", "transcribe", "as_ready"]
 
 # The transcript formats read, in the order a folder holding several of them is
@@ -317,15 +317,16 @@ def _passage_id(value, count: int) -> int | None:
     return index if 0 <= index < count else None
 
 
-def _ask_json(llm, prompt: str, wanted: str, log) -> dict | None:
+def _ask_json(llm, prompt: str, wanted: str, log,
+              tally: chapterllm.Tally | None = None) -> dict | None:
     """The model's answer as a dict holding ``wanted``, asked again once when
     the first answer is not one. None when neither was, or the run is being
-    stopped."""
+    stopped. Each request is counted into ``tally``."""
     for attempt in range(2):
         if safety.abort_requested():
             return None
         try:
-            answer = chapterllm.first_json(llm.ask(_SYSTEM, prompt))
+            answer = chapterllm.first_json(llm.ask(_SYSTEM, prompt, tally))
         except chapterllm.LlmError as error:
             log("    the model gave no answer: %s" % error)
             return None
@@ -364,7 +365,8 @@ def _windows(lines: Sequence[_Line], budget: int) -> list[list[_Line]]:
 
 
 def _summarise(lines: Sequence[_Line], llm, duration: int, count: int,
-               log, instructions: str = "") -> list[_Line]:
+               log, instructions: str = "",
+               tally: chapterllm.Tally | None = None) -> list[_Line]:
     """The lines summarised a window at a time, one summary per stretch on a
     single topic. A window the model gives no usable answer for is kept as a
     single line holding the start of its text, so the outline still knows the
@@ -393,7 +395,7 @@ def _summarise(lines: Sequence[_Line], llm, duration: int, count: int,
                time_label(window[-1].start), per_window,
                "P%d" % (window[0].passage + 1),
                _asked(instructions, _FOR_SUMMARIES), _render(window)))
-        answer = _ask_json(llm, prompt, "sections", log)
+        answer = _ask_json(llm, prompt, "sections", log, tally)
         by_passage = {line.passage: line for line in window}
         found = []
         for section in (answer or {}).get("sections") or []:
@@ -425,7 +427,8 @@ class _Mark:
 
 def _outline(lines: Sequence[_Line], summarised: bool, total: int, llm,
              duration: int, typical_minutes: int, min_minutes: float,
-             log, instructions: str = "") -> tuple[str, list[_Mark]] | None:
+             log, instructions: str = "",
+             tally: chapterllm.Tally | None = None) -> tuple[str, list[_Mark]] | None:
     """The first pass: the whole recording divided at once. None when the
     model gave no usable outline."""
     what = ("a section of the recording, already summarised: its id, the time "
@@ -461,7 +464,7 @@ def _outline(lines: Sequence[_Line], summarised: bool, total: int, llm,
         % (time_label(duration), what, typical_minutes, span_label(min_minutes),
            "P%d" % (lines[0].passage + 1), _TITLE_RULES,
            _asked(instructions, _FOR_CHAPTERS), _render(lines)))
-    answer = _ask_json(llm, prompt, "chapters", log)
+    answer = _ask_json(llm, prompt, "chapters", log, tally)
     if answer is None:
         return None
     marks: dict[int, _Mark] = {}
@@ -510,7 +513,8 @@ def _neighbour(cues: Sequence[Cue], title: str, first: int, here_start: int,
 
 def _refine(cues: Sequence[Cue], found: Sequence[Passage], marks: list[_Mark],
             summary: str, llm, duration: int, log,
-            instructions: str = "") -> list[tuple[int, str, str]]:
+            instructions: str = "",
+            tally: chapterllm.Tally | None = None) -> list[tuple[int, str, str]]:
     """The second pass: every chapter start after the first looked at again in
     the transcript around it. Comes back as (cue index, title, the outline's
     title), the first chapter on the first cue; a start the model answers
@@ -563,7 +567,7 @@ def _refine(cues: Sequence[Cue], found: Sequence[Passage], marks: list[_Mark],
                outline, mark.title, time_label(here.start),
                neighbours, mark.title, _TITLE_RULES,
                _asked(instructions, _FOR_REFINE), window))
-        answer = _ask_json(llm, prompt, "start", log)
+        answer = _ask_json(llm, prompt, "start", log, tally)
         if answer is None:
             return here.first, mark.title, mark.title
         title = clean_title(answer.get("title")) or mark.title
@@ -630,6 +634,102 @@ def _settle(cues: Sequence[Cue], chosen: Sequence[tuple[int, str, str]],
     return marks if len(marks) > 1 else []
 
 
+# The passes the model is asked in, in the order they run.
+PHASES = ("summarise", "outline", "refine", "review")
+
+
+class Meter:
+    """The model's work phase by phase - on one recording, or added up over
+    a run: each phase's wall-clock seconds, and the requests it made as a
+    :class:`chapterllm.Tally`. A phase run more than once (a transcript
+    summarised in two rounds, a run of many recordings) adds up. Safe to time
+    phases into from many threads.
+
+    ``span`` runs from the first phase's start to the last one's end, so
+    phases that ran side by side - recordings chaptered at once - count once
+    in it."""
+
+    def __init__(self) -> None:
+        self.wall: dict[str, float] = {}
+        self.tallies: dict[str, chapterllm.Tally] = {}
+        self.first: float | None = None
+        self.last: float | None = None
+        self._lock = threading.Lock()
+
+    @property
+    def span(self) -> float:
+        with self._lock:
+            if self.first is None or self.last is None:
+                return 0.0
+            return self.last - self.first
+
+    def _stamp(self, first: float | None, last: float | None) -> None:
+        if first is not None and (self.first is None or first < self.first):
+            self.first = first
+        if last is not None and (self.last is None or last > self.last):
+            self.last = last
+
+    @contextlib.contextmanager
+    def phase(self, name: str) -> Iterator[chapterllm.Tally]:
+        """The tally to count ``name``'s requests into, the block timed as
+        its wall-clock."""
+        with self._lock:
+            tally = self.tallies.setdefault(name, chapterllm.Tally())
+            self.wall.setdefault(name, 0.0)
+        started = time.monotonic()
+        try:
+            yield tally
+        finally:
+            ended = time.monotonic()
+            with self._lock:
+                self.wall[name] += ended - started
+                self._stamp(started, ended)
+
+    def add(self, other: Meter) -> None:
+        """``other``'s phases added into this one's."""
+        with other._lock:
+            phases = [(name, other.wall[name], other.tallies[name])
+                      for name in other.wall]
+            first, last = other.first, other.last
+        with self._lock:
+            for name, wall, tally in phases:
+                self.tallies.setdefault(name, chapterllm.Tally()).merge(tally)
+                self.wall[name] = self.wall.get(name, 0.0) + wall
+            self._stamp(first, last)
+
+    def lines(self) -> list[str]:
+        """A line per phase that asked the model and one for them all: requests,
+        wall-clock, the tokens written and tokens a second over that
+        wall-clock - and, where several requests ran, over the time each was
+        under way, which is the model's own speed when they ran side by side.
+        The total is over :attr:`span`. Empty when the model was never
+        asked."""
+        with self._lock:
+            phases = [(name, self.wall[name], self.tallies[name])
+                      for name in PHASES
+                      if name in self.wall and self.tallies[name].requests]
+        if not phases:
+            return []
+        total = chapterllm.Tally()
+        for _, _, tally in phases:
+            total.merge(tally)
+        return ([_rate_line(name, seconds, tally) for name, seconds, tally in phases]
+                + [_rate_line("all", self.span, total)])
+
+
+def _rate_line(name: str, wall: float, tally: chapterllm.Tally) -> str:
+    text = "%-9s %3d request(s) in %7.1fs" % (name + ":", tally.requests, wall)
+    if not tally.counted:
+        return text + (", tokens not reported" if tally.requests else "")
+    text += ", %d token(s) written, %.1f tok/s" % (
+        tally.tokens, tally.tokens / wall if wall > 0 else 0.0)
+    if tally.counted > 1 and tally.counted_seconds > 0:
+        text += " (%.1f tok/s a request)" % (tally.tokens / tally.counted_seconds)
+    if tally.counted < tally.requests:
+        text += ", %d request(s) uncounted" % (tally.requests - tally.counted)
+    return text
+
+
 def too_short(duration: int, min_minutes: float = DEFAULT_MIN_MINUTES) -> bool:
     """Whether a recording of ``duration`` ms is too short for two chapters -
     asked before it is transcribed, since :func:`generate` would answer
@@ -640,8 +740,12 @@ def too_short(duration: int, min_minutes: float = DEFAULT_MIN_MINUTES) -> bool:
 
 def generate(cues: Sequence[Cue], llm, *, min_minutes: float = DEFAULT_MIN_MINUTES,
              typical_minutes: int = DEFAULT_TYPICAL_MINUTES,
-             log: Callable[[str], None] = lambda line: None) -> list[tuple[int, str]]:
+             log: Callable[[str], None] = lambda line: None,
+             meter: Meter | None = None) -> list[tuple[int, str]]:
     """The chapters of a recording, as (start ms, title), the first at 0.
+
+    Each pass the model is asked in is timed into ``meter`` with the
+    requests it made.
 
     The model's instructions (:meth:`chapterllm.Llm.following`) - the user's
     own word on how to divide and what the titles name - go into every
@@ -664,7 +768,8 @@ def generate(cues: Sequence[Cue], llm, *, min_minutes: float = DEFAULT_MIN_MINUT
     try:
         with held as served:
             return _chapters(cues, found, served, duration, count,
-                             typical_minutes, min_minutes, log, instructions)
+                             typical_minutes, min_minutes, log, instructions,
+                             meter or Meter())
     except chapterllm.LlmError as error:
         log("    no model to ask: %s" % error)
         return []
@@ -672,7 +777,8 @@ def generate(cues: Sequence[Cue], llm, *, min_minutes: float = DEFAULT_MIN_MINUT
 
 def _chapters(cues: Sequence[Cue], found: list[Passage], llm, duration: int,
               count: int, typical_minutes: int, min_minutes: float,
-              log: Callable[[str], None], instructions: str) -> list[tuple[int, str]]:
+              log: Callable[[str], None], instructions: str,
+              meter: Meter) -> list[tuple[int, str]]:
     """:func:`generate`'s work, on the server the model is held on."""
     min_ms = int(min_minutes * _MS_PER_MINUTE)
     lines = [_Line(index, passage.start, passage.text)
@@ -681,24 +787,31 @@ def _chapters(cues: Sequence[Cue], found: list[Passage], llm, duration: int,
     for _ in range(MAX_SUMMARY_LEVELS):
         if sum(_tokens(line.text) + 6 for line in lines) <= _budget(llm):
             break
-        shorter = _summarise(lines, llm, duration, count, log, instructions)
+        with meter.phase("summarise") as tally:
+            shorter = _summarise(lines, llm, duration, count, log, instructions,
+                                 tally)
         if len(shorter) >= len(lines):
             break
         lines, summarised = shorter, True
 
-    outline = _outline(lines, summarised, len(found), llm, duration,
-                       typical_minutes, min_minutes, log, instructions)
+    with meter.phase("outline") as tally:
+        outline = _outline(lines, summarised, len(found), llm, duration,
+                           typical_minutes, min_minutes, log, instructions, tally)
     if outline is None:
         return []
     summary, marks = outline
     log("    outline: %d chapter(s); placing each start" % len(marks))
-    chosen = _refine(cues, found, marks, summary, llm, duration, log, instructions)
+    with meter.phase("refine") as tally:
+        chosen = _refine(cues, found, marks, summary, llm, duration, log,
+                         instructions, tally)
     settled = _settle(cues, chosen, duration, min_ms)
-    return _review(settled, summary, llm, duration, log, instructions)
+    with meter.phase("review") as tally:
+        return _review(settled, summary, llm, duration, log, instructions, tally)
 
 
 def _review(marks: list[tuple[int, str, str]], summary: str, llm, duration: int,
-            log, instructions: str = "") -> list[tuple[int, str]]:
+            log, instructions: str = "",
+            tally: chapterllm.Tally | None = None) -> list[tuple[int, str]]:
     """The third pass: the finished list read once as a whole, against the
     user's instructions. Only titles can change - the starts are settled - and
     only where the answer names the chapter; a title the model leaves out,
@@ -741,7 +854,7 @@ def _review(marks: list[tuple[int, str, str]], summary: str, llm, duration: int,
         % (time_label(duration), " What it is: " + summary if summary else "",
            _TITLE_RULES, "\n" + _asked(instructions, _FOR_REVIEW).rstrip()
            if instructions.strip() else "", listing))
-    answer = _ask_json(llm, prompt, "titles", log)
+    answer = _ask_json(llm, prompt, "titles", log, tally)
     if answer is None:
         return titles
     changed = 0
