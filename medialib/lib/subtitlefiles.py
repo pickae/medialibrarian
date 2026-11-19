@@ -33,6 +33,7 @@ from medialib.lib import (
     runlog,
     safety,
     subtitleads,
+    subtitletracks,
     tmdbidentify,
     toolcapture,
     treewalk,
@@ -69,16 +70,14 @@ __all__ = [
 # scenes sit at two offsets, and no one shift puts both in step.
 MIN_SYNC_CONFIDENCE = 1.0
 
-# The subtitle codecs drawn as pictures, which ffsubsync cannot read and so
-# replaces with the audio's voice detection. A film that carries one carries
+# A subtitle drawn as pictures is one ffsubsync cannot read, and so replaces
+# with the audio's voice detection. A film that carries one carries
 # the exact on-screen times of its dialogue, so those times are lifted out and
 # handed to ffsubsync as a text subtitle of their own. Voice detection hears
 # singing over an orchestra as noise, so for a musical the picture subtitle is
 # the only reference there is; for anything else it is still the better one.
 # A text subtitle the film carries needs none of this: ffsubsync reads it
 # itself before it ever listens to the audio.
-_PICTURE_CODECS = ("hdmv_pgs_subtitle", "dvd_subtitle", "dvb_subtitle")
-
 # The fewest cues a picture subtitle needs to stand in for the dialogue. A
 # forced track that is only the signs and the odd foreign line has a few
 # dozen, and so few cues line up with almost any shift.
@@ -327,25 +326,35 @@ def _frames(stream: dict) -> int:
 
 def _reference_stream(film: str) -> dict | None:
     """The picture subtitle a film's timings are taken from: the one with the
-    most packets that is not a commentary's, and not a forced one while there
+    most packets that is not a commentary, and not a forced one while there
     is another - a film in a foreign language flags its whole subtitle forced,
     and a forced track that is only the signs is caught by its few cues. None
     when the film has none, or when it carries a text subtitle, which ffsubsync
     reads on its own."""
     streams = _probe(["-select_streams", "s",
                       "-show_entries", "stream=index,codec_name"
-                      ":stream_disposition=forced:stream_tags"], film
+                      ":stream_disposition=forced,comment,hearing_impaired"
+                      ":stream_tags"], film
                      ).get("streams", [])
-    if any(s.get("codec_name") not in _PICTURE_CODECS for s in streams):
+    if any(subtitletracks.subtitle_form(s.get("codec_name")) != "image"
+           for s in streams):
         return None
-    usable = [s for s in streams
-              if not languages.is_commentary_name(
-                  s.get("tags", {}).get("title", ""))]
+    roles = {id(s): _stream_role(s) for s in streams}
+    usable = [s for s in streams if roles[id(s)] != "commentary"]
     if not usable:
         return None
     # max keeps the first of equals, the stream the film lists first
-    return max(usable, key=lambda s: (
-        not s.get("disposition", {}).get("forced"), _frames(s)))
+    return max(usable, key=lambda s: (roles[id(s)] != "forced", _frames(s)))
+
+
+def _stream_role(stream: dict) -> str:
+    """An ffprobe subtitle stream's role, from its disposition and title."""
+    disposition = stream.get("disposition") or {}
+    return subtitletracks.subtitle_role(
+        (stream.get("tags") or {}).get("title", ""),
+        forced=bool(disposition.get("forced")),
+        hearing_impaired=bool(disposition.get("hearing_impaired")),
+        commentary=bool(disposition.get("comment")))
 
 
 def _reference_cues(film: str, stream: dict) -> list:
@@ -527,7 +536,7 @@ def _sidecar(file: str, language_code: str) -> str:
     """The ``<movie>.<xx>.srt`` a film's subtitle in one language is named."""
     dot = file.rfind(".")
     stem = file[:dot] if dot != -1 else file
-    return "{}.{}.srt".format(stem, language_code)
+    return subtitletracks.sidecar_name(stem, language_code)
 
 
 def _to_subrip(srt: str, language_code: str, file: str,

@@ -193,3 +193,11 @@ class TestFileKinds:
             assert enums.file_kind("x." + extension) in ("video", "audio")
         for extension in enums.SUBTITLE_EXTENSIONS:
             assert enums.file_kind("x." + extension) == "subtitle"
+
+
+class TestSubtitleLists:
+    def test_the_subtitle_list_is_text_and_pictures_and_nothing_else(self):
+        text, image = (set(enums.TEXT_SUBTITLE_EXTENSIONS),
+                       set(enums.IMAGE_SUBTITLE_EXTENSIONS))
+        assert not text & image
+        assert set(enums.SUBTITLE_EXTENSIONS) == text | image

@@ -505,6 +505,20 @@ class TestTimingReference:
             assert timing.path()
         assert asked[1][:2] == ["-select_streams", "6"]
 
+    def test_a_track_named_forced_or_flagged_a_commentary_is_passed_over(
+            self, monkeypatch):
+        """The flag is not the only way a disc says it: a name says forced,
+        and a commentary can be flagged without being named one."""
+        named = self._pgs(index=4, frames=5000, title="English Forced")
+        flagged = self._pgs(index=5, frames=4000)
+        flagged["disposition"]["comment"] = 1
+        asked = self._film(monkeypatch, [
+            named, flagged, self._pgs(index=6, frames=2000)],
+            self._blu_ray_packets(150))
+        with subtitlefiles.TimingReference("Movie.mkv") as timing:
+            assert timing.path()
+        assert asked[1][:2] == ["-select_streams", "6"]
+
     def test_a_forced_track_when_it_is_all_there_is(self, monkeypatch):
         """A film in a foreign language flags its whole subtitle forced."""
         asked = self._film(monkeypatch, [
@@ -758,7 +772,8 @@ class TestDownloadSrt:
              "Movie.en.srt"],
             ["ffprobe", "-v", "error", "-select_streams", "s",
              "-show_entries",
-             "stream=index,codec_name:stream_disposition=forced:stream_tags",
+             "stream=index,codec_name"
+             ":stream_disposition=forced,comment,hearing_impaired:stream_tags",
              "-of", "json", str(tree / "Movie.mkv")]]
         assert "ffmpeg" not in by_tool
         (sync,) = by_tool["ffsubsync"]

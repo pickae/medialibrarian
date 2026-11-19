@@ -44,6 +44,7 @@ from medialib.lib import (
     plexnames,
     ramscratch,
     safety,
+    subtitletracks,
     toolcapture,
 )
 from medialib.lib.runlog import log
@@ -484,9 +485,6 @@ BONUS_CATEGORIES = (
 BONUS_FOLDER_NAMES = ("Featurettes",) + tuple(
     name for name, _keywords in BONUS_CATEGORIES)
 
-# The image-based subtitle codecs, as mkvmerge reports them.
-IMAGE_SUB_CODECS = ("S_HDMV/PGS", "S_VOBSUB", "S_DVBSUB")
-
 # The first four bytes of an EBML document, which is what a Matroska file
 # starts with. Releases do ship an MP4 under a ".mkv" name, and mkvpropedit
 # answers for one with "not a Matroska file or it could not be found" - which
@@ -598,7 +596,7 @@ def rename(name: str, fragments_file: str = "") -> str:
 def is_image_sub_codec(codec: str) -> bool:
     """``isImageSubCodec``: PGS (Blu-ray), VobSub (DVD) or DVBSub
     (broadcast)."""
-    return (codec or "").upper() in IMAGE_SUB_CODECS
+    return subtitletracks.subtitle_form(codec) == "image"
 
 
 def is_lossless_track_codec(codec: str) -> bool:
@@ -826,6 +824,22 @@ class Track:
     def is_commentary(self) -> bool:
         return (self.commentary == "true"
                 or languages.is_commentary_name(self.name))
+
+    @property
+    def subtitle_form(self) -> str:
+        """A subtitle's form, "text" or "image": see
+        :func:`subtitletracks.subtitle_form`."""
+        return subtitletracks.subtitle_form(self.codec)
+
+    @property
+    def subtitle_role(self) -> str:
+        """A subtitle's role, from its flags and its name: see
+        :func:`subtitletracks.subtitle_role`."""
+        return subtitletracks.subtitle_role(
+            self.name if self.name != "null" else "",
+            forced=self.forced == "true",
+            hearing_impaired=self.hearing_impaired == "true",
+            commentary=self.commentary == "true")
 
     @property
     def is_audio_description(self) -> bool:
@@ -1383,9 +1397,9 @@ def _tag_arguments(tracks: list) -> list:
         folded = enums.shell_lower(track.name)
         if languages.is_commentary_name(track.name):
             sets += ["--set", "flag-commentary=1"]
-        if "forced" in folded:
+        if languages.is_forced_name(track.name):
             sets += ["--set", "flag-forced=1"]
-        if "sdh" in folded:
+        if languages.is_sdh_name(track.name):
             sets += ["--set", "flag-hearing-impaired=1"]
 
         # One language tag, the highest-priority one the name names:
@@ -1731,7 +1745,7 @@ def _is_transcript_subtitle(track) -> bool:
     subtitle flagged as a commentary. The image subtitles a disc ships are
     neither, however they are named."""
     return (track.is_subtitle and track.is_commentary
-            and track.codec.upper().startswith("S_TEXT"))
+            and track.subtitle_form == "text")
 
 
 def _take_unplaced(unplaced: list, language: str) -> bool:
@@ -1805,7 +1819,7 @@ def gather_downloaded_subtitles(base: str, tracks: list, say=None) -> list:
     say = say or log
     found = []
     for row in languages.LANGUAGES:
-        srt = "%s.%s.srt" % (base, row.code2)
+        srt = subtitletracks.sidecar_name(base, row.code2)
         if os.path.islink(srt) or not os.path.isfile(srt) \
                 or not _size_of(srt):
             continue
@@ -1817,26 +1831,14 @@ def gather_downloaded_subtitles(base: str, tracks: list, say=None) -> list:
     return found
 
 
-# The words a track name says SDH or forced with, where the flag does not.
-_SDH_NAME = re.compile(r"\bsdh\b|\bcc\b|hearing|deaf|malentendant|"
-                       r"h[oö]rgesch[aä]digt|doven|slechthorend", re.I)
-_FORCED_NAME = re.compile(r"forced|forc[ée]s?\b|erzwungen|geforceerd", re.I)
-
-
 def _is_plain_text_subtitle(track, language: str) -> bool:
     """Whether a track is a text subtitle of this language that is none of
     forced, SDH or commentary - the one a downloaded sidecar would duplicate.
     A subtitle the improvement drops does not count."""
-    if not (track.is_subtitle and track.action != "drop"
-            and track.codec.upper().startswith("S_TEXT")):
-        return False
-    if not languages.same_language_tag(track.language, language):
-        return False
-    if track.is_commentary or track.forced == "true" \
-            or track.hearing_impaired == "true":
-        return False
-    name = track.name if track.name != "null" else ""
-    return not (_SDH_NAME.search(name) or _FORCED_NAME.search(name))
+    return (track.is_subtitle and track.action != "drop"
+            and track.subtitle_form == "text"
+            and languages.same_language_tag(track.language, language)
+            and track.subtitle_role == "full")
 
 
 def apply_surround_ladder(tracks: list) -> list:

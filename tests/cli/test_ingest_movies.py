@@ -490,6 +490,32 @@ class TestTagArguments:
         assert self._languages("Italian dub of the Spanish cut") == ["spa"]
 
 
+class TestRoleFlagsFromTheName:
+    """A name that says forced or SDH, in any of the words the library knows,
+    sets the flag the container did not."""
+
+    def _flags(self, name):
+        tracks = [im.Track(id="0", type="video"),
+                  im.Track(id="1", type="subtitles", name=name)]
+        sets = _sets_by_track(im._tag_arguments(tracks))["track:2"]
+        return {key for key, value in sets if value == "1"}
+
+    @pytest.mark.parametrize("name", ["English SDH", "English (CC)",
+                                      "Hearing Impaired", "Hörgeschädigte"])
+    def test_an_sdh_name(self, name):
+        assert "flag-hearing-impaired" in self._flags(name)
+
+    @pytest.mark.parametrize("name", ["Forced", "Français (forcés)",
+                                      "Erzwungen"])
+    def test_a_forced_name(self, name):
+        assert "flag-forced" in self._flags(name)
+
+    def test_a_plain_name_sets_neither(self):
+        flags = self._flags("English")
+        assert "flag-forced" not in flags
+        assert "flag-hearing-impaired" not in flags
+
+
 class TestAudioDescriptions:
     """A narration for the blind is dropped where its language has a
     soundtrack of its own, and kept where it is all a kept language has."""
