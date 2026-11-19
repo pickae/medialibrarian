@@ -22,7 +22,11 @@ import subprocess
 from collections.abc import Callable, Sequence
 
 from medialib.lib import toolcapture
-from medialib.lib.enums import VIDEO_EXTENSIONS, lower_extension_of
+from medialib.lib.enums import (
+    TEXT_SUBTITLE_EXTENSIONS,
+    VIDEO_EXTENSIONS,
+    lower_extension_of,
+)
 from medialib.lib.safety import SkipLog, is_empty_folder, lower_case_ending
 
 __all__ = [
@@ -42,7 +46,7 @@ __all__ = [
 # delete them, which it does not always manage when a run is interrupted).
 DOWNLOAD_SIDECARS: tuple[str, ...] = (
     "webp", "jpg", "jpeg", "png", "description", "info.json", "json",
-    "vtt", "srt", "ass", "lrc",
+    *TEXT_SUBTITLE_EXTENSIONS, "lrc",
 )
 
 # What an interrupted download leaves: none of these is ever part of a finished
@@ -64,7 +68,8 @@ _FRAGMENT_PATTERN = "*-Frag[0-9]*"
 
 # A converted subtitle carries its language between the stem and the extension
 # ("Episode.en.srt"), so it is not found by the plain "<stem>.<ext>" loop.
-_SUBTITLE_SIDEcar_SUFFIXES = (".srt", ".vtt", ".ass")
+_SUBTITLE_SIDEcar_SUFFIXES = tuple("." + extension
+                                  for extension in TEXT_SUBTITLE_EXTENSIONS)
 
 Runner = Callable[[Sequence[str]], "subprocess.CompletedProcess"]
 

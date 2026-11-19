@@ -15,6 +15,8 @@ __all__ = [
     "extension_list",
     "FILE_KINDS",
     "file_kind",
+    "SUBTITLE_ROLES",
+    "SUBTITLE_ROLE_SUFFIXES",
     "BRACKET_OPEN",
     "BRACKET_CLOSE",
     "PART_WORDS",
@@ -102,7 +104,24 @@ LOSSLESS_AUDIO_EXTENSIONS = ("flac", "ape", "wav", "wv",)
 # disk thrash between them: a 3 GB book took twenty times longer than one
 # sequential read. Matroska can hold FLAC too.
 SEEK_CHEAP_EXTENSIONS = ("opus", "ogg", "ogx",)
-SUBTITLE_EXTENSIONS = ("srt", "ass", "ssa", "vtt", "sub", "idx", "sup",)
+# A subtitle is written one of two ways: as TEXT, which a player draws in its own
+# font and a program can read, or as PICTURES, which a disc carries and only OCR
+# reads. Every subtitle list below is split that way.
+TEXT_SUBTITLE_EXTENSIONS = ("srt", "ass", "ssa", "vtt",)
+# A Blu-ray's PGS is a .sup; a DVD's VobSub is an .idx index beside a .sub of
+# pictures.
+IMAGE_SUBTITLE_EXTENSIONS = ("sup", "idx", "sub",)
+SUBTITLE_EXTENSIONS = TEXT_SUBTITLE_EXTENSIONS + IMAGE_SUBTITLE_EXTENSIONS
+# The text subtitles as ffprobe names their codecs. mov_text is MP4's.
+TEXT_SUBTITLE_CODECS = ("subrip", "ass", "ssa", "webvtt", "mov_text", "text",)
+# The picture subtitles as ffprobe names their codecs: Blu-ray, DVD, broadcast.
+IMAGE_SUBTITLE_CODECS = ("hdmv_pgs_subtitle", "dvd_subtitle", "dvb_subtitle",)
+# The same three as mkvmerge's codec_id spells them, lower-cased here and
+# matched case-insensitively, as LOSSLESS_TRACK_CODECS is.
+IMAGE_SUBTITLE_TRACK_CODECS = ("s_hdmv/pgs", "s_vobsub", "s_dvbsub",)
+# Every text subtitle's mkvmerge codec_id begins with this: S_TEXT/UTF8,
+# S_TEXT/ASS, S_TEXT/WEBVTT.
+TEXT_SUBTITLE_TRACK_PREFIX = "s_text/"
 LOSSLESS_CODECS = ("flac", "ape", "alac", "pcm_s16le", "pcm_s16be", "wavpack",)
 LOSSLESS_TRACK_CODECS = ("dts", "flac", "truehd", "wav", "ape", "pcm",)
 
@@ -135,6 +154,29 @@ for _kind, _members in FILE_KINDS.items():
     for _member in _members:
         _KIND_OF.setdefault(_member, _kind)
 
+
+# --- the roles a subtitle plays -----------------------------------------------
+# What a subtitle track is FOR, which is a different question from the language
+# it is in or the form it is written in. A film can carry four subtitles of one
+# language that are four different things:
+#
+#   commentary  what is said over the film in a commentary, not the film itself
+#   forced      only the lines a viewer is meant to read whatever they chose -
+#               the signs, and dialogue in a language the film does not explain
+#   sdh         the film's dialogue for the deaf and hard of hearing: the
+#               dialogue plus who is speaking and the [sounds]
+#   full        the film's dialogue, and nothing else
+#
+# In the order they are asked: the first that fits a track is its role, so a
+# commentary flagged forced is a commentary, and a forced track named SDH is
+# forced - it is shown without being chosen, which is what matters to a player.
+SUBTITLE_ROLES = ("commentary", "forced", "sdh", "full")
+
+# The tag a sidecar of each role carries between its language and its
+# extension - "Film.en.forced.srt" - in the spelling Plex and Jellyfin read. A
+# full subtitle carries none. A commentary has none either: it names its
+# commentary instead ("Film 2 Director's Commentary.en.srt").
+SUBTITLE_ROLE_SUFFIXES = {"forced": "forced", "sdh": "sdh", "full": ""}
 
 # --- the bracket set ----------------------------------------------------------
 # The single source of truth for which characters count as brackets across the

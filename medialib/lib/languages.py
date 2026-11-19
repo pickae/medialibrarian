@@ -161,6 +161,27 @@ def is_commentary_name(name: str) -> bool:
                for word in re.findall(r"[^\W\d_]+", folded))
 
 
+# The words a track name says it is for the deaf and hard of hearing with, in
+# the languages discs carry. "cc" only as a word of its own, where it is
+# closed captions and not two letters of something else.
+_SDH_NAME = re.compile(r"\bsdh\b|\bcc\b|hearing|deaf|malentendant|"
+                       r"h[oö]rgesch[aä]digt|doven|slechthorend", re.I)
+# The words a track name says it is forced with.
+_FORCED_NAME = re.compile(r"forced|forc[ée]s?\b|erzwungen|geforceerd", re.I)
+
+
+def is_sdh_name(name: str) -> bool:
+    """Does this track name mark it as subtitles for the deaf and hard of
+    hearing?"""
+    return bool(_SDH_NAME.search(name or ""))
+
+
+def is_forced_name(name: str) -> bool:
+    """Does this track name mark it as a forced subtitle - the signs and foreign
+    lines, shown without being chosen?"""
+    return bool(_FORCED_NAME.search(name or ""))
+
+
 def code_from_tag(tag: str) -> str:
     """The ".xx" code for an mkv language tag, or "" for a tag naming none.
 
