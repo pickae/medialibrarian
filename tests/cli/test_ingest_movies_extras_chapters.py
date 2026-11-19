@@ -1,4 +1,4 @@
-"""The extras' chapters (-e): a lane of a full ingest that gives each bonus
+"""The extras' chapters (-C): a lane of a full ingest that gives each bonus
 video without chapters some a language model works out, written in place.
 
 What is pinned here is the boundary: which files count as extras, that a main
@@ -214,6 +214,6 @@ class TestTheOptions:
 
     def test_instructions_need_the_option(self, tmp_path, capsys):
         assert self._main(tmp_path, "-P", "a chapter per scene") == 1
-        assert ("-P (instructions for the chapter model) needs -e, or -O "
+        assert ("-P (instructions for the chapter model) needs -C, or -O "
                 "extras-chapters.") in capsys.readouterr().err
 

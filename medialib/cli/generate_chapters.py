@@ -12,7 +12,7 @@ two passes medialib/lib/aichapters.py describes. With a hosted model the two
 overlap: each file is chaptered as soon as its transcript is there.
 
 Nothing in the input is touched. A chapter file is the OGM list mkvmerge,
-ffmpeg's ingest and convert-audio all read; convert-audio's -t writes the same
+ffmpeg's ingest and convert-audio all read; convert-audio's -C writes the same
 chapters straight into what it encodes.
 """
 
@@ -58,7 +58,7 @@ m | <minutes> | The shortest chapter, in minutes; a fraction is allowed,
                     Default {minimum}
 l | <minutes> | The length of chapter the model is steered towards.
                     Default {typical}
-p | <text> | More instructions for the model, added to every request,
+P | <text> | More instructions for the model, added to every request,
                     e.g. "a chapter per speaker, titled with their name and
                     topic". The model then reasons at medium effort, and Claude
                     may search the web.
@@ -70,9 +70,9 @@ m | posNum | shortest chapter
 l | posInt | chapter length
 """
 
-OPT_VARS = "f:force m:minMinutes l:typicalMinutes p:instructions"
+OPT_VARS = "f:force m:minMinutes l:typicalMinutes P:instructions"
 OPT_COLUMN = 20
-OPT_LONG = "h:help f:force m:min-length l:length p:prompt"
+OPT_LONG = "h:help f:force m:min-length l:length P:prompt"
 
 # What a chapter file is called beside the transcript.
 CHAPTER_SUFFIX = ".chapters.txt"

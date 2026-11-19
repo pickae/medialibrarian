@@ -123,7 +123,7 @@ k | [part] | keep <part>: takes nothing away. The parts are pages and input,
                     unpacks by content either way. A folder literally named
                     "input" is written ./input: the word after -k goes to -k
                     when it is a part.
-l | <quality> | quality level of the output images, default {quality}
+Q | <quality> | quality level of the output images, default {quality}
 u | <chroma> | page chroma: {chromas}. 444 keeps colour at full resolution,
                     420 at a quarter of it, for smaller books with colour
                     fringes on thin lines and lettering. Default {chroma}.
@@ -142,9 +142,9 @@ s | int:0:{top} | speed preset
 u | enum:{chromas} | chroma
 """.format(chromas="\\|".join(CHROMAS), top=MAX_SPEED)
 
-OPT_VARS = "l:quality u:chroma s:speedPreset m:maxRes f:fuzz k:keepParts"
+OPT_VARS = "Q:quality u:chroma s:speedPreset m:maxRes f:fuzz k:keepParts"
 OPT_COLUMN = 20
-OPT_LONG = "h:help l:quality u:chroma s:speed m:max-resolution f:fuzz k:keep"
+OPT_LONG = "h:help Q:quality u:chroma s:speed m:max-resolution f:fuzz k:keep"
 
 # The smallest an AVIF page can plausibly be, in bytes. A page that encodes to
 # less than this is an empty page - nothing on it worth a page in the book - and
@@ -188,9 +188,9 @@ OVERSUBSCRIBE = 2
 LANE_BOOKS = 4
 LANE_PAGES_PER_BOOK = 8
 
-# What av1gpu is asked for in place of -s and -l. convert-images' calibration
+# What av1gpu is asked for in place of -s and -Q. convert-images' calibration
 # was measured on photographs at 4:2:0, and on comic pages at 4:4:4 it is off:
-# its quality 47 for -l 45 scored 65 in SSIMULACRA2 where the CPU's page scored
+# its quality 47 for -Q 45 scored 65 in SSIMULACRA2 where the CPU's page scored
 # 73, so the card's pages would be visibly worse than the CPU's in the same
 # book. Measured 2026-10-31 on an RTX 5090 (av1gpu 84394ca) against ImageMagick
 # 7.1.2 / libaom at -s 4 4:4:4, over 24 1280x1280 crops of four comics - a
@@ -1066,7 +1066,7 @@ class Run:
             # was already taken above, for the WHOLE book, and a book that
             # got this far is one being converted.
             "-a", "-u", self.chroma, "-j", self.pages_per_book,
-            "-m", self.max_res, "-l", self.quality, "-s", self.speed_preset,
+            "-m", self.max_res, "-Q", self.quality, "-s", self.speed_preset,
             "-f", self.fuzz, book_temp, book_avif]
         argv, env = commands.command_line(
                 "convert-images", flags,
@@ -1674,7 +1674,7 @@ def _run(result, declaration, program: str, script_dir: str,
     # run, and fed the pages of every book, since a call per book would pay
     # av1gpu's start-up per book. The book workers then only sort the pages,
     # and the lane encodes them - the card's and the CPU's at once, across
-    # books. -l and -s are the CPU's; what av1gpu has to be asked for to match
+    # books. -Q and -s are the CPU's; what av1gpu has to be asked for to match
     # them on comic pages was measured (COMIC_CALIBRATION).
     # Nothing left to convert starts no card: av1gpu's start-up would be all
     # a resumed run of a finished library spent.
@@ -1853,7 +1853,7 @@ def _start_gpu_lane(state, speed: int, quality, chroma: str,
             preset, gpu_quality = COMIC_CALIBRATION.gpu_settings(
                 speed, int(quality))
             runlog.detail("the card is asked for quality %d, preset %s - what "
-                          "the calibration measured for -l %d -s %d"
+                          "the calibration measured for -Q %d -s %d"
                           % (gpu_quality, preset, int(quality), speed))
             # The trim is decided on the card where it can: the per-book runs
             # then only read each page's header, and the CPU is left to the

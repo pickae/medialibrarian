@@ -11,7 +11,7 @@ carrying over chapters and cover art.
 | **Writes** | the converted files under `<outputDir>`; with `-c`, the rest copied verbatim beside them |
 | **Input** | file extensions lower-cased and `.jpeg` renamed to `.jpg`; nothing else is changed |
 | **Reruns** | an up-to-date output is skipped |
-| **Network** | none, except the language model's server under `-t` |
+| **Network** | none, except the language model's server under `-C` |
 
 ## Default behavior
 
@@ -57,12 +57,12 @@ stereo and mono alike, and the `-g` folder verdicts read against it as well.
 | --- | --- | --- |
 | default | as the source, but at most stereo — a surround source is downmixed | 46 kbps |
 | `-m` | forced mono | 32 kbps |
-| `-u` (surround) | the source's own count, up to 7.1 | 46 kbps scaled up with the channel count (106 for 5.1) |
+| `-s` (surround) | the source's own count, up to 7.1 | 46 kbps scaled up with the channel count (106 for 5.1) |
 | `-b <kbps>` | — | that bitrate |
-| `-a` (adaptive) | the source's own count, decided per file, capped at stereo unless `-u` | the slightly higher spoken-word figure for that channel count, allowing for sound-effects. Cannot be combined with `-m` or `-b`, and turns long-file splitting off |
+| `-a` (adaptive) | the source's own count, decided per file, capped at stereo unless `-s` | the slightly higher spoken-word figure for that channel count, allowing for sound-effects. Cannot be combined with `-m` or `-b`, and turns long-file splitting off |
 
-The output is meant for a phone, so stereo is the ceiling unless `-u` asks for
-more. With `-u`, Opus carries surround in only one fixed layout per channel
+The output is meant for a phone, so stereo is the ceiling unless `-s` asks for
+more. With `-s`, Opus carries surround in only one fixed layout per channel
 count, so a source in any other layout (the 5.1(side) that EAC3 decodes to, or
 7.1(wide)) is re-labelled onto it. A 2.1 or 3.1 source is still downmixed to
 stereo rather than have its LFE played from a full-range speaker, and one wider
@@ -70,7 +70,7 @@ than 7.1 is folded down to 7.1.
 
 The table is the Opus one: `-e aac` runs at 64 kbps by default and 48 kbps in a
 forced mono run, and an AAC figure is not scaled up with the channel count the
-Opus one is — a `-u` run of it stays at the rate the codec needs of speech.
+Opus one is — a `-s` run of it stays at the rate the codec needs of speech.
 
 ## AAC (`-e aac`)
 
@@ -116,26 +116,26 @@ ffmpeg can write, so lyrics are how a transcript fits in an Opus file without
 switching it to Matroska. An `.m4a` takes it as a subtitle track. An output
 that carries a transcript already is left as it is.
 
-## Chapters for what has none (`-t`)
+## Chapters for what has none (`-C`)
 
-With `-t`, every output whose source has no chapters gets some, worked out by a
+With `-C`, every output whose source has no chapters gets some, worked out by a
 language model from a transcript of the speech, exactly as
 [`generate-chapters`](generate-chapters.md) does it and with the same
 settings. The transcript is the sidecar where there is one. Otherwise the
 outputs are transcribed by `transcribe-audio` once all the encoding is done, and
 that transcript goes into the output with the chapters. A source with chapters
 of its own keeps them and is not sent to the model. A rerun tries again only for
-outputs that still have none. Without a usable model, `-t` is refused before
+outputs that still have none. Without a usable model, `-C` is refused before
 anything is encoded.
 
-`-p "<text>"` adds your own instructions to every request the model gets, for
+`-P "<text>"` adds your own instructions to every request the model gets, for
 example a chapter per speaker. The model then reasons at medium effort, and
 Claude may search the web, as with
-[`generate-chapters -p`](generate-chapters.md#your-own-instructions). `-p` needs `-t`.
+[`generate-chapters -P`](generate-chapters.md#your-own-instructions). `-P` needs `-C`.
 
-## Some folders of the input (`-r`)
+## Some folders of the input (`-O`)
 
-`-r <folder>` converts only what is under `<inputDir>/<folder>`, into the
+`-O <folder>` converts only what is under `<inputDir>/<folder>`, into the
 place a run over all of `<inputDir>` would put it. It may be given more than
 once, and is how `ytdlp -i` converts the feeds a batch has finished while it
 fetches the rest.

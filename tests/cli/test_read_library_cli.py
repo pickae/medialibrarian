@@ -532,7 +532,7 @@ class TestOneVoicePerLanguage:
 
     def test_a_book_gets_the_sample_of_its_own_language(self, voices):
         library, folder = voices
-        log = library.read("-l", "deu", "-r", folder, library.source,
+        log = library.read("-l", "deu", "-V", folder, library.source,
                            library.outputs)
         assert len([c for c in library.engine_calls()
                     if re.search(r"--voice \S*/deu/", c)]) == 2
@@ -540,13 +540,13 @@ class TestOneVoicePerLanguage:
 
     def test_a_sample_naming_no_language_is_named_and_ignored(self, voices):
         library, folder = voices
-        log = library.read("-l", "deu", "-r", folder, library.source,
+        log = library.read("-l", "deu", "-V", folder, library.source,
                            library.outputs)
         assert 'notalanguage.wav" names no language' in log, log
 
     def test_a_language_with_no_sample_of_its_own_falls_back(self, voices):
         library, folder = voices
-        library.read("-l", "ita", "-r", folder, library.source, library.outputs)
+        library.read("-l", "ita", "-V", folder, library.source, library.outputs)
         assert len([c for c in library.engine_calls()
                     if re.search(r"--voice \S*/-/", c)]) == 2
 
@@ -560,7 +560,7 @@ class TestAVoiceSampleThatIsRefused:
         before = blackbox.tree_of(library.source)
         missing = tmp_path / "no-such-sample.wav"
         target = tmp_path / "out.voice"
-        log = library.read("-l", "deu", "-r", str(missing), library.source,
+        log = library.read("-l", "deu", "-V", str(missing), library.source,
                            target, expect=1)
         assert 'Voice sample "%s" does not exist.' % missing in log, log
         assert library.engine_calls() == []
@@ -574,7 +574,7 @@ class TestAVoiceSampleThatIsRefused:
         # A name that carries no language, so no sample in the folder is one.
         (folder / "voice.mp3").write_bytes(b"\x00" * 32)
         target = tmp_path / "out.voices"
-        log = library.read("-l", "deu", "-r", str(folder), library.source,
+        log = library.read("-l", "deu", "-V", str(folder), library.source,
                            target, expect=1)
         assert 'No usable voice sample was found in "%s".' % folder in log, log
         assert library.engine_calls() == []

@@ -39,7 +39,7 @@ With no options, a run:
   that Letterboxd has neither watched nor on its own, for the import on the
   Letterboxd watchlist page
 - skips the Letterboxd side with `-l`
-- remembers in `data/plex-letterboxd-state.json` (`-k`) what Letterboxd has,
+- remembers in `data/plex-letterboxd-state.json` (`-S`) what Letterboxd has,
   and every row it has written into a CSV; and keeps a copy of the Plex library
   beside it, so the next run reads only what changed
 

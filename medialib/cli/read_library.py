@@ -68,7 +68,7 @@ j | <jobs> | Narrate up to <jobs> books at a time.
                     Default: what the device has room for - free VRAM divided by
                     5 GB on a GPU, and 1 on a CPU, which one narration saturates
                     on its own.
-r | <sample> | Voice sample(s) to clone the narrator's voice from.
+V | <sample> | Voice sample(s) to clone the narrator's voice from.
                     A FILE is used for every book: any audio or video file, one in
                     the wrong format is transcoded to WAV first, and one longer
                     than a minute is cut down to a slice of speech from its middle.
@@ -87,7 +87,7 @@ c | <dir> | The ebook2audiobook checkout to drive.
 d | <device> | Where the model runs: cpu, cuda, mps, rocm, xpu, jetson.
                     Default cuda when an NVIDIA GPU is present, cpu otherwise
 e | <engine> | TTS engine: xtts, bark, vits, fairseq, tacotron, yourtts.
-                    Voice cloning (-r) needs one that supports it.
+                    Voice cloning (-V) needs one that supports it.
                     Default xtts
 l | <language> | Language of the books, ISO 639-3 (eng, deu, ita, ...). Given,
                     it is used for every book and nothing is detected. Omitted,
@@ -95,7 +95,7 @@ l | <language> | Language of the books, ISO 639-3 (eng, deu, ita, ...). Given,
                     or from its text when the metadata says nothing.
                     Default: detected per book"""
 
-OPT_VARS = ("j:jobs r:voiceSample b:opusBitrate c:narrationCheckout "
+OPT_VARS = ("j:jobs V:voiceSample b:opusBitrate c:narrationCheckout "
             "d:narrationDeviceArg e:narrationEngine l:languageArg")
 
 # -j left out is the device's own answer, which is why only a value somebody
@@ -108,7 +108,7 @@ b | nonNegInt | bitrate in kbps
 """
 
 OPT_COLUMN = 20
-OPT_LONG = ("h:help j:jobs r:voice b:opus-bitrate o:opus-only c:checkout d:device "
+OPT_LONG = ("h:help j:jobs V:voice b:opus-bitrate o:opus-only c:checkout d:device "
             "e:engine l:language")
 
 # The listening copy and the archival one. 36 kbps of mono Opus is transparent
@@ -991,7 +991,7 @@ def _read(result, program: str, script_dir: str, in_path: str, out_path: str,
                              "a folder of them named\n")
             sys.stderr.write("after the languages they speak (deu.wav, "
                              "german.m4a, de.mp3, default.wav),\n")
-            sys.stderr.write("or omit -r to use the engine's own voice. Nothing "
+            sys.stderr.write("or omit -V to use the engine's own voice. Nothing "
                              "was changed.\n")
             return 1
     runcontext.settle("narrationVoiceMap", voice_map or "")

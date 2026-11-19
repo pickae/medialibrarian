@@ -187,7 +187,7 @@ def test_the_tree_is_mirrored_under_blackbox(chaptering, tmp_path):
 
 def test_instructions_go_into_every_request_and_raise_the_effort(chaptering, tmp_path):
     source, out = _tree(tmp_path, "show.mp3")
-    log = chaptering.chapter("-p", "Name each speaker.", source, out)
+    log = chaptering.chapter("-P", "Name each speaker.", source, out)
     assert "reasoning at medium effort" in log
     requests = chaptering.model_log.read_text().splitlines()
     assert len(requests) == 2

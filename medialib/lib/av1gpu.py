@@ -336,7 +336,7 @@ def encode_chunk(encoder: str, items, workdir: str, quality: int,
     absolute, or ``(source, destination, crop, max_size)``: av1gpu's own
     ``WxH+X+Y`` and ``WxH`` / ``xH``, either one "" for none, done on the card
     after the decode; <workdir> an empty directory for the call's own files.
-    <quality> and <preset> are av1gpu's own - what a CPU -l and -s turn into
+    <quality> and <preset> are av1gpu's own - what a CPU -Q and -s turn into
     is medialib/lib/encodercalibration.py's to say. <chroma> is "420" or
     "444", and <depth> 8 or 10 - 10 by default, which is what the CPU road
     writes.

@@ -24,7 +24,7 @@ Options:
     -l, --length <minutes>
                     The length of chapter the model is steered towards.
                     Default 8
-    -p, --prompt <text>
+    -P, --prompt <text>
                     More instructions for the model, added to every request,
                     e.g. "a chapter per speaker, titled with their name and
                     topic". The model then reasons at medium effort, and Claude

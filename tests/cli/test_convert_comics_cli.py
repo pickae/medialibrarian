@@ -1136,7 +1136,7 @@ class TestTheGpuLaneSaysEachPage_s_road:
     def test_the_card_s_ask_is_said_from_the_calibration(self, lane, comics):
         log = lane("-v")
         assert re.search(r"the card is asked for quality \d+, preset \S+ - "
-                         r"what the calibration measured for -l 45 -s 4",
+                         r"what the calibration measured for -Q 45 -s 4",
                          log)
 
     def test_a_run_without_the_card_says_neither(self, lane, comics):
