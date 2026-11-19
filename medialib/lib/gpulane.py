@@ -38,7 +38,9 @@ has failed, the CPU. The CPU's own pages come with the books unpacked for the
 card: nearly every page is the card's. The CPU's encodes run niced, below the
 sorting that feeds the card. What bounds the looking
 ahead is RAM, read live: every book unpacked and not yet zipped is held there,
-and none is unpacked while less than :data:`RAM_RESERVE` is left.
+and none is unpacked while less than the lane's reserve is left - the full
+:data:`RAM_RESERVE` on a big machine, a share of the RAM on a machine that has
+less of it.
 
 Under -v the lane says each page's road as the manifest lists it - which side
 it was sorted onto, and why the card declined it, from the page's own run -
@@ -85,8 +87,17 @@ QUEUED_PER_ENCODER = 2
 
 # RAM kept free of unpacked books: what the encoders themselves need - an
 # ImageMagick AVIF encode of a large page takes a few GB - and room for the
-# book being unpacked.
+# book being unpacked. The ceiling the lane asks for on a big machine; on a
+# machine with less RAM it is scaled to a quarter of what the machine has, so
+# a small machine is never asked to keep free more than it can ever have
+# (which is what left it unpacking nothing at all).
 RAM_RESERVE = 16 * 1024 ** 3
+
+# The divisor that scales the reserve down on a machine with less RAM than it:
+# the reserve becomes a share of the machine's RAM - a quarter - which is
+# always less than the RAM that is realistically free, so a book can be
+# unpacked.
+RAM_RESERVE_SHARE = 4
 
 # The CPU's encodes run below the sorting that feeds the card: with every core
 # taken by encoders, the next books' pages were sorted - and the card fed -
@@ -149,6 +160,9 @@ class Lane:
         self.cpu_jobs = max(1, cpu_jobs)
         self.budget = CHUNK_MEGAPIXELS * 1_000_000
         self.room = threading.Condition()
+        # The machine's total RAM, read once from /proc/meminfo; 0 when it
+        # cannot be read, which leaves the full reserve in force.
+        self._total_ram = 0
         self.expected: dict[str, _Book] = {}
         self.dropped: list[_Book] = []
         self.pending: list = []
@@ -271,7 +285,7 @@ class Lane:
                and self.pending_pixels < QUEUED_CHUNKS * self.budget)
         cpu = (self.broken
                and len(self.cpu_queue) < QUEUED_PER_ENCODER * self.cpu_jobs)
-        if (gpu or cpu) and self._ram_free() > RAM_RESERVE:
+        if (gpu or cpu) and self._ram_free() > self._ram_reserve():
             return "gpu" if gpu else "cpu"
         return ""
 
@@ -290,6 +304,30 @@ class Lane:
         except (OSError, ValueError):
             pass
         return free
+
+    def _total_ram_bytes(self) -> int:
+        """The machine's total RAM, read once; 0 when it cannot be read."""
+        if self._total_ram:
+            return self._total_ram
+        try:
+            with open("/proc/meminfo") as handle:
+                for line in handle:
+                    if line.startswith("MemTotal:"):
+                        self._total_ram = int(line.split()[1]) * 1024
+                        break
+        except (OSError, ValueError):
+            pass
+        return self._total_ram
+
+    def _ram_reserve(self) -> int:
+        """The headroom the lane keeps free of unpacked books, on THIS machine:
+        the full reserve, or a share of the RAM when the machine has less of
+        it - a machine that cannot keep the full reserve free cannot wait for
+        it, and would unpack nothing at all."""
+        total = self._total_ram_bytes()
+        if not total:
+            return RAM_RESERVE
+        return min(RAM_RESERVE, total // RAM_RESERVE_SHARE)
 
     def close(self) -> None:
         """No more books: every one still expected is collected, both sides

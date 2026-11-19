@@ -370,6 +370,29 @@ def test_a_book_is_unpacked_for_the_cpu_only_once_the_card_failed(tmp_path):
         _close(lane)
 
 
+def test_the_reserve_scales_to_a_machine_with_less_ram_than_it_keeps_free(
+        tmp_path):
+    """The reserve is headroom the lane asks to keep free of unpacked books. A
+    machine with less RAM than the full reserve could never keep it free - it
+    would wait to unpack a book it could never hold - so on such a machine the
+    reserve is a share of its RAM, which is always less than the RAM that is
+    realistically free. A machine with the full reserve to spare keeps it, and
+    so does one whose RAM the lane cannot read."""
+    lane = gpulane.Lane("", str(tmp_path), 60, "turbo", "444",
+                        lambda item: None, 2, lambda line: None)
+    try:
+        lane._total_ram_bytes = lambda: 256 * 1024 ** 3
+        assert lane._ram_reserve() == gpulane.RAM_RESERVE
+        lane._total_ram_bytes = lambda: 8 * 1024 ** 3
+        assert (lane._ram_reserve() == 8 * 1024 ** 3
+                // gpulane.RAM_RESERVE_SHARE)
+        lane._total_ram_bytes = lambda: 0
+        assert lane._ram_reserve() == gpulane.RAM_RESERVE
+    finally:
+        lane.broken = True
+        _close(lane)
+
+
 def _cpu_book(lane, tmp_path, pages):
     """A book of <pages> for the card, each with a CPU encode that writes
     "CPU" to its output - one any platform can run."""
