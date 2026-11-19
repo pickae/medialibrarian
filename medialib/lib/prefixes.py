@@ -71,6 +71,13 @@ class SplitSiblings(NamedTuple):
     cores: list[str]
     # The indices of the siblings that form the group (the plurality filetype).
     group: list[int]
+    # The (prefix, core) each sibling had right after the individual pass,
+    # before the collective stripping had its say - for a caller that wants
+    # to say which pass left a name the way it ended up.
+    first: list[tuple[str, str]]
+    # The core each sibling had right after the collective pass, before the
+    # recovery pass could re-split a prefix out of it.
+    collective: list[str]
 
 
 def split_siblings(names: Sequence[str], mode: str,
@@ -85,8 +92,13 @@ def split_siblings(names: Sequence[str], mode: str,
 
     ``group`` overrides which siblings form the group; left out, it is the
     plurality filetype in files mode and every sibling in folders mode.
+
+    The result also carries the intermediate states - the individual pass's
+    output and the collective pass's output - so a caller can say which pass
+    left a name the way it ends up: what one pass's output was is what the
+    next one read.
     """
-    extensions, item_prefixes, cores = [], [], []
+    extensions, item_prefixes, cores, first = [], [], [], []
     for base in names:
         name, extension = extension_of(base, mode)
         prefix, core = cleannamesindividually.clean_names_individually(
@@ -94,8 +106,10 @@ def split_siblings(names: Sequence[str], mode: str,
         extensions.append(extension)
         item_prefixes.append(prefix)
         cores.append(core)
+        first.append((prefix, core))
 
     clean_names = list(cores)
+    collective = list(cores)
 
     # Which siblings take part in the collective pass: the plurality filetype in
     # files mode, all of them in folders mode. A lone odd file - one cover.jpg
@@ -114,6 +128,7 @@ def split_siblings(names: Sequence[str], mode: str,
             group_cores, mode, group_lengths)
         for position, index in enumerate(group):
             clean_names[index] = cleaned[position]
+            collective[index] = cleaned[position]
 
     # A prefix can have been hidden behind the common leading text the
     # collective pass has just removed, so the individual cleaner runs again on
@@ -133,7 +148,8 @@ def split_siblings(names: Sequence[str], mode: str,
             item_prefixes[index] = prefix
             clean_names[index] = core
 
-    return SplitSiblings(extensions, item_prefixes, clean_names, group)
+    return SplitSiblings(extensions, item_prefixes, clean_names, group,
+                         first, collective)
 
 
 def wipe_doubled_prefixes(

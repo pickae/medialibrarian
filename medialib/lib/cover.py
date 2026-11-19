@@ -19,12 +19,14 @@ would be whatever the filesystem listed first.
 """
 
 import os
+from typing import NamedTuple
 
 from medialib.lib.enums import LISTS, lower_extension_of, shell_lower
 from medialib.lib.safety import SkipLog, safe_rename
 from medialib.lib.versionsort import version_key
 
-__all__ = ["COVER_WORDS", "choose_cover", "rename_cover_to_folder"]
+__all__ = ["COVER_WORDS", "CoverChoice", "choose_cover",
+           "cover_choice", "rename_cover_to_folder"]
 
 # Highest priority first.
 COVER_WORDS = ("folder", "front", "cover")
@@ -80,27 +82,48 @@ def _size(path: str) -> int:
         return 0
 
 
-def choose_cover(directory: str) -> str | None:
-    """The path of the cover to promote, or None when the folder has no candidate."""
-    paths = _candidates(directory)
-    if not paths:
-        return None
+class CoverChoice(NamedTuple):
+    """What :func:`choose_cover` decided, and the figure it was taken on.
 
+    ``word`` is the cover word the winner carries - the highest-priority one
+    any candidate matched - and ``candidates`` how many carry it, which is
+    what it was largest among. Both are empty when the folder has none.
+    """
+
+    path: str | None
+    word: str
+    candidates: int
+
+
+def _stem(path: str) -> str:
+    """The filename without its extension, the cover words are matched in."""
+    base = path.rpartition("/")[2]
+    return base.rpartition(".")[0]
+
+
+def cover_choice(directory: str) -> CoverChoice:
+    """The cover to promote, the word it won on, and how many candidates
+    carry that word - the selection with the figure it was taken on.
+    """
+    paths = _candidates(directory)
     for word in COVER_WORDS:
+        candidates = [path for path in paths if word in shell_lower(_stem(path))]
+        if not candidates:
+            continue
         best: str | None = None
         best_size = -1  # not 0: a real file can be empty, and that is a candidate
-        for path in paths:
-            base = path.rpartition("/")[2]
-            stem = shell_lower(base.rpartition(".")[0])
-            if word not in stem:
-                continue
+        for path in candidates:
             size = _size(path)
             if size > best_size:
                 best_size = size
                 best = path
-        if best is not None:
-            return best
-    return None
+        return CoverChoice(best, word, len(candidates))
+    return CoverChoice(None, "", 0)
+
+
+def choose_cover(directory: str) -> str | None:
+    """The path of the cover to promote, or None when the folder has no candidate."""
+    return cover_choice(directory).path
 
 
 def rename_cover_to_folder(directory: str, log: SkipLog | None = None,

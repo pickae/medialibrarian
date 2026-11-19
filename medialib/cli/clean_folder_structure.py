@@ -124,8 +124,13 @@ def siblings(directory: str, mode: str) -> list[str]:
 
 
 def rename_siblings(directory: str, mode: str, fragments_file: str,
-                    skips: safety.SkipLog) -> int:
-    """One pass over one directory's siblings; how many really were renamed."""
+                    skips: safety.SkipLog, detail: list | None = None) -> int:
+    """One pass over one directory's siblings; how many really were renamed.
+
+    ``detail`` collects one (old name, new name, the pass that changed it)
+    entry per rename that really happened, so the caller can say, under the
+    directory's own line, which cleaning pass left each name the way it is.
+    """
     if not os.path.isdir(directory):
         return 0
     items = siblings(directory, mode)
@@ -135,8 +140,8 @@ def rename_siblings(directory: str, mode: str, fragments_file: str,
     if not items:
         return 0
 
-    split = prefixes.split_siblings(
-        [os.path.basename(full) for full in items], mode, fragments_file)
+    names = [os.path.basename(full) for full in items]
+    split = prefixes.split_siblings(names, mode, fragments_file)
     extensions, item_prefixes = split.extensions, split.prefixes
     clean_names, group = split.cores, split.group
 
@@ -152,8 +157,17 @@ def rename_siblings(directory: str, mode: str, fragments_file: str,
     item_prefixes = prefixes.wipe_uniform_prefixes(item_prefixes, clean_names,
                                                    group)
 
-    return _apply(directory, item_prefixes, clean_names, extensions, items,
-                  skips, companions)
+    changes, renamed = _apply(directory, item_prefixes, clean_names, extensions,
+                              items, skips, companions)
+    if detail is not None:
+        by_name = {os.path.basename(full): index
+                   for index, full in enumerate(items)}
+        for old, new, reason in renamed:
+            if reason is None:
+                reason = _passes_for(by_name[old], names, mode, split,
+                                     item_prefixes, clean_names)
+            detail.append((old, new, reason))
+    return changes
 
 
 # What a transcript's owner is when one stem has several files: what is
@@ -195,10 +209,17 @@ def _transcript_companions(items: list) -> tuple:
 
 
 def _apply(directory: str, item_prefixes, clean_names, extensions, items,
-           skips: safety.SkipLog, companions=None) -> int:
+           skips: safety.SkipLog, companions=None) -> tuple:
     """The last step, kept apart so the passes above read as the sequence of
-    decisions they are and this reads as the one place that touches disk."""
+    decisions they are and this reads as the one place that touches disk.
+
+    Returns how many renames really happened, and the (old name, new name,
+    why) of each - ``why`` is the reason a transcript sidecar was renamed,
+    and None for a sibling cleaned on its own merit, whose reason the caller
+    works out of which pass left its name the way it is.
+    """
     changes = 0
+    renamed: list[tuple[str, str, str | None]] = []
     for index, name in enumerate(clean_names):
         prefix = item_prefixes[index]
         extension = extensions[index]
@@ -225,11 +246,58 @@ def _apply(directory: str, item_prefixes, clean_names, extensions, items,
         # decided inside safe_rename, which records the second.
         if safety.safe_rename(items[index], path, skips):
             changes += 1
+            renamed.append((os.path.basename(items[index]),
+                            os.path.basename(path), None))
             for sidecar, tail in (companions or {}).get(items[index], ()):
                 if safety.safe_rename(sidecar, os.path.join(directory, name + tail),
                                       skips):
                     changes += 1
-    return changes
+                    renamed.append((os.path.basename(sidecar), name + tail,
+                                    "its recording's new name"))
+    return changes, renamed
+
+
+# The passes in the order they run, the label each one gets in a line that
+# says which of them changed a name: the individual cleaner, the collective
+# strip, the hidden-prefix recovery, and the group passes over the prefixes -
+# the individual pass's own business, the prefix being what it split off.
+_PASS_LABELS = ("individual cleaning", "collective stripping",
+                "hidden-prefix recovery", "individual cleaning")
+
+
+def _assemble(prefix: str, core: str) -> str:
+    """The name a (prefix, core) pair reassembles to, the way _apply joins it:
+    the same collapse of a prefix that is also the whole core, the same join."""
+    if prefix == core:
+        core = ""
+    if prefix:
+        return "%s %s" % (prefix, core) if core else prefix
+    return core
+
+
+def _passes_for(index: int, names: list, mode: str, split, final_prefixes,
+                final_cores) -> str:
+    """Which of the cleaning passes changed one sibling's name.
+
+    The name is read back at every stage of the pipeline - as found, after the
+    individual pass, after the collective strip, after the recovery pass, after
+    the group passes over the prefixes - and every stage that left a different
+    string is one of the passes that changed it, named in the order the passes
+    ran.
+    """
+    base, _ = prefixes.extension_of(names[index], mode)
+    states = (
+        base,
+        _assemble(split.first[index][0], split.first[index][1]),
+        _assemble(split.first[index][0], split.collective[index]),
+        _assemble(split.prefixes[index], split.cores[index]),
+        _assemble(final_prefixes[index], final_cores[index]),
+    )
+    said = []
+    for before, after, label in zip(states[:-1], states[1:], _PASS_LABELS, strict=True):
+        if before != after and label not in said:
+            said.append(label)
+    return " and ".join(said)
 
 
 def rename_siblings_until_stable(directory: str, mode: str,
@@ -247,7 +315,8 @@ def rename_siblings_until_stable(directory: str, mode: str,
     # Said once the first pass has renamed something, so a directory whose
     # names were already clean - every one of them, on a re-run - is never
     # announced. What the later passes do is the stabilising line's.
-    changed = rename_siblings(directory, mode, fragments_file, skips)
+    detail: list[tuple[str, str, str]] = []
+    changed = rename_siblings(directory, mode, fragments_file, skips, detail)
     if not changed:
         return
     log('  "%s": renamed %d of %d %s'
@@ -256,9 +325,14 @@ def rename_siblings_until_stable(directory: str, mode: str,
     # Only the iterations that CHANGED something are counted: one change
     # followed by a clean pass reports 1.
     iterations = 1 + fixedpoint.until_stable(
-        lambda: rename_siblings(directory, mode, fragments_file, skips))
+        lambda: rename_siblings(directory, mode, fragments_file, skips, detail))
     if iterations >= 2:
         log("    Stabilised after %d iteration(s)" % iterations)
+
+    # Which pass left each renamed name the way it is: the account a whole
+    # run's -v is for, under the directory's own line.
+    for old, new, reason in detail:
+        runlog.detail('    "%s" -> "%s": %s' % (old, new, reason))
 
 
 def sort_files_into_year_folders(root: str, skips: safety.SkipLog) -> None:
@@ -291,6 +365,8 @@ def sort_files_into_year_folders(root: str, skips: safety.SkipLog) -> None:
         os.makedirs(target_dir, exist_ok=True)
         if safety.safe_rename(path, os.path.join(target_dir, base), skips):
             moved += 1
+            runlog.detail('    "%s" -> "%s/%s": the year its name leads with'
+                          % (base, year, base))
 
     log("  Moved %d file(s) into yearly subfolders" % moved)
 
@@ -319,6 +395,8 @@ def fix_date_prefixes(root: str, skips: safety.SkipLog, date_form: str) -> None:
         target = os.path.join(os.path.dirname(path), new_base)
         if safety.safe_rename(path, target, skips):
             fixed += 1
+            runlog.detail('    "%s" -> "%s": the leading date'
+                          % (base, new_base))
 
     log("  Fixed %d date prefix(es)" % fixed)
 
@@ -603,9 +681,20 @@ def main(argv: list, program: str = "clean-folder-structure",
         else:
             log("Cover art keeps the name it came in under (all levels)")
         for directory in _directories(input_path, deepest_first=False):
+            if not cover_name:
+                # Nothing to rename: the selection is the caller's business,
+                # and a folder that keeps its cover under its own name is not
+                # an event to log.
+                continue
+            # The selection is settled before the rename: once the winner is
+            # called folder.<ext>, "folder" is in its own name and the count of
+            # what it won against is gone.
+            choice = cover.cover_choice(directory)
             renamed = cover.rename_cover_to_folder(directory, skips, cover_name)
             if renamed:
                 log(renamed)
+                runlog.detail('    the largest of the %d with "%s" in the name'
+                              % (choice.candidates, choice.word))
 
         # After the name cleaning, so the "YYYYMMDD ..." prefixes are already in
         # their final form.
