@@ -26,13 +26,17 @@ every claim is granted at once.
 from __future__ import annotations
 
 import contextlib
-import fcntl
 import itertools
 import json
 import os
 import threading
 import time
 from collections.abc import Callable
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows: the thread lock alone
+    fcntl = None  # type: ignore[assignment]
 
 __all__ = ["Gate", "GateAborted", "free_vram_mib"]
 
@@ -45,6 +49,7 @@ POLL_SECONDS = 2
 
 
 _COUNTER = itertools.count()
+_THREADS = threading.Lock()
 
 
 class GateAborted(Exception):
@@ -115,8 +120,10 @@ class Gate:
 
     @contextlib.contextmanager
     def _locked(self):
-        with open(os.path.join(self._directory, ".lock"), "a+") as handle:
-            fcntl.flock(handle, fcntl.LOCK_EX)
+        with _THREADS, open(os.path.join(self._directory, ".lock"),
+                            "a+") as handle:
+            if fcntl is not None:
+                fcntl.flock(handle, fcntl.LOCK_EX)
             yield
 
     def _entries(self) -> dict:
