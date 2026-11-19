@@ -59,6 +59,11 @@ Options:
                     the output as well. A transcript sidecar is used rather
                     than transcribing again.
                     Default false
+    -p, --prompt <text>
+                    With -t: more instructions for the model, added to every
+                    request, e.g. "a chapter per speaker, titled with their
+                    name and topic". The model then reasons at medium effort,
+                    and Claude may search the web.
     -r, --only <folder>
                     Only the files under <inputDir>/<folder>, converted to
                     where a run over all of <inputDir> would put them. May

@@ -206,7 +206,9 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("chapterLlmOptions", "More fields for every request over the `openai` "
             "protocol, as a JSON object - whatever that server takes, e.g. "
             "`{\"reasoning_effort\": \"low\"}` or `{\"temperature\": 0.2}`; an output "
-            "limit given here replaces the one the run works out", _AI_CHAPTERS),
+            "limit given here replaces the one the run works out, and the chapter "
+            "instructions (`generate-chapters -p`, `convert-audio -p`, `ytdlp -P`) "
+            "send their own `reasoning_effort`", _AI_CHAPTERS),
     Setting("chapterLlmJobs", "How many requests are sent to the model at once, "
             "over the whole run. Whether the model is local is read off "
             "`chapterLlmUrl`: localhost, a private or Tailscale address, or a "

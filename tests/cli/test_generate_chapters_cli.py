@@ -37,9 +37,11 @@ python3 -c '
 import json, re, sys
 config = sys.stdin.read()
 with open(re.search(r"data-binary = \"@(.*)\"", config).group(1)) as f:
-    prompt = json.load(f)["messages"][1]["content"]
+    body = json.load(f)
+prompt = body["messages"][1]["content"]
 with open(sys.argv[1], "a") as log:
-    log.write(prompt.split("\n", 1)[0] + "\n")
+    log.write("%s | effort=%s asked=%s\n" % (prompt.split("\n", 1)[0],
+              body.get("reasoning_effort"), "<<<\nName each speaker.\n>>>" in prompt))
 if "Find the line where" in prompt:
     at = re.search(r"placed to start \((\d+:\d\d:\d\d)\)", prompt).group(1)
     line = re.search(r"\[(L\d+) %s\]" % at, prompt).group(1)
@@ -177,3 +179,19 @@ def test_the_tree_is_mirrored_under_blackbox(chaptering, tmp_path):
     source, out = _tree(tmp_path, "deep/er/show.mp3")
     chaptering.chapter(source, out)
     assert "deep/er/show.chapters.txt" in blackbox.tree_of(out)
+
+
+def test_instructions_go_into_every_request_and_raise_the_effort(chaptering, tmp_path):
+    source, out = _tree(tmp_path, "show.mp3")
+    log = chaptering.chapter("-p", "Name each speaker.", source, out)
+    assert "reasoning at medium effort" in log
+    requests = chaptering.model_log.read_text().splitlines()
+    assert len(requests) == 2
+    assert all(line.endswith("effort=medium asked=True") for line in requests)
+
+
+def test_without_them_the_settings_are_sent_as_they_are(chaptering, tmp_path):
+    source, out = _tree(tmp_path, "show.mp3")
+    chaptering.chapter(source, out)
+    assert all(line.endswith("effort=None asked=False")
+               for line in chaptering.model_log.read_text().splitlines())

@@ -77,6 +77,11 @@ Options:
                     names it and in English when it does not, and written into
                     the episode even when it has chapters; an RSS episode is
                     transcribed on this machine.
+    -P, --prompt <text>
+                    With -g: more instructions for the chapter model, added to
+                    every request, e.g. "a chapter per speaker, titled with
+                    their name and topic" (convert-audio -p). The model then
+                    reasons at medium effort, and Claude may search the web.
     -l, --consolidate
                     Consolidate archives instead of downloading: every line of
                     every <archiveFile> given, sorted and with duplicates

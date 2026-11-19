@@ -38,14 +38,15 @@ import tempfile
 import threading
 import time
 import urllib.parse
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from medialib.lib import tmdbclient, tooldeps
 
 __all__ = ["API_VARIABLE", "URL_VARIABLE", "MODEL_VARIABLE", "KEY_VARIABLE",
            "CONTEXT_VARIABLE", "OPTIONS_VARIABLE", "JOBS_VARIABLE", "APIS", "DEFAULT_API",
            "DEFAULT_ANTHROPIC_MODEL", "DEFAULT_CONTEXT_TOKENS", "DEFAULT_JOBS",
-           "LlmError", "Llm", "from_environment", "require", "is_local", "first_json"]
+           "THOROUGH_EFFORT", "LlmError", "Llm", "from_environment", "require",
+           "is_local", "first_json"]
 
 # The settings, by the names a user gives them.
 API_VARIABLE = "chapterLlmApi"
@@ -80,6 +81,20 @@ _LOCAL_SUFFIXES = (".localhost", ".local", ".lan", ".home", ".internal",
 
 # Tailscale's addresses, which ipaddress does not count as private.
 _SHARED_SPACE = ipaddress.ip_network("100.64.0.0/10")
+
+# How hard the model thinks when it is asked to do more than divide the
+# recording - follow the user's own instructions, look something up. Sent as
+# ``reasoning_effort`` over the openai protocol, over whatever the options say
+# there, and as the effort over the anthropic one.
+THOROUGH_EFFORT = "medium"
+DEFAULT_ANTHROPIC_EFFORT = "medium"
+
+# How many web searches one Claude request may make, when it may search.
+MAX_SEARCHES = 5
+
+# How many times a Claude request whose searching ran past the API's own turn
+# limit is resumed before what it has is taken.
+MAX_CONTINUATIONS = 3
 
 # How long one request may take. Long, because a local model reading a whole
 # podcast transcript spends minutes on the prompt before the first word.
@@ -127,6 +142,9 @@ class Llm:
     # A server on this machine or its network, rather than a hosted API.
     local: bool = True
     limit_field: int = field(default=0, compare=False)
+    effort: str = ""
+    search: bool = False
+    instructions: str = ""
     _slots: threading.BoundedSemaphore | None = field(
         default=None, init=False, repr=False, compare=False)
 
@@ -135,10 +153,33 @@ class Llm:
             self._slots = threading.BoundedSemaphore(self.jobs)
 
     def describe(self) -> str:
-        """The model as a run reports it: which, and where."""
+        """The model as a run reports it: which, and where, and how hard it
+        thinks when that was raised."""
         where = self.url or ("the Claude API" if self.api == "anthropic" else "")
-        return "%s at %s (%s protocol, %s)" % (
+        text = "%s at %s (%s protocol, %s)" % (
             self.model, where, self.api, "local" if self.local else "hosted")
+        if self.effort:
+            text += ", reasoning at %s effort" % self.effort
+        if self.search:
+            text += ", with web search"
+        return text
+
+    def following(self, instructions: str) -> Llm:
+        """This model with the user's own ``instructions`` for every chapter
+        request (:mod:`medialib.lib.aichapters` puts them in), and asked to
+        reason at :data:`THOROUGH_EFFORT` while it follows them - Claude
+        allowed to search the web as well, which no server behind the openai
+        protocol does for its caller. Itself when there are none.
+
+        The copy shares this model's request slots, so the two together stay
+        within :attr:`jobs`."""
+        instructions = (instructions or "").strip()
+        if not instructions:
+            return self
+        copy = replace(self, effort=THOROUGH_EFFORT, search=self.api == "anthropic",
+                       instructions=instructions)
+        copy._slots = self._slots
+        return copy
 
     def ask(self, system: str, prompt: str) -> str:
         """The model's text answer, its thinking taken out. LlmError when no
@@ -279,7 +320,8 @@ def _ask_openai(llm: Llm, system: str, prompt: str) -> str:
     some server this protocol is meant to reach, and the answer is read
     leniently instead (:func:`first_json`). What one server takes and another
     does not - how hard to think, a sampling setting - is the user's to add,
-    in :data:`OPTIONS_VARIABLE`. The limit is what the window has
+    in :data:`OPTIONS_VARIABLE`, except the ``reasoning_effort`` a model
+    given instructions (:meth:`Llm.following`) sends over it. The limit is what the window has
     left after the prompt, up to :data:`MAX_OUTPUT_TOKENS`, under whichever of
     :data:`_LIMIT_FIELDS` the server takes.
 
@@ -302,6 +344,8 @@ class _LimitRefused(Exception):
 
 def _post_openai(llm: Llm, system: str, prompt: str, tried: int) -> str:
     request: dict = dict(llm.options)
+    if llm.effort:
+        request["reasoning_effort"] = llm.effort
     request.update({"model": llm.model, "messages": [
         {"role": "system", "content": system},
         {"role": "user", "content": prompt}]})
@@ -374,6 +418,10 @@ def _ask_anthropic(llm: Llm, system: str, prompt: str) -> str:
     finds itself (ANTHROPIC_API_KEY, a login profile). A refusal is retried on
     another model by the API itself (the fallbacks), and one that still stands
     is no answer.
+
+    With :attr:`Llm.search` the model may search the web, which Anthropic runs
+    on its side. A turn that searches past the API's own limit comes back
+    paused and is sent again as it stands, which resumes it.
     """
     try:
         import anthropic
@@ -385,20 +433,29 @@ def _ask_anthropic(llm: Llm, system: str, prompt: str) -> str:
     if llm.url:
         options["base_url"] = llm.url
     client = anthropic.Anthropic(timeout=REQUEST_SECONDS, **options)
-    try:
-        with client.beta.messages.stream(
-                model=llm.model, max_tokens=MAX_OUTPUT_TOKENS,
-                system=system,
-                messages=[{"role": "user", "content": prompt}],
-                output_config={"effort": "medium"},
-                betas=["server-side-fallback-2026-07-01"],
-                fallbacks="default") as stream:
-            message = stream.get_final_message()
-    except anthropic.APIStatusError as error:
-        raise LlmError("the Claude API answered HTTP %d: %s"
-                       % (error.status_code, error.message)) from error
-    except anthropic.APIConnectionError as error:
-        raise LlmError("the Claude API could not be reached: %s" % error) from error
+    request: dict = {}
+    if llm.search:
+        request["tools"] = [{"type": "web_search_20260209", "name": "web_search",
+                             "max_uses": MAX_SEARCHES}]
+    messages: list = [{"role": "user", "content": prompt}]
+    for _ in range(MAX_CONTINUATIONS + 1):
+        try:
+            with client.beta.messages.stream(
+                    model=llm.model, max_tokens=MAX_OUTPUT_TOKENS,
+                    system=system, messages=messages,
+                    output_config={"effort": llm.effort or DEFAULT_ANTHROPIC_EFFORT},
+                    betas=["server-side-fallback-2026-07-01"],
+                    fallbacks="default", **request) as stream:
+                message = stream.get_final_message()
+        except anthropic.APIStatusError as error:
+            raise LlmError("the Claude API answered HTTP %d: %s"
+                           % (error.status_code, error.message)) from error
+        except anthropic.APIConnectionError as error:
+            raise LlmError("the Claude API could not be reached: %s" % error) from error
+        if message.stop_reason != "pause_turn":
+            break
+        messages = [{"role": "user", "content": prompt},
+                    {"role": "assistant", "content": message.content}]
     if message.stop_reason == "refusal":
         raise LlmError("the model declined to answer")
     return "".join(block.text for block in message.content if block.type == "text")

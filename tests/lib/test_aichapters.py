@@ -37,6 +37,7 @@ class Model:
                  context_tokens=200000):
         self.context_tokens = context_tokens
         self.jobs = 2
+        self.instructions = ""
         self.asked: list[str] = []
         self._outline = outline
         self._refine = refine or (lambda prompt: json.dumps(
@@ -186,6 +187,33 @@ class TestGenerate:
         assert len(looks) == 2
         assert all("Topic 1" in look and "Topic 41" in look for look in looks)
         assert all("What it is: A test." in look for look in looks)
+
+    def test_the_users_instructions_are_in_every_request(self):
+        model = Model(outline=_outline(1, 21, 41))
+        model.instructions = "A chapter per speaker, named."
+        aichapters.generate(_cues(30), model)
+        assert len(model.asked) == 3
+        assert all("<<<\nA chapter per speaker, named.\n>>>" in prompt
+                   for prompt in model.asked)
+
+    def test_and_in_the_summaries_of_a_long_transcript(self):
+        def sections(prompt):
+            first = re.search(r"\[(P\d+) ", prompt).group(1)
+            return json.dumps({"sections": [{"start": first, "summary": "talk"}]})
+
+        model = Model(outline=lambda prompt: json.dumps(
+            {"chapters": [{"start": re.search(r"\[(P\d+) ", prompt).group(1),
+                           "title": "All"}]}),
+            sections=sections, context_tokens=3000)
+        model.instructions = "Name the speakers."
+        aichapters.generate(_cues(60), model)
+        summaries = [prompt for prompt in model.asked if prompt.startswith("Below is part")]
+        assert summaries and all("Name the speakers." in prompt for prompt in summaries)
+
+    def test_without_instructions_nothing_changes(self):
+        model = Model(outline=_outline(1, 21))
+        aichapters.generate(_cues(30), model)
+        assert not any("<<<" in prompt for prompt in model.asked)
 
     def test_chapters_shorter_than_the_minimum_are_merged_away(self):
         marks = aichapters.generate(_cues(30), Model(outline=_outline(1, 4, 21, 59)),

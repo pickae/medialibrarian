@@ -255,6 +255,24 @@ _TITLE_RULES = (
     "titled as what it is.")
 
 
+def _asked(instructions: str, what: str) -> str:
+    """The user's own instructions as a paragraph of a prompt, ahead of the
+    answer's form, or nothing when there are none. ``what`` says what this
+    request is to do with them."""
+    if not instructions.strip():
+        return ""
+    return ("The person these chapters are for asks for this as well. %s Where "
+            "it differs from the guidance above, it goes first; the answer's "
+            "JSON form and the ids stay as asked.\n<<<\n%s\n>>>\n\n"
+            % (what, instructions.strip()))
+
+
+_FOR_SUMMARIES = ("The chapters are drawn from these summaries later, so keep in "
+                  "them whatever it needs.")
+_FOR_CHAPTERS = "Follow it in dividing the recording and in the titles."
+_FOR_REFINE = "Follow it in placing this start and in its title."
+
+
 @dataclass
 class _Line:
     """One line of what the outline is drawn from: a passage, or a summary of
@@ -332,7 +350,7 @@ def _windows(lines: Sequence[_Line], budget: int) -> list[list[_Line]]:
 
 
 def _summarise(lines: Sequence[_Line], llm, duration: int, count: int,
-               log) -> list[_Line]:
+               log, instructions: str = "") -> list[_Line]:
     """The lines summarised a window at a time, one summary per stretch on a
     single topic. A window the model gives no usable answer for is kept as a
     single line holding the start of its text, so the outline still knows the
@@ -353,13 +371,14 @@ def _summarise(lines: Sequence[_Line], llm, duration: int, count: int,
             "on what is said in it, with the names and subjects that come up. "
             "Start a new section wherever the topic clearly changes - about %d "
             "sections for this part, fewer if it stays on one subject. The first "
-            "section starts at %s.\n\n"
+            "section starts at %s.\n\n%s"
             'Answer with JSON only: {"sections": [{"start": "<passage id>", '
             '"summary": "<what is said>"}, ...]}\n\nTranscript:\n%s\n'
             % (number + 1, len(windows), time_label(duration),
                time_label(window[0].start),
                time_label(window[-1].start), per_window,
-               "P%d" % (window[0].passage + 1), _render(window)))
+               "P%d" % (window[0].passage + 1),
+               _asked(instructions, _FOR_SUMMARIES), _render(window)))
         answer = _ask_json(llm, prompt, "sections", log)
         by_passage = {line.passage: line for line in window}
         found = []
@@ -392,7 +411,7 @@ class _Mark:
 
 def _outline(lines: Sequence[_Line], summarised: bool, total: int, llm,
              duration: int, typical_minutes: int, min_minutes: int,
-             log) -> tuple[str, list[_Mark]] | None:
+             log, instructions: str = "") -> tuple[str, list[_Mark]] | None:
     """The first pass: the whole recording divided at once. None when the
     model gave no usable outline."""
     what = ("a section of the recording, already summarised: its id, the time "
@@ -421,12 +440,13 @@ def _outline(lines: Sequence[_Line], summarised: bool, total: int, llm,
         "of its segments into one chapter. If an episode or part comes twice, "
         "chapter the repeat like any other.\n"
         "- The first chapter starts at %s.\n"
-        "- %s\n\n"
+        "- %s\n\n%s"
         'Answer with JSON only: {"summary": "<two or three sentences on what the '
         'whole recording is about>", "chapters": [{"start": "<line id>", '
         '"title": "<title>"}, ...]}\n\nTranscript:\n%s\n'
         % (time_label(duration), what, typical_minutes, min_minutes,
-           "P%d" % (lines[0].passage + 1), _TITLE_RULES, _render(lines)))
+           "P%d" % (lines[0].passage + 1), _TITLE_RULES,
+           _asked(instructions, _FOR_CHAPTERS), _render(lines)))
     answer = _ask_json(llm, prompt, "chapters", log)
     if answer is None:
         return None
@@ -448,7 +468,8 @@ def _outline(lines: Sequence[_Line], summarised: bool, total: int, llm,
 
 
 def _refine(cues: Sequence[Cue], found: Sequence[Passage], marks: list[_Mark],
-            summary: str, llm, duration: int, log) -> list[tuple[int, str]]:
+            summary: str, llm, duration: int, log,
+            instructions: str = "") -> list[tuple[int, str]]:
     """The second pass: every chapter start after the first looked at again in
     the transcript around it. Comes back as (cue index, title), the first
     chapter on the first cue; a start the model answers nothing usable for
@@ -479,13 +500,14 @@ def _refine(cues: Sequence[Cue], found: Sequence[Passage], marks: list[_Mark],
             "not where its first segment does. If the title does not fit what is "
             "said there, give a better one, keeping an episode or part number it "
             "starts with. %s If this is not a change of topic at all, answer null "
-            "as the start.\n\n"
+            "as the start.\n\n%s"
             'Answer with JSON only: {"start": "<line id, or null>", '
             '"title": "<title>"}\n\nTranscript:\n%s\n'
             % (time_label(duration),
                " What it is: " + summary if summary else "",
                outline, mark.title, time_label(here.start),
-               marks[position - 1].title, mark.title, _TITLE_RULES, window))
+               marks[position - 1].title, mark.title, _TITLE_RULES,
+               _asked(instructions, _FOR_REFINE), window))
         answer = _ask_json(llm, prompt, "start", log)
         if answer is None:
             return here.first, mark.title
@@ -562,9 +584,14 @@ def generate(cues: Sequence[Cue], llm, *, min_minutes: int = DEFAULT_MIN_MINUTES
              log: Callable[[str], None] = lambda line: None) -> list[tuple[int, str]]:
     """The chapters of a recording, as (start ms, title), the first at 0.
 
+    The model's instructions (:meth:`chapterllm.Llm.following`) - the user's
+    own word on how to divide and what the titles name - go into every
+    request.
+
     Empty when there is nothing to divide - a recording too short for two
     chapters, or one the model gave no usable outline for.
     """
+    instructions = llm.instructions
     if not cues:
         return []
     duration = max(cue.end for cue in cues)
@@ -580,18 +607,18 @@ def generate(cues: Sequence[Cue], llm, *, min_minutes: int = DEFAULT_MIN_MINUTES
     for _ in range(MAX_SUMMARY_LEVELS):
         if sum(_tokens(line.text) + 6 for line in lines) <= _budget(llm):
             break
-        shorter = _summarise(lines, llm, duration, count, log)
+        shorter = _summarise(lines, llm, duration, count, log, instructions)
         if len(shorter) >= len(lines):
             break
         lines, summarised = shorter, True
 
     outline = _outline(lines, summarised, len(found), llm, duration,
-                       typical_minutes, min_minutes, log)
+                       typical_minutes, min_minutes, log, instructions)
     if outline is None:
         return []
     summary, marks = outline
     log("    outline: %d chapter(s); placing each start" % len(marks))
-    chosen = _refine(cues, found, marks, summary, llm, duration, log)
+    chosen = _refine(cues, found, marks, summary, llm, duration, log, instructions)
     return _settle(cues, chosen, duration, min_ms)
 
 

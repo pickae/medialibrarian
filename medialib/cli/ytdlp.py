@@ -119,6 +119,10 @@ g |  | With -i: chapters for every episode in the library that has
                     names it and in English when it does not, and written into
                     the episode even when it has chapters; an RSS episode is
                     transcribed on this machine.
+P | <text> | With -g: more instructions for the chapter model, added to
+                    every request, e.g. "a chapter per speaker, titled with
+                    their name and topic" (convert-audio -p). The model then
+                    reasons at medium effort, and Claude may search the web.
 l |  | Consolidate archives instead of downloading: every line of
                     every <archiveFile> given, sorted and with duplicates
                     dropped, is written into the FIRST one, which is created if
@@ -133,7 +137,7 @@ l |  | Consolidate archives instead of downloading: every line of
 # tables can be read in one run. The rest assign once, last flag winning.
 OPT_FLAGS = "repeat:t"
 OPT_VARS = ("t:tables j:jobCap p:dryRun a:includeInactive c:cleanUp i:ingest m:match "
-            "l:consolidate g:aiChapters")
+            "l:consolidate g:aiChapters P:instructions")
 
 # -j caps a table's own parallelism and 0 means "no cap", so zero belongs in the
 # range; -s is the one option whose accepted values are words rather than a
@@ -145,7 +149,8 @@ s | enum:windows\\|linux\\|auto | system
 """
 
 OPT_LONG = ("h:help t:table j:jobs p:preview a:include-inactive "
-            "c:clean-up i:ingest m:match s:system l:consolidate g:ai-chapters")
+            "c:clean-up i:ingest m:match s:system l:consolidate g:ai-chapters "
+            "P:prompt")
 
 USAGE_TAIL = """
 
@@ -683,7 +688,8 @@ class LibraryQueue:
         only = [argument for subdir in present for argument in ("-r", subdir)]
         if present and not safety.abort_requested() and commands.run_command(
                 "convert-audio",
-                self.ingest["args"][kind].split() + only + [staging, self.ingest["root"]],
+                self.ingest["args"][kind].split() + self.ingest.get("prompt", [])
+                + only + [staging, self.ingest["root"]],
                 script_dir=state.script_dir).returncode != 0:
             failures.append(kind + " audio (%s)" % ", ".join(present))
         if failures:
@@ -927,8 +933,13 @@ def main(argv: list, program: str = "ytdlp", script_dir: str = "") -> int:
         "jobCap": int(result.values["jobCap"] or 0),
         "outputPath": output_path,
         "aiChapters": bool(result.values["aiChapters"]),
+        "instructions": (result.values["instructions"] or "").strip(),
         "spoken": (),
     }
+    if "P" in result.given and not options["aiChapters"]:
+        clioptions.refuse_usage(declaration, "-P is for the chapter model, "
+                                "so it needs -g")
+        return 1
     if options["aiChapters"]:
         if not options["ingest"]:
             clioptions.refuse_usage(declaration, "-g chapters the library copy, "
@@ -1242,6 +1253,9 @@ def _run(options, tables, profiles, jobs_of, rows_of, feed_count, output_path,
         if options["aiChapters"]:
             for kind in ingest["args"]:
                 ingest["args"][kind] += " -t"
+            # Kept apart from the arguments above, which are split on spaces.
+            if options["instructions"]:
+                ingest["prompt"] = ["-p", options["instructions"]]
 
     if not options["dryRun"]:
         os.makedirs(output_path, exist_ok=True)
@@ -1393,6 +1407,8 @@ def _announce(state, tables, feed_count, ingest, native_output) -> None:
         if state.options.get("aiChapters"):
             log("Chapters for the episodes with none; YouTube transcripts in "
                 "%s, else en" % ",".join(state.spoken))
+            if state.options.get("instructions"):
+                log("Chapter instructions: " + state.options["instructions"])
         if ingest["notIngested"]:
             log("Not converted, downloaded straight to %s: %s"
                 % (native_output, " ".join(ingest["notIngested"])))
@@ -1455,7 +1471,7 @@ def _report(state, ingest, started, feed_count) -> int:
                     state.platform))
                 print(podcastfeeds.render_call(
                     ["convert-audio"]
-                    + ingest["args"][kind].split()
+                    + ingest["args"][kind].split() + ingest.get("prompt", [])
                     + [ingest["staging"][kind], ingest["root"]],
                     state.platform))
         log("Dry run: %d call(s) printed for %s, nothing was downloaded"
@@ -1635,7 +1651,8 @@ def _build_library(state, ingest):
                                             ingest["args"][kind]))
         if commands.run_command(
                 "convert-audio",
-                ingest["args"][kind].split() + [staging, ingest["root"]],
+                ingest["args"][kind].split() + ingest.get("prompt", [])
+                + [staging, ingest["root"]],
                 script_dir=state.script_dir).returncode != 0:
             failures.append(kind + " audio")
     if failures:

@@ -122,3 +122,17 @@ def test_an_output_too_short_for_chapters_is_not_transcribed(convert, tmp_path):
     _run(convert, tmp_path, "-t")
     assert (tmp_path / "whisper.calls").read_text() == ""
     assert (tmp_path / "model.calls").read_text() == ""
+
+
+def test_p_puts_the_instructions_into_every_request(convert, tmp_path):
+    said = _run(convert, tmp_path, "-t", "-p", "Name each speaker.")
+    assert "reasoning at medium effort" in said
+    requests = (tmp_path / "model.calls").read_text().splitlines()
+    assert len(requests) == 2
+    assert all(line.endswith("effort=medium asked=True") for line in requests)
+
+
+def test_p_without_t_is_refused_before_anything_is_encoded(convert, tmp_path):
+    said = _run(convert, tmp_path, "-p", "Name each speaker.", expect=1)
+    assert "-p (instructions for the chapter model) needs -t" in said
+    assert not (tmp_path / "out").exists()

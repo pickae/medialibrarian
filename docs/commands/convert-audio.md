@@ -128,6 +128,11 @@ of its own keeps them and is not sent to the model. A rerun tries again only for
 outputs that still have none. Without a usable model, `-t` is refused before
 anything is encoded.
 
+`-p "<text>"` adds your own instructions to every request the model gets, for
+example a chapter per speaker. The model then reasons at medium effort, and
+Claude may search the web, as with
+[`generate-chapters -p`](generate-chapters.md#your-own-instructions). `-p` needs `-t`.
+
 ## Some folders of the input (`-r`)
 
 `-r <folder>` converts only what is under `<inputDir>/<folder>`, into the
