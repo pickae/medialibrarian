@@ -429,6 +429,7 @@ class TestTheChromaReachesTheConversion:
                        quality="45", chroma=chroma, speed_preset="4",
                        pages_per_book=4,
                        max_res=2960, fuzz="10", keep_pages=keep_pages,
+                       keep_input=False,
                        stats_file=str(tmp_path / "pageStats"))
         state._convert_pages(str(tmp_path / "pages"), str(tmp_path / "avif"),
                              "book.cbz")
@@ -792,6 +793,37 @@ class TestTheInputIsRenamedToWhatItIs:
 
     def test_a_name_already_taken_is_left_alone(self, renamed):
         assert "Taken.cbr" in renamed and "Taken.cbz" in renamed
+
+
+class TestTheKeptInputKeepsItsName:
+    """-k input keeps the one rename that changes a name the user chose: the
+    unpack goes by content either way, and the pretreatment the part does not
+    cover - the cleaning and the lower-casing - still happens."""
+
+    def _library(self, tmp_path, name):
+        library = tmp_path / "in"
+        library.mkdir()
+        _zip_named(library / name)
+        return library
+
+    def test_the_kept_input_is_not_renamed(self, tmp_path):
+        library = self._library(tmp_path, "Zip.cbr")
+        skips = cc.safety.SkipLog()
+        cc.pretreat_input(str(library), skips, keep_input=True)
+        assert sorted(os.listdir(str(library))) == ["Zip.cbr"]
+
+    def test_the_default_is_the_renaming_one(self, tmp_path):
+        library = self._library(tmp_path, "Zip.cbr")
+        skips = cc.safety.SkipLog()
+        cc.pretreat_input(str(library), skips)
+        assert sorted(os.listdir(str(library))) == ["Zip.cbz"]
+
+    def test_the_pretreatment_the_part_does_not_cover_still_happens(self,
+                                                                     tmp_path):
+        library = self._library(tmp_path, "Zip.CBR")
+        skips = cc.safety.SkipLog()
+        cc.pretreat_input(str(library), skips, keep_input=True)
+        assert sorted(os.listdir(str(library))) == ["Zip.cbr"]
 
 
 class TestMacResourceForksAreNotPages:

@@ -956,8 +956,8 @@ class TestKeepPages:
             == "AVIF from blank.jpg"
 
     def test_a_bare_k_keeps_every_part(self, run):
-        """There is one part today, so the bare flag is the named one - and it
-        stays so when the later parts land."""
+        """A bare -k keeps every part: the trim here, and the archive name in
+        TestKeepInput's case."""
         run.ingest("-k")
         assert not self._trims(run), self._argvs(run)
         assert self._pages(run) == ["1.avif", "2.avif", "3.avif"]
@@ -1030,3 +1030,42 @@ class TestKeepPages:
         assert _entries(small_run.outputs / "Alpha.cbz") == \
             ["1.avif", "2.avif", "3.avif"], log
         assert "of those empty, dropped" not in log, log
+
+
+class TestKeepInput:
+    """-k input: an archive under the wrong extension keeps the name it was
+    given. The unpack goes by content either way, so the book comes out the
+    same; what the part changes is the name the input tree is left with."""
+
+    @pytest.fixture
+    def run(self, comics):
+        comics.with_tool("identify", _IDENTIFY_FLAT)
+        comics.with_tool("convert", _CONVERT_STAMPING)
+        comics.with_tool("fdupes", "exit 0")
+        _cbz(comics.inputs, "Book.cbr", {"01.jpg": "book 1",
+                                         "02.jpg": "book 2"})
+
+        def ingest(*flags):
+            done = comics.run("convert-comics", *flags, comics.inputs,
+                              comics.outputs)
+            assert done.returncode == 0, done.stdout + done.stderr
+            return done.stdout + done.stderr
+
+        comics.ingest = ingest
+        return comics
+
+    def test_the_default_run_renames_the_wrongly_suffixed_archive(self, run):
+        log = run.ingest()
+        assert blackbox.tree_of(run.inputs) == ["Book.cbz"]
+        assert 'renamed "Book.cbr" to "Book.cbz"' in log, log
+        assert blackbox.tree_of(run.outputs) == ["Book.cbz"]
+
+    def test_the_kept_input_keeps_the_name(self, run):
+        run.ingest("-k", "input")
+        assert blackbox.tree_of(run.inputs) == ["Book.cbr"]
+        assert blackbox.tree_of(run.outputs) == ["Book.cbz"]
+
+    def test_a_bare_k_keeps_the_name_with_the_rest(self, run):
+        """The bare flag keeps every part, and the name is one of them now."""
+        run.ingest("-k")
+        assert blackbox.tree_of(run.inputs) == ["Book.cbr"]

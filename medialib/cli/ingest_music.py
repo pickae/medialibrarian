@@ -77,13 +77,16 @@ c | <file> | The beets config the tagging phase runs with. The one that
                   Default the shipped medialib/config/beets.yaml
 j | <jobs> | Run up to <jobs> encoder processes in parallel
                   (default: the number of CPU cores).
-k | [part] | keep <part>: takes nothing away. The one part is resolution:
-                  the source's bit depth and sample rate, which a run otherwise
-                  turns into 16-bit at 48 kHz or less. Kept, the lossless copy
-                  stays at the source's resolution; the Opus copies are not
-                  affected. A bare -k keeps every part, which today is this
-                  one. A folder literally named "resolution" is written
-                  ./resolution: the word after -k is the part when it is one.
+k | [part] | keep <part>: takes nothing away. The parts are resolution and
+                  downloads, comma-separated, and a bare -k keeps both.
+                  resolution: the source's bit depth and sample rate, which a
+                  run otherwise turns into 16-bit at 48 kHz or less. Kept, the
+                  lossless copy stays at the source's resolution; the Opus
+                  copies are not affected. downloads: the download folder is
+                  not changed - no duplicate is deleted, and a multi-disc
+                  folder is split in the run's scratch, not in place. A folder
+                  literally named "downloads" is written ./downloads: the word
+                  after -k goes to -k when it is a part.
 o |  | Offline: the tagging phase is skipped, so the run reaches no
                   network and needs no beets.
                   Default false
@@ -142,7 +145,7 @@ def spec(program: str) -> "clioptions.Spec":
         options=OPT_SPEC,
         long=OPT_LONG,
         vars=OPT_VARS,
-        flags="optionalArg:k:^resolution$",
+        flags="optionalArg:k:^(downloads|resolution)(,(downloads|resolution))*$",
         column=OPT_COLUMN,
         tail=USAGE_TAIL,
     ))
@@ -467,6 +470,7 @@ class Counters:
              "coverAvif", "coverCopied", "coverAlreadyThere",
              "copiesAlreadyThere", "chaptersEmbedded", "chaptersSkipped",
              "chaptersFailed", "videosRemuxed", "videosFailed", "discsSplit",
+             "foldersRefused",
              "alacRenamed", "cuesDropped", "folderRedirects")
 
     def __init__(self, counter_dir: str, run_start_epoch: int) -> None:
@@ -626,6 +630,10 @@ class Run:
     # The -k parts this run was told to keep: what a run would otherwise take
     # away is left as the source has it.
     keep_parts: frozenset
+    # The download folders the run refused rather than change in place, as
+    # relative paths: what a kept download could not be split in the scratch
+    # copy, so it is not ingested this run. Empty when nothing was refused.
+    refused: frozenset
     # Where each download folder's tracks actually landed, filled in as the
     # library is read.
     folder_map: dict
@@ -953,10 +961,7 @@ class Run:
         Redundant CUE sidecars are dropped and byte-identical duplicates removed
         first.
         """
-        # What a cue sheet's disc image can be: any of the lossless containers,
-        # plus the ALAC .m4a - this runs BEFORE renameAlac, so an ALAC image
-        # still wears the extension it arrived with.
-        image_extensions = list(enums.LOSSLESS_AUDIO_EXTENSIONS) + ["m4a"]
+        image_extensions = _DISC_IMAGE_EXTENSIONS
 
         for path in _find_files(root, lambda name: name.endswith(".ape.cue")
                                 or name.endswith(".wav.cue")):
@@ -976,16 +981,7 @@ class Run:
         # single image or plain tracks, and a heading for a split that never
         # happens would be the only thing the run said about them here.
         announced = False
-        for cue in _find_files(root, lambda name:
-                               enums.lower_extension_of(name) == "cue"):
-            folder = os.path.dirname(cue)
-            cue_count = len(_one_level(
-                folder, lambda name: name.endswith(".cue")))
-            stem = os.path.splitext(cue)[0]
-            has_image = any(os.path.isfile(stem + "." + extension)
-                            for extension in image_extensions)
-            if cue_count < 2 or not has_image:
-                continue
+        for _cue, folder in discs_to_split(root):
             if not announced:
                 log("Splitting multi-disc CUE images into subfolders")
                 announced = True
@@ -1157,6 +1153,84 @@ def _find_relative(root: str, matches) -> list:
     return [os.path.relpath(path, root) for path in _find_files(root, matches)]
 
 
+# What a cue sheet's disc image can be: any of the lossless containers, plus
+# the ALAC .m4a - the split runs BEFORE renameAlac, so an ALAC image still
+# wears the extension it arrived with.
+_DISC_IMAGE_EXTENSIONS = list(enums.LOSSLESS_AUDIO_EXTENSIONS) + ["m4a"]
+
+
+def discs_to_split(root: str) -> list:
+    """The (cue, folder) of every cue sheet the disc split would move: its
+    folder holds a second cue, and the image this cue names is there. A folder
+    is multi-disc when this names anything in it."""
+    to_split = []
+    for cue in _find_files(root, lambda name:
+                           enums.lower_extension_of(name) == "cue"):
+        folder = os.path.dirname(cue)
+        cue_count = len(_one_level(
+            folder, lambda name: name.endswith(".cue")))
+        stem = os.path.splitext(cue)[0]
+        has_image = any(os.path.isfile(stem + "." + extension)
+                        for extension in _DISC_IMAGE_EXTENSIONS)
+        if cue_count < 2 or not has_image:
+            continue
+        to_split.append((cue, folder))
+    return to_split
+
+
+def _under_any(relative: str, refused: frozenset[str]) -> bool:
+    """Whether a relative path is in, or below, one of the refused folders."""
+    for folder in refused:
+        if folder == "." or relative == folder \
+                or relative.startswith(folder + "/"):
+            return True
+    return False
+
+
+def _downloads_copy(download_dir: str) -> str:
+    """The download tree in the run's scratch, or ``""`` when it cannot be
+    made.
+
+    What a kept-downloads run works on: the de-duplication, the disc split and
+    the renames all happen on the copy, and the folder itself comes out of the
+    run as it went in."""
+    size = 0
+    for parent, _dirs, names in os.walk(download_dir):
+        for name in names:
+            try:
+                size += os.path.getsize(os.path.join(parent, name))
+            except OSError:
+                pass
+    scratch, _on_disk, status = ramscratch.ram_scratch_dir_for(
+        str(size), "ingestMusic.downloads")
+    if status != 0 or not scratch:
+        return ""
+    ramscratch.add_exit_cleanup([scratch])
+    if _run(["rsync", "-rm", "--quiet", download_dir + "/", scratch]) != 0:
+        ramscratch.release_exit_cleanup([scratch])
+        return ""
+    return scratch
+
+
+def _refuse_multi_disc(state, download_dir: str) -> frozenset:
+    """The multi-disc folders a kept download cannot ingest without the
+    scratch copy: each named with what the refusal means, counted, and left in
+    the download - not copied, not split, nothing changed."""
+    refused = set()
+    for _cue, folder in discs_to_split(download_dir):
+        relative = os.path.relpath(folder, download_dir)
+        if relative in refused:
+            continue
+        refused.add(relative)
+        state.counters.bump("foldersRefused")
+        state.counters.note(
+            'Refused "%s": a kept download folder is split in the run\'s '
+            "scratch, and the scratch copy of the tree did not hold. It is not "
+            "ingested this run, and the download is left as it was; run "
+            "without -k downloads to split it in place." % relative)
+    return frozenset(refused)
+
+
 # --- the closing report -------------------------------------------------------
 
 def _stat_row(label: str, value) -> None:
@@ -1215,6 +1289,7 @@ def footer(state) -> None:
     _stat_row_if_any("  remuxed to MKV", counters.value("videosRemuxed"))
     _stat_row_if_any("  failed", counters.value("videosFailed"))
     _stat_row_if_any("Discs split off", counters.value("discsSplit"))
+    _stat_row_if_any("Folders refused", counters.value("foldersRefused"))
     _stat_row_if_any("ALAC renamed", counters.value("alacRenamed"))
     _stat_row_if_any("Folders re-homed", counters.value("folderRedirects"))
     _stat_row_if_any("Already in library",
@@ -1260,7 +1335,7 @@ def main(argv: list, program: str = "ingest-music",
         # like a bad option. A bare -k keeps them all; without the flag the
         # run takes its normal measures and keeps none.
         keep_parts = (keepparts.parse(result.values["keepParts"],
-                                      ("resolution",))
+                                      ("downloads", "resolution"))
                       if "k" in result.given else frozenset())
     except clioptions.HelpRequested:
         sys.stdout.write(clioptions.help_text(declaration))
@@ -1415,6 +1490,7 @@ def _ingest(program: str, script_dir: str, download_dir: str, ingest_dir: str,
         download_dir=download_dir, ingest_dir=ingest_dir,
         script_dir=script_dir, counters=counters, skips=skips,
         keep_parts=keep_parts,
+        refused=frozenset(),
         folder_map={}, lossless_total=0,
         cover_max_edge=imagesizes.height(cover_tier),
         ingested_sources=os.path.join(counter_dir, "ingestedSources"),
@@ -1423,23 +1499,42 @@ def _ingest(program: str, script_dir: str, download_dir: str, ingest_dir: str,
         encode_start=None, encode_end=None)
     safety.set_run_footer(lambda: footer(state))
 
-    # Put CD images that need splitting in separate folders if needed.
-    state.split_disc_images(download_dir)
+    # A kept download folder is not changed in place: the run works on the
+    # scratch copy of the tree, and the de-duplication, the disc split and the
+    # renames all happen on it.
+    copy_failed = False
+    if "downloads" in keep_parts:
+        work_dir = _downloads_copy(download_dir)
+        if work_dir:
+            download_dir = work_dir
+            state.download_dir = work_dir
+        else:
+            copy_failed = True
+            # The copy did not hold: the tree is read, not written - nothing is
+            # de-duplicated, renamed or split - and the folders the split needs
+            # are refused rather than ingested flat.
+            state.refused = _refuse_multi_disc(state, download_dir)
 
-    # Before anything reads the tree: an ALAC .m4a is a lossless source wearing a
-    # lossy extension, and renaming it now is what puts it in the encoder's queue
-    # below instead of in the plain copy.
-    state.rename_alac(download_dir)
+    if not copy_failed:
+        # Put CD images that need splitting in separate folders if needed.
+        state.split_disc_images(download_dir)
+
+        # Before anything reads the tree: an ALAC .m4a is a lossless source wearing a
+        # lossy extension, and renaming it now is what puts it in the encoder's queue
+        # below instead of in the plain copy.
+        state.rename_alac(download_dir)
 
     # The encoder's queue, collected into a list first, and the SAME list both
     # counted and dispatched - a denominator from a second walk could disagree
     # with it over a file that arrived, left, or was renamed in between.
     # Collected before the copy, because what the library already holds from
     # these very tracks is also what says where this release lives in it.
-    lossless_tracks = _find_relative(
-        download_dir,
-        lambda name: enums.lower_extension_of(name)
-        in enums.LOSSLESS_AUDIO_EXTENSIONS)
+    lossless_tracks = [
+        relative for relative in _find_relative(
+            download_dir,
+            lambda name: enums.lower_extension_of(name)
+            in enums.LOSSLESS_AUDIO_EXTENSIONS)
+        if not _under_any(relative, state.refused)]
     state.lossless_total = len(lossless_tracks)
 
     # What the library already holds, and under what names, read out of the flacs
@@ -1451,8 +1546,11 @@ def _ingest(program: str, script_dir: str, download_dir: str, ingest_dir: str,
 
     # The target folders - each one where the library actually keeps it, which is
     # the same path it has in the download unless a previous run's name cleaning
-    # moved it.
+    # moved it. A refused folder has no target: nothing of it is ingested this
+    # run.
     for relative in _download_folders(download_dir)[1:]:
+        if _under_any(relative, state.refused):
+            continue
         os.makedirs(
             ingested_dir_path(relative, ingest_dir, state.folder_map),
             exist_ok=True)
@@ -1553,10 +1651,12 @@ def _convert_covers(state: Run, download_dir: str) -> None:
     # cores/4 at once instead of one per core. Its own number, so the encoder
     # jobs (and the -j the user passed) stay intact.
     image_jobs = runlog.jobs_per_core(IMAGE_THREADS_PER_CONVERSION)
-    cover_images = _find_relative(
-        download_dir,
-        lambda name: enums.lower_extension_of(name)
-        in enums.COVER_IMAGE_EXTENSIONS)
+    cover_images = [
+        relative for relative in _find_relative(
+            download_dir,
+            lambda name: enums.lower_extension_of(name)
+            in enums.COVER_IMAGE_EXTENSIONS)
+        if not _under_any(relative, state.refused)]
     if cover_images:
         log("Converting %d cover image(s), the large ones to AVIF%s"
             % (len(cover_images),
@@ -1626,6 +1726,13 @@ def _copy_the_rest(state, download_dir: str, ingest_dir: str,
                  "--exclude=*.jpg", "--exclude=*.png", "--exclude=*.svg",
                  "--exclude=*.tiff", "--exclude=*.tif", "--exclude=*.bmp",
                  "--exclude=*.webp*"]
+    # A refused folder is not ingested this run, and neither is what is under
+    # it. A refused ROOT is the whole tree: rsync will not exclude the transfer
+    # root itself, so that one is excluded as everything.
+    if os.curdir in state.refused:
+        excludes += ["--exclude=*"]
+    else:
+        excludes += ["--exclude=/" + folder for folder in sorted(state.refused)]
 
     if not state.folder_map:
         _run(["rsync", "-rm", "--quiet", "--size-only"] + excludes
@@ -1639,6 +1746,8 @@ def _copy_the_rest(state, download_dir: str, ingest_dir: str,
     # rsync takes cannot change mid-pass.
     naming = _transfer_format()
     for relative in _download_folders(download_dir):
+        if _under_any(relative, state.refused):
+            continue
         copy_to = ingested_dir_path(relative, ingest_dir, state.folder_map)
         os.makedirs(copy_to, exist_ok=True)
         transferred = _probe(

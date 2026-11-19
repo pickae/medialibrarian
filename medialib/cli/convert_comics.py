@@ -113,13 +113,16 @@ DEFAULT_FUZZ = 10
 # recorded contract under tests/data/cliContract.
 OPT_SPEC = """
 h |  | Print this help page.
-k | [part] | keep <part>: takes nothing away. The one part is pages: the
-                    light, plain margins a run otherwise trims off every page,
-                    and the blank pages it drops with them. Kept, both stay;
-                    -m still caps the height, and pages are still numbered.
-                    A bare -k keeps every part, which today is this one. A
-                    folder literally named "pages" is written ./pages: the
-                    word after -k is the part when it is one.
+k | [part] | keep <part>: takes nothing away. The parts are pages and input,
+                    comma-separated, and a bare -k keeps both. pages: the light,
+                    plain margins a run otherwise trims off every page, and the
+                    blank pages it drops with them. Kept, both stay; -m still
+                    caps the height, and pages are still numbered. input: an
+                    archive is not renamed to the extension of what it really
+                    is - a zip called .cbr stays named .cbr, because the run
+                    unpacks by content either way. A folder literally named
+                    "input" is written ./input: the word after -k goes to -k
+                    when it is a part.
 l | <quality> | quality level of the output images, default {quality}
 u | <chroma> | page chroma: {chromas}. 444 keeps colour at full resolution,
                     420 at a quarter of it, for smaller books with colour
@@ -235,7 +238,7 @@ def spec(program: str) -> clioptions.Spec:
         long=OPT_LONG,
         vars=OPT_VARS,
         checks=OPT_CHECKS,
-        flags="optionalArg:k:^pages$",
+        flags="optionalArg:k:^(pages|input)(,(pages|input))*$",
         column=OPT_COLUMN,
     ))
 
@@ -340,7 +343,8 @@ class Counters:
                 handle.write(str(current))
 
 
-def pretreat_input(in_path: str, skips: safety.SkipLog) -> None:
+def pretreat_input(in_path: str, skips: safety.SkipLog,
+                   keep_input: bool = False) -> None:
     """Only the known problems in names and paths."""
     root_depth = in_path.rstrip("/").count(os.sep)
     by_depth: dict[int, list[str]] = {}
@@ -358,7 +362,11 @@ def pretreat_input(in_path: str, skips: safety.SkipLog) -> None:
         safety.safe_rename(path, safety.clean_input_path(path), skips)
 
     safety.lower_case_extensions(in_path, skips)
-    name_by_content(in_path, skips)
+    # The one rename that changes a name the user chose - a wrong suffix is
+    # corrected either way: the unpack goes by content, and the library stops
+    # being told otherwise. Kept, the name stays as it was.
+    if not keep_input:
+        name_by_content(in_path, skips)
 
 
 def name_by_content(in_path: str, skips: safety.SkipLog) -> None:
@@ -764,6 +772,9 @@ class Run:
     fuzz: str
     # -k pages: the trim and the blank-page drop it ends with are both skipped.
     keep_pages: bool
+    # -k input: the rename of an archive to the extension of what it really is
+    # is skipped - the unpack goes by content either way.
+    keep_input: bool
     # The books already packaged, so a resumed run skips them.
     converted: set[str]
     input_list: str
@@ -1471,7 +1482,7 @@ def main(argv: list, program: str = "convert-comics",
         # like a bad option. A bare -k keeps them all; without the flag the
         # run takes its normal measures and keeps none.
         keep_parts = (keepparts.parse(result.values["keepParts"],
-                                      ("pages",))
+                                      ("pages", "input"))
                       if "k" in result.given else frozenset())
     except clioptions.HelpRequested:
         sys.stdout.write(clioptions.help_text(declaration))
@@ -1569,6 +1580,7 @@ def _run(result, declaration, program: str, script_dir: str,
         quality=quality, chroma=chroma, speed_preset=speed_preset,
         pages_per_book=IMAGES_PER_BOOK, max_res=max_res, fuzz=fuzz,
         keep_pages="pages" in keep_parts,
+        keep_input="input" in keep_parts,
         converted=set(), input_list=os.path.join(counter_dir, "inputs"),
         stats_file=os.path.join(counter_dir, "pageStats"),
         phase_start=None, phase_end=None, total=0, lane=None,
@@ -1587,7 +1599,8 @@ def _run(result, declaration, program: str, script_dir: str,
             % (enums.extension_list(list(enums.COMIC_EXTENSIONS)),
                enums.extension_list(list(enums.COMIC_PDF_EXTENSIONS))))
 
-    if not _tidy_input(in_path, temp_path, have_fdupes, skips):
+    if not _tidy_input(in_path, temp_path, have_fdupes, skips,
+                       state.keep_input):
         return 1
 
     # The books this run converts: every archive, plus the PDFs that turn out to
@@ -1748,7 +1761,7 @@ def _open_converting(state, counter_dir: str, out_path: str, packaged: list,
 
 
 def _tidy_input(in_path: str, temp_path: str, have_fdupes: bool,
-                skips) -> bool:
+                skips, keep_input: bool = False) -> bool:
     """The input de-duplicated, its empty folders pruned and its names
     pretreated, with the run moved into it and its folder tree mirrored in the
     scratch. False when the input could not be entered."""
@@ -1773,7 +1786,7 @@ def _tidy_input(in_path: str, temp_path: str, have_fdupes: bool,
         os.makedirs(os.path.join(temp_path, os.path.relpath(parent, in_path)),
                     exist_ok=True)
 
-    pretreat_input(in_path, skips)
+    pretreat_input(in_path, skips, keep_input)
     return True
 
 
