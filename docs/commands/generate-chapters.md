@@ -68,8 +68,13 @@ sends `reasoning_effort` set to `medium`, replacing whatever `chapterLlmOptions`
 says for that field. A server that switches thinking off some other way has to
 have that setting removed by hand. Claude runs at `medium` effort anyway, and
 with `-p` it may also search the web, up to five searches a request. Anthropic
-bills those searches. A server behind the `openai` protocol cannot search, so
-it works from the transcript alone.
+bills those searches. A server behind the `openai` protocol cannot search on
+its own, so it works from the transcript alone - unless you have an agent
+harness: with `chapterLlmHarness=opencode` and `chapterLlmHarnessModel` naming
+the model as `opencode models` lists it, `-p` requests go to that model through
+opencode, which can fetch web pages. Each request is a throwaway session,
+deleted once its answer is read, so opencode's own session list stays yours.
+Opencode runs with its permissions auto-approved for these requests.
 
 A transcript does not say who is speaking, so the model works speakers out from
 what they say: introductions, names, how they address each other.

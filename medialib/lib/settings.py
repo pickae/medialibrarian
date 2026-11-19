@@ -259,6 +259,22 @@ SETTINGS: tuple[Setting, ...] = (
             "instructions (`generate-chapters -p`, `convert-audio -p`, `convert-video -P`, "
             "`ingest-movies -P`, `ytdlp -P`) "
             "send their own `reasoning_effort`", _AI_CHAPTERS),
+    Setting("chapterLlmHarness", "The agent harnesses you have installed, a comma "
+            "list, the preferred first - only `opencode` is known so far. With "
+            "one, the chapter instructions (`generate-chapters -p` and the "
+            "like) are asked of the same model through the harness instead of "
+            "straight to its server, so a local model can search the web as "
+            "Claude does, e.g. to spell the speakers' names. Each request is "
+            "one throwaway session that is deleted when its answer is read, "
+            "so your own sessions stay easy to find. The harness runs with "
+            "its permissions auto-approved, and its prompt is the transcript, "
+            "so use it only with a model you trust with both",
+            _AI_CHAPTERS, "unset - instructions are asked of the server alone"),
+    Setting("chapterLlmHarnessModel", "The model the harness asks, as it names "
+            "models - for opencode `provider/model`, as `opencode models` "
+            "lists them, e.g. `ninfer/qwen3.8-27b`. Required with "
+            "`chapterLlmHarness`: the harness's own default can be a hosted "
+            "model, and the transcript would be sent to it", _AI_CHAPTERS),
     Setting("chapterLlmVramGB", "The GPU memory, in GB, the chapter model needs while "
             "whisper is using the same card - ingest-movies starts it beside the "
             "commentary transcription only when that much is free, and otherwise waits "

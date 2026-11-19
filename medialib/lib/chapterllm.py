@@ -31,6 +31,11 @@ started with :data:`SERVE_VARIABLE` where the GPU has room for it, and stopped
 again once idle (:mod:`medialib.lib.modelserver`); further down, the model a
 server lists is asked when it does not list :data:`MODEL_VARIABLE`, and the
 window is the one it lists when that is smaller than :data:`CONTEXT_VARIABLE`.
+
+A model behind the openai protocol cannot look anything up, so where the user
+has an agent harness (:data:`HARNESS_VARIABLE`, :mod:`medialib.lib.llmharness`)
+the requests that carry the user's own instructions are asked through it
+instead, which can search the web for what they ask to have checked.
 """
 
 from __future__ import annotations
@@ -52,11 +57,12 @@ import urllib.request
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field, replace
 
-from medialib.lib import modelserver, tmdbclient, tooldeps
+from medialib.lib import llmharness, modelserver, tmdbclient, tooldeps
 
 __all__ = ["API_VARIABLE", "URL_VARIABLE", "MODEL_VARIABLE", "KEY_VARIABLE",
            "CONTEXT_VARIABLE", "OPTIONS_VARIABLE", "JOBS_VARIABLE",
-           "SERVE_VARIABLE", "SERVE_MIB_VARIABLE", "SERVE_MIB", "APIS", "DEFAULT_API",
+           "SERVE_VARIABLE", "SERVE_MIB_VARIABLE",
+           "HARNESS_VARIABLE", "HARNESS_MODEL_VARIABLE", "SERVE_MIB", "APIS", "DEFAULT_API",
            "DEFAULT_ANTHROPIC_MODEL", "DEFAULT_CONTEXT_TOKENS", "DEFAULT_JOBS",
            "THOROUGH_EFFORT", "LlmError", "Llm", "from_environment", "require",
            "is_local", "first_json"]
@@ -71,6 +77,8 @@ OPTIONS_VARIABLE = "chapterLlmOptions"
 JOBS_VARIABLE = "chapterLlmJobs"
 SERVE_VARIABLE = "chapterLlmServe"
 SERVE_MIB_VARIABLE = "chapterLlmServeMib"
+HARNESS_VARIABLE = llmharness.HARNESS_VARIABLE
+HARNESS_MODEL_VARIABLE = llmharness.MODEL_VARIABLE
 
 # The free GPU memory, in MiB, the first server is started with unless
 # SERVE_MIB_VARIABLE says: a 35B-A3B's weights are 22 GiB, and a long
@@ -182,6 +190,12 @@ class Llm:
     # Whether :attr:`context_tokens` was set, rather than the default: a
     # server's own window replaces the default, and only narrows a setting.
     context_given: bool = True
+    # The harnesses the user has, preferred first, and the model they are
+    # asked for; :attr:`harness` is the one a request goes through, set by
+    # :meth:`following`.
+    harnesses: tuple[llmharness.Harness, ...] = ()
+    harness_model: str = ""
+    harness: llmharness.Harness | None = None
     _slots: threading.BoundedSemaphore | None = field(
         default=None, init=False, repr=False, compare=False)
 
@@ -204,6 +218,9 @@ class Llm:
             text += ", reasoning at %s effort" % self.effort
         if self.search:
             text += ", with web search"
+        if self.harness:
+            text += ", through %s asking %s, with web search" % (
+                self.harness.program, self.harness_model)
         return text
 
     def following(self, instructions: str) -> Llm:
@@ -211,7 +228,9 @@ class Llm:
         request (:mod:`medialib.lib.aichapters` puts them in), and asked to
         reason at :data:`THOROUGH_EFFORT` while it follows them - Claude
         allowed to search the web as well, which no server behind the openai
-        protocol does for its caller. Itself when there are none.
+        protocol does for its caller - so a model behind that protocol is
+        asked through the first of :attr:`harnesses` that is installed, when
+        there is one. Itself when there are no instructions.
 
         The copy shares this model's request slots, so the two together stay
         within :attr:`jobs`."""
@@ -219,7 +238,9 @@ class Llm:
         if not instructions:
             return self
         copy = replace(self, effort=THOROUGH_EFFORT, search=self.api == "anthropic",
-                       instructions=instructions)
+                       instructions=instructions,
+                       harness=llmharness.installed(self.harnesses)
+                       if self.api == "openai" else None)
         copy._slots = self._slots
         return copy
 
@@ -305,6 +326,12 @@ class Llm:
         raise LlmError(last)
 
     def _ask_once(self, system: str, prompt: str) -> str:
+        if self.harness:
+            try:
+                return llmharness.ask(self.harness, self.harness_model, system,
+                                      prompt, REQUEST_SECONDS)
+            except llmharness.HarnessError as error:
+                raise LlmError(str(error)) from error
         if self.api == "anthropic":
             return _ask_anthropic(self, system, prompt)
         return _ask_openai(self, system, prompt)
@@ -347,13 +374,25 @@ def from_environment(environ=None) -> Llm:
     serve = (environ.get(SERVE_VARIABLE) or "").strip()
     if serve and api != "openai":
         raise LlmError("%s applies to the openai protocol only" % SERVE_VARIABLE)
+    try:
+        harnesses = llmharness.parse(environ.get(HARNESS_VARIABLE) or "")
+    except llmharness.HarnessError as error:
+        raise LlmError(str(error)) from error
+    harness_model = (environ.get(HARNESS_MODEL_VARIABLE) or "").strip()
+    if harnesses and not harness_model:
+        # Not the harness's own default: that can be a hosted model, and the
+        # transcript would be sent to it.
+        raise LlmError("%s is not set: name the model %s is to ask, as it "
+                       "names models (e.g. provider/model)"
+                       % (HARNESS_MODEL_VARIABLE, harnesses[0].program))
     local = is_local(url)
     return Llm(api, url, model, key,
                _positive(environ, CONTEXT_VARIABLE, DEFAULT_CONTEXT_TOKENS),
                _positive(environ, JOBS_VARIABLE, DEFAULT_JOBS if local else 0),
                extra, local, fallbacks=tuple(urls[1:]), serve=serve,
                serve_mib=_positive(environ, SERVE_MIB_VARIABLE, SERVE_MIB),
-               context_given=bool((environ.get(CONTEXT_VARIABLE) or "").strip()))
+               context_given=bool((environ.get(CONTEXT_VARIABLE) or "").strip()),
+               harnesses=harnesses, harness_model=harness_model)
 
 
 def _server(url: str, command: str, need_mib: int) -> modelserver.Server:
@@ -439,6 +478,11 @@ def require(program: str) -> Llm | None:
                          "Nothing was changed.\n" % error)
         return None
     skip = bool(os.environ.get("SKIP_TOOL_PREFLIGHT", ""))
+    if llm.harnesses and llm.api == "openai" and not llmharness.installed(llm.harnesses):
+        sys.stderr.write("\nWarning: %s lists %s, and none is installed: "
+                         "instructions are asked without web search.\n"
+                         % (HARNESS_VARIABLE, ", ".join(each.program
+                                                        for each in llm.harnesses)))
     if llm.api == "anthropic":
         if tooldeps.require_python_module(
                 "anthropic", program, "asks Claude for the chapters (pip install "

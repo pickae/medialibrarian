@@ -136,6 +136,19 @@ A tool's replayed output and a crash's traceback are not repeated here: they
 are in the error log. Nothing is ever deleted from `logs/info/` by the
 commands.
 
+## Model sessions
+
+A request sent to a language model through an agent harness
+(`chapterLlmHarness`) is a session in that harness, deleted as soon as its
+answer is read so the harness's own list stays yours. Just before, it is
+exported into `logs/llm/`, in a folder with the run's name -
+`logs/llm/20261105-140211-generate-chapters-4242/` - one JSON file per
+request, as the harness writes it: the prompt, every tool the model called,
+the pages it fetched and its answer. That is where to look to see whether a
+model really searched, and what for. Keys are starred out as in the other
+logs, but the transcript is in there. Nothing is ever deleted from
+`logs/llm/` by the commands.
+
 ## Where it goes
 
 Results go to standard output: a report's name, a query's table, the calls a
