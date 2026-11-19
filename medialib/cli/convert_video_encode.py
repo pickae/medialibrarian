@@ -61,7 +61,7 @@ def encode_video_whole(relative: str, directory: str, settings) -> int:
     source = rules.video_source_for(relative, settings.input_dir,
                                     settings.dolby_vision_source)
     args = rules.build_video_args(
-        rules.profile_args(rules.VIDEO_PROFILES, settings.video_profile),
+        rules.profile_args(rules.video_profiles(), settings.video_profile),
         source, settings)
     out = os.path.join(directory, "video.mkv")
     progress = os.path.join(directory, "prog.0000")
@@ -125,7 +125,7 @@ def encode_video_chunk(settings, token: str) -> int:
     out = os.path.join(directory, "%04d.mkv" % int(index))
 
     args = rules.build_video_args(
-        rules.profile_args(rules.VIDEO_PROFILES, settings.video_profile),
+        rules.profile_args(rules.video_profiles(), settings.video_profile),
         source, settings)
     progress = os.path.join(directory, "prog.%04d" % int(index))
     chunk_label = "%s (chunk %d of %s)" % (relative, int(index) + 1, total)
@@ -191,7 +191,7 @@ def encode_audio_all(relative: str, directory: str, settings) -> int:
     """
     import multiprocessing
     source = os.path.join(settings.input_dir, relative)
-    audio_args = rules.profile_args(rules.AUDIO_PROFILES,
+    audio_args = rules.profile_args(rules.audio_profiles(),
                                     settings.audio_profile)
     if "-c:a copy" in audio_args:
         return 0
@@ -298,7 +298,7 @@ def mux_final(relative: str, directory: str, settings, output: str) -> int:
     source = os.path.join(settings.input_dir, relative)
     if settings.keep_tracks:
         return _mux_keeping_tracks(relative, directory, source, output)
-    audio_args = rules.profile_args(rules.AUDIO_PROFILES,
+    audio_args = rules.profile_args(rules.audio_profiles(),
                                     settings.audio_profile)
 
     argv = ["ffmpeg", "-nostdin", "-hide_banner",
