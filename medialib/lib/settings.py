@@ -169,9 +169,9 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("ramScratchBase", "Where each run's scratch directories go",
             _SCRATCH, "`/dev/shm`, else the system temp directory"),
     Setting("ramScratchMaxPercent", "The largest share of the RAM filesystem, in "
-            "percent, one intermediate file may take", _SCRATCH, "50"),
+            "percent, one intermediate file may take", _SCRATCH),
     Setting("ramScratchMinFreeBytes", "With this little free in RAM, new scratch "
-            "goes to disk instead", _SCRATCH, "1073741824"),
+            "goes to disk instead", _SCRATCH),
     Setting("ramScratchDiskBase", "Where scratch goes on disk once RAM is nearly full",
             _SCRATCH, "the cache directory's `ramScratchOverflow`"),
     Setting("censusRamBase", "The census's scratch, ahead of `ramScratchBase`",
@@ -275,19 +275,19 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("comicPdfExtensions", "The file suffixes that may be comic PDFs, "
             "space-separated", ("content-census",), "pdf"),
     Setting("comicPdfMinCoverage", "How much of a page, in percent, its one image has "
-            "to cover for it to be a comic page", _COMICS, "80"),
+            "to cover for it to be a comic page", _COMICS),
     Setting("comicPdfMinPixels", "How wide and high a page image has to be, in pixels",
-            _COMICS, "400"),
+            _COMICS),
     Setting("comicPdfMinPageShare", "How many of a PDF's pages, in percent, have to be "
-            "comic pages for it to be a comic", _COMICS, "90"),
+            "comic pages for it to be a comic", _COMICS),
     Setting("comicPdfMinDpi", "The lowest resolution a comic PDF is rendered at",
-            _COMICS, "150"),
+            _COMICS),
     Setting("comicPdfMaxDpi", "The highest resolution a comic PDF is rendered at",
-            _COMICS, "600"),
+            _COMICS),
     Setting("comicPdfFallbackDpi", "The resolution used where the PDF's own cannot be "
-            "read", _COMICS, "300"),
+            "read", _COMICS),
     Setting("comicPdfJpegQuality", "The JPEG quality comic PDF pages are rendered at",
-            _COMICS, "92"),
+            _COMICS),
     # --- reading books aloud
     Setting("narrationHome", "The ebook2audiobook checkout read-library drives; `-c` "
             "overrides it", _NARRATION, "`~/ebook2audiobook`"),
