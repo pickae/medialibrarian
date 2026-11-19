@@ -1385,9 +1385,9 @@ class Run:
         the track's name is a cover already, and is never searched past.
 
         Whether the track is encoded in stereo goes with it: podcast length in
-        stereo is most likely a full-cast drama, and is looked for where
-        audiobooks are. ``channels`` is the source's count where the run
-        already probed it, 0 where it did not.
+        stereo is most likely a full-cast drama, and is looked for as one.
+        ``channels`` is the source's count where the run already probed it, 0
+        where it did not.
 
         ``seconds`` None is probed here and ``mono`` None is the run's own -m -
         both only once the search is known to run, so a run with it switched

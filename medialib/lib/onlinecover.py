@@ -16,9 +16,8 @@ What the audio probably IS decides which rows are asked:
   podcast for sure, and its own thumbnail is asked for by that id;
 * a name starting with a yyyymmdd date is a podcast episode - it is how the
   podcast downloads name them, and nothing else is named that way;
-* 30 to 200 minutes is most likely a podcast - unless convert-audio encodes it
-  in stereo, which makes it most likely a full-cast drama, found where
-  audiobooks are;
+* 30 to 200 minutes is most likely a podcast - unless it is encoded in
+  stereo, which makes it most likely a full-cast drama;
 * anything longer is most likely an audiobook;
 * anything shorter is "other".
 
@@ -42,6 +41,7 @@ from dataclasses import dataclass, field
 
 from medialib import commands
 from medialib.lib import (
+    cleannamesindividually,
     enums,
     formatting,
     imagecodecs,
@@ -79,7 +79,7 @@ TABLE_NAME = "coverproviders.tsv"
 PODCAST_MIN_SECONDS = 30 * 60
 AUDIOBOOK_MIN_SECONDS = 200 * 60
 
-CONTENTS = ("podcast", "audiobook", "other")
+CONTENTS = ("podcast", "drama", "audiobook", "other")
 MATCHES = ("id", "strict", "loose", "show")
 
 # How far a catalogue's running time may be from the audio's and still be the
@@ -221,7 +221,7 @@ def probable_content(name: str, seconds: float, stereo: bool = False) -> tuple:
         return "audiobook", "a length of %s" % formatting.fmt_clock(seconds)
     if seconds >= PODCAST_MIN_SECONDS:
         if stereo:
-            return "audiobook", "a stereo recording of %s" \
+            return "drama", "a stereo recording of %s" \
                 % formatting.fmt_clock(seconds)
         return "podcast", "a length of %s" % formatting.fmt_clock(seconds)
     if seconds > 0:
@@ -229,19 +229,30 @@ def probable_content(name: str, seconds: float, stereo: bool = False) -> tuple:
     return "other", "no length"
 
 
-# What a name carries that is not its title: the date in front, the
-# "(Unabridged)" and "[B0ABC12345]" behind, underscores for spaces.
+# What a name carries that is not its title: the "(Unabridged)" and
+# "[B0ABC12345]" behind.
 _BRACKETED = re.compile(r"\s*[\(\[\{][^\)\]\}]*[\)\]\}]\s*")
+
+# The dash between a name's parts, however its spaces are written: " - ",
+# ".-." or "_-_". A hyphen inside a word is not one.
+_PART_BREAK = re.compile(r"[\s._]+-[\s._]+")
 
 
 def clean_name(name: str) -> str:
-    """``name`` with what is not its title taken off."""
-    text = name
-    if _dated(text):
-        text = text[8:].lstrip(" _-.")
-    text = text.replace("_", " ")
-    text = _BRACKETED.sub(" ", text)
-    return " ".join(text.split()).strip(" -")
+    """``name`` with what is not its title taken off.
+
+    Each part is cleaned the way concat-audio cleans a folder name - the date
+    in front off, dots and underscores to spaces - and the parts are joined
+    with " - " again, which that cleaning would lose: the break is what says
+    where the series ends and the title starts.
+    """
+    parts = []
+    for part in _PART_BREAK.split(name):
+        _prefix, text = cleannamesindividually.clean_names_individually(part)
+        text = " ".join(_BRACKETED.sub(" ", text).split()).strip(" -")
+        if text:
+            parts.append(text)
+    return " - ".join(parts)
 
 
 def _unique(values: Sequence[str]) -> list[str]:
@@ -258,7 +269,8 @@ def _unique(values: Sequence[str]) -> list[str]:
 class Subject:
     """What is being looked for: what it is called, best first; who made it,
     the trusted (tagged) names apart from the guessed ones; how long it runs;
-    what it probably is, and the figure that read as it."""
+    what it probably is, and the figure that read as it; and the title after
+    the last dash of a name in parts - an episode's own."""
 
     titles: list[str]
     creators: list[str]
@@ -267,6 +279,7 @@ class Subject:
     content: str
     youtube_id: str = ""
     why: str = ""
+    episode: str = ""
 
     @property
     def title(self) -> str:
@@ -286,15 +299,18 @@ def subject_for(name: str, seconds: float, tag_titles: Sequence[str] = (),
     ``tag_titles`` and ``tag_creators`` are what its tags say, best first;
     ``guessed_creators`` names that may be its maker - a parent folder. A name
     written "Author - Title" offers both halves as titles and as creators,
-    because which half is which is not written down.
+    because which half is which is not written down. A name of three parts -
+    "Series - Episode 12 - Its Title" - offers the last on its own as well:
+    a catalogue may sell the episode under its own title alone.
     """
     cleaned = clean_name(name)
     head, tail = titlematch.leading_segment(cleaned)
-    titles = _unique([*tag_titles, cleaned, tail, head])
+    episode = titlematch.last_segment(cleaned)
+    titles = _unique([*tag_titles, cleaned, tail, episode, head])
     creators = _unique([*tag_creators, *guessed_creators, head, tail])
     content, why = probable_content(name, seconds, stereo)
     return Subject(titles, creators, _unique(tag_creators), seconds,
-                   content, youtube_id(name), why)
+                   content, youtube_id(name), why, episode)
 
 
 # --- what a site answered -----------------------------------------------------------
@@ -480,6 +496,26 @@ def _runtime(subject: Subject, candidate: Candidate) -> str:
         else "conflicts"
 
 
+# The number a series gives one of its parts: "Folge 6", "Episode 06", "Part 2".
+_EPISODE = re.compile(
+    r"\b(?:folge|episode|ep|teil|part|band|vol|volume|book|buch)\.?\s*0*(\d+)\b",
+    re.IGNORECASE)
+
+
+def _episode(text: str) -> str:
+    found = _EPISODE.search(text)
+    return found.group(1) if found else ""
+
+
+def _another_episode(subject: Subject, candidate: Candidate) -> bool:
+    """Whether the candidate is numbered as another part of the series than
+    the subject: "Folge 13: The Glass Lighthouse" is not "Folge 06 - The
+    Glass Lighthouse", although the titles past the number are the same."""
+    ours = next((n for n in map(_episode, subject.titles) if n), "")
+    theirs = _episode(candidate.title)
+    return bool(ours and theirs and ours != theirs)
+
+
 def accepts(match: str, subject: Subject, candidate: Candidate) -> bool:
     """Whether ``candidate`` is ``subject``, as sure as ``match`` asks."""
     if match == "id":
@@ -489,7 +525,7 @@ def accepts(match: str, subject: Subject, candidate: Candidate) -> bool:
         return any(titlematch.equivalent(name, candidate.title)
                    for name in subject.creators)
     title = _matched_title(subject, candidate)
-    if not title:
+    if not title or _another_episode(subject, candidate):
         return False
     if match == "loose":
         return True
@@ -610,7 +646,7 @@ def _address(row: Row, subject: Subject) -> str:
     subject does not have."""
     values = {"title": subject.title, "creator": subject.creator,
               "query": " ".join(v for v in (subject.title, subject.creator) if v),
-              "youtube_id": subject.youtube_id}
+              "youtube_id": subject.youtube_id, "episode": subject.episode}
     for key, value in values.items():
         placeholder = "{%s}" % key
         if placeholder not in row.address:

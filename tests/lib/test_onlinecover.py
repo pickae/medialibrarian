@@ -59,7 +59,7 @@ def test_youtube_id(name, found):
 def test_podcast_length_in_stereo_is_a_full_cast_drama():
     assert onlinecover.probable_content(
         "The Lantern Keepers", 90 * 60, stereo=True) == \
-        ("audiobook", "a stereo recording of 1:30:00")
+        ("drama", "a stereo recording of 1:30:00")
     assert onlinecover.probable_content(
         "The Lantern Keepers", 90 * 60) == ("podcast", "a length of 1:30:00")
     # dated or YouTube-named stays a podcast, and short stays other
@@ -85,6 +85,31 @@ def test_a_youtube_id_is_a_podcast_whatever_its_length():
 def test_clean_name_drops_the_date_the_brackets_and_underscores():
     assert onlinecover.clean_name("20240105 - The_Quiet Orchard (Unabridged) [B0X1]") \
         == "The Quiet Orchard"
+
+
+def test_clean_name_reads_dots_as_spaces_and_keeps_the_parts():
+    assert onlinecover.clean_name(
+        "Night.Harbour.-.Folge.12.-.The.Glass-Lighthouse") \
+        == "Night Harbour - Folge 12 - The Glass-Lighthouse"
+
+
+def test_a_name_in_three_parts_offers_the_episode_title():
+    subject = onlinecover.subject_for(
+        "Night Harbour - Folge 12 - The Glass Lighthouse", 0)
+    assert subject.episode == "The Glass Lighthouse"
+    assert "The Glass Lighthouse" in subject.titles
+
+
+def test_another_episode_of_the_same_title_is_refused():
+    subject = onlinecover.subject_for(
+        "Night Harbour - Folge 06 - The Glass Lighthouse", 3000, stereo=True)
+    same = Candidate("Night Harbour - Folge 6: The Glass Lighthouse",
+                     ("Someone",), 3000, ("u",))
+    other = Candidate("Folge 13: The Glass Lighthouse", ("Someone",), 3000,
+                      ("u",))
+    for match in ("strict", "loose"):
+        assert onlinecover.accepts(match, subject, same)
+        assert not onlinecover.accepts(match, subject, other)
 
 
 def test_subject_offers_both_halves_of_a_dashed_name():
@@ -369,24 +394,24 @@ def test_the_line_says_what_the_content_was_taken_on(tmp_path, monkeypatch):
             'looked for "A Short Thing")' in said), said
 
 
-def test_a_stereo_book_of_podcast_length_is_looked_for_as_an_audiobook(
+def test_a_stereo_book_of_podcast_length_is_looked_for_as_a_drama(
         tmp_path, monkeypatch):
     """A joined book of podcast length encoded in stereo is a full-cast
-    drama, not a talk: the audiobook rows are asked, not the podcast ones."""
+    drama, not a talk: the drama rows are asked, not the podcast ones."""
     monkeypatch.setenv("coverSearch", "on")
     said = []
     monkeypatch.setattr(onlinecover, "_log", said.append)
-    book = tmp_path / "Night Harbour - Episode 12 - The Glass Lighthouse"
+    book = tmp_path / "Night.Harbour.-.Episode.12.-.The.Glass.Lighthouse"
     book.mkdir()
-    for stereo, content in ((False, "podcast"), (True, "audiobook")):
+    for stereo, content in ((False, "podcast"), (True, "drama")):
         net = _Net({}, {})
-        rows = [Row(c, "audible", "strict", 0, "%s:{title}" % c)
-                for c in ("podcast", "audiobook")]
+        rows = [Row(c, "audible", "strict", 0, "%s:{episode}" % c)
+                for c in ("podcast", "drama", "audiobook")]
         search = CoverSearch(rows, net.fetch, net.download, pace=False)
         onlinecover.book_cover(str(book), [], 45 * 60 + 55,
                                str(tmp_path / "b"), search, stereo=stereo)
-        assert [a.split(":")[0] for a in net.fetched] == [content]
-    assert said[-1].startswith("    No cover found online either (audiobook - "
+        assert net.fetched == [content + ":The+Glass+Lighthouse"]
+    assert said[-1].startswith("    No cover found online either (drama - "
                                "a stereo recording of 45:55"), said
 
 
