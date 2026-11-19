@@ -1144,7 +1144,7 @@ def _settle_mkvtoolnix(opus_wanted: bool) -> None:
     present = all(tooldeps.tool_present(tool) for tool in
                   ("mkvmerge", "mkvpropedit", "mkvextract"))
     runcontext.settle("HAVE_MKVTOOLNIX", "1" if present else "")
-    narrated_as = os.environ.get("narrationFormat", "m4b").lower()
+    narrated_as = settings.value("narrationFormat").lower()
     if not present and opus_wanted and narrated_as in ("mka", "mkv"):
         log("WARNING: mkvtoolnix not found (apt install mkvtoolnix) - cover art "
             "embedded in Matroska sources")
