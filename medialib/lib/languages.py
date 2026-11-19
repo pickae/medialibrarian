@@ -182,6 +182,14 @@ def is_forced_name(name: str) -> bool:
     return bool(_FORCED_NAME.search(name or ""))
 
 
+def without_forced_word(name: str) -> str:
+    """A track name with the word that says it is forced taken out, and the
+    brackets and dashes that are left around nothing with it."""
+    rest = _FORCED_NAME.sub("", name or "")
+    rest = re.sub(r"\(\s*\)|\[\s*\]", "", rest)
+    return " ".join(rest.split()).strip(" -_,;:")
+
+
 def code_from_tag(tag: str) -> str:
     """The ".xx" code for an mkv language tag, or "" for a tag naming none.
 

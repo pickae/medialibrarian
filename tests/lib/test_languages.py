@@ -324,3 +324,15 @@ class TestWantedSubtitles:
         # the codes the table has, so the one who set it can pick a real one
         assert "cs, da, de, el, en, es" in message
         assert "ja, ko, nl, no, pl, pt" in message
+
+
+class TestTakingTheForcedWordOut:
+    @pytest.mark.parametrize("name,rest", [
+        ("English (Forced)", "English"),
+        ("Forced", ""),
+        ("English - Forced", "English"),
+        ("English [forced]", "English"),
+        ("English", "English"),
+    ])
+    def test_the_word_and_what_was_around_it(self, name, rest):
+        assert lang.without_forced_word(name) == rest

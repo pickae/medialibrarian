@@ -192,6 +192,10 @@ class TestTheOmittedPhase:
             monkeypatch.setattr(run.rules, name, note(name))
         for name in ("rename_folders", "rename_movies"):
             monkeypatch.setattr(run.rules, name, lambda *a, **k: 0)
+        monkeypatch.setattr(
+            run.rules, "update_tags",
+            lambda _root, roles=True: seen.append(
+                "update_tags" if roles else "update_tags without roles"))
         monkeypatch.setattr(run.safety, "lower_case_extensions",
                             note("lower"))
         for name in ("move_subs", "rename_subs"):
@@ -264,6 +268,14 @@ class TestTheOmittedPhase:
         assert "Subtitles: not fetched (-o subtitles)" in joined
         assert "downloading missing subtitles - OMITTED (-o subtitles)" \
             in joined
+
+    def test_omitted_roles_are_not_measured(self, monkeypatch):
+        seen, lines, _lane, _research = self._ingested(
+            monkeypatch, omit=frozenset({"roles"}))
+        assert "update_tags without roles" in seen
+        assert "update_tags" not in seen
+        assert "refreshing mkv tags and track flags - subtitle roles " \
+            "OMITTED (-o roles)" in " ".join(lines)
 
     def test_omitted_commentary_is_not_listened_for_or_transcribed(
             self, monkeypatch):
