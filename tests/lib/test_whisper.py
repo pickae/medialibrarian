@@ -243,6 +243,7 @@ class TestSettlement:
                           "threads": "4", "jobs": whisper.WHISPER_JOBS,
                           "batchSlots": 0}
         assert logs == [
+            "No GPU found: the model settles on the CPU",
             "Transcribing on the CPU (int8, 4 threads) with base.en, 2 at a time",
             "Non-English work (detection, foreign transcripts, translations) "
             "runs on base",
@@ -253,6 +254,17 @@ class TestSettlement:
         answer, calls = self._run(w, logs, "8", nvidia="0\n", install=("nvidia-smi",))
         assert _tools(calls) == ["nvidia-smi"]
         assert answer["device"] == "cpu"
+        assert "No GPU found: the model settles on the CPU" in logs
+        assert logs[0] == "No GPU found: the model settles on the CPU"
+
+    def test_the_line_is_not_said_when_a_gpu_was_there(self, w):
+        """A GPU that could not run whisper already says why: the line belongs
+        to the host with no GPU at all."""
+        logs = []
+        self._run(
+            w, logs, "8", nvidia=_nvidia_stdout("1198"),
+            install=("nvidia-smi",))
+        assert "No GPU found: the model settles on the CPU" not in logs
 
     def test_a_card_that_holds_large_v3_twice_over(self, w):
         logs = []
@@ -421,3 +433,34 @@ class TestThreadCap:
         as 0 rather than failing the run."""
         answer = whisper.init_whisper_model(cores, w.ram, lambda _: None)
         assert answer["threads"] == "0"
+
+
+class TestDetectedLanguages:
+    """whisper-ctranslate2's own line for a detection, as it prints it: one
+    per input it transcribes, before the transcript."""
+
+    @pytest.mark.parametrize("name,probability", [
+        ("English", "0.998765"),
+        ("Dutch", "0.987654"),
+        ("Mandarin", "1.0"),
+    ])
+    def test_a_whisper_line_parses_to_its_parts(self, name, probability):
+        assert whisper.detected_languages(
+            ["Detected language '%s' with probability %s"
+             % (name, probability)]) == [(name, float(probability))]
+
+    def test_the_order_is_the_order_the_inputs_were_transcribed(self):
+        lines = [
+            "Detected language 'English' with probability 0.99",
+            "  0%|          | 0.0/60.0 [00:00<?, ?s/s]",
+            "Detected language 'Dutch' with probability 0.97",
+            "[... 4 line(s) not kept ...]",
+            "Detected language 'Turkish' with probability 0.91",
+        ]
+        assert whisper.detected_languages(lines) == [
+            ("English", 0.99), ("Dutch", 0.97), ("Turkish", 0.91)]
+
+    def test_a_line_whisper_does_not_say_is_no_detection(self):
+        assert whisper.detected_languages(
+            ["Transcribing input/track.mp3",
+             "Transcription results written to 'out' directory"]) == []

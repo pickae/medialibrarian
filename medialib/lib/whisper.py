@@ -17,6 +17,7 @@ The plan therefore fills one run's slots before it considers a second run.
 """
 
 import os
+import re
 import subprocess
 
 from medialib import helpers
@@ -36,6 +37,7 @@ __all__ = [
     "whisper_works",
     "settle_gpu_plan",
     "init_whisper_model",
+    "detected_languages",
 ]
 
 # How whisper-ctranslate2 is started: through a helper that pins the PyAV its
@@ -259,7 +261,8 @@ def init_whisper_model(cores: str, ram_root: str, log) -> dict:
     slots = 0
 
     listing = _nvidia_smi(["-L"])
-    if any(line.startswith("GPU") for line in listing.splitlines()):
+    gpu_present = any(line.startswith("GPU") for line in listing.splitlines())
+    if gpu_present:
         # First line of the memory query, with a 0 default for a query that
         # printed nothing.
         query = _nvidia_smi(
@@ -305,6 +308,12 @@ def init_whisper_model(cores: str, ram_root: str, log) -> dict:
         log("Transcribing on the GPU (cuda, float16) with {}, {} at a time, "
             "{} batch slots each".format(model, jobs, slots))
     else:
+        if not gpu_present:
+            # The figure the model was settled on is the absence of one: there
+            # is no GPU to settle against, so the line says the CPU settles
+            # the model rather than the CPU line below appearing without a
+            # reason.
+            log("No GPU found: the model settles on the CPU")
         log("Transcribing on the CPU (int8, {} threads) with {}, {} at a time"
             .format(threads, model, jobs))
     if model_multi != model:
@@ -320,3 +329,23 @@ def init_whisper_model(cores: str, ram_root: str, log) -> dict:
         "jobs": jobs,
         "batchSlots": slots,
     }
+
+
+# whisper-ctranslate2's own word for a detection, printed to its standard
+# output before the transcript, one line per input it transcribes.
+_DETECTED_LANGUAGE = re.compile(
+    r"^Detected language '(.*)' with probability (\d+(?:\.\d+)?)\s*$")
+
+
+def detected_languages(lines) -> list:
+    """The languages whisper's output says it detected, in the order it
+    transcribed the inputs, as (language, probability) pairs.
+
+    A line it does not say is no detection, not a guess: the caller says the
+    languages it read and is silent where whisper's words were not kept."""
+    found = []
+    for line in lines:
+        match = _DETECTED_LANGUAGE.match(line.strip())
+        if match:
+            found.append((match.group(1), float(match.group(2))))
+    return found
