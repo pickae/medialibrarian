@@ -43,8 +43,8 @@ transcription together, and everything else runs normally.
 
 The tools come from half a dozen places - apt, a snap, pipx venvs, the
 environments `pipx run` caches, cargo, GitHub release binaries and checkouts
-built by hand - and each is updated its own way. `tools/update_deps.py` in the
-checkout does all of them:
+built by hand - and each is updated its own way. `tools/update_deps.py`, in a
+checkout of this repository, does all of them:
 
 ```bash
 tools/update_deps.py -n
@@ -81,9 +81,9 @@ not hold.
 
 Three things are **not** solved and will bite:
 
-- No NVENC. While hardware **decode** goes through VideoToolbox;
-  **encoding** is the software profiles (`av1Svt`, `x265`)
-  the `*Nvenc` profiles need an NVIDIA card and refuse up front.
+- **No NVENC.** Hardware **decode** goes through VideoToolbox, but
+  **encoding** is the software profiles (`av1Svt`, `x265`): the `*Nvenc`
+  profiles need an NVIDIA card and refuse up front.
 - **A case-insensitive filesystem.** APFS is case-insensitive by default, so a
   rename that only changes case, and two files that differ only in case, do not
   behave as they do on Linux. Keep the library on a case-**sensitive** volume.
@@ -91,6 +91,10 @@ Three things are **not** solved and will bite:
   name with an accent is not byte-identical to the same name written on Linux.
   Nothing here re-normalises, so a library shared between the two can hold what
   looks like the same folder twice.
+
+macOS, like Windows, has no RAM-backed filesystem, so the RAM scratch lands in
+`$TMPDIR` on a normal disk; a RAM disk mounted by hand works if
+`ramScratchBase` points at it.
 
 ## Which ffmpeg a run uses
 
@@ -100,7 +104,7 @@ itself, the parallel workers it spawns and the commands it calls. Whatever is on
 ffmpeg you put there is a deliberate choice. A run whose `PATH` has none — a cron
 job, a systemd unit, a file-manager action — falls through to `$HOME/.local/bin`,
 `/opt/homebrew/bin`, `/usr/local/bin` and `/opt/ffmpeg/bin`, where a
-hand-installed or Homebrew build goes. Set
+hand-installed or Homebrew build goes, and last `/usr/bin`. Set
 `ffmpegOverride` to an absolute path to pin one outright. `ffprobe` comes from the
 same build, and a choice that is **not** what your own shell would have run is said
 in the output; the ordinary case is silent.

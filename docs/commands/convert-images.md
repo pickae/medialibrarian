@@ -26,7 +26,7 @@ With no options, a run:
 
 | `-e` | Writes | Notes |
 | --- | --- | --- |
-| `avif` (default) | AVIF | `-u 444` keeps colour at full resolution instead of a quarter of it: sharper coloured lines and lettering, files about a quarter larger. [`convert-comics`](convert-comics.md) asks for it by default |
+| `avif` (default) | AVIF | `-u 444` keeps colour at full resolution instead of a quarter of it: sharper coloured lines and lettering, files about a quarter larger |
 | `webp` | WebP | no lossy 4:4:4, so `-u` does not apply |
 | `jxl` | JPEG XL | does not subsample colour anyway |
 | any, with `-r` | JPEG, from that format | [below](#starved-images) |
@@ -64,8 +64,7 @@ has ten speeds, so the numbers are not passed through but translated by a
 measurement ([below](#calibrating)):
 
 - **`-Q`** becomes the av1gpu quality whose pictures score the same
-  SSIMULACRA2 as the CPU's at that `-Q` and `-s` — about four points higher on
-  this machine.
+  SSIMULACRA2 as the CPU's at that `-Q` and `-s`.
 - **`-s`** keeps its ranking: the default `-s 5` is av1gpu's default `turbo`,
   slower speeds spread towards `slow` and faster ones towards `turbo3`, each by
   how much smaller or larger the CPU's files are at that speed.
@@ -74,16 +73,13 @@ measurement ([below](#calibrating)):
 | --- | --- | --- | --- | --- | --- |
 | GPU preset | `slow` | `fast` | `turbo` | `turbo2` | `turbo3` |
 
-Measured here, the GPU's files are smaller than the CPU's at every setting: at
-equal SSIMULACRA2, `turbo3` is 6.6 % below CPU `-s 5` and `slow` 12.7 %, while
-the CPU's own range runs from −1.9 % at `-s 2` to +26 % at `-s 9`. So a lower
-`-s` still buys smaller files on the GPU, and either road's file is at least
-as good as the CPU's would be. The GPU writes 8 bits where ImageMagick writes
+At equal SSIMULACRA2 the GPU's files are smaller than the CPU's at every
+setting, so a lower `-s` still buys smaller files on the GPU, and either road's
+file is at least as good as the CPU's would be. The GPU writes 8 bits where ImageMagick writes
 10; the measurement scores the pictures, so that is already counted.
 
-The images go to the card in batches of about 24 gigapixels — about a minute's
-work — since each call costs about two seconds of start-up whatever it holds,
-and progress is printed as each batch finishes. The closing report gives each
+The images go to the card in batches of about a minute's work, and progress is
+printed as each batch finishes. The closing report gives each
 road's images, megapixels and speed:
 
     GPU: 873 image(s), 12287 MP in 34.4 seconds = 356.7 MP/s
@@ -99,7 +95,7 @@ road's images, megapixels and speed:
 
 measures the translation above on this machine's encoders and saves it beside
 the [settings file](../settings.md) (`av1gpu-calibration.json`), where every
-later run finds it; until then the one measured when this was written is used.
+later run finds it; until then a built-in measurement is used.
 Run it again after updating av1gpu or ImageMagick.
 
 It cuts two 1280×1280 crops from each of up to 12 images in `<sampleDir>`,
@@ -108,8 +104,8 @@ every preset and quality on the GPU, scores each encode against its crop with
 [ssimulacra2_rs](https://github.com/rust-av/ssimulacra2_bin)
 (`cargo install --locked --no-default-features ssimulacra2_rs`), and prints
 what each setting costs and what the GPU will be asked for. `<sampleDir>` is
-only read; the crops, the encodes and `scores.csv` stay in `<workDir>`. It took
-20 minutes here and converts nothing. `-s 0` and `1` are not measured — libaom
+only read; the crops, the encodes and `scores.csv` stay in `<workDir>`. It takes
+about 20 minutes and converts nothing. `-s 0` and `1` are not measured — libaom
 takes minutes a crop there — and take `-s 2`'s answer.
 
 ## Starved images
@@ -120,16 +116,15 @@ below that point whatever is left of the picture is all there is: encoding it
 again spends a second generation of loss on something that had none to spare.
 Such images are counted in the closing report and skipped.
 
-- **The check is one header read per image**, not a decode: `identify -ping`
-  stops at the header, which states the format, the pixel size and whether there
-  is colour in the picture. What is *in* the picture — photograph, flat artwork,
-  line art — would cost a full decode, so it is left unmeasured here and read at
-  its most forgiving. An image nothing could measure is converted, not skipped.
+- **The check is one header read per image**, not a decode: the header states
+  the format, the pixel size and whether there is colour in the picture. What is
+  *in* the picture — photograph, flat artwork, line art — would cost a full
+  decode, so it is left unmeasured and read at its most forgiving. An image nothing could measure is converted, not skipped.
 
 | Run | Starved images |
 | --- | --- |
 | default | skipped |
-| `-a` | converted regardless, which is what [`convert-comics`](convert-comics.md) asks for — inside one book every page has to come out in the same format |
+| `-a` | converted regardless |
 | `-r` | never asked about: converting back to JPEG is about what can open the file, and a source too small to improve is exactly as unopenable as a large one |
 
 ---

@@ -57,7 +57,6 @@ Options:"""
 OPT_SPEC = """
 h |  | Print this help page.
 f |  | Make the chapter files again, over the ones already there.
-                    Default false
 m | <minutes> | The shortest chapter, in minutes; a fraction is allowed,
                     0.5 being thirty seconds.
                     Default {minimum}
@@ -69,7 +68,6 @@ w |  | Write the chapters into the input files too, replacing the
                     chapters (raw AAC, WAV) gets the chapter file beside it
                     instead. Chapter files already made are written in
                     without asking the model again.
-                    Default false
 P | <text> | More instructions for the model, added to every request,
                     e.g. "a chapter per speaker, titled with their name and
                     topic". The model then reasons at medium effort, and Claude

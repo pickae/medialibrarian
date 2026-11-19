@@ -367,7 +367,7 @@ class TestTheResearchOmissions:
 class TestTheLanePlacement:
     """The transcription decides where the opus transcode sits: a run told
     to omit the commentary is not one that transcribes, so the transcode
-    goes first as it always did, even when whisper is on the GPU."""
+    goes first, even when whisper is on the GPU."""
 
     def test_the_omitted_commentary_does_not_move_the_transcode(
             self, monkeypatch, tmp_path):

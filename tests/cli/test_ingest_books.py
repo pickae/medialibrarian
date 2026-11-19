@@ -281,11 +281,10 @@ class TestEmitOutput:
 
     def test_an_interrupt_at_placement_leaves_nothing_under_the_final_name(
             self, tmp_path, monkeypatch):
-        """A library on a filesystem without hard links (exFAT) used to claim
-        the final name empty before the finished copy was renamed over it; cut
-        off in that gap, the library was left a 0-byte book under a finished
-        name. The name is now claimed by a token in the scratch, so the final
-        name never appears until the finished copy is moved over it whole."""
+        """On a filesystem without hard links (exFAT) too: the name is claimed
+        by a token in the scratch, so the final name never appears until the
+        finished copy is moved over it whole, and an interrupt cannot leave a
+        0-byte book under a finished name."""
         source, dest = tmp_path / "src", tmp_path / "dst"
         source.mkdir()
         dest.mkdir()

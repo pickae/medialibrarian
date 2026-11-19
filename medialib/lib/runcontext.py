@@ -7,10 +7,10 @@ and the commands it starts as children. They are kept here, in one
 :class:`Run` per process:
 
 - a WORKER is handed the parent's run, pickled, and adopts it in one place
-  (:func:`adopt`, called by `medialib/lib/workerpool.py` as the worker
-  starts). It reads nothing of this from the environment: a worker started
-  from a forkserver has the forkserver's environment, which is the parent's as
-  it was when the forkserver started, not as it is now;
+  (:func:`adopt`, as the worker starts). It reads nothing of this from the
+  environment: a worker started from a forkserver has the forkserver's
+  environment, which is the parent's as it was when the forkserver started,
+  not as it is now;
 - a CHILD COMMAND is a fresh run, and the environment is how it is handed the
   parent's: every value settled here is also written there, and a value this
   run did not settle is read from there - which is the parent's hand-down.
@@ -100,7 +100,6 @@ _RUN = Run()
 
 
 def current() -> Run:
-    """This process's run."""
     return _RUN
 
 
@@ -156,9 +155,8 @@ def get(name: str, default=""):
 def can_lock() -> bool:
     """Whether this host can serialise the shared counters at all.
 
-    Two ways, and either will do. ``flock(1)`` on PATH stays the first one
-    asked, so a Linux box that has had the tool taken off it still reads as it
-    always did. Failing that, the C library's own ``flock`` - which is what
+    Two ways, and either will do. ``flock(1)`` on PATH is asked first.
+    Failing that, the C library's own ``flock`` - which is what
     :func:`take_lock` actually calls - and that is the rung macOS lands on: it
     has never shipped the util-linux command line tool, but the system call has
     been there all along.
@@ -238,7 +236,6 @@ def abort_flag() -> str:
 
 
 def abort_requested() -> bool:
-    """Has this run been asked to stop?"""
     flag = abort_flag()
     return bool(flag) and os.path.exists(flag)
 

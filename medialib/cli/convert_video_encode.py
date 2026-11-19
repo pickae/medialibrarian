@@ -350,7 +350,7 @@ def mux_final(relative: str, directory: str, settings, output: str,
     if not muxed.ok:
         toolcapture.report_failure(muxed)
         return muxed.returncode
-    # The output gets the source's modification time, like the sibling scripts do.
+    # The output gets the source's modification time.
     try:
         stamp = os.stat(source)
         os.utime(output, (stamp.st_atime, stamp.st_mtime))

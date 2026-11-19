@@ -355,7 +355,7 @@ def private_workspace(tmp_path_factory, monkeypatch):
 def fake_command(monkeypatch, tmp_path_factory):
     """Point one command name at a throwaway module.
 
-    A command starts another one as a child process (item 5.3), so a test that
+    A command starts another one as a child process, so a test that
     wants to watch what the child was asked to do has two choices: mock the
     starting, or give it something harmless to start. This is the second, and it
     keeps what the first would lose - a real process, the real argv, and the real
@@ -484,10 +484,9 @@ def pytest_xdist_auto_num_workers(config):
 
 # --- the suite is the whole suite --------------------------------------------
 # A runner counts what it DISCOVERS, so "all passed" is not by itself a claim
-# that the suite ran: this repository's bash runner once reported 90 files
-# passing with 72 of its 98 missing from disk. pytest has the same hole one
-# level in - a renamed directory, a `testpaths` that stops matching, a module
-# that stops being importable - and the run comes back smaller and still green.
+# that the suite ran: a renamed directory, a `testpaths` that stops matching,
+# a module that stops being importable - and the run comes back smaller and
+# still green.
 #
 # The floor is per FILE rather than a total, because a total is a number
 # somebody has to keep in step and this is not: every `test_*.py` under `tests/`

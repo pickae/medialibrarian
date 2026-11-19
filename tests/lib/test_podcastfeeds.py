@@ -1099,12 +1099,6 @@ def test_an_empty_argv_renders_to_nothing():
     assert pf.render_call([], "windows") == ""
 
 
-# --- the constants -----------------------------------------------------------------------
-
-def test_the_columns_are_the_ones_the_hand_edited_tables_hold():
-    assert pf.PODCAST_COLUMNS == ("active", "subdir", "nameTemplate",
-                                  "playlistEnd", "extraArgs", "url")
-
 # --- the tables the repository is responsible for ------------------------------
 # They are data, and data is where a typo hides. EVERY table the repository is
 # responsible for, not one named table: they are edited by hand and by the

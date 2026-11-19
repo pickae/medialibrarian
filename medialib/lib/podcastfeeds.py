@@ -183,7 +183,7 @@ def podcast_profile_media(profile: str) -> str:
 
 def podcast_profile_ingest(profile: str) -> str | None:
     """How a download of that profile becomes the library copy, as
-    "<stagingFolder> <convertAudio arguments...>" - or None for a profile that
+    "<stagingFolder> <convert-audio arguments...>" - or None for a profile that
     is not converted at all."""
     return _INGEST.get(profile)
 

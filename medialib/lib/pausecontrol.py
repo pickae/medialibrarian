@@ -95,8 +95,9 @@ def _set_state(name: str, value: str) -> None:
 
 def abort_requested() -> bool:
     """True once any process in this run recorded an interrupt - the flag
-    ``fileSafety``'s ``requestAbort`` makes. Safe where no flag was armed: it is
-    then simply always False, so a caller needs no second condition."""
+    :func:`medialib.lib.runcontext.request_abort` makes. Safe where no flag was
+    armed: it is then simply always False, so a caller needs no second
+    condition."""
     flag = _env("ABORT_FLAG")
     return bool(flag) and os.path.exists(flag)
 
@@ -513,8 +514,8 @@ def pause_key_reader(stream, error=None) -> None:
 def start_pause_keys() -> bool:
     """Start reading p and r from the console, in the background. A no-op - silently,
     and leaving ``pause_keys_active`` false - when there is no console to read from:
-    a redirected or scripted run has nobody at a keyboard, and the run has to be
-    exactly as it was before this module existed."""
+    a redirected or scripted run has nobody at a keyboard, and the run goes on
+    with no pause keys."""
     if not _env("PAUSE_DIR"):
         return False
     if not _is_console():

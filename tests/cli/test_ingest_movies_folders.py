@@ -382,8 +382,7 @@ class TestTheListsEachFolderLeaves:
     def test_an_id_list_asks_for_the_tagging_and_nothing_else(
             self, monkeypatch, tmp_path):
         """The list is only ever read by the tagging phase, so naming one names
-        that phase: a run given -i alone used to fall through to the full
-        ingest and remux films while the list went unread."""
+        that phase, and the full ingest does not run."""
         self._tagging(monkeypatch, tmp_path)
 
         def no_ingest(*_a, **_k):

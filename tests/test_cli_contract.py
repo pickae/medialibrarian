@@ -7,8 +7,7 @@ together.
 
 Bytes rather than substrings, because a substring check lets whitespace, line
 order, the exit code or which stream a line went to drift silently, and these
-pages are rendered by one shared renderer that every command's spec feeds. That is
-what caught every accidental change through 48 module ports and 18 script ports.
+pages are rendered by one shared renderer that every command's spec feeds.
 
 Each command names ITSELF on its own page: the recording directory is the command
 name and `Usage:` carries it.

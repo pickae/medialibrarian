@@ -20,12 +20,14 @@ Options:
                     write no CSV.
     -o, --output <file>
                     Write the CSV for Letterboxd's importer to <file>. Default:
-                    logs/letterboxd-import-<date>.csv beside this script.
+                    logs/letterboxd-import-<date>.csv in the medialib data
+                    directory.
     -S, --state <file>
                     Remember what Letterboxd has, and what was sent to it, in
                     <file>, and keep a copy of the Plex library beside it, so
                     the next run reads only what changed. Default:
-                    data/plex-letterboxd-state.json beside this script.
+                    data/plex-letterboxd-state.json in the medialib data
+                    directory.
     -a, --account <id>
                     Read the plays of the Plex account with this number on the
                     server rather than its owner's (1). The numbers are listed
@@ -42,9 +44,8 @@ Options:
                     lines.
     -q, --quiet     Print errors only - no progress and no warnings.
     -x, --set <name=value>
-                    Override a setting for this run: name=value, repeatable. The
-                    value is held where the environment holds it, so it wins
-                    over the settings file; a secret is refused - the settings
-                    file is where it goes. The settings page lists the names.
+                    Override a setting for this run, over the settings file;
+                    repeatable. A secret is refused - the settings file is where
+                    it goes. The settings page lists the names.
 
 Nothing was changed.

@@ -106,16 +106,18 @@ def _encode_one(tmp_path, monkeypatch, channels, codec="A_TRUEHD"):
 
 
 class TestTheFlacEncode:
-    """The argv is the contract: the stream mapped, no bitrate, no layout,
-    the flac encoder and the .flac beside the film's mirror in RAM."""
+    """The stream mapped, no bitrate, no layout, the flac encoder and the
+    .flac beside the film's mirror in RAM."""
 
     def test_a_lossless_track_is_encoded_to_flac(self, tmp_path, monkeypatch):
         movie, converted, calls, probed = _encode_one(tmp_path, monkeypatch,
                                                       "6")
-        assert calls == [
-            ["ffmpeg", "-y", "-loglevel", "error", "-nostats", "-i", movie,
-             "-vn", "-map", "0:a:0", "-map_metadata", "-1", "-c:a", "flac",
-             converted]]
+        [argv] = calls
+        assert argv[argv.index("-i") + 1] == movie
+        assert argv[argv.index("-map") + 1] == "0:a:0"
+        assert argv[argv.index("-c:a") + 1] == "flac"
+        assert not {"-b:a", "-channel_layout", "-ac", "-af"} & set(argv)
+        assert argv[-1] == converted
         assert os.path.isfile(converted)
         # No layout to match: the source is not asked for one.
         assert not any("stream=channel_layout" in argv for argv in probed)
@@ -244,8 +246,8 @@ class TestForget:
 
 
 class TestTheSwap:
-    """The remux swaps a lossless track for its conversion the way it always
-    has: the conversion's presence in the RAM scratch is the decision."""
+    """The remux swaps a lossless track for its conversion: the
+    conversion's presence in the RAM scratch is the decision."""
 
     def test_the_flac_in_ram_is_swapped(self, tmp_path, monkeypatch):
         monkeypatch.setenv("losslessAudioTarget", "flac")

@@ -353,8 +353,7 @@ class Run:
 
     def film_languages(self, movie: str) -> tmdbidentify.FilmLanguages:
         """What TMDb says the film is spoken in, or nothing - which keeps the
-        first audio track's language, the rule there was before there was a
-        catalogue to ask.
+        first audio track's language.
 
         The film is known by the id tag its own name or its folder's carries,
         and before the tagging has put one there by what the tagging would
@@ -373,7 +372,7 @@ class Run:
                 tag = film_tags.tag_of(movie)
             return (tmdbidentify.film_languages(tag) if tag
                     else tmdbidentify.FilmLanguages())
-        except Exception as error:  # noqa: BLE001 - the old rule still stands
+        except Exception as error:  # noqa: BLE001 - the first track's language stands
             log("  WARNING: could not ask TMDb for the film's languages "
                 "(%s); keeping the first audio track's: %s" % (error, movie))
             return tmdbidentify.FilmLanguages()
@@ -1108,7 +1107,7 @@ def _main_one(declaration, result, program: str, script_dir: str,
     # The phases the run is told to omit from the full ingest, settled here
     # too: a phase the run will not omit is refused with the page, like a bad
     # option. A bare -o omits them all; without the flag the run does every
-    # phase, as it always has.
+    # phase.
     try:
         omit_phases = (keepparts.parse(result.values["omitPhases"],
                                        rules.OMIT_PHASES, flag="-o",
@@ -1403,7 +1402,7 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
 
 
 # Every file this command leaves behind about a run goes in one folder of its
-# own under the script directory's logs/, and not in the library: a run over the
+# own under logs/ in the medialib data directory, and not in the library: a run over the
 # library deletes stray .txt files as junk, and these are worklists rather than
 # part of the collection.
 LOGS = "ingest-movies"
@@ -3294,7 +3293,7 @@ def _lanes(state, root: str, subtitle_work: bool, locks, row=None,
     The transcode runs BESIDE the transcription only when whisper is on the
     GPU, a job's worth of cores narrower so whisper and the walk that feeds it
     keep theirs; with whisper on the CPU the two would only fight over the
-    same cores, and the transcode goes first as it always did. Each film is
+    same cores, and the transcode goes first. Each film is
     remuxed by the remux lane as soon as its own transcode and transcripts are
     done and ``fetching``, the subtitle lane, has had its turn at it; a film
     the lane never got is remuxed by the walk after it, once the subtitle lane

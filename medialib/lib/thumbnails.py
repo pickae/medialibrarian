@@ -262,15 +262,18 @@ def _online_thumbnail(input_path: str, outputs: Sequence[str],
                       ram_base: str) -> str:
     """A cover found online for the book joined from <input_path>, or "".
 
-    The book's length is read off the joined output, the tags off its first
-    source track: both say what the book probably is and which answer is it.
+    The book's length and channel count are read off the joined output, the
+    tags off its first source track: they say what the book probably is and
+    which answer is it. Podcast length in stereo is most likely a full-cast
+    drama, since convert-audio keeps a talk mono.
     """
     tracks = [path for path in _regular_files(input_path)
               if lower_extension_of(path) in _AUDIO_EXTENSIONS]
-    seconds = next((onlinecover.media_seconds(path) for path in outputs
-                    if os.path.isfile(path)), 0.0)
+    joined = next((path for path in outputs if os.path.isfile(path)), "")
+    seconds = onlinecover.media_seconds(joined) if joined else 0.0
+    stereo = bool(joined) and onlinecover.media_channels(joined) >= 2
     return onlinecover.book_cover(input_path, tracks[:1], seconds,
-                                  f"{ram_base}.online")
+                                  f"{ram_base}.online", stereo=stereo)
 
 
 def embed_thumbnail(input_path: str, file_name: str, image_size_limit: int,
@@ -291,12 +294,11 @@ def embed_thumbnail(input_path: str, file_name: str, image_size_limit: int,
         _detail("    Cover from the image file %s in the input"
                 % os.path.relpath(thumb_file, input_path))
 
-    # or extract from pdf file or audio file themselves, if nothing was found till now
     if not os.path.isfile(thumb_file):
         extract_thumbnail(input_path, ram_base, dpi, have_mkvtoolnix, run)
         thumb_file = f"{ram_base}.jpg"
 
-    # and online, the last rung, when none of the local ones held a cover
+    # Online is the last rung, when none of the local ones held a cover.
     if not os.path.isfile(thumb_file):
         if onlinecover.enabled():
             thumb_file = _online_thumbnail(
@@ -306,7 +308,7 @@ def embed_thumbnail(input_path: str, file_name: str, image_size_limit: int,
             _detail("    No cover looked for online: the coverSearch "
                     "setting is off")
 
-    # The temp name is keyed on ramBase (the unique per-subfolder output stem),
+    # The temp name is keyed on ram_base (the unique per-subfolder output stem),
     # NOT on the source image's basename: parallel workers share one ram_dir.
     output_thumb = f"{ram_base}.output.jpg"
 

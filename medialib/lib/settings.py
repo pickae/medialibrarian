@@ -51,13 +51,15 @@ FILE_VARIABLE = "CLI_SETTINGS_FILE"
 
 class Setting(NamedTuple):
     """One setting: its name, what it does, the commands that read it, its
-    default as a user would describe it, and whether it is a secret."""
+    default as a user would describe it, whether it is a secret, and whether
+    it is a tuning knob or test hook rather than something a user sets."""
 
     name: str
     about: str
     commands: tuple
     default: str = "unset"
     secret: bool = False
+    tuning: bool = False
 
 
 class SettingsError(Exception):
@@ -186,9 +188,9 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("ffmpegOverride", "The ffmpeg every run uses, by its path; a run refuses "
             "to start when it is not executable", _FFMPEG),
     Setting("ffmpegLadder", "The directories searched for ffmpeg after `PATH`, "
-            "separated as `PATH` is - there for the test suite", _FFMPEG,
+            "separated as `PATH` is", _FFMPEG,
             "`~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, `/opt/ffmpeg/bin`, "
-            "`/usr/bin`"),
+            "`/usr/bin`", tuning=True),
     Setting("beetsConfig", "The beets config ingest-music's tagging phase runs "
             "with", ("ingest-music",),
             "the shipped `medialib/config/beets.yaml`"),
@@ -206,21 +208,21 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("coverSearchTable", "The table of where that search looks, in what "
             "order, by its path", ("concat-audio", "convert-and-concat", "convert-audio"),
             "the shipped `medialib/config/coverproviders.tsv`"),
-    Setting("chapterDbSite", "The chapter database's address - there for the test "
-            "suite", ("ingest-movies",), "`https://chapterdb.plex.tv`"),
-    Setting("dvdCompareSite", "The disc database's address - there for the test suite",
-            ("ingest-movies",), "`http://www.dvdcompare.net/comparisons/`"),
+    Setting("chapterDbSite", "The chapter database's address", ("ingest-movies",),
+            "`https://chapterdb.plex.tv`", tuning=True),
+    Setting("dvdCompareSite", "The disc database's address", ("ingest-movies",),
+            "`http://www.dvdcompare.net/comparisons/`", tuning=True),
     Setting("viewerCdnBase", "Where the census page loads its pivot-table engine "
             "from; a local copy makes the page fetch nothing", ("content-census-bi",),
             "`https://cdn.jsdelivr.net/npm`"),
     Setting("viewerPerspectiveVersion", "Which release of that engine the page loads",
             ("content-census-bi",), "5.3.0"),
     Setting("ytdlp", "The yt-dlp a download runs with, instead of the one found: "
-            "a command name on PATH or a path. The old name YTDLP is still read",
+            "a command name on PATH or a path. `YTDLP` is accepted too",
             ("ytdlp",), "unset - the one found, printed at the start of the run"),
     Setting("skipYtdlpUpgrade", "Set to 1 and a nightly yt-dlp is not brought up "
-            "to date before the fetch. The old name SKIP_YTDLP_UPGRADE is still "
-            "read", ("ytdlp",),
+            "to date before the fetch. `SKIP_YTDLP_UPGRADE` is accepted too",
+            ("ytdlp",),
             "unset - a nightly is upgraded; a preview (-p) never is"),
     # --- chapters made by a language model
     Setting("chapterLlmApi", "The protocol the chapter model is asked over: `openai` "
@@ -261,7 +263,7 @@ SETTINGS: tuple[Setting, ...] = (
             "`ingest-movies -P`, `ytdlp -P`) "
             "send their own `reasoning_effort`", _AI_CHAPTERS),
     Setting("chapterLlmHarness", "The agent harnesses you have installed, a comma "
-            "list, the preferred first - only `opencode` is known so far. With "
+            "list, the preferred first - only `opencode` is supported. With "
             "one, the chapter instructions (`generate-chapters -P` and the "
             "like) are asked of the same model through the harness instead of "
             "straight to its server, so a local model can search the web as "
@@ -311,48 +313,48 @@ SETTINGS: tuple[Setting, ...] = (
             "be found", _NARRATION),
     Setting("narrationFormat", "The format the engine writes an audiobook in",
             _NARRATION),
-    Setting("narrationChannel", "The engine's channel layout", _NARRATION),
+    Setting("narrationChannel", "The engine's channel layout", _NARRATION, tuning=True),
     Setting("narrationVramPerBookGB", "The GPU memory, in GB, each book read at once "
             "needs - which sets the default `-j`", _NARRATION),
     Setting("narrationEngineLanguages", "Which languages each engine speaks, as "
             "`engine:codes`", _NARRATION),
     Setting("narrationPythonMinMinor", "The oldest Python 3 minor version the "
-            "engine's environment is built with", _NARRATION),
+            "engine's environment is built with", _NARRATION, tuning=True),
     Setting("narrationPythonMaxMinor", "The newest Python 3 minor version the "
-            "engine's environment is built with", _NARRATION),
+            "engine's environment is built with", _NARRATION, tuning=True),
     Setting("narrationTorchcodecPairs", "Which torchcodec goes with which torch, for "
-            "repairing a mismatch", _NARRATION),
+            "repairing a mismatch", _NARRATION, tuning=True),
     Setting("narrationSoundfileFallbackMark", "The text that marks the engine shim "
-            "this package wrote", _NARRATION, "`_load_with_soundfile_fallback`"),
+            "this package wrote", _NARRATION, "`_load_with_soundfile_fallback`", tuning=True),
     Setting("narrationProgressTail", "How much of the end of the engine's log, in "
-            "bytes, is read for its progress", _NARRATION),
+            "bytes, is read for its progress", _NARRATION, tuning=True),
     Setting("narrationLosslessTolerance", "How far the engine's lossless copy may be "
-            "from the book's length and still be found", _NARRATION),
+            "from the book's length and still be found", _NARRATION, tuning=True),
     Setting("narrationVoiceFallbackNames", "The voice-sample names that mean \"any "
-            "language\"", _NARRATION),
+            "language\"", _NARRATION, tuning=True),
     Setting("audiobookLosslessFilters", "The ffmpeg filters the lossless copy of an "
             "audiobook is made with; empty for none", _NARRATION,
             "`dynaudnorm=f=150:g=15,afftdn=nf=-70`"),
     Setting("audiobookLosslessCompression", "The FLAC compression level of that copy",
             _NARRATION, "5"),
     Setting("voiceSampleMaxSeconds", "A voice sample longer than this, in seconds, is "
-            "cut down to a stretch of speech", _NARRATION),
+            "cut down to a stretch of speech", _NARRATION, tuning=True),
     Setting("voiceSampleSearchSeconds", "How much of a long sample's middle, in "
-            "seconds, is searched for speech", _NARRATION),
+            "seconds, is searched for speech", _NARRATION, tuning=True),
     Setting("voiceSampleSeconds", "How long the stretch of speech taken is, in seconds",
-            _NARRATION),
+            _NARRATION, tuning=True),
     Setting("voiceSampleMinSeconds", "The shortest stretch still taken, in seconds",
-            _NARRATION),
+            _NARRATION, tuning=True),
     Setting("voiceSampleMaxGap", "The longest pause, in seconds, inside that stretch",
-            _NARRATION),
+            _NARRATION, tuning=True),
     Setting("voiceSilenceNoise", "What counts as silence when looking for it",
-            _NARRATION),
+            _NARRATION, tuning=True),
     Setting("voiceSilenceMinDur", "The shortest silence, in seconds, that counts",
-            _NARRATION),
+            _NARRATION, tuning=True),
     Setting("voiceSampleRate", "The sample rate a prepared voice sample is written at",
-            _NARRATION),
+            _NARRATION, tuning=True),
     Setting("voiceSampleCodec", "The codec a prepared voice sample is written in",
-            _NARRATION),
+            _NARRATION, tuning=True),
     # --- naming
     Setting("coverName", "The name clean-folder-structure gives a folder's cover "
             "art: `folder` (the default) or `cover`, or empty for no rename at "
@@ -559,6 +561,8 @@ def _apply_shipped() -> None:
 
 def page() -> str:
     """docs/settings.md, as the registry says it."""
+    from medialib import commands
+
     lines = [
         "# Settings",
         "",
@@ -568,8 +572,8 @@ def page() -> str:
         "that is set) - one `name=value` per line, the way a shell profile writes",
         "it, `export` and quotes allowed. The environment wins, so one run can",
         "override the file without editing it. Beneath both is the file that ships",
-        "with the package, `medialib/config/settings.defaults`: the Default column",
-        "prints its values, and nothing else in the code supplies one.",
+        "with the package, `medialib/config/settings.defaults`, whose values the",
+        "Default column prints.",
         "",
         "Every command that takes options can override a setting for one run",
         "with `-x name=value`, repeatable: the value lands in the run's",
@@ -579,17 +583,24 @@ def page() -> str:
         "A file that holds a secret (marked below) must be readable by you alone -",
         "`chmod 600` - or every command refuses to start. A name in the file that",
         "no command reads is warned about.",
-        "",
-        "This page is written from `medialib/lib/settings.py`; the tests fail if",
-        "the two disagree.",
-        "",
-        "| Setting | What it does | Default | Read by |",
-        "| --- | --- | --- | --- |",
     ]
-    for setting in sorted(SETTINGS, key=lambda one: one.name.lower()):
-        lines.append("| `%s`%s | %s | %s | %s |" % (
+    header = ["", "| Setting | What it does | Default | Read by |", "| --- | --- | --- | --- |"]
+
+    def row(setting: Setting) -> str:
+        if set(setting.commands) == set(commands.COMMANDS):
+            read_by = "every command"
+        else:
+            read_by = ", ".join("`%s`" % command for command in setting.commands)
+        return "| `%s`%s | %s | %s | %s |" % (
             setting.name, " (secret)" if setting.secret else "",
             setting.about.replace("|", "\\|"),
             shipped().get(setting.name, setting.default).replace("|", "\\|"),
-            ", ".join("`%s`" % command for command in setting.commands)))
+            read_by)
+
+    ordered = sorted(SETTINGS, key=lambda one: one.name.lower())
+    lines += header + [row(setting) for setting in ordered if not setting.tuning]
+    lines += ["", "## Tuning and testing", "",
+              "These are read too, but the defaults are what the commands are",
+              "built and tested with."]
+    lines += header + [row(setting) for setting in ordered if setting.tuning]
     return "\n".join(lines) + "\n"

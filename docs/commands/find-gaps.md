@@ -86,10 +86,8 @@ long it was meant to be.
 ## Reruns
 
 The report is named after the folder given, so a second run over it would
-replace the first. When the report is already there, the run asks before it
-does anything; only `y` overwrites. The answer is read from standard input: a
-run with nothing on it keeps the old report and stops, and `echo y |` in front
-of the command says yes.
+replace the first. When the report is already there, the run
+[asks before overwriting it](../output.md#overwriting-a-report).
 
 ---
 

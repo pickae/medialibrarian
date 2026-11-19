@@ -1,7 +1,7 @@
 """Planning where a long file is cut into pieces that encode in parallel.
 
-Everything except ``detectWindow``, which is an ffmpeg decode rather than a
-calculation.
+Everything except the silence detection, which is an ffmpeg decode rather than
+a calculation.
 
 What is here is the arithmetic either side of it: the per-source scratch paths
 that let the planner, the parallel encoders and the stitcher agree on a location
@@ -39,7 +39,6 @@ SEEK_COPY_JOBS = 4
 
 
 def _md5(text: str) -> str:
-    """The hex digest of ``text``."""
     return hashlib.md5(os.fsencode(text)).hexdigest()
 
 

@@ -138,17 +138,14 @@ of its own keeps them and is not sent to the model. A rerun tries again only for
 outputs that still have none. Without a usable model, `-C` is refused before
 anything is encoded.
 
-`-P "<text>"` adds your own instructions to every request the model gets, for
-example a chapter per speaker. The model then reasons at medium effort, and
-Claude may search the web, as with
-[`generate-chapters -P`](generate-chapters.md#your-own-instructions). `-P` needs `-C`.
+`-P "<text>"` adds your own instructions for the model, as
+[`generate-chapters -P`](generate-chapters.md#your-own-instructions) does; it needs `-C`.
 
 ## Some folders of the input (`-O`)
 
 `-O <folder>` converts only what is under `<inputDir>/<folder>`, into the
 place a run over all of `<inputDir>` would put it. It may be given more than
-once, and is how `ytdlp -i` converts the feeds a batch has finished while it
-fetches the rest.
+once.
 
 ## Cover art
 
@@ -176,8 +173,7 @@ audiobooks are. The
 
 ## Every conversion is measured
 
-Every conversion is measured afterwards, here and in the other commands that
-transcode: an output that is not as long as its input is removed and named, and
+Every conversion is measured afterwards: an output that is not as long as its input is removed and named, and
 the run ends non-zero — an encoder that stops early otherwise leaves a playable
 file and a zero exit status.
 

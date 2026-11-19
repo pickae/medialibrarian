@@ -284,6 +284,7 @@ _FOR_SUMMARIES = ("The chapters are drawn from these summaries later, so keep in
                   "them whatever it needs.")
 _FOR_CHAPTERS = "Follow it in dividing the recording and in the titles."
 _FOR_REFINE = "Follow it in placing this start and in its title."
+_FOR_REVIEW = "Follow it in correcting the titles."
 
 
 @dataclass
@@ -328,7 +329,7 @@ def _ask_json(llm, prompt: str, wanted: str, log) -> dict | None:
         except chapterllm.LlmError as error:
             log("    the model gave no answer: %s" % error)
             return None
-        if isinstance(answer, list) and wanted in ("chapters", "sections"):
+        if isinstance(answer, list) and wanted in ("chapters", "sections", "titles"):
             answer = {wanted: answer}
         if isinstance(answer, dict) and wanted in answer:
             return answer
@@ -690,7 +691,61 @@ def _chapters(cues: Sequence[Cue], found: list[Passage], llm, duration: int,
     summary, marks = outline
     log("    outline: %d chapter(s); placing each start" % len(marks))
     chosen = _refine(cues, found, marks, summary, llm, duration, log, instructions)
-    return _settle(cues, chosen, duration, min_ms)
+    settled = _settle(cues, chosen, duration, min_ms)
+    return _review(settled, summary, llm, duration, log, instructions)
+
+
+def _review(marks: list[tuple[int, str]], summary: str, llm, duration: int,
+            log, instructions: str = "") -> list[tuple[int, str]]:
+    """The third pass: the finished list read once as a whole, against the
+    user's instructions. Only titles can change - the starts are settled - and
+    only where the answer names the chapter; a title the model leaves out,
+    or gives back empty, stays as it was."""
+    if len(marks) < 3:
+        return marks
+    listing = "\n".join("[C%d %s] %s" % (number, time_label(start), title)
+                        for number, (start, title) in enumerate(marks, 1))
+    prompt = (
+        "A recording that runs %s has been divided into chapters.%s Each "
+        "chapter below is its id, the time it starts and its title. Every "
+        "title was written while looking at only a few minutes of the "
+        "recording, so they may not agree with one another.\n\n"
+        "Read the whole list and correct the titles - and only the titles; "
+        "the starts are final and no chapter is added, removed or merged:\n"
+        "- Titles that follow a pattern (an episode or part number, a speaker's "
+        "name, a topic after \"on\") should follow it all the way through, in "
+        "the same form.\n"
+        "- A number should keep to the order of the list. It may repeat only "
+        "where the recording itself repeats a part; do not renumber to hide "
+        "that.\n"
+        "- Put right a title that contradicts the instructions below. Add or "
+        "change a fact only when the list itself shows it: you have not seen "
+        "the recording.\n"
+        "- Leave a title that is right exactly as it is.\n\n%s%s\n\n"
+        'Answer with JSON only: {"titles": [{"id": "<chapter id>", '
+        '"title": "<title>"}, ...]}, one entry for every chapter whose title '
+        "you change and none for the others.\n\nChapters:\n%s\n"
+        % (time_label(duration), " What it is: " + summary if summary else "",
+           _TITLE_RULES, "\n" + _asked(instructions, _FOR_REVIEW).rstrip()
+           if instructions.strip() else "", listing))
+    answer = _ask_json(llm, prompt, "titles", log)
+    if answer is None:
+        return marks
+    titles = [(start, title) for start, title in marks]
+    changed = 0
+    for entry in answer.get("titles") or []:
+        if not isinstance(entry, dict):
+            continue
+        match = re.fullmatch(r"\s*C?(\d+)\s*", str(entry.get("id")), re.IGNORECASE)
+        title = clean_title(entry.get("title"))
+        index = int(match.group(1)) - 1 if match else -1
+        if title and 0 <= index < len(titles) and title != titles[index][1]:
+            log("    review: %s: %r -> %r" % (time_label(titles[index][0]),
+                                             titles[index][1], title))
+            titles[index] = (titles[index][0], title)
+            changed += 1
+    log("    review: %d of %d title(s) changed" % (changed, len(titles)))
+    return titles
 
 
 def chapter_rows(marks: Sequence[tuple[int, str]]) -> list[str]:

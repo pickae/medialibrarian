@@ -106,7 +106,6 @@ def test_crop_aware_scan_direct():
     # merely longer one: " des k" (both carry >= 4) beats "des k" (one carries 3)
     assert cnc._crop_aware_common_affix(
         ["mmmm des k", "nn des"], "", []) == " des k"
-    # nothing shared at all
     assert cnc._crop_aware_common_affix(["alpha", "beta"], "", []) == ""
     assert cnc._crop_aware_common_affix([], "", []) == ""
 
@@ -144,7 +143,7 @@ def test_crop_aware_scan_direct():
         (["(1946-1948) (Verlag 2011)", "(2011)", "(Verlag 2015)"],
          "files", [25, 6, 13],
          ["1946-1948 Verlag 2011", "2011", "Verlag 2015"]),
-        # a missing length defaults to 0, as bash's ${lens[i]:-0} does - and a
+        # a missing length defaults to 0 - and a
         # zero-width source cannot be reconciled to the other's width, so
         # the same-width guard rejects the crop
         (["mmmm des k", "nn des"], "files", [10], ["mmmm des k", "nn des"]),
@@ -176,7 +175,6 @@ def test_same_width_guard_direct():
     assert cnc._same_width_ok(" des k", [6, 4], [10, 9])
     # 10 vs 6(+1): no common length
     assert not cnc._same_width_ok(" des k", [6, 4], [10, 6])
-    # already equal
     assert cnc._same_width_ok(" des k", [5, 5], [10, 10])
 
 
@@ -378,8 +376,7 @@ def test_roman_prefix():
     # common prefix, so the numeral itself survives the prefix strip
     assert coll(["season i 1", "season ii 1"]) == ["i", "ii"]
     # with nothing after the numeral, the permissive crop-aware suffix takes
-    # the whole longer name (the shorter one carries its leading part), so
-    # both names come back empty
+    # the whole longer name (the shorter one carries its leading part)
     assert coll(["season i", "season ii"]) == ["", ""]
     # where plain boundary alignment would keep the prefix "season i"
     # (no letter runs next to it in either name), the rule peels the " i"
@@ -395,10 +392,9 @@ def test_case_insensitive():
     # the original (mixed-case) characters are what is kept
     assert coll(["Suf1Fix.X", "suf2fix.x"]) == ["1", "2"]
 
-# --- the cases the bash white box pinned --------------------------------------
-# Carried over whole, with its own descriptions as the ids: that white box was
-# this module's specification, and this is what it said. The reasoning behind
-# each rule is in the classes above; this is the ledger of the rules themselves.
+# --- the ledger of the rules -------------------------------------------------
+# The reasoning behind each rule is in the classes above; this is the ledger of
+# the rules themselves, each described by its id.
 
 COLLECTIVE_CASES = [
     pytest.param(
@@ -813,5 +809,5 @@ COLLECTIVE_CASES = [
 
 
 @pytest.mark.parametrize("names,mode,lens,expected", COLLECTIVE_CASES)
-def test_the_case_the_bash_white_box_pinned(names, mode, lens, expected):
+def test_the_pinned_case(names, mode, lens, expected):
     assert coll(names, mode=mode, lens=lens) == expected

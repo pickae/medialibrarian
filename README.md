@@ -8,11 +8,11 @@ described under [File safety](docs/file-safety.md). What they print, and the `-v
 [What a run prints](docs/output.md).
 
 Each is an installed command. From a checkout, `pip install .` puts all twenty-one
-on your PATH; `pip install -e .` does the same and keeps them running the
-checkout, which is what you want while editing it. Under a plain `pip install .`
-the per-machine files — the `data/` tables, the `logs/` logs — live under
-`~/.local/share/medialib` (or `$XDG_DATA_HOME/medialib` if it is set); the
-environment variable `CLI_SCRIPT_DIR` points them somewhere else.
+on your PATH. The per-machine files — the `data/` tables, the `logs/` logs —
+live in **the medialib data directory**: `~/.local/share/medialib` (or
+`$XDG_DATA_HOME/medialib` if it is set), the checkout itself under
+`pip install -e .`, or wherever the environment variable `CLI_SCRIPT_DIR`
+points.
 
 ## Built to use the whole machine
 
@@ -40,16 +40,10 @@ network connection — rather than leaving most of it idle while one part works:
 
 A smaller machine runs them too — just with the CPU roads and less overlap.
 
-> **Platform:** these target **Linux**. **macOS** support is **aspirational**:
-> everything is written to work there, but no macOS machine has run it yet, so
-> treat it as untested rather than as broken (see
-> [Running on a Mac](docs/requirements.md#running-on-a-mac)). On a Windows machine **WSL2** is the
-> way to run them. Native Windows is **experimental for now**: the tool-free
-> cases import and run there, but the commands that drive the media tools and
-> POSIX coreutils expect a POSIX host. Neither Windows nor macOS has a
-> RAM-backed filesystem, so the RAM scratch described below lands in `%TEMP%` / `$TMPDIR` on a
-> normal disk; a RAM disk mounted by hand works if `ramScratchBase` points at
-> it.
+> **Platform:** these target **Linux**. **macOS** is untested (see
+> [Running on a Mac](docs/requirements.md#running-on-a-mac)). On a Windows
+> machine **WSL2** is the way to run them; native Windows is experimental, as
+> the commands that drive the media tools expect a POSIX host.
 
 ## At a glance
 
@@ -93,6 +87,7 @@ apply to it.
 | Command | Does |
 | --- | --- |
 | [`clean-folder-structure`](docs/commands/clean-folder-structure.md) | Apply the shared name cleaners across a tree |
+| [`clean-folder-structure-adb`](docs/commands/clean-folder-structure-adb.md) | The same cleaning on a phone over adb, renaming on the device |
 | [`find-fragment-candidates`](docs/commands/find-fragment-candidates.md) | Report the recurring name fragments a library still carries |
 | [`find-gaps`](docs/commands/find-gaps.md) | A tree of what is missing from the numbered, episode and dated runs |
 | [`cue-to-chapters`](docs/commands/cue-to-chapters.md) | A `.cue` sheet → an OGM chapter file |
@@ -126,8 +121,7 @@ option can never change what a command you already type means.
   `whisper-ctranslate2`, `ffsubsync`, `tree`, `beets`, Calibre's `ebook-convert`,
   Ghostscript (`gs`), `duckdb`, [subcleaner](https://github.com/KBlixt/subcleaner),
   Subtitle Edit's [`seconv`](https://github.com/SubtitleEdit/subtitleedit/releases),
-  `curl` (for TheMovieDB, Plex, Letterboxd and the chapter model) and `wc` — that last one being the
-  only piece of coreutils anything here still shells out to.
+  `curl` (for TheMovieDB, Plex, Letterboxd and the chapter model) and `wc`.
 - `convert-audio -o xheaac` additionally needs
   [exhale](https://gitlab.com/ecodis/exhale), which ffmpeg cannot stand in for:
   it decodes the codec but does not encode it. No distribution packages exhale,
@@ -159,12 +153,10 @@ one command is under
 ## Settings
 
 Logins, API keys and the knobs the commands are tuned with are environment
-variables, read from the environment a command starts in or from one settings
-file, `~/.config/medialib/settings`, written the way a shell profile writes
-them. One run overrides a setting with `-x name=value` on any command line,
-repeatable — secrets excepted, which stay in the file. A file that holds a
-secret has to be private (`chmod 600`). Every setting, what it does and which
-commands read it is listed in [Settings](docs/settings.md).
+variables, read from the environment or from the settings file
+`~/.config/medialib/settings`; `-x name=value` overrides one for a single run.
+Where each is read from, which wins, and every setting with what it does are
+in [Settings](docs/settings.md).
 
 ## File safety
 

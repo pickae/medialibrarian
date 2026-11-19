@@ -31,7 +31,7 @@ class TestCharacterClasses:
         assert klass("Æ") == "L"
 
     def test_an_en_dash_is_a_letter_too(self):
-        # Not ASCII punctuation, so bash's classifier calls it a letter. It is in
+        # Not ASCII punctuation, so the classifier calls it a letter. It is in
         # the separator vocabulary the name cleaners actually run over, so this is
         # a live quirk rather than a theoretical one.
         assert klass("–") == "L"
@@ -118,7 +118,7 @@ class TestASeparatorIsAlwaysACleanEdge:
 class TestTheAsciiOnlyRetreat:
     """The class test accepts any letter; the retreat only walks back over ASCII
     ones. So an affix ending in an accented letter finds a split and then retreats
-    past nothing. bash does this, so the port does."""
+    past nothing."""
 
     def test_an_accented_boundary_retreats_no_further(self):
         assert align("prefix", "abcé", ["abcéx", "abcéy"]) == "abcé"
@@ -129,5 +129,6 @@ class TestTheAsciiOnlyRetreat:
 
 class TestTheSideArgument:
     def test_anything_that_is_not_prefix_means_suffix(self):
-        # bash tests `== prefix`, so this is the contract rather than an accident
+        # only `prefix` is tested for, so this is the contract rather than an
+        # accident
         assert align("suffix", "ow", ["show", "grow"]) == align("anything", "ow", ["show", "grow"])

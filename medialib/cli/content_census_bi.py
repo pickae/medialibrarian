@@ -49,7 +49,8 @@ o | <file> | Write the database to <file> instead of to
                     is always written beside it, under the same name.
 e | <dir> | Also export each cube as <type>Cube.csv into <dir>.
 c | <sql> | Run one query against the finished database and print it.
-                    The tables are named above; try
+                    Each type has a <type>Files table (one row per file) and
+                    a <type>Cube table (the roll-ups); try
                       -c \"SELECT * FROM videoCube WHERE depth = 1 AND resolution != 'ALL'\"
 h |  | Print this help page.
 """

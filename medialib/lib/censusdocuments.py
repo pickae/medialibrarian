@@ -31,7 +31,7 @@ __all__ = [
     "extension_list",
 ]
 
-# The suffix lists the caller settles (censusInit) and this module only reads.
+# The suffix lists the caller settles (census_init) and this module only reads.
 # The defaults are what that init computes on a stock checkout, so a caller that
 # never ran it still gets the answers the module would have given.
 _COMIC_PDF_EXTENSIONS = "pdf"

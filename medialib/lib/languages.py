@@ -368,7 +368,7 @@ def speaks(language: str, ietf: str, code: str) -> bool:
 
 
 def same_language_tag(tag_a: str, tag_b: str) -> bool:
-    """``sameLanguageTag``: do two mkv language tags name one language?
+    """Do two mkv language tags name one language?
 
     Whatever spelling each turns up in - two-letter, 639-2/T or 639-2/B (see
     ``code_from_tag`` for why all three exist). Tags that name no ISO language

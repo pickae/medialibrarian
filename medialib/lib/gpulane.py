@@ -16,12 +16,12 @@ them as they are listed, pages from every book at once:
   chunk is waiting - av1gpu reads its whole list before it starts, so the
   second call's start-up is paid while the first is still encoding;
 - the CPU's pages on ``cpu_jobs`` encoders: the pages the card cannot take,
-  and those it did not write. They never take the card's pages from its queue.
-  Once the card decided the trim itself, the CPU had the time to, and on 6
-  comic albums (1,621 pages) the 16-21 pages it took cost about 550 seconds of
-  CPU for no gain in the run's time (46.1 / 45.3 s without against 48.3 /
-  46.0 s with): an ImageMagick encode of a page takes the CPU about as long
-  as the card takes for a book.
+  and those it did not write. They never take the card's pages from its queue:
+  with the card deciding the trim itself, on 6 comic albums (1,621 pages) the
+  16-21 pages the CPU would take cost about 550 seconds of CPU for no gain in
+  the run's time (46.1 / 45.3 s without against 48.3 / 46.0 s with): an
+  ImageMagick encode of a page takes the CPU about as long as the card takes
+  for a book.
 
 A book is handed back to the run - to be numbered and zipped - once every page
 of it has an output: written by the card, or by the ImageMagick call its

@@ -9,18 +9,15 @@ Usage:
     <archiveFile>   yt-dlp's download archive: the record of what has already
                     been fetched, so a re-run only picks up what is new. It is
                     created if it does not exist. A name with no path in it is
-                    kept in the script directory's logs/ folder, the home of
-                    the records a run keeps about itself; a path is taken as
-                    given.
+                    kept in logs/ in the medialib data directory; a path is
+                    taken as given.
     <dateRange>     optional upload-date filter, applied to every feed:
                         20260607             everything since that day
                         20260607..20260707   a window
                         ..20260707           everything up to that day
                         today-2weeks         relative dates work at either end
-                        ..today-10days       and so a rolling window is one of
-                                             them: nothing newer than ten days,
-                                             which is how the video library was
-                                             fetched before it had a table
+                        ..today-10days       a rolling window: nothing newer
+                                             than ten days
                     Without it, --playlist-end and the archive decide alone.
 
 Options:
@@ -29,7 +26,7 @@ Options:
                     A feed table to read. May be given more than once, and each
                     table brings its own profile and its own parallelism (see
                     below). Default: data/podcasts/podcasts.tsv, else
-                    podcasts.tsv, under the script directory.
+                    podcasts.tsv, in the medialib data directory.
     -j, --jobs <jobs>
                     Cap how many feeds any one table may fetch at once. Lower
                     only; a table asking for less keeps its own number.
@@ -96,10 +93,9 @@ Options:
                     lines.
     -q, --quiet     Print errors only - no progress and no warnings.
     -x, --set <name=value>
-                    Override a setting for this run: name=value, repeatable. The
-                    value is held where the environment holds it, so it wins
-                    over the settings file; a secret is refused - the settings
-                    file is where it goes. The settings page lists the names.
+                    Override a setting for this run, over the settings file;
+                    repeatable. A secret is refused - the settings file is where
+                    it goes. The settings page lists the names.
 
 A table says what it is with a "#!profile <name>" line, one of:
     youtubeAudio    (the default) audio only, SponsorBlock segments cut out,

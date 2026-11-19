@@ -57,7 +57,7 @@ class _Run:
     """The command runner stand-in: per-tool canned statuses, the argv of
     every call recorded, and the sidecar a call is handed - a mkvmerge
     --chapters file or an ffmpeg ffmetadata one - read at the moment it is
-    handed it (the port removes the file right after the call).
+    handed it (the file is removed right after the call).
 
     An ffmpeg call creates its output, the way the real one does: a caller that
     checks whether the file it asked for is there would otherwise read every
@@ -154,8 +154,7 @@ def test_duration_ms(text, expected):
 
 @pytest.mark.parametrize("text", ["inf", "nan", "-inf"])
 def test_duration_ms_words_die(text):
-    # The shell's 10# of the word is an arithmetic error that kills its run;
-    # the port's int() of the word is the same death.
+    # A word is not a duration: it is an error that kills the run.
     with pytest.raises(ValueError):
         chapters._duration_ms(text)
 
@@ -169,9 +168,7 @@ def test_duration_ms_words_die(text):
     ("-inf", "-inf"),
     ("nan", "nan"),
     ("", "0.000"),
-    # Hex floats parse to 8.000 in the shell; the port declines to parse them
-    # at all - ffprobe never prints one, and the corpus stops short, the way
-    # the census stops short of the 2^63 spellings the shell would take.
+    # Hex floats are not parsed at all - ffprobe never prints one.
     ("0x1p3", "0.000"),
 ])
 def test_printf_f3(text, expected):
@@ -187,7 +184,7 @@ def test_printf_f3_errors_the_way_the_shell_does(text, capsys):
         f"{chapters._SOURCE}: printf: {text}: invalid number\n")
 
 
-def test_the_error_names_this_port_and_not_a_retired_bash_file():
+def test_the_error_names_this_module():
     assert chapters._SOURCE.endswith("medialib/lib/chapters.py")
 
 
@@ -740,8 +737,8 @@ def test_attach_without_chapters_embeds_nothing(tmp_path, tags):
     run = _Run()
     assert chapters.attach_chapters("src.opus", "out.opus", str(tmp_path),
                                     "script", run=run, probe=lambda s: "") == 0
-    # Both, and not just the runner: embedding stopped being a subprocess, so
-    # "no command ran" no longer says anything about whether a tag was written.
+    # Both, and not just the runner: embedding is not a subprocess, so "no
+    # command ran" says nothing about whether a tag was written.
     assert run.calls == []
     assert tags.calls == []
     with open(tmp_path / "chapters.ogm", encoding="utf-8") as handle:

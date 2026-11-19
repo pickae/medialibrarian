@@ -1,8 +1,8 @@
 """Tests for medialib.lib.clioptions - the option spec, the page, the parse loop.
 
 What is pinned here is the handful of rules a random spec would take thousands of
-cases to stumble on, and the ones whose being an accident of bash is the reason
-they have to be reproduced at all.
+cases to stumble on, and the ones that look like accidents but are the
+contract.
 """
 
 import inspect
@@ -31,14 +31,13 @@ class TestSplittingASpecLine:
         assert cli.spec_field(line, 3) == r"either | or the other"
 
     def test_the_help_is_the_whole_remainder_pipes_and_all(self):
-        """bash's read puts what is left into the last variable, so an UNescaped
-        pipe in the help is help text rather than a fourth field."""
+        """What is left goes into the last field, so an UNescaped pipe in the help
+        is help text rather than a fourth field."""
         assert cli.spec_field("j | <n> | a | b | c", 3) == "a | b | c"
 
     def test_the_help_is_trimmed_at_the_front_only(self):
-        """The placeholder is trimmed both ends and the help is not, which is not
-        symmetry anybody chose - it is where bash's two trims were written. A page
-        whose help ends in spaces prints them, and the port has to as well."""
+        """The placeholder is trimmed both ends and the help is not: a page whose
+        help ends in spaces prints them."""
         assert cli.spec_field("j | <n> |   padded   ", 3) == "padded   "
         assert cli.spec_field("j |   <n>   | x", 2) == "<n>"
 
@@ -259,7 +258,6 @@ class TestTheValueChecks:
             cli.validate("m", "slow", tables)
 
     def test_an_empty_enum_accepts_nothing_including_the_empty_string(self):
-        """bash's walk is a while over a non-empty string, so it never runs once."""
         with pytest.raises(cli.UsageError):
             cli.validate("m", "", self.tables("m | enum: | mode"))
 

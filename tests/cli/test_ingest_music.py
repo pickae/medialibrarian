@@ -44,8 +44,6 @@ class TestChapterTimeMs:
         ("08:00:00.000", 28800000),
     ])
     def test_a_leading_zero_is_still_base_ten(self, stamp, expected):
-        """08 and 09 are what trips the shell: without the ``10#`` they are
-        invalid octal and abort the arithmetic under set -e."""
         assert im.chapter_time_ms(stamp) == expected
 
     @pytest.mark.parametrize("stamp,expected", [
@@ -111,7 +109,7 @@ class TestFlacForCue:
             str(tmp_path / "Album.flac")
 
     def test_the_stem_match_is_case_insensitive(self, tmp_path):
-        """Ripped folders often differ, and the shell matches with -iname."""
+        """Ripped folders often differ in case."""
         _touch(str(tmp_path / "Album.cue"), str(tmp_path / "ALBUM.FLAC"))
         assert im.flac_for_cue(str(tmp_path / "Album.cue")) == \
             str(tmp_path / "ALBUM.FLAC")
@@ -474,8 +472,7 @@ class TestHasTwinIn:
 # Every cue leaves exactly one counted line behind, which is the point: a release
 # whose cue names a disc that never got copied must not come out without chapters
 # AND without a word about it. The write itself is stubbed here and real in the
-# media tier - it stopped being a subprocess at item 5.2, so the stubbed-tool
-# suite can no longer observe it by putting a recorder on PATH.
+# media tier: it is an in-process call, which a recorder on PATH cannot observe.
 
 class _Counters:
     def __init__(self):
@@ -540,9 +537,8 @@ class TestEmbedCueChapters:
 
     def test_a_write_that_fails_is_counted_and_named_rather_than_fatal(
             self, release):
-        """The status is the whole reason the writer answers with one: a file
-        mutagen cannot tag used to be a non-zero exit, and a direct call that
-        raised instead would end the run over one track."""
+        """The status is the whole reason the writer answers with one: a call
+        that raised instead would end the run over one track."""
         run, counters, cue, _written = release(status=1)
         run.embed_cue_chapters([cue])
         assert counters.counts == {"chaptersFailed": 1}

@@ -19,7 +19,7 @@ the film's speech, in another language. A track is called a commentary only
 when BOTH signals say so. When only one does it is left as it is and said, for
 somebody to listen to - a wrong flag would send a soundtrack to transcription
 and out of the surround ladder, while a missed commentary is only a commentary
-the file did not flag, as before.
+the file did not flag.
 
 The measurement is one :data:`PROBE_COMMAND` run per film: three windows of
 :data:`PROBE_SECONDS`, read with a seek each rather than the whole file, of the

@@ -37,19 +37,15 @@ Options:
                   part.
     -o, --offline Offline: the tagging phase is skipped, so the run reaches no
                   network and needs no beets.
-                  Default false
     -v, --verbose Also say why each item was handled the way it was, and on a
                   failure print the tool's whole output rather than its last
                   lines.
     -q, --quiet   Print errors only - no progress and no warnings.
     -x, --set <name=value>
-                  Override a setting for this run: name=value, repeatable. The
-                  value is held where the environment holds it, so it wins over
-                  the settings file; a secret is refused - the settings file is
-                  where it goes. The settings page lists the names.
+                  Override a setting for this run, over the settings file;
+                  repeatable. A secret is refused - the settings file is where
+                  it goes. The settings page lists the names.
 
 Dependencies:
-    ffmpeg, mkvtoolnix, ImageMagick, rsync, fdupes, beets (unless -o), and the
-    mutagen package for this Python (chapter embedding). Optional: flock
-    (numbers the progress lines). Also invokes the sibling commands
-    convert-audio, clean-folder-structure and cue-to-chapters.
+    ffmpeg, mkvtoolnix, ImageMagick, rsync, fdupes and beets (unless -o).
+    Optional: flock (numbers the progress lines).
