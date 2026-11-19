@@ -11,6 +11,12 @@ model the settings name (medialib/lib/chapterllm.py) for the chapters, in the
 two passes medialib/lib/aichapters.py describes. With a hosted model the two
 overlap: each file is chaptered as soon as its transcript is there.
 
+Each file's chapters are followed by the model's account of them, a pass at a
+time: requests, wall-clock seconds, and the tokens written with tokens a
+second, where the model reports them (a Chat Completions server's usage, the
+Claude API; a harness reports none). A run of several files ends with the
+same added up.
+
 Nothing in the input is touched unless -w asks for the chapters in it as well:
 then each input takes its chapter file in place, without being re-encoded, or
 beside it when its format has no place for chapters. A
@@ -313,6 +319,7 @@ def _chapter(script_dir: str, input_dir: str, output_dir: str,
                 failed = 1
 
     numbers = {relative: number for number, relative in enumerate(todo, 1)}
+    run_meter = aichapters.Meter()
 
     def chapter(relative: str, source: str) -> bool:
         label = "[%d/%d] %s" % (numbers[relative], len(todo), relative)
@@ -325,8 +332,12 @@ def _chapter(script_dir: str, input_dir: str, output_dir: str,
             return False
         cues = aichapters.read_transcript(source)
         runlog.say("%s: %d transcript line(s)\n" % (label, len(cues)))
+        meter = aichapters.Meter()
         marks = aichapters.generate(cues, llm, min_minutes=min_minutes,
-                                    typical_minutes=typical, log=log)
+                                    typical_minutes=typical, log=log, meter=meter)
+        run_meter.add(meter)
+        for line in meter.lines():
+            log("    model %s" % line)
         if not marks:
             runlog.error("%s: no chapters (too short, or the model gave no usable "
                          "outline)" % label)
@@ -346,6 +357,11 @@ def _chapter(script_dir: str, input_dir: str, output_dir: str,
     made = sum(results)
     if not all(results):
         failed = 1
+    if len(todo) > 1:
+        lines = run_meter.lines()
+        if lines:
+            runlog.say("Model time over the run:\n"
+                       + "".join("    %s\n" % line for line in lines))
     runlog.say("Done: %d chapter file(s) written.\n" % made)
     return failed
 

@@ -127,7 +127,7 @@ class TestLocalOrHosted:
             release.wait(timeout=5)
             with lock:
                 flying[0] -= 1
-            return "x"
+            return "x", None
 
         monkeypatch.setattr(chapterllm, "_post_openai", post)
         llm = chapterllm.Llm("openai", "http://x/v1", "m", jobs=jobs)
@@ -174,6 +174,17 @@ class TestTheRequest:
         assert 'url = "http://localhost:11434/v1/chat/completions"' in curl["config"]
         assert curl["body"] == {"model": "m", "max_tokens": 32000 - 2, "messages": [
             {"role": "system", "content": "sys"}, {"role": "user", "content": "user"}]}
+
+    def test_the_tokens_written_are_counted_when_the_server_reports_them(self, curl):
+        tally = chapterllm.Tally()
+        llm = chapterllm.from_environment(_LOCAL)
+        curl["stdout"] = json.dumps({"choices": [{"message": {"content": "x"}}],
+                                     "usage": {"completion_tokens": 42}}) + "\n200"
+        llm.ask("s", "u", tally)
+        del curl["stdout"]
+        llm.ask("s", "u", tally)
+        assert (tally.requests, tally.counted, tally.tokens) == (2, 1, 42)
+        assert tally.seconds >= tally.counted_seconds > 0
 
     def test_the_key_is_on_stdin_and_never_on_the_argv(self, curl):
         chapterllm.from_environment(dict(_LOCAL, chapterLlmKey="sk-secret")).ask("s", "u")
@@ -261,7 +272,7 @@ class TestOptions:
 
         def post(llm, system, prompt, tried):
             seen["options"] = llm.options
-            return "x"
+            return "x", None
 
         monkeypatch.setattr(chapterllm, "_post_openai", post)
         llm = chapterllm.from_environment(dict(
@@ -309,8 +320,10 @@ class _Block:
 
 
 class _Message:
-    def __init__(self, stop_reason, *blocks):
+    def __init__(self, stop_reason, *blocks, output_tokens=None):
         self.stop_reason, self.content = stop_reason, list(blocks)
+        if output_tokens is not None:
+            self.usage = types.SimpleNamespace(output_tokens=output_tokens)
 
 
 class TestClaude:
@@ -366,3 +379,10 @@ class TestClaude:
         assert second["messages"][0] == {"role": "user", "content": "p"}
         assert second["messages"][1]["role"] == "assistant"
         assert second["messages"][1]["content"][1] is searched
+
+    def test_the_tokens_of_a_resumed_turn_add_up(self, claude):
+        claude["replies"] += [_Message("pause_turn", _Block("text", "."), output_tokens=30),
+                              _Message("end_turn", _Block("text", "{}"), output_tokens=12)]
+        tally = chapterllm.Tally()
+        chapterllm.from_environment({"chapterLlmApi": "anthropic"}).ask("s", "p", tally)
+        assert (tally.requests, tally.tokens) == (1, 42)

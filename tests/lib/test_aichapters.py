@@ -46,8 +46,10 @@ class Model:
         self._sections = sections
         self._review = review or (lambda prompt: '{"titles": []}')
 
-    def ask(self, system, prompt):
+    def ask(self, system, prompt, tally=None):
         self.asked.append(prompt)
+        if tally is not None:
+            tally.add(0.5, 10)
         if prompt.startswith("Below is part"):
             return self._sections(prompt)
         if "Find the line where" in prompt:
@@ -145,6 +147,38 @@ class TestTitles:
     def test_a_long_title_is_cut_at_a_word(self):
         title = aichapters.clean_title("word " * 40)
         assert len(title) <= aichapters.MAX_TITLE + 1 and title.endswith("word…")
+
+
+class TestTheMeter:
+    def test_each_pass_is_timed_with_the_requests_it_made(self):
+        meter = aichapters.Meter()
+        aichapters.generate(_cues(30), Model(outline=_outline(1, 21, 41)), meter=meter)
+        # One outline, a second look at each start after the first, one review.
+        assert {name: tally.requests for name, tally in meter.tallies.items()} == {
+            "outline": 1, "refine": 2, "review": 1}
+        lines = meter.lines()
+        assert [line.split(":")[0] for line in lines] == ["outline", "refine",
+                                                          "review", "all"]
+        assert "40 token(s) written" in lines[-1]
+        assert "(20.0 tok/s a request)" in lines[1]
+        assert meter.span >= max(meter.wall.values())
+
+    def test_a_model_that_reports_no_tokens_is_timed_all_the_same(self):
+        meter = aichapters.Meter()
+        with meter.phase("outline") as tally:
+            tally.add(2.0, None)
+        assert meter.lines()[0].endswith("tokens not reported")
+
+    def test_meters_add_up_over_a_run(self):
+        run = aichapters.Meter()
+        for _ in range(2):
+            one = aichapters.Meter()
+            with one.phase("outline") as tally:
+                tally.add(1.0, 100)
+            run.add(one)
+        assert run.tallies["outline"].tokens == 200
+        assert run.lines()[-1].startswith("all:")
+        assert aichapters.Meter().lines() == []
 
 
 class TestGenerate:
