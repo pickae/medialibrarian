@@ -143,6 +143,13 @@ class TestTheTreeARunLeaves:
         ingest.ingest()
         assert blackbox.tree_of(ingest.phone) == before
 
+    def test_the_profiles_own_arguments_are_what_the_run_announces(self, run):
+        """A table without a #!ingest line is converted with what its profile
+        names - the override is the line's, not the default's."""
+        _ingest, log = run
+        assert "(convert-audio -c -m)" in log, log
+        assert "(convert-audio -c -b 65)" in log, log
+
 
 class TestARunOfOneTableOverAFullStagingTree:
     """What `-i` ingests is the FOLDER and not the run, so a conversion no table
@@ -201,3 +208,115 @@ class TestALibraryStepThatFails:
     def test_the_downloads_are_kept_in_staging(self, run, episode):
         ingest, _ = run
         assert (ingest.phone / "Staging" / episode / _EPISODE).is_file()
+
+
+class TestTheIngestLine:
+    """A table's #!ingest line replaces the arguments its profile's conversion
+    is run with. The staging folder the profile owns is the one it names, and a
+    folder is shared, so the tables of one kind must agree on its arguments."""
+
+    def _table(self, tmp_path, name, args):
+        """name is the feed's folder and the table's file name at once."""
+        table = tmp_path / name
+        table.write_text("#!ingest %s\n" % args
+                         + _feed(name, "https://example.test/%s" % name))
+        return table
+
+    def _run(self, ingest, tables, expect=0):
+        arguments = []
+        for table in tables:
+            arguments += ["-t", str(table)]
+        done = ingest.run("ytdlp", "-s", "linux", "-i", "-c", *arguments,
+                          ingest.phone, ingest.phone / "archive.log",
+                          env=dict(os.environ, YTDLP="yt-dlp"), timeout=600)
+        assert done.returncode == expect, done.stdout + done.stderr
+        return done.stdout + done.stderr
+
+    def test_a_table_s_ingest_line_is_what_its_profile_runs_with(self, ingest,
+                                                                 tmp_path):
+        table = self._table(tmp_path, "music128", "-c -b 128")
+        log = self._run(ingest, [table])
+        assert "(convert-audio -c -b 128)" in log, log
+        assert (ingest.phone / "Ingested" / "music128" / _EPISODE).is_file()
+
+    def test_two_tables_of_one_kind_that_disagree_are_refused(self, ingest,
+                                                              tmp_path):
+        first = self._table(tmp_path, "at65", "-c -b 65")
+        second = self._table(tmp_path, "at128", "-c -b 128")
+        log = self._run(ingest, [first, second], expect=2)
+        assert 'the "Music" staging folder is shared, so its arguments ' \
+            "must agree" in log, log
+        assert '"-c -b 65" in "%s"' % first in log, log
+        assert '"-c -b 128" in "%s"' % second in log, log
+        # The refusal is before the first download, so before the first folder:
+        # nothing was made.
+        assert not ingest.phone.exists()
+
+    def test_two_tables_of_one_kind_that_agree_share_the_arguments(self,
+                                                                   ingest,
+                                                                   tmp_path):
+        first = self._table(tmp_path, "shared", "-c -b 96")
+        second = self._table(tmp_path, "shared2", "-c -b 96")
+        log = self._run(ingest, [first, second])
+        assert "(convert-audio -c -b 96)" in log, log
+        assert (ingest.phone / "Ingested" / "shared" / _EPISODE).is_file()
+        assert (ingest.phone / "Ingested" / "shared2" / _EPISODE).is_file()
+
+    def test_a_table_that_names_no_arguments_runs_with_the_named_ones(
+            self, ingest, tmp_path):
+        """The folder is the conversion's, and one folder is converted with
+        one set of arguments: a table that names none takes what a table of
+        the same kind names."""
+        named = self._table(tmp_path, "named96", "-c -b 96")
+        plain = tmp_path / "plain.tsv"
+        plain.write_text(_feed("plain", "https://example.test/plain"))
+        log = self._run(ingest, [named, plain])
+        assert "(convert-audio -c -b 96)" in log, log
+        assert (ingest.phone / "Ingested" / "plain" / _EPISODE).is_file()
+
+
+class TestTheYtdlpSetting:
+    """The ytdlp setting names the command a run is fetched with, the way the
+    old YTDLP variable did - and where the two disagree, the setting is what
+    the run names."""
+
+    def _run_with(self, ingest, tmp_path, table, settings, env_extra=None):
+        ingest.with_tool("the-chosen", _STUB)
+        environment = {key: value for key, value in os.environ.items()
+                       if key not in ("YTDLP", "ytdlp", "skipYtdlpUpgrade",
+                                      "SKIP_YTDLP_UPGRADE")}
+        environment.update(env_extra or {})
+        if settings is not None:
+            environment["CLI_SETTINGS_FILE"] = str(settings)
+        done = ingest.run("ytdlp", "-s", "linux", "-i", "-c",
+                          "-t", str(table), ingest.phone,
+                          ingest.phone / "archive.log",
+                          env=environment, timeout=600)
+        assert done.returncode == 0, done.stdout + done.stderr
+        return done.stdout + done.stderr
+
+    def test_the_setting_is_the_command_a_run_uses(self, ingest, tmp_path):
+        table = tmp_path / "chosen.tsv"
+        table.write_text(_feed("chosen", "https://example.test/chosen"))
+        settings = tmp_path / "settings"
+        settings.write_text("ytdlp=the-chosen\n")
+        log = self._run_with(ingest, tmp_path, table, settings)
+        assert "yt-dlp: the-chosen" in log, log
+
+    def test_the_old_name_in_the_settings_file_is_still_read(self, ingest,
+                                                             tmp_path):
+        table = tmp_path / "old.tsv"
+        table.write_text(_feed("old", "https://example.test/old"))
+        settings = tmp_path / "settings"
+        settings.write_text("YTDLP=the-chosen\n")
+        log = self._run_with(ingest, tmp_path, table, settings)
+        assert "yt-dlp: the-chosen" in log, log
+
+    def test_the_setting_wins_over_the_old_name(self, ingest, tmp_path):
+        table = tmp_path / "both.tsv"
+        table.write_text(_feed("both", "https://example.test/both"))
+        settings = tmp_path / "settings"
+        settings.write_text("ytdlp=the-chosen\n")
+        log = self._run_with(ingest, tmp_path, table, settings,
+                             env_extra={"YTDLP": "yt-dlp"})
+        assert "yt-dlp: the-chosen" in log, log

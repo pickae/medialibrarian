@@ -87,6 +87,12 @@ at once, which is what gets a client throttled, so however many are given they
 queue behind one another — while an RSS table is dozens of unrelated providers
 who cannot see each other, so it runs alongside without waiting.
 
+A `#!ingest <args>` line replaces the arguments `-i` runs a table's profile's
+conversion with: `<args>` stand in for what the profile alone names, and the
+staging folder the feed lands in stays the profile's own. A folder is shared by
+every table of the same kind, so the tables of one kind must agree on the
+arguments, and a run where they do not is refused before anything is downloaded.
+
 ### Which tables there are
 
 One per thing that would otherwise have to be passed differently — the output
@@ -111,8 +117,8 @@ the two systems and is worked out at run time:
 
 | Settled at run time | How | Override |
 | --- | --- | --- |
-| **which yt-dlp** | a `yt-dlp.exe` beside the checkout, one on `PATH`, or an importable `yt_dlp` module — which covers the apt, pip and pipx installs, and the single downloaded binary. On Linux a `yt-dlp-nightly` is taken ahead of the release one. The winner is printed, because "it works on the other machine" usually starts there | `YTDLP` |
-| **which nightly** | a nightly winner is brought up to date before anything is fetched, through the install's own upgrade path | `SKIP_YTDLP_UPGRADE=1`; a preview (`-p`) never upgrades |
+| **which yt-dlp** | a `yt-dlp.exe` beside the checkout, one on `PATH`, or an importable `yt_dlp` module — which covers the apt, pip and pipx installs, and the single downloaded binary. On Linux a `yt-dlp-nightly` is taken ahead of the release one. The winner is printed, because "it works on the other machine" usually starts there | `ytdlp` (the old name `YTDLP` is still read) |
+| **which nightly** | a nightly winner is brought up to date before anything is fetched, through the install's own upgrade path | `skipYtdlpUpgrade=1` (the old name `SKIP_YTDLP_UPGRADE` is still read); a preview (`-p`) never upgrades |
 | **which ffmpeg** | the [ladder](../requirements.md#which-ffmpeg-a-run-uses) is walked past any build that will not run, and the winner named to yt-dlp | a feed's own `--ffmpeg-location` |
 | **which paths** | under Git Bash or Cygwin the output and archive paths are translated to their drive-letter form, since a native `yt-dlp.exe` does not know where the emulated root is mounted | — |
 | **which quoting** | `-p` prints the calls instead of running them, quoted for the shell of the host it is printed on | `-s windows` / `-s linux` prints the *other* machine's calls from the same table |
@@ -184,6 +190,11 @@ library:
 | --- | --- |
 | podcast RSS | `convert-audio -c -m` |
 | music | `convert-audio -c -b 65` |
+
+What a table's profile is converted with is what the profile names above; a
+`#!ingest` line names different arguments for its own profile ([the
+profiles](#profiles)). The arguments one kind is run with are decided once for
+the run, because the folder it converts is one.
 
 There is one staging folder per **conversion** and not per table or profile,
 because the converter is handed a folder rather than a file — and they all end up

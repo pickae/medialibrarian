@@ -80,6 +80,7 @@ the two disagree.
 | `ramScratchMaxPercent` | The largest share of the RAM filesystem, in percent, one intermediate file may take | 50 | `concat-audio`, `content-census`, `content-census-bi`, `convert-and-concat`, `convert-audio`, `convert-comics`, `convert-images`, `convert-video`, `generate-chapters`, `ingest-books`, `ingest-movies`, `ingest-music`, `read-library`, `transcribe-audio`, `ytdlp` |
 | `ramScratchMinFreeBytes` | With this little free in RAM, new scratch goes to disk instead | 1073741824 | `concat-audio`, `content-census`, `content-census-bi`, `convert-and-concat`, `convert-audio`, `convert-comics`, `convert-images`, `convert-video`, `generate-chapters`, `ingest-books`, `ingest-movies`, `ingest-music`, `read-library`, `transcribe-audio`, `ytdlp` |
 | `readLibraryRamBase` | read-library's scratch, ahead of `ramScratchBase` | `ramScratchBase` | `read-library` |
+| `skipYtdlpUpgrade` | Set to 1 and a nightly yt-dlp is not brought up to date before the fetch. The old name SKIP_YTDLP_UPGRADE is still read | unset - a nightly is upgraded; a preview (-p) never is | `ytdlp` |
 | `spokenLanguages` | The languages you speak: ingest-movies fetches and tests subtitles in them, and ytdlp -g takes a YouTube episode's transcript in its own language when it is one of them, in English when it is not. A comma list of ISO 639-1 codes the language table knows, in the order to fetch them; the table knows the six this defaults to plus pt, pl, sv, da, no, fi, cs, hu, ro, el, tr, ru, ja, ko and zh | en,de,fr,nl,es,it | `ingest-movies`, `ytdlp` |
 | `subDlApiKey` (secret) | API key of a free SubDL account, asked third for subtitles | unset | `ingest-movies` |
 | `tmdbApiKey` (secret) | TheMovieDB API key, for naming films - and tagging their folders with an id, or matching them to Letterboxd's; without it the lookup is skipped | unset | `ingest-movies`, `plex-letterboxd-sync` |
@@ -96,3 +97,4 @@ the two disagree.
 | `voiceSampleSeconds` | How long the stretch of speech taken is, in seconds | 45 | `read-library` |
 | `voiceSilenceMinDur` | The shortest silence, in seconds, that counts | 0.3 | `read-library` |
 | `voiceSilenceNoise` | What counts as silence when looking for it | -30dB | `read-library` |
+| `ytdlp` | The yt-dlp a download runs with, instead of the one found: a command name on PATH or a path. The old name YTDLP is still read | unset - the one found, printed at the start of the run | `ytdlp` |
