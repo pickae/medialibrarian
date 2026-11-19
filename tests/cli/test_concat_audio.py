@@ -23,8 +23,8 @@ class TestSelectCueSheet:
         (tmp_path / "album.flac").write_text("")
         cue = tmp_path / "sub" / "only.cue"
         cue.write_text("only\n")
-        assert ca.select_cue_sheet([str(cue)],
-                                   str(tmp_path / "album.flac")) == str(cue)
+        assert ca.select_cue_sheet([str(cue)], str(tmp_path / "album.flac")) \
+            == (str(cue), "the only cue sheet in the input")
 
     def test_the_sibling_cue_sharing_the_stem_beats_a_larger_foreign_one(
             self, tmp_path):
@@ -34,8 +34,9 @@ class TestSelectCueSheet:
         big.write_text("a" * 28 + "\n")          # larger, wrong place
         match = tmp_path / "My Album.cue"
         match.write_text("match\n")              # same stem and same folder
-        assert ca.select_cue_sheet([str(big), str(match)],
-                                   str(tmp_path / "My Album.flac")) == str(match)
+        assert ca.select_cue_sheet(
+            [str(big), str(match)], str(tmp_path / "My Album.flac")) \
+            == (str(match), "beside the audio, sharing its name")
 
     def test_the_largest_cue_wins_when_none_matches(self, tmp_path):
         for name in ("sub1", "sub2"):
@@ -45,8 +46,9 @@ class TestSelectCueSheet:
         small.write_text("small\n")
         large = tmp_path / "sub2" / "two.cue"
         large.write_text("this cue is considerably larger than the other one\n")
-        assert ca.select_cue_sheet([str(small), str(large)],
-                                   str(tmp_path / "track.flac")) == str(large)
+        assert ca.select_cue_sheet(
+            [str(small), str(large)], str(tmp_path / "track.flac")) \
+            == (str(large), "the largest of the 2 in the input")
 
     def test_a_zero_byte_cue_is_still_a_choice(self, tmp_path):
         """-1 is the "nothing seen yet" mark rather than 0, because a cue file
@@ -56,11 +58,12 @@ class TestSelectCueSheet:
         empty.write_text("")
         other = tmp_path / "other.cue"
         other.write_text("")
-        assert ca.select_cue_sheet([str(empty), str(other)],
-                                   str(tmp_path / "a.flac")) == str(empty)
+        assert ca.select_cue_sheet(
+            [str(empty), str(other)], str(tmp_path / "a.flac")) \
+            == (str(empty), "the largest of the 2 in the input")
 
     def test_no_cue_at_all_is_no_choice(self, tmp_path):
-        assert ca.select_cue_sheet([], str(tmp_path / "a.flac")) == ""
+        assert ca.select_cue_sheet([], str(tmp_path / "a.flac")) == ("", "")
 
 
 class TestScan:

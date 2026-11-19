@@ -31,19 +31,19 @@ def _fresh(monkeypatch):
 
 # --- what the audio is -------------------------------------------------------------
 
-@pytest.mark.parametrize("name, minutes, content", [
-    ("20240105 A Talk About Kites", 5, "podcast"),
-    ("20240105_A Talk About Kites", 0, "podcast"),
-    ("A Talk About Kites", 45, "podcast"),
-    ("A Talk About Kites", 200, "podcast"),
-    ("The Long Book", 201, "audiobook"),
-    ("The Long Book", 600, "audiobook"),
-    ("Short Thing", 12, "other"),
-    ("20241399 Not A Date", 5, "other"),
-    ("2024010512 Too Many Digits", 5, "other"),
+@pytest.mark.parametrize("name, minutes, content, why", [
+    ("20240105 A Talk About Kites", 5, "podcast", "the name starts with a date"),
+    ("20240105_A Talk About Kites", 0, "podcast", "the name starts with a date"),
+    ("A Talk About Kites", 45, "podcast", "a length of 45:00"),
+    ("A Talk About Kites", 200, "podcast", "a length of 3:20:00"),
+    ("The Long Book", 201, "audiobook", "a length of 3:21:00"),
+    ("The Long Book", 600, "audiobook", "a length of 10:00:00"),
+    ("Short Thing", 12, "other", "a length of 12:00"),
+    ("20241399 Not A Date", 5, "other", "a length of 5:00"),
+    ("2024010512 Too Many Digits", 5, "other", "a length of 5:00"),
 ])
-def test_probable_content(name, minutes, content):
-    assert onlinecover.probable_content(name, minutes * 60) == content
+def test_probable_content(name, minutes, content, why):
+    assert onlinecover.probable_content(name, minutes * 60) == (content, why)
 
 
 @pytest.mark.parametrize("name, found", [
@@ -57,20 +57,29 @@ def test_youtube_id(name, found):
 
 
 def test_podcast_length_in_stereo_is_a_full_cast_drama():
-    assert onlinecover.probable_content("The Lantern Keepers", 90 * 60,
-                                        stereo=True) == "audiobook"
-    assert onlinecover.probable_content("The Lantern Keepers", 90 * 60) == "podcast"
+    assert onlinecover.probable_content(
+        "The Lantern Keepers", 90 * 60, stereo=True) == \
+        ("audiobook", "a stereo recording of 1:30:00")
+    assert onlinecover.probable_content(
+        "The Lantern Keepers", 90 * 60) == ("podcast", "a length of 1:30:00")
     # dated or YouTube-named stays a podcast, and short stays other
-    assert onlinecover.probable_content("20240105 Lanterns", 90 * 60,
-                                        stereo=True) == "podcast"
-    assert onlinecover.probable_content("Lanterns [aB3_x-9QzK1]", 90 * 60,
-                                        stereo=True) == "podcast"
-    assert onlinecover.probable_content("Lanterns", 10 * 60, stereo=True) == "other"
+    assert onlinecover.probable_content(
+        "20240105 Lanterns", 90 * 60, stereo=True) == \
+        ("podcast", "the name starts with a date")
+    assert onlinecover.probable_content(
+        "Lanterns [aB3_x-9QzK1]", 90 * 60, stereo=True) == \
+        ("podcast", "the name ends in a YouTube id")
+    assert onlinecover.probable_content(
+        "Lanterns", 10 * 60, stereo=True) == ("other", "a length of 10:00")
 
 
 def test_a_youtube_id_is_a_podcast_whatever_its_length():
-    assert onlinecover.probable_content("Kites [aB3_x-9QzK1]", 5 * 60) == "podcast"
-    assert onlinecover.probable_content("Kites [aB3_x-9QzK1]", 600 * 60) == "podcast"
+    assert onlinecover.probable_content(
+        "Kites [aB3_x-9QzK1]", 5 * 60) == ("podcast",
+                                           "the name ends in a YouTube id")
+    assert onlinecover.probable_content(
+        "Kites [aB3_x-9QzK1]", 600 * 60) == ("podcast",
+                                             "the name ends in a YouTube id")
 
 
 def test_clean_name_drops_the_date_the_brackets_and_underscores():
@@ -334,6 +343,30 @@ def test_a_row_needing_a_name_the_subject_lacks_is_skipped(tmp_path):
     subject = Subject(["Kites"], [], [], 3000, "podcast")
     assert search.find(subject, str(tmp_path / "ep")) == ("", "")
     assert net.fetched == ["ytsearch5:Kites"]
+
+
+def test_the_line_says_what_the_content_was_taken_on(tmp_path, monkeypatch):
+    """The content and the figure it was taken on sit in the line's
+    parentheses, on the answer that was taken and the one that was not."""
+    said = []
+    monkeypatch.setattr(onlinecover, "_log", said.append)
+    rows = [Row("podcast", "youtube", "strict", 0, "ytsearch5:{title}")]
+    net = _Net({"ytsearch5:Kites": json.dumps({"entries": [
+        {"id": "v1", "title": "Kites", "duration": 3000,
+         "channel": "Kite Talk"}]})},
+        {"https://i.ytimg.com/vi/v1/maxresdefault.jpg": JPEG})
+    search = CoverSearch(rows, net.fetch, net.download, pace=False)
+    subject = onlinecover.subject_for("20240105 Kites", 3000)
+    onlinecover._search(subject, str(tmp_path / "ep"), search)
+    assert ("    Cover found online (podcast - the name starts with a date): "
+            "youtube, strict match: Kites" in said), said
+
+    net = _Net({}, {})
+    search = CoverSearch(rows, net.fetch, net.download, pace=False)
+    subject = onlinecover.subject_for("A Short Thing", 12 * 60)
+    onlinecover._search(subject, str(tmp_path / "no"), search)
+    assert ("    No cover found online either (other - a length of 12:00, "
+            'looked for "A Short Thing")' in said), said
 
 
 # --- convert-audio: worth a search? ------------------------------------------------------
