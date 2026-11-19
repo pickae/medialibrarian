@@ -369,6 +369,27 @@ def test_the_line_says_what_the_content_was_taken_on(tmp_path, monkeypatch):
             'looked for "A Short Thing")' in said), said
 
 
+def test_a_stereo_book_of_podcast_length_is_looked_for_as_an_audiobook(
+        tmp_path, monkeypatch):
+    """A joined book of podcast length encoded in stereo is a full-cast
+    drama, not a talk: the audiobook rows are asked, not the podcast ones."""
+    monkeypatch.setenv("coverSearch", "on")
+    said = []
+    monkeypatch.setattr(onlinecover, "_log", said.append)
+    book = tmp_path / "Night Harbour - Episode 12 - The Glass Lighthouse"
+    book.mkdir()
+    for stereo, content in ((False, "podcast"), (True, "audiobook")):
+        net = _Net({}, {})
+        rows = [Row(c, "audible", "strict", 0, "%s:{title}" % c)
+                for c in ("podcast", "audiobook")]
+        search = CoverSearch(rows, net.fetch, net.download, pace=False)
+        onlinecover.book_cover(str(book), [], 45 * 60 + 55,
+                               str(tmp_path / "b"), search, stereo=stereo)
+        assert [a.split(":")[0] for a in net.fetched] == [content]
+    assert said[-1].startswith("    No cover found online either (audiobook - "
+                               "a stereo recording of 45:55"), said
+
+
 # --- convert-audio: worth a search? ------------------------------------------------------
 
 def _touch(path, data=b""):
