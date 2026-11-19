@@ -57,7 +57,6 @@ from medialib.lib import (
     clioptions,
     console,
     durationcheck,
-    dynamicqueue,
     enums,
     errorlog,
     ffmpegselect,
@@ -2467,18 +2466,10 @@ def _encode_all(state: Run, jobs: int) -> None:
         state.counters.console.show(state.counters.status_text)
         producer = _encode_producer(state, planner, preload, candidates,
                                     total_file, seed)
-        if jobs <= 1:
-            # Nothing to interleave the planning with, so it and the encode run
-            # one after the other in this process.
-            for token, _size in producer:
-                if safety.abort_requested():
-                    break
-                with errorlog.work_item(token):
-                    state.encode(token)
-        else:
-            dynamicqueue.run(producer, jobs, workerpool.in_worker,
-                             lambda token: (state.encode, token),
-                             buffer_factor=QUEUE_BUFFER_FACTOR, log=log)
+        # At width one the planning and the encode run one after the other
+        # in this process: there is nothing to interleave them with.
+        workerpool.map(producer, jobs, state.encode, prepared=True,
+                       buffer_factor=QUEUE_BUFFER_FACTOR, log=log)
         state.counters.console.hide()
         safety.exit_if_aborted()
     state.conv_end = time.time()

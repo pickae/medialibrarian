@@ -173,10 +173,10 @@ def counted_prefix(count: int, total: int | None) -> str:
     file, and a host that cannot take the lock has no honest number to print -
     so it prints none rather than one per worker that each start at 1.
 
-    A total of None is a run that has not finished counting its own queue - the
-    dynamic queue does not know how many jobs it will hand out until the last of
-    them is planned - and such a run prints the position without a denominator
-    rather than one it would have to promise.
+    A total of None is a run that has not finished counting its own queue - a
+    queue of prepared items does not know how many jobs it will hand out until
+    the last of them is planned - and such a run prints the position without a
+    denominator rather than one it would have to promise.
     """
     if not have_flock():
         return ""

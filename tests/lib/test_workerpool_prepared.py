@@ -1,4 +1,4 @@
-"""The white box for medialib/lib/dynamicqueue.py.
+"""The white box for medialib/lib/workerpool.py's prepared queue.
 
 The property that matters is the one a queue of items that have to be prepared
 cannot have: the preparation runs beside the run, not in front of it. The queue
@@ -18,7 +18,7 @@ import time
 
 import pytest
 
-from medialib.lib import dynamicqueue, workerpool
+from medialib.lib import workerpool
 
 pytestmark = pytest.mark.fs
 
@@ -47,6 +47,11 @@ def _a_fresh_tally():
     workerpool.forget_failures()
     yield
     workerpool.forget_failures()
+
+
+def _run(producer, *args, **kwargs):
+    """The queue fed by a producer of ``(item, size)``."""
+    return workerpool.run(producer, *args, prepared=True, **kwargs)
 
 
 # --- the buffer, and what a freed slot is given --------------------------------
@@ -81,7 +86,7 @@ def test_a_freed_slot_is_refilled_while_the_slow_worker_still_runs(tmp_path):
             prepared.append(kind)
             yield kind, 0
 
-    dynamicqueue.run(producer(), 2, _step, lambda kind: (directory, kind))
+    _run(producer(), 2, _step, lambda kind: (directory, kind))
 
     assert prepared == ["slow", "quick", "late"]
     assert (tmp_path / "overlapped").exists(), (
@@ -105,7 +110,7 @@ def test_a_freed_slot_is_given_the_longest_item_left(tmp_path):
         for name in ("small", "large", "medium"):
             yield name, sizes[name]
 
-    dynamicqueue.run(producer(), 1, _append, lambda name: (directory, name))
+    _run(producer(), 1, _append, lambda name: (directory, name))
 
     assert (tmp_path / "dispatched").read_text().split() \
         == ["large", "medium", "small"]
@@ -124,7 +129,7 @@ def test_each_item_is_reported_once_its_worker_has_ended(tmp_path):
         assert (tmp_path / "dispatched").read_text().count(name + "\n") == 1
         ended.append((name, threading.current_thread()))
 
-    dynamicqueue.run(producer(), 2, _append, lambda name: (directory, name),
+    _run(producer(), 2, _append, lambda name: (directory, name),
                      on_done=seen)
     assert sorted(name for name, _thread in ended) == ["a", "b", "c"]
     assert {thread for _name, thread in ended} == {threading.current_thread()}
@@ -154,7 +159,7 @@ def test_no_worker_starts_before_the_buffer_is_loaded(tmp_path):
             _mark(directory, "prepared.%d" % (index + 1))
             yield item, 0
 
-    dynamicqueue.run(producer(), 2, _record_seen,
+    _run(producer(), 2, _record_seen,
                      lambda item: (directory, item))
 
     counts = {}
@@ -186,7 +191,7 @@ def test_preparation_is_interleaved_with_the_run(tmp_path):
             _mark(directory, "interleaved")
         yield "third", 0
 
-    dynamicqueue.run(producer(), 1, _done_after,
+    _run(producer(), 1, _done_after,
                      lambda name: (directory, name, 0.1))
 
     assert (tmp_path / "interleaved").exists()
@@ -205,7 +210,7 @@ def test_a_slow_preparation_does_not_hold_back_the_buffer(tmp_path):
             _mark(directory, "not-held-back")
         yield "third", 0
 
-    dynamicqueue.run(producer(), 1, _done_after,
+    _run(producer(), 1, _done_after,
                      lambda name: (directory, name, 0.1))
 
     assert (tmp_path / "not-held-back").exists(), (
@@ -221,7 +226,7 @@ def _raise_in_producer():
 
 def test_what_the_producer_raises_is_raised_by_the_run(tmp_path):
     with pytest.raises(RuntimeError, match="producer's own bug"):
-        dynamicqueue.run(_raise_in_producer(), 1, _mark,
+        _run(_raise_in_producer(), 1, _mark,
                          lambda item: (str(tmp_path), item))
 
 
@@ -231,7 +236,7 @@ def test_what_the_producer_raises_is_raised_by_the_run(tmp_path):
 def test_an_empty_queue_runs_nothing(tmp_path):
     directory = str(tmp_path)
     lines = []
-    outcome = dynamicqueue.run(iter(()), 2, _mark,
+    outcome = _run(iter(()), 2, _mark,
                                lambda item: (directory, item),
                                log=lines.append)
 
@@ -251,7 +256,7 @@ def test_a_run_already_aborting_never_pulls_the_producer(tmp_path, monkeypatch):
         _mark(directory, "pulled")
         yield "a", 0
 
-    outcome = dynamicqueue.run(producer(), 2, _mark,
+    outcome = _run(producer(), 2, _mark,
                                lambda item: (directory, item))
 
     assert outcome.aborted
@@ -279,7 +284,7 @@ def test_an_abort_mid_run_stops_the_dispatch_not_the_workers(
         yield "a", 0
         yield "b", 0
 
-    outcome = dynamicqueue.run(producer(), 1, _abort_if,
+    outcome = _run(producer(), 1, _abort_if,
                                lambda name: (directory, name, str(flag)))
 
     assert (tmp_path / "a.ran").exists()
@@ -292,7 +297,7 @@ def _explode(_name: str) -> None:
 
 
 def test_a_dead_worker_is_counted_and_named():
-    outcome = dynamicqueue.run(iter([("boom", 0)]), 1, _explode,
+    outcome = _run(iter([("boom", 0)]), 1, _explode,
                                lambda item: (item,))
 
     assert outcome.failed == [("boom", "exited with status 1")]
@@ -352,7 +357,7 @@ def test_the_queue_says_its_prefill_its_start_and_a_buffer_that_ran_dry(
         # if "b" and "c" were both reaped before it was ready
         yield "c", 0
 
-    dynamicqueue.run(producer(), 2, _hold_b,
+    _run(producer(), 2, _hold_b,
                      lambda name: (directory, name),
                      buffer_factor=1, log=lines.append)
 
@@ -370,7 +375,7 @@ def test_a_queue_smaller_than_its_buffer_says_it_was_prepared_whole(tmp_path):
     directory = str(tmp_path)
     lines = []
 
-    dynamicqueue.run(iter([("a", 0), ("b", 0)]), 2, _mark,
+    _run(iter([("a", 0), ("b", 0)]), 2, _mark,
                      lambda item: (directory, item), log=lines.append)
 
     assert lines == [
@@ -396,7 +401,7 @@ def test_an_early_start_runs_the_first_item_before_the_rest_is_prepared(
         yield "second", 0
         yield "third", 0
 
-    dynamicqueue.run(producer(), 3, _mark, lambda item: (directory, item),
+    _run(producer(), 3, _mark, lambda item: (directory, item),
                      buffer_factor=1, log=lines.append, start_after=1)
 
     assert sorted(os.listdir(directory)) == ["first", "second", "third"]
@@ -410,7 +415,7 @@ def test_an_early_start_runs_the_first_item_before_the_rest_is_prepared(
 
 def test_ahead_hands_the_items_out_in_the_order_prepared():
     sizes = [("small", 1), ("large", 9), ("middle", 5)]
-    assert list(dynamicqueue.ahead(iter(sizes), 2)) == [
+    assert list(workerpool.ahead(iter(sizes), 2)) == [
         "small", "large", "middle"]
 
 
@@ -424,7 +429,7 @@ def test_ahead_prepares_while_the_caller_works_and_no_further_than_its_buffer():
             more.set()
             yield name, 0
 
-    queue = dynamicqueue.ahead(producer(), 2)
+    queue = workerpool.ahead(producer(), 2)
     assert next(queue) == "a"
     # The caller is busy with "a": the buffer fills behind it, and stops full.
     deadline = time.time() + LIMIT
@@ -452,7 +457,7 @@ def test_ahead_gives_what_it_never_handed_out_to_discard():
             pulled.append(name)
             yield name, 0
 
-    queue = dynamicqueue.ahead(producer(), 2, discard=discarded.append)
+    queue = workerpool.ahead(producer(), 2, discard=discarded.append)
     assert next(queue) == "a"
     deadline = time.time() + LIMIT
     while len(pulled) < 3 and time.time() < deadline:
@@ -468,7 +473,7 @@ def test_ahead_raises_what_the_producer_raised_after_what_it_prepared():
 
     got = []
     with pytest.raises(RuntimeError, match="probe failed"):
-        for item in dynamicqueue.ahead(producer(), 2):
+        for item in workerpool.ahead(producer(), 2):
             got.append(item)
     assert got == ["a"]
 
@@ -483,7 +488,7 @@ def test_ahead_says_how_long_the_caller_waited_on_an_empty_buffer():
         time.sleep(1.1)
         yield "b", 0
 
-    queue = dynamicqueue.ahead(producer(), 2, log=lines.append)
+    queue = workerpool.ahead(producer(), 2, log=lines.append)
     assert next(queue) == "a"
     assert lines == []
     go.set()
@@ -502,5 +507,5 @@ def test_ahead_already_aborting_hands_out_nothing(tmp_path, monkeypatch):
         pulled.append("a")
         yield "a", 0
 
-    assert list(dynamicqueue.ahead(producer(), 2)) == []
+    assert list(workerpool.ahead(producer(), 2)) == []
     assert pulled == []

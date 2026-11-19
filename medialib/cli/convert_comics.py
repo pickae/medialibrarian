@@ -63,7 +63,6 @@ from medialib.lib import (
     av1gpu,
     clioptions,
     comicpdf,
-    dynamicqueue,
     encodercalibration,
     enums,
     errorlog,
@@ -1691,11 +1690,11 @@ def _run(result, declaration, program: str, script_dir: str,
     # is full: on a cold drive four books took 15 s to read and unpack, and the
     # card waited for all of them.
     try:
-        dynamicqueue.run(_prepared_books(state, book_list), workers,
-                         workerpool.in_worker,
-                         lambda item: (state.finish_book, item),
-                         buffer_factor=BOOKS_BUFFERED_PER_WORKER, log=log,
-                         start_after=1)
+        workerpool.run(_prepared_books(state, book_list), workers,
+                       workerpool.in_worker,
+                       lambda item: (state.finish_book, item), prepared=True,
+                       buffer_factor=BOOKS_BUFFERED_PER_WORKER, log=log,
+                       start_after=1)
     finally:
         if state.lane is not None:
             state.lane.close()

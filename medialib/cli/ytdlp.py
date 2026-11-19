@@ -13,15 +13,13 @@ occurrence, because a lane and a parallel table's feeds run in separate
 processes and nothing they add to a variable reaches the parent.
 """
 
+import functools
 import os
 import shutil
 import subprocess
 import sys
 import time
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from multiprocessing import Process
+from typing import Any
 
 from medialib import commands
 from medialib.lib import (
@@ -487,7 +485,17 @@ class Run:
         log("%s: %d feed(s), profile %s, %d at a time"
             % (label, len(rows), profile, jobs))
 
-        running: list[Process] = []
+        # This table's stragglers are waited for before the next table in the
+        # same lane starts: that is what "one table at a time within a lane"
+        # means.
+        workerpool.map(self._selected(rows, provider, root, profile), jobs,
+                       functools.partial(_feed, self, provider, root, profile),
+                       prepared=True)
+
+    def _selected(self, rows, provider: str, root: str, profile: str):
+        """The table's feeds this run fetches, as ``((subdir, row), 0)`` for
+        the queue; a dry run's are printed here instead, and none is handed
+        on."""
         match = (self.options["match"] or "").lower()
         for row in rows:
             if safety.abort_requested() or self.provider_blocked(provider):
@@ -502,13 +510,8 @@ class Run:
                 self.counters.record_skip("unmatched")
                 continue
 
-            index = self.counters.next_feed_index()
-            if self.status_dir:
-                with open(os.path.join(self.status_dir, "%d.name" % index),
-                          "w") as handle:
-                    handle.write(subdir + "\n")
-
             if self.options["dryRun"]:
+                self.number_feed(subdir)
                 argv = podcastfeeds.podcast_call(
                     root, self.native_archive, subdir, fields[2], fields[3],
                     fields[4], url, ytdlp_command=self.ytdlp_command,
@@ -521,20 +524,17 @@ class Run:
                 if argv is not None:
                     print(podcastfeeds.render_call(argv, self.platform))
                 continue
+            yield (subdir, row), 0
 
-            if jobs <= 1:
-                self.run_feed(index, subdir, row, provider, root, profile)
-                continue
-
-            running.append(workerpool.start_worker(
-                _feed_worker, (self, index, subdir, row, provider, root,
-                               profile), subdir))
-            if len(running) >= jobs:
-                running = workerpool.reap_one(running)
-
-        # This table's stragglers, before the next table in the same lane
-        # starts: that is what "one table at a time within a lane" means.
-        workerpool.join_all(running)
+    def number_feed(self, subdir: str) -> int:
+        """The feed's position in the run, its name left beside it for the
+        report."""
+        index = self.counters.next_feed_index()
+        if self.status_dir:
+            with open(os.path.join(self.status_dir, "%d.name" % index),
+                      "w") as handle:
+                handle.write(subdir + "\n")
+        return index
 
     def run_lane(self, lane_tables, tables, profiles, jobs_of) -> None:
         """The tables of one lane, one after another."""
@@ -559,14 +559,14 @@ class Run:
 
 
 
-def _feed_worker(state, index, subdir, row, provider, root,
-                 profile) -> None:
-    """One feed, in a worker process.
-
-    The handler is installed here because recording the flag is what stops the
-    REST of the run.
-    """
-    safety.trap_worker_abort()
+def _feed(state, provider, root, profile, item) -> None:
+    """One feed of a table, numbered as it starts: a feed the queue had
+    prepared but never got to - the run stopped, or the provider refused us -
+    is not counted as one the run selected."""
+    subdir, row = item
+    if safety.abort_requested() or state.provider_blocked(provider):
+        return
+    index = state.number_feed(subdir)
     state.run_feed(index, subdir, row, provider, root, profile)
 
 
@@ -1383,10 +1383,9 @@ def _run(options, tables, profiles, jobs_of, rows_of, ingest_of, feed_count,
         else:
             log("%d provider(s) fetched alongside each other: %s"
                 % (len(order), " ".join(order)))
-            running = [workerpool.start_worker(
-                _lane_worker, (state, lanes[lane], tables, profiles, jobs_of),
-                lane) for lane in order]
-            workerpool.join_all(running)
+            workerpool.run(order, len(order), _lane_worker,
+                           lambda lane: (state, lanes[lane], tables, profiles,
+                                         jobs_of))
 
         if library is not None:
             _write(os.path.join(status_dir, DOWNLOADS_DONE), "")

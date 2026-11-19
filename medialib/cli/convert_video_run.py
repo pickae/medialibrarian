@@ -32,7 +32,6 @@ from medialib.lib import (
     clioptions,
     console,
     durationcheck,
-    dynamicqueue,
     enums,
     ffmpegselect,
     formatting,
@@ -1139,7 +1138,7 @@ def _run_all(settings, llm=None) -> int:
 
     - the NEXT files' preparation - the probes, the -t worthwhileness test, the
       grain and crop measurements, the Dolby Vision conversion, the HDR10+
-      extraction and the chunk boundaries - fed by the dynamic queue up to
+      extraction and the chunk boundaries - prepared on a thread up to
       LOOKAHEAD files ahead, passing over the files it skips as it goes;
     - the PREVIOUS file's tail - waiting for its audio, the mux and the checks of
       the muxed file - on a thread of its own while this file's video encodes.
@@ -1191,7 +1190,7 @@ def _run_all(settings, llm=None) -> int:
     sys.stderr = output
 
     def prepared():
-        # The dynamic queue's producer, on the queue's own thread: the files
+        # The queue's producer, on the queue's own thread: the files
         # still to convert, each prepared - or passed over - in turn.
         output.ahead = threading.get_ident()
         for relative in probes._sources(settings.input_dir):
@@ -1226,7 +1225,7 @@ def _run_all(settings, llm=None) -> int:
         except BaseException as raised:  # noqa: BLE001 - re-raised above
             crashed.append(raised)
 
-    queue = dynamicqueue.ahead(prepared(), LOOKAHEAD, log=log,
+    queue = workerpool.ahead(prepared(), LOOKAHEAD, log=log,
                                discard=run._release_dv)
     try:
         while True:
