@@ -28,7 +28,7 @@ import time
 import pytest
 
 from medialib.cli import convert_images as ci
-from medialib.lib import adequacy, clioptions, enums
+from medialib.lib import adequacy, clioptions, enums, runlog
 from tests import blackbox
 
 pytestmark = pytest.mark.fs
@@ -402,6 +402,127 @@ class TestAFailedConversion:
         assert (tmp_path / "out" / "page.avif").read_text() == "avif"
 
 
+class TestAnEncoderThatDiesOfMemory:
+    """The kernel's out-of-memory killer, or a wrapper that answers it as 137:
+    the image is failed as any other, but the line says what killed it, with
+    the size of the image that cost it."""
+
+    def _run(self, tmp_path, status, pixels):
+        counters = tmp_path / "counters"
+        counters.mkdir()
+        for name in ("current", "converted", "trimmed", "failed"):
+            (counters / name).write_text("0")
+        options = {"crop": False, "skipStarved": False, "format": "avif",
+                   "chroma": ci.DEFAULT_CHROMA, "quality": 60,
+                   "effortLevel": 5, "fuzzCommand": "10%",
+                   "maxResCommand": "10000x10000>"}
+        state = ci.Run(str(tmp_path), str(tmp_path / "out"), str(counters),
+                       options, 1)
+        state._convert = lambda arguments: status
+        state._pixels = lambda source: pixels
+        return state
+
+    @pytest.mark.parametrize("status", [-9, 137])
+    def test_the_failure_line_says_killed_and_names_the_size(self, tmp_path,
+                                                             monkeypatch,
+                                                             capfd, status):
+        (tmp_path / "page.jpg").write_bytes(b"x")
+        (tmp_path / "out").mkdir()
+        monkeypatch.chdir(tmp_path)
+        state = self._run(tmp_path, status, 1_500_000)
+        state.transcode("page.jpg")
+        assert state.counter("failed") == 1
+        assert ("FAILED (killed, probably out of memory, 1.5 MP): "
+                "page.jpg") in capfd.readouterr().err
+
+    def test_without_a_size_the_line_says_killed_only(self, tmp_path,
+                                                      monkeypatch, capfd):
+        (tmp_path / "page.jpg").write_bytes(b"x")
+        (tmp_path / "out").mkdir()
+        monkeypatch.chdir(tmp_path)
+        state = self._run(tmp_path, -9, 0)
+        state.transcode("page.jpg")
+        assert ("FAILED (killed, probably out of memory): page.jpg"
+                in capfd.readouterr().err)
+
+    @pytest.mark.parametrize("status", [1, 3])
+    def test_an_ordinary_failure_stays_ordinary(self, tmp_path, monkeypatch,
+                                                capfd, status):
+        (tmp_path / "page.jpg").write_bytes(b"x")
+        (tmp_path / "out").mkdir()
+        monkeypatch.chdir(tmp_path)
+        state = self._run(tmp_path, status, 1_500_000)
+        state.transcode("page.jpg")
+        err = capfd.readouterr().err
+        assert "FAILED: page.jpg" in err
+        assert "out of memory" not in err
+
+
+class TestThePoolSizeIsCappedByTheRAM:
+    """The default pool: what the cores allow, capped by what the RAM holds of
+    the largest image, said under -v with what bounded it."""
+
+    def _state(self, tmp_path, sizes):
+        counters = tmp_path / "counters"
+        counters.mkdir()
+        state = ci.Run(str(tmp_path), "/out", str(counters), {}, len(sizes))
+        state._pixels = lambda source: sizes.get(source, 0)
+        return state
+
+    @pytest.fixture
+    def said(self, monkeypatch):
+        lines = []
+        monkeypatch.setattr(ci.runlog, "detail", lines.append)
+        return lines
+
+    def test_the_ram_caps_the_pool(self, tmp_path, monkeypatch, said):
+        monkeypatch.setattr(ci, "_mem_available", lambda: 100 * 10**9)
+        state = self._state(tmp_path, {"big.jpg": 2_500_000_000})
+        # 2.5e9 pixels at 8 bytes a pixel is 20 GB: the RAM fits 5 of it.
+        assert ci._default_jobs(state, ["big.jpg"], 8, 4.0) == 5
+        assert said == ["5 encoder(s) at once - the RAM fits 5 of the "
+                        "largest image (20.00 GB at 8 bytes a pixel), fewer "
+                        "than the 8 the %d core(s) allow"
+                        % runlog.cpu_count()]
+
+    def test_when_one_copy_does_not_fit_one_encoder_still_runs(self,
+                                                               tmp_path,
+                                                               monkeypatch,
+                                                               said):
+        monkeypatch.setattr(ci, "_mem_available", lambda: 10 * 10**9)
+        state = self._state(tmp_path, {"big.jpg": 2_500_000_000})
+        assert ci._default_jobs(state, ["big.jpg"], 8, 4.0) == 1
+        assert said == ["1 encoder(s) at once - the RAM fits 0 of the "
+                        "largest image (20.00 GB at 8 bytes a pixel), fewer "
+                        "than the 8 the %d core(s) allow"
+                        % runlog.cpu_count()]
+
+    def test_the_cores_bound_when_the_ram_holds_more(self, tmp_path,
+                                                     monkeypatch, said):
+        monkeypatch.setattr(ci, "_mem_available", lambda: 10**12)
+        state = self._state(tmp_path, {"a.jpg": 1_500_000,
+                                       "b.jpg": 1_500_000})
+        assert ci._default_jobs(state, ["a.jpg", "b.jpg"], 8, 4.0) == 8
+        assert said == ["8 encoder(s) at once - %d core(s), 4 thread(s) a "
+                        "conversion; the RAM fits 83333 of the largest image"
+                        % runlog.cpu_count()]
+
+    def test_without_a_readable_ram_the_cores_decide(self, tmp_path,
+                                                     monkeypatch, said):
+        monkeypatch.setattr(ci, "_mem_available", lambda: 0)
+        state = self._state(tmp_path, {"a.jpg": 1_500_000})
+        assert ci._default_jobs(state, ["a.jpg"], 8, 4.0) == 8
+        assert said == ["8 encoder(s) at once - %d core(s), 4 thread(s) a "
+                        "conversion" % runlog.cpu_count()]
+
+    def test_without_sizes_the_cores_decide_too(self, tmp_path, monkeypatch,
+                                                said):
+        monkeypatch.setattr(ci, "_mem_available", lambda: 10**12)
+        state = self._state(tmp_path, {"a.jpg": 0})
+        assert ci._default_jobs(state, ["a.jpg"], 8, 4.0) == 8
+        assert "RAM" not in said[0]
+
+
 class TestTheStarvedSkip:
     """The -a decision, which is what this command does INSTEAD of converting.
 
@@ -773,6 +894,47 @@ class TestAQuietRun:
         assert again.returncode == 0, log
         assert "SKIP (already done)" not in log, log
         assert "already done: 2" not in log, log
+
+
+class TestThePoolSizeIsSaidAtStartup:
+    """The width the pool was settled at, and what bounded it, is on the
+    record before the pool starts, under -v; at the ordinary verbosity the
+    run says nothing about its own width."""
+
+    @pytest.fixture
+    def run(self, sandbox, tmp_path):
+        sandbox.with_tool("fdupes", "exit 0")
+        sandbox.with_tool("identify", 'echo "1000 1500"')
+        sandbox.with_tool("convert", 'out="${!#}"; echo converted > "$out"')
+        folder = tmp_path / "in"
+        folder.mkdir()
+        (folder / "page.jpg").write_text("a page")
+        return lambda *flags: sandbox.run("convert-images", *flags, folder,
+                                          tmp_path / "out")
+
+    @pytest.mark.stubbed
+    def test_under_verbose_the_width_and_its_bound_are_said(self, run):
+        done = run("-v")
+        log = done.stdout + done.stderr
+        assert done.returncode == 0, log
+        line = re.search(r"\d+ encoder\(s\) at once - .+", log)
+        assert line, log
+        # A startup line: it is said before the first image is encoded.
+        assert line.start() < log.index("CONV: page.jpg")
+
+    @pytest.mark.stubbed
+    def test_at_the_ordinary_verbosity_the_width_is_not_said(self, run):
+        done = run()
+        log = done.stdout + done.stderr
+        assert done.returncode == 0, log
+        assert "encoder(s) at once" not in log, log
+
+    @pytest.mark.stubbed
+    def test_an_asked_width_is_said_as_asked(self, run):
+        done = run("-j", "1", "-v")
+        log = done.stdout + done.stderr
+        assert done.returncode == 0, log
+        assert "1 encoder(s) at once - what -j asked for" in log, log
 
 
 class TestATrimThatCannotBeMeasured:

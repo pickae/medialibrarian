@@ -16,8 +16,9 @@ Options:
                     420 at a quarter of it; 444 gives sharper coloured lines and
                     larger files. Default 420. AVIF only.
     -j, --jobs <jobs>
-                    Run up to <jobs> encoder processes in parallel.
-                    Only needed when RAM is short, otherwise a good guess is made.
+                    Caps the number of encoders.
+                    Default: what the cores allow, or what the RAM holds of
+                    the largest image in the input, whichever is fewer.
     -l, --quality <quality>
                     quality level of the output images
     -s, --speed <speed>

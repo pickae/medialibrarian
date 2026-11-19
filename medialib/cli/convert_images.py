@@ -114,8 +114,9 @@ e | <format> | output encoding: {formats}, default {default}
 u | <chroma> | AVIF chroma: {chromas}. 444 keeps colour at full resolution,
                     420 at a quarter of it; 444 gives sharper coloured lines and
                     larger files. Default {chroma}. AVIF only.
-j | <jobs> | Run up to <jobs> encoder processes in parallel.
-                    Only needed when RAM is short, otherwise a good guess is made.
+j | <jobs> | Caps the number of encoders.
+                    Default: what the cores allow, or what the RAM holds of
+                    the largest image in the input, whichever is fewer.
 l | <quality> | quality level of the output images
 s | <speed> | av1 speed preset {speeds}, lower is slower, default {speed}
 m | <maxRes> | maximum resolution (height) to keep
@@ -162,6 +163,60 @@ def threads_per_conversion(image_format: str, speed: int) -> float:
     if image_format != "avif":
         return THREADS_PER_CONVERSION
     return AVIF_THREADS_BY_SPEED.get(speed, THREADS_PER_CONVERSION)
+
+
+# What one encoder holds in RAM per pixel of an 8-bit image: the pixel data
+# and the working buffers around it. A budget, not an exact cost - the point
+# is to run no more encoders than the RAM can carry the LARGEST image the run
+# is asked for, and a budget that is off by a factor still keeps the run
+# alive where an unbounded pool dies.
+BYTES_PER_PIXEL = 8
+
+
+def _mem_available() -> int:
+    """The RAM the kernel says another process may take, in bytes; 0 when it
+    cannot be read, which leaves the pool to the cores alone."""
+    try:
+        with open("/proc/meminfo") as handle:
+            for line in handle:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) * 1024
+    except (OSError, ValueError):
+        pass
+    return 0
+
+
+def _default_jobs(state, work, core_jobs: int, threads: float) -> int:
+    """The pool the cores allow, capped by what the RAM holds of the largest
+    image in <work>: an encoder that dies of memory is what the -j that used
+    to be the answer to it is for, and the largest image is the one that
+    costs it. The sizes are a header read each, asked <core_jobs> at a time,
+    as the GPU's road asks its own.
+
+    Said under -v: the width that came out, and what bounded it."""
+    with ThreadPoolExecutor(max_workers=core_jobs) as pool:
+        largest = max([0] + list(pool.map(state._pixels, work)))
+    mem = _mem_available()
+    if largest and mem:
+        fits = mem // (largest * BYTES_PER_PIXEL)
+        if fits < core_jobs:
+            # When even one copy does not fit, one encoder still runs: the
+            # unbounded pool it replaces ran the same image and died of it.
+            jobs = max(1, fits)
+            runlog.detail("%d encoder(s) at once - the RAM fits %d of the "
+                          "largest image (%s at %d bytes a pixel), fewer than "
+                          "the %d the %d core(s) allow" %
+                          (jobs, fits, formatting.fmt_bytes(
+                              largest * BYTES_PER_PIXEL), BYTES_PER_PIXEL,
+                           core_jobs, runlog.cpu_count()))
+            return jobs
+        runlog.detail("%d encoder(s) at once - %d core(s), %g thread(s) a "
+                      "conversion; the RAM fits %d of the largest image" %
+                      (core_jobs, runlog.cpu_count(), threads, fits))
+        return core_jobs
+    runlog.detail("%d encoder(s) at once - %d core(s), %g thread(s) a "
+                  "conversion" % (core_jobs, runlog.cpu_count(), threads))
+    return core_jobs
 
 # Set by a run that encodes the images of many of these runs together -
 # convert-comics, one of these per book: the folder this run writes the
@@ -567,6 +622,9 @@ class Run:
         self.counter_dir = counter_dir
         self.options = options
         self.total = total
+        # The header reads the pool's RAM bound makes in the parent, by the
+        # name the workers use: a size read once is not read again.
+        self._pixels_by_name = {}
         # When the CPU's pool began, which is when the GPU's chunks ended.
         self.cpu_started = 0.0
 
@@ -636,6 +694,7 @@ class Run:
         encoder killed midway must never carry the real name."""
         staged = _staged_output(out)
         status = self._convert(list(arguments[:-1]) + [staged])
+        killed = status == 137 or status < 0
         if status == 0 and _written(staged):
             # A rename within one folder: the output's name holds nothing or
             # the whole image, at every moment. Not safety.replace_file, which
@@ -658,7 +717,16 @@ class Run:
             os.remove(staged)
         except OSError:
             pass
-        self.record("failed", "FAILED", relative, stream=sys.stderr)
+        if killed:
+            # The kernel's out-of-memory killer, or a wrapper that answers it
+            # as 137: the line says so, with the size of the image that cost
+            # it. The replay above already gave the tool its own last word.
+            size = (", %.1f MP" % (pixels / 10**6)) if pixels else ""
+            self.record("failed",
+                        "FAILED (killed, probably out of memory%s)" % size,
+                        relative, stream=sys.stderr)
+        else:
+            self.record("failed", "FAILED", relative, stream=sys.stderr)
 
     def _identify(self, arguments) -> str:
         proc = subprocess.run(imagemagick.identify_argv(arguments),
@@ -670,10 +738,18 @@ class Run:
 
     def _pixels(self, source: str) -> int:
         """The picture's pixel count, from its header, or 0 when it cannot be
-        read - which leaves the image out of the speed and nothing else."""
-        size = _parse_size(self._identify(
-            ["-ping", "-format", "%w %h", imagecodecs.coder_prefixed(source)]))
-        return size[0] * size[1] if size else 0
+        read - which leaves the image out of the speed and nothing else.
+        Read once per name: the pool's RAM bound reads them all before the
+        pool starts, and the workers read the same names again."""
+        try:
+            return self._pixels_by_name[source]
+        except KeyError:
+            size = _parse_size(self._identify(
+                ["-ping", "-format", "%w %h", imagecodecs.coder_prefixed(
+                    source)]))
+            pixels = size[0] * size[1] if size else 0
+            self._pixels_by_name[source] = pixels
+            return pixels
 
     def _encode_arguments(self, source, out, extra=()):
         return encode_arguments(self.options, source, out, extra)
@@ -1289,16 +1365,15 @@ def main(argv: list, program: str = "convert-images") -> int:
     options, encoder = _settle_options(result.values, crop, skip_starved,
                                        image_format, chroma, quality, speed,
                                        max_res, reverse)
-    jobs = int(result.values["jobs"]
-               or max(1, int(runlog.cpu_count()
-                             / threads_per_conversion(image_format, speed))))
     if result.values["jobs"]:
+        jobs = int(result.values["jobs"])
         runlog.detail("%d encoder(s) at once - what -j asked for" % jobs)
     else:
-        runlog.detail("%d encoder(s) at once - %d core(s), %g thread(s) a "
-                      "conversion" % (jobs, runlog.cpu_count(),
-                                      threads_per_conversion(image_format,
-                                                             speed)))
+        # The pool the cores allow, until the images are known: the RAM's
+        # share of the answer is the largest image's, and the sizes are a
+        # header read the input does not hold.
+        jobs = max(1, int(runlog.cpu_count()
+                          / threads_per_conversion(image_format, speed)))
 
     runlog.settle_flock()
     if _missing_tools(program, image_format, reverse,
@@ -1371,6 +1446,10 @@ def main(argv: list, program: str = "convert-images") -> int:
                 handle.write("0")
 
         state = Run(input_dir, output_dir, counter_dir, options, total)
+        # The pool's RAM bound needs the input's largest image, known only now.
+        if not result.values["jobs"]:
+            jobs = _default_jobs(state, work, jobs,
+                                 threads_per_conversion(image_format, speed))
         started = time.time()
         if encoder:
             work = _encode_on_gpu(state, work, jobs, encoder)
