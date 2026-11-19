@@ -10,12 +10,12 @@
 # first.
 #
 # The columns:
-#   content   what the audio probably is: podcast, audiobook or other. A file
-#             name ending in a [YouTube id] - yt-dlp's default - or starting
-#             with a yyyymmdd date, or a length from 30 to 200 minutes, reads
-#             as a podcast; anything longer as an audiobook; a shorter one
-#             as other. convert-audio reads 30 to 200 minutes it encodes in
-#             stereo as an audiobook too: most likely a full-cast drama.
+#   content   what the audio probably is: podcast, drama, audiobook or other.
+#             A file name ending in a [YouTube id] - yt-dlp's default - or
+#             starting with a yyyymmdd date, or a length from 30 to 200
+#             minutes, reads as a podcast - but 30 to 200 minutes in stereo
+#             reads as a drama, since a talk is encoded mono. Anything longer
+#             reads as an audiobook; a shorter one as other.
 #   provider  how the answer is read: audible, amazon, itunes, openlibrary or
 #             youtube. A new site needs a reader in medialib/lib/onlinecover.py;
 #             a new address for a known one only needs a row.
@@ -30,9 +30,11 @@
 #               show    the podcast's own name, for the show's artwork rather
 #                       than the episode's.
 #   pace      seconds between two requests to this provider, at least.
-#   address   the request. {title}, {creator}, {query} (both together) and
-#             {youtube_id} are filled in, URL-encoded; a row that needs one the
-#             file does not have is passed over. youtube's address is handed
+#   address   the request. {title}, {creator}, {query} (both together),
+#             {episode} (what follows the last " - " of a name in parts:
+#             "Series - Episode 6 - Its Title") and {youtube_id} are filled
+#             in, URL-encoded; a row that needs one the file does not have is
+#             passed over. youtube's address is handed
 #             to yt-dlp: a ytsearchN: search, or a watch address.
 #
 # podcast: the video the name's id points at, when it has one - only the
@@ -52,6 +54,14 @@ audiobook	audible	loose	2	https://api.audible.de/1.0/catalog/products?title={tit
 audiobook	audible	loose	2	https://api.audible.fr/1.0/catalog/products?title={title}&num_results=10&response_groups=media,contributors,product_attrs&image_sizes=1215
 audiobook	amazon	loose	6	https://www.amazon.com/s?k={query}&i=stripbooks
 audiobook	openlibrary	loose	2	https://openlibrary.org/search.json?q={query}&limit=10&fields=title,author_name,cover_i
+#
+# drama: a full-cast audio drama, sold one episode at a time where audiobooks
+# are, and usually found by the episode's own title alone.
+drama	audible	strict	2	https://api.audible.com/1.0/catalog/products?title={episode}&num_results=10&response_groups=media,contributors,product_attrs&image_sizes=1215
+drama	audible	strict	2	https://api.audible.de/1.0/catalog/products?title={episode}&num_results=10&response_groups=media,contributors,product_attrs&image_sizes=1215
+drama	audible	strict	2	https://api.audible.com/1.0/catalog/products?keywords={query}&num_results=10&response_groups=media,contributors,product_attrs&image_sizes=1215
+drama	itunes	strict	3	https://itunes.apple.com/search?term={query}&media=audiobook&limit=10
+drama	amazon	strict	6	https://www.amazon.com/s?k={query}&i=audible
 #
 # other: short and undated - most likely a short book or a single episode.
 other	audible	strict	2	https://api.audible.com/1.0/catalog/products?keywords={query}&num_results=10&response_groups=media,contributors,product_attrs&image_sizes=1215
