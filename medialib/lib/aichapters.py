@@ -31,16 +31,19 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
+import time
 from collections.abc import Callable, Sequence
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
+from typing import TypeVar
 
 from medialib import commands
-from medialib.lib import chapterllm, cuechapters
+from medialib.lib import chapterllm, cuechapters, safety
 
 __all__ = ["TRANSCRIPT_SUFFIXES", "Cue", "read_transcript", "find_transcript",
            "Passage", "passages", "generate", "chapter_rows", "time_label",
-           "DEFAULT_MIN_MINUTES", "DEFAULT_TYPICAL_MINUTES", "transcribe"]
+           "DEFAULT_MIN_MINUTES", "DEFAULT_TYPICAL_MINUTES", "transcribe", "as_ready"]
 
 # The transcript formats read, in the order a folder holding several of them is
 # looked through: the two subtitle formats every recogniser can write,
@@ -284,8 +287,11 @@ def _passage_id(value, count: int) -> int | None:
 
 def _ask_json(llm, prompt: str, wanted: str, log) -> dict | None:
     """The model's answer as a dict holding ``wanted``, asked again once when
-    the first answer is not one. None when neither was."""
+    the first answer is not one. None when neither was, or the run is being
+    stopped."""
     for attempt in range(2):
+        if safety.abort_requested():
+            return None
         try:
             answer = chapterllm.first_json(llm.ask(_SYSTEM, prompt))
         except chapterllm.LlmError as error:
@@ -298,6 +304,12 @@ def _ask_json(llm, prompt: str, wanted: str, log) -> dict | None:
         if not attempt:
             log("    the model's answer was not the JSON asked for, asking again")
     return None
+
+
+def _workers(llm, count: int) -> int:
+    """Threads for ``count`` requests: one each when the model takes any
+    number at once (``jobs`` 0), never more than it takes otherwise."""
+    return max(1, min(count, llm.jobs) if llm.jobs > 0 else count)
 
 
 def _budget(llm) -> int:
@@ -367,7 +379,7 @@ def _summarise(lines: Sequence[_Line], llm, duration: int, count: int,
             found[0] = _Line(window[0].passage, window[0].start, found[0].text)
         return found
 
-    with ThreadPoolExecutor(max_workers=llm.jobs) as pool:
+    with ThreadPoolExecutor(max_workers=_workers(llm, len(windows))) as pool:
         parts = list(pool.map(one, enumerate(windows)))
     return [line for part in parts for line in part]
 
@@ -487,7 +499,7 @@ def _refine(cues: Sequence[Cue], found: Sequence[Passage], marks: list[_Mark],
             index = here.first
         return index, title
 
-    with ThreadPoolExecutor(max_workers=llm.jobs) as pool:
+    with ThreadPoolExecutor(max_workers=_workers(llm, len(marks) - 1)) as pool:
         refined = list(pool.map(one, range(1, len(marks))))
     dropped = refined.count(None)
     if dropped:
@@ -616,3 +628,64 @@ def transcribe(items: Sequence[tuple[str, str]], stage_root: str,
                                  os.path.abspath(transcript_root)],
                                 script_dir=script_dir,
                                 cwd=commands.package_root()).returncode
+
+
+_Item = TypeVar("_Item")
+_Result = TypeVar("_Result")
+
+# How often a hosted run looks for transcripts the transcription has finished.
+POLL_SECONDS = 1.0
+
+
+def as_ready(items: Sequence[_Item], transcript_of: Callable[[_Item], str],
+             transcribe: Callable[[], object] | None, llm,
+             chapter: Callable[[_Item, str], _Result],
+             begin: Callable[[], None] = lambda: None) -> list[_Result]:
+    """``chapter(item, transcript)`` for every item, the results in item
+    order. ``transcript`` is where :func:`find_transcript` found the item's
+    transcript, "" when it has none; ``transcribe`` makes the ones still
+    missing. ``begin`` is called once the chaptering starts.
+
+    A local model shares the machine with whisper, and its own requests
+    already keep it busy: everything is transcribed first and the items are
+    chaptered one after another. A hosted model is waited on by nothing:
+    transcription runs alongside, and each item is chaptered the moment its
+    transcript is there, all of them at once - an item already transcribed
+    is under way before whisper has loaded.
+    """
+    if getattr(llm, "local", True):
+        if transcribe is not None:
+            transcribe()
+        safety.exit_if_aborted()
+        begin()
+        results = []
+        for item in items:
+            safety.exit_if_aborted()
+            results.append(chapter(item, transcript_of(item)))
+        return results
+
+    transcriber = None
+    if transcribe is not None:
+        transcriber = threading.Thread(target=transcribe, name="transcribe",
+                                       daemon=True)
+        transcriber.start()
+    begin()
+    pool = ThreadPoolExecutor(max_workers=max(1, len(items)))
+    futures: dict[int, Future[_Result]] = {}
+    try:
+        while True:
+            finished = transcriber is None or not transcriber.is_alive()
+            for index, item in enumerate(items):
+                if index not in futures:
+                    source = transcript_of(item)
+                    if source or finished:
+                        futures[index] = pool.submit(chapter, item, source)
+            if finished:
+                break
+            safety.exit_if_aborted()
+            time.sleep(POLL_SECONDS)
+        results = [futures[index].result() for index in range(len(items))]
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+    safety.exit_if_aborted()
+    return results

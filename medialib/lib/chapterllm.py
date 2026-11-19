@@ -18,17 +18,26 @@ Which one, where, which model and with what key are settings
 (:data:`API_VARIABLE` and the three after it), so one machine can keep a local
 model and another a hosted one without anything here changing. Everything the
 answer MEANS is :mod:`medialib.lib.aichapters`.
+
+Whether the model is local or hosted is read off its address
+(:func:`is_local`). A local server has one GPU to share, so its requests are
+held to :data:`JOBS_VARIABLE` at a time; a hosted API scales with what it is
+sent, so nothing waits for it unless that setting says otherwise.
 """
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+import urllib.parse
 from dataclasses import dataclass, field
 
 from medialib.lib import tmdbclient, tooldeps
@@ -36,7 +45,7 @@ from medialib.lib import tmdbclient, tooldeps
 __all__ = ["API_VARIABLE", "URL_VARIABLE", "MODEL_VARIABLE", "KEY_VARIABLE",
            "CONTEXT_VARIABLE", "OPTIONS_VARIABLE", "JOBS_VARIABLE", "APIS", "DEFAULT_API",
            "DEFAULT_ANTHROPIC_MODEL", "DEFAULT_CONTEXT_TOKENS", "DEFAULT_JOBS",
-           "LlmError", "Llm", "from_environment", "require", "first_json"]
+           "LlmError", "Llm", "from_environment", "require", "is_local", "first_json"]
 
 # The settings, by the names a user gives them.
 API_VARIABLE = "chapterLlmApi"
@@ -59,9 +68,18 @@ DEFAULT_ANTHROPIC_MODEL = "claude-opus-5-5"
 # requests rather than to a server silently cutting the transcript short.
 DEFAULT_CONTEXT_TOKENS = 32000
 
-# How many requests are in flight at once. Two keeps a single local GPU busy
-# without queueing so deep that the server's own admission timeout fires.
+# How many requests are in flight at once on a local server. Two keeps a
+# single GPU busy without queueing so deep that the server's own admission
+# timeout fires. A hosted API gets every request the moment it is ready (0).
 DEFAULT_JOBS = 2
+
+# Host names that never leave this machine or its network: mDNS, home routers,
+# Tailscale, and the names RFC 6761 keeps off the Internet.
+_LOCAL_SUFFIXES = (".localhost", ".local", ".lan", ".home", ".internal",
+                   ".home.arpa", ".ts.net", ".test", ".invalid")
+
+# Tailscale's addresses, which ipaddress does not count as private.
+_SHARED_SPACE = ipaddress.ip_network("100.64.0.0/10")
 
 # How long one request may take. Long, because a local model reading a whole
 # podcast transcript spends minutes on the prompt before the first word.
@@ -102,27 +120,40 @@ class Llm:
     model: str
     key: str = ""
     context_tokens: int = DEFAULT_CONTEXT_TOKENS
+    # How many requests may be in flight at once, over the whole run; 0 is
+    # no limit.
     jobs: int = DEFAULT_JOBS
     options: dict = field(default_factory=dict)
+    # A server on this machine or its network, rather than a hosted API.
+    local: bool = True
     limit_field: int = field(default=0, compare=False)
+    _slots: threading.BoundedSemaphore | None = field(
+        default=None, init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if self.jobs > 0:
+            self._slots = threading.BoundedSemaphore(self.jobs)
 
     def describe(self) -> str:
         """The model as a run reports it: which, and where."""
         where = self.url or ("the Claude API" if self.api == "anthropic" else "")
-        return "%s at %s (%s protocol)" % (self.model, where, self.api)
+        return "%s at %s (%s protocol, %s)" % (
+            self.model, where, self.api, "local" if self.local else "hosted")
 
     def ask(self, system: str, prompt: str) -> str:
         """The model's text answer, its thinking taken out. LlmError when no
-        answer came after the retries."""
+        answer came after the retries. Safe to call from many threads: the
+        requests in flight never pass :attr:`jobs`."""
         last = ""
         for attempt in range(RETRIES + 1):
             if attempt:
                 time.sleep(RETRY_WAIT_SECONDS * 2 ** (attempt - 1))
             try:
-                if self.api == "anthropic":
-                    text = _ask_anthropic(self, system, prompt)
+                if self._slots is None:
+                    text = self._ask_once(system, prompt)
                 else:
-                    text = _ask_openai(self, system, prompt)
+                    with self._slots:
+                        text = self._ask_once(system, prompt)
             except LlmError as error:
                 last = str(error)
                 continue
@@ -131,6 +162,11 @@ class Llm:
                 return text
             last = "an empty answer"
         raise LlmError(last)
+
+    def _ask_once(self, system: str, prompt: str) -> str:
+        if self.api == "anthropic":
+            return _ask_anthropic(self, system, prompt)
+        return _ask_openai(self, system, prompt)
 
 
 def from_environment(environ=None) -> Llm:
@@ -162,9 +198,46 @@ def from_environment(environ=None) -> Llm:
         raise LlmError("%s has to be a JSON object" % OPTIONS_VARIABLE)
     if extra and api != "openai":
         raise LlmError("%s applies to the openai protocol only" % OPTIONS_VARIABLE)
+    local = is_local(url)
     return Llm(api, url, model, key,
                _positive(environ, CONTEXT_VARIABLE, DEFAULT_CONTEXT_TOKENS),
-               _positive(environ, JOBS_VARIABLE, DEFAULT_JOBS), extra)
+               _positive(environ, JOBS_VARIABLE, DEFAULT_JOBS if local else 0),
+               extra, local)
+
+
+def is_local(url: str) -> bool:
+    """Whether the model at ``url`` runs on this machine or its network rather
+    than as a hosted API. No address is the protocol's own hosted endpoint.
+
+    Read off the host: a loopback, private or Tailscale address, a name
+    without a dot (a machine on the LAN), one of :data:`_LOCAL_SUFFIXES`, or
+    a name that resolves to local addresses only. A name that does not
+    resolve is taken as local, the cautious side: a local server is only
+    queued for, a hosted one is never waited on.
+    """
+    if not url:
+        return False
+    host = (urllib.parse.urlsplit(url if "//" in url else "//" + url).hostname
+            or "").lower().rstrip(".")
+    if not host or host == "localhost" or "." not in host and ":" not in host \
+            or host.endswith(_LOCAL_SUFFIXES):
+        return True
+    try:
+        return _local_address(ipaddress.ip_address(host))
+    except ValueError:
+        pass
+    try:
+        found = socket.getaddrinfo(host, None)
+    except (OSError, UnicodeError):
+        return True
+    addresses = {str(entry[4][0]).split("%", 1)[0] for entry in found}
+    return bool(addresses) and all(_local_address(ipaddress.ip_address(address))
+                                   for address in addresses)
+
+
+def _local_address(address) -> bool:
+    return (address.is_loopback or address.is_private or address.is_link_local
+            or address.version == 4 and address in _SHARED_SPACE)
 
 
 def require(program: str) -> Llm | None:
@@ -214,22 +287,25 @@ def _ask_openai(llm: Llm, system: str, prompt: str) -> str:
     every account an argv, and a transcript is too long for one anyway.
     """
     while True:
+        tried = llm.limit_field
         try:
-            return _post_openai(llm, system, prompt)
+            return _post_openai(llm, system, prompt, tried)
         except _LimitRefused:
-            llm.limit_field += 1
+            # Requests running side by side can all be refused the same name;
+            # each moves the run one past the name it sent, not one further.
+            llm.limit_field = max(llm.limit_field, tried + 1)
 
 
 class _LimitRefused(Exception):
     """The server refused the name the output limit was sent under."""
 
 
-def _post_openai(llm: Llm, system: str, prompt: str) -> str:
+def _post_openai(llm: Llm, system: str, prompt: str, tried: int) -> str:
     request: dict = dict(llm.options)
     request.update({"model": llm.model, "messages": [
         {"role": "system", "content": system},
         {"role": "user", "content": prompt}]})
-    limit_field = _LIMIT_FIELDS[min(llm.limit_field, len(_LIMIT_FIELDS) - 1)]
+    limit_field = _LIMIT_FIELDS[min(tried, len(_LIMIT_FIELDS) - 1)]
     if limit_field and not any(name in request for name in _LIMIT_FIELDS if name):
         left = llm.context_tokens - (len(system) + len(prompt)) // 3
         request[limit_field] = max(MIN_OUTPUT_TOKENS, min(MAX_OUTPUT_TOKENS, left))

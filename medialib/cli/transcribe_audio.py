@@ -270,7 +270,11 @@ class Run:
     def _keep(self, relative: str, whisper_out: str) -> None:
         out = self._transcript(relative)
         os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
-        shutil.move(whisper_out, out)
+        # Moved in under another name and renamed in place, so the transcript
+        # appears whole: a chapter run reading the folder as it fills never
+        # sees half of one.
+        shutil.move(whisper_out, out + ".part")
+        os.replace(out + ".part", out)
         self.report_progress("transcribed: " + relative)
 
     def transcribe_one(self, ready: tuple) -> None:

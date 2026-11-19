@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import json
 import re
+import threading
+from types import SimpleNamespace
 
 import pytest
 
@@ -268,3 +270,55 @@ def test_too_short_is_known_before_any_transcript(duration, short):
 
 def test_too_short_follows_the_shortest_chapter():
     assert aichapters.too_short(9 * 60_000, min_minutes=5)
+
+
+class TestAsReady:
+    def test_a_local_model_waits_for_every_transcript_then_goes_in_order(self):
+        made: dict[str, str] = {}
+        events = []
+
+        def transcribe():
+            events.append("transcribed")
+            made.update(a="a.srt", b="b.srt")
+
+        def chapter(item, source):
+            events.append((item, source))
+            return item.upper()
+
+        results = aichapters.as_ready(["a", "b"], lambda item: made.get(item, ""),
+                                      transcribe, SimpleNamespace(local=True), chapter,
+                                      begin=lambda: events.append("begin"))
+        assert results == ["A", "B"]
+        assert events == ["transcribed", "begin", ("a", "a.srt"), ("b", "b.srt")]
+
+    def test_a_hosted_one_starts_each_file_as_its_transcript_appears(self, monkeypatch):
+        monkeypatch.setattr(aichapters, "POLL_SECONDS", 0.01)
+        made = {"ready": "ready.srt"}
+        first_done = threading.Event()
+
+        def transcribe():
+            # Only finishes the second transcript once the first file has been
+            # chaptered: a run that waited for transcription would hang here.
+            assert first_done.wait(timeout=5)
+            made["later"] = "later.srt"
+
+        def chapter(item, source):
+            if item == "ready":
+                first_done.set()
+            return (item, source)
+
+        results = aichapters.as_ready(["ready", "later", "never"],
+                                      lambda item: made.get(item, ""), transcribe,
+                                      SimpleNamespace(local=False), chapter)
+        assert results == [("ready", "ready.srt"), ("later", "later.srt"),
+                           ("never", "")]
+
+    def test_and_runs_them_side_by_side(self):
+        together = threading.Barrier(3)
+
+        def chapter(item, source):
+            together.wait(timeout=5)
+            return item
+
+        assert aichapters.as_ready(["a", "b", "c"], lambda item: item + ".srt", None,
+                                   SimpleNamespace(local=False), chapter) == ["a", "b", "c"]

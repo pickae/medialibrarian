@@ -8,7 +8,8 @@ yet: the transcripts land in the output folder beside the chapter files, so a
 rerun pays for neither again. A transcript some other recogniser wrote is used
 as it is, from the output folder or from beside the input. The second asks the
 model the settings name (medialib/lib/chapterllm.py) for the chapters, in the
-two passes medialib/lib/aichapters.py describes.
+two passes medialib/lib/aichapters.py describes. With a hosted model the two
+overlap: each file is chaptered as soon as its transcript is there.
 
 Nothing in the input is touched. A chapter file is the OGM list mkvmerge,
 ffmpeg's ingest and convert-audio all read; convert-audio's -t writes the same
@@ -177,44 +178,55 @@ def _run(program: str, script_dir: str, input_dir: str, output_dir: str,
                      for relative in todo if not transcript(relative)]
 
     failed = 0
+    transcribe = None
     if untranscribed:
-        runlog.say("Transcribing %d file(s)...\n" % len(untranscribed))
         stage, status = ramscratch.ram_scratch_dir("generateChapters.stage")
         if status != 0 or not stage:
             sys.stderr.write("\nError: no scratch directory could be made for this "
                              "run.\nNothing was changed.\n")
             return 1
         ramscratch.add_exit_cleanup([stage])
-        if aichapters.transcribe(untranscribed, stage, output_dir, script_dir):
-            failed = 1
-        safety.exit_if_aborted()
 
-    runlog.say("Chaptering %d file(s) with %s...\n" % (len(todo), llm.describe()))
-    made = 0
-    for number, relative in enumerate(todo, 1):
-        safety.exit_if_aborted()
-        source = transcript(relative)
-        label = "[%d/%d] %s" % (number, len(todo), relative)
+        def transcribe() -> None:
+            nonlocal failed
+            runlog.say("Transcribing %d file(s)...\n" % len(untranscribed))
+            if aichapters.transcribe(untranscribed, stage, output_dir, script_dir):
+                failed = 1
+
+    numbers = {relative: number for number, relative in enumerate(todo, 1)}
+
+    def chapter(relative: str, source: str) -> bool:
+        label = "[%d/%d] %s" % (numbers[relative], len(todo), relative)
+
+        # Side by side, every line says which file it is about.
+        def log(line: str) -> None:
+            runlog.log(line if llm.local else "%s: %s" % (label, line.strip()))
         if not source:
             runlog.error("%s: no transcript to chapter from" % label)
-            failed = 1
-            continue
+            return False
         cues = aichapters.read_transcript(source)
         runlog.say("%s: %d transcript line(s)\n" % (label, len(cues)))
         marks = aichapters.generate(cues, llm, min_minutes=min_minutes,
-                                    typical_minutes=typical, log=runlog.log)
+                                    typical_minutes=typical, log=log)
         if not marks:
             runlog.error("%s: no chapters (too short, or the model gave no usable "
                          "outline)" % label)
-            failed = 1
-            continue
+            return False
         target = chapter_file(relative)
         os.makedirs(os.path.dirname(target), exist_ok=True)
         with open(target, "w", encoding="utf-8") as handle:
             handle.write("\n".join(aichapters.chapter_rows(marks)) + "\n")
         for start, title in marks:
-            runlog.log("    %s  %s" % (aichapters.time_label(start), title))
-        made += 1
+            log("    %s  %s" % (aichapters.time_label(start), title))
+        return True
+
+    results = aichapters.as_ready(
+        todo, transcript, transcribe, llm, chapter,
+        begin=lambda: runlog.say("Chaptering %d file(s) with %s...\n"
+                                 % (len(todo), llm.describe())))
+    made = sum(results)
+    if not all(results):
+        failed = 1
     runlog.say("Done: %d chapter file(s) written.\n" % made)
     return failed
 

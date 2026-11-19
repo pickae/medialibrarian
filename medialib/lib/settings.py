@@ -207,8 +207,11 @@ SETTINGS: tuple[Setting, ...] = (
             "protocol, as a JSON object - whatever that server takes, e.g. "
             "`{\"reasoning_effort\": \"low\"}` or `{\"temperature\": 0.2}`; an output "
             "limit given here replaces the one the run works out", _AI_CHAPTERS),
-    Setting("chapterLlmJobs", "How many requests are sent to the model at once",
-            _AI_CHAPTERS, "2"),
+    Setting("chapterLlmJobs", "How many requests are sent to the model at once, "
+            "over the whole run. Whether the model is local is read off "
+            "`chapterLlmUrl`: localhost, a private or Tailscale address, or a "
+            "name on the LAN", _AI_CHAPTERS,
+            "2 for a local model; no limit for a hosted one"),
     # --- comic PDFs
     Setting("comicPdfExtensions", "The file suffixes that may be comic PDFs, "
             "space-separated", ("content-census",), "pdf"),
