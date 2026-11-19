@@ -2,7 +2,8 @@
 
 import pytest
 
-from medialib.lib import enums, subtitletracks as st
+from medialib.lib import enums
+from medialib.lib import subtitletracks as st
 
 pytestmark = pytest.mark.pure
 
