@@ -729,27 +729,42 @@ class Run:
         # The two things the normalisation takes away from the source, or
         # nothing at all when the run keeps the source's resolution: the track
         # is still re-encoded to FLAC, which is what makes the formats uniform.
+        # The line's word for the resolution the encode settles on: the cap,
+        # with its figure, or the part's - the source's own bit depth and rate,
+        # which the source figure below already names.
+        source_rate = rate
         if "resolution" in getattr(self, "keep_parts", frozenset()):
             sample_args = []
+            settled = "at the source's resolution"
         else:
             # Ultrasound music files are useless.
             rate = min(rate, HEARING_THRESHOLD) if rate else HEARING_THRESHOLD
             sample_args = ["-sample_fmt", "s16", "-ar", str(rate)]
-
-        # Announced before the encode, not after it: a single track is minutes of
-        # work, and a line that only appears once it is over says nothing about
-        # what the run is doing right now.
-        self.counters.progress("Encoding: " + relative)
+            settled = "16-bit at %s kHz" % _khz(rate)
 
         # The cover is scaled to the cap, or written at its own size when the
         # run keeps the covers - re-encoded as MJPEG either way, which is what
         # makes the art readable in a flac.
         if "covers" in getattr(self, "keep_parts", frozenset()):
             scale = "format=yuvj420p"
+            cover = "the cover at its own size"
         else:
             scale = ("scale='min(%s,iw)':min'(%s,ih)'"
                      ":force_original_aspect_ratio=decrease,format=yuvj420p"
                      % (self.cover_max_edge, self.cover_max_edge))
+            cover = "the cover scaled to at most fullHD"
+
+        # Announced before the encode, not after it: a single track is minutes of
+        # work, and a line that only appears once it is over says nothing about
+        # what the run is doing right now. The line states the two decisions on
+        # the source's own figures - the resolution the track is encoded at and
+        # what happens to its cover - the way the copy states the tracks it
+        # carries across.
+        source_figure = ("%s %s kHz" % (codec, _khz(source_rate))
+                         if source_rate else codec)
+        self.counters.progress(
+            "Encoding: %s (%s: %s, %s)"
+            % (relative, source_figure, settled, cover))
         argv = ["ffmpeg", "-nostdin", "-hide_banner",
                 *toolcapture.ffmpeg_loglevel(),
                 "-y", "-i", source, "-map", "0:a:0", "-map", "0:v:0?",
@@ -1087,6 +1102,17 @@ def parse_stream_info(text: str) -> tuple:
             int(formatting.awk_number(rate)) if rate is not None else 0)
 
 
+def _khz(rate: int) -> str:
+    """A sample rate in hertz, in the kHz a line says it in: whole where it
+    is whole, the fraction kept where it is not - 48000 is 48, 44100 is 44.1."""
+    if not rate:
+        return ""
+    value = rate / 1000.0
+    if value == int(value):
+        return str(int(value))
+    return ("%.3f" % value).rstrip("0").rstrip(".")
+
+
 def _copy_mtime(source: str, target: str) -> bool:
     """``touch -r``: the encoded flac keeps its source's modification time."""
     try:
@@ -1165,6 +1191,15 @@ def _find_files(root: str, matches) -> list:
 def _find_relative(root: str, matches) -> list:
     """The same, as paths relative to ``root``."""
     return [os.path.relpath(path, root) for path in _find_files(root, matches)]
+
+
+def _is_copied_audio(name: str) -> bool:
+    """Whether a file is the audio the plain copy carries across as-is: an audio
+    extension that is not a lossless one. That is the whole of the copy's audio -
+    the lossless ones are the encoder's queue, not the copy's."""
+    extension = enums.lower_extension_of(name)
+    return (extension in enums.AUDIO_EXTENSIONS
+            and extension not in enums.LOSSLESS_AUDIO_EXTENSIONS)
 
 
 # What a cue sheet's disc image can be: any of the lossless containers, plus
@@ -1729,6 +1764,16 @@ def _copy_the_rest(state, download_dir: str, ingest_dir: str,
     own turn, since a subfolder can resolve somewhere its parent does not.
     """
     log("Copying non-lossless files into the ingest tree")
+    # The tracks the copy carries across as-is, said one per track on the figure
+    # that put them here - they are not lossless - the way the encoder says the
+    # ones it takes. A re-run over a finished library re-says them, the way it
+    # re-says the tracks it leaves up to date.
+    copied_tracks = [
+        relative for relative in _find_relative(download_dir,
+                                                _is_copied_audio)
+        if not _under_any(relative, state.refused)]
+    for relative in copied_tracks:
+        runlog.detail("Copied as it is, not lossless: " + relative)
     # The lossless sources are excluded from the same enum the encoder's queue
     # was built from, so a format cannot end up queued for encoding AND copied
     # across as-is.

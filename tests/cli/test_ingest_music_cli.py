@@ -659,6 +659,42 @@ def keep_music(sandbox, tmp_path):
     return sandbox
 
 
+@pytest.fixture
+def copied_music(sandbox, tmp_path):
+    """One lossless track and one lossy one side by side: the one the encoder
+    takes and the one the plain copy carries across as-is, the two fates a
+    download holds."""
+    for tool in _TOOLS:
+        if shutil.which(tool) is None:
+            conftest.missing_host_tool(
+                "the host has no %s: the command needs it to report what is "
+                "asserted here" % tool)
+    sandbox.with_tool("ffprobe", _FFPROBE_HIRES)
+    sandbox.with_tool("ffmpeg", _FFMPEG)
+    sandbox.with_tool("convert", _CONVERT)
+    sandbox.with_tool("mkvmerge", _MKVMERGE)
+    sandbox.with_tools("fdupes", "beet", "mkvpropedit", "mkvextract")
+
+    download = tmp_path / "download"
+    album = download / "Album"
+    album.mkdir(parents=True)
+    (album / "one.flac").write_text("one")
+    # The one the encoder does not take: a lossy extension, carried across as-is.
+    (album / "two.mp3").write_text("two")
+
+    library = tmp_path / "library"
+    opus = tmp_path / "libraryopus"
+
+    def run(*options):
+        done = sandbox.run("ingest-music", "-j", "2", *options,
+                           download, library, opus, timeout=900)
+        return done
+
+    sandbox.library = library
+    sandbox.ingest = run
+    return sandbox
+
+
 def _FFMPEG_CALLS(calls_file: str) -> str:
     """The ffmpeg stand-in, with every call it gets recorded, argument by
     argument, ahead of what it does with it."""
@@ -750,6 +786,72 @@ class TestTheKeptResolution:
         assert default_opus == kept_opus
         assert kept_opus[kept_opus.index("-c:a") + 1] == "libopus"
         assert kept_opus[kept_opus.index("-b:a") + 1] == "120k"
+
+
+class TestTheEncodeSaysItsFigures:
+    """The encode line states the two decisions on the source's own figures:
+    the resolution the track is encoded at - the cap by default, the source's
+    with -k resolution, which does not say 16-bit, because the part keeps the
+    source's bit depth too - and the cover, scaled to at most fullHD by
+    default, at its own size with -k covers."""
+
+    def test_the_default_encode_says_the_capped_rate(self, keep_music):
+        done = keep_music.ingest()
+        log = done.stdout + done.stderr
+        assert done.returncode == 0, log
+        assert ("Encoding: Album/one.flac (flac 96 kHz: 16-bit at 48 kHz, "
+                "the cover scaled to at most fullHD)") in log, log
+
+    def test_the_kept_resolution_is_said_as_kept_not_sixteen_bit(self, keep_music):
+        done = keep_music.ingest("-k", "resolution")
+        log = done.stdout + done.stderr
+        assert done.returncode == 0, log
+        assert ("Encoding: Album/one.flac (flac 96 kHz: at the source's "
+                "resolution, the cover scaled to at most fullHD)") in log, log
+
+    def test_the_kept_cover_is_said_at_its_own_size(self, keep_music):
+        done = keep_music.ingest("-k", "covers")
+        log = done.stdout + done.stderr
+        assert done.returncode == 0, log
+        assert ("Encoding: Album/one.flac (flac 96 kHz: 16-bit at 48 kHz, "
+                "the cover at its own size)") in log, log
+
+    def test_a_source_below_the_cap_is_said_at_its_own_rate(self, music):
+        """The cap is a cap, not a target: a 44.1 kHz source is not raised to
+        48, and the line says the rate the encode settles on rather than the
+        ceiling it did not reach."""
+        log = music.ingest()
+        assert ("Encoding: Album/one.flac (flac 44.1 kHz: 16-bit at 44.1 kHz, "
+                "the cover scaled to at most fullHD)") in log, log
+
+
+class TestTheCopySaysItsTracks:
+    """The plain copy carries across the tracks the encoder does not take, and
+    says so per track - under -v, the way the run says the reason behind each
+    decision. A run without -v leaves them to the copy's own heading."""
+
+    def test_a_copied_track_is_said_as_copied(self, copied_music):
+        done = copied_music.ingest("-v")
+        log = done.stdout + done.stderr
+        assert done.returncode == 0, log
+        assert (copied_music.library / "Album" / "two.mp3").is_file()
+        assert "Copied as it is, not lossless: Album/two.mp3" in log, log
+
+    def test_the_copied_track_is_not_said_without_verbose(self, copied_music):
+        done = copied_music.ingest()
+        log = done.stdout + done.stderr
+        assert done.returncode == 0, log
+        assert "Copied as it is" not in log, log
+
+    def test_a_rerun_says_the_copied_track_again(self, copied_music):
+        """A rerun leaves the library as it was, and says so per track rather
+        than looking like a copy that has stopped: the lossy track is said the
+        way the encoder's tracks are said up to date."""
+        for _ in range(2):
+            done = copied_music.ingest("-v")
+            log = done.stdout + done.stderr
+            assert done.returncode == 0, log
+            assert "Copied as it is, not lossless: Album/two.mp3" in log, log
 
 
 class TestTheWordAfterTheFlag:
