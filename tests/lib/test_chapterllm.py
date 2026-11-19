@@ -26,12 +26,33 @@ class TestSettings:
         assert llm.context_tokens == chapterllm.DEFAULT_CONTEXT_TOKENS
         assert llm.jobs == chapterllm.DEFAULT_JOBS
 
-    @pytest.mark.parametrize("missing", ["chapterLlmUrl", "chapterLlmModel"])
-    def test_and_is_refused_without_either(self, missing):
-        environ = dict(_LOCAL)
-        del environ[missing]
-        with pytest.raises(chapterllm.LlmError, match=missing):
-            chapterllm.from_environment(environ)
+    def test_and_is_refused_without_an_address(self):
+        with pytest.raises(chapterllm.LlmError, match="chapterLlmUrl"):
+            chapterllm.from_environment({"chapterLlmModel": "m"})
+
+    def test_a_local_server_may_leave_the_model_to_what_it_lists(self):
+        llm = chapterllm.from_environment({"chapterLlmUrl": _LOCAL["chapterLlmUrl"]})
+        assert llm.model == ""
+
+    def test_a_hosted_api_is_refused_without_a_model(self):
+        with pytest.raises(chapterllm.LlmError, match="chapterLlmModel"):
+            chapterllm.from_environment({"chapterLlmUrl": "https://8.8.8.8/v1"})
+
+    def test_several_addresses_are_a_ladder_the_first_preferred(self):
+        llm = chapterllm.from_environment(dict(
+            _LOCAL, chapterLlmUrl=" http://localhost:8081/v1/ , http://localhost:8080/v1",
+            chapterLlmServe="serve-it --port 8081", chapterLlmServeMib="20000"))
+        assert (llm.url, llm.fallbacks) == ("http://localhost:8081/v1",
+                                           ("http://localhost:8080/v1",))
+        assert (llm.serve, llm.serve_mib) == ("serve-it --port 8081", 20000)
+        assert "started when needed" in llm.describe()
+        assert "else http://localhost:8080/v1" in llm.describe()
+
+    def test_claude_takes_one_address_and_no_command(self):
+        for extra in ({"chapterLlmUrl": "https://a/v1,https://b/v1"},
+                      {"chapterLlmServe": "serve-it"}):
+            with pytest.raises(chapterllm.LlmError):
+                chapterllm.from_environment(dict(extra, chapterLlmApi="anthropic"))
 
     def test_claude_needs_neither(self):
         llm = chapterllm.from_environment({"chapterLlmApi": "Anthropic"})

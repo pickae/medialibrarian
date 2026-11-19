@@ -941,7 +941,10 @@ it, counting a job that has only just started at its whole need, and otherwise
 waits for the other to finish; whichever began waiting first goes first, so
 neither starves the other. whisper's need is read off its settled plan. The
 model's is the `chapterLlmVramGB` [setting](../settings.md); unset, the model
-takes the whole card and never runs beside whisper. A hosted model, or a
+takes the whole card and never runs beside whisper. A server the run starts
+itself (`chapterLlmServe`, see
+[generate-chapters](generate-chapters.md#several-servers-one-card)) is started
+inside that claim; with too little room, the next server listed is asked. A hosted model, or a
 machine with no NVIDIA card, never waits. Two whisper jobs are not held apart:
 the plan already fits them together. An extra that has to be transcribed waits
 for the commentary whisper altogether, since a second whisper beside the first
