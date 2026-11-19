@@ -162,16 +162,18 @@ Usage:
                   goes to -k when it is a part. Cannot be combined with -r,
                   which encodes.
     -o, --omit [phase]
-                  omit <phase> from a full ingest: junk, subtitles, roles,
-                  commentary, chapters, plex and tagging, comma-separated,
-                  and a bare -o omits all seven. junk: the junk files are
-                  left. subtitles: the subtitles are not fetched and the
-                  missing ones are not downloaded. roles: the subtitles are
-                  not measured for being forced or SDH where the file does not
-                  say so, and their flags are left as the file has them.
-                  commentary: the commentaries are not listened for, not
-                  transcribed and not named. chapters: the chapter archive is
-                  not asked. plex: the films are not compared with
+                  omit <phase> from a full ingest: junk, subtitles, ocr,
+                  roles, commentary, chapters, plex and tagging,
+                  comma-separated, and a bare -o omits all eight. junk: the
+                  junk files are left. subtitles: the subtitles are not
+                  fetched and the missing ones are not downloaded. ocr: the
+                  picture subtitles are not read into text. roles: the
+                  subtitles are not measured for being forced or SDH where
+                  the file does not say so, and their flags are left as the
+                  file has them. commentary: the commentaries are not
+                  listened for, not transcribed and not named. chapters: the
+                  chapter archive is not asked. plex: the films are not
+                  compared with
                   the Plex library and nothing is carried over from it.
                   tagging: the films are not tagged with their IMDb ids. The
                   phases not named run as they always have. A phase the run

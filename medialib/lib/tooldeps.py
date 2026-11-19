@@ -83,6 +83,11 @@ _TOOL_NOTES = {
     "subcleaner": "taking the adverts out of downloaded subtitles"
                   "|git clone https://github.com/KBlixt/subcleaner, then chmod +x"
                   " its subcleaner.py and link it onto PATH as subcleaner",
+    # A self-contained .NET build, from Subtitle Edit's releases.
+    "seconv": "reading picture subtitles into text (Subtitle Edit)"
+              "|download SeConv-Linux-x64.tar.gz from"
+              " https://github.com/SubtitleEdit/subtitleedit/releases, unpack it"
+              " and link its seconv onto PATH",
     "pipx": "running whisper-ctranslate2 and subliminal|apt install pipx",
     "python3": "the mutagen tag/chapter helpers|apt install python3",
     "adb": "reaching the files on the attached phone|apt install android-tools-adb",
@@ -159,6 +164,9 @@ _MACOS_HINTS = {
     "exhale": "https://gitlab.com/ecodis/exhale (make release)",
     "subcleaner": "git clone https://github.com/KBlixt/subcleaner, then chmod +x"
                   " its subcleaner.py and link it onto PATH as subcleaner",
+    "seconv": "download SeConv-macOS-ARM64.zip (or -x64) from"
+              " https://github.com/SubtitleEdit/subtitleedit/releases, unpack it"
+              " and link its seconv onto PATH",
 }
 
 # The line a name with no entry falls through to, rather than to an empty one,

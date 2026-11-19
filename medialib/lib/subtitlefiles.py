@@ -81,7 +81,7 @@ MIN_SYNC_CONFIDENCE = 1.0
 # The fewest cues a picture subtitle needs to stand in for the dialogue. A
 # forced track that is only the signs and the odd foreign line has a few
 # dozen, and so few cues line up with almost any shift.
-MIN_REFERENCE_CUES = 100
+MIN_REFERENCE_CUES = subtitletracks.MIN_REFERENCE_CUES
 
 # A Blu-ray subtitle takes a line off the screen with a packet of its own that
 # carries no picture, about 30 bytes where one with a picture runs to thousands.

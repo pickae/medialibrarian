@@ -27,6 +27,7 @@ given (one level deep, not the whole tree):
 - **transcodes lossless audio to Opus** — or FLAC, the `losslessAudioTarget` setting — leaving lossy tracks as they are
 - **finds forced and SDH subtitles the file does not flag**, and puts their flags right ([details](#subtitles-the-file-flags-wrong))
 - **finds commentaries the file does not flag** and flags them before anything else reads the tracks ([details](#commentaries-the-file-does-not-flag))
+- **reads picture subtitles into text** where a language has no text subtitle (needs `seconv`) ([details](#picture-subtitles-read-into-text))
 - transcribes commentary tracks with whisper, and names numbered ones after who speaks in them (dvdcompare.net)
 - **remuxes each film once into an improved copy**, keeping the original as `<name> (old).mkv` ([details](#what-a-full-ingest-does))
 - tags names with the IMDb id (needs `tmdbApiKey`), looks up chapters, and downloads missing subtitles (needs an OpenSubtitles or SubDL login)
@@ -58,6 +59,13 @@ These are read from the environment:
 | `subDlApiKey` | asking SubDL third — the key a free account at subdl.com gets | it is not asked |
 | `spokenLanguages` | the languages whose subtitles are fetched and tested | the six it knows by default (en, de, fr, nl, es, it) |
 | `mediaServerNaming` | the server the names are written for | `plex`; the names are then written and read the way that server spells them |
+| `subtitleOcrEngines` | the engines a picture subtitle is read with, in the order to try them | the order below |
+| `subtitleOcrUrl` | the servers holding a vision model, for the `vision` engine: a comma list, the preferred first | that engine is not tried |
+| `subtitleOcrServe` | the command that starts the first of them when it is not running | it is only used when it is running |
+| `subtitleOcrServeMib` | the free GPU memory it is started with | 26000 |
+| `subtitleOcrModel` | that model's name, asked of a server that lists it | the first model each server lists |
+| `subtitleOcrOptions` | more fields for every request to it, as a JSON object | none |
+| `subtitleOcrJobs` | how many requests are sent to that model at once, each with up to 16 pictures | 32 |
 | `losslessAudioTarget` | the codec the lossless audio is converted to | `opus`, at a per-channel target bitrate; `flac` takes the channels as they are, up to eight of them |
 | `plexUrl` | the Plex server the films are compared with | the server on this machine, `http://localhost:32400` |
 | `plexToken` | that server's X-Plex-Token | the server is asked without one, which it refuses unless told to trust this address; the comparison is then skipped |
@@ -221,6 +229,101 @@ A downloaded `<name>.xx.srt` whose text reads as SDH is muxed in flagged SDH and
 named "SDH". The sidecar keeps its `.xx.srt` name, which is what tells the next
 run's download that the language is there.
 
+### Picture subtitles read into text
+
+A Blu-ray's subtitles (PGS) and a DVD's (VobSub) are pictures of the lines: a
+player shows them, but nothing can search, restyle or sync them. Where a film
+has no text subtitle in a language `spokenLanguages` names, and no sidecar for
+it beside the film — none was downloaded ahead of the remux, or none passed the
+sync test — its picture subtitle in that language is read into one by OCR, just
+before the remux, and muxed in like a download. Each role gets its own sidecar
+(see [Subtitles the file flags wrong](#subtitles-the-file-flags-wrong)):
+
+| Picture subtitle | Read into |
+| --- | --- |
+| the plain one — the longest, where there are several | `<name>.xx.srt` |
+| the SDH one | `<name>.xx.sdh.srt`, muxed flagged for the hearing impaired; and `<name>.xx.srt` when there is no plain one and no SDH text subtitle |
+| the forced one | `<name>.xx.forced.srt`, muxed flagged forced |
+| a commentary's, or a broadcast's (DVB) | nothing: it stays a picture |
+
+Its lines keep the picture subtitle's own times, so it is in step with the
+film by construction, and is not put to the sync test.
+
+The reading is done by Subtitle Edit's `seconv`, which is optional: without it
+picture subtitles stay pictures, and the run says so once at the start. It is
+a self-contained download from the
+[Subtitle Edit releases](https://github.com/SubtitleEdit/subtitleedit/releases):
+
+```bash
+tar xzf SeConv-Linux-x64.tar.gz -C ~/.local/share/seconv
+ln -s ~/.local/share/seconv/seconv ~/.local/bin/seconv
+```
+
+A film's subtitles may be in any language, so an engine that reads them all is
+preferred wherever the machine can run it at speed. Each is tried where it is
+ready, and one that fails or reads nothing hands the subtitle to the next:
+
+| Order | Engine | Languages | Needs |
+| --- | --- | --- | --- |
+| 1 | `vision`, a vision model | any | `subtitleOcrUrl`: servers with the OpenAI chat API holding one — llama-server, or any that lists its model at `/v1/models` — tried in order (below) |
+| 2 | `paddle` (PP-OCR) on the GPU | a hundred-odd | `paddleocr` with a CUDA build of paddle, and 2 GiB free on the card — asked afresh for each subtitle, since another program may hold it |
+| 3 | `tesseract` on the CPU | the ones whose data is installed: `apt install tesseract-ocr-fra` for French, `tesseract-ocr-all` for all | `tesseract` |
+| 4 | `paddle` on the CPU, the GPU hidden from it | a hundred-odd, at about a second a line | `paddleocr` |
+
+`paddleocr` installs with `pipx install --python python3.12 paddleocr`, then
+`pipx inject paddleocr "paddlepaddle<3.3"` (3.3 fails on the CPU), or a CUDA
+build of paddlepaddle for the GPU. A GPU too full for paddle after all is one
+more failure the next engine answers, so the run never stops over it. A
+language tesseract has no data for is said once. `subtitleOcrEngines` names
+other engines or another order.
+
+The vision engine has seconv take each line's picture and time out of the
+subtitle, and sends the pictures itself: sixteen to a request, each after its
+number, asking for a JSON array of their texts, without thinking, and
+`subtitleOcrJobs` requests at a time. A server batches the requests it runs,
+but admits them one by one, so few large requests go much faster than many
+small ones. A picture with no text in it is no line. A group whose answer is
+not such an array, and a picture tall enough for two lines answered with one,
+are asked again a picture at a time; a request the server is too busy for is
+asked again after a pause.
+
+Measured on a French Blu-ray, against the pictures:
+
+| Engine | Forced track, 57 lines | Full track, 1,342 pictures | Reads |
+| --- | --- | --- | --- |
+| `vision`, a 35B-A3B model, 16 pictures a request | 3 s | 43 s | best: accents, quotes and line breaks right; a slip in a word now and then |
+| `vision`, the same, one picture a request | 2 s | 210 s | as well, but a blank picture gets an apology and two-line pictures lose their break |
+| `vision`, a 27B model, one picture a request | 5 s | 237 s | as well |
+| `tesseract` | 9 s | 232 s | well, but `V` comes out as `\/`, `Il` as `\|\|` and accented capitals lose their accent |
+| `paddle` on the CPU | 90 s | 27 min | garbles about half the lines, with seconv's picture cleaning or without it |
+
+The servers in `subtitleOcrUrl` are a ladder, tried for each subtitle in the
+order given, and nobody has to start one beforehand:
+
+1. one that answers already is used, and left running: it is not the run's;
+2. the first, when it is not running, is started with `subtitleOcrServe`
+   where the GPU has `subtitleOcrServeMib` free — in a process group of its
+   own, its output in a log in the scratch — and used once it answers. The
+   run stops it again once no subtitle has used it for five minutes, and when
+   it ends at the latest;
+3. with the card taken — another model server holds it — the next server
+   that answers reads instead, whatever model it holds;
+4. with none to be had, the engines after `vision` read.
+
+For example, a small vision model started on port 8082 when the card is
+free, and the larger model a chat server keeps on port 8080 when that server
+holds the card:
+
+```bash
+subtitleOcrUrl=http://127.0.0.1:8082/v1,http://127.0.0.1:8080/v1
+subtitleOcrServe=llama-server --model /models/vision.gguf --mmproj /models/mmproj.gguf --port 8082
+```
+
+The film's picture subtitles are taken out with `mkvextract` first, all in one
+pass: `seconv` handed the film itself would hold the whole of it in memory.
+
+`-o ocr` leaves the picture subtitles as they are.
+
 ### Commentary tracks
 
 A track counts as a commentary when its mkv commentary flag says so *or* when its
@@ -274,7 +377,7 @@ call, so the film is remuxed once and only one output exists at a time:
 | --- | --- |
 | Lossless audio converted to the target codec | the `losslessAudioTarget` setting: `opus`, the default, at a per-channel target bitrate, or `flac`, which takes the channels as they are, up to eight of them. A track the target cannot take stays lossless. A TrueHD Atmos bed loses its objects either way, since both carry the discrete bed. The conversion is swapped in place, keeping index, language, name and flags; it is encoded into RAM and never written beside the film, and a run cut short encodes it again next time |
 | Excessive audio and image-subtitle tracks | dropped: everything not in a kept language - the `keepLanguages` setting, a comma list of ISO 639-1 codes, `en` by default - or the film's own language. That is TMDb's original language (with `tmdbApiKey` set), asked by the id the folder carries or the tagging would give it, and the first audio track's as well when TMDb lists it as spoken in the film or lists no spoken languages - TMDb has some films' original language wrong, and some films are made in several. With no answer, or no soundtrack in the original language, it is the first audio track's alone. Chinese varieties (Cantonese, Mandarin, ...) count as one language, as do the written Norwegians, Serbo-Croatian, Arabic, Persian and Malay, since discs tag them unevenly. Commentary **audio** is exempt from the excessive-language rule, so a foreign-language commentary is never dropped from the film its subtitles were just made for |
-| Downloaded subtitles (`<name>.xx.srt`) that passed the sync test | muxed in, placed after the other subtitles and before the commentary ones — unless the film already carries a text subtitle of that language and role. A download that reads as SDH goes in flagged SDH. A picture subtitle, or a text one of another role, doesn't count, so the download goes in beside it. The `.srt` stays beside the film |
+| Downloaded subtitles (`<name>.xx.srt`) that passed the sync test, and the ones read off a picture subtitle, with their `.forced.srt` and `.sdh.srt` siblings | muxed in, placed after the other subtitles and before the commentary ones, a forced one flagged forced and an SDH one flagged for the hearing impaired — unless the film already carries a text subtitle of that language and role. A plain `.xx.srt` that reads as SDH goes in flagged SDH. A picture subtitle, or a text one of another role, doesn't count, so the sidecar goes in beside it. The `.srt` stays beside the film |
 | Commentary audio | moved below the other audio tracks |
 | Commentary transcripts | appended, each tagged with its own language |
 | Dual-layer Dolby Vision profile 7 | **normalised to single-layer profile 8.1**, so DV survives on hardware that cannot read the enhancement layer. Metadata only — the video is **never re-encoded** |
@@ -838,7 +941,10 @@ it, counting a job that has only just started at its whole need, and otherwise
 waits for the other to finish; whichever began waiting first goes first, so
 neither starves the other. whisper's need is read off its settled plan. The
 model's is the `chapterLlmVramGB` [setting](../settings.md); unset, the model
-takes the whole card and never runs beside whisper. A hosted model, or a
+takes the whole card and never runs beside whisper. A server the run starts
+itself (`chapterLlmServe`, see
+[generate-chapters](generate-chapters.md#several-servers-one-card)) is started
+inside that claim; with too little room, the next server listed is asked. A hosted model, or a
 machine with no NVIDIA card, never waits. Two whisper jobs are not held apart:
 the plan already fits them together. An extra that has to be transcribed waits
 for the commentary whisper altogether, since a second whisper beside the first
@@ -944,9 +1050,9 @@ refused with `-r` (which encodes) and with the single-task sweeps.
 
 **A full ingest with `-o` does everything except the phase it names.** The
 phases are `junk` (the release junk is left where it is), `subtitles` (nothing
-is fetched and the missing subtitles are not downloaded), `roles` (the
-subtitles are not measured for being forced or SDH, and their flags stay as the
-file has them), `commentary`
+is fetched and the missing subtitles are not downloaded), `ocr` (the picture
+subtitles are not read into text), `roles` (the subtitles are not measured for
+being forced or SDH, and their flags stay as the file has them), `commentary`
 (commentaries are not listened for, transcribed or named), `chapters` (the
 chapter archive is not asked), `plex` (the films are not compared with the Plex
 library and nothing is carried over from its copy) and `tagging` (the films are

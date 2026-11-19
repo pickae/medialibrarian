@@ -23,10 +23,19 @@ Whether the model is local or hosted is read off its address
 (:func:`is_local`). A local server has one GPU to share, so its requests are
 held to :data:`JOBS_VARIABLE` at a time; a hosted API scales with what it is
 sent, so nothing waits for it unless that setting says otherwise.
+
+:data:`URL_VARIABLE` may name several servers, the preferred first, for a
+machine whose one card holds one model at a time: each recording is chaptered
+by the first that answers (:meth:`Llm.serving`). The first, not running, is
+started with :data:`SERVE_VARIABLE` where the GPU has room for it, and stopped
+again once idle (:mod:`medialib.lib.modelserver`); further down, the model a
+server lists is asked when it does not list :data:`MODEL_VARIABLE`, and the
+window is the one it lists when that is smaller than :data:`CONTEXT_VARIABLE`.
 """
 
 from __future__ import annotations
 
+import contextlib
 import ipaddress
 import json
 import os
@@ -37,13 +46,17 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.error
 import urllib.parse
+import urllib.request
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field, replace
 
-from medialib.lib import tmdbclient, tooldeps
+from medialib.lib import modelserver, tmdbclient, tooldeps
 
 __all__ = ["API_VARIABLE", "URL_VARIABLE", "MODEL_VARIABLE", "KEY_VARIABLE",
-           "CONTEXT_VARIABLE", "OPTIONS_VARIABLE", "JOBS_VARIABLE", "APIS", "DEFAULT_API",
+           "CONTEXT_VARIABLE", "OPTIONS_VARIABLE", "JOBS_VARIABLE",
+           "SERVE_VARIABLE", "SERVE_MIB_VARIABLE", "SERVE_MIB", "APIS", "DEFAULT_API",
            "DEFAULT_ANTHROPIC_MODEL", "DEFAULT_CONTEXT_TOKENS", "DEFAULT_JOBS",
            "THOROUGH_EFFORT", "LlmError", "Llm", "from_environment", "require",
            "is_local", "first_json"]
@@ -56,6 +69,21 @@ KEY_VARIABLE = "chapterLlmKey"
 CONTEXT_VARIABLE = "chapterLlmContext"
 OPTIONS_VARIABLE = "chapterLlmOptions"
 JOBS_VARIABLE = "chapterLlmJobs"
+SERVE_VARIABLE = "chapterLlmServe"
+SERVE_MIB_VARIABLE = "chapterLlmServeMib"
+
+# The free GPU memory, in MiB, the first server is started with unless
+# SERVE_MIB_VARIABLE says: a 35B-A3B's weights are 22 GiB, and a long
+# transcript's cache wants most of the rest of a 32 GiB card.
+SERVE_MIB = 26000
+
+# How long a server started here waits unused before it is stopped.
+SERVE_IDLE = 300.0
+
+# The servers started here, one per address and command, so every recording
+# and every thread holds the same one.
+_servers: dict = {}
+_servers_lock = threading.Lock()
 
 APIS = ("openai", "anthropic")
 DEFAULT_API = "openai"
@@ -145,6 +173,15 @@ class Llm:
     effort: str = ""
     search: bool = False
     instructions: str = ""
+    # The servers asked when :attr:`url`'s is not to be had, in order.
+    fallbacks: tuple[str, ...] = ()
+    # The command that starts :attr:`url`'s server, and the free GPU memory
+    # in MiB it is started with.
+    serve: str = ""
+    serve_mib: int = SERVE_MIB
+    # Whether :attr:`context_tokens` was set, rather than the default: a
+    # server's own window replaces the default, and only narrows a setting.
+    context_given: bool = True
     _slots: threading.BoundedSemaphore | None = field(
         default=None, init=False, repr=False, compare=False)
 
@@ -156,8 +193,13 @@ class Llm:
         """The model as a run reports it: which, and where, and how hard it
         thinks when that was raised."""
         where = self.url or ("the Claude API" if self.api == "anthropic" else "")
+        if self.serve:
+            where += " (started when needed)"
+        if self.fallbacks:
+            where += ", else " + ", else ".join(self.fallbacks)
         text = "%s at %s (%s protocol, %s)" % (
-            self.model, where, self.api, "local" if self.local else "hosted")
+            self.model or "the model listed", where, self.api,
+            "local" if self.local else "hosted")
         if self.effort:
             text += ", reasoning at %s effort" % self.effort
         if self.search:
@@ -180,6 +222,64 @@ class Llm:
                        instructions=instructions)
         copy._slots = self._slots
         return copy
+
+    @contextlib.contextmanager
+    def serving(self, log: Callable[[str], None]) -> Iterator[Llm]:
+        """This model on the first server of the ladder that can be had now,
+        held until the block ends: the first one answering, or the first
+        started where it is not running (:attr:`serve`) and the GPU has room.
+        A server started here is stopped once it has been idle a while, and at
+        the end of the run at the latest.
+
+        The model is :attr:`model` where the server lists it, or names none,
+        and otherwise the first it lists; the window is the one it lists
+        where that is narrower. LlmError when no server can be had, or one
+        names no model and lists none.
+
+        A single address with a model and no command is used as it is,
+        unasked - a hosted API need not list its models."""
+        if self.api != "openai" or not (self.fallbacks or self.serve
+                                        or not self.model):
+            yield self
+            return
+        for at, url in enumerate((self.url,) + self.fallbacks):
+            server = None
+            if at == 0 and self.serve:
+                server = _server(url, self.serve, self.serve_mib)
+                if not server.acquire(log):
+                    continue
+            try:
+                listing = _listing(url, self.key)
+                if listing is None:
+                    continue
+                yield self._on(url, listing, log)
+                return
+            finally:
+                if server is not None:
+                    server.release()
+        raise LlmError("no chapter model server answers at %s, nor can one be "
+                       "started now" % ", ".join((self.url,) + self.fallbacks))
+
+    def _on(self, url: str, listed: dict[str, int],
+            log: Callable[[str], None]) -> Llm:
+        """This model as the server at ``url``, listing ``listed``, serves it
+        - see :meth:`serving`."""
+        model = self.model
+        if listed and model not in listed:
+            model = next(iter(listed))
+        if not model:
+            raise LlmError("%s lists no model and %s names none"
+                           % (url, MODEL_VARIABLE))
+        window = listed.get(model, 0)
+        context = self.context_tokens
+        if window and (not self.context_given or window < context):
+            context = window
+        if url != self.url or model != self.model:
+            log("    asking %s at %s" % (model, url))
+        bound = replace(self, url=url, model=model, context_tokens=context,
+                        fallbacks=(), serve="")
+        bound._slots = self._slots
+        return bound
 
     def ask(self, system: str, prompt: str) -> str:
         """The model's text answer, its thinking taken out. LlmError when no
@@ -217,7 +317,12 @@ def from_environment(environ=None) -> Llm:
     api = (environ.get(API_VARIABLE) or DEFAULT_API).strip().lower()
     if api not in APIS:
         raise LlmError("%s is %r; it takes %s" % (API_VARIABLE, api, " or ".join(APIS)))
-    url = (environ.get(URL_VARIABLE) or "").strip().rstrip("/")
+    urls = [address.strip().rstrip("/") for address in
+            (environ.get(URL_VARIABLE) or "").split(",") if address.strip()]
+    url = urls[0] if urls else ""
+    if urls[1:] and api != "openai":
+        raise LlmError("%s names one address for the anthropic protocol"
+                       % URL_VARIABLE)
     model = (environ.get(MODEL_VARIABLE) or "").strip()
     key = environ.get(KEY_VARIABLE) or ""
     if api == "openai":
@@ -225,9 +330,9 @@ def from_environment(environ=None) -> Llm:
             raise LlmError("%s is not set: give the address of an OpenAI-compatible "
                            "server, e.g. http://localhost:11434/v1 for Ollama or "
                            "https://api.openai.com/v1" % URL_VARIABLE)
-        if not model:
-            raise LlmError("%s is not set: give the model name that server "
-                           "serves" % MODEL_VARIABLE)
+        if not model and not is_local(url):
+            raise LlmError("%s is not set: give the model that API is to be "
+                           "asked for" % MODEL_VARIABLE)
     else:
         model = model or DEFAULT_ANTHROPIC_MODEL
     options = (environ.get(OPTIONS_VARIABLE) or "").strip()
@@ -239,11 +344,52 @@ def from_environment(environ=None) -> Llm:
         raise LlmError("%s has to be a JSON object" % OPTIONS_VARIABLE)
     if extra and api != "openai":
         raise LlmError("%s applies to the openai protocol only" % OPTIONS_VARIABLE)
+    serve = (environ.get(SERVE_VARIABLE) or "").strip()
+    if serve and api != "openai":
+        raise LlmError("%s applies to the openai protocol only" % SERVE_VARIABLE)
     local = is_local(url)
     return Llm(api, url, model, key,
                _positive(environ, CONTEXT_VARIABLE, DEFAULT_CONTEXT_TOKENS),
                _positive(environ, JOBS_VARIABLE, DEFAULT_JOBS if local else 0),
-               extra, local)
+               extra, local, fallbacks=tuple(urls[1:]), serve=serve,
+               serve_mib=_positive(environ, SERVE_MIB_VARIABLE, SERVE_MIB),
+               context_given=bool((environ.get(CONTEXT_VARIABLE) or "").strip()))
+
+
+def _server(url: str, command: str, need_mib: int) -> modelserver.Server:
+    """The one :class:`modelserver.Server` for ``url`` started by ``command``,
+    shared by every recording and thread of the run."""
+    key = (url, command, need_mib)
+    with _servers_lock:
+        if key not in _servers:
+            _servers[key] = modelserver.Server(url, command, need_mib,
+                                               idle=SERVE_IDLE)
+        return _servers[key]
+
+
+def _listing(url: str, key: str = "") -> dict[str, int] | None:
+    """The models the server at ``url`` lists, in its order, each with the
+    window it serves it with (``max_model_len``, 0 where it says none). None
+    when it does not answer; nothing listed when it answers with an error, as
+    a hosted API that keeps its list to itself does."""
+    request = urllib.request.Request(url.rstrip("/") + "/models")
+    if key:
+        request.add_header("Authorization", "Bearer " + key)
+    try:
+        with urllib.request.urlopen(request, timeout=10) as reply:
+            body = json.loads(reply.read().decode("utf-8", "replace"))
+    except urllib.error.HTTPError:
+        return {}
+    except (OSError, ValueError):
+        return None
+    entries = body.get("data") if isinstance(body, dict) else None
+    listed = {}
+    for entry in entries if isinstance(entries, list) else []:
+        if isinstance(entry, dict) and entry.get("id"):
+            window = entry.get("max_model_len")
+            listed[str(entry["id"])] = window if isinstance(window, int) \
+                and window > 0 else 0
+    return listed
 
 
 def is_local(url: str) -> bool:

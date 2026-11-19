@@ -93,7 +93,33 @@ For example, a local Ollama:
 
 `chapterLlmContext` should be the window the server really runs the model with,
 which is often smaller than the model allows. Ollama, for one, uses a small
-window unless it is told otherwise.
+window unless it is told otherwise. A server that lists its window at
+`/v1/models` (`max_model_len`, as vLLM does) is held to the smaller of the two,
+and unset, `chapterLlmContext` is the window it lists.
+
+### Several servers, one card
+
+`chapterLlmUrl` may list several servers, the preferred first. That suits a
+card that holds one model at a time, where the model you would rather chapter
+with is often not the one loaded:
+
+    chapterLlmUrl=http://localhost:8081/v1,http://localhost:8080/v1
+    chapterLlmModel=qwen3.6-35b-a3b
+    chapterLlmServe=/path/to/start-the-35b-server
+    chapterLlmServeMib=26000
+
+Each recording is chaptered by the first server that can be had right then:
+
+- A server that answers is used, and left running when the run ends.
+- The first server, when it does not answer, is started with `chapterLlmServe`.
+  This happens only if nvidia-smi shows `chapterLlmServeMib` free. Its output
+  goes to a log in the scratch folder. A server started this way is stopped
+  once nothing has asked it anything for five minutes, and when the run ends.
+- When the card is taken, the next server that answers is asked, with
+  the model it lists when it does not list `chapterLlmModel`.
+
+`chapterLlmJobs` and `chapterLlmOptions` apply to whichever server is asked.
+With no server to be had, a recording gets no chapters and the run goes on.
 
 Whether the model is local or hosted is read off `chapterLlmUrl`. A local one
 is localhost, a private or Tailscale address, a name without a dot, or a name
