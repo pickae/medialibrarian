@@ -607,6 +607,24 @@ class TestTheSharedFlags:
         with pytest.raises(cli.UsageError, match="-v and -q"):
             cli.settle_verbosity(result)
 
+    def test_verbose_sets_the_console_clock(self, monkeypatch):
+        import os
+
+        from medialib.lib import runcontext, runlog
+        monkeypatch.delenv("LOG_TIMESTAMPS", raising=False)
+        result = cli.parse(self.shared_spec(), ["-v"])
+        assert cli.settle_verbosity(result) == runlog.VERBOSE
+        # settled here, and in the environment, for the children this run starts
+        assert runcontext.get("LOG_TIMESTAMPS") == "1"
+        assert os.environ.get("LOG_TIMESTAMPS") == "1"
+
+    @pytest.mark.parametrize("argv", [[], ["-q"]])
+    def test_without_verbose_the_clock_is_not_set(self, monkeypatch, argv):
+        from medialib.lib import runcontext
+        monkeypatch.delenv("LOG_TIMESTAMPS", raising=False)
+        cli.settle_verbosity(cli.parse(self.shared_spec(), argv))
+        assert runcontext.get("LOG_TIMESTAMPS") == ""
+
 
 
 class TestWithSharedOptions:

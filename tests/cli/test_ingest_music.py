@@ -856,3 +856,18 @@ class TestTheKeptCoversAreCopiedAsTheyAre:
         run.convert_image("Album/cover.jpg")
         assert run.counters.counts.get("coverAvif") == 1
         assert any("avif" in str(arg) for arg in calls[0]), calls[0]
+
+
+class TestTheRunCarriesAClock:
+    """ingest-music is a long run - every lossless track re-encoded, then
+    beets over the library, then a second library in Opus - so its lines
+    carry the time they were said. The run settles the clock before it asks
+    for any of its inputs, and exports it, so the child scripts it ends
+    with stamp their lines the same way."""
+
+    def test_a_run_settles_the_clock(self, monkeypatch):
+        monkeypatch.delenv("LOG_TIMESTAMPS", raising=False)
+        from medialib.lib import runcontext
+        assert im.main(["-o", "no-such-dir", "dest"]) == 1
+        assert runcontext.get("LOG_TIMESTAMPS") == "1"
+        assert os.environ.get("LOG_TIMESTAMPS") == "1"

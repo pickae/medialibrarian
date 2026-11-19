@@ -14,6 +14,11 @@ same two options for how much of it to say.
 `-v` and `-q` together are refused. A command that starts another one hands its
 level down, so a child says as much as its parent.
 
+**Under `-v`, the run's lines carry a clock** - the time each was said - so
+which step is the slow one reads off the output instead of a stopwatch.
+`ingest-movies` and `ingest-music` carry it at the default verbosity too: they
+are the runs a missing minute hides in.
+
 ## The tools a command runs
 
 ffmpeg, whisper, yt-dlp and the rest never print while they work: several run at

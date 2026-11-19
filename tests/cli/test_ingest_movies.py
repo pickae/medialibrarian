@@ -10,6 +10,7 @@ import os
 import pytest
 
 from medialib.cli import ingest_movies as im
+from medialib.cli import ingest_movies_run as run
 from medialib.lib import clioptions
 
 pytestmark = pytest.mark.pure
@@ -634,3 +635,18 @@ class TestKeepEverythingDropsNothing:
                                  keep_parts=frozenset({"tracks"}))
         assert [t.action for t in tracks] == [
             "keep", "keep", "keep", "swap", "keep", "keep", "keep"]
+
+
+@pytest.mark.fs
+class TestTheRunCarriesAClock:
+    """ingest-movies is a long run, so its lines carry the time they were
+    said; the run settles the clock before it asks for any of its inputs,
+    and exports it, so the phases it ends with stamp their lines the same
+    way."""
+
+    def test_a_run_settles_the_clock(self, monkeypatch):
+        monkeypatch.delenv("LOG_TIMESTAMPS", raising=False)
+        from medialib.lib import runcontext
+        assert run.main(["no-such-dir"]) == 1
+        assert runcontext.get("LOG_TIMESTAMPS") == "1"
+        assert os.environ.get("LOG_TIMESTAMPS") == "1"
