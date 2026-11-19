@@ -11,7 +11,7 @@ While it runs:
     p             Pause the video encoding: every encoder of the moment is stopped
                   where it is, so the CPU cores or the NVENC engines are free for
                   something else. Their memory is NOT released, and the pause lasts
-                  only as long as this shell does. Audio keeps encoding.
+                  only as long as the run. Audio keeps encoding.
     r             Resume: every paused encoder carries on where it stopped.
                   (Ctrl+C still ends the run, paused or not.)
 
@@ -139,10 +139,9 @@ Options:
                   lines.
     -q, --quiet   Print errors only - no progress and no warnings.
     -x, --set <name=value>
-                  Override a setting for this run: name=value, repeatable. The
-                  value is held where the environment holds it, so it wins over
-                  the settings file; a secret is refused - the settings file is
-                  where it goes. The settings page lists the names.
+                  Override a setting for this run, over the settings file;
+                  repeatable. A secret is refused - the settings file is where
+                  it goes. The settings page lists the names.
 
     Run with an unknown profile or tier name to have the valid names listed.
 
@@ -162,8 +161,7 @@ Dependencies:
     after it, with any ffmpeg. Without them, and on the AV1 profiles, such a
     file is encoded as plain HDR10, with a warning when a tool is missing. The
     finished file's Dolby Vision level - the capability claim a player checks
-    before it decodes anything - is corrected if it overstates the video, which
-    needs python3 and is skipped with a warning without it.
+    before it decodes anything - is corrected if it overstates the video.
 
     -u needs an NVIDIA GPU and a Python environment of its own under
     $upscaleHome (default ~/vapoursynth): venv/ with VapourSynth,
@@ -172,13 +170,4 @@ Dependencies:
     models/ ($upscaleModel names another). The engines TensorRT builds for each
     frame size are kept in engines/ there.
 
-    The AV1 profiles ask for psychovisual SVT-AV1 parameters, and the *Nvenc ones
-    for NVENC's uhq tuning, that a distribution's ffmpeg is often too old for -
-    and a too-old libsvtav1 DROPS an unknown parameter silently rather than
-    failing. So a newer build installed beside the packaged one is looked for and
-    preferred when it accepts more: PATH first, then $HOME/.local/bin,
-    /opt/homebrew/bin, /usr/local/bin and /opt/ffmpeg/bin. Of the builds that
-    accept everything, one whose libsvtav1 is SVT-AV1-HDR is preferred; without
-    one the choice is the same as it always was. Set ffmpegOverride to name one
-    outright.
-    The startup summary says which build was used and what it could not do.
+    Which ffmpeg build a run uses is described in docs/requirements.md.

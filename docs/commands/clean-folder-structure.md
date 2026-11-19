@@ -1,7 +1,6 @@
 # `clean-folder-structure`
 
-Applies the shared name cleaners in place across a nested folder tree, then
-removes any sub-folders left empty (or already empty), keeping the input root
+Cleans the names in a nested folder tree in place, then removes any sub-folders left empty (or already empty), keeping the input root
 itself.
 
     clean-folder-structure [options] <inputDir>
@@ -37,8 +36,7 @@ With no options, a run:
 
 ## How names are cleaned
 
-Renaming itself is done in three phases, reused by the comic and audio pipelines
-too:
+Renaming itself is done in three phases:
 
 1. **Individual** — clean each name on its own, normalise separators and
    punctuation, remove configured fragments, and split off a leading date/number
@@ -61,7 +59,7 @@ removed when doing so would slice through the middle of a word or a number, so
 
 ### Fragments
 
-The fragments to remove are read from `data/fragments.txt` (one per line), or from
+The fragments to remove are read from `data/fragments.txt` in the medialib data directory (one per line), or from
 a file named with `-f`. Without either, names are cleaned without any fragment
 removal. [`find-fragment-candidates`](find-fragment-candidates.md) surfaces the
 recurring leftovers in a library worth adding to that list.

@@ -215,7 +215,7 @@ class TestEveryFormatReallyEncodes:
 
 
 class TestEverySpeedTheMappingCanEmit:
-    """The regression guard for the range. Every -s the check now accepts,
+    """The regression guard for the range. Every -s the check accepts,
     through the real encoder, for every format this build can write."""
 
     @pytest.mark.parametrize("speed", range(ci.MAX_SPEED + 1))

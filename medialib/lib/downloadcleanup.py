@@ -210,7 +210,7 @@ def clean_downloaded_file(path: str, run: Runner = _run,
 
     # FILE.JPG and FILE.jpg are the same file to the phone's filesystem and two
     # different ones here, which is the whole reason this is done before anything
-    # else looks for a sidecar by name. lowerCaseEnding renames in place, so the
+    # else looks for a sidecar by name. lower_case_ending renames in place, so the
     # file is now under the lowercased name - unless that name was taken, in which
     # case it refused and the original is still there.
     lower_case_ending(path, skip_log)

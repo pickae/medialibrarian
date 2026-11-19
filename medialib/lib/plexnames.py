@@ -1228,7 +1228,7 @@ def id_tag_renames(tag: str, names, cropped: list | None = None,
 
     The answer for a folder whose names cannot be made to agree and whose id is
     not in doubt: each film keeps the name it has, each sidecar follows its own
-    film the way it always does, and the one thing that changes is that Plex can
+    film, and the one thing that changes is that Plex can
     now see which film they are.
 
     ``cropped`` and ``over_limit`` collect what the file name limit did to the

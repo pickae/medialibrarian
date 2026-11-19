@@ -2,7 +2,7 @@
 
 The archive extension list (:mod:`medialib.lib.enums`) becomes a set of
 questions: is this an archive, what is it called without its suffix, which tool
-opens it, and does a folder of its name sit beside it. The two ``extractArchive``
+opens it, and does a folder of its name sit beside it. The two ``extract_archive``
 functions are the ones that unpack: zip, rar and 7z go to the host's real
 unpacker, and the tar family is read by :mod:`tarfile`.
 
@@ -136,8 +136,8 @@ def archive_base_name(name: str) -> str:
 
 
 def archive_tool_specs(ext: str) -> str:
-    """The ``requireTools`` specs that can unpack that suffix, space-separated,
-    or ``""`` for a suffix none of them opens."""
+    """The :func:`~medialib.lib.tooldeps.require_tools` specs that can unpack
+    that suffix, space-separated, or ``""`` for a suffix none of them opens."""
     return _TOOL_SPECS.get(ext, "")
 
 

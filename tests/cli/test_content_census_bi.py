@@ -319,8 +319,7 @@ class TestTheViewerPageIsNotTheRun:
 
 
 class TestHumanSize:
-    """The page's line says what `du -h` says, because that is what the shell
-    printed."""
+    """The page's line says what `du -h` says."""
 
     @pytest.mark.parametrize("size,expected", [
         (0, "0"), (512, "512"), (1024, "1.0K"), (1536, "1.5K"),

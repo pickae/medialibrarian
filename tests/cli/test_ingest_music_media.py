@@ -1,4 +1,4 @@
-"""Tier D for the provenance tag ingestMusic's resume check is built on.
+"""Tier D for the provenance tag ingest-music's resume check is built on.
 
 A run ends by cleaning the library's names, so by the time the next run looks
 for an already-ingested track it is not called what the encoder called it any

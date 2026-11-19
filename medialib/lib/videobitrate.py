@@ -12,7 +12,7 @@ Which codec a name means, and which tier a size is, are answered by
 family/era and the tier ladder the model keys on); the grain level it is read
 against is the one :mod:`medialib.lib.videograin` measures. The model itself is pure
 arithmetic over its tables and needs no tool; only measuring a file
-(``videoBitrateStats``) reaches for ffprobe.
+(:func:`video_bitrate_stats`) reaches for ffprobe.
 """
 
 from __future__ import annotations
@@ -202,7 +202,7 @@ def source_bitrate_grain(file: str, label: str = "", probe_enabled: int = 1,
     a caller's own duration and dimensions to lay its sample grid out), so this
     only calls it when a caller has handed it over - a caller that never sourced
     the probe library cannot have been asking for one - and leaves an unstated
-    level to weigh as an ordinary picture, the way ``bitrateGrainHeaviness``
+    level to weigh as an ordinary picture, the way :func:`bitrate_grain_heaviness`
     reads one.
     """
     if probe_enabled and source_grain_for is not None:

@@ -55,7 +55,8 @@ it is harmless, and repeating it would bury what is not.
 
 ## The error log
 
-Every error a run reports is also kept, in `logs/error/`, one file per run,
+Every error a run reports is also kept, in `logs/error/` in the
+[medialib data directory](../README.md), one file per run,
 named for when it started, the command and its process id:
 `logs/error/20261105-140211-convert-audio-4242.log`. The file is only made when
 the first error arrives, so a clean run leaves nothing there. The workers a run
@@ -161,3 +162,11 @@ preview would make. Everything else — progress, warnings, errors, a failed
 tool's replay — goes to standard error, beside the status row it shares the
 screen with. So `command > results.txt` keeps the results and still shows the
 run.
+
+## Overwriting a report
+
+A report named after the folder given would be replaced by a second run over
+it. When the report is already there, the run asks before it does anything;
+only `y` overwrites. The answer is read from standard input: a run with
+nothing on it keeps the old report and stops, and `echo y |` in front of the
+command says yes.

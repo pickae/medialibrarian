@@ -82,8 +82,7 @@ diary entry for, and the whole of Plex's watchlist.
 ## Matching
 
 Letterboxd's export names a film by its title and year only, so most films are
-matched by title — through the same fold `ingest-movies` matches a folder
-against TheMovieDB with. Accents, punctuation, a leading article, "Part II"
+matched by title. Accents, punctuation, a leading article, "Part II"
 against "Part 2", "&" against "and" and a dropped subtitle all still match. The
 evidence is asked strongest first: a TMDb or IMDb id both sides carry; the
 title in the same year; the title a year apart; the title where one side has

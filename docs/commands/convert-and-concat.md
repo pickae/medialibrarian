@@ -49,7 +49,7 @@ only the extractors the input actually needs are required.
 | a **folder of that name** lies beside the archive | the archive is left alone: that folder is taken to be it, already unpacked, and possibly corrected since |
 | two archives claim one name (a `.zip` and a `.rar` of one book) | the first stands in for it and the other is passed over, so the two are never mixed into a single book |
 | the redundant folder most archives carry (`Some Book.zip` holding `Some Book/…`) | dropped, so the tracks end up where they would have been unpacked by hand |
-| a member asks to write **outside its own folder** — spelled `/etc/…` or `../…`, or a link pointing out of the tree | the archive is skipped whole rather than unpacked and tidied up afterwards. The same applies to `.cbz`/`.cbr`/`.cb7` in `convert-comics` |
+| a member asks to write **outside its own folder** — spelled `/etc/…` or `../…`, or a link pointing out of the tree | the archive is skipped whole rather than unpacked and tidied up afterwards |
 
 An archive is read before it is unpacked, so that last check comes first.
 

@@ -49,9 +49,8 @@ _SHARED_HELP = (
           "failure print the tool's whole output rather than its last lines."),
     ("q", "", "Print errors only - no progress and no warnings."),
     ("x", "<name=value>",
-          "Override a setting for this run: name=value, repeatable. The value "
-          "is held where the environment holds it, so it wins over the "
-          "settings file; a secret is refused - the settings file is where it "
+          "Override a setting for this run, over the settings file; "
+          "repeatable. A secret is refused - the settings file is where it "
           "goes. The settings page lists the names."),
 )
 
@@ -427,7 +426,7 @@ def help_text(spec: Spec) -> str:
 
 
 def missing_dir_text(spec: Spec, directory: str) -> str:
-    """The input-folder refusal, worded the way every script worded it."""
+    """The input-folder refusal."""
     return f'Directory "{directory}" does not exist.\n\n{page(spec)}\n'
 
 
@@ -504,9 +503,7 @@ def settle_verbosity(result: Result) -> int:
     if verbose:
         # A run that says why is a run whose lines need a clock: which step
         # is the slow one is a guess without the time a step was said. The
-        # variable, not the level, is what stamps the console - ingest-movies
-        # and ingest-music settle it themselves, being long enough to need
-        # it by their own length.
+        # variable, not the level, is what stamps the console.
         runcontext.settle("LOG_TIMESTAMPS", "1")
     return level
 

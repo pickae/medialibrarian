@@ -67,8 +67,7 @@ def census_union(extensions):
 
 
 def census_video_extensions():
-    """``videoExtensions`` (convertAudio's video inputs) plus
-    ``sourceVideoExtensions`` (ingestMovies' loose video), because a library holds
+    """``VIDEO_EXTENSIONS`` plus ``SOURCE_VIDEO_EXTENSIONS``, because a library holds
     both kinds and neither list is a superset of the other: .ts and .wmv are only
     in the first, .vob and .m3u8 only in the second."""
     return census_union(list(enums.VIDEO_EXTENSIONS)
@@ -105,7 +104,8 @@ def census_init(adequacy_wanted=False):
 
     These are the OPTIONAL tools: their absence costs a column, and the run says
     so and goes on. The ones whose absence would cost a whole content type are
-    asked for through ``requireTools`` by the command instead.
+    asked for through :func:`~medialib.lib.tooldeps.require_tools` by the command
+    instead.
 
     The settled values are left in the environment, so the row builders read one
     answer rather than probing again.
@@ -139,8 +139,9 @@ def census_init(adequacy_wanted=False):
 
 
 def _missing_pdf_tools():
-    """What ``comicPdfMissingTools`` prints - the tools it cannot find, or
-    nothing. What matters is only whether anything was printed."""
+    """What :func:`~medialib.lib.comicpdf.comic_pdf_missing_tools` prints - the
+    tools it cannot find, or nothing. What matters is only whether anything was
+    printed."""
     captured = io.StringIO()
     with contextlib.redirect_stdout(captured):
         comicpdf.comic_pdf_missing_tools()
@@ -169,7 +170,7 @@ def census_classify(path):
     if extension in [shell_lower(e) for e in comic_pdf]:
         if not runcontext.get("CENSUS_HAVE_POPPLER", ""):
             return "books", ""
-        # isComicPdf PRINTS its stats whichever way it votes, precisely so one
+        # is_comic_pdf PRINTS its stats whichever way it votes, precisely so one
         # probe answers both questions; the print is captured here.
         captured = io.StringIO()
         with contextlib.redirect_stdout(captured):
@@ -177,9 +178,9 @@ def census_classify(path):
         stats = captured.getvalue().rstrip("\n")
         return ("comics" if status == 0 else "books"), stats
 
-    # The video list is the one censusInit derives, read from where it settled it
+    # The video list is the one census_init derives, read from where it settled it
     # the way censusdocuments reads censusPageExtensions - so a caller that
-    # settled something else is honoured, and one that never called censusInit
+    # settled something else is honoured, and one that never called census_init
     # still gets the answer the module would have given.
     video = runcontext.get("censusVideoExtensions",
                            census_video_extensions()).split()

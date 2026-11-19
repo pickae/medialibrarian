@@ -32,11 +32,11 @@ Usage:
     -s, --sub-folders
             iterate through different input subfolders independently
     -c, --only-concat
-            only concat
-    -b, --bitrate
-            specify bitrate
+            Skip the conversion: join the files as they are.
+    -b, --bitrate <bitrate>
+            The conversion's bitrate, handed to convert-audio -b.
     -i, --clean-input
-            clean input folders
+            Clean the names in the input folders first.
     -e, --encoding <codec>
             output encoding of the transcoding phase, handed to
             convert-audio: opus or aac or xheaac. aac and xheaac are written as .m4a,
@@ -49,9 +49,8 @@ Usage:
     -q, --quiet
             Print errors only - no progress and no warnings.
     -x, --set <name=value>
-            Override a setting for this run: name=value, repeatable. The value
-            is held where the environment holds it, so it wins over the settings
-            file; a secret is refused - the settings file is where it goes. The
+            Override a setting for this run, over the settings file; repeatable.
+            A secret is refused - the settings file is where it goes. The
             settings page lists the names.
 
 Nothing was changed.

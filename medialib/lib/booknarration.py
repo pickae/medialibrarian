@@ -153,7 +153,7 @@ done
 exec "$real" "${args[@]}"
 """
 
-# The script narrationPackageSeries feeds the venv python on stdin: the
+# The script narration_package_series feeds the venv python on stdin: the
 # package's version from its METADATA, never by importing it - torchcodec is
 # asked about precisely because importing it is what fails.
 _PACKAGE_SERIES = """import sys
@@ -774,7 +774,7 @@ def init_book_narration(checkout=None, device=None, log=None):
 
 def narrate_book(book, out_dir, voice="", language=None, log_file=None,
                  prefix=""):
-    """Read ONE book aloud into <outDir> and return the path of the file that
+    """Read ONE book aloud into <out_dir> and return the path of the file that
     came out, or None when nothing was produced. <language> falls back to
     $narrationLanguage; the produced file is FOUND rather than named, newest
     first. With <prefix>, every line the engine's output takes to the console
@@ -1274,7 +1274,7 @@ def _probe_codec(src):
 
 def prepare_voice_sample(src, scratch_dir, log=None):
     """The voice sample to hand to the narration: the file itself when it is
-    already what cloning wants, or a rewritten one in <scratchDir>. Returns the
+    already what cloning wants, or a rewritten one in <scratch_dir>. Returns the
     path, or None for a file no audio could be read from at all."""
     if log is None:
         log = _noop

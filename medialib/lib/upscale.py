@@ -4,8 +4,7 @@ vs-mlrt's TensorRT plugin, run from a Python environment of its own.
 None of it is a Python package this one can import. VapourSynth, its source
 filter, TensorRT and the model live in their own environment under
 ``upscaleHome`` (default ``~/vapoursynth``), which is driven by starting its
-programs - the same arrangement ``read-library`` has with its narration
-checkout:
+programs:
 
     <upscaleHome>/venv/bin/vspipe, venv/bin/python
         VapourSynth, vapoursynth-bestsource, TensorRT, onnx, onnxconverter-common

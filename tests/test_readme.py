@@ -1,8 +1,7 @@
 """The README and docs/ against the package they describe.
 
-Item 8.1's verify, kept as a test because the three things it asks are the three
-that rot silently: a command that is renamed, a link that stops resolving, and
-a requirements list that disagrees with the install.
+Three things rot silently: a command that is renamed, a link that stops
+resolving, and a requirements list that disagrees with the install.
 """
 
 import re
@@ -35,8 +34,8 @@ def _anchor(heading: str) -> str:
 
 
 def test_no_entry_script_is_named():
-    """The eighteen .sh files were deleted at item 6.3; a page that still names
-    one is telling a reader to run something that is not there."""
+    """No command is a .sh file; a page that names one is telling a reader to
+    run something that is not there."""
     assert [p.name for p in _PAGES if ".sh" in _text(p)] == []
 
 
@@ -61,8 +60,8 @@ def test_every_link_reaches_a_file_and_heading():
 
 
 def test_the_requirements_agree_with_the_install():
-    """`mutagen` is the one third-party import, and the README used to say there
-    was nothing to install three bullets above listing it."""
+    """`mutagen` is the one third-party import, so the README must not also say
+    there is nothing to install."""
     requirements = _README.split("## Requirements", 1)[1].split("\n##", 1)[0]
     assert "`mutagen`" in requirements
     assert "nothing to install" not in _README

@@ -67,7 +67,7 @@ def prepare(where: str, log: Callable[[str], None]) -> str:
     answered, and is said once.
 
     Nothing here is required. Without DuckDB, or with no copy and no network,
-    the tagging runs as it always did.
+    the tagging runs without it.
     """
     if not shutil.which("duckdb"):
         log("WARNING: duckdb not found, so the local IMDb lists are not "

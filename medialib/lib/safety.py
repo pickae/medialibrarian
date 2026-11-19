@@ -73,7 +73,7 @@ class SkipLog:
 
 
 class RunSkipLog(SkipLog):
-    """``recordSafetySkip``: the run-level log, which is a FILE.
+    """The run-level log, which is a FILE.
 
     The report a run prints is read back from $SAFETY_LOG, and other phases
     append to that same file - so a skip recorded only in memory would be
@@ -508,7 +508,7 @@ INTERRUPTED_EXIT_STATUS = 130
 
 
 def init_abort_flag(path: str | None = None) -> str:
-    """``initAbortFlag``: settle where this run records an interrupt.
+    """Settle where this run records an interrupt.
 
     Inheritance wins: a wrapper that has already started a run owns the flag, and
     the inner script must share it so one Ctrl+C stops every layer. Taking the
@@ -530,9 +530,9 @@ def init_abort_flag(path: str | None = None) -> str:
 
 
 def release_abort_flag() -> None:
-    """``releaseAbortFlag``: remove the flag, if this layer is the one that made
-    it. An inner script that deleted an inherited one would tell the wrapper
-    above it that the run was never interrupted."""
+    """Remove the flag, if this layer is the one that made it. An inner script
+    that deleted an inherited one would tell the wrapper above it that the run
+    was never interrupted."""
     if runcontext.get("ABORT_FLAG_OWNER") != str(os.getpid()):
         return
     try:
@@ -548,8 +548,8 @@ request_abort = runcontext.request_abort
 
 def fail_no_relevant_input(path: str, what: str,
                            stream=None) -> int:
-    """``failNoRelevantInput``: the refusal a folder gets when it holds nothing
-    this run can work with, and the status to exit with.
+    """The refusal a folder gets when it holds nothing this run can work with,
+    and the status to exit with.
 
     Two different sentences, because they are two different mistakes: an empty
     folder is usually the wrong path, and a full one holding nothing usable is
@@ -581,7 +581,7 @@ _FOOTER: dict[str, Any] = {"report": None, "owner": None, "printed": False}
 
 
 def set_run_footer(report) -> None:
-    """``setRunFooter``: name the closing report of this run."""
+    """Name the closing report of this run."""
     _FOOTER["report"] = report
     _FOOTER["owner"] = os.getpid()
     _FOOTER["printed"] = False
@@ -676,8 +676,7 @@ def interrupts_held() -> Iterator[None]:
     The hold is a Python-level handler that only records the signal, not a
     blocked signal mask, because a child inherits the mask across exec and
     would start deaf to the very signals it is meant to be stopped with. Off
-    the main thread no handler can be installed, and the block runs unguarded
-    as before.
+    the main thread no handler can be installed, and the block runs unguarded.
     """
     held: list[int] = []
     previous = {}

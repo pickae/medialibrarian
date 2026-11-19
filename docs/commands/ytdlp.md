@@ -40,7 +40,7 @@ lives in the tables.
 | Argument | What it is |
 | --- | --- |
 | `<outputPath>` | where the library goes — or, with `-i`, the parent of the staging and library trees |
-| `<archiveFile>` | the "already have it" record. A bare name is kept in the script directory's `logs/` folder — the home of the records a run keeps about itself, and of `ingest-music`'s `beets.log` — and read back from there on the next run; a path is taken as given |
+| `<archiveFile>` | the "already have it" record. A bare name is kept in `logs/` in the medialib data directory and read back from there on the next run; a path is taken as given |
 | `<dateRange>` | optional upload-date filter (below) |
 
 | `<dateRange>` | Fetches |
@@ -57,10 +57,10 @@ A table holds one row per podcast — its folder, its file-name template, how ma
 entries back to walk (`0` for the whole feed), any arguments it alone needs, and
 its URL — and the argument sets every feed shares live once.
 
-The tables are one machine's library rather than code, so `data/` is not tracked
-and there is a sample to start from instead —
+The tables are one machine's library, so there is a sample to start from —
 [`medialib/config/podcasts.example.tsv`](../../medialib/config/podcasts.example.tsv), a working table
-whose header documents the columns and the directives:
+whose header documents the columns and the directives. Copy it to
+`data/podcasts/podcasts.tsv` in the medialib data directory:
 
     cp medialib/config/podcasts.example.tsv data/podcasts/podcasts.tsv
 
@@ -117,8 +117,8 @@ the two systems and is worked out at run time:
 
 | Settled at run time | How | Override |
 | --- | --- | --- |
-| **which yt-dlp** | a `yt-dlp.exe` beside the checkout, one on `PATH`, or an importable `yt_dlp` module — which covers the apt, pip and pipx installs, and the single downloaded binary. On Linux a `yt-dlp-nightly` is taken ahead of the release one. The winner is printed, because "it works on the other machine" usually starts there | `ytdlp` (the old name `YTDLP` is still read) |
-| **which nightly** | a nightly winner is brought up to date before anything is fetched, through the install's own upgrade path | `skipYtdlpUpgrade=1` (the old name `SKIP_YTDLP_UPGRADE` is still read); a preview (`-p`) never upgrades |
+| **which yt-dlp** | a `yt-dlp.exe` in the medialib data directory, one on `PATH`, or an importable `yt_dlp` module — which covers the apt, pip and pipx installs, and the single downloaded binary. On Linux a `yt-dlp-nightly` is taken ahead of the release one. The winner is printed, because "it works on the other machine" usually starts there | `ytdlp` (`YTDLP` is accepted too) |
+| **which nightly** | a nightly winner is brought up to date before anything is fetched, through the install's own upgrade path | `skipYtdlpUpgrade=1` (`SKIP_YTDLP_UPGRADE` is accepted too); a preview (`-p`) never upgrades |
 | **which ffmpeg** | the [ladder](../requirements.md#which-ffmpeg-a-run-uses) is walked past any build that will not run, and the winner named to yt-dlp | a feed's own `--ffmpeg-location` |
 | **which paths** | under Git Bash or Cygwin the output and archive paths are translated to their drive-letter form, since a native `yt-dlp.exe` does not know where the emulated root is mounted | — |
 | **which quoting** | `-p` prints the calls instead of running them, quoted for the shell of the host it is printed on | `-s windows` / `-s linux` prints the *other* machine's calls from the same table |
@@ -194,13 +194,9 @@ library:
 
 What a table's profile is converted with is what the profile names above; a
 `#!ingest` line names different arguments for its own profile ([the
-profiles](#profiles)). The arguments one kind is run with are decided once for
-the run, because the folder it converts is one.
+profiles](#profiles)).
 
-There is one staging folder per **conversion** and not per table or profile,
-because the converter is handed a folder rather than a file — and they all end up
-in the same library, so the split is invisible in the result. The raw downloads
-are kept: they are the only copy of what was published, and the archive file says
+The raw downloads are kept: they are the only copy of what was published, and the archive file says
 they will not be fetched again, so changing one's mind about a bitrate is a
 re-run of the last step rather than of the whole night. A video table ignores
 `-i` and downloads to `<outputPath>` as usual, since an audio converter would
@@ -208,16 +204,10 @@ throw its picture away. Normally given together with `-c`, so the embedded
 thumbnail is gone before the library is built out of the folder it was sitting
 in.
 
-The library copy runs beside the downloads rather than after them. A download
-waits on the network and on the pauses a provider asks for, and leaves the
-processor idle; the conversion — and with `-g` the transcription and the
-language model, which take far longer — is started as soon as a feed is
-finished. Feeds are converted a few episodes at a time, one `convert-audio`
-over the folders of all of them (`-r` each), so whisper and the model each
-start once per batch and take turns on the graphics card once per batch, not
-once per episode. When the downloads are over, the last batch is converted and
-every staging folder is passed over once more, which finds the feeds done and
-converts the folders no table in this run downloads into.
+The library copy runs beside the downloads rather than after them: a feed is
+converted as soon as it is finished, a few episodes at a time. When the
+downloads are over, the last batch is converted, and so are the staging folders
+no table in this run downloads into.
 
 ### Chapters for the library (`-g`)
 
@@ -229,9 +219,8 @@ staging folder as well as the new ones, so the first run with `-g` chapters a
 feed's back catalogue too. A run whose model cannot be reached is refused
 before anything is fetched.
 
-`-P "<text>"` hands your own instructions to the model, for example a chapter
-per speaker ([`convert-audio -p`](convert-audio.md#chapters-for-what-has-none--t)).
-The model then reasons harder, and Claude may search the web. `-P` needs `-g`.
+`-P "<text>"` adds your own instructions for the model, as
+[`generate-chapters -p`](generate-chapters.md#your-own-instructions) does; it needs `-g`.
 
 Where the transcript comes from depends on the feed:
 

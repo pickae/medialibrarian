@@ -33,11 +33,9 @@ class TestRename:
         assert im.rename("   Some Movie   ") == "Some Movie"
 
     def test_an_apostrophe_does_not_break_the_collapse(self):
-        """An apostrophe broke the shell's original `echo | xargs` collapse,
-        which treats it as a quote and errors out. The apostrophe itself is
-        dropped earlier by the shared cleaner's punctuation pass; what matters
-        here is that the name comes through collapsed rather than the whole
-        rename failing."""
+        """The apostrophe itself is dropped earlier by the shared cleaner's
+        punctuation pass; what matters here is that the name comes through
+        collapsed rather than the whole rename failing."""
         assert im.rename("Dante's   Peak") == "Dantes Peak"
 
     @pytest.mark.parametrize("tagged", [
@@ -381,11 +379,10 @@ class TestTheFilmsOriginalLanguage:
 class TestReadTrackInfo:
     """The mkvmerge identification folded into per-track fields.
 
-    What the shell did with a jq filter joining six fields on a unit separator,
-    and the interesting part of it was ``tostring``: a property the file does not
-    carry - no track name, no channel count on a subtitle, an absent commentary
-    flag or language - renders as the literal string "null", which is what every
-    comparison downstream is written against.
+    A property the file does not carry - no track name, no channel count on a
+    subtitle, an absent commentary flag or language - reads as the literal
+    string "null", which is what every comparison downstream is written
+    against.
     """
 
     PAYLOAD = """{
@@ -436,13 +433,11 @@ class TestReadTrackInfo:
         assert comments == ["null", "false", "true", "null"]
 
     def test_a_language_survives_verbatim(self, read):
-        """Both the tagging and the commentary language read this field."""
         _names, _codecs, _channels, _comments, _types, langs = read
         assert langs == ["null", "eng", "null", "ger"]
 
     def test_a_file_that_cannot_be_identified_yields_no_tracks(self,
                                                                monkeypatch):
-        """Which every caller already treats as nothing to do."""
         class Done:
             returncode = 2
             stdout = b"not json"

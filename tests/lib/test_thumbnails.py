@@ -57,9 +57,8 @@ class _Covers:
     """The cover writer stand-in: every (audio, cover) pair recorded, and a
     canned status per call.
 
-    Embedding is a function call now rather than a subprocess, so what used to be
-    an assertion on argv is an assertion on the call - the same two paths, one
-    layer in.
+    Embedding is a function call rather than a subprocess, so the assertion is
+    on the call.
     """
 
     def __init__(self, statuses=None):
@@ -276,9 +275,8 @@ def test_pdftoppm_s_own_status_is_the_functions(tmp_path, isolated_env, monkeypa
 ################################################################################
 # embedThumbnail: get it to a sane size, then write it in
 #
-# The audio files are looked up next to the CURRENT directory, the way the
-# shell version finds them after its caller has cd'd into the subfolder, so
-# each case runs from inside its own folder.
+# The audio files are looked up next to the CURRENT directory, so each case
+# runs from inside its own folder.
 ################################################################################
 def test_no_image_and_no_extraction_is_a_status_zero(tmp_path, isolated_env,
                                                      monkeypatch):
@@ -382,10 +380,6 @@ def test_two_outputs_in_one_run_never_share_a_temp_thumbnail(tmp_path,
                                                              covers):
     """The path is derived from the OUTPUT name, so two workers of one parallel
     run cannot delete each other's in-flight cover.
-
-    Asserted here rather than end to end: concatAudio's parallel run used to show
-    it through the two python3 calls a PATH recorder saw, and embedding stopped
-    being a subprocess at item 5.2.
     """
     d = tmp_path / "case"
     _folder(d, ["art.jpg", "Album One.opus", "Album Two.opus"])

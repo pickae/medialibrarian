@@ -1701,11 +1701,11 @@ def _run(result, declaration, program: str, script_dir: str,
     safety.exit_if_aborted()
     state.phase_end = time.time()
 
-    # The same two refusals this script has always made, answered from what the
-    # workers saw: the archives were found, but did any of them hold a page, and
-    # did any page survive being converted? A run that only found books already on
-    # disk counts as packaged and so refuses nothing, which is what a resumed run
-    # of a finished library is.
+    # Two refusals, answered from what the workers saw: the archives were
+    # found, but did any of them hold a page, and did any page survive being
+    # converted? A run that only found books already on disk counts as packaged
+    # and so refuses nothing, which is what a resumed run of a finished library
+    # is.
     if counters.read("packaged") == 0:
         if counters.read("pagesFound") == 0:
             return safety.fail_no_relevant_input(

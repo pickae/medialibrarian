@@ -120,7 +120,7 @@ jobs:
       # The weekly run shuffles the order, to find a case that passes only
       # because of what ran before it - something an in-order run can never
       # show. Not every run: the collected order is also close to the fastest
-      # one (tests.md has the measurement), so shuffling stays out of the
+      # one (tests/README.md has the measurement), so shuffling stays out of the
       # runs people wait on. The seed is the run's id with the matrix leg's
       # index appended, so the three Pythons try three orders; the header
       # prints it, and `pytest --randomly-seed=<seed>` with pytest-randomly

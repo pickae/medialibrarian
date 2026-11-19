@@ -19,8 +19,7 @@ USAGE_HEAD = """Usage:
 def spec(program: str) -> "clioptions.Spec":
     return clioptions.Spec(
         head=USAGE_HEAD.format(program=program),
-        # The page is printed without the credits line and on stderr, which is
-        # where this usage has always gone.
+        # The page is printed without the credits line and on stderr.
         no_args_with_credits=False,
         no_args_stream="stderr",
     )

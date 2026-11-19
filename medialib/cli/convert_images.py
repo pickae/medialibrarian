@@ -105,11 +105,10 @@ def _spoken_list(words) -> str:
 
 OPT_SPEC = """
 h |  | Print this help page.
-c |  | crop excessive whitespace
+c |  | Trim the plain margins off each image.
 a |  | convert every image, including one whose file size says it is
-                    already starved. Without it such an image is left alone: see
-                    below.
-r |  | reverse: convert the -e format back to jpeg
+                    already starved. Without it such an image is left alone.
+r |  | Convert images of the -e format back to JPEG.
 e | <format> | output encoding: {formats}, default {default}
 u | <chroma> | AVIF chroma: {chromas}. 444 keeps colour at full resolution,
                     420 at a quarter of it; 444 gives sharper coloured lines and
@@ -117,11 +116,13 @@ u | <chroma> | AVIF chroma: {chromas}. 444 keeps colour at full resolution,
 j | <jobs> | Caps the number of encoders.
                     Default: what the cores allow, or what the RAM holds of
                     the largest image in the input, whichever is fewer.
-l | <quality> | quality level of the output images
+l | <quality> | Encoder quality; higher is better and larger. Default 60.
 s | <speed> | av1 speed preset {speeds}, lower is slower, default {speed}
-m | <maxRes> | maximum resolution (height) to keep
-f | <fuzz> | when trimming, how many percent color difference gets still trimmed
-k |  | calibrate: measure what the GPU encoder has to be asked for to
+m | <maxRes> | Scale an image taller than <maxRes> pixels down to that
+                    height. Default: no limit.
+f | <fuzz> | With -c: how many percent a colour may differ from the margin
+                    and still be trimmed. Default 10.
+k |  | Measure what the GPU encoder has to be asked for to
                     match the CPU, on crops of the images in <inputDir>, and
                     save it. Works in <outputDir>; converts nothing.
 """.format(formats=_spoken_list(enums.IMAGE_CODECS), default=DEFAULT_FORMAT,
@@ -218,10 +219,10 @@ def _default_jobs(state, work, core_jobs: int, threads: float) -> int:
                   "conversion" % (core_jobs, runlog.cpu_count(), threads))
     return core_jobs
 
-# Set by a run that encodes the images of many of these runs together -
-# convert-comics, one of these per book: the folder this run writes the
-# manifest of its pages into. Under it this run only sorts the pages - which go
-# to the card, which to the CPU, and with what call - and encodes none of them.
+# Set by a run that encodes the images of many of these runs together, one of
+# these per book: the folder this run writes the manifest of its pages into.
+# Under it this run only sorts the pages - which go to the card, which to the
+# CPU, and with what call - and encodes none of them.
 LANE_VARIABLE = "imageGpuLane"
 LANE_MANIFEST = "manifest"
 # Set beside it when the lane's av1gpu decides a -c trim itself (av1gpu.trims):
@@ -599,7 +600,7 @@ def encode_arguments(options, source, out, extra=()):
     """
     chosen = FORMATS[options["format"]]
     # Named only when it is not the encoder's own default, so a run that
-    # does not ask is the call it always was.
+    # does not ask leaves the encoder's own choice alone.
     chroma = (["-define", "%s=%s" % (CHROMA_DEFINE, options["chroma"])]
               if options["chroma"] != DEFAULT_CHROMA else [])
     return ["-format", options["format"],
@@ -1461,7 +1462,7 @@ def main(argv: list, program: str = "convert-images") -> int:
         safety.exit_if_aborted()
         safety.print_run_footer()
         # An image that could not be converted is a run that did not do what
-        # it was asked, and its caller - convert-comics, say - has to know.
+        # it was asked, and its caller has to know.
         return workerpool.exit_status(1 if state.counter("failed") else 0)
     finally:
         ramscratch.run_exit_cleanup()

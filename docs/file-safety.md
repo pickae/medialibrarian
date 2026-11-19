@@ -48,9 +48,8 @@ Every long-running command can be stopped at any point — with `Ctrl+C`, with a
 `kill`, or simply by closing the terminal window it is running in — and all three
 end the run the same way:
 
-- **Nothing that had not begun is begun.** The interrupt is recorded where every
-  parallel worker can see it, so one `Ctrl+C` stops the whole run instead of only
-  the file it landed on, and the run does not fall through into its next phase
+- **Nothing that had not begun is begun.** One `Ctrl+C` stops the whole run,
+  its parallel workers included, instead of only the file it landed on, and the run does not fall through into its next phase
   (re-concatenating, packaging, cube-building) over half-finished work.
 - **The run still reports what it managed.** The closing report — the stats block,
   the counts, the safety recap — is printed for the part that got done, exactly as
@@ -69,7 +68,7 @@ end the run the same way:
   process ends abnormally — an uncaught error, a kill, a library that took the
   process down with it — names the item that was lost as it happens, recaps them
   at the end, and exits non-zero. The per-file failures a command handles itself
-  are unchanged: those are reported and deliberately not fatal.
+  are reported and deliberately not fatal.
 
 A second `Ctrl+C` during the wind-down is not caught, so an impatient user can
 always get out — even when what is being waited for is a `rm -rf` over a mount that
@@ -85,10 +84,8 @@ finishes the download in flight before stopping.
 Stopping is not the only way out of "I need this machine back". `convert-video`,
 whose runs are the long ones, also takes `p` and `r` from the console: `p` stops every
 video encoder of the moment where it is and `r` has them all carry on. The pause
-reaches the encoders whatever the run is doing — a whole file, the chunks of one
-spread across the CPU, or the engines of a GPU — because they are stopped by signal
-rather than asked to stop, and it reaches the ones its parallel workers started as
-readily as its own. What it frees is **computation, not memory**: a stopped encoder
+reaches every encoder whatever the run is doing — a whole file, the chunks of one
+spread across the CPU, or the engines of a GPU. What it frees is **computation, not memory**: a stopped encoder
 still holds its RAM and VRAM, so this is for handing the cores or the GPU over for a
 while, not for freeing them. It also lasts only as long as the run, and the run's
 own report keeps the waiting out of its throughput figures. `Ctrl+C` still

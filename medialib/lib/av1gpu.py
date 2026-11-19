@@ -16,7 +16,7 @@ ImageMagick call, only a faster road for the images it can carry:
   the CPU would have trimmed or resized is still the card's.
 
 So the caller decides per image, and everything it does not take - and
-everything it was given and did not write - goes to ImageMagick as before.
+everything it was given and did not write - goes to ImageMagick.
 
 It is reached in batches, never one image per call, and the batches are
 sized in megapixels, not images. Measured on an RTX 5090 with 873 camera

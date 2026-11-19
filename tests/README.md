@@ -207,17 +207,14 @@ tool macOS does not ship (`flock`, `timeout`), and the handful that need a
 case-sensitive filesystem (`conftest.needs_case_sensitive_fs`). On Linux a
 missing tool still fails, because that job installs every one.
 
-It has no `/proc` either, and the package never assumed one — `pausecontrol`
-reads it where there is one and falls back to `kill -0` and `pgrep -P`. Five
-*cases* did assume one, and they are the reason to say so here rather than treat
-it as settled: three read `/proc/<pid>` to ask whether an encoder was stopped or
-released, which off Linux answered "no such process" for a live one — so a case
-asserting the encoders were *gone* passed without testing anything. They now
-take the same two rungs the package does (`ps -o stat=` for the state letter,
-which is `T` for stopped on both; signal 0 for liveness, where a refusal counts
-as alive). The other two wanted a pid with nothing behind it and read
-`/proc/sys/kernel/pid_max` to build one; they reap a child of their own instead,
-which is the property they were after on any POSIX host.
+It has no `/proc` either. `pausecontrol` reads it where there is one and falls
+back to `kill -0` and `pgrep -P`, and the cases that ask whether an encoder was
+stopped or released take the same two rungs (`ps -o stat=` for the state
+letter, which is `T` for stopped on both; signal 0 for liveness, where a
+refusal counts as alive) — reading `/proc/<pid>` off Linux answers "no such
+process" for a live one, so a case asserting the encoders were *gone* would
+pass without testing anything. The cases that want a pid with nothing behind
+it reap a child of their own rather than reading `/proc/sys/kernel/pid_max`.
 
 **Windows** runs the `pure` tier and `test_ramscratch.py`, which is what CI
 runs there. The rest fails for reasons that belong to the platform and not to

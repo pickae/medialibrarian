@@ -60,11 +60,13 @@ s | <names> | Only the Plex movie libraries with these titles,
 l |  | Letterboxd -> Plex only: mark films played and rated, and
                     write no CSV.
 o | <file> | Write the CSV for Letterboxd's importer to <file>. Default:
-                    logs/letterboxd-import-<date>.csv beside this script.
+                    logs/letterboxd-import-<date>.csv in the medialib data
+                    directory.
 k | <file> | Remember what Letterboxd has, and what was sent to it, in
                     <file>, and keep a copy of the Plex library beside it, so
                     the next run reads only what changed. Default:
-                    data/plex-letterboxd-state.json beside this script.
+                    data/plex-letterboxd-state.json in the medialib data
+                    directory.
 a | <id> | Read the plays of the Plex account with this number on the
                     server rather than its owner's (1). The numbers are listed
                     at <plexUrl>/accounts.

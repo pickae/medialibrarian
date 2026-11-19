@@ -531,7 +531,6 @@ def embed_chapters(chapter_file: str, chapter_lines: Sequence[str],
     elif audio_file:
         run(["mkvmerge", "--quiet", audio_file, "-o", mka_file])
 
-    # Set the title.
     run(["mkvpropedit", "--quiet", mka_file, "--edit", "info",
          "--set", f"title={title}", "--edit", "track:1",
          "--set", f"name={title}"])

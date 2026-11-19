@@ -1,14 +1,11 @@
 """How this host spells an ImageMagick call.
 
 ImageMagick 6 installs one binary per operation - ``convert``, ``identify`` -
-and version 7 replaced all of them with a single ``magick`` that takes the
+and version 7 replaces them all with a single ``magick`` that takes the
 operation as its first word: ``magick identify ...``, and ``magick ...`` on its
-own for what used to be ``convert``. Version 7 still installs the old names as
-compatibility wrappers on most builds, which is why every call site here could
-say ``convert`` for years and be right on both.
-
-That is the part that is ending. The v7 wrappers print a deprecation notice and
-are documented as going away, and Homebrew - which is how a Mac gets
+own for ``convert``. Version 7 still installs the old names as compatibility
+wrappers on most builds, but they print a deprecation notice and are
+documented as going away, and Homebrew - which is how a Mac gets
 ImageMagick at all - ships v7 only. So the name is resolved rather than
 written: the old one while it is there, ``magick`` when it is not.
 

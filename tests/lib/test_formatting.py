@@ -124,10 +124,9 @@ class TestByteCounts:
 
 
 class TestOutsideTheContract:
-    """Past 2^63 the bash implementation stopped agreeing with this one: gawk gives
-    up printing a double through a 64-bit integer, and at infinity it answers
-    "+inf:-nan:-nan" for a duration. What happens beyond that point is a decision,
-    so it is stated here rather than left untested."""
+    """Past 2^63 a byte count does not fit a 64-bit integer, and infinity is no
+    duration. What happens beyond that point is a decision, so it is stated
+    here rather than left untested."""
 
     def test_an_overflowing_value_reads_as_zero(self):
         # awk would carry the infinity into the formatter; carrying it here means
@@ -137,7 +136,7 @@ class TestOutsideTheContract:
         assert fmt_hms("1e400") == "0:00:00"
         assert fmt_bytes("1e400") == "0 B"
 
-    def test_which_is_what_it_already_did_with_the_words(self):
+    def test_and_the_words_read_the_same(self):
         assert awk_number("inf") == awk_number("1e400") == 0
 
     def test_nothing_in_the_module_raises_on_any_of_them(self):
