@@ -514,11 +514,11 @@ def _neighbour(cues: Sequence[Cue], title: str, first: int, here_start: int,
 def _refine(cues: Sequence[Cue], found: Sequence[Passage], marks: list[_Mark],
             summary: str, llm, duration: int, log,
             instructions: str = "",
-            tally: chapterllm.Tally | None = None) -> list[tuple[int, str]]:
+            tally: chapterllm.Tally | None = None) -> list[tuple[int, str, str]]:
     """The second pass: every chapter start after the first looked at again in
-    the transcript around it. Comes back as (cue index, title), the first
-    chapter on the first cue; a start the model answers nothing usable for
-    stays where the outline put it."""
+    the transcript around it. Comes back as (cue index, title, the outline's
+    title), the first chapter on the first cue; a start the model answers
+    nothing usable for stays where the outline put it."""
     listing = [(found[mark.passage].start, mark.title) for mark in marks]
 
     def one(position: int):
@@ -569,7 +569,7 @@ def _refine(cues: Sequence[Cue], found: Sequence[Passage], marks: list[_Mark],
                _asked(instructions, _FOR_REFINE), window))
         answer = _ask_json(llm, prompt, "start", log, tally)
         if answer is None:
-            return here.first, mark.title
+            return here.first, mark.title, mark.title
         title = clean_title(answer.get("title")) or mark.title
         start = answer.get("start")
         if start is None or str(start).strip().lower() in ("", "null", "none"):
@@ -580,14 +580,15 @@ def _refine(cues: Sequence[Cue], found: Sequence[Passage], marks: list[_Mark],
         ceiling = high if after_first is None else min(high, after_first - 1)
         if not floor <= index <= ceiling:
             index = here.first
-        return index, title
+        return index, title, mark.title
 
     with ThreadPoolExecutor(max_workers=_workers(llm, len(marks) - 1)) as pool:
         refined = list(pool.map(one, range(1, len(marks))))
     dropped = refined.count(None)
     if dropped:
         log("    %d chapter start(s) dropped on a second look" % dropped)
-    return [(0, marks[0].title)] + [mark for mark in refined if mark is not None]
+    return ([(0, marks[0].title, marks[0].title)]
+            + [mark for mark in refined if mark is not None])
 
 
 def clean_title(value) -> str:
@@ -615,18 +616,19 @@ def _place(cues: Sequence[Cue], index: int) -> int:
     return max(cues[index].start - min(LEAD_MS, max(gap, 0) // 2), 0)
 
 
-def _settle(cues: Sequence[Cue], chosen: Sequence[tuple[int, str]],
-            duration: int, min_ms: int) -> list[tuple[int, str]]:
+def _settle(cues: Sequence[Cue], chosen: Sequence[tuple[int, str, str]],
+            duration: int, min_ms: int) -> list[tuple[int, str, str]]:
     """The marks in time order, at their places, with every one that would
     leave a chapter shorter than ``min_ms`` taken out - the later of two that
-    sit too close, and a last one too near the end."""
-    marks: list[tuple[int, str]] = []
-    for index, title in sorted(chosen, key=lambda pair: pair[0]):
+    sit too close, and a last one too near the end. Each keeps its outline
+    title beside its title."""
+    marks: list[tuple[int, str, str]] = []
+    for index, title, first in sorted(chosen, key=lambda mark: mark[0]):
         at = _place(cues, index)
         if not marks:
-            marks.append((0, title))
+            marks.append((0, title, first))
         elif at - marks[-1][0] >= min_ms:
-            marks.append((at, title))
+            marks.append((at, title, first))
     while len(marks) > 1 and duration - marks[-1][0] < min_ms:
         marks.pop()
     return marks if len(marks) > 1 else []
@@ -807,22 +809,33 @@ def _chapters(cues: Sequence[Cue], found: list[Passage], llm, duration: int,
         return _review(settled, summary, llm, duration, log, instructions, tally)
 
 
-def _review(marks: list[tuple[int, str]], summary: str, llm, duration: int,
+def _review(marks: list[tuple[int, str, str]], summary: str, llm, duration: int,
             log, instructions: str = "",
             tally: chapterllm.Tally | None = None) -> list[tuple[int, str]]:
     """The third pass: the finished list read once as a whole, against the
     user's instructions. Only titles can change - the starts are settled - and
     only where the answer names the chapter; a title the model leaves out,
-    or gives back empty, stays as it was."""
+    or gives back empty, stays as it was. The titles the second look changed
+    follow the list with the outline's, for the model to choose between."""
+    titles = [(start, title) for start, title, _ in marks]
     if len(marks) < 3:
-        return marks
+        return titles
     listing = "\n".join("[C%d %s] %s" % (number, time_label(start), title)
-                        for number, (start, title) in enumerate(marks, 1))
+                        for number, (start, title, _) in enumerate(marks, 1))
+    drafts = "\n".join("C%d: %s" % (number, first)
+                       for number, (_, title, first) in enumerate(marks, 1)
+                       if first != title)
+    if drafts:
+        listing += ("\n\nTitles changed after the first draft, with the first "
+                    "draft's title, which may be the right one:\n" + drafts)
     prompt = (
         "A recording that runs %s has been divided into chapters.%s Each "
         "chapter below is its id, the time it starts and its title. Every "
         "title was written while looking at only a few minutes of the "
-        "recording, so they may not agree with one another.\n\n"
+        "recording, so they may not agree with one another. Where a title was "
+        "changed after the first draft, the first draft's title is given after "
+        "the list: either may be the right one, so keep the one that fits the "
+        "list, or take from both what each gets right.\n\n"
         "Read the whole list and correct the titles - and only the titles; "
         "the starts are final and no chapter is added, removed or merged:\n"
         "- Titles that follow a pattern (an episode or part number, a speaker's "
@@ -832,8 +845,8 @@ def _review(marks: list[tuple[int, str]], summary: str, llm, duration: int,
         "where the recording itself repeats a part; do not renumber to hide "
         "that.\n"
         "- Put right a title that contradicts the instructions below. Add or "
-        "change a fact only when the list itself shows it: you have not seen "
-        "the recording.\n"
+        "change a fact only when the list or a first draft shows it: you have "
+        "not seen the recording.\n"
         "- Leave a title that is right exactly as it is.\n\n%s%s\n\n"
         'Answer with JSON only: {"titles": [{"id": "<chapter id>", '
         '"title": "<title>"}, ...]}, one entry for every chapter whose title '
@@ -843,8 +856,7 @@ def _review(marks: list[tuple[int, str]], summary: str, llm, duration: int,
            if instructions.strip() else "", listing))
     answer = _ask_json(llm, prompt, "titles", log, tally)
     if answer is None:
-        return marks
-    titles = [(start, title) for start, title in marks]
+        return titles
     changed = 0
     for entry in answer.get("titles") or []:
         if not isinstance(entry, dict):

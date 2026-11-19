@@ -45,8 +45,10 @@ A chapter list is a division of the whole recording, so it is made in three pass
 - **The review** reads the finished list - each chapter's start and title, your
   instructions, and no transcript - and rewords titles that disagree with one
   another or with the instructions: a pattern kept to the end, numbers in order.
-  It cannot move, add or drop a chapter, and a title it does not name stays as
-  it was. It is one short request, skipped for fewer than three chapters.
+  The titles the second look changed follow the list with the outline's titles,
+  so the review can choose between them or combine them. It cannot move, add or
+  drop a chapter, and a title it does not name stays as it was. It is one short
+  request, skipped for fewer than three chapters.
 
 A recording made of parts, such as several episodes in a row each with its own
 segments, comes out as one flat list. Each part gets its own chapter where it

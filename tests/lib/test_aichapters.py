@@ -407,8 +407,9 @@ def test_the_settle_step_keeps_a_chapter_the_floor_lets_through():
     cues = [aichapters.Cue(0, 5_000, "opening"),
             aichapters.Cue(40_000, 45_000, "first speaker"),
             aichapters.Cue(400_000, 405_000, "next part")]
-    chosen = [(0, "Episode"), (1, "First speaker"), (2, "Next")]
-    kept = {floor: [at for at, _ in aichapters._settle(cues, chosen, 900_000, floor)]
+    chosen = [(0, "Episode", "Episode"), (1, "First speaker", "First speaker"),
+              (2, "Next", "Next")]
+    kept = {floor: [at for at, *_ in aichapters._settle(cues, chosen, 900_000, floor)]
             for floor in (60_000, 30_000)}
     assert len(kept[60_000]) == 2
     assert len(kept[30_000]) == 3
@@ -519,6 +520,36 @@ class TestTheReviewOfTheTitles:
     def test_a_list_of_two_is_not_worth_a_review(self):
         _, model = self._run(None, 1, 21)
         assert not self._reviews(model)
+
+    def test_a_title_the_second_look_changed_is_given_after_the_list(self):
+        def refine(prompt):
+            title = _placed_title(prompt)
+            return json.dumps({"start": _first_line(prompt),
+                               "title": "Renamed" if title == "Topic 21" else title})
+
+        model = Model(outline=_outline(1, 21, 41), refine=refine)
+        aichapters.generate(_cues(60), model)
+        (prompt,) = self._reviews(model)
+        assert re.search(r"\[C2 0:\d\d:\d\d\] Renamed\n", prompt)
+        drafts = prompt[prompt.index("Titles changed after the first draft"):]
+        assert "\nC2: Topic 21" in drafts
+        assert "\nC1:" not in drafts and "\nC3:" not in drafts
+
+    def test_with_no_title_changed_there_are_no_first_drafts(self):
+        _, model = self._run(None)
+        (prompt,) = self._reviews(model)
+        assert "Titles changed after the first draft" not in prompt
+
+    def test_and_the_review_may_give_the_first_title_back(self):
+        def refine(prompt):
+            title = _placed_title(prompt)
+            return json.dumps({"start": _first_line(prompt),
+                               "title": "Renamed" if title == "Topic 21" else title})
+
+        model = Model(outline=_outline(1, 21, 41), refine=refine,
+                      review=lambda p: '{"titles": [{"id": "C2", "title": "Topic 21"}]}')
+        marks = aichapters.generate(_cues(60), model)
+        assert [title for _, title in marks] == ["Topic 1", "Topic 21", "Topic 41"]
 
     def test_it_tells_the_model_the_starts_are_final(self):
         _, model = self._run(None)
