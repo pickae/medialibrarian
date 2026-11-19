@@ -176,7 +176,7 @@ def commentary_language(name: str, tag: str, mka: str, ram_root: str,
     tag = shell_lower(tag)
 
     # 1. a language word in the track name
-    for lang in languages.LANGUAGES:
+    for lang in languages.recognised():
         for keyword in lang.keywords:
             if keyword in name:
                 return (lang.code2, lang.code2)

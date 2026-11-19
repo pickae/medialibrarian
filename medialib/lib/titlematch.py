@@ -392,7 +392,7 @@ NUMBER_LABELS = frozenset((
 # be arithmetic rather than a reading.
 #
 # In every Latin-script language the library's audio is recognised in -
-# :data:`medialib.lib.languages.LANGUAGES` minus the Greek, Cyrillic and CJK
+# :data:`medialib.lib.languages.NAMED` minus the Greek, Cyrillic and CJK
 # ones the fold drops - written as the fold leaves them: accents dropped, and
 # the umlauts, the å and the ö spelled out as well. A few are left out on
 # purpose. The ones are the articles of their languages ("ein", "un", "een",

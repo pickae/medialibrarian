@@ -8,69 +8,97 @@ nothing at all.
 import pytest
 
 from medialib.lib import languages as lang
+from medialib.lib import settings
 
 
-class TestTheTableItself:
-    def test_every_row_has_every_field(self):
-        for row in lang.LANGUAGES:
+class TestTheLanguagesFromISO:
+    def test_every_recognised_language_has_every_field(self):
+        for row in lang.recognised():
             assert row.code2 and row.code3 and row.sub_word and row.code3b
             assert row.keywords
 
     def test_two_letter_codes_are_two_letters_and_three_are_three(self):
-        for row in lang.LANGUAGES:
+        for row in lang.recognised():
             assert len(row.code2) == 2
             assert len(row.code3) == 3
             assert len(row.code3b) == 3
 
     def test_no_code_is_claimed_by_two_languages(self):
-        """The lookups walk the table in order and take the first match, so a code
-        in two rows would make the order load-bearing without saying so."""
-        for row in lang.LANGUAGES:
-            for other in lang.LANGUAGES:
-                if other is row:
-                    continue
-                assert row.code2 not in (other.code2, other.code3, other.code3b)
+        rows = lang.recognised()
+        assert len({row.code2 for row in rows}) == len(rows)
+        spellings = [code for row in rows
+                     for code in {row.code2, row.code3, row.code3b}]
+        assert len(spellings) == len(set(spellings))
 
-    def test_only_four_languages_have_a_second_three_letter_code(self):
-        """639-2/B differs from 639-2/T for exactly these; the rest repeat.
-        Chinese is the fourth: it is fed "chi" and reports "zho"."""
-        differing = {row.code2 for row in lang.LANGUAGES if row.code3 != row.code3b}
-        assert differing == {"de", "fr", "nl", "zh"}
+    def test_the_languages_with_a_second_three_letter_code(self):
+        """639-2/B differs from 639-2/T for these of the named ones; the rest
+        repeat their one code."""
+        differing = {row.code2 for row in lang.recognised()
+                     if row.code3 != row.code3b}
+        assert differing == {"de", "fr", "nl", "cs", "ro", "el", "zh"}
 
-    def test_the_rows_the_setting_may_name_beside_the_default_six(self):
-        """The ``spokenLanguages`` setting may name these beside the six a
-        run fetches by default, and a row's codes are what a track is stamped
-        with and read back from, so each is pinned by every spelling."""
-        expected = {
-            "pt": ("por", "por", "Portuguese"),
-            "pl": ("pol", "pol", "Polish"),
-            "sv": ("swe", "swe", "Swedish"),
-            "da": ("dan", "dan", "Danish"),
-            "no": ("nor", "nor", "Norwegian"),
-            "fi": ("fin", "fin", "Finnish"),
-            "cs": ("ces", "ces", "Czech"),
-            "hu": ("hun", "hun", "Hungarian"),
-            "ro": ("ron", "ron", "Romanian"),
-            "el": ("ell", "ell", "Greek"),
-            "tr": ("tur", "tur", "Turkish"),
-            "ru": ("rus", "rus", "Russian"),
-            "ja": ("jpn", "jpn", "Japanese"),
-            "ko": ("kor", "kor", "Korean"),
-            "zh": ("chi", "zho", "Chinese"),
-        }
-        for row in lang.LANGUAGES:
-            if row.code2 in expected:
-                assert (row.code3, row.code3b, row.sub_word) \
-                    == expected[row.code2]
-        assert len(lang.LANGUAGES) == 6 + len(expected)
+    @pytest.mark.parametrize("code, code3, code3b, name", [
+        ("pt", "por", "por", "Portuguese"), ("no", "nor", "nor", "Norwegian"),
+        ("cs", "ces", "cze", "Czech"), ("ro", "ron", "rum", "Romanian"),
+        ("el", "ell", "gre", "Greek"), ("zh", "zho", "chi", "Chinese"),
+        ("ja", "jpn", "jpn", "Japanese"), ("de", "deu", "ger", "German"),
+    ])
+    def test_codes_and_the_name_whisper_spells(self, code, code3, code3b, name):
+        row = lang.language(code)
+        assert (row.code3, row.code3b, row.sub_word) == (code3, code3b, name)
+
+    def test_a_language_outside_the_named_ones_is_still_a_language(self):
+        row = lang.language("sk")
+        assert (row.code3, row.sub_word) == ("slk", "Slovak")
+        assert lang.same_language_tag("slo", "sk")
+        assert lang.code3_from_label("Slovak") == "slk"
+
+    def test_a_tag_is_a_language_only_where_the_collection_recognises_it(self):
+        """The tail of a file name is asked, and "II" is a roman numeral
+        there before it is Sichuan Yi."""
+        assert lang.code_from_tag("slo") == ""
+        assert lang.code_from_tag("ii") == ""
+        assert lang.code_from_tag("iii") == ""
+
+    def test_a_code_iso_does_not_have_is_no_language(self):
+        assert lang.language("xx") is None
+
+    @pytest.mark.parametrize("code, words", [
+        ("en", {"english", "englisch", "anglais", "ingles"}),
+        ("de", {"german", "deutsch", "allemand"}),
+        ("fr", {"french", "français", "francais", "französisch"}),
+        ("nl", {"dutch", "nederlands"}),
+        ("es", {"spanish", "espagnol"}),
+        ("it", {"italian", "italien"}),
+        ("pt", {"portuguese", "português", "portugues"}),
+        ("pl", {"polish", "polski"}), ("sv", {"swedish", "svenska"}),
+        ("da", {"danish", "dansk"}), ("no", {"norwegian", "norsk"}),
+        ("fi", {"finnish", "suomi"}), ("cs", {"czech", "cesky"}),
+        ("hu", {"hungarian", "magyar"}), ("ro", {"romanian", "romana"}),
+        ("el", {"greek", "ellinika"}), ("tr", {"turkish", "turkce"}),
+        ("ru", {"russian", "русский"}),
+        ("ja", {"japanese", "nihongo", "日本語"}),
+        ("ko", {"korean", "hangugeo", "한국어"}),
+        ("zh", {"chinese", "zhongwen", "中文"}),
+    ])
+    def test_the_names_a_track_has_always_been_read_by_are_still_read(
+            self, code, words):
+        assert words <= set(lang.language(code).keywords)
+
+    def test_no_name_is_two_languages(self):
+        seen = {}
+        for row in lang.recognised():
+            for keyword in row.keywords:
+                assert seen.setdefault(keyword, row.code2) == row.code2, keyword
 
     def test_no_keyword_is_a_commentary_marker(self):
-        """Field 4 says what a track is spoken IN, not what it is. A "commentary"
-        keyword in the English row would stamp "eng" over every foreign
-        commentary and rob the transcription of its one hint about the language."""
-        for row in lang.LANGUAGES:
+        """Keywords say what a track is spoken IN, not what it is. A
+        "commentary" keyword would stamp a language over every foreign
+        commentary and rob the transcription of its one hint about it."""
+        for row in lang.recognised():
             for keyword in row.keywords:
-                assert not any(marker in keyword for marker in lang.COMMENTARY_KEYWORDS)
+                assert not any(marker in keyword
+                               for marker in lang.COMMENTARY_KEYWORDS)
 
 
 class TestWhetherATagSaysAnything:
@@ -116,8 +144,8 @@ class TestACodeFromATag:
     def test_every_row_answers_by_all_three_of_its_codes(self, tag, expected):
         assert lang.code_from_tag(tag) == expected
 
-    @pytest.mark.parametrize("tag", ["kk", "ar", "hin", "th"])
-    def test_a_language_with_no_row_answers_nothing(self, tag):
+    @pytest.mark.parametrize("tag", ["yue", "xx", "zzz"])
+    def test_a_tag_with_no_two_letter_language_answers_nothing(self, tag):
         assert lang.code_from_tag(tag) == ""
 
     @pytest.mark.parametrize("tag", ["und", "null", "zxx", "", "mis", "qaa"])
@@ -224,14 +252,14 @@ class TestTheGuardThatDecidesNothing:
 
     def test_no_tag_that_names_no_language_is_also_somebodys_code(self):
         codes = set()
-        for row in lang.LANGUAGES:
+        for row in lang.recognised():
             codes |= {row.code2, row.code3, row.code3b}
         assert codes.isdisjoint(lang._NOT_A_LANGUAGE)
 
     @pytest.mark.parametrize("tag", ["", "null", "und", "mis", "qaa", "zxx"])
     def test_and_so_the_walk_would_answer_nothing_for_them_by_itself(self, tag):
         assert not any(tag in (row.code2, row.code3, row.code3b)
-                       for row in lang.LANGUAGES)
+                       for row in lang.recognised())
 
 
 class TestSpeaks:
@@ -280,23 +308,28 @@ class TestWantedSubtitles:
     :func:`medialib.lib.languages.spoken_languages`: the languages a run
     fetches and tests subtitles for, in the order the setting names them."""
 
-    def test_the_setting_unset_fetches_what_a_run_always_fetched(
+    SHIPPED = ["en", "de", "fr", "nl", "es", "it"]
+
+    def test_the_shipped_settings_file_names_the_languages_of_the_owner(self):
+        assert settings.shipped()["spokenLanguages"] == ",".join(self.SHIPPED)
+
+    def test_the_setting_unset_is_what_the_shipped_file_says(
             self, monkeypatch):
         monkeypatch.delenv("spokenLanguages", raising=False)
-        wanted = lang.spoken_languages()
-        assert [row.code2 for row in wanted] == list(lang.SPOKEN_DEFAULT)
-        assert wanted == tuple(row for row in lang.LANGUAGES
-                               if row.code2 in lang.SPOKEN_DEFAULT)
+        assert [row.code2 for row in lang.spoken_languages()] == self.SHIPPED
 
-    def test_an_empty_setting_names_nothing(self, monkeypatch):
+    def test_an_empty_setting_is_the_shipped_value_too(self, monkeypatch):
         monkeypatch.setenv("spokenLanguages", "")
-        assert [row.code2 for row in lang.spoken_languages()] \
-            == list(lang.SPOKEN_DEFAULT)
+        assert [row.code2 for row in lang.spoken_languages()] == self.SHIPPED
 
     def test_the_setting_s_order_is_the_order_the_sources_are_asked_in(
             self, monkeypatch):
         monkeypatch.setenv("spokenLanguages", "pt,ja")
         assert [row.code2 for row in lang.spoken_languages()] == ["pt", "ja"]
+
+    def test_any_iso_language_may_be_named(self, monkeypatch):
+        monkeypatch.setenv("spokenLanguages", "sk,af")
+        assert [row.code2 for row in lang.spoken_languages()] == ["sk", "af"]
 
     def test_a_code_named_twice_is_one_language(self, monkeypatch):
         monkeypatch.setenv("spokenLanguages", "pt, pt ,PT,en")
@@ -306,24 +339,32 @@ class TestWantedSubtitles:
         monkeypatch.setenv("spokenLanguages", "ZH,En")
         assert [row.code2 for row in lang.spoken_languages()] == ["zh", "en"]
 
-    def test_a_code_the_table_does_not_know_is_refused(self, monkeypatch):
+    def test_a_code_iso_does_not_know_is_refused(self, monkeypatch):
         from medialib.lib import clioptions
         monkeypatch.setenv("spokenLanguages", "xx")
         with pytest.raises(clioptions.UsageError) as refused:
             lang.spoken_languages()
         assert '"xx"' in refused.value.message
-        assert "It knows:" in refused.value.message
+
+    def test_a_three_letter_code_is_not_a_two_letter_one(self, monkeypatch):
+        from medialib.lib import clioptions
+        monkeypatch.setenv("spokenLanguages", "deu")
+        with pytest.raises(clioptions.UsageError):
+            lang.spoken_languages()
 
     def test_every_unknown_code_is_named(self, monkeypatch):
         from medialib.lib import clioptions
         monkeypatch.setenv("spokenLanguages", "xx,yy")
         with pytest.raises(clioptions.UsageError) as refused:
             lang.spoken_languages()
-        message = refused.value.message
-        assert '"xx"' in message and '"yy"' in message
-        # the codes the table has, so the one who set it can pick a real one
-        assert "cs, da, de, el, en, es" in message
-        assert "ja, ko, nl, no, pl, pt" in message
+        assert '"xx"' in refused.value.message
+        assert '"yy"' in refused.value.message
+
+    def test_a_language_the_user_speaks_is_one_a_track_name_is_read_for(
+            self, monkeypatch):
+        monkeypatch.setenv("spokenLanguages", "en,sk")
+        assert "sk" in {row.code2 for row in lang.recognised()}
+        assert "slovak" in lang.language("sk").keywords
 
 
 class TestTakingTheForcedWordOut:

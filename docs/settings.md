@@ -5,7 +5,9 @@ environment it was started in, or in the settings file
 `~/.config/medialib/settings` (`$XDG_CONFIG_HOME/medialib/settings` where
 that is set) - one `name=value` per line, the way a shell profile writes
 it, `export` and quotes allowed. The environment wins, so one run can
-override the file without editing it.
+override the file without editing it. Beneath both is the file that ships
+with the package, `medialib/config/settings.defaults`: the Default column
+prints its values, and nothing else in the code supplies one.
 
 Every command that takes options can override a setting for one run
 with `-x name=value`, repeatable: the value lands in the run's
@@ -54,7 +56,7 @@ the two disagree.
 | `ffmpegOverride` | The ffmpeg every run uses, by its path; a run refuses to start when it is not executable | unset | `concat-audio`, `content-census`, `convert-and-concat`, `convert-audio`, `convert-video`, `ingest-movies`, `ingest-music`, `read-library`, `transcribe-audio`, `ytdlp` |
 | `imageGpuEncoder` | The GPU AVIF encoder (av1gpu) tried before ImageMagick, by name or path; empty to encode every image on the CPU | `av1gpu` | `convert-comics`, `convert-images` |
 | `infoLogLevel` | How much of what a run says is kept in `logs/info/`, one file per run: `off`, `quiet` (errors and results), `normal` or `verbose` - apart from the console's `-q` and `-v` | normal | `clean-folder-structure`, `clean-folder-structure-adb`, `concat-audio`, `content-census`, `content-census-bi`, `convert-and-concat`, `convert-audio`, `convert-comics`, `convert-images`, `convert-video`, `cue-to-chapters`, `find-fragment-candidates`, `find-gaps`, `generate-chapters`, `ingest-books`, `ingest-movies`, `ingest-music`, `plex-letterboxd-sync`, `read-library`, `transcribe-audio`, `ytdlp` |
-| `keepLanguages` | The languages ingest-movies' improved copy keeps beside the film's own language: a comma list of ISO 639-1 codes the language table knows; the film's own language is kept whatever it says | en | `ingest-movies` |
+| `keepLanguages` | The languages ingest-movies' improved copy keeps beside the film's own language: a comma list of ISO 639-1 codes; the film's own language is kept whatever it says | en | `ingest-movies` |
 | `losslessAudioTarget` | The codec ingest-movies' improved copy converts the lossless audio to: `opus` (the default, at a per-channel target bitrate) or `flac`, which takes the channels as they are, up to eight of them | opus | `ingest-movies` |
 | `mediaServerNaming` | The server the names are written for: `plex` or `jellyfin`. The id tag is written the way that server reads it - `{imdb-tt…}` and `[imdbid-tt…]` - and an edition as its tag, or its version label after the name; names written either way are read back whatever it says, so a library can be switched | plex | `ingest-movies` |
 | `movieJunkExtensions` | The file suffixes ingest-movies deletes from a release as junk, space-separated; empty deletes none - the sample clips, the tiny .mkv files and the .unwanted folders go whatever it says | txt nfo exe doc sfv | `ingest-movies` |
@@ -84,7 +86,7 @@ the two disagree.
 | `ramScratchMinFreeBytes` | With this little free in RAM, new scratch goes to disk instead | 1073741824 | `concat-audio`, `content-census`, `content-census-bi`, `convert-and-concat`, `convert-audio`, `convert-comics`, `convert-images`, `convert-video`, `generate-chapters`, `ingest-books`, `ingest-movies`, `ingest-music`, `read-library`, `transcribe-audio`, `ytdlp` |
 | `readLibraryRamBase` | read-library's scratch, ahead of `ramScratchBase` | `ramScratchBase` | `read-library` |
 | `skipYtdlpUpgrade` | Set to 1 and a nightly yt-dlp is not brought up to date before the fetch. The old name SKIP_YTDLP_UPGRADE is still read | unset - a nightly is upgraded; a preview (-p) never is | `ytdlp` |
-| `spokenLanguages` | The languages you speak: ingest-movies fetches and tests subtitles in them, and ytdlp -g takes a YouTube episode's transcript in its own language when it is one of them, in English when it is not. A comma list of ISO 639-1 codes the language table knows, in the order to fetch them; the table knows the six this defaults to plus pt, pl, sv, da, no, fi, cs, hu, ro, el, tr, ru, ja, ko and zh | en,de,fr,nl,es,it | `ingest-movies`, `ytdlp` |
+| `spokenLanguages` | The languages you speak: ingest-movies fetches and tests subtitles in them, and ytdlp -g takes a YouTube episode's transcript in its own language when it is one of them, in English when it is not. A comma list of ISO 639-1 codes, in the order to fetch them; track names are also read in the names these languages give each other | en,de,fr,nl,es,it | `ingest-movies`, `ytdlp` |
 | `subDlApiKey` (secret) | API key of a free SubDL account, asked third for subtitles | unset | `ingest-movies` |
 | `subtitleOcrEngines` | The OCR engines ingest-movies reads a film's picture subtitles with: a comma list of `vision`, `paddle` and `tesseract`, tried in the order named until one reads the subtitle | a vision model where `subtitleOcrUrl` is set, paddle on the GPU where it fits, tesseract, then paddle on the CPU | `ingest-movies` |
 | `subtitleOcrJobs` | How many requests are sent to that vision model at once, each with up to 16 of a subtitle's pictures | 32 | `ingest-movies` |

@@ -13,7 +13,7 @@ from medialib.cli import ingest_movies as rules
 from medialib.cli import ingest_movies_run as run_module
 from medialib.lib import languages
 
-ENGLISH, FRENCH = (next(row for row in languages.LANGUAGES
+ENGLISH, FRENCH = (next(row for row in languages.recognised()
                         if row.code2 == code) for code in ("en", "fr"))
 
 

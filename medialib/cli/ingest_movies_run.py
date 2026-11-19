@@ -1730,10 +1730,7 @@ def _subtitles_only(program: str, script_dir: str, roots: list, names: list,
                "tested"))
     _warn_without_subcleaner()
 
-    # A line written before the scope was recorded is one the table's
-    # default languages were done for.
-    done = donelog.DoneLog(commands.logs_file(script_dir, SUBTITLES_DONE),
-                           default_scope=languages.SPOKEN_DEFAULT)
+    done = donelog.DoneLog(commands.logs_file(script_dir, SUBTITLES_DONE))
     totals = {"kept": 0, "discarded": 0, "untested": 0}
     for root, name in zip(roots, names, strict=True):
         log('Phase: testing the subtitles already beside the films in "%s"'

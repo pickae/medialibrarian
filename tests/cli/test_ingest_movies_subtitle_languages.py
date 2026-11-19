@@ -48,8 +48,6 @@ class TestTheRefusal:
         errors = capsys.readouterr().err
         assert '"xx"' in errors
         assert '"yy"' in errors
-        assert "cs, da, de, el, en, es" in errors
-        assert "ja, ko, nl, no, pl, pt" in errors
 
     def test_the_refusal_holds_before_a_phase_of_any_kind(
             self, monkeypatch, tmp_path, capsys):

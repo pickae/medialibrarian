@@ -32,7 +32,8 @@ _SETTING_SPELLING = re.compile(r"[a-z][A-Za-z0-9]*$")
 # what the run did not settle from the environment), and the small readers
 # modules keep for their knobs.
 _READERS = {"get", "getenv", "setdefault", "pop", "_config", "_knob", "_env",
-            "_flag", "setenv", "delenv", "settle", "forget"}
+            "_flag", "setenv", "delenv", "settle", "forget", "value", "_setting_codes",
+            "setting_languages"}
 
 
 def _names_read(tree: ast.AST) -> set:
@@ -83,7 +84,8 @@ def _is_environment_read(func) -> bool:
     """A method of an environment, or one of the module-level readers."""
     if isinstance(func, ast.Attribute):
         return _environ(func.value) or func.attr == "getenv" or (
-            isinstance(func.value, ast.Name) and func.value.id == "runcontext")
+            isinstance(func.value, ast.Name)
+            and func.value.id in ("runcontext", "settings", "languages"))
     return isinstance(func, ast.Name)
 
 
@@ -166,3 +168,14 @@ def test_the_subtitle_helper_reads_the_logins_the_command_checks():
     assert {key: tuple(login) for key, login in values["LOGINS"].items()} == \
         {key: login for key, login in providers.items() if len(login) == 2}
     assert (values["SUBDL_KEY"],) == providers["subdl"]
+
+
+def test_the_shipped_defaults_are_only_for_listed_settings():
+    assert [name for name in settings.shipped() if name not in settings.BY_NAME] == []
+
+
+def test_a_shipped_default_is_not_also_described_as_a_default_in_the_registry():
+    """The registry's own default text is for a default that is not a value; a
+    shipped one is printed from the file, so the two cannot disagree."""
+    assert [name for name in settings.shipped()
+            if settings.BY_NAME[name].default != "unset"] == []

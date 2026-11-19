@@ -280,12 +280,11 @@ class TestTheKeptLanguagesSetting:
         monkeypatch.setenv("keepLanguages", "DE")
         assert im.kept_languages() == ("de",)
 
-    def test_a_code_the_table_does_not_know_is_refused(self, monkeypatch):
+    def test_a_code_iso_does_not_know_is_refused(self, monkeypatch):
         monkeypatch.setenv("keepLanguages", "en,xx")
         with pytest.raises(clioptions.UsageError) as error:
             im.kept_languages()
         assert '"xx"' in error.value.message
-        assert "cs, da, de, el, en, es" in error.value.message
 
     def test_every_refusal_names_every_unknown_code(self, monkeypatch):
         monkeypatch.setenv("keepLanguages", "xx,yy")

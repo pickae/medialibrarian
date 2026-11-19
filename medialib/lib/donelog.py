@@ -6,7 +6,7 @@ the scope it was finished for: the comma list of codes the run was told to
 do, in the language table's order - so a film is known by its id wherever it
 has since been moved and however its title has since been spelled, and for
 what an earlier run got through. A line written before the scope was
-recorded has none, and is read as ``default_scope``; a film is done for a
+recorded has none, and holds no code; a film is done for a
 run only when its recorded scope holds every code the run wants, so a code
 added to the list later is fetched for the film once, and never again. A
 film with no id tag is never recorded, and so never skipped. Deleting a
@@ -21,9 +21,8 @@ from medialib.lib import languages, plexnames
 
 
 def _ordered(codes: set | tuple) -> tuple:
-    """``codes`` in the language table's order, a code the table does not
-    know after every one it does."""
-    order = {row.code2: index for index, row in enumerate(languages.LANGUAGES)}
+    """``codes`` in :data:`languages.NAMED`'s order, any other code after them."""
+    order = {code: index for index, code in enumerate(languages.NAMED)}
     return tuple(sorted(set(codes),
                         key=lambda code: order.get(code, len(order))))
 
@@ -38,9 +37,8 @@ class DoneLog:
     later run wants.
     """
 
-    def __init__(self, path: str, default_scope: tuple = ()) -> None:
+    def __init__(self, path: str) -> None:
         self.path = path
-        self._default = frozenset(default_scope)
         self._scope: dict = {}
         self._lines: list = []
         self._line: dict = {}
@@ -55,8 +53,7 @@ class DoneLog:
             if not key or key.startswith("#"):
                 continue
             codes = fields[2].strip() if len(fields) > 2 else ""
-            self._scope[key] = (frozenset(codes.split(","))
-                                if codes else self._default)
+            self._scope[key] = frozenset(codes.split(",")) if codes else frozenset()
             self._line[key] = index
 
     def __len__(self) -> int:

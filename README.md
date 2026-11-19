@@ -117,7 +117,7 @@ option can never change what a command you already type means.
 
 ## Requirements
 
-- Python 3.11.4+, and one package with it: `mutagen`, which the install brings in
+- Python 3.11.4+, and two packages with it: `mutagen` and `pycountry` (the ISO 639 language tables), which the install brings in
 - A UTF-8 locale (accented/multibyte filenames are handled character-wise)
 - Per-tool external dependencies (see each command's `-h` output). Across the set:
   `ffmpeg`, `mkvtoolnix`, `dovi_tool`, `hdr10plus_tool`, `mediainfo`, `ImageMagick`, `rsync`,

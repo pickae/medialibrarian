@@ -1,0 +1,11 @@
+# The values a setting has when neither the environment nor the user's settings
+# file (~/.config/medialib/settings) gives one. Same format as that file; only
+# the settings whose default is a value rather than "unset" are here. Every
+# command reads these beneath whatever the user set, and docs/settings.md
+# prints them as the defaults.
+
+# The languages you speak, in the order subtitles are fetched for them.
+spokenLanguages=en,de,fr,nl,es,it
+
+# The languages an improved copy keeps beside the film's own.
+keepLanguages=en

@@ -16,9 +16,9 @@ requires-python = ">=3.11.4"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "David Ernst" }]
-# The one third-party import: mutagen writes the FLAC picture blocks and
+# The Python dependencies. mutagen writes the FLAC picture blocks and
 # Vorbis-comment chapters ffmpeg has no way to write (medialib/lib/mutagentags.py).
-dependencies = ["mutagen"]
+dependencies = ["mutagen", "pycountry"]
 
 # What running the suite takes: `pip install -e ".[test]"`. pytest-xdist is not
 # optional on top of pytest, because the addopts below ask for `-n`.
