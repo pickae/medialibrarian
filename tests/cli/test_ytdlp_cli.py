@@ -1040,6 +1040,24 @@ class TestTheNightlyUpgrade:
         assert argv is None
         assert len(list(library.rglob("episode*.opus"))) == 1
 
+    def test_the_check_can_be_switched_off_with_the_setting(self, nightly):
+        log, argv, library = nightly("2026.08.30.232658", "2026.08.31.010203",
+                                     skipYtdlpUpgrade="1")
+        assert "is a nightly" not in log, log
+        assert argv is None
+        assert len(list(library.rglob("episode*.opus"))) == 1
+
+    def test_the_check_can_be_switched_off_from_the_settings_file(self,
+                                                                  nightly,
+                                                                  tmp_path):
+        settings = tmp_path / "settings"
+        settings.write_text("skipYtdlpUpgrade=1\n")
+        log, argv, library = nightly("2026.08.30.232658", "2026.08.31.010203",
+                                     CLI_SETTINGS_FILE=str(settings))
+        assert "is a nightly" not in log, log
+        assert argv is None
+        assert len(list(library.rglob("episode*.opus"))) == 1
+
     def test_a_dry_run_leaves_the_install_where_it_found_it(self, nightly):
         # -p prints the calls a run WOULD make; it must not move the install
         # that would have made them.

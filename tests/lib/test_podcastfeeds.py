@@ -820,7 +820,7 @@ def _read(content, tmp_path, name="table.tsv"):
 
 
 def test_a_well_formed_table_is_accepted(tmp_path):
-    (rows, profile, jobs, status), _err = _read(
+    (rows, profile, jobs, _ingest, status), _err = _read(
         "# a comment, and the blank line below, are grouping - not rows\n"
         "\n"
         "1\tAI/latent space\t\t40\t\thttps://example.test/latent\n"
@@ -836,27 +836,28 @@ def test_a_well_formed_table_is_accepted(tmp_path):
 
 
 def test_a_crlf_row_does_not_carry_the_cr_into_the_url(tmp_path):
-    (rows, _profile, _jobs, status), _err = _read(
+    (rows, _profile, _jobs, _ingest, status), _err = _read(
         "1\tAI/crlf\t\t\t\thttps://example.test/crlf\r\n", tmp_path)
     assert status == 0
     assert pf.split_podcast_row(rows[0])[5] == "https://example.test/crlf"
 
 
 def test_a_table_with_no_trailing_newline_is_read_whole(tmp_path):
-    (rows, _profile, _jobs, status), _err = _read(VALID_ROW, tmp_path)
+    (rows, _profile, _jobs, _ingest, status), _err = _read(VALID_ROW, tmp_path)
     assert status == 0 and rows == [VALID_ROW]
 
 
 def test_a_missing_table_is_refused(tmp_path):
     err = io.StringIO()
-    rows, profile, jobs, status = pf.read_podcast_table(
+    rows, profile, jobs, _ingest, status = pf.read_podcast_table(
         str(tmp_path / "nope.tsv"), err)
-    assert (rows, profile, jobs, status) == ([], "youtubeAudio", "", 1)
+    assert (rows, profile, jobs, _ingest, status) == \
+        ([], "youtubeAudio", "", "", 1)
     assert err.getvalue() == f"Podcast table not found: {tmp_path / 'nope.tsv'}\n"
 
 
 def test_the_refusal_names_every_fault_at_once(tmp_path):
-    (rows, _profile, _jobs, status), err = _read(
+    (rows, _profile, _jobs, _ingest, status), err = _read(
         "1\tAI/ok\t\t\t\thttps://example.test/ok\n"
         "2\tAI/bad-active\t\t\t\thttps://example.test/bad\n"
         "1\tAI/too-few-columns\thttps://example.test/short\n"
@@ -886,7 +887,7 @@ def test_a_single_line_can_earn_two_faults(tmp_path):
     err = io.StringIO()
     table = tmp_path / "t.tsv"
     table.write_text("1\t/a..b\t\t\t\tnot-a-url\n")
-    _rows, _profile, _jobs, status = pf.read_podcast_table(str(table), err)
+    _rows, _profile, _jobs, _ingest, status = pf.read_podcast_table(str(table), err)
     assert status == 1
     assert 'subdir "/a..b" must stay under the output root' in err.getvalue()
     assert 'url "not-a-url" is not an http(s) address' in err.getvalue()
@@ -896,7 +897,7 @@ def test_a_single_line_can_earn_two_faults(tmp_path):
 def test_a_template_that_climbs_out_of_the_root_is_a_fault(tmp_path):
     """The name half of the same path the subdir column is kept inside. Only
     subdir was checked, so this row wrote wherever it liked."""
-    (_rows, _profile, _jobs, status), err = _read(
+    (_rows, _profile, _jobs, _ingest, status), err = _read(
         "1\tAI/ok\t../../%(title)s.%(ext)s\t\t\thttps://example.test/a\n",
         tmp_path)
     assert status == 1
@@ -905,7 +906,7 @@ def test_a_template_that_climbs_out_of_the_root_is_a_fault(tmp_path):
 
 
 def test_an_absolute_template_is_a_fault_too(tmp_path):
-    (_rows, _profile, _jobs, status), err = _read(
+    (_rows, _profile, _jobs, _ingest, status), err = _read(
         "1\tAI/ok\t/tmp/%(title)s.%(ext)s\t\t\thttps://example.test/a\n",
         tmp_path)
     assert status == 1
@@ -914,7 +915,7 @@ def test_an_absolute_template_is_a_fault_too(tmp_path):
 
 def test_a_template_field_with_a_format_spec_is_still_allowed(tmp_path):
     """The check must not cost the column what it is for."""
-    (_rows, _profile, _jobs, status), err = _read(
+    (_rows, _profile, _jobs, _ingest, status), err = _read(
         "1\tAI/ok\t%(upload_date>%Y-%m-%d)s %(title)s.%(ext)s\t\t\t"
         "https://example.test/a\n", tmp_path)
     assert status == 0, err.getvalue()
@@ -927,14 +928,14 @@ def test_a_template_field_with_a_format_spec_is_still_allowed(tmp_path):
 def test_the_options_a_row_may_not_carry(argument, tmp_path):
     """Four decide where a download is written and would take it out of the
     output root; three run something else, which is not a feed's to ask for."""
-    (_rows, _profile, _jobs, status), err = _read(
+    (_rows, _profile, _jobs, _ingest, status), err = _read(
         f"1\tAI/ok\t\t\t{argument} x\thttps://example.test/a\n", tmp_path)
     assert status == 1
     assert f'extraArgs may not carry "{argument}"' in err.getvalue()
 
 
 def test_the_equals_form_is_the_same_option(tmp_path):
-    (_rows, _profile, _jobs, status), err = _read(
+    (_rows, _profile, _jobs, _ingest, status), err = _read(
         "1\tAI/ok\t\t\t--paths=/elsewhere\thttps://example.test/a\n",
         tmp_path)
     assert status == 1
@@ -942,14 +943,14 @@ def test_the_equals_form_is_the_same_option(tmp_path):
 
 
 def test_the_arguments_a_row_is_meant_to_carry_still_pass(tmp_path):
-    (_rows, _profile, _jobs, status), err = _read(
+    (_rows, _profile, _jobs, _ingest, status), err = _read(
         "1\tAI/ok\t\t\t--no-sponsorblock --write-subs\t"
         "https://example.test/a\n", tmp_path)
     assert status == 0, err.getvalue()
 
 
 def test_directives_set_the_profile_and_the_width(tmp_path):
-    (rows, profile, jobs, status), _err = _read(
+    (rows, profile, jobs, _ingest, status), _err = _read(
         "#!profile rssAudio\n#!jobs 4\n"
         "1\tRSS/a\t\t\t\thttps://example.test/a\n", tmp_path)
     assert (status, profile, jobs) == (0, "rssAudio", "4")
@@ -957,14 +958,14 @@ def test_directives_set_the_profile_and_the_width(tmp_path):
 
 
 def test_a_table_that_says_nothing_about_width_gets_its_profiles_width(tmp_path):
-    (_rows, profile, jobs, status), _err = _read(
+    (_rows, profile, jobs, _ingest, status), _err = _read(
         "#!profile rssAudio\n1\tRSS/a\t\t\t\thttps://example.test/a\n",
         tmp_path)
     assert (status, profile, jobs) == (0, "rssAudio", "10")
 
 
 def test_a_table_with_no_directive_keeps_the_old_behaviour(tmp_path):
-    (_rows, profile, jobs, status), _err = _read(
+    (_rows, profile, jobs, _ingest, status), _err = _read(
         "1\tYT/a\t\t\t\thttps://example.test/a\n", tmp_path)
     assert (status, profile, jobs) == (0, "youtubeAudio", "1")
 
@@ -976,11 +977,11 @@ def test_a_mistyped_directive_is_a_fault_not_a_comment(tmp_path):
                      "#!profile notAProfile\n"
                      "#!jobs many\n"
                      "1\tRSS/a\t\t\t\thttps://example.test/a\n")
-    _rows, _profile, _jobs, status = pf.read_podcast_table(str(table), err)
+    _rows, _profile, _jobs, _ingest, status = pf.read_podcast_table(str(table), err)
     out = err.getvalue()
     assert status == 1
     assert 'unknown directive "#!profil" - the directives are ' \
-        "profile and jobs" in out
+        "profile, jobs and ingest" in out
     assert 'unknown profile "notAProfile" - one of: ' in out
     assert 'jobs is "many", expected a positive number' in out
 
@@ -991,10 +992,71 @@ def test_a_directive_with_the_wrong_shape_is_a_fault(tmp_path):
         err = io.StringIO()
         table = tmp_path / "t.tsv"
         table.write_text(line)
-        _rows, _profile, _jobs, status = pf.read_podcast_table(str(table), err)
+        _rows, _profile, _jobs, _ingest, status = pf.read_podcast_table(str(table), err)
         assert status == 1, line
         assert "#!<name> <value>" in err.getvalue() or \
             'unknown directive "#!Profile"' in err.getvalue(), line
+
+
+def test_a_table_with_no_ingest_line_reads_an_empty_one(tmp_path):
+    (rows, _profile, _jobs, _ingest, status), _err = _read(VALID_ROW + "\n",
+                                                           tmp_path)
+    assert status == 0 and rows == [VALID_ROW]
+    assert _ingest == ""
+
+
+def test_the_ingest_line_is_the_convert_audio_arguments_of_the_rest_of_it(
+        tmp_path):
+    """The value is not one token: the arguments carry their own options, and
+    what the line names is what the table hands back, not a guess at it."""
+    (rows, profile, _jobs, ingest, status), _err = _read(
+        "#!profile rssAudio\n"
+        "#!ingest -c -b 128 -m\n"
+        + VALID_ROW + "\n", tmp_path)
+    assert status == 0 and rows == [VALID_ROW]
+    assert profile == "rssAudio"
+    assert ingest == "-c -b 128 -m"
+
+
+def test_an_ingest_line_with_no_value_is_a_fault(tmp_path):
+    """Bare like the other directives: it is the generic shape fault, and the
+    table's arguments stay unset."""
+    (rows, _profile, _jobs, _ingest, status), err = _read(
+        "#!ingest\n" + VALID_ROW + "\n", tmp_path)
+    assert status == 1 and rows == [VALID_ROW] and _ingest == ""
+    assert 'line 1: a #! directive reads "#!<name> <value>", ' \
+        'not "#!ingest"' in err.getvalue()
+
+
+def test_an_ingest_line_of_a_profile_that_does_not_convert_is_a_fault(
+        tmp_path):
+    (rows, _profile, _jobs, _ingest, status), err = _read(
+        "#!profile rssVideo\n"
+        "#!ingest -c -b 128\n"
+        + VALID_ROW + "\n", tmp_path)
+    assert status == 1 and _ingest == "-c -b 128"
+    assert 'line 2: #!ingest is set, but the profile ' \
+        '"rssVideo" is not one that -i converts' in err.getvalue()
+
+
+def test_an_ingest_line_of_a_profile_that_does_convert_is_not_a_fault(
+        tmp_path):
+    (rows, _profile, _jobs, ingest, status), err = _read(
+        "#!profile rssAudio\n"
+        "#!ingest -c\n"
+        + VALID_ROW + "\n", tmp_path)
+    assert status == 0 and ingest == "-c"
+    assert err.getvalue() == ""
+
+
+def test_a_second_ingest_line_replaces_the_first(tmp_path):
+    """A directive repeated is the last one that speaks, the way #!jobs is."""
+    (_rows, _profile, _jobs, ingest, status), _err = _read(
+        "#!ingest -c\n"
+        "#!ingest -c -b 32\n"
+        + VALID_ROW + "\n", tmp_path)
+    assert status == 0
+    assert ingest == "-c -b 32"
 
 
 # --- rendering the call ------------------------------------------------------------------
@@ -1088,8 +1150,8 @@ def test_the_sample_table_ships_with_the_repository():
                          ids=lambda p: os.path.basename(p))
 def test_a_table_in_this_checkout_is_valid(table):
     faults = io.StringIO()
-    _rows, _profile, _jobs, status = pf.read_podcast_table(table,
-                                                           stderr=faults)
+    _rows, _profile, _jobs, _ingest, status = pf.read_podcast_table(table,
+                                                                   stderr=faults)
     assert status == 0, faults.getvalue()
 
 

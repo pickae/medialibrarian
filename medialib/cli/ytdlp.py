@@ -952,12 +952,14 @@ def main(argv: list, program: str = "ytdlp", script_dir: str = "") -> int:
     if before:
         runcontext.settle("PODCAST_DATE_BEFORE", before)
 
-    profiles, jobs_of, rows_of, feed_count, bad = [], [], [], 0, False
+    profiles, jobs_of, rows_of, ingest_of, feed_count, bad = \
+        [], [], [], [], 0, False
     for table in tables:
         # The third value is the table's OWN width: a "#!jobs" line overrides
         # what the profile would run at, so recomputing it from the profile
         # would quietly drop the override.
-        rows, profile, jobs, status = podcastfeeds.read_podcast_table(table)
+        rows, profile, jobs, ingest, status = \
+            podcastfeeds.read_podcast_table(table)
         if status != 0:
             bad = True
         profiles.append(profile)
@@ -965,6 +967,7 @@ def main(argv: list, program: str = "ytdlp", script_dir: str = "") -> int:
         # and reported at once, so this must not raise on the way there.
         jobs_of.append(int(jobs) if str(jobs).strip().isdigit() else 0)
         rows_of.append(rows)
+        ingest_of.append(ingest)
         feed_count += len(rows)
     if bad:
         return 2
@@ -985,6 +988,7 @@ def main(argv: list, program: str = "ytdlp", script_dir: str = "") -> int:
 
     try:
         return _settle_and_run(options, tables, profiles, jobs_of, rows_of,
+                               ingest_of,
                                feed_count, output_path, archive_file,
                                ytdlp_command, platform, host_platform,
                                script_dir, skip_preflight)
@@ -994,9 +998,10 @@ def main(argv: list, program: str = "ytdlp", script_dir: str = "") -> int:
         ramscratch.run_exit_cleanup()
 
 
-def _settle_and_run(options, tables, profiles, jobs_of, rows_of, feed_count,
-                    output_path, archive_file, ytdlp_command, platform,
-                    host_platform, script_dir, skip_preflight: bool) -> int:
+def _settle_and_run(options, tables, profiles, jobs_of, rows_of, ingest_of,
+                    feed_count, output_path, archive_file,
+                    ytdlp_command, platform, host_platform, script_dir,
+                    skip_preflight: bool) -> int:
     # The build is named in the startup summary rather than here, with the rest
     # of what this run settled.
     ffmpegselect.select_ffmpeg(_ffmpeg_serves_ytdlp)
@@ -1023,6 +1028,7 @@ def _settle_and_run(options, tables, profiles, jobs_of, rows_of, feed_count,
     # and before the run, because that is the build the episodes are fetched
     # with. Never on a dry run, which changes nothing on this machine.
     if (not skip_preflight and not options["dryRun"]
+            and not os.environ.get("skipYtdlpUpgrade", "")
             and not os.environ.get("SKIP_YTDLP_UPGRADE", "")):
         _upgrade_nightly(ytdlp_command)
     if not skip_preflight:
@@ -1048,9 +1054,9 @@ def _settle_and_run(options, tables, profiles, jobs_of, rows_of, feed_count,
                 skip_preflight=skip_preflight):
             return 1
 
-    return _run(options, tables, profiles, jobs_of, rows_of, feed_count,
-                output_path, archive_file, ytdlp_command, platform, script_dir,
-                ffmpeg_location)
+    return _run(options, tables, profiles, jobs_of, rows_of, ingest_of,
+                feed_count, output_path, archive_file, ytdlp_command, platform,
+                script_dir, ffmpeg_location)
 
 
 def _consolidate(declaration: clioptions.Spec, result) -> int:
@@ -1161,7 +1167,7 @@ def _native_path(path: str, platform: str) -> str:
     return podcastfeeds.native_path(path, platform, _cygpath(path, platform))
 
 
-def _plan_ingest(output_path: str, profiles, script_dir: str):
+def _plan_ingest(output_path: str, profiles, ingests, tables, script_dir: str):
     """The two trees -i makes.
 
     What comes off the network and what the phone plays are not the same file,
@@ -1181,6 +1187,7 @@ def _plan_ingest(output_path: str, profiles, script_dir: str):
         "carried": [],
         "notIngested": [],
         "forProfile": {},
+        "faults": [],
     }
     # EVERY staging folder this script knows how to convert, not only the ones
     # this run downloads into: where a folder is and what converts it follows
@@ -1195,6 +1202,31 @@ def _plan_ingest(output_path: str, profiles, script_dir: str):
             all_kinds.append(kind)
         plan["args"][kind] = arguments
         plan["staging"][kind] = os.path.join(base, "Staging", kind)
+
+    # A table's #!ingest line replaces what its profile's conversion is run
+    # with. The staging folder it downloads into is the profile's own, and a
+    # folder is shared - so the tables of one kind must agree on the
+    # arguments, and the first that names them decides what the run uses.
+    override_of: dict[str, tuple[str, str]] = {}
+    for index, profile in enumerate(profiles):
+        override = ingests[index]
+        if not override:
+            continue
+        spec_line = podcastfeeds.podcast_profile_ingest(profile)
+        if not spec_line:
+            continue
+        kind = spec_line.partition(" ")[0]
+        if kind in override_of:
+            arguments, table = override_of[kind]
+            if arguments != override:
+                plan["faults"].append(
+                    'the "%s" staging folder is shared, so its arguments must '
+                    'agree - "%s" in "%s", "%s" in "%s"'
+                    % (kind, arguments, table, override, tables[index]))
+            continue
+        override_of[kind] = (override, tables[index])
+    for kind, (arguments, _table) in override_of.items():
+        plan["args"][kind] = arguments
 
     this_run = set()
     for profile in profiles:
@@ -1230,15 +1262,22 @@ def _holds_a_file(directory: str) -> bool:
     return any(files for _parent, _dirs, files in os.walk(directory))
 
 
-def _run(options, tables, profiles, jobs_of, rows_of, feed_count, output_path,
-         archive_file, ytdlp_command, platform, script_dir,
+def _run(options, tables, profiles, jobs_of, rows_of, ingest_of, feed_count,
+         output_path, archive_file, ytdlp_command, platform, script_dir,
          ffmpeg_location) -> int:
     ingest = None
     if options["ingest"]:
         # No preflight for the two commands the library copy runs: they are
         # modules of this package rather than files that can be missing from a
         # checkout, which is what the check that stood here was for.
-        ingest = _plan_ingest(output_path, profiles, script_dir)
+        ingest = _plan_ingest(output_path, profiles, ingest_of, tables,
+                              script_dir)
+        if ingest["faults"]:
+            # The staging folder is shared, so what converts it is decided
+            # once for the run, before anything is downloaded.
+            for fault in ingest["faults"]:
+                log(fault)
+            return 2
         if options["aiChapters"]:
             for kind in ingest["args"]:
                 ingest["args"][kind] += " -t"

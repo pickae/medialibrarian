@@ -252,7 +252,8 @@ def resolve_ytdlp(ytdlp_env: str, platform: str, home: str, script_home: str,
     there: an extractor a site broke is fixed in a nightly weeks before that
     fix is in a release. The nightly is looked for under its own name
     (``pipx install --suffix=-nightly --pip-args=--pre yt-dlp``), so the two
-    coexist and ``YTDLP`` still overrides both.
+    coexist, and the ``ytdlp`` setting - or its old name ``YTDLP`` - still
+    overrides both.
     """
     if ytdlp_env:
         return [ytdlp_env]
@@ -309,7 +310,8 @@ def locate_ytdlp(platform: str, script_dir: str) -> list[str] | None:
         except OSError:
             pass
     return resolve_ytdlp(
-        os.environ.get("YTDLP", ""), platform, os.path.expanduser("~"),
+        os.environ.get("ytdlp") or os.environ.get("YTDLP", ""),
+        platform, os.path.expanduser("~"),
         script_dir, os.getcwd(), present, executable, importable)
 
 
@@ -389,13 +391,17 @@ _BLANK_RE = re.compile(r"^[ \t\r\v\f]*$")
 _DIRECTIVE_RE = re.compile(
     r"^#![ \t\r\v\f]*([A-Za-z]+)[ \t\r\v\f]+([^ \t\r\v\f]+)[ \t\r\v\f]*$")
 _JOBS_RE = re.compile(r"^[1-9][0-9]*$")
+# Its value is the rest of the line rather than one token, because the
+# convert-audio arguments carry their own options.
+_INGEST_DIRECTIVE_RE = re.compile(r"^#![ \t\r\v\f]*ingest[ \t\r\v\f]+(.*)$")
 _PLAYLIST_END_RE = re.compile(r"^[0-9]+$")
 _URL_RE = re.compile(r"^https?://")
 
 
 def read_podcast_table(file: str, stderr=None) -> tuple[list[str], str,
-                                                        str, int]:
-    """The table's data rows, its profile and its jobs, or the refusal.
+                                                        str, str, int]:
+    """The table's data rows, its profile, its jobs, and the conversion
+    arguments its #!ingest line gives - or the refusal.
 
     Everything is validated before anything is downloaded, and every fault is
     reported at once: the rows are returned as they were read (a malformed row
@@ -406,10 +412,12 @@ def read_podcast_table(file: str, stderr=None) -> tuple[list[str], str,
     rows: list[str] = []
     profile = PODCAST_DEFAULT_PROFILE
     jobs = ""
+    ingest = ""
+    ingest_line = 0
 
     if not os.path.isfile(file):
         stderr.write(f"Podcast table not found: {file}\n")
-        return ([], profile, jobs, 1)
+        return ([], profile, jobs, ingest, 1)
 
     with open(file, encoding="utf-8") as handle:
         content = handle.read()
@@ -424,6 +432,16 @@ def read_podcast_table(file: str, stderr=None) -> tuple[list[str], str,
             continue
 
         if line.startswith("#!"):
+            ingest_match = _INGEST_DIRECTIVE_RE.match(line)
+            if ingest_match:
+                value = ingest_match.group(1).strip()
+                if value:
+                    ingest, ingest_line = value, line_no
+                else:
+                    faults.append(
+                        f'line {line_no}: a #!ingest line reads '
+                        f'"#!ingest <convert-audio arguments>", not "{line}"')
+                continue
             match = _DIRECTIVE_RE.match(line)
             if match:
                 directive, value = match.group(1), match.group(2)
@@ -444,7 +462,7 @@ def read_podcast_table(file: str, stderr=None) -> tuple[list[str], str,
                 else:
                     faults.append(
                         f'line {line_no}: unknown directive "#!{directive}" - '
-                        "the directives are profile and jobs")
+                        "the directives are profile, jobs and ingest")
             else:
                 faults.append(
                     f'line {line_no}: a #! directive reads "#!<name> '
@@ -493,6 +511,11 @@ def read_podcast_table(file: str, stderr=None) -> tuple[list[str], str,
 
         rows.append(line)
 
+    if ingest and podcast_profile_ingest(profile) is None:
+        faults.append(
+            f'line {ingest_line}: #!ingest is set, but the profile '
+            f'"{profile}" is not one that -i converts')
+
     if faults:
         stderr.write("\n")
         stderr.write(f"Cannot read the podcast table {file}: "
@@ -501,13 +524,13 @@ def read_podcast_table(file: str, stderr=None) -> tuple[list[str], str,
             stderr.write(f"  {fault}\n")
         stderr.write("\nFix the lines above and run again. "
                      "Nothing was downloaded.\n")
-        return (rows, profile, jobs, 1)
+        return (rows, profile, jobs, ingest, 1)
 
     # A table that says nothing about how wide it may run gets what its
     # profile allows, which is the whole point of naming a profile.
     if not jobs:
         jobs = podcast_profile_jobs(profile)
-    return (rows, profile, jobs, 0)
+    return (rows, profile, jobs, ingest, 0)
 
 
 def refused_extra_args(extra: str) -> list[str]:

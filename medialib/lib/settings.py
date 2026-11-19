@@ -185,6 +185,13 @@ SETTINGS: tuple[Setting, ...] = (
             "`https://cdn.jsdelivr.net/npm`"),
     Setting("viewerPerspectiveVersion", "Which release of that engine the page loads",
             ("content-census-bi",), "5.3.0"),
+    Setting("ytdlp", "The yt-dlp a download runs with, instead of the one found: "
+            "a command name on PATH or a path. The old name YTDLP is still read",
+            ("ytdlp",), "unset - the one found, printed at the start of the run"),
+    Setting("skipYtdlpUpgrade", "Set to 1 and a nightly yt-dlp is not brought up "
+            "to date before the fetch. The old name SKIP_YTDLP_UPGRADE is still "
+            "read", ("ytdlp",),
+            "unset - a nightly is upgraded; a preview (-p) never is"),
     # --- chapters made by a language model
     Setting("chapterLlmApi", "The protocol the chapter model is asked over: `openai` "
             "for any server speaking OpenAI's chat protocol - Ollama, llama.cpp, vLLM, "

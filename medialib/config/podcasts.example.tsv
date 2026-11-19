@@ -14,6 +14,11 @@
 #                     Omitted means youtubeAudio.
 #   #!jobs <n>        how many of them may be fetched at once, overriding what
 #                     the profile alone allows (YouTube one feed, RSS ten).
+#   #!ingest <args>   the convert-audio arguments -i runs this table's
+#                     profile's conversion with, replacing what the profile
+#                     alone names. Only a profile -i converts may carry it:
+#                     the RSS audio one runs with "-c -m", the music one with
+#                     "-c -b 65".
 # An unrecognised directive stops the run rather than being read as a comment.
 #
 # The columns:
