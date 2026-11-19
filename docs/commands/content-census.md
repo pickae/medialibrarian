@@ -102,7 +102,7 @@ picture, which over a library of scans is a run of its own.
 | --- | --- |
 | video | **Dynamic range** is read through the same judgements [`ingest-movies`](ingest-movies.md) acts on, so the two cannot disagree about a file. What the container *claims* is what is recorded: verifying that a Dolby Vision RPU is really in the bitstream costs a pass over the whole stream, which is the ingest's job, not a census's |
 | images | **Loose images are a report of their own** — path, size, resolution and format, plus the verdict under `-a`. The format is what the file's own header says and not what its suffix claims, so a `.jpg` holding a PNG is recorded as the PNG it is |
-| books | **Counted on their text**: each one is converted with Calibre and counted from that, so epub, mobi, chm, azw3, lit and PDF all answer the same way instead of each needing its own extractor |
+| books | **Counted on their text**: each one is converted with Calibre and counted from that, so epub, mobi, chm, azw3, azw, lit, fb2, docx, rtf, djvu and PDF all answer the same way instead of each needing its own extractor |
 | comics / books | **A `.pdf` is decided, not assumed**: it is in both the comic and the book extension lists, so which report it lands in comes from the same probe [`convert-comics`](convert-comics.md) gates on — a scan goes to comics, a text book to books |
 | the `chapters` column | **A file with no chapter marks counts as one chapter**, not as none: it is one unbroken chapter, itself. So the `chapters` column adds up to how many parts a library holds rather than to how many somebody happened to mark up, and a mean chapter length is not a division by zero |
 

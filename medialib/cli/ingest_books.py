@@ -5,9 +5,11 @@ keeping the name and the sub-folder layout:
 
 * PDFs are copied across - they never enter the epub pipeline, because a PDF is
   not something to re-flow;
-* mobi/chm/azw3/lit/txt are converted to epub;
+* everything else that is not an epub is converted to epub;
 * epubs (and the just-converted ones) are re-converted once more for consistent
-  readability.
+  readability - unless -k keeps them: with -k an epub is copied across as a
+  PDF is, and the other formats are converted to epub, once, without that
+  re-conversion.
 
 None of that throws any of a book away. The steps that DO - dropping the
 embedded fonts, deleting the junk/teaser images, downscaling the illustrations,
@@ -63,16 +65,19 @@ d |  | Discard what only costs bytes: drop the embedded fonts, delete the
           and strip a PDF's images. Off by default - none of it can be got
           back from the output.
 c |  | Run clean-folder-structure on the output folder when done.
+k |  | Keep: an epub is copied across as a PDF is, rather than re-converted.
+          The other formats are still converted to epub, once, without that
+          re-conversion.
 t |  | Text mode: convert every recognized input to a raw .txt file,
           mirroring the input sub-folder layout, instead of the epub pipeline.
 z |  | Text mode only: also create a zpaq archive of the resulting folder
           (output folder, or input folder when no conversion was done).
 """
 
-OPT_VARS = ("d:discardExtras c:runCleanFolderStructure t:textMode "
+OPT_VARS = ("d:discardExtras c:runCleanFolderStructure k:keep t:textMode "
             "z:zpaqArchive")
 OPT_COLUMN = 10
-OPT_LONG = "h:help d:discard-extras c:clean-structure t:text z:zpaq"
+OPT_LONG = "h:help d:discard-extras c:clean-structure k:keep t:text z:zpaq"
 
 # Images larger than this are downscaled to at most the tier's geometry; smaller
 # ones are left alone. An illustration inside an epub is read on a reader, not on
@@ -423,6 +428,19 @@ class Run:
                                   toolcapture.replay_text(done))
                 return
 
+            # An epub with -k goes across whole, the way a PDF goes across
+            # without -d: the copy is the book. With -d the cleaning still
+            # runs, because -d is what asked to throw part of the book away.
+            if extension == "epub" and self.options["keep"] \
+                    and not self.options["discardExtras"]:
+                out = os.path.join(work, "out.epub")
+                self.note("EPUB (copy): " + base)
+                shutil.copyfile(source, out)
+                emit_output(out, os.path.join(dest_dir, stem + ".epub"),
+                            self.claims_dir)
+                self.progress("Done (epub): " + base)
+                return
+
             # Everything else is normalised to an epub first.
             epub = os.path.join(work, "book.epub")
             if extension == "epub":
@@ -474,18 +492,22 @@ class Run:
                     base, cwd=unpacked,
                     warning="could not repack %s after cleaning it" % base)
 
-            # Re-converted once more for consistent readability; the epub that
-            # went in is the fallback when that heavier step is unavailable.
-            final = os.path.join(work, "final.epub")
-            done = toolcapture.run(
-                ["ebook-convert", source_epub, final,
-                 "--no-default-epub-cover"],
-                base, report=False)
-            if not done.ok or not os.path.exists(final):
-                runlog.detail("        Re-conversion of %s did not finish (%s), "
-                              "keeping the epub as it was"
-                              % (base, done.failure or "it wrote nothing"))
-                shutil.copyfile(source_epub, final)
+            # Re-converted once more for consistent readability - the step -k
+            # answers to - and the epub that went in is the fallback when that
+            # heavier step is unavailable.
+            if self.options["keep"]:
+                final = source_epub
+            else:
+                final = os.path.join(work, "final.epub")
+                done = toolcapture.run(
+                    ["ebook-convert", source_epub, final,
+                     "--no-default-epub-cover"],
+                    base, report=False)
+                if not done.ok or not os.path.exists(final):
+                    runlog.detail("        Re-conversion of %s did not finish (%s), "
+                                  "keeping the epub as it was"
+                                  % (base, done.failure or "it wrote nothing"))
+                    shutil.copyfile(source_epub, final)
 
             emit_output(final, os.path.join(dest_dir, stem + ".epub"),
                         self.claims_dir)
@@ -655,6 +677,7 @@ def main(argv: list, program: str = "ingest-books",
     zpaq_archive = "z" in result.given
     clean_structure = "c" in result.given
     discard_extras = "d" in result.given
+    keep = "k" in result.given
     script_dir = script_dir or commands.script_dir()
 
     temp_path = counter_dir = ""
@@ -722,6 +745,7 @@ def main(argv: list, program: str = "ingest-books",
         options = {
             "textMode": text_mode,
             "discardExtras": discard_extras,
+            "keep": keep,
             "imageResolution": image_resolution,
         }
         state = Run(os.path.abspath(in_path), os.path.abspath(out_path),

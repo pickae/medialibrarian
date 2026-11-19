@@ -76,8 +76,10 @@ VIDEO_EXTENSIONS = (
 SOURCE_VIDEO_EXTENSIONS = (
     "avi", "mp4", "flv", "flv2", "m4v", "m3u8", "mov", "webm", "mpg", "vob",
 )
-BOOK_INPUT_EXTENSIONS = ("pdf", "epub", "mobi", "chm", "azw3", "lit", "txt",)
-BOOK_CONVERT_EXTENSIONS = ("mobi", "chm", "azw3", "lit", "txt",)
+BOOK_INPUT_EXTENSIONS = ("pdf", "epub", "mobi", "chm", "azw3", "azw", "lit",
+                         "txt", "fb2", "docx", "rtf", "djvu",)
+BOOK_CONVERT_EXTENSIONS = ("mobi", "chm", "azw3", "azw", "lit", "txt",
+                           "fb2", "docx", "rtf", "djvu",)
 BOOK_IMAGE_EXTENSIONS = ("jpg", "jpeg", "png", "svg",)
 NARRATABLE_BOOK_EXTENSIONS = (
     "epub", "mobi", "azw3", "fb2", "pdf", "txt", "rtf", "odt", "doc", "docx", "html",

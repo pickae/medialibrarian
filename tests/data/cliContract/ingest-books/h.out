@@ -12,6 +12,10 @@ Options:
           back from the output.
     -c, --clean-structure
           Run clean-folder-structure on the output folder when done.
+    -k, --keep
+          Keep: an epub is copied across as a PDF is, rather than re-converted.
+          The other formats are still converted to epub, once, without that
+          re-conversion.
     -t, --text
           Text mode: convert every recognized input to a raw .txt file,
           mirroring the input sub-folder layout, instead of the epub pipeline.
