@@ -56,10 +56,10 @@ AUDIO_EXTENSIONS = ("m4a", "opus", "m4b", "aac", "mp3", "mka", "ogg", "ogx",
 #
 # These are CODEC names and nothing else. IMAGE_CODECS above doubles as its own
 # extension list because an image codec is written under its own name; an audio
-# codec is not - opus goes into .opus, xhe-aac into .m4a - so the container each
-# one is written in is the separate mapping below, and a reader wanting a file
-# name has to go through it.
-AUDIO_CODECS = ("opus", "xheaac",)
+# codec is not - opus goes into .opus, aac and xhe-aac into .m4a - so the
+# container each one is written in is the separate mapping below, and a reader
+# wanting a file name has to go through it.
+AUDIO_CODECS = ("opus", "aac", "xheaac",)
 # The container each of AUDIO_CODECS is written in, which is also the output
 # extension. Kept beside the list rather than in the command that writes it,
 # because "opus" and ".opus" being the same word is a coincidence of that one
@@ -67,6 +67,7 @@ AUDIO_CODECS = ("opus", "xheaac",)
 # file any player would open.
 AUDIO_CODEC_EXTENSIONS = {
     "opus": "opus",
+    "aac": "m4a",
     "xheaac": "m4a",
 }
 ALWAYS_TRANSCODE_EXTENSIONS = ("mka",)

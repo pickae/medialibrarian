@@ -6,9 +6,9 @@ phases, with the bulk of the work in RAM.
     3  transcode                 (convert-audio)
     4  concatenate               (concat-audio)
 
-The transcode writes whichever codec -e names, Opus by default and xHE-AAC
-otherwise; the two differ in the container the concatenating phase then joins,
-.opus against the .m4a that becomes an .m4b.
+The transcode writes whichever codec -e names, Opus by default, AAC and
+xHE-AAC the rest; Opus joins as .opus, and the .m4a the other two are
+written in is joined into an .m4b.
 
 The intermediate tree lives entirely in RAM and only the finished book
 reaches the disk. The three phases that are other scripts run as CHILD
@@ -88,9 +88,9 @@ c |  | only concat
 b |  | specify bitrate
 i |  | clean input folders
 e | <codec> | output encoding of the transcoding phase, handed to
-            convert-audio: {codecs}. xheaac needs an external encoder and
-            is written as .m4a, which the concatenating phase joins into
-            an .m4b.
+            convert-audio: {codecs}. aac and xheaac are written as .m4a,
+            which the concatenating phase joins into an .m4b; xheaac
+            needs an external encoder.
             Default {codec}
 """.format(codecs=" or ".join(enums.AUDIO_CODECS), codec=DEFAULT_CODEC)
 

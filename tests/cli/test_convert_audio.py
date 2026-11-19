@@ -35,6 +35,18 @@ class TestResolveBitrate:
         still the built-in default."""
         assert ca.resolve_bitrate(64, mono=mono) == 64
 
+    def test_the_defaults_are_the_codecs_own(self):
+        assert ca.DEFAULT_BITRATES == {"opus": 46, "aac": 64, "xheaac": 46}
+        assert ca.MONO_BITRATES == {"opus": 32, "aac": 48, "xheaac": 32}
+
+    def test_the_swap_follows_the_codec(self):
+        """A forced mono run of AAC encodes at AAC's mono figure, and the Opus
+        one stands for Opus alone - the figure a run asks for is the one its
+        own codec's default belongs to."""
+        assert ca.resolve_bitrate(64, mono=True, codec="aac") == 48
+        assert ca.resolve_bitrate(46, mono=True, codec="aac") == 46
+        assert ca.resolve_bitrate(46, mono=True, codec="opus") == 32
+
 
 class TestIsVideoFile:
     @pytest.mark.parametrize("name", ["a.mkv", "A.MKV", "a.Mp4",
@@ -255,6 +267,7 @@ class TestTheOutputCodec:
 
     @pytest.mark.parametrize("codec,expected", [
         ("opus", "book/track.opus"),
+        ("aac", "book/track.m4a"),
         ("xheaac", "book/track.m4a"),
     ])
     def test_the_output_path_follows_the_codec(self, codec, expected):
@@ -314,6 +327,20 @@ class TestWhichSourcesAreAlreadyFinished:
     def test_an_xhe_aac_stream_is_not_finished_for_an_opus_run(self, probes):
         assert ca.source_audio_is_finished("x", 46000, 90000, "opus") is False
 
+    def test_a_small_aac_lc_stream_is_finished_for_an_aac_run(self, probes):
+        probes["profile"] = "LC"
+        assert ca.source_audio_is_finished("x", 46000, 90000, "aac") is True
+
+    def test_an_xhe_aac_stream_is_not_finished_for_an_aac_run(self, probes):
+        """The reverse of the one above: the run's own encoder writes AAC-LC,
+        so a stream that answers xHE-AAC is a different product than the one
+        being made, however small it is."""
+        assert ca.source_audio_is_finished("x", 46000, 90000, "aac") is False
+
+    def test_an_aac_lc_stream_is_not_finished_for_an_opus_run(self, probes):
+        probes["profile"] = "LC"
+        assert ca.source_audio_is_finished("x", 46000, 90000, "opus") is False
+
     def test_the_profile_is_only_asked_where_the_codec_name_is_ambiguous(
             self, monkeypatch):
         """Opus is `opus` and nothing else, so its row asks for no profile - and
@@ -349,6 +376,15 @@ class TestSplittingAndTheCodec:
                             lambda *a: pytest.fail("Opus asked the xhe-aac "
                                                    "encoder about its timing"))
         assert self._planner().join_rules("book.flac") == (0, 0, 0)
+
+    def test_aac_joins_wherever_it_was_cut(self, monkeypatch):
+        """The encoder primes its decoder, but the priming is flattened off the
+        chunk as it is encoded - see the chunk's edit-list step - so the join
+        needs no rule of its own."""
+        monkeypatch.setattr(ca.xheaac, "encoder_timing",
+                            lambda *a: pytest.fail("AAC asked the xhe-aac "
+                                                   "encoder about its timing"))
+        assert self._planner(codec="aac").join_rules("book.flac") == (0, 0, 0)
 
     def test_xhe_aac_reads_the_rules_off_the_encoder(self, monkeypatch):
         monkeypatch.setattr(ca, "source_sample_rate", lambda src: 44100)
@@ -500,6 +536,25 @@ class TestTheChunkingDecision:
             lambda *a, **kw: ca.chunkdecision.Decision(frozenset(), 60.0, 60.0))
         ca._decide_chunking(self._run(tmp_path, {"a.m4a": 20}), 32)
         assert capsys.readouterr().err == ""
+
+    def test_the_codecs_own_figure_is_the_one_weighed(self, tmp_path,
+                                                      monkeypatch):
+        """The weighing is priced for the codec the run actually encodes: the
+        rate handed it is the run's own, resolved for the run's own codec."""
+        asked = {}
+
+        def decide(tracks, workers, threads, mono, bitrate, threshold,
+                   is_video, always_transcode, codec, *rest, **kw):
+            asked["bitrate"] = bitrate
+            asked["codec"] = codec
+            return ca.chunkdecision.Decision(frozenset(), 0.0, 0.0)
+
+        monkeypatch.setattr(ca.chunkdecision, "decide", decide)
+        state = self._run(tmp_path, {"a.mp3": 20}, codec="aac",
+                          bitrate=ca.DEFAULT_BITRATES["aac"])
+        ca._decide_chunking(state, 8)
+        assert asked["bitrate"] == ca.DEFAULT_BITRATES["aac"]
+        assert asked["codec"] == "aac"
 
 
 class TestAFolderJudgedWhole:
@@ -1025,6 +1080,108 @@ class TestAnOpusEncodeOfASurroundSource:
         self._run(surround=True)._encode("a.m4b", "out/a.opus", mono=True,
                                          bitrate=32)
         assert seen[0][9:-1] == ["-ac", "1", "-c:a", "libopus", "-b:a", "32k"]
+
+
+class TestTheAacEncode:
+    """-e aac is ffmpeg's own encoder in a one-pass encode, so the argv it
+    gets is pinned the way the Opus one is. The channel question is only the
+    FOLD: the encoder takes a layout it is given as it is, so nothing here
+    re-labels one - but the default still does not scale with the channel
+    count the Opus one does, because the figure is the codec's own."""
+
+    @pytest.fixture
+    def seen(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(ca.toolcapture, "run",
+                            lambda argv, **kw: calls.append(list(argv)))
+        return calls
+
+    def _run(self, **settings):
+        base = {"codec": "aac", "extension": "m4a", "output_dir": "out",
+                "adaptive": False, "mono": False, "surround": False,
+                "bitrate": ca.DEFAULT_BITRATES["aac"]}
+        base.update(settings)
+        return ca.Run(**base)
+
+    def test_the_stereo_call_is_the_codec_at_its_default(self, seen,
+                                                         monkeypatch):
+        monkeypatch.setattr(ca, "source_channels", lambda src: 2)
+        self._run()._encode("a.flac", "out/a.m4a", mono=False,
+                            bitrate=ca.DEFAULT_BITRATES["aac"])
+        assert seen == [["ffmpeg", "-nostdin", "-y", "-i", "a.flac",
+                         "-map", "0:a:0", "-map_metadata", "0:s:0",
+                         "-c:a", "aac", "-b:a", "64k", "out/a.m4a"]]
+
+    def test_a_mono_call_puts_the_downmix_before_the_codec(self, seen):
+        self._run()._encode("a.flac", "out/a.m4a", mono=True,
+                            bitrate=ca.MONO_BITRATES["aac"])
+        assert seen == [["ffmpeg", "-nostdin", "-y", "-i", "a.flac",
+                         "-map", "0:a:0", "-map_metadata", "0:s:0",
+                         "-ac", "1", "-c:a", "aac", "-b:a", "48k",
+                         "out/a.m4a"]]
+
+    def test_forced_mono_never_asks_about_the_source(self, seen, monkeypatch):
+        def probed(src):
+            raise AssertionError("mono needs no channel count")
+
+        monkeypatch.setattr(ca, "source_channels", probed)
+        self._run()._encode("a.m4b", "out/a.m4a", mono=True,
+                            bitrate=ca.MONO_BITRATES["aac"])
+        assert seen[0][9:-1] == ["-ac", "1", "-c:a", "aac", "-b:a", "48k"]
+
+    def test_a_six_channel_source_is_folded_down_to_stereo(self, seen,
+                                                           monkeypatch):
+        monkeypatch.setattr(ca, "source_channels", lambda src: 6)
+        self._run()._encode("a.m4b", "out/a.m4a", mono=False,
+                            bitrate=ca.DEFAULT_BITRATES["aac"])
+        assert seen == [["ffmpeg", "-nostdin", "-y", "-i", "a.m4b",
+                         "-map", "0:a:0", "-map_metadata", "0:s:0",
+                         "-ac", "2", "-c:a", "aac", "-b:a", "64k",
+                         "out/a.m4a"]]
+
+    def test_with_surround_it_keeps_the_count_at_the_same_rate(self, seen,
+                                                               monkeypatch):
+        monkeypatch.setattr(ca, "source_channels", lambda src: 6)
+        self._run(surround=True)._encode("a.m4b", "out/a.m4a", mono=False,
+                            bitrate=ca.DEFAULT_BITRATES["aac"])
+        assert seen[0][9:-1] == ["-c:a", "aac", "-b:a", "64k"]
+
+    def test_a_given_bitrate_is_kept_as_given(self, seen, monkeypatch):
+        monkeypatch.setattr(ca, "source_channels", lambda src: 2)
+        self._run()._encode("a.flac", "out/a.m4a", mono=False, bitrate=128)
+        assert seen[0][9:-1] == ["-c:a", "aac", "-b:a", "128k"]
+
+    def test_a_chunk_is_encoded_with_the_settings_of_a_whole_file(
+            self, seen, monkeypatch, tmp_path):
+        """And the chunk's priming is flattened off it, the step the edit-list
+        is carried for - pinned here rather than in the flatten's own file,
+        because this is where the decision to run it lives."""
+        flattened = []
+        monkeypatch.setattr(ca, "source_channels", lambda src: 2)
+        monkeypatch.setattr(ca, "_flatten_edit_list",
+                            lambda path: flattened.append(path))
+        monkeypatch.setattr(ca.durationcheck, "verify", lambda *a: True)
+
+        class _Counters:
+            def report_progress(self, *args):
+                pass
+
+            def tally_duration(self, duration):
+                pass
+
+        run = self._run()
+        run.__dict__.update(input_dir="in", chunk_root=str(tmp_path),
+                            counters=_Counters())
+        run.encode_chunk(ca.UNIT.join(["a.m4b", "0", "4", "0", "600"]))
+        run._encode("in/a.m4b", "out/a.m4a", mono=False,
+                     bitrate=ca.DEFAULT_BITRATES["aac"])
+        chunk, whole = seen
+        assert chunk[:13] == ["ffmpeg", "-nostdin", "-y", "-ss", "0",
+                              "-t", "600", "-i", os.path.join("in", "a.m4b"),
+                              "-map", "0:a:0", "-map_metadata", "-1"]
+        assert chunk[13:-1] == whole[9:-1] == ["-c:a", "aac", "-b:a", "64k"]
+        assert len(flattened) == 1
+        assert flattened[0].endswith(".m4a")
 
 
 class TestOutputChannels:

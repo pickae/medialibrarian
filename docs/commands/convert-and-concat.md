@@ -31,6 +31,7 @@ the source.
 | Codec (`-e`) | Intermediate tree | Finished book |
 | --- | --- | --- |
 | `opus` (default) | Opus | Opus |
+| `aac` | AAC as `.m4a` | `.m4b` |
 | `xheaac` | xHE-AAC as `.m4a` ([needs exhale](convert-audio.md#setting-up-xhe-aac)) | `.m4b` |
 
 ## Archives

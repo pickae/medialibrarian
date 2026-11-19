@@ -547,3 +547,67 @@ class TestXheAacWithoutItsEncoder:
         assert "(-e opus)" in done.stderr
         assert blackbox.tree_of(inputs) == before
         assert not outputs.exists()
+
+
+class TestTheAacEncode:
+    """-e aac is encoded by ffmpeg itself, so a run needs no encoder of its
+    own to refuse over - and a stub that records the calls it gets is what
+    pins what the run really asks for: the codec, the rate, and the .m4a it
+    writes.
+
+    The stubbed probe states a 128 kbps rate for the .m4a of a fixture -
+    above the threshold - which is what the run transcodes, into whatever
+    -e asked for."""
+
+    # The shared stub's encoder, keeping its call in an "encodes" file beside
+    # it as well as writing its output.
+    _ENCODER = '''
+    printf "%s\\n" "$*" >> "$(dirname "$0")/encodes"
+    last="${!#}"
+    [[ "$last" != "-" ]] && : > "$last"
+    exit 0
+    '''
+
+    @pytest.fixture
+    def convert(self, sandbox):
+        convert = _stubbed(sandbox)
+        convert.with_tool("ffmpeg", self._ENCODER)
+        return convert
+
+    def _run(self, convert, tmp_path, *options):
+        inputs = tmp_path / "in"
+        inputs.mkdir(exist_ok=True)
+        (inputs / "book.m4a").write_bytes(b"\0" * 1000)
+        done = convert.run("convert-audio", "-j", "1", *options, inputs,
+                           tmp_path / "out")
+        assert done.returncode == 0, done.stdout + done.stderr
+        log = convert.bin / "encodes"
+        return log.read_text().splitlines() if log.is_file() else []
+
+    def _encodes(self, lines):
+        return [line for line in lines if "-c:a aac" in line]
+
+    def test_the_run_encodes_with_ffmpegs_own_aac_at_its_default(self,
+                                                                 convert,
+                                                                 tmp_path):
+        encodes = self._encodes(self._run(convert, tmp_path, "-e", "aac"))
+        assert len(encodes) == 1
+        assert "-b:a 64k" in encodes[0]
+        assert encodes[0].rsplit(" ", 1)[-1].endswith(
+            os.path.join("out", "book.m4a"))
+        assert (tmp_path / "out" / "book.m4a").is_file()
+
+    def test_a_mono_run_downmixes_and_encodes_at_the_mono_figure(self, convert,
+                                                                 tmp_path):
+        encodes = self._encodes(self._run(convert, tmp_path, "-m", "-e",
+                                          "aac"))
+        assert len(encodes) == 1
+        assert "-ac 1 -c:a aac -b:a 48k" in encodes[0]
+        assert (tmp_path / "out" / "book.m4a").is_file()
+
+    def test_a_rerun_does_not_encode_what_is_already_fresh(self, convert,
+                                                            tmp_path):
+        first = self._run(convert, tmp_path, "-e", "aac")
+        second = self._run(convert, tmp_path, "-e", "aac")
+        assert len(self._encodes(first)) == 1
+        assert self._encodes(second) == self._encodes(first)

@@ -1,7 +1,7 @@
 # `convert-audio`
 
-Transcodes spoken-word audio to Opus at a low bitrate — or to xHE-AAC — carrying
-over chapters and cover art.
+Transcodes spoken-word audio to Opus at a low bitrate — or to AAC or xHE-AAC —
+carrying over chapters and cover art.
 
     convert-audio [options] <inputDir> <outputDir>
 
@@ -67,6 +67,18 @@ count, so a source in any other layout (the 5.1(side) that EAC3 decodes to, or
 7.1(wide)) is re-labelled onto it. A 2.1 or 3.1 source is still downmixed to
 stereo rather than have its LFE played from a full-range speaker, and one wider
 than 7.1 is folded down to 7.1.
+
+The table is the Opus one: `-e aac` runs at 64 kbps by default and 48 kbps in a
+forced mono run, and an AAC figure is not scaled up with the channel count the
+Opus one is — a `-u` run of it stays at the rate the codec needs of speech.
+
+## AAC (`-e aac`)
+
+AAC-LC in a `.m4a`, which ffmpeg encodes itself, so there is no external
+encoder to set up. Its chapters are a track in the `.m4a` rather than a tag,
+exactly as for xHE-AAC, and a book of its outputs through
+[`convert-and-concat`](convert-and-concat.md) joins into one `.m4b` the same
+way. Long files split and re-join as they do for any other codec.
 
 ## xHE-AAC (`-e xheaac`)
 

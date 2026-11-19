@@ -29,15 +29,15 @@ Options:
     -c, --copy-others
                     Copy non transcoded files from <inputDir> into <outputDir>
     -e, --encoding <codec>
-                    Output encoding: opus or xheaac.
-                    xheaac needs an external encoder (exhale) and is
-                    written as .m4a.
+                    Output encoding: opus or aac or xheaac.
+                    aac and xheaac are written as .m4a; xheaac needs an
+                    external encoder (exhale).
                     Default opus
     -b, --bitrate <bitrate>
                     Bitrate of the output files
-                    Default 46 kbps or 32 kbps for forced mono output, and
-                    with -u the 46 scaled up with the channel count for a
-                    surround source
+                    Default 46 kbps Opus or 64 kbps AAC, or 32 or 48 kbps
+                    for forced mono output, and with -u the Opus default
+                    scaled up with the channel count for a surround source
     -T, --threshold <kbps>
                     The bitrate a file must reach to be re-encoded.
                     Default 90 kbps, or 50 kbps for a mono run
