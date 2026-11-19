@@ -4,12 +4,16 @@ Usage:
     clean-folder-structure [options] <inputDir>
 Options:
     -y, --sort-into-years
-                    Sort files named "YYYYMMDD Filename.ext" into yearly
-                    subfolders "YYYY/YYYYMMDD Filename.ext".
+                    Sort files whose names start with a date, in either of the forms the
+                    names carry - "YYYYMMDD Filename.ext" or "YYYY-MM-DD
+                    Filename.ext" - into yearly subfolders "YYYY/"; the file
+                    keeps the form its name has.
     -d, --fix-dates Before cleaning file names, normalise a leading date of the
                     form YYYY<sep>MM<sep>DD<sep> (separators: space . / _ -) at
-                    the start of a file name into the compact "YYYYMMDD " form,
-                    keeping the rest of the name. Applied across all subfolders.
+                    the start of a file name into the form the dateForm setting
+                    names - the compact "YYYYMMDD " form, or "YYYY-MM-DD " with
+                    the setting set to iso - keeping the rest of the name.
+                    Applied across all subfolders.
     -n, --number-files
                     Clean folder names as usual, but instead of cleaning file
                     names, just number the files in each folder (01, 02, ...

@@ -6,9 +6,11 @@ Argument:
     <inputPath>   the folder whose names are cleaned on the device.
 Options:
     -y, --sort-into-years
-                Sort "YYYYMMDD ..." files into YYYY/ subfolders.
+                Sort "YYYYMMDD ..." and "YYYY-MM-DD ..." files into YYYY/ subfolders.
     -d, --fix-dates
-                Normalise leading date prefixes to "YYYYMMDD ".
+                Normalise leading date prefixes to the form the dateForm
+                setting names - "YYYYMMDD ", or "YYYY-MM-DD " with it
+                set to iso.
     -n, --number-files
                 Number files by plurality filetype instead of cleaning names.
     -f, --fragments <file>

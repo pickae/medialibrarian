@@ -188,14 +188,17 @@ DUPLICATE_MARKER_PATTERNS = (
 )
 
 # --- the date prefix ----------------------------------------------------------
-# What counts as a DATE at the front of a name: an eight-digit YYYYMMDD whose year
-# starts with 1 or 2. Such a prefix is split off by the individual cleaner and is
-# deliberately NOT cleared as a uniform prefix - a date timestamps the item and
-# stays informative even when the whole group shares it, unlike a serial number.
+# What counts as a DATE at the front of a name: an eight-digit YYYYMMDD, or the
+# same date with dashes, whose year starts with 1 or 2. Such a prefix is split
+# off by the individual cleaner and is deliberately NOT cleared as a uniform
+# prefix - a date timestamps the item and stays informative even when the whole
+# group shares it, unlike a serial number.
 #
-# Anchored at both ends: it is matched against a candidate prefix on its own, never
-# searched inside a longer string.
-DATE_PREFIX_PATTERN = r"^[1-2][0-9][0-9][0-9][0-9][0-9][0-9][0-9]$"
+# Anchored at both ends: it is matched against a candidate prefix on its own,
+# never searched inside a longer string. A bare year is NOT a date: it is a
+# number the collective pass is free to wipe, and the date SHAPE is what
+# protects a prefix.
+DATE_PREFIX_PATTERN = r"^[12][0-9]{3}([0-9]{4}|-[01][0-9]-[0-3][0-9])$"
 
 
 def extension_of(path: str) -> str:

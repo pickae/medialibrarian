@@ -278,6 +278,15 @@ SETTINGS: tuple[Setting, ...] = (
             _NARRATION, "24000"),
     Setting("voiceSampleCodec", "The codec a prepared voice sample is written in",
             _NARRATION, "pcm_s16le"),
+    # --- naming
+    Setting("coverName", "The name clean-folder-structure gives a folder's cover "
+            "art: `folder` (the default) or `cover`, or empty for no rename at "
+            "all - the art then keeps the name it came in under",
+            ("clean-folder-structure",), "folder"),
+    Setting("dateForm", "The form clean-folder-structure's -d writes a leading "
+            "date in: `compact` (the default, `YYYYMMDD`) or `iso` "
+            "(`YYYY-MM-DD`); -y sorts files that lead with a date in either "
+            "form into their year", ("clean-folder-structure",), "compact"),
 )
 
 # Spelled like settings and not settings: what a command works out and hands

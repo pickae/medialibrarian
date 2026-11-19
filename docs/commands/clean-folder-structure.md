@@ -20,7 +20,7 @@ With no options, a run:
 
 - **renames folders and files in place**, at every level below the folder given
 - removes the configured fragments ([below](#fragments); `-f`)
-- **renames the cover image in each folder to `folder.<ext>`**: the largest one with `folder`, `front` or `cover` in its name
+- **renames the cover image in each folder to `folder.<ext>`** (another name or no rename at all, with the `coverName` setting): the largest one with `folder`, `front` or `cover` in its name
 - **removes sub-folders left empty**, keeping the folder given
 - refuses any rename that would overwrite something
 - fixes no dates, makes no year folders and numbers nothing (`-d`, `-y`, `-n`)
@@ -29,8 +29,8 @@ With no options, a run:
 
 | Option | Adds |
 | --- | --- |
-| `-d` | normalises a leading `YYYY-MM-DD`-style date into the compact `YYYYMMDD ` form first |
-| `-y` | sorts `YYYYMMDD` files into yearly subfolders |
+| `-d` | normalises a leading `YYYY-MM-DD`-style date into the form the `dateForm` setting names first - the compact `YYYYMMDD ` form, or `YYYY-MM-DD ` with it set to `iso` |
+| `-y` | sorts files that lead with a date, `YYYYMMDD` or `YYYY-MM-DD`, into yearly subfolders |
 | `-n` | numbers the plurality filetype in each folder instead of cleaning file names |
 | `-f <file>` | reads the fragments to remove from `<file>` ([below](#fragments)) |
 | `-p` | simulates the whole run in a sandbox and writes `before.tree` and `after.tree` into the input folder for risk-free review, without touching anything. Combines with the others |

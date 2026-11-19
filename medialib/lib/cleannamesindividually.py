@@ -274,6 +274,7 @@ def _is_digit(ch: str) -> bool:
 
 
 _PREFIX_RULES = (
+    (0, 10, 10, DATE_PREFIX_PATTERN),
     (0, 8, 8, DATE_PREFIX_PATTERN),
     (0, 5, 5, r"^[0-9][0-9]-[0-9][0-9]$"),
     (0, 4, 4, r"^[0-9][0-9][0-9][0-9]$"),

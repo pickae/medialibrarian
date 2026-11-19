@@ -320,6 +320,11 @@ PINNED_NAMES = [
         'The Title',
         id='date prefix + underscores'),
     pytest.param(
+        '2024-01-02 The_Title',
+        '2024-01-02',
+        'The Title',
+        id='iso date prefix + underscores'),
+    pytest.param(
         '2024 Something',
         '2024',
         'Something',

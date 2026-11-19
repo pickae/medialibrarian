@@ -446,6 +446,111 @@ class TestCoverArt:
         assert blackbox.tree_of(cleaner.folder) == before
 
 
+class TestTheCoverNameTheSettingGives:
+    """The coverName setting: what a folder's cover art is called, or nothing
+    at all. The selection is the same either way - only the rename changes,
+    and a name that is empty leaves the art where the cleaning put it."""
+
+    def _clean_with(self, cleaner, tmp_path, settings_text, options=()):
+        settings = tmp_path / "settings"
+        settings.write_text(settings_text, encoding="utf-8")
+        done = cleaner.run("clean-folder-structure", *options,
+                           "-f", str(tmp_path / "no-fragments.txt"),
+                           str(cleaner.folder),
+                           env=dict(os.environ,
+                                    CLI_SETTINGS_FILE=str(settings)))
+        assert done.returncode == 0, done.stdout + done.stderr
+
+    def test_a_name_other_than_folder_is_where_the_art_lands(self, cleaner,
+                                                             tmp_path):
+        _tree(cleaner.folder, "pri/cover.png", "pri/front image.jpg",
+              "pri/album Folder.JPG")
+        self._clean_with(cleaner, tmp_path, "coverName=cover\n")
+        assert (cleaner.folder / "pri" / "cover.jpg").is_file()
+        assert not (cleaner.folder / "pri" / "folder.jpg").exists()
+
+    def test_and_the_default_still_says_folder(self, cleaner, tmp_path):
+        _tree(cleaner.folder, "pri/cover.png", "pri/front image.jpg",
+              "pri/album Folder.JPG")
+        self._clean_with(cleaner, tmp_path, "")
+        assert (cleaner.folder / "pri" / "folder.jpg").is_file()
+        assert not (cleaner.folder / "pri" / "cover.jpg").exists()
+
+    def test_an_empty_name_is_no_rename_at_all(self, cleaner, tmp_path):
+        _tree(cleaner.folder, "pri/front image.jpg")
+        self._clean_with(cleaner, tmp_path, "coverName=\n")
+        assert (cleaner.folder / "pri" / "front image.jpg").is_file()
+        assert not (cleaner.folder / "pri" / "folder.jpg").exists()
+
+
+class TestDateFixingInIsoForm:
+    """dateForm: iso - the same normalisation, written in the dashed form, and
+    a name already in that form is what makes a second run a no-op."""
+
+    @pytest.fixture
+    def run(self, cleaner, tmp_path):
+        docs = _tree(cleaner.folder,
+                     "docs/2021.03.05 Report.pdf",     # dots
+                     "docs/sub/1999_12_31_Party.jpg",  # underscores
+                     "docs/2020 01 02 Notes.txt",      # spaces
+                     "docs/2021-03-05 AlreadyIso.txt") / "docs"  # already iso
+        settings = tmp_path / "settings"
+        settings.write_text("dateForm=iso\n", encoding="utf-8")
+
+        def clean(*options):
+            done = cleaner.run("clean-folder-structure", *options,
+                               "-f", str(tmp_path / "no-fragments.txt"),
+                               str(cleaner.folder),
+                               env=dict(os.environ,
+                                        CLI_SETTINGS_FILE=str(settings)))
+            assert done.returncode == 0, done.stdout + done.stderr
+
+        clean("-d")
+        return cleaner, docs, clean
+
+    def test_every_separator_a_date_can_use_is_written_iso(self, run):
+        _, docs, _clean = run
+        assert (docs / "2021-03-05 Report.pdf").is_file()
+        assert (docs / "sub" / "1999-12-31 Party.jpg").is_file()
+        assert (docs / "2020-01-02 Notes.txt").is_file()
+        assert not (docs / "2021.03.05 Report.pdf").exists()
+
+    def test_a_name_already_in_the_iso_form_is_untouched(self, run):
+        _, docs, _clean = run
+        assert (docs / "2021-03-05 AlreadyIso.txt").is_file()
+
+    def test_a_second_run_changes_nothing(self, run):
+        cleaner, _docs, clean = run
+        before = blackbox.tree_of(cleaner.folder)
+        clean("-d")
+        assert blackbox.tree_of(cleaner.folder) == before
+
+
+class TestYearSortingOfBothDateForms:
+    """-y sorts a file into its year by the date its name leads with, in
+    either of the two forms the names carry."""
+
+    @pytest.fixture
+    def run(self, cleaner):
+        docs = _tree(cleaner.folder,
+                     "docs/2023-06-01 alpha.txt",   # iso
+                     "docs/20240202 beta.txt",      # compact
+                     "docs/notes.txt") / "docs"
+        cleaner.clean(cleaner.folder, "-y")
+        return cleaner, docs
+
+    def test_each_form_lands_in_its_year(self, run):
+        _, docs = run
+        assert (docs / "2023" / "2023-06-01 alpha.txt").is_file()
+        assert (docs / "2024" / "20240202 beta.txt").is_file()
+        assert not (docs / "2023-06-01 alpha.txt").exists()
+        assert not (docs / "20240202 beta.txt").exists()
+
+    def test_a_file_with_no_date_stays_where_it_is(self, run):
+        _, docs = run
+        assert (docs / "notes.txt").is_file()
+
+
 class TestSimulation:
     """`-s` previews a whole run without touching the input: it mirrors the
     structure into a sandbox, cleans THAT, and writes `before.tree` and
