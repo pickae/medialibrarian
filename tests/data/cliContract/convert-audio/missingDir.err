@@ -48,11 +48,12 @@ Options:
                     converted, has its whole folder converted with it.
                     Cannot be combined with -a.
     -C, --ai-chapters
-                    Add chapters to every output whose source has none, worked
-                    out by a language model (the chapterLlm settings) from a
-                    transcript of the speech, and write the transcript into
-                    the output as well. A transcript sidecar is used rather
-                    than transcribing again.
+                    Add chapters to every output whose source has none, and no
+                    <name>.chapters.txt beside it, worked out by a language
+                    model (the chapterLlm settings) from a transcript of the
+                    speech, and write the transcript into the output as
+                    well. A transcript sidecar is used rather than
+                    transcribing again.
     -P, --prompt <text>
                     With -C: more instructions for the model, added to every
                     request, e.g. "a chapter per speaker, titled with their

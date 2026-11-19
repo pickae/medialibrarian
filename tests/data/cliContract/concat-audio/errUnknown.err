@@ -47,8 +47,8 @@ Usage:
 
     Dependencies
     ------------
-    ffmpeg, imagemagick, wc, mutagen. Optional: mkvtoolnix (chapters and titles
-    for MP3 output - without it an MP3 still concatenates, unchaptered),
+    ffmpeg, imagemagick, wc, mutagen. Optional: mkvtoolnix (takes an Opus
+    source's cover out; without it ffmpeg does),
     pdftoppm (renders a booklet PDF's first page as the cover; without it the
     embedded cover art is used instead), flock (numbers the progress lines)
 

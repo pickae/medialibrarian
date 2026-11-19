@@ -57,8 +57,6 @@ Each is taken from the first source that has one:
 | **Chapters** | a `.cue` sheet — the only one, or else the one beside the audio sharing its name, or else the largest | one chapter per individual file | — |
 | **Cover** | an image file in the input folder | the first page of a PDF booklet (needs `pdftoppm`) | the art embedded in the audio files |
 
-Without mkvtoolnix an MP3 book still concatenates, but unchaptered.
-
 A book that none of the three gave a cover is looked for **online**. What it
 probably is decides where: a name ending in a `[YouTube id]` (yt-dlp's
 default) is a YouTube podcast, and that video's own thumbnail is fetched; a

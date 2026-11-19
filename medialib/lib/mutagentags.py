@@ -111,6 +111,14 @@ def _open(audio: str):
         from mutagen.oggopus import OggOpus
 
         return OggOpus(audio)
+    if audio.lower().endswith((".ogg", ".oga")):
+        # An .ogg may hold Vorbis, Opus or FLAC: mutagen reads which.
+        import mutagen
+
+        handle = mutagen.File(audio)
+        if handle is None:
+            raise ValueError("not an Ogg file mutagen reads: %s" % audio)
+        return handle
     from mutagen.flac import FLAC
 
     return FLAC(audio)

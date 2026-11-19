@@ -11,10 +11,10 @@ chapters are read back out and re-attached to what was encoded from it.
   attach_chapters       re-attach them after an encode
 
 Chapter marks are carried as OGM-style "CHAPTERnn=" / "CHAPTERnnNAME=" rows,
-which is what every target format here accepts: mutagen writes them into Opus
-and FLAC directly, an m4b gets a chapter track from an ffmetadata file in one
-ffmpeg rewrite, and only an mp3 takes the detour through a Matroska - ID3 has no
-chapter form ffmpeg will write.
+and one writer, write_chapters, puts them into every format: mutagen writes them
+into Opus and FLAC directly, mkvpropedit into Matroska, and anything else - an
+m4b's chapter track, an mp3's ID3 chapter frames - is an ffmpeg stream copy
+from an ffmetadata file.
 """
 
 from __future__ import annotations
@@ -24,7 +24,6 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 from collections.abc import Callable, Sequence
 
 from medialib.lib import mutagentags, runlog, toolcapture
@@ -38,6 +37,11 @@ __all__ = [
     "extract_chapters",
     "attach_chapters",
     "attach_mp4_chapters",
+    "carries_chapters",
+    "CANNOT_HOLD",
+    "SIDECAR_SUFFIX",
+    "read_sidecar",
+    "MATROSKA_SUFFIXES",
     "chapter_count",
     "duration_ms",
     "write_chapters",
@@ -96,36 +100,10 @@ def _remove_quiet(path: str) -> None:
         pass
 
 
-def _remove_status(path: str) -> int:
-    """The same removal where the status is the answer: gone, or never there,
-    is the success, and only something in the way is the failure.
-    """
-    try:
-        os.remove(path)
-    except FileNotFoundError:
-        return 0
-    except OSError:
-        return 1
-    return 0
-
-
 def _stem_of(name: str) -> str:
     """The shortest dot-led suffix stripped, or the whole name."""
     dot = name.rfind(".")
     return name[:dot] if dot >= 0 else name
-
-
-def _ram_temp() -> str:
-    """A temp file on the RAM filesystem when the host has one, in the
-    default temp directory when it does not. It is named tmp.<random> in
-    whichever directory it used, because the recorded calls rewrite that
-    name."""
-    try:
-        descriptor, path = tempfile.mkstemp(prefix="tmp.", dir="/dev/shm")
-    except OSError:
-        descriptor, path = tempfile.mkstemp(prefix="tmp.")
-    os.close(descriptor)
-    return path
 
 
 def _c_div(a: int, b: int) -> int:
@@ -430,119 +408,6 @@ def ffmetadata_chapters(chapter_lines: Sequence[str], title: str,
     return "\n".join(out) + "\n"
 
 
-def _embed_mp4_chapters(m4b_file: str, chapter_lines: Sequence[str],
-                        title: str, ram_dir: str, run: Runner = _run) -> int:
-    """The rows into an m4b, in the one rewrite mp4 needs to gain a chapter
-    track. No mkvtoolnix: ffmpeg writes both the chapters and the title."""
-    if len(chapter_lines) < 2:
-        return 0
-    duration = _duration_ms(_probe_duration(m4b_file))
-    document = ffmetadata_chapters(chapter_lines, title, duration)
-
-    metadata_file = _ram_temp()
-    # Staged in the scratch and moved over at the end: ffmpeg cannot read and
-    # write one file in the same call, and the output tree is for finished
-    # files only - a half-written book must never appear there under any name.
-    chaptered = os.path.join(ram_dir,
-                             os.path.basename(m4b_file) + ".chapters.m4b")
-    try:
-        with open(metadata_file, "w", encoding="utf-8") as handle:
-            handle.write(document)
-        result = run(["ffmpeg", "-nostdin", "-hide_banner",
-                      *toolcapture.ffmpeg_loglevel(), "-y", "-i", m4b_file,
-                      "-i", metadata_file,
-                      "-map_metadata", "1", "-map", "0:a", "-codec", "copy",
-                      chaptered])
-        if getattr(result, "returncode", 0) != 0 \
-                or not os.path.isfile(chaptered):
-            _remove_quiet(chaptered)
-            return 1
-        # Across filesystems: the scratch is a tmpfs and the output is not.
-        return _move_over(chaptered, m4b_file)
-    finally:
-        _remove_quiet(metadata_file)
-
-
-def embed_chapters(chapter_file: str, chapter_lines: Sequence[str],
-                   ram_dir: str, script_dir: str, have_mkvtoolnix: bool,
-                   run: Runner = _run) -> int:
-    """Write the rows into whichever of the stem's output files exists."""
-    stem = _stem_of(chapter_file)
-    opus_file = f"{stem}.opus"
-    mp3_file = f"{stem}.mp3"
-    m4b_file = f"{stem}.m4b"
-    flac_file = f"{stem}.flac"
-    # The intermediary mka detour, kept in RAM rather than on the SSD.
-    mka_file = f"{ram_dir}/{os.path.basename(stem)}.mka"
-    title = _stem_of(os.path.basename(chapter_file))
-
-    # One of the four should exist; every step below acts on that single
-    # file, and the opus-before-flac order is the priority.
-    audio_file = ""
-    for candidate in (opus_file, mp3_file, m4b_file, flac_file):
-        if os.path.isfile(candidate):
-            audio_file = candidate
-            break
-
-    # FLAC and Opus keep chapters as Vorbis comments, so the already-OGM rows
-    # go straight in with mutagen - no Matroska detour. --force: the file was
-    # assembled here, so this list is its truth.
-    if audio_file in (flac_file, opus_file):
-        chapter_temp = ""
-        if len(chapter_lines) >= 4:
-            chapter_temp = _ram_temp()
-            with open(chapter_temp, "w", encoding="utf-8") as handle:
-                handle.write("\n".join(chapter_lines) + "\n")
-        mutagentags.embed_chapters(audio_file, chapter_temp or "/dev/null",
-                                   title, force=True)
-        if chapter_temp:
-            _remove_quiet(chapter_temp)
-        return 0
-
-    # An m4b takes its chapters straight from an ffmetadata file, in one
-    # rewrite. Not over a Matroska: the mp4 muxer cannot fit that route's
-    # nanosecond chapter durations into the chapter track it writes, drops the
-    # track, and leaves the audio pointing at it - ffmpeg says so on every read
-    # ("Referenced QT chapter track not found"), and a player that reads
-    # chapters only from that track finds none.
-    if audio_file == m4b_file:
-        return _embed_mp4_chapters(m4b_file, chapter_lines, title, ram_dir,
-                                   run)
-
-    # The mp3 path cannot run without mkvtoolnix: ID3 carries no
-    # Vorbis-comment chapters. Unset means absent, and outside a run the safe
-    # answer is to skip, not die.
-    if not have_mkvtoolnix:
-        _log("    chapters and title not embedded: mkvtoolnix is not installed "
-             "(MP3 needs it)")
-        return 0
-
-    # The detour over mka, but only if there is more than one chapter:
-    # mkvmerge needs a seekable chapters file, so the list is serialized to
-    # a RAM-backed temporary (removed right after the call).
-    if len(chapter_lines) >= 4:
-        chapter_temp = _ram_temp()
-        with open(chapter_temp, "w", encoding="utf-8") as handle:
-            handle.write("\n".join(chapter_lines) + "\n")
-        if audio_file:
-            run(["mkvmerge", "--quiet", audio_file, "--chapters",
-                 chapter_temp, "-o", mka_file])
-        _remove_quiet(chapter_temp)
-    elif audio_file:
-        run(["mkvmerge", "--quiet", audio_file, "-o", mka_file])
-
-    run(["mkvpropedit", "--quiet", mka_file, "--edit", "info",
-         "--set", f"title={title}", "--edit", "track:1",
-         "--set", f"name={title}"])
-
-    # Re-extract the audio from the mka, now with chapters.
-    if audio_file:
-        run(["ffmpeg", "-nostdin", "-hide_banner",
-             *toolcapture.ffmpeg_loglevel(), "-y",
-             "-i", mka_file, "-codec", "copy", audio_file])
-    return _remove_status(mka_file)
-
-
 def _unquote(value: str) -> str:
     """One leading quote and one trailing quote off."""
     if value.startswith('"'):
@@ -720,31 +585,152 @@ def chapter_count(path: str,
     return len(_flat_entries(probe(path)))
 
 
+# The containers that keep their chapters where a tool can rewrite them without
+# copying the file: Vorbis comments, written by mutagen, and Matroska's chapter
+# element, written by mkvpropedit.
+_VORBIS_SUFFIXES = (".opus", ".flac", ".ogg", ".oga")
+MATROSKA_SUFFIXES = (".mkv", ".mka", ".mk3d", ".webm")
+
+# How far a chapter start read back may sit from the row it was written from:
+# a container keeps its own timebase, and the row is in milliseconds.
+_START_TOLERANCE_MS = 50
+
+# How much shorter or longer a stream copy may come out before it is not put
+# over the file it was copied from.
+_COPY_DURATION_TOLERANCE_MS = 1000
+
+# What a chapter file beside a recording is called: generate-chapters writes
+# them, and convert-audio writes one into the output of the recording beside it.
+SIDECAR_SUFFIX = ".chapters.txt"
+
+# What write_chapters answers for a file whose container has no place for
+# chapters - raw AAC, WAV - which it leaves as it was.
+CANNOT_HOLD = 2
+
+
+def _row_chapters(chapter_lines: Sequence[str]) -> list[tuple[int, str]]:
+    """The OGM rows as (start in milliseconds, title) pairs."""
+    starts: list[int] = []
+    names: list[str] = []
+    for line in chapter_lines:
+        key, _, value = line.partition("=")
+        if key.endswith("NAME"):
+            names.append(value)
+        elif key.startswith("CHAPTER"):
+            starts.append(_ogm_milliseconds(value))
+    return [(start, names[index] if index < len(names) else "")
+            for index, start in enumerate(starts)]
+
+
+def carries_chapters(path: str, chapter_lines: Sequence[str],
+                     probe: Callable[[str], str] = _flat_chapters) -> bool:
+    """Whether a file already holds these chapters: as many, with the same
+    titles, each starting where its row says."""
+    wanted = _row_chapters(chapter_lines)
+    held = _flat_entries(probe(path))
+    if len(held) != len(wanted):
+        return False
+    for (start, name), (_index, held_start, held_name) in zip(wanted, held,
+                                                              strict=True):
+        try:
+            held_ms = float(held_start) * _MS_PER_SECOND
+        except ValueError:
+            return False
+        if held_name != name or abs(held_ms - start) > _START_TOLERANCE_MS:
+            return False
+    return True
+
+
 def write_chapters(target: str, chapter_lines: Sequence[str], tmp_dir: str,
-                   run: Runner = _run) -> int:
+                   run: Runner = _run,
+                   probe: Callable[[str], str] = _flat_chapters,
+                   book_title: str | None = None) -> int:
     """The rows written into a finished file IN PLACE, replacing whatever
     chapters it had and keeping every other tag.
 
-    A Vorbis-comment file takes them with mutagen; an MP4 takes a chapter
-    track, rewritten by ffmpeg into ``tmp_dir`` and moved over the target, its
-    own tags mapped across - unlike :func:`_embed_mp4_chapters`, which builds a
-    book whose tags are the ones this module writes.
+    A Vorbis-comment file takes them with mutagen, and a Matroska file with
+    mkvpropedit, neither copying the file. Anything else - an MP4's chapter
+    track, an MP3's ID3 chapter frames - is a stream copy by ffmpeg into
+    ``tmp_dir``, moved over the target only once it reads back with every
+    chapter and as long as the target. A container that cannot hold chapters
+    is left as it was, and answered with :data:`CANNOT_HOLD` rather than 1.
+
+    ``book_title`` is for a book this program has just joined: the title is
+    set to it, and a stream copy keeps only the audio and that title rather
+    than whatever the join carried over, so a cover stream cannot displace the
+    chapter track and the cover added later is the only one.
     """
     rows = os.path.join(tmp_dir, "generated.chapters.txt")
     with open(rows, "w", encoding="utf-8") as handle:
         handle.write("\n".join(chapter_lines) + "\n")
-    if not _is_mp4(target):
-        return mutagentags.embed_chapters(target, rows, force=True)
-    duration = _duration_ms(_probe_duration(target))
+    lower = target.lower()
+    if lower.endswith(_VORBIS_SUFFIXES):
+        status = mutagentags.embed_chapters(target, rows, book_title or "",
+                                            force=True)
+        _remove_quiet(rows)
+        return status
+    if lower.endswith(MATROSKA_SUFFIXES):
+        title = ["--edit", "info", "--set", f"title={book_title}"] \
+            if book_title is not None else []
+        run(["mkvpropedit", "--quiet", target, "--chapters", rows, *title])
+        _remove_quiet(rows)
+        return 0 if carries_chapters(target, chapter_lines, probe) else 1
+    _remove_quiet(rows)
+    duration = duration_ms(target)
     metadata_file = os.path.join(tmp_dir, "generated.ffmetadata")
     with open(metadata_file, "w", encoding="utf-8") as handle:
-        handle.write(ffmetadata_chapters(chapter_lines, "", duration))
+        handle.write(ffmetadata_chapters(chapter_lines, book_title or "",
+                                         duration))
     staged = os.path.join(tmp_dir, "generated" + os.path.splitext(target)[1])
     _remove_quiet(staged)
-    run(["ffmpeg", "-nostdin", "-hide_banner", *toolcapture.ffmpeg_loglevel(),
-         "-y", "-i", target, "-i", metadata_file, "-map", "0", "-map_metadata", "0",
-         "-map_chapters", "1", "-c", "copy", staged])
-    if not os.path.isfile(staged) or os.path.getsize(staged) <= 0:
+    book = book_title is not None
+    result = run(["ffmpeg", "-nostdin", "-hide_banner",
+                  *toolcapture.ffmpeg_loglevel(), "-y", "-i", target,
+                  "-i", metadata_file, "-map", "0:a" if book else "0",
+                  "-map_metadata", "1" if book else "0", "-map_chapters", "1",
+                  "-c", "copy", staged])
+    _remove_quiet(metadata_file)
+    if getattr(result, "returncode", 0) != 0 or not os.path.isfile(staged) \
+            or os.path.getsize(staged) <= 0 \
+            or abs(duration_ms(staged) - duration) > _COPY_DURATION_TOLERANCE_MS:
         _remove_quiet(staged)
         return 1
+    if not carries_chapters(staged, chapter_lines, probe):
+        # A whole copy holding no chapters at all is a container without a
+        # place for them, as against one that kept some of them wrong.
+        cannot = chapter_lines and not _flat_entries(probe(staged))
+        _remove_quiet(staged)
+        return CANNOT_HOLD if cannot else 1
     return _move_over(staged, target)
+
+
+def embed_chapters(chapter_file: str, chapter_lines: Sequence[str],
+                   ram_dir: str, run: Runner = _run,
+                   probe: Callable[[str], str] = _flat_chapters) -> int:
+    """The rows written into whichever of the stem's output files exists,
+    titled after the stem: :func:`write_chapters` with the book's title.
+
+    A list of fewer than two chapters is no chapters at all, so only the title
+    goes in.
+    """
+    stem = _stem_of(chapter_file)
+    title = _stem_of(os.path.basename(chapter_file))
+    # One of the four should exist; the opus-before-flac order is the priority.
+    for extension in ("opus", "mp3", "m4b", "flac"):
+        audio_file = f"{stem}.{extension}"
+        if os.path.isfile(audio_file):
+            rows = list(chapter_lines) if len(chapter_lines) >= 4 else []
+            return write_chapters(audio_file, rows, ram_dir, run, probe,
+                                  book_title=title)
+    return 0
+
+
+def read_sidecar(stem: str) -> list[str]:
+    """The chapter rows of ``<stem>.chapters.txt``, or none when there is no
+    such file or it holds no chapter."""
+    try:
+        with open(stem + SIDECAR_SUFFIX, encoding="utf-8") as handle:
+            rows = [line.strip() for line in handle if line.strip()]
+    except (OSError, UnicodeDecodeError):
+        return []
+    return rows if _row_chapters(rows) else []

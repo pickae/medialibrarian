@@ -517,8 +517,8 @@ def _settle_mkvtoolnix() -> None:
     both halves; the per-script wordings are for their standalone runs.
 
     A warning rather than a refusal: the transcoding half uses mkvtoolnix only to
-    pull cover art out of a Matroska source, and the concatenating half only for
-    the MP3 chapter-and-title detour.
+    pull cover art out of a Matroska source, and the concatenating half has
+    ffmpeg to fall back on.
     """
     if runcontext.get("HAVE_MKVTOOLNIX", None) is not None:
         return
@@ -530,10 +530,7 @@ def _settle_mkvtoolnix() -> None:
     log("WARNING: mkvtoolnix not found (apt install mkvtoolnix) - in the "
         "transcoding phase, cover art")
     log("         embedded in Matroska sources will not be extracted (sidecar "
-        "images still work); in the")
-    log("         concatenating phase, chapters and titles cannot be embedded "
-        "in MP3 output (Opus and")
-    log("         FLAC go through mutagen, m4b through ffmpeg).")
+        "images still work).")
     log("         The encoding and concatenation themselves are unaffected.")
 
 

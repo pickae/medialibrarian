@@ -21,7 +21,7 @@ With no options, a run:
 - re-encodes only what is at or above 90 kbps (50 kbps in a mono run; `-T`), or in a format not worth keeping, and **leaves smaller files out of the output** ([below](#what-gets-re-encoded); `-c` copies them)
 - **splits files longer than 10000 s** into chunks that encode in parallel (`-s`)
 - carries chapters and cover art over, and copies images across ([below](#cover-art))
-- writes a transcript found beside a source into its output ([below](#transcripts))
+- writes a transcript found beside a source into its output ([below](#transcripts)), and a chapter file found beside it ([below](#a-chapter-file-beside-a-source))
 - **lower-cases file extensions in the input**, and renames `.jpeg` to `.jpg`
 - runs one encoder per CPU thread (`-j`)
 
@@ -116,9 +116,19 @@ ffmpeg can write, so lyrics are how a transcript fits in an Opus file without
 switching it to Matroska. An `.m4a` takes it as a subtitle track. An output
 that carries a transcript already is left as it is.
 
+## A chapter file beside a source
+
+A chapter file beside a source, named after it (`<name>.chapters.txt`, the OGM
+rows [`generate-chapters`](generate-chapters.md) writes), is written into the
+output. It wins over the source's own chapters, being made or corrected for
+that recording. This is how a format with no place for chapters, such as raw
+`.aac`, keeps the chapters `generate-chapters -w` left beside it. An output
+already holding exactly those chapters is left as it is.
+
 ## Chapters for what has none (`-C`)
 
-With `-C`, every output whose source has no chapters gets some, worked out by a
+With `-C`, every output whose source has no chapters, and no chapter file
+beside it, gets some, worked out by a
 language model from a transcript of the speech, exactly as
 [`generate-chapters`](generate-chapters.md) does it and with the same
 settings. The transcript is the sidecar where there is one. Otherwise the
