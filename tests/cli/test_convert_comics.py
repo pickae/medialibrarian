@@ -414,7 +414,7 @@ class TestTheChromaReachesTheConversion:
     book."""
 
     @staticmethod
-    def _argv(tmp_path, monkeypatch, chroma):
+    def _argv(tmp_path, monkeypatch, chroma, keep_pages: bool = False):
         calls = []
         real = cc.commands.command_line
         monkeypatch.setattr(
@@ -428,7 +428,7 @@ class TestTheChromaReachesTheConversion:
         state = cc.Run(counters=cc.Counters(str(tmp_path)), script_dir="",
                        quality="45", chroma=chroma, speed_preset="4",
                        pages_per_book=4,
-                       max_res=2960, fuzz="10",
+                       max_res=2960, fuzz="10", keep_pages=keep_pages,
                        stats_file=str(tmp_path / "pageStats"))
         state._convert_pages(str(tmp_path / "pages"), str(tmp_path / "avif"),
                              "book.cbz")
@@ -450,6 +450,23 @@ class TestTheChromaReachesTheConversion:
         with pytest.raises(cc.clioptions.UsageError):
             cc.clioptions.parse(cc.spec("convert-comics"),
                                 ["-u", "422", "in", "out"])
+
+
+class TestTheTrimIsWhatKeepNames:
+    """-k pages is the trim and the blank-page drop it ends with: a kept run
+    hands the pages to convert-images without -c, and what a kept page still
+    gets - the -m cap - is on this side of that flag."""
+
+    def test_the_default_run_hands_the_trim_over(self, tmp_path, monkeypatch):
+        argv = TestTheChromaReachesTheConversion._argv(tmp_path, monkeypatch,
+                                                       "444")
+        assert "-c" in argv
+
+    def test_a_kept_run_hands_it_over_without(self, tmp_path, monkeypatch):
+        argv = TestTheChromaReachesTheConversion._argv(
+            tmp_path, monkeypatch, "444", keep_pages=True)
+        assert "-c" not in argv
+        assert argv[argv.index("-m") + 1] == 2960, argv
 
 
 class TestTheClosingReport:
@@ -815,6 +832,7 @@ class TestARefusedBookStopsAtTheUnpack:
         state = cc.Run(in_path=str(tmp_path / "in"),
                        temp_path=str(tmp_path / "temp"),
                        avif_path=str(tmp_path / "avif"), max_res=2960,
+                       keep_pages=False,
                        out_path=str(tmp_path / "out"),
                        counters=cc.Counters(str(counters)))
         assert state.prepare_book("Series/Book.cbr" + cc.UNIT
@@ -903,6 +921,7 @@ class TestABookMissingPagesIsNotPackaged:
                        avif_path=str(tmp_path / "avif"),
                        quality="45", chroma="444", speed_preset="4",
                        pages_per_book=4, max_res=2960, fuzz="10",
+                       keep_pages=False,
                        stats_file=str(tmp_path / "pageStats"))
         state._finish_book(("Book.cbz" + cc.UNIT + "Book.cbz", 0, 0, ""))
         return state

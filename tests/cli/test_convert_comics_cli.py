@@ -862,3 +862,171 @@ class TestComicsThatArriveAsPdfs:
                           env=comics.env)
         assert same.returncode == 1
         assert blackbox.tree_of(comics.inputs) == before
+
+
+# The identify stand-in's one trick: the trim's target of a page it calls
+# "blank" measures 0x0, which is what makes the trim's verdict "blank" and
+# the page a drop. Every other question gets the flat answer.
+_IDENTIFY_WITH_BLANKS = '''
+arg=""
+for a in "$@"; do case "$a" in miff:*) arg="${a#miff:}";; esac; done
+if [[ -n "$arg" && -f "$arg" ]] && head -1 -- "$arg" | grep -q "from blank"; then
+    echo "0 0"
+else
+    echo "1000 1500"
+fi
+'''
+
+
+def _CONVERT_CALLS(log_file: str) -> str:
+    """The convert stand-in, with every call it gets recorded, argument by
+    argument, ahead of what it does: which calls carry the -trim is what -k
+    is asserted by."""
+    return "printf '%s\\n' \"$*\" >> " + log_file + "\n" + _CONVERT_STAMPING
+
+
+# The convert stand-in that pads every page it writes past the 10k below which
+# a page reads as an empty one - except one, which it writes at that size: the
+# page a run drops on its way into the book, whether or not it trims.
+_CONVERT_SMALL_PAGE = '''
+src=""
+for a in "$@"; do [[ -f "${a#*:}" ]] && { src="${a#*:}"; break; }; done
+out="${!#}"; out="${out%\\>}"; out="${out#miff:}"
+pad=12288
+if [[ "$src" == *02.jpg ]]; then pad=4096; fi
+{ printf "AVIF from %s\\n" "${src##*/}"; head -c $pad /dev/zero | tr "\\0" "a"; } > "$out"
+exit 0
+'''
+
+
+class TestKeepPages:
+    """-k pages: the trim and the blank-page drop it ends with are both kept
+    in. What a kept page still gets is the -m cap and the numbering, and the
+    default run is the one that trims, so the cases are defined against it."""
+
+    @pytest.fixture
+    def run(self, comics, tmp_path):
+        calls = tmp_path / "convert-calls"
+        comics.with_tool("identify", _IDENTIFY_WITH_BLANKS)
+        comics.with_tool("convert", _CONVERT_CALLS(str(calls)))
+        comics.with_tool("fdupes", "exit 0")
+        _cbz(comics.inputs, "Alpha.cbz",
+             {"01.jpg": "alpha 1", "02.jpg": "alpha 2",
+              "blank.jpg": "alpha blank"})
+
+        def ingest(*flags):
+            done = comics.run("convert-comics", *flags, comics.inputs,
+                              comics.outputs)
+            assert done.returncode == 0, done.stdout + done.stderr
+            return done.stdout + done.stderr
+
+        comics.calls = calls
+        comics.ingest = ingest
+        return comics
+
+    @staticmethod
+    def _argvs(run) -> list[list[str]]:
+        if not run.calls.exists():
+            return []
+        return [line.split(" ") for line in run.calls.read_text().splitlines()
+                if line.strip()]
+
+    @classmethod
+    def _trims(cls, run) -> list[list[str]]:
+        return [argv for argv in cls._argvs(run) if "-trim" in argv]
+
+    @staticmethod
+    def _pages(run) -> list[str]:
+        return [entry for entry in _entries(run.outputs / "Alpha.cbz")
+                if entry.endswith(".avif")]
+
+    def test_the_default_run_trims_every_page_and_drops_the_blank(self, run):
+        log = run.ingest()
+        assert len(self._trims(run)) == 3, self._argvs(run)
+        assert self._pages(run) == ["1.avif", "2.avif"], log
+        assert re.search(r"blank, dropped:\s+1/3", log), log
+
+    def test_the_kept_run_trims_no_page_and_drops_none(self, run):
+        log = run.ingest("-k", "pages")
+        assert not self._trims(run), self._argvs(run)
+        assert self._pages(run) == ["1.avif", "2.avif", "3.avif"], log
+        # The page the trim would have dropped is the last one in, numbered
+        # like its siblings.
+        assert _first_line(run.outputs / "Alpha.cbz", "3.avif") \
+            == "AVIF from blank.jpg"
+
+    def test_a_bare_k_keeps_every_part(self, run):
+        """There is one part today, so the bare flag is the named one - and it
+        stays so when the later parts land."""
+        run.ingest("-k")
+        assert not self._trims(run), self._argvs(run)
+        assert self._pages(run) == ["1.avif", "2.avif", "3.avif"]
+
+    def test_the_cap_is_unchanged_by_the_part(self, run):
+        """What the part takes away is the trim: the encode of a kept page is
+        the encode of any other page, -m and all."""
+        run.ingest("-k", "pages")
+        encodes = [argv for argv in self._argvs(run)
+                   if "-resize" in argv and "-trim" not in argv]
+        assert encodes, self._argvs(run)
+        for argv in encodes:
+            assert argv[argv.index("-resize") + 1] == "10000x2960>", argv
+
+    def test_a_part_that_is_not_the_one_is_refused_with_the_page(self, run):
+        """The = form names the value outright, so a word that is not the part
+        is refused there rather than read as the first folder."""
+        done = run.run("convert-comics", "--keep=margins", run.inputs,
+                       run.outputs)
+        assert done.returncode == 1, done.stdout + done.stderr
+        assert 'Option --keep does not take "margins"' in done.stderr
+        assert not (run.outputs / "Alpha.cbz").exists()
+
+    def test_the_fuzz_is_refused_with_the_part(self, run):
+        """-f tunes the trim, and the part keeps the trim in: the same switch
+        told two ways is refused before the run touches the input."""
+        done = run.run("convert-comics", "-k", "pages", "-f", "10",
+                       run.inputs, run.outputs)
+        assert done.returncode == 1, done.stdout + done.stderr
+        assert "-k pages keeps the trim in, and -f is the fuzz it trims " \
+            "with: give one or the other." in done.stderr
+        assert not (run.outputs / "Alpha.cbz").exists()
+
+    def test_a_bare_k_refuses_the_fuzz_with_it(self, run):
+        done = run.run("convert-comics", "-k", "-f", "10", run.inputs,
+                       run.outputs)
+        assert done.returncode == 1, done.stdout + done.stderr
+        assert "-k pages keeps the trim in, and -f is the fuzz it trims " \
+            "with: give one or the other." in done.stderr
+        assert not (run.outputs / "Alpha.cbz").exists()
+
+    @pytest.fixture
+    def small_run(self, comics):
+        """The same book, with one page the encoder writes at the size an empty
+        page reads as: what the part is is what a run does with that page on
+        its way into the book."""
+        comics.with_tool("identify", _IDENTIFY_WITH_BLANKS)
+        comics.with_tool("convert", _CONVERT_SMALL_PAGE)
+        comics.with_tool("fdupes", "exit 0")
+        _cbz(comics.inputs, "Alpha.cbz",
+             {"01.jpg": "alpha 1", "02.jpg": "alpha 2",
+              "blank.jpg": "alpha blank"})
+        return comics
+
+    def test_the_run_without_the_part_drops_the_small_page(self, small_run):
+        done = small_run.run("convert-comics", small_run.inputs,
+                             small_run.outputs)
+        assert done.returncode == 0, done.stdout + done.stderr
+        log = done.stdout + done.stderr
+        # A page on its own is not a series, so it keeps the name its source
+        # had and the numbering does not reach it.
+        assert _entries(small_run.outputs / "Alpha.cbz") == ["01.avif"], log
+        assert re.search(r"of those empty, dropped:\s+1/3", log), log
+
+    def test_the_kept_run_keeps_the_small_page(self, small_run):
+        done = small_run.run("convert-comics", "-k", "pages",
+                             small_run.inputs, small_run.outputs)
+        assert done.returncode == 0, done.stdout + done.stderr
+        log = done.stdout + done.stderr
+        assert _entries(small_run.outputs / "Alpha.cbz") == \
+            ["1.avif", "2.avif", "3.avif"], log
+        assert "of those empty, dropped" not in log, log
