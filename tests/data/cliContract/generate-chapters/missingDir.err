@@ -8,7 +8,8 @@ sub-folder structure:
     <inputDir>/a/show.mp3    ->   <outputDir>/a/show.chapters.txt
                                   <outputDir>/a/show.srt
 A transcript already in <outputDir>, or beside the input, as .srt, .vtt, .tsv,
-.json or .lrc, is used instead of transcribing again.
+.json or .lrc, is used instead of transcribing again. With -w each input
+takes its chapters in as well, without being re-encoded.
 
 The language model is set with the chapterLlm settings: any server speaking the
 OpenAI chat protocol (local or hosted) or Claude.
@@ -24,6 +25,14 @@ Options:
     -l, --length <minutes>
                     The length of chapter the model is steered towards.
                     Default 8
+    -w, --write-into
+                    Write the chapters into the input files too, replacing the
+                    chapters they hold and keeping everything else; the
+                    audio is not re-encoded. A format with no place for
+                    chapters (raw AAC, WAV) gets the chapter file beside it
+                    instead. Chapter files already made are written in
+                    without asking the model again.
+                    Default false
     -P, --prompt <text>
                     More instructions for the model, added to every request,
                     e.g. "a chapter per speaker, titled with their name and

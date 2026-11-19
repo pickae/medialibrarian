@@ -545,175 +545,179 @@ def test_extract_without_chapters_leaves_an_empty_file(tmp_path):
         assert handle.read() == ""
 
 
-# --- embedChapters: the dispatch and the calls ---------------------------------
+# --- embedChapters: the book's file found, and write_chapters with its title ---
 
-def test_embed_opus_writes_the_rows_with_mutagen(tmp_path, capsys, monkeypatch,
-                                                 tags):
-    (tmp_path / "song.opus").write_bytes(b"x")
-    monkeypatch.chdir(tmp_path)
-    lines = ["CHAPTER01=00:00:00.000", "CHAPTER01NAME=One",
-             "CHAPTER02=00:00:01.000", "CHAPTER02NAME=Two"]
-    run = _Run()
-    status = chapters.embed_chapters("song.opus", lines, "ram", "script",
-                                     False, run)
-    assert status == 0
-    assert len(tags.calls) == 1
-    audio, chapter_file, title, force = tags.calls[0]
-    assert audio == "song.opus"
-    assert chapter_file != "/dev/null"
-    assert title == "song"
-    assert force
-    assert tags.chapter_contents == ["\n".join(lines) + "\n"]
-    assert not run.calls_to("mkvmerge") and not run.calls_to("ffmpeg")
-    assert capsys.readouterr().err == ""
+_LINES = ["CHAPTER01=00:00:00.000", "CHAPTER01NAME=One",
+          "CHAPTER02=00:00:01.000", "CHAPTER02NAME=Two"]
 
 
-def test_embed_few_rows_pass_dev_null(tmp_path, monkeypatch, tags):
-    (tmp_path / "song.flac").write_bytes(b"x")
-    monkeypatch.chdir(tmp_path)
-    run = _Run()
-    assert chapters.embed_chapters("song.flac", ["CHAPTER01=00:00:00.000"],
-                                   "ram", "script", False, run) == 0
-    assert tags.calls[0][1] == "/dev/null"
-    assert tags.chapter_contents == []
+def _flat_of(lines):
+    """What ffprobe's flat -show_chapters would say of a file holding these
+    rows."""
+    pairs = chapters._row_chapters(lines)
+    return "".join('chapters.chapter.%d.start_time="%f"\n'
+                   'chapters.chapter.%d.tags.title="%s"\n'
+                   % (n, start / 1000, n, name)
+                   for n, (start, name) in enumerate(pairs))
 
 
-def test_embed_chooses_the_file_in_its_own_order(tmp_path, monkeypatch, tags):
-    for name in ("song.mp3", "song.flac", "song.opus"):
-        (tmp_path / name).write_bytes(b"x")
-    monkeypatch.chdir(tmp_path)
-    chapters.embed_chapters("song.opus", [], "ram", "script", False, _Run())
-    assert tags.calls[0][0] == "song.opus"
-
-
-def test_embed_mp3_without_mkvtoolnix_skips_with_a_note(tmp_path, capsys,
-                                                        monkeypatch, tags):
-    (tmp_path / "song.mp3").write_bytes(b"x")
-    monkeypatch.chdir(tmp_path)
-    run = _Run()
-    assert chapters.embed_chapters("song.mp3", ["a", "b", "c", "d"],
-                                   "ram", "script", False, run) == 0
-    assert run.calls == []
-    assert tags.calls == []
-    assert capsys.readouterr().err == (
-        "==>     chapters and title not embedded: mkvtoolnix is not installed "
-        "(MP3 needs it)\n")
-
-
-def test_embed_mp3_with_mkvtoolnix_detours_over_mka(tmp_path, monkeypatch,
-                                                    tags):
-    (tmp_path / "song.mp3").write_bytes(b"x")
-    # the stubbed mkvmerge writes no mka, so the removal gets one to remove
-    (tmp_path / "ram").mkdir()
-    (tmp_path / "ram" / "song.mka").write_bytes(b"x")
-    monkeypatch.chdir(tmp_path)
-    lines = ["CHAPTER01=00:00:00.000", "CHAPTER01NAME=One"]
-    run = _Run()
-    assert chapters.embed_chapters("song.mp3", lines, "ram", "script", True,
-                                   run) == 0
-    names = [os.path.basename(str(c[0])) for c in run.calls]
-    assert names == ["mkvmerge", "mkvpropedit", "ffmpeg"]
-    assert run.calls[0] == ["mkvmerge", "--quiet", "song.mp3", "-o", "ram/song.mka"]
-    assert "--chapters" not in run.calls[0]
-    assert run.calls[1] == ["mkvpropedit", "--quiet", "ram/song.mka", "--edit",
-                            "info", "--set", "title=song", "--edit", "track:1",
-                            "--set", "name=song"]
-    assert run.calls[2] == ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel",
-                            "info", "-y", "-i", "ram/song.mka", "-codec", "copy",
-                            "song.mp3"]
-    # and the intermediate does not outlive the detour
-    assert not (tmp_path / "ram" / "song.mka").exists()
-    # The mp3 path goes over Matroska; the Vorbis-comment writer is not its route.
-    assert tags.calls == []
-
-
-def _m4b_run(tmp_path, monkeypatch, lines, duration="61.0", results=None):
-    (tmp_path / "song.m4b").write_bytes(b"x")
-    # The scratch is a real directory: the rewrite is staged there rather than
-    # beside the book, so the output tree never holds a half-written file.
+def _book(tmp_path, monkeypatch, name, duration="61.0"):
+    (tmp_path / name).write_bytes(b"x")
     (tmp_path / "ram").mkdir(exist_ok=True)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(chapters, "_probe_duration", lambda path: duration)
-    run = _Run(results)
-    status = chapters.embed_chapters("song.m4b", lines, "ram", "script", True,
-                                     run)
-    return status, run
 
 
-_M4B_LINES = ["CHAPTER01=00:00:00.000", "CHAPTER01NAME=One",
-              "CHAPTER02=00:00:01.000", "CHAPTER02NAME=Two"]
+class _CopyRun(_Run):
+    """The runner whose ffmpeg writes a copy with something in it, as a real
+    stream copy does."""
+
+    def __call__(self, argv, may_fail=False):
+        result = super().__call__(argv, may_fail)
+        if os.path.basename(str(argv[0])) == "ffmpeg":
+            with open(str(argv[-1]), "w") as handle:
+                handle.write("copy")
+        return result
 
 
-def test_embed_m4b_takes_one_call_and_no_mkvtoolnix(tmp_path, monkeypatch):
-    """mp4 gains a chapter track by being rewritten, which ffmpeg does on its
-    own: three processes and a dependency buy nothing here."""
-    status, run = _m4b_run(tmp_path, monkeypatch, _M4B_LINES)
-    assert status == 0
+def _reads_back(lines):
+    """A probe that finds these rows in the staged copy, and none in the book."""
+    return lambda path: _flat_of(lines) if "generated." in path else ""
+
+
+def test_embed_opus_writes_the_rows_with_mutagen(tmp_path, capsys, monkeypatch,
+                                                 tags):
+    _book(tmp_path, monkeypatch, "song.opus")
+    run = _Run()
+    assert chapters.embed_chapters("song.opus", _LINES, "ram", run) == 0
+    assert len(tags.calls) == 1
+    audio, _chapter_file, title, force = tags.calls[0]
+    assert (audio, title, force) == ("song.opus", "song", True)
+    assert tags.chapter_contents == ["\n".join(_LINES) + "\n"]
+    assert run.calls == []
+    assert capsys.readouterr().err == ""
+
+
+def test_embed_a_single_chapter_writes_the_title_alone(tmp_path, monkeypatch,
+                                                      tags):
+    _book(tmp_path, monkeypatch, "song.flac")
+    assert chapters.embed_chapters("song.flac", ["CHAPTER01=00:00:00.000"],
+                                   "ram", _Run()) == 0
+    assert tags.calls[0][2] == "song"
+    assert "CHAPTER" not in tags.chapter_contents[0]
+
+
+def test_embed_chooses_the_file_in_its_own_order(tmp_path, monkeypatch, tags):
+    for name in ("song.mp3", "song.flac"):
+        _book(tmp_path, monkeypatch, name)
+    _book(tmp_path, monkeypatch, "song.opus")
+    chapters.embed_chapters("song.opus", [], "ram", _Run())
+    assert tags.calls[0][0] == "song.opus"
+
+
+@pytest.mark.parametrize("name", ["song.mp3", "song.m4b"])
+def test_embed_a_stream_copy_keeps_the_audio_and_the_title(tmp_path,
+                                                          monkeypatch, name):
+    """One ffmpeg call, no Matroska: the chapters and the title come from the
+    ffmetadata input, and only the audio from the book, so a cover stream the
+    join carried cannot displace the chapter track."""
+    _book(tmp_path, monkeypatch, name)
+    run = _CopyRun()
+    assert chapters.embed_chapters(name, _LINES, "ram", run,
+                                   _reads_back(_LINES)) == 0
     assert [os.path.basename(str(c[0])) for c in run.calls] == ["ffmpeg"]
     argv = run.calls[0]
-    # Staged in the scratch, never in the tree the book lives in.
-    assert argv[-1] == "ram/song.m4b.chapters.m4b"
-    # The metadata input supplies the chapters and the title; only the audio is
-    # mapped from the book, so a cover stream cannot displace the chapter track.
-    assert argv[argv.index("-map_metadata") + 1] == "1"
+    assert argv[-1] == "ram/generated" + os.path.splitext(name)[1]
     assert argv[argv.index("-map") + 1] == "0:a"
-    assert argv[argv.index("-codec") + 1] == "copy"
-
-
-def test_embed_m4b_hands_ffmpeg_the_rows_as_ffmetadata(tmp_path, monkeypatch):
-    status, run = _m4b_run(tmp_path, monkeypatch, _M4B_LINES)
-    assert status == 0
+    assert argv[argv.index("-map_metadata") + 1] == "1"
+    assert argv[argv.index("-map_chapters") + 1] == "1"
     assert run.metadata_contents == [
         ";FFMETADATA1\n"
         "title=song\n"
         "[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=1000\ntitle=One\n"
         "[CHAPTER]\nTIMEBASE=1/1000\nSTART=1000\nEND=61000\ntitle=Two\n"]
-
-
-def test_embed_m4b_replaces_the_file_only_once_the_rewrite_is_there(
-        tmp_path, monkeypatch):
-    """The rewrite cannot read and write one file in the same call, so it goes
-    beside the original - which is replaced, not cleared in advance."""
-    status, _run = _m4b_run(tmp_path, monkeypatch, _M4B_LINES)
-    assert status == 0
-    assert (tmp_path / "song.m4b").exists()
-    # Neither beside the book nor left in the scratch.
-    assert list(tmp_path.glob("*.chapters.m4b")) == []
+    # Moved over the book; nothing left beside it or in the scratch.
+    assert (tmp_path / name).read_bytes() == b"copy"
     assert list((tmp_path / "ram").iterdir()) == []
 
 
-def test_embed_m4b_reports_a_rewrite_that_failed(tmp_path, monkeypatch):
-    """A non-zero ffmpeg leaves the original in place rather than a half-file
-    under its name."""
-    status, _run = _m4b_run(tmp_path, monkeypatch, _M4B_LINES,
-                            results={"ffmpeg": [1]})
-    assert status == 1
+def test_embed_a_failed_copy_leaves_the_book_as_it_was(tmp_path, monkeypatch):
+    _book(tmp_path, monkeypatch, "song.m4b")
+    assert chapters.embed_chapters("song.m4b", _LINES, "ram",
+                                   _CopyRun({"ffmpeg": [1]}),
+                                   _reads_back(_LINES)) == 1
     assert (tmp_path / "song.m4b").read_bytes() == b"x"
-    assert list(tmp_path.glob("*.chapters.m4b")) == []
     assert list((tmp_path / "ram").iterdir()) == []
 
 
-def test_embed_m4b_without_rows_writes_nothing(tmp_path, monkeypatch):
-    status, run = _m4b_run(tmp_path, monkeypatch, [])
-    assert status == 0
+def test_a_copy_holding_no_chapters_is_a_container_without_a_place_for_them(
+        tmp_path, monkeypatch):
+    _book(tmp_path, monkeypatch, "talk.aac")
+    assert chapters.write_chapters("talk.aac", _LINES, "ram", _CopyRun(),
+                                   lambda path: "") == chapters.CANNOT_HOLD
+    assert (tmp_path / "talk.aac").read_bytes() == b"x"
+    assert list((tmp_path / "ram").iterdir()) == []
+
+
+def test_a_copy_holding_the_wrong_chapters_is_a_failure(tmp_path, monkeypatch):
+    _book(tmp_path, monkeypatch, "song.mp3")
+    assert chapters.write_chapters("song.mp3", _LINES, "ram", _CopyRun(),
+                                   _reads_back(_LINES[:2])) == 1
+    assert (tmp_path / "song.mp3").read_bytes() == b"x"
+
+
+def test_embed_a_copy_that_came_out_short_is_not_put_over_the_book(
+        tmp_path, monkeypatch):
+    _book(tmp_path, monkeypatch, "song.mp3")
+    monkeypatch.setattr(chapters, "_probe_duration",
+                        lambda path: "30.0" if "generated." in path else "61.0")
+    assert chapters.embed_chapters("song.mp3", _LINES, "ram", _CopyRun(),
+                                   _reads_back(_LINES)) == 1
+    assert (tmp_path / "song.mp3").read_bytes() == b"x"
+
+
+def test_embed_with_no_book_there_does_nothing(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    run = _Run()
+    assert chapters.embed_chapters("song.opus", _LINES, "ram", run) == 0
     assert run.calls == []
 
 
-def test_embed_returns_the_status_of_the_last_removal(tmp_path, monkeypatch):
-    """The removal that ends the mka detour is the function's status.
+# --- writeChapters: in place, keeping the file's own tags -----------------------
 
-    Injected rather than arranged on disk, because what makes a removal fail is
-    the platform's own; what is pinned is that the failure comes back out.
-    """
-    (tmp_path / "song.mp3").write_bytes(b"x")
-    monkeypatch.chdir(tmp_path)
+def test_write_keeps_every_stream_and_tag_of_the_file(tmp_path, monkeypatch):
+    _book(tmp_path, monkeypatch, "talk.mp3")
+    run = _CopyRun()
+    assert chapters.write_chapters("talk.mp3", _LINES, "ram", run,
+                                   _reads_back(_LINES)) == 0
+    argv = run.calls[0]
+    assert argv[argv.index("-map") + 1] == "0"
+    assert argv[argv.index("-map_metadata") + 1] == "0"
 
-    def refuse(path):
-        raise PermissionError(13, "Permission denied", path)
 
-    monkeypatch.setattr(chapters.os, "remove", refuse)
-    assert chapters.embed_chapters("song.mp3", [], "ram", "script", True,
-                                   _Run()) == 1
+def test_write_matroska_in_place_with_mkvpropedit(tmp_path, monkeypatch):
+    _book(tmp_path, monkeypatch, "talk.mka")
+    run = _Run()
+    assert chapters.write_chapters("talk.mka", _LINES, "ram", run,
+                                   lambda path: _flat_of(_LINES)) == 0
+    assert run.calls == [["mkvpropedit", "--quiet", "talk.mka", "--chapters",
+                          "ram/generated.chapters.txt"]]
+    assert run.chapter_contents == ["\n".join(_LINES) + "\n"]
+
+
+@pytest.mark.parametrize("held, carries", [
+    (_LINES, True),
+    (_LINES[:2], False),
+    (["CHAPTER01=00:00:00.000", "CHAPTER01NAME=One",
+      "CHAPTER02=00:00:01.040", "CHAPTER02NAME=Two"], True),
+    (["CHAPTER01=00:00:00.000", "CHAPTER01NAME=One",
+      "CHAPTER02=00:00:01.100", "CHAPTER02NAME=Two"], False),
+    (["CHAPTER01=00:00:00.000", "CHAPTER01NAME=One",
+      "CHAPTER02=00:00:01.000", "CHAPTER02NAME=Other"], False),
+])
+def test_carries_chapters(held, carries):
+    assert chapters.carries_chapters("x", _LINES,
+                                     lambda path: _flat_of(held)) is carries
 
 
 # --- attachChapters: the re-attach after an encode ------------------------------

@@ -99,8 +99,8 @@ USAGE_TAIL = """
 
     Dependencies
     ------------
-    ffmpeg, imagemagick, wc, mutagen. Optional: mkvtoolnix (chapters and titles
-    for MP3 output - without it an MP3 still concatenates, unchaptered),
+    ffmpeg, imagemagick, wc, mutagen. Optional: mkvtoolnix (takes an Opus
+    source's cover out; without it ffmpeg does),
     pdftoppm (renders a booklet PDF's first page as the cover; without it the
     embedded cover art is used instead), flock (numbers the progress lines)"""
 
@@ -822,8 +822,7 @@ class Run:
 
         if chapter_lines:
             step("    Embedding chapters")
-            chapters.embed_chapters(chapter_file, chapter_lines, scratch,
-                                    self.script_dir, self.have_mkvtoolnix)
+            chapters.embed_chapters(chapter_file, chapter_lines, scratch)
 
         step("    Embedding thumbnail")
         thumbnails.embed_thumbnail(input_path, output_path, IMAGE_SIZE_LIMIT,
@@ -1156,13 +1155,10 @@ def books_at_once(input_dir: str) -> int:
 
 def _settle_mkvtoolnix(input_dir: str) -> bool:
     """Settled once and shared with the workers through the environment; a
-    wrapper's own settlement, which its run reached first, is inherited rather
-    than said again.
+    wrapper's own settlement, which its run reached first, is inherited.
 
-    Warned about only for an input holding MP3: the chapter-and-title detour is
-    the one thing this script asks the trio for. Every other output writes its
-    chapters without it, and an opus source's embedded cover is copied out by
-    ffmpeg when mkvextract is not there to do it.
+    Not warned about: with mkvtoolnix an opus source's embedded cover is copied
+    out by mkvextract, and without it by ffmpeg, so a run loses nothing.
     """
     inherited = runcontext.get("HAVE_MKVTOOLNIX", None)
     if inherited is not None:
@@ -1171,20 +1167,7 @@ def _settle_mkvtoolnix(input_dir: str) -> bool:
     present = all(tooldeps.tool_present(tool) for tool in
                   ("mkvmerge", "mkvpropedit", "mkvextract"))
     runcontext.settle("HAVE_MKVTOOLNIX", "1" if present else "")
-    if not present and _holds_mp3(input_dir):
-        log("WARNING: mkvtoolnix not found (apt install mkvtoolnix) - chapters "
-            "and titles cannot be embedded in")
-        log("         MP3 output. The concatenation itself is unaffected.")
     return present
-
-
-def _holds_mp3(input_dir: str) -> bool:
-    """Either case, because the extensions are only lower-cased by -p, after
-    this is asked."""
-    for _parent, _dirs, names in os.walk(input_dir):
-        if any(name.lower().endswith(".mp3") for name in names):
-            return True
-    return False
 
 
 def cli(argv: list | None = None) -> int:

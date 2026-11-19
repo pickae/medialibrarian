@@ -9,7 +9,7 @@ language model works out from a transcript of what is said.
 | --- | --- |
 | **Takes** | a folder of audio and video |
 | **Writes** | per input, under `<outputDir>` in the same sub-folders: `<name>.chapters.txt` (OGM chapter rows) and `<name>.srt`, the transcript |
-| **Input** | never modified |
+| **Input** | never modified, unless `-w` writes the chapters into it, or beside it ([below](#into-the-files-themselves--w)) |
 | **Reruns** | a chapter file already present is kept (`-f` makes it again); a transcript already present is reused |
 | **Network** | the language model's server, wherever the settings point: on this machine or a hosted API |
 
@@ -84,6 +84,30 @@ Opencode runs with its permissions auto-approved for these requests.
 
 A transcript does not say who is speaking, so the model works speakers out from
 what they say: introductions, names, how they address each other.
+
+## Into the files themselves (`-w`)
+
+With `-w`, each input also gets its chapters written into it, in place and
+without being re-encoded. Whatever chapters it held are replaced, and its other
+tags, cover and streams are kept:
+
+| Input | How |
+| --- | --- |
+| `.opus`, `.flac`, `.ogg` | the chapters written as tags, the file otherwise untouched |
+| `.mka`, `.mkv`, `.webm` | mkvpropedit, the file otherwise untouched (needs mkvtoolnix) |
+| `.mp3`, `.m4a`, `.m4b`, `.mp4` and other containers | an ffmpeg stream copy with the chapters added, put over the input only once it reads back with every chapter and is as long as the input |
+
+A format with no place for chapters, such as raw `.aac` or `.wav`, is left as
+it was and gets the chapter file beside it instead, as `<name>.chapters.txt`,
+and the run goes on with the rest.
+[`convert-audio`](convert-audio.md#a-chapter-file-beside-a-source) writes that
+file into what it encodes from the recording. An input that cannot take its
+chapters for any other reason is named and fails the run.
+
+The chapter file is what goes in, so a chapter file already made is written in
+without asking the model again, and needs no model at all. You can make the
+chapters first, check or correct the chapter files, then run again with `-w`.
+An input that already holds exactly those chapters is left alone.
 
 ## Which model
 

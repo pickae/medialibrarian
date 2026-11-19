@@ -2,17 +2,17 @@
 
 `mkvmerge` and its siblings are not requirements of `convert-audio`,
 `concat-audio` or `convert-and-concat`. A run can do everything but a few things
-without them - the MP3 chapter-and-title detour, which routes that one format
-through Matroska, and pulling cover art out of a Matroska source - so their
-absence is a startup warning rather than a refusal, and one said only to a run
-whose input holds what it would cost.
+without them - pulling cover art out of a Matroska source, where convert-audio
+has no other way to - so their absence is a startup warning rather than a
+refusal, and one said only to a run whose input holds what it would cost.
+concat-audio writes every format's chapters without them, and has ffmpeg to
+take an Opus source's cover out, so it says nothing.
 
 The state is settled once at startup and travels in the environment, which is what
 makes both halves of this testable on any host:
 
   * the GUARDS are asserted with the state forced, so they behave exactly as if
-    the tools were gone whatever the host has installed - the MP3 step skips
-    with a visible line instead of killing the worker, and `mkvmerge` is never
+    the tools were gone whatever the host has installed - `mkvmerge` is never
     executed;
   * the SETTLEMENT is asserted on a PATH that genuinely cannot find any of the
     trio, which is what the `sandbox` fixture's `narrow()` is for. The warning has
@@ -81,33 +81,19 @@ class TestTheGuardsWithTheStateForced:
     """What each guard does when the answer is "no tools", whatever the host
     actually has."""
 
-    def test_an_mp3_run_loses_its_chapters_visibly_and_not_fatally(self, forced,
-                                                                  tmp_path):
-        """The skip is a line the worker prints, not a death under `set -e`."""
-        source = _album(tmp_path / "mp3in", "01 - first.mp3", "02 - second.mp3")
-        outputs = tmp_path / "mp3out"
-        log = forced.forced("concat-audio", "-v", source, outputs)
-        assert (outputs / "Album.mp3").is_file()
-        assert log.count("chapters and title not embedded") == 1, log
+    @pytest.mark.parametrize("names, book", [
+        (("01 - first.mp3", "02 - second.mp3"), "Album.mp3"),
+        (("01 - first.aac", "02 - second.aac"), "Album.m4b"),
+    ])
+    def test_an_mp3_or_m4b_run_needs_none_of_them(self, forced, tmp_path,
+                                                  names, book):
+        """Both take their chapters by an ffmpeg stream copy from an ffmetadata
+        file, so neither touches the trio."""
+        source = _album(tmp_path / "in", *names)
+        outputs = tmp_path / "out"
+        forced.forced("concat-audio", "-v", source, outputs)
+        assert (outputs / book).is_file()
         assert forced.calls.read_text() == "", "mkvmerge was executed"
-
-    def test_an_m4b_run_keeps_its_chapters(self, forced, tmp_path):
-        """mp4 takes its chapter track from an ffmetadata file through ffmpeg,
-        so this format needs none of the trio - the skip line that an MP3 gets
-        would be a book quietly losing its chapters for no reason."""
-        source = _album(tmp_path / "aacin", "01 - first.aac", "02 - second.aac")
-        outputs = tmp_path / "aacout"
-        log = forced.forced("concat-audio", "-v", source, outputs)
-        assert (outputs / "Album.m4b").is_file()
-        assert "chapters and title not embedded" not in log, log
-        assert forced.calls.read_text() == "", "mkvmerge was executed"
-
-    def test_a_forced_state_does_not_also_warn_at_startup(self, forced,
-                                                          tmp_path):
-        """The warning belongs to the settlement, not to the guard."""
-        source = _album(tmp_path / "mp3in2", "01 - first.mp3", "02 - second.mp3")
-        log = forced.forced("concat-audio", "-v", source, tmp_path / "mp3out2")
-        assert "mkvtoolnix not found" not in log, log
 
     def test_an_opus_run_is_untouched(self, forced, tmp_path):
         """Its chapters go through mutagen, which never sees mkvtoolnix, so the
@@ -155,24 +141,17 @@ class TestTheSettlementOnAPathWithoutThem:
         for tool in _TRIO:
             assert shutil.which(tool, path=absent.path) is None, tool
 
-    def test_concat_audio_warns_once_and_names_the_chapter_loss(self, absent,
-                                                               tmp_path):
-        source = _album(tmp_path / "sin", "01 - first.mp3", "02 - second.mp3")
-        outputs = tmp_path / "sout"
+    @pytest.mark.parametrize("names, book", [
+        (("01 - first.mp3", "02 - second.mp3"), "Album.mp3"),
+        (("01 - first.opus", "02 - second.opus"), "Album.opus"),
+    ])
+    def test_concat_audio_warns_nothing(self, absent, tmp_path, names, book):
+        """Every format's chapters go in without the trio, and ffmpeg copies an
+        opus source's embedded cover out when mkvextract is not there to."""
+        source = _album(tmp_path / "in", *names)
+        outputs = tmp_path / "out"
         log = absent.absent("concat-audio", "-v", source, outputs)
-        assert (outputs / "Album.mp3").is_file()
-        assert log.count("mkvtoolnix not found") == 1, log
-        assert log.count("chapters and titles cannot be embedded") == 1, log
-        assert log.count("chapters and title not embedded") == 1, log
-
-    def test_concat_audio_warns_nothing_to_a_tree_without_mp3(self, absent,
-                                                              tmp_path):
-        """An opus book writes its chapters through mutagen, and ffmpeg copies
-        its embedded cover out when mkvextract is not there to."""
-        source = _album(tmp_path / "oin", "01 - first.opus", "02 - second.opus")
-        outputs = tmp_path / "oout"
-        log = absent.absent("concat-audio", "-v", source, outputs)
-        assert (outputs / "Album.opus").is_file()
+        assert (outputs / book).is_file()
         assert "mkvtoolnix not found" not in log, log
 
     def test_convert_audio_warns_nothing_to_a_tree_it_costs_nothing(

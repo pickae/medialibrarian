@@ -136,3 +136,16 @@ def test_p_without_t_is_refused_before_anything_is_encoded(convert, tmp_path):
     said = _run(convert, tmp_path, "-P", "Name each speaker.", expect=1)
     assert "-P (instructions for the chapter model) needs -C" in said
     assert not (tmp_path / "out").exists()
+
+
+def test_a_chapter_file_beside_the_source_keeps_it_from_the_model(convert,
+                                                                  tmp_path):
+    """Its chapters were made already, by generate-chapters or by hand: the
+    output takes them, and neither whisper nor the model is asked about it."""
+    (tmp_path / "in" / "plain.chapters.txt").write_text(
+        "CHAPTER01=00:00:00.000\nCHAPTER01NAME=One\n"
+        "CHAPTER02=00:10:00.000\nCHAPTER02NAME=Two\n")
+    said = _run(convert, tmp_path, "-C")
+    assert (tmp_path / "whisper.calls").read_text() == ""
+    assert (tmp_path / "model.calls").read_text() == ""
+    assert "Chaptering" not in said

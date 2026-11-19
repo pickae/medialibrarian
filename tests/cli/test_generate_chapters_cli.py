@@ -213,3 +213,104 @@ def test_a_shortest_chapter_of_zero_is_refused(chaptering, tmp_path):
     source, out = _tree(tmp_path, "show.mp3")
     log = chaptering.chapter("-m", "0", source, out, expect=1)
     assert "a number above 0" in log
+
+
+# -w writes into Matroska inputs through mkvpropedit, stubbed to keep the rows it
+# was handed beside the input; the ffprobe stub reads them back from there as
+# chapters, the way a real probe would read the file.
+_MKVPROPEDIT = r"""
+printf '%s\n' "$*" >> "$MKVLOG"
+cp "$4" "$2.written"
+"""
+
+_FFPROBE = r"""
+case "$*" in *-show_chapters*) ;; *) exit 0 ;; esac
+rows="${!#}.written"
+[[ -f "$rows" ]] || exit 0
+python3 -c '
+import sys
+starts, names = [], []
+for line in open(sys.argv[1]):
+    key, _, value = line.strip().partition("=")
+    (names if key.endswith("NAME") else starts).append(value)
+for n, (start, name) in enumerate(zip(starts, names)):
+    h, m, s = start.split(":")
+    print("chapters.chapter.%d.start_time=\"%f\"" % (n, int(h) * 3600 + int(m) * 60 + float(s)))
+    print("chapters.chapter.%d.tags.title=\"%s\"" % (n, name))
+' "$rows"
+"""
+
+
+@pytest.fixture
+def writing(chaptering, tmp_path):
+    mkv_log = tmp_path / "mkvpropedit.calls"
+    mkv_log.write_text("")
+    chaptering.with_tool("mkvpropedit", _MKVPROPEDIT)
+    chaptering.with_tool("ffprobe", _FFPROBE)
+    chaptering.environment = dict(chaptering.environment, MKVLOG=str(mkv_log))
+    chaptering.mkv_log = mkv_log
+    return chaptering
+
+
+def test_w_writes_the_chapters_into_the_input(writing, tmp_path):
+    source, out = _tree(tmp_path, "a/show.mka")
+    log = writing.chapter("-w", source, out, env=writing.environment)
+    assert "chapters written into: a/show.mka" in log
+    assert (source / "a/show.mka.written").read_text() == (
+        out / "a/show.chapters.txt").read_text()
+
+
+def test_without_w_the_input_is_not_touched(writing, tmp_path):
+    source, out = _tree(tmp_path, "show.mka")
+    writing.chapter(source, out, env=writing.environment)
+    assert (out / "show.chapters.txt").is_file()
+    assert writing.mkv_log.read_text() == ""
+
+
+def test_w_over_finished_chapter_files_needs_no_model(writing, tmp_path):
+    source, out = _tree(tmp_path, "show.mka")
+    writing.chapter(source, out, env=writing.environment)
+    writing.model_log.write_text("")
+    environment = dict(writing.environment)
+    del environment["chapterLlmUrl"]
+    log = writing.chapter("-w", source, out, env=environment)
+    assert "chapters written into: show.mka" in log
+    assert writing.model_log.read_text() == ""
+    # Written once: a rerun finds them there and leaves the file alone.
+    writing.mkv_log.write_text("")
+    log = writing.chapter("-w", source, out, env=environment)
+    assert "chapters already in: show.mka" in log
+    assert writing.mkv_log.read_text() == ""
+
+
+def test_an_input_that_will_not_take_them_fails_the_run(writing, tmp_path):
+    source, out = _tree(tmp_path, "show.mka")
+    writing.with_tool("mkvpropedit", "exit 2")
+    log = writing.chapter("-w", source, out, expect=1, env=writing.environment)
+    assert "could not be written into it, so it is left as it was" in log
+
+
+def test_w_puts_the_chapters_beside_what_has_no_place_for_them(writing, tmp_path):
+    """A raw AAC comes out of the copy whole but holding no chapters: it gets
+    the chapter file beside it, and the run goes on to the rest and succeeds."""
+    writing.with_tool("ffmpeg", 'echo copy > "${!#}"')
+    source, out = _tree(tmp_path, "a/show.aac", "b/talk.mka")
+    (source / "a/show.aac").write_text("original")
+    log = writing.chapter("-w", source, out, env=writing.environment)
+    assert "chapters written beside: a/show.aac" in log
+    assert (source / "a/show.chapters.txt").read_text() == (
+        out / "a/show.chapters.txt").read_text()
+    assert (source / "a/show.aac").read_text() == "original"
+    assert "chapters written into: b/talk.mka" in log
+    log = writing.chapter("-w", source, out, env=writing.environment)
+    assert "chapters already beside: a/show.aac" in log
+
+
+def test_w_with_the_input_as_the_output_folder(writing, tmp_path):
+    """The chapter file is then beside every input already, which neither
+    stops a file that can hold them from taking them nor needs copying."""
+    writing.with_tool("ffmpeg", 'echo copy > "${!#}"')
+    source, _out = _tree(tmp_path, "show.aac", "talk.mka")
+    log = writing.chapter("-w", source, source, env=writing.environment)
+    assert "chapters written beside: show.aac" in log
+    assert "chapters written into: talk.mka" in log

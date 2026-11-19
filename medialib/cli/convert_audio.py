@@ -141,11 +141,12 @@ g | <depth> | Judge the files under each folder <depth> levels into
                     out half converted. A video, or a format that is always
                     converted, has its whole folder converted with it.
                     Cannot be combined with -a.
-C |  | Add chapters to every output whose source has none, worked
-                    out by a language model (the chapterLlm settings) from a
-                    transcript of the speech, and write the transcript into
-                    the output as well. A transcript sidecar is used rather
-                    than transcribing again.
+C |  | Add chapters to every output whose source has none, and no
+                    <name>.chapters.txt beside it, worked out by a language
+                    model (the chapterLlm settings) from a transcript of the
+                    speech, and write the transcript into the output as
+                    well. A transcript sidecar is used rather than
+                    transcribing again.
                     Default false
 P | <text> | With -C: more instructions for the model, added to every
                     request, e.g. "a chapter per speaker, titled with their
@@ -2293,7 +2294,9 @@ def _convert(input_dir: str, output_dir: str, probe_what: str, skips,
 def _add_transcripts_and_chapters(state: Run, llm) -> None:
     """The last phase, over every output this run's codec wrote, encoded now
     or by an earlier run: a transcript sidecar beside its source written into
-    it, and - with -C - chapters for one whose source has none.
+    it, a chapter file beside its source (``<name>.chapters.txt``) likewise,
+    and - with -C - chapters for one that has neither that nor chapters of its
+    own.
 
     Every transcript that is missing is made by transcribe-audio, from the
     outputs themselves - audio only, and exactly as long as their sources.
@@ -2318,6 +2321,22 @@ def _add_transcripts_and_chapters(state: Run, llm) -> None:
                         transcripttags.embed_transcript(out, sidecar, tmp)) == 0:
                 runlog.log("Transcript added from %s: %s"
                            % (os.path.basename(sidecar), track))
+        # A chapter file beside the source wins over the source's own
+        # chapters and over the model: it was made, or corrected, for this
+        # recording.
+        rows = chapters.read_sidecar(os.path.splitext(source)[0])
+        if rows:
+            if not chapters.carries_chapters(out, rows):
+                if _rewrite(source, out, lambda tmp, out=out, rows=rows:
+                            chapters.write_chapters(out, rows, tmp)) == 0:
+                    runlog.log("Chapters added from %s: %s"
+                               % (os.path.basename(os.path.splitext(source)[0]
+                                                   + chapters.SIDECAR_SUFFIX),
+                                  track))
+                else:
+                    runlog.error("%s: the chapters beside its source could not "
+                                 "be written into it" % track)
+            continue
         if llm is not None and chapters.chapter_count(source) < 2 \
                 and chapters.chapter_count(out) < 2:
             # Too short for two chapters: not transcribed only to be turned
