@@ -21,6 +21,14 @@ idle for as long as it lasts. Here they overlap where that is safe:
   the tagging renames anything; what it did not get to is downloaded after
   the tagging, the way it always was.
 
+- The CHAPTER LANE gives each extra without chapters some, worked out by a
+  language model, one extra at a time on a thread of its own. An extra with a
+  dialogue subtitle needs only a read of the file and the model, so it is done
+  at once, beside everything else. One that has to be transcribed needs the
+  GPU whisper has, so it waits until the commentary transcription is done.
+  The model, where it runs on this machine's GPU, takes its turn on it
+  (:mod:`medialib.lib.gputurn`) beside whisper.
+
 What keeps the overlap from costing more than it saves:
 
 - A disk-bound job takes the disk's turn (:mod:`medialib.lib.diskturn`), so
@@ -48,7 +56,7 @@ from medialib.lib import (
     tmdblookup,
 )
 
-__all__ = ["FilmLocks", "FilmTags", "RemuxLane", "SubtitleLane",
+__all__ = ["ChapterLane", "FilmLocks", "FilmTags", "RemuxLane", "SubtitleLane",
            "TranscriptTracker", "key"]
 
 # The RAM a remux leaves free while the transcription may still be extracting
@@ -200,6 +208,89 @@ class RemuxLane:
             return
         self._queue.put(None)
         thread.join()
+
+
+class ChapterLane:
+    """The extras' chapters, worked out one extra at a time on a thread of
+    their own.
+
+    ``work(movie, whisper)`` chapters one extra and answers "done" (chapters
+    written), "left" (nothing to write) or, when ``whisper`` is False and the
+    extra would have to be transcribed, "later". The extras answered "later"
+    are done once :meth:`whisper_free` says the GPU is no longer the
+    commentary transcription's. :meth:`finish` waits for the thread, and
+    must be called before anything renames the films.
+    """
+
+    def __init__(self, films: list, work, log, row=None) -> None:
+        self._films = films
+        self._work = work
+        self._log = log
+        self._row = row
+        if row is not None:
+            row.total("chapters", len(films))
+        self._free = threading.Event()
+        self._thread = threading.Thread(target=self._run,
+                                        name="ingest-chapter-lane",
+                                        daemon=True)
+        self.given = 0
+        self.left = 0
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def whisper_free(self) -> None:
+        self._free.set()
+
+    def _one(self, movie: str, whisper: bool) -> str:
+        try:
+            with console.about(movie, "chapters"), errorlog.work_item(movie):
+                return self._work(movie, whisper)
+        except Exception as error:  # noqa: BLE001 - one extra, not the run
+            if not safety.abort_requested():
+                self._log("WARNING: the chapter lane could not chapter %s: "
+                          "%s" % (movie, error))
+            return "left"
+
+    def _settled(self, verdict: str) -> None:
+        if verdict == "done":
+            self.given += 1
+        else:
+            self.left += 1
+        if self._row is not None:
+            self._row.done("chapters")
+
+    def _run(self) -> None:
+        later: list = []
+        for movie in self._films:
+            if safety.abort_requested():
+                return
+            verdict = self._one(movie, False)
+            if verdict == "later":
+                later.append(movie)
+            else:
+                self._settled(verdict)
+        if not later:
+            return
+        while not self._free.wait(1):
+            if safety.abort_requested():
+                return
+        for movie in later:
+            if safety.abort_requested():
+                return
+            self._settled(self._one(movie, True))
+
+    def finish(self) -> None:
+        """Wait for the lane, letting it have whisper if it has not: nothing
+        else is going to use it now."""
+        self._free.set()
+        if self._thread.is_alive():
+            self._log("Waiting for the extras' chapters to finish")
+        if self._thread.ident is not None:
+            self._thread.join()
+        if self.given or self.left:
+            self._log("Extras: %d given chapters, %d left as they were"
+                      % (self.given, self.left))
 
 
 class TranscriptTracker:

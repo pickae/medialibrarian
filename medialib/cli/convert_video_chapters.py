@@ -21,6 +21,7 @@ whisper fills the GPU on its own and a local model shares it.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
@@ -31,6 +32,7 @@ from typing import NamedTuple
 from medialib.lib import (
     aichapters,
     audiotracks,
+    chapterllm,
     chapters,
     languages,
     safety,
@@ -38,7 +40,8 @@ from medialib.lib import (
     toolcapture,
 )
 
-__all__ = ["Candidate", "Outcome", "candidates", "chapter", "TRANSCRIPT_TITLE"]
+__all__ = ["Candidate", "Deferred", "LATER", "Outcome", "candidates", "chapter",
+           "model", "TRANSCRIPT_TITLE"]
 
 # Where the work is done, under the file's own scratch folder, which the run
 # removes with the rest once the file is finished.
@@ -69,13 +72,37 @@ class Outcome(NamedTuple):
     rows ("" for none), and a transcript to add as a subtitle ("" when the
     words came from a subtitle the file already has) with its language and
     the output subtitle index it lands at - after every subtitle of the
-    source."""
+    source. ``marks`` are the chapters themselves, (start ms, title), for a
+    caller that writes them some other way than by a mux."""
 
     ffmetadata: str
     rows: str
     transcript: str
     language: str
     subtitle_index: int
+    marks: tuple = ()
+
+
+class Deferred:
+    """What :func:`chapter` answers when only a soundtrack is left to chapter
+    from and it was asked not to transcribe yet."""
+
+
+LATER = Deferred()
+
+
+def model(program: str, instructions: str, flag: str,
+          log: Callable[[str], None]):
+    """The chapter model the settings describe, given the user's own
+    ``instructions`` for every request, or None when none is set up (which has
+    been said). ``flag`` names the option that asked for it, for the line that
+    says what is used."""
+    llm = chapterllm.require(program)
+    if llm is None:
+        return None
+    llm = llm.following(instructions)
+    log("Chapters (%s): %s" % (flag, llm.describe()))
+    return llm
 
 
 def probe_streams(source: str) -> list[dict]:
@@ -146,17 +173,19 @@ def _ffmpeg(argv: list, label: str) -> bool:
 
 
 def _subtitle_cues(source: str, candidate: Candidate, work: str,
-                   label: str) -> list:
+                   label: str, disk=contextlib.nullcontext) -> list:
     """The candidate subtitle read out as SRT, as transcript cues."""
     out = os.path.join(work, "subtitle%d.srt" % candidate.position)
-    if not _ffmpeg(["-i", source, "-map", "0:s:%d" % candidate.position,
-                    "-c:s", "srt", out], label):
+    with disk():
+        read = _ffmpeg(["-i", source, "-map", "0:s:%d" % candidate.position,
+                        "-c:s", "srt", out], label)
+    if not read:
         return []
     return aichapters.read_transcript(out)
 
 
 def _transcribe(source: str, candidate: Candidate, work: str, label: str,
-                script_dir: str) -> str:
+                script_dir: str, disk=contextlib.nullcontext) -> str:
     """The candidate soundtrack transcribed by transcribe-audio, as the path
     of its SRT, "" when nothing came of it.
 
@@ -165,9 +194,11 @@ def _transcribe(source: str, candidate: Candidate, work: str, label: str,
     """
     stem = "audio%d" % candidate.position
     lifted = os.path.join(work, stem + ".flac")
-    if not _ffmpeg(["-i", source, "-map", "0:a:%d" % candidate.position,
-                    "-vn", "-sn", "-dn", "-ac", "1", "-ar", "16000",
-                    "-c:a", "flac", lifted], label):
+    with disk():
+        lifted_ok = _ffmpeg(["-i", source, "-map", "0:a:%d" % candidate.position,
+                             "-vn", "-sn", "-dn", "-ac", "1", "-ar", "16000",
+                             "-c:a", "flac", lifted], label)
+    if not lifted_ok:
         return ""
     stage = os.path.join(work, "stage")
     transcripts = os.path.join(work, "transcripts")
@@ -184,10 +215,20 @@ def _transcribe(source: str, candidate: Candidate, work: str, label: str,
 
 
 def chapter(source: str, directory: str, llm, label: str, script_dir: str,
-            log: Callable[[str], None]) -> Outcome | None:
+            log: Callable[[str], None], *, allow_audio: bool = True,
+            disk=contextlib.nullcontext,
+            gpu=contextlib.nullcontext) -> Outcome | None | Deferred:
     """Chapters for ``source``, worked out in ``directory``'s scratch, or None
     when it has chapters already, is too short for them, or nothing it holds
-    could be read or heard."""
+    could be read or heard.
+
+    ``disk`` is called for a context that holds the source's disk's turn around
+    each read of the source, and not around the model's questions; ``gpu``
+    likewise holds the GPU's turn around the model's questions, for a model
+    that runs on the same card as other work. Without
+    ``allow_audio`` a source that has no dialogue subtitle to read is not
+    transcribed but answered :data:`LATER`, for a caller that has whisper's
+    turn to wait for."""
     if chapters.chapter_count(source) > 0:
         return None
     duration = chapters.duration_ms(source)
@@ -212,13 +253,16 @@ def chapter(source: str, directory: str, llm, label: str, script_dir: str,
                                   " (%s)" % candidate.name if candidate.name
                                   else "")
         if candidate.kind == "subtitle":
-            cues = _subtitle_cues(source, candidate, work, label)
+            cues = _subtitle_cues(source, candidate, work, label, disk)
             if enough_dialogue(cues, duration):
                 log("Chaptering from the %s: %s" % (what, label))
                 break
         else:
+            if not allow_audio:
+                return LATER
             log("Transcribing the %s for its chapters: %s" % (what, label))
-            made = _transcribe(source, candidate, work, label, script_dir)
+            made = _transcribe(source, candidate, work, label, script_dir,
+                               disk)
             cues = aichapters.read_transcript(made) if made else []
             if enough_dialogue(cues, duration):
                 transcript = os.path.join(work, "transcript.srt")
@@ -236,8 +280,9 @@ def chapter(source: str, directory: str, llm, label: str, script_dir: str,
     if safety.abort_requested():
         return None
 
-    marks = aichapters.generate(cues, llm, log=lambda line: log(
-        "%s: %s" % (label, line.strip())))
+    with gpu():
+        marks = aichapters.generate(cues, llm, log=lambda line: log(
+            "%s: %s" % (label, line.strip())))
     ffmetadata = rows_file = ""
     if marks:
         rows = aichapters.chapter_rows(marks)
@@ -253,4 +298,4 @@ def chapter(source: str, directory: str, llm, label: str, script_dir: str,
     if not marks and not transcript:
         return None
     return Outcome(ffmetadata, rows_file, transcript, language,
-                   subtitle_count(streams))
+                   subtitle_count(streams), tuple(marks))

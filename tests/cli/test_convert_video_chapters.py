@@ -208,3 +208,27 @@ class TestTheInstructions:
         monkeypatch.setattr(chapterllm, "require", lambda program: plain)
         assert run_module.chapter_model("convert-video",
                                         rules.Settings()) is plain
+
+
+class TestChapterBeforeTranscribing:
+    """allow_audio=False reads a subtitle but leaves a soundtrack for later."""
+
+    def _source(self, monkeypatch, streams):
+        monkeypatch.setattr(chapterwork.chapters, "chapter_count", lambda s: 0)
+        monkeypatch.setattr(chapterwork.chapters, "duration_ms",
+                            lambda s: 3600000)
+        monkeypatch.setattr(chapterwork, "probe_streams", lambda s: streams)
+
+    def test_a_soundtrack_is_put_off(self, monkeypatch, tmp_path):
+        self._source(monkeypatch, [_stream("audio", "ac3", language="eng")])
+        monkeypatch.setattr(chapterwork, "_transcribe",
+                            lambda *a, **k: 1 / 0)
+        assert chapterwork.chapter("f.mkv", str(tmp_path), None, "f",
+                                   "", lambda line: None,
+                                   allow_audio=False) is chapterwork.LATER
+
+    def test_a_film_with_neither_is_not_put_off(self, monkeypatch, tmp_path):
+        self._source(monkeypatch, [_stream("video", "h264")])
+        assert chapterwork.chapter("f.mkv", str(tmp_path), None, "f", "",
+                                   lambda line: None,
+                                   allow_audio=False) is None

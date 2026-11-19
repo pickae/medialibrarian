@@ -219,6 +219,24 @@ o | [phase] | omit <phase> from a full ingest: junk, subtitles, commentary,
                   likeliest - is written ./plex: the word after -o goes to -o
                   when it is a phase. Cannot be combined with -a, -n, -c, -p,
                   -s, -t or -i, which do a phase of their own.
+e |  | also chapter the extras, beside the rest of the run: a bonus video (a featurette,
+                  a deleted scene, an interview - never the main movie) that
+                  has no chapters is given some worked out by a language model
+                  (the chapterLlm settings) from what is said in it. The first
+                  text subtitle that is its dialogue - not a commentary, SDH
+                  or forced one - is read for it; one with none is transcribed
+                  from its first soundtrack that is not a commentary, audio
+                  description or isolated score - once the commentary
+                  transcription has done with the GPU; a model served from
+                  this machine waits for GPU memory beside whisper
+                  (chapterLlmVramGB). A video too short to
+                  divide is left alone. Written in place with mkvpropedit,
+                  which is why a transcript made for it is not kept. A full
+                  ingest only.
+P | <text> | With -e: more instructions for the model, added to every
+                  request, e.g. "a chapter per scene, titled with where it
+                  takes place". The model then reasons at medium effort, and
+                  Claude may search the web.
 w |  | with -t or -i, actually perform the renames instead of printing
                   them; with -s, sync, throw out and download; with -n, name
                   the commentaries. On its own it is a usage error rather than
@@ -239,12 +257,12 @@ i | <file> | the hand-written id list filled in and read BACK: tagging and
 
 OPT_VARS = ("f:fragmentsOverride a:commentaryOnly t:tagsOnly s:subtitlesOnly "
             "n:commentaryNames c:chaptersOnly p:plexOnly d:dropBackups "
-            "r:convertRemuxes "
+            "r:convertRemuxes e:extrasChapters P:chapterInstructions "
             "w:writeTags i:idList k:keepParts o:omitPhases")
 OPT_COLUMN = 18
 OPT_LONG = ("f:fragments a:commentary t:tags-only s:subtitles-only "
             "n:commentary-names c:chapters p:plex d:drop-backups "
-            "r:convert-remuxes w:write "
+            "r:convert-remuxes e:extras-chapters P:prompt w:write "
             "i:ids k:keep o:omit")
 
 # The phases a full ingest can be told to omit with -o, in the order the page

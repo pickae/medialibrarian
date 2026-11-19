@@ -771,6 +771,59 @@ half a second or more. Needs `curl`, `mkvmerge`, `mediainfo`, `ffprobe`,
 
 Nothing is changed, on disk or on the server.
 
+## Chaptering the extras (`-e`)
+
+**`-e` adds a lane to a full ingest.** Every bonus video — anything under
+a Plex bonus folder (`Featurettes`, `Deleted Scenes`, `Interviews`, …),
+never a film's main movie — that has no chapters is given some, worked out by
+the language model the `chapterLlm` [settings](../settings.md) name, the way
+[`generate-chapters`](generate-chapters.md) does it. An extra that has chapters
+keeps them, and one too short to divide is left alone. This is separate from
+the [ChapterDB lookup](#chapters--c), which is only for films.
+
+What is said is read from the extra's first text subtitle that is its dialogue:
+not a commentary's, not one for the deaf and hard of hearing, not the forced
+lines. Only an extra with no such subtitle is transcribed with whisper, from its
+first soundtrack that is not a commentary, an audio description, an isolated
+score or music and effects. A subtitle that holds too few lines to be the
+dialogue, or a soundtrack whisper hears too little speech in, is passed over for
+the next one.
+
+The chapters are written in place with `mkvpropedit`, so the extra is not
+remuxed. That cannot add a subtitle track, so a transcript whisper made is used
+for the chapters and then discarded.
+
+**It runs beside the rest of the run, as its own lane.** Extras are done one at a
+time. An extra with a dialogue subtitle needs only a read of the file and the
+model, so those are chaptered from the start, beside the transcode and the
+commentary transcription. An extra that has to be transcribed needs the GPU
+whisper is using for the commentaries, so it waits until that transcription is
+finished and is then transcribed while the remux goes on. Reading a file waits
+for the disk's turn, as the other lanes do, and the lane is finished before the
+tagging renames anything.
+
+**The GPU is shared only where it has room.** A model served from this machine
+or its network (a `chapterLlmUrl` that is local) may sit on the same card as the
+commentary transcription, so each takes a claim on the GPU while it runs. One
+kind is let in beside the other only when nvidia-smi shows the free memory for
+it, counting a job that has only just started at its whole need, and otherwise
+waits for the other to finish; whichever began waiting first goes first, so
+neither starves the other. whisper's need is read off its settled plan. The
+model's is the `chapterLlmVramGB` [setting](../settings.md); unset, the model
+takes the whole card and never runs beside whisper. A hosted model, or a
+machine with no NVIDIA card, never waits. Two whisper jobs are not held apart:
+the plan already fits them together. An extra that has to be transcribed waits
+for the commentary whisper altogether, since a second whisper beside the first
+buys nothing on a saturated GPU. The progress row shows it as `chapters`. The model is asked for up front, so a run whose model is not set
+up is refused before any ingesting. Needs the settings `chapterLlm*` and, for a
+transcribed extra, the same whisper set-up as the commentaries.
+
+`-P "<text>"` adds your own instructions to every request the model gets, for
+example a chapter per scene titled with where it takes place. The model then
+reasons at medium effort, and Claude may search the web, as with
+[`generate-chapters -p`](generate-chapters.md#your-own-instructions). `-P` needs
+`-e`. Both are refused with the single-task sweeps, which never reach this phase.
+
 ## Remux conversion (`-r`)
 
 **A full ingest with `-r` converts the remuxes as its last step.** A film counts
