@@ -732,14 +732,30 @@ def media_seconds(path: str) -> float:
         return 0.0
 
 
+def media_channels(path: str) -> int:
+    """The channel count of ``path``'s first audio stream; 0 when unknown."""
+    try:
+        done = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-select_streams", "a:0",
+             "-show_entries", "stream=channels",
+             "-of", "default=nk=1:nw=1", path],
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL)
+        return int(done.stdout.decode().split("\n")[0].strip() or 0)
+    except (OSError, ValueError):
+        return 0
+
+
 # --- concat-audio ----------------------------------------------------------------------
 
 def book_cover(input_path: str, tracks: Sequence[str], seconds: float,
-               dest_base: str, search: CoverSearch | None = None) -> str:
+               dest_base: str, search: CoverSearch | None = None,
+               stereo: bool = False) -> str:
     """An image for the book joined from ``input_path``, or "".
 
     Always asked when the local rungs failed: a book is one file, so one
-    cover is never wasted on it.
+    cover is never wasted on it. ``stereo`` is whether the book was encoded
+    in stereo - see :func:`probable_content`.
     """
     if not enabled():
         return ""
@@ -751,7 +767,8 @@ def book_cover(input_path: str, tracks: Sequence[str], seconds: float,
         tag_creators=[tags.get("album_artist", ""), tags.get("artist", ""),
                       tags.get("composer", "")],
         guessed_creators=[os.path.basename(os.path.dirname(
-            os.path.normpath(input_path)))])
+            os.path.normpath(input_path)))],
+        stereo=stereo)
     return _search(subject, dest_base, search)
 
 

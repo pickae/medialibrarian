@@ -262,15 +262,18 @@ def _online_thumbnail(input_path: str, outputs: Sequence[str],
                       ram_base: str) -> str:
     """A cover found online for the book joined from <input_path>, or "".
 
-    The book's length is read off the joined output, the tags off its first
-    source track: both say what the book probably is and which answer is it.
+    The book's length and channel count are read off the joined output, the
+    tags off its first source track: they say what the book probably is and
+    which answer is it. Podcast length in stereo is most likely a full-cast
+    drama, since convert-audio keeps a talk mono.
     """
     tracks = [path for path in _regular_files(input_path)
               if lower_extension_of(path) in _AUDIO_EXTENSIONS]
-    seconds = next((onlinecover.media_seconds(path) for path in outputs
-                    if os.path.isfile(path)), 0.0)
+    joined = next((path for path in outputs if os.path.isfile(path)), "")
+    seconds = onlinecover.media_seconds(joined) if joined else 0.0
+    stereo = bool(joined) and onlinecover.media_channels(joined) >= 2
     return onlinecover.book_cover(input_path, tracks[:1], seconds,
-                                  f"{ram_base}.online")
+                                  f"{ram_base}.online", stereo=stereo)
 
 
 def embed_thumbnail(input_path: str, file_name: str, image_size_limit: int,
