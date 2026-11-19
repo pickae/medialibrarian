@@ -71,6 +71,7 @@ from medialib.lib import (
     imagebitrate,
     imagecodecs,
     imagemagick,
+    keepparts,
     numbering,
     ramscratch,
     runcontext,
@@ -112,6 +113,13 @@ DEFAULT_FUZZ = 10
 # recorded contract under tests/data/cliContract.
 OPT_SPEC = """
 h |  | Print this help page.
+k | [part] | keep <part>: takes nothing away. The one part is pages: the
+                    light, plain margins a run otherwise trims off every page,
+                    and the blank pages it drops with them. Kept, both stay;
+                    -m still caps the height, and pages are still numbered.
+                    A bare -k keeps every part, which today is this one. A
+                    folder literally named "pages" is written ./pages: the
+                    word after -k is the part when it is one.
 l | <quality> | quality level of the output images, default {quality}
 u | <chroma> | page chroma: {chromas}. 444 keeps colour at full resolution,
                     420 at a quarter of it, for smaller books with colour
@@ -131,9 +139,9 @@ s | int:0:{top} | speed preset
 u | enum:{chromas} | chroma
 """.format(chromas="\\|".join(CHROMAS), top=MAX_SPEED)
 
-OPT_VARS = "l:quality u:chroma s:speedPreset m:maxRes f:fuzz"
+OPT_VARS = "l:quality u:chroma s:speedPreset m:maxRes f:fuzz k:keepParts"
 OPT_COLUMN = 20
-OPT_LONG = "h:help l:quality u:chroma s:speed m:max-resolution f:fuzz"
+OPT_LONG = "h:help l:quality u:chroma s:speed m:max-resolution f:fuzz k:keep"
 
 # The smallest an AVIF page can plausibly be, in bytes. A page that encodes to
 # less than this is an empty page - nothing on it worth a page in the book - and
@@ -227,6 +235,7 @@ def spec(program: str) -> clioptions.Spec:
         long=OPT_LONG,
         vars=OPT_VARS,
         checks=OPT_CHECKS,
+        flags="optionalArg:k:^pages$",
         column=OPT_COLUMN,
     ))
 
@@ -753,6 +762,8 @@ class Run:
     pages_per_book: int
     max_res: int
     fuzz: str
+    # -k pages: the trim and the blank-page drop it ends with are both skipped.
+    keep_pages: bool
     # The books already packaged, so a resumed run skips them.
     converted: set[str]
     input_list: str
@@ -926,19 +937,21 @@ class Run:
         # The empty pages, counted as they are dropped: this is the only place
         # the run learns of them, because the converter counted such a page as
         # converted - it wrote a file and exited 0 - and only its size
-        # afterwards says it holds nothing.
+        # afterwards says it holds nothing. -k pages keeps the page as it came
+        # in, and the small ones are among the pages it keeps.
         empty = 0
-        for parent, _dirs, names in os.walk(book_avif):
-            for name in names:
-                if not name.endswith(".avif"):
-                    continue
-                path = os.path.join(parent, name)
-                try:
-                    if os.path.getsize(path) < MIN_PAGE_SIZE:
-                        os.remove(path)
-                        empty += 1
-                except OSError:
-                    pass
+        if not self.keep_pages:
+            for parent, _dirs, names in os.walk(book_avif):
+                for name in names:
+                    if not name.endswith(".avif"):
+                        continue
+                    path = os.path.join(parent, name)
+                    try:
+                        if os.path.getsize(path) < MIN_PAGE_SIZE:
+                            os.remove(path)
+                            empty += 1
+                    except OSError:
+                        pass
         if empty:
             self.counters.bump("pagesEmpty", empty)
         _number_pages(book_avif)
@@ -1024,16 +1037,21 @@ class Run:
             environment[LANE_VARIABLE] = lane_folder
             if self.gpu_trim:
                 environment[LANE_TRIM_VARIABLE] = "1"
+        # -c is the trim and the blank-page drop it ends with: the part -k
+        # keeps is both, so a kept run hands the pages over without it.
+        # Everything the pages still get - the -m cap, the numbering - is on
+        # this side of that question.
+        flags = (["-c"] if not self.keep_pages else []) + [
+            # -a: every page or none. That command's own default leaves a
+            # starved image alone, which is the right answer for a folder of
+            # loose pictures and the wrong one inside a book - the decision
+            # was already taken above, for the WHOLE book, and a book that
+            # got this far is one being converted.
+            "-a", "-u", self.chroma, "-j", self.pages_per_book,
+            "-m", self.max_res, "-l", self.quality, "-s", self.speed_preset,
+            "-f", self.fuzz, book_temp, book_avif]
         argv, env = commands.command_line(
-                "convert-images",
-                # -a: every page or none. That command's own default leaves a
-                # starved image alone, which is the right answer for a folder of
-                # loose pictures and the wrong one inside a book - the decision
-                # was already taken above, for the WHOLE book, and a book that
-                # got this far is one being converted.
-                ["-c", "-a", "-u", self.chroma, "-j", self.pages_per_book,
-                 "-m", self.max_res, "-l", self.quality, "-s", self.speed_preset,
-                 "-f", self.fuzz, book_temp, book_avif],
+                "convert-images", flags,
                 script_dir=self.script_dir, env=environment)
         done = toolcapture.run(argv, file_name, tool="convert-images", env=env,
                                warning="conversion failed for %s" % file_name)
@@ -1448,6 +1466,13 @@ def main(argv: list, program: str = "convert-comics",
     try:
         result = clioptions.parse(declaration, argv)
         clioptions.settle_verbosity(result)
+        # The -k parts this run is told to keep, settled with the rest of the
+        # command line: a part the run will not keep is refused with the page,
+        # like a bad option. A bare -k keeps them all; without the flag the
+        # run takes its normal measures and keeps none.
+        keep_parts = (keepparts.parse(result.values["keepParts"],
+                                      ("pages",))
+                      if "k" in result.given else frozenset())
     except clioptions.HelpRequested:
         sys.stdout.write(clioptions.help_text(declaration))
         return 0
@@ -1470,7 +1495,8 @@ def main(argv: list, program: str = "convert-comics",
                              "this run.\nNothing was changed.\n")
             return 1
         ramscratch.add_exit_cleanup([counter_dir])
-        return _run(result, declaration, program, script_dir, counter_dir)
+        return _run(result, declaration, program, script_dir, counter_dir,
+                    keep_parts)
     finally:
         # The run directory, both RAM work trees and the counter dir go back
         # to the tmpfs however this run ends.
@@ -1478,12 +1504,21 @@ def main(argv: list, program: str = "convert-comics",
 
 
 def _run(result, declaration, program: str, script_dir: str,
-         counter_dir: str) -> int:
+         counter_dir: str, keep_parts: frozenset) -> int:
     if clioptions.args_out_of_range(len(result.positionals), 2, None):
         sys.stdout.write(clioptions.no_args_text(declaration))
         return 1
     in_path = result.positionals[0].rstrip("/")
     out_path = result.positionals[1].rstrip("/")
+
+    # -k pages keeps the trim in, and -f is the fuzz the trim trims with: the
+    # same switch told two ways, refused before the run touches the input.
+    if "pages" in keep_parts and "f" in result.given:
+        clioptions.refuse_usage(
+            declaration,
+            "-k pages keeps the trim in, and -f is the fuzz it trims with: "
+            "give one or the other.")
+        return 1
 
     quality = result.values["quality"] or DEFAULT_QUALITY
     chroma = result.values["chroma"] or DEFAULT_CHROMA
@@ -1533,6 +1568,7 @@ def _run(result, declaration, program: str, script_dir: str,
         temp_path=temp_path, avif_path=avif_path, counters=counters,
         quality=quality, chroma=chroma, speed_preset=speed_preset,
         pages_per_book=IMAGES_PER_BOOK, max_res=max_res, fuzz=fuzz,
+        keep_pages="pages" in keep_parts,
         converted=set(), input_list=os.path.join(counter_dir, "inputs"),
         stats_file=os.path.join(counter_dir, "pageStats"),
         phase_start=None, phase_end=None, total=0, lane=None,
@@ -1623,7 +1659,7 @@ def _run(result, declaration, program: str, script_dir: str,
     # Nothing left to convert starts no card: av1gpu's start-up would be all
     # a resumed run of a finished library spent.
     if book_list:
-        _start_gpu_lane(state, speed, quality, chroma, fuzz)
+        _start_gpu_lane(state, speed, quality, chroma, fuzz, state.keep_pages)
     workers = book_workers(runlog.cpu_count(), speed)
     if state.lane is not None:
         workers, state.pages_per_book = LANE_BOOKS, LANE_PAGES_PER_BOOK
@@ -1785,7 +1821,7 @@ def _converted_in(out_path: str) -> set:
 
 
 def _start_gpu_lane(state, speed: int, quality, chroma: str,
-                    fuzz) -> None:
+                    fuzz, keep_pages: bool) -> None:
     """The card's lane on ``state``, when this host has a card and a scratch
     for it: owned by this process for the whole run, and fed the pages of
     every book."""
@@ -1798,8 +1834,9 @@ def _start_gpu_lane(state, speed: int, quality, chroma: str,
                 speed, int(quality))
             # The trim is decided on the card where it can: the per-book runs
             # then only read each page's header, and the CPU is left to the
-            # pages the card cannot take.
-            state.gpu_trim = av1gpu.trims(encoder)
+            # pages the card cannot take. A kept page is not trimmed at all,
+            # so there is nothing to decide.
+            state.gpu_trim = av1gpu.trims(encoder) and not keep_pages
             state.lane = gpulane.Lane(
                 encoder, lane_root, gpu_quality, preset, chroma,
                 state.package_pages, page_slots(runlog.cpu_count(), speed),

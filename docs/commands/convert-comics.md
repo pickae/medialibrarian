@@ -19,8 +19,8 @@ With no options, a run:
 
 - writes pages as **AVIF** at quality 45, speed 4, colour at full resolution (4:4:4) (`-l`, `-s`, `-u`)
 - **scales pages taller than 2960 px down** to that height (`-m`)
-- **trims light, plain margins off every page**, treating colours within 10% of the edge as margin (`-f`)
-- **drops blank pages**
+- **trims light, plain margins off every page**, treating colours within 10% of the edge as margin (`-f`; the trim is what `-k` keeps in)
+- **drops blank pages** (what the trim ends with deciding, so `-k` keeps them in with it)
 - **repackages a book of mostly starved pages** instead of re-encoding it ([below](#starved-scans))
 - inspects every PDF and skips one that is not a scanned comic ([below](#pdfs))
 
@@ -31,7 +31,7 @@ With no options, a run:
    archive under the wrong extension is renamed in the input** — a zip called
    `.cbr` becomes `.cbz`, a RAR called `.cbz` becomes `.cbr`. The `__MACOSX/`
    and `._` files a Mac leaves in an archive are not pages and are dropped.
-2. The pages are converted to AVIF, trimmed on the sides, skipped if empty, and numbered `01`, `02`, … in their reading order.
+2. The pages are converted to AVIF, trimmed on the sides, skipped if empty, and numbered `01`, `02`, … in their reading order (`-k` keeps the trim and the skipping in, so a kept page is the page it came in as).
 3. The finished folder of pages is zipped back into one **stored** (level 0 —
    AVIF does not compress further) `.cbz` in its mirrored parent folder.
 
@@ -102,6 +102,19 @@ Its pages are judged before any of them is encoded:
 The decision is taken once for the whole book, because a `.cbz` whose pages are
 half AVIF and half JPEG is worse than either. Books repackaged this way are named
 in the closing report.
+
+## Keeping the pages (`-k`)
+
+**`-k pages` keeps the two edits a run otherwise makes to what a page is in**:
+the trim of the light, plain margins off every page, and the drop of the page
+the trim ends with deciding is blank. What a kept page still gets is
+everything that only shapes the file: the `-m` cap, the encode, the numbering.
+The closing report names only what occurred, so a kept run carries no trimmed
+line and no blank line at all - and the page a run without the part would drop
+is in the book, numbered like its siblings.
+
+`-f` is the fuzz of the trim, and the part keeps the trim in, so the two are
+refused together with the page, before any book is touched.
 
 ---
 
