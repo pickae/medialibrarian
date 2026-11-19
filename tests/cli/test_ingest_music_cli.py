@@ -21,6 +21,7 @@ import shutil
 import pytest
 
 from tests import blackbox, conftest
+from tests.cli.test_no_mkvtoolnix_cli import _ORDINARY
 
 pytestmark = pytest.mark.stubbed
 
@@ -876,3 +877,158 @@ class TestAReRunInTheOtherMode:
         assert _stat(log, "  up to date") == "1", log
         assert _stat(log, "  encoded") is None, log
         assert len(list(keep_music.library.rglob("*.flac"))) == 1
+
+
+# The beets stand-in, with every call it gets recorded, argument by argument,
+# so the config a run hands it is asserted from the record rather than from a
+# stub that says nothing.
+def _BEET_CALLS(log_file: str) -> str:
+    return "printf '%s\\n' \"$*\" >> " + log_file + "\n"
+
+
+def _beet_calls(log_file) -> list[list[str]]:
+    """The beets calls the stand-in recorded, one list of arguments a line."""
+    if not log_file.exists():
+        return []
+    return [line.split(" ") for line in log_file.read_text().splitlines()
+            if line.strip()]
+
+
+class TestTheBeetsConfig:
+    """The tagging phase's config: the shipped file by default, another with
+    -c or the beetsConfig setting - the option winning where both name one -
+    and none at all with -o, which is a run beets never runs."""
+
+    def test_the_shipped_file_is_the_config_a_run_is_not_given(self,
+                                                               keep_music):
+        log = keep_music.work / "beet-calls"
+        keep_music.with_tool("beet", _BEET_CALLS(str(log)))
+        done = keep_music.ingest()
+        assert done.returncode == 0, done.stdout + done.stderr
+        calls = _beet_calls(log)
+        assert len(calls) == 1, calls
+        config = calls[0][calls[0].index("-c") + 1]
+        assert config.endswith("medialib/config/beets.yaml"), config
+        assert os.path.isfile(config), config
+
+    def test_the_config_the_option_names_is_the_one_beets_runs_with(self,
+                                                                    keep_music):
+        log = keep_music.work / "beet-calls"
+        keep_music.with_tool("beet", _BEET_CALLS(str(log)))
+        config = keep_music.work / "another.yaml"
+        config.write_text("directory: .\n")
+        done = keep_music.ingest("-c", str(config))
+        assert done.returncode == 0, done.stdout + done.stderr
+        calls = _beet_calls(log)
+        assert len(calls) == 1, calls
+        assert calls[0][calls[0].index("-c") + 1] == str(config), calls
+
+    def test_the_setting_the_option_does_not_name_is_the_one_beets_runs_with(
+            self, keep_music, tmp_path):
+        log = keep_music.work / "beet-calls"
+        keep_music.with_tool("beet", _BEET_CALLS(str(log)))
+        config = tmp_path / "the-setting.yaml"
+        config.write_text("directory: .\n")
+        settings_file = tmp_path / "settings"
+        settings_file.write_text("beetsConfig=%s\n" % config)
+        done = keep_music.run("ingest-music", "-j", "2",
+                              str(keep_music.download), str(keep_music.library),
+                              str(keep_music.opus),
+                              env=dict(os.environ,
+                                       CLI_SETTINGS_FILE=str(settings_file)),
+                              timeout=900)
+        assert done.returncode == 0, done.stdout + done.stderr
+        calls = _beet_calls(log)
+        assert len(calls) == 1, calls
+        assert calls[0][calls[0].index("-c") + 1] == str(config), calls
+
+    def test_the_option_wins_over_the_setting(self, keep_music, tmp_path):
+        log = keep_music.work / "beet-calls"
+        keep_music.with_tool("beet", _BEET_CALLS(str(log)))
+        from_the_option = keep_music.work / "the-option.yaml"
+        from_the_option.write_text("directory: .\n")
+        from_the_setting = tmp_path / "the-setting.yaml"
+        from_the_setting.write_text("directory: .\n")
+        settings_file = tmp_path / "settings"
+        settings_file.write_text("beetsConfig=%s\n" % from_the_setting)
+        done = keep_music.run("ingest-music", "-j", "2", "-c",
+                              str(from_the_option),
+                              str(keep_music.download), str(keep_music.library),
+                              str(keep_music.opus),
+                              env=dict(os.environ,
+                                       CLI_SETTINGS_FILE=str(settings_file)),
+                              timeout=900)
+        assert done.returncode == 0, done.stdout + done.stderr
+        calls = _beet_calls(log)
+        assert len(calls) == 1, calls
+        assert calls[0][calls[0].index("-c") + 1] == str(from_the_option), calls
+
+    def test_a_config_that_is_not_there_is_refused_before_any_work(
+            self, keep_music):
+        missing = keep_music.work / "not-there.yaml"
+        done = keep_music.ingest("-c", str(missing))
+        assert done.returncode == 1, done.stdout + done.stderr
+        assert ('The beets config "%s" does not exist.' % missing) in done.stderr
+        assert "-c, --beets-config" in done.stderr
+        assert not keep_music.ffmpeg_calls.exists(), "the run did work"
+
+    def test_an_offline_run_never_runs_beet(self, keep_music):
+        """The config is not even asked for: an offline run handed a config
+        that is not there still runs, and beets is never started."""
+        log = keep_music.work / "beet-calls"
+        keep_music.with_tool("beet", _BEET_CALLS(str(log)))
+        done = keep_music.ingest("-o", "-c",
+                                 str(keep_music.work / "not-there.yaml"))
+        assert done.returncode == 0, done.stdout + done.stderr
+        assert not log.exists(), "beet ran on an offline run"
+
+
+@pytest.fixture
+def no_beet(sandbox, tmp_path):
+    """A PATH that finds no beets, and every other tool the preflight asks for.
+
+    Built as an allow-list rather than by dropping directories from the host's
+    PATH, the way the no-mkvtoolnix cases build theirs: on this host beets
+    lives in the same directory as the coreutils, so dropping it would take
+    those with it.
+    """
+    sandbox.with_tool("ffprobe", _FFPROBE_HIRES)
+    sandbox.with_tool("ffmpeg", _FFMPEG_CALLS(str(tmp_path / "ffmpeg-calls")))
+    sandbox.with_tool("convert", _CONVERT)
+    sandbox.with_tool("mkvmerge", _MKVMERGE)
+    sandbox.with_tools("fdupes", "mkvpropedit", "mkvextract")
+    sandbox.linking(*_ORDINARY).narrow()
+    return sandbox
+
+
+class TestOfflineNeedsNoBeet:
+    """-o is a run beets never runs, so a machine without it can ingest: the
+    preflight asks for the tool only when the tagging phase will run."""
+
+    def test_the_path_really_finds_no_beet(self, no_beet):
+        import shutil
+        assert shutil.which("beet", path=no_beet.path) is None
+
+    def test_an_online_run_is_refused_on_the_missing_beet(self, no_beet,
+                                                          tmp_path):
+        download = tmp_path / "download"
+        download.mkdir()
+        done = no_beet.run("ingest-music", str(download),
+                           str(tmp_path / "library"),
+                           str(tmp_path / "libraryopus"))
+        assert done.returncode == 1, done.stdout + done.stderr
+        assert "Cannot run ingest-music: it needs a tool" in done.stderr
+        assert "beet" in done.stderr
+        assert "Nothing to do" not in done.stderr
+
+    def test_an_offline_run_gets_past_the_preflight(self, no_beet, tmp_path):
+        """Past the preflight, and to the input check the online run never
+        reaches: the empty folder is the same in both, and only the beets
+        question differs between them."""
+        download = tmp_path / "download"
+        download.mkdir()
+        done = no_beet.run("ingest-music", "-o", str(download),
+                           str(tmp_path / "library"),
+                           str(tmp_path / "libraryopus"))
+        assert done.returncode == 1, done.stdout + done.stderr
+        assert 'Nothing to do: "%s" is empty.' % download in done.stderr

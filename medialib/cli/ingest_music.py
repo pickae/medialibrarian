@@ -69,6 +69,12 @@ Options:"""
 
 OPT_SPEC = """
 h |  | Print this help page.
+c | <file> | The beets config the tagging phase runs with. The one that
+                  ships with the package is the default, and its
+                  "directory: ." resolves to <ingestDir> because beets runs
+                  from inside it - a config that names a directory of its own
+                  moves the library there.
+                  Default the shipped medialib/config/beets.yaml
 j | <jobs> | Run up to <jobs> encoder processes in parallel
                   (default: the number of CPU cores).
 k | [part] | keep <part>: takes nothing away. The one part is resolution:
@@ -78,19 +84,22 @@ k | [part] | keep <part>: takes nothing away. The one part is resolution:
                   affected. A bare -k keeps every part, which today is this
                   one. A folder literally named "resolution" is written
                   ./resolution: the word after -k is the part when it is one.
+o |  | Offline: the tagging phase is skipped, so the run reaches no
+                  network and needs no beets.
+                  Default false
 """
 
-OPT_VARS = "j:jobs k:keepParts"
+OPT_VARS = "j:jobs k:keepParts c:beetsConfig o:offline"
 OPT_COLUMN = 18
-OPT_LONG = "h:help j:jobs k:keep"
+OPT_LONG = "h:help j:jobs k:keep c:beets-config o:offline"
 
 USAGE_TAIL = """
 
 Dependencies:
-    ffmpeg, mkvtoolnix, ImageMagick, rsync, fdupes, beets, and the mutagen
-    package for this Python (chapter embedding). Optional: flock (numbers the
-    progress lines). Also invokes the sibling commands convert-audio,
-    clean-folder-structure and cue-to-chapters."""
+    ffmpeg, mkvtoolnix, ImageMagick, rsync, fdupes, beets (unless -o), and the
+    mutagen package for this Python (chapter embedding). Optional: flock
+    (numbers the progress lines). Also invokes the sibling commands
+    convert-audio, clean-folder-structure and cue-to-chapters."""
 
 # Cover-image conversion: only images of at least this size are re-encoded to
 # AVIF (smaller ones are copied unchanged), and the AVIF encode settings.
@@ -1275,6 +1284,21 @@ def main(argv: list, program: str = "ingest-music",
     opus_copy_dir = (result.positionals[2] if len(result.positionals) > 2
                      else ingest_dir + "opus")
 
+    offline = "o" in result.given
+    if offline:
+        # The tagging phase will not run, so its config is not asked for.
+        beets_config = ""
+    else:
+        # The option wins over the beetsConfig setting, which settings.load()
+        # put in the environment; the shipped file is what neither names.
+        beets_config = (result.values["beetsConfig"]
+                        or os.environ.get("beetsConfig", "")
+                        or os.path.join(commands.config_dir(), "beets.yaml"))
+        if not os.path.isfile(beets_config):
+            sys.stderr.write('\nThe beets config "%s" does not exist.\n\n%s\n'
+                             % (beets_config, clioptions.page(declaration)))
+            return 1
+
     # This is a long run - every lossless track re-encoded, then beets over the
     # whole library, then a second library in Opus - so its log lines carry a
     # wall-clock stamp. Exported, so the child scripts this one ends with stamp
@@ -1301,7 +1325,7 @@ def main(argv: list, program: str = "ingest-music",
     try:
         return _settle_and_ingest(program, script_dir, download_dir,
                                   ingest_dir, opus_copy_dir, jobs,
-                                  keep_parts)
+                                  keep_parts, beets_config, offline)
     finally:
         # The ffmpeg pin can make the run directory before init_ram_base
         # does, and every refusal after it must hand it back.
@@ -1310,7 +1334,8 @@ def main(argv: list, program: str = "ingest-music",
 
 def _settle_and_ingest(program: str, script_dir: str, download_dir: str,
                        ingest_dir: str, opus_copy_dir: str, jobs: int,
-                       keep_parts: frozenset) -> int:
+                       keep_parts: frozenset, beets_config: str,
+                       offline: bool) -> int:
     # Which of this machine's ffmpeg builds does the re-encoding - inherited by
     # the convert-audio child, and settled before the preflight below asks
     # whether PATH can reach one.
@@ -1321,11 +1346,13 @@ def _settle_and_ingest(program: str, script_dir: str, download_dir: str,
     # runs as a child right at the end: the point of a preflight is lost if the
     # last phase of a long ingest is where a missing encoder finally shows up.
     # beets is what makes this an INGEST rather than a copy, so its absence is a
-    # refusal and not a warning.
-    if tooldeps.require_tools(program, [
-            "ffmpeg", "ffprobe", "rsync", "fdupes", "beet",
-            imagemagick.CONVERT_SPEC,
-            "mkvmerge", "mkvpropedit", "mkvextract"]):
+    # refusal and not a warning - asked only when the tagging phase will run.
+    tools = ["ffmpeg", "ffprobe", "rsync", "fdupes", "beet",
+             imagemagick.CONVERT_SPEC,
+             "mkvmerge", "mkvpropedit", "mkvextract"]
+    if offline:
+        tools.remove("beet")
+    if tooldeps.require_tools(program, tools):
         return 1
     if tooldeps.require_python_module(
             "mutagen", program,
@@ -1362,14 +1389,15 @@ def _settle_and_ingest(program: str, script_dir: str, download_dir: str,
 
     try:
         return _ingest(program, script_dir, download_dir, ingest_dir,
-                       opus_copy_dir, counter_dir, skips, jobs, keep_parts)
+                       opus_copy_dir, counter_dir, skips, jobs, keep_parts,
+                       beets_config, offline)
     finally:
         console.hide_active()
 
 
 def _ingest(program: str, script_dir: str, download_dir: str, ingest_dir: str,
             opus_copy_dir: str, counter_dir: str, skips, jobs: int,
-            keep_parts: frozenset) -> int:
+            keep_parts: frozenset, beets_config: str, offline: bool) -> int:
     # Stamped here rather than at the top of the run proper, because the closing
     # report divides by it and the pretreatment below - de-duplicating, splitting
     # discs, copying - is already part of what the run cost.
@@ -1438,14 +1466,17 @@ def _ingest(program: str, script_dir: str, download_dir: str, ingest_dir: str,
     _settle_videos_and_cues(state, ingest_dir)
 
     # Tag and organise with beets, against the OUTPUT so the original input is
-    # never renamed. The config travels with the package instead of a personal
-    # ~/.config/beets, and beets runs from inside the library so its
-    # "directory: ." resolves there.
-    log("Tagging and organising with beets")
-    beets_log = commands.logs_file(script_dir, "beets.log")
-    _run_in(ingest_dir, ["beet", "-c",
-                         os.path.join(commands.config_dir(), "beets.yaml"),
-                         "import", "-Ciq", "-l", beets_log, "."])
+    # never renamed. The config is the one the run was given - the shipped
+    # medialib/config/beets.yaml by default, which travels with the package
+    # instead of a personal ~/.config/beets - and beets runs from inside the
+    # library so its "directory: ." resolves there.
+    if offline:
+        log("Tagging and organising with beets: skipped, offline")
+    else:
+        log("Tagging and organising with beets")
+        beets_log = commands.logs_file(script_dir, "beets.log")
+        _run_in(ingest_dir, ["beet", "-c", beets_config,
+                             "import", "-Ciq", "-l", beets_log, "."])
 
     # Final name and structure cleanup, applied to the output only. It also
     # prunes any folders left empty in the ingest tree, so no separate prune is

@@ -23,6 +23,7 @@ the two disagree.
 | --- | --- | --- | --- |
 | `audiobookLosslessCompression` | The FLAC compression level of that copy | 5 | `read-library` |
 | `audiobookLosslessFilters` | The ffmpeg filters the lossless copy of an audiobook is made with; empty for none | `dynaudnorm=f=150:g=15,afftdn=nf=-70` | `read-library` |
+| `beetsConfig` | The beets config ingest-music's tagging phase runs with | the shipped `medialib/config/beets.yaml` | `ingest-music` |
 | `censusRamBase` | The census's scratch, ahead of `ramScratchBase` | `ramScratchBase` | `content-census`, `content-census-bi` |
 | `chapterDbSite` | The chapter database's address - there for the test suite | `https://chapterdb.plex.tv` | `ingest-movies` |
 | `chapterLlmApi` | The protocol the chapter model is asked over: `openai` for any server speaking OpenAI's chat protocol - Ollama, llama.cpp, vLLM, LM Studio and most hosted APIs - or `anthropic` for Claude | `openai` | `convert-audio`, `generate-chapters`, `ytdlp` |
