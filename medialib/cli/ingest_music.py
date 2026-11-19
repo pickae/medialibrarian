@@ -77,16 +77,19 @@ c | <file> | The beets config the tagging phase runs with. The one that
                   Default the shipped medialib/config/beets.yaml
 j | <jobs> | Run up to <jobs> encoder processes in parallel
                   (default: the number of CPU cores).
-k | [part] | keep <part>: takes nothing away. The parts are resolution and
-                  downloads, comma-separated, and a bare -k keeps both.
-                  resolution: the source's bit depth and sample rate, which a
-                  run otherwise turns into 16-bit at 48 kHz or less. Kept, the
-                  lossless copy stays at the source's resolution; the Opus
-                  copies are not affected. downloads: the download folder is
-                  not changed - no duplicate is deleted, and a multi-disc
-                  folder is split in the run's scratch, not in place. A folder
-                  literally named "downloads" is written ./downloads: the word
-                  after -k goes to -k when it is a part.
+k | [part] | keep <part>: takes nothing away. The parts are resolution,
+                  downloads and covers, comma-separated, and a bare -k keeps
+                  all three. resolution: the source's bit depth and sample
+                  rate, which a run otherwise turns into 16-bit at 48 kHz or
+                  less. Kept, the lossless copy stays at the source's
+                  resolution; the Opus copies are not affected. downloads:
+                  the download folder is not changed - no duplicate is
+                  deleted, and a multi-disc folder is split in the run's
+                  scratch, not in place. covers: cover images are copied as
+                  they are whatever their size, and the cover a track embeds
+                  is not scaled down. A folder literally named "covers" is
+                  written ./covers: the word after -k goes to -k when it is a
+                  part.
 o |  | Offline: the tagging phase is skipped, so the run reaches no
                   network and needs no beets.
                   Default false
@@ -145,7 +148,7 @@ def spec(program: str) -> "clioptions.Spec":
         options=OPT_SPEC,
         long=OPT_LONG,
         vars=OPT_VARS,
-        flags="optionalArg:k:^(downloads|resolution)(,(downloads|resolution))*$",
+        flags="optionalArg:k:^(covers|downloads|resolution)(,(covers|downloads|resolution))*$",
         column=OPT_COLUMN,
         tail=USAGE_TAIL,
     ))
@@ -679,7 +682,8 @@ class Run:
     def encode(self, relative: str) -> None:
         """One lossless track re-encoded into a normalised FLAC: 16-bit samples,
         capped at 48 kHz - the source's bit depth and sample rate when
-        resolution is kept - any embedded cover re-encoded as MJPEG and scaled.
+        resolution is kept - any embedded cover re-encoded as MJPEG and scaled
+        to the cap, at its own size when the covers are kept.
 
         Every track leaves exactly ONE counted line behind, on all four paths
         through here - encoded, already up to date, not lossless after all, or
@@ -737,9 +741,15 @@ class Run:
         # what the run is doing right now.
         self.counters.progress("Encoding: " + relative)
 
-        scale = ("scale='min(%s,iw)':min'(%s,ih)'"
-                 ":force_original_aspect_ratio=decrease,format=yuvj420p"
-                 % (self.cover_max_edge, self.cover_max_edge))
+        # The cover is scaled to the cap, or written at its own size when the
+        # run keeps the covers - re-encoded as MJPEG either way, which is what
+        # makes the art readable in a flac.
+        if "covers" in getattr(self, "keep_parts", frozenset()):
+            scale = "format=yuvj420p"
+        else:
+            scale = ("scale='min(%s,iw)':min'(%s,ih)'"
+                     ":force_original_aspect_ratio=decrease,format=yuvj420p"
+                     % (self.cover_max_edge, self.cover_max_edge))
         argv = ["ffmpeg", "-nostdin", "-hide_banner",
                 *toolcapture.ffmpeg_loglevel(),
                 "-y", "-i", source, "-map", "0:a:0", "-map", "0:v:0?",
@@ -784,7 +794,8 @@ class Run:
 
     def convert_image(self, relative: str) -> None:
         """One cover image to AVIF when it is large enough to be worth it and no
-        output exists yet; otherwise copied across unchanged. A failed conversion
+        output exists yet; otherwise copied across unchanged - as it is
+        whatever its size when the run keeps the covers. A failed conversion
         falls back to a plain copy so no art is lost.
 
         One counted line per image, saying which of the two happened - the AVIF
@@ -801,7 +812,10 @@ class Run:
         except OSError:
             size = 0
 
-        if size < COVER_MIN_BYTES:
+        # Copied as it is whatever its size when the run keeps the covers: the
+        # AVIF encode is the measure the part keeps out.
+        if (size < COVER_MIN_BYTES
+                or "covers" in getattr(self, "keep_parts", frozenset())):
             # Unless the library already holds these very bytes. It usually holds
             # them under another name: a cover copied by an earlier run is
             # "folder.png" by now, so a check by name alone would copy it a
@@ -1335,7 +1349,7 @@ def main(argv: list, program: str = "ingest-music",
         # like a bad option. A bare -k keeps them all; without the flag the
         # run takes its normal measures and keeps none.
         keep_parts = (keepparts.parse(result.values["keepParts"],
-                                      ("downloads", "resolution"))
+                                      ("covers", "downloads", "resolution"))
                       if "k" in result.given else frozenset())
     except clioptions.HelpRequested:
         sys.stdout.write(clioptions.help_text(declaration))

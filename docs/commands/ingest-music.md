@@ -31,8 +31,8 @@ Each phase is in the [table below](#what-it-does).
 | Phase | What happens |
 | --- | --- |
 | Split | multi-disc CUE+image rips sharing one folder are split into a subfolder each (de-duplicating with `fdupes` first). With `-k downloads` the de-duplication and the split happen on a copy of the tree, and a copy that cannot be made leaves the folders the split would take apart refused - not ingested flat, and not changed |
-| Encode | every lossless source (FLAC/APE/ALAC/WAV/WavPack) is re-encoded to a normalised 16-bit FLAC (capped at 48 kHz - the source's own bit depth and sample rate with `-k` - embedded cover scaled to at most fullHD), keeping its source's modification time; everything else is copied across with `rsync` |
-| Tidy | large cover images become AVIF, stray video files are remuxed to MKV, and cue-sheet chapters are embedded into the flacs they describe. Cue sheets are read for their chapters first, and only the ones still without a FLAC of their own are then dropped |
+| Encode | every lossless source (FLAC/APE/ALAC/WAV/WavPack) is re-encoded to a normalised 16-bit FLAC (capped at 48 kHz - the source's own bit depth and sample rate with `-k` - the embedded cover scaled to at most fullHD, unscaled with `-k covers`), keeping its source's modification time; everything else is copied across with `rsync` |
+| Tidy | large cover images become AVIF (copied as they are with `-k covers`), stray video files are remuxed to MKV, and cue-sheet chapters are embedded into the flacs they describe. Cue sheets are read for their chapters first, and only the ones still without a FLAC of their own are then dropped |
 | Tag | the assembled output is tagged and organised with `beets`, using the config that ships with the package (another with `-c` or the `beetsConfig` setting), with the import log written to `logs/beets.log`; skipped with `-o` |
 | Clean | passed through [`clean-folder-structure`](clean-folder-structure.md) for final name cleanup and empty-folder pruning |
 | Copy | 120 kbps Opus copies are made with [`convert-audio`](convert-audio.md) |
@@ -48,7 +48,8 @@ encoder that has stopped.
 ## Keeping everything (`-k`)
 
 **A run with `-k` takes nothing away.** The `-k` is given in parts -
-`resolution` and `downloads`, comma-separated - and a bare `-k` keeps both.
+`resolution`, `downloads` and `covers`, comma-separated - and a bare `-k`
+keeps all three.
 
 `resolution` keeps the source's bit depth and sample rate: the track is still
 re-encoded to FLAC - that is what makes the formats uniform - but at the
@@ -63,6 +64,12 @@ comes out of the run as it went in. When the copy cannot be made, the folders
 the split would take apart are refused rather than ingested flat: each is
 named with the reason, counted in the closing report, and left in the download
 - not copied, not split, nothing changed - and the run goes on with the rest.
+
+`covers` keeps the covers as they are. A run would otherwise turn a large
+cover image into AVIF and scale the cover a track embeds down to fullHD; with
+the part, the image is copied across as it is whatever its size, and the
+embedded cover is written at its own size - still re-encoded as MJPEG, which
+is what makes the art readable in a flac.
 
 ---
 
