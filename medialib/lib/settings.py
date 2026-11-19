@@ -159,6 +159,9 @@ SETTINGS: tuple[Setting, ...] = (
             "separated as `PATH` is - there for the test suite", _FFMPEG,
             "`~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, `/opt/ffmpeg/bin`, "
             "`/usr/bin`"),
+    Setting("beetsConfig", "The beets config ingest-music's tagging phase runs "
+            "with", ("ingest-music",),
+            "the shipped `medialib/config/beets.yaml`"),
     Setting("imageGpuEncoder", "The GPU AVIF encoder (av1gpu) tried before "
             "ImageMagick, by name or path; empty to encode every image on the CPU",
             ("convert-comics", "convert-images"), "`av1gpu`"),

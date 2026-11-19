@@ -122,12 +122,14 @@ The reverse nesting is allowed: an input **inside** the output (`<library>` and
 TheMovieDB, so both obviously reach the network. Three other commands do too,
 which is less obvious:
 
-- **`ingest-music`** runs beets with the config that ships beside it, and that
-  config enables `chroma`, `lastgenre`, `lyrics` and `fetchart`. So an ingest
-  sends an acoustic fingerprint of each track to AcoustID, and asks MusicBrainz,
-  Last.fm, a lyrics site and a cover-art host about the release. It also writes
-  the tags it settles back **into your files** (`write: yes`). Edit
-  `medialib/config/beets.yaml` if you would rather it did less.
+- **`ingest-music`** runs beets with the config that ships beside it (another
+  with `-c` or the `beetsConfig` setting, and the phase itself is skipped with
+  `-o`), and that config enables `chroma`, `lastgenre`, `lyrics` and
+  `fetchart`. So an ingest sends an acoustic fingerprint of each track to
+  AcoustID, and asks MusicBrainz, Last.fm, a lyrics site and a cover-art host
+  about the release. It also writes the tags it settles back **into your
+  files** (`write: yes`). A config of your own runs the same phase with fewer
+  of its plugins.
 - **`ingest-movies`** asks TheMovieDB what a film is, but only once `tmdbApiKey`
   is set — with no key it skips the lookup and says so. The key goes to curl on
   stdin rather than on its command line, so it is not readable from the process
