@@ -10,6 +10,7 @@ in a mirrored output folder.
 | **Takes** | a folder of audio and video |
 | **Writes** | one transcript per input under `<outputDir>`: the same sub-folder structure, a new extension |
 | **Input** | never modified |
+| **With `-l`** | an Opus, FLAC, `.m4a` or `.m4b` input also gets a copy under `<outputDir>` (same path and name) carrying its transcript as lyrics |
 | **Reruns** | a transcript already present in the output is left in place, so only what is new is done |
 | **Failures** | a file whisper wrote no transcript for (it exits 0 even when the GPU runs out of memory) is reported `failed` and leaves nothing behind; the run carries on, then exits 1, and a rerun tries that file again |
 | **Network** | none, beyond whisper fetching a model the first time it is used |
@@ -34,6 +35,17 @@ The whisper model is settled for the host once, up front: the GPU when whisper c
 really run on it (the biggest model the free VRAM holds), otherwise the CPU. The
 format (`-f`: `txt`, `srt`, `vtt` or `tsv`) defaults to `txt`, and `-j` sets how
 many transcriptions run at a time.
+
+## Embedding the transcript (`-l`)
+
+`-l` writes, beside each transcript, a copy of the audio with the transcript
+embedded - the way [`convert-audio`](convert-audio.md) does for its outputs: as
+timed lyrics (LRC, in the `LYRICS` tag) in Opus and FLAC, as a subtitle track in
+`.m4a` and `.m4b`. Other containers and videos are only transcribed. The lyrics
+are timed whatever `-f` is: with `txt` or `tsv` whisper is also asked for cues
+and they are used for the lyrics only. A rerun with `-l` adds the copies a
+transcript-only run left out; a copy that could not be written is reported and
+the run exits 1.
 
 ---
 

@@ -33,6 +33,7 @@ from medialib.lib import (
     settings,
     toolcapture,
     tooldeps,
+    transcripttags,
     whisper,
     workerpool,
 )
@@ -50,6 +51,10 @@ Each input gets one transcript in <outputDir>, in the same sub-folder structure:
     <inputDir>/a/track.mp3    ->   <outputDir>/a/track.txt
     <inputDir>/b/movie.mkv    ->   <outputDir>/b/movie.txt
 
+With -l an Opus, FLAC or MP4 audio file also gets a copy in <outputDir> with its
+transcript embedded: as timed lyrics in Opus and FLAC, as a subtitle track in
+.m4a and .m4b. The input is never touched.
+
 The whisper model is picked for this host automatically (the GPU when whisper can
 really run on it, otherwise the CPU), and so is how wide it runs, so there is
 nothing to configure.
@@ -66,6 +71,8 @@ OPT_SPEC = """
 h |  | Print this help page.
 f | <format> | Transcript format: txt, srt, vtt or tsv.
                     Default txt
+l |  | Also write a copy of each Opus, FLAC, .m4a and .m4b input into the
+                    output, with its transcript embedded as lyrics.
 j | <jobs> | Run up to <jobs> transcriptions in parallel.
                     Default: what the card can hold, or 2 on the CPU
 """
@@ -82,9 +89,9 @@ f | enum:%s | transcript format
 j | posInt | job count
 """ % "\\|".join(FORMATS)
 
-OPT_VARS = "f:fmt j:whisperJobs"
+OPT_VARS = "f:fmt j:whisperJobs l:lyrics"
 OPT_COLUMN = 20
-OPT_LONG = "h:help f:format j:jobs"
+OPT_LONG = "h:help f:format j:jobs l:lyrics"
 
 
 def spec(program: str) -> clioptions.Spec:
@@ -105,6 +112,13 @@ def _is_video(name: str) -> bool:
     container, whose first audio track has to be lifted out first."""
     return enums.lower_extension_of(name) in [
         enums.shell_lower(e) for e in enums.VIDEO_EXTENSIONS]
+
+
+def _takes_lyrics(name: str) -> bool:
+    """Whether an input is audio in a container a transcript can be embedded
+    in; any other is only transcribed."""
+    return (not _is_video(name)
+            and name.lower().endswith((".opus", ".flac", ".m4a", ".m4b")))
 
 
 def _input_extensions():
@@ -140,7 +154,7 @@ class Run:
     """One transcription run: the settled world its workers inherit."""
 
     def __init__(self, input_dir, output_dir, fmt, model, ram_root,
-                 counter_dir, total):
+                 counter_dir, total, lyrics=False):
         self.input_dir = input_dir
         self.output_dir = output_dir
         self.fmt = fmt
@@ -151,12 +165,14 @@ class Run:
         self.console = console.Console(counter_dir)
         self.failed_file = os.path.join(counter_dir, "failed")
         self.total = total
+        self.lyrics = lyrics
         # Nought slots is the unbatched path. Only the cued formats want the
         # line flags: a transcript that is read has no cues to spoil.
         slots = model.get("batchSlots", 0)
         self.batch_args = (["--batched", "True", "--batch_size", str(slots)]
                            if slots else [])
-        if slots and fmt in CUED_FORMATS:
+        # Lyrics are timed, so the cues are wanted whatever the format is.
+        if slots and (fmt in CUED_FORMATS or lyrics):
             self.batch_args += [
                 "--word_timestamps", "True",
                 "--max_line_width", str(whisper.WHISPER_LINE_WIDTH),
@@ -211,7 +227,9 @@ class Run:
         # re-run - or one restarted after a Ctrl+C - does not pay for it again.
         # It is tested before anything else, since lifting a film's audio out
         # costs minutes the transcript already made unnecessary.
-        if os.path.exists(out) and os.path.getsize(out) > 0:
+        if os.path.exists(out) and os.path.getsize(out) > 0 and not (
+                self.lyrics and _takes_lyrics(relative)
+                and not os.path.isfile(self._audio_copy(relative))):
             self.report_progress("already present: " + relative)
             return None
 
@@ -249,13 +267,19 @@ class Run:
         return os.path.join(self.output_dir,
                             os.path.splitext(relative)[0] + "." + self.fmt)
 
+    def _audio_copy(self, relative: str) -> str:
+        return os.path.join(self.output_dir, relative)
+
     def _whisper(self, inputs: list, output_dir: str) -> list:
         """The whisper command for ``inputs``, transcribed into
         ``output_dir`` - one process, so one load of the model for them all."""
         return [*whisper.WHISPER_COMMAND, *inputs,
                 "--output_dir", output_dir,
                 "--model", self.model["modelMulti"],
-                "--output_format", self.fmt,
+                # "all" when lyrics need a timed transcript the format is not.
+                "--output_format",
+                "all" if self.lyrics and self.fmt not in CUED_FORMATS
+                else self.fmt,
                 "--device", self.model["device"],
                 "--compute_type", self.model["computeType"],
                 "--threads", str(self.model["threads"]),
@@ -267,8 +291,31 @@ class Run:
         name = os.path.splitext(os.path.basename(for_whisper))[0]
         return os.path.join(output_dir, name + "." + self.fmt)
 
+    def _embed(self, relative: str, whisper_out: str) -> None:
+        """A copy of the input in the output carrying its transcript as
+        lyrics. The copy appears whole, or not at all."""
+        timed = (whisper_out if self.fmt in CUED_FORMATS
+                 else os.path.splitext(whisper_out)[0] + ".srt")
+        target = self._audio_copy(relative)
+        os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
+        staged = target + ".part" + os.path.splitext(target)[1]
+        scratch = tempfile.mkdtemp(prefix="lyrics.", dir=self.ram_root)
+        try:
+            shutil.copyfile(os.path.join(self.input_dir, relative), staged)
+            if transcripttags.embed_transcript(staged, timed, scratch) == 0:
+                os.replace(staged, target)
+                return
+            runlog.warn("lyrics not embedded: " + relative)
+            self.record_failure()
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+            if os.path.exists(staged):
+                os.remove(staged)
+
     def _keep(self, relative: str, whisper_out: str) -> None:
         out = self._transcript(relative)
+        if self.lyrics and _takes_lyrics(relative):
+            self._embed(relative, whisper_out)
         os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
         # Moved in under another name and renamed in place, so the transcript
         # appears whole: a chapter run reading the folder as it fills never
@@ -448,13 +495,14 @@ def main(argv: list, program: str = "transcribe-audio") -> int:
         output_dir = os.path.join(os.getcwd(), output_dir)
 
     fmt = result.values["fmt"] or "txt"
+    lyrics = bool(result.values["lyrics"])
     # Nought stands for "not overridden": the settlement that fills it in
     # cannot run until the scratch its probe writes into exists.
     jobs = int(result.values["whisperJobs"] or 0)
 
     runlog.settle_flock()
     try:
-        return _transcribe(program, input_dir, output_dir, fmt, jobs)
+        return _transcribe(program, input_dir, output_dir, fmt, jobs, lyrics)
     finally:
         # The ffmpeg pin can make the run directory before anything below
         # does, and every refusal after it must hand it back.
@@ -462,7 +510,7 @@ def main(argv: list, program: str = "transcribe-audio") -> int:
 
 
 def _transcribe(program: str, input_dir: str, output_dir: str, fmt: str,
-                jobs: int) -> int:
+                jobs: int, lyrics: bool = False) -> int:
     ffmpegselect.select_ffmpeg()
     ffmpegselect.report_ffmpeg_selection()
     if tooldeps.require_tools(
@@ -521,7 +569,7 @@ def _transcribe(program: str, input_dir: str, output_dir: str, fmt: str,
     ramscratch.add_exit_cleanup([counter_dir])
 
     state = Run(input_dir, output_dir, fmt, model, ram_root, counter_dir,
-                len(tracks))
+                len(tracks), lyrics)
     # The pool is never wider than the work.
     runlog.say("Transcribing %d file(s) on %d worker(s)...\n"
                % (len(tracks), min(int(jobs), len(tracks))))

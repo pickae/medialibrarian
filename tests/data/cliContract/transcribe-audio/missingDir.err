@@ -9,6 +9,10 @@ Each input gets one transcript in <outputDir>, in the same sub-folder structure:
     <inputDir>/a/track.mp3    ->   <outputDir>/a/track.txt
     <inputDir>/b/movie.mkv    ->   <outputDir>/b/movie.txt
 
+With -l an Opus, FLAC or MP4 audio file also gets a copy in <outputDir> with its
+transcript embedded: as timed lyrics in Opus and FLAC, as a subtitle track in
+.m4a and .m4b. The input is never touched.
+
 The whisper model is picked for this host automatically (the GPU when whisper can
 really run on it, otherwise the CPU), and so is how wide it runs, so there is
 nothing to configure.
@@ -18,6 +22,8 @@ Options:
     -f, --format <format>
                     Transcript format: txt, srt, vtt or tsv.
                     Default txt
+    -l, --lyrics    Also write a copy of each Opus, FLAC, .m4a and .m4b input into the
+                    output, with its transcript embedded as lyrics.
     -j, --jobs <jobs>
                     Run up to <jobs> transcriptions in parallel.
                     Default: what the card can hold, or 2 on the CPU
