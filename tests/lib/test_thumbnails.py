@@ -13,7 +13,7 @@ import sys
 
 import pytest
 
-from medialib.lib import statusline, thumbnails
+from medialib.lib import onlinecover, statusline, thumbnails
 
 pytestmark = pytest.mark.stubbed
 
@@ -704,3 +704,97 @@ class TestTheRealRunner:
     def test_one_that_worked_says_nothing(self, capfd):
         thumbnails._run(self._tool("print('chatter')"))
         assert capfd.readouterr() == ("", "")
+
+
+################################################################################
+# where the cover came from: the rung and the file, said under -v
+################################################################################
+def test_the_image_rung_says_the_file_it_came_from(tmp_path, isolated_env,
+                                                   monkeypatch):
+    said = []
+    monkeypatch.setattr(thumbnails, "_detail", said.append)
+    d = tmp_path / "case"
+    _file_with_size(d, "folder.jpg", 10)
+    (d / "ram").mkdir()
+    monkeypatch.chdir(d)
+    run = _Run()
+    monkeypatch.setenv("PATH", _stub_bin(tmp_path, []))
+    thumbnails.embed_thumbnail(
+        str(d), "track01", 100, 90, "1024x1024", 100, False, "ram", "script",
+        run)
+    assert said == ["    Cover from the image file folder.jpg in the input"]
+
+
+def test_the_pdf_rung_says_the_booklet_it_came_from(tmp_path, isolated_env,
+                                                    monkeypatch):
+    said = []
+    monkeypatch.setattr(thumbnails, "_detail", said.append)
+    d = tmp_path / "case"
+    _folder(d, ["booklet.pdf", "track01.opus"])
+    (d / "ram").mkdir()
+    monkeypatch.chdir(d)
+    run = _Run(writes={"pdftoppm": ["ram/track01.jpg"]})
+    monkeypatch.setenv("PATH", _stub_bin(tmp_path, ["pdftoppm"]))
+    thumbnails.embed_thumbnail(
+        str(d), "track01", 100, 90, "1024x1024", 100, False, "ram", "script",
+        run)
+    assert said == ["    Cover from the first page of the PDF booklet "
+                    "booklet.pdf"]
+
+
+def test_the_embedded_rung_says_the_file_it_came_from(tmp_path, isolated_env,
+                                                      monkeypatch):
+    said = []
+    monkeypatch.setattr(thumbnails, "_detail", said.append)
+    d = tmp_path / "case"
+    _folder(d, ["track01.mp3"])
+    (d / "ram").mkdir()
+    monkeypatch.chdir(d)
+    run = _Run(writes={"ffmpeg": ["ram/track01.jpg"]})
+    monkeypatch.setenv("PATH", _stub_bin(tmp_path, ["pdftoppm", "ffmpeg"]))
+    thumbnails.embed_thumbnail(
+        str(d), "track01", 100, 90, "1024x1024", 100, False, "ram", "script",
+        run)
+    assert said == ["    Cover from the art embedded in track01.mp3"]
+
+
+def test_a_file_that_carries_no_art_says_nothing(tmp_path, isolated_env,
+                                                 monkeypatch):
+    """An extraction that leaves no picture behind is not a cover: the line
+    is the rung's, and a rung that came up empty says no rung - the online
+    rung's answer is a normal-verbosity line, not this rung's."""
+    said = []
+    monkeypatch.setattr(thumbnails, "_detail", said.append)
+    # The autouse environment keeps the search off; this one is about a rung
+    # that was reached, so it is turned back on, with the network stood in
+    # for.
+    monkeypatch.setenv("coverSearch", "on")
+    monkeypatch.setattr(onlinecover, "curl_text", lambda url: None)
+    monkeypatch.setattr(onlinecover, "ytdlp_search", lambda search: None)
+    d = tmp_path / "case"
+    _folder(d, ["track01.mp3"])
+    (d / "ram").mkdir()
+    monkeypatch.chdir(d)
+    run = _Run()
+    monkeypatch.setenv("PATH", _stub_bin(tmp_path, ["pdftoppm", "ffmpeg"]))
+    thumbnails.embed_thumbnail(
+        str(d), "track01", 100, 90, "1024x1024", 100, False, "ram", "script",
+        run)
+    assert said == []
+
+
+def test_a_disabled_online_search_says_so(tmp_path, isolated_env, monkeypatch):
+    said = []
+    monkeypatch.setattr(thumbnails, "_detail", said.append)
+    monkeypatch.setattr(thumbnails.onlinecover, "enabled", lambda: False)
+    d = tmp_path / "case"
+    _folder(d, ["track01.mp3"])
+    (d / "ram").mkdir()
+    monkeypatch.chdir(d)
+    run = _Run()
+    monkeypatch.setenv("PATH", _stub_bin(tmp_path, ["pdftoppm", "ffmpeg"]))
+    thumbnails.embed_thumbnail(
+        str(d), "track01", 100, 90, "1024x1024", 100, False, "ram", "script",
+        run)
+    assert said == ["    No cover looked for online: the coverSearch "
+                    "setting is off"]

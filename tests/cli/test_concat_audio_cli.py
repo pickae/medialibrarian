@@ -11,6 +11,7 @@ about names and outputs rather than about where the bytes live.
 
 from __future__ import annotations
 
+import os
 import re
 
 import pytest
@@ -622,3 +623,95 @@ class TestAShortJoinIsNotPublished:
     def test_the_run_ends_non_zero(self, run):
         _, done = run
         assert done.returncode == 1
+
+
+class TestTheCueSheetAndCoverItSays:
+    """The -v lines that name the sources a book's chapters and cover came
+    from, and the figures they were taken on: which cue sheet and why, and
+    which rung of the cover ladder gave the picture.
+
+    The search for a cover nothing local supplied is off in the suite's
+    environment, which the off-line is about; the one case that looks is
+    pointed at a table that answers nothing, through a curl that does not.
+    """
+
+    def test_the_single_cue_is_named_and_why_it_was_the_one(self, concat):
+        _tree(concat.inputs, "Book/01 - part.mp3", "Book/Book.cue")
+        done = concat.run("concat-audio", "-v", concat.inputs, concat.outputs)
+        assert done.returncode == 0, done.stdout + done.stderr
+        assert ("Reading chapters from Book.cue: the only cue sheet in the "
+                "input" in done.stdout + done.stderr)
+
+    def test_without_v_the_cue_is_not_named(self, concat):
+        _tree(concat.inputs, "Book/01 - part.mp3", "Book/Book.cue")
+        done = concat.run("concat-audio", concat.inputs, concat.outputs)
+        assert done.returncode == 0, done.stdout + done.stderr
+        assert "Reading chapters from" not in done.stdout + done.stderr
+
+    def test_split_audio_says_why_the_cue_was_not_taken(self, concat):
+        _tree(concat.inputs, "Book/01 - part.mp3", "Book/02 - part.mp3",
+              "Book/Book.cue")
+        done = concat.run("concat-audio", "-v", concat.inputs, concat.outputs)
+        assert done.returncode == 0, done.stdout + done.stderr
+        assert ("Building chapters from individual files: a cue sheet "
+                "describes one file, and the input holds 2 MP3 files"
+                in done.stdout + done.stderr)
+
+    def test_the_image_is_named(self, concat):
+        _tree(concat.inputs, "Book/01 - part.mp3", "Book/02 - part.mp3",
+              "Book/folder.jpg")
+        done = concat.run("concat-audio", "-v", concat.inputs, concat.outputs)
+        assert done.returncode == 0, done.stdout + done.stderr
+        assert ("Cover from the image file folder.jpg in the input"
+                in done.stdout + done.stderr)
+
+    def test_without_v_the_image_is_not_named(self, concat):
+        _tree(concat.inputs, "Book/01 - part.mp3", "Book/02 - part.mp3",
+              "Book/folder.jpg")
+        done = concat.run("concat-audio", concat.inputs, concat.outputs)
+        assert done.returncode == 0, done.stdout + done.stderr
+        assert "Cover from the image file" not in done.stdout + done.stderr
+
+    def test_the_booklet_page_is_named(self, concat):
+        # $2 is the output stem: $1 is the booklet, and the script's own
+        # name does not count.
+        concat.with_tool("pdftoppm", ': > "$2.jpg"')
+        _tree(concat.inputs, "Book/01 - part.mp3", "Book/02 - part.mp3",
+              "Book/booklet.pdf")
+        done = concat.run("concat-audio", "-v", concat.inputs, concat.outputs)
+        assert done.returncode == 0, done.stdout + done.stderr
+        assert ("Cover from the first page of the PDF booklet booklet.pdf"
+                in done.stdout + done.stderr)
+
+    def test_the_embedded_art_is_named(self, concat):
+        _tree(concat.inputs, "Book/01 - part.mp3")
+        done = concat.run("concat-audio", "-v", concat.inputs, concat.outputs)
+        assert done.returncode == 0, done.stdout + done.stderr
+        assert ("Cover from the art embedded in 01 - part.mp3"
+                in done.stdout + done.stderr)
+
+    def test_a_disabled_search_says_so(self, concat):
+        _tree(concat.inputs, "Book/01 - part.aac")
+        done = concat.run("concat-audio", "-v", concat.inputs, concat.outputs)
+        assert done.returncode == 0, done.stdout + done.stderr
+        assert ("No cover looked for online: the coverSearch setting is off"
+                in done.stdout + done.stderr)
+
+    def test_a_search_that_finds_nothing_says_what_it_read_as(
+            self, concat, tmp_path):
+        """The content and the figure it was taken on sit in the line, not
+        just the content: the length the book read as is what chose the
+        rows it was asked."""
+        table = tmp_path / "table.tsv"
+        table.write_text(
+            "other\taudible\tstrict\t2\t"
+            "https://api.audible.com/1.0/catalog/products?"
+            "title={title}&num_results=10\n")
+        concat.with_tool("curl", "exit 1")
+        _tree(concat.inputs, "Some Book/01 - part.aac")
+        done = concat.run("concat-audio", concat.inputs, concat.outputs,
+                          env=dict(os.environ, coverSearch="on",
+                                   coverSearchTable=str(table)))
+        assert done.returncode == 0, done.stdout + done.stderr
+        assert ('No cover found online either (other - a length of 2:03, '
+                'looked for "Some Book")' in done.stdout + done.stderr)

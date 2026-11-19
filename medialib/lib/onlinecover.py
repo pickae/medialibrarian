@@ -44,6 +44,7 @@ from dataclasses import dataclass, field
 from medialib import commands
 from medialib.lib import (
     enums,
+    formatting,
     imagecodecs,
     imagemagick,
     podcastfeeds,
@@ -204,22 +205,29 @@ def youtube_id(name: str) -> str:
     return found.group(1) if found else ""
 
 
-def probable_content(name: str, seconds: float, stereo: bool = False) -> str:
-    """podcast, audiobook or other, for audio called ``name`` that runs
-    ``seconds`` (0 when unknown).
+def probable_content(name: str, seconds: float, stereo: bool = False) -> tuple:
+    """(What it probably is, what it is on), for audio called ``name`` that
+    runs ``seconds`` (0 when unknown).
 
     ``stereo`` is a run that encodes it in stereo rather than mono: a talk is
     kept mono, so podcast length in stereo is most likely a full-cast drama -
     which the audiobook catalogues sell, and the podcast searches miss. A
     dated or YouTube-named file is a podcast whatever it is encoded in.
     """
-    if youtube_id(name) or _dated(name):
-        return "podcast"
+    if youtube_id(name):
+        return "podcast", "the name ends in a YouTube id"
+    if _dated(name):
+        return "podcast", "the name starts with a date"
     if seconds > AUDIOBOOK_MIN_SECONDS:
-        return "audiobook"
+        return "audiobook", "a length of %s" % formatting.fmt_clock(seconds)
     if seconds >= PODCAST_MIN_SECONDS:
-        return "audiobook" if stereo else "podcast"
-    return "other"
+        if stereo:
+            return "audiobook", "a stereo recording of %s" \
+                % formatting.fmt_clock(seconds)
+        return "podcast", "a length of %s" % formatting.fmt_clock(seconds)
+    if seconds > 0:
+        return "other", "a length of %s" % formatting.fmt_clock(seconds)
+    return "other", "no length"
 
 
 # What a name carries that is not its title: the date in front, the
@@ -251,7 +259,7 @@ def _unique(values: Sequence[str]) -> list[str]:
 class Subject:
     """What is being looked for: what it is called, best first; who made it,
     the trusted (tagged) names apart from the guessed ones; how long it runs;
-    and what it probably is."""
+    what it probably is, and the figure that read as it."""
 
     titles: list[str]
     creators: list[str]
@@ -259,6 +267,7 @@ class Subject:
     seconds: float
     content: str
     youtube_id: str = ""
+    why: str = ""
 
     @property
     def title(self) -> str:
@@ -284,8 +293,9 @@ def subject_for(name: str, seconds: float, tag_titles: Sequence[str] = (),
     head, tail = titlematch.leading_segment(cleaned)
     titles = _unique([*tag_titles, cleaned, tail, head])
     creators = _unique([*tag_creators, *guessed_creators, head, tail])
+    content, why = probable_content(name, seconds, stereo)
     return Subject(titles, creators, _unique(tag_creators), seconds,
-                   probable_content(name, seconds, stereo), youtube_id(name))
+                   content, youtube_id(name), why)
 
 
 # --- what a site answered -----------------------------------------------------------
@@ -666,11 +676,16 @@ def _search(subject: Subject, dest_base: str,
     if search is None:
         search = CoverSearch(read_table(table_path()))
     image, source = search.find(subject, dest_base)
+    # The content and the figure it was taken on, the way the table's rows
+    # were chosen: a hand-built subject without one says the content alone.
+    what = subject.content
+    if subject.why:
+        what = "%s - %s" % (subject.content, subject.why)
     if image:
-        _log("    Cover found online (%s): %s" % (subject.content, source))
+        _log("    Cover found online (%s): %s" % (what, source))
     else:
         _log("    No cover found online either (%s, looked for \"%s\")"
-             % (subject.content, subject.title))
+             % (what, subject.title))
     return image
 
 

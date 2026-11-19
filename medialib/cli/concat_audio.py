@@ -196,23 +196,27 @@ def _run(argv):
     return toolcapture.run(argv, tool="ffmpeg", report=False)
 
 
-def select_cue_sheet(cues: list, audio: str) -> str:
-    """Which cue sheet a folder's chapters are read from.
+def select_cue_sheet(cues: list, audio: str) -> tuple:
+    """Which cue sheet a folder's chapters are read from, and why.
 
     1. exactly one anywhere in the tree: always that one;
     2. several: the one beside the audio file and sharing its stem;
     3. several and none matches: the largest, as the fullest chapter source.
+
+    The why is the doc page's words for the rung the folder fell into, so the
+    run can say the choice on the figure it was taken on.
     """
     cues = [cue for cue in cues if cue]
     if len(cues) <= 1:
-        return cues[0] if cues else ""
+        return (cues[0], "the only cue sheet in the input") if cues \
+            else ("", "")
 
     audio_dir = os.path.dirname(audio)
     audio_stem = os.path.splitext(os.path.basename(audio))[0]
     for cue in cues:
         if (os.path.dirname(cue) == audio_dir
                 and os.path.splitext(os.path.basename(cue))[0] == audio_stem):
-            return cue
+            return cue, "beside the audio, sharing its name"
 
     # -1 is the "nothing seen yet" mark: a cue file can be 0 bytes, so 0 would
     # not tell the two apart.
@@ -224,7 +228,7 @@ def select_cue_sheet(cues: list, audio: str) -> str:
             size = 0
         if size > best_size:
             best, best_size = cue, size
-    return best
+    return best, "the largest of the %d in the input" % len(cues)
 
 
 class Scan:
@@ -801,11 +805,17 @@ class Run:
         # no chapter at all.
         chapter_lines = []
         if scan.cues and scan.audio_files == 1:
-            cue = select_cue_sheet(scan.cues, scan.audio_file)
-            step("    Reading chapters from cue sheet")
+            cue, why = select_cue_sheet(scan.cues, scan.audio_file)
+            step("    Reading chapters from %s: %s"
+                 % (os.path.relpath(cue, input_path), why))
             chapter_lines = cuechapters.chapters_from_cue(cue)
         elif scan.audio_files >= 1:
-            step("    Building chapters from individual files")
+            if scan.cues:
+                step("    Building chapters from individual files: a cue "
+                     "sheet describes one file, and the input holds %d %s "
+                     "files" % (scan.audio_files, label))
+            else:
+                step("    Building chapters from individual files")
             chapter_lines = chapters.chapters_from_files(concat_list)
             if scan.audio_files == 1 and len(chapter_lines) < 4:
                 chapter_lines = []

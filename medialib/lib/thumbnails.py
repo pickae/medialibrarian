@@ -77,6 +77,7 @@ def _run(argv: Sequence[str], may_fail: bool = False) -> toolcapture.ToolRun:
 
 
 _log = runlog.log
+_detail = runlog.detail
 
 
 def _iname(name: str, pattern: str) -> bool:
@@ -197,9 +198,15 @@ def extract_thumbnail(input_path: str, file_name: str, dpi: int,
         pdf = None
 
     if pdf is not None:
-        return run(["pdftoppm", pdf, file_name, "-jpeg",
-                    "-rx", str(dpi), "-ry", str(dpi), "-f", "1",
-                    "-singlefile"]).returncode
+        status = run(["pdftoppm", pdf, file_name, "-jpeg",
+                      "-rx", str(dpi), "-ry", str(dpi), "-f", "1",
+                      "-singlefile"]).returncode
+        # Said only when the page came out: a pdftoppm that wrote nothing
+        # leaves the embedded-artwork rungs their turn, and they say theirs.
+        if os.path.isfile(f"{file_name}.jpg"):
+            _detail("    Cover from the first page of the PDF booklet %s"
+                    % os.path.relpath(pdf, input_path))
+        return status
 
     source_opus = _first_file(input_path, lambda b: _iname(b, "*.opus"))
     source_mp3 = _first_file(input_path, lambda b: _iname(b, "*.mp3"))
@@ -222,20 +229,32 @@ def extract_thumbnail(input_path: str, file_name: str, dpi: int,
                  *toolcapture.ffmpeg_loglevel(),
                  "-i", source_opus, "-an", "-vcodec", "copy",
                  f"{file_name}.jpg"], may_fail=True)
+        _say_embedded(source_opus, file_name, input_path)
         return 0
     if source_mp3 is not None:
         run(["ffmpeg", "-nostdin", "-hide_banner",
              *toolcapture.ffmpeg_loglevel(),
              "-i", source_mp3, "-an", "-vcodec", "copy",
              f"{file_name}.jpg"], may_fail=True)
+        _say_embedded(source_mp3, file_name, input_path)
         return 0
     if source_flac is not None:
         run(["ffmpeg", "-nostdin", "-hide_banner",
              *toolcapture.ffmpeg_loglevel(),
              "-i", source_flac, "-an", "-vcodec", "copy",
              f"{file_name}.jpg"], may_fail=True)
+        _say_embedded(source_flac, file_name, input_path)
         return 0
     return 0
+
+
+def _say_embedded(source: str, file_name: str, input_path: str) -> None:
+    """The line for a cover that came out of one of the audio files, said
+    only when the extraction actually left a picture behind: a file that
+    carries none prints no line, and the rung below says its own."""
+    if os.path.isfile(f"{file_name}.jpg"):
+        _detail("    Cover from the art embedded in %s"
+                % os.path.relpath(source, input_path))
 
 
 def _online_thumbnail(input_path: str, outputs: Sequence[str],
@@ -267,6 +286,9 @@ def embed_thumbnail(input_path: str, file_name: str, image_size_limit: int,
     m4b_temp_file = f"{ram_base}.temp.m4b"
 
     thumb_file = choose_thumbnail(input_path)
+    if os.path.isfile(thumb_file):
+        _detail("    Cover from the image file %s in the input"
+                % os.path.relpath(thumb_file, input_path))
 
     # or extract from pdf file or audio file themselves, if nothing was found till now
     if not os.path.isfile(thumb_file):
@@ -275,8 +297,13 @@ def embed_thumbnail(input_path: str, file_name: str, image_size_limit: int,
 
     # and online, the last rung, when none of the local ones held a cover
     if not os.path.isfile(thumb_file):
-        thumb_file = _online_thumbnail(
-            input_path, (opus_file, mp3_file, m4b_file, flac_file), ram_base)
+        if onlinecover.enabled():
+            thumb_file = _online_thumbnail(
+                input_path, (opus_file, mp3_file, m4b_file, flac_file),
+                ram_base)
+        else:
+            _detail("    No cover looked for online: the coverSearch "
+                    "setting is off")
 
     # The temp name is keyed on ramBase (the unique per-subfolder output stem),
     # NOT on the source image's basename: parallel workers share one ram_dir.
