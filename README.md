@@ -125,6 +125,7 @@ option can never change what a command you already type means.
   `pdfinfo`, `pdfimages`, `pdftotext`),
   `whisper-ctranslate2`, `ffsubsync`, `tree`, `beets`, Calibre's `ebook-convert`,
   Ghostscript (`gs`), `duckdb`, [subcleaner](https://github.com/KBlixt/subcleaner),
+  Subtitle Edit's [`seconv`](https://github.com/SubtitleEdit/subtitleedit/releases),
   `curl` (for TheMovieDB, Plex, Letterboxd and the chapter model) and `wc` — that last one being the
   only piece of coreutils anything here still shells out to.
 - `convert-audio -o xheaac` additionally needs

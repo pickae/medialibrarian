@@ -106,6 +106,34 @@ SETTINGS: tuple[Setting, ...] = (
             "the six this defaults to plus pt, pl, sv, da, no, fi, cs, hu, ro, "
             "el, tr, ru, ja, ko and zh", ("ingest-movies", "ytdlp"),
             "en,de,fr,nl,es,it"),
+    Setting("subtitleOcrEngines", "The OCR engines ingest-movies reads a film's "
+            "picture subtitles with: a comma list of `vision`, `paddle` and "
+            "`tesseract`, tried in the order named until one reads the "
+            "subtitle", ("ingest-movies",),
+            "a vision model where `subtitleOcrUrl` is set, paddle on the GPU "
+            "where it fits, tesseract, then paddle on the CPU"),
+    Setting("subtitleOcrUrl", "The servers holding a vision model, with the "
+            "OpenAI chat API, that ingest-movies reads picture subtitles with "
+            "first, in any language: a comma list of addresses, e.g. "
+            "`http://127.0.0.1:8082/v1,http://127.0.0.1:8080/v1`, the "
+            "preferred first; the first that answers, or can be started, "
+            "reads. Without it that engine is not tried", ("ingest-movies",)),
+    Setting("subtitleOcrServe", "The command that starts the first of those "
+            "servers when it is not running and the GPU has room for it; the "
+            "run stops it again once it has been idle five minutes, and at "
+            "its end", ("ingest-movies",)),
+    Setting("subtitleOcrServeMib", "The free GPU memory, in MiB, that server "
+            "is started with; with less, the next server down the list reads",
+            ("ingest-movies",), "26000"),
+    Setting("subtitleOcrModel", "The vision model's name, asked of a server that "
+            "lists it", ("ingest-movies",), "the first model each server lists"),
+    Setting("subtitleOcrOptions", "More fields for every request to that vision "
+            "model, as a JSON object - e.g. `{\"reasoning_effort\": "
+            "\"none\"}`; the run already asks it not to think",
+            ("ingest-movies",)),
+    Setting("subtitleOcrJobs", "How many requests are sent to that vision model at "
+            "once, each with up to 16 of a subtitle's pictures",
+            ("ingest-movies",), "32"),
     # --- what a run keeps
     Setting("keepLanguages", "The languages ingest-movies' improved copy keeps "
             "beside the film's own language: a comma list of ISO 639-1 codes "

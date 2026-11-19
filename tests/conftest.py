@@ -221,6 +221,20 @@ def no_imdb_lists(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def no_picture_subtitle_ocr(request, monkeypatch):
+    """Nothing in the suite reads a picture subtitle with the host's seconv:
+    a remux case over a film with one would otherwise read it, or not, by
+    whether the machine running the suite has seconv installed. The cases
+    about the reading put a stub seconv on their PATH and ask for it with the
+    ``seconv`` marker.
+    """
+    if request.node.get_closest_marker("seconv"):
+        return
+    from medialib.lib import subtitleocr
+    monkeypatch.setattr(subtitleocr, "available", lambda: False)
+
+
+@pytest.fixture(autouse=True)
 def interrupt_handlers_put_back():
     """A command run in-process installs the run's interrupt handler, and
     nothing in the command takes it off again: a run's process ends with it.

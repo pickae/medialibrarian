@@ -339,6 +339,32 @@ class TestTheDownloadedSubtitles:
             "--language", "0:nl", "--default-track-flag", "0:0",
             "--no-chapters"]
 
+    ROLES = {"sidecars": (".nl.forced.srt", ".nl.sdh.srt", ".en.forced.srt")}
+
+    @pytest.mark.parametrize("remux", [ROLES], indirect=True)
+    def test_a_forced_sidecar_is_muxed_flagged_forced(self, remux):
+        srt = remux["base"] + ".nl.forced.srt"
+        at = remux["argv"].index(srt)
+        assert remux["argv"][at - 9:at] == [
+            "--language", "0:nl", "--default-track-flag", "0:0",
+            "--track-name", "0:Forced", "--forced-display-flag", "0:1",
+            "--no-chapters"]
+
+    @pytest.mark.parametrize("remux", [ROLES], indirect=True)
+    def test_an_sdh_sidecar_is_muxed_flagged_for_the_hearing_impaired(
+            self, remux):
+        srt = remux["base"] + ".nl.sdh.srt"
+        at = remux["argv"].index(srt)
+        assert remux["argv"][at - 5:at] == [
+            "--track-name", "0:SDH", "--hearing-impaired-flag", "0:1",
+            "--no-chapters"]
+
+    @pytest.mark.parametrize("remux", [ROLES], indirect=True)
+    def test_a_forced_one_beside_a_plain_text_track_still_goes_in(
+            self, remux):
+        """Track 6 is a plain English text subtitle, not a forced one."""
+        assert remux["base"] + ".en.forced.srt" in remux["argv"]
+
     @pytest.mark.parametrize("remux", [SIDECARS], indirect=True)
     def test_one_the_film_already_has_as_plain_text_is_not(self, remux):
         """Track 6 is an English text subtitle."""

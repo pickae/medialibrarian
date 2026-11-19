@@ -60,6 +60,8 @@ from medialib.lib import (
     statusline,
     subtitleads,
     subtitlefiles,
+    subtitleocr,
+    subtitletracks,
     tmdbclient,
     tmdbidentify,
     tmdblookup,
@@ -235,6 +237,8 @@ class Run:
                                                           say=say)
         if transcripts:
             changed = True
+        if "ocr" not in getattr(self, "omit_phases", frozenset()):
+            self.read_image_subtitles(movie, base, tracks, say)
         subtitles = rules.gather_downloaded_subtitles(base, tracks, say=say)
         if subtitles:
             changed = True
@@ -263,6 +267,47 @@ class Run:
 
         heading()
         self.remux(movie, base, tracks, transcripts, job, subtitles, carried)
+
+    def read_image_subtitles(self, movie: str, base: str, tracks: list,
+                             say) -> None:
+        """The film's picture subtitles read into the sidecars it has no text
+        for (see :func:`rules.image_subtitles_to_read`), by seconv, for the
+        remux to mux in. Without seconv nothing is read; the run said so at
+        its start."""
+        wanted = getattr(self, "subtitle_languages", None)
+        if wanted is None:
+            wanted = languages.spoken_languages()
+        jobs = rules.image_subtitles_to_read(base, tracks, wanted)
+        if not jobs or not subtitleocr.available():
+            return
+        scratch = tempfile.mkdtemp(dir=os.environ.get("TMPDIR"))
+        try:
+            with diskturn.turn(movie):
+                images = subtitleocr.extract(
+                    movie, [(job.track.id, job.track.codec) for job in jobs],
+                    scratch)
+            for job in jobs:
+                if safety.abort_requested():
+                    return
+                image = images.get(job.track.id)
+                if image is None:
+                    say("  WARNING: %s picture subtitle (track %s) could not "
+                        "be taken out of the film to read"
+                        % (job.row.sub_word, job.track.id))
+                    continue
+                engine = subtitleocr.recognise(image, job.row, job.srt, say)
+                if not engine:
+                    say("  WARNING: no OCR engine could read the %s picture "
+                        "subtitle (track %s)" % (job.row.sub_word,
+                                                 job.track.id))
+                    continue
+                say("  Read the %s picture subtitle (track %s) by %s OCR: "
+                    "%d lines -> %s"
+                    % (job.row.sub_word, job.track.id, engine,
+                       len(subtitletracks.cue_texts(job.srt)),
+                       os.path.basename(job.srt)))
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
 
     def carried_inputs(self, movie: str) -> list:
         """What the film takes from its copy in the Plex library, as remux
@@ -572,7 +617,10 @@ class Run:
             next_fid += 1
             extra += ["--language", "0:" + language,
                       "--default-track-flag", "0:0"]
-            if role == "sdh":
+            if role == "forced":
+                extra += ["--track-name", "0:Forced",
+                          "--forced-display-flag", "0:1"]
+            elif role == "sdh":
                 extra += ["--track-name", "0:SDH",
                           "--hearing-impaired-flag", "0:1"]
             extra += ["--no-chapters", srt]
@@ -1330,6 +1378,8 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
     ffsubsync_quality = _settle_ffsubsync_quality() if subtitle_work else "no"
     if subtitle_work:
         _warn_without_subcleaner()
+    if "ocr" not in omit_phases:
+        _warn_without_seconv()
 
     # Asked of each folder before any of them is set up for, and a folder with
     # nothing to ingest is dropped rather than ending the run: the others were
@@ -2864,6 +2914,17 @@ def _warn_without_subcleaner() -> None:
         "came with.")
     log("         To enable it: %s."
         % tooldeps.tool_note(subtitleads.TOOL).split("|", 1)[1])
+
+
+def _warn_without_seconv() -> None:
+    """Said once at the start: without seconv a film's picture subtitles stay
+    pictures, and the run goes on."""
+    if os.environ.get("SKIP_TOOL_PREFLIGHT") or subtitleocr.available():
+        return
+    log("WARNING: seconv not installed - picture subtitles are not read into "
+        "text.")
+    log("         To enable it: %s."
+        % tooldeps.tool_note(subtitleocr.TOOL).split("|", 1)[1])
 
 
 def _tool_help(name: str) -> str:

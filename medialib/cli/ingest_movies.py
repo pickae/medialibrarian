@@ -46,6 +46,7 @@ from medialib.lib import (
     plexnames,
     ramscratch,
     safety,
+    subtitleocr,
     subtitletracks,
     toolcapture,
 )
@@ -205,16 +206,18 @@ k | [part] | keep <part>: takes nothing away. The parts are audio, tracks and
                   literally named "audio" is written ./audio: the word after -k
                   goes to -k when it is a part. Cannot be combined with -r,
                   which encodes.
-o | [phase] | omit <phase> from a full ingest: junk, subtitles, roles,
-                  commentary, chapters, plex and tagging, comma-separated,
-                  and a bare -o omits all seven. junk: the junk files are
-                  left. subtitles: the subtitles are not fetched and the
-                  missing ones are not downloaded. roles: the subtitles are
-                  not measured for being forced or SDH where the file does not
-                  say so, and their flags are left as the file has them.
-                  commentary: the commentaries are not listened for, not
-                  transcribed and not named. chapters: the chapter archive is
-                  not asked. plex: the films are not compared with
+o | [phase] | omit <phase> from a full ingest: junk, subtitles, ocr,
+                  roles, commentary, chapters, plex and tagging,
+                  comma-separated, and a bare -o omits all eight. junk: the
+                  junk files are left. subtitles: the subtitles are not
+                  fetched and the missing ones are not downloaded. ocr: the
+                  picture subtitles are not read into text. roles: the
+                  subtitles are not measured for being forced or SDH where
+                  the file does not say so, and their flags are left as the
+                  file has them. commentary: the commentaries are not
+                  listened for, not transcribed and not named. chapters: the
+                  chapter archive is not asked. plex: the films are not
+                  compared with
                   the Plex library and nothing is carried over from it.
                   tagging: the films are not tagged with their IMDb ids. The
                   phases not named run as they always have. A phase the run
@@ -271,8 +274,8 @@ OPT_LONG = ("f:fragments a:commentary t:tags-only s:subtitles-only "
 
 # The phases a full ingest can be told to omit with -o, in the order the page
 # lists them: the page and the parser's arm must name the same ones.
-OMIT_PHASES = ("junk", "subtitles", "roles", "commentary", "chapters",
-               "plex", "tagging")
+OMIT_PHASES = ("junk", "subtitles", "ocr", "roles", "commentary",
+               "chapters", "plex", "tagging")
 
 USAGE_TAIL = """
 
@@ -2052,14 +2055,70 @@ def _subtitle_texts(movie: str, tracks: list) -> dict:
         shutil.rmtree(scratch, ignore_errors=True)
 
 
+class OcrJob(NamedTuple):
+    """A picture subtitle to read into text, and the sidecar it is written
+    to: its language is ``row``, one of :data:`languages.LANGUAGES`."""
+
+    track: Track
+    row: languages.Language
+    srt: str
+
+
+# The roles a picture subtitle is read into a sidecar for, the plain one first.
+# A commentary's picture subtitle is left a picture.
+OCR_ROLES = ("full", "sdh", "forced")
+
+
+def image_subtitles_to_read(base: str, tracks: list, wanted) -> list:
+    """The film's picture subtitles worth reading into text, as
+    :class:`OcrJob`: per wanted language, one for each role of
+    :data:`OCR_ROLES` the film has no text subtitle of and no sidecar for -
+    the longest picture subtitle of that role. The plain sidecar falls back to
+    the SDH one where there is no plain picture subtitle and no SDH text, and
+    that track is then not read a second time for the SDH sidecar."""
+    roles = subtitle_roles(tracks)
+    jobs = []
+    for row in wanted:
+        mine = [track for track in tracks if track.is_subtitle
+                and languages.same_language_tag(track.language, row.code2)]
+        have = {roles[track.id] for track in mine
+                if track.subtitle_form == "text" and track.action != "drop"}
+        have.update(role for role in OCR_ROLES if _size_of(
+            subtitletracks.sidecar_name(base, row.code2, role)))
+        pictures = sorted(
+            (track for track in mine if track.subtitle_form == "image"
+             and subtitleocr.readable(track.codec)),
+            key=lambda track: -track.cues)
+
+        def longest(role, _pictures=pictures):
+            return next((track for track in _pictures
+                         if roles[track.id] == role), None)
+
+        read: set = set()
+        for role in OCR_ROLES:
+            if role in have:
+                continue
+            source = longest(role)
+            if source is None and role == "full" and "sdh" not in have:
+                source = longest("sdh")
+            if source is None or source.id in read:
+                continue
+            read.add(source.id)
+            jobs.append(OcrJob(source, row, subtitletracks.sidecar_name(
+                base, row.code2, role)))
+    return jobs
+
+
 def gather_downloaded_subtitles(base: str, tracks: list, say=None) -> list:
-    """The ``<movie>.<xx>.srt`` sidecars to mux into the improved copy, as
-    (srt, language, role) in the table's order.
+    """The ``<movie>.<xx>.srt`` sidecars to mux into the improved copy, and
+    the ``.forced.srt`` and ``.sdh.srt`` ones beside them, as (srt, language,
+    role) in the table's order.
 
     What is still beside the film has passed the alignment test - one out of
-    step is thrown out rather than kept - so every sidecar there is one worth
-    carrying. Its role is "full", or "sdh" where its text reads as SDH
-    (:func:`subtitletracks.is_sdh_text`): the remux flags it so. The name
+    step is thrown out rather than kept - or was read off the film's own
+    picture subtitle, so every sidecar there is one worth carrying. A plain
+    one's role is "full", or "sdh" where its text reads as SDH
+    (:func:`subtitletracks.is_sdh_text`): the remux flags it so, and the name
     stays ``<xx>.srt``, which is what tells the download the language is
     there. One whose language and role the film already carries as a text
     subtitle is left out, the two would only be the same subtitle twice; a
@@ -2069,26 +2128,28 @@ def gather_downloaded_subtitles(base: str, tracks: list, say=None) -> list:
     say = say or log
     found = []
     for row in languages.LANGUAGES:
-        srt = subtitletracks.sidecar_name(base, row.code2)
-        if os.path.islink(srt) or not os.path.isfile(srt) \
-                or not _size_of(srt):
-            continue
-        role = subtitletracks.refine_role(
-            "full", texts=subtitletracks.cue_texts(srt))
-        if any(_is_text_subtitle_of(track, row.code2, role)
-               for track in tracks):
-            say("  %s%s subtitle already a text track in the file, not "
-                "muxing the sidecar: %s"
-                % (row.sub_word, "" if role == "full" else " " + role,
-                   os.path.basename(srt)))
-            continue
-        if role == "sdh":
-            say("  %s sidecar reads as SDH, muxed flagged as such: %s"
-                % (row.sub_word, os.path.basename(srt)))
-        else:
-            say("  Muxing the %s subtitle sidecar: %s"
-                % (row.sub_word, os.path.basename(srt)))
-        found.append((srt, row.code2, role))
+        for named in OCR_ROLES:
+            srt = subtitletracks.sidecar_name(base, row.code2, named)
+            if os.path.islink(srt) or not os.path.isfile(srt) \
+                    or not _size_of(srt):
+                continue
+            role = named if named != "full" else subtitletracks.refine_role(
+                "full", texts=subtitletracks.cue_texts(srt))
+            if any(_is_text_subtitle_of(track, row.code2, role)
+                   for track in tracks):
+                say("  %s%s subtitle already a text track in the file, not "
+                    "muxing the sidecar: %s"
+                    % (row.sub_word, "" if role == "full" else " " + role,
+                       os.path.basename(srt)))
+                continue
+            if named == "full" and role == "sdh":
+                say("  %s sidecar reads as SDH, muxed flagged as such: %s"
+                    % (row.sub_word, os.path.basename(srt)))
+            else:
+                say("  Muxing the %s%s subtitle sidecar: %s"
+                    % (row.sub_word, "" if role == "full" else " " + role,
+                       os.path.basename(srt)))
+            found.append((srt, row.code2, role))
     return found
 
 
