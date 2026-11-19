@@ -37,8 +37,10 @@ Argument:
 Options:"""
 
 OPT_SPEC = """
-y |  | Sort \"YYYYMMDD ...\" files into YYYY/ subfolders.
-d |  | Normalise leading date prefixes to \"YYYYMMDD \".
+y |  | Sort \"YYYYMMDD ...\" and \"YYYY-MM-DD ...\" files into YYYY/ subfolders.
+d |  | Normalise leading date prefixes to the form the dateForm
+                setting names - \"YYYYMMDD \", or \"YYYY-MM-DD \" with it
+                set to iso.
 n |  | Number files by plurality filetype instead of cleaning names.
 f | <file> | Read the name fragments to remove from this file.
 p |  | Preview only: print the planned renames and DO NOT touch the device.

@@ -211,6 +211,10 @@ class TestUniformWipeKeepsADate:
     def test_an_identical_date_is_kept(self):
         assert uniform_all(["20260728", "20260728"]) == ["20260728", "20260728"]
 
+    def test_an_identical_iso_date_is_kept_the_same_way(self):
+        assert uniform_all(["2026-07-28", "2026-07-28"]) == \
+            ["2026-07-28", "2026-07-28"]
+
     def test_it_is_the_date_shape_that_is_protected_not_the_length(self):
         # eight digits, but no year starts with a 3
         assert uniform_all(["30260728", "30260728"]) == ["", ""]

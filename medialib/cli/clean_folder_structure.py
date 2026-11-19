@@ -50,12 +50,16 @@ Options:"""
 # The spec is DATA, and the page it renders is compared byte for byte against the
 # recorded contract under tests/data/cliContract.
 OPT_SPEC = """
-y |  | Sort files named "YYYYMMDD Filename.ext" into yearly
-                    subfolders "YYYY/YYYYMMDD Filename.ext".
+y |  | Sort files whose names start with a date, in either of the forms the
+                    names carry - "YYYYMMDD Filename.ext" or "YYYY-MM-DD
+                    Filename.ext" - into yearly subfolders "YYYY/"; the file
+                    keeps the form its name has.
 d |  | Before cleaning file names, normalise a leading date of the
                     form YYYY<sep>MM<sep>DD<sep> (separators: space . / _ -) at
-                    the start of a file name into the compact "YYYYMMDD " form,
-                    keeping the rest of the name. Applied across all subfolders.
+                    the start of a file name into the form the dateForm setting
+                    names - the compact "YYYYMMDD " form, or "YYYY-MM-DD " with
+                    the setting set to iso - keeping the rest of the name.
+                    Applied across all subfolders.
 n |  | Clean folder names as usual, but instead of cleaning file
                     names, just number the files in each folder (01, 02, ...
                     naturally sorted and zero-padded). Only the plurality
@@ -80,9 +84,13 @@ OPT_COLUMN = 20
 OPT_LONG = ("y:sort-into-years d:fix-dates n:number-files f:fragments p:preview "
             "h:help")
 
-# A file is sorted into a year folder by the first four digits of an eight-digit
-# date at the start of its name, followed by a space and at least one character.
-YEAR_PREFIX = r"^([0-9]{4})[0-9]{4} "
+# A file is sorted into a year folder by the year at the front of its name's
+# date, in either of the two forms the names carry, followed by a space and at
+# least one character.
+YEAR_PREFIX = (
+    r"^([0-9]{4})[0-9]{4} ",
+    r"^([0-9]{4})-[0-9]{2}-[0-9]{2} ",
+)
 
 # The date shape -d normalises. Loose but effective: the year starts 1 or 2, the
 # month 0 or 1, the day 0-3, and one space, dot, slash, underscore or dash
@@ -254,7 +262,8 @@ def rename_siblings_until_stable(directory: str, mode: str,
 
 
 def sort_files_into_year_folders(root: str, skips: safety.SkipLog) -> None:
-    """Every "YYYYMMDD Name.ext" file into a "YYYY" folder beside it (-y)."""
+    """Every file that leads with a date, in either form, into a "YYYY" folder
+    beside it (-y)."""
     log("Sorting date-named files into yearly subfolders")
 
     # The list is taken up front. Moving files into folders created during a live
@@ -265,10 +274,14 @@ def sort_files_into_year_folders(root: str, skips: safety.SkipLog) -> None:
     moved = 0
     for path in files:
         base = os.path.basename(path)
-        match = re.match(YEAR_PREFIX, base)
-        if not match:
+        year = ""
+        for pattern in YEAR_PREFIX:
+            match = re.match(pattern, base)
+            if match:
+                year = match.group(1)
+                break
+        if not year:
             continue
-        year = match.group(1)
         parent = os.path.dirname(path)
         # Already in the right place, which is what makes a repeated run a no-op.
         if os.path.basename(parent) == year:
@@ -282,13 +295,17 @@ def sort_files_into_year_folders(root: str, skips: safety.SkipLog) -> None:
     log("  Moved %d file(s) into yearly subfolders" % moved)
 
 
-def fix_date_prefixes(root: str, skips: safety.SkipLog) -> None:
-    """A leading "YYYY<sep>MM<sep>DD<sep>" compacted to "YYYYMMDD " (-d).
+def fix_date_prefixes(root: str, skips: safety.SkipLog, date_form: str) -> None:
+    """A leading "YYYY<sep>MM<sep>DD<sep>" into the form ``date_form`` names
+    (-d): compacted to "YYYYMMDD ", or written "YYYY-MM-DD " when the form is
+    iso.
 
     Recursive in one pass, and kept out of both the per-sibling cleaner and the
     -n numbering path, either of which would overwrite the prefix.
     """
-    log("Normalising date prefixes in file names (YYYYMMDD)")
+    join = "-" if date_form == "iso" else ""
+    log("Normalising date prefixes in file names (%s)"
+        % ("YYYY-MM-DD" if join else "YYYYMMDD"))
 
     files = _files_below(root)
 
@@ -298,7 +315,7 @@ def fix_date_prefixes(root: str, skips: safety.SkipLog) -> None:
         match = re.match(DATE_PREFIX, base)
         if not match:
             continue
-        new_base = "%s%s%s %s" % match.groups()
+        new_base = join.join(match.groups()[:3]) + " " + match.group(4)
         target = os.path.join(os.path.dirname(path), new_base)
         if safety.safe_rename(path, target, skips):
             fixed += 1
@@ -458,6 +475,12 @@ def main(argv: list, program: str = "clean-folder-structure",
     simulate = "p" in result.given
     fragments_override = result.values["fragmentsOverride"]
 
+    # The two names a run writes, from the settings: what a folder's cover art
+    # is called, and the form a leading date is normalised to. A child this
+    # command starts (the adb helper) inherits both.
+    cover_name = os.environ.get("coverName", "folder")
+    date_form = os.environ.get("dateForm", "compact")
+
     script_dir = script_dir or commands.script_dir()
 
     input_path = result.positionals[0].rstrip("/")
@@ -567,16 +590,20 @@ def main(argv: list, program: str = "clean-folder-structure",
             # First in this phase, before any per-directory cleaning: it depends
             # on nothing that follows.
             if fix_dates:
-                fix_date_prefixes(input_path, skips)
+                fix_date_prefixes(input_path, skips, date_form)
             for directory in _directories(input_path, deepest_first=False):
                 rename_siblings_until_stable(directory, "files",
                                              fragments_file, skips)
 
-        # The best folder/front/cover image in each folder, renamed to
-        # "folder.<ext>". Independent of -n, -d and -y.
-        log("Normalising cover art to folder.<ext> (all levels)")
+        # The best folder/front/cover image in each folder, renamed to the name
+        # the coverName setting gives it - "folder.<ext>" by default, none at
+        # all when the setting is empty. Independent of -n, -d and -y.
+        if cover_name:
+            log("Normalising cover art to %s.<ext> (all levels)" % cover_name)
+        else:
+            log("Cover art keeps the name it came in under (all levels)")
         for directory in _directories(input_path, deepest_first=False):
-            renamed = cover.rename_cover_to_folder(directory, skips)
+            renamed = cover.rename_cover_to_folder(directory, skips, cover_name)
             if renamed:
                 log(renamed)
 

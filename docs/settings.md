@@ -42,8 +42,10 @@ the two disagree.
 | `comicPdfMinPageShare` | How many of a PDF's pages, in percent, have to be comic pages for it to be a comic | 90 | `content-census`, `convert-comics` |
 | `comicPdfMinPixels` | How wide and high a page image has to be, in pixels | 400 | `content-census`, `convert-comics` |
 | `comicsRamBase` | convert-comics' scratch, ahead of `ramScratchBase` | `ramScratchBase` | `convert-comics` |
+| `coverName` | The name clean-folder-structure gives a folder's cover art: `folder` (the default) or `cover`, or empty for no rename at all - the art then keeps the name it came in under | folder | `clean-folder-structure` |
 | `coverSearch` | Whether a cover nothing local supplied is looked for online - for a book always, for a converted track only when it is a long or dated one among tracks that carry covers: `on` or `off` | on | `concat-audio`, `convert-and-concat`, `convert-audio` |
 | `coverSearchTable` | The table of where that search looks, in what order, by its path | the shipped `medialib/config/coverproviders.tsv` | `concat-audio`, `convert-and-concat`, `convert-audio` |
+| `dateForm` | The form clean-folder-structure's -d writes a leading date in: `compact` (the default, `YYYYMMDD`) or `iso` (`YYYY-MM-DD`); -y sorts files that lead with a date in either form into their year | compact | `clean-folder-structure` |
 | `dvdCompareSite` | The disc database's address - there for the test suite | `http://www.dvdcompare.net/comparisons/` | `ingest-movies` |
 | `ffmpegLadder` | The directories searched for ffmpeg after `PATH`, separated as `PATH` is - there for the test suite | `~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, `/opt/ffmpeg/bin`, `/usr/bin` | `concat-audio`, `content-census`, `convert-and-concat`, `convert-audio`, `convert-video`, `ingest-movies`, `ingest-music`, `read-library`, `transcribe-audio`, `ytdlp` |
 | `ffmpegOverride` | The ffmpeg every run uses, by its path; a run refuses to start when it is not executable | unset | `concat-audio`, `content-census`, `convert-and-concat`, `convert-audio`, `convert-video`, `ingest-movies`, `ingest-music`, `read-library`, `transcribe-audio`, `ytdlp` |

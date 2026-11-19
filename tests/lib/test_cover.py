@@ -128,6 +128,25 @@ class TestTheRename:
         assert (tmp_path / "folder.jpg").exists()
         assert message == f'  "{tmp_path.name}": cover art "Front Scan.JPG" -> "folder.jpg"'
 
+    def test_the_name_the_caller_gives_is_where_the_art_lands(self, tmp_path):
+        build(tmp_path, "Front Scan.JPG")
+        message = cover.rename_cover_to_folder(str(tmp_path), name="cover")
+        assert (tmp_path / "cover.jpg").exists()
+        assert not (tmp_path / "folder.jpg").exists()
+        assert message == f'  "{tmp_path.name}": cover art "Front Scan.JPG" -> "cover.jpg"'
+
+    def test_an_empty_name_is_no_rename_and_no_event(self, tmp_path):
+        build(tmp_path, "front scan.JPG")
+        assert cover.rename_cover_to_folder(str(tmp_path), name="") is None
+        assert (tmp_path / "front scan.JPG").exists()
+        assert not (tmp_path / "folder.jpg").exists()
+
+    def test_a_winner_already_called_by_the_given_name_is_not_an_event(
+            self, tmp_path):
+        build(tmp_path, "cover.jpg")
+        assert cover.rename_cover_to_folder(str(tmp_path), name="cover") is None
+        assert (tmp_path / "cover.jpg").exists()
+
     def test_a_winner_already_called_folder_is_not_an_event(self, tmp_path):
         build(tmp_path, "folder.jpg")
         assert cover.rename_cover_to_folder(str(tmp_path)) is None

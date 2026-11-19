@@ -1,4 +1,6 @@
-"""Choosing the cover art in a folder, and calling it ``folder.<ext>``.
+"""Choosing the cover art in a folder, and calling it by the name it is
+given - ``folder.<ext>`` by default, another name or none at the caller's
+choice.
 
 One folder in, at most one rename out.
 
@@ -101,16 +103,21 @@ def choose_cover(directory: str) -> str | None:
     return None
 
 
-def rename_cover_to_folder(directory: str, log: SkipLog | None = None) -> str | None:
-    """Promote the folder's best cover image to ``folder.<ext>``.
+def rename_cover_to_folder(directory: str, log: SkipLog | None = None,
+                           name: str = "folder") -> str | None:
+    """Promote the folder's best cover image to ``<name>.<ext>``.
+
+    ``name`` is empty for no rename at all: the selection is the caller's
+    business, and a folder that keeps its cover under its own name is not an
+    event to log.
 
     Returns the message logged when a rename happened, and None when nothing did
     - which covers a folder with no candidate, a winner that is already called
-    ``folder.<ext>``, and a rename refused because a different ``folder.<ext>``
+    ``<name>.<ext>``, and a rename refused because a different ``<name>.<ext>``
     is in the way. The last of those is recorded in ``log``; the other two are
     not events at all.
     """
-    if not os.path.isdir(directory):
+    if not os.path.isdir(directory) or not name:
         return None
     best = choose_cover(directory)
     if best is None:
@@ -118,7 +125,7 @@ def rename_cover_to_folder(directory: str, log: SkipLog | None = None) -> str | 
 
     base = best.rpartition("/")[2]
     extension = lower_extension_of(base)
-    if not safe_rename(best, f"{directory}/folder.{extension}", log):
+    if not safe_rename(best, f"{directory}/{name}.{extension}", log):
         return None
     folder = _basename(directory)
-    return f'  "{folder}": cover art "{base}" -> "folder.{extension}"'
+    return f'  "{folder}": cover art "{base}" -> "{name}.{extension}"'

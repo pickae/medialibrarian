@@ -36,7 +36,8 @@ __all__ = [
     "wipe_uniform_prefixes",
 ]
 
-# An eight-digit YYYYMMDD, compiled from the one definition of the shape.
+# A date prefix in either of its two forms, compiled from the one definition
+# of the shape.
 _DATE_PREFIX = re.compile(DATE_PREFIX_PATTERN)
 
 
@@ -232,12 +233,12 @@ def wipe_uniform_prefixes(
 
     * **A group of one.** Its prefix may be its only identifying text, and there is
       nothing for it to be uninformative *against*.
-    * **A date.** An eight-digit YYYYMMDD says when the item is from - that is
+    * **A date.** A YYYYMMDD or YYYY-MM-DD says when the item is from - that is
       information about the item, not about how it differs from its siblings, and
-      it is what the group sorts by. Two parts of one podcast episode published the
-      same day share a date by coincidence, not by redundancy. A uniform plain
-      number ("2024") is still wiped; it is the date SHAPE that is protected, so an
-      eight-digit run that cannot be a date ("30260728") goes.
+      it is what the group sorts by. Two parts of one podcast episode published
+      the same day share a date by coincidence, not by redundancy. A uniform
+      plain number ("2024") is still wiped; it is the date SHAPE that is
+      protected, so an eight-digit run that cannot be a date ("30260728") goes.
     * **A member whose core is empty** - whose whole name is the prefix. Wiping
       would strand that one with no name at all while stripping the prefix from its
       siblings. A non-empty core that merely equals the prefix does not block it:
