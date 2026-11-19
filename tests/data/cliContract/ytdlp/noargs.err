@@ -67,20 +67,20 @@ Options:
                     Build the calls for "windows" or "linux" instead of for
                     this host. Only useful with -p, to read off what the other
                     machine would run.
-    -g, --ai-chapters
+    -C, --ai-chapters
                     With -i: chapters for every episode in the library that has
                     none, worked out by a language model (the chapterLlm
                     settings) from a transcript, which is written into the
-                    episode as well (convert-audio -t). A YouTube episode's
+                    episode as well (convert-audio -C). A YouTube episode's
                     transcript is YouTube's own captions, fetched with it in
                     the episode's language when the spokenLanguages setting
                     names it and in English when it does not, and written into
                     the episode even when it has chapters; an RSS episode is
                     transcribed on this machine.
     -P, --prompt <text>
-                    With -g: more instructions for the chapter model, added to
+                    With -C: more instructions for the chapter model, added to
                     every request, e.g. "a chapter per speaker, titled with
-                    their name and topic" (convert-audio -p). The model then
+                    their name and topic" (convert-audio -P). The model then
                     reasons at medium effort, and Claude may search the web.
     -l, --consolidate
                     Consolidate archives instead of downloading: every line of

@@ -151,8 +151,8 @@ the two systems and is worked out at run time:
 | `-q` | prints only failures: no episode lines and no warnings |
 | [`-c`](#tidying-up-after-a-run--c) | tidies up after the run |
 | [`-i`](#building-the-phones-library-from-the-run--i) | builds the phone's library from the run |
-| [`-g`](#chapters-for-the-library--g) | with `-i`, chapters every episode in the library that has none |
-| [`-P`](#chapters-for-the-library--g) | with `-g`, your own instructions for the chapter model |
+| [`-C`](#chapters-for-the-library--c) | with `-i`, chapters every episode in the library that has none |
+| [`-P`](#chapters-for-the-library--c) | with `-C`, your own instructions for the chapter model |
 | [`-l`](#merging-archives--l) | merges archives; downloads nothing |
 
 ### Tidying up after a run (`-c`)
@@ -210,7 +210,7 @@ in.
 
 The library copy runs beside the downloads rather than after them. A download
 waits on the network and on the pauses a provider asks for, and leaves the
-processor idle; the conversion — and with `-g` the transcription and the
+processor idle; the conversion — and with `-C` the transcription and the
 language model, which take far longer — is started as soon as a feed is
 finished. Feeds are converted a few episodes at a time, one `convert-audio`
 over the folders of all of them (`-r` each), so whisper and the model each
@@ -219,19 +219,19 @@ once per episode. When the downloads are over, the last batch is converted and
 every staging folder is passed over once more, which finds the feeds done and
 converts the folders no table in this run downloads into.
 
-### Chapters for the library (`-g`)
+### Chapters for the library (`-C`)
 
-With `-i`, `-g` adds `-t` to every conversion: every episode in the library
+With `-i`, `-C` is passed on to every conversion: every episode in the library
 that has no chapters gets some, worked out by a language model from a
-transcript of the speech ([`convert-audio -t`](convert-audio.md#chapters-for-what-has-none--t),
+transcript of the speech ([`convert-audio -C`](convert-audio.md#chapters-for-what-has-none--c),
 with the `chapterLlm` settings). That covers the episodes already in a feed's
-staging folder as well as the new ones, so the first run with `-g` chapters a
+staging folder as well as the new ones, so the first run with `-C` chapters a
 feed's back catalogue too. A run whose model cannot be reached is refused
 before anything is fetched.
 
 `-P "<text>"` hands your own instructions to the model, for example a chapter
-per speaker ([`convert-audio -p`](convert-audio.md#chapters-for-what-has-none--t)).
-The model then reasons harder, and Claude may search the web. `-P` needs `-g`.
+per speaker ([`convert-audio -P`](convert-audio.md#chapters-for-what-has-none--c)).
+The model then reasons harder, and Claude may search the web. `-P` needs `-C`.
 
 Where the transcript comes from depends on the feed:
 

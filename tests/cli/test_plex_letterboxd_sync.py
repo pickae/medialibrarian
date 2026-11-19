@@ -185,7 +185,7 @@ def run(monkeypatch, tmp_path):
     state, out = tmp_path / "state.json", tmp_path / "import.csv"
 
     def go(*argv):
-        code = sync.main([*argv, "-k", str(state), "-o", str(out)],
+        code = sync.main([*argv, "-S", str(state), "-o", str(out)],
                          script_dir=str(tmp_path))
         return code, server, state, out
     return go

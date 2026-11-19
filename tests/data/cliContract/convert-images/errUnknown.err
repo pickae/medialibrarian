@@ -19,7 +19,7 @@ Options:
                     Caps the number of encoders.
                     Default: what the cores allow, or what the RAM holds of
                     the largest image in the input, whichever is fewer.
-    -l, --quality <quality>
+    -Q, --quality <quality>
                     quality level of the output images
     -s, --speed <speed>
                     av1 speed preset 0-9, lower is slower, default 5

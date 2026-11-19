@@ -124,7 +124,7 @@ class Run:
 
     def __init__(self, settings) -> None:
         self.settings = settings
-        # -n's language model, and the lock that has one file chaptered at a
+        # -C's language model, and the lock that has one file chaptered at a
         # time: whisper fills the GPU on its own, and a local model shares it.
         self.llm = None
         self.chaptering = threading.Lock()
@@ -395,7 +395,7 @@ class Run:
             audio = workerpool.start_worker(
                 _audio_worker, (relative, directory, settings),
                 os.path.join(settings.input_dir, relative))
-            # -n's chapters too: reading a subtitle or transcribing a
+            # -C's chapters too: reading a subtitle or transcribing a
             # soundtrack, and the model's questions, need nothing the encoder
             # does, and what they make is only wanted at the mux.
             chaptering = self._start_chaptering(plan)
@@ -438,9 +438,9 @@ class Run:
         return tail
 
     def _start_chaptering(self, plan: Plan):
-        """-n's chapters for this file started on a thread of their own, and
+        """-C's chapters for this file started on a thread of their own, and
         handed back as a callable that waits for them and returns what the mux
-        is to add - None without -n, or when there is nothing to add."""
+        is to add - None without -C, or when there is nothing to add."""
         if not plan.settings.ai_chapters or self.llm is None:
             return None
         done: list = []
@@ -756,7 +756,7 @@ class Run:
         output = encode.output_path_for(relative, settings, replacing)
         muxed = encode.mux_final(relative, directory, settings, output,
                                  chaptered)
-        # What -n added is the one part of the mux that was not already in a
+        # What -C added is the one part of the mux that was not already in a
         # file the tools read, so it is what is let go of first.
         if muxed != 0 and chaptered is not None:
             log("WARNING: the mux with the generated chapters failed, muxing "
@@ -926,14 +926,14 @@ def main(argv: list, program: str = "convert-video",
         custom_audio_bitrate=result.values["customAudioBitrate"] or "",
         surround="s" in result.given,
         quality=result.values["videoQuality"] or "",
-        quality_given="l" in result.given,
+        quality_given="Q" in result.given,
         max_resolution=result.values["maxVideoResolution"] or "",
         upscale_resolution=result.values["upscaleResolution"] or "",
         crop_wanted="c" in result.given,
         fast_decode=result.values["videoFastDecode"] or "",
         test_source_bitrate="t" in result.given,
         keep_tracks="k" in result.given,
-        ai_chapters="n" in result.given,
+        ai_chapters="C" in result.given,
         chapter_instructions=(result.values["chapterInstructions"]
                               or "").strip(),
         required_saving=saving[0])
@@ -974,10 +974,10 @@ def main(argv: list, program: str = "convert-video",
         sys.stderr.write(malformed.text() + "\n")
         return 1
 
-    # The instructions are for the model -n asks; without it there is none.
+    # The instructions are for the model -C asks; without it there is none.
     if "P" in result.given and not settings.ai_chapters:
         clioptions.refuse_usage(declaration, "-P (instructions for the chapter "
-                                "model) needs -n.")
+                                "model) needs -C.")
         return 1
 
     refusal = startup._validate(settings, video_args, grain, engines_override)
@@ -1086,9 +1086,9 @@ def _settle_and_run(settings, program: str, video_args: str, grain: str,
 
 
 def chapter_model(program: str, settings):
-    """-n's model, given -P's instructions for every request, or None when
+    """-C's model, given -P's instructions for every request, or None when
     none is set up (which has been said)."""
-    return chapterwork.model(program, settings.chapter_instructions, "-n", log)
+    return chapterwork.model(program, settings.chapter_instructions, "-C", log)
 
 
 class _HeldOutput:

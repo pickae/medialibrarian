@@ -1,4 +1,4 @@
-"""convert-audio -r: a run over some folders of the input, whose outputs land
+"""convert-audio -O: a run over some folders of the input, whose outputs land
 where a run over all of it would put them."""
 
 from __future__ import annotations
@@ -45,5 +45,5 @@ def test_an_empty_named_folder_is_kept(tree):
 @pytest.mark.parametrize("folder", ["missing", "../elsewhere"])
 def test_a_folder_that_is_not_inside_the_input_is_refused(tree, folder, capsys):
     (tree / "elsewhere").mkdir()
-    assert convert_audio.main(["-r", folder, str(tree / "in"), str(tree / "out")]) == 1
+    assert convert_audio.main(["-O", folder, str(tree / "in"), str(tree / "out")]) == 1
     assert not (tree / "out").exists()

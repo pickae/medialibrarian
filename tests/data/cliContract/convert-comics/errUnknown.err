@@ -21,7 +21,7 @@ Options:
                     unpacks by content either way. A folder literally named
                     "input" is written ./input: the word after -k goes to -k
                     when it is a part.
-    -l, --quality <quality>
+    -Q, --quality <quality>
                     quality level of the output images, default 45
     -u, --chroma <chroma>
                     page chroma: 420 or 444. 444 keeps colour at full resolution,

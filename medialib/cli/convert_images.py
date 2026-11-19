@@ -117,7 +117,7 @@ u | <chroma> | AVIF chroma: {chromas}. 444 keeps colour at full resolution,
 j | <jobs> | Caps the number of encoders.
                     Default: what the cores allow, or what the RAM holds of
                     the largest image in the input, whichever is fewer.
-l | <quality> | quality level of the output images
+Q | <quality> | quality level of the output images
 s | <speed> | av1 speed preset {speeds}, lower is slower, default {speed}
 m | <maxRes> | maximum resolution (height) to keep
 f | <fuzz> | when trimming, how many percent color difference gets still trimmed
@@ -143,10 +143,10 @@ u | enum:{chromas} | chroma
            chromas="\\|".join(CHROMAS))
 
 OPT_VARS = ("c:crop a:alwaysConvert r:reverse e:outputFormat u:chroma "
-            "j:jobs l:quality s:speedPreset m:maxRes f:fuzz k:calibrate")
+            "j:jobs Q:quality s:speedPreset m:maxRes f:fuzz k:calibrate")
 OPT_COLUMN = 20
 OPT_LONG = ("h:help c:crop a:always r:reverse e:encoding u:chroma j:jobs "
-            "l:quality s:speed m:max-resolution f:fuzz k:calibrate")
+            "Q:quality s:speed m:max-resolution f:fuzz k:calibrate")
 
 # One conversion spans about this many threads, so the pool is the cores divided
 # by it.
@@ -1498,14 +1498,14 @@ def _settle_options(values: dict, crop: bool, skip_starved: bool,
         elif not crop:
             encoder = av1gpu.binary(log)
     options["gpuEncoder"] = encoder
-    # -l and -s mean what they mean on the CPU; what av1gpu has to be asked
+    # -Q and -s mean what they mean on the CPU; what av1gpu has to be asked
     # for to give the same was measured, not assumed.
     if encoder:
         gpu_preset, gpu_quality = \
             encodercalibration.active().gpu_settings(speed, quality)
         options["gpuPreset"], options["gpuQuality"] = gpu_preset, gpu_quality
         runlog.detail("the card is asked for quality %d, preset %s - what the "
-                      "calibration measured for -l %d -s %d"
+                      "calibration measured for -Q %d -s %d"
                       % (gpu_quality, gpu_preset, quality, speed))
     return options, encoder
 
@@ -1580,7 +1580,7 @@ SCORER = "ssimulacra2_rs"
 
 # The options a calibration has no use for: it measures AVIF 4:2:0 at every
 # speed and quality there is, on pictures it cuts itself.
-_NOT_WITH_CALIBRATE = "acremuls"
+_NOT_WITH_CALIBRATE = "acremQus"
 
 
 def _calibrate(declaration, program, result, input_dir, output_dir) -> int:

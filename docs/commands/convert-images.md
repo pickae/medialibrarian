@@ -16,7 +16,7 @@ whitespace cropping and parallel encoding.
 
 With no options, a run:
 
-- writes **AVIF** at quality 60, speed 5, colour at a quarter resolution (4:2:0) (`-e`, `-l`, `-s`, `-u`)
+- writes **AVIF** at quality 60, speed 5, colour at a quarter resolution (4:2:0) (`-e`, `-Q`, `-s`, `-u`)
 - keeps every image at its own size: no resizing, no cropping (`-m`, `-c`)
 - **skips an image that is already starved** ([below](#starved-images); `-a`)
 - skips an image whose output already exists, so a rerun only does what is left
@@ -58,13 +58,13 @@ encode. If the
 card cannot start the encoder at all — no driver, or no memory to spare — the
 run warns once and carries on on the CPU.
 
-**`-l` and `-s` mean what they mean on the CPU, whichever road an image
+**`-Q` and `-s` mean what they mean on the CPU, whichever road an image
 takes.** av1gpu has a quality scale of its own and seven presets where libaom
 has ten speeds, so the numbers are not passed through but translated by a
 measurement ([below](#calibrating)):
 
-- **`-l`** becomes the av1gpu quality whose pictures score the same
-  SSIMULACRA2 as the CPU's at that `-l` and `-s` — about four points higher on
+- **`-Q`** becomes the av1gpu quality whose pictures score the same
+  SSIMULACRA2 as the CPU's at that `-Q` and `-s` — about four points higher on
   this machine.
 - **`-s`** keeps its ranking: the default `-s 5` is av1gpu's default `turbo`,
   slower speeds spread towards `slow` and faster ones towards `turbo3`, each by
@@ -103,7 +103,7 @@ later run finds it; until then the one measured when this was written is used.
 Run it again after updating av1gpu or ImageMagick.
 
 It cuts two 1280×1280 crops from each of up to 12 images in `<sampleDir>`,
-encodes them at every `-s` from 2 to 9 and `-l` from 30 to 90 on the CPU and at
+encodes them at every `-s` from 2 to 9 and `-Q` from 30 to 90 on the CPU and at
 every preset and quality on the GPU, scores each encode against its crop with
 [ssimulacra2_rs](https://github.com/rust-av/ssimulacra2_bin)
 (`cargo install --locked --no-default-features ssimulacra2_rs`), and prints

@@ -45,12 +45,12 @@ def _validate(settings, video_args: str, grain: str,
 
     if settings.quality:
         if not rules.video_quality_flag(video_args):
-            return ("The -l quality level only applies to the "
+            return ("The -Q quality level only applies to the "
                     "constant-quality profiles; -p %s targets an average "
                     "bitrate instead." % settings.video_profile)
         top = rules.video_quality_max(video_args)
         if not settings.quality.isdigit() or int(settings.quality) > top:
-            return ('The -l quality level must be an integer between 0 and %d '
+            return ('The -Q quality level must be an integer between 0 and %d '
                     'for -p %s (got "%s").'
                     % (top, settings.video_profile, settings.quality))
 
@@ -325,12 +325,12 @@ def _summarise(settings, video_args: str, grain: str) -> None:
         log("Video quality: none to set - %s targets an average bitrate, not a "
             "quality level." % settings.video_profile)
     elif settings.quality_given:
-        log("Video quality: %s %s for every file (-l), so no resolution bias "
+        log("Video quality: %s %s for every file (-Q), so no resolution bias "
             "is applied." % (rules.video_quality_flag(settled),
                              settings.quality))
     else:
         log("Video quality: the %s profile default above, biased per file by "
-            "the tier it is ENCODED at (%s; override with -l)."
+            "the tier it is ENCODED at (%s; override with -Q)."
             % (settings.video_profile,
                rules.quality_bias_spellings(settings.max_resolution)))
 

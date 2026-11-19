@@ -89,7 +89,7 @@ def test_the_input_is_only_read_and_the_work_is_kept(calibrate):
         "road,setting,quality,bits,pixels,ssimulacra2\n")
 
 
-@pytest.mark.parametrize("option", [("-l", "60"), ("-s", "5"), ("-c",),
+@pytest.mark.parametrize("option", [("-Q", "60"), ("-s", "5"), ("-c",),
                                     ("-e", "webp")])
 def test_an_option_it_measures_itself_is_refused(calibrate, option):
     done = calibrate(*option)

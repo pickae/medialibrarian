@@ -128,7 +128,7 @@ O | <phases> | do only these phases, each on its own, whole tree below each fold
                   subtitles is the tagging phase and then the subtitles phase,
                   as two commands one after the other would be. Each phase
                   does nothing but its own work. Cannot be combined with -r,
-                  -e, -k or -o. -w goes to the phases that have a dry run to
+                  -C, -k or -o. -w goes to the phases that have a dry run to
                   carry out (tagging, subtitles, names, backups) and is left
                   off the others; -i names the id list the tagging phase
                   reads back; -P goes to the extras-chapters phase. What each
@@ -239,7 +239,7 @@ O | <phases> | do only these phases, each on its own, whole tree below each fold
                   is looked up. Not a dry run, and -w has no part in it. Best
                   run after tagging: an untagged folder's title is only a guess.
                   extras-chapters: the chapters of the extras and nothing else -
-                  what -e does beside a full ingest, on its own: every bonus
+                  what -C does beside a full ingest, on its own: every bonus
                   video below each folder given that has no chapters is given
                   some worked out by a language model (the chapterLlm
                   settings) from what is said in it, written in place with
@@ -265,7 +265,7 @@ O | <phases> | do only these phases, each on its own, whole tree below each fold
                    Walks the whole tree, so it can be pointed at a library.
                    Best run after tagging, so the films are tagged and the copies
                    are settled.
-e |  | also chapter the extras, beside the rest of the run: a bonus video (a featurette,
+C |  | also chapter the extras, beside the rest of the run: a bonus video (a featurette,
                   a deleted scene, an interview - never the main movie) that
                   has no chapters is given some worked out by a language model
                   (the chapterLlm settings) from what is said in it. The first
@@ -279,7 +279,7 @@ e |  | also chapter the extras, beside the rest of the run: a bonus video (a fea
                   divide is left alone. Written in place with mkvpropedit,
                   which is why a transcript made for it is not kept. A full
                   ingest only.
-P | <text> | With -e or -O extras-chapters: more instructions for the model, added to every
+P | <text> | With -C or -O extras-chapters: more instructions for the model, added to every
                   request, e.g. "a chapter per scene, titled with where it
                   takes place". The model then reasons at medium effort, and
                   Claude may search the web.
@@ -303,12 +303,12 @@ i | <file> | with -O tagging, the hand-written id list filled in and read
                   given into that one file."""
 
 OPT_VARS = ("f:fragmentsOverride "
-            "r:convertRemuxes e:extrasChapters P:chapterInstructions "
+            "r:convertRemuxes C:extrasChapters P:chapterInstructions "
             "w:writeTags i:idList k:keepParts o:omitPhases "
             "O:onlyPhases")
 OPT_COLUMN = 18
 OPT_LONG = ("f:fragments "
-            "r:convert-remuxes e:extras-chapters P:prompt w:write "
+            "r:convert-remuxes C:extras-chapters P:prompt w:write "
             "i:ids k:keep o:omit O:only")
 
 # The single-phase sweeps -O names, in the order the page lists them. The

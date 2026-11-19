@@ -1,4 +1,4 @@
-"""convert-video -n: which track the chapters are worked out from, and how
+"""convert-video -C: which track the chapters are worked out from, and how
 the chapters and a transcript reach the output in the one mux."""
 
 from __future__ import annotations
@@ -174,7 +174,7 @@ class TestTheInstructions:
         assert run_module.main(["-P", "A chapter per scene.",
                                 str(tmp_path / "in"),
                                 str(tmp_path / "out")]) == 1
-        assert "-P (instructions for the chapter model) needs -n" in \
+        assert "-P (instructions for the chapter model) needs -C" in \
             capsys.readouterr().err
         assert not (tmp_path / "out").exists()
 
@@ -184,7 +184,7 @@ class TestTheInstructions:
         seen = []
         monkeypatch.setattr(run_module, "_settle_and_run",
                             lambda settings, *_a: seen.append(settings) or 0)
-        assert run_module.main(["-n", "--prompt", "  A chapter per scene. ",
+        assert run_module.main(["-C", "--prompt", "  A chapter per scene. ",
                                 str(tmp_path / "in"),
                                 str(tmp_path / "out")]) == 0
         assert seen[0].ai_chapters

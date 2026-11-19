@@ -91,7 +91,7 @@ pointed at a library. A full ingest reads only the one level it always did.
 | [`-O commentary`](#commentary-transcripts) | transcribing commentary tracks | writes as it goes | left off | transcripts beside the films | — |
 | [`-O names`](#commentary-names) | naming numbered commentary tracks | dry run | names the tracks | `logs/ingest-movies/ingest-movies-commentarynames-<folder>.txt` | `-O commentary` |
 | [`-O chapters`](#chapters) | chapters from the ChapterDB archive | writes as it goes | left off | — | `-wO tagging` |
-| [`-O extras-chapters`](#chaptering-the-extras--e) | chapters for the extras, worked out by the language model (`-P` adds instructions) | writes as it goes | left off | — | — |
+| [`-O extras-chapters`](#chaptering-the-extras--c) | chapters for the extras, worked out by the language model (`-P` adds instructions) | writes as it goes | left off | — | — |
 | [`-O plex`](#plex-comparison) | comparing with the Plex library | changes nothing | left off | — | `-wO tagging` |
 | [`-O backups`](#dropping-the-old-backups) | dropping the `(old)` originals the checks passed | dry run: says which would be dropped and which would stay, with the reason | tags the copies and drops the originals | `logs/ingest-movies/ingest-movies-backups-<folder>.txt` | `-wO tagging` |
 
@@ -907,9 +907,9 @@ half a second or more. Needs `curl`, `mkvmerge`, `mediainfo`, `ffprobe`,
 
 Nothing is changed, on disk or on the server.
 
-## Chaptering the extras (`-e`)
+## Chaptering the extras (`-C`)
 
-**`-e` adds a lane to a full ingest.** Every bonus video — anything under
+**`-C` adds a lane to a full ingest.** Every bonus video — anything under
 a Plex bonus folder (`Featurettes`, `Deleted Scenes`, `Interviews`, …),
 never a film's main movie — that has no chapters is given some, worked out by
 the language model the `chapterLlm` [settings](../settings.md) name, the way
@@ -960,8 +960,8 @@ transcribed extra, the same whisper set-up as the commentaries.
 `-P "<text>"` adds your own instructions to every request the model gets, for
 example a chapter per scene titled with where it takes place. The model then
 reasons at medium effort, and Claude may search the web, as with
-[`generate-chapters -p`](generate-chapters.md#your-own-instructions). `-P` needs
-`-e`. Both are refused with `-O`, whose phases never reach this one.
+[`generate-chapters -P`](generate-chapters.md#your-own-instructions). `-P` needs
+`-C`. Both are refused with `-O`, whose phases never reach this one.
 
 ## Remux conversion (`-r`)
 
@@ -1079,7 +1079,7 @@ had been typed as its own command on the same folders. The phases are
 `-k`. `layout` is the first half of a full ingest — junk, Matroska, folders, extras
 folders, names, subtitle files — without a track touched; `roles` and `ocr` are the
 `-o roles` and `-o ocr` phases on their own (`ocr` leaves the sidecars beside the
-films rather than muxing them in); `extras-chapters` is [`-e`](#chaptering-the-extras--e)
+films rather than muxing them in); `extras-chapters` is [`-C`](#chaptering-the-extras--c)
 on its own, and takes `-P`:
 
 ```bash
@@ -1095,7 +1095,7 @@ Nothing is reordered or checked for sense, so the order is the one the
 `-w` goes to the phases that have a dry run to carry out (`tagging`,
 `subtitles`, `names`, `backups`) and is left off the others; it is refused when
 none of them does. `-i <file>` is the id list the `tagging` phase reads back.
-`-O` is refused with `-r`, `-e`, `-k` and `-o`, which belong to a full ingest.
+`-O` is refused with `-r`, `-C`, `-k` and `-o`, which belong to a full ingest.
 
 ## Several folders
 

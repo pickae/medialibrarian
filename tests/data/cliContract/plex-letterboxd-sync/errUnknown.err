@@ -21,7 +21,7 @@ Options:
     -o, --output <file>
                     Write the CSV for Letterboxd's importer to <file>. Default:
                     logs/letterboxd-import-<date>.csv beside this script.
-    -k, --state <file>
+    -S, --state <file>
                     Remember what Letterboxd has, and what was sent to it, in
                     <file>, and keep a copy of the Plex library beside it, so
                     the next run reads only what changed. Default:
