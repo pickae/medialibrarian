@@ -7,6 +7,7 @@ the census is: the rules are worth reading on their own, and the run around them
 is mostly plumbing.
 """
 
+import contextlib
 import functools
 import json
 import os
@@ -17,6 +18,7 @@ import tempfile
 import threading
 
 from medialib import commands
+from medialib.cli import convert_video_chapters as chapterwork
 from medialib.cli import ingest_movies as rules
 from medialib.cli import ingest_movies_carry as carryphase
 from medialib.cli import ingest_movies_convert as convertphase
@@ -25,6 +27,7 @@ from medialib.cli import ingest_movies_plex as plexphase
 from medialib.cli.ingest_movies import log
 from medialib.lib import (
     chapterdb,
+    chapterllm,
     cleannamesindividually,
     clioptions,
     commentarydetection,
@@ -42,6 +45,7 @@ from medialib.lib import (
     ffmpegselect,
     filmrecord,
     fixedpoint,
+    gputurn,
     imdbdata,
     keepparts,
     languages,
@@ -1122,6 +1126,26 @@ def main(argv: list, program: str = "ingest-movies",
                     "of them in turn." % letter)
                 return 1
 
+    # -e chapters the extras at the end of a full ingest, and each of these is a
+    # run of one phase of its own that never reaches it.
+    if result.values.get("extrasChapters"):
+        for letter, key in (("a", "commentaryOnly"), ("n", "commentaryNames"),
+                            ("c", "chaptersOnly"), ("p", "plexOnly"),
+                            ("s", "subtitlesOnly"), ("t", "tagsOnly"),
+                            ("i", "idList"), ("d", "dropBackups")):
+            if result.values.get(key):
+                clioptions.refuse_usage(
+                    declaration,
+                    "-e chapters the extras at the end of a full ingest, and "
+                    "-%s does one phase\nof its own: give the folders to each "
+                    "of them in turn." % letter)
+                return 1
+    # The instructions are for the model -e asks; without it there is none.
+    if "P" in result.given and not result.values.get("extrasChapters"):
+        clioptions.refuse_usage(declaration, "-P (instructions for the chapter "
+                                "model) needs -e.")
+        return 1
+
     # -d is a run of its own phase, and each of these is one too: the originals
     # it drops are beside the films the tagging settled, so it runs after them
     # rather than beside them.
@@ -1239,6 +1263,15 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
         tools.append("curl")
     if tooldeps.require_tools(program, tools):
         return 1
+    # Asked now, so a run whose model is not set up is refused before hours of
+    # ingesting rather than found out at the last phase.
+    extras_llm = None
+    if result.values.get("extrasChapters"):
+        extras_llm = chapterwork.model(
+            program, (result.values.get("chapterInstructions") or "").strip(),
+            "-e", log)
+        if extras_llm is None:
+            return 1
 
     subtitle_work = _settle_subtitle_work()
     # Only the subtitle work syncs anything, so with it off there is no
@@ -1330,7 +1363,8 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
                 scratch_headroom=0,
                 convert_remuxes=bool(result.values.get("convertRemuxes")),
                 keep_parts=keep_parts,
-                omit_phases=omit_phases,
+                omit_phases=omit_phases, extras_llm=extras_llm,
+                gpu_gate=gputurn.Gate(os.path.join(ram_root, "gpuTurns")),
                 keep_languages=kept, subtitle_languages=wanted)
 
     listed = dict(zip(roots, names, strict=True))
@@ -1862,6 +1896,55 @@ def _chapter_phase(root: str, ahead: dict) -> None:
     outcome = chapterdb.add_chapters(root, log, ahead["chapter pages"])
     _report_chapters({verdict: len(films)
                       for verdict, films in outcome.items()})
+
+
+def extras(root: str) -> list:
+    """The videos under the extras folders of ``root``, in the order they are
+    walked: bonus material, never a film's main movie."""
+    found: list = []
+    for directory in [root] + rules._folders_below(root):
+        if not rules.is_bonus_folder(directory):
+            continue
+        for path in rules._files_below(
+                directory, matches=lambda name: name.endswith(".mkv")):
+            if path not in found:
+                found.append(path)
+    return found
+
+
+def _chapter_extra(state, root: str, llm, movie: str, whisper: bool) -> str:
+    """One extra chaptered and written, and what came of it for the chapter
+    lane: "done", "left", or "later" for one that is yet to be transcribed.
+
+    The chapters are all that is kept: mkvpropedit edits a file's chapters in
+    place and cannot add the transcript as a subtitle, so the transcript the
+    work made is left in the scratch it is removed with."""
+    label = os.path.relpath(movie, root)
+    scratch = tempfile.mkdtemp(prefix="extra-chapters-", dir=state.ram_root)
+    try:
+        # A model served from this machine or its network may be on the card
+        # whisper is using; a hosted one never is.
+        on_gpu = chapterllm.is_local(llm.url)
+        done = chapterwork.chapter(
+            movie, scratch, llm, label, state.script_dir, log,
+            allow_audio=whisper, disk=lambda: diskturn.turn(movie),
+            gpu=(lambda: _gpu_claim(state, "llm", _llm_vram_mib()))
+            if on_gpu else contextlib.nullcontext)
+        if isinstance(done, chapterwork.Deferred):
+            return "later"
+        if done is None or not done.marks:
+            return "left"
+        chosen = chapterdb.ChapterSet(
+            "", "", "", "", 0, 0.0,
+            tuple((start / 1000, title) for start, title in done.marks))
+        if not chapterdb.write_chapters(movie, chosen):
+            log("WARNING: mkvpropedit could not write the chapters, left as "
+                "it was: " + movie)
+            return "left"
+        log("Chapters written for the extra: " + movie)
+        return "done"
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
 
 
 def _plex_phase(root: str, state=None) -> None:
@@ -2885,7 +2968,7 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
     # terminal each lane's lines about a film come out as one block.
     locks = lanes.FilmLocks()
     row = console.LaneRow((rules.lossless_audio_target(), "whisper", "remux",
-                           "subs"))
+                           "subs", "chapters"))
     run_console = console.current()
     run_console.show(row.render, travels=False)
     try:
@@ -2989,6 +3072,30 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
 def _films_in_lanes(state, root: str, subtitle_work: bool, locks,
                     row=None, fetching=None,
                     commentary_work: bool | None = None) -> None:
+    """:func:`_lanes`, with -e's chapter lane running beside it: started first,
+    so the extras that need only a read and the model are chaptered from the
+    start, and waited for on every way out, since a chapter write cut off
+    halfway would leave the extra half-written."""
+    llm = getattr(state, "extras_llm", None)
+    films = extras(root) if llm is not None else []
+    if not films:
+        _lanes(state, root, subtitle_work, locks, row, fetching,
+               commentary_work)
+        return
+    chaptering = lanes.ChapterLane(
+        films, lambda movie, whisper: _chapter_extra(state, root, llm, movie,
+                                                     whisper), log, row)
+    chaptering.start()
+    try:
+        _lanes(state, root, subtitle_work, locks, row, fetching,
+               commentary_work, chaptering)
+    finally:
+        chaptering.finish()
+
+
+def _lanes(state, root: str, subtitle_work: bool, locks, row=None,
+           fetching=None, commentary_work: bool | None = None,
+           chaptering=None) -> None:
     """The lossless transcode, the commentary transcription and the
     improved-copy remux, each on the part of the machine it uses and
     overlapping where that is safe (see :mod:`medialib.cli.ingest_movies_lanes`).
@@ -3058,6 +3165,10 @@ def _films_in_lanes(state, root: str, subtitle_work: bool, locks,
         else:
             log("Phase: extracting and transcribing commentary tracks - "
                 "SKIPPED (no ffsubsync/pipx, see the warning at startup)")
+        # Whisper is the chapter lane's from here: the extras it had to leave
+        # for want of it are transcribed while the remux goes on.
+        if chaptering is not None:
+            chaptering.whisper_free()
     finally:
         # Waited for on every way out: a transcode or a remux cut off halfway
         # would leave a half-written file behind the run that was making it.
@@ -3241,11 +3352,40 @@ def _say_what_was_said(ahead: dict) -> None:
 
 
 def _transcribe_one(state, record: str, lane: str = "") -> None:
-    """One queued transcription; ``lane`` names it beside the other lanes."""
+    """One queued transcription; ``lane`` names it beside the other lanes.
+
+    On the GPU it holds a claim on it for as long as it runs, so that a model
+    the chapter lane asks beside it is only started where both fit."""
+    from medialib.lib import whisper as whisper_lib
+
     with console.about(record, lane):
-        commentarytranscription.transcribe_commentary(
-            record, state.whisper, rules.MAX_WHISPER_SYNC_OFFSET,
-            state.ffsubsync_quality, state.ram_root, log)
+        try:
+            with _gpu_claim(state, "whisper",
+                            whisper_lib.job_vram_mib(state.whisper)):
+                commentarytranscription.transcribe_commentary(
+                    record, state.whisper, rules.MAX_WHISPER_SYNC_OFFSET,
+                    state.ffsubsync_quality, state.ram_root, log)
+        except gputurn.GateAborted:
+            return
+
+
+def _gpu_claim(state, kind: str, need_mib: int | None):
+    """The GPU's turn for ``kind`` work needing ``need_mib`` MiB, or nothing to
+    hold where the run keeps none (no GPU, or whisper on the CPU)."""
+    gate = getattr(state, "gpu_gate", None)
+    if gate is None or (kind == "whisper" and not need_mib):
+        return contextlib.nullcontext()
+    return gate.claim(kind, need_mib, safety.abort_requested, log)
+
+
+def _llm_vram_mib() -> int | None:
+    """The chapterLlmVramGB setting in MiB: the GPU memory the model needs
+    beside other work on this machine's card. None when unset or unreadable,
+    which is that it needs all of it."""
+    try:
+        return int(float(os.environ.get("chapterLlmVramGB", "")) * 1024)
+    except ValueError:
+        return None
 
 
 def _drain_commentary(state, producer, jobs: int, tracker=None) -> None:

@@ -74,7 +74,8 @@ _SCRATCH = ("concat-audio", "content-census", "content-census-bi", "convert-and-
             "transcribe-audio", "ytdlp")
 
 # Every command that asks a language model for chapters.
-_AI_CHAPTERS = ("convert-audio", "convert-video", "generate-chapters", "ytdlp")
+_AI_CHAPTERS = ("convert-audio", "convert-video", "generate-chapters", "ingest-movies",
+                "ytdlp")
 
 SETTINGS: tuple[Setting, ...] = (
     # --- logins and keys
@@ -215,8 +216,14 @@ SETTINGS: tuple[Setting, ...] = (
             "`{\"reasoning_effort\": \"low\"}` or `{\"temperature\": 0.2}`; an output "
             "limit given here replaces the one the run works out, and the chapter "
             "instructions (`generate-chapters -p`, `convert-audio -p`, `convert-video -P`, "
-            "`ytdlp -P`) "
+            "`ingest-movies -P`, `ytdlp -P`) "
             "send their own `reasoning_effort`", _AI_CHAPTERS),
+    Setting("chapterLlmVramGB", "The GPU memory, in GB, the chapter model needs while "
+            "whisper is using the same card - ingest-movies starts it beside the "
+            "commentary transcription only when that much is free, and otherwise waits "
+            "for its turn; only a model served from this machine or its network is "
+            "waited for", ("ingest-movies",),
+            "unset - the model takes the whole card, so it never runs beside whisper"),
     Setting("chapterLlmJobs", "How many requests are sent to the model at once, "
             "over the whole run. Whether the model is local is read off "
             "`chapterLlmUrl`: localhost, a private or Tailscale address, or a "

@@ -177,6 +177,26 @@ Usage:
                   likeliest - is written ./plex: the word after -o goes to -o
                   when it is a phase. Cannot be combined with -a, -n, -c, -p,
                   -s, -t or -i, which do a phase of their own.
+    -e, --extras-chapters
+                  also chapter the extras, beside the rest of the run: a bonus video (a featurette,
+                  a deleted scene, an interview - never the main movie) that
+                  has no chapters is given some worked out by a language model
+                  (the chapterLlm settings) from what is said in it. The first
+                  text subtitle that is its dialogue - not a commentary, SDH
+                  or forced one - is read for it; one with none is transcribed
+                  from its first soundtrack that is not a commentary, audio
+                  description or isolated score - once the commentary
+                  transcription has done with the GPU; a model served from
+                  this machine waits for GPU memory beside whisper
+                  (chapterLlmVramGB). A video too short to
+                  divide is left alone. Written in place with mkvpropedit,
+                  which is why a transcript made for it is not kept. A full
+                  ingest only.
+    -P, --prompt <text>
+                  With -e: more instructions for the model, added to every
+                  request, e.g. "a chapter per scene, titled with where it
+                  takes place". The model then reasons at medium effort, and
+                  Claude may search the web.
     -w, --write   with -t or -i, actually perform the renames instead of printing
                   them; with -s, sync, throw out and download; with -n, name
                   the commentaries. On its own it is a usage error rather than

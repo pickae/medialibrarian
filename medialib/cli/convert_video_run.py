@@ -29,7 +29,6 @@ from medialib.cli import convert_video_probes as probes
 from medialib.cli import convert_video_source as videosource
 from medialib.cli import convert_video_startup as startup
 from medialib.lib import (
-    chapterllm,
     clioptions,
     console,
     durationcheck,
@@ -1001,12 +1000,7 @@ def _settle_and_run(settings, program: str, video_args: str, grain: str,
 def chapter_model(program: str, settings):
     """-n's model, given -P's instructions for every request, or None when
     none is set up (which has been said)."""
-    llm = chapterllm.require(program)
-    if llm is None:
-        return None
-    llm = llm.following(settings.chapter_instructions)
-    log("Chapters (-n): " + llm.describe())
-    return llm
+    return chapterwork.model(program, settings.chapter_instructions, "-n", log)
 
 
 class _HeldOutput:

@@ -161,6 +161,20 @@ def whisper_works(device: str, compute_type: str, model: str,
     return ran.returncode
 
 
+def job_vram_mib(settled: dict) -> int:
+    """The GPU memory in MiB one transcription run of the settled plan needs:
+    the model's weights and context, and its batch slots, on the dearer of the
+    two models the plan may use. 0 for a plan that is not on the GPU."""
+    if settled.get("device") != "cuda":
+        return 0
+    wanted = {settled.get("model"), settled.get("modelMulti")}
+    slots = int(settled.get("batchSlots") or 0)
+    costs = [fixed + slots * per_slot
+             for candidate, multi, fixed, per_slot in WHISPER_GPU_MODELS
+             if candidate in wanted or multi in wanted]
+    return max(costs, default=0)
+
+
 def _nvidia_smi(args) -> str:
     """nvidia-smi's stdout for these arguments, or ``""`` when the tool is
     absent."""
