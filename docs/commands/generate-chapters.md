@@ -42,6 +42,10 @@ A chapter list is a division of the whole recording, so it is made in two passes
   the start to the line where the new topic really begins, corrects a title that
   does not fit what is said there, or drops a start that turns out not to be a
   change of topic.
+  Each look is told where the chapters either side of its own start - at a line
+  of the transcript it is given, or so many minutes outside it - and that they
+  are settled, so it can tell what its chapter is from what surrounds it, and
+  its start has to fall between theirs.
 
 A recording made of parts, such as several episodes in a row each with its own
 segments, comes out as one flat list. Each part gets its own chapter where it
