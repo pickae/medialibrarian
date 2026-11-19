@@ -67,8 +67,7 @@ h |  | Print this help page.
 j | <jobs> | Narrate up to <jobs> books at a time.
                     Default: what the device has room for - free VRAM divided by
                     5 GB on a GPU, and 1 on a CPU, which one narration saturates
-                    on its own. At 1, however it was arrived at, the engine's own
-                    per-book progress is printed as well.
+                    on its own.
 r | <sample> | Voice sample(s) to clone the narrator's voice from.
                     A FILE is used for every book: any audio or video file, one in
                     the wrong format is transcoded to WAV first, and one longer
@@ -369,6 +368,7 @@ class Run:
     opus_bitrate: int
     keep_lossless: bool
     opus_jobs: int
+    narration_jobs: int
     resume_extensions: list[str]
     run_marker: str
     narration_language: str
@@ -567,9 +567,13 @@ class Run:
                 % (language or "default", ", cloned" if voice else "", base))
             self.counters.mark_book_active(number, narration_log)
 
+            # Several books read at once: the engine's output that reaches the
+            # console under -v is tagged with the book it is about.
+            prefix = base + ": " if self.narration_jobs > 1 else ""
             produced = booknarration.narrate_book(source,
                                                   os.path.join(work, "audiobook"),
-                                                  voice, language, narration_log)
+                                                  voice, language, narration_log,
+                                                  prefix)
             if not produced:
                 # Its log is in the scratch that goes below, so what the engine
                 # said is replayed now or never.
@@ -951,14 +955,14 @@ def _read(result, program: str, script_dir: str, in_path: str, out_path: str,
         jobs = int(booknarration.narration_job_budget(device))
         jobs_from = device
 
-    # One book at a time is the only case where the engine's own progress is worth
-    # seeing: it belongs to the one book being read, so nothing interleaves and
-    # the long silences of a slow model stop looking like a hung run. Past that
-    # the same output is several books talking over each other. Decided from the
-    # job count the run really ended up with, rather than from the -j that was
-    # typed. Under -q it is progress like any other, and stays in the log.
+    # The engine's own output is what says whether a book is hung and which stage
+    # it is in, so it reaches the console under -v, at every job count: several
+    # books read at once tag each line with the book it is about, and the long
+    # silences of a slow model stop looking like a hung run without a -j 1 rerun
+    # that slows the run down several times over. Under -q it is progress like
+    # any other, and stays in the log.
     runcontext.settle("narrationVerbose", (
-        "1" if jobs == 1 and runlog.verbosity() >= runlog.NORMAL else "0"))
+        "1" if runlog.verbosity() >= runlog.VERBOSE else "0"))
 
     # How many cores the Opus encode of a finished book may use. The narration of
     # the NEXT books runs alongside it, so one full set of cores per reader would
@@ -1000,7 +1004,8 @@ def _read(result, program: str, script_dir: str, in_path: str, out_path: str,
         in_path=in_path, out_path=out_path, temp_path=temp_path,
         script_dir=script_dir, counters=counters, total=total,
         opus_bitrate=opus_bitrate, keep_lossless=keep_lossless,
-        opus_jobs=opus_jobs, resume_extensions=resume_extensions,
+        opus_jobs=opus_jobs, narration_jobs=jobs,
+        resume_extensions=resume_extensions,
         run_marker=run_marker, narration_language=narration_language,
         narration_engine=narration_engine, run_start=run_start,
         run_start_epoch=int(run_start), run_end=None,
@@ -1024,9 +1029,10 @@ def _read(result, program: str, script_dir: str, in_path: str, out_path: str,
 
     _announce(state, jobs, jobs_from, device, voice_map, voice_sample)
 
-    # The row is only pinned when it has the console to itself; reading one book
-    # at a time prints the engine's own output, which would scroll a row that is
-    # rewritten in place into litter.
+    # The row is pinned whenever the engine's own output stays in its log, at
+    # every job count - its progress is read from the tail of that very log.
+    # Under -v the output is teed to the console instead, and would scroll a row
+    # that is rewritten in place into litter.
     if runcontext.get("narrationVerbose", None) == "0":
         counters.console.show(state.reading_status_text)
 

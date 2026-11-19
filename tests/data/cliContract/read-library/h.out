@@ -17,8 +17,7 @@ Options:
                     Narrate up to <jobs> books at a time.
                     Default: what the device has room for - free VRAM divided by
                     5 GB on a GPU, and 1 on a CPU, which one narration saturates
-                    on its own. At 1, however it was arrived at, the engine's own
-                    per-book progress is printed as well.
+                    on its own.
     -r, --voice <sample>
                     Voice sample(s) to clone the narrator's voice from.
                     A FILE is used for every book: any audio or video file, one in

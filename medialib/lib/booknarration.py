@@ -785,11 +785,14 @@ def init_book_narration(checkout=None, device=None, log=None):
 # --- the narration itself -------------------------------------------------------
 
 
-def narrate_book(book, out_dir, voice="", language=None, log_file=None):
+def narrate_book(book, out_dir, voice="", language=None, log_file=None,
+                 prefix=""):
     """Read ONE book aloud into <outDir> and return the path of the file that
     came out, or None when nothing was produced. <language> falls back to
     $narrationLanguage; the produced file is FOUND rather than named, newest
-    first."""
+    first. With <prefix>, every line the engine's output takes to the console
+    under a verbose run carries it in front - the book's name, when several
+    books are read at once; its log keeps the lines as the engine said them."""
     if language is None or language == "":
         language = os.environ.get("narrationLanguage", "")
     if log_file is None:
@@ -839,7 +842,7 @@ def narrate_book(book, out_dir, voice="", language=None, log_file=None):
         if _config("narrationVerbose", "0") != "0":
             # Verbose runs put the engine's output on the console - on stderr,
             # not stdout - and keep it in the log as well.
-            status = _tee_run(argv, log_file, home, narration_env)
+            status = _tee_run(argv, log_file, home, narration_env, prefix)
         else:
             status = _quiet_run(argv, log_file, home, narration_env)
     except (OSError, ValueError):
@@ -897,18 +900,29 @@ def _quiet_run(argv, log_file, cwd, env):
         return proc.returncode
 
 
-def _tee_run(argv, log_file, cwd, env):
+def _tee_run(argv, log_file, cwd, env, prefix=""):
     """The verbose engine call: its output goes to the log and to the console
     stderr at once. The console side is file descriptor 2 itself, so it
     survives the test's swap of sys.stderr.
+
+    With ``prefix`` in front of every console line, the log keeps the lines as
+    the engine said them - the reader tags several books' engines at once.
 
     An interrupt arriving while the engine runs kills the engine's whole
     process group and waits for it. Left running, the engine would outlive the
     run and recreate the RAM scratch the run's cleanup had just removed when
     it writes its output, and so would the helpers it had started."""
+    prefix_bytes = prefix.encode("utf-8")
     with open(log_file, "wb") as handle:
         console = os.fdopen(2, "wb", closefd=False)
+
+        def console_lines(data: bytes) -> None:
+            for line in (data.splitlines(keepends=True)
+                         if prefix_bytes else (data,)):
+                console.write(prefix_bytes + line)
+
         proc = None
+        pending = b""
         try:
             with safety.interrupts_held():
                 proc = _start_engine(argv, cwd, env, subprocess.PIPE)
@@ -916,8 +930,17 @@ def _tee_run(argv, log_file, cwd, env):
             assert stdout is not None  # stdout=PIPE
             with stdout:
                 for chunk in iter(lambda: stdout.read(65536), b""):
-                    handle.write(chunk)
-                    console.write(chunk)
+                    data = pending + chunk
+                    last = data.rfind(b"\n")
+                    if last < 0:
+                        pending = data
+                        continue
+                    done, pending = data[:last + 1], data[last + 1:]
+                    handle.write(done)
+                    console_lines(done)
+            if pending:
+                handle.write(pending)
+                console_lines(pending)
             console.flush()
             proc.wait()
         except BaseException:
