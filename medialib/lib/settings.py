@@ -104,7 +104,7 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("subDlApiKey", "API key of a free SubDL account, asked third for subtitles",
             ("ingest-movies",), secret=True),
     Setting("spokenLanguages", "The languages you speak: ingest-movies fetches "
-            "and tests subtitles in them, and ytdlp -g takes a YouTube "
+            "and tests subtitles in them, and ytdlp -C takes a YouTube "
             "episode's transcript in its own language when it is one of them, "
             "in English when it is not. A comma list of ISO 639-1 codes, in the "
             "order to fetch them; track names are also read in the names these "
@@ -259,12 +259,12 @@ SETTINGS: tuple[Setting, ...] = (
             "protocol, as a JSON object - whatever that server takes, e.g. "
             "`{\"reasoning_effort\": \"low\"}` or `{\"temperature\": 0.2}`; an output "
             "limit given here replaces the one the run works out, and the chapter "
-            "instructions (`generate-chapters -p`, `convert-audio -p`, `convert-video -P`, "
+            "instructions (`generate-chapters -P`, `convert-audio -P`, `convert-video -P`, "
             "`ingest-movies -P`, `ytdlp -P`) "
             "send their own `reasoning_effort`", _AI_CHAPTERS),
     Setting("chapterLlmHarness", "The agent harnesses you have installed, a comma "
             "list, the preferred first - only `opencode` is supported. With "
-            "one, the chapter instructions (`generate-chapters -p` and the "
+            "one, the chapter instructions (`generate-chapters -P` and the "
             "like) are asked of the same model through the harness instead of "
             "straight to its server, so a local model can search the web as "
             "Claude does, e.g. to spell the speakers' names. Each request is "

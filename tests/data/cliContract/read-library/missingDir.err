@@ -18,7 +18,7 @@ Options:
                     Default: what the device has room for - free VRAM divided by
                     5 GB on a GPU, and 1 on a CPU, which one narration saturates
                     on its own.
-    -r, --voice <sample>
+    -V, --voice <sample>
                     Voice sample(s) to clone the narrator's voice from.
                     A FILE is used for every book: any audio or video file, one in
                     the wrong format is transcoded to WAV first, and one longer
@@ -42,7 +42,7 @@ Options:
                     Default cuda when an NVIDIA GPU is present, cpu otherwise
     -e, --engine <engine>
                     TTS engine: xtts, bark, vits, fairseq, tacotron, yourtts.
-                    Voice cloning (-r) needs one that supports it.
+                    Voice cloning (-V) needs one that supports it.
                     Default xtts
     -l, --language <language>
                     Language of the books, ISO 639-3 (eng, deu, ita, ...). Given,

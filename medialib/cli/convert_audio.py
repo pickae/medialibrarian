@@ -107,15 +107,15 @@ CODEC_NAMES = {"opus": "Opus", "aac": "AAC", "xheaac": "xHE-AAC"}
 OPT_SPEC = """
 h |  | Print this help page.
 m |  | Force mono output.
-u |  | Keep a surround source's channels, up to 7.1, instead of
+s |  | Keep a surround source's channels, up to 7.1, instead of
                     downmixing it to stereo.
 a |  | Adaptive mode: decide channels and bitrate per file rather
                     than globally. The output keeps the source's own channel
-                    count - capped at stereo unless -u is given - and its target
+                    count - capped at stereo unless -s is given - and its target
                     bitrate is the spoken-word figure for that channel count
                     (55 kbps mono, 65 stereo, rising to 200 for 7.1), so a mono
                     source encodes mono at the lower rate, a stereo one stays
-                    stereo, and with -u a multi-channel one gets its own rate.
+                    stereo, and with -s a multi-channel one gets its own rate.
                     Cannot be combined with -m or -b, and disables long-file
                     splitting.
 c |  | Copy non transcoded files from <inputDir> into <outputDir>
@@ -125,7 +125,7 @@ e | <codec> | Output encoding: {codecs}.
                     Default {codec}
 b | <bitrate> | Bitrate of the output files
                     Default 46 kbps Opus or 64 kbps AAC, or 32 or 48 kbps
-                    for forced mono output, and with -u the Opus default
+                    for forced mono output, and with -s the Opus default
                     scaled up with the channel count for a surround source
 T | <kbps> | The bitrate a file must reach to be re-encoded.
                     Default 90 kbps, or 50 kbps for a mono run
@@ -138,29 +138,29 @@ g | <depth> | Judge the files under each folder <depth> levels into
                     out half converted. A video, or a format that is always
                     converted, has its whole folder converted with it.
                     Cannot be combined with -a.
-t |  | Add chapters to every output whose source has none, worked
+C |  | Add chapters to every output whose source has none, worked
                     out by a language model (the chapterLlm settings) from a
                     transcript of the speech, and write the transcript into
                     the output as well. A transcript sidecar is used rather
                     than transcribing again.
-p | <text> | With -t: more instructions for the model, added to every
+P | <text> | With -C: more instructions for the model, added to every
                     request, e.g. "a chapter per speaker, titled with their
                     name and topic". The model then reasons at medium effort,
                     and Claude may search the web.
-r | <folder> | Only the files under <inputDir>/<folder>, converted to
+O | <folder> | Only the files under <inputDir>/<folder>, converted to
                     where a run over all of <inputDir> would put them. May
                     be given more than once.
 """.format(codecs=" or ".join(enums.AUDIO_CODECS),
            encoders=xheaac.ENCODER_SPEC,
            codec=DEFAULT_CODEC)
 
-OPT_VARS = ("m:mono u:surround a:adaptive c:copy e:outputCodec "
-            "b:bitrate T:threshold j:jobs g:groupDepth r:only p:instructions")
-OPT_FLAGS = "repeat:r"
+OPT_VARS = ("m:mono s:surround a:adaptive c:copy e:outputCodec "
+            "b:bitrate T:threshold j:jobs g:groupDepth O:only P:instructions")
+OPT_FLAGS = "repeat:O"
 OPT_COLUMN = 20
-OPT_LONG = ("h:help m:mono u:surround a:adaptive c:copy-others "
+OPT_LONG = ("h:help m:mono s:surround a:adaptive c:copy-others "
             "e:encoding b:bitrate T:threshold j:jobs g:group "
-            "t:ai-chapters p:prompt r:only")
+            "C:ai-chapters P:prompt O:only")
 
 # The codec has to be one this command can write, or a typo would only surface
 # as a per-file failure deep into a run. The choices are joined with an ESCAPED
@@ -223,7 +223,7 @@ def spec(program: str) -> clioptions.Spec:
 
 
 def _roots(input_dir: str, only=()) -> list:
-    """The folders a run reads: the input, or the -r folders inside it."""
+    """The folders a run reads: the input, or the -O folders inside it."""
     return [os.path.join(input_dir, folder) for folder in only] or [input_dir]
 
 
@@ -560,14 +560,14 @@ def output_channels(channels: int, surround: bool) -> int:
     """How many channels a source of <channels> is encoded to when the run is
     not forcing mono.
 
-    Stereo unless -u asked otherwise. What this command makes is listened to on
+    Stereo unless -s asked otherwise. What this command makes is listened to on
     a phone, in earbuds, and a 5.1 audiobook - which is what an Atmos m4b
     decodes to - spends two and a half times the bytes on speakers that are not
     there, to be folded back down by the player anyway. Folded down once here
     instead, by ffmpeg, the book costs the stereo rate. A mono or stereo source
     keeps its own count either way: nothing is ever widened.
 
-    -u keeps the source's count, up to the 7.1 that is the widest layout either
+    -s keeps the source's count, up to the 7.1 that is the widest layout either
     encoder takes - `opus_channel_args` then settles the layout Opus can carry
     it in.
     """
@@ -750,7 +750,7 @@ class Run:
     output_dir: str
     script_dir: str
     mono: bool
-    # -u: a surround source keeps its channels rather than being folded down to
+    # -s: a surround source keeps its channels rather than being folded down to
     # stereo, the default for listening on a phone.
     surround: bool
     adaptive: bool
@@ -1110,10 +1110,10 @@ class Run:
         for "ask" - asked only when the output is not forced mono, since mono
         needs nothing but its `-ac 1`.
 
-        A surround source is folded down to stereo with `-ac 2` unless -u asked
+        A surround source is folded down to stereo with `-ac 2` unless -s asked
         to keep it (`output_channels`), which is also what gets it past libopus
         at all: the encoder refuses every surround layout but one per count. Kept
-        with -u, the layout step (`opus_channel_args`) is what lets a 5.1(side)
+        with -s, the layout step (`opus_channel_args`) is what lets a 5.1(side)
         audiobook encode, and the default bitrate grows with it
         (`surround_bitrate`) - except in adaptive mode, whose rate was already
         looked up for this very channel count.
@@ -1149,7 +1149,7 @@ class Run:
         The encoder is ffmpeg's own, and it takes the source's layout as it is
         - a 5.1(side) comes out 5.1 - so the channel question is only the FOLD:
         a source wider than the ceiling downmixes, and the ceiling is stereo
-        unless -u asked to keep the count.
+        unless -s asked to keep the count.
         """
         if mono:
             layout = ["-ac", "1"]
@@ -1202,7 +1202,7 @@ class Run:
             # source had - and the preset is a rate for the OUTPUT.
             channels = downmix = 1
         else:
-            # Folded to stereo unless -u keeps it, exactly as for Opus - and the
+            # Folded to stereo unless -s keeps it, exactly as for Opus - and the
             # preset and the WAVE ceiling below are asked for the count that is
             # ENCODED, since that is what the pipe carries.
             source_count = max(1, channels or source_channels(source))
@@ -2023,7 +2023,7 @@ def main(argv: list, program: str = "convert-audio",
         return 1
 
     mono = "m" in result.given
-    surround = "u" in result.given
+    surround = "s" in result.given
     adaptive = "a" in result.given
     copy = "c" in result.given
     bitrate_set = bool(result.values["bitrate"])
@@ -2032,7 +2032,7 @@ def main(argv: list, program: str = "convert-audio",
     bitrate = int(result.values["bitrate"] or DEFAULT_BITRATES[codec])
     jobs = int(result.values["jobs"] or runlog.cpu_count())
     group_depth = int(result.values["groupDepth"] or 0)
-    ai_chapters = "t" in result.given
+    ai_chapters = "C" in result.given
     instructions = (result.values["instructions"] or "").strip()
     only = tuple(result.values["only"] or ())
 
@@ -2055,10 +2055,10 @@ def main(argv: list, program: str = "convert-audio",
                             clioptions.page(declaration)))
         return 1
 
-    # The instructions are for the model -t asks; without it there is none.
-    if "p" in result.given and not ai_chapters:
-        sys.stderr.write("%s\n\nerror: -p (instructions for the chapter model) "
-                         "needs -t.\n\n%s\n"
+    # The instructions are for the model -C asks; without it there is none.
+    if "P" in result.given and not ai_chapters:
+        sys.stderr.write("%s\n\nerror: -P (instructions for the chapter model) "
+                         "needs -C.\n\n%s\n"
                          % (declaration.credits,
                             clioptions.page(declaration)))
         return 1
@@ -2288,7 +2288,7 @@ def _convert(input_dir: str, output_dir: str, probe_what: str, skips,
 def _add_transcripts_and_chapters(state: Run, llm) -> None:
     """The last phase, over every output this run's codec wrote, encoded now
     or by an earlier run: a transcript sidecar beside its source written into
-    it, and - with -t - chapters for one whose source has none.
+    it, and - with -C - chapters for one whose source has none.
 
     Every transcript that is missing is made by transcribe-audio, from the
     outputs themselves - audio only, and exactly as long as their sources.
@@ -2490,7 +2490,7 @@ def _rejoin_split_files(state: Run, jobs: int) -> None:
 def _remove_empty_folders(input_dir: str, only=()) -> None:
     """Deepest first, so a folder that only held empty folders collapses too.
     The input folder itself stays: a folder the user named must still be
-    there - and so does each -r folder."""
+    there - and so does each -O folder."""
     for root in _roots(input_dir, only):
         _remove_empty_below(root)
 

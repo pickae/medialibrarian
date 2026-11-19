@@ -55,25 +55,25 @@ episode's opening before its first segment.
 
 ## Your own instructions
 
-`-p` adds your own text to every request, for chapters cut or titled differently
+`-P` adds your own text to every request, for chapters cut or titled differently
 from the default:
 
-    generate-chapters -p "Let the chapters follow the speakers, and title each
+    generate-chapters -P "Let the chapters follow the speakers, and title each
     with the speaker's name and topic. Search online to make sure each speaker
     is named correctly." talks/ chapters/
 
 Where your text and the built-in guidance disagree, yours wins. The answer's
 form and the shortest chapter (`-m`) still apply.
 
-A run with `-p` makes the model think harder. Over the `openai` protocol it
+A run with `-P` makes the model think harder. Over the `openai` protocol it
 sends `reasoning_effort` set to `medium`, replacing whatever `chapterLlmOptions`
 says for that field. A server that switches thinking off some other way has to
 have that setting removed by hand. Claude runs at `medium` effort anyway, and
-with `-p` it may also search the web, up to five searches a request. Anthropic
+with `-P` it may also search the web, up to five searches a request. Anthropic
 bills those searches. A server behind the `openai` protocol cannot search on
 its own, so it works from the transcript alone - unless you have an agent
 harness: with `chapterLlmHarness=opencode` and `chapterLlmHarnessModel` naming
-the model as `opencode models` lists it, `-p` requests go to that model through
+the model as `opencode models` lists it, `-P` requests go to that model through
 opencode, which can fetch web pages. Each request is a throwaway session,
 deleted once its answer is read, so opencode's own session list stays yours.
 Opencode runs with its permissions auto-approved for these requests.

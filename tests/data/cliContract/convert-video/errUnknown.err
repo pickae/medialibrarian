@@ -47,7 +47,7 @@ Options:
                   NVENC engine count to parallelise hardware encoding across,
                   overriding the built-in per-GPU guess. Only affects the *Nvenc
                   profiles.
-    -l, --quality <level>
+    -Q, --quality <level>
                   Constant-quality level to encode at, overriding the one the
                   chosen video profile hardcodes: -crf for the software profiles,
                   -cq for the *Nvenc ones. Lower means better quality and a bigger
@@ -120,7 +120,7 @@ Options:
                   track's name, language and flags the way it found them.
                   Needs mkvmerge. Not with -a, -b or -s, which say how the
                   audio is re-encoded.
-    -n, --ai-chapters
+    -C, --ai-chapters
                   Add chapters to every video that has none, worked out by a
                   language model (the chapterLlm settings) from what is said.
                   The first text subtitle that is the film's dialogue - not a
@@ -130,7 +130,7 @@ Options:
                   transcript is added to the output as a subtitle as well.
                   Runs beside the video encode.
     -P, --prompt <text>
-                  With -n: more instructions for the model, added to every
+                  With -C: more instructions for the model, added to every
                   request, e.g. "a chapter per scene, titled with where it
                   takes place". The model then reasons at medium effort, and
                   Claude may search the web.

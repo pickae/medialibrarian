@@ -91,7 +91,7 @@ pointed at a library.
 | [`-O commentary`](#commentary-transcripts) | transcribing commentary tracks | writes as it goes | left off | transcripts beside the films | — |
 | [`-O names`](#commentary-names) | naming numbered commentary tracks | dry run | names the tracks | `logs/ingest-movies/ingest-movies-commentarynames-<folder>.txt` | `-O commentary` |
 | [`-O chapters`](#chapters) | chapters from the ChapterDB archive | writes as it goes | left off | — | `-wO tagging` |
-| [`-O extras-chapters`](#chaptering-the-extras--e) | chapters for the extras, worked out by the language model (`-P` adds instructions) | writes as it goes | left off | — | — |
+| [`-O extras-chapters`](#chaptering-the-extras--c) | chapters for the extras, worked out by the language model (`-P` adds instructions) | writes as it goes | left off | — | — |
 | [`-O plex`](#plex-comparison) | comparing with the Plex library | changes nothing | left off | — | `-wO tagging` |
 | [`-O backups`](#dropping-the-old-backups) | dropping the `(old)` originals the checks passed | dry run: says which would be dropped and which would stay, with the reason | tags the copies and drops the originals | `logs/ingest-movies/ingest-movies-backups-<folder>.txt` | `-wO tagging` |
 
@@ -859,9 +859,9 @@ half a second or more. Needs `curl`, `mkvmerge`, `mediainfo`, `ffprobe`,
 
 `-O plex` changes nothing, on disk or on the server.
 
-## Chaptering the extras (`-e`)
+## Chaptering the extras (`-C`)
 
-**`-e` adds the extras to a full ingest.** Every bonus video — anything under
+**`-C` adds the extras to a full ingest.** Every bonus video — anything under
 a Plex bonus folder (`Featurettes`, `Deleted Scenes`, `Interviews`, …),
 never a film's main movie — that has no chapters is given some, worked out by
 the language model the `chapterLlm` [settings](../settings.md) name, the way
@@ -870,7 +870,7 @@ keeps them, and one too short to divide is left alone. This is separate from
 the [ChapterDB lookup](#chapters), which is only for films.
 
 What is said is read from the extra's dialogue subtitle, or else transcribed
-with whisper, chosen the way [`convert-video -n`](convert-video.md#chapters--n)
+with whisper, chosen the way [`convert-video -C`](convert-video.md#chapters--c)
 chooses.
 
 The chapters are written in place with `mkvpropedit`, so the extra is not
@@ -898,8 +898,8 @@ set up is refused before any ingesting. Needs the settings `chapterLlm*` and,
 for a transcribed extra, the same whisper set-up as the commentaries.
 
 `-P "<text>"` adds your own instructions to every request the model gets, as
-[`generate-chapters -p`](generate-chapters.md#your-own-instructions) does. It
-needs `-e` or `-O extras-chapters`.
+[`generate-chapters -P`](generate-chapters.md#your-own-instructions) does. It
+needs `-C` or `-O extras-chapters`.
 
 ## Remux conversion (`-r`)
 
@@ -1023,7 +1023,7 @@ ingest-movies -O extras-chapters -P "a chapter per scene" ~/Films
 Nothing is reordered or checked for sense, so the order is the one the
 [sweeps table](#single-task-sweeps) gives. A phase that fails stops the chain.
 `-i <file>` is the id list the `tagging` phase reads back.
-`-O` is refused with `-r`, `-e`, `-k` and `-o`, which belong to a full ingest.
+`-O` is refused with `-r`, `-C`, `-k` and `-o`, which belong to a full ingest.
 
 ## Several folders
 

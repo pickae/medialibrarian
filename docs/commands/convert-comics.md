@@ -17,7 +17,7 @@ hold one large image per page — into a tree of `.cbz` archives of AVIF pages.
 
 With no options, a run:
 
-- writes pages as **AVIF** at quality 45, speed 4, colour at full resolution (4:4:4) (`-l`, `-s`, `-u`)
+- writes pages as **AVIF** at quality 45, speed 4, colour at full resolution (4:4:4) (`-Q`, `-s`, `-u`)
 - **scales pages taller than 2960 px down** to that height (`-m`)
 - **trims light, plain margins off every page**, treating colours within 10% of the edge as margin (`-f`; the trim is what `-k` keeps in)
 - **drops blank pages** (what the trim ends with deciding, so `-k` keeps them in with it)
@@ -52,7 +52,7 @@ encoded on the NVIDIA card and the CPU at once**, both kept busy:
   newer). A trimmed page's margin is the page's own rather than a flat border.
 - The CPU takes everything else - other formats, pages with transparency,
   pages the card did not write.
-- `-l` means what it means on the CPU: the card is asked for the quality whose
+- `-Q` means what it means on the CPU: the card is asked for the quality whose
   pages score the same SSIMULACRA2 as the CPU's on comic pages, with its
   `turbo` preset.
 
@@ -78,7 +78,7 @@ but puts a coloured fringe on thin inked lines and lettering.
 
 | `-u` | Colour | Size |
 | --- | --- | --- |
-| `444` (default) | full resolution | about a quarter more per page, which the slower default speed (`-s 4`) and lower default quality (`-l 45`) pay back, so books come out about the size they did at 4:2:0 |
+| `444` (default) | full resolution | about a quarter more per page, which the slower default speed (`-s 4`) and lower default quality (`-Q 45`) pay back, so books come out about the size they did at 4:2:0 |
 | `420` | a quarter of it | smaller books, with colour fringes on thin lines and lettering |
 
 4:4:4 is AV1's High profile: software decoders read it, but some hardware

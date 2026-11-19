@@ -1,5 +1,5 @@
 """`ytdlp -i`'s library copy, built while the downloads go on: the finished
-feeds it is handed, the batches it converts them in, and -g's chapters.
+feeds it is handed, the batches it converts them in, and -C's chapters.
 
 In process, with the two commands it runs recorded rather than run: what is
 asserted is which calls the queue makes and when, not what they do - that is
@@ -37,7 +37,7 @@ def library(tmp_path, monkeypatch):
         status_dir=str(status), manifest_dir=str(manifests), script_dir="",
         options={"cleanUp": False, "aiChapters": False},
         ingest={"staging": {"Music": str(staging)}, "root": str(tmp_path / "Ingested"),
-                "args": {"Music": "-c -b 65 -t"}},
+                "args": {"Music": "-c -b 65 -C"}},
         transcripts_for=lambda profile: ())
     index = [0]
 
@@ -83,17 +83,17 @@ class TestBatches:
         assert len(conversions) == 1
         assert conversions[0][-2:] == [str(library.staging),
                                        library.state.ingest["root"]]
-        assert conversions[0][1:-2] == ["-c", "-b", "65", "-t",
-                                        "-r", "A", "-r", "B", "-r", "C"]
+        assert conversions[0][1:-2] == ["-c", "-b", "65", "-C",
+                                        "-O", "A", "-O", "B", "-O", "C"]
 
     def test_the_chapter_instructions_go_over_whole(self, library):
         """-P's text is handed to convert-audio as one argument, however many
         spaces it holds."""
-        library.state.ingest["prompt"] = ["-p", "Name each speaker and topic."]
+        library.state.ingest["prompt"] = ["-P", "Name each speaker and topic."]
         library.feed("A", 1)
         library.drain()
         assert _conversions(library.calls)[0][1:-2] == [
-            "-c", "-b", "65", "-t", "-p", "Name each speaker and topic.", "-r", "A"]
+            "-c", "-b", "65", "-C", "-P", "Name each speaker and topic.", "-O", "A"]
 
     def test_a_batch_short_of_the_size_still_goes_when_the_downloads_end(self, library):
         library.feed("A", 1)
@@ -111,7 +111,7 @@ class TestBatches:
         library.feed("A", 1)
         library.feed("A", 1)
         library.drain()
-        assert _conversions(library.calls)[0].count("-r") == 1
+        assert _conversions(library.calls)[0].count("-O") == 1
 
     def test_a_profile_with_no_conversion_is_not_converted(self, library):
         library.feed("Videos", 6, profile="youtubeVideo")
@@ -158,19 +158,19 @@ class TestBeforeTheNamesChange:
 
 class TestTheOption:
     def test_g_without_i_is_refused(self, tmp_path, capsys):
-        status = ytdlp.main(["-g", str(tmp_path / "out"), "archive.log"])
+        status = ytdlp.main(["-C", str(tmp_path / "out"), "archive.log"])
         assert status == 1
-        assert "-g chapters the library copy, so it needs -i" in capsys.readouterr().err
+        assert "-C chapters the library copy, so it needs -i" in capsys.readouterr().err
 
     def test_P_without_g_is_refused(self, tmp_path, capsys):
         status = ytdlp.main(["-i", "-P", "Name them.", str(tmp_path / "out"),
                              "archive.log"])
         assert status == 1
-        assert "-P is for the chapter model, so it needs -g" in capsys.readouterr().err
+        assert "-P is for the chapter model, so it needs -C" in capsys.readouterr().err
 
     def test_an_unknown_spoken_language_is_refused(self, tmp_path, capsys, monkeypatch):
         monkeypatch.setenv("spokenLanguages", "xx")
-        assert ytdlp.main(["-i", "-g", str(tmp_path / "out"), "archive.log"]) == 1
+        assert ytdlp.main(["-i", "-C", str(tmp_path / "out"), "archive.log"]) == 1
         assert "spokenLanguages" in capsys.readouterr().err
 
     def test_only_a_youtube_feed_fetches_captions(self):

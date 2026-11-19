@@ -19,7 +19,7 @@ With no options, a run:
 
 - picks up `.mp4`, `.mkv`, `.avi`, `.mov`, `.webm`, `.m4v`, `.flv`, `.mpg`,
   `.mpeg`, `.wmv` and `.ts` files only, and writes every output as `.mkv`
-- encodes video with the `av1BluRay` preset: SVT-AV1, 10-bit, quality shifted by resolution (`-p`, `-l`; [details](#quality-and-grain))
+- encodes video with the `av1BluRay` preset: SVT-AV1, 10-bit, quality shifted by resolution (`-p`, `-Q`; [details](#quality-and-grain))
 - **measures each film's grain, denoises it out and synthesises it back** (`-g`)
 - **keeps the picture as it is**: no cropping, scaling or deinterlacing (`-c`, `-m`, `-u`)
 - keeps the first video stream only, and drops data streams
@@ -48,12 +48,12 @@ measured.
 | `-m <tier>` | caps the resolution; never scales up | [Picture size](#picture-size--m-and--u) |
 | `-u <tier>` | upscales what is smaller, with a neural network on the GPU | [Picture size](#picture-size--m-and--u) |
 | `-c` | crops the black bands off | [Cropping](#cropping--c) |
-| `-l <level>` | names the quality level yourself, and turns the per-file bias off | [Quality and grain](#quality-and-grain) |
+| `-Q <level>` | names the quality level yourself, and turns the per-file bias off | [Quality and grain](#quality-and-grain) |
 | `-g <level\|off>` | names the film grain yourself, or turns it off | [Quality and grain](#quality-and-grain) |
 | `-t [percent]` | converts only what has room to save | [Only what has room to save](#only-what-has-room-to-save--t) |
 | `-k` | keeps every track except the video as the source has it (below) | — |
-| `-n` | adds chapters to a video that has none, worked out by a language model | [Chapters](#chapters--n) |
-| `-P "<text>"` | with `-n`: your own instructions for that model | [Chapters](#chapters--n) |
+| `-C` | adds chapters to a video that has none, worked out by a language model | [Chapters](#chapters--c) |
+| `-P "<text>"` | with `-C`: your own instructions for that model | [Chapters](#chapters--c) |
 
 **`-k` keeps everything but the picture.** The audio is not re-encoded, and the
 finished video is combined with the source's audio, subtitles, attachments,
@@ -61,7 +61,7 @@ chapters and tags by `mkvmerge`, which keeps each track's name, language and fla
 (commentary, forced, …) unchanged. It needs `mkvmerge` and is refused together
 with `-a`, `-b` or `-s`.
 
-## Chapters (`-n`)
+## Chapters (`-C`)
 
 A video that has no chapters is given some, worked out by the language model the
 `chapterLlm` [settings](../settings.md) name, the way `generate-chapters` does it.
@@ -81,7 +81,7 @@ so the output is written once. The work runs beside the video encode, one file
 at a time.
 
 `-P "<text>"` adds your own instructions for the model, as
-[`generate-chapters -p`](generate-chapters.md#your-own-instructions) does; it needs `-n`.
+[`generate-chapters -P`](generate-chapters.md#your-own-instructions) does; it needs `-C`.
 
 ## Hardware and parallelism
 
@@ -206,7 +206,7 @@ states one quality level, and that level is then moved by the tier the file is
 *encoded* at — a 2160p file two levels softer, an SD file two levels harder — since
 the same number does not buy the same visible quality across the ladder. A source
 capped by `-m` is judged by the size it comes out at, not the one it arrived at.
-`-l` names a level yourself and turns the bias off.
+`-Q` names a level yourself and turns the bias off.
 
 **Film grain follows the source.** Every preset that synthesises grain measures each
 file and synthesises what it measured, so a clean digital master and a 16mm blow-up
@@ -240,7 +240,7 @@ and the refusal a typo gets lists the file's rows with the shipped ones:
 Whatever a row names is what a run then does with it, the way it does with a
 built-in: the encoder the row names is the one the hardware settles on, the
 level it states is the one the resolution bias moves, a row without a level
-is one `-l` does not apply to, and a VAAPI or QSV row takes the pixel format
+is one `-Q` does not apply to, and a VAAPI or QSV row takes the pixel format
 the hardware encoders take. The startup summary says when the profile in use
 is the file's rather than a shipped row.
 

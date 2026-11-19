@@ -36,13 +36,13 @@ Usage:
                   the first that fails: layout, roles, ocr, tagging,
                   subtitles, commentary, names, chapters, extras-chapters,
                   plex and backups, comma-separated. Cannot be combined with
-                  -r, -e, -k or -o.
-    -e, --extras-chapters
+                  -r, -C, -k or -o.
+    -C, --extras-chapters
                   also chapter the extras that have no chapters, by the
                   language model the chapterLlm settings name. A full ingest
                   only.
     -P, --prompt <text>
-                  with -e or -O extras-chapters: more instructions for the
+                  with -C or -O extras-chapters: more instructions for the
                   model, added to every request.
     -w, --write   with -O tagging, subtitles, names or backups: carry out what
                   their dry run only prints. On its own it is refused.
@@ -60,7 +60,7 @@ Usage:
 
     Phases
     ------
-    A full ingest runs all but backups (and extras-chapters without -e), one
+    A full ingest runs all but backups (and extras-chapters without -C), one
     level below each folder given, and remuxes each film once into an
     improved copy, keeping the original as "<name> (old).mkv". -O runs them
     one at a time over the whole tree.
@@ -75,7 +75,7 @@ Usage:
     commentary       finds and transcribes the commentary tracks (whisper)
     names            names numbered commentaries after who speaks in them
     chapters         gives the films their disc's chapters from ChapterDB
-    extras-chapters  chapters the extras by the language model (-e)
+    extras-chapters  chapters the extras by the language model (-C)
     plex             compares each film with the Plex library's copy, and
                      carries over what it lacks
     backups          drops the (old) originals whose copies pass the checks

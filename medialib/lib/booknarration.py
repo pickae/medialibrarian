@@ -1349,7 +1349,7 @@ def voice_sample_language(path):
 
 
 def prepare_voice_samples(given, scratch_dir, log=None):
-    """The voice map for what -r was given, having prepared every sample in it
+    """The voice map for what -V was given, having prepared every sample in it
     exactly once. Returns the map (one "<code><TAB><path>" per line, no trailing
     newline), or None when nothing usable came out of it at all."""
     if log is None:

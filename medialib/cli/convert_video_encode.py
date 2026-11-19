@@ -295,7 +295,7 @@ def mux_final(relative: str, directory: str, settings, output: str,
 
     Input 0 is the encoded video, input 1 the original (for the parts only it
     still has, and for passthrough audio), and any further inputs the encoded audio
-    in order. ``chaptered``, -n's :class:`convert_video_chapters.Outcome`, adds
+    in order. ``chaptered``, -C's :class:`convert_video_chapters.Outcome`, adds
     the chapters worked out for a source that had none, and the transcript they
     were worked out from as a subtitle after the source's own.
     """
@@ -375,7 +375,7 @@ def _mux_keeping_tracks(relative: str, directory: str, source: str,
             "--no-chapters", "--no-track-tags", "--no-global-tags",
             os.path.join(directory, "video.mkv"),
             "--no-video", source]
-    # -n's chapters stand in for the source's - it had none to speak of - and
+    # -C's chapters stand in for the source's - it had none to speak of - and
     # its transcript follows the source's subtitles.
     if chaptered is not None and chaptered.rows:
         argv[-2:-2] = ["--no-chapters"]

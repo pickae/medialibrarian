@@ -1030,7 +1030,7 @@ def _only_phases(declaration, result, program: str, script_dir: str) -> int:
         clioptions.refuse_usage(declaration, error.message)
         return 1
     phases = result.values["onlyPhases"].split(",")
-    for letter, key in (("r", "convertRemuxes"), ("e", "extrasChapters"),
+    for letter, key in (("r", "convertRemuxes"), ("C", "extrasChapters"),
                         ("k", None), ("o", None)):
         if (letter in result.given if key is None
                 else result.values.get(key)):
@@ -1162,11 +1162,11 @@ def _main_one(declaration, result, program: str, script_dir: str,
             "-k says take nothing away, and -r converts the remuxes by "
             "encoding\nthem: they contradict each other. Drop one.")
         return 1
-    # The instructions are for the model -e asks; without it there is none.
+    # The instructions are for the model -C asks; without it there is none.
     if ("P" in result.given and not result.values.get("extrasChapters")
             and phase != "extras-chapters"):
         clioptions.refuse_usage(declaration, "-P (instructions for the chapter "
-                                "model) needs -e, or -O extras-chapters.")
+                                "model) needs -C, or -O extras-chapters.")
         return 1
 
     script_dir = script_dir or commands.script_dir()
@@ -1290,7 +1290,7 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
     if result.values.get("extrasChapters"):
         extras_llm = chapterwork.model(
             program, (result.values.get("chapterInstructions") or "").strip(),
-            "-e", log)
+            "-C", log)
         if extras_llm is None:
             return 1
 
@@ -1963,7 +1963,7 @@ def _extras_chapters_only(program: str, script_dir: str, roots: list,
                           instructions: str) -> int:
     """The extras' chapters phase on its own: every bonus video below each
     folder given that has no chapters is given some worked out by the chapter
-    model from what is said in it, written in place with mkvpropedit - what -e
+    model from what is said in it, written in place with mkvpropedit - what -C
     does beside a full ingest. -P adds instructions for the model."""
     if tooldeps.require_tools(program, ["ffmpeg", "ffprobe", "mkvmerge",
                                         "mkvpropedit"]):
@@ -3257,7 +3257,7 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
 def _films_in_lanes(state, root: str, subtitle_work: bool, locks,
                     row=None, fetching=None,
                     commentary_work: bool | None = None) -> None:
-    """:func:`_lanes`, with -e's chapter lane running beside it: started first,
+    """:func:`_lanes`, with -C's chapter lane running beside it: started first,
     so the extras that need only a read and the model are chaptered from the
     start, and waited for on every way out, since a chapter write cut off
     halfway would leave the extra half-written."""

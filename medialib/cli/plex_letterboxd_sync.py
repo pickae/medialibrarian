@@ -62,7 +62,7 @@ l |  | Letterboxd -> Plex only: mark films played and rated, and
 o | <file> | Write the CSV for Letterboxd's importer to <file>. Default:
                     logs/letterboxd-import-<date>.csv in the medialib data
                     directory.
-k | <file> | Remember what Letterboxd has, and what was sent to it, in
+S | <file> | Remember what Letterboxd has, and what was sent to it, in
                     <file>, and keep a copy of the Plex library beside it, so
                     the next run reads only what changed. Default:
                     data/plex-letterboxd-state.json in the medialib data
@@ -79,10 +79,10 @@ p |  | Preview: say what would be marked, rated, added and
 h |  | Print this help page.
 """
 
-OPT_VARS = ("s:sections l:toPlexOnly o:outOverride k:stateOverride a:account "
+OPT_VARS = ("s:sections l:toPlexOnly o:outOverride S:stateOverride a:account "
             "f:whole p:simulate")
 OPT_COLUMN = 20
-OPT_LONG = ("s:sections l:to-plex-only o:output k:state a:account f:full "
+OPT_LONG = ("s:sections l:to-plex-only o:output S:state a:account f:full "
             "p:preview h:help")
 OPT_CHECKS = """
 a | nonNegInt | account number

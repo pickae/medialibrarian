@@ -151,8 +151,8 @@ the two systems and is worked out at run time:
 | `-q` | prints only failures: no episode lines and no warnings |
 | [`-c`](#tidying-up-after-a-run--c) | tidies up after the run |
 | [`-i`](#building-the-phones-library-from-the-run--i) | builds the phone's library from the run |
-| [`-g`](#chapters-for-the-library--g) | with `-i`, chapters every episode in the library that has none |
-| [`-P`](#chapters-for-the-library--g) | with `-g`, your own instructions for the chapter model |
+| [`-C`](#chapters-for-the-library--c) | with `-i`, chapters every episode in the library that has none |
+| [`-P`](#chapters-for-the-library--c) | with `-C`, your own instructions for the chapter model |
 | [`-l`](#merging-archives--l) | merges archives; downloads nothing |
 
 ### Tidying up after a run (`-c`)
@@ -209,18 +209,18 @@ converted as soon as it is finished, a few episodes at a time. When the
 downloads are over, the last batch is converted, and so are the staging folders
 no table in this run downloads into.
 
-### Chapters for the library (`-g`)
+### Chapters for the library (`-C`)
 
-With `-i`, `-g` adds `-t` to every conversion: every episode in the library
+With `-i`, `-C` is passed on to every conversion: every episode in the library
 that has no chapters gets some, worked out by a language model from a
-transcript of the speech ([`convert-audio -t`](convert-audio.md#chapters-for-what-has-none--t),
+transcript of the speech ([`convert-audio -C`](convert-audio.md#chapters-for-what-has-none--c),
 with the `chapterLlm` settings). That covers the episodes already in a feed's
-staging folder as well as the new ones, so the first run with `-g` chapters a
+staging folder as well as the new ones, so the first run with `-C` chapters a
 feed's back catalogue too. A run whose model cannot be reached is refused
 before anything is fetched.
 
 `-P "<text>"` adds your own instructions for the model, as
-[`generate-chapters -p`](generate-chapters.md#your-own-instructions) does; it needs `-g`.
+[`generate-chapters -P`](generate-chapters.md#your-own-instructions) does; it needs `-C`.
 
 Where the transcript comes from depends on the feed:
 

@@ -78,7 +78,7 @@ s |  | Keep the source's channels up to 7.1: an audio track above stereo
 e | <count> | NVENC engine count to parallelise hardware encoding across,
                   overriding the built-in per-GPU guess. Only affects the *Nvenc
                   profiles.
-l | <level> | Constant-quality level to encode at, overriding the one the
+Q | <level> | Constant-quality level to encode at, overriding the one the
                   chosen video profile hardcodes: -crf for the software profiles,
                   -cq for the *Nvenc ones. Lower means better quality and a bigger
                   file, and the bitrate follows from it. Also turns OFF the
@@ -144,7 +144,7 @@ k |  | Keep every track but the video exactly as the source has it:
                   track's name, language and flags the way it found them.
                   Needs mkvmerge. Not with -a, -b or -s, which say how the
                   audio is re-encoded.
-n |  | Add chapters to every video that has none, worked out by a
+C |  | Add chapters to every video that has none, worked out by a
                   language model (the chapterLlm settings) from what is said.
                   The first text subtitle that is the film's dialogue - not a
                   commentary, SDH or forced one - is read for it; a video with
@@ -152,16 +152,16 @@ n |  | Add chapters to every video that has none, worked out by a
                   commentary, audio description or isolated score, and that
                   transcript is added to the output as a subtitle as well.
                   Runs beside the video encode.
-P | <text> | With -n: more instructions for the model, added to every
+P | <text> | With -C: more instructions for the model, added to every
                   request, e.g. "a chapter per scene, titled with where it
                   takes place". The model then reasons at medium effort, and
                   Claude may search the web.
 """
 
 OPT_LONG = ("h:help j:cores p:profile a:audio-profile b:audio-bitrate "
-            "s:surround e:nvenc-engines l:quality m:max-resolution "
+            "s:surround e:nvenc-engines Q:quality m:max-resolution "
             "u:upscale c:crop f:fast-decode g:grain t:test k:keep-tracks "
-            "n:ai-chapters P:prompt")
+            "C:ai-chapters P:prompt")
 
 USAGE_TAIL = r"""
 
@@ -296,7 +296,7 @@ def spec(program: str) -> "clioptions.Spec":
         options=OPT_SPEC,
         long=OPT_LONG,
         vars="j:CORES p:videoProfile a:audioProfile b:customAudioBitrate "
-             "e:nvencEnginesOverride l:videoQuality f:videoFastDecode "
+             "e:nvencEnginesOverride Q:videoQuality f:videoFastDecode "
              "g:videoGrain m:maxVideoResolution u:upscaleResolution "
              "P:chapterInstructions",
         flags="optionalArg:t:^[0-9]+$",
@@ -429,7 +429,7 @@ def video_quality_flag(args: str) -> str:
 
     The same knob under two names: -crf for the software encoders, -cq for the
     NVENC ones. The av1Constrained* rows have neither - they target an average
-    bitrate, so there is no level for -l to override.
+    bitrate, so there is no level for -Q to override.
     """
     padded = " %s " % args
     if " -crf " in padded:
@@ -443,7 +443,7 @@ def video_quality_max(args: str) -> int:
     """``videoQualityMax``: the top of that encoder's scale. SVT-AV1's CRF runs to
     63; x265's CRF and NVENC's CQ both stop at 51.
 
-    Used both to reject an out-of-range -l up front and to clamp the resolution
+    Used both to reject an out-of-range -Q up front and to clamp the resolution
     bias, so the two cannot disagree about what the encoder will accept.
     """
     return 63 if "libsvtav1" in args else 51
@@ -488,7 +488,7 @@ def apply_video_quality(args: str, width="", height="", given: bool = False,
                         quality: str = "") -> str:
     """``applyVideoQuality``: that argument string with its level settled.
 
-    The -l value when one was given, or the profile's own level moved by the
+    The -Q value when one was given, or the profile's own level moved by the
     resolution bias when it was not. The two dimensions are the size the file is
     ENCODED at, not the size it arrived at: with -m in play those differ, and it is
     the encoded frame that decides whether a level is generous or mean. A profile
@@ -1075,7 +1075,7 @@ class Settings:
         # -k: the audio left alone, and every track but the video taken from
         # the source by mkvmerge rather than remapped by ffmpeg.
         self.keep_tracks = False
-        # -n: chapters worked out by a language model for a video with none.
+        # -C: chapters worked out by a language model for a video with none.
         self.ai_chapters = False
         # -P: the user's own instructions for that model.
         self.chapter_instructions = ""
