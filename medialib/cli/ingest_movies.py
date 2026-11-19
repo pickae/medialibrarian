@@ -31,6 +31,7 @@ from typing import NamedTuple
 
 from medialib import commands
 from medialib.lib import (
+    audiotracks,
     bitrates,
     cleannamesindividually,
     clioptions,
@@ -842,18 +843,19 @@ class Track:
             commentary=self.commentary == "true")
 
     @property
+    def audio_role(self) -> str:
+        """An audio track's role, from its flags and its name: see
+        :func:`audiotracks.audio_role`."""
+        return audiotracks.audio_role(
+            self.name if self.name != "null" else "",
+            commentary=self.commentary == "true",
+            visual_impaired=self.visual_impaired == "true")
+
+    @property
     def is_audio_description(self) -> bool:
         """A narration of the picture for the blind over the film's own mix:
         flagged for the visually impaired, or named as one."""
-        if self.is_commentary:
-            return False
-        return (self.visual_impaired == "true"
-                or bool(_AUDIO_DESCRIPTION_NAME.search(self.name)))
-
-
-# "Audio Description", "audiodescription", "Audiodeskription", "AD" - the last
-# in capitals only, where a lower-case "ad" is a word in more than one language.
-_AUDIO_DESCRIPTION_NAME = re.compile(r"(?i:descri|deskri)|\bAD\b")
+        return self.audio_role == "description"
 
 
 def _identify(movie: str) -> list:
@@ -1376,15 +1378,17 @@ def _tag_arguments(tracks: list) -> list:
     track and exit non-zero, so every movie logged a spurious failure even though
     the tags were written.
     """
-    # The default audio track is the first non-commentary audio track, falling
-    # back to the first audio track when every one of them is a commentary.
+    # The default audio track is the first soundtrack - the first audio track
+    # that is not a commentary, an audio description, a score or other bonus
+    # audio - falling back to the first audio track when there is none.
     first_video = first_audio = default_audio = None
     for position, track in enumerate(tracks, start=1):
         if first_video is None and track.is_video:
             first_video = position
         if first_audio is None and track.is_audio:
             first_audio = position
-        if default_audio is None and track.is_audio and not track.is_commentary:
+        if (default_audio is None and track.is_audio
+                and track.audio_role == "main"):
             default_audio = position
     if default_audio is None:
         default_audio = first_audio
@@ -1419,7 +1423,8 @@ def _tag_arguments(tracks: list) -> list:
                 and track.is_commentary):
             sets += ["--set", "language=eng"]
 
-        if "isolated score" in folded:
+        # Music with no words in it has no language to be in.
+        if track.is_audio and track.audio_role in ("score", "effects"):
             sets += ["--set", "language=zxx"]
 
         arguments += ["--edit", "track:%d" % position] + sets

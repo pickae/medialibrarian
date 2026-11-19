@@ -35,6 +35,7 @@ import unicodedata
 from typing import NamedTuple
 
 from medialib import helpers
+from medialib.lib import audiotracks
 
 __all__ = [
     "PROBE_COMMAND",
@@ -77,14 +78,6 @@ MIN_NEW_WORDS = 0.5
 COMMENTARY = "commentary"
 NOT_COMMENTARY = "not"
 UNSURE = "unsure"
-
-# Words in a track's name that already say what it is, and that it is not a
-# commentary: an audio description shares the film's dialogue AND adds a voice,
-# which is the one kind of track the two signals could split on, and a score or
-# an effects track is a track somebody took the trouble to name.
-_NAMED_AS_OTHER = re.compile(
-    r"descri|deskri|\bad\b|isolated|score|music|musik|musique|effects",
-    re.IGNORECASE)
 
 # Scripts written without spaces between words, where a "word" whisper prints
 # is a whole phrase: they are compared by their pairs of characters instead.
@@ -134,9 +127,12 @@ def suspects(audio: list[AudioTrack]) -> list[AudioTrack]:
     """
     found = []
     for track in audio[1:]:
-        if track.commentary or track.visual_impaired:
-            continue
-        if _NAMED_AS_OTHER.search(track.name or ""):
+        # A track whose flags or name already say what it is: an audio
+        # description shares the film's dialogue AND adds a voice, which is the
+        # one kind of track the two signals could split on, and a score or an
+        # effects track is a track somebody took the trouble to name.
+        if not audiotracks.is_main(track.name, commentary=track.commentary,
+                                   visual_impaired=track.visual_impaired):
             continue
         try:
             channels = int(track.channels)

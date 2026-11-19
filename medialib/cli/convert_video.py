@@ -144,11 +144,24 @@ k |  | Keep every track but the video exactly as the source has it:
                   track's name, language and flags the way it found them.
                   Needs mkvmerge. Not with -a, -b or -s, which say how the
                   audio is re-encoded.
+n |  | Add chapters to every video that has none, worked out by a
+                  language model (the chapterLlm settings) from what is said.
+                  The first text subtitle that is the film's dialogue - not a
+                  commentary, SDH or forced one - is read for it; a video with
+                  none is transcribed from its first soundtrack that is not a
+                  commentary, audio description or isolated score, and that
+                  transcript is added to the output as a subtitle as well.
+                  Runs beside the video encode.
+P | <text> | With -n: more instructions for the model, added to every
+                  request, e.g. "a chapter per scene, titled with where it
+                  takes place". The model then reasons at medium effort, and
+                  Claude may search the web.
 """
 
 OPT_LONG = ("h:help j:cores p:profile a:audio-profile b:audio-bitrate "
             "s:surround e:nvenc-engines l:quality m:max-resolution "
-            "u:upscale c:crop f:fast-decode g:grain t:test k:keep-tracks")
+            "u:upscale c:crop f:fast-decode g:grain t:test k:keep-tracks "
+            "n:ai-chapters P:prompt")
 
 USAGE_TAIL = r"""
 
@@ -294,7 +307,8 @@ def spec(program: str) -> "clioptions.Spec":
         long=OPT_LONG,
         vars="j:CORES p:videoProfile a:audioProfile b:customAudioBitrate "
              "e:nvencEnginesOverride l:videoQuality f:videoFastDecode "
-             "g:videoGrain m:maxVideoResolution u:upscaleResolution",
+             "g:videoGrain m:maxVideoResolution u:upscaleResolution "
+             "P:chapterInstructions",
         flags="optionalArg:t:^[0-9]+$",
         column=18,
         tail=USAGE_TAIL,
@@ -1071,6 +1085,10 @@ class Settings:
         # -k: the audio left alone, and every track but the video taken from
         # the source by mkvmerge rather than remapped by ffmpeg.
         self.keep_tracks = False
+        # -n: chapters worked out by a language model for a video with none.
+        self.ai_chapters = False
+        # -P: the user's own instructions for that model.
+        self.chapter_instructions = ""
         self.hardware_encode = False
         self.nvenc_engines = 1
         self.nvenc_tune = NVENC_TUNE_WANTED

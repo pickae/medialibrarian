@@ -52,12 +52,38 @@ measured.
 | `-g <level\|off>` | names the film grain yourself, or turns it off | [Quality and grain](#quality-and-grain) |
 | `-t [percent]` | converts only what has room to save | [Only what has room to save](#only-what-has-room-to-save--t) |
 | `-k` | keeps every track except the video as the source has it (below) | — |
+| `-n` | adds chapters to a video that has none, worked out by a language model | [Chapters](#chapters--n) |
+| `-P "<text>"` | with `-n`: your own instructions for that model | [Chapters](#chapters--n) |
 
 **`-k` keeps everything but the picture.** The audio is not re-encoded, and the
 finished video is combined with the source's audio, subtitles, attachments,
 chapters and tags by `mkvmerge`, which keeps each track's name, language and flags
 (commentary, forced, …) unchanged. It needs `mkvmerge` and is refused together
 with `-a`, `-b` or `-s`. `ingest-movies -r` uses it.
+
+## Chapters (`-n`)
+
+A video that has no chapters is given some, worked out by the language model the
+`chapterLlm` [settings](../settings.md) name, the way `generate-chapters` does it.
+A video that has chapters keeps them.
+
+What is said in the film is read from its first text subtitle that is its
+dialogue: not a commentary's, not one for the deaf and hard of hearing, not the
+forced lines - by the track's flags, or by its name where it has none. Only a
+video with no such subtitle is transcribed with whisper, from its first
+soundtrack that is not a commentary, an audio description, an isolated score or
+music and effects; that transcript goes into the output too, as a subtitle named
+"Transcript". A subtitle that holds too few lines to be the dialogue, or a
+soundtrack whisper hears too little speech in, is passed over for the next one.
+
+The chapters and the transcript are written by the same mux as everything else,
+so the output is written once. The work runs beside the video encode, one file
+at a time.
+
+`-P "<text>"` adds your own instructions to every request the model gets, for
+example a chapter per scene titled with where it takes place. The model then
+reasons at medium effort, and Claude may search the web, as with
+[`generate-chapters -p`](generate-chapters.md#your-own-instructions). `-P` needs `-n`.
 
 ## Hardware and parallelism
 

@@ -18,11 +18,10 @@ the lengths decide, a minute or more apart being two versions.
 from __future__ import annotations
 
 import json
-import re
 import subprocess
 from typing import NamedTuple
 
-from medialib.lib import chapterdb, filmrecord, languages
+from medialib.lib import audiotracks, chapterdb, filmrecord
 
 __all__ = ["Audio", "Profile", "Comparison", "Offset", "Timing",
            "read_profile", "compare", "measure_offset", "audio_pair", "tier"]
@@ -71,12 +70,10 @@ _REFINE = 2 * _HOP
 _TRUSTED_ENVELOPE = 0.5
 _TRUSTED_WAVEFORM = 0.3
 
-# Bonus audio that is neither a commentary nor a soundtrack to watch the film in.
-_OTHER_AUDIO = (("isolated score", re.compile(r"isolat|score only|music only",
-                                              re.IGNORECASE)),
-                ("music & effects", re.compile(r"effects|\bm ?& ?e\b", re.IGNORECASE)),
-                ("audio description", re.compile(r"descripti", re.IGNORECASE)),
-                ("interview", re.compile(r"interview", re.IGNORECASE)))
+# Bonus audio that is neither a commentary nor a soundtrack to watch the film
+# in: each audiotracks role of it, as a report names it.
+_OTHER_AUDIO = {"description": "audio description", "effects": "music & effects",
+                "score": "isolated score", "interview": "interview"}
 
 # The HDR kinds, worst to best.
 _HDR_RANK = {"SDR": 0, "HLG": 1, "HDR10": 1, "HDR10+": 2, "Dolby Vision": 3}
@@ -288,9 +285,12 @@ def read_profile(path: str, edition: str = "") -> Profile | None:
             str(properties.get("language_ietf") or ""),
             _number(properties.get("audio_sampling_frequency")))
         index += 1
-        if properties.get("flag_commentary") or languages.is_commentary_name(name):
+        role = audiotracks.audio_role(
+            name, commentary=bool(properties.get("flag_commentary")),
+            visual_impaired=bool(properties.get("flag_visual_impaired")))
+        if role == "commentary":
             commentaries.append(audio)
-        elif properties.get("flag_visual_impaired") or _other_kind(name):
+        elif role != "main":
             others.append(audio)
         else:
             soundtracks.append(audio)
@@ -308,10 +308,7 @@ def read_profile(path: str, edition: str = "") -> Profile | None:
 
 def _other_kind(name: str) -> str:
     """What kind of bonus audio a track name says it is, or ""."""
-    for kind, pattern in _OTHER_AUDIO:
-        if pattern.search(name):
-            return kind
-    return ""
+    return _OTHER_AUDIO.get(audiotracks.audio_role(name), "")
 
 
 def tier(width: int, height: int) -> int:
