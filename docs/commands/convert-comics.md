@@ -9,7 +9,7 @@ hold one large image per page — into a tree of `.cbz` archives of AVIF pages.
 | --- | --- |
 | **Takes** | a tree of `.cbr`/`.cbz`/`.cb7` archives and comic PDFs |
 | **Writes** | one `.cbz` per book in its mirrored parent folder: the same depth and roughly the same file count as the input, not one extra folder level per book |
-| **Input** | never modified |
+| **Input** | renamed in place when an archive wears the extension of another - a zip called `.cbr` becomes `.cbz` (`-k input` keeps the name); duplicate files removed, empty folders pruned |
 | **Reruns** | a `.cbz` left by an earlier run is skipped, so a grown library neither duplicates nor rewrites finished books |
 | **Network** | none |
 
@@ -29,7 +29,9 @@ With no options, a run:
 1. Each book is extracted and flattened into a single folder of pages. A book
    is opened as what its contents are, not what its extension says, and **an
    archive under the wrong extension is renamed in the input** — a zip called
-   `.cbr` becomes `.cbz`, a RAR called `.cbz` becomes `.cbr`. The `__MACOSX/`
+   `.cbr` becomes `.cbz`, a RAR called `.cbz` becomes `.cbr`. With `input` in
+   `-k` the rename stays out: the book is opened by content either way, so it
+   comes out the same under the name it was given. The `__MACOSX/`
    and `._` files a Mac leaves in an archive are not pages and are dropped.
 2. The pages are converted to AVIF, trimmed on the sides, skipped if empty, and numbered `01`, `02`, … in their reading order (`-k` keeps the trim and the skipping in, so a kept page is the page it came in as).
 3. The finished folder of pages is zipped back into one **stored** (level 0 —
@@ -103,18 +105,25 @@ The decision is taken once for the whole book, because a `.cbz` whose pages are
 half AVIF and half JPEG is worse than either. Books repackaged this way are named
 in the closing report.
 
-## Keeping the pages (`-k`)
+## Keeping everything (`-k`)
 
-**`-k pages` keeps the two edits a run otherwise makes to what a page is in**:
-the trim of the light, plain margins off every page, and the drop of the page
-the trim ends with deciding is blank. What a kept page still gets is
-everything that only shapes the file: the `-m` cap, the encode, the numbering.
-The closing report names only what occurred, so a kept run carries no trimmed
-line and no blank line at all - and the page a run without the part would drop
-is in the book, numbered like its siblings.
+**A run with `-k` takes nothing away.** The `-k` is given in parts - `pages`
+and `input`, comma-separated - and a bare `-k` keeps both.
 
-`-f` is the fuzz of the trim, and the part keeps the trim in, so the two are
-refused together with the page, before any book is touched.
+`pages` keeps the two edits a run otherwise makes to what a page is: the trim
+of the light, plain margins off every page, and the drop of the page the trim
+ends with deciding is blank. What a kept page still gets is everything that
+only shapes the file: the `-m` cap, the encode, the numbering. The closing
+report names only what occurred, so a kept run carries no trimmed line and no
+blank line at all - and the page a run without the part would drop is in the
+book, numbered like its siblings. `-f` is the fuzz of the trim, and the part
+keeps the trim in, so the two are refused together with the page, before any
+book is touched.
+
+`input` keeps the one rename that changes a name the user chose: an archive
+under the wrong extension - a zip called `.cbr`, a RAR called `.cbz` - keeps
+the name it was given. The book is opened as what its contents are either
+way, so the run comes out the same book under the kept name.
 
 ---
 

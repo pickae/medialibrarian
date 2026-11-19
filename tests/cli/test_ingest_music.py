@@ -676,3 +676,123 @@ class TestTheParallelWidth:
         (8, 1, ""), (1, 20, "")])
     def test_the_width_is_what_the_queue_can_use(self, jobs, items, expected):
         assert im._in_parallel(jobs, items) == expected
+
+
+class TestDiscsToSplit:
+    """Which folders the disc split moves: two or more cue sheets in one, and
+    the image a cue names beside them. A folder the split does not name, the
+    kept-downloads refusal does not refuse, so the two share this walk."""
+
+    def _rip(self, root, image_extension="flac", with_images=True):
+        rip = root / "Rip"
+        rip.mkdir()
+        for stem in ("disc1", "disc2"):
+            if with_images:
+                (rip / (stem + "." + image_extension)).write_bytes(b"x")
+            (rip / (stem + ".cue")).write_text('FILE "%s" WAVE\n' % stem)
+
+    def test_a_two_disc_rip_is_named_once_per_disc(self, tmp_path):
+        self._rip(tmp_path)
+        found = im.discs_to_split(str(tmp_path))
+        assert sorted(os.path.relpath(folder, str(tmp_path))
+                      for _cue, folder in found) == ["Rip", "Rip"]
+
+    def test_a_single_image_is_not_named(self, tmp_path):
+        album = tmp_path / "Album"
+        album.mkdir()
+        (album / "one.flac").write_bytes(b"x")
+        (album / "one.cue").write_text('FILE "one.flac" WAVE\n')
+        assert im.discs_to_split(str(tmp_path)) == []
+
+    def test_a_cue_without_its_image_is_not_named(self, tmp_path):
+        self._rip(tmp_path, with_images=False)
+        assert im.discs_to_split(str(tmp_path)) == []
+
+    def test_the_alac_image_wears_the_extension_it_arrived_with(self,
+                                                                tmp_path):
+        """The split runs before the ALAC rename, so an ALAC image is still a
+        .m4a when this asks what the cue's disc is."""
+        self._rip(tmp_path, image_extension="m4a")
+        found = im.discs_to_split(str(tmp_path))
+        assert len(found) == 2, found
+
+
+class TestUnderAny:
+    """What is in, or below, a refused folder: the folder itself and
+    everything under it, and nothing that merely begins with its name."""
+
+    @pytest.mark.parametrize("relative,folder,under", [
+        ("Rip", "Rip", True),
+        ("Rip/disc1/disc1.flac", "Rip", True),
+        ("RipExtra/one.flac", "Rip", False),
+        ("Album/one.flac", "Rip", False),
+        ("Rip", ".", True),
+        ("Album/one.flac", ".", True),
+    ])
+    def test_the_boundary(self, relative, folder, under):
+        assert im._under_any(relative, frozenset((folder,))) is under
+
+
+class TestTheDownloadsCopy:
+    """The scratch copy a kept download is worked on: the tree, and the
+    empty name when the tree cannot be held."""
+
+    def test_the_copy_holds_the_tree_and_leaves_the_folder(self, tmp_path):
+        download = tmp_path / "download"
+        album = download / "Album"
+        album.mkdir(parents=True)
+        (album / "one.flac").write_bytes(b"one")
+        copy = im._downloads_copy(str(download))
+        assert copy, "the host holds no scratch the copy could land in"
+        assert os.path.abspath(copy) != os.path.abspath(str(download))
+        assert (pathlib.Path(copy) / "Album" / "one.flac").read_bytes() == b"one"
+        assert (album / "one.flac").read_bytes() == b"one"
+
+    def test_a_copy_that_cannot_be_made_is_the_empty_name(self, tmp_path,
+                                                          monkeypatch):
+        download = tmp_path / "download"
+        download.mkdir()
+        (download / "one.flac").write_bytes(b"one")
+        monkeypatch.setattr(im.ramscratch, "ram_scratch_dir_for",
+                            lambda *args, **kwargs: ("", 0, 1))
+        assert im._downloads_copy(str(download)) == ""
+
+
+class TestTheRefusedMultiDiscFolders:
+    """A kept download whose scratch copy did not hold: the folders the split
+    needs are refused rather than ingested flat - each named, counted once,
+    and left in the download."""
+
+    def _state(self):
+        return im.Run(counters=_Counters())
+
+    def test_the_multi_disc_folder_is_refused_and_said(self, tmp_path):
+        rip = tmp_path / "Rip"
+        rip.mkdir()
+        for stem in ("disc1", "disc2"):
+            (rip / (stem + ".flac")).write_bytes(b"x")
+            (rip / (stem + ".cue")).write_text('FILE "%s.flac" WAVE\n' % stem)
+        state = self._state()
+        refused = im._refuse_multi_disc(state, str(tmp_path))
+        assert refused == frozenset({"Rip"})
+        assert state.counters.counts["foldersRefused"] == 1
+        assert any('Refused "Rip"' in line
+                   for line in state.counters.notes)
+
+    def test_the_single_image_folder_is_not_refused(self, tmp_path):
+        album = tmp_path / "Album"
+        album.mkdir()
+        (album / "one.flac").write_bytes(b"x")
+        (album / "one.cue").write_text('FILE "one.flac" WAVE\n')
+        state = self._state()
+        assert im._refuse_multi_disc(state, str(tmp_path)) == frozenset()
+        assert "foldersRefused" not in state.counters.counts
+
+    def test_a_multi_disc_set_at_the_root_refuses_the_root(self, tmp_path):
+        for stem in ("disc1", "disc2"):
+            (tmp_path / (stem + ".flac")).write_bytes(b"x")
+            (tmp_path / (stem + ".cue")).write_text(
+                'FILE "%s.flac" WAVE\n' % stem)
+        state = self._state()
+        assert im._refuse_multi_disc(state, str(tmp_path)) == frozenset(
+            {os.curdir})

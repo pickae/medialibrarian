@@ -811,6 +811,19 @@ class TestTheWordAfterTheFlag:
         assert done.returncode == 0, done.stdout + done.stderr
         assert (keep_music.library / "Album" / "one.flac").is_file()
 
+    def test_a_download_folder_literally_named_downloads(self, keep_music):
+        """The second part name the flag would eat, the same way: written
+        ./downloads, the folder is the first positional after all."""
+        download = keep_music.work / "downloads"
+        (download / "Album").mkdir(parents=True)
+        (download / "Album" / "one.flac").write_text("one")
+        done = keep_music.ingest("-k",
+                                 positionals=("./downloads",
+                                              str(keep_music.library),
+                                              str(keep_music.opus)))
+        assert done.returncode == 0, done.stdout + done.stderr
+        assert (keep_music.library / "Album" / "one.flac").is_file()
+
     def test_and_the_bare_name_is_the_part_not_the_folder(self, keep_music):
         """The same folder written resolution, with no ./ to keep it from
         being the part: the word goes to -k, the run's first positional is
@@ -825,6 +838,119 @@ class TestTheWordAfterTheFlag:
         assert done.returncode == 1, log
         assert 'Directory "%s" does not exist' % str(keep_music.library) \
             in log, log
+
+
+class TestKeptDownloads:
+    """-k downloads: the run works on a copy of the download folder: the
+    de-duplication, the disc split and the renames happen on it, and the
+    folder comes out of the run as it went in. The measures the part keeps out
+    of the folder are the real ones - the real fdupes, not the stand-in - so
+    what the part is is what they do not do to it."""
+
+    @pytest.fixture
+    def kept(self, sandbox, tmp_path):
+        """The -k resolution cases' release plus a two-disc rip and a pair of
+        identical files, the two things the folder is otherwise changed by."""
+        for tool in _TOOLS + ("fdupes",):
+            if shutil.which(tool) is None:
+                conftest.missing_host_tool(
+                    "the host has no %s: the command needs it to report what "
+                    "is asserted here" % tool)
+        calls = sandbox.work / "ffmpeg-calls"
+        sandbox.with_tool("ffprobe", _FFPROBE_HIRES)
+        sandbox.with_tool("ffmpeg", _FFMPEG_CALLS(str(calls)))
+        sandbox.with_tool("convert", _CONVERT)
+        sandbox.with_tool("mkvmerge", _MKVMERGE)
+        sandbox.with_tools("beet", "mkvpropedit", "mkvextract")
+
+        download = tmp_path / "download"
+        album = download / "Album"
+        album.mkdir(parents=True)
+        (album / "one.flac").write_bytes(b"one")
+        (album / "one-copy.flac").write_bytes(b"one")
+        rip = download / "Rip"
+        rip.mkdir()
+        for stem in ("disc1", "disc2"):
+            (rip / (stem + ".flac")).write_bytes(("rip " + stem).encode())
+            (rip / (stem + ".cue")).write_text('FILE "%s.flac" WAVE\n' % stem)
+
+        library = tmp_path / "library"
+        opus = tmp_path / "libraryopus"
+
+        def run(*options, positionals=None):
+            done = sandbox.run("ingest-music", "-j", "2", *options,
+                               *(positionals or (download, library, opus)),
+                               timeout=900)
+            return done
+
+        sandbox.ffmpeg_calls = calls
+        sandbox.download = download
+        sandbox.library = library
+        sandbox.opus = opus
+        sandbox.ingest = run
+        return sandbox
+
+    def _tree(self, folder):
+        return blackbox.tree_of(folder)
+
+    def test_the_kept_folder_is_the_one_it_went_in_as(self, kept):
+        before = self._tree(kept.download)
+        done = kept.ingest("-k", "downloads")
+        assert done.returncode == 0, done.stdout + done.stderr
+        assert self._tree(kept.download) == before
+
+    def test_the_default_run_is_the_changing_one(self, kept):
+        """The contrast: the same folder without the part is de-duplicated and
+        split in place, which is what the part keeps out of it."""
+        done = kept.ingest()
+        assert done.returncode == 0, done.stdout + done.stderr
+        after = self._tree(kept.download)
+        assert "Rip/disc1/disc1.flac" in after, after
+        assert "Rip/disc1.flac" not in after, after
+        assert sum(name.startswith("Album/") and name.endswith(".flac")
+                   for name in after) == 1, after
+
+    def test_the_split_happens_in_the_library_not_the_folder(self, kept):
+        done = kept.ingest("-k", "downloads")
+        assert done.returncode == 0, done.stdout + done.stderr
+        # The subfolders the split made are name-cleaned to their disc numbers
+        # before the assertion can name them.
+        assert (kept.library / "Rip" / "1" / "disc1.flac").is_file()
+        assert (kept.library / "Rip" / "2" / "disc2.flac").is_file()
+        # The de-duplication happened on the copy the run worked on: the
+        # library holds the one track the duplicate came down to.
+        assert sum(name.startswith("Album/") and name.endswith(".flac")
+                   for name in self._tree(kept.library)) == 1
+
+    def test_a_bare_k_keeps_every_part(self, kept):
+        """The folder here, and the source's resolution in the encode the
+        resolution part is about."""
+        before = self._tree(kept.download)
+        done = kept.ingest("-k")
+        assert done.returncode == 0, done.stdout + done.stderr
+        assert self._tree(kept.download) == before
+        argv = _encodes(_recorded_calls(kept.ffmpeg_calls), ".flac")[0]
+        assert "-ar" not in argv, argv
+
+    def test_the_multi_disc_folder_is_refused_when_the_copy_cannot_be_made(
+            self, kept, tmp_path):
+        """The split happens in the scratch copy of the tree: when the copy
+        cannot be made, the folders it would split are refused rather than
+        ingested flat, and the download is left as it was."""
+        marker = tmp_path / "rsync-first"
+        kept.with_tool("rsync",
+                       'if [ ! -f "%s" ]; then touch "%s"; exit 1; fi\n'
+                       'exec %s "$@"' % (marker, marker,
+                                         shutil.which("rsync")))
+        before = self._tree(kept.download)
+        done = kept.ingest("-k", "downloads")
+        log = done.stdout + done.stderr
+        assert done.returncode == 0, log
+        assert 'Refused "Rip"' in log, log
+        assert "Folders refused" in log, log
+        assert self._tree(kept.download) == before
+        assert (kept.library / "Album" / "one.flac").is_file()
+        assert not (kept.library / "Rip").exists()
 
 
 class TestAnUnknownPart:
