@@ -52,7 +52,7 @@ def rejoin(tmp_path, monkeypatch):
                          (ca.thumbnails, "apply_cover")):
         monkeypatch.setattr(module, name, lambda *args, **kwargs: None)
 
-    def run(joined=b"joined", keep=False):
+    def run(joined=b"joined"):
         def concat(argv, **kwargs):
             with open(argv[-1], "wb") as handle:
                 handle.write(joined)
@@ -60,7 +60,7 @@ def rejoin(tmp_path, monkeypatch):
         monkeypatch.setattr(ca.toolcapture, "run", concat)
         state = ca.Run(input_dir=str(inputs), output_dir=str(outputs),
                        chunk_root=str(chunk_root), extension="opus",
-                       keep=keep, script_dir="", cover_resolution="")
+                       script_dir="", cover_resolution="")
         state.reconcat("book.m4b\t2")
         return outputs / "book.opus"
 
@@ -93,10 +93,6 @@ class TestTheChunksItWasMadeFrom:
     def test_they_are_released_once_the_join_holds_the_audio(self, rejoin):
         rejoin()
         assert not os.path.exists(rejoin.chunks)
-
-    def test_k_keeps_them(self, rejoin):
-        rejoin(keep=True)
-        assert sorted(os.listdir(rejoin.chunks)) == ["0000.opus", "0001.opus"]
 
     def test_a_join_that_produced_nothing_keeps_them_for_inspection(
             self, rejoin):

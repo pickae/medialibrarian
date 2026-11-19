@@ -122,8 +122,6 @@ a |  | Adaptive mode: decide channels and bitrate per file rather
                     Cannot be combined with -m or -b, and disables long-file
                     splitting.
                     Default false
-k |  | Keep temporary files.
-                    Default false
 c |  | Copy non transcoded files from <inputDir> into <outputDir>
 e | <codec> | Output encoding: {codecs}.
                     aac and xheaac are written as .m4a; xheaac needs an
@@ -161,11 +159,11 @@ r | <folder> | Only the files under <inputDir>/<folder>, converted to
            encoders=xheaac.ENCODER_SPEC,
            codec=DEFAULT_CODEC)
 
-OPT_VARS = ("m:mono u:surround a:adaptive c:copy k:keep e:outputCodec "
+OPT_VARS = ("m:mono u:surround a:adaptive c:copy e:outputCodec "
             "b:bitrate T:threshold j:jobs g:groupDepth r:only p:instructions")
 OPT_FLAGS = "repeat:r"
 OPT_COLUMN = 20
-OPT_LONG = ("h:help m:mono u:surround a:adaptive k:keep c:copy-others "
+OPT_LONG = ("h:help m:mono u:surround a:adaptive c:copy-others "
             "e:encoding b:bitrate T:threshold j:jobs g:group "
             "t:ai-chapters p:prompt r:only")
 
@@ -762,7 +760,6 @@ class Run:
     surround: bool
     adaptive: bool
     copy: bool
-    keep: bool
     bitrate: int
     threshold: int
     # The cut-off a mono run, or the mono file of an adaptive run, is judged
@@ -1313,6 +1310,7 @@ class Run:
                  tmp_dir: str, input_duration_raw: str,
                  channels: int = 0, lift_out: bool = False) -> None:
         cover_target = ""
+        cover_origin = "the source's own art"
 
         if self.transcodes(relative, source_bitrate, threshold):
             if lift_out:
@@ -1338,11 +1336,14 @@ class Run:
             # written by ffmpeg for an .m4a, which the chapter library decides
             # from the extension it is handed.
             chapters.attach_chapters(source, out, tmp_dir, self.script_dir)
+            self._say_chapters(relative, source)
             # Cover art often lives ONLY inside the source, so it is pulled from
             # there; a sidecar image sharing the track name overrides it below.
             # Skipped for a video, whose "video stream" is not cover art.
             if not video:
                 thumbnails.extract_source_cover(source, tmp_dir)
+                if not os.path.isfile(os.path.join(tmp_dir, "tempCover.jpg")):
+                    cover_origin = "an online search"
                 self._online_cover(relative, source, tmp_dir,
                                    _seconds(input_duration_raw),
                                    mono, channels)
@@ -1358,7 +1359,8 @@ class Run:
             thumbnails.apply_cover(relative, cover_target, COVER_THRESHOLD,
                                    COVER_QUALITY, self.cover_resolution,
                                    self.input_dir, self.output_dir, tmp_dir,
-                                   out, self.script_dir)
+                                   out, self.script_dir,
+                                   origin=cover_origin)
             # The source's modification time, set last: the encode and the
             # mutagen writes each bump it, so the final timestamp matches the
             # source rather than whichever edit happened to run last.
@@ -1367,15 +1369,18 @@ class Run:
             # low-bitrate no-op leaves no target and tallies nothing.
             self.counters.tally_duration(input_duration_raw)
 
-        if self.keep:
-            for name, suffix in (("chapters.ogm", ".chapters.txt"),
-                                 ("tempCover.jpg", ".temp.jpg"),
-                                 ("cover.jpg", ".cover.jpg")):
-                kept = os.path.join(tmp_dir, name)
-                if os.path.isfile(kept):
-                    shutil.copyfile(kept, os.path.join(
-                        self.output_dir,
-                        os.path.splitext(relative)[0] + suffix))
+    def _say_chapters(self, relative: str, source: str) -> None:
+        """-v: what chapters a source carried - the source and the count, which
+        -k used to leave on disk as the OGM file beside the output."""
+        if runlog.verbosity() < runlog.VERBOSE:
+            return
+        count = chapters.chapter_count(source)
+        if count:
+            runlog.detail("    %s: %d chapter(s) - the source's own"
+                          % (relative, count))
+        else:
+            runlog.detail("    %s: no chapters - the source carried none"
+                          % relative)
 
     def _online_cover(self, relative: str, source: str, tmp_dir: str,
                       seconds: float | None = None, mono: bool | None = None,
@@ -1477,22 +1482,27 @@ class Run:
             # chunk memory is reclaimed as early as possible instead of lingering
             # through the whole tail. Guarded on a non-empty output, so a failed
             # join keeps its chunks for inspection.
-            if not self.keep and os.path.getsize(stage) > 0:
+            if os.path.getsize(stage) > 0:
                 shutil.rmtree(directory, ignore_errors=True)
 
             chapters.attach_chapters(source, stage, tmp_dir, self.script_dir)
+            self._say_chapters(relative, source)
             # A video source's "video stream" is not cover art, so it is not
             # pulled in - a sidecar image still applies, the same rule a
             # whole-file encode follows.
+            cover_origin = "the source's own art"
             if not is_video_file(relative):
                 thumbnails.extract_source_cover(source, tmp_dir)
+                if not os.path.isfile(os.path.join(tmp_dir, "tempCover.jpg")):
+                    cover_origin = "an online search"
                 # A split file is never adaptive, so the run's own -m is
                 # what decides its channels: no mono passed.
                 self._online_cover(relative, source, tmp_dir)
             thumbnails.apply_cover(relative, stage, COVER_THRESHOLD,
                                    COVER_QUALITY, self.cover_resolution,
                                    self.input_dir, self.output_dir, tmp_dir,
-                                   stage, self.script_dir)
+                                   stage, self.script_dir,
+                                   origin=cover_origin)
 
             # The source's modification time, after the mutagen writes that each
             # bumped it, so the final timestamp matches the source.
@@ -1850,6 +1860,12 @@ class Planner:
         _write_jobs(base, tokens)
         with open(base + ".plans", "w") as handle:
             handle.write("%s\t%d\0" % (track, total))
+        # -v: how many chunks, and the cut points. Each cut point is a silence
+        # the planner found; total - 1 of them divide the file into total chunks.
+        runlog.detail("    %s: cut into %d chunk(s), at %s"
+                      % (track, total,
+                         ", ".join(formatting.fmt_clock(point)
+                                   for point in interior)))
 
 
 def chunk_tokens(track: str, bounds: list, rate: int, priming: int,
@@ -2016,7 +2032,6 @@ def main(argv: list, program: str = "convert-audio",
     surround = "u" in result.given
     adaptive = "a" in result.given
     copy = "c" in result.given
-    keep = "k" in result.given
     bitrate_set = bool(result.values["bitrate"])
     cutoff = int(result.values["threshold"] or 0) * 1000
     codec = result.values["outputCodec"] or DEFAULT_CODEC
@@ -2094,7 +2109,7 @@ def main(argv: list, program: str = "convert-audio",
 
     try:
         return _settle_and_convert(program, script_dir, input_dir, output_dir,
-                                   mono, adaptive, copy, keep, bitrate,
+                                   mono, adaptive, copy, bitrate,
                                    cutoff, jobs, codec, chunk_over_ceiling,
                                    surround, group_depth, ai_chapters, only,
                                    instructions)
@@ -2106,7 +2121,7 @@ def main(argv: list, program: str = "convert-audio",
 
 def _settle_and_convert(program: str, script_dir: str, input_dir: str,
                         output_dir: str, mono: bool, adaptive: bool,
-                        copy: bool, keep: bool, bitrate: int, cutoff: int,
+                        copy: bool, bitrate: int, cutoff: int,
                         jobs: int, codec: str, chunk_over_ceiling: bool,
                         surround: bool, group_depth: int, ai_chapters: bool,
                         only=(), instructions: str = "") -> int:
@@ -2162,7 +2177,7 @@ def _settle_and_convert(program: str, script_dir: str, input_dir: str,
         return _convert(input_dir, output_dir, probe_what, skips, jobs,
                         mkvtoolnix_unsaid, script_dir=script_dir, mono=mono,
                         surround=surround, adaptive=adaptive, copy=copy,
-                        keep=keep, bitrate=bitrate, cutoff=cutoff, codec=codec,
+                        bitrate=bitrate, cutoff=cutoff, codec=codec,
                         chunk_over_ceiling=chunk_over_ceiling,
                         group_depth=group_depth, llm=llm, only=only)
     finally:
@@ -2206,7 +2221,7 @@ def _holds_input(input_dir: str, only=()) -> bool:
 def _convert(input_dir: str, output_dir: str, probe_what: str, skips,
              jobs: int, mkvtoolnix_unsaid: bool, *, script_dir: str,
              mono: bool, surround: bool, adaptive: bool, copy: bool,
-             keep: bool, bitrate: int, cutoff: int = 0, codec: str,
+             bitrate: int, cutoff: int = 0, codec: str,
              chunk_over_ceiling: bool, group_depth: int, llm=None,
              only=()) -> int:
     """The run itself, once the tools are checked. The command line's choices
@@ -2219,7 +2234,7 @@ def _convert(input_dir: str, output_dir: str, probe_what: str, skips,
 
     state = Run(
         input_dir=input_dir, output_dir=output_dir, script_dir=script_dir,
-        mono=mono, surround=surround, adaptive=adaptive, copy=copy, keep=keep,
+        mono=mono, surround=surround, adaptive=adaptive, copy=copy,
         bitrate=bitrate,
         # A -T value stands for both cut-offs; without one the defaults stand.
         threshold=cutoff or THRESHOLD,
@@ -2365,9 +2380,6 @@ def _add_transcripts_and_chapters(state: Run, llm) -> None:
 
         if _rewrite(source, out, write) == 0:
             runlog.say("%s: %d chapters\n" % (label, len(marks)))
-        if state.keep:
-            shutil.copyfile(transcript, os.path.splitext(out)[0] + ".transcript"
-                            + os.path.splitext(transcript)[1])
 
     aichapters.as_ready(
         pending, transcript_of, transcribe, llm, chapter,
@@ -2417,11 +2429,7 @@ def _settle_scratch(state: Run) -> bool:
                          "run.\nNothing was changed.\n")
         return False
     state.chunk_root, state.plan_root = chunk_root, plan_root
-    # -k asks for the chunks to be left behind, so only a run without it
-    # registers them.
-    if not state.keep:
-        ramscratch.add_exit_cleanup([chunk_root])
-    ramscratch.add_exit_cleanup([plan_root])
+    ramscratch.add_exit_cleanup([chunk_root, plan_root])
     return True
 
 

@@ -24,8 +24,6 @@ Options:
                     Cannot be combined with -m or -b, and disables long-file
                     splitting.
                     Default false
-    -k, --keep      Keep temporary files.
-                    Default false
     -c, --copy-others
                     Copy non transcoded files from <inputDir> into <outputDir>
     -e, --encoding <codec>

@@ -17,6 +17,7 @@ import shutil
 from collections.abc import Callable, Iterator, Sequence
 
 from medialib.lib import (
+    formatting,
     imagecodecs,
     imagemagick,
     mutagentags,
@@ -354,10 +355,12 @@ def embed_thumbnail(input_path: str, file_name: str, image_size_limit: int,
 def apply_cover(track: str, target: str | None, cover_threshold: int,
                 cover_quality: int, cover_resolution: str, input_dir: str,
                 output_dir: str, tmp_dir: str, opus: str, script_dir: str,
-                run: Runner = _run) -> int:
+                run: Runner = _run,
+                origin: str = "the source's own art") -> int:
     """Let a sidecar cover override the source's, then embed it in <target>.
 
-    <target> defaults to <opus>.
+    <target> defaults to <opus>. <origin> is where a cover that is not a
+    sidecar was taken from - the source's own art, or an online search.
     """
     if not target:
         target = opus
@@ -369,11 +372,14 @@ def apply_cover(track: str, target: str | None, cover_threshold: int,
 
     # The sidecar is an image sharing the track's base name in the INPUT
     # folder, where it always sits next to the source audio. Copied (not
-    # moved) so the source image is preserved.
+    # moved) so the source image is preserved. It overrides <origin>, the
+    # source a non-sidecar cover was taken from.
     if os.path.isfile(f"{input_dir}/{stem}.webp"):
         shutil.copyfile(f"{input_dir}/{stem}.webp", temp_cover)
+        origin = "a sidecar image"
     elif os.path.isfile(f"{input_dir}/{stem}.jpg"):
         shutil.copyfile(f"{input_dir}/{stem}.jpg", temp_cover)
+        origin = "a sidecar image"
 
     if not os.path.isfile(temp_cover):
         return 0
@@ -384,8 +390,13 @@ def apply_cover(track: str, target: str | None, cover_threshold: int,
             [imagecodecs.coder_prefixed(temp_cover),
              "-quality", str(cover_quality),
              "-resize", f"{cover_resolution}>", cover]))
+        recompressed = True
     else:
         shutil.copyfile(temp_cover, cover)
+        recompressed = False
+    _detail("    %s: cover from %s, %s, %s"
+            % (track, origin, formatting.fmt_bytes(file_size),
+               "recompressed" if recompressed else "kept at its own size"))
 
     # Whatever the embed did, the status is zero; only a successful embed
     # drops the now-redundant sidecar copies in the output folder.
