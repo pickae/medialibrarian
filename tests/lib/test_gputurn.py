@@ -130,9 +130,9 @@ class TestAbort:
 
     def test_a_waiting_claim_is_released_by_an_abort(self, tmp_path):
         gate = _gate(tmp_path, free=0)
-        with gate.claim("whisper", 4000), pytest.raises(gputurn.GateAborted):
-            with gate.claim("llm", 6000, abort=lambda: True):
-                pass
+        with gate.claim("whisper", 4000), pytest.raises(gputurn.GateAborted), \
+                gate.claim("llm", 6000, abort=lambda: True):
+            pass
 
 
 class TestJobNeed:
