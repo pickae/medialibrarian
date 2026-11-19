@@ -30,11 +30,12 @@ def _cues(minutes: int, every: int = 10) -> list[aichapters.Cue]:
 
 
 class Model:
-    """A scripted model: ``outline``, ``refine`` and ``sections`` are each a
-    function from the prompt to the answer's text."""
+    """A scripted model: ``outline``, ``refine``, ``sections`` and ``review``
+    are each a function from the prompt to the answer's text; the review
+    changes nothing unless told to."""
 
     def __init__(self, outline=None, refine=None, sections=None,
-                 context_tokens=200000):
+                 context_tokens=200000, review=None):
         self.context_tokens = context_tokens
         self.jobs = 2
         self.instructions = ""
@@ -43,6 +44,7 @@ class Model:
         self._refine = refine or (lambda prompt: json.dumps(
             {"start": _first_line(prompt), "title": _placed_title(prompt)}))
         self._sections = sections
+        self._review = review or (lambda prompt: '{"titles": []}')
 
     def ask(self, system, prompt):
         self.asked.append(prompt)
@@ -50,6 +52,8 @@ class Model:
             return self._sections(prompt)
         if "Find the line where" in prompt:
             return self._refine(prompt)
+        if "correct the titles" in prompt:
+            return self._review(prompt)
         return self._outline(prompt)
 
 
@@ -192,7 +196,7 @@ class TestGenerate:
         model = Model(outline=_outline(1, 21, 41))
         model.instructions = "A chapter per speaker, named."
         aichapters.generate(_cues(30), model)
-        assert len(model.asked) == 3
+        assert len(model.asked) == 4
         assert all("<<<\nA chapter per speaker, named.\n>>>" in prompt
                    for prompt in model.asked)
 
@@ -431,3 +435,58 @@ class TestTheNeighboursOfASecondLook:
         marks = aichapters.generate(_cues(60), Model(outline=_outline(1, 21, 23, 41),
                                                      refine=refine))
         assert [at for at, _ in marks] == sorted(at for at, _ in marks)
+
+
+class TestTheReviewOfTheTitles:
+    """The finished list is read once more as a whole, with the user's
+    instructions, and may reword titles - never move, add or drop a chapter."""
+
+    def _run(self, review, *starts, instructions=""):
+        model = Model(outline=_outline(*(starts or (1, 21, 41))), review=review)
+        model.instructions = instructions
+        return aichapters.generate(_cues(60), model), model
+
+    def _reviews(self, model):
+        return [p for p in model.asked if "correct the titles" in p]
+
+    def test_it_sees_the_list_and_the_instructions_and_no_transcript(self):
+        _, model = self._run(None, instructions="Name each speaker.")
+        (prompt,) = self._reviews(model)
+        assert "[C1 0:00:00] Topic 1" in prompt
+        assert re.search(r"\[C3 0:\d\d:\d\d\] Topic 41", prompt)
+        assert "Name each speaker." in prompt
+        assert "line at" not in prompt
+
+    def test_it_runs_without_instructions_too(self):
+        _, model = self._run(None)
+        (prompt,) = self._reviews(model)
+        assert "The person these chapters are for" not in prompt
+
+    def test_a_title_it_gives_replaces_the_old_one_and_nothing_else_moves(self):
+        before, _ = self._run(None)
+        marks, _ = self._run(lambda p: '{"titles": [{"id": "C2", "title": "Ep. 1: Fixed"}]}')
+        assert [at for at, _ in marks] == [at for at, _ in before]
+        assert [title for _, title in marks] == ["Topic 1", "Ep. 1: Fixed", "Topic 41"]
+
+    def test_an_id_that_names_no_chapter_is_ignored(self):
+        marks, _ = self._run(lambda p: json.dumps({"titles": [
+            {"id": "C9", "title": "X"}, {"id": "nope", "title": "Y"},
+            {"id": "C1", "title": ""}, "junk"]}))
+        assert [title for _, title in marks] == ["Topic 1", "Topic 21", "Topic 41"]
+
+    def test_a_bare_list_is_taken_as_the_titles(self):
+        marks, _ = self._run(lambda p: '[{"id": "3", "title": "Last"}]')
+        assert marks[2][1] == "Last"
+
+    def test_a_review_that_fails_keeps_every_title(self):
+        marks, _ = self._run(lambda p: "no json at all")
+        assert [title for _, title in marks] == ["Topic 1", "Topic 21", "Topic 41"]
+
+    def test_a_list_of_two_is_not_worth_a_review(self):
+        _, model = self._run(None, 1, 21)
+        assert not self._reviews(model)
+
+    def test_it_tells_the_model_the_starts_are_final(self):
+        _, model = self._run(None)
+        (prompt,) = self._reviews(model)
+        assert "starts are final" in prompt

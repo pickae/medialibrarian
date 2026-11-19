@@ -30,7 +30,7 @@ pause before the first word.
 
 ## How the model is asked
 
-A chapter list is a division of the whole recording, so it is made in two passes:
+A chapter list is a division of the whole recording, so it is made in three passes:
 
 - **The outline** reads the whole transcript at once, as passages of about 20
   seconds, and divides all of it. It writes a short summary too. A transcript too
@@ -42,6 +42,11 @@ A chapter list is a division of the whole recording, so it is made in two passes
   the start to the line where the new topic really begins, corrects a title that
   does not fit what is said there, or drops a start that turns out not to be a
   change of topic.
+- **The review** reads the finished list - each chapter's start and title, your
+  instructions, and no transcript - and rewords titles that disagree with one
+  another or with the instructions: a pattern kept to the end, numbers in order.
+  It cannot move, add or drop a chapter, and a title it does not name stays as
+  it was. It is one short request, skipped for fewer than three chapters.
 
 A recording made of parts, such as several episodes in a row each with its own
 segments, comes out as one flat list. Each part gets its own chapter where it
