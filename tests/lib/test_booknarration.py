@@ -1143,6 +1143,49 @@ class TestNarrateBook:
         assert got == m4b
         assert capfd.readouterr().err == ""
 
+    def test_a_prefix_tags_every_console_line_and_the_log_keeps_the_lines(self,
+                                                                           nb,
+                                                                           capfd):
+        checkout = _checkout(nb)
+        self._env(nb, checkout)
+        os.environ["narrationVerbose"] = "1"
+        outdir = str(nb.tmp_path / "out")
+        book = str(nb.tmp_path / "book.epub")
+        m4b = os.path.join(outdir, "B.m4b")
+        nb.rc("python", "0")
+        nb.write("python", [m4b])
+        nb.say("python", "engine line one\nengine line two\nno trailing newline")
+        got = bn.narrate_book(book, outdir, prefix="book.epub: ")
+        assert got == m4b
+        assert capfd.readouterr().err == \
+            "book.epub: engine line one\nbook.epub: engine line two\n" \
+            "book.epub: no trailing newline"
+        with open(os.path.join(outdir, "narration.log"),
+                  encoding="ascii") as written:
+            assert written.read() == \
+                "engine line one\nengine line two\nno trailing newline"
+
+    def test_a_prefix_survives_a_chunk_boundary_in_the_middle_of_a_line(self,
+                                                                         nb,
+                                                                         capfd):
+        # The line is longer than one of the tee's reads, so a boundary lands
+        # in it: the prefix still goes on the line once, not on the pieces.
+        checkout = _checkout(nb)
+        self._env(nb, checkout)
+        os.environ["narrationVerbose"] = "1"
+        outdir = str(nb.tmp_path / "out")
+        book = str(nb.tmp_path / "book.epub")
+        m4b = os.path.join(outdir, "B.m4b")
+        nb.rc("python", "0")
+        nb.write("python", [m4b])
+        nb.say("python", "a" * 65536 + "\nsecond line")
+        got = bn.narrate_book(book, outdir, prefix="b: ")
+        assert got == m4b
+        assert capfd.readouterr().err == "b: " + "a" * 65536 + "\nb: second line"
+        with open(os.path.join(outdir, "narration.log"),
+                  encoding="ascii") as written:
+            assert written.read() == "a" * 65536 + "\nsecond line"
+
     def test_the_engine_runs_from_the_checkout_with_its_bin_first(self, nb):
         checkout = nb.tmp_path / "checkout"
         (checkout / "python_env" / "bin").mkdir(parents=True)

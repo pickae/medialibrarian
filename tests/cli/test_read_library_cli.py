@@ -52,6 +52,9 @@ if [[ -n "$ebook" && ! -f "$ebook" ]]; then
 fi
 [[ -n "$outDir" ]] || exit 1
 mkdir -p "$outDir"
+# The engine's own progress, as it would be while a book is being read: what -v
+# tees to the console, and what a book that fails is replayed with.
+[[ -n "${STUB_ENGINE_CHATTER:-}" ]] && printf 'narrating %s\n' "$ebook"
 [[ -n "${STUB_PRODUCES_NOTHING:-}" ]] && exit 0
 printf 'audiobook bytes' > "$outDir/Some Title - An Author.m4b"
 # The engine's own working directory, exactly where app.py puts it - and left
@@ -412,6 +415,54 @@ class TestANarrationThatDiedPartWay:
                            STUB_DIES_PART_WAY="1")
         assert "Failed:            2" in log, log
         assert [p for p in library.outputs.rglob("*") if p.is_file()] == []
+
+
+class TestTheEnginesOwnOutput:
+    """What says whether a book is hung and which stage it is in: under -v it is
+    teed to the console at every job count, tagged with its book when several
+    are read at once, and replayed under a book that fails; without -v it stays
+    in the log the status row reads from."""
+
+    BOOKS = ("Fiction/Autor/Ein Roman.epub", "plain book.epub")
+
+    def test_under_v_the_engine_says_it_at_one_job(self, library):
+        lib = library
+        log = library.read("-l", "deu", "-j", "1", "-v", lib.source,
+                           lib.outputs, STUB_ENGINE_CHATTER="1")
+        for book in self.BOOKS:
+            assert "narrating %s" % str(lib.source / book) in log, log
+            # One book at a time: nothing else talks, so no tag is needed.
+            assert "%s: narrating" % os.path.basename(book) not in log, log
+
+    def test_under_v_several_books_at_once_each_line_carries_its_book(self,
+                                                                      library):
+        lib = library
+        log = library.read("-l", "deu", "-j", "2", "-v", lib.source,
+                           lib.outputs, STUB_ENGINE_CHATTER="1")
+        for book in self.BOOKS:
+            assert ("%s: narrating %s"
+                    % (os.path.basename(book), str(lib.source / book))) in log, \
+                log
+
+    def test_without_v_the_engine_stays_in_its_log(self, library):
+        log = library.read("-l", "deu", "-j", "1", library.source,
+                           library.outputs, STUB_ENGINE_CHATTER="1")
+        assert "narrating" not in log, log
+
+    def test_the_status_row_is_said_at_one_job_without_v(self, library):
+        lib = library
+        log = library.read("-l", "deu", "-j", "1", lib.source, lib.outputs)
+        assert re.search(r"reading \S+ books: elapsed", log), log
+        # Under -v the teed output would scroll the row, so it is not pinned.
+        log = library.read("-l", "deu", "-j", "1", "-v", lib.source,
+                           lib.outputs)
+        assert "realtime" not in log, log
+
+    def test_a_failed_books_engine_output_is_replayed_under_it(self, library):
+        log = library.read("-l", "deu", library.source, library.outputs,
+                           STUB_ENGINE_CHATTER="1", STUB_PRODUCES_NOTHING="1")
+        assert "Failed:            2" in log, log
+        assert "| narrating" in log, log
 
 
 class TestQuiet:
