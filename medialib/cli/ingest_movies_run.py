@@ -8,6 +8,7 @@ is mostly plumbing.
 """
 
 import contextlib
+import dataclasses
 import functools
 import json
 import os
@@ -1015,6 +1016,60 @@ def main(argv: list, program: str = "ingest-movies",
         sys.stderr.write(clioptions.no_args_text(declaration))
         return 1
 
+    if "O" in result.given:
+        return _only_phases(declaration, result, program, script_dir)
+    return _main_one(declaration, result, program, script_dir)
+
+
+def _only_phases(declaration, result, program: str, script_dir: str) -> int:
+    """-O: the single-phase sweeps it names, run one after the other exactly as
+    the flag of each would have been typed in turn, stopping at the first that
+    fails: a later phase leans on what an earlier one settled."""
+    try:
+        keepparts.parse(result.values["onlyPhases"], rules.ONLY_PHASES,
+                        flag="-O", word="phase")
+    except clioptions.UsageError as error:
+        clioptions.refuse_usage(declaration, error.message)
+        return 1
+    phases = result.values["onlyPhases"].split(",")
+    for letter, key in (("r", "convertRemuxes"), ("e", "extrasChapters"),
+                        ("k", None), ("o", None)):
+        if (letter in result.given if key is None
+                else result.values.get(key)):
+            clioptions.refuse_usage(
+                declaration,
+                "-O names the phases to run on their own, and -%s belongs to "
+                "a full ingest.\nDrop one." % letter)
+            return 1
+    if result.values.get("idList") and "tagging" not in phases:
+        clioptions.refuse_usage(
+            declaration,
+            "-i is the id list the tagging phase reads back, and tagging is "
+            "not among the\nphases named in -O.")
+        return 1
+    if result.values.get("writeTags") and not any(
+            phase in rules.ONLY_WRITES for phase in phases):
+        clioptions.refuse_usage(
+            declaration,
+            "-w carries out the dry run of tagging, subtitles, names or "
+            "backups, and none of\nthe phases named in -O is one. Drop the -w.")
+        return 1
+    for number, phase in enumerate(phases, 1):
+        if len(phases) > 1:
+            log("-O phase %d/%d: %s" % (number, len(phases), phase))
+        values = dict(result.values)
+        if phase not in rules.ONLY_WRITES:
+            values["writeTags"] = False
+        status = _main_one(declaration,
+                           dataclasses.replace(result, values=values),
+                           program, script_dir, phase)
+        if status:
+            return status
+    return 0
+
+
+def _main_one(declaration, result, program: str, script_dir: str,
+              phase: str = "") -> int:
     # The languages the improved copy keeps beside a film's own, read once
     # here, before any film is touched: a code the language table does not
     # know is refused with the page, like a bad option.
@@ -1074,103 +1129,26 @@ def main(argv: list, program: str = "ingest-movies",
         clioptions.refuse_usage(declaration, error.message)
         return 1
 
-    # -w carries out a dry run, and without -t, -i or -s there is none to
-    # carry out. Refused rather than ignored: a -tw typed as -w would otherwise
-    # be a full ingest, hours of converting and remuxing, on a library asked
-    # for nothing but its names.
-    if result.values.get("writeTags") and not (
-            result.values.get("tagsOnly") or result.values.get("idList")
-            or result.values.get("subtitlesOnly")
-            or result.values.get("commentaryNames")
-            or result.values.get("dropBackups")):
-        for letter, key in (("a", "commentaryOnly"), ("c", "chaptersOnly"),
-                            ("p", "plexOnly")):
-            if result.values.get(key):
-                # The transcription and the chapter lookup are not dry runs,
-                # so there is nothing for -w to carry out.
-                clioptions.refuse_usage(
-                    declaration,
-                    "-w has no part in -%s: it carries out the dry run of -t, "
-                    "-i or -s, and -%s\nis not a dry run. Drop the -w."
-                    % (letter, letter))
-                return 1
+    # -w carries out the dry run of a phase named in -O, and without one there
+    # is none to carry out. Refused rather than ignored: a -w typed on its own
+    # would otherwise be a full ingest, hours of converting and remuxing, on a
+    # library asked for nothing but its names.
+    if result.values.get("writeTags") and not phase:
         clioptions.refuse_usage(
             declaration,
             "-w on its own does nothing to carry out: it is what turns the dry "
-            "run of -t,\n-i, -s or -d into the real thing, and none was given. "
-            "Without one of them this is a\nFULL INGEST - converting, "
-            "transcribing and remuxing - which -w has no part in.\n\n"
-            "Did you mean -tw, -iw, -sw or -dw?")
+            "run of the\ntagging, subtitles, names and backups phases of -O "
+            "into the real thing, and none was\ngiven. Without one this is a "
+            "FULL INGEST - converting, transcribing and remuxing -\nwhich -w "
+            "has no part in.\n\nDid you mean -wO tagging?")
         return 1
 
-    # -a is the commentary phase on its own and -t and -i the tagging phase:
-    # two runs over the same folders, neither knowing what the other would do
-    # to the names, so they are refused together rather than run in a guessed
-    # order.
-    if result.values.get("commentaryOnly") and (result.values.get("tagsOnly")
-                                                or result.values.get("idList")):
+    # -i is the id list of the tagging phase, and only that phase reads it.
+    if result.values.get("idList") and not phase:
         clioptions.refuse_usage(
             declaration,
-            "-a transcribes the commentary tracks and nothing else, and -t and "
-            "-i tag and nothing\nelse: they are two runs, not one. Give the "
-            "folders to each of them in turn.")
-        return 1
-
-    # -s the same, against both: the subtitles are searched for by the id the
-    # tagging gives a film's name, so the order matters and is not guessed.
-    if result.values.get("subtitlesOnly") and (
-            result.values.get("commentaryOnly")
-            or result.values.get("tagsOnly") or result.values.get("idList")):
-        clioptions.refuse_usage(
-            declaration,
-            "-s tests and fetches subtitles and nothing else, and -a, -t and -i "
-            "each do a\nphase of their own: they are two runs, not one. Tag "
-            "first (-tw), so the\nsubtitles are searched for by the ids it "
-            "gives, then run -s.")
-        return 1
-
-    # -n the same, against every other: it names the tracks the transcription
-    # and the tagging name their files after, so the order matters and is not
-    # guessed.
-    if result.values.get("commentaryNames") and (
-            result.values.get("commentaryOnly")
-            or result.values.get("chaptersOnly")
-            or result.values.get("subtitlesOnly")
-            or result.values.get("tagsOnly") or result.values.get("idList")):
-        clioptions.refuse_usage(
-            declaration,
-            "-n names the commentary tracks and nothing else, and -a, -c, -s, "
-            "-t and -i each do\na phase of their own: they are two runs, not "
-            "one. Transcribe first (-a), so the\ntranscripts are there to "
-            "tell the commentaries apart by, then run -n.")
-        return 1
-
-    # -c the same, against every other phase of its own: the chapters are
-    # looked up by the title the tagging gives a folder.
-    if result.values.get("chaptersOnly") and (
-            result.values.get("commentaryOnly") or result.values.get("tagsOnly")
-            or result.values.get("idList")
-            or result.values.get("subtitlesOnly")):
-        clioptions.refuse_usage(
-            declaration,
-            "-c looks up chapters and nothing else, and -a, -t, -i and -s each "
-            "do a phase\nof their own: they are two runs, not one. Tag first "
-            "(-tw), so the chapters are\nlooked up by the titles it gives, "
-            "then run -c.")
-        return 1
-
-    # -p the same, against every other: it compares the films as the other
-    # phases leave them, so it runs after them rather than beside them.
-    if result.values.get("plexOnly") and any(
-            result.values.get(key) for key in (
-                "commentaryOnly", "commentaryNames", "chaptersOnly",
-                "subtitlesOnly", "tagsOnly", "idList")):
-        clioptions.refuse_usage(
-            declaration,
-            "-p compares the films with the Plex library and nothing else, and "
-            "-a, -n, -c, -s,\n-t and -i each do a phase of their own: they are "
-            "two runs, not one. Tag first\n(-tw), so the films are looked up by "
-            "their ids, then run -p.")
+            "-i is the id list the tagging phase reads back, and no phase was "
+            "named.\nDid you mean -O tagging -i <file>?")
         return 1
 
     # -k changes what a full ingest takes away, and -r encodes the picture.
@@ -1180,84 +1158,10 @@ def main(argv: list, program: str = "ingest-movies",
             "-k says take nothing away, and -r converts the remuxes by "
             "encoding\nthem: they contradict each other. Drop one.")
         return 1
-    # -k is the full ingest's alone: each of these is a phase of its own that
-    # never takes anything away.
-    if "k" in result.given:
-        for letter, key in (("a", "commentaryOnly"), ("n", "commentaryNames"),
-                            ("c", "chaptersOnly"), ("p", "plexOnly"),
-                            ("s", "subtitlesOnly"), ("t", "tagsOnly"),
-                            ("i", "idList"), ("d", "dropBackups")):
-            if result.values.get(key):
-                clioptions.refuse_usage(
-                    declaration,
-                    "-k says take nothing away through a full ingest, and "
-                    "-%s does\none phase of its own, which takes none away "
-                    "anyway. Drop the -k." % letter)
-                return 1
-
-    # -o changes what a full ingest leaves out, and each of these does its
-    # phase alone: there is no full ingest here to leave a phase out of.
-    if "o" in result.given:
-        for letter, key in (("a", "commentaryOnly"), ("n", "commentaryNames"),
-                            ("c", "chaptersOnly"), ("p", "plexOnly"),
-                            ("s", "subtitlesOnly"), ("t", "tagsOnly"),
-                            ("i", "idList"), ("d", "dropBackups")):
-            if result.values.get(key):
-                clioptions.refuse_usage(
-                    declaration,
-                    "-o leaves a phase out of a full ingest, and -%s does its "
-                    "phase of\nits own: there is no full ingest here to leave "
-                    "it out of.\nDrop the -o." % letter)
-                return 1
-
-    # -r is the last phase of a full ingest, and each of these is a run of one
-    # phase of its own that never reaches it.
-    if result.values.get("convertRemuxes"):
-        for letter, key in (("a", "commentaryOnly"), ("n", "commentaryNames"),
-                            ("c", "chaptersOnly"), ("p", "plexOnly"),
-                            ("s", "subtitlesOnly"), ("t", "tagsOnly"),
-                            ("i", "idList"), ("d", "dropBackups")):
-            if result.values.get(key):
-                clioptions.refuse_usage(
-                    declaration,
-                    "-r converts the remuxes at the end of a full ingest, and "
-                    "-%s does one phase\nof its own: give the folders to each "
-                    "of them in turn." % letter)
-                return 1
-
-    # -e chapters the extras at the end of a full ingest, and each of these is a
-    # run of one phase of its own that never reaches it.
-    if result.values.get("extrasChapters"):
-        for letter, key in (("a", "commentaryOnly"), ("n", "commentaryNames"),
-                            ("c", "chaptersOnly"), ("p", "plexOnly"),
-                            ("s", "subtitlesOnly"), ("t", "tagsOnly"),
-                            ("i", "idList"), ("d", "dropBackups")):
-            if result.values.get(key):
-                clioptions.refuse_usage(
-                    declaration,
-                    "-e chapters the extras at the end of a full ingest, and "
-                    "-%s does one phase\nof its own: give the folders to each "
-                    "of them in turn." % letter)
-                return 1
     # The instructions are for the model -e asks; without it there is none.
     if "P" in result.given and not result.values.get("extrasChapters"):
         clioptions.refuse_usage(declaration, "-P (instructions for the chapter "
                                 "model) needs -e.")
-        return 1
-
-    # -d is a run of its own phase, and each of these is one too: the originals
-    # it drops are beside the films the tagging settled, so it runs after them
-    # rather than beside them.
-    if result.values.get("dropBackups") and any(
-            result.values.get(key) for key in (
-                "commentaryOnly", "commentaryNames", "chaptersOnly",
-                "plexOnly", "subtitlesOnly", "tagsOnly", "idList")):
-        clioptions.refuse_usage(
-            declaration,
-            "-d drops the originals the improved remuxes were kept beside and "
-            "nothing else, and\n-a, -n, -c, -p, -s, -t and -i each do a phase "
-            "of their own: they are two\nruns, not one. Tag first (-tw), so the "
-            "copies are settled, then run -d.")
         return 1
 
     script_dir = script_dir or commands.script_dir()
@@ -1282,7 +1186,7 @@ def main(argv: list, program: str = "ingest-movies",
     try:
         return _run_phases(result, program, script_dir, roots, names,
                            fragments_file, kept, wanted, keep_parts,
-                           omit_phases)
+                           omit_phases, phase)
     finally:
         # Every phase below can pin an ffmpeg or settle a run directory, and
         # each refusal after that must hand it back, not only a finished run.
@@ -1294,17 +1198,18 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
                 kept: tuple = ("en",),
                 wanted: tuple | None = None,
                 keep_parts: frozenset = frozenset(),
-                omit_phases: frozenset = frozenset()) -> int:
+                omit_phases: frozenset = frozenset(),
+                phase: str = "") -> int:
     # Commentary only is the one phase of the full ingest it names, run on the
     # folders given: the walk and the transcription, and not the rest of the
     # run around them.
-    if result.values.get("commentaryOnly"):
+    if phase == "commentary":
         if not _may_overwrite(script_dir, names, (), (COMMENTARY_ORPHANS_LIST,
                                                     UNFIXED_MOVIES_LIST)):
             return 1
         return _commentary_only(program, script_dir, roots, fragments_file)
 
-    if result.values.get("commentaryNames"):
+    if phase == "names":
         write = bool(result.values.get("writeTags"))
         if tooldeps.require_tools(program, ["curl", "mkvmerge"]
                                   + (["mkvpropedit"] if write else [])):
@@ -1315,17 +1220,17 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
         return _commentary_names(roots, names, write, site.releases,
                                  fragments_file, script_dir, queued=True)
 
-    if result.values.get("subtitlesOnly"):
+    if phase == "subtitles":
         if not _may_overwrite(script_dir, names, (SUBTITLES_LIST,)):
             return 1
         return _subtitles_only(program, script_dir, roots, names,
                                bool(result.values.get("writeTags")),
                                wanted)
 
-    if result.values.get("chaptersOnly"):
+    if phase == "chapters":
         return _chapters_only(program, roots)
 
-    if result.values.get("plexOnly"):
+    if phase == "plex":
         if tooldeps.require_tools(program, ["curl", "mkvmerge", "mediainfo",
                                             "ffprobe", "ffmpeg"]):
             return 1
@@ -1333,15 +1238,13 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
                                        keeps_for=Run(
                                            keep_languages=kept).carry_keeps)
 
-    if result.values.get("dropBackups"):
+    if phase == "backups":
         if not _may_overwrite(script_dir, names, (BACKUPS_LIST,)):
             return 1
         return _drop_backups(program, script_dir, roots, names,
                              bool(result.values.get("writeTags")), kept)
 
-    # An id list is only ever read by the tagging phase, so asking for one asks
-    # for that phase.
-    if result.values.get("tagsOnly") or result.values.get("idList"):
+    if phase == "tagging":
         if not _may_overwrite(script_dir, names,
                               *_tag_lists(bool(result.values.get("idList")),
                                           bool(result.values.get("writeTags")))):

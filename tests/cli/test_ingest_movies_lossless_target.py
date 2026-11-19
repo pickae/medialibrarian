@@ -66,7 +66,7 @@ class TestTheRefusal:
             self, monkeypatch, tmp_path, capsys):
         _library(tmp_path, "Films")
         monkeypatch.setenv("losslessAudioTarget", "aac")
-        assert run.main(["-t", str(tmp_path / "Films")],
+        assert run.main(["-O", "tagging", str(tmp_path / "Films")],
                         script_dir=str(tmp_path / "script")) == 1
         errors = capsys.readouterr().err
         assert "losslessAudioTarget" in errors

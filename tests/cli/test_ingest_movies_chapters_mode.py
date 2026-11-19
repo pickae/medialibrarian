@@ -63,28 +63,11 @@ class TestThePhaseRunsAndNothingElse:
     def test_each_folder_is_looked_up_in_order(self, stubbed, tmp_path):
         films = _library(tmp_path, "Films")
         docs = _library(tmp_path, "Documentaries")
-        assert _main(stubbed, "-c", str(films), str(docs)) == 0
+        assert _main(stubbed, "-O", "chapters", str(films), str(docs)) == 0
         assert stubbed["calls"] == [str(films), str(docs)]
         assert stubbed["tools"] == [["ffprobe", "curl", "mkvpropedit"]]
         assert any("2 film(s) already named" in line
                    for line in stubbed["logs"])
-
-
-class TestRefusedBesideAnotherPhase:
-
-    @pytest.mark.parametrize("other", ["-t", "-s", "-a"])
-    def test_another_phase_of_its_own_is_refused(self, stubbed, tmp_path,
-                                                 capsys, other):
-        assert _main(stubbed, "-c", other, str(_library(tmp_path, "F"))) == 1
-        assert "-c looks up chapters and nothing else" in \
-            capsys.readouterr().err
-        assert stubbed["calls"] == []
-
-    def test_w_has_no_part_in_it(self, stubbed, tmp_path, capsys):
-        """Not a dry run, so there is nothing for -w to carry out."""
-        assert _main(stubbed, "-cw", str(_library(tmp_path, "F"))) == 1
-        assert "-w has no part in -c" in capsys.readouterr().err
-        assert stubbed["calls"] == []
 
 
 @pytest.mark.media

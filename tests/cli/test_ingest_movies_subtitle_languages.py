@@ -32,7 +32,7 @@ class TestTheRefusal:
             self, monkeypatch, tmp_path, capsys):
         (tmp_path / "Films").mkdir()
         monkeypatch.setenv("spokenLanguages", "xx")
-        assert run.main(["-s", str(tmp_path / "Films")],
+        assert run.main(["-O", "subtitles", str(tmp_path / "Films")],
                         script_dir=str(tmp_path / "script")) == 1
         errors = capsys.readouterr().err
         assert "spokenLanguages" in errors
@@ -43,7 +43,7 @@ class TestTheRefusal:
                                          capsys):
         (tmp_path / "Films").mkdir()
         monkeypatch.setenv("spokenLanguages", "xx,yy")
-        assert run.main(["-s", str(tmp_path / "Films")],
+        assert run.main(["-O", "subtitles", str(tmp_path / "Films")],
                         script_dir=str(tmp_path / "script")) == 1
         errors = capsys.readouterr().err
         assert '"xx"' in errors
@@ -57,7 +57,7 @@ class TestTheRefusal:
         run's start, on a run asked for nothing but the tags."""
         _library(tmp_path, "Films")
         monkeypatch.setenv("spokenLanguages", "xx")
-        assert run.main(["-t", str(tmp_path / "Films")],
+        assert run.main(["-O", "tagging", str(tmp_path / "Films")],
                         script_dir=str(tmp_path / "script")) == 1
         errors = capsys.readouterr().err
         assert "spokenLanguages" in errors

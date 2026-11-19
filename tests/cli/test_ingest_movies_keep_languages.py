@@ -32,7 +32,7 @@ class TestTheRefusal:
             self, monkeypatch, tmp_path, capsys):
         (tmp_path / "Films").mkdir()
         monkeypatch.setenv("keepLanguages", "xx")
-        assert run.main(["-p", str(tmp_path / "Films")],
+        assert run.main(["-O", "plex", str(tmp_path / "Films")],
                         script_dir=str(tmp_path / "script")) == 1
         errors = capsys.readouterr().err
         assert "keepLanguages" in errors
@@ -42,7 +42,7 @@ class TestTheRefusal:
     def test_every_unknown_code_is_named(self, monkeypatch, tmp_path, capsys):
         (tmp_path / "Films").mkdir()
         monkeypatch.setenv("keepLanguages", "xx,yy")
-        assert run.main(["-p", str(tmp_path / "Films")],
+        assert run.main(["-O", "plex", str(tmp_path / "Films")],
                         script_dir=str(tmp_path / "script")) == 1
         errors = capsys.readouterr().err
         assert '"xx"' in errors
@@ -113,7 +113,7 @@ class TestThePlexKeeps:
         seen = self._stubbed(monkeypatch, tmp_path)
         (tmp_path / "Films").mkdir()
         monkeypatch.setenv("keepLanguages", "en,de")
-        assert run.main(["-p", str(tmp_path / "Films")],
+        assert run.main(["-O", "plex", str(tmp_path / "Films")],
                         script_dir=str(tmp_path / "script")) == 0
         assert seen["keeps_for"].__self__.keep_languages == ("en", "de")
 
@@ -122,6 +122,6 @@ class TestThePlexKeeps:
         seen = self._stubbed(monkeypatch, tmp_path)
         (tmp_path / "Films").mkdir()
         monkeypatch.delenv("keepLanguages", raising=False)
-        assert run.main(["-p", str(tmp_path / "Films")],
+        assert run.main(["-O", "plex", str(tmp_path / "Films")],
                         script_dir=str(tmp_path / "script")) == 0
         assert seen["keeps_for"].__self__.keep_languages == ("en",)

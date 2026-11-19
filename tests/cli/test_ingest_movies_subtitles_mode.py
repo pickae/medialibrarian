@@ -98,7 +98,7 @@ class TestThePhaseRunsAndNothingElse:
             self, stubbed, tmp_path):
         films = _library(tmp_path, "Films")
         docs = _library(tmp_path, "Documentaries")
-        assert _main(stubbed, "-s", str(films), str(docs)) == 0
+        assert _main(stubbed, "-O", "subtitles", str(films), str(docs)) == 0
         assert stubbed["calls"] == [
             ("check", str(films), "confidence", False, None),
             ("check", str(docs), "confidence", False, None)]
@@ -112,7 +112,7 @@ class TestThePhaseRunsAndNothingElse:
         throws out is fetched again in the same run."""
         films = _library(tmp_path, "Films")
         docs = _library(tmp_path, "Documentaries")
-        assert _main(stubbed, "-sw", str(films), str(docs)) == 0
+        assert _main(stubbed, "-wO", "subtitles", str(films), str(docs)) == 0
         asked = ["opensubtitles"]
         assert stubbed["calls"] == [
             ("check", str(films), "confidence", True, asked),
@@ -124,7 +124,7 @@ class TestThePhaseRunsAndNothingElse:
         given to another is still known to be done."""
         films = _library(tmp_path, "Films")
         docs = _library(tmp_path, "Documentaries")
-        assert _main(stubbed, "-sw", str(films), str(docs)) == 0
+        assert _main(stubbed, "-wO", "subtitles", str(films), str(docs)) == 0
         first, second = stubbed["dones"]
         assert first is second
         assert first.path == str(tmp_path / "script" / "logs"
@@ -133,8 +133,8 @@ class TestThePhaseRunsAndNothingElse:
     def test_pipx_is_asked_for_only_when_there_is_a_download(self, stubbed,
                                                              tmp_path):
         films = _library(tmp_path, "Films")
-        _main(stubbed, "-s", str(films))
-        _main(stubbed, "-sw", str(films))
+        _main(stubbed, "-O", "subtitles", str(films))
+        _main(stubbed, "-wO", "subtitles", str(films))
         dry, real = stubbed["tools"]
         assert "ffsubsync" in dry and "pipx" not in dry
         assert "ffsubsync" in real and "pipx" in real
@@ -144,7 +144,7 @@ class TestThePhaseRunsAndNothingElse:
         monkeypatch.delenv("openSubtitlesPassword")
         films = _library(tmp_path, "Films")
         docs = _library(tmp_path, "Documentaries")
-        assert _main(stubbed, "-sw", str(films), str(docs)) == 0
+        assert _main(stubbed, "-wO", "subtitles", str(films), str(docs)) == 0
         assert [(call[0], call[4]) for call in stubbed["calls"]] == [
             ("check", None), ("check", None)]
         (said,) = [line for line in stubbed["logs"]
@@ -157,7 +157,7 @@ class TestThePhaseRunsAndNothingElse:
         monkeypatch.delenv("openSubtitlesPassword")
         monkeypatch.setenv("subDlApiKey", "k")
         films = _library(tmp_path, "Films")
-        assert _main(stubbed, "-sw", str(films)) == 0
+        assert _main(stubbed, "-wO", "subtitles", str(films)) == 0
         assert stubbed["calls"][0][4] == ["subdl"]
         assert [line for line in stubbed["logs"]
                 if "openSubtitlesUser" in line] == [
@@ -170,7 +170,7 @@ class TestThePhaseRunsAndNothingElse:
         monkeypatch.setenv("openSubtitlesComPassword", "p")
         monkeypatch.setenv("subDlApiKey", "k")
         films = _library(tmp_path, "Films")
-        assert _main(stubbed, "-sw", str(films)) == 0
+        assert _main(stubbed, "-wO", "subtitles", str(films)) == 0
         assert stubbed["calls"][0][4] == [
             "opensubtitles", "opensubtitlescom", "subdl"]
 
@@ -179,7 +179,7 @@ class TestThePhaseRunsAndNothingElse:
         monkeypatch.setattr(run.subtitleads, "available", lambda: False)
         films = _library(tmp_path, "Films")
         docs = _library(tmp_path, "Documentaries")
-        assert _main(stubbed, "-sw", str(films), str(docs)) == 0
+        assert _main(stubbed, "-wO", "subtitles", str(films), str(docs)) == 0
         warning = ("WARNING: subcleaner not installed - subtitles keep the "
                    "adverts they came with.")
         assert stubbed["logs"].count(warning) == 1
@@ -192,7 +192,7 @@ class TestThePhaseRunsAndNothingElse:
         monkeypatch.setattr(run, "_settle_ffsubsync_quality",
                             lambda **_k: "no")
         films = _library(tmp_path, "Films")
-        assert _main(stubbed, "-sw", str(films)) == 1
+        assert _main(stubbed, "-wO", "subtitles", str(films)) == 1
         assert stubbed["calls"] == []
         assert "Nothing was changed." in capsys.readouterr().err
 
@@ -200,7 +200,7 @@ class TestThePhaseRunsAndNothingElse:
                                           monkeypatch):
         monkeypatch.setattr(run.tooldeps, "require_tools", lambda *_a: 1)
         films = _library(tmp_path, "Films")
-        assert _main(stubbed, "-s", str(films)) == 1
+        assert _main(stubbed, "-O", "subtitles", str(films)) == 1
         assert stubbed["calls"] == []
 
 
@@ -216,7 +216,7 @@ class TestTheList:
         stubbed["verdicts"]["kept"] = ["/Films/a.en.srt"]
         stubbed["verdicts"]["discarded"] = ["/Films/b.de.srt"]
         stubbed["verdicts"]["untested"] = ["/Films/c.fr.srt"]
-        _main(stubbed, "-s", str(films))
+        _main(stubbed, "-O", "subtitles", str(films))
         assert self._listing(stubbed).read_text() == (
             "# Out of step with their film - would be thrown out:\n"
             "/Films/b.de.srt\n"
@@ -226,7 +226,7 @@ class TestTheList:
     def test_under_w_it_says_they_were_thrown_out(self, stubbed, tmp_path):
         films = _library(tmp_path, "Films")
         stubbed["verdicts"]["discarded"] = ["/Films/b.de.srt"]
-        _main(stubbed, "-sw", str(films))
+        _main(stubbed, "-wO", "subtitles", str(films))
         assert self._listing(stubbed).read_text() == (
             "# Out of step with their film - thrown out:\n"
             "/Films/b.de.srt\n")
@@ -240,7 +240,7 @@ class TestTheList:
         listing.write_text("stale\n")
         stubbed["verdicts"]["kept"] = ["/Films/a.en.srt"]
         monkeypatch.setattr("sys.stdin", io.StringIO("y\n"))
-        _main(stubbed, "-s", str(films))
+        _main(stubbed, "-O", "subtitles", str(films))
         assert not listing.exists()
 
     def test_an_earlier_list_is_kept_unless_the_user_says_yes(
@@ -251,7 +251,7 @@ class TestTheList:
         listing.write_text("stale\n")
         stubbed["verdicts"]["discarded"] = ["/Films/b.de.srt"]
         monkeypatch.setattr("sys.stdin", io.StringIO("n\n"))
-        assert _main(stubbed, "-s", str(films)) == 1
+        assert _main(stubbed, "-O", "subtitles", str(films)) == 1
         assert listing.read_text() == "stale\n"
         assert stubbed["calls"] == []
         assert "Overwrite it? [y/N]" in capsys.readouterr().err
@@ -262,7 +262,7 @@ class TestWhatItSaysAtTheEnd:
 
     def test_a_folder_without_subtitles_says_so_rather_than_three_zeros(
             self, stubbed, tmp_path):
-        _main(stubbed, "-s", str(_library(tmp_path, "Films")))
+        _main(stubbed, "-O", "subtitles", str(_library(tmp_path, "Films")))
         assert "No subtitle found beside any film" in stubbed["logs"]
         assert stubbed["logs"][-1] == ("Dry run: nothing was changed. Pass -w "
                                        "to download what is missing.")
@@ -270,7 +270,7 @@ class TestWhatItSaysAtTheEnd:
     def test_all_in_step_leaves_out_the_untested_count_and_the_throwing_out(
             self, stubbed, tmp_path):
         stubbed["verdicts"]["kept"] = ["/Films/a.en.srt"]
-        _main(stubbed, "-s", str(_library(tmp_path, "Films")))
+        _main(stubbed, "-O", "subtitles", str(_library(tmp_path, "Films")))
         assert "1 subtitle(s) in step, 0 out of step" in stubbed["logs"]
         assert stubbed["logs"][-1] == (
             "Dry run: nothing was changed. Pass -w to sync the subtitles in "
@@ -281,7 +281,7 @@ class TestWhatItSaysAtTheEnd:
         stubbed["verdicts"]["kept"] = ["/Films/a.en.srt"]
         stubbed["verdicts"]["discarded"] = ["/Films/b.de.srt"]
         stubbed["verdicts"]["untested"] = ["/Films/c.fr.srt"]
-        _main(stubbed, "-s", str(_library(tmp_path, "Films")))
+        _main(stubbed, "-O", "subtitles", str(_library(tmp_path, "Films")))
         assert ("1 subtitle(s) in step, 1 out of step, 1 could not be tested"
                 in stubbed["logs"])
         assert stubbed["logs"][-1] == (
@@ -293,7 +293,7 @@ class TestWhatItSaysAtTheEnd:
                                                           tmp_path):
         films = _library(tmp_path, "Films")
         stubbed["verdicts"]["discarded"] = ["/Films/b.de.srt"]
-        _main(stubbed, "-s", str(films))
+        _main(stubbed, "-O", "subtitles", str(films))
         listed = [line for line in stubbed["logs"] if "listed in" in line]
         assert len(listed) == 1
         assert listed[0].startswith("1 subtitle(s) in ")
@@ -302,18 +302,11 @@ class TestWhatItSaysAtTheEnd:
 
 
 class TestTheCombosItRefuses:
-    @pytest.mark.parametrize("other", [["-t"], ["-a"], ["-i", "ids.tsv"]])
-    def test_s_with_another_phase_is_refused(self, tmp_path, capsys, other):
-        films = _library(tmp_path, "Films")
-        assert run.main(["-s", *other, str(films)]) == 1
-        errors = capsys.readouterr().err
-        assert "two runs, not one" in errors
-        assert "Nothing was changed." in errors
 
     def test_w_on_its_own_points_at_sw_too(self, tmp_path, capsys):
         films = _library(tmp_path, "Films")
         assert run.main(["-w", str(films)]) == 1
-        assert "-sw" in capsys.readouterr().err
+        assert "-wO tagging" in capsys.readouterr().err
 
 
 class TestTheLanguagesItChecksFor:
@@ -324,7 +317,7 @@ class TestTheLanguagesItChecksFor:
     def test_without_the_setting_it_checks_the_default_six(self, stubbed,
                                                            tmp_path):
         films = _library(tmp_path, "Films")
-        _main(stubbed, "-s", str(films))
+        _main(stubbed, "-O", "subtitles", str(films))
         wanted = stubbed["wanteds"][0]
         assert [row.code2 for row in wanted] \
             == ["en", "de", "fr", "nl", "es", "it"]
@@ -333,6 +326,6 @@ class TestTheLanguagesItChecksFor:
                                           monkeypatch):
         films = _library(tmp_path, "Films")
         monkeypatch.setenv("spokenLanguages", "pt,ja")
-        _main(stubbed, "-s", str(films))
+        _main(stubbed, "-O", "subtitles", str(films))
         wanted = stubbed["wanteds"][0]
         assert [row.code2 for row in wanted] == ["pt", "ja"]

@@ -84,7 +84,7 @@ def test_a_refusal_after_the_pin_leaves_no_run_directory(
     assert _left_behind() == []
 
 
-@pytest.mark.parametrize("phase", [[], ["-s"], ["-a"]],
+@pytest.mark.parametrize("phase", [[], ["-O", "subtitles"], ["-O", "commentary"]],
                          ids=["full ingest", "subtitles only",
                               "commentary only"])
 def test_an_ingest_movies_refusal_after_the_pin_leaves_no_run_directory(

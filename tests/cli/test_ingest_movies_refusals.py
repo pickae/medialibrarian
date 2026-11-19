@@ -30,20 +30,7 @@ class TestANamesBesideAnotherPhase:
     phase it would have to share a run with is refused: the order is not
     guessed, and the answer is which of the two runs comes first."""
 
-    @pytest.mark.parametrize("other", [["-a"], ["-c"], ["-s"], ["-t"]])
-    def test_a_phase_of_its_own_is_refused(self, other, tmp_path, capsys):
-        assert run.main(["-n"] + other + [str(_library(tmp_path, "Films"))]) \
-            == 1
-        errors = capsys.readouterr().err
-        assert "-n names the commentary tracks and nothing else" in errors
-        assert "Nothing was changed." in errors
 
-    def test_an_id_list_is_refused(self, tmp_path, capsys):
-        assert run.main(["-n", "-i", str(tmp_path / "nope.tsv"),
-                         str(_library(tmp_path, "Films"))]) == 1
-        errors = capsys.readouterr().err
-        assert "-n names the commentary tracks and nothing else" in errors
-        assert "Nothing was changed." in errors
 
 
 class TestTaggingWithoutWhatItNeeds:
@@ -55,7 +42,7 @@ class TestTaggingWithoutWhatItNeeds:
     def test_without_the_api_key(self, monkeypatch, tmp_path, capsys):
         monkeypatch.delenv("tmdbApiKey", raising=False)
         monkeypatch.setenv("CLI_SCRIPT_DIR", str(tmp_path))
-        assert run.main(["-t", str(_library(tmp_path, "Films"))]) == 1
+        assert run.main(["-O", "tagging", str(_library(tmp_path, "Films"))]) == 1
         errors = capsys.readouterr().err
         assert "tmdbApiKey is not set, so there is nothing to tag with." \
             in errors
@@ -68,7 +55,7 @@ class TestTaggingWithoutWhatItNeeds:
         monkeypatch.setenv("tmdbApiKey", "a-key")
         monkeypatch.setenv("CLI_SCRIPT_DIR", str(tmp_path))
         monkeypatch.setenv("PATH", str(empty))
-        assert run.main(["-t", str(_library(tmp_path, "Films"))]) == 1
+        assert run.main(["-O", "tagging", str(_library(tmp_path, "Films"))]) == 1
         errors = capsys.readouterr().err
         assert "it needs a tool this machine does not have" in errors
         assert "curl" in errors
@@ -108,7 +95,7 @@ class TestUnderQuiet:
         monkeypatch.setenv("LOG_VERBOSITY", "")
         monkeypatch.delenv("tmdbApiKey", raising=False)
         monkeypatch.setenv("CLI_SCRIPT_DIR", str(tmp_path))
-        assert run.main(["-q", "-t", str(_library(tmp_path, "Films"))]) == 1
+        assert run.main(["-q", "-O", "tagging", str(_library(tmp_path, "Films"))]) == 1
         errors = capsys.readouterr().err
         assert "tmdbApiKey is not set, so there is nothing to tag with." \
             in errors

@@ -31,20 +31,20 @@ given (one level deep, not the whole tree):
 - transcribes commentary tracks with whisper, and names numbered ones after who speaks in them (dvdcompare.net)
 - **remuxes each film once into an improved copy**, keeping the original as `<name> (old).mkv` ([details](#what-a-full-ingest-does))
 - tags names with the IMDb id (needs `tmdbApiKey`), looks up chapters, and downloads missing subtitles (needs an OpenSubtitles or SubDL login)
-- last, **compares each film with the copy your Plex library already has**, if any ([details](#plex-comparison--p))
+- last, **compares each film with the copy your Plex library already has**, if any ([details](#plex-comparison))
 - with `-r`, after all of that, **converts the remuxes** and writes each converted copy beside its film ([details](#remux-conversion--r))
 - with `-o`, any of the phases above is left out, the rest going on as they always have ([details](#leaving-phases-out--o))
 
-Each phase can also be run on its own, over a whole library: see
-[single-task sweeps](#single-task-sweeps).
+Each phase can also be run on its own, over a whole library, and several in a
+row: see [single-task sweeps](#single-task-sweeps) and [`-O`](#single-task-sweeps-chained--o).
 
 **Contents:** [Default behavior](#default-behavior) · [Settings](#settings) · [Single-task sweeps](#single-task-sweeps) ·
 [What a full ingest does](#what-a-full-ingest-does) ·
-[Naming films](#naming-films--t) · [Feeding ids back](#feeding-ids-back--i) ·
-[Subtitles](#subtitles--s) · [Commentary transcripts](#commentary-transcripts--a) ·
-[Commentary names](#commentary-names--n) · [Chapters](#chapters--c) ·
-[Plex comparison](#plex-comparison--p) · [Remux conversion](#remux-conversion--r) · [Keeping everything](#keeping-everything--k) ·
-[Leaving phases out](#leaving-phases-out--o) ·
+[Naming films](#naming-films) · [Feeding ids back](#feeding-ids-back--i) ·
+[Subtitles](#subtitles) · [Commentary transcripts](#commentary-transcripts) ·
+[Commentary names](#commentary-names) · [Chapters](#chapters) ·
+[Plex comparison](#plex-comparison) · [Remux conversion](#remux-conversion--r) · [Keeping everything](#keeping-everything--k) ·
+[Leaving phases out](#leaving-phases-out--o) · [Chaining sweeps](#single-task-sweeps-chained--o) ·
 [Several folders](#several-folders)
 
 ## Settings
@@ -75,45 +75,46 @@ a film are still tested.
 
 ## Single-task sweeps
 
-A full ingest does everything in one pass. Each of these flags does **one**
+A full ingest does everything in one pass. Each of these phases, named in `-O`, does **one**
 phase of it and nothing else: no conversion, no remux and none of the other
 phases. They walk the **whole tree** below each folder given, so they can be
 pointed at a library. A full ingest reads only the one level it always did.
 
-| Flag | Does only | By default | With `-w` | Leaves behind | Run it after |
+| Phase | Does only | By default | With `-w` | Leaves behind | Run it after |
 | --- | --- | --- | --- | --- | --- |
-| [`-t`](#naming-films--t) | the server naming: IMDb id, editions, stacking token | dry run: prints every rename | carries the renames out | [lists](#the-lists--t-writes) in `logs/ingest-movies/` | — |
-| [`-i <file>`](#feeding-ids-back--i) | the same naming, from the id list you filled in | dry run: prints, writes only the conflicts and duplicates lists | renames, and brings the file up to date | — | `-t` |
-| [`-s`](#subtitles--s) | testing the subtitles already there | dry run: says which would be kept | syncs, deletes the out-of-step ones, downloads the missing | `logs/ingest-movies/ingest-movies-subtitles-<folder>.txt` | `-tw` |
-| [`-a`](#commentary-transcripts--a) | transcribing commentary tracks | writes as it goes | refused | transcripts beside the films | — |
-| [`-n`](#commentary-names--n) | naming numbered commentary tracks | dry run | names the tracks | `logs/ingest-movies/ingest-movies-commentarynames-<folder>.txt` | `-a` |
-| [`-c`](#chapters--c) | chapters from the ChapterDB archive | writes as it goes | refused | — | `-tw` |
-| [`-p`](#plex-comparison--p) | comparing with the Plex library | changes nothing | refused | — | `-tw` |
-| [`-d`](#dropping-the-old-backups--d) | dropping the `(old)` originals the checks passed | dry run: says which would be dropped and which would stay, with the reason | tags the copies and drops the originals | `logs/ingest-movies/ingest-movies-backups-<folder>.txt` | `-tw` |
+| [`-O tagging`](#naming-films) | the server naming: IMDb id, editions, stacking token | dry run: prints every rename | carries the renames out | [lists](#the-lists-tagging-writes) in `logs/ingest-movies/` | — |
+| [`-O tagging -i <file>`](#feeding-ids-back--i) | the same naming, from the id list you filled in | dry run: prints, writes only the conflicts and duplicates lists | renames, and brings the file up to date | — | `-O tagging` |
+| [`-O subtitles`](#subtitles) | testing the subtitles already there | dry run: says which would be kept | syncs, deletes the out-of-step ones, downloads the missing | `logs/ingest-movies/ingest-movies-subtitles-<folder>.txt` | `-wO tagging` |
+| [`-O commentary`](#commentary-transcripts) | transcribing commentary tracks | writes as it goes | left off | transcripts beside the films | — |
+| [`-O names`](#commentary-names) | naming numbered commentary tracks | dry run | names the tracks | `logs/ingest-movies/ingest-movies-commentarynames-<folder>.txt` | `-O commentary` |
+| [`-O chapters`](#chapters) | chapters from the ChapterDB archive | writes as it goes | left off | — | `-wO tagging` |
+| [`-O plex`](#plex-comparison) | comparing with the Plex library | changes nothing | left off | — | `-wO tagging` |
+| [`-O backups`](#dropping-the-old-backups) | dropping the `(old)` originals the checks passed | dry run: says which would be dropped and which would stay, with the reason | tags the copies and drops the originals | `logs/ingest-movies/ingest-movies-backups-<folder>.txt` | `-wO tagging` |
 
-`-s`, `-a`, `-n` and `-c` take the films in name order and open each with
+`-O subtitles`, `-O commentary`, `-O names` and `-O chapters` take the films in name order and open each with
 `[n/total] <film>`, its place in the folder, so a film nothing is done to still
-shows up. What is said about that film follows, indented under it. For `-a`
+shows up. What is said about that film follows, indented under it. For `-O commentary`
 that is one line per commentary track. Each transcription finishes in a worker
 later and names its own transcript, and so does each chapter write.
 
-**`-w` on its own is refused.** Without `-t`, `-i`, `-s`, `-n` or `-d` there is
+**`-w` on its own is refused.** Without `-O` naming `tagging`, `subtitles`, `names` or `backups` there is
 no dry run to carry out, and the run it would otherwise start is a full ingest.
-`-a` and `-c` refuse it as well: the transcription and the chapter lookup are not
-dry runs, so there is nothing for `-w` to carry out. Nor is `-p`, which changes
-nothing.
+Named with `commentary`, `chapters` or `plex` only, it is refused as well: the
+transcription and the chapter lookup are not dry runs and the comparison changes
+nothing, so there is nothing for `-w` to carry out. Beside a phase that has a dry
+run it is left off those.
 
 Following those dependencies, a library is brought up to date in this order:
 
 ```bash
-ingest-movies -t  ~/Films     # review what the naming would do
-ingest-movies -tw ~/Films     # tag the films with their ids
-ingest-movies -sw ~/Films     # subtitles, now searched for by id
-ingest-movies -a  ~/Films     # transcribe the commentaries
-ingest-movies -nw ~/Films     # name them from those transcripts
-ingest-movies -c  ~/Films     # chapters for the tagged films
-ingest-movies -p  ~/Films     # which of them the Plex library already has
-ingest-movies -dw ~/Films     # drop the (old) originals the checks passed
+ingest-movies -O tagging ~/Films     # review what the naming would do
+ingest-movies -wO tagging ~/Films     # tag the films with their ids
+ingest-movies -wO subtitles ~/Films     # subtitles, now searched for by id
+ingest-movies -O commentary ~/Films     # transcribe the commentaries
+ingest-movies -wO names ~/Films     # name them from those transcripts
+ingest-movies -O chapters ~/Films     # chapters for the tagged films
+ingest-movies -O plex ~/Films     # which of them the Plex library already has
+ingest-movies -wO backups ~/Films     # drop the (old) originals the checks passed
 ```
 
 ## What a full ingest does
@@ -393,7 +394,7 @@ is thrown away and the original left alone.
 The original is preserved as `<name> (old).mkv`, so nothing is lost and a rerun
 is a no-op — which is also what makes the Dolby Vision work a one-time job per
 film: a film that already has its `(old)` backup is not remuxed again. Once the
-copy has stood the checks, [`-d`](#dropping-the-old-backups--d) drops that
+copy has stood the checks, [`-O backups`](#dropping-the-old-backups) drops that
 backup, and the tag it wrote in the backup's place is what keeps the film done
 from then on.
 
@@ -422,13 +423,13 @@ Every sidecar follows its own film, including a commentary transcript whose name
 extends the film's. The `(old)` backup keeps its own name, and running the
 ingest again changes nothing.
 
-## Naming films (`-t`)
+## Naming films
 
-**`-t` does only this phase** — no conversion, no remux, no downloads, no
+**`-O tagging` does only this phase** — no conversion, no remux, no downloads, no
 transcription — and does it as a **dry run** unless `-w` is given, printing
 every rename it would make. Nothing is renamed for a film TMDb could not name,
 nor for a folder holding a film that is not its own; those go on
-[the lists](#the-lists--t-writes) instead. Requests to TMDb are paced to ten a
+[the lists](#the-lists-tagging-writes) instead. Requests to TMDb are paced to ten a
 second.
 
 ### A year Plex cannot see
@@ -517,7 +518,7 @@ above is read as the first half and the two together are asked about as one
 title. A tail that is only a number is never asked about on its own — a
 catalogue asked for `Part 2` answers with every film ever released in halves.
 
-**Where TMDb cannot name a film, `-t` asks a local copy of IMDb's own title
+**Where TMDb cannot name a film, `-O tagging` asks a local copy of IMDb's own title
 lists** — the romanisations its search does not find, and the films it states
 no runtime for, which is what a folder with no year is settled on. The lists
 are fetched into the checkout's `data/imdb` the first time (about 750 MB),
@@ -635,7 +636,7 @@ a third, and the files are then the only names a catalogue has ever heard of.
 Every film in the folder must answer, and all of them to the same id — a folder
 whose films answer to two ids is a folder holding two films.
 
-### The lists `-t` writes
+### The lists tagging writes
 
 Each folder given gets these lists, in the script directory's
 `logs/ingest-movies/` folder:
@@ -651,7 +652,7 @@ Each folder given gets these lists, in the script directory's
 
 **A list an earlier run left is not replaced without asking.** When one of the
 lists this run could write is already there — for any of the folders given, and
-for `-s`, `-n` and `-a` too — the run names them and asks before it starts; only
+for `-O subtitles`, `-O names` and `-O commentary` too — the run names them and asks before it starts; only
 `y` overwrites, and anything else stops the run with nothing changed. The answer
 is read from standard input, so a run nobody is watching (a closed stdin) keeps
 the old lists and stops, and `echo y |` in front of it says yes.
@@ -668,7 +669,7 @@ plainly the film means the matching is too narrow; a page of films that merely
 share a word means it is working.
 
 **A film kept twice is warned about.** When two separate folders carry the
-same id, whether it was already on them or the run gives it to them, `-t`
+same id, whether it was already on them or the run gives it to them, `-O tagging`
 lists both in `ingest-movies-duplicates.txt` — one file for the whole run, since
 they may be side by side, in different corners of the library, or in two of the
 folders given (two disks, say). That is nearly always one film kept twice by accident, so which copy to
@@ -687,11 +688,11 @@ An id is read however you have it to hand (`tt0000002`, `imdb-tt0000002`, a bare
 TMDb number), answers before the network is asked, and stays in the file so the
 lookup you did by hand is not lost.
 
-Feeding that list back is **`-i`**, the same tagging phase going on what you
+Feeding that list back is **`-O tagging -i <file>`**, the same tagging phase going on what you
 filled in — and a **dry run** too, unless `-w` is given. It prints what your ids
-would rename and writes neither `-t`'s worklists nor the file you are still
+would rename and writes neither `-O tagging`'s worklists nor the file you are still
 filling in. Only the conflicts and duplicates lists are left, since they record
-what the run found rather than asking you anything. `-iw` carries the renames out and brings
+what the run found rather than asking you anything. `-wO tagging -i` carries the renames out and brings
 the file up to date.
 
 | Row in the file | What happens |
@@ -701,15 +702,15 @@ the file up to date.
 | a row that names no folder in the library | an error naming that row, and the run carries on to the next |
 | a file that **cannot be read** | **stops the run**: counted as no ids at all, a path typed wrong would throw away every id in the real file and put the whole library back through the lookups that already failed on it |
 
-## Subtitles (`-s`)
+## Subtitles
 
-**`-s` does only the subtitles.** Every `<movie>.xx.srt` already beside a film
+**`-O subtitles` does only the subtitles.** Every `<movie>.xx.srt` already beside a film
 is put to the test a downloaded subtitle is kept by: its best alignment with the
 film's speech has to stand out from every other. Commentary transcripts are
 never tested — they are named after their track — and neither are forced
 subtitles or the languages the `spokenLanguages` setting does not name.
 
-| | Dry run (`-s`) | `-sw` |
+| | Dry run (`-O subtitles`) | `-wO subtitles` |
 | --- | --- | --- |
 | subtitle in step | said to be kept | adverts taken out, synced |
 | subtitle out of step | listed in `logs/ingest-movies/ingest-movies-subtitles-<folder>.txt` | deleted |
@@ -717,12 +718,12 @@ subtitles or the languages the `spokenLanguages` setting does not name.
 | subtitle ffsubsync cannot align at all | left alone | left alone, since it may be one that cannot be fetched again |
 
 A dry run tests each subtitle on a copy, its adverts taken out first, and says
-how many advert cues the real run would remove. Run it after `-tw`, so that films are
+how many advert cues the real run would remove. Run it after `-wO tagging`, so that films are
 searched for by their ids.
 
 The films are taken one at a time in name order, each announced with its place
 in the folder, so a film with nothing to test or download still shows up. With
-`-sw` each film's missing subtitles are downloaded before the run moves on to
+`-wO subtitles` each film's missing subtitles are downloaded before the run moves on to
 the next film. Under the film, one line per subtitle says what it was aligned
 to, by how much, and what became of it:
 
@@ -736,9 +737,9 @@ to, by how much, and what became of it:
 ```
 
 **Films already done are skipped.** Testing and syncing a whole library takes
-hours, so every film `-sw` gets through is recorded by its id tag in
+hours, so every film `-wO subtitles` gets through is recorded by its id tag in
 `logs/ingest-movies/ingest-movies-subtitles-done.txt` as soon as it is
-finished, and every later `-s` or `-sw` run skips the films recorded there,
+finished, and every later `-O subtitles` or `-wO subtitles` run skips the films recorded there,
 saying how many it skipped. A run that is stopped halfway keeps every film it
 finished. A film is known by its `{imdb-…}` or `{tmdb-…}` tag, plus its
 edition and part when it has them, so moving or renaming it does not undo the
@@ -750,15 +751,15 @@ the first run after the change, and never again. These films are never recorded:
 - a film with no id tag, since its name is only a guess at which film it is
 - a film with a subtitle ffsubsync could not align at all
 - a film the run was interrupted on
-- any film of a `-sw` run made with no subtitle source's login set, since
+- any film of a `-wO subtitles` run made with no subtitle source's login set, since
   nothing was downloaded
 
 To have a film done again, delete its line from the file. To redo every film,
 delete the file.
 
-## Commentary transcripts (`-a`)
+## Commentary transcripts
 
-**`-a` does only the audio commentary phase.** Every commentary track that does
+**`-O commentary` does only the audio commentary phase.** Every commentary track that does
 not already have its transcript beside the film is transcribed next to it — in
 the language it is spoken in, on the GPU when whisper can use it, on every CPU
 thread otherwise — and nothing else: no subtitle downloading, no renaming of
@@ -779,11 +780,11 @@ A transcript already beside a film is left alone, with two exceptions:
   name still says which commentary it is. The srt itself is left untouched, and
   the renumbered sidecar is judged by the size rule like any other.
 
-## Commentary names (`-n`)
+## Commentary names
 
-**`-n` names numbered commentary tracks.** A rip often calls its commentaries
+**`-O names` names numbered commentary tracks.** A rip often calls its commentaries
 `Commentary 1`, `Commentary 2` — the disc said which was which only in its
-menu. `-n` looks the film up on [dvdcompare.net](https://www.dvdcompare.net),
+menu. `-O names` looks the film up on [dvdcompare.net](https://www.dvdcompare.net),
 which lists every release's commentaries by who speaks in them, and gives each
 track its real name: `Commentary by director …`. Only a film whose every
 commentary is still merely numbered is touched — in any of the languages the
@@ -804,7 +805,7 @@ It names a film only when it is sure:
   are, and each track's opening minutes have to introduce one listed
   commentary's people and nobody else's, in one way of pairing them only. One
   commentary whose people never introduce themselves may take the track that
-  is left over. Run `-a` first, so the transcripts are there.
+  is left over. Run `-O commentary` first, so the transcripts are there.
 
 The disc's own subtitles for a commentary (`English (Commentary #2)`), the
 transcripts the ingest appended to the film, and the transcripts and extracts
@@ -822,9 +823,9 @@ title TMDb gave its folder. The site was already asked in the background (see
 [What a full ingest does](#what-a-full-ingest-does)), and the same list is
 written.
 
-## Chapters (`-c`)
+## Chapters
 
-**`-c` does only the chapters.** Every tagged film under the given folders that
+**`-O chapters` does only the chapters.** Every tagged film under the given folders that
 has no chapters, or only numbered ones (`Chapter 01`, `Kapitel 3`, a bare
 number or time), is looked up in the read-only
 [ChapterDB archive](https://chapterdb.plex.tv/): chapter times read off DVDs and
@@ -855,10 +856,10 @@ asked about three seconds apart, give or take one. The archive takes no new
 sets, so a recent film will not be in it; if it stops answering, the rest of
 the run does without it. Needs `curl`.
 
-## Plex comparison (`-p`)
+## Plex comparison
 
 **Is the film already in the library, and which copy is better?** The full
-ingest asks this last, once each film is the file it will stay; `-p` asks it
+ingest asks this last, once each film is the file it will stay; `-O plex` asks it
 alone, of every film under the folders given. The server is `plexUrl`, or else
 the one on this machine; the library is read once per run. A film is found by
 its id tag — Plex keeps the IMDb and TMDb ids of every film it matched — or, for
@@ -910,7 +911,7 @@ never a film's main movie — that has no chapters is given some, worked out by
 the language model the `chapterLlm` [settings](../settings.md) name, the way
 [`generate-chapters`](generate-chapters.md) does it. An extra that has chapters
 keeps them, and one too short to divide is left alone. This is separate from
-the [ChapterDB lookup](#chapters--c), which is only for films.
+the [ChapterDB lookup](#chapters), which is only for films.
 
 What is said is read from the extra's first text subtitle that is its dialogue:
 not a commentary's, not one for the deaf and hard of hearing, not the forced
@@ -956,7 +957,7 @@ transcribed extra, the same whisper set-up as the commentaries.
 example a chapter per scene titled with where it takes place. The model then
 reasons at medium effort, and Claude may search the web, as with
 [`generate-chapters -p`](generate-chapters.md#your-own-instructions). `-P` needs
-`-e`. Both are refused with the single-task sweeps, which never reach this phase.
+`-e`. Both are refused with `-O`, whose phases never reach this one.
 
 ## Remux conversion (`-r`)
 
@@ -986,14 +987,13 @@ last, so the converted parts stack.
 
 The film itself is not changed. Later phases and later runs skip the copy in the
 same way they skip the `(old)` original: it is not tagged, transcribed, remuxed or
-fetched subtitles for, and a later `-t` rename does not rename it. Converting the
+fetched subtitles for, and a later `-O tagging` rename does not rename it. Converting the
 same remux again is left to convert-video: a copy as long as its film is skipped,
-and an unfinished one is redone. `-r` is refused alongside any of the
-single-task sweeps.
+and an unfinished one is redone. `-r` is refused alongside `-O`.
 
-## Dropping the `(old)` backups (`-d`)
+## Dropping the `(old)` backups
 
-**`-d` drops the `(old)` originals the improved copies were kept beside, and
+**`-O backups` drops the `(old)` originals the improved copies were kept beside, and
 nothing else.** It is the end of the remux's work: a film whose original still
 stands beside it as `<name> (old).mkv` is asked about its copy, and the backup
 goes where the copy is the whole of the original.
@@ -1020,8 +1020,7 @@ not dropped in favour of nothing.
 
 The tag is what tells a later run the film is done: the "already remuxed" check
 accepts either the `(old)` backup or the tag in its place, so a film whose
-backup has been dropped is not remuxed a second time. `-d` is refused alongside
-the other single-task sweeps.
+backup has been dropped is not remuxed a second time. 
 
 ## Keeping everything (`-k`)
 
@@ -1042,9 +1041,9 @@ happens with every part: the cleaning, renaming and IMDb tagging, the track
 names and flags, the subtitles downloaded and the commentary transcripts muxed
 in, the chapters, a false Dolby Vision claim or an overstated level corrected.
 
-The word after `-k` is claimed by `-k` when it is a part, the way `-t` claims
+The word after `-k` is claimed by `-k` when it is a part, the way `convert-video -t` claims
 a number: a folder literally named `audio` is written `./audio`. `-k` is
-refused with `-r` (which encodes) and with the single-task sweeps.
+refused with `-r` (which encodes) and with `-O`.
 
 ## Leaving phases out (`-o`)
 
@@ -1062,10 +1061,30 @@ not named run as they always have.
 The phases are comma-separated, in any order, and a phase the run will not omit
 is refused with the page, like a bad option. A folder literally named after one
 of them — `plex` is the likeliest — is written `./plex`: the word after `-o`
-goes to `-o` when it is a phase. `-o` is refused with the single-task sweeps,
-which do a phase of their own rather than leaving one out of a full ingest.
+goes to `-o` when it is a phase. `-o` is refused with `-O`,
+which does a phase of their own rather than leaving one out of a full ingest.
 Omitting `tagging` is the one with a downstream effect: the later phases then
 see untagged folders, which they already handle.
+
+## Single-task sweeps, chained (`-O`)
+
+**`-O <phases>` runs single-task sweeps by name**, in the order typed, as if each
+had been typed as its own command on the same folders. The phases are
+`tagging`, `subtitles`, `commentary`, `names`, `chapters`, `plex` and `backups`,
+comma-separated like `-o` and `-k`:
+
+```bash
+ingest-movies -O tagging ~/Films
+ingest-movies -wO tagging,subtitles ~/Films       # tag, then the subtitles
+ingest-movies -O commentary,names,chapters ~/Films
+```
+
+Nothing is reordered or checked for sense, so the order is the one the
+[sweeps table](#single-task-sweeps) gives. A phase that fails stops the chain.
+`-w` goes to the phases that have a dry run to carry out (`tagging`,
+`subtitles`, `names`, `backups`) and is left off the others; it is refused when
+none of them does. `-i <file>` is the id list the `tagging` phase reads back.
+`-O` is refused with `-r`, `-e`, `-k` and `-o`, which belong to a full ingest.
 
 ## Several folders
 
@@ -1074,7 +1093,7 @@ next is started, in the order they were typed. Each leaves lists of its own,
 named after it — `ingest-movies-unmatched-Films.tsv`,
 `ingest-movies-ambiguous-Films.txt` — so two libraries' worklists never land in
 one file. An `-i` list you named yourself is the exception: it is read for every
-folder and, under `-iw`, written back once, holding them all. Two folders of the
+folder and, under `-wO tagging -i`, written back once, holding them all. Two folders of the
 same name are refused before anything is touched, since their lists would be
 written to one path.
 

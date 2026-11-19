@@ -152,24 +152,7 @@ class TestTheSweepRefusals:
     """Each sweep does its phase alone: there is no full ingest here to
     leave a phase out of."""
 
-    @pytest.mark.parametrize("letter", ["a", "n", "c", "p", "s", "t"])
-    def test_the_sweeps_are_refused_naming_their_own(self, letter, tmp_path,
-                                                     capsys):
-        (tmp_path / "Films").mkdir()
-        assert run.main(["-o", "junk", "-" + letter, str(tmp_path / "Films")],
-                        script_dir=str(tmp_path / "script")) == 1
-        errors = capsys.readouterr().err
-        assert "-%s does its phase of" % letter in errors
-        assert "Drop the -o." in errors
 
-    def test_the_id_list_is_the_seventh(self, tmp_path, capsys):
-        (tmp_path / "Films").mkdir()
-        assert run.main(["-o", "junk", "-i", str(tmp_path / "ids"),
-                         str(tmp_path / "Films")],
-                        script_dir=str(tmp_path / "script")) == 1
-        errors = capsys.readouterr().err
-        assert "-i does its phase of" in errors
-        assert "Drop the -o." in errors
 
 
 class TestTheOmittedPhase:
