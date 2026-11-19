@@ -17,6 +17,7 @@ import pytest
 
 from medialib.cli import ingest_movies as rules
 from medialib.cli import ingest_movies_run as run_module
+from medialib.lib import runlog
 
 pytestmark = pytest.mark.fs
 
@@ -314,6 +315,13 @@ class TestTheCommentaryTranscripts:
             "--language", "0:en", "--track-name", "0:Commentary Dutch (EN)",
             "--commentary-flag", "0:1", "--default-track-flag", "0:0"]
 
+    def test_an_append_is_said_on_the_title_and_the_file(self, capsys, remux):
+        err = capsys.readouterr().err
+        assert ("  Appending the commentary transcript: Commentary Dutch (NL), "
+                "Film (2020) 8 Commentary Dutch.nl.srt") in err
+        assert ("  Appending the commentary transcript: Commentary Dutch (EN), "
+                "Film (2020) 8 Commentary Dutch.en.srt") in err
+
 
 class TestTheDownloadedSubtitles:
     """The good ``<movie>.xx.srt`` sidecars, muxed in where the film has no
@@ -335,6 +343,16 @@ class TestTheDownloadedSubtitles:
     def test_one_the_film_already_has_as_plain_text_is_not(self, remux):
         """Track 6 is an English text subtitle."""
         assert remux["base"] + ".en.srt" not in remux["argv"]
+
+    @pytest.mark.parametrize("remux", [SIDECARS], indirect=True)
+    def test_a_muxed_sidecar_is_said_on_its_language(self, capsys, remux):
+        stem = os.path.basename(remux["base"])
+        err = capsys.readouterr().err
+        assert ("  Muxing the Dutch subtitle sidecar: " + stem + ".nl.srt") \
+            in err
+        assert ("  Muxing the French subtitle sidecar: " + stem + ".fr.srt") \
+            in err
+        assert "Muxing the English" not in err
 
     @pytest.mark.parametrize("remux", [SIDECARS], indirect=True)
     def test_they_go_before_the_commentary_subtitles(self, remux):
@@ -667,11 +685,71 @@ class TestATranscriptCutForLength:
 
 class TestIdempotency:
 
-    def test_a_folder_that_already_has_an_old_copy_is_skipped(self, remux):
-        """Which is what makes a second run a no-op."""
+    def test_a_folder_that_already_has_an_old_copy_is_said(self, remux,
+                                                           monkeypatch,
+                                                           capsys):
+        """The fixture's run is the first one: this walk is the second, a
+        no-op - and a no-op that is said, on the backup that is one on. A
+        rerun changes nothing, so the no-op is a -v line, not a result."""
         before = len(remux["calls"])
+        said = []
+        monkeypatch.setattr(runlog, "detail", said.append)
         run_module.improve_main_movies(remux["state"], remux["root"])
         assert len(remux["calls"]) == before
+        assert ("Already improved, left as it is: " + remux["movie"] +
+                " - the (old) copy beside it") in said
+        assert remux["movie"] not in capsys.readouterr().err
+
+    def test_one_done_by_the_tag_the_backup_sweep_wrote_is_said_the_same(
+            self, tmp_path, monkeypatch):
+        folder = tmp_path / "Film (2020)"
+        folder.mkdir()
+        movie = str(folder / "Film (2020).mkv")
+        open(movie, "w").close()
+        monkeypatch.setattr(run_module.convertphase, "kept_original",
+                            lambda m: "")
+        monkeypatch.setattr(run_module.convertphase, "has_ingested_tag",
+                            lambda m: True)
+        said = []
+        assert run_module.main_movies(str(tmp_path), say=said.append) == []
+        assert said == ["Already improved, left as it is: " + movie +
+                        " - the ingested tag in the (old) copy's place"]
+        # And a walk without a say stays the list it was before: the lanes
+        # and the carry-over read it for what it holds, not for its skips.
+        assert run_module.main_movies(str(tmp_path)) == []
+
+
+class TestTheLanguageRuleSaid:
+    """The language rule's per-track consequence, said under the film's own
+    heading on the rule's own figures - the remux fixture's film drops a
+    German soundtrack and a German picture subtitle, and keeps a Dutch
+    commentary the rule does not reach."""
+
+    def test_a_track_dropped_for_its_language_is_said(self, capsys, remux):
+        err = capsys.readouterr().err
+        assert ("  Dropping audio track 2 (AC3 German, ger): its language is "
+                "not the first audio track's (eng) or a kept one (en)") in err
+
+    def test_so_is_an_image_subtitle_the_rule_drops(self, capsys, remux):
+        err = capsys.readouterr().err
+        assert ("  Dropping image subtitle track 5 (PGS German, ger): its "
+                "language is not the first audio track's (eng) or a kept one "
+                "(en)") in err
+
+    def test_a_commentary_the_rule_does_not_reach_is_said_kept(
+            self, capsys, remux):
+        err = capsys.readouterr().err
+        assert ("  Keeping audio track 8 (Commentary Dutch, nld): a "
+                "commentary is exempt from the language rule - its language "
+                "is not the first audio track's (eng) or a kept one (en)") \
+            in err
+
+    def test_and_a_score_the_rule_has_no_figure_for_is_said_on_nothing(
+            self, capsys, remux):
+        """The isolated score is kept without the rule being taken on a
+        figure, so no line of the rule names it."""
+        err = capsys.readouterr().err
+        assert "track 9" not in err.split("Surround ladder")[0]
 
 
 class TestWhatAFilmSays:
@@ -697,11 +775,13 @@ class TestWhatAFilmSays:
             monkeypatch.setattr(run_module.dolbyvision,
                                 "normalise_config_level", level)
             logs: list = []
+            details: list = []
             monkeypatch.setattr(run_module, "log", logs.append)
+            monkeypatch.setattr(runlog, "detail", details.append)
             run_module.Run(script_dir="",
                            ram_root=str(tmp_path / "ram")).improve_main_movie(
                                movie)
-            return movie, logs
+            return movie, logs, details
         return run
 
     def _plain(self):
@@ -727,7 +807,7 @@ class TestWhatAFilmSays:
                   rules.Track(id="3", type="audio", codec="A_AC3",
                               channels="6", language="fre",
                               language_ietf="fr")]
-        _movie, logs = improve(tracks)
+        _movie, logs, _details = improve(tracks)
         assert ("  Keeping the film's original language (ja, per TMDb), the "
                 "first audio track's (de, which TMDb lists as spoken in it) "
                 "and the kept languages (en)") in logs
@@ -754,7 +834,7 @@ class TestWhatAFilmSays:
                   rules.Track(id="3", type="audio", codec="A_AC3",
                               channels="6", language="eng",
                               language_ietf="en")]
-        _movie, logs = improve(tracks)
+        _movie, logs, _details = improve(tracks)
         assert ("  Keeping the film's original language (ja, per TMDb), the "
                 "first audio track's (de, which TMDb lists as spoken in it) "
                 "and the kept languages (de)") in logs
@@ -762,12 +842,174 @@ class TestWhatAFilmSays:
         # English no longer is.
         assert [t.action for t in tracks[1:]] == ["keep", "keep", "drop"]
 
+    def test_a_track_dropped_for_its_language_is_said_on_the_rule(
+            self, improve):
+        """No catalogue: the rule keeps the first audio track's language and
+        the kept ones, and a track it drops is said on those figures."""
+        tracks = [rules.Track(id="0", type="video", codec="V_MPEG4/ISO/AVC"),
+                  rules.Track(id="1", type="audio", codec="A_AC3",
+                              channels="6", language="eng", name="AC3 5.1"),
+                  rules.Track(id="2", type="audio", codec="A_AC3",
+                              channels="6", language="ger", name="AC3 German")]
+        _movie, logs, _details = improve(tracks)
+        assert ("  Dropping audio track 2 (AC3 German, ger): its language is "
+                "not the first audio track's (eng) or a kept one (en)") in logs
+
+    def test_an_image_subtitle_the_rule_drops_is_said_the_same(self,
+                                                               improve):
+        tracks = [rules.Track(id="0", type="video", codec="V_MPEG4/ISO/AVC"),
+                  rules.Track(id="1", type="audio", codec="A_AC3",
+                              channels="6", language="eng", name="AC3 5.1"),
+                  rules.Track(id="2", type="subtitles", codec="S_HDMV/PGS",
+                              language="ger", name="PGS German")]
+        _movie, logs, _details = improve(tracks)
+        assert ("  Dropping image subtitle track 2 (PGS German, ger): its "
+                "language is not the first audio track's (eng) or a kept one "
+                "(en)") in logs
+
+    def test_a_commentary_the_rule_does_not_reach_is_said_kept(
+            self, improve):
+        """A foreign-language commentary is never dropped for its language,
+        and the run says so on the figures the rule would have dropped it
+        on."""
+        tracks = [rules.Track(id="0", type="video", codec="V_MPEG4/ISO/AVC"),
+                  rules.Track(id="1", type="audio", codec="A_AC3",
+                              channels="6", language="eng", name="AC3 5.1"),
+                  rules.Track(id="2", type="audio", codec="A_AC3",
+                              channels="2", language="nld",
+                              name="Commentary Dutch", commentary="true")]
+        _movie, logs, _details = improve(tracks)
+        assert tracks[2].action == "keep"
+        assert ("  Keeping audio track 2 (Commentary Dutch, nld): a commentary "
+                "is exempt from the language rule - its language is not the "
+                "first audio track's (eng) or a kept one (en)") in logs
+        assert not any("Dropping" in line for line in logs)
+
+    def test_a_language_there_is_nothing_to_judge_is_said_on_nothing(
+            self, improve):
+        """An isolated score: no linguistic content, kept without the rule
+        being taken on a figure, so no figure is said at normal verbosity -
+        and -v says the one figure there is."""
+        tracks = [rules.Track(id="0", type="video", codec="V_MPEG4/ISO/AVC"),
+                  rules.Track(id="1", type="audio", codec="A_AC3",
+                              channels="6", language="eng", name="AC3 5.1"),
+                  rules.Track(id="2", type="audio", codec="A_DTS",
+                              channels="5", language="zxx",
+                              name="Isolated Score")]
+        _movie, logs, details = improve(tracks)
+        assert tracks[2].action == "keep"
+        assert not any("Dropping" in line or "exempt" in line
+                       for line in logs)
+        assert ("  Keeping audio track 2 (Isolated Score, zxx): no language "
+                "to judge") in details
+
+    def test_a_drop_is_said_on_the_catalogue_s_figures(self, improve,
+                                                       monkeypatch):
+        monkeypatch.setattr(
+            run_module.Run, "film_languages",
+            lambda self, movie: run_module.tmdbidentify.FilmLanguages(
+                "ja", ("ja", "de")))
+        monkeypatch.setattr(run_module.Run, "remux", lambda *a: None)
+        tracks = [rules.Track(id="0", type="video", codec="V_MPEG4/ISO/AVC"),
+                  rules.Track(id="1", type="audio", codec="A_AC3",
+                              channels="6", language="ger",
+                              language_ietf="de", name="AC3 German"),
+                  rules.Track(id="2", type="audio", codec="A_AC3",
+                              channels="6", language="jpn",
+                              language_ietf="ja", name="FLAC Japanese"),
+                  rules.Track(id="3", type="audio", codec="A_AC3",
+                              channels="6", language="fre",
+                              language_ietf="fr", name="AC3 French")]
+        _movie, logs, _details = improve(tracks)
+        assert ("  Dropping audio track 3 (AC3 French, fre): its language is "
+                "not the film's own (ja, per TMDb), the first audio track's "
+                "(de) or a kept one (en)") in logs
+
+    def test_the_first_track_s_language_is_off_the_figures_when_not_kept(
+            self, improve, monkeypatch):
+        """TMDb lists what the film speaks and the first track is not among
+        it: the rule keeps the original and the kept languages only, and the
+        drop is said on those alone."""
+        monkeypatch.setattr(
+            run_module.Run, "film_languages",
+            lambda self, movie: run_module.tmdbidentify.FilmLanguages(
+                "ja", ("de",)))
+        monkeypatch.setattr(run_module.Run, "remux", lambda *a: None)
+        tracks = [rules.Track(id="0", type="video", codec="V_MPEG4/ISO/AVC"),
+                  rules.Track(id="1", type="audio", codec="A_AC3",
+                              channels="6", language="eng",
+                              language_ietf="en", name="AC3 5.1"),
+                  rules.Track(id="2", type="audio", codec="A_AC3",
+                              channels="6", language="jpn",
+                              language_ietf="ja", name="FLAC Japanese"),
+                  rules.Track(id="3", type="audio", codec="A_AC3",
+                              channels="6", language="ger",
+                              language_ietf="de", name="AC3 German")]
+        _movie, logs, _details = improve(tracks)
+        assert ("  Keeping the film's original language (ja, per TMDb) and "
+                "the kept languages (en), not the first audio track's (en)") \
+            in logs
+        assert ("  Dropping audio track 3 (AC3 German, ger): its language is "
+                "not the film's own (ja, per TMDb) or a kept one (en)") in logs
+
+    def test_the_keeps_are_said_on_the_rule_s_figures(self, improve,
+                                                      monkeypatch):
+        """The keeps are the ordinary case, so the rule says them under -v
+        only, on the same figures it drops on - and says nothing it does not
+        judge: the video track and the text subtitle are not in its way."""
+        monkeypatch.setattr(run_module.Run, "keep_languages", ("en", "de"),
+                            raising=False)
+        tracks = [rules.Track(id="0", type="video", codec="V_MPEG4/ISO/AVC"),
+                  rules.Track(id="1", type="audio", codec="A_AC3",
+                              channels="6", language="eng", name="AC3 5.1"),
+                  rules.Track(id="2", type="audio", codec="A_FLAC",
+                              channels="2", language="ger",
+                              name="FLAC German"),
+                  rules.Track(id="3", type="subtitles",
+                              codec="S_HDMV/PGS", language="ger",
+                              name="PGS German"),
+                  rules.Track(id="4", type="subtitles",
+                              codec="S_TEXT/UTF8", language="eng",
+                              name="English")]
+        movie, logs, details = improve(tracks)
+        assert logs == ["No improvements needed: " + movie]
+        assert details == [
+            "  Keeping audio track 1 (AC3 5.1, eng): the first audio track's "
+            "language (eng)",
+            "  Keeping audio track 2 (FLAC German, ger): a kept language "
+            "(de)",
+            "  Keeping image subtitle track 3 (PGS German, ger): a kept "
+            "language (de)",
+        ]
+
+    def test_a_keep_is_said_on_the_catalogue_s_figures(self, improve,
+                                                       monkeypatch):
+        monkeypatch.setattr(
+            run_module.Run, "film_languages",
+            lambda self, movie: run_module.tmdbidentify.FilmLanguages(
+                "ja", ("ja", "de")))
+        tracks = [rules.Track(id="0", type="video", codec="V_MPEG4/ISO/AVC"),
+                  rules.Track(id="1", type="audio", codec="A_AC3",
+                              channels="6", language="ger",
+                              language_ietf="de", name="AC3 German"),
+                  rules.Track(id="2", type="audio", codec="A_AC3",
+                              channels="6", language="jpn",
+                              language_ietf="ja", name="FLAC Japanese")]
+        _movie, _logs, details = improve(tracks)
+        assert details == [
+            "  Keeping audio track 1 (AC3 German, ger): the first audio "
+            "track's language (de)",
+            "  Keeping audio track 2 (FLAC Japanese, jpn): the film's own "
+            "language (ja, per TMDb)",
+        ]
+
     def test_a_film_that_needs_nothing_is_one_line(self, improve):
-        movie, logs = improve(self._plain())
+        movie, logs, _details = improve(self._plain())
         assert logs == ["No improvements needed: " + movie]
 
     def test_one_with_something_to_say_is_headed_first(self, improve):
-        movie, logs = improve(self._plain(), "  Corrected the level")
+        movie, logs, _details = improve(
+            self._plain(), "  Corrected the level")
         assert logs == ["Improving main movie: " + movie,
                         "  Corrected the level",
                         "  No improvements needed: " + movie]

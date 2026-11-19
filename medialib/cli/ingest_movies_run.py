@@ -184,6 +184,39 @@ class Run:
                        "which TMDb lists as spoken in it" if film.spoken
                        else "TMDb lists no spoken languages",
                        ", ".join(kept)))
+        if not keep_tracks:
+            # The language rule's per-track consequence: what it dropped, a
+            # commentary it does not reach, and what it kept, each on the
+            # rule's own figures - the drops change the film, so they are
+            # said; the keeps are the ordinary case, and -v says them.
+            primary = ""
+            for track in tracks:
+                if track.is_audio:
+                    primary = enums.shell_lower(track.language)
+                    break
+            for track in tracks:
+                if track.action == "drop":
+                    say("  Dropping %s track %s (%s, %s): %s"
+                        % ("audio" if track.is_audio else "image subtitle",
+                           track.id, track.name, track.language,
+                           rules.language_drop_reason(primary, choice,
+                                                      kept)))
+                elif (track.is_audio and track.is_commentary
+                        and not rules._language_kept(track, primary, choice,
+                                                     kept)):
+                    say("  Keeping audio track %s (%s, %s): a commentary is "
+                        "exempt from the language rule - %s"
+                        % (track.id, track.name, track.language,
+                           rules.language_drop_reason(primary, choice,
+                                                      kept)))
+                elif track.is_audio or rules.is_image_sub_codec(
+                        track.codec):
+                    runlog.detail(
+                        "  Keeping %s track %s (%s, %s): %s"
+                        % ("audio" if track.is_audio else "image subtitle",
+                           track.id, track.name, track.language,
+                           rules.language_keep_reason(track, primary,
+                                                      choice, kept)))
         for position in ([] if keep_tracks
                          else rules.drop_audio_descriptions(tracks)):
             changed = True
@@ -782,7 +815,7 @@ def improve_main_movies(state, root: str, skip=(), around=None) -> None:
     them - and ``around``, when given, is what each remux is run inside of: the
     locks a film is held under while other lanes may still be at work.
     """
-    for movie in main_movies(root):
+    for movie in main_movies(root, say=runlog.detail):
         if lanes.key(movie) in skip:
             continue
         if around is None:
@@ -792,8 +825,14 @@ def improve_main_movies(state, root: str, skip=(), around=None) -> None:
             state.improve_main_movie(movie)
 
 
-def main_movies(root: str) -> list:
-    """The films :func:`improve_main_movies` would improve, in its order."""
+def main_movies(root: str, say=None) -> list:
+    """The films :func:`improve_main_movies` would improve, in its order.
+
+    A film already improved is skipped - the (old) copy beside it, or the tag
+    a drop-backups run wrote in its place, says so - and ``say``, when given,
+    is where that is said, which is what makes a rerun over a done library say
+    the no-op of each of its films under ``-v`` rather than stay silent about
+    every film it does nothing to."""
     movies = []
     for directory in [root] + rules._folders_below(root):
         if rules.is_bonus_folder(directory):
@@ -804,15 +843,19 @@ def main_movies(root: str) -> list:
                  if os.path.isfile(os.path.join(directory, name))]
         for name in plexnames.one_film_in(base, names):
             movie = os.path.join(directory, name)
-            if _already_improved(movie):
+            improved = _already_improved(movie)
+            if improved:
+                if say:
+                    say("Already improved, left as it is: %s - %s"
+                        % (movie, improved))
                 continue
             movies.append(movie)
     return movies
 
 
-def _already_improved(movie: str) -> bool:
-    """Whether this film's improved copy has already been made, which is what a
-    second run over the same library skips itself on.
+def _already_improved(movie: str) -> str:
+    """Why this film's improved copy has already been made, or "" when it has
+    not - which is what a second run over the same library skips itself on.
 
     The "(old)" copy beside it says so, matched by the name it WOULD be given
     rather than the name it has: it is the one file the tagging leaves alone, so
@@ -820,7 +863,11 @@ def _already_improved(movie: str) -> bool:
     drop-backups run has verified the copy and deleted that original, the tag
     it wrote in the copy's place says it.
     """
-    return convertphase.is_ingested(movie)
+    if convertphase.kept_original(movie):
+        return "the (old) copy beside it"
+    if convertphase.has_ingested_tag(movie):
+        return "the ingested tag in the (old) copy's place"
+    return ""
 
 
 def check_folders(root: str) -> None:
