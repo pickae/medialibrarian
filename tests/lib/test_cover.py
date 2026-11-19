@@ -179,3 +179,33 @@ class TestTheRename:
 
     def test_a_folder_that_is_not_there_is_not_an_error(self, tmp_path):
         assert cover.rename_cover_to_folder(str(tmp_path / "gone")) is None
+
+
+class TestCoverChoice:
+    """The selection and the figure it was taken on, together."""
+
+    def test_the_word_and_its_candidates_come_with_the_winner(self, tmp_path):
+        build(tmp_path, ("front.jpg", 10), ("front large.jpg", 20),
+              ("cover.jpg", 100))
+        choice = cover.cover_choice(str(tmp_path))
+        assert choice.path == f"{tmp_path}/front large.jpg"
+        assert choice.word == "front"
+        assert choice.candidates == 2
+
+    def test_a_group_of_one_is_largest_among_one(self, tmp_path):
+        build(tmp_path, ("front.jpg", 0), ("cover.jpg", 100))
+        choice = cover.cover_choice(str(tmp_path))
+        assert choice.path == f"{tmp_path}/front.jpg"
+        assert choice.word == "front"
+        assert choice.candidates == 1
+
+    def test_no_candidate_is_an_empty_choice(self, tmp_path):
+        build(tmp_path, "readme.txt")
+        choice = cover.cover_choice(str(tmp_path))
+        assert choice == cover.CoverChoice(None, "", 0)
+
+    def test_the_choice_and_the_cover_agree(self, tmp_path):
+        build(tmp_path, ("cover 1.jpg", 3), ("cover 2.jpg", 1),
+              ("folder.png", 2))
+        directory = str(tmp_path)
+        assert cover.cover_choice(directory).path == cover.choose_cover(directory)

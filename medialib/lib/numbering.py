@@ -20,7 +20,7 @@ from collections.abc import Sequence
 from typing import NamedTuple
 
 from medialib.lib import enums
-from medialib.lib.runlog import log
+from medialib.lib.runlog import detail, log
 from medialib.lib.versionsort import version_key
 
 __all__ = ["NO_EXTENSION", "Numbering", "plan_numbering"]
@@ -122,9 +122,12 @@ def number_files_in_folder(directory: str, files,
             os.replace(os.path.join(directory, source), temporary)
         except OSError:
             continue
-        staged.append((temporary, target))
-    for temporary, target in staged:
+        staged.append((temporary, target, source, index + 1))
+    for temporary, target, source, number in staged:
         try:
             os.replace(temporary, os.path.join(directory, target))
         except OSError:
-            pass
+            continue
+        if announce and source != target:
+            detail('    "%s" -> "%s": numbered %d of %d'
+                   % (source, target, number, plan.total))

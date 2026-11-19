@@ -776,3 +776,100 @@ class TestAFragmentsFileThatCannotBeRead:
         assert 'The fragments file "%s" does not exist or is empty.' \
             % empty in done.stderr
         assert blackbox.tree_of(tree.folder) == before
+
+
+class TestWhichPassChangedTheName:
+    """Under -v, every renamed file and folder says which cleaning pass
+    changed it, the cover says what it was largest among, and a moved or
+    numbered file says why; the account is the run's own, so a run without
+    -v has none of it."""
+
+    def test_the_individual_pass_is_named_under_v(self, cleaner):
+        _tree(cleaner.folder, "My_Show/My_Movie.mp4")
+        done = cleaner.clean(cleaner.folder, "-v")
+        log = done.stdout + done.stderr
+        assert '"My_Show" -> "My Show": individual cleaning' in log
+        assert '"My_Movie.mp4" -> "My Movie.mp4": individual cleaning' in log
+
+    def test_the_passes_that_changed_a_name_are_named_together(self,
+                                                               cleaner):
+        _tree(cleaner.folder, "Show/Show - Episode 01.opus",
+              "Show/Show - Episode 02.opus")
+        done = cleaner.clean(cleaner.folder, "-v")
+        log = done.stdout + done.stderr
+        assert ('"Show - Episode 01.opus" -> "1.opus": '
+                "individual cleaning and collective stripping" in log)
+        assert ('"Show - Episode 02.opus" -> "2.opus": '
+                "individual cleaning and collective stripping" in log)
+
+    def test_the_recovery_pass_is_named_where_it_changed_the_name(self,
+                                                                  cleaner):
+        _tree(cleaner.folder, "Doubled/Show 01 01.opus",
+              "Doubled/Show 02 02.opus")
+        done = cleaner.clean(cleaner.folder, "-v")
+        log = done.stdout + done.stderr
+        assert ('"Show 01 01.opus" -> "01.opus": '
+                "collective stripping and hidden-prefix recovery" in log)
+        # The name only settles on a second pass, and that rename is the
+        # prefix passes' own line, a second one.
+        assert "Stabilised after 2 iteration(s)" in log
+        assert '"01.opus" -> "1.opus": individual cleaning' in log
+
+    def test_a_transcript_says_it_follows_its_recording(self, cleaner):
+        _tree(cleaner.folder, "Side/The_Episode.opus",
+              "Side/The_Episode.en.srt")
+        done = cleaner.clean(cleaner.folder, "-v")
+        log = done.stdout + done.stderr
+        assert ('"The_Episode.opus" -> "The Episode.opus": '
+                "individual cleaning" in log)
+        assert ('"The_Episode.en.srt" -> "The Episode.en.srt": '
+                "its recording's new name" in log)
+
+    def test_the_cover_says_what_it_was_largest_among(self, cleaner):
+        _tree(cleaner.folder, "Show/front.jpg", "Show/front large.jpg",
+              "Show/cover.jpg")
+        (cleaner.folder / "Show" / "front.jpg").write_bytes(b"0" * 10)
+        (cleaner.folder / "Show" / "front large.jpg").write_bytes(b"0" * 20)
+        (cleaner.folder / "Show" / "cover.jpg").write_bytes(b"0" * 100)
+        done = cleaner.clean(cleaner.folder, "-v")
+        log = done.stdout + done.stderr
+        assert '"Show": cover art "front large.jpg" -> "folder.jpg"' in log
+        assert 'the largest of the 2 with "front" in the name' in log
+
+    def test_a_fixed_date_says_which_file_it_was(self, cleaner):
+        _tree(cleaner.folder, "Book/2024-01-05 First Track.mp3",
+              "Book/2024-01-06 Second Track.mp3")
+        done = cleaner.clean(cleaner.folder, "-d", "-v")
+        log = done.stdout + done.stderr
+        assert ('"2024-01-05 First Track.mp3" -> "20240105 First Track.mp3": '
+                "the leading date" in log)
+        assert ('"2024-01-06 Second Track.mp3" -> "20240106 Second '
+                'Track.mp3": the leading date' in log)
+
+    def test_a_moved_file_says_the_year_it_went_into(self, cleaner):
+        _tree(cleaner.folder, "Movies/2019-07-04 One.mkv",
+              "Movies/2019-08-15 Two.mkv")
+        done = cleaner.clean(cleaner.folder, "-y", "-v")
+        log = done.stdout + done.stderr
+        assert ('"2019-07-04 One.mkv" -> "2019/2019-07-04 One.mkv": '
+                "the year its name leads with" in log)
+        assert (cleaner.folder / "Movies" / "2019"
+                / "2019-07-04 One.mkv").is_file()
+
+    def test_a_numbered_file_says_its_number_and_its_series(self, cleaner):
+        _tree(cleaner.folder, "Book/Chapter One.opus",
+              "Book/Chapter Two.opus", "Book/Chapter Three.opus")
+        done = cleaner.clean(cleaner.folder, "-n", "-v")
+        log = done.stdout + done.stderr
+        assert '"Book": numbering 3 .opus file(s)' in log
+        assert '"Chapter One.opus" -> "1.opus": numbered 1 of 3' in log
+        assert '"Chapter Three.opus" -> "2.opus": numbered 2 of 3' in log
+        assert '"Chapter Two.opus" -> "3.opus": numbered 3 of 3' in log
+
+    def test_the_account_is_not_there_without_v(self, cleaner):
+        _tree(cleaner.folder, "My_Show/My_Movie.mp4")
+        done = cleaner.clean(cleaner.folder)
+        log = done.stdout + done.stderr
+        for phrase in ("individual cleaning", "collective stripping",
+                       "hidden-prefix recovery"):
+            assert phrase not in log
