@@ -27,6 +27,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from typing import NamedTuple
 
 from medialib import commands
@@ -204,13 +205,16 @@ k | [part] | keep <part>: takes nothing away. The parts are audio, tracks and
                   literally named "audio" is written ./audio: the word after -k
                   goes to -k when it is a part. Cannot be combined with -r,
                   which encodes.
-o | [phase] | omit <phase> from a full ingest: junk, subtitles, commentary,
-                  chapters, plex and tagging, comma-separated, and a bare -o
-                  omits all six. junk: the junk files are left. subtitles: the
-                  subtitles are not fetched and the missing ones are not
-                  downloaded. commentary: the commentaries are not listened
-                  for, not transcribed and not named. chapters: the chapter
-                  archive is not asked. plex: the films are not compared with
+o | [phase] | omit <phase> from a full ingest: junk, subtitles, roles,
+                  commentary, chapters, plex and tagging, comma-separated,
+                  and a bare -o omits all seven. junk: the junk files are
+                  left. subtitles: the subtitles are not fetched and the
+                  missing ones are not downloaded. roles: the subtitles are
+                  not measured for being forced or SDH where the file does not
+                  say so, and their flags are left as the file has them.
+                  commentary: the commentaries are not listened for, not
+                  transcribed and not named. chapters: the chapter archive is
+                  not asked. plex: the films are not compared with
                   the Plex library and nothing is carried over from it.
                   tagging: the films are not tagged with their IMDb ids. The
                   phases not named run as they always have. A phase the run
@@ -267,8 +271,8 @@ OPT_LONG = ("f:fragments a:commentary t:tags-only s:subtitles-only "
 
 # The phases a full ingest can be told to omit with -o, in the order the page
 # lists them: the page and the parser's arm must name the same ones.
-OMIT_PHASES = ("junk", "subtitles", "commentary", "chapters", "plex",
-               "tagging")
+OMIT_PHASES = ("junk", "subtitles", "roles", "commentary", "chapters",
+               "plex", "tagging")
 
 USAGE_TAIL = """
 
@@ -792,7 +796,7 @@ class Track:
 
     FIELDS = ("id", "type", "codec", "channels", "language", "language_ietf",
               "name", "commentary", "default", "forced", "dimensions",
-              "visual_impaired", "hearing_impaired")
+              "visual_impaired", "hearing_impaired", "frames")
 
     # FIELDS is what __init__ sets; these declare what it sets them TO. Every
     # one is text, and an absent field is the empty string rather than a
@@ -818,6 +822,9 @@ class Track:
     # A subtitle's SDH flag: the captions for the deaf, which a plain subtitle
     # of the same language is something else than.
     hearing_impaired: str
+    # How many packets the track holds, from mkvmerge's statistics tags: ""
+    # where the file was written without them.
+    frames: str
 
     def __init__(self, **fields) -> None:
         for field in self.FIELDS:
@@ -859,6 +866,18 @@ class Track:
             forced=self.forced == "true",
             hearing_impaired=self.hearing_impaired == "true",
             commentary=self.commentary == "true")
+
+    @property
+    def cues(self) -> int:
+        """About how many lines a subtitle holds, 0 unknown: see
+        :data:`enums.IMAGE_PACKETS_PER_CUE`. A text subtitle's packets are its
+        lines."""
+        try:
+            packets = int(self.frames)
+        except ValueError:
+            return 0
+        return packets // enums.IMAGE_PACKETS_PER_CUE.get(
+            enums.shell_lower(self.codec), 1)
 
     @property
     def audio_role(self) -> str:
@@ -913,7 +932,8 @@ def _identify(movie: str) -> list:
             visual_impaired=_as_text(
                 properties.get("flag_visual_impaired")),
             hearing_impaired=_as_text(
-                properties.get("flag_hearing_impaired"))))
+                properties.get("flag_hearing_impaired")),
+            frames=_as_text(properties.get("tag_number_of_frames") or "")))
     return tracks
 
 
@@ -1331,12 +1351,14 @@ def _is_matroska(path: str) -> bool | None:
         return None
 
 
-def update_tags(root: str) -> None:
+def update_tags(root: str, roles: bool = True) -> None:
     """``updateTags``: the mkv title and every track's flags, refreshed from the
     track layout in ONE mkvpropedit call per file.
 
     Each mkvpropedit call rewrites the file header, so batching turns dozens of
-    rewrites into one.
+    rewrites into one. With ``roles`` the subtitles are measured as well, and
+    the forced and SDH flags of each the file says wrong are put right in the
+    same call (:func:`_measured_role_edits`).
     """
     for movie in _files_below(root, matches=lambda name:
                               name.endswith("mkv")):
@@ -1373,7 +1395,8 @@ def update_tags(root: str) -> None:
         filmrecord.forget(movie)
 
         tracks = _identify(movie)
-        arguments = _tag_arguments(tracks)
+        edits = _measured_role_edits(movie, tracks) if roles else {}
+        arguments = _tag_arguments(tracks, edits)
         if arguments:
             failure = _run_capture(["mkvpropedit", movie] + arguments)
             if failure:
@@ -1388,8 +1411,12 @@ def update_tags(root: str) -> None:
                 pass
 
 
-def _tag_arguments(tracks: list) -> list:
+def _tag_arguments(tracks: list, role_edits=None) -> list:
     """One ``--edit`` scope per track, bundling every ``--set`` for it together.
+
+    ``role_edits`` is :func:`subtitle_role_edits`' answer: a subtitle in it is
+    given the flags of the role it was measured to have, and one measured not
+    to be forced is not flagged forced again for its name.
 
     Always the same numeric selector: addressing a track as ``track:$i`` here and
     as ``track:v1`` there makes mkvpropedit warn that the two resolve to the same
@@ -1417,12 +1444,16 @@ def _tag_arguments(tracks: list) -> list:
                 % (1 if position in (first_video, default_audio) else 0)]
 
         folded = enums.shell_lower(track.name)
+        edit = (role_edits or {}).get(track.id)
         if languages.is_commentary_name(track.name):
             sets += ["--set", "flag-commentary=1"]
-        if languages.is_forced_name(track.name):
+        if languages.is_forced_name(track.name) and not (
+                edit and edit[0] == "forced"):
             sets += ["--set", "flag-forced=1"]
         if languages.is_sdh_name(track.name):
             sets += ["--set", "flag-hearing-impaired=1"]
+        if edit:
+            sets += role_edit_arguments(track, *edit)
 
         # One language tag, the highest-priority one the name names:
         # mkvpropedit would keep the last of several.
@@ -1827,17 +1858,159 @@ def _same_commentary(have: str, want: str, siblings: list) -> bool:
     return _identifies_one(short, siblings)
 
 
+def subtitle_roles(tracks: list) -> dict:
+    """Each subtitle track's role, {track id: role}: what its flags and name
+    say, corrected by how long it is beside the longest OTHER subtitle the
+    film carries (:func:`subtitletracks.refine_role`)."""
+    subtitles = [track for track in tracks if track.is_subtitle]
+    roles = {}
+    for track in subtitles:
+        reference = max((other.cues for other in subtitles
+                         if other is not track
+                         and other.subtitle_role != "commentary"), default=0)
+        roles[track.id] = subtitletracks.refine_role(
+            track.subtitle_role, track.cues, reference)
+    return roles
+
+
+def needs_reading(track) -> bool:
+    """Whether a subtitle's text is worth reading for its role: a text track
+    that says, by flag and name, it is the plain subtitle - the one an SDH
+    track nobody marked passes for."""
+    return (track.is_subtitle and track.subtitle_form == "text"
+            and track.subtitle_role == "full")
+
+
+def subtitle_role_edits(tracks: list, texts=None) -> dict:
+    """The subtitle tracks whose role the file says wrong, as {track id:
+    (role it says, role it is)}: the role :func:`subtitle_roles` measures,
+    and for a text track the ``texts`` map holds - {track id: its cues' text}
+    - the SDH its text reads as. A commentary is never changed, nor changed
+    into."""
+    texts = texts or {}
+    roles = subtitle_roles(tracks)
+    edits = {}
+    for track in tracks:
+        if not track.is_subtitle:
+            continue
+        said, measured = track.subtitle_role, roles[track.id]
+        if measured == "full" and track.id in texts:
+            measured = subtitletracks.refine_role(measured,
+                                                  texts=texts[track.id])
+        if said != measured and "commentary" not in (said, measured):
+            edits[track.id] = (said, measured)
+    return edits
+
+
+def role_edit_arguments(track, said: str, measured: str) -> list:
+    """The mkvpropedit ``--set`` arguments that make a track's flags say
+    ``measured`` where they said ``said``. A forced track that is the whole
+    dialogue loses the word "forced" from its name as well, or the next run's
+    tag refresh would flag it forced again from its name."""
+    sets = []
+    if measured == "forced":
+        sets.append("flag-forced=1")
+    elif said == "forced":
+        sets.append("flag-forced=0")
+        name = "" if track.name == "null" else track.name
+        if languages.is_forced_name(name):
+            sets.append("name=" + languages.without_forced_word(name))
+    if measured == "sdh":
+        sets.append("flag-hearing-impaired=1")
+    arguments = []
+    for one in sets:
+        arguments += ["--set", one]
+    return arguments
+
+
+def _measured_role_edits(movie: str, tracks: list) -> dict:
+    """:func:`subtitle_role_edits` for a film, its subtitles measured: the
+    lines of each (``Track.frames``, counted where the file has no statistics
+    tags for it) and the text of each that says it is the plain one, read
+    for the SDH it may be. Each correction is said in one line."""
+    texts = _subtitle_texts(movie, [track for track in tracks
+                                    if needs_reading(track)])
+    for track in tracks:
+        if track.id in texts and not track.cues:
+            track.frames = str(len(texts[track.id]))
+    measurable = [track for track in tracks if track.is_subtitle
+                  and track.subtitle_role != "commentary"]
+    if len(measurable) > 1 and any(not track.cues for track in measurable):
+        _count_subtitle_packets(movie, measurable)
+    edits = subtitle_role_edits(tracks, texts)
+    for track in tracks:
+        if track.id in edits:
+            said, measured = edits[track.id]
+            log('  subtitle track %s "%s" (%s, %s lines): the file says %s, '
+                "measured %s" % (track.id,
+                                 "" if track.name == "null" else track.name,
+                                 track.language, track.cues or "?", said,
+                                 measured))
+    return edits
+
+
+def _count_subtitle_packets(movie: str, tracks: list) -> None:
+    """``Track.frames`` filled in by ffprobe's packet count for each of
+    ``tracks`` the file has no statistics tags for - a read through the whole
+    film, on the disk's turn. A track ffprobe does not count stays unknown."""
+    import json
+    unknown = {track.id: track for track in tracks if not track.cues}
+    with diskturn.turn(movie):
+        text = _probe(["ffprobe", "-v", "error", "-select_streams", "s",
+                       "-count_packets", "-show_entries",
+                       "stream=index,nb_read_packets", "-of", "json", movie])
+    try:
+        streams = json.loads(text or "{}").get("streams") or []
+    except (ValueError, AttributeError):
+        return
+    for stream in streams:
+        if not isinstance(stream, dict):
+            continue
+        track = unknown.get(str(stream.get("index")))
+        packets = str(stream.get("nb_read_packets") or "")
+        if track is not None and packets.isdigit():
+            track.frames = packets
+
+
+def _subtitle_texts(movie: str, tracks: list) -> dict:
+    """The cues' text of each of the film's SubRip subtitles in ``tracks``,
+    {track id: [text]}, taken out in one mkvextract pass on the disk's turn;
+    a track that did not come out, or a film that could not be read, has
+    none."""
+    readable = [track.id for track in tracks
+                if enums.shell_lower(track.codec) == "s_text/utf8"]
+    if not readable:
+        return {}
+    scratch = tempfile.mkdtemp(dir=os.environ.get("TMPDIR"))
+    try:
+        paths = {number: os.path.join(scratch, "track%s.srt" % number)
+                 for number in readable}
+        with diskturn.turn(movie):
+            toolcapture.watched(
+                ["mkvextract", os.path.abspath(movie), "tracks",
+                 *["%s:%s" % pair for pair in paths.items()]],
+                announce=False, skipped="its subtitles were not read for SDH",
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                on_missing=127)
+        return {number: subtitletracks.cue_texts(path)
+                for number, path in paths.items() if os.path.isfile(path)}
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
 def gather_downloaded_subtitles(base: str, tracks: list, say=None) -> list:
     """The ``<movie>.<xx>.srt`` sidecars to mux into the improved copy, as
-    (srt, language) pairs in the table's order.
+    (srt, language, role) in the table's order.
 
     What is still beside the film has passed the alignment test - one out of
     step is thrown out rather than kept - so every sidecar there is one worth
-    carrying. One whose language the film already carries as a plain text
+    carrying. Its role is "full", or "sdh" where its text reads as SDH
+    (:func:`subtitletracks.is_sdh_text`): the remux flags it so. The name
+    stays ``<xx>.srt``, which is what tells the download the language is
+    there. One whose language and role the film already carries as a text
     subtitle is left out, the two would only be the same subtitle twice; a
-    picture subtitle, or a forced, SDH or commentary one of that language, is
-    a different thing, and the sidecar goes in beside it. The sidecar itself
-    stays where it is.
+    picture subtitle, or a text one of another role, is a different thing,
+    and the sidecar goes in beside it. The sidecar itself stays where it is.
     """
     say = say or log
     found = []
@@ -1846,11 +2019,19 @@ def gather_downloaded_subtitles(base: str, tracks: list, say=None) -> list:
         if os.path.islink(srt) or not os.path.isfile(srt) \
                 or not _size_of(srt):
             continue
-        if any(_is_plain_text_subtitle(track, row.code2) for track in tracks):
-            say("  %s subtitle already a text track in the file, not muxing "
-                "the sidecar: %s" % (row.sub_word, os.path.basename(srt)))
+        role = subtitletracks.refine_role(
+            "full", texts=subtitletracks.cue_texts(srt))
+        if any(_is_text_subtitle_of(track, row.code2, role)
+               for track in tracks):
+            say("  %s%s subtitle already a text track in the file, not "
+                "muxing the sidecar: %s"
+                % (row.sub_word, "" if role == "full" else " " + role,
+                   os.path.basename(srt)))
             continue
-        found.append((srt, row.code2))
+        if role == "sdh":
+            say("  %s sidecar reads as SDH, muxed flagged as such: %s"
+                % (row.sub_word, os.path.basename(srt)))
+        found.append((srt, row.code2, role))
     return found
 
 
@@ -1858,10 +2039,17 @@ def _is_plain_text_subtitle(track, language: str) -> bool:
     """Whether a track is a text subtitle of this language that is none of
     forced, SDH or commentary - the one a downloaded sidecar would duplicate.
     A subtitle the improvement drops does not count."""
+    return _is_text_subtitle_of(track, language, "full")
+
+
+def _is_text_subtitle_of(track, language: str, role: str) -> bool:
+    """Whether a track is a text subtitle of this language and role, which a
+    sidecar of the same would duplicate. A subtitle the improvement drops does
+    not count."""
     return (track.is_subtitle and track.action != "drop"
             and track.subtitle_form == "text"
             and languages.same_language_tag(track.language, language)
-            and track.subtitle_role == "full")
+            and track.subtitle_role == role)
 
 
 def apply_surround_ladder(tracks: list) -> list:

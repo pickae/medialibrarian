@@ -17,6 +17,11 @@ __all__ = [
     "file_kind",
     "SUBTITLE_ROLES",
     "SUBTITLE_ROLE_SUFFIXES",
+    "SDH_CUE_MARKERS",
+    "SDH_CUE_SHARE",
+    "FORCED_CUE_SHARE",
+    "FULL_CUE_SHARE",
+    "IMAGE_PACKETS_PER_CUE",
     "AUDIO_ROLES",
     "BRACKET_OPEN",
     "BRACKET_CLOSE",
@@ -178,6 +183,37 @@ SUBTITLE_ROLES = ("commentary", "forced", "sdh", "full")
 # full subtitle carries none. A commentary has none either: it names its
 # commentary instead ("Film 2 Director's Commentary.en.srt").
 SUBTITLE_ROLE_SUFFIXES = {"forced": "forced", "sdh": "sdh", "full": ""}
+
+# What a subtitle's CONTENT says of its role, where neither its flags nor its
+# name say anything - a disc's tracks are often neither.
+#
+# An SDH subtitle writes down what a hearing viewer hears without reading: the
+# sounds in brackets, the music as notes, and who is speaking off screen. A
+# cue is SDH-like when one of these matches it, and a subtitle is SDH when at
+# least SDH_CUE_SHARE of its cues are: a plain subtitle has the odd bracketed
+# sign or sung line, never one cue in ten.
+SDH_CUE_MARKERS = (
+    r"\[[^\]]{2,}\]",           # [door slams]
+    r"^\(\s*[^)]{2,}\)\s*$",    # (gasps), a whole line in parentheses
+    r"[♪♫#]",                   # ♪ music, or # where the font had no note
+    r"^-?\s*[A-Z][A-Z0-9 .'-]{1,24}:",  # DOCTOR: a speaker, in capitals
+)
+SDH_CUE_SHARE = 0.10
+
+# A forced subtitle is only the signs and the odd foreign line, so it is SHORT
+# beside the film's whole dialogue. Counted against the longest subtitle the
+# film carries of any language, the dialogue being about as many lines in each:
+# under FORCED_CUE_SHARE of it is forced however the track is flagged or named
+# not, and over FULL_CUE_SHARE of it is the whole dialogue however it is
+# flagged - a film in a foreign language flags its one subtitle forced.
+FORCED_CUE_SHARE = 0.25
+FULL_CUE_SHARE = 0.60
+
+# How many packets a picture subtitle spends on one line, by mkvmerge codec_id,
+# which is what turns the packet count mkvmerge's statistics tags give into a
+# count of lines: a Blu-ray's takes each line off the screen with an empty
+# packet of its own, a DVD's says how long it stays in the one packet.
+IMAGE_PACKETS_PER_CUE = {"s_hdmv/pgs": 2, "s_vobsub": 1, "s_dvbsub": 1}
 
 # --- the roles an audio track plays -------------------------------------------
 # What an audio track is FOR, the way SUBTITLE_ROLES above says it of a

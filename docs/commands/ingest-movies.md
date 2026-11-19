@@ -25,6 +25,7 @@ given (one level deep, not the whole tree):
 - sorts loose films into a folder each, with extras where Plex looks for them
 - cleans folder, film and subtitle names
 - **transcodes lossless audio to Opus** — or FLAC, the `losslessAudioTarget` setting — leaving lossy tracks as they are
+- **finds forced and SDH subtitles the file does not flag**, and puts their flags right ([details](#subtitles-the-file-flags-wrong))
 - **finds commentaries the file does not flag** and flags them before anything else reads the tracks ([details](#commentaries-the-file-does-not-flag))
 - transcribes commentary tracks with whisper, and names numbered ones after who speaks in them (dvdcompare.net)
 - **remuxes each film once into an improved copy**, keeping the original as `<name> (old).mkv` ([details](#what-a-full-ingest-does))
@@ -193,6 +194,33 @@ are exact, and they still work where speech detection does not — a musical,
 whose sung lines over an orchestra it cannot pick out. A subtitle that does not
 line up with them is still tried against the speech before it is thrown away.
 
+### Subtitles the file flags wrong
+
+Many discs carry a forced or SDH subtitle that is neither flagged nor named as
+one, and a film in a foreign language often flags its one full subtitle as
+forced. So when the track flags are refreshed, each film's subtitles are
+measured, and a flag the measurement disagrees with is set or cleared in the
+same header edit:
+
+| Measured | What it says |
+| --- | --- |
+| how many lines a subtitle has, beside the longest other subtitle of the film | under a quarter of it is **forced** (the signs and the odd foreign line); a track flagged forced with more than 60% of it is the **whole dialogue**, and loses the forced flag and the word "forced" from its name |
+| the text of a text subtitle that says it is the plain one | when one line in ten or more is a sound in brackets, a note of music or a speaker's name in capitals, it is **SDH** |
+
+The line counts come from the statistics tags mkvmerge writes into a file; for a
+file without them, ffprobe counts the packets, which reads the whole film. A
+Blu-ray's picture subtitle spends two packets on each line. Nothing is measured
+against a subtitle of fewer than 100 lines, one counted at over 5000 (a picture
+subtitle that redraws its lines packet by packet), or a commentary, and a
+commentary subtitle is never changed. Each correction is logged in one line
+saying what the file said and what was measured. Only the flags (and that
+name) change: no track is dropped for its role, so `-k tracks` keeps every
+one, and `-o roles` leaves the flags as the file has them.
+
+A downloaded `<name>.xx.srt` whose text reads as SDH is muxed in flagged SDH and
+named "SDH". The sidecar keeps its `.xx.srt` name, which is what tells the next
+run's download that the language is there.
+
 ### Commentary tracks
 
 A track counts as a commentary when its mkv commentary flag says so *or* when its
@@ -246,7 +274,7 @@ call, so the film is remuxed once and only one output exists at a time:
 | --- | --- |
 | Lossless audio converted to the target codec | the `losslessAudioTarget` setting: `opus`, the default, at a per-channel target bitrate, or `flac`, which takes the channels as they are, up to eight of them. A track the target cannot take stays lossless. A TrueHD Atmos bed loses its objects either way, since both carry the discrete bed. The conversion is swapped in place, keeping index, language, name and flags; it is encoded into RAM and never written beside the film, and a run cut short encodes it again next time |
 | Excessive audio and image-subtitle tracks | dropped: everything not in a kept language - the `keepLanguages` setting, a comma list of ISO 639-1 codes, `en` by default - or the film's own language. That is TMDb's original language (with `tmdbApiKey` set), asked by the id the folder carries or the tagging would give it, and the first audio track's as well when TMDb lists it as spoken in the film or lists no spoken languages - TMDb has some films' original language wrong, and some films are made in several. With no answer, or no soundtrack in the original language, it is the first audio track's alone. Chinese varieties (Cantonese, Mandarin, ...) count as one language, as do the written Norwegians, Serbo-Croatian, Arabic, Persian and Malay, since discs tag them unevenly. Commentary **audio** is exempt from the excessive-language rule, so a foreign-language commentary is never dropped from the film its subtitles were just made for |
-| Downloaded subtitles (`<name>.xx.srt`) that passed the sync test | muxed in, placed after the other subtitles and before the commentary ones — unless the film already carries a plain text subtitle in that language. A picture subtitle, or a forced, SDH or commentary one, doesn't count, so the download goes in beside it. The `.srt` stays beside the film |
+| Downloaded subtitles (`<name>.xx.srt`) that passed the sync test | muxed in, placed after the other subtitles and before the commentary ones — unless the film already carries a text subtitle of that language and role. A download that reads as SDH goes in flagged SDH. A picture subtitle, or a text one of another role, doesn't count, so the download goes in beside it. The `.srt` stays beside the film |
 | Commentary audio | moved below the other audio tracks |
 | Commentary transcripts | appended, each tagged with its own language |
 | Dual-layer Dolby Vision profile 7 | **normalised to single-layer profile 8.1**, so DV survives on hardware that cannot read the enhancement layer. Metadata only — the video is **never re-encoded** |
@@ -916,7 +944,9 @@ refused with `-r` (which encodes) and with the single-task sweeps.
 
 **A full ingest with `-o` does everything except the phase it names.** The
 phases are `junk` (the release junk is left where it is), `subtitles` (nothing
-is fetched and the missing subtitles are not downloaded), `commentary`
+is fetched and the missing subtitles are not downloaded), `roles` (the
+subtitles are not measured for being forced or SDH, and their flags stay as the
+file has them), `commentary`
 (commentaries are not listened for, transcribed or named), `chapters` (the
 chapter archive is not asked), `plex` (the films are not compared with the Plex
 library and nothing is carried over from its copy) and `tagging` (the films are

@@ -534,11 +534,15 @@ class Run:
             extra += ["--no-chapters", track.lossless]
 
         sub_fids = []
-        for srt, language in subtitles:
+        for srt, language, role in subtitles:
             sub_fids.append(next_fid)
             next_fid += 1
             extra += ["--language", "0:" + language,
-                      "--default-track-flag", "0:0", "--no-chapters", srt]
+                      "--default-track-flag", "0:0"]
+            if role == "sdh":
+                extra += ["--track-name", "0:SDH",
+                          "--hearing-impaired-flag", "0:1"]
+            extra += ["--no-chapters", srt]
 
         carried_audio, carried_text = [], []
         for item in carried:
@@ -2923,8 +2927,14 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
     subtitlefiles.move_subs(root)
     subtitlefiles.rename_subs(root, state.skips)
 
-    log("Phase: refreshing mkv tags and track flags")
-    rules.update_tags(root)
+    # The subtitles' roles are measured here, before the remux, the subtitle
+    # download and the sidecars' muxing, which all go by a subtitle's flags.
+    if "roles" in omit:
+        log("Phase: refreshing mkv tags and track flags - subtitle roles "
+            "OMITTED (-o roles)")
+    else:
+        log("Phase: refreshing mkv tags and track flags")
+    rules.update_tags(root, roles="roles" not in omit)
     if "junk" not in omit:
         rules.cleanup(root)
 
