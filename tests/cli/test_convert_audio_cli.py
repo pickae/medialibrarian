@@ -19,10 +19,23 @@ from tests import blackbox
 pytestmark = pytest.mark.stubbed
 
 # ffprobe answers a long duration for an input whose name says "long", so a file
-# deterministically splits, and a short one otherwise, so it stays whole.
+# deterministically splits, and a short one otherwise, so it stays whole. It also
+# states the rate of an .m4a or .m4b - 128 kbps, above the re-encode threshold -
+# and nothing else: the .mp3 of a case states no rate at all, which the run keeps
+# as it would a small file. The rate is what the run reads off the file now, and
+# the length is the planner's own probe to answer.
 _FFPROBE = '''
 for a in "$@"; do [[ "$a" == "-show_chapters" ]] && exit 0; done
 last="${!#}"
+if [[ "$*" == *"-print_format json"* ]]; then
+  case "$last" in
+    *.m4a|*.m4b)
+      printf '{"format": {}, "streams": [{%s}]}' \
+        '"codec_name": "aac", "codec_type": "audio", "bit_rate": "128000", "channels": 2'
+      ;;
+  esac
+  exit 0
+fi
 for a in "$@"; do
   if [[ "$a" == *duration* ]]; then
     if [[ "$last" == *long* ]]; then echo 300.000; else echo 5.000; fi
@@ -75,8 +88,8 @@ exit 0
 def _stubbed(sandbox):
     sandbox.with_tool("ffmpeg", _FFMPEG)
     sandbox.with_tool("ffprobe", _FFPROBE)
-    # The bitrate lookup decides nothing here - .m4a is always transcoded - and
-    # no cover art or metadata is in play.
+    # The stub's probe states an .m4a's rate and nothing else - so an .m4a is
+    # transcoded on the rate it states, and no cover art or metadata is in play.
     sandbox.with_tool("jq", "echo 0")
     sandbox.with_tools("rsync", "mkvextract")
     sandbox.with_tool("convert", 'out="${!#}"; out="${out%\\>}"; : > "$out"')
@@ -161,9 +174,9 @@ class TestWhatEachLineSays:
     """A counted line says what its job does to the file, so a re-run over a
     finished tree does not read as every file being converted again.
 
-    The stubbed probe states no bitrate at all, which the run keeps as it would
-    a small file - so an .mp3 here is one the run leaves alone, and an .m4a one
-    it always transcodes.
+    The stubbed probe states a 128 kbps rate for an .m4a - above the threshold -
+    and nothing for an .mp3, which the run keeps as it would a small file: the
+    .mp3 here is one it leaves alone, and the .m4a one it transcodes.
     """
 
     @pytest.fixture
@@ -238,6 +251,44 @@ class TestWhatEachLineSays:
         assert (tmp_path / "out" / "long.opus").is_file()
 
 
+class TestTheThresholdOption:
+    """-T moves the cut-off a file is judged against.
+
+    The stub's probe states a 128 kbps rate for the .m4a of a fixture: the
+    90 kbps default transcodes it, and a cut-off that moves past it leaves
+    it alone - with the line that says so naming the figure the file was
+    read against."""
+
+    @pytest.fixture
+    def convert(self, sandbox):
+        return _stubbed(sandbox)
+
+    def _said(self, convert, tmp_path, *options):
+        inputs = tmp_path / "in"
+        inputs.mkdir(exist_ok=True)
+        (inputs / "book.m4a").write_bytes(b"\0" * 1000)
+        done = convert.run("convert-audio", "-j", "1", *options, inputs,
+                           tmp_path / "out")
+        assert done.returncode == 0, done.stdout + done.stderr
+        return re.sub(r"^\[\d+(?:/\d+)?\] ", "", done.stderr, flags=re.M)
+
+    def test_the_default_cut_off_transcodes_a_file_above_it(self, convert,
+                                                            tmp_path):
+        assert "\nConverting: book.m4a\n" in self._said(convert, tmp_path)
+        assert (tmp_path / "out" / "book.opus").is_file()
+
+    def test_a_cut_off_above_the_file_leaves_it_alone(self, convert,
+                                                      tmp_path):
+        said = self._said(convert, tmp_path, "-T", "200")
+        assert "\nUnder 200 kbps, skipping: book.m4a\n" in said
+        assert not (tmp_path / "out" / "book.opus").exists()
+
+    def test_a_cut_off_below_the_file_transcodes_it(self, convert, tmp_path):
+        said = self._said(convert, tmp_path, "-T", "50")
+        assert "\nConverting: book.m4a\n" in said
+        assert (tmp_path / "out" / "book.opus").is_file()
+
+
 class TestAnOutputPathThatIsAFile:
     """An output path naming an existing file is refused before anything runs;
     it once reached the output folder's makedirs and died in a traceback."""
@@ -278,13 +329,14 @@ class TestRelativePaths:
             pytest.fail("rsync is missing: the image copy is a step under test")
         if not shutil.which("jq"):
             pytest.fail("jq is missing: the bitrate probe decides what -c copies")
-        return sandbox.with_media_stubs()
+        return sandbox.with_media_stubs().with_tool("ffprobe", _FFPROBE)
 
     def _fixture(self, root):
         """One file of each kind the run treats differently, in the root and in a
-        sub-folder, so the mirrored tree is exercised too: an .m4a is always
-        transcoded, an .mp3 below the threshold is copied verbatim by -c, and a
-        .jpg that is nobody's sidecar is copied by the image pass."""
+        sub-folder, so the mirrored tree is exercised too: an .m4a states a rate
+        above the threshold, so it is transcoded, an .mp3 below the threshold is
+        copied verbatim by -c, and a .jpg that is nobody's sidecar is copied by
+        the image pass."""
         (root / "sub").mkdir(parents=True)
         for name in ("track.m4a", "sub/track.m4a", "sub/spoken.mp3",
                      "sub/cover.jpg"):
@@ -386,6 +438,15 @@ class TestARerunOverASplitFile:
 # carry, so xHE-AAC can only take it in pieces.
 _FFPROBE_TWENTY_HOURS = '''
 for a in "$@"; do [[ "$a" == "-show_chapters" ]] && exit 0; done
+if [[ "$*" == *"-print_format json"* ]]; then
+  case "${!#}" in
+    *.m4a|*.m4b)
+      printf '{"format": {}, "streams": [{%s}]}' \
+        '"codec_name": "aac", "codec_type": "audio", "bit_rate": "128000", "channels": 1'
+      ;;
+  esac
+  exit 0
+fi
 for a in "$@"; do
   case "$a" in
     *sample_rate*) echo 44100; exit 0;;

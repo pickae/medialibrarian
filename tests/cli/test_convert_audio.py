@@ -49,13 +49,18 @@ class TestIsVideoFile:
 
 class TestAlwaysTranscodeFile:
     """The formats re-encoded however small they already are, because it is their
-    CONTAINER that is unwanted in the output rather than their size."""
+    CONTAINER that is unwanted in the output rather than their size: mka,
+    which concat-audio cannot join, so a book of them copied through
+    convert-and-concat would fail at the join. m4a and m4b are judged on
+    their bitrate like anything else: a 32 kbps HE-AAC book is not put
+    through a second lossy encode for the container's sake."""
 
-    @pytest.mark.parametrize("name", ["a.m4a", "A.M4A", "a.m4b", "a.mka"])
+    @pytest.mark.parametrize("name", ["a.mka", "A.MKA"])
     def test_a_listed_container_is_always_transcoded(self, name):
         assert ca.always_transcode_file(name) is True
 
-    @pytest.mark.parametrize("name", ["a.mp3", "a.opus", "a.flac"])
+    @pytest.mark.parametrize("name", ["a.mp3", "a.opus", "a.flac",
+                                      "a.m4a", "A.M4A", "a.m4b"])
     def test_others_are_judged_on_their_bitrate_instead(self, name):
         assert ca.always_transcode_file(name) is False
 
@@ -380,7 +385,8 @@ class TestTheChunkingDecision:
             (tmp_path / track).write_bytes(b"\0" * size)
         base = {"input_dir": str(tmp_path), "tracks": list(sizes),
                 "adaptive": False, "mono": False, "bitrate": ca.DEFAULT_BITRATE,
-                "threshold": ca.THRESHOLD, "codec": "opus",
+                "threshold": ca.THRESHOLD,
+                "mono_threshold": ca.MONO_THRESHOLD, "codec": "opus",
                 "group_depth": 0, "verdicts": {}, "background": 0.0}
         base.update(settings)
         return ca.Run(**base)
@@ -508,7 +514,8 @@ class TestAFolderJudgedWhole:
         rates = {os.path.normpath(track): rate
                  for track, rate in rates.items()}
         base = {"input_dir": "/in", "tracks": list(tracks), "mono": False,
-                "threshold": ca.THRESHOLD, "group_depth": depth,
+                "threshold": ca.THRESHOLD,
+                "mono_threshold": ca.MONO_THRESHOLD, "group_depth": depth,
                 "verdicts": {}}
         base.update(settings)
         state = ca.Run(**base)
@@ -551,7 +558,7 @@ class TestAFolderJudgedWhole:
         assert not state.transcodes("loose.mp3", 64000, ca.THRESHOLD)
 
     def test_a_format_always_converted_converts_its_folder_unmeasured(self):
-        state = self._run(["Book/1.m4b"], {})
+        state = self._run(["Book/1.mka"], {})
         assert ca._judge_groups(state, 1) == {"Book": True}
 
     def test_a_folder_whose_rates_cannot_be_read_gets_no_verdict(self):
@@ -562,6 +569,13 @@ class TestAFolderJudgedWhole:
         state = self._run(["Book/1.mp3"], {"Book/1.mp3": (64000, 10)},
                           mono=True)
         assert ca._judge_groups(state, 1) == {"Book": True}
+
+    def test_the_cut_off_the_run_was_given_is_the_one_judged_against(self):
+        # 128 kbps is over the 90 kbps default and under the 200 a -T gave:
+        # the verdict reads the run's own figure, not the constant.
+        state = self._run(["Book/1.mp3"], {"Book/1.mp3": (128000, 10)},
+                          threshold=200000)
+        assert ca._judge_groups(state, 1) == {"Book": False}
 
     def test_an_overruled_file_is_said(self, capsys):
         state = self._run(

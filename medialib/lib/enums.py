@@ -69,7 +69,7 @@ AUDIO_CODEC_EXTENSIONS = {
     "opus": "opus",
     "xheaac": "m4a",
 }
-ALWAYS_TRANSCODE_EXTENSIONS = ("m4a", "m4b", "mka",)
+ALWAYS_TRANSCODE_EXTENSIONS = ("mka",)
 VIDEO_EXTENSIONS = (
     "mp4", "mkv", "avi", "mov", "webm", "m4v", "flv", "mpg", "mpeg", "wmv", "ts",
 )
