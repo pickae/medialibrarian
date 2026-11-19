@@ -102,6 +102,23 @@ def test_a_tree_gets_transcripts_and_chapter_files(chaptering, tmp_path):
     assert len(chaptering.model_log.read_text().splitlines()) == 4
 
 
+def test_a_hosted_model_chapters_each_file_as_it_is_transcribed(chaptering, tmp_path):
+    source, out = _tree(tmp_path, "a/show.mp3", "b/talk.opus", "c/ready.mp3")
+    (out / "c").mkdir(parents=True)
+    (out / "c/ready.srt").write_text("".join(
+        "%d\n00:%02d:%02d,000 --> 00:%02d:%02d,000\ntopic %d words\n\n"
+        % (n, s // 60, s % 60, (s + 9) // 60, (s + 9) % 60, s // 600)
+        for n, s in enumerate(range(0, 1200, 10), 1)))
+    environment = dict(chaptering.environment, chapterLlmUrl="https://8.8.8.8/v1")
+    log = chaptering.chapter(source, out, env=environment)
+    assert "hosted" in log
+    for stem in ("a/show", "b/talk", "c/ready"):
+        assert (out / (stem + ".chapters.txt")).read_text() == (
+            "CHAPTER01=00:00:00.000\nCHAPTER01NAME=First half\n"
+            "CHAPTER02=00:09:59.500\nCHAPTER02NAME=Second half\n")
+    assert len(chaptering.model_log.read_text().splitlines()) == 6
+
+
 def test_whisper_is_handed_only_what_has_no_transcript(chaptering, tmp_path):
     source, out = _tree(tmp_path, "show.mp3", "other.mp3")
     (source / "other.vtt").write_text(

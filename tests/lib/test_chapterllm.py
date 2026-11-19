@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import json
 import subprocess
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -42,6 +44,73 @@ class TestSettings:
     def test_a_window_that_is_not_a_count_is_refused(self, value):
         with pytest.raises(chapterllm.LlmError, match="chapterLlmContext"):
             chapterllm.from_environment(dict(_LOCAL, chapterLlmContext=value))
+
+
+class TestLocalOrHosted:
+    @pytest.mark.parametrize("url", [
+        "http://localhost:11434/v1", "http://127.0.0.1:8080/v1", "http://[::1]:8080/v1",
+        "http://192.168.1.20:11434/v1", "http://10.0.0.5/v1", "http://100.101.5.7/v1",
+        "http://gpubox:8080/v1", "http://gpubox.local/v1", "http://nas.lan/v1",
+        "http://box.tail1234.ts.net/v1", "http://model.test/v1"])
+    def test_a_server_on_this_machine_or_network_is_local(self, url):
+        assert chapterllm.is_local(url)
+
+    def test_no_address_is_the_hosted_api(self):
+        assert not chapterllm.is_local("")
+
+    def test_a_public_address_is_hosted(self):
+        assert not chapterllm.is_local("https://8.8.8.8/v1")
+
+    def test_a_name_is_hosted_when_it_resolves_to_public_addresses(self, monkeypatch):
+        monkeypatch.setattr(chapterllm.socket, "getaddrinfo", lambda host, port: [
+            (2, 1, 6, "", ("104.18.6.192", 0)), (10, 1, 6, "", ("2606:4700::1", 0, 0, 0))])
+        assert not chapterllm.is_local("https://api.openai.com/v1")
+
+    def test_and_local_when_it_resolves_to_this_network(self, monkeypatch):
+        monkeypatch.setattr(chapterllm.socket, "getaddrinfo", lambda host, port: [
+            (2, 1, 6, "", ("192.168.1.20", 0))])
+        assert chapterllm.is_local("http://llm.example.com/v1")
+
+    def test_and_local_when_it_does_not_resolve(self, monkeypatch):
+        def fail(host, port):
+            raise OSError("no such host")
+
+        monkeypatch.setattr(chapterllm.socket, "getaddrinfo", fail)
+        assert chapterllm.is_local("http://llm.example.com/v1")
+
+    def test_a_local_model_is_held_to_two_requests(self):
+        llm = chapterllm.from_environment(_LOCAL)
+        assert llm.local and llm.jobs == chapterllm.DEFAULT_JOBS
+
+    def test_a_hosted_one_to_none(self):
+        llm = chapterllm.from_environment({"chapterLlmApi": "anthropic"})
+        assert not llm.local and llm.jobs == 0
+
+    def test_unless_the_setting_says_so(self):
+        llm = chapterllm.from_environment({"chapterLlmApi": "anthropic",
+                                           "chapterLlmJobs": "4"})
+        assert not llm.local and llm.jobs == 4
+
+    @pytest.mark.parametrize("jobs, most", [(2, 2), (0, 6)])
+    def test_requests_in_flight_never_pass_the_limit(self, monkeypatch, jobs, most):
+        lock = threading.Lock()
+        flying = [0, 0]
+        release = threading.Barrier(most)
+
+        def post(llm, system, prompt, tried):
+            with lock:
+                flying[0] += 1
+                flying[1] = max(flying)
+            release.wait(timeout=5)
+            with lock:
+                flying[0] -= 1
+            return "x"
+
+        monkeypatch.setattr(chapterllm, "_post_openai", post)
+        llm = chapterllm.Llm("openai", "http://x/v1", "m", jobs=jobs)
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            assert list(pool.map(lambda _: llm.ask("s", "u"), range(6))) == ["x"] * 6
+        assert flying[1] == most
 
 
 class TestFirstJson:
@@ -158,7 +227,7 @@ class TestOptions:
     def test_they_go_into_every_request(self, monkeypatch):
         seen = {}
 
-        def post(llm, system, prompt):
+        def post(llm, system, prompt, tried):
             seen["options"] = llm.options
             return "x"
 

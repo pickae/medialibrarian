@@ -70,8 +70,17 @@ For example, a local Ollama:
 
 `chapterLlmContext` should be the window the server really runs the model with,
 which is often smaller than the model allows. Ollama, for one, uses a small
-window unless it is told otherwise. `chapterLlmJobs` sets how many requests are
-sent at once.
+window unless it is told otherwise.
+
+Whether the model is local or hosted is read off `chapterLlmUrl`. A local one
+is localhost, a private or Tailscale address, a name without a dot, or a name
+ending in `.local` or `.lan`. A local model shares the GPU with whisper, so all
+the transcripts are made first. Then the files are chaptered one at a time, two
+requests at once (`chapterLlmJobs`). A hosted model (no `chapterLlmUrl` for
+`anthropic`, or a public address) is never queued for. Each file is chaptered
+as soon as its transcript is there, while the rest are still being
+transcribed, and every request goes out as soon as it is ready. Set
+`chapterLlmJobs` to cap that, for an API with a rate limit.
 
 The model does not have to reason. On a three-hour recording of seven
 episodes, 28 chapters in all, a mixture-of-experts model with thinking turned off

@@ -2265,10 +2265,11 @@ def _add_transcripts_and_chapters(state: Run, llm) -> None:
     or by an earlier run: a transcript sidecar beside its source written into
     it, and - with -t - chapters for one whose source has none.
 
-    Chapters are worked out in two steps over the whole lot, so the GPU does
-    one thing at a time: every transcript that is missing is made first, by
-    transcribe-audio, from the outputs themselves - audio only, and exactly as
-    long as their sources - and the model is asked after. A transcript made
+    Every transcript that is missing is made by transcribe-audio, from the
+    outputs themselves - audio only, and exactly as long as their sources.
+    With a local model that comes first and the model is asked after, so the
+    GPU does one thing at a time; a hosted model is asked about each output
+    as soon as its transcript is there (:func:`aichapters.as_ready`). A transcript made
     here is written into the output with the chapters. An output that has
     chapters already, from a run before, is left alone, so a rerun only
     retries what failed.
@@ -2306,27 +2307,38 @@ def _add_transcripts_and_chapters(state: Run, llm) -> None:
     ramscratch.add_exit_cleanup([transcript_root, stage])
     untranscribed = [(os.path.relpath(out, state.output_dir), out)
                      for _track, _source, out, sidecar in pending if not sidecar]
+    transcribe = None
     if untranscribed:
-        runlog.say("Transcribing %d file(s) for their chapters...\n" % len(untranscribed))
-        aichapters.transcribe(untranscribed, stage, transcript_root, state.script_dir)
-        safety.exit_if_aborted()
+        def transcribe() -> None:
+            runlog.say("Transcribing %d file(s) for their chapters...\n"
+                       % len(untranscribed))
+            aichapters.transcribe(untranscribed, stage, transcript_root,
+                                  state.script_dir)
 
-    runlog.say("Chaptering %d file(s) with %s...\n" % (len(pending), llm.describe()))
-    for number, (track, source, out, sidecar) in enumerate(pending, 1):
-        safety.exit_if_aborted()
+    def transcript_of(entry) -> str:
+        _track, _source, out, sidecar = entry
         made = os.path.join(transcript_root, os.path.splitext(
             os.path.relpath(out, state.output_dir))[0] + ".srt")
-        transcript = sidecar or (made if os.path.isfile(made) else "")
-        label = "[%d/%d] %s" % (number, len(pending), track)
+        return sidecar or (made if os.path.isfile(made) else "")
+
+    numbers = {entry[0]: number for number, entry in enumerate(pending, 1)}
+
+    def chapter(entry, transcript: str) -> None:
+        track, source, out, sidecar = entry
+        label = "[%d/%d] %s" % (numbers[track], len(pending), track)
         if not transcript:
             runlog.error("%s: no transcript, so no chapters" % label)
-            continue
+            return
+
+        # Side by side, every line says which file it is about.
+        def log(line: str) -> None:
+            runlog.log(line if llm.local else "%s: %s" % (label, line.strip()))
         marks = aichapters.generate(aichapters.read_transcript(transcript), llm,
-                                    log=runlog.log)
+                                    log=log)
         if not marks:
             runlog.error("%s: no chapters (too short, or the model gave no usable "
                          "outline)" % label)
-            continue
+            return
         rows = aichapters.chapter_rows(marks)
 
         def write(tmp, out=out, rows=rows, transcript=transcript, sidecar=sidecar):
@@ -2340,6 +2352,11 @@ def _add_transcripts_and_chapters(state: Run, llm) -> None:
         if state.keep:
             shutil.copyfile(transcript, os.path.splitext(out)[0] + ".transcript"
                             + os.path.splitext(transcript)[1])
+
+    aichapters.as_ready(
+        pending, transcript_of, transcribe, llm, chapter,
+        begin=lambda: runlog.say("Chaptering %d file(s) with %s...\n"
+                                 % (len(pending), llm.describe())))
 
 
 def _rewrite(source: str, out: str, change) -> int:
