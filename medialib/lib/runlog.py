@@ -167,7 +167,7 @@ def error_continued(*message: object, stream=None) -> None:
 
 
 def counted_prefix(count: int, total: int | None) -> str:
-    """``countedPrefix``: the "[n/total] " a progress line carries, or nothing.
+    """The "[n/total] " a progress line carries, or nothing.
 
     Nothing without flock: the count is shared between workers through a lock
     file, and a host that cannot take the lock has no honest number to print -
@@ -197,8 +197,8 @@ def film_header(index: int, total: int, root: str, film: str) -> str:
 
 
 def cpu_count() -> int:
-    """``cpuCount``: the logical cores, and never less than 1 - a host whose
-    count cannot be read runs serially rather than not at all."""
+    """The logical cores, and never less than 1 - a host whose count cannot be
+    read runs serially rather than not at all."""
     try:
         count = os.cpu_count()
     except NotImplementedError:      # pragma: no cover - os.cpu_count is total
@@ -217,15 +217,15 @@ def python_bin() -> str:
 
 
 def jobs_per_core(divisor: int = 1) -> int:
-    """``jobsPerCore``: how many jobs to run at once when one job wants
-    ``divisor`` cores. Floored at 1, so a machine smaller than the divisor still
-    runs serially rather than not at all."""
+    """How many jobs to run at once when one job wants ``divisor`` cores.
+    Floored at 1, so a machine smaller than the divisor still runs serially
+    rather than not at all."""
     count = cpu_count() // max(1, divisor)
     return count if count >= 1 else 1
 
 
 def warn_uncounted_progress() -> None:
-    """``warnUncountedProgress``: say once, at startup, what a missing flock costs.
+    """Say once, at startup, what a missing flock costs.
 
     Once per RUN and not once per caller: several of these scripts reach this
     twice over, and a child has nothing to add to something the run has said.

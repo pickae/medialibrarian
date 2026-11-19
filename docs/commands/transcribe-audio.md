@@ -31,16 +31,13 @@ With no options, a run:
 | `<input>/b/movie.mkv` | its **first audio track only** — the video stream and any further audio tracks are ignored | `<output>/b/movie.txt` |
 | a video with no audio track | — | skipped, with a warning |
 
-The whisper model is settled for the host once, up front: the GPU when whisper can
-really run on it (the biggest model the free VRAM holds), otherwise the CPU. The
-format (`-f`: `txt`, `srt`, `vtt` or `tsv`) defaults to `txt`, and `-j` sets how
-many transcriptions run at a time.
+`-f` picks the format (`txt`, `srt`, `vtt` or `tsv`), and `-j` sets how many
+transcriptions run at a time.
 
 ## Embedding the transcript (`-l`)
 
 `-l` writes, beside each transcript, a copy of the audio with the transcript
-embedded - the way [`convert-audio`](convert-audio.md) does for its outputs: as
-timed lyrics (LRC, in the `LYRICS` tag) in Opus and FLAC, as a subtitle track in
+embedded: as timed lyrics (LRC, in the `LYRICS` tag) in Opus and FLAC, as a subtitle track in
 `.m4a` and `.m4b`. Other containers and videos are only transcribed. The lyrics
 are timed whatever `-f` is: with `txt` or `tsv` whisper is also asked for cues
 and they are used for the lyrics only. A rerun with `-l` adds the copies a

@@ -1,9 +1,8 @@
 """Looking online for a cover nothing local supplied.
 
-The last rung of the cover ladder, and a rare one: concat-audio reaches it only
-when the folder's images, its booklet PDF and the art embedded in its tracks all
-came up empty, and convert-audio only for a long track - a podcast episode, an
-audiobook - whose source carries no cover and whose folder holds none.
+The last rung of the cover ladder, and a rare one: it is reached only when the
+folder's images, its booklet PDF and the art embedded in its tracks all came up
+empty.
 
 WHERE to ask is a table (``medialib/config/coverproviders.tsv``, or the copy the
 ``coverSearchTable`` setting names), because the sites change and their order

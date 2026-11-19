@@ -131,8 +131,8 @@ class TestTheProbe:
 
 class TestTheFilterSemantics:
     """Each of these is a place where jq does something a reader of the program
-    would not predict, and where the port had to be written to match rather than
-    to be sensible."""
+    would not predict, and where this module matches it rather than being
+    sensible."""
 
     def test_tonumber_over_a_word_is_no_value_and_not_null(self):
         assert cm._num("abc") is cm._EMPTY

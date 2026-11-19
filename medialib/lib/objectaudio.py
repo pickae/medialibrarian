@@ -1,8 +1,7 @@
 """Which audio tracks are object-based, and which surround track of a language survives.
 
-Both decisions are pure readings of mediainfo fields, centralised so every
-script that needs them shares one set of rules instead of each carrying its
-own. """
+Both decisions are pure readings of mediainfo fields.
+"""
 
 import re
 
@@ -54,7 +53,7 @@ _EX_NAME = re.compile(r"(?:^|[^a-z0-9])(?:dd|ac-?3|e-?ac-?3|digital|surround"
 
 
 def audio_object_flag(commercial: str, objects: str, name: str) -> str:
-    """``audioObjectFlag``: "1" for object-based metadata, "" otherwise.
+    """The flag: "1" for object-based metadata, "" otherwise.
 
     Three sources, in order of how much they know. The commercial name is what
     mediainfo writes for the JOC variants ("... with Dolby Atmos"), the object
@@ -76,7 +75,7 @@ def audio_object_flag(commercial: str, objects: str, name: str) -> str:
 
 
 def audio_ex_flag(mode: str, name: str) -> str:
-    """``audioExFlag``: "1" for a Dolby Surround EX track, "" otherwise.
+    """The flag: "1" for a Dolby Surround EX track, "" otherwise.
 
     Two sources, the way the object flag has three. The settings mode is what
     mediainfo writes for the flag in the AC-3 header ("Dolby Surround EX"), and
@@ -93,7 +92,7 @@ def audio_ex_flag(mode: str, name: str) -> str:
 
 def audio_ladder_score(codec_id: str, channels: str, object_flag: str,
                        ex_flag: str = "") -> str:
-    """``audioLadderScore``: this track's rung, or "" for one not on the ladder.
+    """This track's rung, or "" for one not on the ladder.
 
     The ladder deduplicates the LOSSY compatibility tracks only. Lossless tracks
     are not on it - they are consumed into their opus bed before it runs - and

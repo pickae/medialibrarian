@@ -51,8 +51,7 @@ exactly as it was.
 ## The axes
 
 Some columns are read more than one way. Each reading is either an axis of the
-cube, or an axis of the page only — the page computes those from the base grain
-for free, where a cube axis doubles the grouping sets.
+cube, or an axis the page works out for itself.
 
 | Axis | Read from | Where |
 | --- | --- | --- |
@@ -69,26 +68,21 @@ detail is in it, and the aspect ratio bucket says what shape it is, because a
 scope film and a vertical short can both be 1080p. Shape is shown as the ratio
 normed to a height of 1 — the one of a bucket's three names that can be compared
 at a glance — and the integer ratio (`16:9`, `239:100`) and the marketing names
-(Scope, Academy, Univisium) sit next to it. It is an axis of the page rather than
-of the cube: 22 buckets would double the largest cube for a question the pivot
-table answers from the base grain for free.
+(Scope, Academy, Univisium) sit next to it.
 
 **The codec is read three ways for the same reason.** What the file states is a
 fact and stays an axis of its own; beside it the page can group by the codec's
 **family**, which is that codec under every spelling it arrives in, and by its
 **generation** — MPEG-2 era, MPEG-4 ASP era, or everything from H.264 on. The
 last is the one worth asking a whole library: it is the answer to "how much of
-this is old enough to be worth re-encoding", and it comes from the same table
-`convert-video -t` judges a single file with.
+this is old enough to be worth re-encoding", and it agrees with
+`convert-video -t`.
 
 **Bitrate adequacy is a cube axis, and the one that pays for itself.** The census
 has already decided, per film, whether its video bitrate is starved, adequate or
 generous *for what that file is*; here it is only an axis like any other, so "how
 many terabytes of the 2160p HEVC in this library is generous" — the re-encode queue,
-in one drill-down — is a filter rather than a query. It is the one axis worth a
-doubling of the cube's grouping sets, where the aspect ratio and the bitrate bands
-were left to the page for exactly that cost: those slice a library, this one names
-the part of it that is worth acting on.
+in one drill-down — is a filter rather than a query.
 
 ## The page
 

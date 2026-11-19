@@ -59,7 +59,7 @@ measured.
 finished video is combined with the source's audio, subtitles, attachments,
 chapters and tags by `mkvmerge`, which keeps each track's name, language and flags
 (commentary, forced, …) unchanged. It needs `mkvmerge` and is refused together
-with `-a`, `-b` or `-s`. `ingest-movies -r` uses it.
+with `-a`, `-b` or `-s`.
 
 ## Chapters (`-C`)
 
@@ -80,10 +80,8 @@ The chapters and the transcript are written by the same mux as everything else,
 so the output is written once. The work runs beside the video encode, one file
 at a time.
 
-`-P "<text>"` adds your own instructions to every request the model gets, for
-example a chapter per scene titled with where it takes place. The model then
-reasons at medium effort, and Claude may search the web, as with
-[`generate-chapters -P`](generate-chapters.md#your-own-instructions). `-P` needs `-C`.
+`-P "<text>"` adds your own instructions for the model, as
+[`generate-chapters -P`](generate-chapters.md#your-own-instructions) does; it needs `-C`.
 
 ## Hardware and parallelism
 
@@ -107,8 +105,7 @@ tier — named either by its line count (`720p` … `4320p`) or by a marketing n
 (`fullHD`, `2K`, `4K`, `UltraHD`, `8K`, …), in any case — and everything above it
 is scaled down to fit with its aspect ratio kept, so a 2.39:1 scope film capped at
 1080p comes out 1920x800 rather than letterboxed. Anything already at or below the
-tier is encoded at its own size: **`-m` never scales anything up.** The tiers are
-the same ones `content-census-bi` reports a library by.
+tier is encoded at its own size: **`-m` never scales anything up.**
 
 **`-u` upscales what is smaller, and only when asked.** `-u 1080p` enlarges every
 picture smaller than 1080p to fill it, with a neural upscaler on the GPU rather
@@ -149,8 +146,7 @@ it.
 
 The upscaler is [VapourSynth](https://www.vapoursynth.com/) with
 [vs-mlrt](https://github.com/AmusementClub/vs-mlrt)'s TensorRT plugin, driven
-from an environment of its own, the way `read-library` drives its narration
-checkout. It needs an NVIDIA GPU.
+from an environment of its own. It needs an NVIDIA GPU.
 
 | Setting | Default | What it is |
 | --- | --- | --- |
@@ -277,14 +273,14 @@ kept falls back to the HDR10 layer, so a file never loses its high dynamic range
 | --- | --- | --- | --- |
 | HDR10 | whenever present | — | — |
 | Dolby Vision | wherever the encoder can code an RPU: the software encoders can, NVENC cannot. The finished file is checked to still signal DV | ffmpeg 7.1 or newer | the reason is reported and the file comes out as plain HDR10 |
-| Dolby Vision, dual-layer profile 7 | normalised to single-layer profile 8.1 first — the same no-re-encode conversion `ingest-movies` does, so it keeps its Dolby Vision without being ingested beforehand | `dovi_tool`, `mkvmerge` | plain HDR10 |
+| Dolby Vision, dual-layer profile 7 | normalised to single-layer profile 8.1 first, without re-encoding, so it keeps its Dolby Vision | `dovi_tool`, `mkvmerge` | plain HDR10 |
 | HDR10+ | on the HEVC profiles; a source carrying both Dolby Vision and HDR10+ keeps both, profile 7 included | `hdr10plus_tool`, `mkvmerge` | plain HDR10 (below) |
 
 **HDR10+** is carried through no encoder, so the source's dynamic metadata is
 read out before the encode and written back into the finished video after it —
 the video is not re-encoded for it, and it works with whichever ffmpeg the run
 settles on. Where it cannot be kept the reason is reported: on the AV1 profiles,
-which it cannot be written back into yet; when a tool is missing, with a
+which it cannot be written back into; when a tool is missing, with a
 warning; and when the encode does not have exactly the source's frames, or is
 cropped or scaled while the metadata places windows in the original frame.
 
@@ -337,9 +333,7 @@ This frees **computation, not memory**: the encoders are stopped, not unloaded, 
 their RAM and VRAM stay allocated, and the pause lives and dies with the run itself
 (there is no pausing across a reboot, or from another terminal). Audio, one short
 single-threaded process per track, deliberately keeps going. The time spent paused
-is reported separately and kept out of the run's throughput figures. `ffmpeg`
-itself has no pause — the keys are the command's, and what they move is the
-operating system's stop/continue signal.
+is reported separately and kept out of the run's throughput figures.
 
 ---
 

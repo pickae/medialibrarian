@@ -92,7 +92,6 @@ k | [part] | keep <part>: takes nothing away. The parts are resolution,
                   part.
 o |  | Offline: the tagging phase is skipped, so the run reaches no
                   network and needs no beets.
-                  Default false
 """
 
 OPT_VARS = "j:jobs k:keepParts c:beetsConfig o:offline"
@@ -102,10 +101,8 @@ OPT_LONG = "h:help j:jobs k:keep c:beets-config o:offline"
 USAGE_TAIL = """
 
 Dependencies:
-    ffmpeg, mkvtoolnix, ImageMagick, rsync, fdupes, beets (unless -o), and the
-    mutagen package for this Python (chapter embedding). Optional: flock
-    (numbers the progress lines). Also invokes the sibling commands
-    convert-audio, clean-folder-structure and cue-to-chapters."""
+    ffmpeg, mkvtoolnix, ImageMagick, rsync, fdupes and beets (unless -o).
+    Optional: flock (numbers the progress lines)."""
 
 # Cover-image conversion: only images of at least this size are re-encoded to
 # AVIF (smaller ones are copied unchanged), and the AVIF encode settings.
@@ -1757,8 +1754,8 @@ def _copy_the_rest(state, download_dir: str, ingest_dir: str,
     leftover, copied into the library.
 
     Two paths on purpose. With nothing to redirect - a first ingest, or a library
-    whose names still match the download's - it is the single recursive rsync it
-    always was. Once the map holds something, the tree is copied folder by folder
+    whose names still match the download's - it is a single recursive rsync.
+    Once the map holds something, the tree is copied folder by folder
     instead, each into the folder the library keeps it in: -d rather than -r so
     each rsync moves that one folder's files and leaves its subfolders to their
     own turn, since a subfolder can resolve somewhere its parent does not.

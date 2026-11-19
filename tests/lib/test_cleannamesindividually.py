@@ -295,8 +295,7 @@ def test_fragments_file_for_explicit(tmp_path):
 
 def test_the_default_sits_under_the_base_everything_else_uses(tmp_path, monkeypatch):
     """`data/fragments.txt` is asked for the same way the podcast tables and the
-    beets log are, so one variable moves all three. It used to be resolved from
-    this module's own location, which `CLI_SCRIPT_DIR` could not reach."""
+    beets log are, so one variable moves all three."""
     monkeypatch.setenv("CLI_SCRIPT_DIR", str(tmp_path))
     (tmp_path / "data").mkdir()
     fragments = tmp_path / "data" / "fragments.txt"
@@ -309,10 +308,9 @@ def test_an_absent_default_is_not_an_error(tmp_path, monkeypatch):
     monkeypatch.setenv("CLI_SCRIPT_DIR", str(tmp_path))
     assert cni.fragments_file_for() == ("", True)
 
-# --- the cases the bash white box pinned --------------------------------------
-# Carried over whole, with its own descriptions as the ids: that white box was
-# this module's specification, and this is what it said. Its fragments-file
-# cases are not here - they need a file, and the tests above build one.
+# --- the ledger of the rules -------------------------------------------------
+# Each case described by its id. The fragments-file cases are not here - they
+# need a file, and the tests above build one.
 PINNED_NAMES = [
     pytest.param(
         '20240102 The_Title',
@@ -593,7 +591,7 @@ PINNED_NAMES = [
 
 
 @pytest.mark.parametrize("raw,prefix,name", PINNED_NAMES)
-def test_the_split_the_bash_white_box_pinned(raw, prefix, name):
+def test_the_pinned_split(raw, prefix, name):
     assert clean(raw) == (prefix, name)
 
 
@@ -915,7 +913,7 @@ PINNED_SEPARATORS = [
 
 
 @pytest.mark.parametrize("raw,expected", PINNED_SEPARATORS)
-def test_the_separator_the_bash_white_box_pinned(raw, expected):
+def test_the_pinned_separator(raw, expected):
     assert cni.normalize_number_separator(raw) == expected
 
 
@@ -980,5 +978,5 @@ PINNED_COMPARISONS = [
 
 
 @pytest.mark.parametrize("a,b,expected", PINNED_COMPARISONS)
-def test_the_comparison_the_bash_white_box_pinned(a, b, expected):
+def test_the_pinned_comparison(a, b, expected):
     assert cni._digits_not_greater(a, b) is expected

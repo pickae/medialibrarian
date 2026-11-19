@@ -75,9 +75,8 @@ pay for the walk again.
 for what it is, in a column of its own that becomes an axis of the cube like any
 other. Whether a file is big enough depends on the codec, the size and what is in
 it together, so no single column can answer it — and the answer is what "which of
-this is worth re-encoding" actually asks. Each of the three is taken with the very
-model its own converter decides one file with, so the census and the conversion
-cannot disagree about a film, an album or a scan. Off by default because the image
+this is worth re-encoding" actually asks. Each verdict is the one its own
+converter would reach for that file. Off by default because the image
 half is dear: telling a photograph from a page of flat artwork means decoding the
 picture, which over a library of scans is a run of its own.
 
@@ -100,10 +99,10 @@ picture, which over a library of scans is a run of its own.
 
 | Where | Worth knowing |
 | --- | --- |
-| video | **Dynamic range** is read through the same judgements [`ingest-movies`](ingest-movies.md) acts on, so the two cannot disagree about a file. What the container *claims* is what is recorded: verifying that a Dolby Vision RPU is really in the bitstream costs a pass over the whole stream, which is the ingest's job, not a census's |
+| video | **Dynamic range** is what the container *claims*: verifying that a Dolby Vision RPU is really in the bitstream costs a pass over the whole stream, which a census does not make |
 | images | **Loose images are a report of their own** — path, size, resolution and format, plus the verdict under `-a`. The format is what the file's own header says and not what its suffix claims, so a `.jpg` holding a PNG is recorded as the PNG it is |
 | books | **Counted on their text**: each one is converted with Calibre and counted from that, so epub, mobi, chm, azw3, azw, lit, fb2, docx, rtf, djvu and PDF all answer the same way instead of each needing its own extractor |
-| comics / books | **A `.pdf` is decided, not assumed**: it is in both the comic and the book extension lists, so which report it lands in comes from the same probe [`convert-comics`](convert-comics.md) gates on — a scan goes to comics, a text book to books |
+| comics / books | **A `.pdf` is decided, not assumed**: it is in both the comic and the book extension lists, so which report it lands in comes from a look at its pages — a scan goes to comics, a text book to books |
 | the `chapters` column | **A file with no chapter marks counts as one chapter**, not as none: it is one unbroken chapter, itself. So the `chapters` column adds up to how many parts a library holds rather than to how many somebody happened to mark up, and a mean chapter length is not a division by zero |
 
 **A lying suffix is skipped, not guessed at**: an `.mka` that holds a video

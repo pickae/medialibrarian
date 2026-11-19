@@ -51,18 +51,15 @@ USAGE_HEAD = """Usage:
     <archiveFile>   yt-dlp's download archive: the record of what has already
                     been fetched, so a re-run only picks up what is new. It is
                     created if it does not exist. A name with no path in it is
-                    kept in the script directory's logs/ folder, the home of
-                    the records a run keeps about itself; a path is taken as
-                    given.
+                    kept in logs/ in the medialib data directory; a path is
+                    taken as given.
     <dateRange>     optional upload-date filter, applied to every feed:
                         20260607             everything since that day
                         20260607..20260707   a window
                         ..20260707           everything up to that day
                         today-2weeks         relative dates work at either end
-                        ..today-10days       and so a rolling window is one of
-                                             them: nothing newer than ten days,
-                                             which is how the video library was
-                                             fetched before it had a table
+                        ..today-10days       a rolling window: nothing newer
+                                             than ten days
                     Without it, --playlist-end and the archive decide alone.
 
 Options:"""
@@ -74,7 +71,7 @@ h |  | Print this help page.
 t | <table> | A feed table to read. May be given more than once, and each
                     table brings its own profile and its own parallelism (see
                     below). Default: data/podcasts/podcasts.tsv, else
-                    podcasts.tsv, under the script directory.
+                    podcasts.tsv, in the medialib data directory.
 j | <jobs> | Cap how many feeds any one table may fetch at once. Lower
                     only; a table asking for less keeps its own number.
 p |  | Preview: print the yt-dlp call each feed would get and
@@ -730,9 +727,8 @@ def _library_worker(state) -> None:
 def _archive_location(archive_file: str, script_dir: str) -> str:
     """Where the run's archive is read from and written to.
 
-    A name carrying a path in it is taken as given; a bare NAME goes to the
-    home of the records a run keeps about itself - the script directory's
-    logs/ folder - and is read back from the same place on the next run,
+    A name carrying a path in it is taken as given; a bare NAME goes to logs/
+    in the medialib data directory, and is read back from the same place on the next run,
     which is the whole of what the archive is for: a re-run checks it
     before fetching.
     """
@@ -742,8 +738,8 @@ def _archive_location(archive_file: str, script_dir: str) -> str:
 
 
 def _default_tables(script_dir: str):
-    """The one table that has always been there, so the common call stays as
-    short as it was. Looked for in data/podcasts first, which is where the
+    """The default table, so the common call needs no -t. Looked for in
+    data/podcasts first, which is where the
     tables actually live - they are one machine's library rather than code."""
     first = os.path.join(script_dir, "data", "podcasts", "podcasts.tsv")
     if os.path.isfile(first):

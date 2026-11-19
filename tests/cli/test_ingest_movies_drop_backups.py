@@ -4,7 +4,7 @@ Each copy is asked the three things the copy was asked by - the same length as
 the original, a video stream, at least the tracks the rules keep - and the
 original is dropped where it passes. A dry run unless -w; with -w the copy is
 tagged before the original goes, so the "already remuxed" check still answers
-yes when the backup that used to say it is gone.
+yes once the backup is gone.
 """
 
 from __future__ import annotations

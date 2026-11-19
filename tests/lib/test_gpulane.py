@@ -384,8 +384,7 @@ def test_the_reserve_scales_to_a_machine_with_less_ram_than_it_keeps_free(
         lane._total_ram_bytes = lambda: 256 * 1024 ** 3
         assert lane._ram_reserve() == gpulane.RAM_RESERVE
         lane._total_ram_bytes = lambda: 8 * 1024 ** 3
-        assert (lane._ram_reserve() == 8 * 1024 ** 3
-                // gpulane.RAM_RESERVE_SHARE)
+        assert lane._ram_reserve() == 2 * 1024 ** 3
         lane._total_ram_bytes = lambda: 0
         assert lane._ram_reserve() == gpulane.RAM_RESERVE
     finally:

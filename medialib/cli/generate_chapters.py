@@ -52,7 +52,6 @@ Options:"""
 OPT_SPEC = """
 h |  | Print this help page.
 f |  | Make the chapter files again, over the ones already there.
-                    Default false
 m | <minutes> | The shortest chapter, in minutes; a fraction is allowed,
                     0.5 being thirty seconds.
                     Default {minimum}

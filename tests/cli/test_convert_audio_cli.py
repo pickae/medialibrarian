@@ -22,7 +22,7 @@ pytestmark = pytest.mark.stubbed
 # deterministically splits, and a short one otherwise, so it stays whole. It also
 # states the rate of an .m4a or .m4b - 128 kbps, above the re-encode threshold -
 # and nothing else: the .mp3 of a case states no rate at all, which the run keeps
-# as it would a small file. The rate is what the run reads off the file now, and
+# as it would a small file. The rate is what the run reads off the file, and
 # the length is the planner's own probe to answer.
 _FFPROBE = '''
 for a in "$@"; do [[ "$a" == "-show_chapters" ]] && exit 0; done
@@ -320,8 +320,7 @@ class TestAnOutputPathThatIsAFile:
 
 class TestRelativePaths:
     """The run chdirs into its input folder, so a relative path from the command
-    line once resolved against that folder rather than the caller's and no output
-    tree was built at all."""
+    line has to be resolved against the caller's folder first."""
 
     @pytest.fixture
     def convert(self, sandbox):

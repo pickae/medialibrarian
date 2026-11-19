@@ -122,10 +122,8 @@ class TestTheOpus:
 
 
 # --- the cover art ------------------------------------------------------------
-# Never verified before this module existed: the writer was a subprocess, so the
-# stubbed tests could assert the argv it was called with and nothing else. What
-# a player actually reads is a picture block, and only mutagen can say whether
-# one is there.
+# What a player actually reads is a picture block, and only mutagen can say
+# whether one is there.
 
 @pytest.fixture
 def cover(tmp_path):
@@ -184,10 +182,8 @@ class TestTheMP4CoverGoesIn:
 
 
 class TestTheStatusIsAStatus:
-    """The process boundary these functions replace turned any failure into a
-    non-zero exit, and two callers read that: ingest_music counts a chapter write
-    it could not make, and thumbnails drops its sidecar copies only on success. A
-    direct call that raised instead would take the run down.
+    """Any failure is a non-zero status, not an exception: a caller decides
+    from the status, and a call that raised instead would take the run down.
     """
 
     def test_and_for_a_file_that_is_not_there_at_all(self, tmp_path, cover):

@@ -112,7 +112,8 @@ class ToolOutput:
         self.notable_count = 0
 
     def feed(self, data: bytes | str) -> None:
-        """Take the next piece of output."""
+        """Take the next piece of output, which may end mid-line or mid-character:
+        the unfinished rest is held until the next piece completes it."""
         if isinstance(data, bytes):
             data = self._decoder.decode(data)
         text = self._pending + _CSI.sub("", data)
@@ -326,7 +327,7 @@ def watched(argv, *, label: str = "", tool: str = "", ok=None,
     The same call and the same result as ``subprocess.run``: what the caller
     asked to be given back is given back, and what it sent to the null device
     or left to the terminal is captured instead - a tool's stderr is what says
-    why it failed - and handed back as nothing, as before. An exit status
+    why it failed - and handed back as nothing. An exit status
     outside ``ok`` is a failure; left out, it is 0 alone, or 0 and 1 for the
     mkvtoolnix tools, whose 1 is warnings with the file complete.
 

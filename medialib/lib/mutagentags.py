@@ -18,9 +18,8 @@ lives in :mod:`medialib.lib.chapters`, beside the m4b path that writes one the
 same way.
 
 **Every function here answers with a process-style status: 0 for done, non-zero
-for failed**, because that is the error boundary its callers need: a corrupt file
-is one file `ingest_music` counts as `chaptersFailed` and reports, where a raise
-would take the whole run down.
+for failed**, because a corrupt file is one file failed and reported, where a
+raise would take the whole run down.
 
 ``mutagen`` is imported inside the functions rather than at the top, so a host
 without it can still import this package and run everything that does not write a

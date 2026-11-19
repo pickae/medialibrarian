@@ -211,7 +211,7 @@ class TestWhyTheFileLogAndNotStderr:
 
 
 class TestEndToEndThroughTheRealWrapper:
-    """The port's own sync_subtitle against the real binary: the two verdicts
+    """sync_subtitle against the real binary: the two verdicts
     that decide whether a subtitle survives the ingest."""
 
     def test_it_sees_the_real_refusal(self, tmp_path):

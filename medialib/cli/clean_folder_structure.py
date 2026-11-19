@@ -67,9 +67,9 @@ n |  | Clean folder names as usual, but instead of cleaning file
                     files (e.g. a cover.jpg) are left alone.
 f | <file> | Read the name fragments to remove from <file> (one per line,
                     '#' comments and blank lines ignored) instead of from
-                    data/fragments.txt beside this script. Without this option that
-                    file is used when it is there, and names are cleaned without any
-                    fragment removal when it is not.
+                    data/fragments.txt in the medialib data directory. Without
+                    this option that file is used when it is there, and names
+                    are cleaned without any fragment removal when it is not.
 p |  | Preview: do not touch the input at all. Mirror its structure
                     into a sandbox, run the full cleaning there, and write
                     "before.tree" and "after.tree" into the input folder so the
@@ -603,8 +603,8 @@ def main(argv: list, program: str = "clean-folder-structure",
                                   script_dir=script_dir)
 
     # Which fragments this run removes, settled once here: the file named with
-    # -f, else data/fragments.txt beside this script, else none at all. A -f path
-    # that cannot be read STOPS the run, because cleaning a whole tree without
+    # -f, else data/fragments.txt in the medialib data directory, else none at
+    # all. A -f path that cannot be read STOPS the run, because cleaning a whole tree without
     # the fragments someone asked for would have to be undone by hand.
     fragments_file, ok = cleannamesindividually.fragments_file_for(
         fragments_override)

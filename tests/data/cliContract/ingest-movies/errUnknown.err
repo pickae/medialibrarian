@@ -12,437 +12,79 @@ Usage:
     -------
     -f, --fragments <file>
                   read the name fragments to remove from <file> (one per line,
-                  '#' comments and blank lines ignored) instead of from
-                  data/fragments.txt beside this script. Without it that file is
-                  used when it is there, and names are cleaned without any fragment
-                  removal when it is not.
+                  '#' comments and blank lines ignored). Default:
+                  data/fragments.txt in the medialib data directory when it is
+                  there, else no fragment removal.
     -r, --convert-remuxes
-                  also convert the remuxes, last of all: a film whose name says
-                  REMUX, a 2160p HEVC one carrying dual-layer Dolby Vision
-                  profile 7 at a generous bitrate, any other 2160p HEVC one
-                  or an SDR 1080p H.264 one at a very generous bitrate (four
-                  times what it needs) is
-                  handed to convert-video, on its default video settings,
-                  with -k: the finished video is combined with every audio,
-                  subtitle, attachment and chapter of the ingested film as it
-                  is, and written beside it as "<film> {edition-AV1}.mkv" - the
-                  version label where the run writes for jellyfin - so the
-                  server offers the two as one film. The film itself is left as
-                  it is. A full ingest only.
+                  also convert the remuxes, last of all, with convert-video -k,
+                  writing each converted copy beside its film as its AV1
+                  edition. The film itself is left as it is. A full ingest
+                  only.
     -k, --keep [part]
-                  keep <part>: takes nothing away. The parts are audio, tracks and
-                  dv, comma-separated, and a bare -k keeps all three. audio:
-                  lossless audio stays lossless rather than going to the
-                  target codec, and
-                  a track of the library's copy that would need encoding (put
-                  to another speed) is not carried. tracks: no audio or
-                  subtitle track is dropped - not another language, not an
-                  image subtitle, not an audio description, not the lesser of
-                  two surround tiers - and what is carried over from the Plex
-                  library's copy is its soundtracks in every language, lossless
-                  as they are. dv: a dual-layer Dolby Vision profile 7 keeps
-                  its enhancement layer. Everything that only adds or corrects
-                  still happens: the cleaning, renaming and IMDb tagging, the
-                  track names and flags, the subtitles downloaded and the
-                  commentary transcripts muxed in, the chapters, a false Dolby
-                  Vision claim or an overstated level corrected. A folder
-                  literally named "audio" is written ./audio: the word after -k
-                  goes to -k when it is a part. Cannot be combined with -r,
-                  which encodes.
+                  keep <part>, taking nothing away: audio (lossless audio stays
+                  lossless), tracks (no track is dropped) and dv (a dual-layer
+                  Dolby Vision profile 7 keeps its enhancement layer),
+                  comma-separated; a bare -k keeps all three. Cannot be
+                  combined with -r.
     -o, --omit [phase]
                   omit <phase> from a full ingest: junk, subtitles, ocr,
                   roles, commentary, chapters, plex and tagging,
-                  comma-separated, and a bare -o omits all eight. junk: the
-                  junk files are left. subtitles: the subtitles are not
-                  fetched and the missing ones are not downloaded. ocr: the
-                  picture subtitles are not read into text. roles: the
-                  subtitles are not measured for being forced or SDH where
-                  the file does not say so, and their flags are left as the
-                  file has them. commentary: the commentaries are not
-                  listened for, not transcribed and not named. chapters: the
-                  chapter archive is not asked. plex: the films are not
-                  compared with
-                  the Plex library and nothing is carried over from it.
-                  tagging: the films are not tagged with their IMDb ids. The
-                  phases not named run as they always have. A phase the run
-                  will not omit is refused with the page, like a bad option. A
-                  folder literally named after one of them - "plex" is the
-                  likeliest - is written ./plex: the word after -o goes to -o
-                  when it is a phase. Cannot be combined with -O, which does
-                  its phases on their own.
+                  comma-separated; a bare -o omits all eight.
     -O, --only <phases>
-                  do only these phases, each on its own, whole tree below each folder
-                  given, one after the other in the order typed and stopping at
-                  the first that fails: layout, roles, ocr, tagging, subtitles,
-                  commentary, names, chapters, extras-chapters, plex and
-                  backups, comma-separated. -O tagging,
-                  subtitles is the tagging phase and then the subtitles phase,
-                  as two commands one after the other would be. Each phase
-                  does nothing but its own work. Cannot be combined with -r,
-                  -C, -k or -o. -w goes to the phases that have a dry run to
-                  carry out (tagging, subtitles, names, backups) and is left
-                  off the others; -i names the id list the tagging phase
-                  reads back; -P goes to the extras-chapters phase. What each
-                  does:
-                  layout: what a full ingest does first and nothing after it -
-                  the junk files deleted (as -o junk would leave them), every
-                  video remuxed into Matroska, loose films given a folder
-                  each, bonus material sorted into the Plex folders, folder,
-                  movie and subtitle names cleaned, existing subtitles moved
-                  beside their film and a mangled movie name conformed to its
-                  folder's. Walks the whole tree below each folder given.
-                  No track is touched and no film is tagged with an id.
-                  roles: the subtitle roles and nothing else - every subtitle
-                  of every film is measured, and its forced and SDH flags
-                  are put right where the file says otherwise, in place with
-                  mkvpropedit. No other flag, name or title is touched. Not a
-                  dry run, and -w has no part in it.
-                  ocr: the picture subtitles and nothing else - each main
-                  film's PGS and VobSub subtitles in the spokenLanguages
-                  setting's languages are read into the "<movie>.xx.srt"
-                  sidecars it has none of, by seconv. The sidecars are left
-                  beside the films; a full ingest muxes them in. Needs
-                  seconv, see "Languages & subtitles" below.
-                  tagging: the Plex/Jellyfin naming and nothing else - the IMDb id,
-                  the editions a folder's several versions become, and a split
-                  film's stacking token kept last. Nothing is converted,
-                  remuxed, downloaded or transcribed. A DRY RUN unless -w is
-                  given: it asks TMDb, prints every rename it would make, and
-                  changes nothing on disk. Walks the whole tree, so it can be
-                  pointed at a library rather than at the folder holding the
-                  films. Where TMDb cannot name a film it asks a local copy of
-                  IMDb's own title lists last, kept in the checkout's
-                  data/imdb (about 750 MB fetched the first time, refreshed
-                  monthly, and skipped without duckdb). A film neither could
-                  name, and a folder holding a film that is not its own, are
-                  both left exactly as they are. Every folder given leaves
-                  these lists in logs/ingest-movies/, named after the folder:
-                    unmatched    films not identified - fill in ids for -i
-                    ambiguous    folders holding more than one film
-                    othertitles  folders holding one film under several titles
-                    conflicts    renames held back, the name already taken
-                    renames      every rename it would make (dry run only)
-                    nearmisses   how close the first two came (dry run only)
-                  The films kept in more than one folder, across all of those
-                  given, are listed once in
-                  logs/ingest-movies/ingest-movies-duplicates.txt.
-                  subtitles: the subtitles the spokenLanguages setting names,
-                  and nothing else -
-                  walks the whole tree the way the tagging phase does, and tests every
-                  "<movie>.xx.srt" already beside a film (never a commentary
-                  transcript) by the alignment a download is kept by. A DRY
-                  RUN unless -w is given: it says which would be kept and
-                  which thrown out, lists the ones out of step, and changes
-                  nothing on disk. With -w the ones in step are synced, the
-                  ones out of step are deleted, and every subtitle still
-                  missing is downloaded, synced and tested the way a full
-                  ingest does it. One ffsubsync cannot align at all is left
-                  alone either way. Best run after tagging, so films are searched
-                  for by their ids. Every film the subtitles phase gets through is recorded by
-                  its id in logs/ingest-movies/ingest-movies-subtitles-done.txt,
-                  and every subtitles run after it skips the films recorded there;
-                  one untagged is never recorded, nor one with a subtitle that
-                  could not be tested. Delete a film's line, or the file, to
-                  have it done again.
-                  commentary: the transcription phase and nothing
-                  else - the given folders are walked the way the tagging phase walks them, and
-                  every commentary track that does not already have its
-                  transcript beside the film is transcribed next to it, in the
-                  language it is spoken in. A movie whose name never got the dot
-                  before its mkv is first conformed to the spelling its folder
-                  spells it, and one that cannot be conformed is left
-                  untranscribed and reported at the end. No subtitles are
-                  downloaded, and nothing is converted, remuxed or tagged - and
-                  no title is renamed beyond that conforming. The transcripts
-                  are left beside the films rather than muxed into them.
-                  names: a film whose commentary tracks are only
-                  numbered - "Commentary 2", "Kommentar 1", "Audiosommentary
-                  3" - has them named after who speaks in each, the way the
-                  disc database dvdcompare.net lists the film's releases, and
-                  nothing else is done. Walks the whole tree the way the tagging phase does.
-                  A film is named only when it has exactly as many
-                  commentaries as a release of its kind of disc (4K, Blu-ray
-                  or DVD, told by the picture size) lists, every such release
-                  agrees on what they are, and - for two or more - the
-                  transcripts beside the film say which track is which, from
-                  the commentators saying who they are in the opening
-                  minutes. The subtitles of a commentary and its transcripts
-                  beside the film are renamed with it. A DRY RUN unless -w is
-                  given. The site is asked a few seconds apart, and with -w
-                  each film is renamed while the next is looked up. The pages
-                  asked for are kept in data/dvdcompare, and every folder
-                  given leaves a list in logs/ingest-movies/
-                  ingest-movies-commentarynames-<folder>.txt of what was
-                  named and of every film left alone, with the reason. Best
-                  run after commentary, which writes the transcripts.
-                  chapters: the chapter lookup and nothing else - walks the
-                  whole tree the way the tagging phase does, and gives every tagged film that
-                  has no chapters the chapters the ChapterDB archive holds for
-                  the disc it was ripped from. A set is taken only when it runs
-                  as long as the film to within two seconds, starts at the
-                  start and reaches past the middle. A film's numbered chapters
-                  are replaced only by a named set whose every chapter starts
-                  where the film's own do - the same marks, given names - and a
-                  film whose chapters have names is not looked up at all.
-                  Written in place with mkvpropedit, replacing whatever chapters
-                  the film had; the film is never remuxed. The archive is asked
-                  a few seconds apart, and each film is written while the next
-                  is looked up. Not a dry run, and -w has no part in it. Best
-                  run after tagging: an untagged folder's title is only a guess.
-                  extras-chapters: the chapters of the extras and nothing else -
-                  what -C does beside a full ingest, on its own: every bonus
-                  video below each folder given that has no chapters is given
-                  some worked out by a language model (the chapterLlm
-                  settings) from what is said in it, written in place with
-                  mkvpropedit. -P adds instructions for the model. Not a dry
-                  run, and -w has no part in it.
-                  plex: walks the whole tree the way the tagging phase does and
-                  looks every film up in the Plex library - by its id tag,
-                  by its title and year where it has none - saying where the
-                  library already keeps it, which of the two is better, and
-                  what a full ingest would carry over from the library's copy
-                  (see "Plex comparison" below). Changes nothing, and -w has
-                  no part in it. Best run after tagging.
-                  backups: drop the "(old)" originals the improved remuxes were kept beside, and
-                   nothing else: for each film whose improved copy kept its
-                   original beside it as "<name> (old).mkv", the copy is
-                   checked - the same length as the original, a video stream,
-                   and at least the tracks the rules keep - and the original
-                   is dropped where it passes. A DRY RUN unless -w is given:
-                   it says which original would go and which would stay, with
-                   the reason, and changes nothing on disk. With -w each
-                   original that passes is first tagged on the copy, so a
-                   later run does not remux the film again, and then deleted.
-                   Walks the whole tree, so it can be pointed at a library.
-                   Best run after tagging, so the films are tagged and the copies
-                   are settled.
+                  do only these phases, each on its own, over the whole tree
+                  below each folder given, in the order typed and stopping at
+                  the first that fails: layout, roles, ocr, tagging,
+                  subtitles, commentary, names, chapters, extras-chapters,
+                  plex and backups, comma-separated. Cannot be combined with
+                  -r, -C, -k or -o.
     -C, --extras-chapters
-                  also chapter the extras, beside the rest of the run: a bonus video (a featurette,
-                  a deleted scene, an interview - never the main movie) that
-                  has no chapters is given some worked out by a language model
-                  (the chapterLlm settings) from what is said in it. The first
-                  text subtitle that is its dialogue - not a commentary, SDH
-                  or forced one - is read for it; one with none is transcribed
-                  from its first soundtrack that is not a commentary, audio
-                  description or isolated score - once the commentary
-                  transcription has done with the GPU; a model served from
-                  this machine waits for GPU memory beside whisper
-                  (chapterLlmVramGB). A video too short to
-                  divide is left alone. Written in place with mkvpropedit,
-                  which is why a transcript made for it is not kept. A full
-                  ingest only.
+                  also chapter the extras that have no chapters, by the
+                  language model the chapterLlm settings name. A full ingest
+                  only.
     -P, --prompt <text>
-                  With -C or -O extras-chapters: more instructions for the model, added to every
-                  request, e.g. "a chapter per scene, titled with where it
-                  takes place". The model then reasons at medium effort, and
-                  Claude may search the web.
-    -w, --write   with -O, actually perform what the tagging phase would only print
-                  as renames, the subtitles phase would sync, throw out and
-                  download, the names phase would name and the backups phase
-                  would drop. On its own it is a usage error rather than a
-                  full ingest: there is no dry run to carry out.
+                  with -C or -O extras-chapters: more instructions for the
+                  model, added to every request.
+    -w, --write   with -O tagging, subtitles, names or backups: carry out what
+                  their dry run only prints. On its own it is refused.
     -i, --ids <file>
-                  with -O tagging, the hand-written id list filled in and read
-                  BACK: the same naming, going on what is in this file. An
-                  id in it is simply used - TMDb is not asked to agree with a
-                  lookup someone did because it had already failed. A row still
-                  BLANK is not asked about either, for the same reason, and all
-                  that is said of those is how many there were. A file that
-                  cannot be read STOPS the run rather than counting as no ids.
-                  A DRY RUN unless -w is given, and a quieter one than tagging's: it
-                  prints what those ids would rename and writes NOTHING - not
-                  the lists, which are tagging's to write, and not the file it was
-                  handed, which is still being filled in. -w carries the
-                  renames out and brings the file up to date, every folder
-                  given into that one file.
+                  with -O tagging: the unmatched list, filled in with ids, read
+                  back. A dry run unless -w is given.
     -v, --verbose Also say why each item was handled the way it was, and on a
                   failure print the tool's whole output rather than its last
                   lines.
     -q, --quiet   Print errors only - no progress and no warnings.
     -x, --set <name=value>
-                  Override a setting for this run: name=value, repeatable. The
-                  value is held where the environment holds it, so it wins over
-                  the settings file; a secret is refused - the settings file is
-                  where it goes. The settings page lists the names.
+                  Override a setting for this run, over the settings file;
+                  repeatable. A secret is refused - the settings file is where
+                  it goes. The settings page lists the names.
 
-    Default behavior
-    ----------------
-    deletes release junk: files with the movieJunkExtensions suffixes (the
-    default: txt nfo exe doc sfv), samples, .mkv files under 1000 KiB, folders
-    named ".unwanted", and folders left empty
-    remuxes non-Matroska video into .mkv, deleting the source
-    sorts loose movie files into one subfolder each (Plex layout)
-    cleans up folder, movie and subtitle names
-    sorts bonus material into the subfolders Plex recognizes (see below)
-
-    IMDb ids and editions (Plex/Jellyfin naming, and all that -O tagging does)
-    ------------------------------------------------------------------
-    -O tagging does this phase and nothing else, as a dry run unless -w is given, and
-    writes the films it could not name to a list to fill in by hand and feed
-    back with -O tagging -i, which is that same phase going on the filled-in list
-    looks each movie up on TheMovieDB (TMDb) by its cleaned name and year
-    appends the id tag - "{imdb-ttXXXXXXX}", or "[imdbid-ttXXXXXXX]" where the
-    mediaServerNaming setting writes for jellyfin - to the folder, movie and
-    subtitles
-    only when ONE film carries that title and was released that year in some
-    country - and where that leaves several or none, only when the film's own
-    length fits one of them and rules out every other
-    looks up a folder with no year too, names it only when the length picks
-    one film out, and gives the folder that film's year
-    tags a film IMDb never catalogued - a television special, a concert disc -
-    with TMDb's own number instead, "{tmdb-NNNN}"
-    recognises a file that is the same film named in another language by the
-    titles TMDb holds it under, and leaves its name alone - only the id is
-    added, and the folder is listed in a file of its own; a language written
-    after the year is an EDITION, and becomes one
-    asks the films inside a folder under their own names when nothing answers
-    to the folder's
-    reads an accent dropped or written out, a dash, an apostrophe, a roman
-    numeral, articles gone from anywhere in the name and a written-out "&" as
-    the same title said differently - several at once in one name included -
-    reads the folder ABOVE a film as the first half of its title, for a library
-    that keeps a franchise in a folder of its own, and asks again
-    without the "Movie"/"Special" a library wrote in front of the name
-    writes the folder and its files under TMDb's own spelling of whichever title
-    matched, so folder and files stop disagreeing about how the film is spelled
-    names a folder's several versions of one film as editions - "<film>
-    {imdb-id} {edition-Colorized}", the version label after the name where the
-    run writes for jellyfin - so the server offers them as one film with a
-    named picker
-    keeps a split film's "Part1" / "cd1" token LAST, which is where the
-    server reads it
-    renames only, at the end of the run, with every sidecar following its own film
-    warns of a film whose id two separate folders carry - in different places,
-    or in different folders given - as one kept twice (a folder's own several
-    files are its versions, and never counted)
-
-    Languages & subtitles
-    ---------------------
-    the subtitles fetched and tested are the ones the spokenLanguages
-    setting names - a comma list of ISO 639-1 codes the language table knows,
-    en, de, fr, nl, es, it by default, and a code the table does not know
-    stops the run before a film is touched; the table knows pt, pl, sv, da,
-    no, fi, cs, hu, ro, el, tr, ru, ja, ko and zh besides, so the setting may
-    name them
-    renames pre-existing subtitles to the .xx.srt convention
-    downloads missing subtitles - from OpenSubtitles.org, then OpenSubtitles.com
-    and SubDL, each asked only once its login is set - takes the adverts out of
-    them, and embeds the language tags
-
-    Chapters
-    --------
-    -O chapters does this phase and nothing else
-    near the end, after the tagging, looks each tagged film up in the ChapterDB
-    archive (chapterdb.plex.tv) by the title its folder now carries
-    takes a set only when it runs as long as the film to within two seconds -
-    which is what tells the disc a film was ripped from from every other cut
-    and transfer - starts at the start, has at least three chapters in order
-    and reaches past the middle of the film
-    a film with no chapters gets the best named set, or else a numbered one
-    a film with only numbered chapters gets them REPLACED by a named set only
-    when that set has the same chapters starting within a second of the
-    film's own - the same marks, given names; otherwise they are kept
-    a film whose chapters have names is left alone
-    writes them in place with mkvpropedit, replacing every chapter the film
-    had, so a film never carries two sets - and is never remuxed for them
-
-    Plex comparison
-    ---------------
-    -O plex does this phase and nothing else, and changes nothing
-    as soon as the names have settled, looks each film up in the Plex library
-    (plexUrl, else the server on this machine at localhost:32400, asked with
-    plexToken) by its id tag, or the one the tagging will give it, or by its
-    title and year where it has none, and measures the offset between the two
-    soundtracks at five points of the film: on one straight line, the two are
-    one cut - a logo more or less in front, or another speed (24 against 23.976
-    fps, or PAL) - whatever their lengths; a different edition tag is a
-    different version, kept beside it
-    before any lane writes a film, carries over from the library's copy what it
-    lacks: the names of commentaries it only numbers (as many, same languages),
-    named chapters where it has numbered or none (moved to its time), and the
-    audio it lacks - a soundtrack in a language it keeps, commentaries with the
-    transcripts beside the library's copy (or transcribed by whisper), an
-    isolated score or audio description - taken in by the one remux at the
-    measured offset; a lossless track goes to the target codec, put to the
-    film's speed where the two differ; a lossy one at another speed is left
-    never the picture, the subtitles, or a better soundtrack in a language the
-    film already has: those stay for a person to decide
-    last, the films as the run leaves them are compared on resolution, HDR, the
-    soundtracks per language, the commentaries, the other bonus audio and the
-    chapters: the new file better, the library's better, the two equivalent,
-    MIXED - each has something the other lacks, with what could not be carried
-    over and why, listed again at the end - or a DIFFERENT VERSION
-
-    Tags & commentary
-    ------------------
-    reads the track layout once and refreshes the mkv tags from it
-    transcodes lossless audio to the target codec - opus by default, at the
-    per-channel target bitrate; flac takes the channels as they are, up to
-    eight - and leaves lossy tracks as they are
-    extracts commentary tracks and transcribes them into .srt beside the film
-    names commentary tracks that are only numbered after who speaks in each,
-    the way dvdcompare.net lists them - all that -O names does, carried out
-    rather than a dry run
-    takes a track for a commentary by its mkv flag or by its name, in any of the
-    supported languages ("Audiokommentar" counts as much as "Audio Commentary")
-    takes a stereo or mono track after the first audio track for a commentary
-    the file does not flag when it is far more speech than the film AND its
-    words are mostly not the film's (three minutes of each, heard by whisper),
-    flags it and names it "Commentary N" in place before the remux - a track
-    only one of the two says so of is left as it is and listed at the end;
-    a commentary the file flags but leaves unnamed is numbered the same way
-    reads each commentary's language from its track name or mkv language tag, and
-    lets whisper detect it when neither says. English gives one "<name>.en.srt",
-    another supported language a native "<name>.xx.srt" plus a translated
-    "<name>.en.srt", an unsupported one only the translated "<name>.en.srt"
-    queues every wanted transcription of every movie in ONE queue, spread over all
-    transcription workers
-    transcribes on the GPU when whisper can use it, picking the largest model
-    the free VRAM fits, and falls back to all CPU threads on base.en if not
-
-    Keep everything (-k)
-    --------------------
-    a full ingest that takes nothing away: no track dropped, no lossless audio
-    transcoded, no Dolby Vision enhancement layer discarded. All the
-    additions and corrections still happen, and the carry-over from the Plex
-    library's copy takes lossless soundtracks as they are, in every language
-
-    Asking the web politely
-    -----------------------
-    the ChapterDB archive and dvdcompare.net are asked a few seconds apart,
-    with some jitter
-    the full ingest asks both on background threads from early in the run,
-    once the names have settled, so the chapters and the commentary names at
-    its end are ready by the time it gets there
-
-    Dolby Vision
-    ------------
-    normalises dual-layer profile 7 to single-layer profile 8.1, so DV survives
-    on hardware that cannot read the enhancement layer (metadata only, the video
-    is never re-encoded, needs dovi_tool)
-    leaves profile 5, profile 8.x, HDR10, HDR10+ and SDR untouched (a profile 5
-    base layer is not HDR10 and cannot be converted without re-encoding)
-    corrects a Dolby Vision level that overstates the video, whatever the profile:
-    players check the level against their hardware before decoding and refuse a
-    file that asks for more than they have (container metadata only, in place)
-
-    RAM usage
-    ---------
-    all large temporary media (extracts, remux copies, Dolby Vision streams)
-    live in tmpfs
-    the converted lossless tracks too: made in RAM and written to disk only
-    inside the improved copy, never as files beside the film
-    only the final outputs (.mkv, .srt) are written to disk, unless a remux
-    copy is too large for tmpfs
+    Phases
+    ------
+    A full ingest runs all but backups (and extras-chapters without -C), one
+    level below each folder given, and remuxes each film once into an
+    improved copy, keeping the original as "<name> (old).mkv". -O runs them
+    one at a time over the whole tree.
+    junk             deletes release junk (movieJunkExtensions) and samples
+    layout           remuxes into Matroska, gives each film a folder, sorts the
+                     extras and cleans the names
+    roles            puts the subtitles' forced and SDH flags right
+    ocr              reads picture subtitles into text (seconv)
+    tagging          writes the IMDb id and editions into the names (tmdbApiKey)
+    subtitles        downloads, syncs and tests the subtitles spokenLanguages
+                     names
+    commentary       finds and transcribes the commentary tracks (whisper)
+    names            names numbered commentaries after who speaks in them
+    chapters         gives the films their disc's chapters from ChapterDB
+    extras-chapters  chapters the extras by the language model (-C)
+    plex             compares each film with the Plex library's copy, and
+                     carries over what it lacks
+    backups          drops the (old) originals whose copies pass the checks
 
     Dependencies
     ------------
-    Required: ffmpeg, mkvtoolnix, mediainfo (and curl, once tmdbApiKey is set,
-    for names or for the chapter lookup).
-    Optional, each skipped with a warning when absent: pipx + ffsubsync (together
-    they enable subtitle downloading and commentary transcription - without either,
-    BOTH are skipped, since neither subtitle is worth keeping unaligned), dovi_tool
-    (the Dolby Vision normalisation), flock (numbers the progress lines),
-    subcleaner (takes the adverts out of downloaded subtitles)
+    Required: ffmpeg, mkvtoolnix, mediainfo. The optional tools, and what a
+    run does without each, are in docs/requirements.md.
+
+    Everything else: docs/commands/ingest-movies.md
 
 Nothing was changed.

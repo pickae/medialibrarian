@@ -35,10 +35,11 @@ class TestTheFamilyLookup:
         assert codecs.family_of(spelling) in codecs.families()
 
     def test_the_dotted_I_lowers_the_shell_way(self):
-        # bash lowercases character by character through the C library, which maps
-        # U+0130 to a plain "i"; str.lower() would answer "i" plus a combining dot,
-        # a different spelling and therefore a different miss. enums.shell_lower is
-        # the one place that rule lives, and this pins that the port went through it.
+        # The shell lowercases character by character through the C library, which
+        # maps U+0130 to a plain "i"; str.lower() would answer "i" plus a combining
+        # dot, a different spelling and therefore a different miss. enums.shell_lower
+        # is the one place that rule lives, and this pins that the lookup goes
+        # through it.
         assert codecs.family_of("mpeg1vİdeo") == "mpeg2"
 
     @pytest.mark.parametrize("name", ["notACodec", "", " ", "  hevc", "hevc ",
@@ -118,7 +119,7 @@ class TestTheSql:
     def test_it_maps_an_alias_to_its_family(self, family_sql):
         assert "IN ('hevc', 'h265', 'x265') THEN 'hevc'" in family_sql
 
-    def test_it_matches_case_insensitively_as_bash_does(self, family_sql):
+    def test_it_matches_case_insensitively(self, family_sql):
         assert "lower(trim(videoCodec))" in family_sql
 
     def test_it_answers_unknown_rather_than_guessing(self, family_sql):
@@ -131,7 +132,7 @@ class TestTheSql:
         assert when < middle < last
 
     def test_the_family_is_written_out_of_its_own_alias_list(self, family_sql):
-        # the bash builder skips an alias that is the family itself, so a
+        # the builder skips an alias that is the family itself, so a
         # single-spelling family is exactly one entry, not two
         assert "IN ('vp8') THEN 'vp8'" in family_sql
 

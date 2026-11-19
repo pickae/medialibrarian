@@ -107,20 +107,17 @@ CODEC_NAMES = {"opus": "Opus", "aac": "AAC", "xheaac": "xHE-AAC"}
 OPT_SPEC = """
 h |  | Print this help page.
 m |  | Force mono output.
-                    Default false
 s |  | Keep a surround source's channels, up to 7.1, instead of
                     downmixing it to stereo.
-                    Default false
 a |  | Adaptive mode: decide channels and bitrate per file rather
                     than globally. The output keeps the source's own channel
                     count - capped at stereo unless -s is given - and its target
-                    bitrate is the spoken-word (commentary) figure listed for
-                    that channel count in the shared bitrate table, so a mono
+                    bitrate is the spoken-word figure for that channel count
+                    (55 kbps mono, 65 stereo, rising to 200 for 7.1), so a mono
                     source encodes mono at the lower rate, a stereo one stays
                     stereo, and with -s a multi-channel one gets its own rate.
                     Cannot be combined with -m or -b, and disables long-file
                     splitting.
-                    Default false
 c |  | Copy non transcoded files from <inputDir> into <outputDir>
 e | <codec> | Output encoding: {codecs}.
                     aac and xheaac are written as .m4a; xheaac needs an
@@ -146,7 +143,6 @@ C |  | Add chapters to every output whose source has none, worked
                     transcript of the speech, and write the transcript into
                     the output as well. A transcript sidecar is used rather
                     than transcribing again.
-                    Default false
 P | <text> | With -C: more instructions for the model, added to every
                     request, e.g. "a chapter per speaker, titled with their
                     name and topic". The model then reasons at medium effort,
@@ -1369,8 +1365,7 @@ class Run:
             self.counters.tally_duration(input_duration_raw)
 
     def _say_chapters(self, relative: str, source: str) -> None:
-        """-v: what chapters a source carried - the source and the count, which
-        -k used to leave on disk as the OGM file beside the output."""
+        """-v: what chapters a source carried - the source and the count."""
         if runlog.verbosity() < runlog.VERBOSE:
             return
         count = chapters.chapter_count(source)
@@ -2629,9 +2624,8 @@ def _background_load() -> float:
     still busy with someone else's work has not - so the chunk decision weighs
     the run against this, not against an idle machine.
 
-    A caller that has already started work of its own - convert-and-concat
-    unpacking archives - reads it before that and hands it down in
-    BACKGROUND_LOAD, which is also how the suite pins it.
+    A caller that has already started work of its own reads it before that and
+    hands it down in BACKGROUND_LOAD.
     """
     given = os.environ.get(BACKGROUND_LOAD_VARIABLE, "")
     try:

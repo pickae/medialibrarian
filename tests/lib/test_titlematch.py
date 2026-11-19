@@ -129,8 +129,7 @@ class TestNormalizeTitle:
         assert titlematch.normalize_title("Sélène") == "selene"
 
     def test_and_neither_is_a_host_with_no_iconv_at_all(self, monkeypatch):
-        """Which used to be a FileNotFoundError out of the middle of a
-        lookup."""
+        """No FileNotFoundError out of the middle of a lookup."""
         def absent(*_a, **_k):
             raise FileNotFoundError(2, "no such file", "iconv")
 

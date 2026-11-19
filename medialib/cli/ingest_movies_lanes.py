@@ -12,14 +12,13 @@ idle for as long as it lasts. Here they overlap where that is safe:
   subtitles it kept are muxed in) and what it carries over from the Plex
   library's copy is ready, one film at a time on a thread of its
   own, while the transcode and the transcription go on with the rest. A film
-  it never heard was ready is remuxed by the walk after it, the way every
-  film used to be.
+  it never heard was ready is remuxed by the walk after it.
 - The SUBTITLE LANE asks TMDb which film each folder is - a dry run of the
   tagging the run does at its end, its answers remembered for that - and
   downloads the missing subtitles of every film it got an id for, one film
-  after another, polite as the download always was. It is finished before
+  after another, at the download's polite pace. It is finished before
   the tagging renames anything; what it did not get to is downloaded after
-  the tagging, the way it always was.
+  the tagging.
 
 - The CHAPTER LANE gives each extra without chapters some, worked out by a
   language model, one extra at a time on a thread of its own. An extra with a

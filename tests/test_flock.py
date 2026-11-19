@@ -58,9 +58,7 @@ class TestHaveFlock:
 
     def test_no_tool_but_a_locking_c_library_still_counts(self, monkeypatch):
         """The macOS rung. ``flock(1)`` is util-linux and has never shipped on
-        a Mac; the system call the lock is actually taken with has. Answering
-        no there would have been the port declining a facility it was already
-        using."""
+        a Mac; the system call the lock is actually taken with has."""
         pytest.importorskip("fcntl")
         monkeypatch.delenv("HAVE_FLOCK", raising=False)
         monkeypatch.setattr(runcontext.shutil, "which", lambda tool: None)

@@ -58,8 +58,7 @@ def census(sandbox, tmp_path):
 
 
 class TestOneFolder:
-    """The single-folder case every existing habit depends on, which the rewrite
-    into a list of paths must not have moved."""
+    """A single folder named on its own."""
 
     def test_the_report_lands_in_the_folder_named_after_it(self, census):
         census.census(census.work / "Films")
@@ -104,7 +103,6 @@ class TestSeveralLibraries:
         assert not (census.work / "Films" / "booksFilms.csv").exists()
 
     def test_a_report_holds_its_own_librarys_rows_and_no_others(self, run):
-        """The thing the cube's library axis relies on."""
         census, reports = run
         rows = _rows(reports / "booksFilms.csv")
         assert len(rows) == 1

@@ -29,7 +29,7 @@ LINES_PER_CHAPTER = 2
 
 
 def time_row(number: int, length: int) -> str:
-    """``timeRow``: "CHAPTER01=00:00:00.000" for a chapter at <length> ms."""
+    """The "CHAPTER01=00:00:00.000" row for a chapter at <length> ms."""
     hours = length // MS_PER_HOUR
     minutes = length % MS_PER_HOUR // MS_PER_MINUTE
     seconds = length % MS_PER_HOUR % MS_PER_MINUTE // MS_PER_SECOND
@@ -39,12 +39,12 @@ def time_row(number: int, length: int) -> str:
 
 
 def name_row(number: int, name: str) -> str:
-    """``nameRow``: "CHAPTER01NAME=Intro"."""
+    """The "CHAPTER01NAME=Intro" row."""
     return "CHAPTER%02dNAME=%s" % (number, name)
 
 
 def time_from_cue_string(text: str) -> int:
-    """``timeFromCueString``: a cue "MM:SS:FF" time as flat milliseconds.
+    """A cue "MM:SS:FF" time as flat milliseconds.
 
     The input is the tail of an INDEX line, so it arrives with whatever came
     along in front of the time; whitespace is collapsed and everything up to the
@@ -123,7 +123,7 @@ def _describes_one_file(lines: list[str]) -> bool:
 
 
 def chapters_from_cue(cue_file: str) -> list[str]:
-    """``chaptersFromCue``: the OGM chapter lines a cue sheet describes.
+    """The OGM chapter lines a cue sheet describes.
 
     Empty for a cue that describes no chapters of one joined file. Everything is
     gated on being inside an AUDIO track, so a data track's title - and the
@@ -169,9 +169,9 @@ def chapters_from_cue(cue_file: str) -> list[str]:
 
 
 def write_chapters_from_cue(cue_file: str, chapter_file: str) -> None:
-    """``writeChaptersFromCue``: the chapter list, in the OGM layout mkvmerge is
-    given. A cue that describes no chapters leaves the file empty rather than
-    absent, because the caller's next step is to read it."""
+    """The chapter list, in the OGM layout mkvmerge is given. A cue that
+    describes no chapters leaves the file empty rather than absent, because the
+    caller's next step is to read it."""
     chapters = chapters_from_cue(cue_file)
     with open(chapter_file, "w", encoding="utf-8",
               errors="surrogateescape") as handle:

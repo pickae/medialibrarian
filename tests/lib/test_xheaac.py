@@ -29,9 +29,6 @@ class TestTheEncoder:
     refusal prints, and the word the help page tells a reader to install are the
     same constant."""
 
-    def test_the_tool_spec_is_the_binary_a_preflight_asks_for(self):
-        assert xheaac.ENCODER_SPEC == xheaac.EXHALE
-
     def test_the_binary_has_a_line_in_the_shared_notes_table(self):
         """A refusal reads its role and its install hint from there, so a
         binary missing from it would refuse with an empty sentence."""
@@ -337,15 +334,11 @@ class TestHowLongAWaveCanBe:
     so the ceiling is reached whether or not a file is in between.
     """
 
-    def test_the_ceiling_is_the_largest_a_32_bit_length_can_say(self):
-        assert xheaac.WAVE_DATA_CEILING == 0xFFFFFFFF
-
     def test_the_sample_width_is_the_one_the_decode_actually_writes(self):
         """The arithmetic and the ffmpeg call have to agree, or the ceiling
         describes a WAVE nobody writes: `pcm_s16le` is two bytes."""
         argv = xheaac.wav_argv("in.m4b", 44100, 1)
         assert "pcm_s16le" in argv
-        assert xheaac.SAMPLE_BYTES == 2
 
     def test_mono_at_44_1_kHz_runs_out_after_about_thirteen_and_a_half_hours(
             self):

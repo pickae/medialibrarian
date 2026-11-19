@@ -336,7 +336,6 @@ class TestABookTooLongForOneWave:
         assert "too long for exhale" not in said
 
     def test_and_the_book_that_came_out_is_the_whole_book(self, long_book):
-        """The assertion the old truncation would have failed by five sixths."""
         made = long_book["out"] / "book.m4a"
         assert _property(made, "profile") == PROFILE
         assert _seconds(made) == pytest.approx(long_book["seconds"], abs=0.01)

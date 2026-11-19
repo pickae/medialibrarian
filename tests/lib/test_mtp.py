@@ -28,8 +28,8 @@ class TestPercentDecode:
         assert mtp.percent_decode("%C3%AF") == "ï"
 
     def test_a_multibyte_character_is_one_character(self):
-        # the bash decodes in bytes, so the two escapes of one character come
-        # back as that character, not as two
+        # decoding is in bytes, so the two escapes of one character come back
+        # as that character, not as two
         assert mtp.percent_decode("n%C3%BC") == "nü"
 
     def test_a_backslash_stays(self):
@@ -38,10 +38,8 @@ class TestPercentDecode:
         assert mtp.percent_decode("trail\\") == "trail\\"
 
     def test_backslashes_against_escapes(self):
-        # the shapes that decide how the bash's doubling of backslashes pairs
-        # up against the escapes its rewrite inserts: an odd run of
-        # backslashes in front of an escape decodes the escape, and a name
-        # that already holds the spelling of an escape keeps it
+        # an odd run of backslashes in front of an escape decodes the escape,
+        # and a name that already holds the spelling of an escape keeps it
         assert mtp.percent_decode("back\\%5Cslash") == "back\\\\slash"
         assert mtp.percent_decode("back\\\\%5Cslash") == "back\\\\\\slash"
         assert mtp.percent_decode("%41%5C") == "A\\"
@@ -59,15 +57,13 @@ class TestPercentDecode:
         assert mtp.percent_decode("ab%41") == "abA"
 
     def test_a_null_byte_does_not_survive(self):
-        # the bash's answer is a command substitution, and one drops nulls
+        # a name cannot hold one
         assert mtp.percent_decode("%00") == ""
         assert mtp.percent_decode("a%00b") == "ab"
 
     def test_a_spelling_that_is_not_a_whole_character(self):
         # the byte the escape names, read back in the filesystem's encoding:
-        # an incomplete UTF-8 sequence comes back the way the encoding says,
-        # and bash, holding the raw byte, answers the same way when the two
-        # are compared
+        # an incomplete UTF-8 sequence comes back the way the encoding says
         assert mtp.percent_decode("%C3") == "\udcc3"
 
 
@@ -184,8 +180,8 @@ class TestResolveMtpUri:
         assert path == str(tmp_path / "mtp:host=tricky %41 name")
 
     def test_two_mounts_that_decode_to_one_host(self, monkeypatch, tmp_path):
-        # both decode to AB; the match is the one the walk reaches last, which
-        # is the byte-sort order the glob the bash uses produces
+        # both decode to AB; the match is the one the walk reaches last, in
+        # byte-sort order
         self._root(
             tmp_path, [("mtp:host=A%42", ["x"]), ("mtp:host=AB", ["x"])]
         )

@@ -3,8 +3,7 @@
 A folder on a phone mounted over MTP has two spellings: the ``mtp://`` URI a
 file manager puts on the clipboard, and the gvfs FUSE path that is the only
 one of the two a directory. This module translates the first into the second,
-and probes whether a mount will take a rename - the two judgements
-``clean-folder-structure`` makes before it trusts a phone with a rename.
+and probes whether a mount will take a rename.
 """
 
 import os
@@ -68,9 +67,8 @@ def percent_decode(name: str) -> str:
 
 
 def mtp_mount_can_rename(directory: str) -> bool:
-    """``mtpMountCanRename``: whether renames can be applied on
-    this mount, answered by doing one - a scratch folder is created inside
-    ``directory``, renamed and removed again.
+    """Whether renames can be applied on this mount, answered by doing one - a
+    scratch folder is created inside ``directory``, renamed and removed again.
 
     ``CFS_MTP_FORCE_ADB=1`` answers no without probing.
     """
@@ -100,8 +98,8 @@ def _remove_quietly(path: str) -> None:
 
 
 def resolve_mtp_uri(uri: str) -> tuple[str, str]:
-    """``resolveMtpUri``: the gvfs path of the folder a ``mtp://``
-    URI names, or the one-line reason there is none.
+    """The gvfs path of the folder a ``mtp://`` URI names, or the one-line
+    reason there is none.
 
     Returns ``(path, error)``: on success the path and an empty error, on
     failure an empty path and the reason.

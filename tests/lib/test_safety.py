@@ -134,11 +134,6 @@ class TestARenameKeepsEveryDate:
         assert int((tmp_path / "after.mp3").stat().st_mtime) == 1551973337
 
     def test_the_date_comes_back_rounded_to_the_second(self, tmp_path):
-        """bash restores through ``touch -t``, whose format has no fraction.
-
-        Keeping the nanoseconds would be more accurate and would also be a
-        divergence, so the port rounds exactly where bash rounds.
-        """
         source = tmp_path / "before.mp3"
         source.touch()
         self._stamp(source, 1551973337, nanoseconds=123456789)
@@ -582,7 +577,7 @@ class TestCleaningAPath:
 
 class TestRunSkipLog:
     """The run-level log is a FILE, because the report is read back from it and
-    phases that are still bash append to the same one."""
+    other phases append to the same one."""
 
     def test_a_refused_rename_reaches_the_file(self, tmp_path, monkeypatch,
                                                capsys):

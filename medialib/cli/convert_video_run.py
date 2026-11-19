@@ -1158,7 +1158,7 @@ def _run_all(settings, llm=None) -> int:
     if pausecontrol.pause_keys_active():
         log('Pause: press "p" to pause the video encoding (the %s freed, the '
             "encoders keep their memory and the audio keeps going) and \"r\" to "
-            "carry on. Only for as long as this shell runs."
+            "carry on. Only for as long as the run lasts."
             % ("NVENC engines are" if settings.hardware_encode
                else "CPU is"))
 

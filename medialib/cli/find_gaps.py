@@ -51,6 +51,10 @@ from medialib.lib.versionsort import version_key
 
 USAGE_HEAD = """Usage:
     {program} [options] <inputDir>
+
+    Draws the folder tree under <inputDir> with, for each folder, the numbers
+    and dates missing from its numbered or dated run, into
+    logs/find-gaps/find-gaps-<folder>.tree in the medialib data directory.
 Options:"""
 
 OPT_SPEC = """

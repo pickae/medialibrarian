@@ -404,7 +404,7 @@ class TestPruneEmptyFolders:
 
 def test_the_kept_transcript_survives_the_tidy_up(tmp_path):
     """The one transcript the library copy reads into the episode's output;
-    every other sidecar goes as before."""
+    every other sidecar goes."""
     _write(tmp_path, "Episode.opus")
     _write(tmp_path, "Episode.srt")
     _write(tmp_path, "Episode.en.vtt")

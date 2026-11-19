@@ -1,10 +1,9 @@
 """One record per film: what the probes said about it, kept while the file
 stays the same.
 
-ingest-movies reads a film's tracks in nearly every pass, and on a spinning
-disk each read is a seek into the film. A :class:`Film` keeps what a probe
-printed, so the next pass to ask gets the same answer without asking the file
-again.
+A film's tracks are read in nearly every pass, and on a spinning disk each read
+is a seek into the film. A :class:`Film` keeps what a probe printed, so the
+next pass to ask gets the same answer without asking the file again.
 
 An answer is only as good as the file it was read from, so a record is tied
 to the file by its stat signature - device, inode, size, and the modification
@@ -164,6 +163,5 @@ def forget(path: str) -> None:
 
 
 def reset() -> None:
-    """Every record dropped."""
     with _GUARD:
         _RECORDS.clear()

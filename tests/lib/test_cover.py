@@ -103,9 +103,8 @@ class TestWhatIsNotACandidate:
         assert cover.choose_cover(str(tmp_path)) is None
 
     def test_a_hidden_image_is_not_a_candidate(self, tmp_path):
-        """The behaviour item 7.4 changed: a dot-leading name reached every filter
-        built from the central lists as the extension it ended in, so a
-        ".cover.jpg" a tool left behind could be chosen as a folder's art."""
+        """A dot-leading name has no extension, so a ".cover.jpg" a tool left
+        behind is never chosen as a folder's art."""
         build(tmp_path, ".cover.jpg")
         assert cover.choose_cover(str(tmp_path)) is None
 

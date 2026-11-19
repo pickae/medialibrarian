@@ -2,10 +2,7 @@
 worth keeping.
 
 Work out what language each commentary is in, and drain one flat queue of
-transcription runs. The shared whisper settlement lives in
-:mod:`medialib.lib.whisper`, the languages table and its lookups in
-:mod:`medialib.lib.languages`, and the alignment in
-:mod:`medialib.lib.subtitlefiles` - sourced once rather than re-implemented.
+transcription runs.
 """
 
 from __future__ import annotations

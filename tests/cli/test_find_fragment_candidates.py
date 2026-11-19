@@ -138,8 +138,7 @@ class TestTheTokenising:
 
     def test_quality_and_source_tags_are_kept_on_purpose(self, tmp_path):
         # ".hdr" is the trailing extension here and goes with it, which is the
-        # rule above meeting this one - checked against the shell, which says
-        # the same five.
+        # rule above meeting this one.
         assert sorted(self._candidates(
             tmp_path, "Film.1080p.x264.webrip.bluray.hdr")) == [
             "1080p", "bluray", "film", "webrip", "x264"]

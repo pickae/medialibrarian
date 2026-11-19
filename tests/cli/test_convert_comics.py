@@ -229,7 +229,7 @@ class TestPagesPerBook:
         assert cc.pages_per_book(32, 4, books) == expected
 
     def test_never_fewer_than_a_full_pool_s_share(self):
-        assert cc.pages_per_book(4, 4, 1) == cc.IMAGES_PER_BOOK
+        assert cc.pages_per_book(4, 4, 1) == 4
 
     def test_a_faster_speed_holds_fewer_cores_so_more_books_run(self):
         """At -s 9 a page keeps 2.5 cores busy, not 4."""

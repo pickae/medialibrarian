@@ -127,8 +127,6 @@ class TestCapping:
         assert res.capped("x", "y", "1080p") == ("x", "y")
 
     def test_an_unscaled_size_keeps_the_caller_s_own_spelling(self):
-        # bash hands the size to awk, which prints an unused -v assignment exactly
-        # as given, so unchanged means unchanged down to the padding
         assert res.capped("0720", "0480", "1080p") == ("0720", "0480")
 
 

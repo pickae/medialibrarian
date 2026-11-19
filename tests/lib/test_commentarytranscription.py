@@ -9,7 +9,7 @@ duration, ffmpeg materialises the extract and the detection excerpt (both its
 last argument), pipx prints the "Detected language" line on every call,
 ffsubsync writes its log where --log-dir-path points. The track reader, the
 bonus-folder guard and the rename sanitiser are the caller's helpers and are
-stood in for, the way the bash test lifts them out of ingest-movies.
+stood in for.
 
 One shape the stub cannot fake: a transcription's srt lands in the run's own
 output directory, named after the extract - "<movie> <index> <name>.srt" -
@@ -38,7 +38,7 @@ _TOOLSTUB = blackbox.TOOLSTUB
 # write and rc lists, so they ride along in the stub-only PATH
 _PLUMBING = ("bash", "awk", "cat")
 
-# the settled whisper, the way the bash test exports it
+# the settled whisper
 DEVICE = "cpu"
 COMPUTE = "int8"
 THREADS = "4"
@@ -148,7 +148,7 @@ def w(tmp_path, monkeypatch):
 
 
 def _read_track_info(tracks):
-    """The caller's track reader (the bash's readTrackInfo), over the fixture's
+    """The caller's track reader, over the fixture's
     per-movie track list, keyed by the movie's base name."""
     def read(file):
         rows = tracks[os.path.basename(file)[:-4]]

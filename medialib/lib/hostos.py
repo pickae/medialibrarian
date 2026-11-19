@@ -6,18 +6,16 @@ illumos) reading as ``"linux"`` - not because it is Linux, but because every
 decision keyed on this asks "does the POSIX shape hold here", and on those it
 does.
 
-What actually differs on macOS, and where it is acted on:
+What actually differs on macOS:
 
-  * the package manager a refusal names - Homebrew, not apt
-    (:mod:`medialib.lib.tooldeps`);
+  * the package manager a refusal names - Homebrew, not apt;
   * where a hand-installed or Homebrew build of ffmpeg lands - ``/opt/homebrew``
-    on Apple Silicon, ``/usr/local`` on Intel (:mod:`medialib.lib.ffmpegselect`);
+    on Apple Silicon, ``/usr/local`` on Intel;
   * where large regenerable per-user data belongs - ``~/Library/Caches``, not
-    ``~/.cache`` (:mod:`medialib.lib.ramscratch`);
+    ``~/.cache``;
   * there is no ``flock(1)`` and no ``/dev/shm``, and the first of those is a
-    capability the C library still has (:mod:`medialib.lib.runlog`);
-  * the hardware video path is VideoToolbox rather than VAAPI or NVENC
-    (``medialib/cli/convert_video_startup.py``).
+    capability the C library still has;
+  * the hardware video path is VideoToolbox rather than VAAPI or NVENC.
 
 Read through a function rather than a module-level constant, so a test can say
 what the host is for one case without the import order deciding it.

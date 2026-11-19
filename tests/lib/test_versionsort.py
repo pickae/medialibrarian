@@ -1,8 +1,7 @@
 """Tests for medialib.lib.versionsort.
 
-Twelve call sites across six modules list a folder with ``find ... | sort -V``,
-and the order that comes back decides which file becomes 01 - so the ordering is
-a rule of the whole system and the port has to be exact.
+The order a folder is listed in decides which file becomes 01 - so the ordering
+is a rule of the whole system and has to be exact.
 
 The oracle is at the bottom: the `sort -V` this machine actually has. Exact
 against WHAT is the interesting part - `sort` here is uutils coreutils, not GNU,

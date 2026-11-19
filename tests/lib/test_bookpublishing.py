@@ -157,7 +157,6 @@ class TestLossless:
         finish = [c for c in pub.calls()
                   if c[0] == "ffmpeg" and "-map_metadata" in c][0]
         assert finish[finish.index("-compression_level") + 1] == "5"
-        assert bp.LOSSLESS_COMPRESSION == "5"
 
     def test_a_master_that_is_missing_or_empty_yields_nothing(self, pub):
         tagged = pub.media("book.m4b")

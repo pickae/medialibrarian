@@ -23,9 +23,9 @@ Options:
     -f, --fragments <file>
                     Read the name fragments to remove from <file> (one per line,
                     '#' comments and blank lines ignored) instead of from
-                    data/fragments.txt beside this script. Without this option that
-                    file is used when it is there, and names are cleaned without any
-                    fragment removal when it is not.
+                    data/fragments.txt in the medialib data directory. Without
+                    this option that file is used when it is there, and names
+                    are cleaned without any fragment removal when it is not.
     -p, --preview   Preview: do not touch the input at all. Mirror its structure
                     into a sandbox, run the full cleaning there, and write
                     "before.tree" and "after.tree" into the input folder so the
@@ -37,9 +37,8 @@ Options:
                     lines.
     -q, --quiet     Print errors only - no progress and no warnings.
     -x, --set <name=value>
-                    Override a setting for this run: name=value, repeatable. The
-                    value is held where the environment holds it, so it wins
-                    over the settings file; a secret is refused - the settings
-                    file is where it goes. The settings page lists the names.
+                    Override a setting for this run, over the settings file;
+                    repeatable. A secret is refused - the settings file is where
+                    it goes. The settings page lists the names.
 
 Nothing was changed.

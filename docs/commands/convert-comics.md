@@ -32,7 +32,10 @@ With no options, a run:
    `.cbr` becomes `.cbz`, a RAR called `.cbz` becomes `.cbr`. With `input` in
    `-k` the rename stays out: the book is opened by content either way, so it
    comes out the same under the name it was given. The `__MACOSX/`
-   and `._` files a Mac leaves in an archive are not pages and are dropped.
+   and `._` files a Mac leaves in an archive are not pages and are dropped. A
+   book with a member that asks to write outside its own folder — spelled
+   `/etc/…` or `../…`, or a link pointing out of the tree — is not unpacked at
+   all.
 2. The pages are converted to AVIF, trimmed on the sides, skipped if empty, and numbered `01`, `02`, … in their reading order (`-k` keeps the trim and the skipping in, so a kept page is the page it came in as).
 3. The finished folder of pages is zipped back into one **stored** (level 0 —
    AVIF does not compress further) `.cbz` in its mirrored parent folder.
@@ -46,24 +49,14 @@ encoded on the NVIDIA card and the CPU at once**, both kept busy:
 - The card takes JPEG, PNG and WebP pages of up to 100 megapixels that have
   no transparency and, for a PNG or WebP, are stored upright, and it does their
   trim and their shrink to `-m` itself, after its own decode (av1gpu 0.7.0 or
-  newer). av1gpu 0.11.0 or newer also decides the trim on the card - where the
-  margin is, whether it is one, whether the page is blank - so the CPU only
-  reads each page's header; an older one is given the trim's box, measured on
-  the CPU. A trimmed page's margin is the page's own rather than a flat border.
+  newer). A trimmed page's margin is the page's own rather than a flat border.
 - The CPU takes everything else - other formats, pages with transparency,
-  pages the card did not write - and never the card's own pages: an
-  ImageMagick encode of one takes the CPU about as long as the card takes for
-  a whole book.
-- Books are unpacked in the order they were found, the next one as soon as
-  the card is short of work. The CPU's encodes run at lower priority than
-  the work that feeds the card. How far ahead books are unpacked is bounded by
-  the RAM free at the time.
+  pages the card did not write.
 - `-Q` means what it means on the CPU: the card is asked for the quality whose
-  pages scored the same SSIMULACRA2 as the CPU's on comic pages, with its
-  `turbo` preset, whose files came out 6 % larger than its slower `fast` at
-  twice the speed.
+  pages score the same SSIMULACRA2 as the CPU's on comic pages, with its
+  `turbo` preset.
 
-With no card the run is the CPU run it always was.
+With no card every page is encoded on the CPU.
 
 ## PDFs
 

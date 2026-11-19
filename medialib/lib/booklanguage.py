@@ -293,7 +293,7 @@ def book_text_language(src: str, ram_base: str | None = None,
     The book is converted to plain text and a sample of that text is scored.
     The text never touches the disk for long: it is written into the RAM
     scratch and removed again on the way out. Without a converter there is
-    simply no answer - and WHICH converter is the bookToText decision, not
+    simply no answer - and WHICH converter is ``book_to_text_fn``'s decision, not
     this one's, so the guard asks for the tool that would actually run.
     """
     if ram_base is None:

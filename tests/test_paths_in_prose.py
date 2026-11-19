@@ -1,8 +1,6 @@
 """A path named in a comment or a docstring, and whether it is still there.
 
-Item 8.2's grep, kept rather than run once: prose is the part of a move nothing
-else checks, and the one-line version of this found 60 dead paths at item 4.1 and
-35 more after phases 6 and 7.
+Prose is the part of a move nothing else checks.
 
 Two rules, both without an allow-list to go stale:
 

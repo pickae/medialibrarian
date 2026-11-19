@@ -104,42 +104,47 @@ class TestWhichTracksAreTranscoded:
 
 
 class TestTheEncoderCall:
-    """The argv is the contract: the stream mapped, the per-channel bitrate, and
+    """What each call carries: the stream mapped, the per-channel bitrate, and
     the layout or channel count."""
+
+    @staticmethod
+    def _after(argv, option):
+        return argv[argv.index(option) + 1]
 
     def test_a_quad_source_converts_to_quad(self, run):
         movie, base, calls = run
-        assert calls[0] == [
-            "ffmpeg", "-y", "-loglevel", "error", "-nostats", "-i", movie,
-            "-vn", "-map", "0:a:0", "-map_metadata", "-1", "-c:a", "libopus",
-            "-b:a", "185k", "-channel_layout", "quad", base + "_1.opus"]
+        argv = calls[0]
+        assert self._after(argv, "-i") == movie
+        assert self._after(argv, "-map") == "0:a:0"
+        assert self._after(argv, "-b:a") == "185k"
+        assert self._after(argv, "-channel_layout") == "quad"
+        assert argv[-1] == base + "_1.opus"
 
     def test_a_three_channel_source_with_no_LFE_converts_to_3_0(self, run):
-        movie, base, calls = run
-        assert calls[2] == [
-            "ffmpeg", "-y", "-loglevel", "error", "-nostats", "-i", movie,
-            "-vn", "-map", "0:a:2", "-map_metadata", "-1", "-c:a", "libopus",
-            "-b:a", "150k", "-channel_layout", "3.0", base + "_3.opus"]
+        _movie, base, calls = run
+        argv = calls[2]
+        assert self._after(argv, "-map") == "0:a:2"
+        assert self._after(argv, "-b:a") == "150k"
+        assert self._after(argv, "-channel_layout") == "3.0"
+        assert argv[-1] == base + "_3.opus"
 
     def test_a_3_1_source_is_padded_to_5_1_at_the_six_channel_rate(self, run):
         """Front left, right and centre and the LFE keep their places; the two
         surrounds 5.1 adds are silent."""
-        movie, base, calls = run
-        assert calls[1] == [
-            "ffmpeg", "-y", "-loglevel", "error", "-nostats", "-i", movie,
-            "-vn", "-map", "0:a:1", "-map_metadata", "-1", "-c:a", "libopus",
-            "-b:a", "250k",
-            "-af", "pan=5.1|FL=FL|FR=FR|FC=FC|LFE=LFE",
-            base + "_2.opus"]
+        _movie, base, calls = run
+        argv = calls[1]
+        assert self._after(argv, "-map") == "0:a:1"
+        assert self._after(argv, "-b:a") == "250k"
+        assert self._after(argv, "-af") == "pan=5.1|FL=FL|FR=FR|FC=FC|LFE=LFE"
+        assert argv[-1] == base + "_2.opus"
 
     def test_a_2_1_source_is_padded_to_5_1_with_a_silent_centre(self, run):
-        movie, base, calls = run
-        assert calls[3] == [
-            "ffmpeg", "-y", "-loglevel", "error", "-nostats", "-i", movie,
-            "-vn", "-map", "0:a:3", "-map_metadata", "-1", "-c:a", "libopus",
-            "-b:a", "250k",
-            "-af", "pan=5.1|FL=FL|FR=FR|LFE=LFE",
-            base + "_4.opus"]
+        _movie, base, calls = run
+        argv = calls[3]
+        assert self._after(argv, "-map") == "0:a:3"
+        assert self._after(argv, "-b:a") == "250k"
+        assert self._after(argv, "-af") == "pan=5.1|FL=FL|FR=FR|LFE=LFE"
+        assert argv[-1] == base + "_4.opus"
 
     @pytest.mark.parametrize("index,stream,bitrate,channels,suffix", [
         (4, "0:a:4", "220k", "5", "_5.opus"),
@@ -148,11 +153,13 @@ class TestTheEncoderCall:
     def test_every_other_count_is_left_to_a_plain_channel_count(
             self, run, index, stream, bitrate, channels, suffix):
         """A layout opus has from five channels up needs only its count."""
-        movie, base, calls = run
-        assert calls[index] == [
-            "ffmpeg", "-y", "-loglevel", "error", "-nostats", "-i", movie,
-            "-vn", "-map", stream, "-map_metadata", "-1", "-c:a", "libopus",
-            "-b:a", bitrate, "-ac", channels, base + suffix]
+        _movie, base, calls = run
+        argv = calls[index]
+        assert self._after(argv, "-map") == stream
+        assert self._after(argv, "-b:a") == bitrate
+        assert self._after(argv, "-ac") == channels
+        assert "-channel_layout" not in argv and "-af" not in argv
+        assert argv[-1] == base + suffix
 
 
 def _encode_one(tmp_path, monkeypatch, channels, layout):

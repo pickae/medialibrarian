@@ -1,10 +1,9 @@
 """The white box for the census run's resolution half.
 
-What is pinned here is what the shell decides before it reads a single file:
+What is pinned here is what the run decides before it reads a single file:
 which folders are libraries, what each is reported as, where its reports go, and
 which of those questions is a refusal. The refusal texts are compared as whole
-strings on purpose - they are the script's user interface, and the bash suite
-compares the same words from the other side.
+strings on purpose - they are the script's user interface.
 """
 
 import os

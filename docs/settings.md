@@ -6,8 +6,8 @@ environment it was started in, or in the settings file
 that is set) - one `name=value` per line, the way a shell profile writes
 it, `export` and quotes allowed. The environment wins, so one run can
 override the file without editing it. Beneath both is the file that ships
-with the package, `medialib/config/settings.defaults`: the Default column
-prints its values, and nothing else in the code supplies one.
+with the package, `medialib/config/settings.defaults`, whose values the
+Default column prints.
 
 Every command that takes options can override a setting for one run
 with `-x name=value`, repeatable: the value lands in the run's
@@ -18,19 +18,15 @@ A file that holds a secret (marked below) must be readable by you alone -
 `chmod 600` - or every command refuses to start. A name in the file that
 no command reads is warned about.
 
-This page is written from `medialib/lib/settings.py`; the tests fail if
-the two disagree.
-
 | Setting | What it does | Default | Read by |
 | --- | --- | --- | --- |
 | `audiobookLosslessCompression` | The FLAC compression level of that copy | 5 | `read-library` |
 | `audiobookLosslessFilters` | The ffmpeg filters the lossless copy of an audiobook is made with; empty for none | `dynaudnorm=f=150:g=15,afftdn=nf=-70` | `read-library` |
 | `beetsConfig` | The beets config ingest-music's tagging phase runs with | the shipped `medialib/config/beets.yaml` | `ingest-music` |
 | `censusRamBase` | The census's scratch, ahead of `ramScratchBase` | `ramScratchBase` | `content-census`, `content-census-bi` |
-| `chapterDbSite` | The chapter database's address - there for the test suite | `https://chapterdb.plex.tv` | `ingest-movies` |
 | `chapterLlmApi` | The protocol the chapter model is asked over: `openai` for any server speaking OpenAI's chat protocol - Ollama, llama.cpp, vLLM, LM Studio and most hosted APIs - or `anthropic` for Claude | `openai` | `convert-audio`, `convert-video`, `generate-chapters`, `ingest-movies`, `ytdlp` |
 | `chapterLlmContext` | How many tokens the model's context window holds, as the server runs it: a transcript longer than fits is summarised in parts before it is chaptered. A server that lists its window (`max_model_len`) is held to the smaller of the two | the window the server lists, else 32000 | `convert-audio`, `convert-video`, `generate-chapters`, `ingest-movies`, `ytdlp` |
-| `chapterLlmHarness` | The agent harnesses you have installed, a comma list, the preferred first - only `opencode` is known so far. With one, the chapter instructions (`generate-chapters -P` and the like) are asked of the same model through the harness instead of straight to its server, so a local model can search the web as Claude does, e.g. to spell the speakers' names. Each request is one throwaway session that is deleted when its answer is read, so your own sessions stay easy to find. The harness runs with its permissions auto-approved, and its prompt is the transcript, so use it only with a model you trust with both | unset - instructions are asked of the server alone | `convert-audio`, `convert-video`, `generate-chapters`, `ingest-movies`, `ytdlp` |
+| `chapterLlmHarness` | The agent harnesses you have installed, a comma list, the preferred first - only `opencode` is supported. With one, the chapter instructions (`generate-chapters -P` and the like) are asked of the same model through the harness instead of straight to its server, so a local model can search the web as Claude does, e.g. to spell the speakers' names. Each request is one throwaway session that is deleted when its answer is read, so your own sessions stay easy to find. The harness runs with its permissions auto-approved, and its prompt is the transcript, so use it only with a model you trust with both | unset - instructions are asked of the server alone | `convert-audio`, `convert-video`, `generate-chapters`, `ingest-movies`, `ytdlp` |
 | `chapterLlmHarnessModel` | The model the harness asks, as it names models - for opencode `provider/model`, as `opencode models` lists them, e.g. `ninfer/qwen3.8-27b`. Required with `chapterLlmHarness`: the harness's own default can be a hosted model, and the transcript would be sent to it | unset | `convert-audio`, `convert-video`, `generate-chapters`, `ingest-movies`, `ytdlp` |
 | `chapterLlmJobs` | How many requests are sent to the model at once, over the whole run. Whether the model is local is read off `chapterLlmUrl`: localhost, a private or Tailscale address, or a name on the LAN | 2 for a local model; no limit for a hosted one | `convert-audio`, `convert-video`, `generate-chapters`, `ingest-movies`, `ytdlp` |
 | `chapterLlmKey` (secret) | The API key, where the server asks for one; for `anthropic`, `ANTHROPIC_API_KEY` or an `ant auth login` profile does too | unset | `convert-audio`, `convert-video`, `generate-chapters`, `ingest-movies`, `ytdlp` |
@@ -53,28 +49,18 @@ the two disagree.
 | `coverSearch` | Whether a cover nothing local supplied is looked for online - for a book always, for a converted track only when it is a long or dated one among tracks that carry covers: `on` or `off` | on | `concat-audio`, `convert-and-concat`, `convert-audio` |
 | `coverSearchTable` | The table of where that search looks, in what order, by its path | the shipped `medialib/config/coverproviders.tsv` | `concat-audio`, `convert-and-concat`, `convert-audio` |
 | `dateForm` | The form clean-folder-structure's -d writes a leading date in: `compact` (the default, `YYYYMMDD`) or `iso` (`YYYY-MM-DD`); -y sorts files that lead with a date in either form into their year | compact | `clean-folder-structure` |
-| `dvdCompareSite` | The disc database's address - there for the test suite | `http://www.dvdcompare.net/comparisons/` | `ingest-movies` |
-| `ffmpegLadder` | The directories searched for ffmpeg after `PATH`, separated as `PATH` is - there for the test suite | `~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, `/opt/ffmpeg/bin`, `/usr/bin` | `concat-audio`, `content-census`, `convert-and-concat`, `convert-audio`, `convert-video`, `ingest-movies`, `ingest-music`, `read-library`, `transcribe-audio`, `ytdlp` |
 | `ffmpegOverride` | The ffmpeg every run uses, by its path; a run refuses to start when it is not executable | unset | `concat-audio`, `content-census`, `convert-and-concat`, `convert-audio`, `convert-video`, `ingest-movies`, `ingest-music`, `read-library`, `transcribe-audio`, `ytdlp` |
 | `imageGpuEncoder` | The GPU AVIF encoder (av1gpu) tried before ImageMagick, by name or path; empty to encode every image on the CPU | `av1gpu` | `convert-comics`, `convert-images` |
-| `infoLogLevel` | How much of what a run says is kept in `logs/info/`, one file per run: `off`, `quiet` (errors and results), `normal` or `verbose` - apart from the console's `-q` and `-v` | normal | `clean-folder-structure`, `clean-folder-structure-adb`, `concat-audio`, `content-census`, `content-census-bi`, `convert-and-concat`, `convert-audio`, `convert-comics`, `convert-images`, `convert-video`, `cue-to-chapters`, `find-fragment-candidates`, `find-gaps`, `generate-chapters`, `ingest-books`, `ingest-movies`, `ingest-music`, `plex-letterboxd-sync`, `read-library`, `transcribe-audio`, `ytdlp` |
+| `infoLogLevel` | How much of what a run says is kept in `logs/info/`, one file per run: `off`, `quiet` (errors and results), `normal` or `verbose` - apart from the console's `-q` and `-v` | normal | every command |
 | `keepLanguages` | The languages ingest-movies' improved copy keeps beside the film's own language: a comma list of ISO 639-1 codes; the film's own language is kept whatever it says | en | `ingest-movies` |
 | `losslessAudioTarget` | The codec ingest-movies' improved copy converts the lossless audio to: `opus` (the default, at a per-channel target bitrate) or `flac`, which takes the channels as they are, up to eight of them | opus | `ingest-movies` |
 | `mediaServerNaming` | The server the names are written for: `plex` or `jellyfin`. The id tag is written the way that server reads it - `{imdb-tt…}` and `[imdbid-tt…]` - and an edition as its tag, or its version label after the name; names written either way are read back whatever it says, so a library can be switched | plex | `ingest-movies` |
 | `movieJunkExtensions` | The file suffixes ingest-movies deletes from a release as junk, space-separated; empty deletes none - the sample clips, the tiny .mkv files and the .unwanted folders go whatever it says | txt nfo exe doc sfv | `ingest-movies` |
 | `musicRamBase` | ingest-music's scratch, ahead of `ramScratchBase` | `ramScratchBase` | `ingest-music` |
-| `narrationChannel` | The engine's channel layout | mono | `read-library` |
 | `narrationEngineLanguages` | Which languages each engine speaks, as `engine:codes` | xtts:ara,ces,deu,eng,fra,hin,hun,ita,jpn,kor,nld,pol,por,rus,spa,tur,zho | `read-library` |
 | `narrationFormat` | The format the engine writes an audiobook in | m4b | `read-library` |
 | `narrationHome` | The ebook2audiobook checkout read-library drives; `-c` overrides it | `~/ebook2audiobook` | `read-library` |
 | `narrationLanguage` | The language a book is read in when its own cannot be found | unset | `read-library` |
-| `narrationLosslessTolerance` | How far the engine's lossless copy may be from the book's length and still be found | 0.02 | `read-library` |
-| `narrationProgressTail` | How much of the end of the engine's log, in bytes, is read for its progress | 65536 | `read-library` |
-| `narrationPythonMaxMinor` | The newest Python 3 minor version the engine's environment is built with | 12 | `read-library` |
-| `narrationPythonMinMinor` | The oldest Python 3 minor version the engine's environment is built with | 10 | `read-library` |
-| `narrationSoundfileFallbackMark` | The text that marks the engine shim this package wrote | `_load_with_soundfile_fallback` | `read-library` |
-| `narrationTorchcodecPairs` | Which torchcodec goes with which torch, for repairing a mismatch | 2.9:0.9 2.10:0.10 2.11:0.11 2.13:0.15 2.14:0.17 | `read-library` |
-| `narrationVoiceFallbackNames` | The voice-sample names that mean "any language" | default any fallback other | `read-library` |
 | `narrationVramPerBookGB` | The GPU memory, in GB, each book read at once needs - which sets the default `-j` | 5 | `read-library` |
 | `openSubtitlesComPassword` (secret) | OpenSubtitles.com password | unset | `ingest-movies` |
 | `openSubtitlesComUser` (secret) | OpenSubtitles.com login - a separate service, asked second | unset | `ingest-movies` |
@@ -87,7 +73,7 @@ the two disagree.
 | `ramScratchMaxPercent` | The largest share of the RAM filesystem, in percent, one intermediate file may take | 50 | `concat-audio`, `content-census`, `content-census-bi`, `convert-and-concat`, `convert-audio`, `convert-comics`, `convert-images`, `convert-video`, `generate-chapters`, `ingest-books`, `ingest-movies`, `ingest-music`, `read-library`, `transcribe-audio`, `ytdlp` |
 | `ramScratchMinFreeBytes` | With this little free in RAM, new scratch goes to disk instead | 1073741824 | `concat-audio`, `content-census`, `content-census-bi`, `convert-and-concat`, `convert-audio`, `convert-comics`, `convert-images`, `convert-video`, `generate-chapters`, `ingest-books`, `ingest-movies`, `ingest-music`, `read-library`, `transcribe-audio`, `ytdlp` |
 | `readLibraryRamBase` | read-library's scratch, ahead of `ramScratchBase` | `ramScratchBase` | `read-library` |
-| `skipYtdlpUpgrade` | Set to 1 and a nightly yt-dlp is not brought up to date before the fetch. The old name SKIP_YTDLP_UPGRADE is still read | unset - a nightly is upgraded; a preview (-p) never is | `ytdlp` |
+| `skipYtdlpUpgrade` | Set to 1 and a nightly yt-dlp is not brought up to date before the fetch. `SKIP_YTDLP_UPGRADE` is accepted too | unset - a nightly is upgraded; a preview (-p) never is | `ytdlp` |
 | `spokenLanguages` | The languages you speak: ingest-movies fetches and tests subtitles in them, and ytdlp -C takes a YouTube episode's transcript in its own language when it is one of them, in English when it is not. A comma list of ISO 639-1 codes, in the order to fetch them; track names are also read in the names these languages give each other | en,de,fr,nl,es,it | `ingest-movies`, `ytdlp` |
 | `subDlApiKey` (secret) | API key of a free SubDL account, asked third for subtitles | unset | `ingest-movies` |
 | `subtitleOcrEngines` | The OCR engines ingest-movies reads a film's picture subtitles with: a comma list of `vision`, `paddle` and `tesseract`, tried in the order named until one reads the subtitle | a vision model where `subtitleOcrUrl` is set, paddle on the GPU where it fits, tesseract, then paddle on the CPU | `ingest-movies` |
@@ -102,6 +88,26 @@ the two disagree.
 | `upscaleModel` | The upscaling model: a path, or a file name under `<upscaleHome>/models` | `2xLiveActionV1_SPAN_490000.onnx` | `convert-video` |
 | `viewerCdnBase` | Where the census page loads its pivot-table engine from; a local copy makes the page fetch nothing | `https://cdn.jsdelivr.net/npm` | `content-census-bi` |
 | `viewerPerspectiveVersion` | Which release of that engine the page loads | 5.3.0 | `content-census-bi` |
+| `ytdlp` | The yt-dlp a download runs with, instead of the one found: a command name on PATH or a path. `YTDLP` is accepted too | unset - the one found, printed at the start of the run | `ytdlp` |
+
+## Tuning and testing
+
+These are read too, but the defaults are what the commands are
+built and tested with.
+
+| Setting | What it does | Default | Read by |
+| --- | --- | --- | --- |
+| `chapterDbSite` | The chapter database's address | `https://chapterdb.plex.tv` | `ingest-movies` |
+| `dvdCompareSite` | The disc database's address | `http://www.dvdcompare.net/comparisons/` | `ingest-movies` |
+| `ffmpegLadder` | The directories searched for ffmpeg after `PATH`, separated as `PATH` is | `~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, `/opt/ffmpeg/bin`, `/usr/bin` | `concat-audio`, `content-census`, `convert-and-concat`, `convert-audio`, `convert-video`, `ingest-movies`, `ingest-music`, `read-library`, `transcribe-audio`, `ytdlp` |
+| `narrationChannel` | The engine's channel layout | mono | `read-library` |
+| `narrationLosslessTolerance` | How far the engine's lossless copy may be from the book's length and still be found | 0.02 | `read-library` |
+| `narrationProgressTail` | How much of the end of the engine's log, in bytes, is read for its progress | 65536 | `read-library` |
+| `narrationPythonMaxMinor` | The newest Python 3 minor version the engine's environment is built with | 12 | `read-library` |
+| `narrationPythonMinMinor` | The oldest Python 3 minor version the engine's environment is built with | 10 | `read-library` |
+| `narrationSoundfileFallbackMark` | The text that marks the engine shim this package wrote | `_load_with_soundfile_fallback` | `read-library` |
+| `narrationTorchcodecPairs` | Which torchcodec goes with which torch, for repairing a mismatch | 2.9:0.9 2.10:0.10 2.11:0.11 2.13:0.15 2.14:0.17 | `read-library` |
+| `narrationVoiceFallbackNames` | The voice-sample names that mean "any language" | default any fallback other | `read-library` |
 | `voiceSampleCodec` | The codec a prepared voice sample is written in | pcm_s16le | `read-library` |
 | `voiceSampleMaxGap` | The longest pause, in seconds, inside that stretch | 2.5 | `read-library` |
 | `voiceSampleMaxSeconds` | A voice sample longer than this, in seconds, is cut down to a stretch of speech | 60 | `read-library` |
@@ -111,4 +117,3 @@ the two disagree.
 | `voiceSampleSeconds` | How long the stretch of speech taken is, in seconds | 45 | `read-library` |
 | `voiceSilenceMinDur` | The shortest silence, in seconds, that counts | 0.3 | `read-library` |
 | `voiceSilenceNoise` | What counts as silence when looking for it | -30dB | `read-library` |
-| `ytdlp` | The yt-dlp a download runs with, instead of the one found: a command name on PATH or a path. The old name YTDLP is still read | unset - the one found, printed at the start of the run | `ytdlp` |

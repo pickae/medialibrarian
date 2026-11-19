@@ -257,8 +257,8 @@ class TestInitRamBase:
 
 
 class TestFilesystemType:
-    """What ``stat -f -c %T`` used to answer, read out of the mount table
-    instead: statfs has the number, and Python exposes no way to ask for it."""
+    """The filesystem type, read out of the mount table: statfs has the number,
+    and Python exposes no way to ask for it."""
 
     def test_the_longest_matching_mount_point_wins(self, tmp_path, monkeypatch):
         deep = tmp_path / "a" / "b"

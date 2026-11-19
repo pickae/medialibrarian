@@ -111,10 +111,12 @@ class TestThePagesUnitsAreThePages:
         assert "SUM(durationSeconds) / %s AS durationHours" \
             % v.SECONDS_PER_HOUR in sql
 
-    def test_the_gigabyte_is_the_decimal_one(self):
+    @pytest.mark.parametrize("content", TYPES)
+    def test_the_gigabyte_is_the_decimal_one(self, content):
         """10^9 and not 2^30, because the number this is compared against is a
         disk's stated capacity."""
-        assert v.BYTES_PER_GIGABYTE == "1000000000.0"
+        assert ("SUM(sizeBytes) / 1000000000.0 AS sizeGigabytes"
+                in v.viewer_grain_sql(content))
 
 
 class TestEveryColumnIsDeclared:

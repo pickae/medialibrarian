@@ -740,7 +740,7 @@ class TestIdempotency:
         assert run_module.main_movies(str(tmp_path), say=said.append) == []
         assert said == ["Already improved, left as it is: " + movie +
                         " - the ingested tag in the (old) copy's place"]
-        # And a walk without a say stays the list it was before: the lanes
+        # And a walk without a say stays the whole list: the lanes
         # and the carry-over read it for what it holds, not for its skips.
         assert run_module.main_movies(str(tmp_path)) == []
 
@@ -865,7 +865,7 @@ class TestWhatAFilmSays:
                 "first audio track's (de, which TMDb lists as spoken in it) "
                 "and the kept languages (de)") in logs
         # German is kept whether the setting names it or the film speaks it;
-        # English no longer is.
+        # English is not.
         assert [t.action for t in tracks[1:]] == ["keep", "keep", "drop"]
 
     def test_a_track_dropped_for_its_language_is_said_on_the_rule(

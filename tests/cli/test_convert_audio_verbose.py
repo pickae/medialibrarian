@@ -1,5 +1,4 @@
-"""`convert-audio -v`: the steps a run used to prove only by leaving temp files
-behind, now said instead.
+"""`convert-audio -v`: what a run says about the steps it took.
 
 The encoders are the stubs the other convert-audio cases use, so an output is
 an empty file and nothing can be written into it; what is checked is what a run
@@ -70,8 +69,7 @@ def _run(convert, tmp_path, *options, expect=0):
 
 class TestTheChaptersASourceCarried:
     """-v says what a source's chapters were, per file - the count, and that
-    they were the source's own - or that there were none. -k used to prove it by
-    leaving the OGM file beside the output; the line is the proof now."""
+    they were the source's own - or that there were none."""
 
     def test_under_v_a_source_says_its_chapters(self, convert, tmp_path):
         _make(tmp_path / "in", "chaptered.m4a")
