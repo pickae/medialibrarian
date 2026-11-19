@@ -335,6 +335,13 @@ class Run:
         if argv is None:
             return
 
+        # The resolved call for this feed. -p says it and runs nothing; a
+        # real run under -v says it too, one line per feed, so the call it
+        # actually runs is on the record.
+        runlog.detail("%s: %s"
+                      % (podcast, podcastfeeds.render_call(argv,
+                                                            self.platform)))
+
         manifest = os.path.join(self.manifest_dir, "feed%d" % index)
         block_flag = os.path.join(self.status_dir, "blocked." + provider)
 
@@ -348,6 +355,9 @@ class Run:
             log("%s: Cloudflare anti-bot challenge, retrying with impersonation"
                 % podcast)
             argv = retry
+            runlog.detail("%s: %s"
+                          % (podcast, podcastfeeds.render_call(argv,
+                                                                self.platform)))
             status, _, output = self._download(retry, manifest, podcast,
                                                block_flag, provider)
 

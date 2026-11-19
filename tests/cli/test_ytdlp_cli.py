@@ -398,6 +398,31 @@ class TestARunOverATable:
         assert " ok " not in log, log
 
 
+class TestTheCallARealRunSays:
+    """-p prints a feed's call and runs nothing. Under -v a real run says it
+    too, one line per feed - the RESOLVED call, down to the feed's own url -
+    and only under -v: the call is how an ordinary feed is handled, not a
+    result the run reports at every verbosity."""
+
+    def test_under_v_a_real_run_says_the_call_it_runs(self, ytdlp):
+        log = ytdlp.ytdlp("-v", "-t", ytdlp.table, "-m", "latent",
+                          ytdlp.library, ytdlp.library / "archive.log")
+        # The feed named, then the invocation it runs, on one line to the
+        # feed's own url.
+        assert re.search(r"AI/latent space: yt-dlp .*example\.test/latent",
+                         log), log
+        # And it ran it: the stub recorded the call.
+        assert len(list(ytdlp.calls.glob("call*"))) == 1
+
+    def test_without_v_the_call_it_runs_is_not_said(self, ytdlp):
+        log = ytdlp.ytdlp("-t", ytdlp.table, "-m", "latent",
+                          ytdlp.library, ytdlp.library / "archive.log")
+        # The run happened - the stub recorded the call - but the resolved
+        # call is not among what it said.
+        assert len(list(ytdlp.calls.glob("call*"))) == 1
+        assert re.search(r"AI/latent space: yt-dlp", log) is None, log
+
+
 class TestTheArgvAFeedIsCalledWith:
     """Argument by argument, because a folder with a space in it has to arrive as
     ONE argument - which is the thing a hand-written command line gets wrong."""
@@ -788,7 +813,7 @@ class TestTheCloudflareChallenge:
 
     @pytest.fixture
     def run(self, ytdlp, tmp_path):
-        def go(dependency=True, extra="", expect=0):
+        def go(dependency=True, extra="", expect=0, verbose=False):
             ytdlp.with_tool("yt-dlp", _STUB_CLOUDFLARE)
             # One at a time, so the stub's numbered call log is not two feeds
             # racing for the same number.
@@ -801,7 +826,9 @@ class TestTheCloudflareChallenge:
             environment = dict(ytdlp.env)
             if not dependency:
                 environment["DEP_CLAUSE"] = _DEP_CLAUSE
-            return ytdlp.ytdlp("-t", table, library, library / "archive.log",
+            flags = ("-v",) if verbose else ()
+            return ytdlp.ytdlp("-t", table, *flags, library,
+                               library / "archive.log",
                                expect=expect, env=environment)
         return go
 
@@ -854,6 +881,17 @@ class TestTheCloudflareChallenge:
         assert len(self._calls(ytdlp, "RSS/cloudflare")) == 1
         assert "FAIL" in log, log
         assert "retrying with impersonation" not in log, log
+
+    def test_under_v_the_call_the_retry_runs_is_said_too(self, run):
+        # The feed's first call is said, and so is the one it is re-asked with:
+        # the only difference between the two is the impersonation argument.
+        log = run(verbose=True)
+        assert "retrying with impersonation" in log, log
+        calls = [line for line in log.splitlines()
+                 if line.startswith("==> RSS/cloudflare: yt-dlp ")]
+        assert len(calls) == 2, log
+        assert "generic:impersonate" not in calls[0]
+        assert "generic:impersonate" in calls[1]
 
 
 class TestTheTidyUp:
