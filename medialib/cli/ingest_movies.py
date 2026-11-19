@@ -789,6 +789,58 @@ def _language_kept(track, primary: str, choice: LanguageChoice,
             == choice.first)
 
 
+def language_drop_reason(primary: str, choice: LanguageChoice,
+                         kept: tuple = ("en",)) -> str:
+    """Why a track's language is not one the improved copy keeps, as the
+    language rule states it - the film's own language when the catalogue
+    gives one, the first audio track's when the rule keeps it, and the kept
+    languages, which are always among the figures - for the line that says a
+    drop was taken on them, or a commentary kept despite the rule.
+
+    ``primary`` is the first audio track's language as stored, the figure the
+    rule matches on when the catalogue gives no original of its own."""
+    kept_said = "a kept one (%s)" % ", ".join(kept)
+    if not choice.original:
+        if not primary:
+            return "its language is not " + kept_said
+        return ("its language is not the first audio track's (%s) or %s"
+                % (primary, kept_said))
+    reason = "its language is not the film's own (%s, per TMDb)" \
+        % choice.original
+    if choice.keep_first and choice.first:
+        reason += ", the first audio track's (%s)" % choice.first
+    return reason + " or " + kept_said
+
+
+def language_keep_reason(track, primary: str, choice: LanguageChoice,
+                         kept: tuple = ("en",)) -> str:
+    """Why the language rule keeps a track, the converse of
+    :func:`language_drop_reason` on the same figures - for the line that says
+    a keep was taken on them.
+
+    The figure is the most specific the rule gives: the film's own language
+    when the catalogue says it, the first audio track's when the rule keeps
+    it, the kept language it matches, and no figure at all for a language
+    there is nothing to judge - an isolated score or effects, or no language
+    in the tags."""
+    if choice.original and languages.speaks(
+            track.language, track.language_ietf, choice.original):
+        return "the film's own language (%s, per TMDb)" % choice.original
+    if choice.original and choice.keep_first and choice.first \
+            and languages.track_language(track.language,
+                                         track.language_ietf) \
+                == choice.first:
+        return "the first audio track's language (%s)" % choice.first
+    folded = enums.shell_lower(track.language)
+    if not choice.original and primary and folded == primary:
+        return "the first audio track's language (%s)" % primary
+    code = next((code for code in kept
+                 if languages.speaks(folded, "", code)), "")
+    if code:
+        return "a kept language (%s)" % code
+    return "no language to judge"
+
+
 # --- reading a file's tracks --------------------------------------------------
 
 class Track:
@@ -1764,6 +1816,8 @@ def gather_commentary_transcripts(base: str, tracks: list,
             # Appended under the track's own name whole, never the cut one: a
             # title that had to be cut is what left the doubt in the first
             # place.
+            say("  Appending the commentary transcript: %s, %s"
+                % (title, os.path.basename(srt)))
             found.append((srt, language, title))
     return found
 
@@ -2030,6 +2084,9 @@ def gather_downloaded_subtitles(base: str, tracks: list, say=None) -> list:
             continue
         if role == "sdh":
             say("  %s sidecar reads as SDH, muxed flagged as such: %s"
+                % (row.sub_word, os.path.basename(srt)))
+        else:
+            say("  Muxing the %s subtitle sidecar: %s"
                 % (row.sub_word, os.path.basename(srt)))
         found.append((srt, row.code2, role))
     return found
