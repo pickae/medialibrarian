@@ -202,7 +202,7 @@ class TestTheListsEachFolderLeaves:
         self._tagging(monkeypatch, tmp_path)
         _library(tmp_path, "Films")
         _library(tmp_path, "Documentaries")
-        assert run.main(["-t", str(tmp_path / "Films"),
+        assert run.main(["-O", "tagging", str(tmp_path / "Films"),
                          str(tmp_path / "Documentaries")]) == 0
         logs = tmp_path / "script" / "logs" / "ingest-movies"
         assert (logs / "ingest-movies-unmatched-Films.tsv").is_file()
@@ -221,7 +221,7 @@ class TestTheListsEachFolderLeaves:
                             lambda where, _log: prepared.append(where)
                             or "the lists")
         _library(tmp_path, "Films")
-        assert run.main(["-t", str(tmp_path / "Films")]) == 0
+        assert run.main(["-O", "tagging", str(tmp_path / "Films")]) == 0
         assert prepared == [str(tmp_path / "script" / "data" / "imdb")]
         assert self.imdb == "the lists"
 
@@ -230,7 +230,7 @@ class TestTheListsEachFolderLeaves:
         self._tagging(monkeypatch, tmp_path)
         _library(tmp_path, "Films")
         _library(tmp_path, "Documentaries")
-        run.main(["-t", str(tmp_path / "Films"),
+        run.main(["-O", "tagging", str(tmp_path / "Films"),
                   str(tmp_path / "Documentaries")])
         logs = tmp_path / "script" / "logs" / "ingest-movies"
         assert (logs / "ingest-movies-ambiguous-Films.txt").is_file()
@@ -243,7 +243,7 @@ class TestTheListsEachFolderLeaves:
         self._tagging(monkeypatch, tmp_path)
         _library(tmp_path, "Films")
         _library(tmp_path, "Documentaries")
-        run.main(["-t", str(tmp_path / "Films"),
+        run.main(["-O", "tagging", str(tmp_path / "Films"),
                   str(tmp_path / "Documentaries")])
         logs = tmp_path / "script" / "logs" / "ingest-movies"
         listing = logs / "ingest-movies-renames-Films.txt"
@@ -261,7 +261,7 @@ class TestTheListsEachFolderLeaves:
         does not have yet."""
         self._tagging(monkeypatch, tmp_path)
         _library(tmp_path, "Films")
-        run.main(["-t", str(tmp_path / "Films")])
+        run.main(["-O", "tagging", str(tmp_path / "Films")])
         listing = (tmp_path / "script" / "logs" / "ingest-movies"
                    / "ingest-movies-nearmisses-Films.txt")
         assert listing.is_file()
@@ -276,7 +276,7 @@ class TestTheListsEachFolderLeaves:
         is the only way to see the recognition working."""
         self._tagging(monkeypatch, tmp_path)
         _library(tmp_path, "Films")
-        run.main(["-t", str(tmp_path / "Films")])
+        run.main(["-O", "tagging", str(tmp_path / "Films")])
         listing = (tmp_path / "script" / "logs" / "ingest-movies"
                    / "ingest-movies-othertitles-Films.txt")
         assert listing.is_file()
@@ -293,7 +293,7 @@ class TestTheListsEachFolderLeaves:
         worth having after the renaming as much as before it."""
         self._tagging(monkeypatch, tmp_path)
         _library(tmp_path, "Films")
-        run.main(["-t", "-w", str(tmp_path / "Films")])
+        run.main(["-O", "tagging", "-w", str(tmp_path / "Films")])
         assert (tmp_path / "script" / "logs" / "ingest-movies"
                 / "ingest-movies-othertitles-Films.txt").is_file()
 
@@ -303,7 +303,7 @@ class TestTheListsEachFolderLeaves:
         answer to "should this have matched?" is the library itself."""
         self._tagging(monkeypatch, tmp_path)
         _library(tmp_path, "Films")
-        run.main(["-t", "-w", str(tmp_path / "Films")])
+        run.main(["-O", "tagging", "-w", str(tmp_path / "Films")])
         assert not (tmp_path / "script" / "logs" / "ingest-movies"
                     / "ingest-movies-nearmisses-Films.txt").exists()
 
@@ -312,7 +312,7 @@ class TestTheListsEachFolderLeaves:
         that DID happen are the library itself."""
         self._tagging(monkeypatch, tmp_path)
         _library(tmp_path, "Films")
-        run.main(["-t", "-w", str(tmp_path / "Films")])
+        run.main(["-O", "tagging", "-w", str(tmp_path / "Films")])
         assert not (tmp_path / "script" / "logs" / "ingest-movies"
                     / "ingest-movies-renames-Films.txt").exists()
 
@@ -323,7 +323,7 @@ class TestTheListsEachFolderLeaves:
         self._tagging(monkeypatch, tmp_path)
         _library(tmp_path, "Films")
         _library(tmp_path, "Documentaries")
-        run.main(["-t", str(tmp_path / "Films"),
+        run.main(["-O", "tagging", str(tmp_path / "Films"),
                   str(tmp_path / "Documentaries")])
         errors = capsys.readouterr().err
         listing = (tmp_path / "script" / "logs" / "ingest-movies"
@@ -345,7 +345,7 @@ class TestTheListsEachFolderLeaves:
         self._tagging(monkeypatch, tmp_path)
         _library(tmp_path, "Films")
         _library(tmp_path, "Documentaries")
-        run.main(["-t", str(tmp_path / "Films"),
+        run.main(["-O", "tagging", str(tmp_path / "Films"),
                   str(tmp_path / "Documentaries")])
         errors = capsys.readouterr().err
         logs = tmp_path / "script" / "logs" / "ingest-movies"
@@ -364,7 +364,7 @@ class TestTheListsEachFolderLeaves:
                                               capsys):
         self._tagging(monkeypatch, tmp_path)
         _library(tmp_path, "Films")
-        run.main(["-t", str(tmp_path / "Films")])
+        run.main(["-O", "tagging", str(tmp_path / "Films")])
         assert "more than one folder" not in capsys.readouterr().err
 
     def test_w_on_its_own_is_refused_rather_than_ignored(self, monkeypatch,
@@ -393,7 +393,7 @@ class TestTheListsEachFolderLeaves:
         listing = tmp_path / "by-hand.tsv"
         listing.write_text("The Movie (1999)\ttt0000001\n", encoding="utf-8")
         _library(tmp_path, "Films")
-        assert run.main(["-i", str(listing), str(tmp_path / "Films")]) == 0
+        assert run.main(["-O", "tagging", "-i", str(listing), str(tmp_path / "Films")]) == 0
 
     def test_but_a_list_that_cannot_be_read_stops_the_run(self, monkeypatch,
                                                           tmp_path, capsys):
@@ -403,7 +403,7 @@ class TestTheListsEachFolderLeaves:
         which is the worst way to lose it."""
         self._tagging(monkeypatch, tmp_path)
         _library(tmp_path, "Films")
-        assert run.main(["-i", str(tmp_path / "typo.tsv"),
+        assert run.main(["-O", "tagging", "-i", str(tmp_path / "typo.tsv"),
                          str(tmp_path / "Films")]) == 1
         assert "cannot be read" in capsys.readouterr().err
 
@@ -418,7 +418,7 @@ class TestTheListsEachFolderLeaves:
                            "Nobody Looked This Up (1988)\t\n",
                            encoding="utf-8")
         _library(tmp_path, "Films")
-        assert run.main(["-i", str(listing), str(tmp_path / "Films")]) == 0
+        assert run.main(["-O", "tagging", "-i", str(listing), str(tmp_path / "Films")]) == 0
         assert self.not_asked == ["Nobody Looked This Up (1988)"]
         out = capsys.readouterr().err
         assert "1 film(s) had no id filled in and were not asked about" in out
@@ -431,7 +431,7 @@ class TestTheListsEachFolderLeaves:
         listing.write_text("Nobody Looked This Up (1988)\t\n",
                            encoding="utf-8")
         _library(tmp_path, "Films")
-        assert run.main(["-i", str(listing), "-w",
+        assert run.main(["-O", "tagging", "-i", str(listing), "-w",
                          str(tmp_path / "Films")]) == 0
         assert "Nobody Looked This Up (1988)\t" in listing.read_text(
             encoding="utf-8")
@@ -447,7 +447,7 @@ class TestTheListsEachFolderLeaves:
         written = "The Movie (1999)\ttt0000001\n"
         listing.write_text(written, encoding="utf-8")
         _library(tmp_path, "Films")
-        assert run.main(["-i", str(listing), str(tmp_path / "Films")]) == 0
+        assert run.main(["-O", "tagging", "-i", str(listing), str(tmp_path / "Films")]) == 0
         assert not _worklists(tmp_path)
         assert listing.read_text(encoding="utf-8") == written
 
@@ -459,7 +459,7 @@ class TestTheListsEachFolderLeaves:
         listing = tmp_path / "by-hand.tsv"
         listing.write_text("The Movie (1999)\ttt0000001\n", encoding="utf-8")
         _library(tmp_path, "Films")
-        assert run.main(["-i", str(listing), "-w",
+        assert run.main(["-O", "tagging", "-i", str(listing), "-w",
                          str(tmp_path / "Films")]) == 0
         rewritten = listing.read_text(encoding="utf-8")
         assert "The Movie (1999)\t{imdb-tt0000001}" in rewritten
@@ -476,7 +476,7 @@ class TestTheListsEachFolderLeaves:
         listing.write_text("The Movie (1999)\ttt0000001\n"
                            "Not here (1901)\ttt0000002\n", encoding="utf-8")
         _library(tmp_path, "Films")
-        assert run.main(["-i", str(listing), str(tmp_path / "Films")]) == 0
+        assert run.main(["-O", "tagging", "-i", str(listing), str(tmp_path / "Films")]) == 0
         errors = capsys.readouterr().err
         assert "Not here (1901)" in errors
         assert "{imdb-tt0000002}" in errors
@@ -490,7 +490,7 @@ class TestTheListsEachFolderLeaves:
         listing = tmp_path / "by-hand.tsv"
         listing.write_text("Not here (1901)\t\n", encoding="utf-8")
         _library(tmp_path, "Films")
-        assert run.main(["-i", str(listing), str(tmp_path / "Films")]) == 0
+        assert run.main(["-O", "tagging", "-i", str(listing), str(tmp_path / "Films")]) == 0
         assert "ERROR" not in capsys.readouterr().err
 
     def test_but_one_id_list_named_by_hand_holds_them_all(self, monkeypatch,
@@ -502,7 +502,7 @@ class TestTheListsEachFolderLeaves:
         listing.write_text("Old film (1970)\ttt0000001\n", encoding="utf-8")
         _library(tmp_path, "Films")
         _library(tmp_path, "Documentaries")
-        assert run.main(["-i", str(listing), "-w", str(tmp_path / "Films"),
+        assert run.main(["-O", "tagging", "-i", str(listing), "-w", str(tmp_path / "Films"),
                          str(tmp_path / "Documentaries")]) == 0
         written = listing.read_text(encoding="utf-8")
         assert "Old film (1970)\t{imdb-tt0000001}" in written

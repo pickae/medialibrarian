@@ -176,21 +176,8 @@ class TestTheMode:
 
     def test_p_compares_and_does_nothing_else(self, stubbed, tmp_path):
         (tmp_path / "Films").mkdir()
-        assert run.main(["-p", str(tmp_path / "Films")],
+        assert run.main(["-O", "plex", str(tmp_path / "Films")],
                         script_dir=str(tmp_path / "script")) == 0
         assert stubbed == [[str(tmp_path / "Films")]]
 
-    @pytest.mark.parametrize("other", ["-t", "-c", "-a"])
-    def test_another_phase_of_its_own_is_refused(self, stubbed, tmp_path, capsys,
-                                                 other):
-        (tmp_path / "Films").mkdir()
-        assert run.main(["-p", other, str(tmp_path / "Films")],
-                        script_dir=str(tmp_path / "script")) == 1
-        assert "-p compares the films with the Plex library" in capsys.readouterr().err
-        assert stubbed == []
 
-    def test_w_has_no_part_in_it(self, stubbed, tmp_path, capsys):
-        (tmp_path / "Films").mkdir()
-        assert run.main(["-pw", str(tmp_path / "Films")],
-                        script_dir=str(tmp_path / "script")) == 1
-        assert "-w has no part in -p" in capsys.readouterr().err

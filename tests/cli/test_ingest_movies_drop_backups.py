@@ -202,7 +202,7 @@ class TestTheSweep:
     def test_the_dry_run_says_what_would_go(self, tmp_path, capsys):
         movie, old = _pair(tmp_path)
         scripts = self._scripts(tmp_path)
-        assert run.main(["-d", str(tmp_path)], script_dir=str(scripts)) == 0
+        assert run.main(["-O", "backups", str(tmp_path)], script_dir=str(scripts)) == 0
         err = capsys.readouterr().err
         assert "DRY RUN, nothing will be changed" in err
         assert "would be dropped" in err
@@ -212,7 +212,7 @@ class TestTheSweep:
             self, tmp_path, capsys):
         movie, old = _pair(tmp_path)
         scripts = self._scripts(tmp_path)
-        assert run.main(["-dw", str(tmp_path)], script_dir=str(scripts)) == 0
+        assert run.main(["-wO", "backups", str(tmp_path)], script_dir=str(scripts)) == 0
         err = capsys.readouterr().err
         assert "Dropped 1 (old) original." in err
         assert not old.exists()
@@ -222,7 +222,7 @@ class TestTheSweep:
     def test_the_check_that_fails_is_kept_and_listed(self, tmp_path, capsys):
         movie, old = _pair(tmp_path, seconds=4, copy_seconds=2)
         scripts = self._scripts(tmp_path)
-        assert run.main(["-d", str(tmp_path)], script_dir=str(scripts)) == 0
+        assert run.main(["-O", "backups", str(tmp_path)], script_dir=str(scripts)) == 0
         err = capsys.readouterr().err
         assert "would be kept" in err
         assert "not the same length" in err
@@ -237,7 +237,7 @@ class TestTheSweep:
             self, tmp_path, capsys):
         movie, old = _pair(tmp_path, seconds=4, copy_seconds=2)
         scripts = self._scripts(tmp_path)
-        assert run.main(["-dw", str(tmp_path)], script_dir=str(scripts)) == 0
+        assert run.main(["-wO", "backups", str(tmp_path)], script_dir=str(scripts)) == 0
         err = capsys.readouterr().err
         assert "1 kept, the copy failing its check" in err
         assert old.exists()
@@ -247,9 +247,9 @@ class TestTheSweep:
             self, tmp_path, capsys):
         _pair(tmp_path)
         scripts = self._scripts(tmp_path)
-        assert run.main(["-dw", str(tmp_path)], script_dir=str(scripts)) == 0
+        assert run.main(["-wO", "backups", str(tmp_path)], script_dir=str(scripts)) == 0
         capsys.readouterr()
-        assert run.main(["-d", str(tmp_path)], script_dir=str(scripts)) == 0
+        assert run.main(["-O", "backups", str(tmp_path)], script_dir=str(scripts)) == 0
         assert "No (old) original kept beside an improved copy" in \
             capsys.readouterr().err
 
@@ -258,14 +258,14 @@ class TestTheSweep:
                                                               capsys):
         movie, old = _pair(tmp_path, seconds=4, copy_seconds=2)
         scripts = self._scripts(tmp_path)
-        assert run.main(["-d", str(tmp_path)], script_dir=str(scripts)) == 0
+        assert run.main(["-O", "backups", str(tmp_path)], script_dir=str(scripts)) == 0
         listing = self._listing(scripts, tmp_path.name)
         assert listing.is_file()
         # The copy made whole in the meantime: the write run overwrites the
         # earlier list, drops the original and leaves no list of its own.
         _mkv(movie, seconds=4)
         monkeypatch.setattr("sys.stdin", io.StringIO("y\n"))
-        assert run.main(["-dw", str(tmp_path)], script_dir=str(scripts)) == 0
+        assert run.main(["-wO", "backups", str(tmp_path)], script_dir=str(scripts)) == 0
         assert "An earlier run already wrote" in capsys.readouterr().err
         assert not old.exists()
         assert convert.has_ingested_tag(str(movie))
@@ -281,30 +281,10 @@ class TestTheFlagsRefuse:
         (folder / "The Movie (1999).mkv").touch()
         return str(tmp_path / "Films")
 
-    @pytest.mark.parametrize("other", [
-        ["-a"], ["-n"], ["-c"], ["-p"], ["-s"], ["-t"],
-        ["-i", "nope.tsv"]])
-    def test_a_phase_of_its_own_is_refused(self, other, tmp_path, capsys):
-        assert run.main(["-d"] + other + [self._library(tmp_path)]) == 1
-        errors = capsys.readouterr().err
-        assert "-d drops the originals the improved remuxes were kept " \
-            "beside" in errors
-        assert "Nothing was changed." in errors
 
-    def test_the_write_run_is_refused_the_same_way(self, tmp_path, capsys):
-        assert run.main(["-dw", "-t", self._library(tmp_path)]) == 1
-        errors = capsys.readouterr().err
-        assert "-d drops the originals the improved remuxes were kept " \
-            "beside" in errors
 
-    def test_the_remux_conversion_is_refused_the_other_way(self, tmp_path,
-                                                           capsys):
-        assert run.main(["-dr", self._library(tmp_path)]) == 1
-        errors = capsys.readouterr().err
-        assert "-r converts the remuxes at the end of a full ingest, and " \
-            "-d does one phase" in errors
 
     def test_a_lone_write_is_refused_naming_the_sweep(self, tmp_path, capsys):
         assert run.main(["-w", self._library(tmp_path)]) == 1
         errors = capsys.readouterr().err
-        assert "Did you mean -tw, -iw, -sw or -dw?" in errors
+        assert "Did you mean -wO tagging?" in errors

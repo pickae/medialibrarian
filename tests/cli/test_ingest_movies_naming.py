@@ -31,7 +31,7 @@ class TestTheRefusal:
             self, monkeypatch, tmp_path, capsys):
         (tmp_path / "Films").mkdir()
         monkeypatch.setenv("mediaServerNaming", "kodi")
-        assert run.main(["-s", str(tmp_path / "Films")],
+        assert run.main(["-O", "subtitles", str(tmp_path / "Films")],
                         script_dir=str(tmp_path / "script")) == 1
         errors = capsys.readouterr().err
         assert "mediaServerNaming" in errors
@@ -44,7 +44,7 @@ class TestTheRefusal:
         run's start, on a run asked for nothing but the tags."""
         _library(tmp_path, "Films")
         monkeypatch.setenv("mediaServerNaming", "plex  plex")
-        assert run.main(["-t", str(tmp_path / "Films")],
+        assert run.main(["-O", "tagging", str(tmp_path / "Films")],
                         script_dir=str(tmp_path / "script")) == 1
         errors = capsys.readouterr().err
         assert "mediaServerNaming" in errors

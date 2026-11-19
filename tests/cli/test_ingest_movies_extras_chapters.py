@@ -217,8 +217,3 @@ class TestTheOptions:
         assert "-P (instructions for the chapter model) needs -e." in \
             capsys.readouterr().err
 
-    @pytest.mark.parametrize("other", ["-a", "-c", "-p", "-d"])
-    def test_a_phase_of_its_own_is_refused(self, tmp_path, capsys, other):
-        assert self._main(tmp_path, "-e", other) == 1
-        assert "-e chapters the extras at the end of a full ingest" in \
-            capsys.readouterr().err

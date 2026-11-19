@@ -102,7 +102,7 @@ class TestThePhaseRunsAndNothingElse:
         exports, _settled, _scratch = self._stubbed(monkeypatch, tmp_path)
         films = _library(tmp_path, "Films")
         docs = _library(tmp_path, "Documentaries")
-        assert run.main(["-a", str(films), str(docs)]) == 0
+        assert run.main(["-O", "commentary", str(films), str(docs)]) == 0
         assert [entry["directory"] for entry in exports] \
             == [str(films), str(docs)]
 
@@ -114,14 +114,14 @@ class TestThePhaseRunsAndNothingElse:
         exports, _settled, _scratch = self._stubbed(monkeypatch, tmp_path)
         empty = tmp_path / "Empty"
         empty.mkdir()
-        assert run.main(["-a", str(empty)]) == 0
+        assert run.main(["-O", "commentary", str(empty)]) == 0
         assert [entry["directory"] for entry in exports] == [str(empty)]
 
     def test_the_whisper_settlement_is_done_once_and_handed_to_the_phase(
             self, monkeypatch, tmp_path):
         exports, settled, scratch = self._stubbed(monkeypatch, tmp_path)
         films = _library(tmp_path, "Films")
-        assert run.main(["-a", str(films)]) == 0
+        assert run.main(["-O", "commentary", str(films)]) == 0
         # The GPU-to-CPU ladder runs, against the run's RAM scratch, and the
         # settled models are what the phase and its queue are handed.
         assert settled == {"cores": str(runlog.cpu_count()),
@@ -140,7 +140,7 @@ class TestThePhaseRunsAndNothingElse:
             self, monkeypatch, tmp_path):
         exports, _settled, scratch = self._stubbed(monkeypatch, tmp_path)
         films = _library(tmp_path, "Films")
-        assert run.main(["-a", str(films)]) == 0
+        assert run.main(["-O", "commentary", str(films)]) == 0
 
         seen = []
         monkeypatch.setattr(run.commentarytranscription,
@@ -178,37 +178,8 @@ class TestThePhaseRunsAndNothingElse:
         monkeypatch.setattr(run.commentarytranscription,
                             "export_commentary", no_export)
         films = _library(tmp_path, "Films")
-        assert run.main(["-a", str(films)]) == 0
+        assert run.main(["-O", "commentary", str(films)]) == 0
         assert exports == []
-
-
-class TestTheCombosItRefuses:
-    def test_w_combined_with_a_is_refused(self, monkeypatch, tmp_path, capsys):
-        """-w turns the dry run of -t or -i into real renames, and -a is the
-        transcription, not a dry run, so there is nothing for -w to carry out."""
-        _library(tmp_path, "Films")
-        assert run.main(["-a", "-w", str(tmp_path / "Films")]) == 1
-        errors = capsys.readouterr().err
-        assert "-w has no part in -a" in errors
-        assert "Nothing was changed." in errors
-
-    def test_t_combined_with_a_is_refused(self, monkeypatch, tmp_path,
-                                          capsys):
-        """Two phases asked of the same folders at once would have to guess an
-        order, and neither of them is answerable for the other's names."""
-        _library(tmp_path, "Films")
-        assert run.main(["-a", "-t", str(tmp_path / "Films")]) == 1
-        errors = capsys.readouterr().err
-        assert "two runs, not one" in errors
-        assert "Nothing was changed." in errors
-
-    def test_i_combined_with_a_is_refused(self, monkeypatch, tmp_path, capsys):
-        _library(tmp_path, "Films")
-        assert run.main(["-a", "-i", str(tmp_path / "nope.tsv"),
-                         str(tmp_path / "Films")]) == 1
-        errors = capsys.readouterr().err
-        assert "two runs, not one" in errors
-        assert "Nothing was changed." in errors
 
 
 class TestTheTooSmallSidecar:
@@ -375,7 +346,7 @@ class TestTheOrphanReport:
 
         script_dir = self._stubbed(monkeypatch, tmp_path, export_commentary)
         films = _library(tmp_path, "Films")
-        assert run.main(["-a", str(films)]) == 0
+        assert run.main(["-O", "commentary", str(films)]) == 0
         report = script_dir / "logs" / "ingest-movies" / "commentaryOrphans.txt"
         expected = str(films / "The Movie (1999)" /
                        "The Movie (1999) 5 OldCommentary.en.srt") + "\n"
@@ -390,7 +361,7 @@ class TestTheOrphanReport:
 
         script_dir = self._stubbed(monkeypatch, tmp_path, export_commentary)
         films = _library(tmp_path, "Films")
-        assert run.main(["-a", str(films)]) == 0
+        assert run.main(["-O", "commentary", str(films)]) == 0
         assert not (script_dir / "logs" / "ingest-movies" / "commentaryOrphans.txt").exists()
 
 
@@ -474,7 +445,7 @@ class TestTheUnfixedReport:
 
         script_dir = self._stubbed(monkeypatch, tmp_path, export_commentary)
         films = _library(tmp_path, "Films")
-        assert run.main(["-a", str(films)]) == 0
+        assert run.main(["-O", "commentary", str(films)]) == 0
         report = script_dir / "logs" / "ingest-movies" / "unfixedMovies.txt"
         expected = (str(films / "Hollow Ridge (1981) {imdb-tt0000001}" /
                         "Hollow Ridge (1981) {imdb-tt0000001} 1981mkv")
@@ -490,7 +461,7 @@ class TestTheUnfixedReport:
 
         script_dir = self._stubbed(monkeypatch, tmp_path, export_commentary)
         films = _library(tmp_path, "Films")
-        assert run.main(["-a", str(films)]) == 0
+        assert run.main(["-O", "commentary", str(films)]) == 0
         assert not (script_dir / "logs" / "ingest-movies" / "unfixedMovies.txt").exists()
 
     def test_a_mangled_name_the_folder_answers_is_conformed_not_reported(
@@ -508,7 +479,7 @@ class TestTheUnfixedReport:
         folder.mkdir(parents=True)
         mangled = folder / "Hollow Ridge (1981) {imdb-tt0000001} 1981mkv"
         mangled.touch()
-        assert run.main(["-a", str(tmp_path / "Films")]) == 0
+        assert run.main(["-O", "commentary", str(tmp_path / "Films")]) == 0
         assert not mangled.exists()
         assert (folder / "Hollow Ridge (1981) {imdb-tt0000001}.mkv").is_file()
         assert not (script_dir / "logs" / "ingest-movies" / "unfixedMovies.txt").exists()
