@@ -11,7 +11,7 @@ import re
 import shutil
 import subprocess
 
-from medialib.lib import toolcapture
+from medialib.lib import settings, toolcapture
 from medialib.lib.formatting import awk_number
 
 __all__ = [
@@ -30,9 +30,9 @@ _A_NUMBER = re.compile(r"[0-9]+")
 _PAGE = re.compile(r"^Page +[0-9]+ +size:")
 
 
-def _knob(name: str, default: str) -> float:
-    """An exported knob, read as a number: ``value + 0``."""
-    return awk_number(os.environ.get(name, default))
+def _knob(name: str) -> float:
+    """A setting read as a number: ``value + 0``."""
+    return awk_number(settings.value(name))
 
 
 def _run(argv: list[str]) -> int:
@@ -109,11 +109,11 @@ def _stats_line(pdf: str, max_height_px: str) -> tuple[str, int]:
         + _capture(["pdfimages", "-list", "-f", "1", "-l", str(pages_n), pdf])
     ).decode("utf-8", "replace")
 
-    min_coverage = _knob("comicPdfMinCoverage", "80")
-    min_pixels = _knob("comicPdfMinPixels", "400")
-    min_dpi = _knob("comicPdfMinDpi", "150")
-    max_dpi = _knob("comicPdfMaxDpi", "600")
-    fallback_dpi = _knob("comicPdfFallbackDpi", "300")
+    min_coverage = _knob("comicPdfMinCoverage")
+    min_pixels = _knob("comicPdfMinPixels")
+    min_dpi = _knob("comicPdfMinDpi")
+    max_dpi = _knob("comicPdfMaxDpi")
+    fallback_dpi = _knob("comicPdfFallbackDpi")
     max_height = awk_number(max_height_px)
 
     page_w: dict[int, float] = {}
@@ -230,7 +230,7 @@ def comic_pdf_verdict(pdf: str, max_height_px: str = "0") -> tuple:
     pages, good, dpi = number(0), number(1), number(2)
     if pages <= 0:
         return False, pages, good, dpi
-    min_page_share = int(_knob("comicPdfMinPageShare", "90"))
+    min_page_share = int(_knob("comicPdfMinPageShare"))
     return good * 100 >= pages * min_page_share, pages, good, dpi
 
 
@@ -267,14 +267,14 @@ def render_comic_pdf_pages(pdf: str, dest: str, max_height_px: str = "0") -> int
     fields = stats.split()
     dpi = fields[2] if len(fields) > 2 else ""
     if not _A_NUMBER.fullmatch(dpi) or int(dpi) < 1:
-        dpi = os.environ.get("comicPdfFallbackDpi", "300")
+        dpi = settings.value("comicPdfFallbackDpi")
 
     try:
         os.makedirs(dest, exist_ok=True)
     except OSError:
         pass
 
-    quality = os.environ.get("comicPdfJpegQuality", "92")
+    quality = settings.value("comicPdfJpegQuality")
     _run(["pdftoppm", "-jpeg", "-jpegopt", f"quality={quality}",
           "-r", dpi, pdf, f"{dest}/page"])
 

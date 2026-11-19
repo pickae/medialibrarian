@@ -30,7 +30,7 @@ import tempfile
 import threading
 
 from medialib import commands
-from medialib.lib import hostos, runcontext, runlog, safety
+from medialib.lib import hostos, runcontext, runlog, safety, settings
 
 _INT = re.compile(r"^[0-9]+$")
 
@@ -43,12 +43,6 @@ SHM = runcontext.SHM
 # The mount table, which is what names a filesystem "tmpfs" rather than a magic
 # number - statfs has the answer but Python exposes no f_type.
 MOUNTS = "/proc/self/mounts"
-
-# How much of a tmpfs one intermediate may occupy, and the headroom below
-# which even a fresh scratch root goes to disk, when the environment does not
-# say otherwise (``ramScratchMaxPercent`` and ``ramScratchMinFreeBytes``).
-DEFAULT_MAX_PERCENT = 50
-DEFAULT_MIN_FREE = 1073741824
 
 
 class _State:
@@ -276,11 +270,11 @@ def ram_dir_free_bytes(directory):
     except OSError:
         return None
     if filesystem_type(directory) in ("tmpfs", "ramfs"):
-        raw = os.environ.get("ramScratchMaxPercent", "") or str(DEFAULT_MAX_PERCENT)
+        raw = settings.value("ramScratchMaxPercent")
         if _INT.match(raw) and 1 <= int(raw) <= 100:
             pct = int(raw)
         else:
-            pct = DEFAULT_MAX_PERCENT
+            pct = int(settings.shipped()["ramScratchMaxPercent"])
         # total/100 first, so the multiplication cannot overflow on a large
         # tmpfs; the rounding it costs is under a hundred bytes.
         capped = usage.total // 100 * pct
@@ -343,7 +337,7 @@ def ram_scratch_dir(label, state=_STATE, log=runlog.log):
     if not state.ram_base:
         init_ram_base("", state=state)
     free = ram_dir_free_bytes(state.ram_base)
-    raw_min = os.environ.get("ramScratchMinFreeBytes", "") or str(DEFAULT_MIN_FREE)
+    raw_min = settings.value("ramScratchMinFreeBytes")
     if free is not None and _INT.match(raw_min) and free <= int(raw_min):
         disk_parent = ram_disk_base()
         if disk_parent is not None:

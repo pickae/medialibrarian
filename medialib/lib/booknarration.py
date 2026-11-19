@@ -23,7 +23,7 @@ import stat
 import subprocess
 import sys
 
-from medialib.lib import runcontext, safety, toolcapture
+from medialib.lib import runcontext, safety, settings, toolcapture
 from medialib.lib.booklanguage import book_language_code
 from medialib.lib.enums import lower_extension_of, shell_lower
 from medialib.lib.formatting import awk_gt, awk_number, fmt_clock
@@ -57,16 +57,6 @@ __all__ = [
     "prepare_voice_samples",
     "voice_sample_for",
 ]
-
-# The engine's language table, as one scalar string so the parallel workers
-# inherit it. One row per engine whose set is known; an engine with no row is
-# not second-guessed - app.py owns that answer.
-_ENGINE_LANGUAGES = (
-    "xtts:ara,ces,deu,eng,fra,hin,hun,ita,jpn,kor,nld,pol,por,rus,spa,tur,zho"
-)
-
-# The torchcodec PyTorch pairs, as "<torch series>:<torchcodec series>".
-_TORCHCODEC_PAIRS = "2.9:0.9 2.10:0.10 2.11:0.11 2.13:0.15 2.14:0.17"
 
 # The mark that recognises this repo's own sitecustomize.py.
 _SOUNDFILE_MARK = "_load_with_soundfile_fallback"
@@ -191,20 +181,17 @@ _SESSION_ID = frozenset(
 _C_SPACE = " \t\n\r\f\v"
 
 
-def _config(name, default):
-    """A configuration value, read from the environment with its default - a
-    caller that never set it gets the module's own answer."""
-    return os.environ.get(name, default)
-
-
-# The free VRAM, in GB, one book read on the GPU is given.
-VRAM_PER_BOOK_GB = "5"
+def _config(name, default=""):
+    """A configuration value: the environment's, else the shipped default
+    (see :func:`medialib.lib.settings.value`), else ``default`` for a knob
+    that has neither."""
+    return settings.value(name) or default
 
 
 def narration_vram_per_book():
     """The narrationVramPerBookGB setting, or its default - the GB of free VRAM
     each book read in parallel on the GPU is sized for."""
-    return _config("narrationVramPerBookGB", VRAM_PER_BOOK_GB)
+    return _config("narrationVramPerBookGB")
 
 
 def _noop(*_args):
@@ -304,7 +291,7 @@ def narration_supports_language(code, engine=None):
         engine = _config("narrationEngine", "xtts")
     engine = shell_lower(engine)
     # The table is split on semicolons and then on whitespace.
-    for row in _config("narrationEngineLanguages", _ENGINE_LANGUAGES).replace(";", " ").split():
+    for row in _config("narrationEngineLanguages").replace(";", " ").split():
         name, _sep, codes = row.partition(":")
         if name != engine:
             continue
@@ -319,7 +306,7 @@ def narration_language_list(engine=None):
         engine = _config("narrationEngine", "xtts")
     engine = shell_lower(engine)
     # The table is split on semicolons and then on whitespace.
-    for row in _config("narrationEngineLanguages", _ENGINE_LANGUAGES).replace(";", " ").split():
+    for row in _config("narrationEngineLanguages").replace(";", " ").split():
         name, _sep, codes = row.partition(":")
         if name == engine:
             return codes.replace(",", " ")
@@ -396,8 +383,8 @@ def narration_base_python():
     one on PATH. Returns the path the first qualifying candidate resolves to, or
     None when nothing qualifies.
     """
-    min_minor = int(awk_number(_config("narrationPythonMinMinor", "10")))
-    max_minor = int(awk_number(_config("narrationPythonMaxMinor", "12")))
+    min_minor = int(awk_number(_config("narrationPythonMinMinor")))
+    max_minor = int(awk_number(_config("narrationPythonMaxMinor")))
     candidates = []
 
     if _command_v("pyenv"):
@@ -488,8 +475,8 @@ def narration_ensure_venv(log=None):
 
     base_python = narration_base_python()
     if base_python is None:
-        min_minor = _config("narrationPythonMinMinor", "10")
-        max_minor = _config("narrationPythonMaxMinor", "12")
+        min_minor = _config("narrationPythonMinMinor")
+        max_minor = _config("narrationPythonMaxMinor")
         sys.stderr.write("\n")
         sys.stderr.write(
             "Cannot narrate: no Python 3.%s-3.%s interpreter found on this "
@@ -530,7 +517,7 @@ def narration_wanted_torchcodec(torch_series):
     """The torchcodec series that torch is paired with, or None when it is not
     in the table - the same "not this repo's answer" the language table gives
     for an untabulated engine."""
-    for pair in _config("narrationTorchcodecPairs", _TORCHCODEC_PAIRS).split():
+    for pair in _config("narrationTorchcodecPairs").split():
         torch, sep, torchcodec = pair.partition(":")
         if sep and torch == torch_series:
             return torchcodec
@@ -817,8 +804,8 @@ def narrate_book(book, out_dir, voice="", language=None, log_file=None,
     args = ["--headless",
             "--device", device,
             "--tts_engine", _config("narrationEngine", "xtts"),
-            "--output_format", _config("narrationFormat", "m4b"),
-            "--output_channel", _config("narrationChannel", "mono"),
+            "--output_format", _config("narrationFormat"),
+            "--output_channel", _config("narrationChannel"),
             "--ebook", book,
             "--output_dir", out_dir]
     if voice:
@@ -852,7 +839,7 @@ def narrate_book(book, out_dir, voice="", language=None, log_file=None,
 
     # Newest first, so a checkout that left something behind from an earlier
     # attempt cannot be mistaken for this run's output.
-    produced = newest_file(out_dir, _config("narrationFormat", "m4b"))
+    produced = newest_file(out_dir, _config("narrationFormat"))
     if not produced or os.path.getsize(produced) == 0:
         return None
     return produced
@@ -980,7 +967,7 @@ def narration_progress(log_file):
     if not os.path.isfile(log_file) or os.path.getsize(log_file) == 0:
         return None
     try:
-        tail = int(_config("narrationProgressTail", "65536"))
+        tail = int(_config("narrationProgressTail"))
     except ValueError:
         return None
     if tail <= 0:
@@ -1053,7 +1040,7 @@ def narration_lossless_master(log_file, audiobook=None):
         except OSError:
             pass
 
-    tolerance = awk_number(_config("narrationLosslessTolerance", "0.02"))
+    tolerance = awk_number(_config("narrationLosslessTolerance"))
     # Newest last in the log, so the candidates are walked from the back.
     for candidate in reversed(candidates):
         if not (os.path.isfile(candidate) and os.path.getsize(candidate) > 0):
@@ -1148,7 +1135,7 @@ def voice_sample_window(src, duration):
     voiceSampleSeconds. Returns the string, or "" when nothing could be worked
     out."""
     duration_number = awk_number(duration)
-    search_seconds = awk_number(_config("voiceSampleSearchSeconds", "180"))
+    search_seconds = awk_number(_config("voiceSampleSearchSeconds"))
     # start = d / 2 - s / 2, clamped at 0, to three decimals.
     start = duration_number / 2 - search_seconds / 2
     if start < 0:
@@ -1164,8 +1151,8 @@ def voice_sample_window(src, duration):
         length = duration_number - awk_number(search_start)
     search_length = "%.3f" % length
 
-    noise = _config("voiceSilenceNoise", "-30dB")
-    min_dur = _config("voiceSilenceMinDur", "0.3")
+    noise = _config("voiceSilenceNoise")
+    min_dur = _config("voiceSilenceMinDur")
     proc = _run(["ffmpeg", "-nostdin", "-hide_banner", "-copyts",
                  "-ss", search_start, "-t", search_length, "-i", src,
                  "-af", "silencedetect=noise=%s:d=%s" % (noise, min_dur),
@@ -1184,9 +1171,9 @@ def _select_window(silence_text, search_start, search_length):
     and the edges nudged out of any short pause."""
     win_start = awk_number(search_start)
     win_len = awk_number(search_length)
-    want = awk_number(_config("voiceSampleSeconds", "45"))
-    min_want = awk_number(_config("voiceSampleMinSeconds", "5"))
-    max_gap = awk_number(_config("voiceSampleMaxGap", "2.5"))
+    want = awk_number(_config("voiceSampleSeconds"))
+    min_want = awk_number(_config("voiceSampleMinSeconds"))
+    max_gap = awk_number(_config("voiceSampleMaxGap"))
 
     starts = []
     ends = []
@@ -1304,7 +1291,7 @@ def prepare_voice_sample(src, scratch_dir, log=None):
     # A duration that does not LOOK like a number is compared as text - and an
     # unreadable file ("N/A", or a probe that printed a word and failed) reads
     # as OVER-LONG rather than as empty.
-    if awk_gt(duration, _config("voiceSampleMaxSeconds", "60")):
+    if awk_gt(duration, _config("voiceSampleMaxSeconds")):
         window = voice_sample_window(src, duration)
         parts = window.split()
         if len(parts) == 2 and parts[0] and parts[1]:
@@ -1314,12 +1301,12 @@ def prepare_voice_sample(src, scratch_dir, log=None):
                 % (os.path.basename(src), fmt_clock(duration), fmt_clock(take),
                    fmt_clock(start)))
             cut_args = ["-ss", start, "-t", take]
-    elif extension == "wav" and codec == _config("voiceSampleCodec", "pcm_s16le"):
+    elif extension == "wav" and codec == _config("voiceSampleCodec"):
         return src
 
     sample = os.path.join(scratch_dir, "voiceSample.wav")
-    rate = _config("voiceSampleRate", "24000")
-    codec = _config("voiceSampleCodec", "pcm_s16le")
+    rate = _config("voiceSampleRate")
+    codec = _config("voiceSampleCodec")
     if not toolcapture.run(["ffmpeg", "-y", "-nostdin", "-hide_banner",
                             *toolcapture.ffmpeg_loglevel()] + cut_args
                            + ["-i", src, "-map", "0:a:0", "-ac", "1",
@@ -1343,8 +1330,7 @@ def voice_sample_language(path):
         return ""
 
     stem_lower = shell_lower(stem)
-    for candidate in _config(
-            "narrationVoiceFallbackNames", "default any fallback other").split():
+    for candidate in _config("narrationVoiceFallbackNames").split():
         if stem_lower == candidate:
             return "-"
 

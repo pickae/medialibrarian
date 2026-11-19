@@ -169,9 +169,9 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("ramScratchBase", "Where each run's scratch directories go",
             _SCRATCH, "`/dev/shm`, else the system temp directory"),
     Setting("ramScratchMaxPercent", "The largest share of the RAM filesystem, in "
-            "percent, one intermediate file may take", _SCRATCH, "50"),
+            "percent, one intermediate file may take", _SCRATCH),
     Setting("ramScratchMinFreeBytes", "With this little free in RAM, new scratch "
-            "goes to disk instead", _SCRATCH, "1073741824"),
+            "goes to disk instead", _SCRATCH),
     Setting("ramScratchDiskBase", "Where scratch goes on disk once RAM is nearly full",
             _SCRATCH, "the cache directory's `ramScratchOverflow`"),
     Setting("censusRamBase", "The census's scratch, ahead of `ramScratchBase`",
@@ -275,68 +275,68 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("comicPdfExtensions", "The file suffixes that may be comic PDFs, "
             "space-separated", ("content-census",), "pdf"),
     Setting("comicPdfMinCoverage", "How much of a page, in percent, its one image has "
-            "to cover for it to be a comic page", _COMICS, "80"),
+            "to cover for it to be a comic page", _COMICS),
     Setting("comicPdfMinPixels", "How wide and high a page image has to be, in pixels",
-            _COMICS, "400"),
+            _COMICS),
     Setting("comicPdfMinPageShare", "How many of a PDF's pages, in percent, have to be "
-            "comic pages for it to be a comic", _COMICS, "90"),
+            "comic pages for it to be a comic", _COMICS),
     Setting("comicPdfMinDpi", "The lowest resolution a comic PDF is rendered at",
-            _COMICS, "150"),
+            _COMICS),
     Setting("comicPdfMaxDpi", "The highest resolution a comic PDF is rendered at",
-            _COMICS, "600"),
+            _COMICS),
     Setting("comicPdfFallbackDpi", "The resolution used where the PDF's own cannot be "
-            "read", _COMICS, "300"),
+            "read", _COMICS),
     Setting("comicPdfJpegQuality", "The JPEG quality comic PDF pages are rendered at",
-            _COMICS, "92"),
+            _COMICS),
     # --- reading books aloud
     Setting("narrationHome", "The ebook2audiobook checkout read-library drives; `-c` "
             "overrides it", _NARRATION, "`~/ebook2audiobook`"),
     Setting("narrationLanguage", "The language a book is read in when its own cannot "
             "be found", _NARRATION),
     Setting("narrationFormat", "The format the engine writes an audiobook in",
-            _NARRATION, "m4b"),
-    Setting("narrationChannel", "The engine's channel layout", _NARRATION, "mono"),
+            _NARRATION),
+    Setting("narrationChannel", "The engine's channel layout", _NARRATION),
     Setting("narrationVramPerBookGB", "The GPU memory, in GB, each book read at once "
-            "needs - which sets the default `-j`", _NARRATION, "5"),
+            "needs - which sets the default `-j`", _NARRATION),
     Setting("narrationEngineLanguages", "Which languages each engine speaks, as "
-            "`engine:codes`", _NARRATION, "XTTS's seventeen"),
+            "`engine:codes`", _NARRATION),
     Setting("narrationPythonMinMinor", "The oldest Python 3 minor version the "
-            "engine's environment is built with", _NARRATION, "10"),
+            "engine's environment is built with", _NARRATION),
     Setting("narrationPythonMaxMinor", "The newest Python 3 minor version the "
-            "engine's environment is built with", _NARRATION, "12"),
+            "engine's environment is built with", _NARRATION),
     Setting("narrationTorchcodecPairs", "Which torchcodec goes with which torch, for "
-            "repairing a mismatch", _NARRATION, "2.9:0.9 2.10:0.10 2.11:0.11 2.13:0.15 2.14:0.17"),
+            "repairing a mismatch", _NARRATION),
     Setting("narrationSoundfileFallbackMark", "The text that marks the engine shim "
             "this package wrote", _NARRATION, "`_load_with_soundfile_fallback`"),
     Setting("narrationProgressTail", "How much of the end of the engine's log, in "
-            "bytes, is read for its progress", _NARRATION, "65536"),
+            "bytes, is read for its progress", _NARRATION),
     Setting("narrationLosslessTolerance", "How far the engine's lossless copy may be "
-            "from the book's length and still be found", _NARRATION, "0.02"),
+            "from the book's length and still be found", _NARRATION),
     Setting("narrationVoiceFallbackNames", "The voice-sample names that mean \"any "
-            "language\"", _NARRATION, "default any fallback other"),
+            "language\"", _NARRATION),
     Setting("audiobookLosslessFilters", "The ffmpeg filters the lossless copy of an "
             "audiobook is made with; empty for none", _NARRATION,
             "`dynaudnorm=f=150:g=15,afftdn=nf=-70`"),
     Setting("audiobookLosslessCompression", "The FLAC compression level of that copy",
             _NARRATION, "5"),
     Setting("voiceSampleMaxSeconds", "A voice sample longer than this, in seconds, is "
-            "cut down to a stretch of speech", _NARRATION, "60"),
+            "cut down to a stretch of speech", _NARRATION),
     Setting("voiceSampleSearchSeconds", "How much of a long sample's middle, in "
-            "seconds, is searched for speech", _NARRATION, "180"),
+            "seconds, is searched for speech", _NARRATION),
     Setting("voiceSampleSeconds", "How long the stretch of speech taken is, in seconds",
-            _NARRATION, "45"),
+            _NARRATION),
     Setting("voiceSampleMinSeconds", "The shortest stretch still taken, in seconds",
-            _NARRATION, "5"),
+            _NARRATION),
     Setting("voiceSampleMaxGap", "The longest pause, in seconds, inside that stretch",
-            _NARRATION, "2.5"),
+            _NARRATION),
     Setting("voiceSilenceNoise", "What counts as silence when looking for it",
-            _NARRATION, "-30dB"),
+            _NARRATION),
     Setting("voiceSilenceMinDur", "The shortest silence, in seconds, that counts",
-            _NARRATION, "0.3"),
+            _NARRATION),
     Setting("voiceSampleRate", "The sample rate a prepared voice sample is written at",
-            _NARRATION, "24000"),
+            _NARRATION),
     Setting("voiceSampleCodec", "The codec a prepared voice sample is written in",
-            _NARRATION, "pcm_s16le"),
+            _NARRATION),
     # --- naming
     Setting("coverName", "The name clean-folder-structure gives a folder's cover "
             "art: `folder` (the default) or `cover`, or empty for no rename at "

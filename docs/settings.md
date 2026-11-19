@@ -62,7 +62,7 @@ the two disagree.
 | `movieJunkExtensions` | The file suffixes ingest-movies deletes from a release as junk, space-separated; empty deletes none - the sample clips, the tiny .mkv files and the .unwanted folders go whatever it says | txt nfo exe doc sfv | `ingest-movies` |
 | `musicRamBase` | ingest-music's scratch, ahead of `ramScratchBase` | `ramScratchBase` | `ingest-music` |
 | `narrationChannel` | The engine's channel layout | mono | `read-library` |
-| `narrationEngineLanguages` | Which languages each engine speaks, as `engine:codes` | XTTS's seventeen | `read-library` |
+| `narrationEngineLanguages` | Which languages each engine speaks, as `engine:codes` | xtts:ara,ces,deu,eng,fra,hin,hun,ita,jpn,kor,nld,pol,por,rus,spa,tur,zho | `read-library` |
 | `narrationFormat` | The format the engine writes an audiobook in | m4b | `read-library` |
 | `narrationHome` | The ebook2audiobook checkout read-library drives; `-c` overrides it | `~/ebook2audiobook` | `read-library` |
 | `narrationLanguage` | The language a book is read in when its own cannot be found | unset | `read-library` |
