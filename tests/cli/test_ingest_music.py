@@ -796,3 +796,63 @@ class TestTheRefusedMultiDiscFolders:
         state = self._state()
         assert im._refuse_multi_disc(state, str(tmp_path)) == frozenset(
             {os.curdir})
+
+
+class TestTheKeptCoversAreCopiedAsTheyAre:
+    """-k covers: a cover image over the AVIF size is copied across as it is -
+    the AVIF encode is the measure the part keeps out - and the copy, like the
+    one a small cover always gets, is skipped when the library already holds
+    those bytes."""
+
+    @pytest.fixture
+    def big_cover(self, tmp_path):
+        download = tmp_path / "download"
+        (download / "Album").mkdir(parents=True)
+        source = download / "Album" / "cover.jpg"
+        source.write_bytes(b"\0" * (im.COVER_MIN_BYTES + 1))
+        return source, str(download), str(tmp_path / "library")
+
+    def _run(self, big_cover, keep_parts):
+        source, download, library = big_cover
+        return (im.Run(download_dir=download, ingest_dir=library,
+                       folder_map={}, counters=_Counters(),
+                       keep_parts=keep_parts), source, library)
+
+    def test_a_cover_over_the_size_is_copied_when_covers_are_kept(
+            self, big_cover):
+        run, source, library = self._run(big_cover, frozenset({"covers"}))
+        run.convert_image("Album/cover.jpg")
+        copied = pathlib.Path(library) / "Album" / "cover.jpg"
+        assert copied.read_bytes() == source.read_bytes()
+        assert not (pathlib.Path(library) / "Album" / "cover.avif").exists()
+        assert run.counters.counts.get("coverCopied") == 1
+        assert "coverAvif" not in run.counters.counts
+
+    def test_and_one_the_library_already_holds_is_not_copied_again(
+            self, big_cover):
+        run, source, library = self._run(big_cover, frozenset({"covers"}))
+        (pathlib.Path(library) / "Album").mkdir(parents=True)
+        (pathlib.Path(library) / "Album" / "cover.jpg").write_bytes(
+            source.read_bytes())
+        run.convert_image("Album/cover.jpg")
+        assert run.counters.counts.get("coverAlreadyThere") == 1
+        assert "coverCopied" not in run.counters.counts
+
+    def test_and_the_same_cover_earns_its_avif_when_they_are_not(self,
+                                                                 big_cover,
+                                                                 monkeypatch):
+        class _ok:
+            ok = True
+            failure = ""
+
+        calls = []
+
+        def tool(argv, relative):
+            calls.append(argv)
+            return _ok()
+
+        monkeypatch.setattr(im, "_tool", tool)
+        run, _source, _library = self._run(big_cover, frozenset())
+        run.convert_image("Album/cover.jpg")
+        assert run.counters.counts.get("coverAvif") == 1
+        assert any("avif" in str(arg) for arg in calls[0]), calls[0]

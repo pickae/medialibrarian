@@ -824,6 +824,19 @@ class TestTheWordAfterTheFlag:
         assert done.returncode == 0, done.stdout + done.stderr
         assert (keep_music.library / "Album" / "one.flac").is_file()
 
+    def test_a_download_folder_literally_named_covers(self, keep_music):
+        """The third part name the flag would eat, the same way: written
+        ./covers, the folder is the first positional after all."""
+        download = keep_music.work / "covers"
+        (download / "Album").mkdir(parents=True)
+        (download / "Album" / "one.flac").write_text("one")
+        done = keep_music.ingest("-k",
+                                 positionals=("./covers",
+                                              str(keep_music.library),
+                                              str(keep_music.opus)))
+        assert done.returncode == 0, done.stdout + done.stderr
+        assert (keep_music.library / "Album" / "one.flac").is_file()
+
     def test_and_the_bare_name_is_the_part_not_the_folder(self, keep_music):
         """The same folder written resolution, with no ./ to keep it from
         being the part: the word goes to -k, the run's first positional is
@@ -953,6 +966,60 @@ class TestKeptDownloads:
         assert not (kept.library / "Rip").exists()
 
 
+class TestTheKeptCovers:
+    """-k covers keeps the covers as they are: the image over the AVIF size is
+    copied across as it is, and the cover a track embeds is not scaled - still
+    re-encoded as MJPEG, which is what makes the art readable in a flac. The
+    names the library ends up with are the cleaner's, so the case counts
+    rather than names."""
+
+    def _cover(self, keep_music):
+        cover = keep_music.download / "Album" / "cover.jpg"
+        cover.write_bytes(b"\0" * 1200000)
+        return cover
+
+    def test_the_cover_over_the_size_is_copied_as_it_is(self, keep_music):
+        cover = self._cover(keep_music)
+        done = keep_music.ingest("-k", "covers")
+        log = done.stdout + done.stderr
+        assert done.returncode == 0, log
+        kept = list(keep_music.library.rglob("*.jpg"))
+        assert len(kept) == 1, kept
+        assert kept[0].read_bytes() == cover.read_bytes()
+        assert not list(keep_music.library.rglob("*.avif"))
+        assert "Cover copied as it is" in log, log
+
+    def test_and_a_default_run_gives_the_library_the_avif(self, keep_music):
+        self._cover(keep_music)
+        done = keep_music.ingest()
+        log = done.stdout + done.stderr
+        assert done.returncode == 0, log
+        assert len(list(keep_music.library.rglob("*.avif"))) == 1
+        assert not list(keep_music.library.rglob("cover.jpg"))
+        assert "Cover to AVIF" in log, log
+
+    def test_the_embedded_cover_is_not_scaled(self, keep_music):
+        self._cover(keep_music)
+        # The part named, and a bare -k that keeps every part: the cover the
+        # track embeds comes out at its own size either way.
+        for options in (("-k", "covers"), ("-k",)):
+            done = keep_music.ingest(*options)
+            assert done.returncode == 0, done.stdout + done.stderr
+            argv = _encodes(_recorded_calls(keep_music.ffmpeg_calls),
+                            ".flac")[-1]
+            assert argv[argv.index("-filter:v") + 1] == "format=yuvj420p", argv
+            assert not any("scale=" in part for part in argv), argv
+
+    def test_and_a_default_run_scales_the_embedded_cover(self, keep_music):
+        self._cover(keep_music)
+        done = keep_music.ingest()
+        assert done.returncode == 0, done.stdout + done.stderr
+        argv = _encodes(_recorded_calls(keep_music.ffmpeg_calls), ".flac")[0]
+        filter_arg = argv[argv.index("-filter:v") + 1]
+        assert filter_arg.startswith("scale="), argv
+        assert "format=yuvj420p" in filter_arg, argv
+
+
 class TestAnUnknownPart:
     """A part the run will not keep is refused with the page, like a bad
     option. The part the value names is checked the one place that knows
@@ -961,20 +1028,20 @@ class TestAnUnknownPart:
 
     def test_the_long_form_refuses_a_part_the_command_does_not_keep(
             self, sandbox):
-        done = sandbox.run("ingest-music", "--keep=covers")
+        done = sandbox.run("ingest-music", "--keep=artwork")
         log = done.stdout + done.stderr
         assert done.returncode == 1, log
-        assert 'Option --keep does not take "covers"' in log, log
+        assert 'Option --keep does not take "artwork"' in log, log
         assert "Usage:" in log, log
         assert "Nothing was changed." in log
 
     def test_and_a_list_with_an_unknown_part_in_it(self, sandbox):
         """The value is a comma list of parts, and one not among them is the
         refusal: the page is printed and nothing is changed."""
-        done = sandbox.run("ingest-music", "--keep=resolution,covers")
+        done = sandbox.run("ingest-music", "--keep=resolution,artwork")
         log = done.stdout + done.stderr
         assert done.returncode == 1, log
-        assert 'Option --keep does not take "resolution,covers"' in log, log
+        assert 'Option --keep does not take "resolution,artwork"' in log, log
         assert "Nothing was changed." in log
 
 

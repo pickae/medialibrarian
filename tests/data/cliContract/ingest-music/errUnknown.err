@@ -22,16 +22,19 @@ Options:
                   Run up to <jobs> encoder processes in parallel
                   (default: the number of CPU cores).
     -k, --keep [part]
-                  keep <part>: takes nothing away. The parts are resolution and
-                  downloads, comma-separated, and a bare -k keeps both.
-                  resolution: the source's bit depth and sample rate, which a
-                  run otherwise turns into 16-bit at 48 kHz or less. Kept, the
-                  lossless copy stays at the source's resolution; the Opus
-                  copies are not affected. downloads: the download folder is
-                  not changed - no duplicate is deleted, and a multi-disc
-                  folder is split in the run's scratch, not in place. A folder
-                  literally named "downloads" is written ./downloads: the word
-                  after -k goes to -k when it is a part.
+                  keep <part>: takes nothing away. The parts are resolution,
+                  downloads and covers, comma-separated, and a bare -k keeps
+                  all three. resolution: the source's bit depth and sample
+                  rate, which a run otherwise turns into 16-bit at 48 kHz or
+                  less. Kept, the lossless copy stays at the source's
+                  resolution; the Opus copies are not affected. downloads:
+                  the download folder is not changed - no duplicate is
+                  deleted, and a multi-disc folder is split in the run's
+                  scratch, not in place. covers: cover images are copied as
+                  they are whatever their size, and the cover a track embeds
+                  is not scaled down. A folder literally named "covers" is
+                  written ./covers: the word after -k goes to -k when it is a
+                  part.
     -o, --offline Offline: the tagging phase is skipped, so the run reaches no
                   network and needs no beets.
                   Default false
