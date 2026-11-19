@@ -148,7 +148,7 @@ def test_a_worker_writing_a_film_has_this_process_forget_it(film,
     read of the film goes once the worker is done, whatever the file system's
     time stamps say."""
     rules._identify(film.path)
-    monkeypatch.setattr(run_module.dynamicqueue, "run",
+    monkeypatch.setattr(run_module.workerpool, "run",
                         lambda items, *a, **k: list(items))
     run_module._apply_as_prepared(iter([(film.path, "work")]),
                                   lambda work: "")

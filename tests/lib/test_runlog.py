@@ -117,9 +117,9 @@ class TestCountedPrefix:
 
     def test_with_flock_a_queue_still_loading_counts_without_a_denominator(
             self, monkeypatch):
-        """A dynamic queue does not know its own length until the last file is
-        planned, and a denominator promised before then would be a promise the
-        run could not keep."""
+        """A queue of prepared items does not know its own length until the
+        last file is planned, and a denominator promised before then would be
+        a promise the run could not keep."""
         monkeypatch.setenv("HAVE_FLOCK", "1")
         assert runlog.counted_prefix(812, None) == "[812] "
 

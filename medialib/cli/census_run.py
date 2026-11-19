@@ -8,7 +8,6 @@ come back in a variable: rows, skips and counts go to files, which the parent
 reads back in the order the paths were given.
 """
 
-import multiprocessing
 import os
 import shutil
 import signal
@@ -558,51 +557,60 @@ class Run:
 
         censused = 0
         sanitised = False
-        running: list[multiprocessing.Process] = []
+
+        def walk():
+            """Every file read here, in the library's order, but the books:
+            handed to the queue as ``((path, index), 0)``. An interrupt stops
+            it between two files - here, or in the queue before it is asked
+            for the next."""
+            nonlocal censused, sanitised
+            for file_index in range(start, start + count):
+                if safety.abort_requested():
+                    break
+                file_path = self.files[file_index]
+                label = file_path[len(path):].lstrip("/")
+                self.progress(report_name, label)
+                censused += 1
+
+                content, _stats = contentcensus.census_classify(file_path)
+                if not content:
+                    # cannot happen (the walk matched one of the lists), but a
+                    # row is never written for a file whose type cannot be
+                    # named
+                    continue
+                if content == "books":
+                    # The one row that is CPU-bound rather than seek-bound, so
+                    # the one the cores share. The progress line and the census
+                    # count were taken above, in this process, on purpose: the
+                    # counter stays one sequence whether or not the books run
+                    # in parallel, and the line keeps its place in the
+                    # library's file order.
+                    yield (file_path, file_index), 0
+                    continue
+
+                row, reason = contentcensus.census_row(content, file_path,
+                                                       self.separator)
+                if row is not None:
+                    with open(rows[content], "a") as handle:
+                        handle.write(row + "\n")
+                    if getattr(row, "sanitised", False):
+                        sanitised = True
+                else:
+                    log('  WARNING: skipping "%s": %s' % (file_path, reason))
+                    _append_bytes(skipped_path, _skip_entry(file_path, reason))
+
         log('Censusing %d file(s) under "%s"' % (count, path))
-        for file_index in range(start, start + count):
-            if safety.abort_requested():
-                log("Interrupted - stopping after the file(s) already read "
-                    'under "%s"' % path)
-                break
-            file_path = self.files[file_index]
-            label = file_path[len(path):].lstrip("/")
-            self.progress(report_name, label)
-            censused += 1
-
-            content, _stats = contentcensus.census_classify(file_path)
-            if not content:
-                # cannot happen (the walk matched one of the lists), but a row
-                # is never written for a file whose type cannot be named
-                continue
-            if content == "books":
-                # The one row that is CPU-bound rather than seek-bound, so the
-                # one the cores share. The progress line and the census count
-                # were taken above, in this process, on purpose: the counter
-                # stays one sequence whether or not the books run in parallel,
-                # and the line keeps its place in the library's file order.
-                running.append(workerpool.start_worker(
-                    self.book_one,
-                    (file_index, file_path, scratch, skipped_path), file_path))
-                if len(running) >= self.book_jobs:
-                    running = workerpool.reap_one(running)
-                continue
-
-            row, reason = contentcensus.census_row(content, file_path,
-                                                   self.separator)
-            if row is not None:
-                with open(rows[content], "a") as handle:
-                    handle.write(row + "\n")
-                if getattr(row, "sanitised", False):
-                    sanitised = True
-            else:
-                log('  WARNING: skipping "%s": %s' % (file_path, reason))
-                _append_bytes(skipped_path, _skip_entry(file_path, reason))
-
-        # The books the pool is still holding, then their rows and skips folded
-        # back in the library's file order - only then is the books file
-        # complete, which is what the reports below read.
-        workerpool.join_all(running)
+        # A book is started as soon as the walk finds it, beside the walk,
+        # rather than once a buffer of them is found. The books' workers are
+        # waited for, then their rows and skips folded back in the library's
+        # file order - only then is the books file complete, which is what the
+        # reports below read.
+        workerpool.run(walk(), self.book_jobs, self.book_one,
+                       lambda book: (book[1], book[0], scratch, skipped_path),
+                       prepared=True, start_after=1)
+        if censused < count and safety.abort_requested():
+            log("Interrupted - stopping after the file(s) already read "
+                'under "%s"' % path)
         if self.merge_book_results(scratch, start, count, rows["books"],
                                    skipped_path):
             sanitised = True
@@ -794,11 +802,9 @@ def run(arguments, depth, out_dir, run_bi, separator, extension,
                     "counts are unaffected.")
             log("Censusing %d libraries from the %d folders given, one worker "
                 "each" % (len(lib_paths), len(worker_roots)))
-            workers = []
-            for root_index in worker_roots:
-                workers.append(workerpool.start_worker(
-                    state.root, (root_index,), in_paths[root_index]))
-            workerpool.join_all(workers)
+            workerpool.run([(in_paths[index], index) for index in worker_roots],
+                           len(worker_roots), state.root,
+                           lambda root: (root[1],))
         else:
             for root_index in worker_roots:
                 state.root(root_index)

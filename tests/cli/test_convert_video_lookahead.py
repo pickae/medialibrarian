@@ -4,7 +4,7 @@ Preparing a file - its probes, the -t test, the grain and crop measurements,
 the chunk boundaries - is work of its own, and done between two encodes it is
 spent in front of the second. So is the previous file's tail: waiting for its
 audio, the mux and the checks of the muxed file. So the run prepares files
-ahead through the dynamic queue, on a thread beside the encode, and muxes the
+ahead through the queue, on a thread beside the encode, and muxes the
 previous file on another. What that must not cost: a second Dolby Vision
 intermediate in the RAM scratch beside the first, more than one mux at a time,
 and the prepared files' lines printed over the one encoding.

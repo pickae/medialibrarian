@@ -301,7 +301,9 @@ class TestJoiningTheStragglers:
 
 
 def test_no_command_keeps_a_queue_of_its_own():
-    """Waiting for a worker is this module's job, and only this module's.
+    """Waiting for a worker is this module's job, and only this module's:
+    a command hands its items to :func:`workerpool.map` or
+    :func:`workerpool.run` and never reaps a worker itself.
 
     A command that caps its own fan-out has to reap it too, and the reap is the
     part that is easy to get wrong: waiting on ``running[0]`` looks like waiting
@@ -312,7 +314,7 @@ def test_no_command_keeps_a_queue_of_its_own():
         if path.name == "workerpool.py":
             continue
         source = path.read_text(encoding="utf-8")
-        if "running[0]" in source or (
+        if "running[0]" in source or "reap_one(" in source or (
                 "len(running)" in source and "workerpool." not in source):
             private.append(path.name)
     assert private == []

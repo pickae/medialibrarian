@@ -2,7 +2,7 @@
 
 A forkserver worker keeps the environment the fork server started with, so a
 profile handed over through ``os.environ`` reaches the second table's workers
-as the first table's. The stand-in for ``_spawn`` below runs each worker under
+as the first table's. The stand-in for the queue below runs each worker under
 the environment the first one saw, which is what the fork server does.
 """
 
@@ -15,16 +15,6 @@ from medialib.cli import ytdlp
 pytestmark = pytest.mark.pure
 
 
-class _Done:
-    exitcode = 0
-
-    def join(self, timeout=None):
-        return None
-
-    def is_alive(self):
-        return False
-
-
 @pytest.fixture
 def fetched(monkeypatch, tmp_path):
     profiles = []
@@ -34,7 +24,7 @@ def fetched(monkeypatch, tmp_path):
         profiles.append(profile)
         return None
 
-    def spawn(target, args, _name):
+    def spawn(target, args):
         if not server_environment:
             server_environment.update(os.environ)
         current = dict(os.environ)
@@ -45,12 +35,14 @@ def fetched(monkeypatch, tmp_path):
         finally:
             os.environ.clear()
             os.environ.update(current)
-        return _Done()
+
+    def queue(items, _jobs, target, arguments, on_done=None, prepared=False,
+              **_kwargs):
+        for entry in items:
+            spawn(target, arguments(entry[0] if prepared else entry))
 
     monkeypatch.setattr(ytdlp.podcastfeeds, "podcast_call", call)
-    monkeypatch.setattr(ytdlp.workerpool, "start_worker", spawn)
-    monkeypatch.setattr(ytdlp.workerpool, "reap_one", lambda running: [])
-    monkeypatch.setattr(ytdlp.workerpool, "join_all", lambda running: None)
+    monkeypatch.setattr(ytdlp.workerpool, "run", queue)
     monkeypatch.setattr(ytdlp.safety, "trap_worker_abort", lambda: None)
     monkeypatch.setattr(ytdlp.safety, "abort_requested", lambda: False)
 

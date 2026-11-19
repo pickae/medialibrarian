@@ -24,7 +24,6 @@ from medialib.lib import (
     clioptions,
     console,
     durationcheck,
-    dynamicqueue,
     enums,
     ffmpegselect,
     ramscratch,
@@ -198,7 +197,7 @@ class Run:
 
     def prepared(self, relatives):
         """Each input made ready for whisper, as ``((relative, for_whisper,
-        work), size)`` for :mod:`medialib.lib.dynamicqueue`.
+        work), size)`` for :func:`medialib.lib.workerpool.map`.
 
         This runs on the queue's own thread, beside the workers: lifting a
         film's audio out is minutes of ffmpeg in which a worker would leave
@@ -611,17 +610,8 @@ def _transcribe(program: str, input_dir: str, output_dir: str, fmt: str,
     # whisper in groups, one process - one load of the model - a group.
     groups = _groups(state.prepared(tracks), group_size(len(tracks),
                                                         int(jobs)))
-    if int(jobs) <= 1:
-        queue = dynamicqueue.ahead(groups, 1, discard=_discard_group)
-        try:
-            workerpool.map(queue, 1, state.transcribe_group)
-        finally:
-            queue.close()
-    else:
-        dynamicqueue.run(groups, int(jobs),
-                         workerpool.in_worker,
-                         lambda group: (state.transcribe_group, group),
-                         start_after=1)
+    workerpool.map(groups, int(jobs), state.transcribe_group, prepared=True,
+                   look_ahead=1, discard=_discard_group, start_after=1)
     safety.exit_if_aborted()
     runlog.say("Done.\n")
     safety.print_run_footer()

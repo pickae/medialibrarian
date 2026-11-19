@@ -40,7 +40,6 @@ from medialib.lib import (
     donelog,
     durationcheck,
     dvdcompare,
-    dynamicqueue,
     enums,
     errorlog,
     ffmpegselect,
@@ -2017,10 +2016,10 @@ def _chapters_only(program: str, roots: list) -> int:
 
 def _queued_chapters(root: str) -> dict:
     """One folder's chapters, looked up and written at once: the lookup,
-    paced to the archive, is the producer of a dynamic queue, and each film
-    it has found a set for is written by a worker while it goes on to the
-    next - so the lookup, which is what the run waits for, never waits for a
-    write."""
+    paced to the archive, is the producer of a queue of prepared items, and
+    each film it has found a set for is written by a worker while it goes on
+    to the next - so the lookup, which is what the run waits for, never
+    waits for a write."""
     outcome = chapterdb.empty_outcome()
     found: list = []
 
@@ -2213,12 +2212,13 @@ def _commentary_names_in(root: str, name: str, write: bool, lookup,
     """One folder's commentary tracks named, or what would be, and its list
     written.
 
-    Queued, the naming is a dynamic queue: working out each film's names -
-    the database asked at its polite pace - is the producer, and each film
-    whose names are settled is renamed by a worker while the producer goes on
-    to the next. The database is what the run waits for, and it is never kept
-    waiting for a rename. Unqueued, each film is renamed as it is settled: the
-    full ingest's way, whose research asked the database long before.
+    Queued, the naming is a queue of prepared items: working out each film's
+    names - the database asked at its polite pace - is the producer, and each
+    film whose names are settled is renamed by a worker while the producer
+    goes on to the next. The database is what the run waits for, and it is
+    never kept waiting for a rename. Unqueued, each film is renamed as it is
+    settled: the full ingest's way, whose research asked the database long
+    before.
     """
     log = _preview_log(write)
     named: list = []
@@ -2430,7 +2430,7 @@ APPLY_BUFFER_FACTOR = 8
 def _apply_as_prepared(prepared, target) -> list:
     """Every ``(label, work)`` the ``prepared`` generator yields handed to
     ``target`` in a worker, while the generator goes on preparing the next -
-    the dynamic queue, with the preparation as its producer. ``target``'s
+    the queue, with the preparation as its producer. ``target``'s
     answers come back in the order prepared, None for one whose worker never
     answered: it was stopped, or died. Each label is the film the worker
     writes to, and what this process read of it is forgotten."""
@@ -2446,9 +2446,9 @@ def _apply_as_prepared(prepared, target) -> list:
 
     try:
         try:
-            dynamicqueue.run(items(), APPLY_JOBS, _in_apply_worker,
-                             lambda item: (target, item),
-                             buffer_factor=APPLY_BUFFER_FACTOR, log=log)
+            workerpool.run(items(), APPLY_JOBS, _in_apply_worker,
+                           lambda item: (target, item), prepared=True,
+                           buffer_factor=APPLY_BUFFER_FACTOR, log=log)
         finally:
             for label in labels:
                 filmrecord.forget(label)
@@ -3582,9 +3582,9 @@ def _drain_commentary(state, producer, jobs: int, tracker=None) -> None:
     ``producer`` yields ``(record, size)`` as it prepares the commentary, so
     the preparation runs beside the transcription rather than in front of it.
     At width one there is nothing to interleave with, so the records are
-    prepared and run in this process one at a time; wider than that the dynamic
-    queue runs them, keeping an adequate buffer of prepared items and giving a
-    freed slot the next longest one.
+    prepared and run in this process one at a time; wider than that the queue
+    keeps an adequate buffer of prepared items and gives a freed slot the next
+    longest one.
 
     ``tracker``, when given, is told of every record as it is queued and again
     once it is done - a :class:`lanes.TranscriptTracker`, which is how the
@@ -3596,19 +3596,8 @@ def _drain_commentary(state, producer, jobs: int, tracker=None) -> None:
     if tracker is not None:
         producer = _told_of(tracker, producer)
     work = functools.partial(_transcribe_one, state, lane=lane)
-    if jobs <= 1:
-        for record, _size in producer:
-            if safety.abort_requested():
-                return
-            with errorlog.work_item(record):
-                work(record)
-            if tracker is not None:
-                tracker.record_done(record)
-        return
-
-    dynamicqueue.run(producer, jobs, workerpool.in_worker,
-                     lambda record: (work, record), log=log,
-                     on_done=None if tracker is None else tracker.record_done)
+    workerpool.map(producer, jobs, work, prepared=True, log=log,
+                   on_done=None if tracker is None else tracker.record_done)
 
 
 def _told_of(tracker, producer):

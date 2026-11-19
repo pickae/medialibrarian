@@ -68,7 +68,7 @@ def test_the_queue_is_handed_a_drain_and_not_none(ingested):
 
 def test_the_width_is_whisper_s_and_not_the_core_count(ingested, monkeypatch):
     widths = []
-    monkeypatch.setattr(run_module.dynamicqueue, "run",
+    monkeypatch.setattr(run_module.workerpool, "map",
                         lambda producer, jobs, *a, **k: widths.append(jobs))
     ingested()["drain"](iter(()))
     assert widths == [whisper_lib.WHISPER_JOBS]
