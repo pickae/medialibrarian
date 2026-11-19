@@ -374,3 +374,60 @@ def test_the_settle_step_keeps_a_chapter_the_floor_lets_through():
             for floor in (60_000, 30_000)}
     assert len(kept[60_000]) == 2
     assert len(kept[30_000]) == 3
+
+
+class TestTheNeighboursOfASecondLook:
+    """A second look is told where the chapters either side of it start - at a
+    line of its own transcript, or so far outside it - so it can tell what its
+    chapter is from what surrounds it, whatever the chapters are called."""
+
+    def _looks(self, *starts, cues=30):
+        model = Model(outline=_outline(*starts))
+        aichapters.generate(_cues(cues), model)
+        return [prompt for prompt in model.asked if "Find the line where" in prompt]
+
+    def test_a_neighbour_far_off_is_said_to_be_outside_with_its_distance(self):
+        first, last = self._looks(1, 21, 41)
+        assert 'The chapter before it, "Topic 1", starts about 10 minutes ' \
+               'before the start of this one, outside this transcript.' in first
+        assert 'The chapter after it, "Topic 41", starts about 10 minutes ' \
+               'after the start of this one, outside this transcript.' in first
+        assert 'The chapter before it, "Topic 21"' in last
+
+    def test_a_neighbour_in_the_window_is_said_to_be_at_a_line(self):
+        (look,) = self._looks(1, 7, 9, cues=10)[:1]
+        assert re.search(r'The chapter after it, "Topic 9", starts at about line '
+                         r'L\d+ \(0:\d\d:\d\d\), inside this transcript\.', look)
+
+    def test_the_last_chapter_has_no_chapter_after_it(self):
+        *_, last = self._looks(1, 21, 41)
+        assert "There is no chapter after it." in last
+
+    def test_the_neighbours_are_settled(self):
+        (look, *_) = self._looks(1, 21)
+        assert "Those neighbours are settled" in look
+
+    def test_nothing_in_the_words_is_about_episodes_or_speakers(self):
+        (look, *_) = self._looks(1, 21)
+        sentence = look[look.index("The chapter before it"):look.index("Find the line")]
+        assert not re.search(r"episode|speaker|season|header", sentence, re.IGNORECASE)
+
+    def test_a_start_at_or_before_the_chapter_before_it_is_not_taken(self):
+        marks = aichapters.generate(_cues(30), Model(
+            outline=_outline(1, 21, 41),
+            refine=lambda p: ('{"start": "L1", "title": "T"}' if '"Topic 21" is placed' in p
+                              else json.dumps({"start": _first_line(p),
+                                               "title": _placed_title(p)}))))
+        assert marks[1][0] == 600000 - 500
+
+    def test_a_start_at_or_after_the_chapter_after_it_is_not_taken(self):
+        def refine(prompt):
+            if '"Topic 21" is placed' in prompt:
+                after = re.search(r"\[(L\d+) (0:20:\d\d)\]", prompt)
+                return json.dumps({"start": after.group(1), "title": "T"}) if after \
+                    else json.dumps({"start": _first_line(prompt), "title": "T"})
+            return json.dumps({"start": _first_line(prompt), "title": _placed_title(prompt)})
+
+        marks = aichapters.generate(_cues(60), Model(outline=_outline(1, 21, 23, 41),
+                                                     refine=refine))
+        assert [at for at, _ in marks] == sorted(at for at, _ in marks)

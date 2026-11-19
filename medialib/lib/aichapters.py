@@ -480,6 +480,33 @@ def _outline(lines: Sequence[_Line], summarised: bool, total: int, llm,
     return str(answer.get("summary") or "").strip(), kept
 
 
+def _gap_label(ms: int) -> str:
+    """A distance as the model is told it: 40 seconds, 5 minutes 31 seconds."""
+    seconds = max(ms, 0) // _MS_PER_SECOND
+    minutes, seconds = divmod(seconds, 60)
+    parts = []
+    if minutes:
+        parts.append("%d minute%s" % (minutes, "" if minutes == 1 else "s"))
+    if seconds or not minutes:
+        parts.append("%d second%s" % (seconds, "" if seconds == 1 else "s"))
+    return " ".join(parts)
+
+
+def _neighbour(cues: Sequence[Cue], title: str, first: int, here_start: int,
+               low: int, high: int, word: str) -> str:
+    """Where the chapter before or after the one being looked at starts, as
+    that second look is told: at a line of the transcript it is given, or so
+    far before or after the start it is looking at, outside it. ``word`` is
+    "before" or "after"."""
+    if low <= first <= high:
+        return ("The chapter %s it, \"%s\", starts at about line L%d (%s), "
+                "inside this transcript." % (
+                    word, title, first + 1, time_label(cues[first].start)))
+    return ("The chapter %s it, \"%s\", starts about %s %s the start of this one, "
+            "outside this transcript." % (
+                word, title, _gap_label(abs(cues[first].start - here_start)), word))
+
+
 def _refine(cues: Sequence[Cue], found: Sequence[Passage], marks: list[_Mark],
             summary: str, llm, duration: int, log,
             instructions: str = "") -> list[tuple[int, str]]:
@@ -500,12 +527,26 @@ def _refine(cues: Sequence[Cue], found: Sequence[Passage], marks: list[_Mark],
         outline = "\n".join("%s %s%s" % (time_label(start), title,
                                          "   <-- this one" if index == position else "")
                             for index, (start, title) in enumerate(listing))
+        before = marks[position - 1]
+        after = marks[position + 1] if position + 1 < len(marks) else None
+        before_first = found[before.passage].first
+        neighbours = _neighbour(cues, before.title, before_first, here.start,
+                                low, high, "before")
+        after_first = None
+        if after is None:
+            neighbours += " There is no chapter after it."
+        else:
+            after_first = found[after.passage].first
+            neighbours += " " + _neighbour(cues, after.title, after_first,
+                                           here.start, low, high, "after")
         prompt = (
             "A recording that runs %s is being divided into chapters.%s\n\n"
             "The chapter list so far:\n%s\n\n"
             "Below is the transcript around where the chapter \"%s\" is placed "
-            "to start (%s), line by line, each with its id and start time. The "
-            "chapter before it is \"%s\".\n\n"
+            "to start (%s), line by line, each with its id and start time. %s "
+            "Those neighbours are settled: only this chapter's start and title "
+            "are yours to decide, and its start has to come after the one before "
+            "it and before the one after it.\n\n"
             "Find the line where \"%s\" really begins: the first line that "
             "belongs to it, such as the sentence that introduces the new topic "
             "or leads over to it - not a line in the middle of it. A chapter that "
@@ -519,7 +560,7 @@ def _refine(cues: Sequence[Cue], found: Sequence[Passage], marks: list[_Mark],
             % (time_label(duration),
                " What it is: " + summary if summary else "",
                outline, mark.title, time_label(here.start),
-               marks[position - 1].title, mark.title, _TITLE_RULES,
+               neighbours, mark.title, _TITLE_RULES,
                _asked(instructions, _FOR_REFINE), window))
         answer = _ask_json(llm, prompt, "start", log)
         if answer is None:
@@ -530,7 +571,9 @@ def _refine(cues: Sequence[Cue], found: Sequence[Passage], marks: list[_Mark],
             return None
         match = re.fullmatch(r"\s*L?(\d+)\s*", str(start), re.IGNORECASE)
         index = int(match.group(1)) - 1 if match else -1
-        if not low <= index <= high:
+        floor = max(low, before_first + 1)
+        ceiling = high if after_first is None else min(high, after_first - 1)
+        if not floor <= index <= ceiling:
             index = here.first
         return index, title
 
