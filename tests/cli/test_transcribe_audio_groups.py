@@ -183,5 +183,6 @@ class TestLyrics:
 
     def test_a_transcript_without_its_copy_is_done_again(self, run):
         open(os.path.join(run.input_dir, "a.opus"), "w").close()
-        open(os.path.join(run.output_dir, "a.srt"), "w").write("x")
+        with open(os.path.join(run.output_dir, "a.srt"), "w") as handle:
+            handle.write("x")
         assert run._prepare("a.opus") is not None
