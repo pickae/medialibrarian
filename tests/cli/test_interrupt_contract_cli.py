@@ -556,8 +556,14 @@ class TestAnInterruptedCensus:
         built = interrupt.work / "duckdbWasRun"
         interrupt.with_tool("duckdb", ': > "%s"' % built)
         library = interrupt.tree("Shelf", "a.txt", *_tracks(4, "mp3"))
-        stopped = interrupt.stop(signal.SIGTERM, "content-census", "-b",
-                                 library)
+        # The book is read by a pool worker, and a worker that has not yet
+        # started when the signal lands sees the abort and reads nothing - a
+        # slow runner's process start is longer than the grace. So the signal
+        # waits for the book's row, which is what "the part it read" is.
+        base = interrupt.outputs.parent / "rambase"
+        stopped = interrupt.stop(
+            signal.SIGTERM, "content-census", "-b", library,
+            ready=lambda: any(base.rglob("bookrow.*")))
         stopped.library = library
         stopped.built = built
         return stopped
