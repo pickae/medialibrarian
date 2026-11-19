@@ -203,7 +203,7 @@ class TestTheSettingOverrideInARealRun:
             "%s/Books/a.txt,50000,300,80000,450000\n" % sandbox.work,
             encoding="utf-8")
         done = sandbox.run("content-census-bi", "-x", "infoLogLevel=verbose",
-                           "-s", str(reports))
+                           str(reports))
         assert done.returncode == 0, done.stdout + done.stderr
         log_dir = Path(os.environ["CLI_SCRIPT_DIR"]) / "logs" \
             / runlog.INFO_DIR

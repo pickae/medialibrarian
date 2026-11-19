@@ -22,6 +22,7 @@ from medialib.lib import (
     clioptions,
     cubes,
     errorlog,
+    formatting,
     ramscratch,
     runlog,
     safety,
@@ -50,13 +51,12 @@ e | <dir> | Also export each cube as <type>Cube.csv into <dir>.
 c | <sql> | Run one query against the finished database and print it.
                     The tables are named above; try
                       -c \"SELECT * FROM videoCube WHERE depth = 1 AND resolution != 'ALL'\"
-s |  | Print each cube's grand total when it is built.
 h |  | Print this help page.
 """
 
-OPT_VARS = "o:dbPath e:exportDir c:query s:showTotals"
+OPT_VARS = "o:dbPath e:exportDir c:query"
 OPT_COLUMN = 20
-OPT_LONG = "o:database e:export-dir c:query s:show-totals h:help"
+OPT_LONG = "o:database e:export-dir c:query h:help"
 
 # The report name prefixes this command looks for, which are the census's own
 # content types and not a second list of them.
@@ -369,14 +369,19 @@ def discard_build(build_path: str) -> None:
 def report_counts(db_path: str, built) -> None:
     for content in built:
         query = ("SELECT (SELECT COUNT(*) FROM %sFiles) || '|' || "
-                 "(SELECT COUNT(*) FROM %sCube);" % (content, content))
+                 "(SELECT SUM(sizeBytes) FROM %sFiles) || '|' || "
+                 "(SELECT COUNT(*) FROM %sCube);" % (content, content,
+                                                      content))
         proc = _duckdb(["-noheader", "-list", db_path, "-c", query],
                        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         counts = (proc.stdout.decode("utf-8", "replace").strip()
-                  if proc.returncode == 0 else "?|?") or "?|?"
-        files, _, buckets = counts.partition("|")
-        log("%s: %s file(s) rolled up into %s bucket(s) in %sCube"
-            % (content, files, buckets, content))
+                  if proc.returncode == 0 else "")
+        files, _, rest = counts.partition("|")
+        size, _, buckets = rest.partition("|")
+        log("%s: %s file(s) of %s rolled up into %s bucket(s) in %sCube"
+            % (content, files or "?",
+               formatting.fmt_bytes(size) if size.isdigit() else "?",
+               buckets or "?", content))
 
 
 def write_page(db_path: str, scratch: str, built) -> str:
@@ -501,7 +506,7 @@ def main(argv: list, program: str = "content-census-bi") -> int:
 
         report_counts(build_path, built)
 
-        if result.values["showTotals"]:
+        if runlog.verbosity() >= runlog.VERBOSE:
             for content in built:
                 sys.stderr.write("\n%s, all of it:\n" % content)
                 _duckdb(["-box", build_path, "-c", cubes.totals_sql(content)])
