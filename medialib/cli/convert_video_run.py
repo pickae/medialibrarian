@@ -172,6 +172,7 @@ class Run:
         if safety.abort_requested():
             return None
         self._settle_dolby_vision(plan)
+        self._note_static_hdr(plan)
 
         # From here the plan may hold the run's one Dolby Vision slot, so every
         # way out that does not hand the plan on hands the slot back first.
@@ -308,6 +309,15 @@ class Run:
         count = (settings.nvenc_engines if settings.hardware_encode
                  else rules.chunk_count_for(enc_width, enc_height,
                                             settings.cores))
+        if not settings.hardware_encode:
+            # The count is the file's own: the run's summary names the policy,
+            # this names the tier the file fell on and the cores it was scaled
+            # to, so the number in the Chunking line below is reachable from
+            # its reason.
+            runlog.detail("%s: %d chunk(s) - the %s tier, scaled to %d cores"
+                          % (relative, count,
+                             resolutions.tier_of(enc_width, enc_height),
+                             settings.cores))
         plan.bounds = chunk_bounds(plan.duration, count)
         # Last, because it reads the video the encode will: the Dolby Vision
         # intermediate where there is one.
@@ -319,6 +329,42 @@ class Run:
                 rules.video_source_for(relative, settings.input_dir,
                                        settings.dolby_vision_source),
                 plan.bounds, settings.decode_accel)
+        self._settle_quality_note(plan, enc_width, enc_height)
+
+    def _settle_quality_note(self, plan: Plan, enc_width, enc_height) -> None:
+        """The quality level this file actually encodes at, spoken under -v when
+        the resolution bias moved it off the profile's.
+
+        The run's summary names the policy and the table; the encode then
+        applies it per file on the size that file is ENCODED at, and applies it
+        in silence - the level the argument string ends up with is a local of
+        that application, nowhere else to be read. Said here, where the size is
+        settled and the figures are the same ones the encode will use.
+        """
+        settings, relative = plan.settings, plan.relative
+        if settings.quality_given:
+            return
+        base = rules.profile_args(rules.video_profiles(),
+                                  settings.video_profile)
+        if not rules.video_quality_flag(base):
+            return
+        settled = rules.apply_video_quality(base, enc_width, enc_height)
+        before = rules._LEVEL.search(base)
+        after = rules._LEVEL.search(settled)
+        if not before or not after or before.group(2) == after.group(2):
+            return
+        bias = rules.quality_bias_for(enc_width, enc_height)
+        line = ("%s: quality %s -> %s, biased %+d for the %s tier it is "
+                "encoded at"
+                % (relative, before.group(2), after.group(2), bias,
+                   resolutions.tier_of(enc_width, enc_height)))
+        if int(after.group(2)) != int(before.group(2)) + bias:
+            ceiling = rules.video_quality_max(base)
+            kind = ("maximum" if int(after.group(2)) == ceiling
+                    else "minimum")
+            line += ", stopped at %s, the encoder's %s" % (after.group(2),
+                                                           kind)
+        runlog.detail(line)
 
     def convert(self, plan: Plan) -> int:
         """ONE prepared video, produced in three overlapping parts and muxed.
@@ -508,6 +554,35 @@ class Run:
         # nothing: its base layer is the same HDR10 the source already has.
         if plan.scratch and settings.dolby_vision_mode != "1":
             self._release_dv(plan)
+
+    def _note_static_hdr(self, plan: Plan) -> None:
+        """The source's static HDR metadata, named under -v.
+
+        A file that is not Dolby Vision and keeps no HDR10+ still carries its
+        HDR the ordinary way: the colour tags and the mastering-display
+        metadata, copied into the encode by the argument builder - and nothing
+        else in the run says that copy happened or what it was made of. The
+        figures are the source's own, read the way the argument builder reads
+        them; a file without the metadata is the ordinary case and says
+        nothing. A file carrying its RPU through already says it.
+        """
+        if runlog.verbosity() < runlog.VERBOSE:
+            return
+        settings = plan.settings
+        if settings.dolby_vision_mode == "1":
+            return
+        if safety.abort_requested():
+            return
+        metadata = videosource.hdr_master_display(plan.source)
+        if not metadata:
+            return
+        if safety.abort_requested():
+            return
+        _space, _range, transfer = videosource.video_color_space(plan.source)
+        light = metadata.rpartition(" ")[2]
+        runlog.detail("%s: the source's static HDR metadata is kept in the "
+                      "encode - transfer %s, max CLL %s"
+                      % (plan.relative, transfer, light))
 
     def _settle_crop(self, relative: str, source: str, settings) -> str:
         """The per-file crop -c asks for, which every chunk then inherits, or ""
@@ -930,6 +1005,20 @@ def main(argv: list, program: str = "convert-video",
         ramscratch.run_exit_cleanup()
 
 
+def _takes_profile(video_args: str):
+    """The ladder's probe, with the walk spoken under -v: a build the
+    one-frame encode refuses is named with the complaint that refused it.
+    The run's summary says which build was settled on and what THAT build
+    lacks; this says what the ones it was passed over lacked. The probe
+    itself still answers only true or false."""
+    def takes_profile(binary: str) -> bool:
+        ok, why = probes.ffmpeg_takes_profile(binary, video_args)
+        if not ok:
+            runlog.detail("ffmpeg: %s passed over - %s" % (binary, why))
+        return ok
+    return takes_profile
+
+
 def _settle_and_run(settings, program: str, video_args: str, grain: str,
                     engines_override: str) -> int:
     # This script asks ffmpeg for things a distribution's package is often too old
@@ -946,7 +1035,7 @@ def _settle_and_run(settings, program: str, video_args: str, grain: str,
             fork_use = "its PQ variance-boost curve on a PQ source"
         rank = probes.SvtBuildRank(fork_use)
     ffmpegselect.select_ffmpeg(
-        lambda binary: probes.ffmpeg_takes_profile(binary, video_args),
+        _takes_profile(video_args),
         prefer=rank)
     if tooldeps.require_tools(program, ["ffmpeg", "ffprobe"]
                               + (["mkvmerge"] if settings.keep_tracks else [])):

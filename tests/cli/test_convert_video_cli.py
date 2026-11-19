@@ -8,6 +8,8 @@ and whether that count was read from the card or guessed blind.
 
 from __future__ import annotations
 
+import os
+import re
 from pathlib import Path
 
 import pytest
@@ -1036,3 +1038,55 @@ class TestRefusalsChangeNothing:
         assert ("The hevcNvenc profile needs a working hevc_nvenc encoder, "
                 "which this machine does not provide." in done.stderr)
         assert blackbox.tree_of(video.outputs) == []
+
+
+class TestTheVerboseWalk:
+    """-v speaks the ffmpeg ladder's walk and the file's own figures: a build
+    the one-frame probe passed over is named with the complaint that passed
+    it over, and a file's chunk count names the tier it was taken from.
+    Without -v, none of it is spoken."""
+
+    REJECT = ('case "$*" in *libsvtav1*) echo \'[libsvtav1 @ 0x1] Error '
+              'parsing option "qm-min" with value "0".\' >&2;; esac; exit 0')
+
+    @pytest.fixture
+    def video(self, sandbox, tmp_path):
+        # ffprobe answers the duration; the ffmpeg on PATH is the build the
+        # probe passes over, and the one the ladder names behind it is the
+        # build the run settles on.
+        sandbox.with_tool("ffprobe", "echo 1.0")
+        sandbox.inputs = tmp_path / "in"
+        sandbox.inputs.mkdir()
+        (sandbox.inputs / "clip.mkv").write_text("")
+        return sandbox
+
+    def _run(self, video, *options):
+        video.with_tool("ffmpeg", self.REJECT)
+        ladder = video.work / "ladder"
+        ladder.mkdir()
+        (ladder / "ffmpeg").write_text("#!/usr/bin/env bash\nexit 0\n")
+        (ladder / "ffmpeg").chmod(0o755)
+        video.linking(*_ORDINARY).narrow()
+        outputs = video.work / "out"
+        done = video.run("convert-video", *options, video.inputs, outputs,
+                         env=dict(os.environ, ffmpegLadder=str(ladder)),
+                         timeout=180)
+        return done.stdout + done.stderr
+
+    def test_a_build_passed_over_is_named_with_its_complaint(self, video):
+        log = self._run(video, "-v")
+        assert log.count("passed over -") == 1
+        assert 'Error parsing option "qm-min" with value "0"' in log
+        assert any("Using ffmpeg: " in line and "ladder" in line
+                   for line in log.splitlines())
+
+    def test_a_file_chunk_count_names_the_tier_it_was_taken_from(self, video):
+        log = self._run(video, "-v")
+        assert re.search(r"clip\.mkv: \d+ chunk\(s\) - the unknown tier, "
+                         r"scaled to \d+ cores", log)
+
+    def test_without_verbose_the_walk_and_the_figures_are_not_spoken(
+            self, video):
+        log = self._run(video)
+        assert "passed over -" not in log
+        assert not re.search(r"clip\.mkv: \d+ chunk\(s\)", log)
