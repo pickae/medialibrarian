@@ -242,10 +242,10 @@ class TestRenameSubs:
     def test_every_language_of_the_table(self, w):
         entries = ["The Movie/%s %s.srt" % (letter, row.sub_word.lower())
                    for letter, row in zip(string.ascii_lowercase,
-                                          languages.LANGUAGES, strict=False)]
+                                          languages.recognised(), strict=False)]
         tree = _tree(w, ("The Movie", "d"), *entries, "The Movie/x.txt")
         subtitlefiles.rename_subs(str(tree))
-        for row in languages.LANGUAGES:
+        for row in languages.recognised():
             assert (tree / "The Movie/The Movie.{}.srt".format(row.code2)).is_file()
         assert (tree / "The Movie/x.txt").is_file()
 
@@ -961,11 +961,11 @@ class TestDownloadSubs:
         logs = []
         subtitlefiles.download_subs(str(tree), _ORG, "600", "60", "yes",
                                     logs.append,
-                                    wanted=tuple(languages.LANGUAGES))
+                                    wanted=tuple(languages.recognised()))
         assert (tree / "Movie.en.srt").is_file()
         assert not (tree / "Featurettes/Clip.en.srt").exists()
         pipx_calls = [a for a in w.calls() if a[0] == "pipx"]
-        codes = [row.code2 for row in languages.LANGUAGES]
+        codes = [row.code2 for row in languages.recognised()]
         assert [a[3] for a in pipx_calls] == [",".join(codes)] + codes
         assert all(a[5].endswith("/Movie.mkv") for a in pipx_calls)
 
@@ -1027,11 +1027,11 @@ class TestDownloadSubs:
         logs = []
         subtitlefiles.download_subs(str(tree), _NO_ORG, "600", "60", "yes",
                                     logs.append,
-                                    wanted=tuple(languages.LANGUAGES))
+                                    wanted=tuple(languages.recognised()))
         assert logs[0] == ("WARNING: openSubtitlesUser/openSubtitlesPassword "
                            "not set, OpenSubtitles skipped")
         assert sum("OpenSubtitles skipped" in line for line in logs) == 1
-        missing = 2 * len(languages.LANGUAGES) - 1
+        missing = 2 * len(languages.recognised()) - 1
         # and one call per film for the first try of all its languages,
         # which the stub answers for none of
         assert len([a for a in w.calls() if a[0] == "pipx"]) \
@@ -1055,7 +1055,7 @@ class TestDownloadSubs:
         w.say("pipx", self._answers(en="saved\t7", de="none", fr="none",
                                     nl="none", es="none", it="already",
                                     **{row.code2: "none"
-                                       for row in languages.LANGUAGES
+                                       for row in languages.recognised()
                                        if row.code2 not in
                                        ("en", "de", "fr", "nl", "es", "it")}))
         w.say("ffprobe", "subrip")
@@ -1065,10 +1065,10 @@ class TestDownloadSubs:
         logs = []
         subtitlefiles.download_subs(str(tree), _ORG, "600", "60", "yes",
                                     logs.append,
-                                    wanted=tuple(languages.LANGUAGES))
+                                    wanted=tuple(languages.recognised()))
         pipx_calls = [a for a in w.calls() if a[0] == "pipx"]
         assert [a[3] for a in pipx_calls] == [
-            ",".join(row.code2 for row in languages.LANGUAGES)]
+            ",".join(row.code2 for row in languages.recognised())]
         assert (tree / "Movie.en.srt").is_file()
         assert ("  English: downloaded from OpenSubtitles.org, in step with "
                 "the audio (shifted +5.0 s) - synced and kept") in logs
@@ -1094,7 +1094,7 @@ class TestDownloadSubs:
 
     def test_a_film_missing_one_language_asks_for_it_alone(self, w,
                                                            monkeypatch):
-        have = ["Movie.%s.srt" % row.code2 for row in languages.LANGUAGES
+        have = ["Movie.%s.srt" % row.code2 for row in languages.recognised()
                 if row.code2 != "it"]
         tree = _tree(w, "Movie.mkv", *have)
         monkeypatch.chdir(tree)
@@ -1140,7 +1140,7 @@ class TestDownloadSubs:
     def test_without_credentials_and_nothing_missing_it_is_silent(
             self, w, monkeypatch):
         tree = _tree(w, "Movie.mkv", *["Movie.%s.srt" % row.code2
-                                       for row in languages.LANGUAGES])
+                                       for row in languages.recognised()])
         monkeypatch.chdir(tree)
         logs = []
         subtitlefiles.download_subs(str(tree), (), "600", "60", "yes",
@@ -1213,7 +1213,7 @@ class TestCheckSubs:
         logs = []
         subtitlefiles.check_subs(str(tree), "600", "60", "yes", True,
                                  logs.append, _ORG,
-                                 wanted=tuple(languages.LANGUAGES))
+                                 wanted=tuple(languages.recognised()))
         second = logs.index("[2/2] " + os.path.join("Films", "Second", "Second.mkv"))
         first = logs[:second]
         assert first[0] == "[1/2] " + os.path.join("Films", "Movie", "Movie.mkv")
@@ -1227,7 +1227,7 @@ class TestCheckSubs:
         pipx = [argv[5] for argv in w.calls() if argv[0] == "pipx"]
         # each film's first try of every language in one call, which the
         # helper here answers for none of, then each language on its own
-        per_film = 1 + len(languages.LANGUAGES)
+        per_film = 1 + len(languages.recognised())
         assert pipx == (
             [str(tree / "Films/Movie/Movie.mkv")] * per_film
             + [str(tree / "Films/Second/Second.mkv")] * per_film)
@@ -1318,7 +1318,7 @@ class TestCheckSubs:
         subtitle in an extras folder, nor one beside the copy an improvement
         kept."""
         own = ["Films/Movie/Movie.%s.srt" % row.code2
-               for row in languages.LANGUAGES]
+               for row in languages.recognised()]
         tree = self._library(
             w, monkeypatch, *own,
             "Films/Movie/Movie 2 Audio Commentary.en.srt",
@@ -1330,7 +1330,7 @@ class TestCheckSubs:
             "Films/Movie/Movie (old).en.srt",
             calls=len(own))
         verdicts, _logs = self._check(tree, write=False,
-                                      wanted=tuple(languages.LANGUAGES))
+                                      wanted=tuple(languages.recognised()))
         assert verdicts["kept"] == [str(tree / path) for path in own]
         assert len(self._synced(w)) == len(own)
 
@@ -1342,7 +1342,7 @@ class TestCheckSubs:
             w, monkeypatch,
             "Films/Movie/Movie.en.srt", "Films/Movie/Movie.pt.srt",
             calls=1)
-        english = tuple(row for row in languages.LANGUAGES
+        english = tuple(row for row in languages.recognised()
                         if row.code2 == "en")
         verdicts, logs = self._check(tree, write=False, wanted=english)
         assert verdicts == {"kept": [str(tree / "Films/Movie/Movie.en.srt")],
@@ -1358,7 +1358,7 @@ class TestCheckSubs:
         tree = _tree(w, "Films/Movie/Movie.mkv")
         monkeypatch.setenv("TMPDIR", str(w.tmp_path))
         w.install("pipx")
-        english = tuple(row for row in languages.LANGUAGES
+        english = tuple(row for row in languages.recognised()
                         if row.code2 in ("en", "de"))
         subtitlefiles.check_subs(str(tree), "600", "60", "yes", True,
                                  [].append, _ORG, wanted=english)
@@ -1440,13 +1440,13 @@ class TestCheckSubsDoneLog:
         tree = self._tree(w, monkeypatch)
         subtitlefiles.check_subs(str(tree), "600", "60", "yes", True,
                                  [].append, _ORG, self._done(w),
-                                 wanted=tuple(languages.LANGUAGES))
+                                 wanted=tuple(languages.recognised()))
         searched = len(w.calls())
-        assert searched == 1 + len(languages.LANGUAGES)
+        assert searched == 1 + len(languages.recognised())
         logs = []
         subtitlefiles.check_subs(str(tree), "600", "60", "yes", True,
                                  logs.append, _ORG, self._done(w),
-                                 wanted=tuple(languages.LANGUAGES))
+                                 wanted=tuple(languages.recognised()))
         assert len(w.calls()) == searched
         assert logs == ['1 film(s) skipped, done in an earlier run - recorded '
                         'in "%s"' % (w.tmp_path / "done.txt")]

@@ -152,7 +152,7 @@ def rename_subs(directory: str, skip_log: SkipLog | None = None) -> None:
             continue
         # One pass per language: the safety-skip report it produces reads a
         # movie's skips language by language, not file by file.
-        for row in languages.LANGUAGES:
+        for row in languages.recognised():
             suffix = row.sub_word.lower() + ".srt"
             target = "{}/{}.{}".format(movie, movie, row.code2) + ".srt"
             for dirpath, _dirnames, filenames in os.walk(movie_dir):
@@ -485,8 +485,8 @@ def _sync_to_film(file: str, srt: str, timing: str | None, max_offset: str,
 def _said(language_code: str, text: str) -> str:
     """One subtitle's line under its film's header: the language, and what
     became of it."""
-    name = next((row.sub_word for row in languages.LANGUAGES
-                 if row.code2 == language_code), language_code)
+    row = languages.language(language_code)
+    name = row.sub_word if row else language_code
     return "  {}: {}".format(name, text)
 
 

@@ -15,8 +15,8 @@ from medialib.lib import languages, subtitleocr, subtitletracks
 
 pytestmark = [pytest.mark.stubbed, pytest.mark.seconv]
 
-FRENCH = next(row for row in languages.LANGUAGES if row.code2 == "fr")
-ENGLISH = next(row for row in languages.LANGUAGES if row.code2 == "en")
+FRENCH = next(row for row in languages.recognised() if row.code2 == "fr")
+ENGLISH = next(row for row in languages.recognised() if row.code2 == "en")
 
 _CUES = ("1\n00:00:01,000 --> 00:00:03,000\nBonjour.\n\n"
          "2\n00:01:00,000 --> 00:01:02,000\n- Oui ?\n- Non.\n")

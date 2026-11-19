@@ -1,28 +1,41 @@
-"""The supported-language table and its lookups.
+"""Languages: what a code, a tag or a name stands for, and which ones this
+collection reads track names for.
 
-One place decides which languages this collection recognises and how each is
-spelled in every place it turns up - subtitle suffixes, mkv tags, track names,
-whisper output - so supporting another language is a row here and nothing else.
+The codes and the English names are ISO 639 and come from ``pycountry``, so
+any language ISO 639-1 has is a language here - nothing is typed per
+language but the three short lists below, which are choices rather than data:
+the languages whose names are looked for in a track's name, the commentary
+words, and the macrolanguage families.
 """
 
 from __future__ import annotations
 
+import functools
+import gettext
 import os
 import re
+import unicodedata
 from typing import NamedTuple
 
-from medialib.lib import clioptions, titlematch
+import pycountry
+
+from medialib.lib import clioptions, settings, titlematch
 from medialib.lib.enums import shell_lower
 
 
 class Language(NamedTuple):
-    """One row of the table.
+    """One language.
 
     ``code3b`` is ISO 639-2/B, which is what mkvmerge REPORTS where ``code3``
     (639-2/T) is what it is FED: a track muxed as "deu" reads back as "ger", so a
     lookup on the fed code alone would recognise no German, French or Dutch track
-    at all. Only those three and Chinese have two codes (it is fed "chi" and
-    reports "zho"); the rest repeat the one they have.
+    at all. Where the language has one code of the two the field repeats it.
+
+    ``sub_word`` is the language's English name as whisper and the subtitle
+    providers spell it ("Greek", not ISO's "Modern Greek (1453-)").
+    ``keywords`` are its names a track may carry, lower case, as written and
+    with the accents off - in English, in the language itself and in the
+    languages the user speaks.
     """
 
     code2: str
@@ -32,70 +45,154 @@ class Language(NamedTuple):
     code3b: str
 
 
-# In priority order. ``keywords`` holds language words ONLY, never a commentary
-# marker: it says what a track is spoken IN, not what it is. A "commentary" keyword
-# in the English row would stamp "eng" over every foreign commentary's language tag
-# and rob the transcription step of its one hint about what to transcribe.
-LANGUAGES = (
-    Language("en", "eng", "English", ("english", "englisch", "anglais", "ingles"), "eng"),
-    Language("de", "deu", "German", ("german", "deutsch", "allemand"), "ger"),
-    Language("fr", "fra", "French", ("french", "français", "francais", "französisch"), "fre"),
-    Language("nl", "nld", "Dutch", ("dutch", "nederlands"), "dut"),
-    Language("es", "spa", "Spanish", ("spanish", "espagnol"), "spa"),
-    Language("it", "ita", "Italian", ("italian", "italien"), "ita"),
-    Language("pt", "por", "Portuguese", ("portuguese", "português", "portugues"), "por"),
-    Language("pl", "pol", "Polish", ("polish", "polski"), "pol"),
-    Language("sv", "swe", "Swedish", ("swedish", "svenska"), "swe"),
-    Language("da", "dan", "Danish", ("danish", "dansk"), "dan"),
-    Language("no", "nor", "Norwegian", ("norwegian", "norsk"), "nor"),
-    Language("fi", "fin", "Finnish", ("finnish", "suomi"), "fin"),
-    Language("cs", "ces", "Czech", ("czech", "česky", "cesky"), "ces"),
-    Language("hu", "hun", "Hungarian", ("hungarian", "magyar"), "hun"),
-    Language("ro", "ron", "Romanian", ("romanian", "română", "romana"), "ron"),
-    Language("el", "ell", "Greek", ("greek", "ελληνικά", "ellinika"), "ell"),
-    Language("tr", "tur", "Turkish", ("turkish", "türkçe", "turkce"), "tur"),
-    Language("ru", "rus", "Russian", ("russian", "русский"), "rus"),
-    Language("ja", "jpn", "Japanese", ("japanese", "nihongo", "にほんご"), "jpn"),
-    Language("ko", "kor", "Korean", ("korean", "hangugeo", "한국어"), "kor"),
-    Language("zh", "chi", "Chinese", ("chinese", "zhongwen", "中文"), "zho"),
-)
+# The languages whose names are looked for in a track's name, in priority
+# order: where a name holds two languages' words, the first of them wins.
+# Every language the user names in ``spokenLanguages`` or ``keepLanguages``
+# is looked for too, after these. A language outside both is still
+# understood by its code, in a tag or a sidecar's name - it is only that its
+# name, which a short one makes a likely stranger inside a longer word, is
+# not searched for.
+NAMED = ("en", "de", "fr", "nl", "es", "it", "pt", "pl", "sv", "da", "no",
+         "fi", "cs", "hu", "ro", "el", "tr", "ru", "ja", "ko", "zh")
 
-# The languages the user speaks when the ``spokenLanguages`` setting names
-# none of its own: the table's first six, in the table's order - the
-# languages ingest-movies fetched subtitles for before the setting existed,
-# so a run that does not set it fetches what it always fetched.
-SPOKEN_DEFAULT = ("en", "de", "fr", "nl", "es", "it")
+# Names a language is written as that ISO's translations do not carry: the
+# Latin spelling of an endonym a disc writes in the Latin alphabet, or the
+# one word a language has for itself that its name in ISO's own list is not.
+_EXTRA_NAMES = {
+    "cs": ("cesky",),
+    "el": ("ellinika", "ελληνικά", "griechisch", "grieks", "griego", "grec",
+           "greco"), "ja": ("nihongo",),
+    "ko": ("hangugeo",), "zh": ("zhongwen",), "no": ("norsk",),
+}
+
+
+def _fold_accents(text: str) -> str:
+    decomposed = unicodedata.normalize("NFKD", text)
+    return "".join(c for c in decomposed if not unicodedata.combining(c))
+
+
+@functools.cache
+def _by_tag() -> dict:
+    """Every spelling of every ISO 639 code that has a two-letter one, to
+    its language."""
+    found = {}
+    for entry in pycountry.languages:
+        if not getattr(entry, "alpha_2", ""):
+            continue
+        for spelling in (entry.alpha_2, entry.alpha_3,
+                         getattr(entry, "bibliographic", "")):
+            if spelling:
+                found[spelling] = entry
+    return found
+
+
+def _plain_name(name: str) -> str:
+    """ISO's name for a language as people write it: "Modern Greek
+    (1453-)" is "Greek", "Spanish; Castilian" is "Spanish"."""
+    name = re.sub(r"\s*\(.*?\)", "", name)
+    name = re.split(r"[;,]", name)[0].strip()
+    return name[len("Modern "):] if name.startswith("Modern ") else name
+
+
+@functools.cache
+def _catalogue(locale: str):
+    """ISO 639's name list translated into ``locale``, or None where
+    pycountry has none. A language with only regional translations (Norwegian
+    has nb_NO and nn, Chinese zh_CN) takes the first it has."""
+    found = sorted(name for name in os.listdir(pycountry.LOCALES_DIR)
+                   if name == locale or name.startswith(locale + "_")
+                   or (locale == "no" and name in ("nb_NO", "nn")))
+    for name in found:
+        try:
+            return gettext.translation("iso639-3", pycountry.LOCALES_DIR,
+                                       languages=[name])
+        except OSError:
+            continue
+    return None
+
+
+def _names(entry, locales: tuple) -> tuple:
+    """The names for ``entry``: its English name, its name in itself and in
+    each of ``locales``, written as found and with the accents off. A short
+    Latin-script word is left out - it is more likely a stranger inside a
+    longer one than the language."""
+    names = {_plain_name(entry.name)}
+    for locale in (entry.alpha_2, *locales):
+        catalogue = _catalogue(locale)
+        if catalogue is not None:
+            names.add(_plain_name(catalogue.gettext(entry.name)))
+    names.update(_EXTRA_NAMES.get(entry.alpha_2, ()))
+    found = set()
+    for name in names:
+        lowered = shell_lower(name)
+        plain = _fold_accents(lowered)
+        if not lowered.isascii():
+            found.add(lowered)
+        if plain.isascii() and len(plain) >= 4:
+            found.add(plain)
+    return tuple(sorted(found))
+
+
+@functools.cache
+def _language(code2: str, locales: tuple) -> Language | None:
+    entry = _by_tag().get(code2)
+    if entry is None or entry.alpha_2 != code2:
+        return None
+    return Language(code2, entry.alpha_3, _plain_name(entry.name),
+                    _names(entry, locales),
+                    getattr(entry, "bibliographic", "") or entry.alpha_3)
+
+
+def language(code: str) -> Language | None:
+    """The language an ISO 639-1 code names, or None where ISO has none."""
+    return _language(shell_lower(code), _locales())
+
+
+def _locales() -> tuple:
+    """The languages whose names a track's language may be written in: those
+    the user speaks. Read from the setting each time - it may have been
+    loaded after this module was."""
+    return _setting_codes("spokenLanguages")
+
+
+def _setting_codes(name: str) -> tuple:
+    """The two-letter codes a language setting names, in its order, a code
+    named twice once. UsageError for one ISO does not know, naming it."""
+    codes: list = []
+    for entry in settings.value(name).split(","):
+        code = shell_lower(entry.strip())
+        if code and code not in codes:
+            codes.append(code)
+    unknown = [code for code in codes if code not in _by_tag()
+               or _by_tag()[code].alpha_2 != code]
+    if unknown:
+        raise clioptions.UsageError(
+            "The %s setting names %s, which ISO 639-1 does not know."
+            % (name, ", ".join('"%s"' % code for code in unknown)))
+    return tuple(codes)
+
+
+def setting_languages(name: str) -> tuple:
+    """The languages a setting names, as :class:`Language` rows, in its
+    order. Unset or empty is the shipped value (see
+    :func:`medialib.lib.settings.value`)."""
+    return tuple(language(code) for code in _setting_codes(name))
 
 
 def spoken_languages() -> tuple:
     """The languages the user speaks - the ones ingest-movies fetches and
     tests subtitles for, and the ones ytdlp takes a YouTube transcript in:
-    the ``spokenLanguages`` setting's codes, in the order it names them, each
-    as its row of :data:`LANGUAGES`.
+    the ``spokenLanguages`` setting's languages, in its order."""
+    return setting_languages("spokenLanguages")
 
-    A setting that names nothing - unset or empty - names the default
-    :data:`SPOKEN_DEFAULT`, a code named twice is one language, and a code
-    the table does not know is refused, naming it and the codes the table
-    has, because a language this collection does not recognise would be
-    fetched for and read back with no one to have been told.
-    """
-    raw = os.environ.get("spokenLanguages", "")
-    codes: list = []
-    for entry in raw.split(","):
-        code = shell_lower(entry.strip())
-        if code and code not in codes:
-            codes.append(code)
-    if not codes:
-        codes = list(SPOKEN_DEFAULT)
-    by_code = {row.code2: row for row in LANGUAGES}
-    unknown = [code for code in codes if code not in by_code]
-    if unknown:
-        raise clioptions.UsageError(
-            "The spokenLanguages setting names %s, which the language "
-            "table does not know. It knows: %s."
-            % (", ".join('"%s"' % code for code in unknown),
-               ", ".join(sorted(by_code))))
-    return tuple(by_code[code] for code in codes)
+
+def recognised() -> tuple:
+    """The languages a track's name is searched for: :data:`NAMED`, then
+    whatever the user's settings name that it does not."""
+    codes = list(NAMED)
+    for name in ("spokenLanguages", "keepLanguages"):
+        codes += [code for code in _setting_codes(name) if code not in codes]
+    return tuple(language(code) for code in codes)
 
 
 # The words that mark an audio track as a commentary, in the spellings track names
@@ -190,19 +287,27 @@ def without_forced_word(name: str) -> str:
     return " ".join(rest.split()).strip(" -_,;:")
 
 
-def code_from_tag(tag: str) -> str:
-    """The ".xx" code for an mkv language tag, or "" for a tag naming none.
-
-    Every spelling of the table's codes is accepted: the two-letter one, which is
-    also what mkvmerge reports as language_ietf, and both three-letter ones.
-    """
+def _iso2(tag: str) -> str:
+    """The two-letter code of any ISO 639 spelling of any language, or ""."""
     folded = shell_lower(tag)
     if not is_real_language_tag(folded):
         return ""
-    for row in LANGUAGES:
-        if folded in (row.code2, row.code3, row.code3b):
-            return row.code2
-    return ""
+    entry = _by_tag().get(folded)
+    return entry.alpha_2 if entry else ""
+
+
+def code_from_tag(tag: str) -> str:
+    """The ".xx" code for an mkv language tag of a language this collection
+    recognises (:func:`recognised`), or "" for any other.
+
+    Every spelling ISO gives the language is accepted: the two-letter one,
+    which is also what mkvmerge reports as language_ietf, and both
+    three-letter ones. It is the recognised languages and not all of ISO's
+    because the answer is also asked of the last word of a file name, where
+    ISO's "ii" and "iii" - Sichuan Yi - are a film's roman numerals.
+    """
+    code = _iso2(tag)
+    return code if code in {row.code2 for row in recognised()} else ""
 
 
 # The languages that are several to a precise tag and one to a catalogue or a
@@ -232,7 +337,7 @@ def _family(code: str) -> str:
     for family, members in LANGUAGE_FAMILIES:
         if code in members:
             return family
-    return code_from_tag(code) or code
+    return _iso2(code) or code
 
 
 def track_language(language: str, ietf: str) -> str:
@@ -266,24 +371,47 @@ def same_language_tag(tag_a: str, tag_b: str) -> bool:
     """``sameLanguageTag``: do two mkv language tags name one language?
 
     Whatever spelling each turns up in - two-letter, 639-2/T or 639-2/B (see
-    ``code_from_tag`` for why all three exist). Tags that name no table row
-    (foreign languages, or no language at all) only match when spelled
+    ``code_from_tag`` for why all three exist). Tags that name no ISO language
+    (or no language at all) only match when spelled
     identically.
     """
-    code_a = code_from_tag(tag_a)
+    code_a = _iso2(tag_a)
     if code_a:
-        return code_a == code_from_tag(tag_b)
+        return code_a == _iso2(tag_b)
     return shell_lower(tag_a) == shell_lower(tag_b)
 
 
+@functools.cache
+def _by_name() -> dict:
+    return {shell_lower(_plain_name(entry.name)): entry.alpha_2
+            for entry in _by_tag().values()}
+
+
 def code_from_name(name: str) -> str:
-    """The ".xx" code for an English language name, or "" for one with no row.
+    """The ".xx" code for the English name of a language this collection
+    recognises, or "" for any other: a language it does not recognise is
+    handed to whisper by its name, and no transcript is written for it.
 
     The names are exactly the spelling whisper-ctranslate2 prints - "Detected
     language 'Dutch'" - because it title-cases the same English names.
     """
-    folded = shell_lower(name)
-    for row in LANGUAGES:
-        if shell_lower(row.sub_word) == folded:
-            return row.code2
-    return ""
+    code = _by_name().get(shell_lower(name), "")
+    return code if code in {row.code2 for row in recognised()} else ""
+
+
+def code3_from_label(label: str) -> str:
+    """The ISO 639-3 code of the language a tag or a name stands for, or "".
+
+    ``label`` is whatever a file says: a two- or three-letter code of any
+    ISO spelling, a member of one of :data:`LANGUAGE_FAMILIES` ("cmn" is
+    Chinese), the English name ("German") or a name the language is called
+    by on a disc ("deutsch").
+    """
+    folded = shell_lower(label)
+    code2 = _iso2(folded) or _by_name().get(folded, "") or next(
+        (row.code2 for row in recognised() if folded in row.keywords), "")
+    if not code2:
+        family = _family(folded)
+        code2 = family if family in _by_tag() else ""
+    entry = _by_tag().get(code2)
+    return entry.alpha_3 if entry else ""

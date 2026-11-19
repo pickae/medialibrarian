@@ -587,7 +587,7 @@ def _written(stdout: str, out: str) -> str:
 def recognise(image: str, row, srt: str,
               log: Callable[[str], None], environ=None) -> str:
     """The picture subtitle ``image``, in the language of ``row`` (one of
-    :data:`languages.LANGUAGES`), read into ``srt`` by the first engine
+    :func:`languages.recognised`), read into ``srt`` by the first engine
     that manages it; the engine's name, or "" when none did. An engine that
     exits 0 having written no line is a failure too."""
     environ = os.environ if environ is None else environ

@@ -42,15 +42,14 @@ def test_comments_and_blank_lines_are_not_films(tmp_path):
 
 # The films are recorded for the languages their run was told to do, and a
 # later run skips a film only when that record holds every language it wants.
-def test_a_line_without_a_scope_is_read_as_the_default(tmp_path):
-    """The lines an earlier run wrote name no languages: they were done for
-    the languages that run fetched, which is the table's default."""
+def test_a_line_without_a_scope_is_done_for_no_language(tmp_path):
+    """A line that names no languages is a film done for none in particular:
+    a run that wants languages does it again, once."""
     path = tmp_path / "done.txt"
     path.write_text("{imdb-tt0000001}\t%s\n" % TAGGED, encoding="utf-8")
-    done = donelog.DoneLog(str(path), default_scope=("en", "de"))
-    assert done.has(TAGGED, ("en",))
-    assert done.has(TAGGED, ("en", "de"))
-    assert not done.has(TAGGED, ("pt",))
+    done = donelog.DoneLog(str(path))
+    assert done.has(TAGGED)
+    assert not done.has(TAGGED, ("en",))
 
 
 def test_a_film_is_done_only_for_what_its_record_says(tmp_path):

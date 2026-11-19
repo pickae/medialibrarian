@@ -23,6 +23,7 @@ import unicodedata
 from collections.abc import Callable
 from typing import Any
 
+from medialib.lib import languages
 from medialib.lib.booktext import book_to_text
 from medialib.lib.enums import lower_extension_of
 
@@ -42,7 +43,7 @@ __all__ = [
 # The stop-word table: the few dozen words that make up a large share of any
 # text in each supported language, one entry per language, scalar on purpose,
 # because the words are what the scoring reads. Adding a language means adding
-# its row here, its codes to _CODE_MAP, and the engine's own support for it.
+# its row here and the engine's own support for it (:data:`_SPEAKABLE`).
 STOP_WORDS = (
     "eng:the,and,of,to,that,is,it,was,for,with,this,but,his,are,from,have,not,you,they,what;"
     "deu:der,die,das,und,ist,nicht,sich,ein,eine,auch,aber,wurde,werden,oder,wenn,doch,schon,noch,nur,mehr;"
@@ -74,31 +75,16 @@ MIN_SCRIPT_SHARE = 0.15
 SKIP_BYTES = 4000
 SAMPLE_BYTES = 300000
 
-# Whatever a book states its language as, into one ISO 639-3 code. There is no
-# single convention in the wild: an epub's dc:language is an IETF tag ("de",
-# "de-DE", "pt-BR"), Calibre reports ISO 639-3 ("deu"), older tooling writes
-# ISO 639-2/B ("ger", "fre", "dut", "cze"), and some files simply say "German".
-# A region subtag is dropped rather than honoured - "pt-BR" and "pt-PT" are one
-# voice's worth of difference, and the engine takes neither.
-_CODE_MAP = {
-    "ar": "ara", "ara": "ara", "arabic": "ara",
-    "cs": "ces", "ces": "ces", "cze": "ces", "czech": "ces",
-    "de": "deu", "deu": "deu", "ger": "deu", "german": "deu", "deutsch": "deu",
-    "en": "eng", "eng": "eng", "english": "eng",
-    "fr": "fra", "fra": "fra", "fre": "fra", "french": "fra",
-    "hi": "hin", "hin": "hin", "hindi": "hin",
-    "hu": "hun", "hun": "hun", "hungarian": "hun",
-    "it": "ita", "ita": "ita", "italian": "ita",
-    "ja": "jpn", "jpn": "jpn", "jp": "jpn", "japanese": "jpn",
-    "ko": "kor", "kor": "kor", "korean": "kor",
-    "nl": "nld", "nld": "nld", "dut": "nld", "dutch": "nld",
-    "pl": "pol", "pol": "pol", "polish": "pol",
-    "pt": "por", "por": "por", "portuguese": "por",
-    "ru": "rus", "rus": "rus", "russian": "rus",
-    "es": "spa", "spa": "spa", "esl": "spa", "spanish": "spa",
-    "tr": "tur", "tur": "tur", "turkish": "tur",
-    "zh": "zho", "zho": "zho", "chi": "zho", "cmn": "zho", "chinese": "zho",
-}
+# The languages the narration engines can speak, as ISO 639-3 codes. A book
+# stating its language as anything else names no language this can speak,
+# which is the right thing to print: the caller would only learn of it later,
+# from the engine refusing the book.
+_SPEAKABLE = frozenset((
+    "ara", "ces", "deu", "eng", "fra", "hin", "hun", "ita", "jpn", "kor", "nld",
+    "pol", "por", "rus", "spa", "tur", "zho"))
+
+# Spellings in use for a language that no ISO list has.
+_ALIASES = {"jp": "jpn", "esl": "spa"}
 
 # The parsed table: the languages in their table order (which is the tie order
 # of the stop-word decision), and each stop word with the languages it belongs
@@ -151,18 +137,19 @@ _SCRIPT_BLOCKS = (
 
 
 def book_language_code(raw: str) -> str:
-    """Whatever ``raw`` states a language as, as one ISO 639-3 code, or "".
-
-    A code the table does not know names no language this can speak, which is
-    the right thing to print: the caller would only learn of it later, from the
-    engine refusing the book.
+    """Whatever ``raw`` states a language as - an epub's IETF tag ("de-DE"),
+    Calibre's ISO 639-3 ("deu"), older tooling's ISO 639-2/B ("ger"), or
+    simply "German" - as one ISO 639-3 code, or "" for one the engines cannot
+    speak. A region subtag is dropped rather than honoured: "pt-BR" and
+    "pt-PT" are one voice's worth of difference, and the engine takes neither.
     """
     raw = raw.lower().replace("_", "-")
     raw = raw.split("-", 1)[0]
     raw = re.sub(r"[^a-z]", "", raw)
     if not raw:
         return ""
-    return _CODE_MAP.get(raw, "")
+    code = languages.code3_from_label(_ALIASES.get(raw, raw))
+    return code if code in _SPEAKABLE else ""
 
 
 def _first_opf_language(opf: str) -> str:

@@ -686,26 +686,11 @@ def kept_languages() -> tuple:
     """The languages the improved copy keeps beside a film's own, read from the
     ``keepLanguages`` setting once, as :func:`language_allowed` takes them.
 
-    A comma list of ISO 639-1 codes, each one the language table knows - a code
-    it does not know is refused, naming it and the codes the table has, because
-    a language this collection does not recognise would otherwise be dropped
-    with no one to have been told. Unset and empty are the same: English.
+    A comma list of ISO 639-1 codes - one ISO does not know is refused, naming
+    it, because a language this collection does not recognise would otherwise
+    be dropped with no one to have been told.
     """
-    raw = os.environ.get("keepLanguages", "")
-    codes = tuple(enums.shell_lower(part)
-                  for part in (entry.strip() for entry in raw.split(","))
-                  if part)
-    if not codes:
-        codes = ("en",)
-    known = {row.code2 for row in languages.LANGUAGES}
-    unknown = [code for code in codes if code not in known]
-    if unknown:
-        raise clioptions.UsageError(
-            "The keepLanguages setting names %s, which the language table does "
-            "not know. It knows: %s."
-            % (", ".join('"%s"' % code for code in unknown),
-               ", ".join(sorted(known))))
-    return codes
+    return tuple(row.code2 for row in languages.setting_languages("keepLanguages"))
 
 
 def lossless_audio_target() -> str:
@@ -1210,7 +1195,7 @@ def rename_movies(root: str, fragments_file: str, skips) -> int:
                 _rename_quiet(plain, english)
 
         new_stem = os.path.splitext(new_movie)[0]
-        for row in languages.LANGUAGES:
+        for row in languages.recognised():
             source = "%s.%s.srt" % (old_stem, row.code2)
             target = "%s.%s.srt" % (new_stem, row.code2)
             if not os.path.isfile(source) or source == target:
@@ -1531,7 +1516,7 @@ def _tag_arguments(tracks: list, role_edits=None) -> list:
 
         # One language tag, the highest-priority one the name names:
         # mkvpropedit would keep the last of several.
-        spoken = next((row for row in languages.LANGUAGES
+        spoken = next((row for row in languages.recognised()
                        if any(keyword in folded for keyword in row.keywords)),
                       None)
         if spoken is not None:
@@ -2076,7 +2061,7 @@ def _subtitle_texts(movie: str, tracks: list) -> dict:
 
 class OcrJob(NamedTuple):
     """A picture subtitle to read into text, and the sidecar it is written
-    to: its language is ``row``, one of :data:`languages.LANGUAGES`."""
+    to: its language is ``row``, one of :func:`languages.recognised`."""
 
     track: Track
     row: languages.Language
@@ -2146,7 +2131,7 @@ def gather_downloaded_subtitles(base: str, tracks: list, say=None) -> list:
     """
     say = say or log
     found = []
-    for row in languages.LANGUAGES:
+    for row in languages.recognised():
         for named in OCR_ROLES:
             srt = subtitletracks.sidecar_name(base, row.code2, named)
             if os.path.islink(srt) or not os.path.isfile(srt) \

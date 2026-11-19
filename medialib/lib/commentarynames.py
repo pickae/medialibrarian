@@ -93,10 +93,10 @@ class Decision(NamedTuple):
 # which say nothing about who is speaking: the language, "audio", "track".
 _FILLER_WORDS = frozenset(
     ["audio", "track", "spur", "piste", "no", "nr", "number", "num", "the"]
-    + [keyword for row in languages.LANGUAGES for keyword in row.keywords]
-    + [row.sub_word.lower() for row in languages.LANGUAGES]
-    + [row.code2 for row in languages.LANGUAGES]
-    + [row.code3 for row in languages.LANGUAGES])
+    + [keyword for row in languages.recognised() for keyword in row.keywords]
+    + [row.sub_word.lower() for row in languages.recognised()]
+    + [row.code2 for row in languages.recognised()]
+    + [row.code3 for row in languages.recognised()])
 
 def _fold(text: str) -> str:
     """Lower case without accents, so "Kommentär" and "Kommentar" are one

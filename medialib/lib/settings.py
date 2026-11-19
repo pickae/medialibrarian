@@ -5,7 +5,9 @@ Every setting is an environment variable, and every command finds it in the
 same two places: the environment the command was started in, and a settings
 file - ``~/.config/medialib/settings``, or ``$XDG_CONFIG_HOME/medialib/settings``
 where that is set. The environment wins, so a value given for one run
-overrides the file without editing it.
+overrides the file without editing it. Beneath both sits
+``medialib/config/settings.defaults``, shipped with the package, which holds
+every default that is a value; code asks :func:`value` and carries none.
 
 The file is one ``name=value`` per line, the way a shell writes an
 assignment, so a line copied out of a shell profile works as it is: an
@@ -32,6 +34,7 @@ and are not listed: nobody is meant to set them.
 from __future__ import annotations
 
 import difflib
+import functools
 import os
 import shlex
 import stat
@@ -39,7 +42,7 @@ import sys
 from typing import NamedTuple
 
 __all__ = ["Setting", "SETTINGS", "INTERNAL", "SettingsError", "settings_file",
-           "load", "read_file", "shell_value", "page"]
+           "shipped", "value", "load", "read_file", "shell_value", "page"]
 
 # Where a run is told to look instead, for the suite - which must never read
 # the settings of the machine it runs on - and for anyone keeping two.
@@ -101,11 +104,9 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("spokenLanguages", "The languages you speak: ingest-movies fetches "
             "and tests subtitles in them, and ytdlp -g takes a YouTube "
             "episode's transcript in its own language when it is one of them, "
-            "in English when it is not. A comma list of ISO 639-1 codes the "
-            "language table knows, in the order to fetch them; the table knows "
-            "the six this defaults to plus pt, pl, sv, da, no, fi, cs, hu, ro, "
-            "el, tr, ru, ja, ko and zh", ("ingest-movies", "ytdlp"),
-            "en,de,fr,nl,es,it"),
+            "in English when it is not. A comma list of ISO 639-1 codes, in the "
+            "order to fetch them; track names are also read in the names these "
+            "languages give each other", ("ingest-movies", "ytdlp")),
     Setting("subtitleOcrEngines", "The OCR engines ingest-movies reads a film's "
             "picture subtitles with: a comma list of `vision`, `paddle` and "
             "`tesseract`, tried in the order named until one reads the "
@@ -136,9 +137,9 @@ SETTINGS: tuple[Setting, ...] = (
             ("ingest-movies",), "32"),
     # --- what a run keeps
     Setting("keepLanguages", "The languages ingest-movies' improved copy keeps "
-            "beside the film's own language: a comma list of ISO 639-1 codes "
-            "the language table knows; the film's own language is kept "
-            "whatever it says", ("ingest-movies",), "en"),
+            "beside the film's own language: a comma list of ISO 639-1 codes; "
+            "the film's own language is kept whatever it says",
+            ("ingest-movies",)),
     Setting("losslessAudioTarget", "The codec ingest-movies' improved copy "
             "converts the lossless audio to: `opus` (the default, at a "
             "per-channel target bitrate) or `flac`, which takes the channels "
@@ -380,6 +381,26 @@ def settings_file() -> str:
     return os.path.join(config_home(), "settings")
 
 
+def shipped_file() -> str:
+    """The defaults file that ships with the package: the value each setting
+    has beneath the environment and the user's own file."""
+    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "config", "settings.defaults")
+
+
+@functools.cache
+def shipped() -> dict[str, str]:
+    """The shipped defaults, name to value."""
+    return read_file(shipped_file())
+
+
+def value(name: str) -> str:
+    """The value of a setting: the environment's - where the user's file was
+    loaded into it - or else the shipped default, "" for one with neither.
+    A blank value is no value, so the shipped default stands in for it."""
+    return os.environ.get(name, "").strip() or shipped().get(name, "")
+
+
 def read_file(path: str) -> dict[str, str]:
     """The assignments in a settings file, in its order.
 
@@ -487,6 +508,7 @@ def load(stream=None) -> None:
     stream = sys.stderr if stream is None else stream
     path = settings_file()
     if not os.path.isfile(path):
+        _apply_shipped()
         return
     try:
         values = read_file(path)
@@ -509,6 +531,14 @@ def load(stream=None) -> None:
             stream.write("==> WARNING: %s sets %s, which no command reads%s\n"
                          % (path, name, " - did you mean %s?" % near[0] if near else ""))
         os.environ.setdefault(name, value)
+    _apply_shipped()
+
+
+def _apply_shipped() -> None:
+    """The shipped defaults, beneath everything else, so a tool a command
+    starts sees them as the command does."""
+    for name, default in shipped().items():
+        os.environ.setdefault(name, default)
 
 
 def page() -> str:
@@ -521,7 +551,9 @@ def page() -> str:
         "`~/.config/medialib/settings` (`$XDG_CONFIG_HOME/medialib/settings` where",
         "that is set) - one `name=value` per line, the way a shell profile writes",
         "it, `export` and quotes allowed. The environment wins, so one run can",
-        "override the file without editing it.",
+        "override the file without editing it. Beneath both is the file that ships",
+        "with the package, `medialib/config/settings.defaults`: the Default column",
+        "prints its values, and nothing else in the code supplies one.",
         "",
         "Every command that takes options can override a setting for one run",
         "with `-x name=value`, repeatable: the value lands in the run's",
@@ -541,6 +573,7 @@ def page() -> str:
     for setting in sorted(SETTINGS, key=lambda one: one.name.lower()):
         lines.append("| `%s`%s | %s | %s | %s |" % (
             setting.name, " (secret)" if setting.secret else "",
-            setting.about.replace("|", "\\|"), setting.default.replace("|", "\\|"),
+            setting.about.replace("|", "\\|"),
+            shipped().get(setting.name, setting.default).replace("|", "\\|"),
             ", ".join("`%s`" % command for command in setting.commands)))
     return "\n".join(lines) + "\n"
