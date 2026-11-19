@@ -38,6 +38,9 @@ Options:
                     Default 46 kbps or 32 kbps for forced mono output, and
                     with -u the 46 scaled up with the channel count for a
                     surround source
+    -T, --threshold <kbps>
+                    The bitrate a file must reach to be re-encoded.
+                    Default 90 kbps, or 50 kbps for a mono run
     -j, --jobs <jobs>
                     Run up to <jobs> encoder processes in parallel.
                     Default one per CPU thread

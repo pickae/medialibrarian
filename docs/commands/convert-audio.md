@@ -18,7 +18,7 @@ over chapters and cover art.
 With no options, a run:
 
 - writes **Opus at 46 kbps**, keeping the source's channel count (`-e`, `-b`, `-m`, `-a`)
-- re-encodes only what is at or above 90 kbps, or in a format not worth keeping, and **leaves smaller files out of the output** ([below](#what-gets-re-encoded); `-c` copies them)
+- re-encodes only what is at or above 90 kbps (50 kbps in a mono run; `-T`), or in a format not worth keeping, and **leaves smaller files out of the output** ([below](#what-gets-re-encoded); `-c` copies them)
 - **splits files longer than 10000 s** into chunks that encode in parallel (`-s`)
 - carries chapters and cover art over, and copies images across ([below](#cover-art))
 - writes a transcript found beside a source into its output ([below](#transcripts))
@@ -31,7 +31,7 @@ What gets re-encoded is decided per file:
 
 | Input | What happens |
 | --- | --- |
-| above the bitrate threshold | re-encoded |
+| at or above the re-encode threshold (90 kbps, 50 kbps in a mono run, or what `-T` names) | re-encoded |
 | `mka`, a container `concat-audio` cannot join - a book of them copied through `convert-and-concat` would fail at the join | re-encoded |
 | a video | its audio stream is extracted and converted like any other input |
 | a video whose soundtrack is *already* a small enough Opus | stream-copied out of its container rather than encoded a second time into the same thing |
@@ -42,6 +42,14 @@ are transparently re-joined, with the original's metadata re-attached. Whether a
 run splits anything, and which files, it decides for itself from the file sizes:
 it splits only when that is expected to finish the whole run sooner than
 encoding every file whole, and prints what it expects to gain when it does.
+
+## The re-encode threshold (`-T`)
+
+The threshold is tuned to the 46 kbps Opus default - 90 kbps, or 50 kbps in a
+mono run - and is wrong for a run that encodes at another rate: a `-b 120` run
+judged against 90 re-encodes what is already at the rate it would encode at.
+`-T` moves it for the whole run, judging every file of it against the value,
+stereo and mono alike, and the `-g` folder verdicts read against it as well.
 
 ## Channels and bitrate
 

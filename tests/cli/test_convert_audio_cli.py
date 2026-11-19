@@ -251,6 +251,44 @@ class TestWhatEachLineSays:
         assert (tmp_path / "out" / "long.opus").is_file()
 
 
+class TestTheThresholdOption:
+    """-T moves the cut-off a file is judged against.
+
+    The stub's probe states a 128 kbps rate for the .m4a of a fixture: the
+    90 kbps default transcodes it, and a cut-off that moves past it leaves
+    it alone - with the line that says so naming the figure the file was
+    read against."""
+
+    @pytest.fixture
+    def convert(self, sandbox):
+        return _stubbed(sandbox)
+
+    def _said(self, convert, tmp_path, *options):
+        inputs = tmp_path / "in"
+        inputs.mkdir(exist_ok=True)
+        (inputs / "book.m4a").write_bytes(b"\0" * 1000)
+        done = convert.run("convert-audio", "-j", "1", *options, inputs,
+                           tmp_path / "out")
+        assert done.returncode == 0, done.stdout + done.stderr
+        return re.sub(r"^\[\d+(?:/\d+)?\] ", "", done.stderr, flags=re.M)
+
+    def test_the_default_cut_off_transcodes_a_file_above_it(self, convert,
+                                                            tmp_path):
+        assert "\nConverting: book.m4a\n" in self._said(convert, tmp_path)
+        assert (tmp_path / "out" / "book.opus").is_file()
+
+    def test_a_cut_off_above_the_file_leaves_it_alone(self, convert,
+                                                      tmp_path):
+        said = self._said(convert, tmp_path, "-T", "200")
+        assert "\nUnder 200 kbps, skipping: book.m4a\n" in said
+        assert not (tmp_path / "out" / "book.opus").exists()
+
+    def test_a_cut_off_below_the_file_transcodes_it(self, convert, tmp_path):
+        said = self._said(convert, tmp_path, "-T", "50")
+        assert "\nConverting: book.m4a\n" in said
+        assert (tmp_path / "out" / "book.opus").is_file()
+
+
 class TestAnOutputPathThatIsAFile:
     """An output path naming an existing file is refused before anything runs;
     it once reached the output folder's makedirs and died in a traceback."""

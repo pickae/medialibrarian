@@ -132,6 +132,8 @@ b | <bitrate> | Bitrate of the output files
                     Default 46 kbps or 32 kbps for forced mono output, and
                     with -u the 46 scaled up with the channel count for a
                     surround source
+T | <kbps> | The bitrate a file must reach to be re-encoded.
+                    Default 90 kbps, or 50 kbps for a mono run
 j | <jobs> | Run up to <jobs> encoder processes in parallel.
                     Default one per CPU thread
 g | <depth> | Judge the files under each folder <depth> levels into
@@ -155,11 +157,12 @@ r | <folder> | Only the files under <inputDir>/<folder>, converted to
            codec=DEFAULT_CODEC)
 
 OPT_VARS = ("m:mono u:surround a:adaptive c:copy k:keep e:outputCodec "
-            "b:bitrate j:jobs g:groupDepth r:only")
+            "b:bitrate T:threshold j:jobs g:groupDepth r:only")
 OPT_FLAGS = "repeat:r"
 OPT_COLUMN = 20
 OPT_LONG = ("h:help m:mono u:surround a:adaptive k:keep c:copy-others "
-            "e:encoding b:bitrate j:jobs g:group t:ai-chapters r:only")
+            "e:encoding b:bitrate T:threshold j:jobs g:group "
+            "t:ai-chapters r:only")
 
 # The codec has to be one this command can write, or a typo would only surface
 # as a per-file failure deep into a run. The choices are joined with an ESCAPED
@@ -168,12 +171,15 @@ OPT_LONG = ("h:help m:mono u:surround a:adaptive k:keep c:copy-others "
 # pipe, the kind ends at the first codec and every other one is refused.
 OPT_CHECKS = """
 e | enum:{codecs} | output encoding
+T | posInt | threshold
 g | posInt | group depth
 """.format(codecs="\\|".join(enums.AUDIO_CODECS))
 
 DEFAULT_BITRATE = 46
 MONO_BITRATE = 32
 
+# The re-encode cut-off, in bps, and the one a mono run judges by. Where -T
+# gives a value it stands for both, so the run has one cut-off, not a pair.
 THRESHOLD = 90000
 MONO_THRESHOLD = 50000
 COVER_THRESHOLD = 500000
@@ -741,6 +747,9 @@ class Run:
     keep: bool
     bitrate: int
     threshold: int
+    # The cut-off a mono run, or the mono file of an adaptive run, is judged
+    # by. A -T value stands here as well, so the run keeps one cut-off.
+    mono_threshold: int
     # -g: how deep into the input the folders lie whose files are judged
     # together (0 for none), and what was judged of each - converted whole or
     # kept whole - keyed by the folder's path relative to the input. A folder
@@ -971,7 +980,7 @@ class Run:
             return
 
         if mono:
-            threshold = MONO_THRESHOLD
+            threshold = self.mono_threshold
             # Only the DEFAULT bitrate is swapped - a provided -b is kept, and so
             # is the per-file target adaptive mode already looked up, which is the
             # whole point of that mode.
@@ -1597,7 +1606,7 @@ class Planner:
         # soundtrack is only lifted out all stay whole - the last emphatically so,
         # since chunking it would mean encoding the very audio the lift-out exists
         # to preserve.
-        threshold = MONO_THRESHOLD if state.mono else state.threshold
+        threshold = state.mono_threshold if state.mono else state.threshold
         source_bitrate = source_audio_bitrate(source)
         video = is_video_file(track)
         if video and source_audio_is_finished(source, source_bitrate,
@@ -1949,6 +1958,7 @@ def main(argv: list, program: str = "convert-audio",
     keep = "k" in result.given
     bitrate_set = bool(result.values["bitrate"])
     bitrate = int(result.values["bitrate"] or DEFAULT_BITRATE)
+    cutoff = int(result.values["threshold"] or 0) * 1000
     codec = result.values["outputCodec"] or DEFAULT_CODEC
     jobs = int(result.values["jobs"] or runlog.cpu_count())
     group_depth = int(result.values["groupDepth"] or 0)
@@ -2014,9 +2024,9 @@ def main(argv: list, program: str = "convert-audio",
 
     try:
         return _settle_and_convert(program, script_dir, input_dir, output_dir,
-                                   mono, adaptive, copy, keep, bitrate, jobs,
-                                   codec, chunk_over_ceiling, surround,
-                                   group_depth, ai_chapters, only)
+                                   mono, adaptive, copy, keep, bitrate,
+                                   cutoff, jobs, codec, chunk_over_ceiling,
+                                   surround, group_depth, ai_chapters, only)
     finally:
         # The ffmpeg pin can make the run directory before init_ram_base
         # does, and every refusal after it must hand it back.
@@ -2025,9 +2035,10 @@ def main(argv: list, program: str = "convert-audio",
 
 def _settle_and_convert(program: str, script_dir: str, input_dir: str,
                         output_dir: str, mono: bool, adaptive: bool,
-                        copy: bool, keep: bool, bitrate: int, jobs: int,
-                        codec: str, chunk_over_ceiling: bool, surround: bool,
-                        group_depth: int, ai_chapters: bool, only=()) -> int:
+                        copy: bool, keep: bool, bitrate: int, cutoff: int,
+                        jobs: int, codec: str, chunk_over_ceiling: bool,
+                        surround: bool, group_depth: int, ai_chapters: bool,
+                        only=()) -> int:
     ffmpegselect.select_ffmpeg()
     ffmpegselect.report_ffmpeg_selection()
     if tooldeps.require_tools(program, ["ffmpeg", "ffprobe", "rsync",
@@ -2078,7 +2089,7 @@ def _settle_and_convert(program: str, script_dir: str, input_dir: str,
         return _convert(input_dir, output_dir, probe_what, skips, jobs,
                         mkvtoolnix_unsaid, script_dir=script_dir, mono=mono,
                         surround=surround, adaptive=adaptive, copy=copy,
-                        keep=keep, bitrate=bitrate, codec=codec,
+                        keep=keep, bitrate=bitrate, cutoff=cutoff, codec=codec,
                         chunk_over_ceiling=chunk_over_ceiling,
                         group_depth=group_depth, llm=llm, only=only)
     finally:
@@ -2122,8 +2133,9 @@ def _holds_input(input_dir: str, only=()) -> bool:
 def _convert(input_dir: str, output_dir: str, probe_what: str, skips,
              jobs: int, mkvtoolnix_unsaid: bool, *, script_dir: str,
              mono: bool, surround: bool, adaptive: bool, copy: bool,
-             keep: bool, bitrate: int, codec: str, chunk_over_ceiling: bool,
-             group_depth: int, llm=None, only=()) -> int:
+             keep: bool, bitrate: int, cutoff: int = 0, codec: str,
+             chunk_over_ceiling: bool, group_depth: int, llm=None,
+             only=()) -> int:
     """The run itself, once the tools are checked. The command line's choices
     are keyword-only: there are too many flags of one type to pass by
     position."""
@@ -2135,7 +2147,11 @@ def _convert(input_dir: str, output_dir: str, probe_what: str, skips,
     state = Run(
         input_dir=input_dir, output_dir=output_dir, script_dir=script_dir,
         mono=mono, surround=surround, adaptive=adaptive, copy=copy, keep=keep,
-        bitrate=bitrate, threshold=THRESHOLD, chunked=frozenset(),
+        bitrate=bitrate,
+        # A -T value stands for both cut-offs; without one the defaults stand.
+        threshold=cutoff or THRESHOLD,
+        mono_threshold=cutoff or MONO_THRESHOLD,
+        chunked=frozenset(),
         group_depth=group_depth, verdicts={}, codec=codec,
         extension=enums.AUDIO_CODEC_EXTENSIONS[codec],
         chunk_over_ceiling=chunk_over_ceiling,
@@ -2458,7 +2474,7 @@ def _judge_groups(state: Run, jobs: int) -> dict:
             lambda track: _measured_rate(os.path.join(state.input_dir, track)),
             measured), strict=True))
 
-    threshold = MONO_THRESHOLD if state.mono else state.threshold
+    threshold = state.mono_threshold if state.mono else state.threshold
     for group in sorted(groups, key=os.fsencode):
         if group in verdicts:
             continue
@@ -2497,7 +2513,7 @@ def _decide_chunking(state: Run, jobs: int) -> frozenset:
          for track in state.tracks],
         jobs, runlog.cpu_count(), state.mono,
         resolve_bitrate(state.bitrate, state.mono),
-        MONO_THRESHOLD if state.mono else state.threshold,
+        state.mono_threshold if state.mono else state.threshold,
         lambda extension: extension in enums.VIDEO_EXTENSIONS,
         lambda extension: extension in enums.ALWAYS_TRANSCODE_EXTENSIONS,
         state.codec,

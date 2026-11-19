@@ -385,7 +385,8 @@ class TestTheChunkingDecision:
             (tmp_path / track).write_bytes(b"\0" * size)
         base = {"input_dir": str(tmp_path), "tracks": list(sizes),
                 "adaptive": False, "mono": False, "bitrate": ca.DEFAULT_BITRATE,
-                "threshold": ca.THRESHOLD, "codec": "opus",
+                "threshold": ca.THRESHOLD,
+                "mono_threshold": ca.MONO_THRESHOLD, "codec": "opus",
                 "group_depth": 0, "verdicts": {}, "background": 0.0}
         base.update(settings)
         return ca.Run(**base)
@@ -513,7 +514,8 @@ class TestAFolderJudgedWhole:
         rates = {os.path.normpath(track): rate
                  for track, rate in rates.items()}
         base = {"input_dir": "/in", "tracks": list(tracks), "mono": False,
-                "threshold": ca.THRESHOLD, "group_depth": depth,
+                "threshold": ca.THRESHOLD,
+                "mono_threshold": ca.MONO_THRESHOLD, "group_depth": depth,
                 "verdicts": {}}
         base.update(settings)
         state = ca.Run(**base)
@@ -567,6 +569,13 @@ class TestAFolderJudgedWhole:
         state = self._run(["Book/1.mp3"], {"Book/1.mp3": (64000, 10)},
                           mono=True)
         assert ca._judge_groups(state, 1) == {"Book": True}
+
+    def test_the_cut_off_the_run_was_given_is_the_one_judged_against(self):
+        # 128 kbps is over the 90 kbps default and under the 200 a -T gave:
+        # the verdict reads the run's own figure, not the constant.
+        state = self._run(["Book/1.mp3"], {"Book/1.mp3": (128000, 10)},
+                          threshold=200000)
+        assert ca._judge_groups(state, 1) == {"Book": False}
 
     def test_an_overruled_file_is_said(self, capsys):
         state = self._run(
