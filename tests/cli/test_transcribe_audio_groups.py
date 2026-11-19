@@ -142,3 +142,47 @@ class TestOneProcessForAGroup:
                                                stem + ".txt"))
         assert not state.any_failed()
         assert os.listdir(state.ram_root) == []
+
+
+class TestLyrics:
+    @pytest.fixture
+    def run(self, tmp_path, monkeypatch):
+        fake = tmp_path / "fake_whisper.py"
+        fake.write_text(_FAKE_WHISPER)
+        calls = tmp_path / "calls"
+        calls.write_text("")
+        monkeypatch.setenv("FAKE_WHISPER_LOG", str(calls))
+        monkeypatch.setattr(whisper, "WHISPER_COMMAND",
+                            (sys.executable, str(fake)))
+        source, out, ram, counter = (tmp_path / n for n in
+                                     ("in", "out", "ram", "counter"))
+        for folder in (source, out, ram, counter):
+            folder.mkdir()
+        model = {"modelMulti": "base", "device": "cpu", "computeType": "int8",
+                 "threads": "1"}
+        embedded = []
+
+        def embed(target, transcript, tmp_dir):
+            embedded.append((os.path.basename(target), transcript))
+            return 0
+        monkeypatch.setattr(transcribe_audio.transcripttags,
+                            "embed_transcript", embed)
+        state = transcribe_audio.Run(str(source), str(out), "srt", model,
+                                     str(ram), str(counter), 0, lyrics=True)
+        state.embedded = embedded
+        return state
+
+    def test_an_opus_input_gets_a_copy_in_the_output(self, run):
+        for name in ("a.opus", "b.mp3"):
+            open(os.path.join(run.input_dir, name), "w").close()
+        for name in ("a.opus", "b.mp3"):
+            run.transcribe_one(run._prepare(name))
+        assert os.path.isfile(os.path.join(run.output_dir, "a.opus"))
+        assert not os.path.exists(os.path.join(run.output_dir, "b.mp3"))
+        assert [e[0] for e in run.embedded] == ["a.opus.part.opus"]
+
+    def test_a_transcript_without_its_copy_is_done_again(self, run):
+        open(os.path.join(run.input_dir, "a.opus"), "w").close()
+        with open(os.path.join(run.output_dir, "a.srt"), "w") as handle:
+            handle.write("x")
+        assert run._prepare("a.opus") is not None
