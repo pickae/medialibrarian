@@ -214,6 +214,6 @@ class TestTheOptions:
 
     def test_instructions_need_the_option(self, tmp_path, capsys):
         assert self._main(tmp_path, "-P", "a chapter per scene") == 1
-        assert "-P (instructions for the chapter model) needs -e." in \
-            capsys.readouterr().err
+        assert ("-P (instructions for the chapter model) needs -e, or -O "
+                "extras-chapters.") in capsys.readouterr().err
 

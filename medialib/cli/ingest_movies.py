@@ -122,15 +122,36 @@ o | [phase] | omit <phase> from a full ingest: junk, subtitles, ocr,
                   its phases on their own.
 O | <phases> | do only these phases, each on its own, whole tree below each folder
                   given, one after the other in the order typed and stopping at
-                  the first that fails: tagging, subtitles, commentary, names,
-                  chapters, plex and backups, comma-separated. -O tagging,
+                  the first that fails: layout, roles, ocr, tagging, subtitles,
+                  commentary, names, chapters, extras-chapters, plex and
+                  backups, comma-separated. -O tagging,
                   subtitles is the tagging phase and then the subtitles phase,
                   as two commands one after the other would be. Each phase
                   does nothing but its own work. Cannot be combined with -r,
                   -e, -k or -o. -w goes to the phases that have a dry run to
                   carry out (tagging, subtitles, names, backups) and is left
                   off the others; -i names the id list the tagging phase
-                  reads back. What each does:
+                  reads back; -P goes to the extras-chapters phase. What each
+                  does:
+                  layout: what a full ingest does first and nothing after it -
+                  the junk files deleted (as -o junk would leave them), every
+                  video remuxed into Matroska, loose films given a folder
+                  each, bonus material sorted into the Plex folders, folder,
+                  movie and subtitle names cleaned, existing subtitles moved
+                  beside their film and a mangled movie name conformed to its
+                  folder's. Walks the whole tree below each folder given.
+                  No track is touched and no film is tagged with an id.
+                  roles: the subtitle roles and nothing else - every subtitle
+                  of every film is measured, and its forced and SDH flags
+                  are put right where the file says otherwise, in place with
+                  mkvpropedit. No other flag, name or title is touched. Not a
+                  dry run, and -w has no part in it.
+                  ocr: the picture subtitles and nothing else - each main
+                  film's PGS and VobSub subtitles in the spokenLanguages
+                  setting's languages are read into the "<movie>.xx.srt"
+                  sidecars it has none of, by seconv. The sidecars are left
+                  beside the films; a full ingest muxes them in. Needs
+                  seconv, see "Languages & subtitles" below.
                   tagging: the Plex/Jellyfin naming and nothing else - the IMDb id,
                   the editions a folder's several versions become, and a split
                   film's stacking token kept last. Nothing is converted,
@@ -217,6 +238,13 @@ O | <phases> | do only these phases, each on its own, whole tree below each fold
                   a few seconds apart, and each film is written while the next
                   is looked up. Not a dry run, and -w has no part in it. Best
                   run after tagging: an untagged folder's title is only a guess.
+                  extras-chapters: the chapters of the extras and nothing else -
+                  what -e does beside a full ingest, on its own: every bonus
+                  video below each folder given that has no chapters is given
+                  some worked out by a language model (the chapterLlm
+                  settings) from what is said in it, written in place with
+                  mkvpropedit. -P adds instructions for the model. Not a dry
+                  run, and -w has no part in it.
                   plex: walks the whole tree the way the tagging phase does and
                   looks every film up in the Plex library - by its id tag,
                   by its title and year where it has none - saying where the
@@ -251,7 +279,7 @@ e |  | also chapter the extras, beside the rest of the run: a bonus video (a fea
                   divide is left alone. Written in place with mkvpropedit,
                   which is why a transcript made for it is not kept. A full
                   ingest only.
-P | <text> | With -e: more instructions for the model, added to every
+P | <text> | With -e or -O extras-chapters: more instructions for the model, added to every
                   request, e.g. "a chapter per scene, titled with where it
                   takes place". The model then reasons at medium effort, and
                   Claude may search the web.
@@ -285,8 +313,8 @@ OPT_LONG = ("f:fragments "
 
 # The single-phase sweeps -O names, in the order the page lists them. The
 # words are -o's where -o has the same phase.
-ONLY_PHASES = ("tagging", "subtitles", "commentary", "names", "chapters",
-               "plex", "backups")
+ONLY_PHASES = ("layout", "roles", "ocr", "tagging", "subtitles", "commentary",
+               "names", "chapters", "extras-chapters", "plex", "backups")
 
 # Of those, the ones whose dry run -w carries out.
 ONLY_WRITES = ("tagging", "subtitles", "names", "backups")
@@ -1483,6 +1511,53 @@ def update_tags(root: str, roles: bool = True) -> None:
                 os.utime(movie, (original, original))
             except OSError:
                 pass
+
+
+def update_roles(root: str) -> int:
+    """The subtitle roles of every film under ``root``, measured and the
+    forced and SDH flags of each the file says wrong put right - and nothing
+    else of what :func:`update_tags` does: no title, no track name, no other
+    flag. One mkvpropedit call per film that needs one. Answers how many
+    films were changed."""
+    changed = 0
+    for movie in _files_below(root, matches=lambda name:
+                              name.endswith("mkv")):
+        if is_bonus_folder(os.path.dirname(movie)) \
+                or plexnames.is_kept_copy(movie):
+            continue
+        if not _is_matroska(movie):
+            log("WARNING: not a Matroska file despite its name, roles left "
+                "alone: ./" + os.path.relpath(movie, root))
+            continue
+        tracks = _identify(movie)
+        if not any(track.is_subtitle for track in tracks):
+            continue
+        log("Measuring subtitle roles: ./" + os.path.relpath(movie, root))
+        edits = _measured_role_edits(movie, tracks)
+        arguments: list = []
+        for position, track in enumerate(tracks, start=1):
+            if track.id in edits:
+                arguments += (["--edit", "track:%d" % position]
+                              + role_edit_arguments(track, *edits[track.id]))
+        if not arguments:
+            continue
+        try:
+            original = os.stat(movie).st_mtime
+        except OSError:
+            original = None
+        failure = _run_capture(["mkvpropedit", movie] + arguments)
+        filmrecord.forget(movie)
+        if failure:
+            log("WARNING: mkvpropedit could not apply the subtitle flags: "
+                "%s :: %s" % (movie, failure.replace("\n", " | ")))
+            continue
+        changed += 1
+        if original is not None:
+            try:
+                os.utime(movie, (original, original))
+            except OSError:
+                pass
+    return changed
 
 
 def _tag_arguments(tracks: list, role_edits=None) -> list:

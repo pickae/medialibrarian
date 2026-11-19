@@ -1041,6 +1041,12 @@ def _only_phases(declaration, result, program: str, script_dir: str) -> int:
                 "-O names the phases to run on their own, and -%s belongs to "
                 "a full ingest.\nDrop one." % letter)
             return 1
+    if "P" in result.given and "extras-chapters" not in phases:
+        clioptions.refuse_usage(
+            declaration,
+            "-P is for the chapter model of the extras-chapters phase, and "
+            "extras-chapters is\nnot among the phases named in -O.")
+        return 1
     if result.values.get("idList") and "tagging" not in phases:
         clioptions.refuse_usage(
             declaration,
@@ -1159,9 +1165,10 @@ def _main_one(declaration, result, program: str, script_dir: str,
             "encoding\nthem: they contradict each other. Drop one.")
         return 1
     # The instructions are for the model -e asks; without it there is none.
-    if "P" in result.given and not result.values.get("extrasChapters"):
+    if ("P" in result.given and not result.values.get("extrasChapters")
+            and phase != "extras-chapters"):
         clioptions.refuse_usage(declaration, "-P (instructions for the chapter "
-                                "model) needs -e.")
+                                "model) needs -e, or -O extras-chapters.")
         return 1
 
     script_dir = script_dir or commands.script_dir()
@@ -1208,6 +1215,20 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
                                                     UNFIXED_MOVIES_LIST)):
             return 1
         return _commentary_only(program, script_dir, roots, fragments_file)
+
+    if phase == "layout":
+        return _layout_only(program, script_dir, roots, fragments_file)
+
+    if phase == "roles":
+        return _roles_only(program, roots)
+
+    if phase == "ocr":
+        return _ocr_only(program, script_dir, roots, wanted)
+
+    if phase == "extras-chapters":
+        return _extras_chapters_only(
+            program, script_dir, roots,
+            (result.values.get("chapterInstructions") or "").strip())
 
     if phase == "names":
         write = bool(result.values.get("writeTags"))
@@ -1842,6 +1863,143 @@ def _write_backup_list(listing: str, root: str, held: list,
             handle.write("    " + reason + "\n")
     log('%d (old) original(s) in "%s" %s - listed in "%s"'
         % (len(held), root, "kept" if write else "would be kept", listing))
+
+
+def _layout_only(program: str, script_dir: str, roots: list,
+                 fragments_file: str) -> int:
+    """The layout phase on its own: what a full ingest does first and what
+    every later phase leans on, and nothing after it - the junk deleted, every
+    video remuxed into Matroska, each loose film given a folder, the bonus
+    material sorted into the folders Plex reads, the folder, movie and
+    subtitle names cleaned, the subtitles moved beside their film and a
+    mangled movie name conformed to its folder's. No track is touched, nothing
+    is downloaded or transcribed, and no film is tagged with an id."""
+    if tooldeps.require_tools(program, ["ffprobe", "mkvmerge", "mediainfo"]):
+        return 1
+    ramscratch.init_ram_base()
+    ram_root, status = ramscratch.ram_scratch_dir("ingestMovies")
+    if status != 0:
+        return 1
+    ramscratch.add_exit_cleanup([ram_root])
+    safety.init_safety_log(os.path.join(ram_root, "safetySkips.log"))
+    safety.init_abort_flag(os.path.join(ram_root, "abortRequested"))
+    safety.trap_run_abort()
+    state = Run(script_dir=script_dir, ram_root=ram_root,
+                skips=safety.RunSkipLog(), fragments_file=fragments_file)
+    safety.set_run_footer(safety.report_safety_skips)
+    try:
+        for root in roots:
+            log("Laying out: " + root)
+            _lay_out(state, root)
+            log("Phase: moving and renaming pre-existing subtitles")
+            subtitlefiles.move_subs(root)
+            subtitlefiles.rename_subs(root, state.skips)
+            rules.cleanup(root)
+            log("Phase: checking for folders without a movie")
+            check_folders(root)
+            safety.exit_if_aborted()
+        safety.print_run_footer()
+    finally:
+        ramscratch.run_exit_cleanup()
+    return 0
+
+
+def _roles_only(program: str, roots: list) -> int:
+    """The subtitle roles phase on its own: every subtitle of every film below
+    each folder given measured, and its forced and SDH flags put right where
+    the file says otherwise, in place with mkvpropedit. No other flag, name or
+    title is touched."""
+    if tooldeps.require_tools(program, ["mkvmerge", "mkvpropedit",
+                                        "mkvextract", "ffprobe", "mediainfo"]):
+        return 1
+    changed = 0
+    for root in roots:
+        log('Phase: measuring the subtitle roles of the films in "%s"' % root)
+        changed += rules.update_roles(root)
+        safety.exit_if_aborted()
+    log("Subtitle roles: %d film(s) had flags put right" % changed)
+    return 0
+
+
+def _ocr_only(program: str, script_dir: str, roots: list,
+              wanted: tuple | None) -> int:
+    """The picture-subtitle phase on its own: each main film's picture
+    subtitles in the spokenLanguages setting's languages read into the
+    "<movie>.xx.srt" sidecars it has none of, by seconv. The sidecars are left
+    beside the films rather than muxed in; a full ingest muxes them in."""
+    if not subtitleocr.available():
+        sys.stderr.write("seconv is not installed, so there is no OCR engine "
+                         "to read picture subtitles with.\n")
+        return 1
+    ffmpegselect.select_ffmpeg()
+    ffmpegselect.report_ffmpeg_selection()
+    if tooldeps.require_tools(program, ["ffmpeg", "ffprobe", "mkvmerge",
+                                        "mediainfo"]):
+        return 1
+    ramscratch.init_ram_base()
+    ram_root, status = ramscratch.ram_scratch_dir("ingestMovies")
+    if status != 0:
+        return 1
+    ramscratch.add_exit_cleanup([ram_root])
+    safety.init_abort_flag(os.path.join(ram_root, "abortRequested"))
+    safety.trap_run_abort()
+    state = Run(script_dir=script_dir, ram_root=ram_root,
+                subtitle_languages=wanted)
+    try:
+        for root in roots:
+            log('Phase: reading the picture subtitles of the films in "%s"'
+                % root)
+            for movie in main_movies(root):
+                if safety.abort_requested():
+                    break
+                tracks = rules._identify(movie)
+                if not tracks:
+                    continue
+                rules._object_flags(movie, tracks)
+                state.read_image_subtitles(movie, os.path.splitext(movie)[0],
+                                           tracks, log)
+            safety.exit_if_aborted()
+    finally:
+        ramscratch.run_exit_cleanup()
+    return 0
+
+
+def _extras_chapters_only(program: str, script_dir: str, roots: list,
+                          instructions: str) -> int:
+    """The extras' chapters phase on its own: every bonus video below each
+    folder given that has no chapters is given some worked out by the chapter
+    model from what is said in it, written in place with mkvpropedit - what -e
+    does beside a full ingest. -P adds instructions for the model."""
+    if tooldeps.require_tools(program, ["ffmpeg", "ffprobe", "mkvmerge",
+                                        "mkvpropedit"]):
+        return 1
+    llm = chapterwork.model(program, instructions, "-O extras-chapters", log)
+    if llm is None:
+        return 1
+    ramscratch.init_ram_base()
+    ram_root, status = ramscratch.ram_scratch_dir("ingestMovies")
+    if status != 0:
+        return 1
+    ramscratch.add_exit_cleanup([ram_root])
+    safety.init_abort_flag(os.path.join(ram_root, "abortRequested"))
+    safety.trap_run_abort()
+    state = Run(script_dir=script_dir, ram_root=ram_root)
+    try:
+        for root in roots:
+            films = extras(root)
+            log('Phase: chaptering the %d extra(s) in "%s"'
+                % (len(films), root))
+            if not films:
+                continue
+            chaptering = lanes.ChapterLane(
+                films, lambda movie, whisper, _root=root: _chapter_extra(
+                    state, _root, llm, movie, whisper), log)
+            chaptering.start()
+            chaptering.finish()
+            safety.exit_if_aborted()
+    finally:
+        ramscratch.run_exit_cleanup()
+    return 0
 
 
 def _chapters_only(program: str, roots: list) -> int:
@@ -2878,13 +3036,12 @@ def _settle_ffsubsync_quality(judged: str = "a downloaded subtitle",
     return "yes"
 
 
-def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
-    # The phases the run was told to omit: every phase entry below is
-    # guarded by them, and an omitted one is said so at its place, the way
-    # a phase skipped for want of its tool is.
-    omit: frozenset = getattr(state, "omit_phases", frozenset())
-    log("Starting ingest: " + root)
-
+def _lay_out(state, root: str, omit: frozenset = frozenset()) -> set:
+    """The layout phases of a full ingest, which -O layout runs on their own:
+    the junk gone, every video a Matroska file, each film in a folder of its
+    own, the bonus material in the folders Plex reads, and the names cleaned.
+    Answers the films named as remuxes before the cleaning takes the word out
+    of their names."""
     if "junk" in omit:
         log("Phase: cleaning up junk files - OMITTED (-o junk)")
     else:
@@ -2917,6 +3074,17 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
     # gain their id from the tagging below are conformed again after it.
     log("Phase: conforming mangled movie names to their folders'")
     rules.conform_movie_names(root, state.skips)
+    return named_remuxes
+
+
+def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
+    # The phases the run was told to omit: every phase entry below is
+    # guarded by them, and an omitted one is said so at its place, the way
+    # a phase skipped for want of its tool is.
+    omit: frozenset = getattr(state, "omit_phases", frozenset())
+    log("Starting ingest: " + root)
+
+    named_remuxes = _lay_out(state, root, omit)
 
     # Which film each folder is, asked once for the subtitle lane, the remux
     # and the carry-over from the Plex library: the remux keeps the language

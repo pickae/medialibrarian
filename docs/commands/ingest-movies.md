@@ -82,12 +82,16 @@ pointed at a library. A full ingest reads only the one level it always did.
 
 | Phase | Does only | By default | With `-w` | Leaves behind | Run it after |
 | --- | --- | --- | --- | --- | --- |
+| `-O layout` | the layout: junk deleted, videos remuxed into Matroska, a folder per film, extras sorted, names cleaned, subtitles moved beside their film | not a dry run | left off | — | — |
+| [`-O roles`](#subtitles-the-file-flags-wrong) | measuring the subtitles for forced and SDH, and fixing those flags | writes as it goes | left off | — | — |
+| [`-O ocr`](#picture-subtitles-read-into-text) | reading picture subtitles into `.srt` sidecars | writes as it goes | left off | sidecars beside the films | — |
 | [`-O tagging`](#naming-films) | the server naming: IMDb id, editions, stacking token | dry run: prints every rename | carries the renames out | [lists](#the-lists-tagging-writes) in `logs/ingest-movies/` | — |
 | [`-O tagging -i <file>`](#feeding-ids-back--i) | the same naming, from the id list you filled in | dry run: prints, writes only the conflicts and duplicates lists | renames, and brings the file up to date | — | `-O tagging` |
 | [`-O subtitles`](#subtitles) | testing the subtitles already there | dry run: says which would be kept | syncs, deletes the out-of-step ones, downloads the missing | `logs/ingest-movies/ingest-movies-subtitles-<folder>.txt` | `-wO tagging` |
 | [`-O commentary`](#commentary-transcripts) | transcribing commentary tracks | writes as it goes | left off | transcripts beside the films | — |
 | [`-O names`](#commentary-names) | naming numbered commentary tracks | dry run | names the tracks | `logs/ingest-movies/ingest-movies-commentarynames-<folder>.txt` | `-O commentary` |
 | [`-O chapters`](#chapters) | chapters from the ChapterDB archive | writes as it goes | left off | — | `-wO tagging` |
+| [`-O extras-chapters`](#chaptering-the-extras--e) | chapters for the extras, worked out by the language model (`-P` adds instructions) | writes as it goes | left off | — | — |
 | [`-O plex`](#plex-comparison) | comparing with the Plex library | changes nothing | left off | — | `-wO tagging` |
 | [`-O backups`](#dropping-the-old-backups) | dropping the `(old)` originals the checks passed | dry run: says which would be dropped and which would stay, with the reason | tags the copies and drops the originals | `logs/ingest-movies/ingest-movies-backups-<folder>.txt` | `-wO tagging` |
 
@@ -99,8 +103,8 @@ later and names its own transcript, and so does each chapter write.
 
 **`-w` on its own is refused.** Without `-O` naming `tagging`, `subtitles`, `names` or `backups` there is
 no dry run to carry out, and the run it would otherwise start is a full ingest.
-Named with `commentary`, `chapters` or `plex` only, it is refused as well: the
-transcription and the chapter lookup are not dry runs and the comparison changes
+Named with `layout`, `roles`, `ocr`, `commentary`, `chapters`, `extras-chapters` or `plex` only, it is refused as well: the
+layout, the transcription and the chapter lookups are not dry runs and the comparison changes
 nothing, so there is nothing for `-w` to carry out. Beside a phase that has a dry
 run it is left off those.
 
@@ -1070,13 +1074,20 @@ see untagged folders, which they already handle.
 
 **`-O <phases>` runs single-task sweeps by name**, in the order typed, as if each
 had been typed as its own command on the same folders. The phases are
-`tagging`, `subtitles`, `commentary`, `names`, `chapters`, `plex` and `backups`,
-comma-separated like `-o` and `-k`:
+`layout`, `roles`, `ocr`, `tagging`, `subtitles`, `commentary`, `names`,
+`chapters`, `extras-chapters`, `plex` and `backups`, comma-separated like `-o` and
+`-k`. `layout` is the first half of a full ingest — junk, Matroska, folders, extras
+folders, names, subtitle files — without a track touched; `roles` and `ocr` are the
+`-o roles` and `-o ocr` phases on their own (`ocr` leaves the sidecars beside the
+films rather than muxing them in); `extras-chapters` is [`-e`](#chaptering-the-extras--e)
+on its own, and takes `-P`:
 
 ```bash
 ingest-movies -O tagging ~/Films
 ingest-movies -wO tagging,subtitles ~/Films       # tag, then the subtitles
 ingest-movies -O commentary,names,chapters ~/Films
+ingest-movies -O layout,ocr,roles ~/Films
+ingest-movies -O extras-chapters -P "a chapter per scene" ~/Films
 ```
 
 Nothing is reordered or checked for sense, so the order is the one the
