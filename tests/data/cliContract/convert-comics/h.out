@@ -39,7 +39,6 @@ Options:
                     lines.
     -q, --quiet     Print errors only - no progress and no warnings.
     -x, --set <name=value>
-                    Override a setting for this run: name=value, repeatable. The
-                    value is held where the environment holds it, so it wins
-                    over the settings file; a secret is refused - the settings
-                    file is where it goes. The settings page lists the names.
+                    Override a setting for this run, over the settings file;
+                    repeatable. A secret is refused - the settings file is where
+                    it goes. The settings page lists the names.

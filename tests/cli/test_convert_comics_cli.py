@@ -1067,7 +1067,7 @@ class TestKeepInput:
         assert blackbox.tree_of(run.outputs) == ["Book.cbz"]
 
     def test_a_bare_k_keeps_the_name_with_the_rest(self, run):
-        """The bare flag keeps every part, and the name is one of them now."""
+        """The bare flag keeps every part, and the name is one of them."""
         run.ingest("-k")
         assert blackbox.tree_of(run.inputs) == ["Book.cbr"]
 

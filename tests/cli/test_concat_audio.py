@@ -83,8 +83,7 @@ class TestScan:
                                  "flac": 1}
 
     def test_a_cue_matches_in_either_case(self, folder):
-        """Deliberately unlike the audio extensions, which match exactly - the
-        shell used -iname for the cue and -name for the rest."""
+        """Deliberately unlike the audio extensions, which match exactly."""
         assert sorted(os.path.basename(cue) for cue in folder.cues) == [
             "other.cue", "sheet.CUE"]
 
@@ -298,13 +297,13 @@ class TestBooksAtOnce:
         monkeypatch.setattr(ca.ramscratch, "filesystem_type",
                             lambda _directory: "ext4")
         monkeypatch.setattr(ca.runlog, "cpu_count", lambda: 32)
-        assert ca.books_at_once(str(tmp_path)) == ca.JOBS_FROM_DISK == 2
+        assert ca.books_at_once(str(tmp_path)) == 2
 
     def test_a_host_that_cannot_name_the_filesystem_counts_as_disk(
             self, monkeypatch, tmp_path):
         monkeypatch.setattr(ca.ramscratch, "filesystem_type",
                             lambda _directory: "")
-        assert ca.books_at_once(str(tmp_path)) == ca.JOBS_FROM_DISK
+        assert ca.books_at_once(str(tmp_path)) == 2
 
 
 class TestPublishBook:

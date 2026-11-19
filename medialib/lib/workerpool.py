@@ -312,8 +312,7 @@ def run(items, jobs: int, target, arguments, on_done=None, *,
             on_done(item)
     # What the producer thread and the dispatch share, under <room>: the buffer
     # itself, whether the producer is finished, and what it raised if it did
-    # not finish cleanly - handed to the dispatch to raise, as the pull that
-    # raised it used to.
+    # not finish cleanly - handed to the dispatch to raise.
     room = threading.Condition()
     order = 0
     done = False

@@ -589,7 +589,7 @@ class Provider:
     asked."""
 
 
-# In the order they are asked. OpenSubtitles.org first, as it always was; then
+# In the order they are asked. OpenSubtitles.org first; then
 # OpenSubtitles.com, a separate service with accounts of its own; then SubDL,
 # with the API key a free account gets. None of them is asked without its
 # login: none of the catalogues that need no account was reachable, or would

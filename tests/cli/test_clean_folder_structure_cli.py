@@ -637,8 +637,8 @@ class TestSimulation:
 # because it was right and must stay that way. The text is the specification;
 # the two .tree files beside it are the executable form.
 _CASES = [
-    # A pure regression guard: nothing is changed here today, and a future run
-    # that changes something should raise the question rather than pass.
+    # A pure regression guard: nothing here changes, and a run that changes
+    # something should raise the question rather than pass.
     "a16z",
     # Duplicate prefix numbers separated by a common string, the second set
     # unpadded, and one padded sequence must survive. The near-common suffix
@@ -663,14 +663,13 @@ _CASES = [
     "Lage",
     # Two nearly-identical numeric prefixes, "36 10903" and "36 10963". Losing
     # the "36" is right and cropping to "1090"/"1096" is defensible; losing
-    # everything else was not. "Jahresrueckblick" is common to both names but at
-    # different positions, so the middle-substring pass must never have taken it.
+    # everything else is not. "Jahresrueckblick" is common to both names but at
+    # different positions, so the middle-substring pass must not take it.
     # Guarded by the truncation-consistency check on the original name lengths.
     "36",
-    # The parent of all the other cases. "a16z" was renamed when its parent was
-    # cleaned around it but not when it was cleaned directly: the individual
-    # prefix rule matched the "16" inside it and took the letters with it.
-    # Stripping around a number is now allowed to remove separators and brackets
+    # The parent of all the other cases. "a16z" comes out the same whether its
+    # parent is cleaned around it or it is cleaned directly: the "16" inside it
+    # is not a prefix. Stripping around a number removes separators and brackets
     # only, never letters or digits.
     "folders",
     # Abenteuer1/2 again, with the cropped common suffix only ONE token long and
@@ -684,38 +683,33 @@ _CASES = [
     # Every name is "NN(...)", most "NN(years) (publisher year)", so the group
     # shares a leading "(" and a trailing ")". Those look like one matched pair,
     # which holds for the single-pair names and not for the two-pair ones, where
-    # the leading "(" closes mid-name. Stripping both left half a pair at each
-    # end. Consecutive pairs are each their own thing now - a stripped bracket
+    # the leading "(" closes mid-name. Stripping both would leave half a pair at
+    # each end. Consecutive pairs are each their own thing - a stripped bracket
     # takes its real partner with it - so they come out as if each pair had a
     # name to itself. Nested pairs are unaffected; an unmatched bracket has no
     # partner and is never touched.
     "Brackets",
     # An anonymised comics folder where only 2 of 29 files carry a numeric prefix
     # and most names open with a stray space. Those two numbers are exactly what
-    # distinguishes those files and must survive; only the spaces go. They were
-    # dropped by renameSiblings' third pass, which recovers a prefix hidden
-    # behind common leading text the collective pass removed. Whether it runs was
-    # decided by the group's FIRST item - here a space-less name with no prefix -
-    # so it ran, re-cleaned every core, and wrote the empty result over the real
-    # prefix. It only touches names that have no prefix yet.
+    # distinguishes those files and must survive; only the spaces go. The pass
+    # that recovers a prefix hidden behind common leading text the collective
+    # pass removed touches only names that have no prefix yet, whatever the
+    # group's first item is - here a space-less name with no prefix.
     "Sparse",
     # Two files, two difficulties. The part numbering "(1/2)"/"(2/2)", where
-    # yt-dlp writes the slash as a lookalike character, was spelled out as " - "
-    # by the individual pass: that turned the 2-character token into an
-    # 8-character shared run, well past the middle-removal minimum, and the
-    # numbering was eaten down to "(1)"/"(2)" - and before the bracket gate, to
-    # "(1 Die ..." with an orphaned "(". The lookalike is one dash now, so the
-    # shared run is short enough to be left alone. And the date: both parts were
+    # yt-dlp writes the slash as a lookalike character, survives: the lookalike
+    # is spelled as one dash, so the shared run stays short of the
+    # middle-removal minimum and is left alone. And the date: both parts were
     # published the same day, so the group shares one date prefix - coincidence
     # in a group this small rather than redundancy, and a date is informative and
     # the sort key besides. A uniform DATE is kept where a uniform plain number
-    # is still wiped. What should go still goes: the shared episode title is the
+    # is wiped. What should go still goes: the shared episode title is the
     # cores' common prefix and is stripped, the date sitting outside it.
     "Verbrechen",
     # The colon a Windows-safe renamer wrote as "∶", which is not ASCII
-    # punctuation and so a letter to affix_char_class: the shared "∶ Nebel am
-    # Morgen (Folge 12)" suffix stopped one character short of it and every
-    # file kept a trailing "∶". It is spelled out as " - " now.
+    # punctuation and so a letter to affix_char_class. It is spelled out as
+    # " - ", so the shared "∶ Nebel am Morgen (Folge 12)" suffix goes whole and
+    # no file keeps a trailing "∶".
     "Doppelpunkt",
 ]
 

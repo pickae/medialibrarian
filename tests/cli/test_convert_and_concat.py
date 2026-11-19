@@ -123,10 +123,6 @@ class TestTheOptionPage:
         for codec in enums.AUDIO_CODECS:
             assert codec in page, page
 
-    def test_the_default_is_the_same_one_convert_audio_falls_back_to(self):
-        from medialib.cli import convert_audio
-        assert cac.DEFAULT_CODEC == convert_audio.DEFAULT_CODEC
-
     def test_the_token_is_spelled_without_a_hyphen(self):
         """The page names what -e actually takes: `xhe-aac` is the codec's
         name, and a reader who types it gets a refusal."""

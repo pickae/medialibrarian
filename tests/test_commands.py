@@ -45,7 +45,7 @@ def test_the_installed_commands_are_the_table():
 
 
 @pytest.mark.parametrize("command", sorted(commands.COMMANDS), ids=lambda n: n)
-def test_every_console_script_points_at_something_callable(command):
+def test_every_console_script_imports_and_has_a_cli(command):
     module = __import__(commands.module_for(command), fromlist=["cli"])
     assert callable(module.cli)
 
@@ -67,7 +67,8 @@ def test_an_unknown_command_names_itself():
 
 class TestRunCommand:
     """What reaches the child: the resolved interpreter, the module, the argv,
-    and the two environment values the shell shim used to set."""
+    and the two environment values it is handed (its name, its script
+    directory)."""
 
     def _spawn(self, monkeypatch, *args, **kwargs):
         seen = {}

@@ -84,9 +84,9 @@ USAGE_HEAD = """Usage:
 OPT_SPEC = """
 m |  | mono output, lower default bitrate.
 s |  | iterate through different input subfolders independently
-c |  | only concat
-b |  | specify bitrate
-i |  | clean input folders
+c |  | Skip the conversion: join the files as they are.
+b | <bitrate> | The conversion's bitrate, handed to convert-audio -b.
+i |  | Clean the names in the input folders first.
 e | <codec> | output encoding of the transcoding phase, handed to
             convert-audio: {codecs}. aac and xheaac are written as .m4a,
             which the concatenating phase joins into an .m4b; xheaac
@@ -96,7 +96,6 @@ e | <codec> | output encoding of the transcoding phase, handed to
 
 OPT_VARS = ("m:mono s:subFolders c:onlyConcat b:bitrate i:inputClean "
             "e:outputCodec")
-OPT_FLAGS = "arg:b"
 OPT_COLUMN = 12
 OPT_LONG = ("m:mono s:sub-folders c:only-concat b:bitrate i:clean-input "
             "e:encoding")
@@ -114,7 +113,6 @@ def spec(program: str) -> clioptions.Spec:
         options=OPT_SPEC,
         long=OPT_LONG,
         vars=OPT_VARS,
-        flags=OPT_FLAGS,
         checks=OPT_CHECKS,
         column=OPT_COLUMN,
         credits=CREDITS,

@@ -437,9 +437,8 @@ class Run:
     def progress(self, library, label):
         """The one progress line a file gets.
 
-        Under one worker it is exactly the line this script has always printed.
-        Under several the counter has to be shared, and the line says which
-        library it belongs to - the workers' lines interleave, and
+        Under several workers the counter has to be shared, and the line says
+        which library it belongs to - the workers' lines interleave, and
         "[812/40000] 03 - Chapter.opus" on its own would say nothing about which
         of four libraries is 812 files in.
         """

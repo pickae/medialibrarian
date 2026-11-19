@@ -12,7 +12,7 @@ at a time.
 
 Only a disk that spins is taken turns on. One that does not - an SSD, NVMe -
 reads several films at once about as fast as it reads one, and is left to be
-shared the way it always was. A disk that cannot be told - a network or FUSE
+shared. A disk that cannot be told - a network or FUSE
 file system, a btrfs subvolume - is taken to spin: the cautious answer is the
 one that never makes a disk do two things at once.
 

@@ -271,7 +271,7 @@ def _coder_by_content(path: str) -> str:
 def magick_coder(path: str) -> str:
     """The ImageMagick coder to read <path> with: the one its bytes name, else
     the one its extension implies - "" for an extension this table has no
-    raster family for, which leaves ImageMagick to decide as it always has."""
+    raster family for, which leaves ImageMagick to decide."""
     coder = _coder_by_content(path)
     if coder:
         return coder

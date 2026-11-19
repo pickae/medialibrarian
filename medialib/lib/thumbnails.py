@@ -291,12 +291,11 @@ def embed_thumbnail(input_path: str, file_name: str, image_size_limit: int,
         _detail("    Cover from the image file %s in the input"
                 % os.path.relpath(thumb_file, input_path))
 
-    # or extract from pdf file or audio file themselves, if nothing was found till now
     if not os.path.isfile(thumb_file):
         extract_thumbnail(input_path, ram_base, dpi, have_mkvtoolnix, run)
         thumb_file = f"{ram_base}.jpg"
 
-    # and online, the last rung, when none of the local ones held a cover
+    # Online is the last rung, when none of the local ones held a cover.
     if not os.path.isfile(thumb_file):
         if onlinecover.enabled():
             thumb_file = _online_thumbnail(
@@ -306,7 +305,7 @@ def embed_thumbnail(input_path: str, file_name: str, image_size_limit: int,
             _detail("    No cover looked for online: the coverSearch "
                     "setting is off")
 
-    # The temp name is keyed on ramBase (the unique per-subfolder output stem),
+    # The temp name is keyed on ram_base (the unique per-subfolder output stem),
     # NOT on the source image's basename: parallel workers share one ram_dir.
     output_thumb = f"{ram_base}.output.jpg"
 

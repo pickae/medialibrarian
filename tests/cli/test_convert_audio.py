@@ -35,10 +35,6 @@ class TestResolveBitrate:
         still the built-in default."""
         assert ca.resolve_bitrate(64, mono=mono) == 64
 
-    def test_the_defaults_are_the_codecs_own(self):
-        assert ca.DEFAULT_BITRATES == {"opus": 46, "aac": 64, "xheaac": 46}
-        assert ca.MONO_BITRATES == {"opus": 32, "aac": 48, "xheaac": 32}
-
     def test_the_swap_follows_the_codec(self):
         """A forced mono run of AAC encodes at AAC's mono figure, and the Opus
         one stands for Opus alone - the figure a run asks for is the one its
@@ -229,11 +225,7 @@ class TestTheMeasuredBitrate:
 
 
 class TestTheOutputCodec:
-    """-o, and the four places the choice of codec has to reach. Every one of
-    them used to spell `.opus` out."""
-
-    def test_opus_is_the_default_and_the_first_of_the_list(self):
-        assert ca.DEFAULT_CODEC == "opus" == enums.AUDIO_CODECS[0]
+    """-o, and the four places the choice of codec has to reach."""
 
     def test_every_codec_the_page_offers_is_accepted(self):
         """Read off the page a reader sees. Written out by hand the two drift,

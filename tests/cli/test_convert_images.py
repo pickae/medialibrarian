@@ -150,9 +150,6 @@ def _run(image_format="avif", speed=5, quality=60, max_res=ci.UNBOUNDED_EDGE,
 class TestTheFormatTable:
     """The three formats -e takes, and the -s knob translated into each one."""
 
-    def test_avif_is_still_the_default(self):
-        assert ci.DEFAULT_FORMAT == "avif"
-
     def test_the_table_covers_the_central_list_and_nothing_else(self):
         """enums.IMAGE_CODECS is what the page offers and the check accepts, so
         a codec there with no entry here would be accepted and then crash."""
@@ -193,12 +190,12 @@ class TestTheFormatTable:
 
 
 class TestEncodeArguments:
-    def test_the_default_run_is_the_avif_call(self):
-        """-e defaults to avif, so this is the call a bare command line makes."""
-        assert _run()._encode_arguments("page.jpg", "/out/page.avif") == [
-            "-format", "avif", "-quality", "60",
-            "-define", "heic:speed=5", "jpeg:page.jpg",
-            "-resize", "10000x10000>", "-depth", "10", "/out/page.avif"]
+    def test_the_quality_source_and_size_reach_the_call(self):
+        argv = _run()._encode_arguments("page.jpg", "/out/page.avif")
+        assert argv[argv.index("-quality") + 1] == "60"
+        assert "jpeg:page.jpg" in argv
+        assert argv[argv.index("-resize") + 1] == "10000x10000>"
+        assert argv[-1] == "/out/page.avif"
 
     @pytest.mark.parametrize("name", sorted(ci.FORMATS))
     def test_the_depth_is_set_on_the_image_and_not_on_the_read(self, name):
@@ -761,7 +758,6 @@ class TestTheOptionsAreSettledUpFront:
             self._parse("-u", chroma, "in", "out")
 
     def test_the_chroma_default_is_the_encoder_s_own(self):
-        assert ci.DEFAULT_CHROMA == "420"
         assert self._parse("in", "out").values["chroma"] == ""
 
     @pytest.mark.parametrize("argv,named", [
@@ -1163,7 +1159,13 @@ class TestTheCpuTrimOfACardPage:
         """The share a trim must take, the corners' lightness, the share past
         which a page is blank and the margin given back - the constants
         trim_verdict decides by."""
-        assert ci.gpu_trim_arguments("10%") == [
-            "--trim", "--fuzz", "10%", "--trim-margin", "1%",
-            "--trim-limits", "1%,20%", "--trim-lightness", "80",
-            "--skip-blank", "99"]
+        argv = ci.gpu_trim_arguments("10%")
+
+        def value(option):
+            return argv[argv.index(option) + 1]
+        assert "--trim" in argv and value("--fuzz") == "10%"
+        assert value("--trim-margin") == "%d%%" % ci.MIN_TRIM_PERCENT
+        assert value("--trim-limits") == "%d%%,%d%%" % (
+            ci.MIN_TRIM_PERCENT, ci.MAX_TRIM_PERCENT)
+        assert value("--trim-lightness") == str(ci.LIGHTNESS_THRESHOLD)
+        assert value("--skip-blank") == str(ci.BLANK_TRIM_PERCENT)

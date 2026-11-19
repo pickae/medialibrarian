@@ -1,6 +1,6 @@
 """The shared Opus target bitrates, one row per channel configuration.
 
-It is a mapping, and the only copy.
+It is a mapping.
 
 Channel counts are strings, not numbers, and matched as text: a track reported
 as "01" channels finds no row, and neither does one reported as "2.0". Reading

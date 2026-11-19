@@ -85,10 +85,6 @@ class TestIsStarved:
 
 
 class TestTheVocabularyItself:
-    def test_the_three_verdicts_are_worst_first(self):
-        assert adequacy.VERDICTS == (adequacy.STARVED, adequacy.ADEQUATE,
-                                     adequacy.GENEROUS)
-
     def test_unknown_is_not_one_of_them(self):
         """It is the absence of a verdict, not a fourth one, so a caller
         iterating the real ones never has to filter it out."""

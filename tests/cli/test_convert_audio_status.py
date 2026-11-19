@@ -1,6 +1,6 @@
-"""convertAudio's live status row and its per-file line.
+"""convert-audio's live status row and its per-file line.
 
-What the row is DRAWN with has its own file; this is the content convertAudio
+What the row is DRAWN with has its own file; this is the content convert-audio
 supplies, the erase/re-pin dance around each line it prints, and the settlement a
 worker process has to be handed before it can join in.
 """

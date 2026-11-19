@@ -92,7 +92,7 @@ def plan_numbering(directory: str, names: Sequence[str]) -> Numbering:
 
 def number_files_in_folder(directory: str, files,
                            announce: bool = True) -> None:
-    """``numberFilesInFolder``: the plurality filetype of one folder, numbered.
+    """The plurality filetype of one folder, numbered.
 
     ``files`` are the folder's own files, in the order `sort -V` puts them - the
     caller lists them, because what counts as a sibling is the caller's rule.

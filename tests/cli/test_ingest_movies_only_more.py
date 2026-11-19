@@ -1,5 +1,5 @@
 """-O layout, roles, ocr and extras-chapters: the phases of a full ingest that
-can now be run on their own."""
+can be run on their own."""
 
 from __future__ import annotations
 

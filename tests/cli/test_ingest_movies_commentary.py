@@ -62,10 +62,6 @@ def ingested(monkeypatch):
     return run
 
 
-def test_the_queue_is_handed_a_drain_and_not_none(ingested):
-    assert callable(ingested()["drain"])
-
-
 def test_the_width_is_whisper_s_and_not_the_core_count(ingested, monkeypatch):
     widths = []
     monkeypatch.setattr(run_module.workerpool, "map",

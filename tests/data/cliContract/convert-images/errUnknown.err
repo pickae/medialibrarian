@@ -4,11 +4,10 @@ Usage:
     convert-images [options] <inputDir> <outputDir>
 Options:
     -h, --help      Print this help page.
-    -c, --crop      crop excessive whitespace
+    -c, --crop      Trim the plain margins off each image.
     -a, --always    convert every image, including one whose file size says it is
-                    already starved. Without it such an image is left alone: see
-                    below.
-    -r, --reverse   reverse: convert the -e format back to jpeg
+                    already starved. Without it such an image is left alone.
+    -r, --reverse   Convert images of the -e format back to JPEG.
     -e, --encoding <format>
                     output encoding: avif, webp or jxl, default avif
     -u, --chroma <chroma>
@@ -20,14 +19,16 @@ Options:
                     Default: what the cores allow, or what the RAM holds of
                     the largest image in the input, whichever is fewer.
     -Q, --quality <quality>
-                    quality level of the output images
+                    Encoder quality; higher is better and larger. Default 60.
     -s, --speed <speed>
                     av1 speed preset 0-9, lower is slower, default 5
     -m, --max-resolution <maxRes>
-                    maximum resolution (height) to keep
+                    Scale an image taller than <maxRes> pixels down to that
+                    height. Default: no limit.
     -f, --fuzz <fuzz>
-                    when trimming, how many percent color difference gets still trimmed
-    -k, --calibrate calibrate: measure what the GPU encoder has to be asked for to
+                    With -c: how many percent a colour may differ from the margin
+                    and still be trimmed. Default 10.
+    -k, --calibrate Measure what the GPU encoder has to be asked for to
                     match the CPU, on crops of the images in <inputDir>, and
                     save it. Works in <outputDir>; converts nothing.
     -v, --verbose   Also say why each item was handled the way it was, and on a
@@ -35,9 +36,8 @@ Options:
                     lines.
     -q, --quiet     Print errors only - no progress and no warnings.
     -x, --set <name=value>
-                    Override a setting for this run: name=value, repeatable. The
-                    value is held where the environment holds it, so it wins
-                    over the settings file; a secret is refused - the settings
-                    file is where it goes. The settings page lists the names.
+                    Override a setting for this run, over the settings file;
+                    repeatable. A secret is refused - the settings file is where
+                    it goes. The settings page lists the names.
 
 Nothing was changed.

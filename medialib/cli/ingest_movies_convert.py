@@ -45,7 +45,7 @@ __all__ = ["backup_is_whole", "convert_remuxes", "drop_candidates",
 
 # The tag the drop-backups sweep writes onto a film whose "(old)" original has
 # been verified and deleted, so the "already remuxed" check still answers yes
-# once the backup that used to say it is gone.
+# once the backup that said so is gone.
 INGESTED_TAG = "MEDIALIB_INGESTED"
 
 # The word a release names itself a remux with, in any case.

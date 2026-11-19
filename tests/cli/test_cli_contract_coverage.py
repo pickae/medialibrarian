@@ -24,8 +24,7 @@ _FIXTURES = str(blackbox.DATA / "cliContract")
 
 
 def _scripts():
-    """The recording directory each command is entitled to, which since item 6.4
-    is simply its own name."""
+    """The recording directory each command is entitled to: its own name."""
     return sorted(commands.COMMANDS)
 
 

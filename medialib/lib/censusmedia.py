@@ -568,7 +568,7 @@ def census_bitrate_adequacy(path, codec, width, height, fps, bits):
     at all unless the run asked for the column.
 
     The one judgement in this census rather than a reading, made against the model
-    in ``videobitrate`` - the same model, tables and boundaries convertVideo's -t
+    in ``videobitrate`` - the same model, tables and boundaries convert-video's -t
     decides a single file with, so a library counted here as starved is the set of
     files that test refuses to re-encode. Grain is the one axis a census cannot
     afford, because measuring it is a decode per file; it is asked for through

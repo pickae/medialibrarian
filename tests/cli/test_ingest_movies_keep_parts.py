@@ -2,7 +2,7 @@
 
 Read once at the run's start: a part the run will not keep is refused with
 the page, like a bad option, and the parts it keeps are what the run that
-remuxes is handed - a bare -k keeping everything, the way it always did.
+remuxes is handed - a bare -k keeping everything.
 What each part settles is pinned where it settles it: the tracks in
 TestKeepEverythingDropsNothing in test_ingest_movies.py, the refusals in
 TestKeepEverything in test_ingest_movies_convert.py.

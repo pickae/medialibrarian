@@ -164,11 +164,10 @@ def _subprocess_pipe(first_argv, second_argv, second_stdout=None,
 
 
 def read_video_info(path, run=_subprocess_run):
-    """dvReadVideoInfo: the DV state and frame rate of <path>'s video track,
-    in one mediainfo pass, as the six DV_* values. A file mediainfo cannot
-    read, one that prints nothing, and one whose JSON the probe cannot
-    navigate all yield the empty values, which the gates below read as
-    "nothing to convert".
+    """The DV state and frame rate of <path>'s video track, in one mediainfo
+    pass, as the six DV_* values. A file mediainfo cannot read, one that prints
+    nothing, and one whose JSON the probe cannot navigate all yield the empty
+    values, which the gates below read as "nothing to convert".
 
     ``run`` stands in for the runner - (argv, **kwargs) to a result with
     returncode/stdout/stderr - so the white box can feed the reader its
@@ -208,11 +207,11 @@ def read_video_info(path, run=_subprocess_run):
 
 
 def is_profile7(profile, settings):
-    """dvIsProfile7: true only for a real dual-layer Dolby Vision profile 7 -
-    the gate for the one thing that can be converted. Profile 5 and the
-    already single-layer profile 8.x are rejected up front, whatever the
-    settings field claims, so neither a mislabelled file nor a second run can
-    ever reach the converter."""
+    """True only for a real dual-layer Dolby Vision profile 7 - the gate for
+    the one thing that can be converted. Profile 5 and the already single-layer
+    profile 8.x are rejected up front, whatever the settings field claims, so
+    neither a mislabelled file nor a second run can ever reach the
+    converter."""
     profile = profile.lower()
     settings = settings.upper()
     if profile.startswith(("dvhe.05", "dvh1.05", "dvav.05",
@@ -224,12 +223,11 @@ def is_profile7(profile, settings):
 
 
 def claims_dolby_vision(profile, settings):
-    """dvClaimsDolbyVision: true when the container claims Dolby Vision at
-    all, whatever profile it names - the wider gate that decides whose
-    bitstream gets probed for an RPU, so a false profile 5 or 8 claim is
-    caught too. Any of the codec-string spellings a mux can report counts,
-    and the settings field is enough on its own: only Dolby Vision ever puts
-    an RPU in there."""
+    """True when the container claims Dolby Vision at all, whatever profile it
+    names - the wider gate that decides whose bitstream gets probed for an RPU,
+    so a false profile 5 or 8 claim is caught too. Any of the codec-string
+    spellings a mux can report counts, and the settings field is enough on its
+    own: only Dolby Vision ever puts an RPU in there."""
     profile = profile.lower()
     settings = settings.upper()
     if profile.startswith(("dvhe.", "dvh1.", "dvav.", "dva1.", "hev1.",
@@ -239,14 +237,14 @@ def claims_dolby_vision(profile, settings):
 
 
 def is_hdr(transfer, formats):
-    """dvIsHdr: true when the bitstream really is HDR. The transfer function
-    decides it - PQ and HLG are the HDR ones, everything else is SDR whatever
-    the container claims; HDR_Format is only a fallback for a file that names
-    a format without a transfer function, with the Dolby Vision entry cut out
+    """True when the bitstream really is HDR. The transfer function decides it
+    - PQ and HLG are the HDR ones, everything else is SDR whatever the
+    container claims; HDR_Format is only a fallback for a file that names a
+    format without a transfer function, with the Dolby Vision entry cut out
     first: that entry is exactly the claim under suspicion, and what may be
-    left is matched by name rather than by "anything at all remains",
-    because the field can carry Dolby Vision's own version and layer details
-    along, and none of that makes a file HDR."""
+    left is matched by name rather than by "anything at all remains", because
+    the field can carry Dolby Vision's own version and layer details along, and
+    none of that makes a file HDR."""
     transfer = transfer.lower()
     if any(token in transfer for token in ("pq", "2084", "hlg", "2100")):
         return True
@@ -256,26 +254,25 @@ def is_hdr(transfer, formats):
 
 
 def is_profile8(path, run=_subprocess_run):
-    """dvIsProfile8: true when <path> reports Dolby Vision profile 8 - the
-    check a finished remux passes before anything on disk is touched. The
-    probe cannot clobber the caller's DV_* values; what it saw is the second
-    return (DV_SEEN_PROFILE) so a rejection can say what the file actually
-    claimed. Matched as a
-    substring, not a prefix: mediainfo renders one field per HDR format
-    joined with " / ", and nothing guarantees Dolby Vision is the first
+    """True when <path> reports Dolby Vision profile 8 - the check a finished
+    remux passes before anything on disk is touched. The probe cannot clobber
+    the caller's DV_* values; what it saw is the second return
+    (DV_SEEN_PROFILE) so a rejection can say what the file actually claimed.
+    Matched as a substring, not a prefix: mediainfo renders one field per HDR
+    format joined with " / ", and nothing guarantees Dolby Vision is the first
     entry."""
     seen = read_video_info(path, run=run)["PROFILE"]
     return re.search(r"(dvhe|dvh1|hev1)\.08", seen.lower()) is not None, seen
 
 
 def is_dolby_vision_free(path, source_hdr, run=_subprocess_run):
-    """dvIsDolbyVisionFree: true when <path> claims no Dolby Vision any more
-    AND is still exactly as HDR as the source was (source_hdr, "1" when the
-    source really was HDR). Both halves have to hold before a stripped copy
-    may replace anything: the first is the whole point of the strip, the
-    second is what catches it taking real HDR10 metadata along. The second
-    return is the (profile, settings, HDR-as-"1"/"0") triple the probe saw,
-    so a rejection can name the half that failed."""
+    """True when <path> claims no Dolby Vision any more AND is still exactly as
+    HDR as the source was (source_hdr, "1" when the source really was HDR).
+    Both halves have to hold before a stripped copy may replace anything: the
+    first is the whole point of the strip, the second is what catches it taking
+    real HDR10 metadata along. The second return is the (profile, settings,
+    HDR-as-"1"/"0") triple the probe saw, so a rejection can name the half that
+    failed."""
     info = read_video_info(path, run=run)
     hdr = "1" if is_hdr(info["TRANSFER"], info["HDR"]) else "0"
     seen = (info["PROFILE"], info["SETTINGS"], hdr)
@@ -290,11 +287,11 @@ def _pipeline_status(first, second):
 
 
 def stream_has_rpu(path, pipe=_subprocess_pipe, tmpdir=None):
-    """dvStreamHasRpu: true when dovi_tool can actually FIND Dolby Vision RPU
-    data in the video bitstream - the claim the container makes is checked
-    against the 48 frames it can get cheaply, a fraction of a second even on a
-    4.5 GB film. ``tmpdir`` is the directory the probe name is made under
-    ($TMPDIR or /tmp when unset)."""
+    """True when dovi_tool can actually FIND Dolby Vision RPU data in the video
+    bitstream - the claim the container makes is checked against the 48 frames
+    it can get cheaply, a fraction of a second even on a 4.5 GB film.
+    ``tmpdir`` is the directory the probe name is made under ($TMPDIR or /tmp
+    when unset)."""
     probe_dir = tmpdir if tmpdir is not None else (os.environ.get("TMPDIR") or "/tmp")
     fd, probe = tempfile.mkstemp(prefix="dvRpuProbe.", dir=probe_dir)
     os.close(fd)
@@ -338,13 +335,13 @@ def _reason(*streams):
 
 
 def convert_to_profile81(movie, out, log=runlog.log, pipe=_subprocess_pipe):
-    """dvConvertToProfile81: the video track out of <movie> rewritten from
-    profile 7 to profile 8.1 - the RPU rewritten, the enhancement layer
-    dropped, no re-encode - to <out>. The extraction is piped straight into
-    dovi_tool, so the dual-layer stream never needs a temp file of its own.
-    Returns 0 when the converted stream is there and non-empty; on a failure
-    it leaves nothing behind, says why, and returns 1, so the caller can fall
-    back to keeping the original profile 7 video."""
+    """The video track out of <movie> rewritten from profile 7 to profile 8.1 -
+    the RPU rewritten, the enhancement layer dropped, no re-encode - to <out>.
+    The extraction is piped straight into dovi_tool, so the dual-layer stream
+    never needs a temp file of its own. Returns 0 when the converted stream is
+    there and non-empty; on a failure it leaves nothing behind, says why, and
+    returns 1, so the caller can fall back to keeping the original profile 7
+    video."""
     _mkdirs_parent(out)
     first, second, first_err, second_err = pipe(
         ["ffmpeg", "-loglevel", "error", "-nostats", "-i", movie,
@@ -362,13 +359,13 @@ def convert_to_profile81(movie, out, log=runlog.log, pipe=_subprocess_pipe):
 
 
 def extract_video_stream(movie, out, log=runlog.log, run=_subprocess_run):
-    """dvExtractVideoStream: the video track out of <movie> copied, with no
-    conversion of any kind, to <out> - the counterpart of
-    convert_to_profile81 for a file whose Dolby Vision claim is false. There
-    is no dovi_tool and in particular no --drop-hdr10plus: there is no RPU to
-    collide with HDR10+ here. Returns 0 when the stream is there and
-    non-empty; on a failure it leaves nothing behind, says why, and returns
-    1, so the caller can fall back to keeping the file as it is."""
+    """The video track out of <movie> copied, with no conversion of any kind,
+    to <out> - the counterpart of convert_to_profile81 for a file whose Dolby
+    Vision claim is false. There is no dovi_tool and in particular no
+    --drop-hdr10plus: there is no RPU to collide with HDR10+ here. Returns 0
+    when the stream is there and non-empty; on a failure it leaves nothing
+    behind, says why, and returns 1, so the caller can fall back to keeping the
+    file as it is."""
     _mkdirs_parent(out)
     proc = run(["ffmpeg", "-loglevel", "error", "-nostats", "-i", movie,
                 "-map", "0:v:0", "-c", "copy", "-bsf:v", "hevc_mp4toannexb",
@@ -412,9 +409,9 @@ _CONFIG_RECORD = "DOVI configuration record"
 
 
 def expected_config_level(width, height, fps_num, fps_den):
-    """dvExpectedConfigLevel: the lowest Dolby Vision level whose luma pixel
-    rate covers this video, or None when the geometry or frame rate is
-    unusable - which the caller reads as "no opinion" rather than as level 1.
+    """The lowest Dolby Vision level whose luma pixel rate covers this video,
+    or None when the geometry or frame rate is unusable - which the caller
+    reads as "no opinion" rather than as level 1.
 
     Above the table's last pixel rate the level is 11 or higher, and which one
     depends on the bitrate tier rather than on the geometry; nothing here needs
@@ -466,8 +463,8 @@ def _config_record(stream):
 
 
 def read_config_level(path, run=_subprocess_run):
-    """dvReadConfigLevel: what <path>'s Dolby Vision configuration record
-    declares, and what its video actually needs, in ONE ffprobe pass:
+    """What <path>'s Dolby Vision configuration record declares, and what its
+    video actually needs, in ONE ffprobe pass:
 
       PROFILE   dv_profile from the record ("" when there is no record)
       LEVEL     dv_level as declared       ("" when there is no record)
@@ -531,10 +528,9 @@ def read_config_level(path, run=_subprocess_run):
 
 def normalise_config_level(path, report_as=None, script_dir="", log=runlog.log,
                            run=_subprocess_run):
-    """dvNormaliseConfigLevel: correct <path>'s Dolby Vision level if it
-    overstates what the video needs. <report_as> is the name to use in the log
-    when the path on disk is not the one the caller talks to the user about;
-    it defaults to <path>.
+    """Correct <path>'s Dolby Vision level if it overstates what the video
+    needs. <report_as> is the name to use in the log when the path on disk is
+    not the one the caller talks to the user about; it defaults to <path>.
 
     Only ever DOWNWARDS: an overstated level is what breaks playback, an
     understated one does not, and raising one cannot be justified from the

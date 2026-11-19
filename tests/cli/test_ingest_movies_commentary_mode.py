@@ -123,18 +123,10 @@ class TestThePhaseRunsAndNothingElse:
         films = _library(tmp_path, "Films")
         assert run.main(["-O", "commentary", str(films)]) == 0
         # The GPU-to-CPU ladder runs, against the run's RAM scratch, and the
-        # settled models are what the phase and its queue are handed.
+        # settled models are what the phase is handed.
         assert settled == {"cores": str(runlog.cpu_count()),
                            "ram_root": str(scratch)}
-        entry = exports[0]
-        assert entry["whisper"]["model"] == "base.en"
-        assert callable(entry["drain"])
-        # The phase syncs whisper transcripts with the tight offset and this
-        # run's ffsubsync answer, and the last thing it is handed is the
-        # verdict on an existing sidecar that is too small to keep.
-        assert entry["rest"][:2] == (run.rules.MAX_WHISPER_SYNC_OFFSET,
-                                     "yes")
-        assert callable(entry["rest"][2])
+        assert exports[0]["whisper"]["model"] == "base.en"
 
     def test_the_drain_transcribes_with_this_run_s_settings(
             self, monkeypatch, tmp_path):

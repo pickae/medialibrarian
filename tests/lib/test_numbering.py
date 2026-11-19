@@ -75,17 +75,15 @@ class TestTheOrderIsVersionOrderOverThePaths:
     def test_the_directory_changes_the_answer_and_must_be_passed(self):
         # Version sort puts a name beginning with a dot before everything; a PATH
         # beginning with a slash never triggers that, and a dot mid-path is just a
-        # separator that sorts after letters. bash sorts the paths find printed,
-        # so ".1 intro" is numbered LAST, and by basename it would be first. This
-        # cost a debugging round on the real harness, so it is pinned here.
+        # separator that sorts after letters. The full paths are sorted, so
+        # ".1 intro" is numbered LAST, and by basename it would be first.
         names = [".1 intro", "a10", "b"]
         assert renames(names, DIR) == [("a10", "1"), ("b", "2"), (".1 intro", "3")]
         assert renames(names, "") == [(".1 intro", "1"), ("a10", "2"), ("b", "3")]
 
 
 class TestTheTieBreak:
-    """Two filetypes with the same count: first appearance wins. bash settled this
-    by iterating an associative array, which is hash order."""
+    """Two filetypes with the same count: first appearance wins."""
 
     def test_the_first_filetype_in_order_wins(self):
         assert plan_numbering(

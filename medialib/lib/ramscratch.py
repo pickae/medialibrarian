@@ -369,7 +369,7 @@ def ram_scratch_file(label, state=_STATE):
 def ram_scratch_dir_for(byte_count, label, disk_parent="", state=_STATE):
     """A fresh scratch directory that can actually hold <byte_count> bytes -
     under the run's base when the tmpfs can take it, otherwise a hidden one
-    under <diskParent>, or under the cache spill base when the caller names
+    under <disk_parent>, or under the cache spill base when the caller names
     none.
 
     Returns (directory, on_disk, status): on_disk is 1 when that is the disk

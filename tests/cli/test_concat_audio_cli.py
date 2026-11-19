@@ -4,9 +4,9 @@ The heavy tools are stand-ins that succeed and create their output, so the real
 pipeline runs end to end with no codecs - which is the only way to reach the
 parallel dispatch, the per-format strategy choice and the progress counter.
 
-The input tree is on a tmpfs where one is available, mirroring the RAM input
-`convert-and-concat` hands over; nothing here depends on it, the assertions being
-about names and outputs rather than about where the bytes live.
+The input tree is on a tmpfs where one is available; nothing here depends on it,
+the assertions being about names and outputs rather than about where the bytes
+live.
 """
 
 from __future__ import annotations
@@ -196,9 +196,7 @@ class TestTheOutputFolderIsNotSweptByExtension:
     This command writes nothing temporary into the output tree - the join and
     the thumbnail work in the scratch, and the chapter "file" is a stem handed
     to the embedder rather than a file - so there is nothing under the output it
-    owns, and a sweep by suffix would be removing somebody else's files. A
-    refused input made it worse still: the sweep ran before the check, so a run
-    that ended by saying "Nothing was changed" had already deleted them.
+    owns, and a sweep by suffix would be removing somebody else's files.
     """
 
     def test_a_refused_input_changes_nothing_in_the_output(self, concat):

@@ -2,8 +2,7 @@
 folder's siblings take part in the collective name-cleaning pass.
 
 These pin the contract in its own right - what the behaviour is FOR, and the
-tie-break in particular, because that rule was made explicit during the port
-rather than inherited.
+tie-break in particular.
 """
 
 import pytest
@@ -23,7 +22,8 @@ class TestFoldersMode:
         assert group("folders", ["mp3", "jpg"]) == [0, 1]
 
     def test_anything_that_is_not_files_means_folders(self):
-        # bash tests `!= files`, so this is the contract rather than an accident
+        # only `files` is tested for, so this is the contract rather than an
+        # accident
         assert group("", ["mp3", "jpg"]) == [0, 1]
         assert group("anything", ["mp3", "jpg"]) == [0, 1]
 
@@ -67,12 +67,7 @@ class TestDotlessNames:
 
 
 class TestTieBreak:
-    """A tie goes to the filetype that appears first among the siblings.
-
-    This rule was made explicit during the port. bash settled ties by its hash
-    order, which meant "jpg" beat "mp3" and "flac" beat "opus" whichever way round
-    they were given - stable for one build of bash, reproducible nowhere else.
-    """
+    """A tie goes to the filetype that appears first among the siblings."""
 
     def test_first_appearance_wins(self):
         assert group("files", ["mp3", "jpg"]) == [0]
@@ -81,7 +76,7 @@ class TestTieBreak:
         assert group("files", ["jpg", "mp3"]) == [0]
 
     def test_the_rule_does_not_depend_on_the_names(self):
-        # the pairs bash's hash order used to decide, now decided by position
+        # a tie is decided by position, never by the names
         assert group("files", ["flac", "opus"]) == [0]
         assert group("files", ["opus", "flac"]) == [0]
         assert group("files", ["zzz", "aaa"]) == [0]

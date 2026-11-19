@@ -33,7 +33,7 @@ given (one level deep, not the whole tree):
 - tags names with the IMDb id (needs `tmdbApiKey`), looks up chapters, and downloads missing subtitles (needs an OpenSubtitles or SubDL login)
 - last, **compares each film with the copy your Plex library already has**, if any ([details](#plex-comparison))
 - with `-r`, after all of that, **converts the remuxes** and writes each converted copy beside its film ([details](#remux-conversion--r))
-- with `-o`, any of the phases above is left out, the rest going on as they always have ([details](#leaving-phases-out--o))
+- with `-o`, any of the phases above is left out ([details](#leaving-phases-out--o))
 
 Each phase can also be run on its own, over a whole library, and several in a
 row: see [single-task sweeps](#single-task-sweeps) and [`-O`](#single-task-sweeps-chained--o).
@@ -57,7 +57,7 @@ These are read from the environment:
 | `openSubtitlesUser`, `openSubtitlesPassword` | downloading missing subtitles from OpenSubtitles.org, the first source | the other sources below are still asked, and the run says OpenSubtitles was skipped |
 | `openSubtitlesComUser`, `openSubtitlesComPassword` | asking OpenSubtitles.com second — a separate service, with free accounts of its own | it is not asked |
 | `subDlApiKey` | asking SubDL third — the key a free account at subdl.com gets | it is not asked |
-| `spokenLanguages` | the languages whose subtitles are fetched and tested | the six it knows by default (en, de, fr, nl, es, it) |
+| `spokenLanguages` | the languages whose subtitles are fetched and tested; a code the language table does not know stops the run before a film is touched | the six it knows by default (en, de, fr, nl, es, it) |
 | `mediaServerNaming` | the server the names are written for | `plex`; the names are then written and read the way that server spells them |
 | `subtitleOcrEngines` | the engines a picture subtitle is read with, in the order to try them | the order below |
 | `subtitleOcrUrl` | the servers holding a vision model, for the `vision` engine: a comma list, the preferred first | that engine is not tried |
@@ -78,7 +78,7 @@ a film are still tested.
 A full ingest does everything in one pass. Each of these phases, named in `-O`, does **one**
 phase of it and nothing else: no conversion, no remux and none of the other
 phases. They walk the **whole tree** below each folder given, so they can be
-pointed at a library. A full ingest reads only the one level it always did.
+pointed at a library.
 
 | Phase | Does only | By default | With `-w` | Leaves behind | Run it after |
 | --- | --- | --- | --- | --- | --- |
@@ -98,8 +98,8 @@ pointed at a library. A full ingest reads only the one level it always did.
 `-O subtitles`, `-O commentary`, `-O names` and `-O chapters` take the films in name order and open each with
 `[n/total] <film>`, its place in the folder, so a film nothing is done to still
 shows up. What is said about that film follows, indented under it. For `-O commentary`
-that is one line per commentary track. Each transcription finishes in a worker
-later and names its own transcript, and so does each chapter write.
+that is one line per commentary track. A transcription or a chapter write
+that finishes later names its own film.
 
 **`-w` on its own is refused.** Without `-O` naming `tagging`, `subtitles`, `names` or `backups` there is
 no dry run to carry out, and the run it would otherwise start is a full ingest.
@@ -123,46 +123,39 @@ ingest-movies -wO backups ~/Films     # drop the (old) originals the checks pass
 
 ## What a full ingest does
 
-Sorts loose movie files into per-movie subfolders (Plex layout), cleans
-folder/movie/subtitle names, renames/downloads subtitles for the languages the
-`spokenLanguages` setting names (six by default),
-refreshes mkv tags, transcodes lossless audio to the target codec, transcribes commentary tracks,
-names numbered commentary tracks after who speaks in them, and gives films
-without named chapters the ones their disc had.
-
 ChapterDB and dvdcompare.net are asked at a polite pace, a few seconds apart,
 so asking them about a whole library takes a while. The full ingest doesn't
 wait for that: once the names have settled, early in the run, each site is
-asked on a background thread about every film that will need it, while the
+asked in the background about every film that will need it, while the
 run carries on with the transcoding, transcription and remux. The tagging
 names more folders, so those are handed over too. Commentary naming and
 chapters come last, after the subtitle downloads, and by then the answers are
-usually all in. If a thread is still going, the run says so and waits for it.
+usually all in. If those lookups are still going, the run says so and waits
+for them.
 
 The work on the films themselves overlaps the same way, each kind on the part
 of the machine it uses:
 
-- **Subtitles are fetched ahead.** On a thread of its own, the run asks TMDb
+- **Subtitles are fetched ahead.** In the background, the run asks TMDb
   which film each folder is (the same questions the tagging asks at the end,
   whose answers it then reuses) and downloads the missing subtitles of every
   film it got an id for while the rest of the run goes on. They are still
-  fetched one film at a time, and the thread is finished before the tagging
-  renames anything. A film it did not get to is fetched after the tagging, as
-  before.
+  fetched one film at a time, and this is finished before the tagging
+  renames anything. A film it did not get to is fetched after the tagging.
 - **The lossless transcode beside the transcription.** With whisper on the GPU, the
   transcode runs at the same time as the commentary transcription, one job
   narrower so whisper keeps its cores. With whisper on the CPU they would only
   fight over the same cores, so the transcode goes first.
 - **Each film is remuxed as soon as it is ready**: once its own converted
-  lossless tracks and transcripts are done and the subtitle thread is past it,
-  one film at a
-  time, while the transcode and the transcription carry on with the others.
-  The films it didn't get to are remuxed after the transcription, as before.
+  lossless tracks and transcripts are done and its subtitles have been
+  fetched, one film at a time, while the transcode and the transcription
+  carry on with the others. The films it didn't get to are remuxed after the
+  transcription.
 - **One disk-heavy job at a time per spinning disk.** A lossless transcode, a
   commentary extract, a remux and a subtitle sync against the film all read a
   whole film, and on a hard disk two of them at once are slower than one after
   the other. So they take turns on each spinning disk, which the run detects,
-  encrypted and LVM disks included. An SSD or NVMe disk is shared as before.
+  encrypted and LVM disks included. An SSD or NVMe disk is shared.
 
 Each film's lines from the background work are printed together when that film
 is done, rather than mixed into the other work's output.
@@ -198,7 +191,7 @@ ln -s ~/.local/share/subcleaner/subcleaner.py ~/.local/bin/subcleaner
 subcleaner only knows the words of a few languages by heart; for the others to
 be cleaned too (German, French and Italian among ours), set
 `require_language_profile = false` in its `subcleaner.conf` — the file appears
-in the checkout the first time it runs. The run warns once a language when it
+in `~/.local/share/subcleaner` the first time it runs. The run warns once a language when it
 is not.
 
 Where the film carries a picture subtitle of its own (a Blu-ray's or a DVD's,
@@ -282,16 +275,6 @@ more failure the next engine answers, so the run never stops over it. A
 language tesseract has no data for is said once. `subtitleOcrEngines` names
 other engines or another order.
 
-The vision engine has seconv take each line's picture and time out of the
-subtitle, and sends the pictures itself: sixteen to a request, each after its
-number, asking for a JSON array of their texts, without thinking, and
-`subtitleOcrJobs` requests at a time. A server batches the requests it runs,
-but admits them one by one, so few large requests go much faster than many
-small ones. A picture with no text in it is no line. A group whose answer is
-not such an array, and a picture tall enough for two lines answered with one,
-are asked again a picture at a time; a request the server is too busy for is
-asked again after a pause.
-
 Measured on a French Blu-ray, against the pictures:
 
 | Engine | Forced track, 57 lines | Full track, 1,342 pictures | Reads |
@@ -302,18 +285,11 @@ Measured on a French Blu-ray, against the pictures:
 | `tesseract` | 9 s | 232 s | well, but `V` comes out as `\/`, `Il` as `\|\|` and accented capitals lose their accent |
 | `paddle` on the CPU | 90 s | 27 min | garbles about half the lines, with seconv's picture cleaning or without it |
 
-The servers in `subtitleOcrUrl` are a ladder, tried for each subtitle in the
-order given, and nobody has to start one beforehand:
-
-1. one that answers already is used, and left running: it is not the run's;
-2. the first, when it is not running, is started with `subtitleOcrServe`
-   where the GPU has `subtitleOcrServeMib` free — in a process group of its
-   own, its output in a log in the scratch — and used once it answers. The
-   run stops it again once no subtitle has used it for five minutes, and when
-   it ends at the latest;
-3. with the card taken — another model server holds it — the next server
-   that answers reads instead, whatever model it holds;
-4. with none to be had, the engines after `vision` read.
+The servers in `subtitleOcrUrl` are tried for each subtitle in the order
+given, the first started with `subtitleOcrServe` when the GPU has
+`subtitleOcrServeMib` free, the way
+[`generate-chapters`](generate-chapters.md#several-servers-one-card) does it
+with its own servers; with none to be had, the engines after `vision` read.
 
 For example, a small vision model started on port 8082 when the card is
 free, and the larger model a chat server keeps on port 8080 when that server
@@ -334,7 +310,8 @@ pass: `seconv` handed the film itself would hold the whole of it in memory.
 A track counts as a commentary when its mkv commentary flag says so *or* when its
 name does — in any of the supported languages, so a German disc's
 "Audiokommentar" is picked up as readily as an "Audio Commentary". Commentary is
-transcribed **in the language it is spoken in**:
+transcribed **in the language it is spoken in** — read from its track name or
+language tag, and heard by whisper when neither says:
 
 | Commentary spoken in | Transcripts written |
 | --- | --- |
@@ -385,7 +362,8 @@ call, so the film is remuxed once and only one output exists at a time:
 | Downloaded subtitles (`<name>.xx.srt`) that passed the sync test, and the ones read off a picture subtitle, with their `.forced.srt` and `.sdh.srt` siblings | muxed in, placed after the other subtitles and before the commentary ones, a forced one flagged forced and an SDH one flagged for the hearing impaired — unless the film already carries a text subtitle of that language and role. A plain `.xx.srt` that reads as SDH goes in flagged SDH. A picture subtitle, or a text one of another role, doesn't count, so the sidecar goes in beside it. The `.srt` stays beside the film |
 | Commentary audio | moved below the other audio tracks |
 | Commentary transcripts | appended, each tagged with its own language |
-| Dual-layer Dolby Vision profile 7 | **normalised to single-layer profile 8.1**, so DV survives on hardware that cannot read the enhancement layer. Metadata only — the video is **never re-encoded** |
+| Dual-layer Dolby Vision profile 7 | **normalised to single-layer profile 8.1**, so DV survives on hardware that cannot read the enhancement layer. Metadata only — the video is **never re-encoded**. Needs `dovi_tool` |
+| A Dolby Vision level that overstates the video, whatever the profile | **corrected**, in the container metadata only: a player refuses a file that asks for more than its hardware has |
 | Profile 5, profile 8.x, HDR10, HDR10+ and SDR | left untouched |
 | A Dolby Vision claim the video does not back up | **dropped**, so the file stops lying about itself (below) |
 
@@ -399,8 +377,7 @@ The original is preserved as `<name> (old).mkv`, so nothing is lost and a rerun
 is a no-op — which is also what makes the Dolby Vision work a one-time job per
 film: a film that already has its `(old)` backup is not remuxed again. Once the
 copy has stood the checks, [`-O backups`](#dropping-the-old-backups) drops that
-backup, and the tag it wrote in the backup's place is what keeps the film done
-from then on.
+backup.
 
 ### The Plex names
 
@@ -525,48 +502,28 @@ catalogue asked for `Part 2` answers with every film ever released in halves.
 **Where TMDb cannot name a film, `-O tagging` asks a local copy of IMDb's own title
 lists** — the romanisations its search does not find, and the films it states
 no runtime for, which is what a folder with no year is settled on. The lists
-are fetched into the checkout's `data/imdb` the first time (about 750 MB),
+are fetched into `data/imdb` in the medialib data directory the first time
+(about 750 MB),
 refreshed when they are a month old, and read with `duckdb`; without it the
 pass runs on TMDb alone. IMDb offers them for personal, non-commercial use
 only. A full ingest never asks them.
 
-### Which results are read
-
-Only the first handful of results are worth a document each, and TMDb answers
-*most popular* first — so a common word of a title fills the page with films
-that merely contain it. The ones already carrying the folder's title are read
-before the rest, and the rest in order of **how near their names are** — two
-things, read in this order:
-
-1. **Does one name begin the other.** Two names that run together from the left
-   until one of them stops is the shape of a subtitle, of a market's title run
-   on after the film's own, and of a label somebody added: `Sunfall Reckoning`
-   against `Sunfall Reckoning Redux`. Scattered words that happen to coincide
-   are not that shape however many of them there are.
-2. **How much of the two names is the same name** — the words they share against
-   the words they do not. A result carrying more of the folder's words is
-   nearer, and a result saying less besides them is nearer: `Grey Border` is a
-   better use of a request than `Mudflat: living on the border of sea and land`,
-   and both carry the whole of a folder called `Border`.
-
-The first is a shape and the second a count, so where they disagree the shape
-is the one read and neither needs a weight invented for it. A film reached only
-by one of its other titles can never be in the group above — nothing the search
-said about it matches — so its own name being near is the only thing that can
-spend a request on it. Popularity is the catalogue's ordering and carries no
-opinion about which film this folder holds, so it is what breaks a tie and
-nothing more.
+Only the first handful of TMDb's results are read in full: those already
+carrying the folder's title first, then the rest by how near their names are to
+it, popularity only breaking a tie.
 
 ### Choosing between candidates
 
-Before the length is asked, three narrowings settle most of what used to reach
-it, because candidates are not equally likely just because they all survived:
+Before the length is asked, three narrowings settle most cases:
 
-| Narrowing | Why |
-| --- | --- |
-| **A candidate with no IMDb id was never a possible answer.** | What is being asked for is an id; one that has none can only stand beside a candidate that has one and make the pair look uncertain. |
-| **A title as written beats one reached through a reading, and a film's own name beats one of the names it is also known by.** | Where any candidate folds to exactly what the folder is called, only those are considered — a folder called `1815` is not left unnamed because some other film also answers to it through a dropped article. A catalogue's alternative titles hold every market's poster name, so one of them is bound to be somebody else's whole title. A translation is not weakened by that — the catalogue leads with the title of the asking language, so a Swedish film catalogued in English carries the English name among its own. |
-| **A re-release does not answer for the film it was timed to.** | A 1976 film back in cinemas in 2018 lists 2018 among its years; where another candidate was *first* released around the wanted year, the older one is set aside. Around, not exactly on — a premiere and a general release a year apart are the case the year rule exists for. |
+- **A candidate with no IMDb id is set aside.**
+- **A title as written beats one reached through a reading, and a film's own
+  name beats one of the names it is also known by** — a folder called `1815`
+  is not left unnamed because some other film also answers to it through a
+  dropped article.
+- **A re-release does not answer for the film it was timed to** — where another
+  candidate was *first* released around the wanted year, the older one is set
+  aside.
 
 All three narrow and never widen: where every candidate is equally strong — or
 equally useless — they all stand and the length decides.
@@ -614,7 +571,7 @@ that way, the folder takes TMDb's spelling and the id, and **every file keeps
 its own name** — which of a film's languages a file is named in is a thing you
 chose, and a lookup is no reason to overwrite it. All that is added is the id,
 so Plex knows they are one film. One file the catalogue cannot account for and
-the folder is left alone as before: a second feature is still a second feature.
+the folder is left alone: a second feature is still a second feature.
 
 Nothing is renamed for those folders, so no other list would mention them — they
 get one of their own, `ingest-movies-othertitles-<folder>.txt`, naming each file
@@ -642,8 +599,8 @@ whose films answer to two ids is a folder holding two films.
 
 ### The lists tagging writes
 
-Each folder given gets these lists, in the script directory's
-`logs/ingest-movies/` folder:
+Each folder given gets these lists, in `logs/ingest-movies/` in the medialib
+data directory:
 
 | List | What is in it | Written |
 |---|---|---|
@@ -654,23 +611,11 @@ Each folder given gets these lists, in the script directory's
 | `ingest-movies-renames-<folder>.txt` | every rename the run would make | dry run only |
 | `ingest-movies-nearmisses-<folder>.txt` | for each folder in the first two: what TMDb was asked, what it offered, and why each offer was refused | dry run only |
 
-**A list an earlier run left is not replaced without asking.** When one of the
-lists this run could write is already there — for any of the folders given, and
-for `-O subtitles`, `-O names` and `-O commentary` too — the run names them and asks before it starts; only
-`y` overwrites, and anything else stops the run with nothing changed. The answer
-is read from standard input, so a run nobody is watching (a closed stdin) keeps
-the old lists and stops, and `echo y |` in front of it says yes.
+**A list an earlier run left is not replaced without asking**, for
+`-O subtitles`, `-O names` and `-O commentary` too: see
+[overwriting a report](../output.md#overwriting-a-report).
 
-A folder is on the unmatched list or the ambiguous one, never both. Under each
-name, the ambiguous list says what it *reads as* once the spelling is folded
-away: two lines that read the same are a reading the matching does not have
-yet — worth reporting; two that read differently are two different films. The
-exception is a folder that *holds the same film twice, spelled two ways*: there
-the lines read the same because the files are one film kept twice, and which to
-keep is yours to decide. Read
-the near-miss list before trusting either: a page of candidates that are
-plainly the film means the matching is too narrow; a page of films that merely
-share a word means it is working.
+A folder is on the unmatched list or the ambiguous one, never both.
 
 **A film kept twice is warned about.** When two separate folders carry the
 same id, whether it was already on them or the run gives it to them, `-O tagging`
@@ -722,12 +667,9 @@ subtitles or the languages the `spokenLanguages` setting does not name.
 | subtitle ffsubsync cannot align at all | left alone | left alone, since it may be one that cannot be fetched again |
 
 A dry run tests each subtitle on a copy, its adverts taken out first, and says
-how many advert cues the real run would remove. Run it after `-wO tagging`, so that films are
-searched for by their ids.
+how many advert cues the real run would remove.
 
-The films are taken one at a time in name order, each announced with its place
-in the folder, so a film with nothing to test or download still shows up. With
-`-wO subtitles` each film's missing subtitles are downloaded before the run moves on to
+With `-wO subtitles` each film's missing subtitles are downloaded before the run moves on to
 the next film. Under the film, one line per subtitle says what it was aligned
 to, by how much, and what became of it:
 
@@ -765,11 +707,14 @@ delete the file.
 
 **`-O commentary` does only the audio commentary phase.** Every commentary track that does
 not already have its transcript beside the film is transcribed next to it — in
-the language it is spoken in, on the GPU when whisper can use it, on every CPU
-thread otherwise — and nothing else: no subtitle downloading, no renaming of
+the language it is spoken in, on the GPU when whisper can use it (the largest
+model the free memory fits), on every CPU thread with `base.en` otherwise — and
+nothing else: no subtitle downloading, no renaming of
 titles, no conversion, no remux, no tagging. The transcripts stay beside the
 films rather than muxed into them, and a rerun over the same library finds every
-commentary already transcribed and does nothing.
+commentary already transcribed and does nothing. A film whose name lacks the dot
+before its `.mkv` is first renamed to its folder's spelling; one that cannot be
+is left untranscribed and reported at the end.
 
 A transcript already beside a film is left alone, with two exceptions:
 
@@ -816,16 +761,14 @@ transcripts the ingest appended to the film, and the transcripts and extracts
 beside it (`… 2 Commentary 1.en.srt`) are renamed along with the track. Every
 folder given leaves `logs/ingest-movies/ingest-movies-commentarynames-<folder>.txt`: what was
 named — or would be — and every film left alone, with the reason. The pages
-asked for are kept in the checkout's `data/dvdcompare`. The site is asked about
+asked for are kept in `data/dvdcompare` in the medialib data directory. The site is asked about
 five seconds apart, give or take two, and after it fails to answer once it isn't
 asked again that run. With `-w`, each film is renamed while the next one is
 being looked up, so the lookup never waits on a rename.
 
 The full ingest does this too, and writes: after the transcription, which the
 transcripts come from, and after the tagging, so each film is looked up by the
-title TMDb gave its folder. The site was already asked in the background (see
-[What a full ingest does](#what-a-full-ingest-does)), and the same list is
-written.
+title TMDb gave its folder, and the same list is written.
 
 ## Chapters
 
@@ -835,9 +778,7 @@ number or time), is looked up in the read-only
 [ChapterDB archive](https://chapterdb.plex.tv/): chapter times read off DVDs and
 Blu-rays, mostly with the names from the disc's menu. The full ingest does the
 same lookup near its end, after the tagging, since a film is looked up by the
-title its folder now carries — an untagged folder is never looked up. The
-archive itself was already asked in the background (see
-[What a full ingest does](#what-a-full-ingest-does)).
+title its folder now carries — an untagged folder is never looked up.
 
 **A set must be the disc the film was ripped from.** It has to run as long as
 the film to within **two seconds**, which rules out every other cut and every
@@ -871,6 +812,17 @@ one the tagging could not name, by its title and year. A copy in the film's own
 folder is the film itself, or a version kept beside it on purpose, and does not
 count.
 
+**What the library's copy has and the film lacks is carried over** by the full
+ingest, into its one remux, before the film is written: the names of
+commentaries the film only numbers (as many, in the same languages), named
+chapters where it has numbered ones or none (moved to its timing), and the
+audio it lacks — a soundtrack in a language it keeps, the commentaries with
+their transcripts, an isolated score or an audio description — at the
+measured offset. A lossless track goes to the target codec, put to the film's
+speed where the two differ; a lossy one at another speed is left. The picture,
+the subtitles and a better soundtrack in a language the film already has are
+never carried: those are left for you to decide. `-o plex` carries nothing.
+
 A film not in the library says so. One that is gets the library's file printed,
 so you do not have to search for it, and a verdict. The closing count lists
 every such film again with its library copy beside it, MIXED first.
@@ -880,7 +832,7 @@ every such film again with its library copy beside it, MIXED first.
 | the new file is better | it wins on something and loses on nothing |
 | the existing file is better | the other way round |
 | equivalent | neither wins on anything |
-| **MIXED** | each has something the other lacks — these want you, and the run lists them first at its end |
+| **MIXED** | each has something the other lacks — these want you, and the run lists them first at its end, with what could not be carried over and why |
 | **different version** | the edition tags differ, or the lengths differ by a minute or more (a 4% difference is called out as a PAL speed-up) |
 
 What is weighed: the resolution (2160p, 1080p, 720p, SD — by width as much as
@@ -894,22 +846,22 @@ under the verdict.
 
 **A few seconds apart is the same cut.** A length difference under a minute is
 most often a studio logo more or less in front of the film. The offset the
-library file's tracks then need — to be muxed into the new file with
-`mkvmerge --sync -1:<ms>` in front of it — is measured on one soundtrack both
-share, at a quarter, half and three quarters of the film: the loudness of the
-two is matched first, which survives a different mix or codec, and then the
-waveform places it to the millisecond. Three offsets that agree to within 40 ms
-are one offset, and printed as that; three that do not mean the cuts differ
-inside the film, and are printed as a warning. The offset is measured whenever
+library file's tracks then need is measured on one soundtrack both share, at
+five points of the film: the loudness of the two is matched first, which
+survives a different mix or codec, and then the waveform places it to the
+millisecond. Offsets that lie on one straight line, to within 40 ms, are one
+cut — a logo more or less in front, or another speed (24 against 23.976
+frames a second, or PAL) — whatever the lengths; ones that do not mean the
+cuts differ inside the film, and are printed as a warning. The offset is measured whenever
 the existing file has something worth carrying over, or the lengths differ by
 half a second or more. Needs `curl`, `mkvmerge`, `mediainfo`, `ffprobe`,
 `ffmpeg`, and numpy for the offset.
 
-Nothing is changed, on disk or on the server.
+`-O plex` changes nothing, on disk or on the server.
 
 ## Chaptering the extras (`-C`)
 
-**`-C` adds a lane to a full ingest.** Every bonus video — anything under
+**`-C` adds the extras to a full ingest.** Every bonus video — anything under
 a Plex bonus folder (`Featurettes`, `Deleted Scenes`, `Interviews`, …),
 never a film's main movie — that has no chapters is given some, worked out by
 the language model the `chapterLlm` [settings](../settings.md) name, the way
@@ -917,51 +869,37 @@ the language model the `chapterLlm` [settings](../settings.md) name, the way
 keeps them, and one too short to divide is left alone. This is separate from
 the [ChapterDB lookup](#chapters), which is only for films.
 
-What is said is read from the extra's first text subtitle that is its dialogue:
-not a commentary's, not one for the deaf and hard of hearing, not the forced
-lines. Only an extra with no such subtitle is transcribed with whisper, from its
-first soundtrack that is not a commentary, an audio description, an isolated
-score or music and effects. A subtitle that holds too few lines to be the
-dialogue, or a soundtrack whisper hears too little speech in, is passed over for
-the next one.
+What is said is read from the extra's dialogue subtitle, or else transcribed
+with whisper, chosen the way [`convert-video -C`](convert-video.md#chapters--c)
+chooses.
 
 The chapters are written in place with `mkvpropedit`, so the extra is not
 remuxed. That cannot add a subtitle track, so a transcript whisper made is used
 for the chapters and then discarded.
 
-**It runs beside the rest of the run, as its own lane.** Extras are done one at a
-time. An extra with a dialogue subtitle needs only a read of the file and the
-model, so those are chaptered from the start, beside the transcode and the
-commentary transcription. An extra that has to be transcribed needs the GPU
-whisper is using for the commentaries, so it waits until that transcription is
-finished and is then transcribed while the remux goes on. Reading a file waits
-for the disk's turn, as the other lanes do, and the lane is finished before the
-tagging renames anything.
+**It runs in the background, beside the rest of the run.** Extras are done one
+at a time. An extra with a dialogue subtitle is chaptered from the start,
+beside the transcode and the commentary transcription. An extra that has to be
+transcribed waits until the commentary transcription is finished, and is then
+transcribed while the remux goes on. All of it is finished before the tagging
+renames anything.
 
 **The GPU is shared only where it has room.** A model served from this machine
-or its network (a `chapterLlmUrl` that is local) may sit on the same card as the
-commentary transcription, so each takes a claim on the GPU while it runs. One
-kind is let in beside the other only when nvidia-smi shows the free memory for
-it, counting a job that has only just started at its whole need, and otherwise
-waits for the other to finish; whichever began waiting first goes first, so
-neither starves the other. whisper's need is read off its settled plan. The
-model's is the `chapterLlmVramGB` [setting](../settings.md); unset, the model
-takes the whole card and never runs beside whisper. A server the run starts
-itself (`chapterLlmServe`, see
+or its network (a `chapterLlmUrl` that is local) runs beside the commentary
+transcription only when nvidia-smi shows free memory for it. Set the
+`chapterLlmVramGB` [setting](../settings.md) to what it needs; unset, the
+model takes the whole card and never runs beside whisper. A server the run
+starts itself (`chapterLlmServe`, see
 [generate-chapters](generate-chapters.md#several-servers-one-card)) is started
-inside that claim; with too little room, the next server listed is asked. A hosted model, or a
-machine with no NVIDIA card, never waits. Two whisper jobs are not held apart:
-the plan already fits them together. An extra that has to be transcribed waits
-for the commentary whisper altogether, since a second whisper beside the first
-buys nothing on a saturated GPU. The progress row shows it as `chapters`. The model is asked for up front, so a run whose model is not set
-up is refused before any ingesting. Needs the settings `chapterLlm*` and, for a
-transcribed extra, the same whisper set-up as the commentaries.
+only with that room; without it, the next server listed is asked. A hosted
+model, or a machine with no NVIDIA card, never waits. The progress row shows
+it as `chapters`. The model is asked for up front, so a run whose model is not
+set up is refused before any ingesting. Needs the settings `chapterLlm*` and,
+for a transcribed extra, the same whisper set-up as the commentaries.
 
-`-P "<text>"` adds your own instructions to every request the model gets, for
-example a chapter per scene titled with where it takes place. The model then
-reasons at medium effort, and Claude may search the web, as with
-[`generate-chapters -P`](generate-chapters.md#your-own-instructions). `-P` needs
-`-C`. Both are refused with `-O`, whose phases never reach this one.
+`-P "<text>"` adds your own instructions to every request the model gets, as
+[`generate-chapters -P`](generate-chapters.md#your-own-instructions) does. It
+needs `-C` or `-O extras-chapters`.
 
 ## Remux conversion (`-r`)
 
@@ -970,7 +908,7 @@ as a remux when any of these holds:
 
 | Test | Read from |
 | --- | --- |
-| its name, or a folder above it, contains `remux` | the name it arrived under, before the cleaning removes the word. The film is recognised again at the end by its inode, which renames do not change |
+| its name, or a folder above it, contains `remux` | the name it arrived under, before the cleaning removes the word |
 | 2160p HEVC with dual-layer Dolby Vision profile 7, at a generous bitrate (twice what [`convert-video -t`](convert-video.md#only-what-has-room-to-save--t) counts as adequate) | the original kept as `(old)`, because the remux has turned profile 7 into 8.1 by then |
 | any other 2160p HEVC — HDR10 alone, or profile 8.1 with no `(old)` copy left — at a very generous bitrate (four times adequate: about 45 Mbit/s for 16:9, above what web releases spend) | the same |
 | SDR 1080p H.264 at a very generous bitrate (four times adequate: about 20 Mbit/s for 16:9) | the same |
@@ -993,7 +931,7 @@ The film itself is not changed. Later phases and later runs skip the copy in the
 same way they skip the `(old)` original: it is not tagged, transcribed, remuxed or
 fetched subtitles for, and a later `-O tagging` rename does not rename it. Converting the
 same remux again is left to convert-video: a copy as long as its film is skipped,
-and an unfinished one is redone. `-r` is refused alongside `-O`.
+and an unfinished one is redone.
 
 ## Dropping the `(old)` backups
 
@@ -1024,7 +962,7 @@ not dropped in favour of nothing.
 
 The tag is what tells a later run the film is done: the "already remuxed" check
 accepts either the `(old)` backup or the tag in its place, so a film whose
-backup has been dropped is not remuxed a second time. 
+backup has been dropped is not remuxed a second time.
 
 ## Keeping everything (`-k`)
 
@@ -1045,9 +983,8 @@ happens with every part: the cleaning, renaming and IMDb tagging, the track
 names and flags, the subtitles downloaded and the commentary transcripts muxed
 in, the chapters, a false Dolby Vision claim or an overstated level corrected.
 
-The word after `-k` is claimed by `-k` when it is a part, the way `convert-video -t` claims
-a number: a folder literally named `audio` is written `./audio`. `-k` is
-refused with `-r` (which encodes) and with `-O`.
+The word after `-k` is claimed by `-k` when it is a part: a folder literally
+named `audio` is written `./audio`. `-k` is refused with `-r`, which encodes.
 
 ## Leaving phases out (`-o`)
 
@@ -1059,16 +996,13 @@ being forced or SDH, and their flags stay as the file has them), `commentary`
 (commentaries are not listened for, transcribed or named), `chapters` (the
 chapter archive is not asked), `plex` (the films are not compared with the Plex
 library and nothing is carried over from its copy) and `tagging` (the films are
-not tagged with their IMDb ids). A bare `-o` leaves them all out, and the phases
-not named run as they always have.
+not tagged with their IMDb ids). A bare `-o` leaves them all out.
 
 The phases are comma-separated, in any order, and a phase the run will not omit
 is refused with the page, like a bad option. A folder literally named after one
 of them — `plex` is the likeliest — is written `./plex`: the word after `-o`
-goes to `-o` when it is a phase. `-o` is refused with `-O`,
-which does a phase of their own rather than leaving one out of a full ingest.
-Omitting `tagging` is the one with a downstream effect: the later phases then
-see untagged folders, which they already handle.
+goes to `-o` when it is a phase. Omitting `tagging` is the one with a
+downstream effect: the later phases then see untagged folders.
 
 ## Single-task sweeps, chained (`-O`)
 
@@ -1076,11 +1010,7 @@ see untagged folders, which they already handle.
 had been typed as its own command on the same folders. The phases are
 `layout`, `roles`, `ocr`, `tagging`, `subtitles`, `commentary`, `names`,
 `chapters`, `extras-chapters`, `plex` and `backups`, comma-separated like `-o` and
-`-k`. `layout` is the first half of a full ingest — junk, Matroska, folders, extras
-folders, names, subtitle files — without a track touched; `roles` and `ocr` are the
-`-o roles` and `-o ocr` phases on their own (`ocr` leaves the sidecars beside the
-films rather than muxing them in); `extras-chapters` is [`-C`](#chaptering-the-extras--c)
-on its own, and takes `-P`:
+`-k`; the [sweeps table](#single-task-sweeps) says what each does:
 
 ```bash
 ingest-movies -O tagging ~/Films
@@ -1092,9 +1022,7 @@ ingest-movies -O extras-chapters -P "a chapter per scene" ~/Films
 
 Nothing is reordered or checked for sense, so the order is the one the
 [sweeps table](#single-task-sweeps) gives. A phase that fails stops the chain.
-`-w` goes to the phases that have a dry run to carry out (`tagging`,
-`subtitles`, `names`, `backups`) and is left off the others; it is refused when
-none of them does. `-i <file>` is the id list the `tagging` phase reads back.
+`-i <file>` is the id list the `tagging` phase reads back.
 `-O` is refused with `-r`, `-C`, `-k` and `-o`, which belong to a full ingest.
 
 ## Several folders

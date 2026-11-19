@@ -981,7 +981,7 @@ def _not_a_rerelease(dated: list, year: str, notes: list | None = None) -> list:
     the case the year rule exists for and must keep answering.
 
     Narrows and never widens: where every candidate is equally old, or none is,
-    they all stand and the length decides as before.
+    they all stand and the length decides.
     """
     original = [row for row in dated
                 if row.years and _near(min(row.years), year)]

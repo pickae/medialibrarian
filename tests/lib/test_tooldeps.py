@@ -1,7 +1,7 @@
 """Tests for medialib.lib.tooldeps - the external-tool preflight.
 
-What is pinned here: the two faces of the presence test (bash's PATH scan does not
-test the executable bit, while a slash-path does), the exact byte-padded layout of
+What is pinned here: the two faces of the presence test (a PATH scan does not test
+the executable bit, while a slash-path does), the exact byte-padded layout of
 the refusal, the notes table and its generic fallback, and the module-import
 check's fresh-process form.
 """
@@ -55,7 +55,7 @@ class TestToolPresent:
         assert tooldeps.tool_present("definitelyNotAToolQqq") is False
 
     def test_the_executable_bit_is_not_required_on_path(self, pathdir):
-        # bash's PATH scan does not test X_OK: a 644 file reads as present
+        # the PATH scan does not test X_OK: a 644 file reads as present
         _file(pathdir, "noexec", mode=0o644)
         assert tooldeps.tool_present("noexec") is True
 

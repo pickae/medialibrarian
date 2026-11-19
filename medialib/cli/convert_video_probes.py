@@ -3,10 +3,7 @@
 Does this encoder take that argument, does this GPU open, which render node
 is the Intel one: each is answered by running the tool once on nothing and
 reading its status, once at startup or per file where the answer depends on
-the file. What a source is, is `convert_video_source.py`.
-
-The small tool helpers the run's other modules share live here too, being
-the lowest of them.
+the file.
 """
 
 import os
@@ -220,8 +217,7 @@ def pq_source_to_convert(settings) -> bool:
 
     A source whose output already exists is passed over: it is usually finished,
     and a finished HDR file in the folder must not hold every new SDR one to the
-    fork. Without an ffprobe on PATH to ask, the answer is yes, which keeps the
-    fork where it was always preferred.
+    fork. Without an ffprobe on PATH to ask, the answer is yes.
     """
     if not _has_tool("ffprobe"):
         return True

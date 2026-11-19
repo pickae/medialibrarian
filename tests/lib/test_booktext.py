@@ -149,11 +149,8 @@ def test_counts_of_a_file_that_is_not_there(tmp_path):
 
 def test_counts_on_a_host_with_no_wc(tmp_path, monkeypatch):
     """The one external tool here that no preflight asks about, so its absence
-    has to arrive as an answer rather than as an exception: it used to come out
-    of the middle of a census as a FileNotFoundError.
-
-    "Not counted" is what both callers already handle - the census leaves the
-    two columns blank, and read-library's queue treats the book as unplaced.
+    has to arrive as "not counted" rather than as an exception out of the
+    middle of a census.
     """
     def absent(*_args, **_kwargs):
         raise FileNotFoundError(2, "no such file", "wc")

@@ -41,7 +41,7 @@ Each book is built whole in RAM — joined, chaptered and given its cover — an
 only the finished file is written to `<outputDir>`, one book at a time. How
 many are built at once depends on where the input is:
 
-- **in RAM** (as `convert-and-concat` hands it over): one per CPU thread
+- **in RAM**: one per CPU thread
 - **on disk**: two, since a mechanical drive read by more than that spends its
   time seeking
 

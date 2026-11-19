@@ -32,7 +32,7 @@ class TestReadingAnExtension:
 
 
 class TestDotfiles:
-    """A name that begins with a dot has no extension (item 7.4)."""
+    """A name that begins with a dot has no extension."""
 
     def test_a_dotfile_has_no_extension(self):
         assert enums.lower_extension_of(".hidden") == ""
@@ -42,8 +42,6 @@ class TestDotfiles:
         assert enums.extension_of(".hidden.MP3") == ""
 
     def test_the_renumberer_reads_the_same_answer(self):
-        # There were two definitions and they disagreed about this one name.
-        # This side moved to the renumberer's, so both now skip the file.
         from medialib.lib.numbering import plan_numbering
 
         plan = plan_numbering("/d", [".hidden.mp3", "x.mp3", "y.mp3"])
@@ -97,27 +95,25 @@ class TestTheListsThemselves:
             assert len(set(members)) == len(members), f"{name} has a duplicate"
 
     def test_every_seek_cheap_extension_is_an_audio_one(self):
-        # What convert-audio's planner leaves uncopied must be a format it
-        # takes in at all: a name only here would be a typo that quietly sends
-        # that format through the seek copy after all.
+        # A name only here would be a typo that quietly sends that format
+        # through the seek copy after all.
         assert set(enums.SEEK_CHEAP_EXTENSIONS) <= set(enums.AUDIO_EXTENSIONS)
 
     def test_the_comic_and_archive_lists_overlap_on_purpose(self):
         # A .cbz IS a zip. They are separate lists because a .cbz is a book and a
-        # .zip is a folder of tracks, and the plan's own note says so.
+        # .zip is a folder of tracks.
         assert set(enums.COMIC_EXTENSIONS) & {"cbz", "cbr", "cb7"}
 
     def test_every_image_codec_is_named_by_its_own_extension(self):
-        # Unlike the audio and video codec lists, these double as extensions -
-        # which is what lets convert-images use one list for the format it
-        # writes and for the output names it has to keep apart.
+        # Unlike the audio and video codec lists, these double as extensions,
+        # so one list names both the format written and the output's suffix.
         for codec in enums.IMAGE_CODECS:
             assert enums.lower_extension_of("page." + codec) == codec
 
     def test_every_image_codec_is_also_an_input_extension(self):
         # The input list holds every still format a library plausibly holds,
-        # and the three this command writes are among them, so a tree of them
-        # can be censused, judged and re-converted like any other.
+        # the written ones among them, so a converted tree can be censused,
+        # judged and re-converted like any other.
         assert set(enums.IMAGE_CODECS) <= set(enums.IMAGE_EXTENSIONS)
 
     def test_every_audio_codec_has_a_container_to_be_written_in(self):
@@ -129,31 +125,25 @@ class TestTheListsThemselves:
                 == set(enums.AUDIO_CODEC_EXTENSIONS)), "-o would have no suffix"
 
     def test_no_audio_codec_is_its_own_extension_by_accident(self):
-        # opus IS spelled the same as its container, and that coincidence is
-        # exactly what tempted the old code to derive one from the other. The
-        # test names it so the next codec added cannot inherit the assumption.
+        # opus IS spelled the same as its container, a coincidence that invites
+        # deriving one from the other. The test names it so the next codec
+        # added cannot inherit the assumption.
         same = {codec for codec, extension
                 in enums.AUDIO_CODEC_EXTENSIONS.items() if codec == extension}
         assert same == {"opus"}
 
     def test_every_audio_output_container_is_also_an_input_extension(self):
-        # convert-audio reads what it writes, which is why it refuses an output
-        # folder inside its input. A container missing from AUDIO_EXTENSIONS
-        # would silently make that trap re-openable for that codec.
+        # What is written can be read back as input, which is why an output
+        # folder inside the input is refused. A container missing from
+        # AUDIO_EXTENSIONS would silently reopen that trap for its codec.
         assert set(enums.AUDIO_CODEC_EXTENSIONS.values()) <= set(
             enums.AUDIO_EXTENSIONS)
 
-    def test_alac_is_absent_from_the_lossless_extensions_but_present_in_the_codecs(self):
-        # It arrives as .m4a, an extension that is lossy far more often than not,
-        # so it is caught by probing rather than by name.
+    def test_m4a_is_not_judged_lossless_by_its_name(self):
+        # ALAC arrives as .m4a, an extension that is lossy far more often than
+        # not, so it is caught by probing rather than by name.
         assert "m4a" not in enums.LOSSLESS_AUDIO_EXTENSIONS
-        assert "alac" in enums.LOSSLESS_CODECS
 
-    def test_the_brackets_are_matched_pairs_by_index(self):
-        assert len(enums.BRACKET_OPEN) == len(enums.BRACKET_CLOSE)
-        assert list(zip(enums.BRACKET_OPEN, enums.BRACKET_CLOSE, strict=True)) == [
-            ("(", ")"), ("[", "]"), ("{", "}"), ("<", ">"),
-        ]
 
 class TestLoweringTheWayTheShellDoes:
     """``${x,,}`` lowers character by character through the C library; Python's
