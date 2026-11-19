@@ -324,6 +324,23 @@ class Run:
         os.replace(out + ".part", out)
         self.report_progress("transcribed: " + relative)
 
+    def _say_language(self, relative: str, detection) -> None:
+        """The line the detection leaves behind, under -v: the language and
+        the probability whisper's own output says it transcribed in. A
+        detection that was not read says nothing, rather than a guess."""
+        if detection is None:
+            return
+        language, probability = detection
+        runlog.detail("%s detected (probability %.3f): %s"
+                      % (language, probability, relative))
+
+    @staticmethod
+    def _detections(done) -> list:
+        """The detections of one whisper call, in input order: whisper prints
+        one of its own lines per input it transcribed, and the call's kept
+        output is where they are."""
+        return whisper.detected_languages(done.output.lines())
+
     def transcribe_one(self, ready: tuple) -> None:
         """One prepared input through whisper into its mirrored transcript;
         its work directory goes when it is done."""
@@ -340,6 +357,9 @@ class Run:
                 verify=lambda: ("" if os.path.isfile(whisper_out)
                                 else "wrote no transcript"))
             if done.ok:
+                detections = self._detections(done)
+                self._say_language(relative, detections[0]
+                                   if detections else None)
                 self._keep(relative, whisper_out)
             else:
                 self.record_failure()
@@ -375,13 +395,25 @@ class Run:
                     for _relative, for_whisper, _work in members]
             # Not reported here: a file this call missed is tried again on
             # its own, and only that call's failure is the file's.
-            toolcapture.run(
+            done = toolcapture.run(
                 self._whisper([m[1] for m in members], output_dir),
                 label, tool="whisper", report=False,
                 verify=lambda: ("" if all(os.path.isfile(o) for o in outs)
                                 else "wrote no transcript for some files"))
+            # One detection per member whisper transcribed, in member order:
+            # a member it passed over printed no line, so the lines line up
+            # with the members that have a transcript. (The one case they do
+            # not - a member whisper transcribed but whose transcript write
+            # failed - only shifts the lines of the members after it, under
+            # -v, in a run that is already reporting that member.)
+            languages = self._detections(done)
+            index = 0
             for member, whisper_out in zip(members, outs, strict=True):
                 if os.path.isfile(whisper_out):
+                    self._say_language(
+                        member[0], languages[index]
+                        if index < len(languages) else None)
+                    index += 1
                     self._keep(member[0], whisper_out)
                     shutil.rmtree(member[2], ignore_errors=True)
                 else:

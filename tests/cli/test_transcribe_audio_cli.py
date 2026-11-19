@@ -137,6 +137,13 @@ class TestOneRunOverAMixedTree:
         _, _, _, log = run
         assert "    | Stream map '0:a:0' matches no streams." in log, log
 
+    def test_the_cpu_settlement_says_the_figure_it_was_settled_on(self, run):
+        """The figure the model was settled on is the absence of a GPU, and
+        the line says so rather than the CPU line appearing without a
+        reason."""
+        _, _, _, log = run
+        assert "No GPU found: the model settles on the CPU" in log, log
+
     def test_only_the_video_is_extracted_and_from_its_first_track(self, run):
         transcribe, _, _, _ = run
         asked = transcribe.ffmpeg_log.read_text()
@@ -330,6 +337,93 @@ class TestWhisperExitingCleanWithNoTranscript:
         transcribe.with_tool("pipx", _PIPX)
         transcribe.transcribe(outputs.parent / "in", outputs)
         assert (outputs / "talk" / "episode.txt").is_file()
+
+
+# What whisper-ctranslate2 says about a detection: one line per input it
+# transcribes, on its standard output, before the transcript - the language
+# named and the probability the detection came in at.
+_PIPX_DETECTED = r"""
+printf '%s\n' "$*" >> "$WHISPERLOG"
+inputs=()
+for a in "${@:3}"; do [[ "$a" == --* ]] && break; inputs+=("$a"); done
+outDir=""; fmt="txt"; prev=""
+for a in "$@"; do
+    case "$prev" in
+        --output_dir)    outDir="$a" ;;
+        --output_format) fmt="$a" ;;
+    esac
+    prev="$a"
+done
+for input in "${inputs[@]}"; do
+    case "$input" in
+        *nowhisper*)
+            if (( ${#inputs[@]} > 1 )); then
+                echo "Error: Unable to process file: $input" >&2; continue
+            fi ;;
+    esac
+    base="${input##*/}"
+    case "$base" in *two*) language="Dutch" ;; *) language="English" ;; esac
+    printf "Detected language '%s' with probability 0.998765\n" "$language"
+    printf 'stub transcript\n' > "$outDir/${base%.*}.$fmt"
+done
+exit 0
+"""
+
+
+class TestTheDetectedLanguage:
+    """whisper detects each file's language itself, and the run says what it
+    detected - under -v, per file, on whisper's own probability. A re-run over
+    a finished transcript never detects again, and says nothing new."""
+
+    def test_a_file_says_its_language_under_v(self, transcribe, tmp_path):
+        source = tmp_path / "in"
+        (source / "talk").mkdir(parents=True)
+        (source / "talk" / "episode.opus").touch()
+        transcribe.with_tool("pipx", _PIPX_DETECTED)
+        log = transcribe.transcribe("-v", source, tmp_path / "out")
+        assert ("English detected (probability 0.999): talk/episode.opus"
+                in log), log
+
+    def test_without_v_the_language_is_not_said(self, transcribe, tmp_path):
+        source = tmp_path / "in"
+        (source / "talk").mkdir(parents=True)
+        (source / "talk" / "episode.opus").touch()
+        transcribe.with_tool("pipx", _PIPX_DETECTED)
+        log = transcribe.transcribe(source, tmp_path / "out")
+        assert "detected (probability" not in log, log
+
+    def test_a_rerun_over_a_finished_transcript_says_no_language(self,
+                                                                 transcribe,
+                                                                 tmp_path):
+        source = tmp_path / "in"
+        (source / "talk").mkdir(parents=True)
+        (source / "talk" / "episode.opus").touch()
+        transcribe.with_tool("pipx", _PIPX_DETECTED)
+        transcribe.transcribe("-v", source, tmp_path / "out")
+        log = transcribe.transcribe("-v", source, tmp_path / "out")
+        assert "detected (probability" not in log, log
+
+    def test_each_file_of_a_group_gets_its_own_line(self, transcribe,
+                                                    tmp_path):
+        """A file whisper passed over in the group printed no line, so the
+        lines line up with the files that have transcripts: the last file
+        says the group's second line, not the third, and the missed file says
+        its own line from its own retry."""
+        source = tmp_path / "in"
+        source.mkdir()
+        for name in ("one.mp3", "nowhisper.mp3", "two.mp3"):
+            (source / name).write_bytes(b"x")
+        transcribe.with_tool("pipx", _PIPX_DETECTED)
+        log = transcribe.transcribe("-j", "1", "-v", source, tmp_path / "out")
+        # One group call with all three, then the missed file alone: the
+        # matching under test is the group's, not three solo calls.
+        starts = _whisper_starts(transcribe)
+        assert len(starts) == 2, starts
+        assert starts[0].count(".mp3") == 3, starts
+        assert "English detected (probability 0.999): one.mp3" in log, log
+        assert "Dutch detected (probability 0.999): two.mp3" in log, log
+        assert ("English detected (probability 0.999): nowhisper.mp3"
+                in log), log
 
 
 class TestTheNextVideoIsExtractedWhileWhisperWorks:
