@@ -28,6 +28,7 @@ The transcript is whatever a speech recogniser wrote, in any of the formats
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -600,7 +601,22 @@ def generate(cues: Sequence[Cue], llm, *, min_minutes: int = DEFAULT_MIN_MINUTES
         return []
     found = passages(cues)
     count = max(2, round(duration / (typical_minutes * _MS_PER_MINUTE)))
+    held = (llm.serving(log) if isinstance(llm, chapterllm.Llm)
+            else contextlib.nullcontext(llm))
+    try:
+        with held as served:
+            return _chapters(cues, found, served, duration, count,
+                             typical_minutes, min_minutes, log, instructions)
+    except chapterllm.LlmError as error:
+        log("    no model to ask: %s" % error)
+        return []
 
+
+def _chapters(cues: Sequence[Cue], found: list[Passage], llm, duration: int,
+              count: int, typical_minutes: int, min_minutes: int,
+              log: Callable[[str], None], instructions: str) -> list[tuple[int, str]]:
+    """:func:`generate`'s work, on the server the model is held on."""
+    min_ms = min_minutes * _MS_PER_MINUTE
     lines = [_Line(index, passage.start, passage.text)
              for index, passage in enumerate(found)]
     summarised = False
