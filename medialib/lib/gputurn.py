@@ -110,9 +110,8 @@ class Gate:
                 self._sleep(POLL_SECONDS)
             yield
         finally:
-            with self._locked():
-                with contextlib.suppress(OSError):
-                    os.remove(os.path.join(self._directory, name))
+            with self._locked(), contextlib.suppress(OSError):
+                os.remove(os.path.join(self._directory, name))
 
     @contextlib.contextmanager
     def _locked(self):

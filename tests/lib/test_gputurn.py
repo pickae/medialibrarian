@@ -41,16 +41,14 @@ class TestSharing:
 
     def test_the_same_kind_never_waits(self, tmp_path):
         gate = _gate(tmp_path, free=0)
-        with gate.claim("whisper", 9000):
-            with gate.claim("whisper", 9000):
-                pass
+        with gate.claim("whisper", 9000), gate.claim("whisper", 9000):
+            pass
 
     def test_another_kind_is_let_in_where_it_fits(self, tmp_path):
         # Counting the whisper just started, which nvidia-smi does not show yet.
         gate = _gate(tmp_path, free=12000)
-        with gate.claim("whisper", 4000):
-            with gate.claim("llm", 6000):
-                pass
+        with gate.claim("whisper", 4000), gate.claim("llm", 6000):
+            pass
 
     def test_another_kind_waits_where_it_does_not_fit(self, tmp_path):
         gate = _gate(tmp_path, free=3000)
@@ -92,15 +90,13 @@ class TestSharing:
 
     def test_no_card_means_no_waiting(self, tmp_path):
         gate = gputurn.Gate(str(tmp_path / "turns"), free=lambda: None)
-        with gate.claim("whisper", 4000):
-            with gate.claim("llm", None):
-                pass
+        with gate.claim("whisper", 4000), gate.claim("llm", None):
+            pass
 
     def test_a_claim_of_a_dead_process_is_let_go_of(self, tmp_path):
         gate = _gate(tmp_path, free=0, alive=lambda pid: False)
-        with gate.claim("whisper", 4000):
-            with gate.claim("llm", 6000):
-                pass
+        with gate.claim("whisper", 4000), gate.claim("llm", 6000):
+            pass
 
 
 class TestFairness:
@@ -134,10 +130,9 @@ class TestAbort:
 
     def test_a_waiting_claim_is_released_by_an_abort(self, tmp_path):
         gate = _gate(tmp_path, free=0)
-        with gate.claim("whisper", 4000):
-            with pytest.raises(gputurn.GateAborted):
-                with gate.claim("llm", 6000, abort=lambda: True):
-                    pass
+        with gate.claim("whisper", 4000), pytest.raises(gputurn.GateAborted):
+            with gate.claim("llm", 6000, abort=lambda: True):
+                pass
 
 
 class TestJobNeed:
