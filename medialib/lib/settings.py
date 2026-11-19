@@ -74,7 +74,7 @@ _SCRATCH = ("concat-audio", "content-census", "content-census-bi", "convert-and-
             "transcribe-audio", "ytdlp")
 
 # Every command that asks a language model for chapters.
-_AI_CHAPTERS = ("convert-audio", "generate-chapters", "ytdlp")
+_AI_CHAPTERS = ("convert-audio", "convert-video", "generate-chapters", "ytdlp")
 
 SETTINGS: tuple[Setting, ...] = (
     # --- logins and keys
@@ -214,7 +214,8 @@ SETTINGS: tuple[Setting, ...] = (
             "protocol, as a JSON object - whatever that server takes, e.g. "
             "`{\"reasoning_effort\": \"low\"}` or `{\"temperature\": 0.2}`; an output "
             "limit given here replaces the one the run works out, and the chapter "
-            "instructions (`generate-chapters -p`, `convert-audio -p`, `ytdlp -P`) "
+            "instructions (`generate-chapters -p`, `convert-audio -p`, `convert-video -P`, "
+            "`ytdlp -P`) "
             "send their own `reasoning_effort`", _AI_CHAPTERS),
     Setting("chapterLlmJobs", "How many requests are sent to the model at once, "
             "over the whole run. Whether the model is local is read off "

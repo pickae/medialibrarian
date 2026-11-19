@@ -114,7 +114,7 @@ def test_finish_muxes_to_the_sibling_when_the_name_was_taken(tree, tmp_path,
                         lambda *a, **k: True)
     muxed = []
 
-    def fake_mux(relative, chunk_dir, settings, output):
+    def fake_mux(relative, chunk_dir, settings, output, chaptered=None):
         muxed.append(output)
         Path(output).write_text("muxed")
         return 0
@@ -129,6 +129,39 @@ def test_finish_muxes_to_the_sibling_when_the_name_was_taken(tree, tmp_path,
     assert status == 0
     assert muxed == [os.path.join(tree.output_dir, "Films", "film (2).mkv")]
     assert Path(taken).read_text() == "not ours"
+
+
+def test_a_mux_that_fails_with_the_generated_chapters_is_done_without(
+        tree, tmp_path, monkeypatch):
+    directory = tmp_path / "chunks"
+    directory.mkdir()
+    (directory / "video.mkv").write_text("video")
+    monkeypatch.setattr(rules, "video_intermediate_complete",
+                        lambda *a, **k: True)
+    monkeypatch.setattr(run_module.durationcheck, "verify",
+                        lambda *a, **k: True)
+    monkeypatch.setattr(dolbyvision, "normalise_config_level",
+                        lambda *a, **k: None)
+    asked = []
+
+    def fake_mux(relative, chunk_dir, settings, output, chaptered=None):
+        asked.append(chaptered)
+        if chaptered is not None:
+            return 1
+        Path(output).write_text("muxed")
+        return 0
+
+    monkeypatch.setattr(encode, "mux_final", fake_mux)
+    outcome = object()
+
+    state = run_module.Run(tree)
+    status = state.finish("Films/film.mkv", str(directory), 600.0, 0,
+                          chaptered=outcome)
+
+    assert status == 0
+    assert asked == [outcome, None]
+    written = os.path.join(tree.output_dir, "Films", "film.mkv")
+    assert Path(written).read_text() == "muxed"
 
 
 class TestAFinishThatFailsAfterTheVideoKeepsTheEncode:
@@ -167,7 +200,7 @@ class TestAFinishThatFailsAfterTheVideoKeepsTheEncode:
 
     def test_a_mux_that_wrote_half_a_file_and_failed(self, tree, finished,
                                                      monkeypatch):
-        def half_a_mux(relative, chunk_dir, settings, output):
+        def half_a_mux(relative, chunk_dir, settings, output, chaptered=None):
             Path(output).write_text("half")
             return 1
 
@@ -185,7 +218,7 @@ class TestAFinishThatFailsAfterTheVideoKeepsTheEncode:
         monkeypatch.setattr(durationcheck, "media_duration",
                             lambda path: 300.0)
 
-        def short_mux(relative, chunk_dir, settings, output):
+        def short_mux(relative, chunk_dir, settings, output, chaptered=None):
             Path(output).write_text("half the film")
             return 0
 

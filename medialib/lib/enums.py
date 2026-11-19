@@ -17,6 +17,7 @@ __all__ = [
     "file_kind",
     "SUBTITLE_ROLES",
     "SUBTITLE_ROLE_SUFFIXES",
+    "AUDIO_ROLES",
     "BRACKET_OPEN",
     "BRACKET_CLOSE",
     "PART_WORDS",
@@ -177,6 +178,25 @@ SUBTITLE_ROLES = ("commentary", "forced", "sdh", "full")
 # full subtitle carries none. A commentary has none either: it names its
 # commentary instead ("Film 2 Director's Commentary.en.srt").
 SUBTITLE_ROLE_SUFFIXES = {"forced": "forced", "sdh": "sdh", "full": ""}
+
+# --- the roles an audio track plays -------------------------------------------
+# What an audio track is FOR, the way SUBTITLE_ROLES above says it of a
+# subtitle. A film can carry five tracks of one language that are five things:
+#
+#   commentary   people talking over the film, not the film itself
+#   description  the film's own mix with a narrator describing the picture, for
+#                the blind and visually impaired
+#   effects      the music and effects with the dialogue taken out (M&E)
+#   score        the music alone: an isolated score
+#   interview    an interview or other spoken extra that happens to play
+#                alongside the picture
+#   main         the film's soundtrack, in some language - what it is watched in
+#
+# In the order they are asked: the first that fits a track is its role, so a
+# commentary flagged for the visually impaired is a commentary, and "Music &
+# Effects" is effects before it is music.
+AUDIO_ROLES = ("commentary", "description", "effects", "score", "interview",
+               "main")
 
 # --- the bracket set ----------------------------------------------------------
 # The single source of truth for which characters count as brackets across the

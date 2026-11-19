@@ -22,12 +22,14 @@ import time
 
 from medialib import commands
 from medialib.cli import convert_video as rules
+from medialib.cli import convert_video_chapters as chapterwork
 from medialib.cli import convert_video_encode as encode
 from medialib.cli import convert_video_hdr as hdr
 from medialib.cli import convert_video_probes as probes
 from medialib.cli import convert_video_source as videosource
 from medialib.cli import convert_video_startup as startup
 from medialib.lib import (
+    chapterllm,
     clioptions,
     console,
     durationcheck,
@@ -124,6 +126,10 @@ class Run:
 
     def __init__(self, settings) -> None:
         self.settings = settings
+        # -n's language model, and the lock that has one file chaptered at a
+        # time: whisper fills the GPU on its own, and a local model shares it.
+        self.llm = None
+        self.chaptering = threading.Lock()
         self.start = time.time()
         self.converted = 0
         self.skipped = 0
@@ -345,6 +351,10 @@ class Run:
             audio = workerpool.start_worker(
                 _audio_worker, (relative, directory, settings),
                 os.path.join(settings.input_dir, relative))
+            # -n's chapters too: reading a subtitle or transcribing a
+            # soundtrack, and the model's questions, need nothing the encoder
+            # does, and what they make is only wanted at the mux.
+            chaptering = self._start_chaptering(plan)
 
             self._encode(settings, relative, directory, plan.video_duration,
                          plan.bounds,
@@ -364,11 +374,12 @@ class Run:
 
         def tail() -> int:
             audio.join()
+            chaptered = chaptering() if chaptering is not None else None
             if safety.abort_requested():
                 return safety.INTERRUPTED_EXIT_STATUS
             if self.finish(relative, directory, plan.duration,
                            audio.exitcode or 0, replacing=plan.replacing,
-                           plan=plan) != 0:
+                           plan=plan, chaptered=chaptered) != 0:
                 return 1
             # Only a file that came out complete counts towards the stats: a
             # skipped or failed one did work that produced nothing, and
@@ -381,6 +392,37 @@ class Run:
             return 0
 
         return tail
+
+    def _start_chaptering(self, plan: Plan):
+        """-n's chapters for this file started on a thread of their own, and
+        handed back as a callable that waits for them and returns what the mux
+        is to add - None without -n, or when there is nothing to add."""
+        if not plan.settings.ai_chapters or self.llm is None:
+            return None
+        done: list = []
+
+        def work() -> None:
+            with self.chaptering:
+                if safety.abort_requested():
+                    return
+                try:
+                    done.append(chapterwork.chapter(
+                        plan.source, plan.directory, self.llm, plan.relative,
+                        plan.settings.script_dir, log))
+                except Exception as failed:  # noqa: BLE001 - only the chapters
+                    # A file whose chapters could not be had is still converted.
+                    runlog.error("%s: no chapters, the chaptering failed: %s"
+                                 % (plan.relative, failed))
+
+        thread = threading.Thread(target=work, name="convert-video-chapters",
+                                  daemon=True)
+        thread.start()
+
+        def wait():
+            thread.join()
+            return done[0] if done else None
+
+        return wait
 
     def count(self, field: str) -> None:
         """One more file skipped or failed: said from the look-ahead and the
@@ -603,7 +645,7 @@ class Run:
 
     def finish(self, relative: str, directory: str, duration: float,
                audio_status: int, replacing: bool = False,
-               plan: "Plan | None" = None) -> int:
+               plan: "Plan | None" = None, chaptered=None) -> int:
         """Everything after both encodes: keep or discard the video, mux the final
         file, and confirm what came out.
 
@@ -639,7 +681,16 @@ class Run:
             relative, directory, hdr10plus_metadata, settings)
 
         output = encode.output_path_for(relative, settings, replacing)
-        if encode.mux_final(relative, directory, settings, output) != 0:
+        muxed = encode.mux_final(relative, directory, settings, output,
+                                 chaptered)
+        # What -n added is the one part of the mux that was not already in a
+        # file the tools read, so it is what is let go of first.
+        if muxed != 0 and chaptered is not None:
+            log("WARNING: the mux with the generated chapters failed, muxing "
+                "without them: " + relative)
+            probes._remove(output)
+            muxed = encode.mux_final(relative, directory, settings, output)
+        if muxed != 0:
             # A half-written output would only confuse the next run's resume
             # check.
             probes._remove(output)
@@ -809,6 +860,9 @@ def main(argv: list, program: str = "convert-video",
         fast_decode=result.values["videoFastDecode"] or "",
         test_source_bitrate="t" in result.given,
         keep_tracks="k" in result.given,
+        ai_chapters="n" in result.given,
+        chapter_instructions=(result.values["chapterInstructions"]
+                              or "").strip(),
         required_saving=saving[0])
     grain = result.values["videoGrain"] or ""
     engines_override = result.values["nvencEnginesOverride"] or ""
@@ -845,6 +899,12 @@ def main(argv: list, program: str = "convert-video",
         # refusal names the file and the line, the way the settings file's
         # does.
         sys.stderr.write(malformed.text() + "\n")
+        return 1
+
+    # The instructions are for the model -n asks; without it there is none.
+    if "P" in result.given and not settings.ai_chapters:
+        clioptions.refuse_usage(declaration, "-P (instructions for the chapter "
+                                "model) needs -n.")
         return 1
 
     refusal = startup._validate(settings, video_args, grain, engines_override)
@@ -891,6 +951,13 @@ def _settle_and_run(settings, program: str, video_args: str, grain: str,
     if tooldeps.require_tools(program, ["ffmpeg", "ffprobe"]
                               + (["mkvmerge"] if settings.keep_tracks else [])):
         return 1
+    # Asked now, so a run whose model is not set up is refused before hours of
+    # encoding rather than found out at the first file's mux.
+    llm = None
+    if settings.ai_chapters:
+        llm = chapter_model(program, settings)
+        if llm is None:
+            return 1
     # Refused rather than degraded, and before the output folder exists: a run
     # that encoded the small files at their own size instead would leave outputs
     # that every later run skips as finished, upscaler or not.
@@ -928,7 +995,18 @@ def _settle_and_run(settings, program: str, video_args: str, grain: str,
     startup._detect_hardware(settings, video_args, engines_override)
     startup._summarise(settings, video_args, grain)
 
-    return _run_all(settings)
+    return _run_all(settings, llm)
+
+
+def chapter_model(program: str, settings):
+    """-n's model, given -P's instructions for every request, or None when
+    none is set up (which has been said)."""
+    llm = chapterllm.require(program)
+    if llm is None:
+        return None
+    llm = llm.following(settings.chapter_instructions)
+    log("Chapters (-n): " + llm.describe())
+    return llm
 
 
 class _HeldOutput:
@@ -970,7 +1048,7 @@ class _HeldOutput:
         return getattr(self._stream, name)
 
 
-def _run_all(settings) -> int:
+def _run_all(settings, llm=None) -> int:
     """The walk: one file at a time, because the chunk count already saturates the
     encoder and encoding files in parallel would oversubscribe it. What runs
     beside a file's encode is everything around it that does not need the
@@ -1011,6 +1089,7 @@ def _run_all(settings) -> int:
         settings.upscale_script = upscale.write_script(chunk_root)
 
     run = Run(settings)
+    run.llm = llm
     safety.set_run_footer(run.footer)
     durationcheck.init_log()
     safety.init_abort_flag()

@@ -13,6 +13,7 @@ import os
 import shutil
 
 from medialib.cli import convert_video as rules
+from medialib.cli import convert_video_chapters as chapterwork
 from medialib.cli import convert_video_probes as probes
 from medialib.cli import convert_video_source as videosource
 from medialib.lib import (
@@ -286,18 +287,22 @@ def output_path_for(relative: str, settings, replacing: bool) -> str:
     return sibling
 
 
-def mux_final(relative: str, directory: str, settings, output: str) -> int:
+def mux_final(relative: str, directory: str, settings, output: str,
+              chaptered=None) -> int:
     """The final output: the encoded video, the separately encoded audio, and the
     source's subtitles, attachments, chapters and metadata, all stream-copied into
     one Matroska.
 
     Input 0 is the encoded video, input 1 the original (for the parts only it
     still has, and for passthrough audio), and any further inputs the encoded audio
-    in order.
+    in order. ``chaptered``, -n's :class:`convert_video_chapters.Outcome`, adds
+    the chapters worked out for a source that had none, and the transcript they
+    were worked out from as a subtitle after the source's own.
     """
     source = os.path.join(settings.input_dir, relative)
     if settings.keep_tracks:
-        return _mux_keeping_tracks(relative, directory, source, output)
+        return _mux_keeping_tracks(relative, directory, source, output,
+                                   chaptered)
     audio_args = rules.profile_args(rules.audio_profiles(),
                                     settings.audio_profile)
 
@@ -306,21 +311,36 @@ def mux_final(relative: str, directory: str, settings, output: str) -> int:
             "-i", os.path.join(directory, "video.mkv"),
             "-i", source]
     maps = ["-map", "0:v"]
+    next_input = 2
     if "-c:a copy" in audio_args:
         maps += ["-map", "1:a?"]
     else:
-        next_input = 2
         for name in sorted(os.listdir(directory)):
             if not (name.startswith("audio") and name.endswith(".mka")):
                 continue
             argv += ["-i", os.path.join(directory, name)]
             maps += ["-map", "%d:a" % next_input]
             next_input += 1
-    maps += ["-map", "1:s?", "-map", "1:t?"]
+    maps += ["-map", "1:s?"]
+    chapters_from = 1
+    tagged = []
+    if chaptered is not None and chaptered.ffmetadata:
+        argv += ["-i", chaptered.ffmetadata]
+        chapters_from = next_input
+        next_input += 1
+    if chaptered is not None and chaptered.transcript:
+        argv += ["-i", chaptered.transcript]
+        maps += ["-map", "%d:s" % next_input]
+        next_input += 1
+        spec = "-metadata:s:s:%d" % chaptered.subtitle_index
+        tagged = [spec, "title=" + chapterwork.TRANSCRIPT_TITLE]
+        if chaptered.language:
+            tagged += [spec, "language=" + chaptered.language]
+    maps += ["-map", "1:t?"]
 
     log("Muxing: " + relative)
-    argv += maps + ["-map_metadata", "1", "-map_chapters", "1", "-c", "copy",
-                    "-f", "matroska", output]
+    argv += maps + ["-map_metadata", "1", "-map_chapters", str(chapters_from),
+                    *tagged, "-c", "copy", "-f", "matroska", output]
     muxed = toolcapture.run(argv, relative, report=False)
     # A mux that failed on a folder that has just gone is retried, once, on the
     # folder put back: stream-copying the parts together again is minutes at
@@ -340,7 +360,7 @@ def mux_final(relative: str, directory: str, settings, output: str) -> int:
 
 
 def _mux_keeping_tracks(relative: str, directory: str, source: str,
-                        output: str) -> int:
+                        output: str, chaptered=None) -> int:
     """-k's final output: the encoded video, then every other track of the
     source exactly as it is there - audio, subtitles, attachments, chapters,
     tags - combined by mkvmerge, which keeps each track's name, language and
@@ -355,6 +375,18 @@ def _mux_keeping_tracks(relative: str, directory: str, source: str,
             "--no-chapters", "--no-track-tags", "--no-global-tags",
             os.path.join(directory, "video.mkv"),
             "--no-video", source]
+    # -n's chapters stand in for the source's - it had none to speak of - and
+    # its transcript follows the source's subtitles.
+    if chaptered is not None and chaptered.rows:
+        argv[-2:-2] = ["--no-chapters"]
+        argv += ["--chapters", chaptered.rows]
+    if chaptered is not None and chaptered.transcript:
+        argv += ["--track-name", "0:" + chapterwork.TRANSCRIPT_TITLE,
+                 "--default-track-flag", "0:no"]
+        if chaptered.language:
+            argv += ["--language", "0:" + chaptered.language]
+        argv += [chaptered.transcript]
+
     def written(muxed) -> bool:
         # mkvmerge exits 1 for warnings, with the file written.
         return muxed.ok or (muxed.returncode == 1 and os.path.isfile(output))
