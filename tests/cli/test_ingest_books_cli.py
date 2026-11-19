@@ -58,6 +58,13 @@ for a in "$@"; do case "$a" in -*|.) ;; *) arch="$a"; break;; esac; done
 _CONVERT = r'out="${!#}"; out="${out%\>}"; : > "$out"'
 
 
+def _EBOOK_CONVERT_CALLS(log_file: str) -> str:
+    """The converter stand-in, with every call it gets recorded, argument by
+    argument, ahead of the copy-through it does: how many times a book goes
+    through Calibre is what -k is asserted by."""
+    return "printf '%s\\n' \"$*\" >> " + log_file + "\n" + 'cat "$1" > "$2"'
+
+
 def _counted(log: str) -> list[tuple[int, int]]:
     """The "[n/total]" lines, as (n, total) pairs."""
     return [(int(n), int(total)) for n, total
@@ -554,3 +561,74 @@ class TestTheCleanerUnpacksAnEpubSafely:
                                                       secret):
         book = self._ingest(sandbox, tmp_path, "../" * 40 + str(secret)[1:])
         assert secret.read_bytes() not in self._contents(book)
+
+
+class TestKeep:
+    """-k keeps the source's epub: an epub is copied across as a PDF is, and
+    the other formats are still converted to epub - once, rather than the
+    twice a run otherwise makes of one."""
+
+    def test_an_epub_is_copied_whole(self, shelf):
+        log = shelf.work / "ebook-calls"
+        shelf.with_tool("ebook-convert", _EBOOK_CONVERT_CALLS(str(log)))
+        shelf.stock({"novel.epub": "the epub as it came in"})
+        out = shelf.ingest("-k")
+        assert re.search(r"^\[\d/1\] Done \(epub\): novel\.epub$", out,
+                         re.MULTILINE), out
+        assert (shelf.outputs / "novel.epub").read_text() \
+            == "the epub as it came in"
+        assert not log.exists(), "the epub was converted, not kept"
+
+    def test_the_default_run_is_the_re_converting_one(self, shelf):
+        """The case above is defined against this one: without -k the same
+        epub goes through the converter once, on the way to its copy."""
+        log = shelf.work / "ebook-calls"
+        shelf.with_tool("ebook-convert", _EBOOK_CONVERT_CALLS(str(log)))
+        shelf.stock({"novel.epub": "words"})
+        shelf.ingest()
+        assert len(log.read_text().splitlines()) == 1
+
+    def test_a_converted_format_is_converted_once_with_the_flag(self, shelf):
+        log = shelf.work / "ebook-calls"
+        shelf.with_tool("ebook-convert", _EBOOK_CONVERT_CALLS(str(log)))
+        shelf.stock({"novel.mobi": "words"})
+        shelf.ingest("-k")
+        calls = log.read_text().splitlines()
+        assert len(calls) == 1, calls
+        assert (shelf.outputs / "novel.epub").is_file()
+
+    def test_the_same_format_twice_without_it(self, shelf):
+        log = shelf.work / "ebook-calls"
+        shelf.with_tool("ebook-convert", _EBOOK_CONVERT_CALLS(str(log)))
+        shelf.stock({"novel.mobi": "words"})
+        shelf.ingest()
+        calls = log.read_text().splitlines()
+        assert len(calls) == 2, calls
+
+    def test_with_d_the_cleaning_runs_and_the_re_conversion_does_not(
+            self, shelf):
+        """-d asked to throw part of the book away, and -k only answers to the
+        re-conversion: the unpack-clean-repack is the book that comes out. The
+        source is a real, if tiny, zip, because only one is unpacked to be
+        cleaned - a book that cannot be unpacked goes on whole."""
+        log = shelf.work / "ebook-calls"
+        shelf.with_tool("ebook-convert", _EBOOK_CONVERT_CALLS(str(log)))
+        with zipfile.ZipFile(shelf.source / "novel.epub", "w") as packed:
+            packed.writestr("OEBPS/content.opf", "x")
+        shelf.ingest("-k", "-d")
+        assert not log.exists(), "the kept epub was re-converted"
+        assert (shelf.outputs / "novel.epub").read_text() == "zip"
+
+    @pytest.mark.parametrize("extension", ["fb2", "azw", "docx", "rtf", "djvu"])
+    def test_the_formats_the_converter_reads_are_ingested(self, shelf,
+                                                          extension):
+        shelf.stock({"book.%s" % extension: "words"})
+        shelf.ingest()
+        assert (shelf.outputs / "book.epub").is_file()
+
+    def test_text_mode_is_not_the_epub_pipeline(self, shelf):
+        """-k says nothing to -t: the book that becomes a txt is not the epub
+        a kept run would have copied."""
+        shelf.stock({"novel.epub": "one two"})
+        shelf.ingest("-t", "-k")
+        assert (shelf.outputs / "novel.txt").read_text() == "one two"

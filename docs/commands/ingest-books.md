@@ -17,7 +17,7 @@ each source's name and sub-folder into the output.
 
 With no options, a run:
 
-- copies PDFs, **converts other formats to epub, and re-converts every epub** (`-t` for plain text)
+- copies PDFs, **converts other formats to epub, and re-converts every epub** (an epub goes across as a copy with `-k`; `-t` for plain text)
 - **keeps everything in a book**: fonts, images, a PDF's pictures (`-d`)
 - skips a book already in the output, and keeps both on a name collision
 - ignores formats it does not list, and does not clean the names afterwards (`-c`)
@@ -28,8 +28,8 @@ written to disk.
 | Source | Becomes |
 | --- | --- |
 | PDF | copied across |
-| `mobi`/`chm`/`azw3`/`lit`/`txt` | converted to epub |
-| epub (and the just-converted epubs) | re-converted once more for consistent readability |
+| `mobi`/`chm`/`azw3`/`azw`/`lit`/`txt`/`fb2`/`docx`/`rtf`/`djvu` | converted to epub |
+| epub (and the just-converted epubs) | re-converted once more for consistent readability — copied across instead with `-k` |
 
 ## Options
 
@@ -37,6 +37,7 @@ written to disk.
 | --- | --- |
 | `-d` | the reading-device version: throws part of each book away ([below](#discarding-extras--d)) |
 | `-c` | runs [`clean-folder-structure`](clean-folder-structure.md) on the output when done |
+| `-k` | keeps the source's epub: an epub is copied across as a PDF is, and the other formats are converted once, without the re-conversion |
 | `-t` | text mode: every book to a raw `.txt` instead of the epub pipeline |
 | `-z` | text mode only: also a zpaq archive of the result |
 
@@ -61,7 +62,8 @@ none to give — so those pass through untouched, exactly as an image under the
 threshold does.
 
 Without `-d` the run needs Calibre alone — Ghostscript, `unzip`/`zip` and
-ImageMagick are only asked for when there is something for them to strip.
+ImageMagick are only asked for when there is something for them to strip; and
+with `-k`, an epub that is already one is never asked of Calibre at all.
 
 ---
 
