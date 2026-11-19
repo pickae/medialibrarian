@@ -67,9 +67,22 @@ def _remove(path: str) -> None:
 
 # --- what this build and this machine can do ----------------------------------
 
-def ffmpeg_takes_args(binary: str, args: str) -> bool:
-    """The one-frame encode the build check is made of: true when the build runs
-    it AND does not report a parameter it had to ignore.
+def _first_stderr_line(stderr: bytes) -> str:
+    """The first line of stderr with anything on it, "" when the tool was
+    silent - the line a failure is reported by, since a build that refuses
+    an encode says so once, and says it there."""
+    for line in stderr.decode("utf-8", "replace").splitlines():
+        if line.strip():
+            return line.strip()
+    return ""
+
+
+def ffmpeg_takes_args(binary: str, args: str) -> tuple:
+    """The one-frame encode the build check is made of: ``(true, "")`` when the
+    build runs it AND does not report a parameter it had to ignore, and
+    ``(false, the complaint)`` otherwise - the encoder's own words for what it
+    lacked, so a caller can say why a build was passed over rather than only
+    that it was.
 
     Only one of the two ways a build can be too old is loud. An option ffmpeg
     itself does not know fails the encode; but a key inside -svtav1-params that the
@@ -83,33 +96,46 @@ def ffmpeg_takes_args(binary: str, args: str) -> bool:
                 + args.split() + ["-frames:v", "1", "-f", "null", "-"],
                 capture=True)
     if done.returncode != 0:
-        return False
-    return b"error parsing option" not in done.stderr.lower()
+        return False, (_first_stderr_line(done.stderr or b"")
+                       or "the one-frame encode failed")
+    stderr = (done.stderr or b"").lower()
+    if b"error parsing option" in stderr:
+        for line in (done.stderr or b"").decode("utf-8", "replace").splitlines():
+            if "error parsing option" in line.lower():
+                return False, line.strip()
+    return True, ""
 
 
-def ffmpeg_takes_profile(binary: str, args: str) -> bool:
-    """True when that build accepts every argument the selected profile asks for.
+def ffmpeg_takes_profile(binary: str, args: str) -> tuple:
+    """Whether that build accepts every argument the selected profile asks for,
+    as ``(true, "")`` or ``(false, the complaint)`` - the complaint being the
+    encoder's own words for the argument it lacked.
 
     The tuning info is the one argument allowed to be negotiated rather than
     demanded: a row asks for uhq, and a build that does not know the value refuses
     the encode over it - but the run does not need uhq, it FALLS BACK to hq, so
     judging a build on the un-demoted row rejects it for a reason that never
-    applies to the encode it would actually run.
+    applies to the encode it would actually run. A build that passes only after
+    that fallback still passes - the demotion is said at the run's own level -
+    and comes back without a complaint.
     """
-    if ffmpeg_takes_args(binary, args):
-        return True
+    ok, why = ffmpeg_takes_args(binary, args)
+    if ok:
+        return True, ""
     wanted = " -tune %s " % rules.NVENC_TUNE_WANTED
-    if wanted not in " %s " % args:
-        return False
-    return ffmpeg_takes_args(binary, args.replace(
-        wanted, " -tune %s " % rules.NVENC_TUNE_FALLBACK))
+    if wanted in " %s " % args:
+        ok, why = ffmpeg_takes_args(binary, args.replace(
+            wanted, " -tune %s " % rules.NVENC_TUNE_FALLBACK))
+        if ok:
+            return True, ""
+    return False, why
 
 
 def svt_av1_hdr_works(binary: str) -> bool:
     """True when that build's libsvtav1 is SVT-AV1-HDR: it parses a key only the
     fork has. A build without libsvtav1 at all fails the encode, and a mainline
     one logs the key as unparsed - both answer False."""
-    return ffmpeg_takes_args(binary, rules.SVT_AV1_HDR_PROBE)
+    return ffmpeg_takes_args(binary, rules.SVT_AV1_HDR_PROBE)[0]
 
 
 _SVT_AV1_RELEASE = re.compile(rb"Encoder Lib v(\d+)\.(\d+)\.(\d+)")

@@ -8,6 +8,7 @@ the one thing a test of the library alone can never see.
 """
 
 import os
+import types
 
 import pytest
 
@@ -18,7 +19,7 @@ from medialib.cli import convert_video_probes as probes
 from medialib.cli import convert_video_run as run_module
 from medialib.cli import convert_video_source as videosource
 from medialib.cli import convert_video_startup as startup
-from medialib.lib import durationcheck, hostos
+from medialib.lib import durationcheck, hdr10plus, hostos, runlog
 
 pytestmark = pytest.mark.fs
 
@@ -658,3 +659,224 @@ class TestSourcesSharingAStem:
             os.path.join(str(tmp_path / "out"), "a-mp4.mkv")
         assert encode.output_path_for("a.mkv", settings, False) == \
             os.path.join(str(tmp_path / "out"), "a-mkv.mkv")
+
+
+class TestTheProbeComplaint:
+    """The one-frame probe answers with what the build LACKED, so the ladder's
+    walk can say why a build was passed over rather than only that it was."""
+
+    def _answer(self, monkeypatch, *calls):
+        """Probes answered in order, each with (returncode, stderr)."""
+        given = list(calls)
+
+        def fake_run(argv, capture=False):
+            returncode, stderr = given.pop(0)
+            return types.SimpleNamespace(returncode=returncode,
+                                         stderr=stderr)
+        monkeypatch.setattr(probes, "_run", fake_run)
+
+    def test_a_refused_encode_comes_back_with_the_line_that_refused_it(
+            self, monkeypatch):
+        self._answer(monkeypatch, (1, b"Unknown option 'uhq'\n"))
+        assert probes.ffmpeg_takes_args("ffmpeg",
+                                        "-c:v hevc_nvenc -tune uhq") == \
+            (False, "Unknown option 'uhq'")
+
+    def test_a_silent_failure_says_so(self, monkeypatch):
+        self._answer(monkeypatch, (1, b""))
+        assert probes.ffmpeg_takes_args("ffmpeg", "-c:v hevc_nvenc") == \
+            (False, "the one-frame encode failed")
+
+    def test_a_dropped_parameter_comes_back_with_its_line(self, monkeypatch):
+        stderr = (b"frame=    1 fps=0.0 q=0.0 Lsize=N/A time=00:00:00.04\n"
+                  b'[libsvtav1 @ 0x1] Error parsing option "qm-min" '
+                  b'with value "0"\n')
+        self._answer(monkeypatch, (0, stderr))
+        assert probes.ffmpeg_takes_args("ffmpeg", "-c:v libsvtav1") == \
+            (False, '[libsvtav1 @ 0x1] Error parsing option "qm-min" '
+                    'with value "0"')
+
+    def test_a_clean_encode_comes_back_silent(self, monkeypatch):
+        self._answer(monkeypatch, (0, b"frame=    1 fps=5.0 q=0.0\n"))
+        assert probes.ffmpeg_takes_args("ffmpeg", "-c:v libsvtav1") == \
+            (True, "")
+
+    def test_a_tune_the_build_lacks_is_not_a_complaint(self, monkeypatch):
+        """The fallback the run takes anyway is not what the build lacked."""
+        self._answer(monkeypatch, (1, b"Unknown option 'uhq'\n"), (0, b""))
+        ok, why = probes.ffmpeg_takes_profile(
+            "ffmpeg", "-c:v hevc_nvenc -tune uhq -rc vbr")
+        assert (ok, why) == (True, "")
+
+    def test_a_build_that_lacks_even_the_fallback_keeps_its_complaint(
+            self, monkeypatch):
+        self._answer(monkeypatch, (1, b"Unknown option 'uhq'\n"),
+                     (1, b"Unknown option 'hq'\n"))
+        ok, why = probes.ffmpeg_takes_profile(
+            "ffmpeg", "-c:v hevc_nvenc -tune uhq -rc vbr")
+        assert (ok, why) == (False, "Unknown option 'hq'")
+
+
+class TestTheFfmpegWalkLine:
+    """The ladder's probe, wrapped for the run: a build it refuses is named
+    under -v with the complaint that refused it. The probe still answers
+    only true or false - the naming is the wrapper's."""
+
+    def _takes(self, monkeypatch, answer):
+        details = []
+        monkeypatch.setattr(runlog, "detail", details.append)
+        monkeypatch.setattr(probes, "ffmpeg_takes_profile",
+                            lambda binary, args: answer)
+        return run_module._takes_profile("-c:v libsvtav1"), details
+
+    def test_a_refused_build_is_named_with_its_complaint(self, monkeypatch):
+        takes, details = self._takes(monkeypatch, (False, "the complaint"))
+        assert takes("/opt/ffmpeg/bin/ffmpeg") is False
+        assert details == ["ffmpeg: /opt/ffmpeg/bin/ffmpeg passed over - "
+                           "the complaint"]
+
+    def test_a_build_that_passes_is_not_named(self, monkeypatch):
+        takes, details = self._takes(monkeypatch, (True, ""))
+        assert takes("/usr/bin/ffmpeg") is True
+        assert details == []
+
+
+class TestTheVerbosePreparation:
+    """What -v says about a file the preparation settles: the tier its chunk
+    count was taken from, the quality level the bias moved it to, and the
+    static HDR metadata the source keeps. Said under -v only - a run not
+    asked to explain itself says none of it, and takes none of the extra
+    probes it would take to say it."""
+
+    HDR = ("G(13250,3450)B(750,3000)R(34000,6000)WP(15635,16450)"
+           "L(10000000,1) 1000,100")
+
+    @pytest.fixture
+    def prepared(self, monkeypatch, tmp_path):
+        """One file through ``prepare`` to the END of it.
+
+        The ``measured`` fixture stops a file at the -t verdict; these cases
+        are about what the preparation SAYS about a file it will convert, so
+        the verdict lets the file through and every measurement it would
+        take is stubbed to a fixed answer.
+        """
+        def run(dims=("1920", "1080", "progressive", "1:1"), cores=16,
+                verbose=True, **settings_kwargs):
+            source_dir = tmp_path / "in"
+            source_dir.mkdir(exist_ok=True)
+            (source_dir / "clip.mkv").write_text("")
+
+            monkeypatch.setattr(run_module.pausecontrol, "wait_while_paused",
+                                lambda *a, **k: None)
+            monkeypatch.setattr(videosource, "_media_duration",
+                                lambda path: 600.0)
+            monkeypatch.setattr(videosource, "video_dimensions",
+                                lambda path: dims)
+            monkeypatch.setattr(videosource, "interlace_counts",
+                                lambda path, accel="": (0, 0, 500))
+            monkeypatch.setattr(videosource, "dolby_vision_profile",
+                                lambda path: ("", ""))
+            monkeypatch.setattr(hdr10plus, "stream_has_hdr10plus",
+                                lambda path: False)
+            monkeypatch.setattr(run_module.scenecuts, "aligned_bounds",
+                                lambda source, bounds, accel="": (
+                                    list(bounds), []))
+            monkeypatch.setattr(run_module, "log", lambda *a, **k: None)
+            details = []
+            monkeypatch.setattr(runlog, "detail", details.append)
+            monkeypatch.setattr(runlog, "verbosity",
+                                lambda: (runlog.VERBOSE if verbose
+                                         else runlog.NORMAL))
+            settings = rules.Settings(
+                input_dir=str(source_dir), output_dir=str(tmp_path / "out"),
+                chunk_root=str(tmp_path / "chunks"), cores=cores,
+                **settings_kwargs)
+            os.makedirs(settings.output_dir, exist_ok=True)
+            plan = run_module.Run(settings).prepare("clip.mkv")
+            return plan, details
+        return run
+
+    def test_the_chunk_count_names_the_tier_and_the_cores(self, prepared):
+        _plan, details = prepared()
+        assert ("clip.mkv: 2 chunk(s) - the 1080p tier, scaled to 16 cores"
+                in details)
+
+    def test_a_file_the_bias_moved_is_said_with_its_tier(self, prepared):
+        _plan, details = prepared(dims=("3840", "2160", "progressive", "1:1"))
+        assert ("clip.mkv: quality 24 -> 26, biased +2 for the 2160p tier "
+                "it is encoded at" in details)
+
+    def test_a_file_the_bias_only_capped_is_said_with_the_ceiling(
+            self, prepared, monkeypatch):
+        monkeypatch.setattr(rules, "video_profiles",
+                            lambda: "testHigh|-c:v libsvtav1 -crf 61 "
+                                    "-preset 5")
+        _plan, details = prepared(dims=("7680", "4320", "progressive", "1:1"),
+                                  video_profile="testHigh")
+        assert ("clip.mkv: quality 61 -> 63, biased +3 for the 4320p tier "
+                "it is encoded at, stopped at 63, the encoder's maximum"
+                in details)
+
+    def test_a_file_the_bias_leaves_alone_says_nothing_about_quality(
+            self, prepared):
+        _plan, details = prepared()
+        assert not any("quality" in line for line in details)
+
+    def test_an_explicit_level_is_not_moved_and_not_named(self, prepared):
+        _plan, details = prepared(dims=("3840", "2160", "progressive", "1:1"),
+                                  quality_given=True, quality="30")
+        assert not any("quality" in line for line in details)
+
+    def test_a_profile_with_no_level_says_nothing_about_quality(
+            self, prepared, monkeypatch):
+        monkeypatch.setattr(rules, "video_profiles",
+                            lambda: "testAbitrate|-c:v libsvtav1 -b:v 3000k")
+        _plan, details = prepared(video_profile="testAbitrate")
+        assert not any("quality" in line for line in details)
+
+    def test_static_hdr_metadata_is_named_with_its_figures(self, prepared,
+                                                           monkeypatch):
+        monkeypatch.setattr(videosource, "hdr_master_display",
+                            lambda path: self.HDR)
+        monkeypatch.setattr(videosource, "video_color_space",
+                            lambda path: ("bt2020nc", "pc", "smpte2084"))
+        _plan, details = prepared()
+        assert ("clip.mkv: the source's static HDR metadata is kept in the "
+                "encode - transfer smpte2084, max CLL 1000,100" in details)
+
+    def test_a_source_without_the_metadata_says_nothing_about_hdr(
+            self, prepared, monkeypatch):
+        looked = []
+        monkeypatch.setattr(videosource, "hdr_master_display",
+                            lambda path: looked.append(1) or "")
+        _plan, details = prepared()
+        assert looked
+        assert not any("HDR" in line for line in details)
+
+    def test_the_static_hdr_line_is_not_said_at_normal_verbosity(
+            self, prepared, monkeypatch):
+        """The gate is the call itself: the probes it would take are not
+        taken, and the line is not among the ones the preparation says."""
+        looked = []
+        monkeypatch.setattr(videosource, "hdr_master_display",
+                            lambda path: looked.append(1) or "")
+        _plan, details = prepared(verbose=False)
+        assert not looked
+        assert not any("HDR" in line for line in details)
+
+    def test_a_file_carrying_its_rpu_says_nothing_about_static_hdr(
+            self, prepared, monkeypatch):
+        monkeypatch.setattr(videosource, "dolby_vision_profile",
+                            lambda path: ("8", "0"))
+        monkeypatch.setattr(hdr, "dolby_vision_mode_for",
+                            lambda relative, profile, enhancement, settings:
+                            "1")
+        looked = []
+
+        def look(path):
+            looked.append(1)
+            return self.HDR
+        monkeypatch.setattr(videosource, "hdr_master_display", look)
+        _plan, details = prepared()
+        assert not looked
+        assert not any("HDR" in line for line in details)
