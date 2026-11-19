@@ -887,8 +887,11 @@ class TestTheCloudflareChallenge:
         # the only difference between the two is the impersonation argument.
         log = run(verbose=True)
         assert "retrying with impersonation" in log, log
+        # -v stamps the run's lines, so the calls are said with the clock;
+        # neither form is the point of the assertion.
         calls = [line for line in log.splitlines()
-                 if line.startswith("==> RSS/cloudflare: yt-dlp ")]
+                 if re.match(r"(?:==> |\[\d\d:\d\d:\d\d\] )"
+                             r"RSS/cloudflare: yt-dlp ", line)]
         assert len(calls) == 2, log
         assert "generic:impersonate" not in calls[0]
         assert "generic:impersonate" in calls[1]

@@ -17,6 +17,7 @@ which makes a green suite on a half-equipped host meaningless.
 
 from __future__ import annotations
 
+import re
 import shutil
 
 import pytest
@@ -215,3 +216,19 @@ class TestRebuildingOverAGoodDatabase:
         assert "DuckDB refused the build" in log
         assert database.read_bytes() == before
         assert not list(bi.work.glob(".building.*"))
+
+
+class TestTheClockTheLinesCarry:
+    """The lines the run says on the console carry the time they were said
+    under -v - the clock is what -v buys - and keep the arrow at the
+    ordinary verbosity, where a run that needs no clock pays for none."""
+
+    def test_under_verbose_the_lines_carry_a_clock(self, bi):
+        log = bi.bi(bi.reports, "-v", "-o", bi.work / "clock.duckdb")
+        assert re.search(r"\[\d\d:\d\d:\d\d\] books: 2 file\(s\)", log), log
+        assert "==> books:" not in log
+
+    def test_at_the_ordinary_verbosity_the_lines_keep_the_arrow(self, bi):
+        log = bi.bi(bi.reports, "-o", bi.work / "arrow.duckdb")
+        assert re.search(r"==> books: 2 file\(s\)", log), log
+        assert re.search(r"\[\d\d:\d\d:\d\d\] books:", log) is None

@@ -22,7 +22,7 @@ import textwrap
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from medialib.lib import errorlog, runlog, settings
+from medialib.lib import errorlog, runcontext, runlog, settings
 
 # The C-locale [[:space:]] set. Python's str.strip() with no argument strips a
 # great deal more than this, and a spec field is allowed to hold any of it.
@@ -489,6 +489,9 @@ def settle_verbosity(result: Result) -> int:
     started says as much as its parent, which is how a quiet run stays quiet
     all the way down. Both at once is refused rather than one silently
     winning: whichever the user meant, the other was typed by mistake.
+
+    -v settles the console's clock as well: the run's lines then carry the
+    time they were said, so which step is the slow one reads off the output.
     """
     verbose = "v" in result.given
     quiet = "q" in result.given
@@ -498,6 +501,13 @@ def settle_verbosity(result: Result) -> int:
         return runlog.verbosity()
     level = runlog.VERBOSE if verbose else runlog.QUIET
     runlog.settle_verbosity(level)
+    if verbose:
+        # A run that says why is a run whose lines need a clock: which step
+        # is the slow one is a guess without the time a step was said. The
+        # variable, not the level, is what stamps the console - ingest-movies
+        # and ingest-music settle it themselves, being long enough to need
+        # it by their own length.
+        runcontext.settle("LOG_TIMESTAMPS", "1")
     return level
 
 
