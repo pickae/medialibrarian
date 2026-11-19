@@ -38,7 +38,16 @@ has failed, the CPU. The CPU's own pages come with the books unpacked for the
 card: nearly every page is the card's. The CPU's encodes run niced, below the
 sorting that feeds the card. What bounds the looking
 ahead is RAM, read live: every book unpacked and not yet zipped is held there,
-and none is unpacked while less than :data:`RAM_RESERVE` is left.
+and none is unpacked while less than the lane's reserve is left - the full
+:data:`RAM_RESERVE` on a big machine, a share of the RAM on a machine that has
+less of it.
+
+Under -v the lane says each page's road as the manifest lists it - which side
+it was sorted onto, and why the card declined it, from the page's own run -
+and what each trim verdict was reached on: the page's run's figures for a trim
+it measured, the encoder's own words for a page it found blank, and the
+CPU's figures for a trim the CPU decided. A page the trim found blank has no
+encode to wait for: its manifest line says so, and the book moves on without it.
 """
 
 from __future__ import annotations
@@ -53,7 +62,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from medialib.lib import av1gpu, errorlog, safety, toolcapture
+from medialib.lib import av1gpu, errorlog, runlog, safety, toolcapture
 
 __all__ = ["READY", "MANIFEST", "Lane"]
 
@@ -78,8 +87,17 @@ QUEUED_PER_ENCODER = 2
 
 # RAM kept free of unpacked books: what the encoders themselves need - an
 # ImageMagick AVIF encode of a large page takes a few GB - and room for the
-# book being unpacked.
+# book being unpacked. The ceiling the lane asks for on a big machine; on a
+# machine with less RAM it is scaled to a quarter of what the machine has, so
+# a small machine is never asked to keep free more than it can ever have
+# (which is what left it unpacking nothing at all).
 RAM_RESERVE = 16 * 1024 ** 3
+
+# The divisor that scales the reserve down on a machine with less RAM than it:
+# the reserve becomes a share of the machine's RAM - a quarter - which is
+# always less than the RAM that is realistically free, so a book can be
+# unpacked.
+RAM_RESERVE_SHARE = 4
 
 # The CPU's encodes run below the sorting that feeds the card: with every core
 # taken by encoders, the next books' pages were sorted - and the card fed -
@@ -122,14 +140,17 @@ class Lane:
     trim the card decides, and <resolve> is handed such a page's manifest line
     when the CPU takes it instead: it answers the ImageMagick call that trims
     and encodes it, or None for a blank page, and the verdict ("trimmed",
-    "converted" or "blank")."""
+    "converted" or "blank") with the figures it was reached on, which the run
+    says under -v. <name_of> answers a book's display name from its item, for
+    those lines."""
 
     def __init__(self, encoder: str, root: str, quality: int, preset: str,
                  chroma: str, finish, cpu_jobs: int, log, trim=(),
-                 resolve=None) -> None:
+                 resolve=None, name_of=None) -> None:
         self.encoder = encoder
         self.trim = list(trim)
         self.resolve = resolve
+        self.name_of = name_of or (lambda item: str(item))
         self.root = root
         self.quality = quality
         self.preset = preset
@@ -139,6 +160,9 @@ class Lane:
         self.cpu_jobs = max(1, cpu_jobs)
         self.budget = CHUNK_MEGAPIXELS * 1_000_000
         self.room = threading.Condition()
+        # The machine's total RAM, read once from /proc/meminfo; 0 when it
+        # cannot be read, which leaves the full reserve in force.
+        self._total_ram = 0
         self.expected: dict[str, _Book] = {}
         self.dropped: list[_Book] = []
         self.pending: list = []
@@ -184,6 +208,46 @@ class Lane:
         for thread in self.threads:
             thread.start()
 
+    # --- what the run says of a page, under -v -----------------------------
+    def _page_name(self, entry) -> str:
+        """The page as its run knew it - the name the lines say it by."""
+        page = entry.get("page") or entry.get("output", "")
+        return os.path.basename(page)
+
+    def _road_lines(self, book: _Book, entry) -> list:
+        """What the run says of a page the manifest lists: which side it was
+        sorted onto and why the card declined it - and the trim its run
+        measured, when the line carries one. A page the trim found blank went
+        to no side: its line is its note alone."""
+        book_name = self.name_of(book.item)
+        page = self._page_name(entry)
+        lines = []
+        if entry.get("blank"):
+            if entry.get("note"):
+                lines.append("%s: %s - %s" % (book_name, page,
+                                              entry["note"]))
+            return lines
+        if "input" in entry and not self.broken:
+            lines.append("%s: %s - to the card - %.1f MP"
+                         % (book_name, page, entry.get("pixels", 0) / 1e6))
+        else:
+            why = entry.get("why", "")
+            lines.append("%s: %s - to the CPU - %s" % (book_name, page, why)
+                         if why else "%s: %s - to the CPU" % (book_name,
+                                                              page))
+        if entry.get("note"):
+            lines.append("%s: %s - %s" % (book_name, page, entry["note"]))
+        return lines
+
+    def _card_blank_line(self, book: _Book, entry, reason: str) -> str:
+        """A page the encoder's own trim found blank: dropped with what the
+        encoder said it found blank about it, the page's own words."""
+        line = ("%s: %s - the card dropped it blank"
+                % (self.name_of(book.item), self._page_name(entry)))
+        if reason:
+            line += ": %s" % reason
+        return line
+
     # --- the run's side ---------------------------------------------------
     def folder(self) -> str:
         """A new lane folder for one book."""
@@ -221,7 +285,7 @@ class Lane:
                and self.pending_pixels < QUEUED_CHUNKS * self.budget)
         cpu = (self.broken
                and len(self.cpu_queue) < QUEUED_PER_ENCODER * self.cpu_jobs)
-        if (gpu or cpu) and self._ram_free() > RAM_RESERVE:
+        if (gpu or cpu) and self._ram_free() > self._ram_reserve():
             return "gpu" if gpu else "cpu"
         return ""
 
@@ -240,6 +304,30 @@ class Lane:
         except (OSError, ValueError):
             pass
         return free
+
+    def _total_ram_bytes(self) -> int:
+        """The machine's total RAM, read once; 0 when it cannot be read."""
+        if self._total_ram:
+            return self._total_ram
+        try:
+            with open("/proc/meminfo") as handle:
+                for line in handle:
+                    if line.startswith("MemTotal:"):
+                        self._total_ram = int(line.split()[1]) * 1024
+                        break
+        except (OSError, ValueError):
+            pass
+        return self._total_ram
+
+    def _ram_reserve(self) -> int:
+        """The headroom the lane keeps free of unpacked books, on THIS machine:
+        the full reserve, or a share of the RAM when the machine has less of
+        it - a machine that cannot keep the full reserve free cannot wait for
+        it, and would unpack nothing at all."""
+        total = self._total_ram_bytes()
+        if not total:
+            return RAM_RESERVE
+        return min(RAM_RESERVE, total // RAM_RESERVE_SHARE)
 
     def close(self) -> None:
         """No more books: every one still expected is collected, both sides
@@ -302,19 +390,27 @@ class Lane:
                        if line.strip()]
         except (OSError, ValueError):
             pass
+        lines = []
         with self.room:
             book.outstanding += len(entries)
             for entry in entries:
-                if "input" in entry and not self.broken:
+                if entry.get("blank"):
+                    # The trim found it blank: no encode is coming for it, so
+                    # it is done the moment it is listed.
+                    self._page_done(book)
+                elif "input" in entry and not self.broken:
                     self.pending.append((book, entry))
                     self.pending_pixels += entry["pixels"]
                 else:
                     self.cpu_queue.append((book, entry))
+                lines.extend(self._road_lines(book, entry))
             if ready:
                 del self.expected[book.folder]
                 book.ready = True
             done = ready and book.outstanding == 0
             self.room.notify_all()
+        for line in lines:
+            runlog.detail(line)
         if done:
             self._finished(book)
 
@@ -381,7 +477,9 @@ class Lane:
                     shutil.rmtree(workdir, ignore_errors=True)
             done = set(written)
             blank = set(report.get("blank", ()))
+            blank_lines = report.get("blank_lines", {})
             finished = []
+            lines = []
             with self.room:
                 self.calls += 1
                 if not written and status > 0 and not self.broken:
@@ -400,6 +498,8 @@ class Lane:
                             self.pixels += entry["pixels"]
                         else:
                             self.blank += 1
+                            lines.append(self._card_blank_line(
+                                book, entry, blank_lines.get(index, "")))
                         if self._page_done(book):
                             finished.append(book)
                     else:
@@ -409,6 +509,8 @@ class Lane:
                 if self.running == 0:
                     self.busy += time.time() - self._busy_since
                 self.room.notify_all()
+            for line in lines:
+                runlog.detail(line)
             for book in finished:
                 self._finished(book)
 
@@ -435,14 +537,18 @@ class Lane:
             if taken is None:
                 break
             book, entry = taken
-            argv, verdict = entry.get("cpu"), ""
+            argv, verdict, note = entry.get("cpu"), "", ""
             if entry.get("trim") and self.resolve is not None:
                 try:
-                    argv, verdict = self.resolve(entry)
+                    argv, verdict, note = self.resolve(entry)
                 except Exception as error:
                     self.log("WARNING: could not decide the trim of %s: %s"
                              % (entry.get("output", "a page"), error))
-                    argv, verdict = [], ""
+                    argv, verdict, note = [], "", ""
+            if note:
+                runlog.detail("%s: %s - %s"
+                              % (self.name_of(book.item),
+                                 self._page_name(entry), note))
             if argv is None:
                 with self.room:
                     self.blank += 1

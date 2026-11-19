@@ -71,6 +71,40 @@ class TestTheProbe:
         assert bool(av1gpu.takes_probe(text, jpeg=jpeg)) is takes
 
 
+class TestTheProbeReason:
+    """The card's own words for a refusal: every answer takes_probe refuses,
+    named on the figure the refusal was reached on, and "" when it takes the
+    image."""
+
+    pytestmark = pytest.mark.pure
+
+    @pytest.mark.parametrize("text,reason", [
+        ("True 8 1000 1500 Undefined", "it carries an alpha channel"),
+        ("False 8 1000 1500", "its header could not be read"),
+        ("False 8 wide tall Undefined", "its header could not be read"),
+        ("", "its header could not be read"),
+        ("False 32 1000 1500 Undefined", "it is 32-bit, and the card reads "
+                                         "to 16"),
+        ("False 8 0 1500 Undefined", "its size could not be read"),
+        ("False 8 10000 10001 Undefined", "it is 100.0 MP, over the card's "
+                                          "100 MP"),
+        ("False 8 1000 1500 Undefined", ""),
+        ("Undefined 8 1000 1500 Undefined", ""),   # a JPEG's alpha, unmeasured
+    ])
+    def test_the_shortfall_is_named_on_the_figure(self, text, reason):
+        assert av1gpu.probe_reason(text) == reason
+
+    @pytest.mark.parametrize("orientation",
+                             av1gpu.QUARTER_TURNS)
+    def test_a_turned_png_is_named_as_stored_turned(self, orientation):
+        """The PNG's orientation the card would not honour - a JPEG's it
+        would, so the same answer, read as a JPEG, takes the image."""
+        text = "False 8 1000 1500 " + orientation
+        assert av1gpu.probe_reason(text, jpeg=False) == \
+            "it is stored turned, and the card would display it as stored"
+        assert av1gpu.probe_reason(text, jpeg=True) == ""
+
+
 class TestTheShrink:
     """The card's -m: ImageMagick's size, and its box turned where av1gpu
     turns it."""
@@ -265,7 +299,13 @@ class TestAChunk:
         done, status = chunk(extra=["--trim", "--skip-blank", "99"],
                              report=report)
         assert (done, status) == ([0, 1], 0)
-        assert report == {"blank": [3], "trimmed": 2}
+        assert report["blank"] == [3] and report["trimmed"] == 2
+        # What the call found blank about the page it dropped, per index:
+        # the parenthesis of its skip line, which is the figure the drop
+        # was reached on.
+        assert report["blank_lines"] == {
+            3: ("--trim would remove more than 99% of its width or height, "
+                "--skip-blank")}
         assert "--trim" in chunk.args.read_text().split()
         err = capfd.readouterr().err
         assert "left 1 of 4 image(s) unwritten" in err   # decline.png only

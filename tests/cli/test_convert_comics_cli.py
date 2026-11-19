@@ -10,6 +10,7 @@ because the archives are the thing being made.
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
@@ -1069,3 +1070,76 @@ class TestKeepInput:
         """The bare flag keeps every part, and the name is one of them now."""
         run.ingest("-k")
         assert blackbox.tree_of(run.inputs) == ["Book.cbr"]
+
+
+class TestTheGpuLaneSaysEachPage_s_road:
+    """With a card, the encodes are the run's own lane's, in the run's own
+    process - and the per-page lines a -v run says are said there: each page
+    named by the book it is in, the card's ask said from the calibration, and
+    a run without the card without either."""
+
+    # The card, stood in for: its --help names the options that make the trim
+    # the card's, and its batch writes every page it is listed, past the size
+    # under which a page reads as empty.
+    _AV1GPU = '''
+    [ "$1" = --help ] && { echo "  --max-input-mp MP";
+                           echo "  --trim-lightness L"; exit 0; }
+    while [ $# -gt 0 ]; do
+        case "$1" in --batch) list=$2 ;; --outdir) out=$2 ;; esac; shift
+    done
+    while IFS= read -r line; do
+        input=${line%%$'\\t'*}
+        { printf "AVIF\\n"; head -c 12288 /dev/zero | tr "\\0" "a"; } > \
+            "$out/${input##*/}.avif"
+    done < "$list"
+    exit 0
+    '''
+
+    # The same flat page a page-stats run answers, and the card's own probe:
+    # no alpha, 8 bits, upright - a page the card takes.
+    _IDENTIFY = '''
+    case "$*" in
+        *"%A %z %w %h %[orientation]"*) echo "False 8 1000 1500 Undefined" ;;
+        *) echo "1000 1500" ;;
+    esac
+    exit 0
+    '''
+
+    @pytest.fixture
+    def lane(self, comics):
+        comics.with_tool("identify", self._IDENTIFY)
+        comics.with_tool("convert", _CONVERT_STAMPING)
+        comics.with_tool("av1gpu", self._AV1GPU)
+        comics.with_tool("fdupes", "exit 0")
+        _cbz(comics.inputs, "Alpha.cbz",
+             {"01.jpg": "alpha 1", "02.jpg": "alpha 2", "03.jpg": "alpha 3"})
+
+        def convert(*flags, **environment):
+            # The host's own card would otherwise stand in for the stub on the
+            # sandbox PATH: name it, the way a machine with one would be told.
+            environment.setdefault(
+                "env", dict(os.environ, imageGpuEncoder="av1gpu"))
+            done = comics.run("convert-comics", *flags, comics.inputs,
+                              comics.outputs, **environment)
+            assert done.returncode == 0, done.stdout + done.stderr
+            return done.stdout + done.stderr
+
+        return convert
+
+    def test_each_page_is_said_by_the_book_it_is_in(self, lane, comics):
+        log = lane("-v")
+        for page in ("01.jpg", "02.jpg", "03.jpg"):
+            assert "Alpha.cbz: %s - to the card - 1.5 MP" % page in log
+        assert _entries(comics.outputs / "Alpha.cbz") == \
+            ["1.avif", "2.avif", "3.avif"]
+
+    def test_the_card_s_ask_is_said_from_the_calibration(self, lane, comics):
+        log = lane("-v")
+        assert re.search(r"the card is asked for quality \d+, preset \S+ - "
+                         r"what the calibration measured for -l 45 -s 4",
+                         log)
+
+    def test_a_run_without_the_card_says_neither(self, lane, comics):
+        log = lane("-v", env=dict(os.environ, imageGpuEncoder=""))
+        assert "to the card" not in log
+        assert "the card is asked" not in log

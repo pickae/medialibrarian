@@ -229,6 +229,33 @@ def takes_probe(text: str, jpeg: bool = True) -> tuple[int, int, str] | None:
     return columns, rows, orientation
 
 
+def probe_reason(text: str, jpeg: bool = True) -> str:
+    """What <text> is short of when :func:`takes_probe` answers None - the
+    card's own shortfall, in the card's own words: the alpha channel it would
+    carry into the AVIF, the orientation it would not honour, the depth it
+    reads to 16 of, the 100 MP it encodes to. "" when it takes the image."""
+    words = text.split()
+    if len(words) != 5:
+        return "its header could not be read"
+    alpha, depth, width, height, _orientation = words
+    if alpha not in ("False", "Undefined"):
+        return "it carries an alpha channel"
+    if not jpeg and _orientation not in UPRIGHT:
+        return "it is stored turned, and the card would display it as stored"
+    try:
+        depth_bits, columns, rows = int(depth), int(width), int(height)
+    except ValueError:
+        return "its header could not be read"
+    if depth_bits > 16:
+        return "it is %d-bit, and the card reads to 16" % depth_bits
+    if columns * rows <= 0:
+        return "its size could not be read"
+    if columns * rows > MAX_PIXELS:
+        return "it is %.1f MP, over the card's 100 MP" % (
+            columns * rows / 1e6)
+    return ""
+
+
 def fitted_size(width: int, height: int, max_height: int) -> tuple[int, int]:
     """<width> x <height> shrunk to at most <max_height> rows, aspect kept,
     never enlarged: ImageMagick's ``-resize 'x<max_height>>'``, which av1gpu
@@ -264,19 +291,24 @@ def chunks(sized, budget: int = CHUNK_MEGAPIXELS * 1_000_000):
 
 
 # What av1gpu says of an image --skip-blank kept from the encode, and of the
-# trims in the whole call.
-_BLANK = re.compile(r"^\[av1gpu\] skipped (.+): blank \(")
+# trims in the whole call: the skip names the image and says in the
+# parenthesis WHAT it found blank, which is the figure the page was dropped on.
+_BLANK = re.compile(r"^\[av1gpu\] skipped (.+): blank \((.*)\)\s*$")
+_BLANK_PREFIX = re.compile(r"^\[av1gpu\] skipped (.+): blank \(")
 _TRIMMED = re.compile(r"^\[av1gpu\] trim: (\d+) images trimmed")
 
 
 class _Listener(toolcapture.ToolOutput):
     """The encoder's output kept as any tool's is, and read on the way for
     the two lines above, which may fall where a long call's capture keeps
-    none."""
+    none. ``blank_lines`` keeps, per skipped image, what the call found blank
+    about it - the parenthesis of its skip line, or the line itself when the
+    call did not say so in a parenthesis."""
 
     def __init__(self) -> None:
         super().__init__()
         self.blank: set[str] = set()
+        self.blank_lines: dict[str, str] = {}
         self.trimmed = 0
 
     def _add(self, line: str) -> None:
@@ -284,6 +316,12 @@ class _Listener(toolcapture.ToolOutput):
         found = _BLANK.match(line)
         if found:
             self.blank.add(found.group(1))
+            self.blank_lines[found.group(1)] = found.group(2)
+            return
+        found = _BLANK_PREFIX.match(line)
+        if found:
+            self.blank.add(found.group(1))
+            self.blank_lines[found.group(1)] = line
             return
         found = _TRIMMED.match(line)
         if found:
@@ -305,8 +343,9 @@ def encode_chunk(encoder: str, items, workdir: str, quality: int,
 
     <extra> are further av1gpu options for every image of the call - the trim
     and its conditions. An image the trim found blank is not written and not a
-    failure: its index goes into ``report["blank"]``, and the number of images
-    the card trimmed into ``report["trimmed"]``, when there is a <report>.
+    failure: its index goes into ``report["blank"]``, the number of images the
+    card trimmed into ``report["trimmed"]``, and what the call found blank about
+    each skipped image into ``report["blank_lines"]``, when there is a <report>.
 
     Returns the indices into <items> whose destination was written, and the
     encoder's exit status. A destination is only written once the encoder has
@@ -364,6 +403,12 @@ def encode_chunk(encoder: str, items, workdir: str, quality: int,
     if report is not None:
         report["blank"] = sorted(blank)
         report["trimmed"] = said.trimmed
+        # Per index, what the call found blank about the image it skipped -
+        # the caller's own words for the figure its page was dropped on.
+        report["blank_lines"] = {
+            index: said.blank_lines[os.path.join(inputs, name)]
+            for index, name in enumerate(staged)
+            if os.path.join(inputs, name) in said.blank_lines}
 
     done = []
     for index, name in enumerate(staged):

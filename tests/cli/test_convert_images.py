@@ -28,7 +28,7 @@ import time
 import pytest
 
 from medialib.cli import convert_images as ci
-from medialib.lib import clioptions, enums
+from medialib.lib import adequacy, clioptions, enums
 from tests import blackbox
 
 pytestmark = pytest.mark.fs
@@ -430,7 +430,7 @@ class TestTheStarvedSkip:
         }
         state = ci.Run(str(tmp_path), str(tmp_path / "out"), str(counters),
                        options, 1)
-        state.starved = lambda relative: verdict
+        state._starved_judgement = lambda relative: (verdict, "")
         converted = []
 
         def convert(arguments):
@@ -485,6 +485,88 @@ class TestTheStarvedSkip:
         monkeypatch.chdir(tmp_path)
         assert ci.Run(str(tmp_path), str(tmp_path / "out"), "/counters",
                       {}, 1).starved("page.jpg") is False
+
+    def test_a_starved_image_says_what_it_was_judged_on_under_verbose(
+            self, tmp_path, monkeypatch, capfd):
+        (tmp_path / "page.jpg").write_bytes(b"x")
+        (tmp_path / "out").mkdir()
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("LOG_VERBOSITY", "verbose")
+        note = ("already starved - it is 20.5 kB, and 40.0 kB would be "
+                "adequate for a jpeg at 1000x1500, colour, so re-encoding "
+                "can only make it worse")
+        state, converted = self._run(tmp_path, verdict=True)
+        state._starved_judgement = lambda relative: (True, note)
+        state.transcode("page.jpg")
+        assert converted == []
+        assert "page.jpg: %s" % note in capfd.readouterr().err
+
+    def test_a_conversion_says_why_it_was_not_starved_under_verbose(
+            self, tmp_path, monkeypatch, capfd):
+        (tmp_path / "page.jpg").write_bytes(b"x")
+        (tmp_path / "out").mkdir()
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("LOG_VERBOSITY", "verbose")
+        note = ("not starved - it is 40.0 kB, and 40.0 kB would be adequate "
+                "for a jpeg at 1000x1500, colour")
+        state, converted = self._run(tmp_path, verdict=False)
+        state._starved_judgement = lambda relative: (False, note)
+        state.transcode("page.jpg")
+        assert len(converted) == 1
+        assert "page.jpg: %s" % note in capfd.readouterr().err
+
+
+class TestTheStarvedFigures:
+    """The check's own answer, with the figures it was reached on: the size
+    the image is, and the size its format at its size would need - or what
+    was missing when the check could not be reached."""
+
+    def _state(self, tmp_path, monkeypatch, figures):
+        (tmp_path / "page.jpg").write_bytes(b"x")
+        monkeypatch.chdir(tmp_path)
+        import medialib.lib.imagebitrate as ib
+        monkeypatch.setattr(ib, "image_adequacy_figures",
+                            lambda path, detail="", size_bytes=None: figures)
+        return ci.Run(str(tmp_path), str(tmp_path / "out"), "/counters",
+                      {"skipStarved": True}, 1)
+
+    def test_a_starved_image_says_what_it_is_and_what_it_would_need(
+            self, tmp_path, monkeypatch):
+        state = self._state(tmp_path, monkeypatch,
+                            (adequacy.STARVED, 20480, 40000, "jpeg", 1000,
+                             1500, "colour"))
+        starved, note = state._starved_judgement("page.jpg")
+        assert starved is True
+        assert note == ("already starved - it is 20.5 kB, and 40.0 kB would "
+                        "be adequate for a jpeg at 1000x1500, colour, so "
+                        "re-encoding can only make it worse")
+
+    def test_one_that_is_not_starved_says_so_with_the_same_figures(
+            self, tmp_path, monkeypatch):
+        state = self._state(tmp_path, monkeypatch,
+                            (adequacy.ADEQUATE, 40000, 40000, "png", 100,
+                             100, "grey"))
+        starved, note = state._starved_judgement("page.jpg")
+        assert starved is False
+        assert note == ("not starved - it is 40.0 kB, and 40.0 kB would be "
+                        "adequate for a png at 100x100, grey")
+
+    @pytest.mark.parametrize("figures,note", [
+        ((adequacy.UNKNOWN, 0, "", "", 0, 0, ""),
+         "the starved check was not reached - its header could not be "
+         "read, so it is converted"),
+        ((adequacy.UNKNOWN, 0, "", "jpeg", 1000, 1500, "colour"),
+         "the starved check was not reached - its size could not be "
+         "read, so it is converted"),
+        ((adequacy.UNKNOWN, 1000, "", "tiff", 100, 100, "colour"),
+         "the starved check was not reached - the model has no "
+         "requirement for a tiff at 100x100, so it is converted")])
+    def test_a_check_that_cannot_be_reached_says_what_was_missing(
+            self, tmp_path, monkeypatch, figures, note):
+        state = self._state(tmp_path, monkeypatch, figures)
+        starved, got = state._starved_judgement("page.jpg")
+        assert starved is False
+        assert got == note
 
 
 class TestTheOptionsAreSettledUpFront:
@@ -753,9 +835,57 @@ class TestTheTrimVerdict:
         assert ci.trim_verdict(_W, _H, cut, _light)[0] == verdict
 
     def test_a_margin_keeps_the_corner_s_colour_and_a_thin_border(self):
-        """The border given back is 1% of the page's shorter edge."""
+        """The border given back is 1% of the page's shorter edge, and the
+        corners' reading comes back with it: the figure the verdict was
+        reached on."""
         assert ci.trim_verdict(_W, _H, (900, 1400), _light) == (
-            "trimmed", _LIGHT, 10)
+            "trimmed", _LIGHT, 10, ci.LIGHTNESS_THRESHOLD)
+
+    def test_the_note_says_what_the_verdict_was_reached_on(self):
+        """The how-much and the corners - the figures a -v line states,
+        one wording per verdict the trim can reach."""
+        cases = [
+            ((900, 1400), _light,
+             "trimmed 1000x1500 to 900x1400 - the corners read "
+             "srgb(240,232,208) at 80, 10 px of margin given back"),
+            ((990, 1486), _light,
+             "converted whole - the trim took 0.9% of the height, short of "
+             "the 1% that would be a margin"),
+            ((800, 1199), _light,
+             "converted whole - the trim took 20.1% of the height, past "
+             "the 20% that would be a margin"),
+            ((9, 1500), _light,
+             "blank - the trim took 99.1% of the width and 0.0% of the "
+             "height, past the 99% that leaves a page"),
+            (None, _light,
+             "converted whole - the trim could not be measured, so the "
+             "page was encoded as stored"),
+        ]
+        for cut, corner, want in cases:
+            verdict, colour, border, lightness = ci.trim_verdict(
+                _W, _H, cut, corner)
+            assert ci._trim_note(_W, _H, cut, verdict, colour, border,
+                                 lightness) == want
+
+    def test_the_note_names_the_corner_that_kept_it_whole(self):
+        """A margin in the band but read dark: the note says what it read as,
+        as does one whose corners could not be read at all."""
+        def dark():
+            return ("srgb(35,31,32)", 12.9412)
+        verdict, colour, border, lightness = ci.trim_verdict(
+            _W, _H, (800, 1200), dark)
+        assert verdict == "converted"
+        assert ci._trim_note(_W, _H, (800, 1200), verdict, colour, border,
+                             lightness) == \
+            ("converted whole - the trim took 20.0% of the width and 20.0% "
+             "of the height, but the corners read srgb(35,31,32) at 13, "
+             "dark for the 80% that is paper")
+        verdict, colour, border, lightness = ci.trim_verdict(
+            _W, _H, (800, 1200), lambda: None)
+        assert ci._trim_note(_W, _H, (800, 1200), verdict, colour, border,
+                             lightness) == \
+            ("converted whole - the trim took 20.0% of the width and 20.0% "
+             "of the height, and the corners could not be read")
 
     @pytest.mark.parametrize("corner,verdict", [
         ((_LIGHT, ci.LIGHTNESS_THRESHOLD), "trimmed"),
@@ -831,10 +961,22 @@ class TestTheCpuTrimOfACardPage:
                 "cpu": ["magick", "-quality", "45", "jpeg:/in/page.jpg",
                         "-resize", "10000x2960>", "/out/page.avif"]}
 
-    @pytest.mark.parametrize("box,verdict", [
-        ((900, 1400, 50, 50), "trimmed"), ((_W, _H, 0, 0), "converted"),
-        ((5, 5, 0, 0), "blank"), (None, "converted")])
-    def test_the_verdict_and_the_call(self, monkeypatch, box, verdict):
+    @pytest.mark.parametrize("box,verdict,note", [
+        ((900, 1400, 50, 50), "trimmed",
+         "trimmed 1000x1500 to 900x1400 - the corners read "
+         "srgb(240,232,208) at 80, 10 px of margin given back"),
+        ((_W, _H, 0, 0), "converted",
+         "converted whole - the trim took 0.0% of the width, short of the "
+         "1% that would be a margin and 0.0% of the height, short of the "
+         "1% that would be a margin"),
+        ((5, 5, 0, 0), "blank",
+         "blank - the trim took 99.5% of the width and 99.7% of the "
+         "height, past the 99% that leaves a page"),
+        (None, "converted",
+         "converted whole - the trim could not be measured, so the page "
+         "was encoded as stored")])
+    def test_the_verdict_the_call_and_the_figures(self, monkeypatch, box,
+                                                  verdict, note):
         asked = []
 
         def measure(source, fuzz):
@@ -842,8 +984,9 @@ class TestTheCpuTrimOfACardPage:
             return box, _light()
         monkeypatch.setattr(ci, "box_and_corners", measure)
         entry = self._entry()
-        argv, got = ci.cpu_trim(entry)
+        argv, got, figures = ci.cpu_trim(entry)
         assert got == verdict and asked == [("/in/page.jpg", "10%")]
+        assert figures == note
         if verdict == "blank":
             assert argv is None
         elif verdict == "converted":

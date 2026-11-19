@@ -175,6 +175,41 @@ def test_a_rerun_finds_the_card_s_work_already_done(run):
     assert "already done: 8" in output
 
 
+def test_under_verbose_each_image_s_road_is_said_on_its_figure(run):
+    """Which side each image was sorted onto, and why: the card's own
+    shortfall for the ones it left, its size for the ones it took, and the
+    batch the card's work was cut into."""
+    _, called, output = run("-v")
+    assert called == 1
+    for name in ("a/cover.jpg", "b/cover.jpg", "photo.jpeg", "flat.png",
+                 "deep.png"):
+        assert "%s: to the card - 1000 x 1500, 1.5 MP" % name in output
+    assert "decline.jpg: to the card - 1000 x 1500, 1.5 MP" in output
+    assert "6 image(s) for the card in 1 call(s) of about 24000 MP each" \
+        in output
+    assert "alpha.png: to the CPU - it carries an alpha channel" in output
+    assert "scan.bmp: to the CPU - it is a bmp, which the card does not " \
+        "read" in output
+    assert "decline.jpg: to the CPU - the card took it, but its call left " \
+        "it unwritten" in output
+
+
+def test_under_a_lane_the_trim_says_what_it_was_reached_on(run, tmp_path):
+    """The per-page trim verdict, under a lane where the page's own run
+    measured it: the margin trimmed back, and the corners' reading for the
+    one the card left to the CPU."""
+    lane = tmp_path / "lane"
+    lane.mkdir()
+    for name in ("margin.jpg", "alpha-margin.png"):
+        (tmp_path / "in" / name).write_text(name)
+    _, _, output = run("-c", "-v", imageGpuLane=str(lane))
+    assert ("margin.jpg: trimmed 1000x1500 to 900x1400 - the corners read "
+            "srgb(255,255,255) at 100, 10 px of margin given back") in output
+    assert ("alpha-margin.png: trimmed 1000x1500 to 900x1400 - the corners "
+            "read srgb(255,255,255) at 100, 10 px of margin given back") \
+        in output
+
+
 def test_a_relative_input_and_output_are_where_the_caller_meant(sandbox,
                                                                 tmp_path):
     """Both are resolved before the run moves into the input folder; resolved

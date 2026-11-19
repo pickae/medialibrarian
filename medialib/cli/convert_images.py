@@ -41,6 +41,7 @@ from medialib.lib import (
     encodercalibration,
     enums,
     errorlog,
+    formatting,
     imagebitrate,
     imagecodecs,
     imagemagick,
@@ -374,11 +375,13 @@ def _parse_corners(text: str) -> tuple[str, float] | None:
 
 def trim_verdict(width: int, height: int, cut: tuple[int, int] | None,
                  corner: Callable[[], tuple[str, float] | None]
-                 ) -> tuple[str, str, int]:
+                 ) -> tuple[str, str, int, float]:
     """What a -c trim meant, from how much it took off a <width> x <height>
-    page: ``(verdict, colour, border)``, the verdict being "blank", "trimmed"
-    or "converted". <cut> is the trimmed size, None when it could not be
-    measured.
+    page: ``(verdict, colour, border, lightness)``, the verdict being "blank",
+    "trimmed" or "converted". <cut> is the trimmed size, None when it could not
+    be measured. <colour> and <lightness> are what the corners read as, when
+    they were read: for a margin, and for a whole conversion whose margin was
+    measured and judged dark - "" and 0.0 when they were not.
 
     Past BLANK_TRIM_PERCENT in either direction there was nothing on the page.
     Between MIN_ and MAX_TRIM_PERCENT in both, the trim took a margin - if the
@@ -394,20 +397,77 @@ def trim_verdict(width: int, height: int, cut: tuple[int, int] | None,
     such a page alike.
     """
     if cut is None or (0 in cut and cut != (0, 0)):
-        return "converted", "", 0
+        return "converted", "", 0, 0.0
     width_diff = width - cut[0]
     height_diff = height - cut[1]
     min_w = width * MIN_TRIM_PERCENT // 100
     min_h = height * MIN_TRIM_PERCENT // 100
     if (width_diff > width * BLANK_TRIM_PERCENT // 100
             or height_diff > height * BLANK_TRIM_PERCENT // 100):
-        return "blank", "", 0
-    if (min_w <= width_diff <= width * MAX_TRIM_PERCENT // 100
-            and min_h <= height_diff <= height * MAX_TRIM_PERCENT // 100):
+        return "blank", "", 0, 0.0
+    in_band = (min_w <= width_diff <= width * MAX_TRIM_PERCENT // 100
+               and min_h <= height_diff <= height * MAX_TRIM_PERCENT // 100)
+    if in_band:
         found = corner()
         if found is not None and found[1] >= LIGHTNESS_THRESHOLD:
-            return "trimmed", found[0], min(min_w, min_h)
-    return "converted", "", 0
+            return "trimmed", found[0], min(min_w, min_h), found[1]
+        # The margin was measured and judged: say what it read as, so the
+        # verdict can be checked against the same figure it was reached on.
+        if found is not None:
+            return "converted", found[0], 0, found[1]
+    return "converted", "", 0, 0.0
+
+
+def _trim_note(width: int, height: int, cut: tuple[int, int] | None,
+               verdict: str, colour: str, border: int,
+               lightness: float) -> str:
+    """What a -c trim verdict was reached on, for -v - the how-much and the
+    corners it was judged on, nothing else: the margin given back, the
+    lightness that made it paper or did not, the share past which there was
+    nothing on the page. The fragment after "<page>: " - a caller says the
+    page; under a lane the lane's run says it, by the book the page is in."""
+    if cut is None:
+        return ("converted whole - the trim could not be measured, so the page "
+                "was encoded as stored")
+    across = 100.0 * (width - cut[0]) / width
+    down = 100.0 * (height - cut[1]) / height
+    if verdict == "blank":
+        return ("blank - the trim took %.1f%% of the width and %.1f%% of the "
+                "height, past the %d%% that leaves a page"
+                % (across, down, BLANK_TRIM_PERCENT))
+    if verdict == "trimmed":
+        return ("trimmed %dx%d to %dx%d - the corners read %s at %.0f, %d px "
+                "of margin given back"
+                % (width, height, cut[0], cut[1], colour, lightness, border))
+    # converted whole: either side out of the margin band, or a margin that
+    # was measured and judged dark.
+    in_band = (width * MIN_TRIM_PERCENT // 100 <= width - cut[0]
+               <= width * MAX_TRIM_PERCENT // 100
+               and height * MIN_TRIM_PERCENT // 100 <= height - cut[1]
+               <= height * MAX_TRIM_PERCENT // 100)
+    if in_band:
+        if colour:
+            return ("converted whole - the trim took %.1f%% of the width and "
+                    "%.1f%% of the height, but the corners read %s at %.0f, "
+                    "dark for the %d%% that is paper"
+                    % (across, down, colour, lightness, LIGHTNESS_THRESHOLD))
+        return ("converted whole - the trim took %.1f%% of the width and "
+                "%.1f%% of the height, and the corners could not be read"
+                % (across, down))
+
+    def band(side: str, full: int, gone: int, percent: float) -> str:
+        if gone < full * MIN_TRIM_PERCENT // 100:
+            return ("%.1f%% of %s, short of the %d%% that would be a margin"
+                    % (percent, side, MIN_TRIM_PERCENT))
+        if gone > full * MAX_TRIM_PERCENT // 100:
+            return ("%.1f%% of %s, past the %d%% that would be a margin"
+                    % (percent, side, MAX_TRIM_PERCENT))
+        return ""
+
+    clauses = [c for c in (band("the width", width, width - cut[0], across),
+                           band("the height", height, height - cut[1], down))
+               if c]
+    return "converted whole - the trim took %s" % " and ".join(clauses)
 
 
 def gpu_trim_arguments(fuzz: str) -> list[str]:
@@ -446,22 +506,26 @@ def box_and_corners(source: str, fuzz: str):
 def cpu_trim(entry: dict):
     """The CPU's encode of a page listed for the card to trim (``"trim"`` in
     its manifest line) that the card did not write: the trim decided here, as
-    it would have been had the page never been the card's. ``(argv,
-    verdict)``, argv None for a blank page."""
+    it would have been had the page never been the card's. ``(argv, verdict,
+    note)``, argv None for a blank page, the note what the verdict was
+    reached on - which the lane's run says under -v, by the book the page is
+    in."""
     width, height = entry["size"]
     box, corners = box_and_corners(entry["input"], entry["fuzz"])
-    verdict, colour, border = trim_verdict(
-        width, height, box[:2] if box else None, lambda: corners)
+    cut = box[:2] if box else None
+    verdict, colour, border, lightness = trim_verdict(
+        width, height, cut, lambda: corners)
+    note = _trim_note(width, height, cut, verdict, colour, border, lightness)
     argv = entry["cpu"]
     if verdict == "blank":
-        return None, verdict
+        return None, verdict, note
     if verdict == "trimmed":
         assert box is not None
         at = argv.index(imagecodecs.coder_prefixed(entry["input"])) + 1
         argv = argv[:at] + ["-crop", "%dx%d+%d+%d" % box, "+repage",
                             "-bordercolor", colour, "-border",
                             str(border)] + argv[at:]
-    return argv, verdict
+    return argv, verdict, note
 
 
 def encode_arguments(options, source, out, extra=()):
@@ -644,22 +708,29 @@ class Run:
         cut = _parse_size(self._identify(["-format", "%w %h",
                                           "miff:" + trimmed]))
         try:
-            verdict, colour, border = trim_verdict(
+            verdict, colour, border, lightness = trim_verdict(
                 width, height, cut, lambda: self._identify_corner(source))
+            note = _trim_note(width, height, cut, verdict, colour, border,
+                              lightness)
             if verdict == "blank":
                 self.record("blank", "SKIP (blank)", relative,
                             stream=sys.stderr)
+                runlog.detail("%s: %s" % (relative, note))
                 return
             if verdict == "trimmed":
                 self._encode(self._encode_arguments(
                     "miff:" + trimmed, out,
                     ["-bordercolor", colour, "-border", str(border)]),
                     relative, out, "trimmed", "TRIM", pixels)
+                runlog.detail("%s: %s" % (relative, note))
                 return
-            if self._to_lane(relative, out):
+            if self.options.get("gpuLane") \
+                    and self._to_lane(relative, out) is None:
+                runlog.detail("%s: %s" % (relative, note))
                 return
             self._encode(self._encode_arguments(source, out), relative, out,
                          pixels=pixels)
+            runlog.detail("%s: %s" % (relative, note))
         finally:
             try:
                 os.remove(trimmed)
@@ -687,37 +758,57 @@ class Run:
         pixels = width * height
         if self.options.get("gpuTrim") and self._to_lane(
                 relative, out, category="converted", label="CONV (GPU, -c)",
-                probe=probe, size=(width, height)):
+                probe=probe, size=(width, height)) is None:
             return
         box, corners = self._box_and_corners(relative)
-        verdict, colour, border = trim_verdict(
-            width, height, box[:2] if box else None, lambda: corners)
+        cut = box[:2] if box else None
+        verdict, colour, border, lightness = trim_verdict(
+            width, height, cut, lambda: corners)
+        note = _trim_note(width, height, cut, verdict, colour, border,
+                          lightness)
         if verdict == "blank":
             self.record("blank", "SKIP (blank)", relative, stream=sys.stderr)
+            runlog.detail("%s: %s" % (relative, note))
+            # The page is done without an encode: the lane must learn it is
+            # done at all - and what it was found blank on, for -v.
+            self._list({"output": os.path.abspath(out), "page": relative,
+                        "blank": True, "note": note})
             return
         if verdict == "converted":
-            if not self._to_lane(relative, out, probe=probe):
+            reason = self._to_lane(relative, out, probe=probe, note=note)
+            if reason:
                 self._cpu_to_lane(relative, out, (), "converted", "CONV",
-                                  pixels)
+                                  pixels, why=reason, note=note)
+            runlog.detail("%s: %s" % (relative, note))
             return
         assert box is not None
         cut_w, cut_h, left, top = box
         left, top = max(0, left - border), max(0, top - border)
         right = min(width, box[2] + cut_w + border)
         bottom = min(height, box[3] + cut_h + border)
-        if self._to_lane(relative, out, (right - left, bottom - top, left, top),
-                         "trimmed", "TRIM (GPU)", probe):
+        reason = self._to_lane(
+            relative, out, (right - left, bottom - top, left, top),
+            "trimmed", "TRIM (GPU)", probe, note=note)
+        if not reason:
+            runlog.detail("%s: %s" % (relative, note))
             return
         trim = ["-crop", "%dx%d+%d+%d" % box, "+repage",
                 "-bordercolor", colour, "-border", str(border)]
-        self._cpu_to_lane(relative, out, trim, "trimmed", "TRIM", pixels)
+        self._cpu_to_lane(relative, out, trim, "trimmed", "TRIM", pixels,
+                          why=reason, note=note)
+        runlog.detail("%s: %s" % (relative, note))
 
     def _cpu_to_lane(self, relative: str, out: str, extra, category: str,
-                     label: str, pixels: int) -> None:
+                     label: str, pixels: int, why: str = "",
+                     note: str = "") -> None:
         """List a page for the lane's CPU encoders, with the ImageMagick call
-        that encodes it - <extra> being the trim, when there is one."""
+        that encodes it - <extra> being the trim, when there is one. <why> is
+        why the card did not take the page, and <note> the trim this run
+        measured it on, when it did: the lane's run says both under -v, by the
+        book the page is in."""
         out = os.path.abspath(out)
-        self._list({"output": out, "pixels": pixels,
+        self._list({"output": out, "page": relative, "why": why, "note": note,
+                    "pixels": pixels,
                     "cpu": imagemagick.convert_argv(self._encode_arguments(
                         os.path.abspath(relative), out, extra))})
         self.record(category, label, relative, pixels=pixels)
@@ -767,6 +858,51 @@ class Run:
         """
         return adequacy.is_starved(imagebitrate.image_adequacy(relative))
 
+    def _starved_judgement(self, relative: str) -> tuple[bool, str]:
+        """Whether this image is starved, with the figures the check was
+        reached on for -v: what the image is, what its format at its size
+        would need, and what was missing when the check could not be reached.
+        The fragment after "<relative>: " - the caller says the name and the
+        road the check was taken on."""
+        verdict, measured, adequate, image_format, width, height, colour = \
+            imagebitrate.image_adequacy_figures(relative)
+        if verdict == adequacy.UNKNOWN:
+            if not image_format:
+                note = ("the starved check was not reached - its header could "
+                        "not be read, so it is converted")
+            elif not measured:
+                note = ("the starved check was not reached - its size could "
+                        "not be read, so it is converted")
+            else:
+                note = ("the starved check was not reached - the model has no "
+                        "requirement for a %s at %sx%s, so it is converted"
+                        % (image_format, width, height))
+        else:
+            what = "a %s at %sx%s" % (image_format, width, height)
+            if colour:
+                what += ", %s" % colour
+            have = formatting.fmt_bytes(measured)
+            need = formatting.fmt_bytes(adequate)
+            if adequacy.is_starved(verdict):
+                note = ("already starved - it is %s, and %s would be adequate "
+                        "for %s, so re-encoding can only make it worse"
+                        % (have, need, what))
+            else:
+                note = ("not starved - it is %s, and %s would be adequate for "
+                        "%s" % (have, need, what))
+        return adequacy.is_starved(verdict), note
+
+    def _cpu_road_note(self, relative: str) -> str:
+        """Why the card left this image to the CPU, for -v: the card's own
+        shortfall, in the words :meth:`_gpu_job` answers - or the card's own
+        hands, when it took the image and wrote it nothing."""
+        _pixels, _crop, _fit, _width, _height, reason = \
+            self._gpu_job(relative)
+        if reason:
+            return "%s: to the CPU - %s" % (relative, reason)
+        return ("%s: to the CPU - the card took it, but its call left it "
+                "unwritten" % relative)
+
     def transcode(self, relative: str) -> None:
         out = disambiguated_output(relative, self.options["format"],
                                    self.input_dir, self.output_dir)
@@ -781,28 +917,42 @@ class Run:
             self.record("alreadyDone", "SKIP (already done)", relative,
                         stream=sys.stderr)
             return
-        if self.options["skipStarved"] and self.starved(relative):
-            self.record("starved", "SKIP (starved)", relative,
-                        stream=sys.stderr)
-            return
+        note = ""
+        if self.options["skipStarved"]:
+            starved, note = self._starved_judgement(relative)
+            if starved:
+                self.record("starved", "SKIP (starved)", relative,
+                            stream=sys.stderr)
+                runlog.detail("%s: %s" % (relative, note))
+                return
+        road = (self._cpu_road_note(relative)
+                if self.options.get("gpuEncoder")
+                and runlog.verbosity() >= runlog.VERBOSE else "")
         if self.options["crop"]:
             self.crop_convert(relative)
-            return
-        if self._to_lane(relative, out):
-            return
-        if self.options.get("gpuLane"):
-            self._cpu_to_lane(relative, out, (), "converted", "CONV",
-                              self._pixels(relative))
-            return
-        self._encode(self._encode_arguments(relative, out), relative, out,
-                     pixels=self._pixels(relative))
+        else:
+            reason = self._to_lane(relative, out)
+            if reason:
+                self._cpu_to_lane(relative, out, (), "converted", "CONV",
+                                  self._pixels(relative), why=reason)
+            elif not self.options.get("gpuLane"):
+                self._encode(self._encode_arguments(relative, out), relative,
+                             out, pixels=self._pixels(relative))
+        if note:
+            runlog.detail("%s: %s" % (relative, note))
+        if road:
+            runlog.detail(road)
 
     def _to_lane(self, relative: str, out: str, crop=None,
                  category: str = "converted",
                  label: str = "CONV (GPU)", probe: str = "",
-                 size=None) -> bool:
+                 size=None, note: str = "") -> str | None:
         """Hand this image to the GPU lane of the run that started this one,
-        and say whether it was taken. Only under a lane (:data:`LANE_VARIABLE`):
+        and answer why it was not taken: None when it was, or when there is no
+        lane - otherwise the card's own shortfall, in the words
+        :func:`av1gpu.probe_reason` speaks, which the lane's run says under -v
+        for the page it leaves to the CPU. Only under a lane
+        (:data:`LANE_VARIABLE`):
         that run owns the card and encodes the pages of many of these runs
         together, so this one only writes down where each page is.
 
@@ -813,10 +963,11 @@ class Run:
         and the -m cap are done by the card after the decode.
 
         Each line of the manifest is the card's input, the output, its pixels
-        once cropped and shrunk, the card's crop and max-size, and the
-        ImageMagick call that does the same on the CPU - which the lane runs
-        for a page the card did not write, or one a CPU encoder takes while the
-        card has more than it can start on.
+        once cropped and shrunk, the card's crop and max-size, the page's name
+        the run knows it by, the note this run reached its -c trim on, when it
+        measured one, and the ImageMagick call that does the same on the CPU -
+        which the lane runs for a page the card did not write, or one a CPU
+        encoder takes while the card has more than it can start on.
 
         With <size>, the page's ``(width, height)``, the card decides its -c
         trim (:data:`LANE_TRIM_VARIABLE`): the line says so, with the -fuzz,
@@ -825,15 +976,16 @@ class Run:
         """
         lane = self.options.get("gpuLane", "")
         if not lane:
-            return False
-        job = self._gpu_job(relative, crop, probe)
-        if job is None:
-            return False
-        pixels, geometry, fit = job
+            return None
+        pixels, geometry, fit, _width, _height, reason = \
+            self._gpu_job(relative, crop, probe)
+        if pixels is None:
+            return reason
         source, out = os.path.abspath(relative), os.path.abspath(out)
         extra = ["-crop", geometry, "+repage"] if geometry else []
-        entry = {"input": source, "output": out, "pixels": pixels,
-                 "crop": geometry, "maxSize": fit,
+        entry = {"input": source, "output": out, "page": relative,
+                 "pixels": pixels, "crop": geometry, "maxSize": fit,
+                 "note": note,
                  "cpu": imagemagick.convert_argv(
                      self._encode_arguments(source, out, extra))}
         if size:
@@ -841,22 +993,32 @@ class Run:
                          fuzz=self.options["fuzzCommand"])
         self._list(entry)
         self.record(category, label, relative, pixels=pixels, road="gpu")
-        return True
+        return None
 
-    def _gpu_job(self, relative: str, crop=None, probe: str = ""):
-        """What the card is asked to do with this image: ``(pixels, crop,
-        max_size)``, the pixels being those it encodes and the other two
-        av1gpu's own geometry, "" for none - or None when it cannot take it.
-        One header read, or none when the caller already made it (<probe>)."""
-        if relative.rpartition(".")[2] not in av1gpu.EXTENSIONS:
-            return None
+    def _gpu_job(self, relative: str, crop=None, probe: str = "") -> tuple:
+        """What the card is asked to do with this image:
+        ``(pixels, crop, max_size, width, height, reason)``, the pixels being
+        those it encodes, the other two av1gpu's own geometry, "" for none,
+        the size as stored, and the reason it cannot take the image - "" when
+        it can, the pixels None when it cannot, the reason in the words
+        :func:`av1gpu.probe_reason` speaks. One header read, or none when the
+        caller already made it (<probe>)."""
+        extension = relative.rpartition(".")[2]
+        if extension not in av1gpu.EXTENSIONS:
+            return (None, "", "", 0, 0,
+                    "it is a %s, which the card does not read" % extension)
+        probe_text = (probe or self._identify(
+            ["-ping", "-format", av1gpu.PROBE_FORMAT,
+             imagecodecs.coder_prefixed(relative)]))
         probed = av1gpu.takes_probe(
-            probe or self._identify(["-ping", "-format", av1gpu.PROBE_FORMAT,
-                                     imagecodecs.coder_prefixed(relative)]),
-            jpeg=relative.endswith((".jpg", ".jpeg")))
+            probe_text, jpeg=relative.endswith((".jpg", ".jpeg")))
         if probed is None:
-            return None
+            return (None, "", "", 0, 0,
+                    av1gpu.probe_reason(probe_text,
+                                        jpeg=relative.endswith(
+                                            (".jpg", ".jpeg"))))
         width, height, orientation = probed
+        source_width, source_height = width, height
         geometry = ""
         if crop:
             width, height = crop[0], crop[1]
@@ -866,12 +1028,17 @@ class Run:
                if max_height and height > max_height else "")
         width, height = av1gpu.fitted_size(width, height, max_height)
         if width * height > av1gpu.MAX_PIXELS:
-            return None
-        return width * height, geometry, fit
+            return (None, "", "", source_width, source_height,
+                    "it is %.1f MP after the -m shrink, over the card's "
+                    "100 MP" % (width * height / 1e6))
+        return width * height, geometry, fit, source_width, source_height, \
+            ""
 
     def gpu_job(self, relative: str):
-        """``(pixels, max_size)`` of this image when it goes to the GPU encoder
-        rather than to the transcode below, and None when it does not.
+        """``(pixels, max_size, width, height)`` of this image when it goes to
+        the GPU encoder rather than to the transcode below, and None when it
+        does not - the size as stored, for what the run says of the road under
+        -v.
 
         Everything the transcode would SKIP stays with it - a missing source,
         an output already there, a starved image - so that it is counted and
@@ -886,10 +1053,20 @@ class Run:
         if os.path.isfile(disambiguated_output(relative, self.options["format"],
                                                self.input_dir, self.output_dir)):
             return None
-        if self.options["skipStarved"] and self.starved(relative):
+        note = ""
+        if self.options["skipStarved"]:
+            starved, note = self._starved_judgement(relative)
+            if starved:
+                return None
+        pixels, _geometry, fit, width, height, _reason = \
+            self._gpu_job(relative)
+        if pixels is None:
             return None
-        job = self._gpu_job(relative)
-        return None if job is None else (job[0], job[2])
+        # The transcode will not see this image again: its starved figures are
+        # said here, under the road they were taken on.
+        if note:
+            runlog.detail("%s: %s" % (relative, note))
+        return (pixels, fit, width, height)
 
     def reverse_to_jpeg(self, relative: str) -> None:
         """The -r path, which the starved check has nothing to say about: -r
@@ -999,6 +1176,17 @@ def _mirror_folders(input_dir: str, output_dir: str) -> None:
         os.makedirs(target, exist_ok=True)
 
 
+def _gpu_road_note(relative: str, job: tuple) -> str:
+    """What the card is asked for with this image, for -v: the size it encodes
+    - the -m shrink already applied - and the -m cap, when there is one."""
+    pixels, fit, width, height = job
+    note = "%s: to the card - %d x %d, %.1f MP" % (
+        relative, width, height, pixels / 1e6)
+    if fit:
+        note += ", the -m %s done by the card" % fit
+    return note
+
+
 def _encode_on_gpu(state, work, jobs: int, encoder: str) -> list:
     """Hand every image the GPU can take to <encoder>, in chunks of
     av1gpu.CHUNK_MEGAPIXELS, and return the work that is left for the CPU:
@@ -1018,8 +1206,18 @@ def _encode_on_gpu(state, work, jobs: int, encoder: str) -> list:
                    zip(work, pool.map(state.gpu_job, work), strict=True) if job}
     sized = [(relative, jobs_of[relative][0]) for relative in work
              if relative in jobs_of]
+    # The road, said before the encode, one line per image the card takes -
+    # and what the batching below was taken on.
+    for relative in work:
+        if relative in jobs_of:
+            runlog.detail(_gpu_road_note(relative, jobs_of[relative]))
+    chunks = list(av1gpu.chunks(sized))
+    if chunks:
+        runlog.detail("%d image(s) for the card in %d call(s) of about %d MP "
+                      "each" % (len(sized), len(chunks),
+                                 av1gpu.CHUNK_MEGAPIXELS))
     done = set()
-    for chunk in av1gpu.chunks(sized):
+    for chunk in chunks:
         if safety.abort_requested():
             break
         items = [(os.path.join(state.input_dir, relative),
@@ -1094,6 +1292,13 @@ def main(argv: list, program: str = "convert-images") -> int:
     jobs = int(result.values["jobs"]
                or max(1, int(runlog.cpu_count()
                              / threads_per_conversion(image_format, speed))))
+    if result.values["jobs"]:
+        runlog.detail("%d encoder(s) at once - what -j asked for" % jobs)
+    else:
+        runlog.detail("%d encoder(s) at once - %d core(s), %g thread(s) a "
+                      "conversion" % (jobs, runlog.cpu_count(),
+                                      threads_per_conversion(image_format,
+                                                             speed)))
 
     runlog.settle_flock()
     if _missing_tools(program, image_format, reverse,
@@ -1213,11 +1418,16 @@ def _settle_options(values: dict, crop: bool, skip_starved: bool,
             options["gpuTrim"] = bool(os.environ.get(LANE_TRIM_VARIABLE))
         elif not crop:
             encoder = av1gpu.binary(log)
+    options["gpuEncoder"] = encoder
     # -l and -s mean what they mean on the CPU; what av1gpu has to be asked
     # for to give the same was measured, not assumed.
     if encoder:
-        options["gpuPreset"], options["gpuQuality"] = \
+        gpu_preset, gpu_quality = \
             encodercalibration.active().gpu_settings(speed, quality)
+        options["gpuPreset"], options["gpuQuality"] = gpu_preset, gpu_quality
+        runlog.detail("the card is asked for quality %d, preset %s - what the "
+                      "calibration measured for -l %d -s %d"
+                      % (gpu_quality, gpu_preset, quality, speed))
     return options, encoder
 
 
