@@ -619,6 +619,66 @@ def test_the_target_defaults_to_the_opus(tmp_path, isolated_env, monkeypatch,
 
 
 ################################################################################
+# where a cover came from: the sidecar, the source, or a search - said under -v
+################################################################################
+def test_a_sidecar_cover_says_it_is_a_sidecar(tmp_path, isolated_env,
+                                              monkeypatch, covers):
+    """The sidecar wins whatever <origin> was: it is the cover, and the line
+    says so, not the source a non-sidecar cover would have come from."""
+    said = []
+    monkeypatch.setattr(thumbnails, "_detail", said.append)
+    d = tmp_path / "case"
+    _file_with_size(d, "in/track 01.jpg", 10)
+    for sub in ("out", "tmp"):
+        (d / sub).mkdir()
+    monkeypatch.chdir(d)
+    run = _Run()
+    monkeypatch.setenv("PATH", _stub_bin(tmp_path, []))
+    thumbnails.apply_cover(
+        "track 01.mp3", "out/track 01.opus", 100, 90, "512x512",
+        "in", "out", "tmp", "out/track 01.opus", "script", run,
+        origin="an online search")
+    assert said == ["    track 01.mp3: cover from a sidecar image, 10 B, "
+                    "kept at its own size"]
+
+
+def test_a_pulled_cover_says_the_source_it_came_from(tmp_path, isolated_env,
+                                                     monkeypatch, covers):
+    said = []
+    monkeypatch.setattr(thumbnails, "_detail", said.append)
+    d = tmp_path / "case"
+    _file_with_size(d, "tmp/tempCover.jpg", 10)
+    (d / "out").mkdir()
+    monkeypatch.chdir(d)
+    run = _Run()
+    monkeypatch.setenv("PATH", _stub_bin(tmp_path, []))
+    thumbnails.apply_cover(
+        "track 01.mp3", "out/track 01.opus", 100, 90, "512x512",
+        "in", "out", "tmp", "out/track 01.opus", "script", run,
+        origin="the source's own art")
+    assert said == ["    track 01.mp3: cover from the source's own art, 10 B, "
+                    "kept at its own size"]
+
+
+def test_a_cover_taken_online_says_so(tmp_path, isolated_env, monkeypatch,
+                                      covers):
+    said = []
+    monkeypatch.setattr(thumbnails, "_detail", said.append)
+    d = tmp_path / "case"
+    _file_with_size(d, "tmp/tempCover.jpg", 10)
+    (d / "out").mkdir()
+    monkeypatch.chdir(d)
+    run = _Run()
+    monkeypatch.setenv("PATH", _stub_bin(tmp_path, []))
+    thumbnails.apply_cover(
+        "track 01.mp3", "out/track 01.opus", 100, 90, "512x512",
+        "in", "out", "tmp", "out/track 01.opus", "script", run,
+        origin="an online search")
+    assert said == ["    track 01.mp3: cover from an online search, 10 B, "
+                    "kept at its own size"]
+
+
+################################################################################
 # extractSourceCover: the cover already inside the file
 ################################################################################
 def test_a_matroska_source_is_asked_for_its_attachment_first(tmp_path,
