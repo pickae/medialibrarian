@@ -3,11 +3,11 @@
 The reports are the LAST argument and there can be any number of them, which makes
 the order people actually type
 
-    content-census-bi ~/reports -s -e ~/cubes
+    content-census-bi ~/reports -v -e ~/cubes
 
 rather than the one the usage line shows. A parser that stops at the first path
 takes every flag written after the reports for another report, and the run refuses
-with '"-s" is neither a file nor a folder' - a flag silently not doing its job, or
+with '"-v" is neither a file nor a folder' - a flag silently not doing its job, or
 the whole run refused, over nothing but word order. Both orders are one command.
 
 `duckdb` is a hard requirement rather than a skip: half the claims here are about
@@ -58,19 +58,19 @@ class TestTheOptionsAreReadInAnyPosition:
     gets wrong."""
 
     def test_before_the_reports_which_is_what_the_usage_line_shows(self, bi):
-        log = bi.bi("-s", "-e", bi.cubes, "-o", bi.work / "before.duckdb",
+        log = bi.bi("-v", "-e", bi.cubes, "-o", bi.work / "before.duckdb",
                     bi.reports)
         assert "books: 1 report(s)" in log
         assert "neither a file nor a folder" not in log
 
     def test_after_the_reports_which_is_what_people_type(self, bi):
-        log = bi.bi(bi.reports, "-s", "-e", bi.cubes,
+        log = bi.bi(bi.reports, "-v", "-e", bi.cubes,
                     "-o", bi.work / "after.duckdb")
         assert "books: 1 report(s)" in log
         assert "neither a file nor a folder" not in log
 
     def test_a_path_between_two_options_is_still_a_path(self, bi):
-        log = bi.bi("-e", bi.cubes, bi.reports, "-s",
+        log = bi.bi("-e", bi.cubes, bi.reports, "-v",
                     "-o", bi.work / "mixed.duckdb")
         assert "books: 1 report(s)" in log
         assert "neither a file nor a folder" not in log
@@ -93,7 +93,7 @@ class TestTheOptionsAreReadRatherThanTolerated:
         assert "the database cannot be written there" in log
 
     def test_a_clustered_pair_after_the_reports_is_read_as_both(self, bi):
-        log = bi.bi(bi.reports, "-se", bi.work / "notAFolder", expect=1)
+        log = bi.bi(bi.reports, "-ve", bi.work / "notAFolder", expect=1)
         assert "export folder" in log
 
 
@@ -144,18 +144,36 @@ class TestWhatTheFlagsBuild:
     being accepted."""
 
     def test_with_the_options_at_the_end(self, bi):
-        log = bi.bi(bi.reports, "-s", "-e", bi.cubes,
+        log = bi.bi(bi.reports, "-v", "-e", bi.cubes,
                     "-o", bi.work / "real.duckdb")
         assert (bi.cubes / "booksCube.csv").is_file()
         assert "books, all of it" in log
+        # the table is the cube's own row, not a rendering: the total the
+        # report holds, to the byte
+        assert "120000" in log
         assert (bi.work / "real.duckdb").is_file()
 
     def test_with_the_options_at_the_front(self, bi):
-        log = bi.bi("-s", "-e", bi.cubes, "-o", bi.work / "real2.duckdb",
+        log = bi.bi("-v", "-e", bi.cubes, "-o", bi.work / "real2.duckdb",
                     bi.reports)
         assert (bi.cubes / "booksCube.csv").is_file()
         assert "books, all of it" in log
         assert (bi.work / "real2.duckdb").is_file()
+
+
+class TestTheCountsSaidAsTheCubesAreBuilt:
+    """The line a cube gets as it is built says what is in it - its files and
+    their size - and the full totals come out only under -v."""
+
+    def test_at_the_ordinary_verbosity_the_counts_say_the_size(
+            self, bi):
+        log = bi.bi(bi.reports, "-o", bi.work / "plain.duckdb")
+        assert ("books: 2 file(s) of 120.0 kB rolled up into" in log)
+        assert "all of it" not in log
+
+    def test_quiet_says_no_totals(self, bi):
+        log = bi.bi(bi.reports, "-q", "-o", bi.work / "quiet.duckdb")
+        assert "all of it" not in log
 
 
 class TestRebuildingOverAGoodDatabase:

@@ -22,7 +22,8 @@ With no options, a run:
 - looks for census reports recursively in any folder given
 - **rebuilds the database from nothing**, replacing the previous one only once the new one is complete
 - writes the `.duckdb` and the `.html` page beside the first audio, video, images, books or comics report, in that order (`-o`)
-- exports no CSV, prints no totals and runs no query (`-e`, `-s`, `-c`)
+- reports each cube as it is built - its files and their size - and its full totals under `-v`
+- exports no CSV and runs no query (`-e`, `-c`)
 
 How many hours of 2160p, how many gigabytes of comics scanned below 1080p, what
 the duration-weighted average bitrate of the Opus audiobooks is — without anyone
