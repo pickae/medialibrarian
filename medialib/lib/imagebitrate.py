@@ -378,25 +378,39 @@ def image_detail(path: str) -> str:
         _identify(["-format", "%[type]|%k", path]))
 
 
-def image_adequacy(path: str, detail: str = "",
-                   size_bytes: object = None) -> str:
-    """The verdict on one file on disk - the whole model, end to end.
+def image_adequacy_figures(path: str, detail: str = "",
+                           size_bytes: object = None) -> tuple:
+    """The verdict on one file on disk, with the figures it was reached on:
+    ``(verdict, measured, adequate, image_format, width, height, colour)`` -
+    the whole model, end to end, the measured and the adequate in bytes.
 
     ``detail`` is the caller's own reading of the detail axis: the word
     :func:`image_detail` answered where the caller could afford that probe, and
     nothing where it could not. ``size_bytes`` likewise saves a stat for a caller
-    that already has one.
+    that already has one. A figure that could not be read is 0 or "" rather than
+    guessed: a caller that wants to say what the verdict was reached on can then
+    say what was missing, and :data:`~adequacy.UNKNOWN` stays the verdict it
+    was reached on nothing.
     """
     stats = image_stats(path).split()
     if len(stats) < 4:
-        return adequacy.UNKNOWN
+        return adequacy.UNKNOWN, 0, "", "", 0, 0, ""
     image_format, width, height, colour = stats[:4]
     if size_bytes is None:
         try:
             size_bytes = os.path.getsize(path)
         except OSError:
-            return adequacy.UNKNOWN
+            return adequacy.UNKNOWN, 0, "", image_format, width, height, colour
     adequate = adequate_image_bytes(image_format, width, height, colour, detail)
     if not adequate:
-        return adequacy.UNKNOWN
-    return image_verdict(size_bytes, adequate, image_format)
+        return adequacy.UNKNOWN, size_bytes, "", image_format, width, height, \
+            colour
+    return image_verdict(size_bytes, adequate, image_format), size_bytes, \
+        adequate, image_format, width, height, colour
+
+
+def image_adequacy(path: str, detail: str = "",
+                   size_bytes: object = None) -> str:
+    """The verdict on one file on disk, alone of its figures - see
+    :func:`image_adequacy_figures` for what the verdict was reached on."""
+    return image_adequacy_figures(path, detail, size_bytes)[0]

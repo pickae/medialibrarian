@@ -102,11 +102,15 @@ def lane_run(tmp_path, monkeypatch):
                     # exits 0 and writes nothing.
                     script = ("exit 0" if page.startswith("cpunone")
                               else 'echo CPU > "$0"')
-                    entry = {"output": str(output), "pixels": 1_000_000,
+                    entry = {"output": str(output), "page": page,
+                             "pixels": 1_000_000,
                              "cpu": ["sh", "-c", script, str(output)]}
-                    # A page named cpu* is listed for the CPU alone.
+                    # A page named cpu* is listed for the CPU alone, with the
+                    # card's own word for why, when it is named for one.
                     if not page.startswith("cpu"):
                         entry["input"] = str(source)
+                    elif "alpha" in page:
+                        entry["why"] = "it carries an alpha channel"
                     # One named trim* or blank* is the card's to trim.
                     if page.startswith(("trim", "blank")):
                         entry["trim"] = True
@@ -145,13 +149,89 @@ def test_the_pages_the_card_trims_go_in_calls_of_their_own(lane_run, tmp_path):
 
 
 def test_a_page_the_card_found_blank_finishes_its_book_without_output(
-        lane_run):
-    """Not a page for the CPU to try again: there is nothing on it."""
+        lane_run, capfd):
+    """Not a page for the CPU to try again: there is nothing on it - and the
+    run says what the call found blank about it, in the call's own words."""
     finished, outputs, _called, lane = lane_run(
-        {"one": ["trim1.jpg", "blank.jpg"]})
+        {"one": ["trim1.jpg", "blank.jpg"]}, LOG_VERBOSITY="verbose")
     assert finished == ["one"]
     assert outputs == {"trim1.jpg": "GPU trimmed"}
     assert (lane.blank, lane.fallbacks, lane.cpu_pages) == (1, 0, 0)
+    assert "one: blank.jpg - the card dropped it blank: --skip-blank" \
+        in capfd.readouterr().err
+
+
+def test_the_run_says_each_page_s_road_as_the_manifest_lists_it(
+        lane_run, capfd):
+    """Which side a page was sorted onto, and why the card declined it - from
+    the page's own run, which is where the header read happened - and the
+    figures a trim verdict was reached on, whichever side reached it."""
+    asked = []
+
+    def resolve(entry):
+        asked.append(entry["page"])
+        return (["sh", "-c", 'echo CPU trimmed > "$0"', entry["output"]],
+                "trimmed",
+                "trimmed 1000x1500 to 900x1400 - the corners read "
+                "srgb(255,255,255) at 100, 10 px of margin given back")
+
+    finished, outputs, _called, lane = lane_run(
+        {"one": ["p1.jpg", "cpu_alpha.png", "trim3.jpg"]}, resolve=resolve,
+        STUB_STATUS="1", LOG_VERBOSITY="verbose")
+    assert finished == ["one"]
+    assert sorted(asked) == ["trim3.jpg"]
+    err = capfd.readouterr().err
+    assert "one: p1.jpg - to the card - 1.0 MP" in err
+    assert "one: cpu_alpha.png - to the CPU - it carries an alpha channel" \
+        in err
+    # trim3 was sorted to the card; the card died, and the CPU decided its
+    # trim, on the figures it measured.
+    assert "one: trim3.jpg - to the card - 1.0 MP" in err
+    assert "one: trim3.jpg - trimmed 1000x1500 to 900x1400" in err
+
+
+def test_a_page_its_own_run_found_blank_is_done_the_moment_it_is_listed(
+        tmp_path, monkeypatch, capfd):
+    """A page the run's own trim found blank is listed, not encoded: its book
+    is not held for an encode that will not come, and the run says what it was
+    found blank on."""
+    if sys.platform == "win32":
+        pytest.skip("the stand-in encoder is a shell script fed symlinks")
+    tool = tmp_path / "bin" / "av1gpu"
+    tool.parent.mkdir()
+    tool.write_text(_ENCODER)
+    tool.chmod(0o755)
+    monkeypatch.setenv("LOG_VERBOSITY", "verbose")
+    root = tmp_path / "lane"
+    root.mkdir()
+    finished = []
+    lane = gpulane.Lane(str(tool), str(root), 60, "turbo", "444",
+                        finished.append, 2, lambda line: None)
+    folder = lane.folder()
+    source = tmp_path / "p1.jpg"
+    source.write_text("p1.jpg")
+    manifest = (json.dumps({"input": str(source),
+                            "output": str(tmp_path / "p1.jpg.avif"),
+                            "page": "p1.jpg", "pixels": 1_000_000,
+                            "cpu": ["sh", "-c", 'echo CPU > "$0"',
+                                    str(tmp_path / "p1.jpg.avif")]})
+                + "\n"
+                + json.dumps({"output": str(tmp_path / "blank1.jpg.avif"),
+                              "page": "blank1.jpg", "blank": True,
+                              "note": ("blank - the trim took 99.5% of the "
+                                       "width and 0.0% of the height, past "
+                                       "the 99% that leaves a page")})
+                + "\n")
+    with open(f"{folder}/{gpulane.MANIFEST}", "w") as handle:
+        handle.write(manifest)
+    open(f"{folder}/{gpulane.READY}", "w").close()
+    lane.expect(folder, "one")
+    _close(lane)
+    assert finished == ["one"]
+    assert (tmp_path / "p1.jpg.avif").read_text().strip() == "GPU"
+    assert not (tmp_path / "blank1.jpg.avif").exists()
+    assert "one: blank1.jpg - blank - the trim took 99.5% of the width" \
+        in capfd.readouterr().err
 
 
 def test_the_cpu_decides_the_trim_of_a_card_page_it_takes(lane_run):
@@ -162,9 +242,9 @@ def test_the_cpu_decides_the_trim_of_a_card_page_it_takes(lane_run):
     def resolve(entry):
         asked.append(entry["output"].rpartition("/")[2])
         if "blank" in entry["output"]:
-            return None, "blank"
-        return ["sh", "-c", 'echo CPU trimmed > "$0"', entry["output"]], \
-            "trimmed"
+            return None, "blank", "blank - the trim took everything"
+        return (["sh", "-c", 'echo CPU trimmed > "$0"', entry["output"]],
+                "trimmed", "trimmed 1000x1500 to 900x1400")
 
     finished, outputs, _called, lane = lane_run(
         {"one": ["trim1.jpg", "blank.jpg", "p1.jpg"]}, resolve=resolve,

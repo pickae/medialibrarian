@@ -928,12 +928,15 @@ class TestABookMissingPagesIsNotPackaged:
         def run(argv, *args, **kwargs):
             if kwargs.get("tool") != "convert-images":
                 return real(argv, *args, **kwargs)
-            # One page written, the other not: what a convert-images that
-            # failed on a page leaves behind, exiting 1 to say so.
+            # One page written whole, a second under the empty size, the
+            # third never written at all: what a convert-images that failed
+            # on a page leaves behind, exiting 1 to say so.
             book_avif = argv[-1]
             os.makedirs(book_avif, exist_ok=True)
             with open(os.path.join(book_avif, "01.avif"), "wb") as handle:
                 handle.write(b"\0" * (cc.MIN_PAGE_SIZE + 1))
+            with open(os.path.join(book_avif, "02.avif"), "wb") as handle:
+                handle.write(b"\0" * 100)
             return cc.toolcapture.ToolRun(
                 argv=argv, returncode=0 if converted_ok else 1,
                 output=cc.toolcapture.ToolOutput(),
@@ -968,3 +971,13 @@ class TestABookMissingPagesIsNotPackaged:
         state = self._finish(tmp_path, monkeypatch, converted_ok=True)
         assert (tmp_path / "out" / "Book.cbz").exists()
         assert state.counters.read("failedBooks") == 0
+
+    def test_a_dropped_empty_page_is_said_on_its_size_under_verbose(
+            self, tmp_path, monkeypatch, capfd):
+        """The page the drop found empty, and the size it dropped it on:
+        the encode it held, and the size under which a page holds nothing."""
+        monkeypatch.setenv("LOG_VERBOSITY", "verbose")
+        state = self._finish(tmp_path, monkeypatch, converted_ok=True)
+        assert state.counters.read("pagesEmpty") == 1
+        assert ("Book.cbz: 02.avif - dropped empty - its encode is 100 B, "
+                "under 10.2 kB") in capfd.readouterr().err

@@ -39,6 +39,13 @@ card: nearly every page is the card's. The CPU's encodes run niced, below the
 sorting that feeds the card. What bounds the looking
 ahead is RAM, read live: every book unpacked and not yet zipped is held there,
 and none is unpacked while less than :data:`RAM_RESERVE` is left.
+
+Under -v the lane says each page's road as the manifest lists it - which side
+it was sorted onto, and why the card declined it, from the page's own run -
+and what each trim verdict was reached on: the page's run's figures for a trim
+it measured, the encoder's own words for a page it found blank, and the
+CPU's figures for a trim the CPU decided. A page the trim found blank has no
+encode to wait for: its manifest line says so, and the book moves on without it.
 """
 
 from __future__ import annotations
@@ -53,7 +60,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from medialib.lib import av1gpu, errorlog, safety, toolcapture
+from medialib.lib import av1gpu, errorlog, runlog, safety, toolcapture
 
 __all__ = ["READY", "MANIFEST", "Lane"]
 
@@ -122,14 +129,17 @@ class Lane:
     trim the card decides, and <resolve> is handed such a page's manifest line
     when the CPU takes it instead: it answers the ImageMagick call that trims
     and encodes it, or None for a blank page, and the verdict ("trimmed",
-    "converted" or "blank")."""
+    "converted" or "blank") with the figures it was reached on, which the run
+    says under -v. <name_of> answers a book's display name from its item, for
+    those lines."""
 
     def __init__(self, encoder: str, root: str, quality: int, preset: str,
                  chroma: str, finish, cpu_jobs: int, log, trim=(),
-                 resolve=None) -> None:
+                 resolve=None, name_of=None) -> None:
         self.encoder = encoder
         self.trim = list(trim)
         self.resolve = resolve
+        self.name_of = name_of or (lambda item: str(item))
         self.root = root
         self.quality = quality
         self.preset = preset
@@ -183,6 +193,46 @@ class Lane:
                         for name, target in targets]
         for thread in self.threads:
             thread.start()
+
+    # --- what the run says of a page, under -v -----------------------------
+    def _page_name(self, entry) -> str:
+        """The page as its run knew it - the name the lines say it by."""
+        page = entry.get("page") or entry.get("output", "")
+        return os.path.basename(page)
+
+    def _road_lines(self, book: _Book, entry) -> list:
+        """What the run says of a page the manifest lists: which side it was
+        sorted onto and why the card declined it - and the trim its run
+        measured, when the line carries one. A page the trim found blank went
+        to no side: its line is its note alone."""
+        book_name = self.name_of(book.item)
+        page = self._page_name(entry)
+        lines = []
+        if entry.get("blank"):
+            if entry.get("note"):
+                lines.append("%s: %s - %s" % (book_name, page,
+                                              entry["note"]))
+            return lines
+        if "input" in entry and not self.broken:
+            lines.append("%s: %s - to the card - %.1f MP"
+                         % (book_name, page, entry.get("pixels", 0) / 1e6))
+        else:
+            why = entry.get("why", "")
+            lines.append("%s: %s - to the CPU - %s" % (book_name, page, why)
+                         if why else "%s: %s - to the CPU" % (book_name,
+                                                              page))
+        if entry.get("note"):
+            lines.append("%s: %s - %s" % (book_name, page, entry["note"]))
+        return lines
+
+    def _card_blank_line(self, book: _Book, entry, reason: str) -> str:
+        """A page the encoder's own trim found blank: dropped with what the
+        encoder said it found blank about it, the page's own words."""
+        line = ("%s: %s - the card dropped it blank"
+                % (self.name_of(book.item), self._page_name(entry)))
+        if reason:
+            line += ": %s" % reason
+        return line
 
     # --- the run's side ---------------------------------------------------
     def folder(self) -> str:
@@ -302,19 +352,27 @@ class Lane:
                        if line.strip()]
         except (OSError, ValueError):
             pass
+        lines = []
         with self.room:
             book.outstanding += len(entries)
             for entry in entries:
-                if "input" in entry and not self.broken:
+                if entry.get("blank"):
+                    # The trim found it blank: no encode is coming for it, so
+                    # it is done the moment it is listed.
+                    self._page_done(book)
+                elif "input" in entry and not self.broken:
                     self.pending.append((book, entry))
                     self.pending_pixels += entry["pixels"]
                 else:
                     self.cpu_queue.append((book, entry))
+                lines.extend(self._road_lines(book, entry))
             if ready:
                 del self.expected[book.folder]
                 book.ready = True
             done = ready and book.outstanding == 0
             self.room.notify_all()
+        for line in lines:
+            runlog.detail(line)
         if done:
             self._finished(book)
 
@@ -381,7 +439,9 @@ class Lane:
                     shutil.rmtree(workdir, ignore_errors=True)
             done = set(written)
             blank = set(report.get("blank", ()))
+            blank_lines = report.get("blank_lines", {})
             finished = []
+            lines = []
             with self.room:
                 self.calls += 1
                 if not written and status > 0 and not self.broken:
@@ -400,6 +460,8 @@ class Lane:
                             self.pixels += entry["pixels"]
                         else:
                             self.blank += 1
+                            lines.append(self._card_blank_line(
+                                book, entry, blank_lines.get(index, "")))
                         if self._page_done(book):
                             finished.append(book)
                     else:
@@ -409,6 +471,8 @@ class Lane:
                 if self.running == 0:
                     self.busy += time.time() - self._busy_since
                 self.room.notify_all()
+            for line in lines:
+                runlog.detail(line)
             for book in finished:
                 self._finished(book)
 
@@ -435,14 +499,18 @@ class Lane:
             if taken is None:
                 break
             book, entry = taken
-            argv, verdict = entry.get("cpu"), ""
+            argv, verdict, note = entry.get("cpu"), "", ""
             if entry.get("trim") and self.resolve is not None:
                 try:
-                    argv, verdict = self.resolve(entry)
+                    argv, verdict, note = self.resolve(entry)
                 except Exception as error:
                     self.log("WARNING: could not decide the trim of %s: %s"
                              % (entry.get("output", "a page"), error))
-                    argv, verdict = [], ""
+                    argv, verdict, note = [], "", ""
+            if note:
+                runlog.detail("%s: %s - %s"
+                              % (self.name_of(book.item),
+                                 self._page_name(entry), note))
             if argv is None:
                 with self.room:
                     self.blank += 1

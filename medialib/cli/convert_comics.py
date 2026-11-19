@@ -67,6 +67,7 @@ from medialib.lib import (
     encodercalibration,
     enums,
     errorlog,
+    formatting,
     gpulane,
     imagebitrate,
     imagecodecs,
@@ -958,9 +959,16 @@ class Run:
                         continue
                     path = os.path.join(parent, name)
                     try:
-                        if os.path.getsize(path) < MIN_PAGE_SIZE:
+                        size = os.path.getsize(path)
+                        if size < MIN_PAGE_SIZE:
                             os.remove(path)
                             empty += 1
+                            runlog.detail("%s: %s - dropped empty - its "
+                                          "encode is %s, under %s"
+                                          % (file_name, name,
+                                             formatting.fmt_bytes(size),
+                                             formatting.fmt_bytes(
+                                                 MIN_PAGE_SIZE)))
                     except OSError:
                         pass
         if empty:
@@ -1845,6 +1853,9 @@ def _start_gpu_lane(state, speed: int, quality, chroma: str,
             ramscratch.add_exit_cleanup([lane_root])
             preset, gpu_quality = COMIC_CALIBRATION.gpu_settings(
                 speed, int(quality))
+            runlog.detail("the card is asked for quality %d, preset %s - what "
+                          "the calibration measured for -l %d -s %d"
+                          % (gpu_quality, preset, int(quality), speed))
             # The trim is decided on the card where it can: the per-book runs
             # then only read each page's header, and the CPU is left to the
             # pages the card cannot take. A kept page is not trimmed at all,
@@ -1856,7 +1867,9 @@ def _start_gpu_lane(state, speed: int, quality, chroma: str,
                 log,
                 trim=(gpu_trim_arguments("%s%%" % fuzz)
                       if state.gpu_trim else ()),
-                resolve=cpu_trim)
+                resolve=cpu_trim,
+                name_of=lambda item: os.path.basename(
+                    item[0].partition(UNIT)[0]))
 
 
 def _missing_pdf_tools() -> str:
