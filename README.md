@@ -64,7 +64,7 @@ apply to it.
 | Command | Does |
 | --- | --- |
 | [`concat-audio`](docs/commands/concat-audio.md) | One audiobook file per input subfolder, with chapters |
-| [`convert-audio`](docs/commands/convert-audio.md) | Spoken-word audio → low-bitrate Opus or xHE-AAC |
+| [`convert-audio`](docs/commands/convert-audio.md) | Spoken-word audio → low-bitrate Opus, AAC or xHE-AAC |
 | [`convert-and-concat`](docs/commands/convert-and-concat.md) | The two above chained, intermediate tree in RAM |
 | [`transcribe-audio`](docs/commands/transcribe-audio.md) | Audio and video → whisper transcripts in a mirrored folder |
 | [`generate-chapters`](docs/commands/generate-chapters.md) | Chapter marks and titles for spoken word, by a language model reading its transcript |

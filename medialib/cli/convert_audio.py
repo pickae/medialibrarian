@@ -1,4 +1,5 @@
-"""convert-audio: a tree of spoken-word audio ingested as Opus or xHE-AAC.
+"""convert-audio: a tree of spoken-word audio ingested as Opus, AAC or
+xHE-AAC.
 
 Video files are ingested too: their audio stream is extracted and converted like
 any other input.
@@ -12,12 +13,12 @@ time inside a video pulled off the web: encoding 46 kbps Opus into 46 kbps Opus
 changes nothing except to spend another lossy generation on it.
 
 -e picks the codec from enums.AUDIO_CODECS, and Opus is the first of them and so
-the default. The other is xHE-AAC, which is a different KIND of encode: ffmpeg
-cannot produce it, so it goes out over a pipe to an external encoder that
-medialib finds and reports for itself (medialib/lib/xheaac.py), and the finished
-file is an .m4a whose chapters are a track rather than a tag. It splits like any
-other codec, which takes three steps the Opus path does not need - see
-medialib/lib/xheaac.py.
+the default. The other two are both written as .m4a, and an .m4a's chapters are
+a track rather than a tag. AAC ffmpeg encodes itself; xHE-AAC is a different
+KIND of encode: ffmpeg cannot produce it, so it goes out over a pipe to an
+external encoder that medialib finds and reports for itself
+(medialib/lib/xheaac.py). It splits like any other codec, which takes three
+steps the Opus path does not need - see medialib/lib/xheaac.py.
 
 A long file can be cut into one chunk per core, and the chunks encode as
 independent queue jobs, each taking its own place in the queue at the size of one
@@ -100,7 +101,7 @@ DEFAULT_CODEC = enums.AUDIO_CODECS[0]
 # takes. "xheaac" is one word because an option value with a hyphen in it is a
 # nuisance to type; the codec's name has the hyphen, and a page that prints the
 # token as though it were the name teaches the reader the wrong word for it.
-CODEC_NAMES = {"opus": "Opus", "xheaac": "xHE-AAC"}
+CODEC_NAMES = {"opus": "Opus", "aac": "AAC", "xheaac": "xHE-AAC"}
 
 # The spec is DATA, and the page it renders is compared byte for byte against the
 # recorded contract under tests/data/cliContract.
@@ -125,13 +126,13 @@ k |  | Keep temporary files.
                     Default false
 c |  | Copy non transcoded files from <inputDir> into <outputDir>
 e | <codec> | Output encoding: {codecs}.
-                    xheaac needs an external encoder ({encoders}) and is
-                    written as .m4a.
+                    aac and xheaac are written as .m4a; xheaac needs an
+                    external encoder ({encoders}).
                     Default {codec}
 b | <bitrate> | Bitrate of the output files
-                    Default 46 kbps or 32 kbps for forced mono output, and
-                    with -u the 46 scaled up with the channel count for a
-                    surround source
+                    Default 46 kbps Opus or 64 kbps AAC, or 32 or 48 kbps
+                    for forced mono output, and with -u the Opus default
+                    scaled up with the channel count for a surround source
 T | <kbps> | The bitrate a file must reach to be re-encoded.
                     Default 90 kbps, or 50 kbps for a mono run
 j | <jobs> | Run up to <jobs> encoder processes in parallel.
@@ -175,8 +176,15 @@ T | posInt | threshold
 g | posInt | group depth
 """.format(codecs="\\|".join(enums.AUDIO_CODECS))
 
-DEFAULT_BITRATE = 46
-MONO_BITRATE = 32
+# The default output rate, in kbps, and the one a forced mono run encodes at -
+# per codec, because the mono counterpart is a decision the rate belongs to.
+# AAC's are the figures speech needs of the codec: 64 kbps stereo, 48 mono.
+DEFAULT_BITRATES = {"opus": 46, "aac": 64, "xheaac": 46}
+MONO_BITRATES = {"opus": 32, "aac": 48, "xheaac": 32}
+# The default codec's pair, kept as the single figures the page and the
+# surround scaling name: a run of another codec reads the table.
+DEFAULT_BITRATE = DEFAULT_BITRATES[DEFAULT_CODEC]
+MONO_BITRATE = MONO_BITRATES[DEFAULT_CODEC]
 
 # The re-encode cut-off, in bps, and the one a mono run judges by. Where -T
 # gives a value it stands for both, so the run has one cut-off, not a pair.
@@ -237,14 +245,16 @@ def _probe(argv: list) -> str:
     return done.stdout.decode("utf-8", "surrogateescape").strip()
 
 
-def resolve_bitrate(bitrate: int, mono: bool) -> int:
+def resolve_bitrate(bitrate: int, mono: bool, codec: str = "opus") -> int:
     """The target bitrate for a track, honouring the forced-mono default swap.
 
-    Kept apart so the chunk encoder produces bit-for-bit the same settings as a
-    whole-file encode.
+    The swap is the codec's OWN default - a forced mono run of AAC encodes at
+    AAC's mono figure, not Opus' - so the codec decides which pair the default
+    belongs to. Kept apart so the chunk encoder produces bit-for-bit the same
+    settings as a whole-file encode.
     """
-    if mono and bitrate == DEFAULT_BITRATE:
-        return MONO_BITRATE
+    if mono and bitrate == DEFAULT_BITRATES[codec]:
+        return MONO_BITRATES[codec]
     return bitrate
 
 
@@ -304,9 +314,12 @@ def source_audio_profile(src: str) -> str:
 #
 # The profile is the whole reason this is a table rather than a comparison.
 # `opus` is `opus` and nothing else, but `aac` is AAC-LC, HE-AAC, HE-AACv2, LD,
-# ELD and xHE-AAC, and only the last of those is this command's output.
+# ELD and xHE-AAC, and this command writes two of those: AAC-LC from `aac`, and
+# xHE-AAC from `xheaac`. They share the codec name `aac`, so the profile is what
+# tells a source apart from the run's own output.
 FINISHED_STREAM = {
     "opus": ("opus", ""),
+    "aac": ("aac", "LC"),
     "xheaac": ("aac", "xHE-AAC"),
 }
 
@@ -481,9 +494,10 @@ def source_channels(src: str) -> int:
     audio file. An unknown count is read as stereo.
 
     Read by adaptive mode, which decides a file's channels and bitrate from it,
-    and by the xhe-aac encode, because exhale's presets are quoted per channel
-    count: the same preset is 48 kbps in stereo and 24 in mono, so the count is
-    part of choosing one rather than an afterthought.
+    and by the encodes that fold a wide source down - and by the xhe-aac encode
+    besides, whose presets are quoted per channel count: the same preset is
+    48 kbps in stereo and 24 in mono, so the count is part of choosing one
+    rather than an afterthought.
     """
     raw = _probe(["ffprobe", "-v", "quiet", "-select_streams", "a:0",
                   "-show_entries", "stream=channels",
@@ -908,15 +922,18 @@ class Run:
         directory = segments.chunk_dir_for(self.chunk_root, relative)
         os.makedirs(directory, exist_ok=True)
         out = self.chunk_path(directory, int(index))
-        bitrate = resolve_bitrate(self.bitrate, self.mono)
+        bitrate = resolve_bitrate(self.bitrate, self.mono, self.codec)
 
         if self.codec == "xheaac":
             self._encode_xheaac(source, out, self.mono, bitrate,
                                 duration=duration, start=start, take=duration)
         else:
+            codec_argv = (self._aac_codec(source, self.mono, bitrate)
+                          if self.codec == "aac"
+                          else self._opus_codec(source, self.mono, bitrate))
             argv = ["ffmpeg", "-nostdin", "-y", "-ss", start, "-t", duration,
                     "-i", source, "-map", "0:a:0", "-map_metadata", "-1"]
-            argv += self._opus_codec(source, self.mono, bitrate) + [out]
+            argv += codec_argv + [out]
             self._run_tool(argv, out)
 
         # Measured here as well as on the finished file, because a chunk is the
@@ -931,10 +948,11 @@ class Run:
 
         # The join is a plain concatenation, and an MP4 carries ONE edit list -
         # so a chunk that still asks for its own priming to be discarded would
-        # have that request applied to the whole book or to none of it. Flattened
-        # here, where the chunks are still separate files and the work is spread
-        # over the pool.
-        if self.codec == "xheaac":
+        # have that request applied to the whole book or to none of it. Both
+        # .m4a encoders prime their decoder and say so, so both flatten.
+        # Here, where the chunks are still separate files and the work is
+        # spread over the pool.
+        if self.extension == "m4a":
             _flatten_edit_list(out)
 
         # A chunk's slice of audio; the chunks of one file sum to its length.
@@ -983,9 +1001,10 @@ class Run:
             threshold = self.mono_threshold
             # Only the DEFAULT bitrate is swapped - a provided -b is kept, and so
             # is the per-file target adaptive mode already looked up, which is the
-            # whole point of that mode.
-            if not self.adaptive and bitrate == DEFAULT_BITRATE:
-                bitrate = MONO_BITRATE
+            # whole point of that mode. The swap is the codec's own default: a
+            # forced mono AAC run encodes at AAC's mono figure, not Opus'.
+            if not self.adaptive and bitrate == DEFAULT_BITRATES[self.codec]:
+                bitrate = MONO_BITRATES[self.codec]
 
         # Only a video ever reaches the lift-out question: a PLAIN file whose
         # audio is already finished never got past the first one - it is its own
@@ -1057,6 +1076,9 @@ class Run:
         if self.codec == "xheaac":
             return self._encode_xheaac(source, out, mono, bitrate, channels,
                                        duration)
+        if self.codec == "aac":
+            self._encode_aac(source, out, mono, bitrate, channels)
+            return True
         self._encode_opus(source, out, mono, bitrate, channels)
         return True
 
@@ -1068,6 +1090,15 @@ class Run:
             ["ffmpeg", "-nostdin", "-y", "-i", source, "-map", "0:a:0",
              "-map_metadata", "0:s:0"]
             + self._opus_codec(source, mono, bitrate, channels) + [out], out)
+
+    def _encode_aac(self, source: str, out: str, mono: bool,
+                    bitrate: int, channels: int = 0) -> None:
+        """The one-pass ffmpeg encode: ffmpeg's own aac encoder, straight to
+        the output."""
+        self._run_tool(
+            ["ffmpeg", "-nostdin", "-y", "-i", source, "-map", "0:a:0",
+             "-map_metadata", "0:s:0"]
+            + self._aac_codec(source, mono, bitrate, channels) + [out], out)
 
     def _opus_codec(self, source: str, mono: bool, bitrate: int,
                     channels: int = 0) -> list:
@@ -1105,6 +1136,32 @@ class Run:
                 if not self.adaptive:
                     bitrate = surround_bitrate(bitrate, channels)
         return layout + ["-c:a", "libopus", "-b:a", "%dk" % bitrate]
+
+    def _aac_codec(self, source: str, mono: bool, bitrate: int,
+                   channels: int = 0) -> list:
+        """The channel and codec half of an AAC encode's argv, shared by the
+        whole-file encode and the chunk encoder.
+
+        Shared for the same reason as the Opus half: the chunks of a split book
+        are joined by a stream copy, so both paths have to come out of the same
+        decision rather than two copies of it.
+
+        <channels> is the source's count if a caller already probed it, and 0
+        for "ask" - asked only when the output is not forced mono, since mono
+        needs nothing but its `-ac 1`.
+
+        The encoder is ffmpeg's own, and it takes the source's layout as it is
+        - a 5.1(side) comes out 5.1 - so the channel question is only the FOLD:
+        a source wider than the ceiling downmixes, and the ceiling is stereo
+        unless -u asked to keep the count.
+        """
+        if mono:
+            layout = ["-ac", "1"]
+        else:
+            channels = channels or source_channels(source)
+            target = output_channels(channels, self.surround)
+            layout = ["-ac", str(target)] if target != channels else []
+        return layout + ["-c:a", "aac", "-b:a", "%dk" % bitrate]
 
     def _encode_xheaac(self, source: str, out: str, mono: bool,
                        bitrate: int, channels: int = 0,
@@ -1374,7 +1431,7 @@ class Run:
         """A track's chunks joined into the final output, with every piece of
         metadata re-attached from the ORIGINAL file.
 
-        A stream copy for either codec: a chunk is already the output format, and
+        A stream copy for any codec: a chunk is already the output format, and
         the pieces were cut to join without a seam.
 
         The whole assembly is done on a RAM-backed staging copy and only the
@@ -1707,7 +1764,7 @@ class Planner:
         channels = 1 if state.mono else output_channels(
             source_channels(source), state.surround)
         preset = xheaac.exhale_preset(
-            resolve_bitrate(state.bitrate, state.mono), channels)
+            resolve_bitrate(state.bitrate, state.mono, state.codec), channels)
         priming, frame = xheaac.encoder_timing(preset, rate, channels)
         return rate, priming, frame
 
@@ -1957,9 +2014,9 @@ def main(argv: list, program: str = "convert-audio",
     copy = "c" in result.given
     keep = "k" in result.given
     bitrate_set = bool(result.values["bitrate"])
-    bitrate = int(result.values["bitrate"] or DEFAULT_BITRATE)
     cutoff = int(result.values["threshold"] or 0) * 1000
     codec = result.values["outputCodec"] or DEFAULT_CODEC
+    bitrate = int(result.values["bitrate"] or DEFAULT_BITRATES[codec])
     jobs = int(result.values["jobs"] or runlog.cpu_count())
     group_depth = int(result.values["groupDepth"] or 0)
     ai_chapters = "t" in result.given
@@ -2111,7 +2168,7 @@ def _report_encoder(codec: str, bitrate: int, mono: bool,
     if adaptive:
         return
     channels = 1 if mono else 2
-    target = resolve_bitrate(bitrate, mono)
+    target = resolve_bitrate(bitrate, mono, codec)
     preset = xheaac.exhale_preset(target, channels)
     actual = xheaac.preset_bitrate(preset, channels)
     note = "" if actual == target else " (nearest preset to %d)" % target
@@ -2512,7 +2569,7 @@ def _decide_chunking(state: Run, jobs: int) -> frozenset:
         [(enums.lower_extension_of(track), _filesize(state, track))
          for track in state.tracks],
         jobs, runlog.cpu_count(), state.mono,
-        resolve_bitrate(state.bitrate, state.mono),
+        resolve_bitrate(state.bitrate, state.mono, state.codec),
         state.mono_threshold if state.mono else state.threshold,
         lambda extension: extension in enums.VIDEO_EXTENSIONS,
         lambda extension: extension in enums.ALWAYS_TRANSCODE_EXTENSIONS,
