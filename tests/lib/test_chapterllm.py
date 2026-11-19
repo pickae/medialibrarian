@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 import threading
+import types
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -208,6 +210,15 @@ class TestTheRequest:
         assert curl["body"]["reasoning_effort"] == "low"
         assert curl["body"]["max_tokens"] == 900
 
+    def test_a_thorough_model_reasons_over_what_the_options_say(self, curl):
+        llm = chapterllm.from_environment(dict(
+            _LOCAL, chapterLlmOptions='{"reasoning_effort": "none", "top_k": 20}'))
+        llm.following("Name the speakers.").ask("system", "prompt")
+        assert curl["body"]["reasoning_effort"] == chapterllm.THOROUGH_EFFORT
+        assert curl["body"]["top_k"] == 20
+        llm.ask("system", "prompt")
+        assert curl["body"]["reasoning_effort"] == "none"
+
     def test_a_curl_failure_is_retried_then_reported(self, curl, monkeypatch):
         calls = []
         original = chapterllm._ask_openai
@@ -248,3 +259,89 @@ class TestOptions:
             chapterllm.from_environment({"chapterLlmApi": "anthropic",
                                          "chapterLlmOptions": '{"a": 1}'})
 
+
+
+class TestFollowing:
+    def test_blank_instructions_change_nothing(self):
+        llm = chapterllm.from_environment(_LOCAL)
+        assert llm.following("  \n ") is llm
+
+    def test_the_copy_shares_the_runs_request_limit(self):
+        llm = chapterllm.from_environment(_LOCAL)
+        assert llm._slots is not None
+        assert llm.following("Name them.")._slots is llm._slots
+
+    def test_only_claude_may_search(self):
+        local = chapterllm.from_environment(_LOCAL).following(" Name them. ")
+        claude = chapterllm.from_environment({"chapterLlmApi": "anthropic"}).following("x")
+        assert local.instructions == "Name them."
+        assert (local.effort, local.search) == (chapterllm.THOROUGH_EFFORT, False)
+        assert (claude.effort, claude.search) == (chapterllm.THOROUGH_EFFORT, True)
+        assert "medium effort" in local.describe()
+        assert "web search" in claude.describe()
+        assert "effort" not in chapterllm.from_environment(_LOCAL).describe()
+
+
+class _Block:
+    def __init__(self, type, text=""):
+        self.type, self.text = type, text
+
+
+class _Message:
+    def __init__(self, stop_reason, *blocks):
+        self.stop_reason, self.content = stop_reason, list(blocks)
+
+
+class TestClaude:
+    @pytest.fixture
+    def claude(self, monkeypatch):
+        """A stand-in for the anthropic package: each request is recorded and
+        answered with the next of ``replies``."""
+        seen: dict = {"requests": [], "replies": []}
+
+        class Stream:
+            def __init__(self, **request):
+                seen["requests"].append(request)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def get_final_message(self):
+                return seen["replies"].pop(0)
+
+        class Messages:
+            def stream(self, **request):
+                return Stream(**request)
+
+        class Client:
+            def __init__(self, **options):
+                self.beta = types.SimpleNamespace(messages=Messages())
+
+        module = types.ModuleType("anthropic")
+        module.Anthropic = Client
+        module.APIStatusError = type("APIStatusError", (Exception,), {})
+        module.APIConnectionError = type("APIConnectionError", (Exception,), {})
+        monkeypatch.setitem(sys.modules, "anthropic", module)
+        return seen
+
+    def test_plain_requests_neither_search_nor_raise_the_effort(self, claude):
+        claude["replies"].append(_Message("end_turn", _Block("text", "{}")))
+        chapterllm.from_environment({"chapterLlmApi": "anthropic"}).ask("s", "p")
+        request = claude["requests"][0]
+        assert "tools" not in request
+        assert request["output_config"] == {"effort": "medium"}
+
+    def test_a_thorough_request_searches_and_a_paused_turn_is_resumed(self, claude):
+        searched = _Block("server_tool_use")
+        claude["replies"] += [_Message("pause_turn", _Block("text", "Looking. "), searched),
+                              _Message("end_turn", _Block("text", '{"a": 1}'))]
+        llm = chapterllm.from_environment({"chapterLlmApi": "anthropic"}).following("x")
+        assert llm.ask("s", "p") == '{"a": 1}'
+        first, second = claude["requests"]
+        assert first["tools"][0]["type"] == "web_search_20260209"
+        assert second["messages"][0] == {"role": "user", "content": "p"}
+        assert second["messages"][1]["role"] == "assistant"
+        assert second["messages"][1]["content"][1] is searched

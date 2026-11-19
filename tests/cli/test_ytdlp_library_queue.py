@@ -86,6 +86,15 @@ class TestBatches:
         assert conversions[0][1:-2] == ["-c", "-b", "65", "-t",
                                         "-r", "A", "-r", "B", "-r", "C"]
 
+    def test_the_chapter_instructions_go_over_whole(self, library):
+        """-P's text is handed to convert-audio as one argument, however many
+        spaces it holds."""
+        library.state.ingest["prompt"] = ["-p", "Name each speaker and topic."]
+        library.feed("A", 1)
+        library.drain()
+        assert _conversions(library.calls)[0][1:-2] == [
+            "-c", "-b", "65", "-t", "-p", "Name each speaker and topic.", "-r", "A"]
+
     def test_a_batch_short_of_the_size_still_goes_when_the_downloads_end(self, library):
         library.feed("A", 1)
         library.drain()
@@ -152,6 +161,12 @@ class TestTheOption:
         status = ytdlp.main(["-g", str(tmp_path / "out"), "archive.log"])
         assert status == 1
         assert "-g chapters the library copy, so it needs -i" in capsys.readouterr().err
+
+    def test_P_without_g_is_refused(self, tmp_path, capsys):
+        status = ytdlp.main(["-i", "-P", "Name them.", str(tmp_path / "out"),
+                             "archive.log"])
+        assert status == 1
+        assert "-P is for the chapter model, so it needs -g" in capsys.readouterr().err
 
     def test_an_unknown_spoken_language_is_refused(self, tmp_path, capsys, monkeypatch):
         monkeypatch.setenv("spokenLanguages", "xx")

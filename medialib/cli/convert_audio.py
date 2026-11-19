@@ -150,6 +150,10 @@ t |  | Add chapters to every output whose source has none, worked
                     the output as well. A transcript sidecar is used rather
                     than transcribing again.
                     Default false
+p | <text> | With -t: more instructions for the model, added to every
+                    request, e.g. "a chapter per speaker, titled with their
+                    name and topic". The model then reasons at medium effort,
+                    and Claude may search the web.
 r | <folder> | Only the files under <inputDir>/<folder>, converted to
                     where a run over all of <inputDir> would put them. May
                     be given more than once.
@@ -158,12 +162,12 @@ r | <folder> | Only the files under <inputDir>/<folder>, converted to
            codec=DEFAULT_CODEC)
 
 OPT_VARS = ("m:mono u:surround a:adaptive c:copy k:keep e:outputCodec "
-            "b:bitrate T:threshold j:jobs g:groupDepth r:only")
+            "b:bitrate T:threshold j:jobs g:groupDepth r:only p:instructions")
 OPT_FLAGS = "repeat:r"
 OPT_COLUMN = 20
 OPT_LONG = ("h:help m:mono u:surround a:adaptive k:keep c:copy-others "
             "e:encoding b:bitrate T:threshold j:jobs g:group "
-            "t:ai-chapters r:only")
+            "t:ai-chapters p:prompt r:only")
 
 # The codec has to be one this command can write, or a typo would only surface
 # as a per-file failure deep into a run. The choices are joined with an ESCAPED
@@ -2020,6 +2024,7 @@ def main(argv: list, program: str = "convert-audio",
     jobs = int(result.values["jobs"] or runlog.cpu_count())
     group_depth = int(result.values["groupDepth"] or 0)
     ai_chapters = "t" in result.given
+    instructions = (result.values["instructions"] or "").strip()
     only = tuple(result.values["only"] or ())
 
     # Adaptive mode owns the channel and bitrate decision per file, so a global
@@ -2037,6 +2042,14 @@ def main(argv: list, program: str = "convert-audio",
     if adaptive and group_depth:
         sys.stderr.write("%s\n\nerror: -a (adaptive) cannot be combined "
                          "with -g.\n\n%s\n"
+                         % (declaration.credits,
+                            clioptions.page(declaration)))
+        return 1
+
+    # The instructions are for the model -t asks; without it there is none.
+    if "p" in result.given and not ai_chapters:
+        sys.stderr.write("%s\n\nerror: -p (instructions for the chapter model) "
+                         "needs -t.\n\n%s\n"
                          % (declaration.credits,
                             clioptions.page(declaration)))
         return 1
@@ -2083,7 +2096,8 @@ def main(argv: list, program: str = "convert-audio",
         return _settle_and_convert(program, script_dir, input_dir, output_dir,
                                    mono, adaptive, copy, keep, bitrate,
                                    cutoff, jobs, codec, chunk_over_ceiling,
-                                   surround, group_depth, ai_chapters, only)
+                                   surround, group_depth, ai_chapters, only,
+                                   instructions)
     finally:
         # The ffmpeg pin can make the run directory before init_ram_base
         # does, and every refusal after it must hand it back.
@@ -2095,7 +2109,7 @@ def _settle_and_convert(program: str, script_dir: str, input_dir: str,
                         copy: bool, keep: bool, bitrate: int, cutoff: int,
                         jobs: int, codec: str, chunk_over_ceiling: bool,
                         surround: bool, group_depth: int, ai_chapters: bool,
-                        only=()) -> int:
+                        only=(), instructions: str = "") -> int:
     ffmpegselect.select_ffmpeg()
     ffmpegselect.report_ffmpeg_selection()
     if tooldeps.require_tools(program, ["ffmpeg", "ffprobe", "rsync",
@@ -2120,6 +2134,8 @@ def _settle_and_convert(program: str, script_dir: str, input_dir: str,
     llm = chapterllm.require(program) if ai_chapters else None
     if ai_chapters and llm is None:
         return 1
+    if llm is not None:
+        llm = llm.following(instructions)
     runlog.warn_uncounted_progress()
     mkvtoolnix_unsaid = _settle_mkvtoolnix()
 

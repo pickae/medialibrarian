@@ -152,6 +152,7 @@ the two systems and is worked out at run time:
 | [`-c`](#tidying-up-after-a-run--c) | tidies up after the run |
 | [`-i`](#building-the-phones-library-from-the-run--i) | builds the phone's library from the run |
 | [`-g`](#chapters-for-the-library--g) | with `-i`, chapters every episode in the library that has none |
+| [`-P`](#chapters-for-the-library--g) | with `-g`, your own instructions for the chapter model |
 | [`-l`](#merging-archives--l) | merges archives; downloads nothing |
 
 ### Tidying up after a run (`-c`)
@@ -227,6 +228,10 @@ with the `chapterLlm` settings). That covers the episodes already in a feed's
 staging folder as well as the new ones, so the first run with `-g` chapters a
 feed's back catalogue too. A run whose model cannot be reached is refused
 before anything is fetched.
+
+`-P "<text>"` hands your own instructions to the model, for example a chapter
+per speaker ([`convert-audio -p`](convert-audio.md#chapters-for-what-has-none--t)).
+The model then reasons harder, and Claude may search the web. `-P` needs `-g`.
 
 Where the transcript comes from depends on the feed:
 

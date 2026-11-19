@@ -51,6 +51,29 @@ starts, and the titles say which part they belong to.
 shortest one allowed (2 minutes). A chapter shorter than that is merged into the
 one before it.
 
+## Your own instructions
+
+`-p` adds your own text to every request, for chapters cut or titled differently
+from the default:
+
+    generate-chapters -p "Let the chapters follow the speakers, and title each
+    with the speaker's name and topic. Search online to make sure each speaker
+    is named correctly." talks/ chapters/
+
+Where your text and the built-in guidance disagree, yours wins. The answer's
+form and the shortest chapter (`-m`) still apply.
+
+A run with `-p` makes the model think harder. Over the `openai` protocol it
+sends `reasoning_effort` set to `medium`, replacing whatever `chapterLlmOptions`
+says for that field. A server that switches thinking off some other way has to
+have that setting removed by hand. Claude runs at `medium` effort anyway, and
+with `-p` it may also search the web, up to five searches a request. Anthropic
+bills those searches. A server behind the `openai` protocol cannot search, so
+it works from the transcript alone.
+
+A transcript does not say who is speaking, so the model works speakers out from
+what they say: introductions, names, how they address each other.
+
 ## Which model
 
 Any model behind one of two protocols, chosen with the

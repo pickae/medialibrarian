@@ -57,6 +57,10 @@ m | <minutes> | The shortest chapter.
                     Default {minimum}
 l | <minutes> | The length of chapter the model is steered towards.
                     Default {typical}
+p | <text> | More instructions for the model, added to every request,
+                    e.g. "a chapter per speaker, titled with their name and
+                    topic". The model then reasons at medium effort, and Claude
+                    may search the web.
 """.format(minimum=aichapters.DEFAULT_MIN_MINUTES,
            typical=aichapters.DEFAULT_TYPICAL_MINUTES)
 
@@ -65,9 +69,9 @@ m | posInt | shortest chapter
 l | posInt | chapter length
 """
 
-OPT_VARS = "f:force m:minMinutes l:typicalMinutes"
+OPT_VARS = "f:force m:minMinutes l:typicalMinutes p:instructions"
 OPT_COLUMN = 20
-OPT_LONG = "h:help f:force m:min-length l:length"
+OPT_LONG = "h:help f:force m:min-length l:length p:prompt"
 
 # What a chapter file is called beside the transcript.
 CHAPTER_SUFFIX = ".chapters.txt"
@@ -127,19 +131,22 @@ def main(argv: list, program: str = "generate-chapters",
     force = "f" in result.given
     min_minutes = int(result.values["minMinutes"] or aichapters.DEFAULT_MIN_MINUTES)
     typical = int(result.values["typicalMinutes"] or aichapters.DEFAULT_TYPICAL_MINUTES)
+    instructions = (result.values["instructions"] or "").strip()
 
     try:
         return _run(program, script_dir or commands.script_dir(), input_dir,
-                    output_dir, force, min_minutes, typical)
+                    output_dir, force, min_minutes, typical, instructions)
     finally:
         ramscratch.run_exit_cleanup()
 
 
 def _run(program: str, script_dir: str, input_dir: str, output_dir: str,
-         force: bool, min_minutes: int, typical: int) -> int:
+         force: bool, min_minutes: int, typical: int,
+         instructions: str = "") -> int:
     llm = chapterllm.require(program)
     if llm is None:
         return 1
+    llm = llm.following(instructions)
 
     inputs = _inputs(input_dir)
     if not inputs:
