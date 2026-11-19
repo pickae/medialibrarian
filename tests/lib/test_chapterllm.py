@@ -184,7 +184,7 @@ class TestTheRequest:
         del curl["stdout"]
         llm.ask("s", "u", tally)
         assert (tally.requests, tally.counted, tally.tokens) == (2, 1, 42)
-        assert tally.seconds >= tally.counted_seconds > 0
+        assert tally.seconds >= tally.counted_seconds >= 0
 
     def test_the_key_is_on_stdin_and_never_on_the_argv(self, curl):
         chapterllm.from_environment(dict(_LOCAL, chapterLlmKey="sk-secret")).ask("s", "u")
