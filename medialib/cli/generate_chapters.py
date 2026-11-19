@@ -53,7 +53,8 @@ OPT_SPEC = """
 h |  | Print this help page.
 f |  | Make the chapter files again, over the ones already there.
                     Default false
-m | <minutes> | The shortest chapter.
+m | <minutes> | The shortest chapter, in minutes; a fraction is allowed,
+                    0.5 being thirty seconds.
                     Default {minimum}
 l | <minutes> | The length of chapter the model is steered towards.
                     Default {typical}
@@ -65,7 +66,7 @@ p | <text> | More instructions for the model, added to every request,
            typical=aichapters.DEFAULT_TYPICAL_MINUTES)
 
 OPT_CHECKS = """
-m | posInt | shortest chapter
+m | posNum | shortest chapter
 l | posInt | chapter length
 """
 
@@ -129,7 +130,7 @@ def main(argv: list, program: str = "generate-chapters",
     output_dir = os.path.abspath(output_dir)
 
     force = "f" in result.given
-    min_minutes = int(result.values["minMinutes"] or aichapters.DEFAULT_MIN_MINUTES)
+    min_minutes = float(result.values["minMinutes"] or aichapters.DEFAULT_MIN_MINUTES)
     typical = int(result.values["typicalMinutes"] or aichapters.DEFAULT_TYPICAL_MINUTES)
     instructions = (result.values["instructions"] or "").strip()
 
@@ -141,7 +142,7 @@ def main(argv: list, program: str = "generate-chapters",
 
 
 def _run(program: str, script_dir: str, input_dir: str, output_dir: str,
-         force: bool, min_minutes: int, typical: int,
+         force: bool, min_minutes: float, typical: int,
          instructions: str = "") -> int:
     llm = chapterllm.require(program)
     if llm is None:

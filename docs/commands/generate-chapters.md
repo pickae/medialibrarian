@@ -49,7 +49,9 @@ starts, and the titles say which part they belong to.
 
 `-l` steers how long a chapter usually is (8 minutes by default) and `-m` sets the
 shortest one allowed (2 minutes). A chapter shorter than that is merged into the
-one before it.
+one before it. `-m` takes fractions of a minute, so `-m 0.5` allows chapters of
+thirty seconds - for a recording whose structure has short parts, such as an
+episode's opening before its first segment.
 
 ## Your own instructions
 

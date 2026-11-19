@@ -44,7 +44,7 @@ from medialib.lib import chapterllm, cuechapters, safety
 
 __all__ = ["TRANSCRIPT_SUFFIXES", "Cue", "read_transcript", "find_transcript",
            "Passage", "passages", "generate", "chapter_rows", "time_label",
-           "DEFAULT_MIN_MINUTES", "DEFAULT_TYPICAL_MINUTES", "transcribe", "as_ready"]
+           "DEFAULT_MIN_MINUTES", "DEFAULT_TYPICAL_MINUTES", "span_label", "transcribe", "as_ready"]
 
 # The transcript formats read, in the order a folder holding several of them is
 # looked through: the two subtitle formats every recogniser can write,
@@ -233,6 +233,18 @@ def passages(cues: Sequence[Cue], seconds: int = PASSAGE_SECONDS) -> list[Passag
     return found
 
 
+def span_label(minutes: float) -> str:
+    """A length the way the model is told it: 2 minutes, 1 minute, 30 seconds,
+    1.5 minutes."""
+    if minutes < 1:
+        seconds = max(1, round(minutes * 60))
+        return "%d second%s" % (seconds, "" if seconds == 1 else "s")
+    if minutes == 1:
+        return "1 minute"
+    return "%s minutes" % ("%d" % minutes if minutes == int(minutes)
+                           else ("%.2f" % minutes).rstrip("0"))
+
+
 def time_label(ms: int) -> str:
     """H:MM:SS, the way the model is shown a time."""
     seconds = max(ms, 0) // _MS_PER_SECOND
@@ -411,7 +423,7 @@ class _Mark:
 
 
 def _outline(lines: Sequence[_Line], summarised: bool, total: int, llm,
-             duration: int, typical_minutes: int, min_minutes: int,
+             duration: int, typical_minutes: int, min_minutes: float,
              log, instructions: str = "") -> tuple[str, list[_Mark]] | None:
     """The first pass: the whole recording divided at once. None when the
     model gave no usable outline."""
@@ -430,7 +442,7 @@ def _outline(lines: Sequence[_Line], summarised: bool, total: int, llm,
         "- Let the content decide how many. As a rough guide a chapter runs "
         "about %d minutes, but where the recording has more real segments than "
         "that, each still gets its own chapter, and where it stays on one subject "
-        "longer, so does the chapter. No chapter shorter than %d minutes.\n"
+        "longer, so does the chapter. No chapter shorter than %s.\n"
         "- A recording can be nested - several episodes or programmes in a row, "
         "each with its own segments, or parts made of chapters. Then give one flat "
         "list: a chapter where each episode or part begins, and within it a "
@@ -445,7 +457,7 @@ def _outline(lines: Sequence[_Line], summarised: bool, total: int, llm,
         'Answer with JSON only: {"summary": "<two or three sentences on what the '
         'whole recording is about>", "chapters": [{"start": "<line id>", '
         '"title": "<title>"}, ...]}\n\nTranscript:\n%s\n'
-        % (time_label(duration), what, typical_minutes, min_minutes,
+        % (time_label(duration), what, typical_minutes, span_label(min_minutes),
            "P%d" % (lines[0].passage + 1), _TITLE_RULES,
            _asked(instructions, _FOR_CHAPTERS), _render(lines)))
     answer = _ask_json(llm, prompt, "chapters", log)
@@ -572,7 +584,7 @@ def _settle(cues: Sequence[Cue], chosen: Sequence[tuple[int, str]],
     return marks if len(marks) > 1 else []
 
 
-def too_short(duration: int, min_minutes: int = DEFAULT_MIN_MINUTES) -> bool:
+def too_short(duration: int, min_minutes: float = DEFAULT_MIN_MINUTES) -> bool:
     """Whether a recording of ``duration`` ms is too short for two chapters -
     asked before it is transcribed, since :func:`generate` would answer
     nothing for it whatever its transcript said. An unknown length (0) is
@@ -580,7 +592,7 @@ def too_short(duration: int, min_minutes: int = DEFAULT_MIN_MINUTES) -> bool:
     return 0 < duration < 2 * min_minutes * _MS_PER_MINUTE
 
 
-def generate(cues: Sequence[Cue], llm, *, min_minutes: int = DEFAULT_MIN_MINUTES,
+def generate(cues: Sequence[Cue], llm, *, min_minutes: float = DEFAULT_MIN_MINUTES,
              typical_minutes: int = DEFAULT_TYPICAL_MINUTES,
              log: Callable[[str], None] = lambda line: None) -> list[tuple[int, str]]:
     """The chapters of a recording, as (start ms, title), the first at 0.
@@ -596,7 +608,7 @@ def generate(cues: Sequence[Cue], llm, *, min_minutes: int = DEFAULT_MIN_MINUTES
     if not cues:
         return []
     duration = max(cue.end for cue in cues)
-    min_ms = min_minutes * _MS_PER_MINUTE
+    min_ms = int(min_minutes * _MS_PER_MINUTE)
     if duration < 2 * min_ms:
         return []
     found = passages(cues)
@@ -613,10 +625,10 @@ def generate(cues: Sequence[Cue], llm, *, min_minutes: int = DEFAULT_MIN_MINUTES
 
 
 def _chapters(cues: Sequence[Cue], found: list[Passage], llm, duration: int,
-              count: int, typical_minutes: int, min_minutes: int,
+              count: int, typical_minutes: int, min_minutes: float,
               log: Callable[[str], None], instructions: str) -> list[tuple[int, str]]:
     """:func:`generate`'s work, on the server the model is held on."""
-    min_ms = min_minutes * _MS_PER_MINUTE
+    min_ms = int(min_minutes * _MS_PER_MINUTE)
     lines = [_Line(index, passage.start, passage.text)
              for index, passage in enumerate(found)]
     summarised = False

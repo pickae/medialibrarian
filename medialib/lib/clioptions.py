@@ -240,6 +240,8 @@ def build_tables(spec: Spec) -> Tables:
 
 _POS_INT = re.compile(r"[1-9][0-9]*")
 _NON_NEG_INT = re.compile(r"0|[1-9][0-9]*")
+# A number above 0, fractions allowed: 2, 0.5, 1.25.
+_POS_NUM = re.compile(r"(0|[1-9][0-9]*)(\.[0-9]+)?")
 _ANY_INT = re.compile(r"0|-?[1-9][0-9]*")
 
 
@@ -259,6 +261,10 @@ def validate(letter: str, value: str, tables: Tables) -> None:
         if _POS_INT.fullmatch(value):
             return
         wanted = "a whole number of 1 or more"
+    elif kind == "posNum":
+        if _POS_NUM.fullmatch(value) and float(value) > 0:
+            return
+        wanted = "a number above 0, a fraction allowed (e.g. 0.5)"
     elif kind == "nonNegInt":
         if _NON_NEG_INT.fullmatch(value):
             return

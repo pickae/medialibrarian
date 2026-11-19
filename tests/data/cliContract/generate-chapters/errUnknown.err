@@ -18,7 +18,8 @@ Options:
     -f, --force     Make the chapter files again, over the ones already there.
                     Default false
     -m, --min-length <minutes>
-                    The shortest chapter.
+                    The shortest chapter, in minutes; a fraction is allowed,
+                    0.5 being thirty seconds.
                     Default 2
     -l, --length <minutes>
                     The length of chapter the model is steered towards.

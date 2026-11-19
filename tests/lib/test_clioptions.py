@@ -713,3 +713,18 @@ class TestTheSettingOverride:
         plain = spec(options="a |  | Something.\n", column=20)
         with pytest.raises(cli.UsageError, match="Unknown option: -x"):
             cli.parse(plain, ["-x", "infoLogLevel=quiet"])
+
+
+class TestPosNum:
+    def tables(self):
+        return cli.check_tables(spec(checks="m | posNum | shortest chapter"))
+
+    @pytest.mark.parametrize("value", ["1", "2", "0.5", "1.25", "0.01", "10"])
+    def test_accepts_a_positive_number_with_a_fraction(self, value):
+        cli.validate("m", value, self.tables())
+
+    @pytest.mark.parametrize("value", ["0", "0.0", "-1", ".5", "1.", "07", "abc", "",
+                                       "1,5", " 1", "+1"])
+    def test_refuses_the_rest(self, value):
+        with pytest.raises(cli.UsageError, match="a number above 0"):
+            cli.validate("m", value, self.tables())

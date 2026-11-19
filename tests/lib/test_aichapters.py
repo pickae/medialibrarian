@@ -350,3 +350,27 @@ class TestAsReady:
 
         assert aichapters.as_ready(["a", "b", "c"], lambda item: item + ".srt", None,
                                    SimpleNamespace(local=False), chapter) == ["a", "b", "c"]
+
+
+def test_a_half_minute_shortest_chapter_is_allowed():
+    assert not aichapters.too_short(2 * 60_000, min_minutes=0.5)
+    assert aichapters.too_short(50_000, min_minutes=0.5)
+
+
+@pytest.mark.parametrize("minutes, words", [
+    (2, "2 minutes"), (1, "1 minute"), (0.5, "30 seconds"),
+    (1.5, "1.5 minutes"), (0.25, "15 seconds"), (0.01, "1 second")])
+def test_the_shortest_chapter_is_told_to_the_model_in_its_own_units(minutes, words):
+    assert aichapters.span_label(minutes) == words
+
+
+def test_the_settle_step_keeps_a_chapter_the_floor_lets_through():
+    # An episode's opening, then its first speaker 40 s later, then the next part.
+    cues = [aichapters.Cue(0, 5_000, "opening"),
+            aichapters.Cue(40_000, 45_000, "first speaker"),
+            aichapters.Cue(400_000, 405_000, "next part")]
+    chosen = [(0, "Episode"), (1, "First speaker"), (2, "Next")]
+    kept = {floor: [at for at, _ in aichapters._settle(cues, chosen, 900_000, floor)]
+            for floor in (60_000, 30_000)}
+    assert len(kept[60_000]) == 2
+    assert len(kept[30_000]) == 3

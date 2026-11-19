@@ -42,6 +42,10 @@ prompt = body["messages"][1]["content"]
 with open(sys.argv[1], "a") as log:
     log.write("%s | effort=%s asked=%s\n" % (prompt.split("\n", 1)[0],
               body.get("reasoning_effort"), "<<<\nName each speaker.\n>>>" in prompt))
+floor = re.search(r"No chapter shorter than [^.]*[.]", prompt)
+if floor:
+    with open(sys.argv[1] + ".floor", "a") as seen:
+        seen.write(floor.group(0) + "\n")
 if "Find the line where" in prompt:
     at = re.search(r"placed to start \((\d+:\d\d:\d\d)\)", prompt).group(1)
     line = re.search(r"\[(L\d+) %s\]" % at, prompt).group(1)
@@ -195,3 +199,17 @@ def test_without_them_the_settings_are_sent_as_they_are(chaptering, tmp_path):
     chaptering.chapter(source, out)
     assert all(line.endswith("effort=None asked=False")
                for line in chaptering.model_log.read_text().splitlines())
+
+
+def test_a_fraction_of_a_minute_is_taken_as_the_shortest_chapter(chaptering, tmp_path):
+    source, out = _tree(tmp_path, "show.mp3")
+    chaptering.chapter("-m", "0.5", source, out)
+    assert (out / "show.chapters.txt").is_file()
+    floor = chaptering.model_log.with_name(chaptering.model_log.name + ".floor")
+    assert "No chapter shorter than 30 seconds." in floor.read_text().splitlines()
+
+
+def test_a_shortest_chapter_of_zero_is_refused(chaptering, tmp_path):
+    source, out = _tree(tmp_path, "show.mp3")
+    log = chaptering.chapter("-m", "0", source, out, expect=1)
+    assert "a number above 0" in log
