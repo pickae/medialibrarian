@@ -78,10 +78,10 @@ _SCRATCH = ("concat-audio", "content-census", "content-census-bi", "convert-and-
             "generate-chapters", "ingest-books", "ingest-movies", "ingest-music", "read-library",
             "transcribe-audio", "ytdlp")
 
-# Every command that asks a language model: for chapters, or concat-audio's
-# for a cover nothing else found.
+# Every command that asks a language model: for chapters, concat-audio's
+# for a cover nothing else found, or read-library's for a book's language.
 _AI_CHAPTERS = ("concat-audio", "convert-and-concat", "convert-audio", "convert-video",
-                "generate-chapters", "ingest-movies", "ytdlp")
+                "generate-chapters", "ingest-movies", "read-library", "ytdlp")
 
 SETTINGS: tuple[Setting, ...] = (
     # --- logins and keys
@@ -343,6 +343,11 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("comicPdfJpegQuality", "The JPEG quality comic PDF pages are rendered at",
             _COMICS),
     # --- reading books aloud
+    Setting("bookLanguageLlm", "Whether read-library asks a small language model "
+            "when a book's metadata language and its text disagree or neither "
+            "gives a confident answer (the `book-language` task, see "
+            "docs/models.md): a ~2 KB excerpt and the book's title/metadata are "
+            "sent to the model: `on` or `off`", _NARRATION, "on"),
     Setting("narrationHome", "The ebook2audiobook checkout read-library drives; `-c` "
             "overrides it", _NARRATION, "`~/ebook2audiobook`"),
     Setting("narrationLanguage", "The language a book is read in when its own cannot "

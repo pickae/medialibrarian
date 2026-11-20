@@ -65,6 +65,8 @@ class TestTheLadder:
     def test_a_light_task_takes_the_small_cheap_and_fast_first(self, tmp_path):
         assert _names(_roster(tmp_path).ladder(llmroster.COVER_LOOK)) == [
             "small-local", "big-local", "claude"]
+        assert _names(_roster(tmp_path).ladder(llmroster.BOOK_LANGUAGE)) == [
+            "small-local", "big-local", "claude"]
 
     def test_what_a_task_prefers_comes_before_its_lean(self, tmp_path):
         # Chapters prefer reasoning; small-local has none.
