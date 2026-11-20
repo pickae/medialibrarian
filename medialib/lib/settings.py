@@ -78,10 +78,11 @@ _SCRATCH = ("concat-audio", "content-census", "content-census-bi", "convert-and-
             "generate-chapters", "ingest-books", "ingest-movies", "ingest-music", "read-library",
             "transcribe-audio", "ytdlp")
 
-# Every command that asks a language model: for chapters, concat-audio's
-# for a cover nothing else found, or ingest-books -d for book images.
+# Every command that asks a language model.
 _AI_CHAPTERS = ("concat-audio", "convert-and-concat", "convert-audio", "convert-video",
-                "generate-chapters", "ingest-books", "ingest-movies", "ytdlp")
+                "find-fragment-candidates", "find-gaps", "generate-chapters",
+                "ingest-books", "ingest-movies", "ingest-music",
+                "plex-letterboxd-sync", "read-library", "ytdlp")
 
 SETTINGS: tuple[Setting, ...] = (
     # --- logins and keys
@@ -114,30 +115,9 @@ SETTINGS: tuple[Setting, ...] = (
             "picture subtitles with: a comma list of `vision`, `paddle` and "
             "`tesseract`, tried in the order named until one reads the "
             "subtitle", ("ingest-movies",),
-            "a vision model where `subtitleOcrUrl` is set, paddle on the GPU "
-            "where it fits, tesseract, then paddle on the CPU"),
-    Setting("subtitleOcrUrl", "The servers holding a vision model, with the "
-            "OpenAI chat API, that ingest-movies reads picture subtitles with "
-            "first, in any language: a comma list of addresses, e.g. "
-            "`http://127.0.0.1:8082/v1,http://127.0.0.1:8080/v1`, the "
-            "preferred first; the first that answers, or can be started, "
-            "reads. Without it that engine is not tried", ("ingest-movies",)),
-    Setting("subtitleOcrServe", "The command that starts the first of those "
-            "servers when it is not running and the GPU has room for it; the "
-            "run stops it again once it has been idle five minutes, and at "
-            "its end", ("ingest-movies",)),
-    Setting("subtitleOcrServeMib", "The free GPU memory, in MiB, that server "
-            "is started with; with less, the next server down the list reads",
-            ("ingest-movies",), "26000"),
-    Setting("subtitleOcrModel", "The vision model's name, asked of a server that "
-            "lists it", ("ingest-movies",), "the first model each server lists"),
-    Setting("subtitleOcrOptions", "More fields for every request to that vision "
-            "model, as a JSON object - e.g. `{\"reasoning_effort\": "
-            "\"none\"}`; the run already asks it not to think",
-            ("ingest-movies",)),
-    Setting("subtitleOcrJobs", "How many requests are sent to that vision model at "
-            "once, each with up to 16 of a subtitle's pictures",
-            ("ingest-movies",), "32"),
+            "a vision model from the roster's `subtitle-ocr` task where there "
+            "is one (docs/models.md), paddle on the GPU where it fits, "
+            "tesseract, then paddle on the CPU"),
     # --- what a run keeps
     Setting("keepLanguages", "The languages ingest-movies' improved copy keeps "
             "beside the film's own language: a comma list of ISO 639-1 codes; "
@@ -223,6 +203,39 @@ SETTINGS: tuple[Setting, ...] = (
             "every chapter. Only a model that can search is asked - Claude, or "
             "one behind `llmHarness`: `on` or `off`",
             ("concat-audio", "convert-and-concat"), "on"),
+    Setting("musicSearchLlm", "Whether an album beets skipped is handed to a "
+            "language model to look up its MusicBrainz release ID on the web "
+            "(the `music-search` task, see docs/models.md): it is told the "
+            "folder and file names, track durations, existing tags and any "
+            "rip logs or cue sheets in the folder. Only a model that can "
+            "search is asked - Claude, or one behind `llmHarness`: `on` or "
+            "`off`",
+            ("ingest-music",), "on"),
+    Setting("fragmentCandidatesLlm", "Whether the candidates "
+            "find-fragment-candidates finds are handed to a language model to "
+            "sort into release groups, quality or source tags, publishers and "
+            "real title words and write proposed additions as a unified diff "
+            "under `logs/` (the `fragment-classify` task, see docs/models.md): "
+            "candidate tokens and sample folder/file names from the library "
+            "are sent to the model; `data/fragments.txt` is never edited "
+            "directly: `on` or `off`",
+            ("find-fragment-candidates",), "on"),
+    Setting("findGapsLlm", "Whether find-gaps asks a language model with web "
+            "search to check numbered, episodic and dated runs against real "
+            "episode lists and release schedules (the `gaps-check` task, see "
+            "docs/models.md): it is told folder, series and episode names, "
+            "number and date ranges, and the deterministic gaps already found, "
+            "and only appends notes and suspected missing items to the report. "
+            "Only a model that can search is asked - Claude, or one behind "
+            "`llmHarness`: `on` or `off`",
+            ("find-gaps",), "on"),
+    Setting("letterboxdMatchLlm", "Whether unmatched or ambiguous Letterboxd "
+            "entries are handed to a language model to suggest a Plex film or "
+            "TMDb id in the sync report only (the `letterboxd-match` task, see "
+            "docs/models.md): Letterboxd entry titles and years and candidate "
+            "Plex film titles, years and ids are sent to the model, and nothing "
+            "in Plex is changed from its answer: `on` or `off`",
+            ("plex-letterboxd-sync",), "on"),
     Setting("bookJunkImagesLlm", "Whether ingest-books -d asks a vision model "
             "to tell book illustrations from advertising and publisher promos "
             "(the `book-image-check` task, see docs/models.md): candidate "
@@ -247,6 +260,16 @@ SETTINGS: tuple[Setting, ...] = (
             "to date before the fetch. `SKIP_YTDLP_UPGRADE` is accepted too",
             ("ytdlp",),
             "unset - a nightly is upgraded; a preview (-p) never is"),
+    Setting("podcastAdsLlm", "Whether a language model looks for host-read ads, "
+            "sponsor reads and self-promotion in the transcripts of RSS and site "
+            "podcast episodes (the `podcast-ads` task, see docs/models.md), "
+            "which have no SponsorBlock: `on` or `off`. Detected stretches are "
+            "marked as skippable chapters by default; `podcastAdsCut` opts in "
+            "to cutting them out", ("ytdlp",), "on"),
+    Setting("podcastAdsCut", "Whether the ad, sponsor and self-promotion "
+            "stretches `podcastAdsLlm` finds in an RSS or site podcast episode "
+            "are cut out of the file instead of only marked as chapters a "
+            "player can skip: `off` or `on`", ("ytdlp",), "off"),
     # --- language models
     Setting("llmModels", "The roster file: every language model you have, "
             "and which tasks use which - see docs/models.md. The single-model "
@@ -351,6 +374,11 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("comicPdfJpegQuality", "The JPEG quality comic PDF pages are rendered at",
             _COMICS),
     # --- reading books aloud
+    Setting("bookLanguageLlm", "Whether read-library asks a small language model "
+            "when a book's metadata language and its text disagree or neither "
+            "gives a confident answer (the `book-language` task, see "
+            "docs/models.md): a ~2 KB excerpt and the book's title/metadata are "
+            "sent to the model: `on` or `off`", _NARRATION, "on"),
     Setting("narrationHome", "The ebook2audiobook checkout read-library drives; `-c` "
             "overrides it", _NARRATION, "`~/ebook2audiobook`"),
     Setting("narrationLanguage", "The language a book is read in when its own cannot "
@@ -431,6 +459,13 @@ RENAMED = {"chapterLlm" + name[len("llm"):]: name for name in (
     "llmApi", "llmUrl", "llmModel", "llmKey", "llmContext", "llmOptions",
     "llmJobs", "llmServe", "llmServeMib", "llmHarness", "llmHarnessModel",
     "llmVramGB")}
+
+# Settings folded into the model roster (docs/models.md). Still read for the
+# time being, and warned about in both the environment and the file.
+DEPRECATED = {
+    "subtitleOcr" + suffix: "the model roster (docs/models.md)"
+    for suffix in ("Url", "Serve", "ServeMib", "Model", "Options", "Jobs")
+}
 
 
 def config_home() -> str:
@@ -602,6 +637,11 @@ def load(stream=None) -> None:
                          "old name works for the time being\n"
                          % (path, name, RENAMED[name]))
             name = RENAMED[name]
+        elif name in DEPRECATED:
+            if value.strip():
+                stream.write("==> WARNING: %s sets %s, which is replaced by %s now - "
+                             "the old name works for the time being\n"
+                             % (path, name, DEPRECATED[name]))
         elif name not in BY_NAME:
             near = difflib.get_close_matches(name, BY_NAME, n=1)
             stream.write("==> WARNING: %s sets %s, which no command reads%s\n"
@@ -612,13 +652,19 @@ def load(stream=None) -> None:
 
 def _apply_renamed(stream) -> None:
     """An old name set in the environment, carried over to the new one where
-    that is not set itself, and warned about."""
+    that is not set itself, and warned about; and a deprecated setting warned
+    about."""
     for old, new in RENAMED.items():
         if old in os.environ:
             stream.write("==> WARNING: the environment sets %s, which is called "
                          "%s now - the old name works for the time being\n"
                          % (old, new))
             os.environ.setdefault(new, os.environ[old])
+    for old, replacement in DEPRECATED.items():
+        if os.environ.get(old, "").strip():
+            stream.write("==> WARNING: the environment sets %s, which is "
+                         "replaced by %s now - the old name works for the "
+                         "time being\n" % (old, replacement))
 
 
 def _apply_shipped() -> None:
