@@ -399,5 +399,88 @@ class TestTrackCover:
         assert image == ""
         assert model.asked == []
         assert model.shown == []
+
+
+class TestFolderCoverLook:
+    """Looking at a folder's unnamed image files to pick the front cover."""
+
+    @pytest.fixture(autouse=True)
+    def _enable_look(self, monkeypatch):
+        monkeypatch.setenv(aicover.LOOK_SWITCH_VARIABLE, "on")
+
+    def _images(self, tmp_path, names=("scan01.jpg", "cd.jpg", "booklet3.jpg")):
+        folder = tmp_path / "The Quiet Orchard"
+        folder.mkdir()
+        paths = []
+        for at, name in enumerate(names, start=1):
+            path = folder / name
+            path.write_bytes(_JPEG + bytes([at]))
+            paths.append(str(path))
+        return folder, paths
+
+    def test_prompt_lists_folder_name_and_images_with_sizes(self, tmp_path):
+        folder, paths = self._images(tmp_path)
+        text = aicover.folder_look_prompt(str(folder), paths)
+        assert "The Quiet Orchard" in text
+        assert "1. scan01.jpg" in text
+        assert "2. cd.jpg" in text
+        assert "3. booklet3.jpg" in text
+        assert '{"choice":' in text
+
+    def test_caps_images_at_max_folder_looked_at(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(aicover, "MAX_FOLDER_LOOKED_AT", 2)
+        folder, paths = self._images(tmp_path, ("a.jpg", "b.jpg", "c.jpg", "d.jpg"))
+        model = _Model("", sees=True, look='{"choice": 2, "why": "second"}')
+        picked = aicover.choose_folder_cover(
+            str(folder), paths, lookers=[model], prepare=_as_is)
+        assert picked == paths[1]
+        assert len(model.shown[0][1]) == 2
+        assert "3. c.jpg" not in model.shown[0][0]
+
+    def test_prepared_temp_files_live_in_scratch_and_are_cleaned_up(self, tmp_path):
+        folder, paths = self._images(tmp_path, ("scan01.jpg", "scan02.jpg"))
+        scratch = tmp_path / "scratch"
+        scratch.mkdir()
+        written = []
+
+        def prepare(src, dest):
+            written.append(dest)
+            pathlib.Path(dest).write_bytes(pathlib.Path(src).read_bytes())
+            return dest
+
+        model = _Model("", sees=True, look='{"choice": 2, "why": "front"}')
+        picked = aicover.choose_folder_cover(
+            str(folder), paths, lookers=[model], scratch_dir=str(scratch),
+            prepare=prepare)
+        assert picked == paths[1]
+        assert len(written) == 2
+        # Prepared files went into scratch (never the input folder) and were removed.
+        assert all(pathlib.Path(p).parent.parent == scratch for p in written)
+        assert all(not pathlib.Path(p).exists() for p in written)
+        assert list(scratch.iterdir()) == []
+        assert sorted(p.name for p in folder.iterdir()) == ["scan01.jpg", "scan02.jpg"]
+
+    def test_skips_non_vision_model_and_uses_next_in_ladder(self, tmp_path):
+        folder, paths = self._images(tmp_path, ("scan01.jpg", "scan02.jpg"))
+        blind = _Model("", sees=False, look='{"choice": 1}')
+        sighted = _Model("", sees=True, look='{"choice": 2, "why": "cover"}')
+        picked = aicover.choose_folder_cover(
+            str(folder), paths, lookers=[blind, sighted], prepare=_as_is)
+        assert picked == paths[1]
+        assert blind.shown == []
+        assert len(sighted.shown) == 1
+
+    def test_llm_error_returns_empty_without_raising(self, tmp_path):
+        folder, paths = self._images(tmp_path, ("scan01.jpg", "scan02.jpg"))
+        meter = tmp_path / "meter"
+
+        class _Failing(_Model):
+            def ask(self, system, prompt, tally=None, images=()):
+                raise llmclient.LlmError("server down")
+
+        picked = aicover.choose_folder_cover(
+            str(folder), paths, lookers=[_Failing("", sees=True)],
+            meter_file=str(meter), prepare=_as_is)
+        assert picked == ""
         assert modelmeter.gathered(str(meter))[1].requests == 0
 

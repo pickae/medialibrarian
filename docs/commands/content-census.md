@@ -10,7 +10,7 @@ content type (audio, video, images, books, comics).
 | **Takes** | one or more library folders, read recursively |
 | **Writes** | one report per content type, into the folder that was censused and named after it (`-o` puts them elsewhere) |
 | **Input** | never changed: nothing in the tree is renamed, moved or converted |
-| **Network** | none |
+| **Network** | none unless a vision model is configured for borderline PDFs (`comicPdfLlm`) |
 
 ## Default behavior
 
@@ -102,7 +102,7 @@ picture, which over a library of scans is a run of its own.
 | video | **Dynamic range** is what the container *claims*: verifying that a Dolby Vision RPU is really in the bitstream costs a pass over the whole stream, which a census does not make |
 | images | **Loose images are a report of their own** — path, size, resolution and format, plus the verdict under `-a`. The format is what the file's own header says and not what its suffix claims, so a `.jpg` holding a PNG is recorded as the PNG it is |
 | books | **Counted on their text**: each one is converted with Calibre and counted from that, so epub, mobi, chm, azw3, azw, lit, fb2, docx, rtf, djvu and PDF all answer the same way instead of each needing its own extractor |
-| comics / books | **A `.pdf` is decided, not assumed**: it is in both the comic and the book extension lists, so which report it lands in comes from a look at its pages — a scan goes to comics, a text book to books |
+| comics / books | **A `.pdf` is decided, not assumed**: it is in both the comic and the book extension lists, so which report it lands in comes from a look at its pages — a scan goes to comics, a text book to books. When a PDF misses the one-image-per-page scan check near the threshold or with zero matching pages (digitally drawn comics, tiled scans), a vision [model](../models.md) is asked about 2–3 rendered pages if one is configured and `comicPdfLlm` is on; verdicts are cached per file (`comicPdfCache`) so `content-census` and `convert-comics` always agree |
 | the `chapters` column | **A file with no chapter marks counts as one chapter**, not as none: it is one unbroken chapter, itself. So the `chapters` column adds up to how many parts a library holds rather than to how many somebody happened to mark up, and a mean chapter length is not a division by zero |
 
 **A lying suffix is skipped, not guessed at**: an `.mka` that holds a video

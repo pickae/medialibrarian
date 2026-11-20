@@ -19,15 +19,17 @@ Two tasks of the roster (:mod:`medialib.lib.llmroster`) do it. The search,
 Claude with its own search, any other model through an agent harness - since
 one that cannot could only guess an address; its ladder is tried in order
 until one answers. The look, :data:`llmroster.COVER_LOOK`, needs a model that
-sees pictures, and leans light: the first few images the search named are
-shown to it, with the same account of the recording, and it says which - if
-any - is plausibly this recording's cover. The search names pages it read,
-the look checks the picture itself; the two may well be different models.
-For a book, where no model sees, the search's own first is taken; for a
-single track, the look must accept an image (where no vision model is
-available or it rejects every candidate, no cover is taken, since a wrong
-cover is worse than none). The ``coverSearchLlm`` setting turns this rung
-off alone; ``coverSearch`` off turns off every online rung, this one too.
+sees pictures, and leans light: it judges both the first few images the web
+search named and, before the web is ever asked, a folder's own unnamed image
+files when two or more sit there and none matched a cover name. For a book's
+web search, where no model sees, the search's own first is taken; for a single
+track, the look must accept an image (where no vision model is available or it
+rejects every candidate, no cover is taken, since a wrong cover is worse than
+none); for a folder's images, where none looks like a front cover or no model
+sees, the first image found is taken. The ``coverSearchLlm`` setting turns the
+web-search rung off alone (``coverSearch`` off turns off every online rung,
+that one too), and ``coverLookLlm`` turns off looking at a folder's local
+images.
 
 What the model was asked is counted (:mod:`medialib.lib.modelmeter`), said
 under the recording, and recorded for the run's total.
@@ -38,6 +40,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import tempfile
 import urllib.parse
 from collections.abc import Callable, Sequence
 
@@ -53,12 +56,15 @@ from medialib.lib import (
 )
 from medialib.lib.enums import shell_lower
 
-__all__ = ["SWITCH_VARIABLE", "PURPOSE", "enabled", "account", "prompt",
-           "track_prompt", "look_prompt", "book_cover", "track_cover",
+__all__ = ["SWITCH_VARIABLE", "LOOK_SWITCH_VARIABLE", "PURPOSE", "enabled",
+           "look_enabled", "account", "prompt", "track_prompt", "look_prompt",
+           "folder_look_prompt", "book_cover", "track_cover",
+           "choose_folder_cover",
            "candidates"]
 
 # Whether the model is asked at all: on unless set to off.
 SWITCH_VARIABLE = "coverSearchLlm"
+LOOK_SWITCH_VARIABLE = "coverLookLlm"
 
 # What the model's requests are for, which names a harness's sessions.
 PURPOSE = "cover"
@@ -72,8 +78,10 @@ MAX_TAG_CHARS = 300
 MAX_IMAGES = 6
 
 # How many of those that download are candidates a model that sees pictures
-# is shown, and how large each is shown: enough to read a cover's title.
+# is shown, how many unnamed local folder images are shown, and how large each
+# is shown: enough to read a cover's title.
 MAX_LOOKED_AT = 4
+MAX_FOLDER_LOOKED_AT = 8
 LOOK_GEOMETRY = "1024x1024"
 
 # What the look at the candidates is counted as.
@@ -83,6 +91,13 @@ LOOK_SYSTEM = ("You judge cover images for a personal audio library. You are "
                "shown pictures found on the web for one recording and say "
                "which, if any, is that recording's cover. A wrong cover is "
                "worse than none.")
+
+FOLDER_LOOK_SYSTEM = (
+    "You pick the front cover among image files found in an audio recording's "
+    "folder. You are shown the images with their file names and the folder's "
+    "name, and say which one, if any, is the front cover - rather than a back "
+    "cover, disc or CD scan, tray inlay, booklet page, artist photo or "
+    "tracklist.")
 
 _log = runlog.log
 _detail = runlog.detail
@@ -134,6 +149,13 @@ of.""" % MAX_IMAGES
 def enabled() -> bool:
     """Whether a run asks the model at all: unless the setting says off."""
     value = shell_lower(os.environ.get(SWITCH_VARIABLE, "on").strip())
+    return value not in ("off", "0", "no", "false")
+
+
+def look_enabled() -> bool:
+    """Whether a run asks a vision model to pick among a folder's unnamed
+    images: unless the setting says off."""
+    value = shell_lower(os.environ.get(LOOK_SWITCH_VARIABLE, "on").strip())
     return value not in ("off", "0", "no", "false")
 
 
@@ -388,6 +410,7 @@ def _search_and_look(
     download: Download,
     prepare: Callable[[str, str], str],
     require_look: bool,
+    found_meta: dict[str, str] | None = None,
 ) -> str:
     """Ask ``searchers`` for candidate URLs, download them, and let
     ``lookers`` choose one (required when ``require_look`` is True)."""
@@ -431,6 +454,11 @@ def _search_and_look(
     path, item = found[choice]
     image = "%s.%s" % (dest_base, onlinecover.image_kind(path) or "jpg")
     os.replace(path, image)
+    if found_meta is not None:
+        for key in ("title", "language", "edition"):
+            value = str(item.get(key) or "").strip()
+            if value:
+                found_meta[key] = value
     title = str(item.get("title") or "").strip()
     _log("    Cover found by the model (%s): %s%s%s" % (
         subject.content, urllib.parse.urlsplit(item["url"]).netloc,
@@ -445,6 +473,7 @@ def book_cover(input_path: str, output_name: str, tracks: Sequence[str],
                searchers: Sequence[llmclient.Llm] | None = None,
                lookers: Sequence[llmclient.Llm] | None = None,
                meter_file: str = "",
+               found_meta: dict[str, str] | None = None,
                download: Download = onlinecover.curl_download,
                probe: Callable[[str], dict] = onlinecover.probe_tags,
                prepare: Callable[[str, str], str] | None = None) -> str:
@@ -474,7 +503,7 @@ def book_cover(input_path: str, output_name: str, tracks: Sequence[str],
         request, output_name, dest_base, subject,
         searchers=searchers, lookers=lookers, meter_file=meter_file,
         download=download, prepare=prepare or _for_looking,
-        require_look=False)
+        require_look=False, found_meta=found_meta)
 
 
 def track_cover(source: str, seconds: float, dest_base: str, *,
@@ -564,6 +593,49 @@ def look_prompt(found: Sequence[tuple[str, dict]], output_name: str,
             "; ".join(subject.creators) or "(none)"))
 
 
+def _ask_vision(paths: Sequence[str], system: str, user_prompt: str,
+                lookers: Sequence[llmclient.Llm] | None, meter_file: str,
+                prepare: Callable[[str, str], str],
+                scratch_dir: str = "", *,
+                none_label: str = "The candidates not looked at",
+                fail_label: str = "The candidates not looked at") -> str:
+    """Show ``paths`` (prepared to :data:`LOOK_GEOMETRY` in a throwaway temp
+    directory) to the first of ``lookers`` that sees pictures, returning its
+    raw answer or "" when none could be asked."""
+    if lookers is None:
+        lookers, why_none = llmroster.optional(llmroster.COVER_LOOK)
+        if not lookers:
+            _detail("    %s: %s" % (none_label, why_none))
+            return ""
+    tally, spans = modelmeter.Tally(), modelmeter.Spans()
+    answer = ""
+    parent = scratch_dir if scratch_dir and os.path.isdir(scratch_dir) else None
+    try:
+        with tempfile.TemporaryDirectory(prefix="coverLook.", dir=parent) as work:
+            pictures = [prepare(path, os.path.join(work, "look%d.jpg" % at))
+                        for at, path in enumerate(paths)]
+            for llm in lookers:
+                try:
+                    with llm.serving(_detail) as bound:
+                        # The server may hold another model than the roster says.
+                        if not bound.sees_images():
+                            _detail("    %s does not see pictures"
+                                    % (bound.model or llm.name))
+                            continue
+                        with spans.timing():
+                            answer = bound.ask(system, user_prompt, tally,
+                                               images=pictures)
+                        break
+                except llmclient.LlmError as error:
+                    _log("    %s by %s: %s" % (fail_label, llm.name, error))
+    finally:
+        if tally.requests:
+            _log("    " + modelmeter.rate_line(LOOK_PURPOSE, spans.seconds, tally))
+        if meter_file:
+            modelmeter.record(meter_file, spans, tally)
+    return answer
+
+
 def _look(lookers: Sequence[llmclient.Llm] | None,
           found: Sequence[tuple[str, dict]], output_name: str,
           subject: onlinecover.Subject, meter_file: str,
@@ -574,44 +646,16 @@ def _look(lookers: Sequence[llmclient.Llm] | None,
     shown (the roster's ladder for the look unless given). Where there is
     none, or the look fails, the search's own first is taken unless
     ``require_look`` is True, in which case None is returned."""
-    if lookers is None:
-        lookers, why_none = llmroster.optional(llmroster.COVER_LOOK)
-        if not lookers:
-            _detail("    The candidates not looked at: %s" % why_none)
-            return (None, why_none) if require_look else (0, "")
-    elif not lookers:
+    if lookers is not None and not lookers:
         if require_look:
             _detail("    The candidates not looked at: no vision model is available")
             return None, "no vision model is available"
         return 0, ""
-    tally, spans = modelmeter.Tally(), modelmeter.Spans()
-    pictures: list[str] = []
-    answer = ""
-    try:
-        pictures = [prepare(path, "%s.look%d.jpg" % (path, at))
-                    for at, (path, _item) in enumerate(found)]
-        for llm in lookers:
-            try:
-                with llm.serving(_detail) as bound:
-                    # The server may hold another model than the roster says.
-                    if not bound.sees_images():
-                        _detail("    %s does not see pictures" % (bound.model or llm.name))
-                        continue
-                    with spans.timing():
-                        answer = bound.ask(LOOK_SYSTEM,
-                                           look_prompt(found, output_name, subject),
-                                           tally, images=pictures)
-                    break
-            except llmclient.LlmError as error:
-                _log("    The candidates not looked at by %s: %s" % (llm.name, error))
-    finally:
-        for picture in pictures:
-            if picture not in (path for path, _item in found):
-                _remove(picture)
-        if tally.requests:
-            _log("    " + modelmeter.rate_line(LOOK_PURPOSE, spans.seconds, tally))
-        if meter_file:
-            modelmeter.record(meter_file, spans, tally)
+    scratch_dir = os.path.dirname(found[0][0]) if found else ""
+    answer = _ask_vision(
+        [path for path, _item in found], LOOK_SYSTEM,
+        look_prompt(found, output_name, subject), lookers, meter_file,
+        prepare, scratch_dir)
     if not answer:
         return (None, "no vision model answered") if require_look else (0, "")
     verdict = llmclient.first_json(answer)
@@ -636,6 +680,83 @@ def _look(lookers: Sequence[llmclient.Llm] | None,
     _log("    The look at the candidates chose %r, which is none of them: the "
          "search's first is taken" % (choice,))
     return 0, ""
+
+
+def folder_look_prompt(input_path: str, images: Sequence[str]) -> str:
+    """What a vision model is told about unnamed image files in a folder."""
+    folder = os.path.basename(os.path.normpath(input_path))
+    described = []
+    for number, path in enumerate(images, start=1):
+        rel = os.path.relpath(path, input_path).replace(os.sep, "/")
+        try:
+            size = formatting.fmt_bytes(os.path.getsize(path))
+        except OSError:
+            size = "?"
+        described.append("%d. %s (%s)" % (number, rel, size))
+    return (
+        "The %d image file(s) above sit in the folder \"%s\", in this order:\n"
+        "%s\n\n"
+        "Look at each picture. Which one is the front cover of this "
+        "recording, if any? Prefer the front cover over back covers, disc or "
+        "CD labels, tray inlays, booklet pages, tracklists or author photos.\n\n"
+        'Answer with JSON only: {"choice": <its number>, "why": "<one '
+        'sentence>"}, or {"choice": null, "why": "..."} when none is.'
+        % (len(images), folder, "\n".join(described)))
+
+
+def choose_folder_cover(
+        input_path: str, images: Sequence[str], *,
+        lookers: Sequence[llmclient.Llm] | None = None,
+        meter_file: str = "",
+        scratch_dir: str = "",
+        prepare: Callable[[str, str], str] | None = None) -> str:
+    """Ask a vision model which of a folder's unnamed ``images`` is the front
+    cover, returning its path or "" when none looks like one, the switch is
+    off, no vision model is available, or the answer is unusable.
+
+    Only called when no cover-name rung matched and at least two images are
+    present. At most :data:`MAX_FOLDER_LOOKED_AT` images are shown, prepared
+    into a temporary directory (under ``scratch_dir`` when given, never in
+    ``input_path``) and cleaned up afterwards."""
+    if len(images) < 2:
+        return ""
+    if not look_enabled():
+        _detail("    Folder images not looked at: the %s setting is off"
+                % LOOK_SWITCH_VARIABLE)
+        return ""
+    shown = list(images[:MAX_FOLDER_LOOKED_AT])
+    answer = _ask_vision(
+        shown, FOLDER_LOOK_SYSTEM, folder_look_prompt(input_path, shown),
+        lookers, meter_file, prepare or _for_looking, scratch_dir,
+        none_label="Folder images not looked at",
+        fail_label="Folder images not looked at")
+    if not answer:
+        return ""
+    fallback = os.path.relpath(shown[0], input_path).replace(os.sep, "/")
+    verdict = llmclient.first_json(answer)
+    if not isinstance(verdict, dict) or "choice" not in verdict:
+        _log("    The look at the folder images gave no answer; falling back "
+             "to %s" % fallback)
+        return ""
+    why = " ".join(str(verdict.get("why") or "").split())
+    choice = verdict.get("choice")
+    if choice is None or (isinstance(choice, int) and not isinstance(choice, bool)
+                          and choice == 0) \
+            or (isinstance(choice, str) and shell_lower(choice.strip()) == "none"):
+        _log("    None of the %d folder images looked like a front cover%s; "
+             "falling back to %s" % (
+                 len(shown), " (" + why + ")" if why else "", fallback))
+        return ""
+    if isinstance(choice, int) and not isinstance(choice, bool) \
+            and 1 <= choice <= len(shown):
+        picked = shown[choice - 1]
+        picked_rel = os.path.relpath(picked, input_path).replace(os.sep, "/")
+        _log("    Cover picked on sight of %d folder images: %s%s" % (
+            len(shown), picked_rel, " - " + why if why else ""))
+        return picked
+    _log("    The look at the folder images chose %r, which is none of them; "
+         "falling back to %s" % (choice, fallback))
+    return ""
 
 
 def _for_looking(path: str, dest: str) -> str:
