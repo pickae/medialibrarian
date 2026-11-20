@@ -15,8 +15,9 @@ serve = "llama-server -m /models/qwen3.6-35b-a3b.gguf --port 8081"
 harness = "opencode"
 harness_model = "local/qwen3.6-35b-a3b"
 
-# A small local model that sees pictures: the cover look leans light, so it
-# is asked before the larger ones.
+# A small local model that sees pictures: cover-look and subtitle-ocr lean
+# light (and subtitle-ocr prefers local, cheap), so it is asked before the
+# larger ones.
 [models.vision-local]
 url = "http://localhost:8082/v1"
 model = "gemma3-12b"
