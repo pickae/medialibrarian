@@ -50,7 +50,8 @@ from dataclasses import dataclass
 from medialib.lib import llmclient, llmtraits, runlog, settings
 
 __all__ = ["MODELS_VARIABLE", "LEAN_VARIABLE", "LEANS", "Task", "TASKS", "CHAPTERS",
-           "CHAPTERS_INSTRUCTED", "COVER_SEARCH", "COVER_LOOK", "Roster",
+           "CHAPTERS_INSTRUCTED", "COVER_SEARCH", "COVER_LOOK", "CONTENTS_SEARCH",
+           "Roster",
            "RosterError", "load", "require", "optional", "chapters_task"]
 
 MODELS_VARIABLE = "llmModels"
@@ -91,9 +92,12 @@ COVER_SEARCH = Task("cover-search", "search the web for a recording's cover",
                     requires=("web",), prefers=("reasoning",))
 COVER_LOOK = Task("cover-look", "look at the covers found and pick the "
                   "recording's own", requires=("vision",), lean="light")
+CONTENTS_SEARCH = Task("contents-search", "search the web for a book's table "
+                       "of contents, to name the chapters its files only number",
+                       requires=("web",), prefers=("reasoning",))
 
 TASKS = {task.name: task for task in (CHAPTERS, CHAPTERS_INSTRUCTED,
-                                      COVER_SEARCH, COVER_LOOK)}
+                                      COVER_SEARCH, COVER_LOOK, CONTENTS_SEARCH)}
 
 
 def chapters_task(instructions: str) -> Task:

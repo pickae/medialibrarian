@@ -496,7 +496,7 @@ class TestTheChapterSourceAFolderHolds:
 
         run = ca.Run(verbose=False, ffmpeg="ffmpeg", script_dir=str(scratch),
                      have_mkvtoolnix=False, thumbnail_resolution="x",
-                     model_meter="")
+                     model_meter="", contents_meter="")
         run._build(scan, str(folder), str(scratch / "Book.mp3"), "mp3",
                    "MP3", str(scratch))
         return scan, cue_calls, file_calls

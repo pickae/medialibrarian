@@ -57,6 +57,15 @@ Each is taken from the first source that has one:
 | **Chapters** | a `.cue` sheet — the only one, or else the one beside the audio sharing its name, or else the largest | one chapter per individual file | — |
 | **Cover** | an image file in the input folder | the first page of a PDF booklet (needs `pdftoppm`) | the art embedded in the audio files |
 
+Chapters made from the files are named after them. Where nearly all those
+names are only numbers (`01`, `Track 02`, `CD1 - 03`), a
+[language model](../models.md) that can **search the web** is asked for the
+book's table of contents (the `contents-search` task). It is told the same
+things as the cover search below, plus each chapter's start and length. Its
+titles are taken only when it gives exactly one for every chapter. Any other
+count means the files aren't cut where the book's chapters are, so the
+numbers stay. `contentsSearchLlm=off` skips this step.
+
 A book that none of the three gave a cover is looked for **online**. What it
 probably is decides where: a name ending in a `[YouTube id]` (yt-dlp's
 default) is a YouTube podcast, and that video's own thumbnail is fetched; a
