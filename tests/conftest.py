@@ -177,10 +177,13 @@ _STATE_KNOBS = (
     "infoLogLevel",
     # The run's error log, settled by the first error and handed to children.
     "ERROR_LOG_NAME",
+    "ERROR_LOG_OWNER",
     "ERROR_LOG_RUN",
     "ERROR_LOG_STARTED",
     "ERROR_LOG_ITEM",
     "ERROR_LOG_INPUT",
+    # Where workers record vision-model usage when judging borderline PDFs.
+    "COMIC_PDF_METER",
 )
 
 
@@ -319,6 +322,49 @@ def private_workspace(tmp_path_factory, monkeypatch):
     # Nor is a language model asked for one: a case that turns the search
     # back on would otherwise reach the model the machine's settings name.
     monkeypatch.setenv("coverSearchLlm", "off")
+    monkeypatch.setenv("contentKindLlm", "off")
+    monkeypatch.setenv("coverLookLlm", "off")
+    # Nor is a language model asked for audiobook metadata tags.
+    monkeypatch.setenv("bookTagsLlm", "off")
+    # Nor is a language model asked for an undated film folder's release year:
+    # a CLI case over undated folders would otherwise reach a configured model.
+    monkeypatch.setenv("undatedYearLlm", "off")
+    # Nor is a language model asked to settle an unmatched film folder.
+    monkeypatch.setenv("filmIdentifyLlm", "off")
+    # Nor is a language model asked about ambiguous film folders or cuts.
+    monkeypatch.setenv("ambiguousEditionsLlm", "off")
+    # Nor for commentary naming or disc-page disambiguation.
+    monkeypatch.setenv("commentaryNamesLlm", "off")
+    # Nor is a language model asked to sort unmatched movie extras.
+    monkeypatch.setenv("bonusCategoryLlm", "off")
+    # Nor is a language model asked about borderline subtitle or audio tracks.
+    monkeypatch.setenv("trackRoleLlm", "off")
+    # Nor to judge ambiguous audio tracks that may be commentaries.
+    monkeypatch.setenv("commentaryJudgeLlm", "off")
+    # Nor is a language model asked to find ad reads in RSS podcasts.
+    monkeypatch.setenv("podcastAdsLlm", "off")
+    monkeypatch.setenv("podcastAdsCut", "off")
+    # Nor to classify fragment candidates: existing CLI cases stay deterministic.
+    monkeypatch.setenv("fragmentCandidatesLlm", "off")
+    # Nor for find-gaps's web-checked gap notes.
+    monkeypatch.setenv("findGapsLlm", "off")
+    # Nor are unmatched or ambiguous Letterboxd entries handed to a model.
+    monkeypatch.setenv("letterboxdMatchLlm", "off")
+    # Nor for a book's language when metadata and text disagree or say nothing.
+    monkeypatch.setenv("bookLanguageLlm", "off")
+    # Nor are book images sent to a vision model during ingest-books -d: a case
+    # about book-image classification turns it back on and stands in for the
+    # model.
+    monkeypatch.setenv("bookJunkImagesLlm", "off")
+    # Nor for advisory triage of error logs: a CLI case that provokes an error
+    # would otherwise reach a model at exit. Triage's own cases turn it back on.
+    monkeypatch.setenv("errorTriageLlm", "off")
+    # Nor is a vision model asked about tiny comic pages in unrelated cases.
+    monkeypatch.setenv("comicEmptyPageLlm", "off")
+    # Nor is a vision model asked about borderline PDFs, and any case that
+    # turns it back on keeps its verdict cache inside its own scratch folder.
+    monkeypatch.setenv("comicPdfLlm", "off")
+    monkeypatch.setenv("comicPdfCache", str(scratch / "comic-pdf-verdicts.json"))
     # Nor is a language model asked to spot subtitle adverts.
     monkeypatch.setenv("subtitleAdsLlm", "off")
     # Nor the machine's own roster of models: a case that asks the roster

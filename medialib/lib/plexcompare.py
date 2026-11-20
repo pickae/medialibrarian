@@ -24,7 +24,8 @@ from typing import NamedTuple
 from medialib.lib import audiotracks, chapterdb, filmrecord
 
 __all__ = ["Audio", "Profile", "Comparison", "Offset", "Timing",
-           "read_profile", "compare", "measure_offset", "audio_pair", "tier"]
+           "read_profile", "compare", "different_versions",
+           "needs_edition_names", "measure_offset", "audio_pair", "tier"]
 
 # Two lengths this far apart are two cuts of the film, not one cut with a
 # different logo in front of it.
@@ -390,6 +391,20 @@ def different_versions(new: Profile, old: Profile,
             reasons.append("the new file runs %s %s" % (
                 _length(gap), "longer" if gap > 0 else "shorter"))
     return reasons
+
+
+def needs_edition_names(new: Profile, old: Profile,
+                        timing: Timing | None = None) -> bool:
+    """Whether two files are cuts at least VERSION_GAP apart (and not a PAL
+    speed-up) without distinct edition tags already telling them apart."""
+    if timing is not None or not (new.seconds and old.seconds):
+        return False
+    if new.edition and old.edition and editions_differ(new, old):
+        return False
+    ratio = max(new.seconds, old.seconds) / min(new.seconds, old.seconds)
+    if abs(ratio - PAL_SPEEDUP) < 0.004:
+        return False
+    return abs(new.seconds - old.seconds) >= VERSION_GAP
 
 
 def compare(new: Profile, old: Profile,

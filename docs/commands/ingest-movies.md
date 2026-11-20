@@ -22,7 +22,7 @@ given (one level deep, not the whole tree):
 
 - **deletes release junk**: files with the `movieJunkExtensions` suffixes (`txt nfo exe doc sfv` by default - an empty setting deletes none), samples, `.mkv`s under 1000 KiB, folders named `.unwanted` (qBittorrent's skipped files), and folders left empty
 - **remuxes non-Matroska video** (avi, mp4, mov, …) into `.mkv`, deleting the source
-- sorts loose films into a folder each, with extras where Plex looks for them
+- sorts loose films into a folder each, with extras where Plex looks for them (by keyword first, and optionally by a light language model for unmatched extras — `bonusCategoryLlm=off` skips the model)
 - cleans folder, film and subtitle names
 - **transcodes lossless audio to Opus** — or FLAC, the `losslessAudioTarget` setting — leaving lossy tracks as they are
 - **finds forced and SDH subtitles the file does not flag**, and puts their flags right ([details](#subtitles-the-file-flags-wrong))
@@ -54,6 +54,7 @@ These are read from the environment:
 | Variable | Needed for | Without it |
 | --- | --- | --- |
 | `tmdbApiKey` | naming films (TMDb lookups) | the lookup is skipped, and the run says so |
+| `undatedYearLlm` | asking a web-searching language model (the `film-year` task in [models.md](../models.md)) for the release year of a folder that carries no year in its folder or file names; the model is told the undated folder name, file names, measured runtime and container write year | `on`; set to `off` to skip the model lookup (or skipped automatically when no web-capable model is configured) |
 | `openSubtitlesUser`, `openSubtitlesPassword` | downloading missing subtitles from OpenSubtitles.org, the first source | the other sources below are still asked, and the run says OpenSubtitles was skipped |
 | `openSubtitlesComUser`, `openSubtitlesComPassword` | asking OpenSubtitles.com second — a separate service, with free accounts of its own | it is not asked |
 | `subDlApiKey` | asking SubDL third — the key a free account at subdl.com gets | it is not asked |
@@ -61,13 +62,10 @@ These are read from the environment:
 | `subtitleAdsLlm` | whether a subtitle in a language subcleaner has no word list for (or when subcleaner is absent) is handed to a language model (`subtitle-ads`, see [docs/models.md](../models.md)): its first and last 20 cues are sent | `on` |
 | `mediaServerNaming` | the server the names are written for | `plex`; the names are then written and read the way that server spells them |
 | `subtitleOcrEngines` | the engines a picture subtitle is read with, in the order to try them | the order below |
-| `subtitleOcrUrl` | the servers holding a vision model, for the `vision` engine: a comma list, the preferred first | that engine is not tried |
-| `subtitleOcrServe` | the command that starts the first of them when it is not running | it is only used when it is running |
-| `subtitleOcrServeMib` | the free GPU memory it is started with | 26000 |
-| `subtitleOcrModel` | that model's name, asked of a server that lists it | the first model each server lists |
-| `subtitleOcrOptions` | more fields for every request to it, as a JSON object | none |
-| `subtitleOcrJobs` | how many requests are sent to that model at once, each with up to 16 pictures | 32 |
+| `llmModels`, `llmUrl`, … | the language-model roster (see [Language models](../models.md)): a model that sees pictures serves the `vision` OCR engine (`subtitle-ocr` task) | `vision` is not tried; paddle and tesseract still are |
 | `losslessAudioTarget` | the codec the lossless audio is converted to | `opus`, at a per-channel target bitrate; `flac` takes the channels as they are, up to eight of them |
+| `bonusCategoryLlm` | sorting extras whose file name matched no keyword with a light language model (`bonus-category` task, see [docs/models.md](../models.md)): sends the extra's name, film title/year and any cached dvdcompare extras listing | on by default when a model is set up; `off` leaves unmatched extras in `Featurettes` |
+| `trackRoleLlm` | asking a light language model to classify a borderline subtitle or audio track from sampled cues, a short transcript, and its title/language (`on`/`off`) | `on`; skipped when no model is configured, or set to `off` to keep the deterministic rules alone |
 | `plexUrl` | the Plex server the films are compared with | the server on this machine, `http://localhost:32400` |
 | `plexToken` | that server's X-Plex-Token | the server is asked without one, which it refuses unless told to trust this address; the comparison is then skipped |
 
@@ -232,6 +230,13 @@ A downloaded `<name>.xx.srt` whose text reads as SDH is muxed in flagged SDH and
 named "SDH". The sidecar keeps its `.xx.srt` name, which is what tells the next
 run's download that the language is there.
 
+Where a subtitle sits near one of those thresholds, could not be measured
+against a reference track, or carries an unrecognized descriptive title, a
+light [language model](../models.md) (the `track-role` task) can be asked with
+sampled subtitle cues and the track's title and language. Clear tracks never
+call a model, only high-confidence answers change the role, and setting
+`trackRoleLlm=off` turns this off.
+
 ### Picture subtitles read into text
 
 A Blu-ray's subtitles (PGS) and a DVD's (VobSub) are pictures of the lines: a
@@ -268,7 +273,7 @@ ready, and one that fails or reads nothing hands the subtitle to the next:
 
 | Order | Engine | Languages | Needs |
 | --- | --- | --- | --- |
-| 1 | `vision`, a vision model | any | `subtitleOcrUrl`: servers with the OpenAI chat API holding one — llama-server, or any that lists its model at `/v1/models` — tried in order (below) |
+| 1 | `vision`, a vision model | any | a vision model in the [model roster](../models.md) for the `subtitle-ocr` task (local and cheap preferred, light lean; legacy `subtitleOcr…` settings still work with a warning) |
 | 2 | `paddle` (PP-OCR) on the GPU | a hundred-odd | `paddleocr` with a CUDA build of paddle, and 2 GiB free on the card — asked afresh for each subtitle, since another program may hold it |
 | 3 | `tesseract` on the CPU | the ones whose data is installed: `apt install tesseract-ocr-fra` for French, `tesseract-ocr-all` for all | `tesseract` |
 | 4 | `paddle` on the CPU, the GPU hidden from it | a hundred-odd, at about a second a line | `paddleocr` |
@@ -290,20 +295,29 @@ Measured on a French Blu-ray, against the pictures:
 | `tesseract` | 9 s | 232 s | well, but `V` comes out as `\/`, `Il` as `\|\|` and accented capitals lose their accent |
 | `paddle` on the CPU | 90 s | 27 min | garbles about half the lines, with seconv's picture cleaning or without it |
 
-The servers in `subtitleOcrUrl` are tried for each subtitle in the order
-given, the first started with `subtitleOcrServe` when the GPU has
-`subtitleOcrServeMib` free, the way
-[`generate-chapters`](generate-chapters.md#several-servers-one-card) does it
-with its own servers; with none to be had, the engines after `vision` read.
+The `vision` engine walks the `subtitle-ocr` ladder from
+[`models.toml`](../models.md) (or the single-model `llm…` settings), starting
+the first server with `serve` when the GPU has `serve_mib` free, and falling
+through to the next model or server — and then to paddle and tesseract — when
+none can be had. Up to 16 pictures go in one request at a 4,096-token context
+(scaled down for smaller contexts), with concurrency held to the model's
+`jobs` setting since batching carries the speed.
 
 For example, a small vision model started on port 8082 when the card is
-free, and the larger model a chat server keeps on port 8080 when that server
-holds the card:
+free, falling back to the larger model on port 8080 when that server holds
+the card:
 
-```bash
-subtitleOcrUrl=http://127.0.0.1:8082/v1,http://127.0.0.1:8080/v1
-subtitleOcrServe=llama-server --model /models/vision.gguf --mmproj /models/mmproj.gguf --port 8082
+```toml
+[models.vision-local]
+url = ["http://127.0.0.1:8082/v1", "http://127.0.0.1:8080/v1"]
+serve = "llama-server --model /models/vision.gguf --mmproj /models/mmproj.gguf --port 8082"
+traits = { vision = true }
 ```
+
+The old `subtitleOcrUrl`, `subtitleOcrServe`, `subtitleOcrServeMib`,
+`subtitleOcrModel`, `subtitleOcrOptions` and `subtitleOcrJobs` settings are
+still accepted for now — they appear in the roster as a model named
+`subtitle-ocr` kept to that task — and warn until moved to `models.toml`.
 
 The film's picture subtitles are taken out with `mkvextract` first, all in one
 pass: `seconv` handed the film itself would hold the whole of it in memory.
@@ -342,9 +356,17 @@ twice over:
 | how many of its words the film's track also has | few: the dialogue is ducked under the commentators | most of them — except a dub, which is in another language |
 
 A track both say so of is flagged as a commentary and named "Commentary N" in
-place, which the commentary naming later replaces with who speaks in it. A
-track only one says so of is left as it is and listed at the end of the run, to
-be listened to. A track flagged for the visually impaired, or named as an audio
+place, which the commentary naming later replaces with who speaks in it. When
+only one signal fires and a language model is set up (the `commentary-judge`
+task, see [models](../models.md); turned off with `commentaryJudgeLlm=off`),
+the model is sent the whisper transcripts already taken from the main and
+suspect tracks, along with their names and languages. Only a high-confidence
+`commentary` (flagged and named like above) or `description` (flagged for the
+visually impaired) is acted on automatically; any other opinion — a dub, an
+isolated score, music and effects, unsure, or lower confidence — leaves the
+track unflagged and adds the model's opinion to the end-of-run list to be
+listened to. Without a model, the track is left as it is and listed at the end
+of the run. A track flagged for the visually impaired, or named as an audio
 description, a score or music, is not listened to at all.
 
 A commentary the file does flag but leaves without a name is numbered the same
@@ -431,6 +453,23 @@ reader can see it** is renamed onto one where it is:
 
 The name is put right on the disk, so the folders no catalogue can name are
 fixed along with the ones it can.
+
+### Undated folders
+
+When a film, concert, special or documentary has no year in either its folder
+name or its file names — and a web-capable language model is configured for
+the `film-year` task ([models.md](../models.md)) — the tagging pass asks the
+model for the original release year unless `undatedYearLlm=off`. It sends the
+undated folder's name, its file names, and (when available) the measured
+running time and container write year.
+
+A returned year is accepted only when the model reports high confidence and
+the year is a plausible 4-digit release year (`1888` through next year) not
+later than the file's written year. It is **never** used to rename files on
+its own: it only feeds the deterministic TMDb identification ladder, which
+still verifies the candidate's title, runtime and container-year guards (and
+falls back to undated identification if TMDb does not confirm it). Dated
+folders never call the model.
 
 ### When a title matches
 
@@ -602,6 +641,33 @@ a third, and the files are then the only names a catalogue has ever heard of.
 Every film in the folder must answer, and all of them to the same id — a folder
 whose films answer to two ids is a folder holding two films.
 
+### When a language model helps settle an unmatched film
+
+Where TMDb and the local IMDb lists offered candidates but could not settle on
+one, and a model is configured in the [model roster](../models.md) (the
+`film-identify` task, preferring web search and reasoning), the folder's name,
+file names, runtime on disk, earliest container creation year, near-miss notes
+and the offered candidates are handed to the model.
+
+The model may only choose one of the ids already offered, or none — any
+invented id is ignored and noted. Controlled by the `filmIdentifyLlm`
+[setting](../settings.md):
+
+- **`on`** (default): accepts a pick outright only when the model marks it
+  `high` confidence, the candidate was not released after the file was written,
+  a year is known, and the disk runtime also fits the candidate's stated runtime
+  (5 min / 7%). Every other offered pick is written as a pre-filled suggestion
+  row in `ingest-movies-unmatched-<folder>.tsv` with its confidence and reason
+  in a trailing `# model (...): ...` comment.
+- **`suggest`**: never accepts outright; writes every pick as a pre-filled
+  suggestion row for review.
+- **`off`**: never asks a model.
+
+Every model decision is printed in the run's output and recorded in the reports
+(`ingest-movies-renames-<folder>.txt`, `ingest-movies-unmatched-<folder>.tsv`
+and `ingest-movies-nearmisses-<folder>.txt`), so a dry run (`-O tagging`) shows
+what the model would do.
+
 ### The lists tagging writes
 
 Each folder given gets these lists, in `logs/ingest-movies/` in the medialib
@@ -610,7 +676,7 @@ data directory:
 | List | What is in it | Written |
 |---|---|---|
 | `ingest-movies-unmatched-<folder>.tsv` | films TMDb could not name — fill in their ids and feed the file back with `-i` | always |
-| `ingest-movies-ambiguous-<folder>.txt` | folders holding more than one film, which no id can settle — give the files names that say which release each one is | always |
+| `ingest-movies-ambiguous-<folder>.txt` | folders holding more than one film, which no id can settle — give the files names that say which release each one is (with model suggestions appended when `ambiguousEditionsLlm` is on and a web-capable model is configured) | always |
 | `ingest-movies-othertitles-<folder>.txt` | folders holding one film under several of its titles ([above](#folders-whose-names-cannot-agree)) | always |
 | `ingest-movies-conflicts-<folder>.txt` | renames held back because the name was already taken — most often by the same film, tagged before | always, `-i` too |
 | `ingest-movies-renames-<folder>.txt` | every rename the run would make | dry run only |
@@ -619,6 +685,19 @@ data directory:
 **A list an earlier run left is not replaced without asking**, for
 `-O subtitles`, `-O names` and `-O commentary` too: see
 [overwriting a report](../output.md#overwriting-a-report).
+
+**Model suggestions for ambiguous folders and differing cuts.** When a
+web-capable language model is set up (the `ambiguous-editions` task in
+[language models](../models.md)), tagging asks it about each ambiguous folder's
+stray video files — whether each is another edition of the same film (with a
+suggested `{edition-...}` name), a sequel, another film, an extra, or `unsure`
+— and the Plex comparison asks it about cuts differing by more than a minute
+without distinct edition tags, using the film's title, year, TMDb/IMDb id, file
+names and runtimes to suggest which known cut each runtime matches. Every
+decision is printed in the run's output and written into
+`ingest-movies-ambiguous-<folder>.txt` as a suggestion only; files are never
+renamed or moved on the model's word. Set `ambiguousEditionsLlm=off` in
+[settings](../settings.md) to switch it off.
 
 A folder is on the unmatched list or the ambiguous one, never both.
 
@@ -637,6 +716,10 @@ A line of the unmatched list, filled in:
 ```
 Your Film (1975)	tt0000002
 ```
+
+Rows pre-filled by a language model carry a third-column `# model (...): ...`
+comment after the id; `-i` reads the id column and ignores the comment, so you
+can keep the id as suggested, edit it, or clear it to leave the row blank.
 
 An id is read however you have it to hand (`tt0000002`, `imdb-tt0000002`, a bare
 TMDb number), answers before the network is asked, and stays in the file so the
@@ -770,6 +853,37 @@ asked for are kept in `data/dvdcompare` in the medialib data directory. The site
 five seconds apart, give or take two, and after it fails to answer once it isn't
 asked again that run. With `-w`, each film is renamed while the next one is
 being looked up, so the lookup never waits on a rename.
+
+**When the rules alone cannot decide**, and a language model is configured for
+the `commentary-names` task (`commentaryNamesLlm=on`, the default; see
+[models](../models.md) and [settings](../settings.md)), the model is asked as a
+guarded fallback in three places:
+
+- **Two or more fitting disc pages** on dvdcompare.net: the model is shown the
+  candidate pages alongside the film's title, year, TMDb/IMDb id and
+  alternative titles, and may only pick one of the offered pages or say
+  `"unsure"`.
+- **Unproved track order or disagreeing listings**: when every numbered
+  commentary track has a transcript, the model is shown the first ten minutes
+  of each transcript and the candidate listings, and may only pick one of the
+  offered listings and a permutation of its tracks — never invent names — or
+  say `"unsure"`.
+- **Speaker introductions in the first 5 minutes** for tracks named only
+  `Commentary` or `Commentary N`: when dvdcompare.net cannot settle the film
+  (no matching disc page, wrong count, mixed named and generic tracks, or
+  subtitle-only commentary tracks), the first 5 minutes of the commentary are
+  taken directly from an existing sidecar or embedded text subtitle when one is
+  present, or otherwise transcribed from the audio track (reusing the
+  commentary whisper probe). Equivalent audio, embedded subtitle and sidecar
+  subtitle surfaces for the same commentary — including multiple language
+  translations of the same track — are grouped together, analysed **once**, and
+  renamed together when the speakers clearly introduce themselves.
+
+Every model decision is printed in the run's output and written into
+`ingest-movies-commentarynames-<folder>.txt`, and model usage is recorded and
+summarised at the end of the run. On `"unsure"` or an invalid answer, the
+tracks stay numbered with the original reason. Set `commentaryNamesLlm=off` to
+keep commentary naming purely rule-based.
 
 The full ingest does this too, and writes: after the transcription, which the
 transcripts come from, and after the tagging, so each film is looked up by the

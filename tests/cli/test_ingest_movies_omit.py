@@ -334,14 +334,16 @@ class TestTheResearchOmissions:
     def test_without_the_flag_every_research_is_built(self, monkeypatch):
         built, ahead = self._started(monkeypatch)
         assert built == ["chapter", "commentary name"]
-        assert set(ahead) == {"chapters", "chapter pages", "names", "said"}
+        assert set(ahead) == {
+            "chapters", "chapter pages", "names", "said", "site", "film_tags",
+        }
 
     def test_omitted_chapters_leave_the_disc_database_asked(self,
                                                             monkeypatch):
         built, ahead = self._started(
             monkeypatch, frozenset({"chapters"}))
         assert built == ["commentary name"]
-        assert set(ahead) == {"names", "said"}
+        assert set(ahead) == {"names", "said", "site", "film_tags"}
 
     def test_omitted_commentary_leaves_the_chapter_archive_asked(
             self, monkeypatch):

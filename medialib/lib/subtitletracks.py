@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 
-from medialib.lib import enums, languages
+from medialib.lib import aitrackrole, enums, languages
 
 __all__ = ["subtitle_form", "subtitle_role", "sidecar_name", "refine_role",
            "is_sdh_text", "cue_texts", "MIN_REFERENCE_CUES",
@@ -46,12 +46,19 @@ def subtitle_form(codec: str) -> str:
 
 def subtitle_role(name: str, *, forced: bool = False,
                   hearing_impaired: bool = False,
-                  commentary: bool = False) -> str:
+                  commentary: bool = False,
+                  language: str = "", texts=None,
+                  models=None, meter_file: str = "",
+                  allow_llm: bool = False) -> str:
     """Which of :data:`enums.SUBTITLE_ROLES` a subtitle track plays.
 
     The container's flag says it where one is set, and the track's name where
     none is - a disc's tracks are often named and not flagged. The roles are
     asked in their order, so a track that is two of them is the first.
+
+    Where neither flags nor known name patterns match and ``allow_llm`` is set
+    (or ``texts`` are supplied), a light model may be asked on borderline or
+    unrecognised cases (:mod:`medialib.lib.aitrackrole`).
     """
     name = name or ""
     if commentary or languages.is_commentary_name(name):
@@ -60,6 +67,19 @@ def subtitle_role(name: str, *, forced: bool = False,
         return "forced"
     if hearing_impaired or languages.is_sdh_name(name):
         return "sdh"
+    if allow_llm or texts is not None:
+        return aitrackrole.resolve_subtitle_role(
+            "full",
+            said="full",
+            texts=texts,
+            name=name,
+            language=language,
+            flags={"forced": forced, "hearing_impaired": hearing_impaired,
+                   "commentary": commentary},
+            flagged=False,
+            models=models,
+            meter_file=meter_file,
+        )
     return "full"
 
 
@@ -87,7 +107,9 @@ def is_sdh_text(cues) -> bool:
 
 
 def refine_role(role: str, cues: int = 0, reference_cues: int = 0,
-                texts=None) -> str:
+                texts=None, *, name: str = "", language: str = "",
+                flagged: bool = False, models=None,
+                meter_file: str = "", allow_llm: bool = True) -> str:
     """A track's role from its flags and name (:func:`subtitle_role`),
     corrected by what it holds.
 
@@ -99,20 +121,39 @@ def refine_role(role: str, cues: int = 0, reference_cues: int = 0,
     measured only against a reference that can stand for the film's dialogue
     (:data:`MIN_REFERENCE_CUES`, :data:`MAX_REFERENCE_CUES`). A full track
     whose text is SDH (:func:`is_sdh_text`) is SDH.
+
+    Only when the deterministic counting or text test could not be run or sits
+    near its threshold (and ``allow_llm`` is true) is a light model consulted
+    via :mod:`medialib.lib.aitrackrole`.
     """
     if role == "commentary":
         return role
     measured = (cues > 0
                 and MIN_REFERENCE_CUES <= reference_cues <= MAX_REFERENCE_CUES)
+    deterministic = role
     if role == "forced":
         if measured and cues >= enums.FULL_CUE_SHARE * reference_cues:
-            return "full"
-        return role
-    if measured and cues < enums.FORCED_CUE_SHARE * reference_cues:
-        return "forced"
-    if role == "full" and texts is not None and is_sdh_text(texts):
-        return "sdh"
-    return role
+            deterministic = "full"
+            if texts is not None and is_sdh_text(texts):
+                deterministic = "sdh"
+    elif measured and cues < enums.FORCED_CUE_SHARE * reference_cues:
+        deterministic = "forced"
+    elif role == "full" and texts is not None and is_sdh_text(texts):
+        deterministic = "sdh"
+    if not allow_llm:
+        return deterministic
+    return aitrackrole.resolve_subtitle_role(
+        deterministic,
+        said=role,
+        cues=cues,
+        reference_cues=reference_cues,
+        texts=texts,
+        name=name,
+        language=language,
+        flagged=flagged,
+        models=models,
+        meter_file=meter_file,
+    )
 
 
 def cue_texts(srt: str) -> list:
