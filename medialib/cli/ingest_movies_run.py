@@ -27,6 +27,7 @@ from medialib.cli import ingest_movies_lanes as lanes
 from medialib.cli import ingest_movies_plex as plexphase
 from medialib.cli.ingest_movies import log
 from medialib.lib import (
+    aifilmyear,
     chapterdb,
     cleannamesindividually,
     clioptions,
@@ -48,6 +49,7 @@ from medialib.lib import (
     imdbdata,
     keepparts,
     languages,
+    modelmeter,
     overwrite,
     plexnames,
     ramscratch,
@@ -1349,7 +1351,9 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
     # TMDb's answers kept, since the subtitles fetched ahead ask the tagging's
     # questions long before the tagging does.
     disk_turns = diskturn.init(os.path.join(ram_root, "diskTurns"))
+    film_year_meter = os.path.join(ram_root, "filmYearMeter")
     tmdbclient.remember_answers()
+    aifilmyear.remember_answers()
     skips = safety.RunSkipLog()
     long_names = tmdblookup.LongNames()
     safety.init_abort_flag(os.path.join(ram_root, "abortRequested"))
@@ -1374,6 +1378,10 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
         _report_unsure_commentaries(unsure_commentaries)
         if ocr_usage.requests:
             _report_ocr_usage(ocr_usage)
+        spans, tally = modelmeter.gathered(film_year_meter)
+        if tally.requests > 1:
+            log("Undated folder year model: "
+                + modelmeter.rate_line(aifilmyear.PURPOSE, spans.seconds, tally))
 
     safety.set_run_footer(recap)
 
@@ -1402,6 +1410,7 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
                 convert_remuxes=bool(result.values.get("convertRemuxes")),
                 keep_parts=keep_parts,
                 omit_phases=omit_phases, extras_llm=extras_llm,
+                film_year_meter=film_year_meter,
                 gpu_gate=gputurn.Gate(os.path.join(ram_root, "gpuTurns")),
                 keep_languages=kept, subtitle_languages=wanted)
 
@@ -1410,6 +1419,7 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
         for root in ingestable:
             _ingest(state, root, subtitle_work, listed[root])
     finally:
+        aifilmyear.remember_answers(False)
         tmdbclient.remember_answers(False)
         diskturn.adopt("")
         ramscratch.run_exit_cleanup()
@@ -3111,7 +3121,7 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
     # Which film each folder is, asked once for the subtitle lane, the remux
     # and the carry-over from the Plex library: the remux keeps the language
     # TMDb says the film was made in. Asked as soon as the names have settled.
-    state.film_tags = lanes.FilmTags(root)
+    state.film_tags = lanes.FilmTags(root, getattr(state, "film_year_meter", ""))
     if os.environ.get("tmdbApiKey"):
         state.film_tags.start()
     # The library's copies looked up and measured against from now on, while
@@ -3212,7 +3222,8 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
     else:
         log("Phase: tagging movies with IMDb ids (Plex/Jellyfin naming)")
         tmdblookup.tag_plex_ids(root, log, state.skips,
-                                long_names=state.long_names)
+                                long_names=state.long_names,
+                                meter_file=getattr(state, "film_year_meter", ""))
 
     # The tagging gave every folder its id, and a mangled name that the first
     # pass could not anchor on a tag can now be conformed. The transcription is

@@ -223,6 +223,15 @@ SETTINGS: tuple[Setting, ...] = (
             "every chapter. Only a model that can search is asked - Claude, or "
             "one behind `llmHarness`: `on` or `off`",
             ("concat-audio", "convert-and-concat"), "on"),
+    Setting("undatedYearLlm", "Whether a film folder with no year in its folder "
+            "or file names is handed to a language model to search the web for "
+            "its release year (the `film-year` task, see docs/models.md) before "
+            "TMDb identification: it is told the undated folder's name, its "
+            "file names, and its measured runtime and container write year. "
+            "The returned year only feeds TMDb verification and never renames "
+            "files on its own. Only a model that can search is asked - Claude, "
+            "or one behind `llmHarness`: `on` or `off`",
+            ("ingest-movies",), "on"),
     Setting("chapterDbSite", "The chapter database's address", ("ingest-movies",),
             "`https://chapterdb.plex.tv`", tuning=True),
     Setting("dvdCompareSite", "The disc database's address", ("ingest-movies",),

@@ -15,6 +15,7 @@ import re
 from collections.abc import Callable
 
 from medialib.lib import (
+    aifilmyear,
     durationcheck,
     filmfolders,
     plexnames,
@@ -108,7 +109,8 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
                  skip: set | None = None,
                  long_names: LongNames | None = None,
                  imdb: str = "",
-                 tagged: dict | None = None) -> int:
+                 tagged: dict | None = None,
+                 meter_file: str = "") -> int:
     """Name each confidently-matched movie folder, its films and their sidecars
     the way Plex reads them: the folder and every file carry the id tag, an
     edition carries its own, and a split film keeps its stacking token last.
@@ -257,18 +259,57 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
                 glued = None if year else filmfolders._GLUED_YEAR.match(title)
                 if glued:
                     title, year = glued.group(1), glued.group(2)
-                found, year, also = tmdbidentify._settle_the_year(
-                    title, year, plexnames.years_disagreeing(base, respelled),
+
+                runtime_fn = functools.lru_cache(maxsize=1)(
                     functools.partial(_folder_runtime, folder.path, base,
-                                      respelled, on_disk, edition),
-                    notes if near_misses is not None else None,
-                    (_with_the_folder_above(directory, folder, title),
-                     _without_the_folder_above(directory, folder, title)),
-                    imdb,
+                                      respelled, on_disk, edition))
+                written_fn = functools.lru_cache(maxsize=1)(
                     functools.partial(tmdbidentify._written_year, [
                         os.path.join(folder.path, name) for name in names
                         if plexnames.is_movie_file(name)]))
+
+                llm_year = ""
+                if not year:
+                    parent = os.path.dirname(folder.path)
+                    parent_name = (
+                        os.path.basename(parent)
+                        if os.path.normpath(parent) != os.path.normpath(directory)
+                        else "")
+                    verdict = aifilmyear.lookup_year(
+                        folder.name, title, names,
+                        runtime_seconds=runtime_fn,
+                        written_year=written_fn,
+                        parent_name=parent_name,
+                        log=log,
+                        meter_file=meter_file)
+                    if verdict.year:
+                        llm_year = verdict.year
+                        year = llm_year
+                        if near_misses is not None:
+                            notes.append(
+                                "model suggested release year %s (%s)%s" % (
+                                    verdict.year, verdict.confidence,
+                                    ": " + verdict.reason
+                                    if verdict.reason else ""))
+
+                disagreeing = plexnames.years_disagreeing(base, respelled)
+                alt_titles = (
+                    _with_the_folder_above(directory, folder, title),
+                    _without_the_folder_above(directory, folder, title))
+                settle_notes = notes if near_misses is not None else None
+                found, year, also = tmdbidentify._settle_the_year(
+                    title, year, disagreeing, runtime_fn, settle_notes,
+                    alt_titles, imdb, written_fn,
+                    verify_runtime=bool(llm_year))
                 tag = found.tag
+                if llm_year and not tag:
+                    # Never rename or leak an unverified model year; fall back
+                    # to deterministic undated lookup so existing behavior is
+                    # preserved.
+                    found, year, also = tmdbidentify._settle_the_year(
+                        title, "", disagreeing, runtime_fn, settle_notes,
+                        alt_titles, imdb, written_fn)
+                    tag = found.tag
                 if glued and not tag:
                     title, year, glued = glued.group(0), "", None
                 # A folder that said no year, or one the catalogue has the film

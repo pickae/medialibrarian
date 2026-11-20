@@ -54,6 +54,7 @@ These are read from the environment:
 | Variable | Needed for | Without it |
 | --- | --- | --- |
 | `tmdbApiKey` | naming films (TMDb lookups) | the lookup is skipped, and the run says so |
+| `undatedYearLlm` | asking a web-searching language model (the `film-year` task in [models.md](../models.md)) for the release year of a folder that carries no year in its folder or file names; the model is told the undated folder name, file names, measured runtime and container write year | `on`; set to `off` to skip the model lookup (or skipped automatically when no web-capable model is configured) |
 | `openSubtitlesUser`, `openSubtitlesPassword` | downloading missing subtitles from OpenSubtitles.org, the first source | the other sources below are still asked, and the run says OpenSubtitles was skipped |
 | `openSubtitlesComUser`, `openSubtitlesComPassword` | asking OpenSubtitles.com second — a separate service, with free accounts of its own | it is not asked |
 | `subDlApiKey` | asking SubDL third — the key a free account at subdl.com gets | it is not asked |
@@ -426,6 +427,23 @@ reader can see it** is renamed onto one where it is:
 
 The name is put right on the disk, so the folders no catalogue can name are
 fixed along with the ones it can.
+
+### Undated folders
+
+When a film, concert, special or documentary has no year in either its folder
+name or its file names — and a web-capable language model is configured for
+the `film-year` task ([models.md](../models.md)) — the tagging pass asks the
+model for the original release year unless `undatedYearLlm=off`. It sends the
+undated folder's name, its file names, and (when available) the measured
+running time and container write year.
+
+A returned year is accepted only when the model reports high confidence and
+the year is a plausible 4-digit release year (`1888` through next year) not
+later than the file's written year. It is **never** used to rename files on
+its own: it only feeds the deterministic TMDb identification ladder, which
+still verifies the candidate's title, runtime and container-year guards (and
+falls back to undated identification if TMDb does not confirm it). Dated
+folders never call the model.
 
 ### When a title matches
 
