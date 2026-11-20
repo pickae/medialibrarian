@@ -8,9 +8,11 @@ book's cover where nothing else found one, its chapter titles where its file
 names only number them (`concat-audio`), reading picture subtitles into text
 (`ingest-movies`), the MusicBrainz release of an album beets skipped
 (`ingest-music`), classifying recurring filename fragment candidates
-(`find-fragment-candidates`), or web-checked gap notes for numbered and dated
-runs (`find-gaps`). Each of those is a **task**, and each task picks from the
-models you have, by what it needs and what it would rather have.
+(`find-fragment-candidates`), web-checked gap notes for numbered and dated
+runs (`find-gaps`), or report-only match suggestions for unmatched or
+ambiguous Letterboxd entries (`plex-letterboxd-sync`). Each of those is a
+**task**, and each task picks from the models you have, by what it needs and
+what it would rather have.
 
 ## Your models
 
@@ -104,6 +106,7 @@ Run with `-v` to see which model each task took, and what it was taken for.
 | `podcast-ads` | - | reasoning | balanced |
 | `fragment-classify` | - | reasoning, web | balanced |
 | `gaps-check` | web | reasoning | balanced |
+| `letterboxd-match` | - | reasoning, web | balanced |
 
 A task's models, best first:
 

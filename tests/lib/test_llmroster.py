@@ -84,6 +84,11 @@ class TestTheLadder:
         assert _names(_roster(tmp_path).ladder(task)) == [
             "big-local", "small-local", "claude"]
 
+    def test_letterboxd_match_prefers_reasoning_and_web_balanced(self, tmp_path):
+        # Claude has both reasoning and web; big-local has reasoning; small-local has neither.
+        assert _names(_roster(tmp_path).ladder(llmroster.LETTERBOXD_MATCH)) == [
+            "claude", "big-local", "small-local"]
+
     def test_the_setting_leans_every_task(self, tmp_path, monkeypatch):
         monkeypatch.setenv(llmroster.LEAN_VARIABLE, "precise")
         assert _names(_roster(tmp_path).ladder(llmroster.COVER_LOOK)) == [

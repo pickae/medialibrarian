@@ -326,6 +326,8 @@ def private_workspace(tmp_path_factory, monkeypatch):
     monkeypatch.setenv("fragmentCandidatesLlm", "off")
     # Nor for find-gaps's web-checked gap notes.
     monkeypatch.setenv("findGapsLlm", "off")
+    # Nor are unmatched or ambiguous Letterboxd entries handed to a model.
+    monkeypatch.setenv("letterboxdMatchLlm", "off")
     # Nor the machine's own roster of models: a case that asks the roster
     # gets the models it set up itself, or none.
     monkeypatch.setenv("llmModels", str(scratch / "no-models-file"))
