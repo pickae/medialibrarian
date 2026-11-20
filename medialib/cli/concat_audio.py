@@ -10,7 +10,8 @@ The chapters come from a cue sheet when the folder holds one audio file and a cu
 that describes it, and from the individual files otherwise - one chapter per
 file, or the file's own chapters where it carries them. The cover comes from
 an image in the folder, else a booklet PDF's first page, else the artwork embedded
-in the audio.
+in the audio, else a catalogue search online, else a language model that
+searches the web for it; a cover found online is kept in the folder too.
 
 The concatenation runs several sub-folders at once, and each book is built
 whole in RAM - the join, the chapters and the cover - so the output disk sees
@@ -41,6 +42,7 @@ from medialib.lib import (
     formatting,
     imagemagick,
     imagesizes,
+    modelmeter,
     ramscratch,
     runcontext,
     runlog,
@@ -96,6 +98,10 @@ USAGE_TAIL = """
     fallback: extract from audio files themselves
     fallback: look online, by what the book probably is - a podcast, an
               audiobook - and only for an answer with the same title
+    fallback: ask a language model that can search the web for it
+              (Claude, or one behind a harness); one that sees pictures
+              is shown what it found, and picks - see docs/models.md
+    a cover found online is also kept in the input folder as cover.<ext>
 
     Dependencies
     ------------
@@ -572,6 +578,8 @@ class Run:
     # The output names that held a file before this run started: books an
     # earlier run made, as opposed to a name another folder of THIS run took.
     present_before: frozenset
+    # Where the workers record what the cover model was asked, for the total.
+    model_meter: str
 
     def __init__(self, **settings) -> None:
         self.__dict__.update(settings)
@@ -828,7 +836,8 @@ class Run:
         thumbnails.embed_thumbnail(input_path, output_path, IMAGE_SIZE_LIMIT,
                                    JPG_QUALITY_LEVEL, self.thumbnail_resolution,
                                    DPI, self.have_mkvtoolnix, scratch,
-                                   self.script_dir)
+                                   self.script_dir,
+                                   model_meter=self.model_meter)
         if not os.path.isfile(joined):
             self.record_failure(name, "the book was lost while its chapters "
                                       "and cover were written into it.")
@@ -1081,6 +1090,7 @@ def _run_with_scratch(ram_dir: str, input_dir: str, output_dir: str,
         publish_lock=os.path.join(ram_dir, "publish.lock"),
         total=total,
         present_before=_present_before(output_paths),
+        model_meter=os.path.join(ram_dir, "coverModel.meter"),
     )
 
     if total:
@@ -1088,12 +1098,14 @@ def _run_with_scratch(ram_dir: str, input_dir: str, output_dir: str,
                        state.process_pair)
         safety.exit_if_aborted()
 
+    report_cover_model(state.model_meter)
+
     # By the paths this run made them at, which are all in the scratch: the join
     # and the thumbnail leave nothing in the output tree to clean up.
     log("Cleaning up temporary files")
     for path in (os.path.join(ram_dir, "concat.progress"), run_console.lock_path,
                  state.reservation_file, state.reservation_file + ".lock",
-                 state.publish_lock):
+                 state.publish_lock, state.model_meter):
         try:
             os.remove(path)
         except OSError:
@@ -1127,6 +1139,16 @@ def _run_with_scratch(ram_dir: str, input_dir: str, output_dir: str,
     # handled itself, so the pool never saw it - but the run still asked for a
     # file it did not get, and must not end on the status of one that did.
     return workerpool.exit_status(1 if failed else 0)
+
+
+def report_cover_model(meter_file: str) -> None:
+    """What the cover model was asked over the whole run, added up from what
+    each book recorded - said only where more than one book asked it, since
+    one book's line already stands under it."""
+    spans, tally = modelmeter.gathered(meter_file)
+    if tally.requests > 1:
+        log("Cover model over the run: "
+            + modelmeter.rate_line("all", spans.seconds, tally))
 
 
 def _present_before(output_paths: list) -> frozenset:

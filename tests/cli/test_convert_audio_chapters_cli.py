@@ -56,7 +56,7 @@ def convert(sandbox, tmp_path):
     sandbox.environment = dict(
         os.environ, WHISPERLOG=str(tmp_path / "whisper.calls"),
         MODELLOG=str(tmp_path / "model.calls"),
-        chapterLlmUrl="http://model.test/v1", chapterLlmModel="stub")
+        llmUrl="http://model.test/v1", llmModel="stub")
     inputs = tmp_path / "in"
     inputs.mkdir()
     for name in ("plain.m4a", "chaptered.m4a"):
@@ -108,9 +108,9 @@ def test_without_t_neither_whisper_nor_the_model_is_asked(convert, tmp_path):
 
 def test_t_without_a_model_is_refused_before_anything_is_encoded(convert, tmp_path):
     environment = dict(convert.environment)
-    del environment["chapterLlmUrl"]
+    del environment["llmUrl"]
     said = _run(convert, tmp_path, "-C", env=environment, expect=1)
-    assert "chapterLlmUrl is not set" in said
+    assert "llmUrl is not set" in said
     assert not (tmp_path / "out" / "plain.opus").exists()
 
 

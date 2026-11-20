@@ -28,7 +28,6 @@ from medialib.cli import ingest_movies_plex as plexphase
 from medialib.cli.ingest_movies import log
 from medialib.lib import (
     chapterdb,
-    chapterllm,
     cleannamesindividually,
     clioptions,
     commentarydetection,
@@ -2100,7 +2099,7 @@ def _chapter_extra(state, root: str, llm, movie: str, whisper: bool) -> str:
     try:
         # A model served from this machine or its network may be on the card
         # whisper is using; a hosted one never is.
-        on_gpu = chapterllm.is_local(llm.url)
+        on_gpu = llm.traits.local
         done = chapterwork.chapter(
             movie, scratch, llm, label, state.script_dir, log,
             allow_audio=whisper, disk=lambda: diskturn.turn(movie),
@@ -3591,11 +3590,11 @@ def _gpu_claim(state, kind: str, need_mib: int | None):
 
 
 def _llm_vram_mib() -> int | None:
-    """The chapterLlmVramGB setting in MiB: the GPU memory the model needs
+    """The llmVramGB setting in MiB: the GPU memory the model needs
     beside other work on this machine's card. None when unset or unreadable,
     which is that it needs all of it."""
     try:
-        return int(float(os.environ.get("chapterLlmVramGB", "")) * 1024)
+        return int(float(os.environ.get("llmVramGB", "")) * 1024)
     except ValueError:
         return None
 

@@ -62,7 +62,9 @@ __all__ = [
     "Row",
     "Subject",
     "book_cover",
+    "book_subject",
     "enabled",
+    "providers_for",
     "probable_content",
     "read_table",
     "track_cover",
@@ -795,9 +797,19 @@ def book_cover(input_path: str, tracks: Sequence[str], seconds: float,
     """
     if not enabled():
         return ""
+    return _search(book_subject(input_path, tracks, seconds, stereo),
+                   dest_base, search)
+
+
+def book_subject(input_path: str, tracks: Sequence[str], seconds: float,
+                 stereo: bool = False,
+                 probe: Callable[[str], dict] | None = None) -> Subject:
+    """What the book joined from ``input_path`` is looked for as: its folder's
+    name, the first track's tags (read by ``probe``, ffprobe unless given),
+    the folder above as a possible author."""
     folder = os.path.basename(os.path.normpath(input_path))
-    tags = probe_tags(tracks[0]) if tracks else {}
-    subject = subject_for(
+    tags = (probe or probe_tags)(tracks[0]) if tracks else {}
+    return subject_for(
         folder, seconds,
         tag_titles=[tags.get("album", "")],
         tag_creators=[tags.get("album_artist", ""), tags.get("artist", ""),
@@ -805,7 +817,12 @@ def book_cover(input_path: str, tracks: Sequence[str], seconds: float,
         guessed_creators=[os.path.basename(os.path.dirname(
             os.path.normpath(input_path)))],
         stereo=stereo)
-    return _search(subject, dest_base, search)
+
+
+def providers_for(content: str) -> list[str]:
+    """The providers the table asks for ``content``, in its order."""
+    return _unique([row.provider for row in read_table(table_path())
+                    if row.content == content])
 
 
 # --- convert-audio -----------------------------------------------------------------------

@@ -14,7 +14,7 @@ import os
 
 import pytest
 
-from medialib.lib import chapterllm, llmharness
+from medialib.lib import llmclient, llmharness
 
 pytestmark = pytest.mark.stubbed
 
@@ -134,18 +134,18 @@ class TestTheSetting:
             llmharness.parse("emacs")
 
     def test_a_model_is_required(self):
-        with pytest.raises(chapterllm.LlmError, match="chapterLlmHarnessModel"):
-            chapterllm.from_environment({
-                "chapterLlmUrl": "http://localhost:8080/v1",
-                "chapterLlmHarness": "opencode"})
+        with pytest.raises(llmclient.LlmError, match="llmHarnessModel"):
+            llmclient.from_environment({
+                "llmUrl": "http://localhost:8080/v1",
+                "llmHarness": "opencode"})
 
 
 class TestThroughTheModel:
     def _llm(self):
-        return chapterllm.from_environment({
-            "chapterLlmUrl": "http://localhost:8080/v1",
-            "chapterLlmHarness": "opencode",
-            "chapterLlmHarnessModel": "ninfer/qwen"})
+        return llmclient.from_environment({
+            "llmUrl": "http://localhost:8080/v1",
+            "llmHarness": "opencode",
+            "llmHarnessModel": "ninfer/qwen"})
 
     def test_instructions_go_through_the_harness(self, opencode):
         llm = self._llm()
@@ -158,13 +158,13 @@ class TestThroughTheModel:
         assert self._llm().following("  ").harness is None
 
     def test_claude_searches_by_itself(self, opencode):
-        llm = chapterllm.from_environment({
-            "chapterLlmApi": "anthropic", "chapterLlmHarness": "opencode",
-            "chapterLlmHarnessModel": "x"})
+        llm = llmclient.from_environment({
+            "llmApi": "anthropic", "llmHarness": "opencode",
+            "llmHarnessModel": "x"})
         assert llm.following("check").harness is None
 
     def test_json_in_the_answer_is_readable(self, opencode):
-        assert chapterllm.first_json(_ask()) == {"chapters": []}
+        assert llmclient.first_json(_ask()) == {"chapters": []}
         assert json.loads(_ask()) == {"chapters": []}
 
 
@@ -199,3 +199,27 @@ class TestTheLog:
         assert _ask()
         assert opencode.lines()[-1] == "delete ses_1"
         assert not os.path.isdir(llmharness.session_dir())
+
+
+class TestSearching:
+    """A model asked to look something up: Claude searches itself, a server
+    behind the openai protocol only through a harness."""
+
+    def test_claude_searches(self):
+        llm = llmclient.from_environment({"llmApi": "anthropic"})
+        found = llm.searching("cover")
+        assert found is not None and found.search and found.purpose == "cover"
+        assert found.effort == llmclient.THOROUGH_EFFORT
+
+    def test_a_server_without_a_harness_cannot(self):
+        llm = llmclient.from_environment({"llmUrl": "http://localhost:8080/v1"})
+        assert llm.searching("cover") is None
+
+    def test_a_server_with_a_harness_searches_through_it(self, opencode):
+        llm = llmclient.from_environment({
+            "llmUrl": "http://localhost:8080/v1",
+            "llmHarness": "opencode", "llmHarnessModel": "ninfer/qwen"})
+        found = llm.searching("cover")
+        assert found is not None and found.harness is llmharness.Harness.OPENCODE
+        found.ask("SYSTEM", "PROMPT")
+        assert "--title medialib cover request" in opencode.lines()[0]

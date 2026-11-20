@@ -864,7 +864,7 @@ half a second or more. Needs `curl`, `mkvmerge`, `mediainfo`, `ffprobe`,
 **`-C` adds the extras to a full ingest.** Every bonus video — anything under
 a Plex bonus folder (`Featurettes`, `Deleted Scenes`, `Interviews`, …),
 never a film's main movie — that has no chapters is given some, worked out by
-the language model the `chapterLlm` [settings](../settings.md) name, the way
+the language model the `llm` [settings](../settings.md) name, the way
 [`generate-chapters`](generate-chapters.md) does it. An extra that has chapters
 keeps them, and one too short to divide is left alone. This is separate from
 the [ChapterDB lookup](#chapters), which is only for films.
@@ -885,16 +885,16 @@ transcribed while the remux goes on. All of it is finished before the tagging
 renames anything.
 
 **The GPU is shared only where it has room.** A model served from this machine
-or its network (a `chapterLlmUrl` that is local) runs beside the commentary
+or its network (a `llmUrl` that is local) runs beside the commentary
 transcription only when nvidia-smi shows free memory for it. Set the
-`chapterLlmVramGB` [setting](../settings.md) to what it needs; unset, the
+`llmVramGB` [setting](../settings.md) to what it needs; unset, the
 model takes the whole card and never runs beside whisper. A server the run
-starts itself (`chapterLlmServe`, see
+starts itself (`llmServe`, see
 [generate-chapters](generate-chapters.md#several-servers-one-card)) is started
 only with that room; without it, the next server listed is asked. A hosted
 model, or a machine with no NVIDIA card, never waits. The progress row shows
 it as `chapters`. The model is asked for up front, so a run whose model is not
-set up is refused before any ingesting. Needs the settings `chapterLlm*` and,
+set up is refused before any ingesting. Needs the settings `llm*` and,
 for a transcribed extra, the same whisper set-up as the commentaries.
 
 `-P "<text>"` adds your own instructions to every request the model gets, as

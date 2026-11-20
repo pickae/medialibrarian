@@ -1,0 +1,37 @@
+# The roster of language models: copy to models.toml beside your settings
+# file (or point llmModels at it) and keep the models you have. See
+# docs/models.md.
+#
+# One table per model, in your order of preference. What each model is
+# (its traits) is found out from its server or its name; say it under
+# `traits` where that gets it wrong.
+
+# A local mixture of experts, started when a task needs it, which searches
+# the web through opencode.
+[models.qwen-local]
+url = "http://localhost:8081/v1"
+model = "qwen3.6-35b-a3b"
+serve = "llama-server -m /models/qwen3.6-35b-a3b.gguf --port 8081"
+harness = "opencode"
+harness_model = "local/qwen3.6-35b-a3b"
+
+# A small local model that sees pictures: the cover look leans light, so it
+# is asked before the larger ones.
+[models.vision-local]
+url = "http://localhost:8082/v1"
+model = "gemma3-12b"
+
+# Claude, for what the local models cannot do as well. Its key comes from
+# the environment, so this file holds none.
+[models.claude]
+api = "anthropic"
+model = "claude-opus-5-5"
+key_env = "ANTHROPIC_API_KEY"
+traits = { cost_in = 5, cost_out = 25 }
+
+# A task's lean, or its ladder outright.
+# [tasks.chapters]
+# lean = "light"
+#
+# [tasks.cover-search]
+# models = ["claude", "qwen-local"]

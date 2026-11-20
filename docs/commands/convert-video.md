@@ -64,7 +64,7 @@ with `-a`, `-b` or `-s`.
 ## Chapters (`-C`)
 
 A video that has no chapters is given some, worked out by the language model the
-`chapterLlm` [settings](../settings.md) name, the way `generate-chapters` does it.
+`llm` [settings](../settings.md) name, the way `generate-chapters` does it.
 A video that has chapters keeps them.
 
 What is said in the film is read from its first text subtitle that is its

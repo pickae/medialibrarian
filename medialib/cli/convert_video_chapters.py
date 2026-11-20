@@ -32,9 +32,9 @@ from typing import NamedTuple
 from medialib.lib import (
     aichapters,
     audiotracks,
-    chapterllm,
     chapters,
     languages,
+    llmroster,
     safety,
     subtitletracks,
     toolcapture,
@@ -93,11 +93,11 @@ LATER = Deferred()
 
 def model(program: str, instructions: str, flag: str,
           log: Callable[[str], None]):
-    """The chapter model the settings describe, given the user's own
+    """The chapter model the roster gives, given the user's own
     ``instructions`` for every request, or None when none is set up (which has
     been said). ``flag`` names the option that asked for it, for the line that
     says what is used."""
-    llm = chapterllm.require(program)
+    llm = llmroster.require(program, llmroster.chapters_task(instructions))
     if llm is None:
         return None
     llm = llm.following(instructions)

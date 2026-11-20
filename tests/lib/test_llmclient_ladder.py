@@ -1,4 +1,4 @@
-"""Tests for the chapter model's server ladder - chapterllm.Llm.serving.
+"""Tests for the chapter model's server ladder - llmclient.Llm.serving.
 
 A small HTTP server written by the test stands in for a model server: it lists
 the model and window a case gives at ``/v1/models``. ``nvidia-smi`` is a stub
@@ -16,7 +16,7 @@ import time
 
 import pytest
 
-from medialib.lib import aichapters, chapterllm, modelserver
+from medialib.lib import aichapters, llmclient, modelserver
 
 pytestmark = pytest.mark.stubbed
 
@@ -67,9 +67,9 @@ def gpu(tmp_path, monkeypatch):
                        + os.environ.get("PATH", ""))
     monkeypatch.setenv("TMPDIR", str(tmp_path))
     monkeypatch.setattr(modelserver, "_POLL", 0.1)
-    monkeypatch.setattr(chapterllm, "_servers", {})
+    monkeypatch.setattr(llmclient, "_servers", {})
     yield say
-    for server in chapterllm._servers.values():
+    for server in llmclient._servers.values():
         server.stop()
 
 
@@ -106,7 +106,7 @@ def running(serve):
 
 def _llm(urls, model="chapters-35b", serve="", context=200000,
          context_given=True):
-    return chapterllm.Llm("openai", urls[0], model, context_tokens=context,
+    return llmclient.Llm("openai", urls[0], model, context_tokens=context,
                           fallbacks=tuple(urls[1:]), serve=serve,
                           serve_mib=20000, context_given=context_given)
 
@@ -121,13 +121,13 @@ class TestTheFirstServer:
             assert (served.url, served.model) == (_url(port), "chapters-35b")
             assert served.context_tokens == 200000
         assert lines == []
-        for server in chapterllm._servers.values():
+        for server in llmclient._servers.values():
             server.stop()
         assert process.poll() is None
 
     def test_down_is_started_with_room_on_the_gpu_and_stopped(self, gpu, serve,
                                                               monkeypatch):
-        monkeypatch.setattr(chapterllm, "SERVE_IDLE", 0.2)
+        monkeypatch.setattr(llmclient, "SERVE_IDLE", 0.2)
         port = _port()
         llm = _llm([_url(port)], serve=serve(port, "chapters-35b"))
         lines = []
@@ -168,7 +168,7 @@ class TestTheCardTaken:
     def test_a_window_left_unset_is_the_one_the_server_lists(self, gpu, running):
         port = _port()
         running(port, "chapters-27b", 262144)
-        llm = _llm([_url(port)], model="", context=chapterllm.DEFAULT_CONTEXT_TOKENS,
+        llm = _llm([_url(port)], model="", context=llmclient.DEFAULT_CONTEXT_TOKENS,
                    context_given=False)
         with llm.serving(print) as served:
             assert (served.model, served.context_tokens) == ("chapters-27b", 262144)
@@ -192,7 +192,7 @@ class TestNoServer:
     def test_is_an_error_naming_the_addresses(self, gpu):
         gpu(2000)
         urls = [_url(_port()), _url(_port())]
-        with pytest.raises(chapterllm.LlmError, match="no chapter model server"), \
+        with pytest.raises(llmclient.LlmError, match="no model server"), \
                 _llm(urls, serve="false").serving(print):
             pass
 
@@ -202,7 +202,7 @@ class TestNoServer:
                 for second in range(0, 3600, 10)]
         lines = []
         assert aichapters.generate(cues, llm, log=lines.append) == []
-        assert lines[-1].startswith("    no model to ask: no chapter model server")
+        assert lines[-1].startswith("    no model to ask: no model server")
 
     def test_one_address_with_a_model_is_used_unasked(self, gpu):
         llm = _llm([_url(_port())])

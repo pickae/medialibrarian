@@ -13,7 +13,7 @@ Every request is one throwaway session. A harness keeps its sessions where its
 own interface lists them, so each one is removed again the moment its answer
 is read - and made hidden when it starts, for the case that the run is killed
 before it can be removed - or a user opening the harness for real would find
-it buried in hundreds of chapter requests.
+it buried in hundreds of chapter or cover requests.
 
 What the session did - the prompt, the tools it called, the pages it fetched,
 the answer - is what a run's author needs to judge it, so each session is
@@ -38,11 +38,17 @@ from medialib.lib import errorlog, runlog
 __all__ = ["HARNESS_VARIABLE", "MODEL_VARIABLE", "Harness", "HarnessError",
            "parse", "installed", "ask"]
 
-HARNESS_VARIABLE = "chapterLlmHarness"
-MODEL_VARIABLE = "chapterLlmHarnessModel"
+HARNESS_VARIABLE = "llmHarness"
+MODEL_VARIABLE = "llmHarnessModel"
 
-# What the sessions are called, so a leftover one is recognisable.
+# What the sessions are called, so a leftover one is recognisable: each use
+# of the model names its own (:func:`session_title`).
 SESSION_TITLE = "medialib chapter request"
+
+
+def session_title(purpose: str) -> str:
+    """What a session asked for ``purpose`` - "chapter", "cover" - is called."""
+    return "medialib %s request" % (purpose or "model")
 
 # What the harness is told to do with the prompt file. The file holds the
 # whole request - system prompt, instructions, transcript - because a
@@ -93,10 +99,10 @@ def installed(harnesses: tuple[Harness, ...]) -> Harness | None:
 
 
 def ask(harness: Harness, model: str, system: str, prompt: str,
-        timeout: float) -> str:
+        timeout: float, title: str = SESSION_TITLE) -> str:
     """The text ``harness`` answers to ``system`` and ``prompt`` with ``model``,
-    in a session that is gone again when this returns. HarnessError when it
-    cannot be run, fails, or says nothing."""
+    in a session called ``title`` that is gone again when this returns.
+    HarnessError when it cannot be run, fails, or says nothing."""
     work = tempfile.mkdtemp(prefix="llmharness.")
     session = ""
     try:
@@ -104,7 +110,7 @@ def ask(harness: Harness, model: str, system: str, prompt: str,
             handle.write("%s\n\n---\n\n%s\n" % (system, prompt))
         try:
             if harness is Harness.OPENCODE:
-                proc = _opencode(work, model, timeout)
+                proc = _opencode(work, model, timeout, title)
                 session = _opencode_session(proc.stdout)
                 if proc.returncode != 0:
                     raise HarnessError("opencode: %s" % (
@@ -122,11 +128,12 @@ def ask(harness: Harness, model: str, system: str, prompt: str,
     finally:
         if session:
             _keep(harness, work, session)
-            _forget(harness, work, session)
+            _forget(harness, work, session, title)
         shutil.rmtree(work, ignore_errors=True)
 
 
-def _opencode(work: str, model: str, timeout: float):
+def _opencode(work: str, model: str, timeout: float,
+              title: str = SESSION_TITLE):
     """One ``opencode run`` in ``work``, as the finished process.
 
     ``--auto`` because a run with nobody to ask turns every permission request
@@ -134,7 +141,7 @@ def _opencode(work: str, model: str, timeout: float):
     titled, so a run that dies before :func:`_forget` leaves one that is out
     of the way and can be told apart."""
     argv = ["opencode", "run", "--format", "json", "--archived",
-            "--title", SESSION_TITLE, "--auto",
+            "--title", title, "--auto",
             "--file", os.path.join(work, "task.md")]
     if model:
         argv += ["--model", model]
@@ -208,7 +215,8 @@ def _keep(harness: Harness, work: str, session: str) -> None:
                     % (harness.program, session, error))
 
 
-def _forget(harness: Harness, work: str, session: str) -> None:
+def _forget(harness: Harness, work: str, session: str,
+            title: str = SESSION_TITLE) -> None:
     """Delete the session. A failure is said, once, not raised: the answer is
     already in hand, and the session is hidden."""
     try:
@@ -221,5 +229,5 @@ def _forget(harness: Harness, work: str, session: str) -> None:
     if failed:
         sys.stderr.write("  Could not delete the %s session %s (titled %r); it is "
                          "hidden, and can be removed with `%s session delete`.\n"
-                         % (harness.program, session, SESSION_TITLE,
+                         % (harness.program, session, title,
                             harness.program))

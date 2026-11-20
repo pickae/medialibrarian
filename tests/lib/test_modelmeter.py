@@ -63,3 +63,27 @@ class TestTheLine:
         tally.add(1.0, None)
         assert modelmeter.rate_line("ocr", 1.0, tally).endswith(
             "tokens not reported")
+
+
+class TestTheRecord:
+    """What worker processes record, read back as one run."""
+
+    def test_records_add_up_and_their_stretches_join(self, tmp_path):
+        path = str(tmp_path / "meter")
+        for start, end, tokens in ((0.0, 10.0, 30), (5.0, 12.0, 20)):
+            spans, tally = modelmeter.Spans(), modelmeter.Tally()
+            spans.add(start, end)
+            tally.add(end - start, tokens, read=100)
+            modelmeter.record(path, spans, tally)
+        spans, tally = modelmeter.gathered(path)
+        assert spans.seconds == 12.0
+        assert (tally.requests, tally.tokens, tally.read, tally.counted) == (2, 50, 200, 2)
+
+    def test_no_record_is_nothing(self, tmp_path):
+        spans, tally = modelmeter.gathered(str(tmp_path / "none"))
+        assert (spans.seconds, tally.requests) == (0.0, 0)
+
+    def test_a_torn_line_is_skipped(self, tmp_path):
+        path = tmp_path / "meter"
+        path.write_text('{"spans": [[0, 1]], "tally": {"requests": 1}}\nnot json\n')
+        assert modelmeter.gathered(str(path))[1].requests == 0

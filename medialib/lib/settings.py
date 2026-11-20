@@ -78,9 +78,10 @@ _SCRATCH = ("concat-audio", "content-census", "content-census-bi", "convert-and-
             "generate-chapters", "ingest-books", "ingest-movies", "ingest-music", "read-library",
             "transcribe-audio", "ytdlp")
 
-# Every command that asks a language model for chapters.
-_AI_CHAPTERS = ("convert-audio", "convert-video", "generate-chapters", "ingest-movies",
-                "ytdlp")
+# Every command that asks a language model: for chapters, or concat-audio's
+# for a cover nothing else found.
+_AI_CHAPTERS = ("concat-audio", "convert-and-concat", "convert-audio", "convert-video",
+                "generate-chapters", "ingest-movies", "ytdlp")
 
 SETTINGS: tuple[Setting, ...] = (
     # --- logins and keys
@@ -208,6 +209,13 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("coverSearchTable", "The table of where that search looks, in what "
             "order, by its path", ("concat-audio", "convert-and-concat", "convert-audio"),
             "the shipped `medialib/config/coverproviders.tsv`"),
+    Setting("coverSearchLlm", "Whether a book that search found no cover for is "
+            "handed to a language model to search the web for one (the "
+            "`cover-search` task, see docs/models.md): it is told the folder's "
+            "file names, the tracks' tags and what the book probably is. Only a "
+            "model that can search is asked - Claude, or one behind "
+            "`llmHarness`: `on` or `off`",
+            ("concat-audio", "convert-and-concat"), "on"),
     Setting("chapterDbSite", "The chapter database's address", ("ingest-movies",),
             "`https://chapterdb.plex.tv`", tuning=True),
     Setting("dvdCompareSite", "The disc database's address", ("ingest-movies",),
@@ -224,69 +232,90 @@ SETTINGS: tuple[Setting, ...] = (
             "to date before the fetch. `SKIP_YTDLP_UPGRADE` is accepted too",
             ("ytdlp",),
             "unset - a nightly is upgraded; a preview (-p) never is"),
-    # --- chapters made by a language model
-    Setting("chapterLlmApi", "The protocol the chapter model is asked over: `openai` "
+    # --- language models
+    Setting("llmModels", "The roster file: every language model you have, "
+            "and which tasks use which - see docs/models.md. The single-model "
+            "settings below add one more, called `llm`", _AI_CHAPTERS,
+            "`models.toml` beside the settings file, where there is one"),
+    Setting("llmLean", "Which way every task leans in choosing among the "
+            "models that can do it: `light` (small, cheap and fast first), "
+            "`balanced` (the roster's order) or `precise` (large and "
+            "reasoning first); the roster file can say it per task",
+            _AI_CHAPTERS, "unset - each task's own"),
+    Setting("llmApi", "The protocol the model is asked over: `openai` "
             "for any server speaking OpenAI's chat protocol - Ollama, llama.cpp, vLLM, "
             "LM Studio and most hosted APIs - or `anthropic` for Claude",
             _AI_CHAPTERS, "`openai`"),
-    Setting("chapterLlmUrl", "That server's address, up to and including the `/v1`, "
+    Setting("llmUrl", "That server's address, up to and including the `/v1`, "
             "e.g. `http://localhost:11434/v1`; for `openai`, a comma list of servers, "
             "the preferred first, e.g. `http://localhost:8081/v1,"
-            "http://localhost:8080/v1` - each recording is chaptered by the first "
+            "http://localhost:8080/v1` - each request goes to the first "
             "that answers, or can be started; for `anthropic`, only to reach another "
             "endpoint than Anthropic's own", _AI_CHAPTERS,
             "unset - required for `openai`"),
-    Setting("chapterLlmServe", "The command that starts the first of those servers "
+    Setting("llmServe", "The command that starts the first of those servers "
             "when it is not running and the GPU has room for it; the run stops it "
             "again once it has been idle five minutes, and at its end. A server found "
             "running is left running", _AI_CHAPTERS),
-    Setting("chapterLlmServeMib", "The free GPU memory, in MiB, that server is "
+    Setting("llmServeMib", "The free GPU memory, in MiB, that server is "
             "started with; with less, the next server down the list is asked",
             _AI_CHAPTERS, "26000"),
-    Setting("chapterLlmModel", "The model's name as that server knows it; a server "
+    Setting("llmModel", "The model's name as that server knows it; a server "
             "that does not list it is asked for the first model it lists",
             _AI_CHAPTERS, "unset - the first model the server lists, required for "
             "a hosted `openai` API; `claude-opus-5-5` for `anthropic`"),
-    Setting("chapterLlmKey", "The API key, where the server asks for one; for "
+    Setting("llmKey", "The API key, where the server asks for one; for "
             "`anthropic`, `ANTHROPIC_API_KEY` or an `ant auth login` profile does too",
             _AI_CHAPTERS, secret=True),
-    Setting("chapterLlmContext", "How many tokens the model's context window holds, "
+    Setting("llmContext", "How many tokens the model's context window holds, "
             "as the server runs it: a transcript longer than fits is summarised in "
             "parts before it is chaptered. A server that lists its window "
             "(`max_model_len`) is held to the smaller of the two", _AI_CHAPTERS,
             "the window the server lists, else 32000"),
-    Setting("chapterLlmOptions", "More fields for every request over the `openai` "
+    Setting("llmOptions", "More fields for every request over the `openai` "
             "protocol, as a JSON object - whatever that server takes, e.g. "
             "`{\"reasoning_effort\": \"low\"}` or `{\"temperature\": 0.2}`; an output "
-            "limit given here replaces the one the run works out, and the chapter "
-            "instructions (`generate-chapters -P`, `convert-audio -P`, `convert-video -P`, "
-            "`ingest-movies -P`, `ytdlp -P`) "
-            "send their own `reasoning_effort`", _AI_CHAPTERS),
-    Setting("chapterLlmHarness", "The agent harnesses you have installed, a comma "
+            "limit given here replaces the one the run works out, and a request "
+            "that searches - the chapter instructions (`generate-chapters -P`, "
+            "`convert-audio -P`, `convert-video -P`, "
+            "`ingest-movies -P`, `ytdlp -P`), the cover search - sends its own "
+            "`reasoning_effort`", _AI_CHAPTERS),
+    Setting("llmHarness", "The agent harnesses you have installed, a comma "
             "list, the preferred first - only `opencode` is supported. With "
             "one, the chapter instructions (`generate-chapters -P` and the "
             "like) are asked of the same model through the harness instead of "
             "straight to its server, so a local model can search the web as "
-            "Claude does, e.g. to spell the speakers' names. Each request is "
+            "Claude does, e.g. to spell the speakers' names - and concat-audio "
+            "can ask it to search the web for a book's cover. Each request is "
             "one throwaway session that is deleted when its answer is read, "
             "so your own sessions stay easy to find. The harness runs with "
-            "its permissions auto-approved, and its prompt is the transcript, "
-            "so use it only with a model you trust with both",
+            "its permissions auto-approved, and its prompt is the transcript "
+            "(for a cover, the book's file names and tags), so use it only "
+            "with a model you trust with both",
             _AI_CHAPTERS, "unset - instructions are asked of the server alone"),
-    Setting("chapterLlmHarnessModel", "The model the harness asks, as it names "
+    Setting("llmHarnessModel", "The model the harness asks, as it names "
             "models - for opencode `provider/model`, as `opencode models` "
             "lists them, e.g. `ninfer/qwen3.8-27b`. Required with "
-            "`chapterLlmHarness`: the harness's own default can be a hosted "
+            "`llmHarness`: the harness's own default can be a hosted "
             "model, and the transcript would be sent to it", _AI_CHAPTERS),
-    Setting("chapterLlmVramGB", "The GPU memory, in GB, the chapter model needs while "
+    Setting("llmTraits", "What the model is, where finding out gets it wrong: "
+            "a comma list of `tools`, `vision`, `reasoning`, `images_out`, `moe`, "
+            "`cheap`, each with `-` in front for one it lacks, and `params=`, "
+            "`active=` (billions), `tok_s=`, `cost_in=`, `cost_out=` (dollars a "
+            "million tokens), `size=` (`small`, `medium`, `large`) and `speed=` "
+            "(`fast`, `slow`) - e.g. `vision,-reasoning,params=30,active=3`. "
+            "What is not said is asked of a local server (llama.cpp's `/props`, "
+            "Ollama's `/api/show`) or read off the model's name",
+            _AI_CHAPTERS, "unset - all found out"),
+    Setting("llmVramGB", "The GPU memory, in GB, the model needs while "
             "whisper is using the same card - ingest-movies starts it beside the "
             "commentary transcription only when that much is free, and otherwise waits "
             "for its turn; only a model served from this machine or its network is "
             "waited for", ("ingest-movies",),
             "unset - the model takes the whole card, so it never runs beside whisper"),
-    Setting("chapterLlmJobs", "How many requests are sent to the model at once, "
+    Setting("llmJobs", "How many requests are sent to the model at once, "
             "over the whole run. Whether the model is local is read off "
-            "`chapterLlmUrl`: localhost, a private or Tailscale address, or a "
+            "`llmUrl`: localhost, a private or Tailscale address, or a "
             "name on the LAN", _AI_CHAPTERS,
             "2 for a local model; no limit for a hosted one"),
     # --- comic PDFs
@@ -380,6 +409,13 @@ INTERNAL = frozenset((
 ))
 
 BY_NAME = {setting.name: setting for setting in SETTINGS}
+
+# The names settings used to go by, and the names they go by now. An old name
+# still works - in the environment and in the file - and is warned about.
+RENAMED = {"chapterLlm" + name[len("llm"):]: name for name in (
+    "llmApi", "llmUrl", "llmModel", "llmKey", "llmContext", "llmOptions",
+    "llmJobs", "llmServe", "llmServeMib", "llmHarness", "llmHarnessModel",
+    "llmVramGB")}
 
 
 def config_home() -> str:
@@ -508,7 +544,7 @@ def _variable(text: str, at: int) -> tuple[str, int]:
     return (name, end - at) if name.isidentifier() else ("", 0)
 
 
-def _readable_by_others(path: str) -> bool:
+def readable_by_others(path: str) -> bool:
     """Whether another account can read the file. Windows keeps no such
     bits in a file's mode, and is not asked."""
     if os.name == "nt":
@@ -524,6 +560,7 @@ def load(stream=None) -> None:
     run: SystemExit, after saying why.
     """
     stream = sys.stderr if stream is None else stream
+    _apply_renamed(stream)
     path = settings_file()
     if not os.path.isfile(path):
         _apply_shipped()
@@ -531,8 +568,9 @@ def load(stream=None) -> None:
     try:
         values = read_file(path)
         secrets = [name for name in values
-                   if name in BY_NAME and BY_NAME[name].secret]
-        if secrets and _readable_by_others(path):
+                   if RENAMED.get(name, name) in BY_NAME
+                   and BY_NAME[RENAMED.get(name, name)].secret]
+        if secrets and readable_by_others(path):
             raise SettingsError(
                 "%s holds %s and other accounts on this machine can read it - "
                 "make it private first: chmod 600 %s"
@@ -544,12 +582,28 @@ def load(stream=None) -> None:
         errorlog.record("config", str(error), files=[path], stack=False)
         raise SystemExit(1) from error
     for name, value in values.items():
-        if name not in BY_NAME:
+        if name in RENAMED:
+            stream.write("==> WARNING: %s sets %s, which is called %s now - the "
+                         "old name works for the time being\n"
+                         % (path, name, RENAMED[name]))
+            name = RENAMED[name]
+        elif name not in BY_NAME:
             near = difflib.get_close_matches(name, BY_NAME, n=1)
             stream.write("==> WARNING: %s sets %s, which no command reads%s\n"
                          % (path, name, " - did you mean %s?" % near[0] if near else ""))
         os.environ.setdefault(name, value)
     _apply_shipped()
+
+
+def _apply_renamed(stream) -> None:
+    """An old name set in the environment, carried over to the new one where
+    that is not set itself, and warned about."""
+    for old, new in RENAMED.items():
+        if old in os.environ:
+            stream.write("==> WARNING: the environment sets %s, which is called "
+                         "%s now - the old name works for the time being\n"
+                         % (old, new))
+            os.environ.setdefault(new, os.environ[old])
 
 
 def _apply_shipped() -> None:

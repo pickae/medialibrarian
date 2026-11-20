@@ -1,5 +1,5 @@
-"""The language model the chapter generator asks, behind one call: a system
-prompt and a user prompt in, the model's text out.
+"""One language model, behind one call: a system prompt and a user prompt in
+- and pictures, for a model that sees - the model's text out.
 
 Two wire protocols cover nearly every model a user could point this at, local
 or hosted, and neither is preferred:
@@ -14,33 +14,40 @@ or hosted, and neither is preferred:
              when this protocol is asked for - a run that never asks needs no
              package.
 
-Which one, where, which model and with what key are settings
-(:data:`API_VARIABLE` and the three after it), so one machine can keep a local
-model and another a hosted one without anything here changing. Everything the
-answer MEANS is :mod:`medialib.lib.aichapters`.
+An :class:`Llm` is one model the user has: which protocol, where, which
+model, with what key. Which of them a use of a model asks - and so which
+model chapters a recording or looks for a cover - is
+:mod:`medialib.lib.llmroster`'s to decide, by what each one is
+(:attr:`Llm.traits`, :mod:`medialib.lib.llmtraits`). The single-model
+settings (:data:`API_VARIABLE` and the ones after it) describe one model
+(:func:`from_environment`); the roster file describes any number.
 
-Whether the model is local or hosted is read off its address
-(:func:`is_local`). A local server has one GPU to share, so its requests are
-held to :data:`JOBS_VARIABLE` at a time; a hosted API scales with what it is
-sent, so nothing waits for it unless that setting says otherwise.
+Whether the model is local or in the cloud is its ``local`` trait
+(:mod:`medialib.lib.llmtraits`): read off its address (:func:`is_local`)
+unless the user declared it. A local server has one GPU to share, so its
+requests are held to :data:`JOBS_VARIABLE` at a time; a cloud API is
+serverless and scales with what it is sent, so every request goes the moment
+it is ready, unless that setting says otherwise.
 
 :data:`URL_VARIABLE` may name several servers, the preferred first, for a
-machine whose one card holds one model at a time: each recording is chaptered
-by the first that answers (:meth:`Llm.serving`). The first, not running, is
-started with :data:`SERVE_VARIABLE` where the GPU has room for it, and stopped
-again once idle (:mod:`medialib.lib.modelserver`); further down, the model a
-server lists is asked when it does not list :data:`MODEL_VARIABLE`, and the
-window is the one it lists when that is smaller than :data:`CONTEXT_VARIABLE`.
+machine whose one card holds one model at a time: each request goes to the
+first that answers (:meth:`Llm.serving`). The first, not running, is started
+with :data:`SERVE_VARIABLE` where the GPU has room for it, and stopped again
+once idle (:mod:`medialib.lib.modelserver`); further down, the model a server
+lists is asked when it does not list :data:`MODEL_VARIABLE`, and the window
+is the one it lists when that is smaller than :data:`CONTEXT_VARIABLE`.
 
 A model behind the openai protocol cannot look anything up, so where the user
 has an agent harness (:data:`HARNESS_VARIABLE`, :mod:`medialib.lib.llmharness`)
-the requests that carry the user's own instructions are asked through it
-instead, which can search the web for what they ask to have checked.
+a request that is to search the web (:meth:`Llm.searching`) is asked through
+it instead. :mod:`medialib.lib.modelmeter` counts what each use asked.
 """
 
 from __future__ import annotations
 
+import base64
 import contextlib
+import importlib.util
 import ipaddress
 import json
 import os
@@ -54,32 +61,38 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field, replace
 
-from medialib.lib import llmharness, modelserver, tmdbclient, tooldeps
+from medialib.lib import llmharness, llmtraits, modelserver, tmdbclient, tooldeps
 from medialib.lib.modelmeter import Tally
 
 __all__ = ["API_VARIABLE", "URL_VARIABLE", "MODEL_VARIABLE", "KEY_VARIABLE",
            "CONTEXT_VARIABLE", "OPTIONS_VARIABLE", "JOBS_VARIABLE",
            "SERVE_VARIABLE", "SERVE_MIB_VARIABLE",
-           "HARNESS_VARIABLE", "HARNESS_MODEL_VARIABLE", "SERVE_MIB", "APIS", "DEFAULT_API",
+           "HARNESS_VARIABLE", "HARNESS_MODEL_VARIABLE", "TRAITS_VARIABLE",
+           "SERVE_MIB", "APIS", "DEFAULT_API",
            "DEFAULT_ANTHROPIC_MODEL", "DEFAULT_CONTEXT_TOKENS", "DEFAULT_JOBS",
-           "THOROUGH_EFFORT", "LlmError", "Tally", "Llm", "from_environment", "require",
-           "is_local", "first_json"]
+           "THOROUGH_EFFORT", "LlmError", "Tally", "Llm", "from_environment", "build",
+           "preflight", "usable", "is_local", "first_json"]
 
 # The settings, by the names a user gives them.
-API_VARIABLE = "chapterLlmApi"
-URL_VARIABLE = "chapterLlmUrl"
-MODEL_VARIABLE = "chapterLlmModel"
-KEY_VARIABLE = "chapterLlmKey"
-CONTEXT_VARIABLE = "chapterLlmContext"
-OPTIONS_VARIABLE = "chapterLlmOptions"
-JOBS_VARIABLE = "chapterLlmJobs"
-SERVE_VARIABLE = "chapterLlmServe"
-SERVE_MIB_VARIABLE = "chapterLlmServeMib"
+API_VARIABLE = "llmApi"
+URL_VARIABLE = "llmUrl"
+MODEL_VARIABLE = "llmModel"
+KEY_VARIABLE = "llmKey"
+CONTEXT_VARIABLE = "llmContext"
+OPTIONS_VARIABLE = "llmOptions"
+JOBS_VARIABLE = "llmJobs"
+SERVE_VARIABLE = "llmServe"
+SERVE_MIB_VARIABLE = "llmServeMib"
 HARNESS_VARIABLE = llmharness.HARNESS_VARIABLE
 HARNESS_MODEL_VARIABLE = llmharness.MODEL_VARIABLE
+TRAITS_VARIABLE = "llmTraits"
+
+# What a picture is counted as against the window, in tokens: about what a
+# vision model makes of one picture scaled to a thousand pixels.
+PICTURE_TOKENS = 1500
 
 # The free GPU memory, in MiB, the first server is started with unless
 # SERVE_MIB_VARIABLE says: a 35B-A3B's weights are 22 GiB, and a long
@@ -177,7 +190,8 @@ class Llm:
     jobs: int = DEFAULT_JOBS
     options: dict = field(default_factory=dict)
     # A server on this machine or its network, rather than a hosted API.
-    local: bool = True
+    # None is as its address says (:func:`is_local`).
+    local: bool | None = None
     limit_field: int = field(default=0, compare=False)
     effort: str = ""
     search: bool = False
@@ -197,10 +211,19 @@ class Llm:
     harnesses: tuple[llmharness.Harness, ...] = ()
     harness_model: str = ""
     harness: llmharness.Harness | None = None
+    # What the model is asked for - "chapter", "cover" - which names a
+    # harness's sessions (:func:`llmharness.session_title`).
+    purpose: str = "chapter"
+    # What the user declared it is (:func:`llmtraits.declared`), over what
+    # is found out; and the name the roster knows it by.
+    said: dict = field(default_factory=dict, compare=False)
+    name: str = "llm"
     _slots: threading.BoundedSemaphore | None = field(
         default=None, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
+        if self.local is None:
+            self.local = is_local(self.url)
         if self.jobs > 0:
             self._slots = threading.BoundedSemaphore(self.jobs)
 
@@ -238,10 +261,24 @@ class Llm:
         instructions = (instructions or "").strip()
         if not instructions:
             return self
+        return self._thorough(instructions=instructions)
+
+    def searching(self, purpose: str = "") -> Llm | None:
+        """This model as it can look things up online, reasoning at
+        :data:`THOROUGH_EFFORT`: Claude with its web search, a model behind
+        the openai protocol through the first of :attr:`harnesses` that is
+        installed. None where it cannot search - an openai server and no
+        harness. ``purpose`` names what it is asked for (:attr:`purpose`).
+
+        The copy shares this model's request slots, as :meth:`following`'s
+        does."""
+        copy = self._thorough(purpose=purpose or self.purpose)
+        return copy if copy.search or copy.harness else None
+
+    def _thorough(self, **changes) -> Llm:
         copy = replace(self, effort=THOROUGH_EFFORT, search=self.api == "anthropic",
-                       instructions=instructions,
                        harness=llmharness.installed(self.harnesses)
-                       if self.api == "openai" else None)
+                       if self.api == "openai" else None, **changes)
         copy._slots = self._slots
         return copy
 
@@ -279,7 +316,7 @@ class Llm:
             finally:
                 if server is not None:
                     server.release()
-        raise LlmError("no chapter model server answers at %s, nor can one be "
+        raise LlmError("no model server answers at %s, nor can one be "
                        "started now" % ", ".join((self.url,) + self.fallbacks))
 
     def _on(self, url: str, listed: dict[str, int],
@@ -303,12 +340,46 @@ class Llm:
         bound._slots = self._slots
         return bound
 
-    def ask(self, system: str, prompt: str, tally: Tally | None = None) -> str:
+    @property
+    def traits(self) -> llmtraits.Traits:
+        """What this model is (:mod:`medialib.lib.llmtraits`): what the user
+        declared (:attr:`said`), else what a local server says, else what
+        its name says. Found out once per model. Of the model :meth:`serving`
+        gave, it is the model the server really holds."""
+        return llmtraits.detect(self.api, self.url, self.model, self.key,
+                                bool(self.local), self.said)
+
+    def sees_images(self) -> bool:
+        """Whether this model can be shown pictures (:meth:`ask`'s ``images``)."""
+        return bool(self.traits.vision)
+
+    def can_search(self) -> bool:
+        """Whether :meth:`searching` has a way to search the web: Claude's
+        own, or an installed harness for a model behind the openai protocol."""
+        return self.api == "anthropic" or (
+            self.api == "openai" and llmharness.installed(self.harnesses) is not None)
+
+    def has(self, trait: str) -> bool:
+        """Whether this model has ``trait`` - one of :mod:`llmtraits`'s, or
+        ``web``, which is the route's (:meth:`can_search`)."""
+        if trait == "web":
+            return self.can_search()
+        return self.traits.has(trait)
+
+    def ask(self, system: str, prompt: str, tally: Tally | None = None,
+            images: Sequence[str] = ()) -> str:
         """The model's text answer, its thinking taken out. LlmError when no
         answer came after the retries. Safe to call from many threads: the
         requests in flight never pass :attr:`jobs`. Every answer, a retried
         one too, is counted into ``tally``, timed from when its request held
-        a slot."""
+        a slot.
+
+        ``images`` are pictures - JPEG, PNG, GIF or WebP files - shown to the
+        model before the prompt, in their order; for a model that
+        :meth:`sees_images`, and never through a harness."""
+        if images and self.harness:
+            raise LlmError("pictures are not sent through %s" % self.harness.program)
+        pictures = [_picture(path) for path in images]
         last = ""
         for attempt in range(RETRIES + 1):
             if attempt:
@@ -316,7 +387,7 @@ class Llm:
             try:
                 with self._slots or contextlib.nullcontext():
                     started = time.monotonic()
-                    text, tokens = self._ask_once(system, prompt)
+                    text, tokens = self._ask_once(system, prompt, pictures)
             except LlmError as error:
                 last = str(error)
                 continue
@@ -328,76 +399,134 @@ class Llm:
             last = "an empty answer"
         raise LlmError(last)
 
-    def _ask_once(self, system: str, prompt: str) -> tuple[str, int | None]:
+    def _ask_once(self, system: str, prompt: str,
+                  pictures: Sequence[tuple[str, str]] = ()) -> tuple[str, int | None]:
         """The answer and the tokens the model wrote for it, None where they
-        were not reported."""
+        were not reported. ``pictures`` are (media type, base64) pairs."""
         if self.harness:
             try:
-                return llmharness.ask(self.harness, self.harness_model, system,
-                                      prompt, REQUEST_SECONDS), None
+                return llmharness.ask(
+                    self.harness, self.harness_model, system, prompt,
+                    REQUEST_SECONDS, llmharness.session_title(self.purpose)), None
             except llmharness.HarnessError as error:
                 raise LlmError(str(error)) from error
+        # Pictures are passed only where there are any, so a request of text
+        # is the call it always was.
+        more = (pictures,) if pictures else ()
         if self.api == "anthropic":
-            return _ask_anthropic(self, system, prompt)
-        return _ask_openai(self, system, prompt)
+            return _ask_anthropic(self, system, prompt, *more)
+        return _ask_openai(self, system, prompt, *more)
 
 
 def from_environment(environ=None) -> Llm:
-    """The model the settings describe. LlmError naming what is missing or
-    wrong, so a run can refuse before it transcribes anything."""
+    """The model the single-model settings describe. LlmError naming what is
+    missing or wrong, so a run can refuse before it transcribes anything."""
     environ = os.environ if environ is None else environ
-    api = (environ.get(API_VARIABLE) or DEFAULT_API).strip().lower()
+    entry = {field: environ.get(name) for field, name in SETTING_FIELDS.items()
+             if (environ.get(name) or "").strip()}
+    return build(entry, "llm", settings=True)
+
+
+# Which of an entry's fields (:func:`build`) each single-model setting gives.
+SETTING_FIELDS = {"api": API_VARIABLE, "url": URL_VARIABLE, "model": MODEL_VARIABLE,
+                  "key": KEY_VARIABLE, "context": CONTEXT_VARIABLE,
+                  "options": OPTIONS_VARIABLE, "jobs": JOBS_VARIABLE,
+                  "serve": SERVE_VARIABLE, "serve_mib": SERVE_MIB_VARIABLE,
+                  "harness": HARNESS_VARIABLE, "harness_model": HARNESS_MODEL_VARIABLE,
+                  "traits": TRAITS_VARIABLE}
+
+# The fields an entry may hold beyond those: the roster's own.
+ROSTER_FIELDS = ("key_env", "tasks")
+
+
+def build(entry: dict, name: str, settings: bool = False) -> Llm:
+    """The model one entry describes: a table of :data:`SETTING_FIELDS`'s
+    fields, as the roster file holds them (typed: a list of addresses, a
+    table of options or traits) or as the settings do (all text). ``name``
+    is what the roster calls it; with ``settings`` a problem is named by the
+    setting it is in, otherwise by the field. LlmError for an entry that
+    cannot be used."""
+    def said(field: str) -> str:
+        return SETTING_FIELDS[field] if settings else "%s's %s" % (name, field)
+
+    unknown = sorted(set(entry) - set(SETTING_FIELDS) - set(ROSTER_FIELDS))
+    if unknown:
+        raise LlmError("%s has no field %s; it takes %s" % (
+            name, ", ".join(unknown),
+            ", ".join(list(SETTING_FIELDS) + list(ROSTER_FIELDS))))
+    api = str(entry.get("api") or DEFAULT_API).strip().lower()
     if api not in APIS:
-        raise LlmError("%s is %r; it takes %s" % (API_VARIABLE, api, " or ".join(APIS)))
-    urls = [address.strip().rstrip("/") for address in
-            (environ.get(URL_VARIABLE) or "").split(",") if address.strip()]
+        raise LlmError("%s is %r; it takes %s" % (said("api"), api, " or ".join(APIS)))
+    addresses = entry.get("url") or ""
+    if isinstance(addresses, str):
+        addresses = addresses.split(",")
+    urls = [str(address).strip().rstrip("/") for address in addresses
+            if str(address).strip()]
     url = urls[0] if urls else ""
     if urls[1:] and api != "openai":
-        raise LlmError("%s names one address for the anthropic protocol"
-                       % URL_VARIABLE)
-    model = (environ.get(MODEL_VARIABLE) or "").strip()
-    key = environ.get(KEY_VARIABLE) or ""
+        raise LlmError("%s names one address for the anthropic protocol" % said("url"))
+    model = str(entry.get("model") or "").strip()
+    key = str(entry.get("key") or "")
+    if not key and entry.get("key_env"):
+        key = os.environ.get(str(entry["key_env"]), "")
     if api == "openai":
         if not url:
             raise LlmError("%s is not set: give the address of an OpenAI-compatible "
                            "server, e.g. http://localhost:11434/v1 for Ollama or "
-                           "https://api.openai.com/v1" % URL_VARIABLE)
+                           "https://api.openai.com/v1" % said("url"))
         if not model and not is_local(url):
             raise LlmError("%s is not set: give the model that API is to be "
-                           "asked for" % MODEL_VARIABLE)
+                           "asked for" % said("model"))
     else:
         model = model or DEFAULT_ANTHROPIC_MODEL
-    options = (environ.get(OPTIONS_VARIABLE) or "").strip()
-    try:
-        extra = json.loads(options) if options else {}
-    except ValueError as error:
-        raise LlmError("%s is not JSON: %s" % (OPTIONS_VARIABLE, error)) from error
+    extra = entry.get("options") or {}
+    if isinstance(extra, str):
+        try:
+            extra = json.loads(extra) if extra.strip() else {}
+        except ValueError as error:
+            raise LlmError("%s is not JSON: %s" % (said("options"), error)) from error
     if not isinstance(extra, dict):
-        raise LlmError("%s has to be a JSON object" % OPTIONS_VARIABLE)
+        raise LlmError("%s has to be a JSON object" % said("options"))
     if extra and api != "openai":
-        raise LlmError("%s applies to the openai protocol only" % OPTIONS_VARIABLE)
-    serve = (environ.get(SERVE_VARIABLE) or "").strip()
+        raise LlmError("%s applies to the openai protocol only" % said("options"))
+    serve = str(entry.get("serve") or "").strip()
     if serve and api != "openai":
-        raise LlmError("%s applies to the openai protocol only" % SERVE_VARIABLE)
+        raise LlmError("%s applies to the openai protocol only" % said("serve"))
+    harness_names = entry.get("harness") or ""
+    if not isinstance(harness_names, str):
+        harness_names = ",".join(str(each) for each in harness_names)
     try:
-        harnesses = llmharness.parse(environ.get(HARNESS_VARIABLE) or "")
+        harnesses = llmharness.parse(harness_names)
     except llmharness.HarnessError as error:
         raise LlmError(str(error)) from error
-    harness_model = (environ.get(HARNESS_MODEL_VARIABLE) or "").strip()
+    harness_model = str(entry.get("harness_model") or "").strip()
     if harnesses and not harness_model:
         # Not the harness's own default: that can be a hosted model, and the
         # transcript would be sent to it.
         raise LlmError("%s is not set: name the model %s is to ask, as it "
                        "names models (e.g. provider/model)"
-                       % (HARNESS_MODEL_VARIABLE, harnesses[0].program))
-    local = is_local(url)
+                       % (said("harness_model"), harnesses[0].program))
+    traits = entry.get("traits") or {}
+    try:
+        if isinstance(traits, str):
+            declared = llmtraits.parse_traits(traits)
+        elif isinstance(traits, dict):
+            declared = llmtraits.declared(traits)
+        else:
+            raise llmtraits.TraitsError("a table or a comma list, not %r" % (traits,))
+    except llmtraits.TraitsError as error:
+        raise LlmError("%s: %s" % (said("traits"), error)) from error
+    # The local trait as declared, else as the address says: it decides
+    # whether requests queue for a GPU or all go at once.
+    local = declared.get("local", is_local(url))
     return Llm(api, url, model, key,
-               _positive(environ, CONTEXT_VARIABLE, DEFAULT_CONTEXT_TOKENS),
-               _positive(environ, JOBS_VARIABLE, DEFAULT_JOBS if local else 0),
+               _positive(entry, "context", DEFAULT_CONTEXT_TOKENS, said),
+               _positive(entry, "jobs", DEFAULT_JOBS if local else 0, said),
                extra, local, fallbacks=tuple(urls[1:]), serve=serve,
-               serve_mib=_positive(environ, SERVE_MIB_VARIABLE, SERVE_MIB),
-               context_given=bool((environ.get(CONTEXT_VARIABLE) or "").strip()),
-               harnesses=harnesses, harness_model=harness_model)
+               serve_mib=_positive(entry, "serve_mib", SERVE_MIB, said),
+               context_given=bool(str(entry.get("context") or "").strip()),
+               harnesses=harnesses, harness_model=harness_model,
+               said=declared, name=name)
 
 
 def _server(url: str, command: str, need_mib: int) -> modelserver.Server:
@@ -436,6 +565,27 @@ def _listing(url: str, key: str = "") -> dict[str, int] | None:
     return listed
 
 
+def _picture(path: str) -> tuple[str, str]:
+    """The picture at ``path`` as (media type, base64). LlmError for a file
+    that is none of the kinds every vision API takes."""
+    try:
+        with open(path, "rb") as handle:
+            data = handle.read()
+    except OSError as error:
+        raise LlmError("the picture %s cannot be read: %s" % (path, error)) from error
+    if data.startswith(b"\xff\xd8\xff"):
+        kind = "image/jpeg"
+    elif data.startswith(b"\x89PNG"):
+        kind = "image/png"
+    elif data[:4] == b"GIF8":
+        kind = "image/gif"
+    elif data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        kind = "image/webp"
+    else:
+        raise LlmError("%s is not a JPEG, PNG, GIF or WebP picture" % path)
+    return kind, base64.b64encode(data).decode("ascii")
+
+
 def is_local(url: str) -> bool:
     """Whether the model at ``url`` runs on this machine or its network rather
     than as a hosted API. No address is the protocol's own hosted endpoint.
@@ -471,44 +621,46 @@ def _local_address(address) -> bool:
             or address.version == 4 and address in _SHARED_SPACE)
 
 
-def require(program: str) -> Llm | None:
-    """The model the settings describe, or None after saying why it cannot be
-    used: a setting missing, or the tool or package its protocol goes through.
-    For every command that chapters, before it does any work."""
-    try:
-        llm = from_environment()
-    except LlmError as error:
-        sys.stderr.write("\nError: no language model to ask: %s.\n"
-                         "See the chapterLlm settings in docs/settings.md.\n"
-                         "Nothing was changed.\n" % error)
-        return None
+def preflight(llm: Llm, program: str, purpose: str = "") -> bool:
+    """Whether what asking ``llm`` goes through is here - the ``anthropic``
+    package, or curl - after saying what is missing where it is not. With
+    ``purpose``, a harness listed and none installed is warned about: what
+    it was for (``purpose``) is asked without web search."""
     skip = bool(os.environ.get("SKIP_TOOL_PREFLIGHT", ""))
-    if llm.harnesses and llm.api == "openai" and not llmharness.installed(llm.harnesses):
+    if purpose and llm.harnesses and llm.api == "openai" \
+            and not llmharness.installed(llm.harnesses):
         sys.stderr.write("\nWarning: %s lists %s, and none is installed: "
-                         "instructions are asked without web search.\n"
-                         % (HARNESS_VARIABLE, ", ".join(each.program
-                                                        for each in llm.harnesses)))
+                         "%s without web search.\n"
+                         % (llm.name, ", ".join(each.program for each in llm.harnesses),
+                            purpose))
     if llm.api == "anthropic":
-        if tooldeps.require_python_module(
-                "anthropic", program, "asks Claude for the chapters (pip install "
-                "anthropic)", skip_preflight=skip):
-            return None
-    elif tooldeps.require_tools(program, ["curl"], skip_preflight=skip):
-        return None
-    return llm
+        return not tooldeps.require_python_module(
+            "anthropic", program, "asks Claude (pip install anthropic)",
+            skip_preflight=skip)
+    return not tooldeps.require_tools(program, ["curl"], skip_preflight=skip)
 
 
-def _positive(environ, name: str, default: int) -> int:
-    value = (environ.get(name) or "").strip()
+def usable(llm: Llm) -> bool:
+    """Whether ``llm`` can be asked without a word: its protocol's package
+    is here. For a model a step only uses where it can."""
+    return llm.api != "anthropic" or importlib.util.find_spec("anthropic") is not None
+
+
+def _positive(entry: dict, field: str, default: int,
+              said: Callable[[str], str]) -> int:
+    value = str(entry.get(field) or "").strip()
     if not value:
         return default
     if not value.isdigit() or int(value) < 1:
-        raise LlmError("%s is %r; it takes a whole number above 0" % (name, value))
+        raise LlmError("%s is %r; it takes a whole number above 0"
+                       % (said(field), value))
     return int(value)
 
 
-def _ask_openai(llm: Llm, system: str, prompt: str) -> tuple[str, int | None]:
-    """One Chat Completions request through curl.
+def _ask_openai(llm: Llm, system: str, prompt: str,
+                pictures: Sequence[tuple[str, str]] = ()) -> tuple[str, int | None]:
+    """One Chat Completions request through curl, with ``pictures`` as
+    ``image_url`` parts of the user's message where there are any.
 
     Nothing beyond the messages and an output limit is asked for - no
     temperature, no response format - because each of those is refused by
@@ -526,6 +678,8 @@ def _ask_openai(llm: Llm, system: str, prompt: str) -> tuple[str, int | None]:
     while True:
         tried = llm.limit_field
         try:
+            if pictures:
+                return _post_openai(llm, system, prompt, tried, pictures)
             return _post_openai(llm, system, prompt, tried)
         except _LimitRefused:
             # Requests running side by side can all be refused the same name;
@@ -537,19 +691,27 @@ class _LimitRefused(Exception):
     """The server refused the name the output limit was sent under."""
 
 
-def _post_openai(llm: Llm, system: str, prompt: str, tried: int) -> tuple[str, int | None]:
+def _post_openai(llm: Llm, system: str, prompt: str, tried: int,
+                 pictures: Sequence[tuple[str, str]] = ()) -> tuple[str, int | None]:
     request: dict = dict(llm.options)
     if llm.effort:
         request["reasoning_effort"] = llm.effort
+    asked: str | list = prompt
+    if pictures:
+        asked = [*({"type": "image_url",
+                      "image_url": {"url": "data:%s;base64,%s" % picture}}
+                     for picture in pictures),
+                   {"type": "text", "text": prompt}]
     request.update({"model": llm.model, "messages": [
         {"role": "system", "content": system},
-        {"role": "user", "content": prompt}]})
+        {"role": "user", "content": asked}]})
     limit_field = _LIMIT_FIELDS[min(tried, len(_LIMIT_FIELDS) - 1)]
     if limit_field and not any(name in request for name in _LIMIT_FIELDS if name):
-        left = llm.context_tokens - (len(system) + len(prompt)) // 3
+        left = llm.context_tokens - (len(system) + len(prompt)) // 3 \
+            - PICTURE_TOKENS * len(pictures)
         request[limit_field] = max(MIN_OUTPUT_TOKENS, min(MAX_OUTPUT_TOKENS, left))
     body = json.dumps(request, ensure_ascii=False)
-    descriptor, body_file = tempfile.mkstemp(prefix="chapterllm.", suffix=".json")
+    descriptor, body_file = tempfile.mkstemp(prefix="llmclient.", suffix=".json")
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             handle.write(body)
@@ -608,9 +770,11 @@ def _error_text(body: str) -> str:
     return str(error or body)[:300]
 
 
-def _ask_anthropic(llm: Llm, system: str, prompt: str) -> tuple[str, int | None]:
+def _ask_anthropic(llm: Llm, system: str, prompt: str,
+                   pictures: Sequence[tuple[str, str]] = ()) -> tuple[str, int | None]:
     """One Messages request through the official SDK, streamed, because a long
-    transcript is a long request.
+    transcript is a long request; ``pictures`` go before the prompt as image
+    blocks.
 
     The key is the setting when there is one, and otherwise whatever the SDK
     finds itself (ANTHROPIC_API_KEY, a login profile). A refusal is retried on
@@ -635,7 +799,13 @@ def _ask_anthropic(llm: Llm, system: str, prompt: str) -> tuple[str, int | None]
     if llm.search:
         request["tools"] = [{"type": "web_search_20260209", "name": "web_search",
                              "max_uses": MAX_SEARCHES}]
-    messages: list = [{"role": "user", "content": prompt}]
+    content: str | list = prompt
+    if pictures:
+        content = [*({"type": "image", "source": {
+                        "type": "base64", "media_type": media_type, "data": data}}
+                     for media_type, data in pictures),
+                   {"type": "text", "text": prompt}]
+    messages: list = [{"role": "user", "content": content}]
     tokens: int | None = None
     for _ in range(MAX_CONTINUATIONS + 1):
         try:
@@ -656,7 +826,7 @@ def _ask_anthropic(llm: Llm, system: str, prompt: str) -> tuple[str, int | None]
             tokens = (tokens or 0) + written
         if message.stop_reason != "pause_turn":
             break
-        messages = [{"role": "user", "content": prompt},
+        messages = [{"role": "user", "content": content},
                     {"role": "assistant", "content": message.content}]
     if message.stop_reason == "refusal":
         raise LlmError("the model declined to answer")

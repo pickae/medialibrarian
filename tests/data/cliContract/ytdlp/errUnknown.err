@@ -66,8 +66,8 @@ Options:
                     machine would run.
     -C, --ai-chapters
                     With -i: chapters for every episode in the library that has
-                    none, worked out by a language model (the chapterLlm
-                    settings) from a transcript, which is written into the
+                    none, worked out by a language model
+                    (docs/models.md) from a transcript, which is written into the
                     episode as well (convert-audio -C). A YouTube episode's
                     transcript is YouTube's own captions, fetched with it in
                     the episode's language when the spokenLanguages setting

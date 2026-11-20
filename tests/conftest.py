@@ -316,6 +316,12 @@ def private_workspace(tmp_path_factory, monkeypatch):
     # would otherwise ask the real catalogues. The search's own cases turn it
     # back on and stand in for the network.
     monkeypatch.setenv("coverSearch", "off")
+    # Nor is a language model asked for one: a case that turns the search
+    # back on would otherwise reach the model the machine's settings name.
+    monkeypatch.setenv("coverSearchLlm", "off")
+    # Nor the machine's own roster of models: a case that asks the roster
+    # gets the models it set up itself, or none.
+    monkeypatch.setenv("llmModels", str(scratch / "no-models-file"))
 
     # And every site's pacing from scratch, so a case does not wait out the gap
     # the one before it left behind.
