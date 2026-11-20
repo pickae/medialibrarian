@@ -852,3 +852,63 @@ def test_a_disabled_online_search_says_so(tmp_path, isolated_env, monkeypatch):
         run)
     assert said == ["    No cover looked for online: the coverSearch "
                     "setting is off"]
+
+
+class TestTheModelRung:
+    """Below the catalogue search, the model; and a cover found online by
+    either is kept in the input folder."""
+
+    def _folder(self, tmp_path):
+        d = tmp_path / "The Quiet Orchard"
+        d.mkdir()
+        (d / "01.mp3").write_bytes(b"x")
+        return d
+
+    def _found(self, data=b"\xff\xd8\xffimage"):
+        def find(*args, **kwargs):
+            dest = (args[4] if len(args) > 4 else args[3]) + ".jpg"
+            with open(dest, "wb") as handle:
+                handle.write(data)
+            return dest
+        return find
+
+    def test_the_model_is_asked_where_the_catalogues_found_nothing(
+            self, tmp_path, monkeypatch):
+        d = self._folder(tmp_path)
+        asked = []
+        monkeypatch.setattr(onlinecover, "book_cover", lambda *a, **k: "")
+        find = self._found()
+
+        def model(*args, **kwargs):
+            asked.append((args[1], kwargs.get("meter_file")))
+            return find(*args, **kwargs)
+        monkeypatch.setattr(thumbnails.aicover, "book_cover", model)
+        image = thumbnails._online_thumbnail(
+            str(d), (), str(tmp_path / "The Quiet Orchard"), "meter")
+        assert image and asked == [("The Quiet Orchard", "meter")]
+        assert (d / "cover.jpg").read_bytes() == b"\xff\xd8\xffimage"
+
+    def test_a_catalogue_cover_is_kept_and_the_model_not_asked(
+            self, tmp_path, monkeypatch):
+        d = self._folder(tmp_path)
+        monkeypatch.setattr(onlinecover, "book_cover", self._found())
+        monkeypatch.setattr(thumbnails.aicover, "book_cover",
+                            lambda *a, **k: pytest.fail("the model was asked"))
+        assert thumbnails._online_thumbnail(str(d), (), str(tmp_path / "book"))
+        assert (d / "cover.jpg").is_file()
+
+    def test_a_kept_cover_never_replaces_a_file(self, tmp_path):
+        d = self._folder(tmp_path)
+        (d / "cover.jpg").write_bytes(b"theirs")
+        found = tmp_path / "found.png"
+        found.write_bytes(b"ours")
+        (d / "cover.png").write_bytes(b"theirs too")
+        kept = thumbnails._keep_in_input(str(found), str(d))
+        assert kept == str(d / "cover (2).png")
+        assert (d / "cover.png").read_bytes() == b"theirs too"
+        assert (d / "cover (2).png").read_bytes() == b"ours"
+
+    def test_a_folder_that_takes_no_file_still_gives_the_cover(self, tmp_path):
+        found = tmp_path / "found.jpg"
+        found.write_bytes(b"ours")
+        assert thumbnails._keep_in_input(str(found), str(tmp_path / "gone")) == ""

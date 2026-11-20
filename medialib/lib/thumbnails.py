@@ -17,6 +17,7 @@ import shutil
 from collections.abc import Callable, Iterator, Sequence
 
 from medialib.lib import (
+    aicover,
     formatting,
     imagecodecs,
     imagemagick,
@@ -32,6 +33,7 @@ from medialib.lib.enums import (
     lower_extension_of,
     shell_lower,
 )
+from medialib.lib.versionsort import version_key
 
 _AUDIO_EXTENSIONS = frozenset((*AUDIO_EXTENSIONS, *LOSSLESS_AUDIO_EXTENSIONS))
 
@@ -259,28 +261,79 @@ def _say_embedded(source: str, file_name: str, input_path: str) -> None:
 
 
 def _online_thumbnail(input_path: str, outputs: Sequence[str],
-                      ram_base: str) -> str:
+                      ram_base: str, model_meter: str = "") -> str:
     """A cover found online for the book joined from <input_path>, or "".
 
-    The book's length and channel count are read off the joined output, the
-    tags off its first source track: they say what the book probably is and
-    which answer is it. Podcast length in stereo is most likely a full-cast
-    drama, since convert-audio keeps a talk mono.
+    The catalogues first (:mod:`onlinecover`), then a model that can search
+    the web (:mod:`aicover`), told everything the catalogues were. The book's
+    length and channel count are read off the joined output, the tags off its
+    source tracks: they say what the book probably is and which answer is it.
+    Podcast length in stereo is most likely a full-cast drama, since
+    convert-audio keeps a talk mono.
+
+    A cover either found is kept in <input_path> as well
+    (:func:`_keep_in_input`), so the folder has its cover from then on.
     """
     tracks = [path for path in _regular_files(input_path)
               if lower_extension_of(path) in _AUDIO_EXTENSIONS]
     joined = next((path for path in outputs if os.path.isfile(path)), "")
     seconds = onlinecover.media_seconds(joined) if joined else 0.0
     stereo = bool(joined) and onlinecover.media_channels(joined) >= 2
-    return onlinecover.book_cover(input_path, tracks[:1], seconds,
-                                  f"{ram_base}.online", stereo=stereo)
+    image = onlinecover.book_cover(input_path, tracks[:1], seconds,
+                                   f"{ram_base}.online", stereo=stereo)
+    if not image:
+        image = aicover.book_cover(
+            input_path, os.path.basename(ram_base),
+            sorted(tracks, key=version_key), seconds,
+            f"{ram_base}.model", stereo=stereo, meter_file=model_meter)
+    if image:
+        _keep_in_input(image, input_path)
+    return image
+
+
+# The name a cover found online is kept under in the input folder: one the
+# ladder's cover pass picks first on the next run.
+KEPT_COVER_STEM = "cover"
+
+
+def _keep_in_input(image: str, input_path: str) -> str:
+    """A copy of ``image`` in ``input_path`` as cover.<ext>, or under a
+    numbered name where that is taken - never over a file. Returns the copy,
+    or "" when the folder would not take it, which is said and is no
+    failure: the book still gets its cover."""
+    extension = os.path.splitext(image)[1] or ".jpg"
+    for number in range(1, 100):
+        name = KEPT_COVER_STEM + ("" if number == 1 else " (%d)" % number) \
+            + extension
+        target = os.path.join(input_path, name)
+        created = False
+        try:
+            with open(target, "xb") as out:
+                created = True
+                with open(image, "rb") as source:
+                    shutil.copyfileobj(source, out)
+        except FileExistsError:
+            continue
+        except OSError as error:
+            if created:
+                _remove_quiet(target)
+            _log("    WARNING: the cover found online was not kept in the "
+                 "input folder: %s" % error)
+            return ""
+        _detail("    Kept the cover found online in the input as %s" % name)
+        return target
+    return ""
 
 
 def embed_thumbnail(input_path: str, file_name: str, image_size_limit: int,
                     jpg_quality_level: int, thumbnail_resolution: str,
                     dpi: int, have_mkvtoolnix: bool, ram_dir: str,
-                    script_dir: str, run: Runner = _run) -> int:
-    """Write the chosen thumbnail into the output file(s) next to <file_name>."""
+                    script_dir: str, run: Runner = _run,
+                    model_meter: str = "") -> int:
+    """Write the chosen thumbnail into the output file(s) next to <file_name>.
+
+    <model_meter> is where what a model was asked for the cover is recorded
+    for the run's total (:func:`modelmeter.record`)."""
     file_name = file_name.removesuffix("/")
     opus_file = f"{file_name}.opus"
     mp3_file = f"{file_name}.mp3"
@@ -303,7 +356,7 @@ def embed_thumbnail(input_path: str, file_name: str, image_size_limit: int,
         if onlinecover.enabled():
             thumb_file = _online_thumbnail(
                 input_path, (opus_file, mp3_file, m4b_file, flac_file),
-                ram_base)
+                ram_base, model_meter)
         else:
             _detail("    No cover looked for online: the coverSearch "
                     "setting is off")

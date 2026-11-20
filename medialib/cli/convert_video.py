@@ -145,7 +145,7 @@ k |  | Keep every track but the video exactly as the source has it:
                   Needs mkvmerge. Not with -a, -b or -s, which say how the
                   audio is re-encoded.
 C |  | Add chapters to every video that has none, worked out by a
-                  language model (the chapterLlm settings) from what is said.
+                  language model (docs/models.md) from what is said.
                   The first text subtitle that is the film's dialogue - not a
                   commentary, SDH or forced one - is read for it; a video with
                   none is transcribed from its first soundtrack that is not a

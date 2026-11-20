@@ -1,5 +1,6 @@
-"""How long a model was at work and what it wrote: the account generate-chapters
-and the picture-subtitle OCR give of their model.
+"""How long a model was at work and what it wrote: the account every use of a
+model gives of it - generate-chapters, the picture-subtitle OCR, the cover
+search.
 
 A :class:`Tally` counts the requests and the tokens their replies report. A
 :class:`Spans` holds the stretches of time the model was at work, and its
@@ -7,18 +8,21 @@ A :class:`Tally` counts the requests and the tokens their replies report. A
 is counted once: requests sent side by side, files chaptered at once, two
 films' subtitles read together all take the wall-clock they took, not its sum,
 and a pause between two stretches - the model waiting on whisper, say - is not
-counted at all. :func:`rate_line` says one of them in a line.
+counted at all. :func:`rate_line` says one of them in a line, and
+:func:`record` and :func:`gathered` carry them across a run's worker
+processes.
 """
 
 from __future__ import annotations
 
 import contextlib
+import json
 import threading
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 
-__all__ = ["Tally", "Spans", "rate_line"]
+__all__ = ["Tally", "Spans", "rate_line", "record", "gathered"]
 
 
 @dataclass
@@ -110,6 +114,56 @@ def joined(spans) -> float:
             total += stop - end
             end = stop
     return total
+
+
+def record(path: str, spans: Spans, tally: Tally) -> None:
+    """``spans`` and ``tally`` added to the record at ``path``, for a run whose
+    model is asked from several worker processes: :func:`gathered` reads them
+    back added up. One line a call, appended whole. Never raises - the record
+    is an account, and losing it is no reason to lose the work."""
+    with tally._lock:
+        counted = {"requests": tally.requests, "seconds": tally.seconds,
+                   "tokens": tally.tokens, "counted": tally.counted,
+                   "counted_seconds": tally.counted_seconds, "read": tally.read}
+    line = json.dumps({"spans": spans.all(), "tally": counted}) + "\n"
+    try:
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(line)
+    except OSError:
+        pass
+
+
+def gathered(path: str) -> tuple[Spans, Tally]:
+    """Everything :func:`record` wrote to ``path``, added up; nothing where
+    there is no record. The stretches are on the monotonic clock, which every
+    process of one machine shares, so overlapping ones still join."""
+    spans, tally = Spans(), Tally()
+    try:
+        with open(path, encoding="utf-8") as handle:
+            lines = handle.read().splitlines()
+    except OSError:
+        return spans, tally
+    for line in lines:
+        # Read whole before any of it is added: a line torn in the middle is
+        # skipped, not half counted.
+        try:
+            entry = json.loads(line)
+            stretches = [(float(start), float(end)) for start, end in entry["spans"]]
+            counted = entry["tally"]
+            figures = (int(counted["requests"]), float(counted["seconds"]),
+                       int(counted["tokens"]), int(counted["counted"]),
+                       float(counted["counted_seconds"]), int(counted["read"]))
+        except (ValueError, KeyError, TypeError):
+            continue
+        for start, end in stretches:
+            spans.add(start, end)
+        tally.requests += figures[0]
+        tally.seconds += figures[1]
+        tally.tokens += figures[2]
+        tally.counted += figures[3]
+        tally.counted_seconds += figures[4]
+        tally.read += figures[5]
+    return spans, tally
 
 
 def rate_line(name: str, wall: float, tally: Tally) -> str:

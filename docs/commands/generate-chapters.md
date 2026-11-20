@@ -34,7 +34,7 @@ A chapter list is a division of the whole recording, so it is made in three pass
 
 - **The outline** reads the whole transcript at once, as passages of about 20
   seconds, and divides all of it. It writes a short summary too. A transcript too
-  long for the model's window (`chapterLlmContext`) is first summarised part by
+  long for the model's window (`llmContext`) is first summarised part by
   part, and the outline is drawn from those summaries. That way it still sees the
   whole recording, at a coarser grain.
 - **The second look** takes each chapter start again, line by line, in the few
@@ -73,13 +73,13 @@ Where your text and the built-in guidance disagree, yours wins. The answer's
 form and the shortest chapter (`-m`) still apply.
 
 A run with `-P` makes the model think harder. Over the `openai` protocol it
-sends `reasoning_effort` set to `medium`, replacing whatever `chapterLlmOptions`
+sends `reasoning_effort` set to `medium`, replacing whatever `llmOptions`
 says for that field. A server that switches thinking off some other way has to
 have that setting removed by hand. Claude runs at `medium` effort anyway, and
 with `-P` it may also search the web, up to five searches a request. Anthropic
 bills those searches. A server behind the `openai` protocol cannot search on
 its own, so it works from the transcript alone - unless you have an agent
-harness: with `chapterLlmHarness=opencode` and `chapterLlmHarnessModel` naming
+harness: with `llmHarness=opencode` and `llmHarnessModel` naming
 the model as `opencode models` lists it, `-P` requests go to that model through
 opencode, which can fetch web pages. Each request is a throwaway session,
 deleted once its answer is read, so opencode's own session list stays yours.
@@ -115,63 +115,63 @@ An input that already holds exactly those chapters is left alone.
 ## Which model
 
 Any model behind one of two protocols, chosen with the
-[settings](../settings.md) `chapterLlmApi`, `chapterLlmUrl`, `chapterLlmModel`
-and `chapterLlmKey`:
+[settings](../settings.md) `llmApi`, `llmUrl`, `llmModel`
+and `llmKey`:
 
-| `chapterLlmApi` | Reaches |
+| `llmApi` | Reaches |
 | --- | --- |
 | `openai` (default) | any server speaking OpenAI's chat protocol: Ollama, llama.cpp, vLLM, LM Studio and other local servers, OpenAI, Groq, Mistral, OpenRouter, Gemini's compatibility endpoint… |
 | `anthropic` | Claude, through the `anthropic` Python package (`pip install anthropic`) |
 
 For example, a local Ollama:
 
-    chapterLlmUrl=http://localhost:11434/v1
-    chapterLlmModel=qwen3:32b
-    chapterLlmContext=32000
+    llmUrl=http://localhost:11434/v1
+    llmModel=qwen3:32b
+    llmContext=32000
 
-`chapterLlmContext` should be the window the server really runs the model with,
+`llmContext` should be the window the server really runs the model with,
 which is often smaller than the model allows. Ollama, for one, uses a small
 window unless it is told otherwise. A server that lists its window at
 `/v1/models` (`max_model_len`, as vLLM does) is held to the smaller of the two,
-and unset, `chapterLlmContext` is the window it lists.
+and unset, `llmContext` is the window it lists.
 
 ### Several servers, one card
 
-`chapterLlmUrl` may list several servers, the preferred first. That suits a
+`llmUrl` may list several servers, the preferred first. That suits a
 card that holds one model at a time, where the model you would rather chapter
 with is often not the one loaded:
 
-    chapterLlmUrl=http://localhost:8081/v1,http://localhost:8080/v1
-    chapterLlmModel=qwen3.6-35b-a3b
-    chapterLlmServe=/path/to/start-the-35b-server
-    chapterLlmServeMib=26000
+    llmUrl=http://localhost:8081/v1,http://localhost:8080/v1
+    llmModel=qwen3.6-35b-a3b
+    llmServe=/path/to/start-the-35b-server
+    llmServeMib=26000
 
 Each recording is chaptered by the first server that can be had right then:
 
 - A server that answers is used, and left running when the run ends.
-- The first server, when it does not answer, is started with `chapterLlmServe`.
-  This happens only if nvidia-smi shows `chapterLlmServeMib` free. Its output
+- The first server, when it does not answer, is started with `llmServe`.
+  This happens only if nvidia-smi shows `llmServeMib` free. Its output
   goes to a log in the scratch folder. A server started this way is stopped
   once nothing has asked it anything for five minutes, and when the run ends.
 - When the card is taken, the next server that answers is asked, with
-  the model it lists when it does not list `chapterLlmModel`.
+  the model it lists when it does not list `llmModel`.
 
-`chapterLlmJobs` and `chapterLlmOptions` apply to whichever server is asked.
+`llmJobs` and `llmOptions` apply to whichever server is asked.
 With no server to be had, a recording gets no chapters and the run goes on.
 
-Whether the model is local or hosted is read off `chapterLlmUrl`. A local one
+Whether the model is local or hosted is read off `llmUrl`. A local one
 is localhost, a private or Tailscale address, a name without a dot, or a name
 ending in `.local` or `.lan`. A local model shares the GPU with whisper, so all
 the transcripts are made first. Then the files are chaptered one at a time, two
-requests at once (`chapterLlmJobs`). A hosted model (no `chapterLlmUrl` for
+requests at once (`llmJobs`). A hosted model (no `llmUrl` for
 `anthropic`, or a public address) is never queued for. Each file is chaptered
 as soon as its transcript is there, while the rest are still being
 transcribed, and every request goes out as soon as it is ready. Set
-`chapterLlmJobs` to cap that, for an API with a rate limit.
+`llmJobs` to cap that, for an API with a rate limit.
 
 The model does not have to reason. On a three-hour recording of seven
 episodes, 28 chapters in all, a mixture-of-experts model with thinking turned off
-(`chapterLlmOptions={"reasoning_effort": "none"}`, where the server takes that
+(`llmOptions={"reasoning_effort": "none"}`, where the server takes that
 field) found every chapter in 8 seconds. A dense reasoning model on the same
 card found the same chapters in 3½ minutes. Letting the small model think at a
 low effort made it slower and its titles worse.

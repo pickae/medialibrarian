@@ -16,7 +16,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from medialib.lib import aichapters, chapterllm
+from medialib.lib import aichapters, llmclient
 
 pytestmark = pytest.mark.pure
 
@@ -331,7 +331,7 @@ class TestGenerate:
 
     def test_the_model_failing_outright_is_no_chapters(self):
         def broken(prompt):
-            raise chapterllm.LlmError("down")
+            raise llmclient.LlmError("down")
 
         assert aichapters.generate(_cues(30), Model(outline=broken)) == []
 

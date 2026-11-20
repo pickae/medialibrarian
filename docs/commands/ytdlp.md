@@ -214,7 +214,7 @@ no table in this run downloads into.
 With `-i`, `-C` is passed on to every conversion: every episode in the library
 that has no chapters gets some, worked out by a language model from a
 transcript of the speech ([`convert-audio -C`](convert-audio.md#chapters-for-what-has-none--c),
-with the `chapterLlm` settings). That covers the episodes already in a feed's
+with the `llm` settings). That covers the episodes already in a feed's
 staging folder as well as the new ones, so the first run with `-C` chapters a
 feed's back catalogue too. A run whose model cannot be reached is refused
 before anything is fetched.

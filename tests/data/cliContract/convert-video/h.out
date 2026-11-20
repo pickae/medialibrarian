@@ -122,7 +122,7 @@ Options:
                   audio is re-encoded.
     -C, --ai-chapters
                   Add chapters to every video that has none, worked out by a
-                  language model (the chapterLlm settings) from what is said.
+                  language model (docs/models.md) from what is said.
                   The first text subtitle that is the film's dialogue - not a
                   commentary, SDH or forced one - is read for it; a video with
                   none is transcribed from its first soundtrack that is not a

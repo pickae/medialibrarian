@@ -87,7 +87,7 @@ O | <phases> | do only these phases, each on its own, over the whole tree
                   plex and backups, comma-separated. Cannot be combined with
                   -r, -C, -k or -o.
 C |  | also chapter the extras that have no chapters, by the
-                  language model the chapterLlm settings name. A full ingest
+                  language model (docs/models.md). A full ingest
                   only.
 P | <text> | with -C or -O extras-chapters: more instructions for the
                   model, added to every request.

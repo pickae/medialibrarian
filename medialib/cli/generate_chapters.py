@@ -7,7 +7,7 @@ transcribe-audio's, run as that command for every input that has no transcript
 yet: the transcripts land in the output folder beside the chapter files, so a
 rerun pays for neither again. A transcript some other recogniser wrote is used
 as it is, from the output folder or from beside the input. The second asks the
-model the settings name (medialib/lib/chapterllm.py) for the chapters, in the
+model the roster gives (medialib/lib/llmroster.py) for the chapters, in the
 two passes medialib/lib/aichapters.py describes. With a hosted model the two
 overlap: each file is chaptered as soon as its transcript is there.
 
@@ -31,10 +31,10 @@ import sys
 from medialib import commands
 from medialib.lib import (
     aichapters,
-    chapterllm,
     chapters,
     clioptions,
     enums,
+    llmroster,
     ramscratch,
     runlog,
     safety,
@@ -55,8 +55,9 @@ A transcript already in <outputDir>, or beside the input, as .srt, .vtt, .tsv,
 .json or .lrc, is used instead of transcribing again. With -w each input
 takes its chapters in as well, without being re-encoded.
 
-The language model is set with the chapterLlm settings: any server speaking the
-OpenAI chat protocol (local or hosted) or Claude.
+The language model is the roster's choice for the chapters task (see
+docs/models.md): any server speaking the OpenAI chat protocol (local or
+hosted) or Claude.
 
 Options:"""
 
@@ -187,7 +188,7 @@ def _run(program: str, script_dir: str, input_dir: str, output_dir: str,
     # Only -w over chapter files already made needs no model at all.
     llm = None
     if todo:
-        llm = chapterllm.require(program)
+        llm = llmroster.require(program, llmroster.chapters_task(instructions))
         if llm is None:
             return 1
         llm = llm.following(instructions)

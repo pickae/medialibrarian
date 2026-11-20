@@ -51,7 +51,6 @@ from medialib import commands
 from medialib.lib import (
     aichapters,
     bitrates,
-    chapterllm,
     chapters,
     chunkdecision,
     clioptions,
@@ -63,6 +62,7 @@ from medialib.lib import (
     formatting,
     imagemagick,
     imagesizes,
+    llmroster,
     onlinecover,
     ramscratch,
     runcontext,
@@ -140,7 +140,7 @@ g | <depth> | Judge the files under each folder <depth> levels into
                     Cannot be combined with -a.
 C |  | Add chapters to every output whose source has none, and no
                     <name>.chapters.txt beside it, worked out by a language
-                    model (the chapterLlm settings) from a transcript of the
+                    model (docs/models.md) from a transcript of the
                     speech, and write the transcript into the output as
                     well. A transcript sidecar is used rather than
                     transcribing again.
@@ -2141,7 +2141,8 @@ def _settle_and_convert(program: str, script_dir: str, input_dir: str,
         _report_encoder(codec, bitrate, mono, adaptive)
     # Asked before anything is encoded: a model that cannot be reached is
     # better found out now than after the last encode.
-    llm = chapterllm.require(program) if ai_chapters else None
+    llm = (llmroster.require(program, llmroster.chapters_task(instructions))
+           if ai_chapters else None)
     if ai_chapters and llm is None:
         return 1
     if llm is not None:

@@ -74,7 +74,7 @@ def chaptering(sandbox, tmp_path):
     sandbox.with_tool("ffmpeg", ': > "${!#}"')
     environment = dict(os.environ, WHISPERLOG=str(whisper_log),
                        MODELLOG=str(model_log),
-                       chapterLlmUrl="http://model.test/v1", chapterLlmModel="stub")
+                       llmUrl="http://model.test/v1", llmModel="stub")
 
     def run(*args, expect=0, env=None):
         done = sandbox.run("generate-chapters", *args, env=env or environment,
@@ -120,7 +120,7 @@ def test_a_hosted_model_chapters_each_file_as_it_is_transcribed(chaptering, tmp_
         "%d\n00:%02d:%02d,000 --> 00:%02d:%02d,000\ntopic %d words\n\n"
         % (n, s // 60, s % 60, (s + 9) // 60, (s + 9) % 60, s // 600)
         for n, s in enumerate(range(0, 1200, 10), 1)))
-    environment = dict(chaptering.environment, chapterLlmUrl="https://8.8.8.8/v1")
+    environment = dict(chaptering.environment, llmUrl="https://8.8.8.8/v1")
     log = chaptering.chapter(source, out, env=environment)
     assert "hosted" in log
     for stem in ("a/show", "b/talk", "c/ready"):
@@ -160,9 +160,9 @@ def test_a_rerun_leaves_finished_files_alone_unless_forced(chaptering, tmp_path)
 def test_no_model_is_refused_before_anything_runs(chaptering, tmp_path):
     source, out = _tree(tmp_path, "show.mp3")
     environment = dict(chaptering.environment)
-    del environment["chapterLlmUrl"]
+    del environment["llmUrl"]
     log = chaptering.chapter(source, out, expect=1, env=environment)
-    assert "chapterLlmUrl is not set" in log
+    assert "llmUrl is not set" in log
     assert chaptering.whisper_log.read_text() == ""
     assert not out.exists()
 
@@ -170,8 +170,8 @@ def test_no_model_is_refused_before_anything_runs(chaptering, tmp_path):
 def test_the_settings_reach_the_run_from_x(chaptering, tmp_path):
     source, out = _tree(tmp_path, "show.mp3")
     environment = dict(chaptering.environment)
-    del environment["chapterLlmModel"]
-    chaptering.chapter("-x", "chapterLlmModel=stub", source, out, env=environment)
+    del environment["llmModel"]
+    chaptering.chapter("-x", "llmModel=stub", source, out, env=environment)
     assert (out / "show.chapters.txt").is_file()
 
 
@@ -277,7 +277,7 @@ def test_w_over_finished_chapter_files_needs_no_model(writing, tmp_path):
     writing.chapter(source, out, env=writing.environment)
     writing.model_log.write_text("")
     environment = dict(writing.environment)
-    del environment["chapterLlmUrl"]
+    del environment["llmUrl"]
     log = writing.chapter("-w", source, out, env=environment)
     assert "chapters written into: show.mka" in log
     assert writing.model_log.read_text() == ""

@@ -23,12 +23,12 @@ from typing import Any
 
 from medialib import commands
 from medialib.lib import (
-    chapterllm,
     clioptions,
     downloadcleanup,
     feedtranscripts,
     ffmpegselect,
     languages,
+    llmroster,
     podcastfeeds,
     ramscratch,
     runcontext,
@@ -106,8 +106,8 @@ s | <system> | Build the calls for "windows" or "linux" instead of for
                     this host. Only useful with -p, to read off what the other
                     machine would run.
 C |  | With -i: chapters for every episode in the library that has
-                    none, worked out by a language model (the chapterLlm
-                    settings) from a transcript, which is written into the
+                    none, worked out by a language model
+                    (docs/models.md) from a transcript, which is written into the
                     episode as well (convert-audio -C). A YouTube episode's
                     transcript is YouTube's own captions, fetched with it in
                     the episode's language when the spokenLanguages setting
@@ -1057,7 +1057,8 @@ def _settle_and_run(options, tables, profiles, jobs_of, rows_of, ingest_of,
     # Asked before anything is fetched: a model that cannot be reached is
     # better found out now than after the first batch has been converted.
     if (options["aiChapters"] and not options["dryRun"]
-            and chapterllm.require("ytdlp") is None):
+            and llmroster.require("ytdlp", llmroster.chapters_task(
+                options.get("instructions", ""))) is None):
         return 1
 
     if options["cleanUp"] and not options["dryRun"]:

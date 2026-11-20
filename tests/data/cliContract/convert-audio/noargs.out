@@ -50,7 +50,7 @@ Options:
     -C, --ai-chapters
                     Add chapters to every output whose source has none, and no
                     <name>.chapters.txt beside it, worked out by a language
-                    model (the chapterLlm settings) from a transcript of the
+                    model (docs/models.md) from a transcript of the
                     speech, and write the transcript into the output as
                     well. A transcript sidecar is used rather than
                     transcribing again.

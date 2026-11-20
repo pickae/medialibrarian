@@ -37,7 +37,7 @@ Usage:
                   -r, -C, -k or -o.
     -C, --extras-chapters
                   also chapter the extras that have no chapters, by the
-                  language model the chapterLlm settings name. A full ingest
+                  language model (docs/models.md). A full ingest
                   only.
     -P, --prompt <text>
                   with -C or -O extras-chapters: more instructions for the

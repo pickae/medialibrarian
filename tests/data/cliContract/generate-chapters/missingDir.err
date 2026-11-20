@@ -11,8 +11,9 @@ A transcript already in <outputDir>, or beside the input, as .srt, .vtt, .tsv,
 .json or .lrc, is used instead of transcribing again. With -w each input
 takes its chapters in as well, without being re-encoded.
 
-The language model is set with the chapterLlm settings: any server speaking the
-OpenAI chat protocol (local or hosted) or Claude.
+The language model is the roster's choice for the chapters task (see
+docs/models.md): any server speaking the OpenAI chat protocol (local or
+hosted) or Claude.
 
 Options:
     -h, --help      Print this help page.

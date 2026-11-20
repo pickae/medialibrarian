@@ -12,7 +12,7 @@ from medialib.cli import convert_video as rules
 from medialib.cli import convert_video_chapters as chapterwork
 from medialib.cli import convert_video_encode as encode
 from medialib.cli import convert_video_run as run_module
-from medialib.lib import aichapters, chapterllm, toolcapture
+from medialib.lib import aichapters, llmclient, llmroster, toolcapture
 
 
 def _stream(kind, codec="", title="", language="", **flags):
@@ -192,20 +192,25 @@ class TestTheInstructions:
 
     def test_the_model_is_handed_them(self, monkeypatch):
         monkeypatch.setattr(run_module, "log", lambda *a, **k: None)
-        monkeypatch.setattr(chapterllm, "require",
-                            lambda program: chapterllm.Llm(
-                                api="openai", url="http://localhost:1/v1",
-                                model="m"))
+        asked = []
+
+        def require(program, task):
+            asked.append(task)
+            return llmclient.Llm(api="openai", url="http://localhost:1/v1",
+                                 model="m")
+        monkeypatch.setattr(llmroster, "require", require)
         settings = rules.Settings(chapter_instructions="A chapter per scene.")
         llm = run_module.chapter_model("convert-video", settings)
         assert llm.instructions == "A chapter per scene."
-        assert llm.effort == chapterllm.THOROUGH_EFFORT
+        assert llm.effort == llmclient.THOROUGH_EFFORT
+        # The roster is asked for a model to follow them with.
+        assert asked == [llmroster.CHAPTERS_INSTRUCTED]
 
     def test_without_them_the_model_is_as_set_up(self, monkeypatch):
         monkeypatch.setattr(run_module, "log", lambda *a, **k: None)
-        plain = chapterllm.Llm(api="openai", url="http://localhost:1/v1",
+        plain = llmclient.Llm(api="openai", url="http://localhost:1/v1",
                                model="m")
-        monkeypatch.setattr(chapterllm, "require", lambda program: plain)
+        monkeypatch.setattr(llmroster, "require", lambda program, task: plain)
         assert run_module.chapter_model("convert-video",
                                         rules.Settings()) is plain
 

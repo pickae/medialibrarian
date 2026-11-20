@@ -23,7 +23,7 @@ whole recording rather than a run of local guesses:
 
 The transcript is whatever a speech recogniser wrote, in any of the formats
 :data:`TRANSCRIPT_SUFFIXES` lists, and the model is whatever
-:mod:`medialib.lib.chapterllm` is set up to ask.
+:mod:`medialib.lib.llmclient` is set up to ask.
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ from dataclasses import dataclass
 from typing import TypeVar
 
 from medialib import commands
-from medialib.lib import chapterllm, cuechapters, modelmeter, safety
+from medialib.lib import cuechapters, llmclient, modelmeter, safety
 
 __all__ = ["TRANSCRIPT_SUFFIXES", "Cue", "read_transcript", "find_transcript",
            "Passage", "passages", "generate", "PHASES", "Meter", "chapter_rows", "time_label",
@@ -318,7 +318,7 @@ def _passage_id(value, count: int) -> int | None:
 
 
 def _ask_json(llm, prompt: str, wanted: str, log,
-              tally: chapterllm.Tally | None = None) -> dict | None:
+              tally: llmclient.Tally | None = None) -> dict | None:
     """The model's answer as a dict holding ``wanted``, asked again once when
     the first answer is not one. None when neither was, or the run is being
     stopped. Each request is counted into ``tally``."""
@@ -326,8 +326,8 @@ def _ask_json(llm, prompt: str, wanted: str, log,
         if safety.abort_requested():
             return None
         try:
-            answer = chapterllm.first_json(llm.ask(_SYSTEM, prompt, tally))
-        except chapterllm.LlmError as error:
+            answer = llmclient.first_json(llm.ask(_SYSTEM, prompt, tally))
+        except llmclient.LlmError as error:
             log("    the model gave no answer: %s" % error)
             return None
         if isinstance(answer, list) and wanted in ("chapters", "sections", "titles"):
@@ -366,7 +366,7 @@ def _windows(lines: Sequence[_Line], budget: int) -> list[list[_Line]]:
 
 def _summarise(lines: Sequence[_Line], llm, duration: int, count: int,
                log, instructions: str = "",
-               tally: chapterllm.Tally | None = None) -> list[_Line]:
+               tally: llmclient.Tally | None = None) -> list[_Line]:
     """The lines summarised a window at a time, one summary per stretch on a
     single topic. A window the model gives no usable answer for is kept as a
     single line holding the start of its text, so the outline still knows the
@@ -428,7 +428,7 @@ class _Mark:
 def _outline(lines: Sequence[_Line], summarised: bool, total: int, llm,
              duration: int, typical_minutes: int, min_minutes: float,
              log, instructions: str = "",
-             tally: chapterllm.Tally | None = None) -> tuple[str, list[_Mark]] | None:
+             tally: llmclient.Tally | None = None) -> tuple[str, list[_Mark]] | None:
     """The first pass: the whole recording divided at once. None when the
     model gave no usable outline."""
     what = ("a section of the recording, already summarised: its id, the time "
@@ -514,7 +514,7 @@ def _neighbour(cues: Sequence[Cue], title: str, first: int, here_start: int,
 def _refine(cues: Sequence[Cue], found: Sequence[Passage], marks: list[_Mark],
             summary: str, llm, duration: int, log,
             instructions: str = "",
-            tally: chapterllm.Tally | None = None) -> list[tuple[int, str, str]]:
+            tally: llmclient.Tally | None = None) -> list[tuple[int, str, str]]:
     """The second pass: every chapter start after the first looked at again in
     the transcript around it. Comes back as (cue index, title, the outline's
     title), the first chapter on the first cue; a start the model answers
@@ -726,7 +726,7 @@ def generate(cues: Sequence[Cue], llm, *, min_minutes: float = DEFAULT_MIN_MINUT
     Each pass the model is asked in is timed into ``meter`` with the
     requests it made.
 
-    The model's instructions (:meth:`chapterllm.Llm.following`) - the user's
+    The model's instructions (:meth:`llmclient.Llm.following`) - the user's
     own word on how to divide and what the titles name - go into every
     request.
 
@@ -742,14 +742,14 @@ def generate(cues: Sequence[Cue], llm, *, min_minutes: float = DEFAULT_MIN_MINUT
         return []
     found = passages(cues)
     count = max(2, round(duration / (typical_minutes * _MS_PER_MINUTE)))
-    held = (llm.serving(log) if isinstance(llm, chapterllm.Llm)
+    held = (llm.serving(log) if isinstance(llm, llmclient.Llm)
             else contextlib.nullcontext(llm))
     try:
         with held as served:
             return _chapters(cues, found, served, duration, count,
                              typical_minutes, min_minutes, log, instructions,
                              meter or Meter())
-    except chapterllm.LlmError as error:
+    except llmclient.LlmError as error:
         log("    no model to ask: %s" % error)
         return []
 
@@ -790,7 +790,7 @@ def _chapters(cues: Sequence[Cue], found: list[Passage], llm, duration: int,
 
 def _review(marks: list[tuple[int, str, str]], summary: str, llm, duration: int,
             log, instructions: str = "",
-            tally: chapterllm.Tally | None = None) -> list[tuple[int, str]]:
+            tally: llmclient.Tally | None = None) -> list[tuple[int, str]]:
     """The third pass: the finished list read once as a whole, against the
     user's instructions. Only titles can change - the starts are settled - and
     only where the answer names the chapter; a title the model leaves out,

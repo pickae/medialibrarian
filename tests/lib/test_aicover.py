@@ -1,0 +1,278 @@
+"""Tests for asking a language model to search the web for a book's cover -
+medialib.lib.aicover.
+
+The model is a stand-in that records what it was told and answers with
+image addresses; the download is a stand-in that writes an image or does
+not. What is pinned: the model is told the folder, the tags, the output name,
+what the book probably is and what a good cover is; only a model that can
+search is asked; its answer is read leniently, and the first address that
+downloads as an image is the cover; and what it was asked is counted.
+"""
+
+import contextlib
+import os
+import pathlib
+
+import pytest
+
+from medialib.lib import aicover, llmclient, modelmeter, onlinecover
+
+pytestmark = pytest.mark.pure
+
+_JPEG = b"\xff\xd8\xff" + b"\0" * 4000
+
+
+class _Model:
+    """A model that can search, answering ``answer`` - or raising it - and,
+    where it ``sees``, answering ``look`` when it is shown pictures."""
+
+    def __init__(self, answer, can_search=True, sees=False, look=""):
+        self.answer = answer
+        self.can_search = can_search
+        self.asked = []
+        self.shown = []
+        self.purpose = ""
+        self.name = "stand-in"
+        self.model = "stand-in"
+        self.vision = "auto"
+        self.sees = sees
+        self.look = look
+
+    def searching(self, purpose=""):
+        self.purpose = purpose
+        return self if self.can_search else None
+
+    @contextlib.contextmanager
+    def serving(self, log):
+        yield self
+
+    def sees_images(self):
+        return self.sees
+
+    def ask(self, system, prompt, tally=None, images=()):
+        if images:
+            self.shown.append((prompt, [pathlib.Path(p).read_bytes() for p in images]))
+            if tally is not None:
+                tally.add(1.0, 10)
+            return self.look
+        self.asked.append((system, prompt))
+        if isinstance(self.answer, Exception):
+            raise self.answer
+        if tally is not None:
+            tally.add(2.0, 40, 900)
+        return self.answer
+
+
+def _lookers(model):
+    """The model as the look's ladder, where it sees; no ladder where not."""
+    return [model] if model.sees else []
+
+
+def _book(tmp_path):
+    folder = tmp_path / "Ann Mirelle" / "The Quiet Orchard (Unabridged)"
+    (folder / "CD1").mkdir(parents=True)
+    (folder / "CD1" / "01 Opening.mp3").write_bytes(b"x" * 10)
+    (folder / "CD1" / "02 The Gate.mp3").write_bytes(b"x" * 10)
+    (folder / "notes.txt").write_text("read by a cast of four")
+    return folder
+
+
+def _tags(path):
+    return {"album": "The Quiet Orchard", "artist": "Ann Mirelle",
+            "title": os.path.basename(path), "language": "deu"}
+
+
+def _download(good):
+    tried = []
+
+    def download(url, dest):
+        tried.append(url)
+        if url not in good:
+            return False
+        with open(dest, "wb") as handle:
+            handle.write(_JPEG)
+        return True
+    download.tried = tried
+    return download
+
+
+def _tracks(folder):
+    return sorted(str(p) for p in folder.rglob("*.mp3"))
+
+
+@pytest.fixture(autouse=True)
+def _on(monkeypatch):
+    monkeypatch.setenv(aicover.SWITCH_VARIABLE, "on")
+
+
+def test_the_model_is_told_everything_the_run_knows(tmp_path):
+    folder = _book(tmp_path)
+    # The tags are the stand-in's, not ffprobe's.
+    subject = onlinecover.subject_for(folder.name, 5 * 3600,
+                                      tag_titles=["The Quiet Orchard"],
+                                      tag_creators=["Ann Mirelle"])
+    text = aicover.prompt(str(folder), "The Quiet Orchard", _tracks(folder),
+                          subject, _tags)
+    assert "The Quiet Orchard (Unabridged)" in text
+    assert "Ann Mirelle" in text
+    assert "CD1/01 Opening.mp3" in text and "notes.txt" in text
+    assert "language: deu" in text
+    assert "joined into one file named: The Quiet Orchard" in text
+    assert "probably an audiobook, because of a length of 5:00:00" in text
+    assert "not certainly" in text
+    assert "audible" in text
+
+
+def test_the_preferences_are_in_the_system_prompt():
+    for wanted in ("own language", "audiobook edition", "High resolution",
+                   "Any image format", "worse than none"):
+        assert wanted in aicover.SYSTEM
+
+
+def test_a_long_folder_is_listed_in_part(tmp_path, monkeypatch):
+    monkeypatch.setattr(aicover, "MAX_LISTED_FILES", 2)
+    folder = _book(tmp_path)
+    assert aicover._listing(str(folder))[-1] == "... and 1 more file(s)"
+
+
+def test_the_answer_is_read_leniently():
+    answer = ('Here you go:\n```json\n{"images": [{"url": "https://a.test/x.jpg"},'
+              ' "https://b.test/y.png", {"url": "file:///etc/passwd"}, 7]}\n```')
+    assert [c["url"] for c in aicover.candidates(answer)] == [
+        "https://a.test/x.jpg", "https://b.test/y.png"]
+    assert aicover.candidates("nothing found") == []
+    assert aicover.candidates('{"images": []}') == []
+
+
+def test_the_first_address_that_is_an_image_is_the_cover(tmp_path):
+    folder = _book(tmp_path)
+    model = _Model('{"images": [{"url": "https://a.test/page"}, '
+                   '{"url": "https://b.test/cover.jpg", "title": "Orchard"}]}')
+    download = _download({"https://b.test/cover.jpg"})
+    meter = tmp_path / "meter"
+    image = aicover.book_cover(str(folder), "The Quiet Orchard", _tracks(folder),
+                               5 * 3600, str(tmp_path / "out"), searchers=[model],
+                               lookers=_lookers(model),
+                               meter_file=str(meter), download=download,
+                               probe=_tags)
+    assert image == str(tmp_path / "out.jpg")
+    assert download.tried == ["https://a.test/page", "https://b.test/cover.jpg"]
+    assert model.purpose == "cover"
+    spans, tally = modelmeter.gathered(str(meter))
+    assert (tally.requests, tally.tokens, tally.read) == (1, 40, 900)
+
+
+def test_nothing_that_downloads_is_no_cover(tmp_path):
+    folder = _book(tmp_path)
+    model = _Model('{"images": [{"url": "https://a.test/x.jpg"}]}')
+    assert aicover.book_cover(str(folder), "x", _tracks(folder), 0,
+                              str(tmp_path / "out"), searchers=[model], lookers=_lookers(model),
+                              download=_download(set()), probe=_tags) == ""
+
+
+def test_a_model_that_cannot_search_is_not_asked(tmp_path):
+    folder = _book(tmp_path)
+    model = _Model('{"images": ["https://a.test/x.jpg"]}', can_search=False)
+    assert aicover.book_cover(str(folder), "x", _tracks(folder), 0,
+                              str(tmp_path / "out"), searchers=[model], lookers=_lookers(model),
+                              download=_download({"https://a.test/x.jpg"}),
+                              probe=_tags) == ""
+    assert model.asked == []
+
+
+def test_the_switch_keeps_the_model_unasked(tmp_path, monkeypatch):
+    monkeypatch.setenv(aicover.SWITCH_VARIABLE, "off")
+    folder = _book(tmp_path)
+    model = _Model('{"images": ["https://a.test/x.jpg"]}')
+    assert aicover.book_cover(str(folder), "x", _tracks(folder), 0,
+                              str(tmp_path / "out"), searchers=[model], lookers=_lookers(model),
+                              probe=_tags) == ""
+    assert model.asked == []
+
+
+def test_no_model_set_up_is_no_cover(tmp_path, monkeypatch):
+    for name in (llmclient.API_VARIABLE, llmclient.URL_VARIABLE,
+                 llmclient.HARNESS_VARIABLE):
+        monkeypatch.delenv(name, raising=False)
+    folder = _book(tmp_path)
+    assert aicover.book_cover(str(folder), "x", _tracks(folder), 0,
+                              str(tmp_path / "out"), probe=_tags) == ""
+
+
+def test_a_model_that_fails_is_no_cover_and_is_still_counted(tmp_path):
+    folder = _book(tmp_path)
+    model = _Model(llmclient.LlmError("no answer"))
+    meter = tmp_path / "meter"
+    assert aicover.book_cover(str(folder), "x", _tracks(folder), 0,
+                              str(tmp_path / "out"), searchers=[model], lookers=_lookers(model),
+                              meter_file=str(meter), probe=_tags) == ""
+    assert modelmeter.gathered(str(meter))[1].requests == 0
+
+
+_THREE = ('{"images": [{"url": "https://a.test/1.jpg", "title": "Orchard Live"},'
+          ' {"url": "https://b.test/2.jpg", "title": "The Quiet Orchard",'
+          ' "edition": "audiobook"}, {"url": "https://c.test/3.jpg"}]}')
+
+
+def _all():
+    """A download that writes each address's own picture."""
+    def download(url, dest):
+        with open(dest, "wb") as handle:
+            handle.write(_JPEG + url.encode())
+        return True
+    return download
+
+
+def _as_is(path, dest):
+    return path
+
+
+def _cover(tmp_path, model, **kwargs):
+    folder = _book(tmp_path)
+    return aicover.book_cover(str(folder), "The Quiet Orchard", _tracks(folder),
+                              5 * 3600, str(tmp_path / "out"), searchers=[model],
+                              lookers=_lookers(model),
+                              download=_all(), probe=_tags, prepare=_as_is,
+                              **kwargs)
+
+
+class TestTheLook:
+    """A model that sees is shown the candidates and picks one, or none."""
+
+    def test_the_model_picks_among_the_pictures(self, tmp_path):
+        model = _Model(_THREE, sees=True,
+                       look='{"choice": 2, "why": "the title is printed on it"}')
+        meter = tmp_path / "meter"
+        image = _cover(tmp_path, model, meter_file=str(meter))
+        assert pathlib.Path(image).read_bytes().endswith(b"https://b.test/2.jpg")
+        prompt, pictures = model.shown[0]
+        assert len(pictures) == 3
+        assert "2. from b.test - title: The Quiet Orchard, edition: audiobook" in prompt
+        assert "probably an audiobook" in prompt
+        # The search and the look, each recorded for the run.
+        assert modelmeter.gathered(str(meter))[1].requests == 2
+        assert sorted(os.listdir(tmp_path)) == ["Ann Mirelle", "meter", "out.jpg"]
+
+    def test_none_plausible_is_no_cover_and_leaves_nothing(self, tmp_path):
+        model = _Model(_THREE, sees=True,
+                       look='{"choice": null, "why": "all three are banners"}')
+        assert _cover(tmp_path, model) == ""
+        assert sorted(os.listdir(tmp_path)) == ["Ann Mirelle"]
+
+    @pytest.mark.parametrize("look", ["I cannot tell", '{"choice": 9}'])
+    def test_an_answer_that_is_no_choice_takes_the_first(self, tmp_path, look):
+        model = _Model(_THREE, sees=True, look=look)
+        image = _cover(tmp_path, model)
+        assert pathlib.Path(image).read_bytes().endswith(b"https://a.test/1.jpg")
+
+    def test_a_model_that_does_not_see_is_not_shown_them(self, tmp_path):
+        model = _Model(_THREE, sees=False, look='{"choice": 2}')
+        image = _cover(tmp_path, model)
+        assert pathlib.Path(image).read_bytes().endswith(b"https://a.test/1.jpg")
+        assert model.shown == []
+
+    def test_no_more_than_a_few_are_shown(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(aicover, "MAX_LOOKED_AT", 2)
+        model = _Model(_THREE, sees=True, look='{"choice": 1}')
+        _cover(tmp_path, model)
+        assert len(model.shown[0][1]) == 2

@@ -16,7 +16,7 @@ import pytest
 from medialib.cli import convert_video_chapters as chapterwork
 from medialib.cli import ingest_movies_lanes as lanes
 from medialib.cli import ingest_movies_run as run
-from medialib.lib import chapterllm
+from medialib.lib import llmclient
 
 pytestmark = pytest.mark.fs
 
@@ -67,7 +67,7 @@ def _outcome(*marks):
 def _extra(work_fixture, name="A.mkv", whisper=True):
     state, root, *_ = work_fixture
     movie = str(root / "The Movie (1999)" / "Featurettes" / name)
-    hosted = chapterllm.Llm(api="openai", url="", model="m")
+    hosted = llmclient.Llm(api="openai", url="", model="m")
     return run._chapter_extra(state, str(root), hosted, movie, whisper)
 
 
@@ -115,7 +115,7 @@ class TestTheGpu:
     does not."""
 
     def _llm(self, url):
-        return chapterllm.Llm(api="openai", url=url, model="m")
+        return llmclient.Llm(api="openai", url=url, model="m")
 
     def _run(self, work, monkeypatch, url):
         state, root, *_ = work
@@ -128,7 +128,7 @@ class TestTheGpu:
                 return contextlib.nullcontext()
 
         state.gpu_gate = Gate()
-        monkeypatch.setenv("chapterLlmVramGB", "12")
+        monkeypatch.setenv("llmVramGB", "12")
 
         def chapter(*_a, gpu, **_k):
             with gpu():
@@ -148,7 +148,7 @@ class TestTheGpu:
         assert self._run(work, monkeypatch, "") == []
 
     def test_unset_it_needs_the_whole_card(self, monkeypatch):
-        monkeypatch.delenv("chapterLlmVramGB", raising=False)
+        monkeypatch.delenv("llmVramGB", raising=False)
         assert run._llm_vram_mib() is None
 
     def test_whisper_on_the_cpu_holds_no_claim(self, work):

@@ -145,7 +145,7 @@ commands.
 ## Model sessions
 
 A request sent to a language model through an agent harness
-(`chapterLlmHarness`) is a session in that harness, deleted as soon as its
+(`llmHarness`) is a session in that harness, deleted as soon as its
 answer is read so the harness's own list stays yours. Just before, it is
 exported into `logs/llm/`, in a folder with the run's name -
 `logs/llm/20261105-140211-generate-chapters-4242/` - one JSON file per
