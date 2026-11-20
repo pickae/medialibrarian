@@ -78,10 +78,10 @@ _SCRATCH = ("concat-audio", "content-census", "content-census-bi", "convert-and-
             "generate-chapters", "ingest-books", "ingest-movies", "ingest-music", "read-library",
             "transcribe-audio", "ytdlp")
 
-# Every command that asks a language model: for chapters, or concat-audio's
-# for a cover nothing else found.
+# Every command that asks a language model: for chapters, concat-audio's
+# for a cover nothing else found, or ingest-books -d for book images.
 _AI_CHAPTERS = ("concat-audio", "convert-and-concat", "convert-audio", "convert-video",
-                "generate-chapters", "ingest-movies", "ytdlp")
+                "generate-chapters", "ingest-books", "ingest-movies", "ytdlp")
 
 SETTINGS: tuple[Setting, ...] = (
     # --- logins and keys
@@ -223,6 +223,14 @@ SETTINGS: tuple[Setting, ...] = (
             "every chapter. Only a model that can search is asked - Claude, or "
             "one behind `llmHarness`: `on` or `off`",
             ("concat-audio", "convert-and-concat"), "on"),
+    Setting("bookJunkImagesLlm", "Whether ingest-books -d asks a vision model "
+            "to tell book illustrations from advertising and publisher promos "
+            "(the `book-image-check` task, see docs/models.md): candidate "
+            "images inside the e-book and their file names are sent to the "
+            "model, and only a high-confidence ad verdict is removed - anything "
+            "else is kept. Without a vision model, or set to `off`, falls back "
+            "to the fixed junk-name substrings: `on` or `off`",
+            ("ingest-books",), "on"),
     Setting("chapterDbSite", "The chapter database's address", ("ingest-movies",),
             "`https://chapterdb.plex.tv`", tuning=True),
     Setting("dvdCompareSite", "The disc database's address", ("ingest-movies",),

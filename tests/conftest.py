@@ -319,6 +319,10 @@ def private_workspace(tmp_path_factory, monkeypatch):
     # Nor is a language model asked for one: a case that turns the search
     # back on would otherwise reach the model the machine's settings name.
     monkeypatch.setenv("coverSearchLlm", "off")
+    # Nor are book images sent to a vision model during ingest-books -d: a case
+    # about book-image classification turns it back on and stands in for the
+    # model.
+    monkeypatch.setenv("bookJunkImagesLlm", "off")
     # Nor the machine's own roster of models: a case that asks the roster
     # gets the models it set up itself, or none.
     monkeypatch.setenv("llmModels", str(scratch / "no-models-file"))
