@@ -223,6 +223,13 @@ SETTINGS: tuple[Setting, ...] = (
             "every chapter. Only a model that can search is asked - Claude, or "
             "one behind `llmHarness`: `on` or `off`",
             ("concat-audio", "convert-and-concat"), "on"),
+    Setting("commentaryJudgeLlm", "Whether an audio track that commentary "
+            "detection was unsure of is handed to a language model to judge "
+            "(the `commentary-judge` task, see docs/models.md): it is sent the "
+            "sampled whisper transcripts of the main and suspect tracks, along "
+            "with their track names and languages. Only a confident commentary "
+            "or audio description is flagged automatically: `on` or `off`",
+            ("ingest-movies",), "on"),
     Setting("chapterDbSite", "The chapter database's address", ("ingest-movies",),
             "`https://chapterdb.plex.tv`", tuning=True),
     Setting("dvdCompareSite", "The disc database's address", ("ingest-movies",),

@@ -70,6 +70,8 @@ class TestTheLadder:
         # Chapters prefer reasoning; small-local has none.
         assert _names(_roster(tmp_path).ladder(llmroster.CHAPTERS)) == [
             "big-local", "claude", "small-local"]
+        assert _names(_roster(tmp_path).ladder(llmroster.COMMENTARY_JUDGE)) == [
+            "big-local", "claude", "small-local"]
 
     def test_a_precise_task_takes_the_large_first(self, tmp_path):
         task = llmroster.Task("t", "test", lean="precise")
