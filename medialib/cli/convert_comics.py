@@ -148,10 +148,15 @@ OPT_VARS = "Q:quality u:chroma s:speedPreset m:maxRes f:fuzz k:keepParts"
 OPT_COLUMN = 20
 OPT_LONG = "h:help Q:quality u:chroma s:speed m:max-resolution f:fuzz k:keep"
 
-# The smallest an AVIF page can plausibly be, in bytes. A page that encodes to
-# less than this is an empty page - nothing on it worth a page in the book - and
-# it is dropped and counted as such. Not a failure: the encode did its job.
+# The smallest an AVIF page can plausibly be, in bytes, under the size-only
+# rule (without AI). A page that encodes to less than this is dropped as empty.
 MIN_PAGE_SIZE = 10 * 1024
+
+# Candidate ceiling when the AI empty-page check is active: eased above the
+# 10 KiB size-only rule so sparse "this page is intentionally blank" notices,
+# lone page numbers, or noisy uniform-colour scans are shown to the vision model
+# instead of relying on the tight byte cutoff.
+AI_CANDIDATE_PAGE_SIZE = 40 * 1024
 
 # Beside a book's AVIF folder while it is converted: the per-book
 # convert-images said a page of it failed. A file rather than a return value
@@ -1095,15 +1100,33 @@ class Run:
 def drop_empty_pages(book_avif: str, file_name: str, *,
                      meter_file: str = "",
                      check_blank=None) -> tuple[int, int]:
-    """Drop AVIF pages under :data:`MIN_PAGE_SIZE`, returning ``(dropped, kept)``.
+    """Drop empty AVIF pages in ``book_avif``, returning ``(dropped, kept)``.
 
-    Pages at or above :data:`MIN_PAGE_SIZE` are never touched or shown to any
-    model. For a page below the threshold, ``check_blank`` (defaulting to
-    :func:`aicomicpage.is_blank`) may ask a vision model whether it is truly
-    blank: ``False`` keeps the page, while ``True`` (confirmed blank) or
-    ``None`` (check disabled or no vision model) drops it.
+    Without AI (``comicEmptyPageLlm=off`` or no vision model configured), the
+    status-quo size-only rule applies unchanged: pages under
+    :data:`MIN_PAGE_SIZE` (10 KiB) are dropped and larger pages are untouched.
+
+    When AI checking is active (or a custom ``check_blank`` is supplied), the
+    hard size rule is eased to :data:`AI_CANDIDATE_PAGE_SIZE` (40 KiB) so the
+    vision model judges whether each small candidate has real comic-book
+    content worth keeping. ``True`` drops the page, ``False`` keeps it (counting
+    sub-10 KiB saves in ``kept``), and ``None`` falls back to the 10 KiB
+    size-only rule.
     """
-    check = aicomicpage.is_blank if check_blank is None else check_blank
+    if check_blank is None:
+        models = aicomicpage.resolve_models()
+        ai_active = bool(models)
+        check = (
+            (lambda path, *, book_name="", page_name="", meter_file="":
+                aicomicpage.is_blank(
+                    path, book_name=book_name, page_name=page_name,
+                    models=models, meter_file=meter_file))
+            if ai_active else None
+        )
+    else:
+        ai_active = True
+        check = check_blank
+    threshold = AI_CANDIDATE_PAGE_SIZE if ai_active else MIN_PAGE_SIZE
     dropped = 0
     kept = 0
     for parent, _dirs, names in os.walk(book_avif):
@@ -1113,17 +1136,23 @@ def drop_empty_pages(book_avif: str, file_name: str, *,
             path = os.path.join(parent, name)
             try:
                 size = os.path.getsize(path)
-                if size >= MIN_PAGE_SIZE:
+                if size >= threshold:
                     continue
-                verdict = check(path, book_name=file_name, page_name=name,
-                                meter_file=meter_file)
+                verdict = (
+                    check(path, book_name=file_name, page_name=name,
+                          meter_file=meter_file)
+                    if check is not None else None
+                )
                 if verdict is False:
-                    kept += 1
+                    if size < MIN_PAGE_SIZE:
+                        kept += 1
                     runlog.detail("%s: %s - kept small page - its encode is "
                                   "%s, under %s"
                                   % (file_name, name,
                                      formatting.fmt_bytes(size),
-                                     formatting.fmt_bytes(MIN_PAGE_SIZE)))
+                                     formatting.fmt_bytes(threshold)))
+                    continue
+                if verdict is None and size >= MIN_PAGE_SIZE:
                     continue
                 os.remove(path)
                 dropped += 1
@@ -1132,7 +1161,7 @@ def drop_empty_pages(book_avif: str, file_name: str, *,
                 runlog.detail("%s: %s - %s - its encode is %s, under %s"
                               % (file_name, name, reason,
                                  formatting.fmt_bytes(size),
-                                 formatting.fmt_bytes(MIN_PAGE_SIZE)))
+                                 formatting.fmt_bytes(threshold)))
             except OSError:
                 pass
     return dropped, kept

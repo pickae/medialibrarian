@@ -20,7 +20,7 @@ With no options, a run:
 - writes pages as **AVIF** at quality 45, speed 4, colour at full resolution (4:4:4) (`-Q`, `-s`, `-u`)
 - **scales pages taller than 2960 px down** to that height (`-m`)
 - **trims light, plain margins off every page**, treating colours within 10% of the edge as margin (`-f`; the trim is what `-k` keeps in)
-- **drops blank pages** (what the trim ends with deciding, so `-k` keeps them in with it); when a vision model is configured, pages that encoded under 10 KiB are checked before they are dropped ([below](#empty-page-check))
+- **drops blank pages** (what the trim ends with deciding, so `-k` keeps them in with it); when a vision model is configured, small pages under 40 KiB are judged by the model instead of the 10 KiB size-only rule ([below](#empty-page-check))
 - **repackages a book of mostly starved pages** instead of re-encoding it ([below](#starved-scans))
 - inspects every PDF and skips one that is not a scanned comic ([below](#pdfs))
 
@@ -100,20 +100,25 @@ in the closing report.
 
 ## Empty-page check
 
-An AVIF page that encodes to less than 10 KiB is normally dropped as empty
-(unless `-k pages` is given). Because a sparse title page, a single line of
-text or a faint pencil drawing can also encode that small, `convert-comics`
-shows those few candidate pages to a vision model when one is configured (the
-`comic-page-check` task in [language models](../models.md), needing `vision`
-and leaning `light`):
+Without a vision model (or with `comicEmptyPageLlm=off`), an AVIF page that
+encodes to less than 10 KiB is dropped as empty (unless `-k pages` is given)
+and larger pages are untouched — the existing size-only rule applies unchanged.
 
-- **The model can only keep a page, never drop one.** Pages at or above 10 KiB
-  are never shown to it.
-- Each candidate page is rendered to a small JPEG (up to 1024×1024) for the
-  model. A page is dropped only when the model confidently answers that it is
-  blank; if it sees content, is unsure, or fails to answer, the page is kept.
-- With no vision model configured, or with `comicEmptyPageLlm=off`, the check
-  is skipped quietly and the existing size-only rule applies unchanged.
+When a vision model is configured and `comicEmptyPageLlm` is on (the
+`comic-page-check` task in [language models](../models.md), needing `vision`
+and leaning `light`), the hard rules are eased and the model judges small
+candidate pages (up to 40 KiB):
+
+- Each candidate page is rendered to a small JPEG (up to 1024×1024) and the
+  model is asked whether it has real content that you would keep in a comic
+  book rather than being blank, a "this page is intentionally blank" notice,
+  just a page number, or just a uniform color.
+- Pages the model judges blank (with medium or high confidence) are dropped —
+  even when a sparse placeholder or lone page number encoded between 10 KiB and
+  40 KiB — while sparse pages with real content (such as title pages or faint
+  sketches under 10 KiB) are kept.
+- If the model sees content, has low confidence, is unsure, or fails to answer,
+  the page is kept.
 - Model usage is recorded across the run and printed in the closing report when
   any requests were made.
 

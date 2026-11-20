@@ -1,22 +1,24 @@
-"""Checking whether a very small comic page is truly blank before
-:mod:`medialib.cli.convert_comics` drops it.
+"""Checking whether a small comic page has real comic-book content worth keeping
+before :mod:`medialib.cli.convert_comics` drops or keeps it.
 
-A comic page whose AVIF encode comes out below ``MIN_PAGE_SIZE`` is usually an
-empty page, but a sparse title page, a single line of text, a credits notice or
-a faint pencil sketch can encode that small too. When a vision model is
-available (the :data:`llmroster.COMIC_PAGE_CHECK` task, needing ``vision`` and
-leaning ``light``), a downsized JPEG of that candidate page is shown to it.
+Without a vision model (or when :data:`SWITCH_VARIABLE` is off),
+``convert-comics`` uses a strict size-only rule (``MIN_PAGE_SIZE`` = 10 KiB).
+When a vision model is available (the :data:`llmroster.COMIC_PAGE_CHECK` task,
+needing ``vision`` and leaning ``light``), the hard rules are eased and the
+model inspects small candidate pages (up to ``AI_CANDIDATE_PAGE_SIZE``) to
+judge whether the page has real content to keep in a comic book rather than
+being blank, a "this page is intentionally blank" notice, just a page number,
+or just a uniform color.
 
-The model can only keep a page, never drop one above the size threshold:
-
-* Only pages already below ``MIN_PAGE_SIZE`` are ever passed here.
 * When :data:`SWITCH_VARIABLE` is off or no vision model is configured,
   :func:`is_blank` returns ``None`` quietly so the caller keeps its existing
-  size-only rule.
-* When a vision model is available, :func:`is_blank` returns ``True`` only on a
-  confident ``"blank"`` verdict. On ``"content"``, low or missing confidence,
-  ambiguity, malformed JSON, an image that cannot be prepared, or
-  :class:`llmclient.LlmError`, it returns ``False`` so the page is kept.
+  10 KiB size-only rule unchanged.
+* When a vision model is available, :func:`is_blank` relies on the model's
+  judgment: ``"blank"`` with ``"high"`` or ``"medium"`` confidence (or numeric
+  confidence >= 0.6) returns ``True`` (drop). ``"content"``, ``"low"`` or
+  missing confidence, ambiguity, malformed JSON, an image that cannot be
+  prepared, or :class:`llmclient.LlmError` returns ``False`` so the page is
+  kept.
 
 What the model was asked is counted (:mod:`medialib.lib.modelmeter`) and
 recorded for the run's closing total when ``meter_file`` is given.
@@ -44,6 +46,7 @@ __all__ = [
     "LOOK_GEOMETRY",
     "SYSTEM",
     "enabled",
+    "resolve_models",
     "prompt",
     "parse_verdict",
     "is_blank",
@@ -59,23 +62,20 @@ PURPOSE = "page"
 # lettering or a faint sketch while keeping vision token usage modest.
 LOOK_GEOMETRY = "1024x1024"
 
-MIN_NUMERIC_CONFIDENCE = 0.9
-_HIGH_CONFIDENCES = frozenset(("high", "certain", "sure"))
+MIN_NUMERIC_CONFIDENCE = 0.6
+_DROP_CONFIDENCES = frozenset(("high", "certain", "sure", "medium", "moderate"))
 
 SYSTEM = (
-    "You inspect candidate empty pages from a comic book whose encoded file "
-    "size is very small, and decide whether the page is truly blank or holds "
-    "intentional content.\n\n"
-    'Answer "blank" ONLY when the page is completely empty: a uniform solid '
-    "colour, plain paper texture, faint scanner noise, bleed-through or an "
-    "empty flyleaf with no readable text or intentional art.\n"
-    'Answer "content" for ANY intentional mark, however sparse: a title page, '
-    "chapter heading, a single line of text, a page number, a copyright or "
-    "credits line, a small logo or emblem, a panel border, or a faint pencil "
-    "drawing.\n\n"
-    "Err strongly on the side of keeping: a lost page is worse than an extra "
-    'blank page. Give "confidence": "high" with "blank" only when you are '
-    "certain nothing intentional is on the page.\n\n"
+    "You inspect small candidate pages from a comic book and decide whether "
+    "the page has real content that you would keep in a comic book.\n\n"
+    'Answer "blank" when the page has no real comic-book content to keep: '
+    "a blank or empty page, plain paper texture, scanner noise or "
+    'bleed-through, a "this page is intentionally blank" (or similar '
+    "placeholder) notice, just a page number, or just a uniform color.\n"
+    'Answer "content" when the page has real content that you would keep in '
+    "a comic book: panels, artwork, illustrations, covers, sketches, title or "
+    "chapter pages, credits, story text, dialogue, or other meaningful "
+    "content.\n\n"
     "Answer with JSON only:\n"
     '{"verdict": "blank" | "content", '
     '"confidence": "high" | "medium" | "low", '
@@ -93,6 +93,15 @@ def enabled() -> bool:
     return value not in ("off", "0", "no", "false")
 
 
+def resolve_models() -> list[llmclient.Llm]:
+    """Configured vision models for :data:`llmroster.COMIC_PAGE_CHECK`, or an
+    empty list when :data:`SWITCH_VARIABLE` is off or no vision model exists."""
+    if not enabled():
+        return []
+    models, _why = llmroster.optional(llmroster.COMIC_PAGE_CHECK)
+    return list(models)
+
+
 def prompt(page_name: str = "", book_name: str = "") -> str:
     """What the vision model is asked about the page image shown to it."""
     where = ""
@@ -101,10 +110,10 @@ def prompt(page_name: str = "", book_name: str = "") -> str:
     elif page_name:
         where = " (%s)" % page_name
     return (
-        "This comic page%s encoded to a very small file size and is about to "
-        "be dropped as empty. Look closely at the image: is it truly blank, "
-        "or does it contain any intentional text, lettering, logo, sketch or "
-        "artwork?\n\n"
+        "Inspect this comic book page%s. Does this page have real content "
+        "that you would keep in a comic book, rather than being blank, a "
+        '"this page is intentionally blank" notice, just a page number, or '
+        "just a uniform color?\n\n"
         'Answer with JSON only: {"verdict": "blank" | "content", '
         '"confidence": "high" | "medium" | "low", "why": "<short phrase>"}'
         % where
@@ -112,12 +121,12 @@ def prompt(page_name: str = "", book_name: str = "") -> str:
 
 
 def parse_verdict(answer: str) -> tuple[bool, str]:
-    """``(confident_blank, reason)`` parsed from the model's answer.
+    """``(should_drop, reason)`` parsed from the model's answer.
 
-    Returns ``(True, why)`` ONLY for an explicit ``"blank"`` verdict with high
-    confidence. Anything else - ``"content"``, low or medium confidence,
-    missing confidence, unexpected verdict, malformed or missing JSON - returns
-    ``(False, reason)`` so the page is kept.
+    Returns ``(True, why)`` for a ``"blank"`` verdict with ``"high"`` or
+    ``"medium"`` confidence (or numeric confidence >= 0.6). ``"content"``,
+    ``"low"`` or missing confidence, unexpected verdict, and malformed or
+    missing JSON return ``(False, reason)`` so the page is kept.
     """
     verdict_obj = llmclient.first_json(answer)
     if not isinstance(verdict_obj, dict):
@@ -130,7 +139,7 @@ def parse_verdict(answer: str) -> tuple[bool, str]:
         return False, why or ("unclear verdict %r" % (verdict_obj.get("verdict"),))
     confidence = verdict_obj.get("confidence")
     if isinstance(confidence, str):
-        confident = confidence.strip().lower() in _HIGH_CONFIDENCES
+        confident = confidence.strip().lower() in _DROP_CONFIDENCES
     elif isinstance(confidence, (int, float)) and not isinstance(confidence, bool):
         confident = float(confidence) >= MIN_NUMERIC_CONFIDENCE
     else:

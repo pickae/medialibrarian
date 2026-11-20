@@ -50,9 +50,20 @@ recovered from the output; `-d` is the version for reading on a device:
 | `-d` | Does |
 | --- | --- |
 | embedded fonts | dropped |
-| junk/teaser images | removed via an extensible name-substring list |
+| junk/teaser images | classified by a vision model (`book-image-check`, see [models](../models.md)) when available, else removed via the fixed name-substring list |
 | illustrations | downscaled to at most fullHD |
 | a PDF's images | stripped |
+
+When a vision model is configured and `bookJunkImagesLlm` is on (the default),
+`-d` shows each non-cover candidate image in an e-book (resized to at most
+`1024x1024`) to the `book-image-check` task, together with its file name inside
+the e-book and the book's title. Only a high-confidence `ad` verdict removes an
+image; `book`, `unsure`, low/medium confidence, unreadable JSON, or any model
+error always keeps it — including rescuing real book illustrations whose
+filename happens to match a junk-name substring. With `bookJunkImagesLlm=off`
+or no vision model available, `-d` falls back to the fixed junk-name substrings
+(`teaser`, `backadd`). Candidate images and their file names are sent to that
+model, so use one you trust with them.
 
 An illustration has to be worth downscaling on *both* counts before `-d` touches
 it: over the size threshold, and not already starved. Scaling a picture that has

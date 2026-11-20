@@ -84,6 +84,12 @@ class TestParseVerdict:
         assert blank is True
         assert why == "uniform white"
 
+    def test_medium_confidence_blank_returns_true(self):
+        blank, why = aicomicpage.parse_verdict(
+            '{"verdict": "blank", "confidence": "medium", "why": "just a page number"}')
+        assert blank is True
+        assert why == "just a page number"
+
     def test_confident_blank_inside_fenced_text_returns_true(self):
         blank, why = aicomicpage.parse_verdict(
             'Looking closely:\n```json\n'
@@ -94,14 +100,21 @@ class TestParseVerdict:
 
     @pytest.mark.parametrize("score, expected", [
         (0.95, True),
-        (0.9, True),
-        (0.89, False),
-        (0.5, False),
+        (0.6, True),
+        (0.59, False),
+        (0.3, False),
     ])
-    def test_numeric_confidence_requires_high_threshold(self, score, expected):
+    def test_numeric_confidence_threshold(self, score, expected):
         blank, _ = aicomicpage.parse_verdict(
             '{"verdict": "blank", "confidence": %s, "why": "empty"}' % score)
         assert blank is expected
+
+    def test_prompt_and_system_ask_comic_content_criteria(self):
+        text = (aicomicpage.SYSTEM + "\n" + aicomicpage.prompt("02.avif")).lower()
+        assert "real content" in text
+        assert "intentionally blank" in text
+        assert "page number" in text
+        assert "uniform color" in text
 
     def test_content_returns_false(self):
         blank, why = aicomicpage.parse_verdict(
@@ -110,7 +123,6 @@ class TestParseVerdict:
         assert "title text" in why
 
     @pytest.mark.parametrize("answer", [
-        '{"verdict": "blank", "confidence": "medium", "why": "faint mark"}',
         '{"verdict": "blank", "confidence": "low", "why": "unclear"}',
         '{"verdict": "blank", "confidence": "unsure"}',
         '{"verdict": "blank", "why": "no confidence field"}',
@@ -326,20 +338,24 @@ traits = { vision = true, params = 4 }
 
 
 class TestConvertComicsIntegration:
-    def test_only_small_pages_are_checked_and_model_can_only_keep(self, tmp_path):
+    def test_ai_eases_size_rule_up_to_ai_candidate_ceiling(self, tmp_path):
         book = tmp_path / "book"
         book.mkdir()
-        (book / "01_big.avif").write_bytes(b"a" * cc.MIN_PAGE_SIZE)
-        (book / "02_small_blank.avif").write_bytes(b"b" * 100)
-        (book / "03_small_title.avif").write_bytes(b"c" * 100)
-        (book / "04_small_unsure.avif").write_bytes(b"d" * 100)
+        (book / "01_full.avif").write_bytes(b"a" * cc.AI_CANDIDATE_PAGE_SIZE)
+        (book / "02_mid_intentionally_blank.avif").write_bytes(b"m" * (cc.MIN_PAGE_SIZE + 5000))
+        (book / "03_mid_content.avif").write_bytes(b"n" * (cc.MIN_PAGE_SIZE + 5000))
+        (book / "04_small_blank.avif").write_bytes(b"b" * 100)
+        (book / "05_small_title.avif").write_bytes(b"c" * 100)
+        (book / "06_small_unsure.avif").write_bytes(b"d" * 100)
         (book / "notes.txt").write_bytes(b"tiny")
 
         checked: list[str] = []
         verdicts = {
-            "02_small_blank.avif": True,
-            "03_small_title.avif": False,
-            "04_small_unsure.avif": False,
+            "02_mid_intentionally_blank.avif": True,
+            "03_mid_content.avif": False,
+            "04_small_blank.avif": True,
+            "05_small_title.avif": False,
+            "06_small_unsure.avif": False,
         }
 
         def stub_check(path, *, book_name="", page_name="", meter_file=""):
@@ -349,14 +365,24 @@ class TestConvertComicsIntegration:
         dropped, kept = cc.drop_empty_pages(
             str(book), "Comic.cbz", check_blank=stub_check)
 
-        assert (dropped, kept) == (1, 2)
-        # Page at MIN_PAGE_SIZE was never shown to the model and never dropped.
+        assert (dropped, kept) == (2, 2)
+        # Page at AI_CANDIDATE_PAGE_SIZE was never shown to the model and never dropped.
         assert checked == [
-            "02_small_blank.avif", "03_small_title.avif", "04_small_unsure.avif"]
+            "02_mid_intentionally_blank.avif",
+            "03_mid_content.avif",
+            "04_small_blank.avif",
+            "05_small_title.avif",
+            "06_small_unsure.avif",
+        ]
         assert sorted(os.listdir(book)) == [
-            "01_big.avif", "03_small_title.avif", "04_small_unsure.avif", "notes.txt"]
+            "01_full.avif",
+            "03_mid_content.avif",
+            "05_small_title.avif",
+            "06_small_unsure.avif",
+            "notes.txt",
+        ]
 
-    def test_none_verdict_preserves_size_only_dropping(self, tmp_path):
+    def test_none_verdict_preserves_10kib_status_quo(self, tmp_path):
         book = tmp_path / "book"
         book.mkdir()
         (book / "01_big.avif").write_bytes(b"a" * (cc.MIN_PAGE_SIZE + 50))
@@ -367,6 +393,18 @@ class TestConvertComicsIntegration:
 
         assert (dropped, kept) == (1, 0)
         assert os.listdir(book) == ["01_big.avif"]
+
+    def test_without_ai_keeps_10kib_status_quo(self, tmp_path, monkeypatch):
+        monkeypatch.setenv(aicomicpage.SWITCH_VARIABLE, "off")
+        book = tmp_path / "book"
+        book.mkdir()
+        (book / "01_mid.avif").write_bytes(b"a" * (cc.MIN_PAGE_SIZE + 2000))
+        (book / "02_small.avif").write_bytes(b"b" * 50)
+
+        dropped, kept = cc.drop_empty_pages(str(book), "Comic.cbz")
+
+        assert (dropped, kept) == (1, 0)
+        assert os.listdir(book) == ["01_mid.avif"]
 
     def test_end_to_end_metering_and_footer_report(self, tmp_path, monkeypatch, capsys):
         book = tmp_path / "book"
