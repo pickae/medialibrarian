@@ -51,8 +51,8 @@ from medialib.lib import llmclient, llmtraits, modelserver, runlog, settings
 
 __all__ = ["MODELS_VARIABLE", "LEAN_VARIABLE", "LEANS", "Task", "TASKS", "CHAPTERS",
            "CHAPTERS_INSTRUCTED", "COVER_SEARCH", "COVER_LOOK", "CONTENTS_SEARCH",
-           "SUBTITLE_OCR", "VIDEO_PROFILE", "Roster", "RosterError", "load", "require",
-           "optional", "chapters_task"]
+           "SUBTITLE_OCR", "VIDEO_PROFILE", "MUSIC_SEARCH", "Roster", "RosterError",
+           "load", "require", "optional", "chapters_task"]
 
 MODELS_VARIABLE = "llmModels"
 LEAN_VARIABLE = "llmLean"
@@ -100,10 +100,14 @@ SUBTITLE_OCR = Task("subtitle-ocr", "read a film's picture subtitles into text",
 VIDEO_PROFILE = Task(
     "video-profile", "classify a video from sampled frames to choose its "
     "encoding profile", requires=("vision",), lean="light")
+MUSIC_SEARCH = Task("music-search",
+                    "search the web for the MusicBrainz release of an album "
+                    "beets could not match",
+                    requires=("web",), prefers=("reasoning",))
 
 TASKS = {task.name: task for task in (CHAPTERS, CHAPTERS_INSTRUCTED,
                                       COVER_SEARCH, COVER_LOOK, CONTENTS_SEARCH,
-                                      SUBTITLE_OCR, VIDEO_PROFILE)}
+                                      SUBTITLE_OCR, VIDEO_PROFILE, MUSIC_SEARCH)}
 
 
 def chapters_task(instructions: str) -> Task:

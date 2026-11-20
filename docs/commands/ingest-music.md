@@ -11,7 +11,7 @@ library, plus Opus copies to carry around.
 | **Writes** | the FLAC library into `<ingestDir>`, and 120 kbps Opus copies into `<opusCopyDir>` (default: the sibling folder `<ingestDir>opus`) |
 | **Input** | de-duplicated and multi-disc rips split into subfolders - on a copy of the tree with `-k downloads`, which keeps the folder as it was; everything else is applied to the output only |
 | **Reruns** | add only what is new: running the same download folder again leaves the library exactly as it was |
-| **Network** | yes — beets asks AcoustID, MusicBrainz, Last.fm, a lyrics site and a cover-art host, unless `-o` skips the tagging phase ([details](../file-safety.md#what-leaves-the-machine)) |
+| **Network** | yes — beets asks AcoustID, MusicBrainz, Last.fm, a lyrics site and a cover-art host, and any unmatched album may be looked up on MusicBrainz through a web-searching language model (`musicSearchLlm`), unless `-o` skips the tagging phase ([details](../file-safety.md#what-leaves-the-machine)) |
 
 ## Default behavior
 
@@ -33,7 +33,7 @@ Each phase is in the [table below](#what-it-does).
 | Split | multi-disc CUE+image rips sharing one folder are split into a subfolder each (de-duplicating with `fdupes` first). With `-k downloads` the de-duplication and the split happen on a copy of the tree, and a copy that cannot be made leaves the folders the split would take apart refused - not ingested flat, and not changed |
 | Encode | every lossless source (FLAC/APE/ALAC/WAV/WavPack) is re-encoded to a normalised 16-bit FLAC (capped at 48 kHz - the source's own bit depth and sample rate with `-k` - the embedded cover scaled to at most fullHD, unscaled with `-k covers`), keeping its source's modification time; everything else is copied across with `rsync` |
 | Tidy | large cover images become AVIF (copied as they are with `-k covers`), stray video files are remuxed to MKV, and cue-sheet chapters are embedded into the flacs they describe. Cue sheets are read for their chapters first, and only the ones still without a FLAC of their own are then dropped |
-| Tag | the assembled output is tagged and organised with `beets`, using the config that ships with the package (another with `-c` or the `beetsConfig` setting), with the import log written to `logs/beets.log`; skipped with `-o` |
+| Tag | the assembled output is tagged and organised with `beets`, using the config that ships with the package (another with `-c` or the `beetsConfig` setting), with the import log written to `logs/beets.log`. Any albums skipped in this run are read back from `beets.log` and reported; when a web-searching language model is configured (`musicSearchLlm`, [models](../models.md)), it looks up each unmatched album's MusicBrainz release ID from the folder, track durations, existing tags and rip logs, and beets retries that folder quietly with `--search-id`; skipped with `-o` |
 | Clean | passed through [`clean-folder-structure`](clean-folder-structure.md) for final name cleanup and empty-folder pruning |
 | Copy | 120 kbps Opus copies are made with [`convert-audio`](convert-audio.md) |
 

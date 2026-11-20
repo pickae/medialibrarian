@@ -78,10 +78,10 @@ _SCRATCH = ("concat-audio", "content-census", "content-census-bi", "convert-and-
             "generate-chapters", "ingest-books", "ingest-movies", "ingest-music", "read-library",
             "transcribe-audio", "ytdlp")
 
-# Every command that asks a language model: for chapters, or concat-audio's
-# for a cover nothing else found.
+# Every command that asks a language model: for chapters, concat-audio's for
+# a cover nothing else found, or ingest-music's for an album beets skipped.
 _AI_CHAPTERS = ("concat-audio", "convert-and-concat", "convert-audio", "convert-video",
-                "generate-chapters", "ingest-movies", "ytdlp")
+                "generate-chapters", "ingest-movies", "ingest-music", "ytdlp")
 
 SETTINGS: tuple[Setting, ...] = (
     # --- logins and keys
@@ -202,6 +202,14 @@ SETTINGS: tuple[Setting, ...] = (
             "every chapter. Only a model that can search is asked - Claude, or "
             "one behind `llmHarness`: `on` or `off`",
             ("concat-audio", "convert-and-concat"), "on"),
+    Setting("musicSearchLlm", "Whether an album beets skipped is handed to a "
+            "language model to look up its MusicBrainz release ID on the web "
+            "(the `music-search` task, see docs/models.md): it is told the "
+            "folder and file names, track durations, existing tags and any "
+            "rip logs or cue sheets in the folder. Only a model that can "
+            "search is asked - Claude, or one behind `llmHarness`: `on` or "
+            "`off`",
+            ("ingest-music",), "on"),
     Setting("chapterDbSite", "The chapter database's address", ("ingest-movies",),
             "`https://chapterdb.plex.tv`", tuning=True),
     Setting("dvdCompareSite", "The disc database's address", ("ingest-movies",),
