@@ -29,12 +29,14 @@ from medialib.cli import convert_video_probes as probes
 from medialib.cli import convert_video_source as videosource
 from medialib.cli import convert_video_startup as startup
 from medialib.lib import (
+    aivideoprofile,
     clioptions,
     console,
     durationcheck,
     enums,
     ffmpegselect,
     formatting,
+    modelmeter,
     pausecontrol,
     ramscratch,
     resolutions,
@@ -128,6 +130,10 @@ class Run:
         # time: whisper fills the GPU on its own, and a local model shares it.
         self.llm = None
         self.chaptering = threading.Lock()
+        # -p auto's vision model and its cumulative usage across the run.
+        self.profile_llm = None
+        self.profile_spans = modelmeter.Spans()
+        self.profile_tally = modelmeter.Tally()
         self.start = time.time()
         self.converted = 0
         self.skipped = 0
@@ -215,6 +221,12 @@ class Run:
         directory = plan.directory
         os.makedirs(directory, exist_ok=True)
 
+        if settings.auto_video_profile:
+            self._settle_auto_profile(plan)
+            if safety.abort_requested():
+                shutil.rmtree(directory, ignore_errors=True)
+                return None
+
         # The source's coded size, and the size it will actually be ENCODED at -
         # the same unless -r caps this one. The encoded size is what the chunk
         # planning goes by: a 2160p source scaled down to 1080p does a 1080p
@@ -255,6 +267,32 @@ class Run:
                 self.count("skipped")
                 return None
         return width, height, sar
+
+    def _settle_auto_profile(self, plan: Plan) -> None:
+        """Pick this file's video profile with the vision model (-p auto) and
+        re-settle the profile-dependent grain settings on ``plan.settings``."""
+        settings = plan.settings
+        pausecontrol.wait_while_paused()
+        if safety.abort_requested():
+            return
+        models = [self.profile_llm] if self.profile_llm is not None else None
+        pick = aivideoprofile.classify(
+            plan.source, plan.relative, plan.duration, plan.directory,
+            models=models,
+            decode_accel_args=settings.decode_accel,
+            run_spans=self.profile_spans,
+            run_tally=self.profile_tally,
+            log=log,
+        )
+        settings.video_profile = pick.profile
+        picked_args = rules.profile_args(rules.video_profiles(), pick.profile)
+        settings.grain_tune = (
+            settings.svt_av1_hdr and not settings.grain_option
+            and settings.video_profile == rules.SVT_AV1_HDR_GRAIN_PROFILE
+        )
+        settings.grain_level, settings.grain_probe_wanted = (
+            startup._settle_grain(settings, settings.grain_option, picked_args)
+        )
 
     def _settle_picture(self, plan: Plan, geometry: tuple, fields) -> None:
         """The crop, the upscale, the HDR10+ and the chunk boundaries, once the
@@ -864,6 +902,11 @@ class Run:
             say("Average fps:       %.1f\n" % (self.frames / encoding), out)
             say("Real-time speedup: %sx\n" % formatting.fmt_ratio(
                 "%.6f" % (self.video_seconds / encoding)), out)
+        if self.profile_tally.requests:
+            say("Profile model:     %s\n"
+                % modelmeter.rate_line(aivideoprofile.PURPOSE,
+                                       self.profile_spans.seconds,
+                                       self.profile_tally), out)
         out.flush()
         durationcheck.report(out)
 
@@ -961,8 +1004,8 @@ def main(argv: list, program: str = "convert-video",
         settings.audio_profile = "passthrough"
 
     try:
-        video_args = rules.profile_args(rules.video_profiles(),
-                                        settings.video_profile)
+        video_args, auto_profile = rules.resolve_video_profile(
+            settings.video_profile)
         rules.profile_args(rules.audio_profiles(), settings.audio_profile)
     except rules.UnknownProfile as unknown:
         sys.stderr.write(unknown.text())
@@ -973,6 +1016,9 @@ def main(argv: list, program: str = "convert-video",
         # does.
         sys.stderr.write(malformed.text() + "\n")
         return 1
+
+    settings.auto_video_profile = auto_profile
+    settings.grain_option = grain
 
     # The instructions are for the model -C asks; without it there is none.
     if "P" in result.given and not settings.ai_chapters:
@@ -1029,6 +1075,9 @@ def _settle_and_run(settings, program: str, video_args: str, grain: str,
         fork_use = ""
         if settings.video_profile == rules.SVT_AV1_HDR_GRAIN_PROFILE and not grain:
             fork_use = "its film grain tune for %s" % settings.video_profile
+        elif settings.auto_video_profile and not grain:
+            fork_use = ("its film grain tune when -p auto selects %s"
+                        % rules.SVT_AV1_HDR_GRAIN_PROFILE)
         elif probes.pq_source_to_convert(settings):
             fork_use = "its PQ variance-boost curve on a PQ source"
         rank = probes.SvtBuildRank(fork_use)
@@ -1044,6 +1093,11 @@ def _settle_and_run(settings, program: str, video_args: str, grain: str,
     if settings.ai_chapters:
         llm = chapter_model(program, settings)
         if llm is None:
+            return 1
+    profile_llm = None
+    if settings.auto_video_profile:
+        profile_llm = aivideoprofile.model(program, log)
+        if profile_llm is None:
             return 1
     # Refused rather than degraded, and before the output folder exists: a run
     # that encoded the small files at their own size instead would leave outputs
@@ -1082,7 +1136,7 @@ def _settle_and_run(settings, program: str, video_args: str, grain: str,
     startup._detect_hardware(settings, video_args, engines_override)
     startup._summarise(settings, video_args, grain)
 
-    return _run_all(settings, llm)
+    return _run_all(settings, llm, profile_llm=profile_llm)
 
 
 def chapter_model(program: str, settings):
@@ -1130,7 +1184,7 @@ class _HeldOutput:
         return getattr(self._stream, name)
 
 
-def _run_all(settings, llm=None) -> int:
+def _run_all(settings, llm=None, profile_llm=None) -> int:
     """The walk: one file at a time, because the chunk count already saturates the
     encoder and encoding files in parallel would oversubscribe it. What runs
     beside a file's encode is everything around it that does not need the
@@ -1172,6 +1226,7 @@ def _run_all(settings, llm=None) -> int:
 
     run = Run(settings)
     run.llm = llm
+    run.profile_llm = profile_llm
     safety.set_run_footer(run.footer)
     durationcheck.init_log()
     safety.init_abort_flag()
