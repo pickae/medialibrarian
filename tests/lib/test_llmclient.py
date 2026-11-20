@@ -4,6 +4,7 @@ replaced by a function that records what it was handed."""
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -320,10 +321,11 @@ class _Block:
 
 
 class _Message:
-    def __init__(self, stop_reason, *blocks, output_tokens=None):
+    def __init__(self, stop_reason, *blocks, output_tokens=None, input_tokens=None):
         self.stop_reason, self.content = stop_reason, list(blocks)
-        if output_tokens is not None:
-            self.usage = types.SimpleNamespace(output_tokens=output_tokens)
+        if output_tokens is not None or input_tokens is not None:
+            self.usage = types.SimpleNamespace(
+                output_tokens=output_tokens, input_tokens=input_tokens)
 
 
 class TestClaude:
@@ -408,3 +410,139 @@ class TestSeeingPictures:
         llm.harness = llmclient.llmharness.Harness.OPENCODE
         with pytest.raises(llmclient.LlmError, match="not sent through"):
             llm.ask("S", "P", images=["x.jpg"])
+        with pytest.raises(llmclient.LlmError, match="not sent through"):
+            llm.ask_pictures("S", "B", "A", ["x.jpg"])
+
+    def test_numbered_pictures_openai_payload_and_options(self, monkeypatch, tmp_path):
+        one = tmp_path / "one.png"
+        two = tmp_path / "two.png"
+        one.write_bytes(b"\x89PNGone")
+        two.write_bytes(b"\x89PNGtwo")
+        sent = {}
+
+        def fake_run(cmd, input=b"", capture_output=False):
+            config = input.decode("utf-8")
+            body_line = next(line for line in config.splitlines()
+                             if line.startswith("data-binary = "))
+            body_path = json.loads(body_line.split(" = ", 1)[1])[1:]
+            with open(body_path, encoding="utf-8") as handle:
+                sent.update(json.loads(handle.read()))
+            reply = json.dumps({
+                "choices": [{"message": {"content": '["A", "B"]'}}],
+                "usage": {"prompt_tokens": 120, "completion_tokens": 11},
+            }) + "\n200"
+            return types.SimpleNamespace(returncode=0,
+                                         stdout=reply.encode("utf-8"),
+                                         stderr=b"")
+
+        monkeypatch.setattr(llmclient.subprocess, "run", fake_run)
+        llm = self._llm(llmUrl="http://localhost:8082/v1", llmModel="vision-12b",
+                        llmOptions='{"top_k": 1}')
+        tally = llmclient.Tally()
+        answer = llm.ask(
+            "", "Read two images.", tally, images=[str(one), str(two)],
+            numbered=True, options={"temperature": 0}, max_tokens=400)
+        assert answer == '["A", "B"]'
+        assert len(sent["messages"]) == 1
+        assert sent["messages"][0]["role"] == "user"
+        content = sent["messages"][0]["content"]
+        assert [p["text"] for p in content if p["type"] == "text"] == [
+            "Read two images.", "Image 1:", "Image 2:"]
+        assert [p["type"] for p in content] == [
+            "text", "text", "image_url", "text", "image_url"]
+        assert sent["top_k"] == 1
+        assert sent["temperature"] == 0
+        assert sent["max_tokens"] == 400
+        assert (tally.requests, tally.read, tally.tokens) == (1, 120, 11)
+
+    def test_numbered_pictures_anthropic_payload(self, monkeypatch, tmp_path):
+        one = tmp_path / "one.png"
+        two = tmp_path / "two.png"
+        one.write_bytes(b"\x89PNGone")
+        two.write_bytes(b"\x89PNGtwo")
+        seen = []
+
+        class Stream:
+            def __init__(self, **request):
+                seen.append(request)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def get_final_message(self):
+                return _Message("end_turn", _Block("text", '["A", "B"]'),
+                                input_tokens=90, output_tokens=9)
+
+        module = types.ModuleType("anthropic")
+        module.Anthropic = lambda **opts: types.SimpleNamespace(
+            beta=types.SimpleNamespace(
+                messages=types.SimpleNamespace(stream=lambda **req: Stream(**req))))
+        module.APIStatusError = type("APIStatusError", (Exception,), {})
+        module.APIConnectionError = type("APIConnectionError", (Exception,), {})
+        monkeypatch.setitem(sys.modules, "anthropic", module)
+
+        tally = llmclient.Tally()
+        llm = self._llm(llmApi="anthropic")
+        answer = llm.ask(
+            "", "Read two images.", tally, images=[str(one), str(two)],
+            numbered=True, max_tokens=400)
+        assert answer == '["A", "B"]'
+        assert seen[0]["max_tokens"] == 400
+        content = seen[0]["messages"][0]["content"]
+        assert [p["text"] for p in content if p["type"] == "text"] == [
+            "Read two images.", "Image 1:", "Image 2:"]
+        assert [p["type"] for p in content] == [
+            "text", "text", "image", "text", "image"]
+        assert (tally.requests, tally.read, tally.tokens) == (1, 90, 9)
+
+    def test_ask_pictures_batches_reasks_and_falls_back_one_by_one(
+            self, monkeypatch, tmp_path):
+        pics = []
+        for name in ("a", "b", "c"):
+            p = tmp_path / (name + ".png")
+            p.write_bytes(b"\x89PNG" + name.encode())
+            pics.append(str(p))
+
+        llm = self._llm(llmUrl="http://localhost:8082/v1", llmModel="vision")
+        calls = []
+
+        def fake_ask(system, prompt, tally=None, images=(), **kwargs):
+            calls.append((prompt, tuple(images), kwargs))
+            if len(images) > 1:
+                return '["one", "two", "short"]'
+            return "full\ntwo lines"
+
+        monkeypatch.setattr(llm, "ask", fake_ask)
+        out = llm.ask_pictures(
+            "", "BATCH", "ALONE", pics, max_tokens_each=200,
+            allow_empty=True, reask=lambda i, t: t == "short")
+        assert out == ["one", "two", "full\ntwo lines"]
+        assert len(calls) == 2
+        assert calls[0][0] == "BATCH" and calls[0][2]["max_tokens"] == 600
+        assert calls[1][0] == "ALONE" and calls[1][1] == (pics[2],)
+
+        # Short / invalid array falls back to asking each picture alone.
+        calls.clear()
+
+        def bad_batch(system, prompt, tally=None, images=(), **kwargs):
+            calls.append(tuple(images))
+            if len(images) > 1:
+                return '["only one"]'
+            return "text:" + os.path.basename(images[0])
+
+        monkeypatch.setattr(llm, "ask", bad_batch)
+        out = llm.ask_pictures("", "BATCH", "ALONE", pics, allow_empty=True)
+        assert out == ["text:a.png", "text:b.png", "text:c.png"]
+        assert len(calls) == 4
+
+    def test_json_strings_and_stray_thinking_tag(self):
+        assert llmclient.json_strings(
+            '```json\n["Bon\\ jour.", "Two\\\\nlines"]\n```', 2) \
+            == ["Bon jour.", "Two\\nlines"]
+        assert llmclient.json_strings('["only one"]', 2) is None
+        assert llmclient.json_strings("not json", 1) is None
+        assert llmclient._strip_thinking("Hmm.</think>- Oui ?\n- Non.") \
+            == "- Oui ?\n- Non."

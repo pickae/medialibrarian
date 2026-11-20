@@ -126,7 +126,11 @@ which is less obvious:
   AcoustID, and asks MusicBrainz, Last.fm, a lyrics site and a cover-art host
   about the release. It also writes the tags it settles back **into your
   files** (`write: yes`). A config of your own runs the same phase with fewer
-  of its plugins.
+  of its plugins. When beets skips an unmatched album and a web-searching
+  language model is configured (`musicSearchLlm`, on by default), the folder
+  and file names, track durations, existing tags and any rip logs or cue
+  sheets in that folder are sent to the model to look up the MusicBrainz
+  release ID.
 - **`ingest-movies`** asks TheMovieDB what a film is, but only once `tmdbApiKey`
   is set — with no key it skips the lookup and says so. The key goes to curl on
   stdin rather than on its command line, so it is not readable from the process
