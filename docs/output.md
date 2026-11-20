@@ -118,6 +118,14 @@ These are the kinds of error a run keeps, and each is also said on the console:
 Help pages, a run with no arguments, and an interrupt are not errors, and
 leave nothing in the log.
 
+When a run ends with error records that no built-in cause matched, it can ask
+a language model (the `error-triage` task — see [Language models](models.md))
+for a concise likely cause and next step for each unique unmatched error,
+printed on standard error and appended to the error log. Because error logs
+hold library paths, `error-triage` prefers a local model. The triage is
+strictly advisory — it never retries a command, deletes a file or changes the
+run's exit code — and is turned off with `errorTriageLlm=off`.
+
 ## The info log
 
 What a run says on the console is also kept, in `logs/info/`, one file per

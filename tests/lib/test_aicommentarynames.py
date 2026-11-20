@@ -390,3 +390,51 @@ class TestFilmInfo:
         assert "Port de nuit" in info.aliases
 
 
+class TestIntroNaming:
+    def test_parse_intro_answer_accepts_high_confidence_and_guards_bad(self):
+        title, why, unsure = aicommentarynames.parse_intro_answer(
+            '{"name": "Audio commentary by director Wenna Castellane", '
+            '"confidence": "high", "why": "Wenna introduces herself"}')
+        assert title == "Commentary by director Wenna Castellane"
+        assert "Wenna" in why and unsure is False
+
+        # Rejects medium/low confidence, null, and generic labels.
+        assert aicommentarynames.parse_intro_answer(
+            '{"name": "Commentary by Wenna", "confidence": "medium", '
+            '"why": "guessed"}')[0] == ""
+        assert aicommentarynames.parse_intro_answer(
+            '{"name": "Commentary 1", "confidence": "high", '
+            '"why": "generic"}')[:3:2] == ("", False)
+        assert aicommentarynames.parse_intro_answer(
+            '{"name": null, "confidence": "low", "why": "no intro"}')[2] is True
+
+    def test_name_from_intro_uses_first_five_minutes_and_respects_switch(
+            self, monkeypatch):
+        monkeypatch.setenv(aicommentarynames.SWITCH_VARIABLE, "on")
+        model = _fake_model("intro-model")
+        stub = _StubServer([
+            '{"name": "Commentary with director Wenna Castellane", '
+            '"confidence": "high", "why": "She introduces herself at 0:15"}',
+        ])
+        stub.install(monkeypatch, model)
+
+        srt = _srt(
+            ("00:00:15,000", "00:00:20,000", "Hi, I'm director Wenna Castellane."),
+            ("00:06:00,000", "00:06:05,000", "Late guest after 5 minutes."),
+        )
+        name, note = aicommentarynames.name_from_intro(
+            srt, title="Nightfall Harbour", year="1987",
+            track_name="Commentary", models=[model])
+        assert name == "Commentary with director Wenna Castellane"
+        assert "intro-model" in note
+        asks = [c for c in stub.calls if c.get("mode") == "ask"]
+        assert len(asks) == 1
+        assert "Late guest" not in asks[0]["prompt"]
+        assert "Wenna Castellane" in asks[0]["prompt"]
+
+        monkeypatch.setenv(aicommentarynames.SWITCH_VARIABLE, "off")
+        assert aicommentarynames.name_from_intro(
+            srt, title="Nightfall Harbour", models=[model]) == ("", "")
+
+
+

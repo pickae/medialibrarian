@@ -207,3 +207,61 @@ class TestFolders:
     def test_hidden_entries_are_not_looked_at(self, tmp_path):
         _touch(tmp_path, ".cache/1.mp3", ".cache/3.mp3")
         assert _tree(tmp_path) == ["lib"]
+
+
+class TestModelRunCollectionAndReport:
+    def test_analyse_collects_complete_and_gappy_runs(self, tmp_path):
+        _touch(
+            tmp_path,
+            "Show/Season 1/Show S01E01.mkv",
+            "Show/Season 1/Show S01E02.mkv",
+            "Book/01.mp3",
+            "Book/03.mp3",
+        )
+        runs = []
+        tree = find_gaps.analyse(str(tmp_path), "lib", runs=runs)
+        assert find_gaps.render(tree) == ["lib", "`-- Book/", "    `-- 02"]
+        by_folder = {(r.folder, r.shape): r for r in runs}
+        assert ("Show/Season 1", "episodes") in by_folder
+        assert by_folder[("Show/Season 1", "episodes")].gaps == ()
+        assert "S01E01-E02" in by_folder[("Show/Season 1", "episodes")].present
+        assert ("Show", "seasons") in by_folder
+        assert ("Book", "numbers") in by_folder
+        assert by_folder[("Book", "numbers")].gaps == ("02",)
+
+    def test_main_appends_model_notes_without_removing_deterministic_gaps(
+            self, tmp_path, monkeypatch, capsys):
+        library = tmp_path / "Library"
+        _touch(
+            library,
+            "Show/Season 1/Show S01E01.mkv",
+            "Show/Season 1/Show S01E02.mkv",
+            "Book/01.mp3",
+            "Book/03.mp3",
+        )
+        from medialib.lib import aigaps
+
+        monkeypatch.setattr(
+            aigaps, "check_gaps",
+            lambda root_name, runs: [
+                aigaps.Finding("Show/Season 1", "missing_final",
+                               "Season 1 has 10 episodes", target="S01E03-E10",
+                               source="https://tvdb.test/show"),
+            ],
+        )
+        script_dir = tmp_path / "script"
+        rc = find_gaps.main([str(library)], script_dir=str(script_dir))
+        assert rc == 0
+        report = (script_dir / "logs" / "find-gaps" / "find-gaps-Library.tree").read_text(
+            encoding="utf-8")
+        # Deterministic gap is untouched above the model notes.
+        assert (
+            "`-- Book/\n    `-- 02\n\n"
+            "1 folder(s) with gaps, 1 missing, 0 date gap(s)\n"
+        ) in report
+        assert "Model notes (web-checked; deterministic gaps above are unchanged):" in report
+        assert (
+            "Show/Season 1/\n  [missing final] S01E03-E10: "
+            "Season 1 has 10 episodes (source: https://tvdb.test/show)"
+        ) in report
+        assert "1 model note(s)" in capsys.readouterr().out

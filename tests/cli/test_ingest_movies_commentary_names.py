@@ -343,3 +343,144 @@ def test_site_page_pick_passes_tmdb_info_and_records_decision(
     assert any("disc page fid=202 chosen by stub-model" in line for line in lines)
 
 
+def test_intro_naming_analyses_once_and_renames_audio_embedded_and_sidecar_translations(
+        film, monkeypatch):
+    movie, lookup, calls = film(
+        _tracks("Commentary",
+                subtitles=["Commentary (EN)", "Commentary (DE)"]),
+        None)
+    folder = os.path.dirname(movie)
+    for filename, text in (
+        (FILM + " 2 Commentary.en.srt", "Hi, I'm director Wenna Castellane."),
+        (FILM + " 2 Commentary.de.srt", "Hallo, ich bin Regisseurin Wenna Castellane."),
+        (FILM + ".Commentary.fr.srt", "Bonjour, ici Wenna Castellane."),
+    ):
+        with open(os.path.join(folder, filename), "w", encoding="utf-8") as handle:
+            handle.write(_srt(text))
+
+    intro_calls = []
+    transcribe_calls = []
+
+    def fake_intro(opening, *, title, year, track_name):
+        intro_calls.append((opening, title, year, track_name))
+        return ("Commentary by director Wenna Castellane",
+                "named from opening 5 min by stub-model")
+
+    plan, why = run_module._plan_commentary_names(
+        movie, FILM, lookup, "",
+        intro_namer=fake_intro,
+        transcribe_opening=lambda *a: transcribe_calls.append(a) or ({}, ""))
+
+    assert why == "" and plan is not None
+    # Analysed strictly once (prefers English sidecar) and never transcribed audio.
+    assert len(intro_calls) == 1
+    assert "Wenna Castellane" in intro_calls[0][0]
+    assert transcribe_calls == []
+
+    assert run_module._carry_out_commentary_names(plan) == ""
+    assert calls == [["mkvpropedit", movie,
+                      "--edit", "track:3", "--set",
+                      "name=Commentary by director Wenna Castellane",
+                      "--set", "flag-commentary=1",
+                      "--edit", "track:4", "--set",
+                      "name=Commentary by director Wenna Castellane (EN)",
+                      "--edit", "track:5", "--set",
+                      "name=Commentary by director Wenna Castellane (DE)"]]
+    assert sorted(os.listdir(folder)) == sorted([
+        FILM + ".mkv",
+        FILM + " 2 Commentary by director Wenna Castellane.en.srt",
+        FILM + " 2 Commentary by director Wenna Castellane.de.srt",
+        FILM + ".Commentary by director Wenna Castellane.fr.srt",
+    ])
+
+
+def test_intro_naming_transcribes_opening_when_no_subtitles_exist(film):
+    from medialib.lib import commentarydetection
+
+    movie, lookup, calls = film(_tracks("Commentary 1"), None)
+    transcribed = []
+
+    def fake_transcribe(_movie, audio_tracks):
+        transcribed.append([t.id for t in audio_tracks])
+        return ({
+            "2": commentarydetection.Measure(
+                0.8, "Welcome, this is actor Oriel Pask.", "en"),
+        }, "")
+
+    intro_calls = []
+    plan, why = run_module._plan_commentary_names(
+        movie, FILM, lookup, "",
+        intro_namer=lambda text, **_k: intro_calls.append(text) or (
+            "Commentary with actor Oriel Pask", "named from opening 5 min"),
+        transcribe_opening=fake_transcribe)
+
+    assert why == "" and plan is not None
+    assert transcribed == [["2"]]
+    assert len(intro_calls) == 1
+    assert run_module._carry_out_commentary_names(plan) == ""
+    assert calls == [["mkvpropedit", movie,
+                      "--edit", "track:3", "--set",
+                      "name=Commentary with actor Oriel Pask",
+                      "--set", "flag-commentary=1"]]
+
+
+def test_intro_naming_extracts_one_embedded_subtitle_and_renames_all_translations(film):
+    movie, lookup, calls = film(
+        _tracks("Commentary 1",
+                subtitles=["Commentary 1 (EN)", "Commentary 1 (DE)"]),
+        None)
+    extracted = []
+    transcribe_calls = []
+
+    def fake_extract(_movie, track_id):
+        extracted.append(track_id)
+        return _srt("Hello, I'm film historian Maren Halvorsen.")
+
+    plan, why = run_module._plan_commentary_names(
+        movie, FILM, lookup, "",
+        extract_subtitle=fake_extract,
+        transcribe_opening=lambda *a: transcribe_calls.append(a) or ({}, ""),
+        intro_namer=lambda *_a, **_k: (
+            "Commentary by film historian Maren Halvorsen",
+            "named from opening 5 min"))
+
+    assert why == "" and plan is not None
+    assert len(extracted) == 1 and transcribe_calls == []
+    assert run_module._carry_out_commentary_names(plan) == ""
+    assert calls == [["mkvpropedit", movie,
+                      "--edit", "track:3", "--set",
+                      "name=Commentary by film historian Maren Halvorsen",
+                      "--set", "flag-commentary=1",
+                      "--edit", "track:4", "--set",
+                      "name=Commentary by film historian Maren Halvorsen (EN)",
+                      "--edit", "track:5", "--set",
+                      "name=Commentary by film historian Maren Halvorsen (DE)"]]
+
+
+def test_intro_naming_handles_mixed_named_and_generic_tracks(film):
+    movie, lookup, calls = film(
+        _tracks("Director's Commentary", "Commentary 2",
+                subtitles=["Commentary 2 (EN)"]),
+        None)
+    folder = os.path.dirname(movie)
+    with open(os.path.join(folder, FILM + " 3 Commentary 2.en.srt"),
+              "w", encoding="utf-8") as handle:
+        handle.write(_srt("Hi, we are Oriel Pask and Tamsin Voller."))
+
+    plan, why = run_module._plan_commentary_names(
+        movie, FILM, lookup, "",
+        intro_namer=lambda *_a, **_k: (
+            "Commentary with actors Oriel Pask and Tamsin Voller",
+            "named from opening 5 min"))
+
+    assert why == "" and plan is not None
+    assert run_module._carry_out_commentary_names(plan) == ""
+    assert calls == [["mkvpropedit", movie,
+                      "--edit", "track:4", "--set",
+                      "name=Commentary with actors Oriel Pask and Tamsin Voller",
+                      "--set", "flag-commentary=1",
+                      "--edit", "track:5", "--set",
+                      "name=Commentary with actors Oriel Pask and Tamsin Voller (EN)"]]
+
+
+

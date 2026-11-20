@@ -51,14 +51,19 @@ __all__ = [
     "MAX_ALIASES",
     "TRACKS_SYSTEM",
     "PAGE_SYSTEM",
+    "INTRO_SYSTEM",
     "Usage",
     "enabled",
+    "available",
     "tracks_prompt",
     "parse_tracks_answer",
     "match_tracks",
     "page_prompt",
     "parse_page_answer",
     "pick_page",
+    "intro_prompt",
+    "parse_intro_answer",
+    "name_from_intro",
 ]
 
 # Whether the model is asked at all: on unless set to off.
@@ -120,6 +125,33 @@ Answer with JSON only:
 or, when not sure:
 {"fid": null, "why": "<one sentence>"}"""
 
+INTRO_SYSTEM = """You name a generically labelled film commentary track \
+(such as "Commentary" or "Commentary 1") from the speaker introductions \
+heard in its first 5 minutes.
+
+You are given the film's title and the first ~5 minutes of text from the \
+commentary track (taken directly from its subtitles or transcribed from its \
+audio, in any language). Look for typical speaker introductions ("Hi, I'm \
+director ...", "Welcome to the commentary with ...", "This is ... joined \
+by ...", "Hallo, ich bin ...", etc.).
+
+Rules:
+- Name the track strictly after who introduces themselves in the opening \
+text. Never guess people who are not introduced or named there.
+- Keep the name concise and clean, in the standard form "Commentary by ..." \
+or "Commentary with ..." (for example "Commentary with director John \
+Carpenter and Kurt Russell" or "Commentary by film historian Jane Doe").
+- Set "confidence" to "high" ONLY when one or more speakers clearly \
+introduce themselves by name (or explicit role such as director, writer, \
+producer, cast, historian, moderated by ...). If nobody clearly introduces \
+themselves, set "name" to null and "confidence" to "low".
+- Never return a generic label like "Commentary" or "Commentary 1".
+
+Answer with JSON only:
+{"name": "<concise commentary title or null>", \
+"confidence": "high|medium|low", \
+"why": "<one sentence citing the speaker introduction>"}"""
+
 _log = runlog.log
 _detail = runlog.detail
 
@@ -159,6 +191,21 @@ def enabled() -> bool:
     """Whether a run asks the model at all: unless the setting says off."""
     value = shell_lower(os.environ.get(SWITCH_VARIABLE, "on").strip())
     return value not in ("off", "0", "no", "false")
+
+
+def available(models: Sequence[llmclient.Llm] | None = None) -> bool:
+    """Whether the commentary-naming model is enabled and configured.
+
+    Callers check this before doing expensive work (such as extracting
+    embedded subtitles or transcribing the first 5 minutes of audio) that is
+    only used to ask the model.
+    """
+    if not enabled():
+        return False
+    if models is not None:
+        return bool(models)
+    resolved, _why = llmroster.optional(llmroster.COMMENTARY_NAMES)
+    return bool(resolved)
 
 
 def _ask(models: Sequence[llmclient.Llm] | None, system: str, request: str,
@@ -441,3 +488,96 @@ def pick_page(
     note = "disc page picked by model %s: %s (fid=%s)%s" % (
         answered_by, label, fid, ": " + why if why else "")
     return fid, note
+
+
+# --- naming a generic commentary directly from its opening 5 minutes ---------
+
+_MAX_INTRO_TITLE_CHARS = 140
+
+
+def intro_prompt(opening: str, *, title: str = "", year: str = "",
+                 track_name: str = "") -> str:
+    """What the model is told about one generically named commentary track and
+    its first 5 minutes of subtitles or transcribed speech."""
+    film = title or "(unknown title)"
+    if year:
+        film += " (%s)" % year
+    snippet = opening.strip()
+    if len(snippet) > MAX_TRANSCRIPT_CHARS:
+        snippet = snippet[:MAX_TRANSCRIPT_CHARS].rstrip() + "\n[...]"
+    sections = [
+        "Name this commentary track of %s from any speaker introductions "
+        "in its first 5 minutes." % film,
+        "Current track label: %s" % (track_name or "Commentary"),
+        "## First ~5 minutes of commentary text\n\n" + snippet,
+        "If speakers clearly introduce themselves, return a concise "
+        'commentary title with confidence "high"; otherwise return null.',
+    ]
+    return "\n\n".join(sections) + "\n"
+
+
+def parse_intro_answer(answer: str) -> tuple[str, str, bool]:
+    """Read and validate the model's opening-introduction track name.
+
+    Returns ``(title, why, unsure)``. Accepts only a ``"high"`` confidence
+    answer whose normalized title is non-generic and within length bounds.
+    """
+    verdict = llmclient.first_json(answer)
+    if not isinstance(verdict, dict):
+        return "", "answer contained no JSON object", False
+    why = " ".join(str(verdict.get("why") or "").split())
+    if verdict.get("unsure"):
+        return "", why, True
+    raw_name = verdict.get("name")
+    if raw_name is None:
+        return "", why, True
+    if not isinstance(raw_name, str):
+        return "", "invalid commentary name %r" % (raw_name,), False
+    cleaned = " ".join(raw_name.split()).strip()
+    if not cleaned or cleaned.lower() == "unsure":
+        return "", why, True
+    confidence = shell_lower(str(verdict.get("confidence") or "").strip())
+    if confidence != "high":
+        return "", why or ("confidence was %s" % (confidence or "missing")), True
+    titled = commentarynames.track_title(cleaned)
+    if not titled or commentarynames.generic_number(titled) is not None:
+        return "", "returned generic title %r" % (cleaned,), False
+    if len(titled) > _MAX_INTRO_TITLE_CHARS:
+        return "", "returned an overlong title (%d chars)" % len(titled), False
+    return titled, why, False
+
+
+def name_from_intro(
+        text: str, *, title: str = "", year: str = "", track_name: str = "",
+        models: Sequence[llmclient.Llm] | None = None,
+        usage: Usage | None = None, meter_file: str = "",
+        log: Callable[[str], None] = _log) -> tuple[str, str]:
+    """Ask a model to name one generically named commentary track from speaker
+    introductions in its first 5 minutes of subtitles or speech transcript.
+
+    Returns ``(resolved_name, note)`` where ``resolved_name`` is ``""`` when
+    no model was asked, no clear introduction was found, or the answer did not
+    pass the guard.
+    """
+    opening = commentarynames.opening_subtitle_text(
+        text, limit=commentarynames.INTRO_SAMPLE_SECONDS)
+    if not opening:
+        return "", ""
+    request = intro_prompt(opening, title=title, year=year,
+                           track_name=track_name)
+    answer, answered_by = _ask(models, INTRO_SYSTEM, request,
+                               usage=usage, meter_file=meter_file, log=log)
+    if not answer:
+        return "", ""
+    titled, why, unsure = parse_intro_answer(answer)
+    if not titled:
+        if unsure:
+            note = "opening intro: model %s found no clear introduction%s" % (
+                answered_by, ": " + why if why else "")
+        else:
+            note = "opening intro: model %s gave an unusable name%s" % (
+                answered_by, ": " + why if why else "")
+        return "", note
+    note = "named from opening 5 min by model %s%s" % (
+        answered_by, ": " + why if why else "")
+    return titled, note

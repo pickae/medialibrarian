@@ -556,3 +556,88 @@ class TestModelFallbackAndGuards:
             fallback=lambda *a: called.append(a) or (0, (0, 1), "note"))
         assert not decision.names and not called
 
+
+class TestOpeningExtractionAndGroups:
+    STEM = "Nightfall Harbour (1987)"
+
+    def test_opening_subtitle_text_handles_srt_vtt_ass_and_plain(self):
+        srt = (
+            "1\n00:00:10,000 --> 00:00:15,000\nHi, I'm director Ada.\n\n"
+            "2\n00:05:01,000 --> 00:05:05,000\nAfter five minutes.\n"
+        )
+        assert cn.opening_subtitle_text(srt) == "Hi, I'm director Ada."
+
+        vtt = (
+            "WEBVTT\n\n"
+            "00:12.000 --> 00:15.000\n<i>Welcome with Bob.</i>\n\n"
+            "05:05.000 --> 05:08.000\nToo late.\n"
+        )
+        assert cn.opening_subtitle_text(vtt) == "Welcome with Bob."
+
+        ass = (
+            "[Events]\n"
+            "Dialogue: 0,0:00:20.00,0:00:24.00,Default,,0,0,0,,"
+            r"{\i1}Hello,{\i0}\NI'm Carol." "\n"
+            "Dialogue: 0,0:06:00.00,0:06:05.00,Default,,0,0,0,,Too late.\n"
+        )
+        assert cn.opening_subtitle_text(ass) == "Hello, I'm Carol."
+
+        assert cn.opening_subtitle_text("Plain transcript line.") == (
+            "Plain transcript line.")
+
+    def test_generic_groups_bundle_audio_embedded_and_sidecar_translations(self):
+        class _MediaTrack:
+            def __init__(self, id, kind, name, commentary=True):
+                self.id, self.name = id, name
+                self.is_audio = kind == "audio"
+                self.is_subtitle = kind == "subtitles"
+                self.is_commentary = commentary
+
+        tracks = [
+            _MediaTrack("2", "audio", "Commentary 1"),
+            _MediaTrack("3", "audio", "Director's Commentary"),
+            _MediaTrack("4", "subtitles", "Commentary 1 (EN)"),
+            _MediaTrack("5", "subtitles", "Commentary 1 (DE)"),
+            _MediaTrack("6", "subtitles", "Commentary 2 (EN)"),
+        ]
+        sidecars = [
+            self.STEM + " 2 Commentary 1.en.srt",
+            self.STEM + " 2 Commentary 1.de.srt",
+            self.STEM + ".Commentary 1.fr.srt",
+            self.STEM + ".Commentary 2.es.vtt",
+        ]
+        groups = cn.generic_groups(tracks, sidecars, self.STEM)
+        assert len(groups) == 2
+        g1, g2 = groups
+        assert g1.number == 1
+        assert g1.audio_ids == ("2",)
+        assert g1.subtitle_ids == ("4", "5")
+        assert sorted(g1.sidecars) == sorted([
+            self.STEM + " 2 Commentary 1.en.srt",
+            self.STEM + " 2 Commentary 1.de.srt",
+            self.STEM + ".Commentary 1.fr.srt",
+        ])
+        assert g2.number == 2
+        assert g2.audio_ids == ()
+        assert g2.subtitle_ids == ("6",)
+        assert g2.sidecars == (self.STEM + ".Commentary 2.es.vtt",)
+
+    def test_group_sidecar_renames_both_indexed_and_plain_sidecars(self):
+        sidecars = [
+            self.STEM + " 2 Commentary 1.en.srt",
+            self.STEM + " 2 Commentary 1.de.srt",
+            self.STEM + ".Commentary 1.fr.srt",
+        ]
+        renamed = cn.group_sidecar_renames(
+            sidecars, self.STEM, "Commentary by Ada", lambda s: s,
+            old_audio_names={"2": "Commentary 1"})
+        assert sorted(renamed) == sorted([
+            (self.STEM + " 2 Commentary 1.en.srt",
+             self.STEM + " 2 Commentary by Ada.en.srt"),
+            (self.STEM + " 2 Commentary 1.de.srt",
+             self.STEM + " 2 Commentary by Ada.de.srt"),
+            (self.STEM + ".Commentary 1.fr.srt",
+             self.STEM + ".Commentary by Ada.fr.srt"),
+        ])
+
+
