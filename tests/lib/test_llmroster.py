@@ -113,6 +113,11 @@ models = ["small-local", "claude"]
         assert _names(_roster(tmp_path, text).ladder(llmroster.COVER_SEARCH)) == [
             "claude", "small-local"]
 
+    def test_commentary_names_prefers_reasoning_and_web_but_keeps_the_rest(self, tmp_path):
+        # Claude has reasoning + web, big-local has reasoning, small-local has neither.
+        assert _names(_roster(tmp_path).ladder(llmroster.COMMENTARY_NAMES)) == [
+            "claude", "big-local", "small-local"]
+
 
 class TestTheSources:
     def test_the_single_model_settings_come_after_the_file(self, tmp_path, monkeypatch):

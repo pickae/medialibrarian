@@ -766,6 +766,27 @@ five seconds apart, give or take two, and after it fails to answer once it isn't
 asked again that run. With `-w`, each film is renamed while the next one is
 being looked up, so the lookup never waits on a rename.
 
+**When the rules alone cannot decide**, and a language model is configured for
+the `commentary-names` task (`commentaryNamesLlm=on`, the default; see
+[models](../models.md) and [settings](../settings.md)), the model is asked as a
+guarded fallback in two places:
+
+- **Two or more fitting disc pages** on dvdcompare.net: the model is shown the
+  candidate pages alongside the film's title, year, TMDb/IMDb id and
+  alternative titles, and may only pick one of the offered pages or say
+  `"unsure"`.
+- **Unproved track order or disagreeing listings**: when every numbered
+  commentary track has a transcript, the model is shown the first ten minutes
+  of each transcript and the candidate listings, and may only pick one of the
+  offered listings and a permutation of its tracks — never invent names — or
+  say `"unsure"`.
+
+Every model decision is printed in the run's output and written into
+`ingest-movies-commentarynames-<folder>.txt`, and model usage is recorded and
+summarised at the end of the run. On `"unsure"` or an invalid answer, the
+tracks stay numbered with the original reason. Set `commentaryNamesLlm=off` to
+keep commentary naming purely rule-based.
+
 The full ingest does this too, and writes: after the transcription, which the
 transcripts come from, and after the tagging, so each film is looked up by the
 title TMDb gave its folder, and the same list is written.

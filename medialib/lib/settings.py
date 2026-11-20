@@ -223,6 +223,14 @@ SETTINGS: tuple[Setting, ...] = (
             "every chapter. Only a model that can search is asked - Claude, or "
             "one behind `llmHarness`: `on` or `off`",
             ("concat-audio", "convert-and-concat"), "on"),
+    Setting("commentaryNamesLlm", "Whether numbered commentary tracks that "
+            "cannot be matched by speaker introductions alone - or ambiguous "
+            "disc database pages where two or more fit - are handed to a "
+            "language model (the `commentary-names` task, see docs/models.md): "
+            "it is sent the film's title, year, TMDb id, alternative titles, "
+            "the opening minutes of each commentary transcript and the "
+            "candidate listings from dvdcompare.net: `on` or `off`",
+            ("ingest-movies",), "on"),
     Setting("chapterDbSite", "The chapter database's address", ("ingest-movies",),
             "`https://chapterdb.plex.tv`", tuning=True),
     Setting("dvdCompareSite", "The disc database's address", ("ingest-movies",),

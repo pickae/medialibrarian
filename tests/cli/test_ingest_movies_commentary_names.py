@@ -208,3 +208,138 @@ def test_a_film_with_nothing_to_name_says_so_and_stays_off_the_list(
     assert _name(movie, lookup, True) == ""
     assert lines == ["[1/1] " + os.path.join(FILM, FILM + ".mkv"),
                      "  left alone: no commentary track"]
+
+
+def test_model_fallback_records_decision_in_output_and_report_file(
+        film, tmp_path, monkeypatch):
+    from medialib.lib import aicommentarynames
+
+    movie, lookup, calls = film(
+        _tracks("Commentary 1", "Commentary 2"),
+        [Release("Region A", (Disc("bluray", (DIRECTOR, CAST)),))])
+    folder = os.path.dirname(movie)
+    for track_id, name, text in (
+            ("2", "Commentary 1", "Guten Abend allerseits."),
+            ("3", "Commentary 2", "Willkommen zu diesem Film.")):
+        with open(os.path.join(folder, "%s %s %s.en.srt"
+                               % (FILM, track_id, name)),
+                  "w", encoding="utf-8") as handle:
+            handle.write(_srt(text))
+
+    lines = []
+    monkeypatch.setattr(run_module, "log", lines.append)
+    monkeypatch.setattr(
+        aicommentarynames, "match_tracks",
+        lambda *_a, **_k: (0, (1, 0),
+                           "track order chosen by stub-model: swapped German intros"))
+
+    root = os.path.dirname(folder)
+    script = os.path.join(root, "script")
+    run_module._commentary_names_in(root, "Films", True, lookup, "", script,
+                                    queued=False)
+    listing = os.path.join(script, "logs", "ingest-movies",
+                           "ingest-movies-commentarynames-Films.txt")
+    with open(listing, encoding="utf-8") as handle:
+        text = handle.read()
+
+    assert "track order chosen by stub-model: swapped German intros" in text
+    assert any("stub-model" in line for line in lines)
+    assert len(calls) == 1
+    assert "name=Commentary with actors Oriel Pask and Tamsin Voller" in calls[0]
+
+
+def test_model_unsure_keeps_fallback_reason_and_reports_model_note(
+        film, monkeypatch):
+    from medialib.lib import aicommentarynames
+
+    movie, lookup, calls = film(
+        _tracks("Commentary 1", "Commentary 2"),
+        [Release("Region A", (Disc("bluray", (DIRECTOR, CAST)),))])
+    folder = os.path.dirname(movie)
+    for track_id, name, text in (
+            ("2", "Commentary 1", "Opening music."),
+            ("3", "Commentary 2", "More music.")):
+        with open(os.path.join(folder, "%s %s %s.en.srt"
+                               % (FILM, track_id, name)),
+                  "w", encoding="utf-8") as handle:
+            handle.write(_srt(text))
+
+    lines = []
+    monkeypatch.setattr(run_module, "log", lines.append)
+    monkeypatch.setattr(
+        aicommentarynames, "match_tracks",
+        lambda *_a, **_k: (None, None, "stub-model unsure: no speakers heard"))
+
+    listing = _name(movie, lookup, True)
+    assert listing.startswith("# Left alone:\n")
+    assert "stub-model unsure: no speakers heard" in listing
+    assert any("stub-model unsure" in line for line in lines)
+    assert calls == []
+
+
+def test_site_page_pick_passes_tmdb_info_and_records_decision(
+        tmp_path, monkeypatch):
+    from medialib.lib import aicommentarynames, dvdcompare, llmroster, tmdbidentify
+
+    tagged = FILM + " {tmdb-55123}"
+    folder = tmp_path / tagged
+    folder.mkdir()
+    movie = folder / (FILM + ".mkv")
+    movie.write_bytes(b"")
+
+    monkeypatch.setenv(aicommentarynames.SWITCH_VARIABLE, "on")
+    monkeypatch.setattr(run_module.rules, "_identify",
+                        lambda _m: _tracks("Commentary"))
+    monkeypatch.setattr(run_module.rules, "_run_capture", lambda _argv: "")
+    monkeypatch.setattr(llmroster, "optional", lambda _task: ([object()], ""))
+    monkeypatch.setattr(
+        tmdbidentify, "film_info",
+        lambda title, year, tag="": tmdbidentify.FilmInfo(
+            tmdb="55123", imdb="tt0093123", aliases=("Nachthafen",)))
+
+    seen_pick = {}
+
+    def fake_pick(fitting, title, year, kind, *, tmdb_id="", imdb_id="",
+                  aliases=(), **_kwargs):
+        seen_pick["ids"] = [e.fid for e in fitting]
+        seen_pick["tmdb_id"] = tmdb_id
+        seen_pick["imdb_id"] = imdb_id
+        seen_pick["aliases"] = aliases
+        return "202", "disc page fid=202 chosen by stub-model: matches TMDb 55123"
+
+    monkeypatch.setattr(aicommentarynames, "pick_page", fake_pick)
+
+    two_search = (
+        '<li><a href="film.php?fid=101">Nightfall Harbour (Blu-ray) (1987)</a></li>'
+        '<li><a href="film.php?fid=202">Nightfall Harbour (Blu-ray) (1987)</a></li>'
+    )
+    from tests import blackbox
+    film_html = (blackbox.DATA / "dvdcompare" / "film.html").read_text(encoding="utf-8")
+
+    monkeypatch.setattr(
+        dvdcompare, "_curl",
+        lambda url, _form=None: two_search if url.endswith("search.php") else film_html)
+
+    lines = []
+    monkeypatch.setattr(run_module, "log", lines.append)
+    script = str(tmp_path / "script")
+    usage = aicommentarynames.Usage()
+    film_tags: dict[tuple[str, str], str] = {}
+    site = run_module._make_dvdcompare_site(script, lines.append, usage, film_tags)
+
+    run_module._commentary_names_in(
+        str(tmp_path), "Films", False, site.releases, "", script,
+        queued=False, site=site, usage=usage, film_tags=film_tags)
+
+    listing = (tmp_path / "script" / "logs" / "ingest-movies"
+               / "ingest-movies-commentarynames-Films.txt").read_text(encoding="utf-8")
+    assert seen_pick == {
+        "ids": ["101", "202"],
+        "tmdb_id": "55123",
+        "imdb_id": "tt0093123",
+        "aliases": ("Nachthafen",),
+    }
+    assert "disc page fid=202 chosen by stub-model: matches TMDb 55123" in listing
+    assert any("disc page fid=202 chosen by stub-model" in line for line in lines)
+
+

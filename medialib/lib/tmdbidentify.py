@@ -176,6 +176,64 @@ def film_languages(tag: str) -> FilmLanguages:
             if isinstance(row, dict)) if code))
 
 
+class FilmInfo(NamedTuple):
+    """What TMDb knows of a film for telling two disc pages apart: its TMDb
+    id, IMDb id and deduplicated titles (primary, original, alternative and
+    translated)."""
+
+    tmdb: str = ""
+    imdb: str = ""
+    aliases: tuple[str, ...] = ()
+
+
+def film_info(title: str, year: str, tag: str = "") -> FilmInfo:
+    """The TMDb id, IMDb id and alternative titles of a film, for telling two
+    matching database pages apart. Reads any id off ``tag`` even when no
+    ``tmdbApiKey`` is set; asks TMDb for the rest when a key is set."""
+    kind, value = plexnames.id_of(tag or "")
+    imdb = _imdb_id(value.strip().lower()) if kind == "imdb" else ""
+    tmdb = value.strip() if kind == "tmdb" and value.strip().isdigit() else ""
+    api_key = os.environ.get("tmdbApiKey", "")
+    if not api_key:
+        return FilmInfo(tmdb=tmdb, imdb=imdb)
+    if imdb and not tmdb:
+        found = tmdbclient._as_json(tmdbclient._curl(
+            tmdbclient._BASE + "/find/" + imdb,
+            [("api_key", api_key), ("external_source", "imdb_id")]))
+        movies = found.get("movie_results")
+        first = movies[0] if isinstance(movies, list) and movies else {}
+        tmdb = _id_token(first.get("id")) if isinstance(first, dict) else ""
+    if not tmdb and not imdb and title:
+        matched = identify(title, year)
+        if matched.tmdb or matched.imdb:
+            return FilmInfo(tmdb=matched.tmdb, imdb=matched.imdb,
+                            aliases=matched.aliases)
+        return FilmInfo()
+    if not tmdb:
+        return FilmInfo(imdb=imdb)
+    detail = tmdbclient._as_json(tmdbclient._curl(
+        tmdbclient._BASE + "/movie/" + tmdb,
+        [("api_key", api_key),
+         ("append_to_response", "alternative_titles,translations,external_ids")]))
+    if not detail:
+        return FilmInfo(tmdb=tmdb, imdb=imdb)
+    if not imdb:
+        external = detail.get("external_ids")
+        if isinstance(external, dict):
+            imdb = _imdb_id(external.get("imdb_id"))
+    seen: set[str] = set()
+    aliases: list[str] = []
+    for name in _detail_titles(detail):
+        cleaned = " ".join(str(name).split())
+        if not cleaned or cleaned == "null":
+            continue
+        folded = cleaned.casefold()
+        if folded not in seen:
+            seen.add(folded)
+            aliases.append(cleaned)
+    return FilmInfo(tmdb=tmdb, imdb=imdb, aliases=tuple(aliases))
+
+
 def _language_code(value) -> str:
     """``value`` when it is a two-letter code naming a language, else ""."""
     if not isinstance(value, str):

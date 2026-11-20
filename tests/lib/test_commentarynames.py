@@ -460,3 +460,99 @@ class TestTheSidecarsThatFollow:
             [self.STEM + " 2 Director.en.srt"], self.STEM,
             [("2", "Commentary 1", "Commentary by X")], lambda name: name) \
             == []
+
+
+class TestModelFallbackAndGuards:
+    DIRECTOR = "Audio commentary by director Wenna Castellane"
+    CAST = "Audio commentary with actors Oriel Pask and Tamsin Voller"
+    CRITIC = "Audio commentary by film historian Maren Halvorsen"
+
+    def test_opening_text_stops_after_intro_seconds(self):
+        srt = (
+            "1\n00:00:05,000 --> 00:00:10,000\nOpening line.\n\n"
+            "2\n00:11:00,000 --> 00:11:05,000\nToo late.\n"
+        )
+        assert cn.opening_text(srt) == "Opening line."
+
+    def test_fallback_not_called_when_rules_decide(self):
+        called = []
+        tracks = [FileCommentary("2", "Commentary 1"),
+                  FileCommentary("3", "Commentary 2")]
+        releases = [Release("Region A", (Disc("bluray", (self.DIRECTOR, self.CAST)),))]
+        transcripts = {
+            "2": "1\n00:00:10,000 --> 00:00:12,000\nHi, I'm Wenna Castellane.\n",
+            "3": "1\n00:00:10,000 --> 00:00:12,000\nThis is Oriel Pask and Tamsin Voller.\n",
+        }
+        decision = cn.decide(
+            tracks, releases, "bluray", transcripts, "Nightfall Harbour",
+            fallback=lambda *a: called.append(a) or (None, None, ""))
+        assert decision.names and not called and decision.model_note == ""
+
+    def test_fallback_resolves_unproved_order_with_model_note(self):
+        tracks = [FileCommentary("2", "Commentary 1"),
+                  FileCommentary("3", "Commentary 2")]
+        releases = [Release("Region A", (Disc("bluray", (self.DIRECTOR, self.CAST)),))]
+        transcripts = {
+            "2": "1\n00:00:10,000 --> 00:00:12,000\nHallo zusammen.\n",
+            "3": "1\n00:00:10,000 --> 00:00:12,000\nWillkommen.\n",
+        }
+        decision = cn.decide(
+            tracks, releases, "bluray", transcripts, "Nightfall Harbour",
+            fallback=lambda *_a: (0, (1, 0), "matched by test-model"))
+        assert decision.names == (
+            ("2", "Commentary with actors Oriel Pask and Tamsin Voller"),
+            ("3", "Commentary by director Wenna Castellane"))
+        assert decision.model_note == "matched by test-model"
+
+    def test_fallback_resolves_disagreeing_releases_by_choosing_one_listing(self):
+        tracks = [FileCommentary("2", "Commentary 1"),
+                  FileCommentary("3", "Commentary 2")]
+        releases = [
+            Release("Region A", (Disc("bluray", (self.DIRECTOR, self.CAST)),)),
+            Release("Region B", (Disc("bluray", (self.DIRECTOR, self.CRITIC)),)),
+        ]
+        transcripts = {
+            "2": "1\n00:00:10,000 --> 00:00:12,000\nIntro one.\n",
+            "3": "1\n00:00:10,000 --> 00:00:12,000\nIntro two.\n",
+        }
+        decision = cn.decide(
+            tracks, releases, "bluray", transcripts, "Nightfall Harbour",
+            fallback=lambda *_a: (1, (0, 1), "picked listing 1"))
+        assert decision.names == (
+            ("2", "Commentary by director Wenna Castellane"),
+            ("3", "Commentary by film historian Maren Halvorsen"))
+        assert decision.source == "Region B"
+        assert decision.model_note == "picked listing 1"
+
+    @pytest.mark.parametrize("bad", [
+        (5, (0, 1), "out of range listing"),
+        (0, (0, 0), "duplicate order"),
+        (0, (0,), "short order"),
+        (0, (False, True), "bools in order"),
+        (None, None, "model was unsure"),
+    ])
+    def test_invalid_or_unsure_fallback_keeps_refusal(self, bad):
+        tracks = [FileCommentary("2", "Commentary 1"),
+                  FileCommentary("3", "Commentary 2")]
+        releases = [Release("Region A", (Disc("bluray", (self.DIRECTOR, self.CAST)),))]
+        transcripts = {
+            "2": "1\n00:00:10,000 --> 00:00:12,000\nNo names here.\n",
+            "3": "1\n00:00:10,000 --> 00:00:12,000\nOr here.\n",
+        }
+        decision = cn.decide(
+            tracks, releases, "bluray", transcripts, "Nightfall Harbour",
+            fallback=lambda *_a: bad)
+        assert not decision.names
+        assert decision.reason
+        assert decision.model_note == bad[2]
+
+    def test_fallback_not_called_without_transcripts(self):
+        called = []
+        tracks = [FileCommentary("2", "Commentary 1"),
+                  FileCommentary("3", "Commentary 2")]
+        releases = [Release("Region A", (Disc("bluray", (self.DIRECTOR, self.CAST)),))]
+        decision = cn.decide(
+            tracks, releases, "bluray", {}, "Nightfall Harbour",
+            fallback=lambda *a: called.append(a) or (0, (0, 1), "note"))
+        assert not decision.names and not called
+

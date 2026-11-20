@@ -27,6 +27,7 @@ from medialib.cli import ingest_movies_lanes as lanes
 from medialib.cli import ingest_movies_plex as plexphase
 from medialib.cli.ingest_movies import log
 from medialib.lib import (
+    aicommentarynames,
     chapterdb,
     cleannamesindividually,
     clioptions,
@@ -48,6 +49,7 @@ from medialib.lib import (
     imdbdata,
     keepparts,
     languages,
+    llmroster,
     overwrite,
     plexnames,
     ramscratch,
@@ -122,6 +124,9 @@ class Run:
     # What the vision model reading picture subtitles was asked over the run
     # (subtitleocr.Usage). Read with a default too.
     ocr_usage: subtitleocr.Usage | None
+    # What the commentary-naming model was asked over the run
+    # (aicommentarynames.Usage). Read with a default too.
+    commentary_names_usage: aicommentarynames.Usage | None
 
     def __init__(self, **settings) -> None:
         self.__dict__.update(settings)
@@ -1246,9 +1251,12 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
             return 1
         if not _may_overwrite(script_dir, names, (COMMENTARY_NAMES_LIST,)):
             return 1
-        site = dvdcompare.Site(dvdcompare.directory(script_dir), log)
+        usage = aicommentarynames.Usage()
+        film_tags: dict[tuple[str, str], str] = {}
+        site = _make_dvdcompare_site(script_dir, log, usage, film_tags)
         return _commentary_names(roots, names, write, site.releases,
-                                 fragments_file, script_dir, queued=True)
+                                 fragments_file, script_dir, queued=True,
+                                 site=site, usage=usage, film_tags=film_tags)
 
     if phase == "subtitles":
         if not _may_overwrite(script_dir, names, (SUBTITLES_LIST,)):
@@ -1362,6 +1370,8 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
     unsure_commentaries: list = []
     # What the vision model reading picture subtitles was asked, over the run.
     ocr_usage = subtitleocr.Usage()
+    # What the commentary-naming model was asked, over the run.
+    commentary_names_usage = aicommentarynames.Usage()
 
     # Named above the phases a Ctrl+C can cut short, so an ingest stopped halfway
     # still recaps the renames it held back instead of leaving them buried in
@@ -1374,6 +1384,8 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
         _report_unsure_commentaries(unsure_commentaries)
         if ocr_usage.requests:
             _report_ocr_usage(ocr_usage)
+        if commentary_names_usage.requests:
+            _report_commentary_names_usage(commentary_names_usage)
 
     safety.set_run_footer(recap)
 
@@ -1399,6 +1411,7 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
                 unfixed_movies=unfixed_movies,
                 unsure_commentaries=unsure_commentaries, disk_turns=disk_turns,
                 scratch_headroom=0, ocr_usage=ocr_usage,
+                commentary_names_usage=commentary_names_usage,
                 convert_remuxes=bool(result.values.get("convertRemuxes")),
                 keep_parts=keep_parts,
                 omit_phases=omit_phases, extras_llm=extras_llm,
@@ -2198,9 +2211,45 @@ def _write_subtitle_list(listing: str, root: str, verdicts: dict,
     log('%s - listed in "%s"' % (what, listing))
 
 
+def _film_id_tag(movie: str) -> str:
+    """The ``{tmdb-...}`` or ``{imdb-...}`` tag on ``movie`` or its folder,
+    or "" when neither carries one."""
+    for candidate in (os.path.basename(os.path.dirname(movie)),
+                      os.path.splitext(os.path.basename(movie))[0]):
+        _base, tag = plexnames.untagged_base(candidate)
+        if tag:
+            return tag
+    return ""
+
+
+def _make_dvdcompare_site(script_dir: str, log_fn,
+                          usage: aicommentarynames.Usage | None,
+                          film_tags: dict[tuple[str, str], str]) -> dvdcompare.Site:
+    """A dvdcompare.net site whose ambiguous disc-page picks fall back to the
+    commentary-names model when it is enabled and configured."""
+    def choose_page(fitting, title: str, year: str, kind: str) -> tuple[str, str]:
+        if not aicommentarynames.enabled():
+            return "", ""
+        models, _why = llmroster.optional(llmroster.COMMENTARY_NAMES)
+        if not models:
+            return "", ""
+        tag = film_tags.get((title, year), "")
+        info = tmdbidentify.film_info(title, year, tag)
+        return aicommentarynames.pick_page(
+            fitting, title, year, kind,
+            tmdb_id=info.tmdb, imdb_id=info.imdb, aliases=info.aliases,
+            models=models, usage=usage, log=log_fn)
+
+    return dvdcompare.Site(dvdcompare.directory(script_dir), log_fn,
+                           choose_page=choose_page)
+
+
 def _commentary_names(roots: list, names: list, write: bool, lookup,
                       fragments_file: str, script_dir: str,
-                      queued: bool = False) -> int:
+                      queued: bool = False, *,
+                      site: dvdcompare.Site | None = None,
+                      usage: aicommentarynames.Usage | None = None,
+                      film_tags: dict[tuple[str, str], str] | None = None) -> int:
     """The commentary naming phase on its own: a film whose commentary tracks
     are only numbered has them named after who is speaking in each, read from
     the disc database - and nothing else is done.
@@ -2216,8 +2265,11 @@ def _commentary_names(roots: list, names: list, write: bool, lookup,
         log('Phase: naming numbered commentary tracks in "%s"' % root
             + ("" if write else " - DRY RUN, nothing will be renamed"))
         _commentary_names_in(root, name, write, lookup, fragments_file,
-                             script_dir, queued)
+                             script_dir, queued, site=site, usage=usage,
+                             film_tags=film_tags)
         safety.exit_if_aborted()
+    if usage is not None and usage.requests:
+        _report_commentary_names_usage(usage)
     if not write:
         log("Dry run: nothing was renamed. Pass -w to carry these out.")
     return 0
@@ -2225,7 +2277,10 @@ def _commentary_names(roots: list, names: list, write: bool, lookup,
 
 def _commentary_names_in(root: str, name: str, write: bool, lookup,
                          fragments_file: str, script_dir: str,
-                         queued: bool = False) -> None:
+                         queued: bool = False, *,
+                         site: dvdcompare.Site | None = None,
+                         usage: aicommentarynames.Usage | None = None,
+                         film_tags: dict[tuple[str, str], str] | None = None) -> None:
     """One folder's commentary tracks named, or what would be, and its list
     written.
 
@@ -2246,8 +2301,9 @@ def _commentary_names_in(root: str, name: str, write: bool, lookup,
         films = list(_commentary_films(root))
         for index, (movie, base) in enumerate(films, start=1):
             log(runlog.film_header(index, len(films), root, movie))
-            plan, why = _plan_commentary_names(movie, base, lookup,
-                                               fragments_file)
+            plan, why = _plan_commentary_names(
+                movie, base, lookup, fragments_file,
+                site=site, usage=usage, film_tags=film_tags)
             relative = "./" + os.path.relpath(movie, root)
             if plan is None:
                 if why:
@@ -2327,7 +2383,8 @@ def _commentary_film(movie: str, base: str) -> tuple:
     return (tracks, commentaries, file_tracks, title, year, kind), ""
 
 
-def _commentary_questions(root: str, lookup) -> None:
+def _commentary_questions(root: str, lookup,
+                          film_tags: dict[tuple[str, str], str] | None = None) -> None:
     """Every film under ``root`` with commentaries to name asked about, and
     nothing else done: the full ingest's research, on a thread of its own."""
     for movie, base in _commentary_films(root):
@@ -2335,11 +2392,19 @@ def _commentary_questions(root: str, lookup) -> None:
             return
         film, _why = _commentary_film(movie, base)
         if film is not None and film[5]:
+            if film_tags is not None:
+                tag = _film_id_tag(movie)
+                if tag:
+                    film_tags[(film[3], film[4])] = tag
             lookup(*film[3:])
 
 
 def _plan_commentary_names(movie: str, base: str, lookup,
-                           fragments_file: str) -> tuple:
+                           fragments_file: str, *,
+                           site: dvdcompare.Site | None = None,
+                           usage: aicommentarynames.Usage | None = None,
+                           film_tags: dict[tuple[str, str], str] | None = None,
+                           fallback=None) -> tuple:
     """How one film's commentary tracks are to be named, said and not yet
     done: (the plan, "") - the renames as lines, and what carries them out -
     or (None, why not)."""
@@ -2347,30 +2412,54 @@ def _plan_commentary_names(movie: str, base: str, lookup,
     if film is None:
         return None, why
     tracks, commentaries, file_tracks, title, year, kind = film
+    if film_tags is not None:
+        tag = _film_id_tag(movie)
+        if tag:
+            film_tags[(title, year)] = tag
+    releases = lookup(title, year, kind) if kind else None
+    site_notes = (site.page_notes(title, year, kind)
+                  if site is not None and kind else ())
+
+    if fallback is None:
+        def _fallback(ordered, candidates, texts, film_title):
+            return aicommentarynames.match_tracks(
+                ordered, candidates, texts, film_title,
+                year=year, disc_kind=kind, usage=usage, log=log)
+        fallback = _fallback
+
     stem = os.path.splitext(movie)[0]
     decision = commentarynames.decide(
-        file_tracks, lookup(title, year, kind) if kind else None, kind,
-        _commentary_transcripts(stem, file_tracks), title)
+        file_tracks, releases, kind,
+        _commentary_transcripts(stem, file_tracks), title,
+        fallback=fallback)
+    notes = tuple(note for note in (*site_notes, decision.model_note) if note)
     if not decision.names:
-        return None, decision.reason
+        reason = decision.reason
+        if notes:
+            reason = "%s; %s" % (reason, "; ".join(notes))
+        return None, reason
     return _commentary_rename_plan(movie, tracks, commentaries,
                                    list(decision.names), fragments_file,
-                                   decision.source)
+                                   decision.source, model_notes=notes)
 
 
 def _commentary_rename_plan(movie: str, tracks: list, commentaries: list,
                             renames: list, fragments_file: str, source: str,
-                            say: bool = True) -> tuple:
+                            say: bool = True,
+                            model_notes: tuple[str, ...] = ()) -> tuple:
     """The commentary tracks ``renames`` names, as ``(track id, name)``, each
     with its transcripts' subtitle tracks and sidecars: (the plan, "") or
     (None, why not). ``source`` is who listed the names; ``say`` whether the
-    renames are said as they are planned."""
+    renames are said as they are planned; ``model_notes`` any model decisions
+    that settled the disc page or track order."""
     stem = os.path.splitext(movie)[0]
     new = dict(renames)
     old = {track.id: track.name for track in commentaries}
     subtitles, why = commentarynames.subtitle_renames(
         tracks, [(old[track_id], name) for track_id, name in renames])
     if why:
+        if model_notes:
+            why = "%s; %s" % (why, "; ".join(model_notes))
         return None, why
 
     def clean(name: str) -> str:
@@ -2391,6 +2480,8 @@ def _commentary_rename_plan(movie: str, tracks: list, commentaries: list,
               for track in tracks if track.id in subtitle_names]
     lines += ['"%s" -> "%s"' % pair for pair in sidecars]
     lines.append("(listed by: %s)" % source)
+    for note in model_notes:
+        lines.append("(%s)" % note)
     if say:
         for line in lines:
             log("  " + line)
@@ -2735,6 +2826,13 @@ def _report_ocr_usage(usage: subtitleocr.Usage) -> None:
     subtitle, since one subtitle's line already said it all."""
     if len(usage.spans.all()) > 1:
         log("Model time over the run (subtitle OCR):\n    %s" % usage.line())
+
+
+def _report_commentary_names_usage(usage: aicommentarynames.Usage) -> None:
+    """The commentary-naming model's account over the run."""
+    if usage.requests:
+        log("Model time over the run (commentary names):\n    %s"
+            % usage.line())
 
 
 def _report_unsure_commentaries(lines: list) -> None:
@@ -3500,9 +3598,13 @@ def _start_research(state, root: str, omit: frozenset = frozenset()) -> dict:
         ahead["chapter pages"] = fetch
     if "commentary" not in omit:
         said: list = []
-        site = dvdcompare.Site(dvdcompare.directory(state.script_dir),
-                               said.append)
+        film_tags: dict[tuple[str, str], str] = {}
+        site = _make_dvdcompare_site(
+            state.script_dir, said.append,
+            getattr(state, "commentary_names_usage", None), film_tags)
         ahead["names"] = research.Research("commentary name", site.releases)
+        ahead["site"] = site
+        ahead["film_tags"] = film_tags
         ahead["said"] = said
     if ahead:
         _research_again(ahead, root)
@@ -3520,7 +3622,8 @@ def _research_again(ahead: dict, root: str) -> None:
         ahead["chapters"].ahead(lambda: _chapter_questions(root,
                                                            ahead["chapter pages"]))
     if "names" in ahead:
-        ahead["names"].ahead(lambda: _commentary_questions(root, ahead["names"]))
+        ahead["names"].ahead(lambda: _commentary_questions(
+            root, ahead["names"], ahead.get("film_tags")))
 
 
 def _chapter_questions(root: str, fetch) -> None:
@@ -3550,7 +3653,10 @@ def _commentary_name_phase(state, root: str, name: str, ahead: dict) -> None:
     ahead["names"].finish(log)
     _say_what_was_said(ahead)
     _commentary_names_in(root, name, True, ahead["names"],
-                         state.fragments_file, state.script_dir)
+                         state.fragments_file, state.script_dir,
+                         site=ahead.get("site"),
+                         usage=getattr(state, "commentary_names_usage", None),
+                         film_tags=ahead.get("film_tags"))
     _say_what_was_said(ahead)
 
 

@@ -30,6 +30,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections import Counter
+from collections.abc import Callable
 from itertools import permutations
 from typing import NamedTuple
 
@@ -45,6 +46,7 @@ __all__ = [
     "disc_format",
     "order_file_commentaries",
     "participants",
+    "opening_text",
     "intro_mentions",
     "track_title",
     "decide",
@@ -80,11 +82,13 @@ class FileCommentary(NamedTuple):
 
 class Decision(NamedTuple):
     """What to do with one film: ``names`` pairs each commentary track id with
-    the name it is to be given, empty when ``reason`` says why nothing is."""
+    the name it is to be given, empty when ``reason`` says why nothing is.
+    ``model_note`` records what a language model decided when one was asked."""
 
     names: tuple[tuple[str, str], ...]
     reason: str
     source: str = ""
+    model_note: str = ""
 
 
 # --- the file's own commentary tracks ---------------------------------------
@@ -247,6 +251,26 @@ def participants(description: str, title: str = "") -> frozenset[str]:
 _SRT_TIME = re.compile(r"(\d+):(\d\d):(\d\d)[,.](\d+)\s*-->")
 
 
+def opening_text(srt: str, limit: int = INTRO_SECONDS) -> str:
+    """The spoken lines from cues starting within ``limit`` seconds of an SRT
+    transcript, one line per cue line."""
+    text = []
+    start = None
+    for line in (srt or "").splitlines():
+        stamp = _SRT_TIME.match(line.strip())
+        if stamp:
+            hours, minutes, seconds = (int(g) for g in stamp.groups()[:3])
+            start = hours * 3600 + minutes * 60 + seconds
+            continue
+        if start is None or start >= limit:
+            continue
+        stripped = line.strip()
+        if not stripped or stripped.isdigit():
+            continue
+        text.append(stripped)
+    return "\n".join(text)
+
+
 def intro_mentions(srt: str) -> Counter:
     """The words that follow somebody saying who is there, in the opening
     minutes of a transcript, counted.
@@ -256,20 +280,7 @@ def intro_mentions(srt: str) -> Counter:
     the way through, and the names that say who is IN the commentary are the
     ones it opens by giving.
     """
-    text = []
-    start = None
-    for line in (srt or "").splitlines():
-        stamp = _SRT_TIME.match(line.strip())
-        if stamp:
-            hours, minutes, seconds = (int(g) for g in stamp.groups()[:3])
-            start = hours * 3600 + minutes * 60 + seconds
-            continue
-        if start is None or start >= INTRO_SECONDS:
-            continue
-        if line.strip().isdigit():
-            continue
-        text.append(line)
-    words = _words(" ".join(text))
+    words = _words(opening_text(srt))
     # A word is counted once however many openings reach it: "Hi, I'm" is
     # two of them in front of one name.
     reached: set[int] = set()
@@ -429,8 +440,21 @@ def _proved_order(listing: tuple, transcripts: list, title: str,
     return None, "the transcripts fit more than one order"
 
 
+def _valid_order(order: object, count: int) -> tuple[int, ...] | None:
+    """``order`` as a tuple when it is one of the permutations
+    :func:`_proved_order` tries on ``count`` tracks, else None."""
+    if not isinstance(order, (tuple, list)) or len(order) != count:
+        return None
+    if not all(type(item) is int for item in order):
+        return None
+    if sorted(order) != list(range(count)):
+        return None
+    return tuple(order)
+
+
 def decide(file_tracks: list, releases: list | None, disc_kind: str,
-           transcripts: dict, title: str = "") -> Decision:
+           transcripts: dict, title: str = "", *,
+           fallback: Callable | None = None) -> Decision:
     """The names to give one film's commentary tracks, or why none are given.
 
     ``file_tracks`` are the film's commentary audio tracks as
@@ -439,6 +463,15 @@ def decide(file_tracks: list, releases: list | None, disc_kind: str,
     is. ``disc_kind`` is :func:`disc_format`'s answer for the file.
     ``transcripts`` maps a track id to the text of its transcript, where one
     is to hand. ``title`` is the film's, whose words are nobody's name.
+
+    When the deterministic rules cannot settle which candidate listing or
+    which track order fits - and every track has a transcript - ``fallback``,
+    if given, is called with ``(ordered, candidates, texts, title)`` where
+    ``candidates`` is ``[(commentaries, tuple(release_labels)), ...]``, and
+    may return ``(listing_index, order, note)``. ``listing_index`` must name
+    one of ``candidates`` and ``order`` must be one of the permutations
+    :func:`_proved_order` tried; any other answer is refused and the existing
+    reason stands.
     """
     ordered, why = order_file_commentaries(file_tracks)
     if not ordered:
@@ -462,6 +495,8 @@ def decide(file_tracks: list, releases: list | None, disc_kind: str,
                            if listed else "there is none"))
 
     texts = [transcripts.get(track.id) for track in ordered]
+    model_note = ""
+    order: tuple[int, ...]
     if count == 1 and len(lists) == 1:
         # One commentary has no order to get wrong, and every release of this
         # kind agrees on what it is.
@@ -476,20 +511,33 @@ def decide(file_tracks: list, releases: list | None, disc_kind: str,
                 reasons.append(why)
             else:
                 proved.append((entry, fit))
-        if len(proved) != 1:
-            if len(lists) == 1:
-                return Decision((), reasons[0])
-            return Decision((), "%d %s releases list different commentaries, "
-                            "and the transcripts %s"
-                            % (len(lists), _KIND_NAMES[disc_kind],
-                               "fit none of them" if not proved
-                               else "fit more than one"))
-        chosen, order = proved[0]
+        if len(proved) == 1:
+            chosen, order = proved[0]
+        else:
+            refusal = (reasons[0] if len(lists) == 1 else
+                       "%d %s releases list different commentaries, "
+                       "and the transcripts %s"
+                       % (len(lists), _KIND_NAMES[disc_kind],
+                          "fit none of them" if not proved
+                          else "fit more than one"))
+            settled = None
+            if fallback is not None and all(t is not None for t in texts):
+                candidates = [(entry[1], tuple(entry[2])) for entry in lists]
+                index, picked_order, note = fallback(
+                    ordered, candidates, texts, title)
+                model_note = note or ""
+                valid = _valid_order(picked_order, count)
+                if (type(index) is int and 0 <= index < len(lists)
+                        and valid is not None):
+                    settled = (lists[index], valid)
+            if settled is None:
+                return Decision((), refusal, model_note=model_note)
+            chosen, order = settled
 
     given = {ordered[order[i]].id: track_title(chosen[1][i])
              for i in range(count)}
     names = tuple((track.id, given[track.id]) for track in ordered)
-    return Decision(names, "", ", ".join(chosen[2]))
+    return Decision(names, "", ", ".join(chosen[2]), model_note=model_note)
 
 
 _KIND_NAMES = {"uhd": "4K Blu-ray", "bluray": "Blu-ray", "dvd": "DVD"}
