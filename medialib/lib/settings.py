@@ -239,6 +239,16 @@ SETTINGS: tuple[Setting, ...] = (
             "to date before the fetch. `SKIP_YTDLP_UPGRADE` is accepted too",
             ("ytdlp",),
             "unset - a nightly is upgraded; a preview (-p) never is"),
+    Setting("podcastAdsLlm", "Whether a language model looks for host-read ads, "
+            "sponsor reads and self-promotion in the transcripts of RSS and site "
+            "podcast episodes (the `podcast-ads` task, see docs/models.md), "
+            "which have no SponsorBlock: `on` or `off`. Detected stretches are "
+            "marked as skippable chapters by default; `podcastAdsCut` opts in "
+            "to cutting them out", ("ytdlp",), "on"),
+    Setting("podcastAdsCut", "Whether the ad, sponsor and self-promotion "
+            "stretches `podcastAdsLlm` finds in an RSS or site podcast episode "
+            "are cut out of the file instead of only marked as chapters a "
+            "player can skip: `off` or `on`", ("ytdlp",), "off"),
     # --- language models
     Setting("llmModels", "The roster file: every language model you have, "
             "and which tasks use which - see docs/models.md. The single-model "

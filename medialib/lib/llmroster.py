@@ -51,8 +51,8 @@ from medialib.lib import llmclient, llmtraits, runlog, settings
 
 __all__ = ["MODELS_VARIABLE", "LEAN_VARIABLE", "LEANS", "Task", "TASKS", "CHAPTERS",
            "CHAPTERS_INSTRUCTED", "COVER_SEARCH", "COVER_LOOK", "CONTENTS_SEARCH",
-           "Roster",
-           "RosterError", "load", "require", "optional", "chapters_task"]
+           "PODCAST_ADS", "Roster", "RosterError", "load", "require", "optional",
+           "chapters_task"]
 
 MODELS_VARIABLE = "llmModels"
 LEAN_VARIABLE = "llmLean"
@@ -95,9 +95,13 @@ COVER_LOOK = Task("cover-look", "look at the covers found and pick the "
 CONTENTS_SEARCH = Task("contents-search", "search the web for a book's table "
                        "of contents, to name the chapters its files only number",
                        requires=("web",), prefers=("reasoning",))
+PODCAST_ADS = Task("podcast-ads", "find sponsor reads, ads and self-promotion "
+                   "in a podcast episode's transcript", prefers=("reasoning",),
+                   lean="balanced")
 
 TASKS = {task.name: task for task in (CHAPTERS, CHAPTERS_INSTRUCTED,
-                                      COVER_SEARCH, COVER_LOOK, CONTENTS_SEARCH)}
+                                      COVER_SEARCH, COVER_LOOK,
+                                      CONTENTS_SEARCH, PODCAST_ADS)}
 
 
 def chapters_task(instructions: str) -> Task:
