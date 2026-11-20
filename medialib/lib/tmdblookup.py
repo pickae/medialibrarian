@@ -15,8 +15,10 @@ import re
 from collections.abc import Callable
 
 from medialib.lib import (
+    aitmdb,
     durationcheck,
     filmfolders,
+    modelmeter,
     plexnames,
     safety,
     titlematch,
@@ -108,7 +110,10 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
                  skip: set | None = None,
                  long_names: LongNames | None = None,
                  imdb: str = "",
-                 tagged: dict | None = None) -> int:
+                 tagged: dict | None = None,
+                 suggestions: dict | None = None,
+                 model_meter: tuple[modelmeter.Spans, modelmeter.Tally]
+                 | None = None) -> int:
     """Name each confidently-matched movie folder, its films and their sidecars
     the way Plex reads them: the folder and every file carry the id tag, an
     edition carries its own, and a split film keeps its stacking token last.
@@ -238,6 +243,11 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
         also: tuple = ()
         redated = False
         glued = None
+        notes: list = []
+        offered: list = []
+        runtime_fn = None
+        written_fn = None
+        model_match: aitmdb.Verdict | None = None
         if asked:
             # The hand-written id first: a film someone has already looked up is
             # not worth asking an API that has already failed to name it.
@@ -250,24 +260,28 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
                     unmatched.append(base)
                 continue
             if not tag:
-                notes: list = []
                 # "The Movie(1999)" is asked about as "The Movie" of 1999. What
                 # the folder said is put back if nothing answers, so a title
                 # that really does end that way is left exactly as it was.
                 glued = None if year else filmfolders._GLUED_YEAR.match(title)
                 if glued:
                     title, year = glued.group(1), glued.group(2)
-                found, year, also = tmdbidentify._settle_the_year(
-                    title, year, plexnames.years_disagreeing(base, respelled),
+                runtime_fn = tmdbidentify._measured_once(
                     functools.partial(_folder_runtime, folder.path, base,
-                                      respelled, on_disk, edition),
-                    notes if near_misses is not None else None,
-                    (_with_the_folder_above(directory, folder, title),
-                     _without_the_folder_above(directory, folder, title)),
-                    imdb,
+                                      respelled, on_disk, edition))
+                written_fn = tmdbidentify._measured_once(
                     functools.partial(tmdbidentify._written_year, [
                         os.path.join(folder.path, name) for name in names
                         if plexnames.is_movie_file(name)]))
+                found, year, also = tmdbidentify._settle_the_year(
+                    title, year, plexnames.years_disagreeing(base, respelled),
+                    runtime_fn,
+                    notes,
+                    (_with_the_folder_above(directory, folder, title),
+                     _without_the_folder_above(directory, folder, title)),
+                    imdb,
+                    written_fn,
+                    offered)
                 tag = found.tag
                 if glued and not tag:
                     title, year, glued = glued.group(0), "", None
@@ -309,7 +323,8 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
                 # reported for holding films that are not its own and never
                 # gets this far.
                 settled, byfile = _named_by_its_files(base, year, folder.path,
-                                                      names, notes, imdb)
+                                                      names, notes, imdb,
+                                                      offered)
                 if settled:
                     _claim(tagged, settled, folder.path)
                     _flag_alias(aliases, folder.path, base, settled, byfile)
@@ -406,13 +421,78 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
             continue
 
         if asked and not tag:
-            if unmatched is not None:
-                unmatched.append(base)
-            if not by_hand:
-                _flag(near_misses, folder.path, "no confident TMDb match",
-                      notes or ["nothing was asked"])
-            _report(log, base, "", [], False)
-            continue
+            verdict = aitmdb.Verdict()
+            if not by_hand and offered:
+                verdict = aitmdb.identify_film(
+                    folder.path, base, names, offered, notes,
+                    seconds=runtime_fn, written_year=written_fn, year=year,
+                    log=log, meter=model_meter)
+            if verdict.accepted and verdict.offer is not None:
+                offer = verdict.offer
+                tag = offer.tag
+                found = tmdbidentify.Match(
+                    imdb=offer.imdb, title="", aliases=offer.titles,
+                    year=offer.released if not year else "", tmdb=offer.tmdb)
+                if not year and offer.released:
+                    year = offer.released
+                    glued_in = filmfolders._GLUED_YEAR.match(title)
+                    raw_title = (glued_in.group(1)
+                                 if glued_in and glued_in.group(2) == year
+                                 else without_its_own_year(title, year))
+                    spelled = "%s (%s)" % (raw_title, year)
+                    if spelled != base:
+                        also += (base,)
+                        base = spelled
+                corrected = plexnames.spelling_renames(base, names, also, True)
+                for name, wanted in plexnames.alias_renames(
+                        base, names, found.aliases).items():
+                    corrected.setdefault(name, wanted)
+                respelled = [corrected.get(name, name) for name in names]
+                on_disk = {new: old for old, new in corrected.items()}
+                model_match = verdict
+            else:
+                if unmatched is not None:
+                    unmatched.append(base)
+                if verdict.asked:
+                    if verdict.offer is not None:
+                        if suggestions is not None:
+                            suggestions[base] = (
+                                verdict.offer.id_text,
+                                verdict.confidence,
+                                verdict.reason,
+                            )
+                        detail = (": " + verdict.reason
+                                  if verdict.reason else "")
+                        notes.append(
+                            "model suggested %s (%s), left for review (%s)%s"
+                            % (verdict.offer.id_text, verdict.confidence,
+                               verdict.hold_reason, detail))
+                        log('  no confident TMDb match: "%s" - left as it is '
+                            "(model suggested %s, %s, %s%s)"
+                            % (base, verdict.offer.id_text, verdict.confidence,
+                               verdict.hold_reason, detail))
+                    elif verdict.rejected_id:
+                        notes.append(
+                            'model answered "%s", which was not among the '
+                            "offered candidates - ignored"
+                            % verdict.rejected_id)
+                        log('  no confident TMDb match: "%s" - left as it is '
+                            '(model answered "%s", not offered - ignored)'
+                            % (base, verdict.rejected_id))
+                    else:
+                        detail = (": " + verdict.reason
+                                  if verdict.reason else "")
+                        notes.append(
+                            "model found no match among the offered "
+                            "candidates%s" % detail)
+                        log('  no confident TMDb match: "%s" - left as it is '
+                            "(model found no match%s)" % (base, detail))
+                else:
+                    _report(log, base, "", [], False)
+                if not by_hand:
+                    _flag(near_misses, folder.path, "no confident TMDb match",
+                          notes or ["nothing was asked"])
+                continue
 
         # The folder's own name is settled BEFORE a single file is touched:
         # renaming the files under a folder that cannot take its name leaves
@@ -434,21 +514,28 @@ def tag_plex_ids(directory: str, log: Callable[[str], None],
         # then what would happen to it. Only a folder this run ASKED about says
         # anything: one already tagged would repeat its line for the rest of
         # the library's life.
-        if asked and glued:
-            log('  "{}" has its year glued onto its title, and TMDb knows it '
-                'as that - renaming it "{}"'.format(folder.name, base))
-        elif asked and not filmfolders.read_folder(folder.name)[0]:
-            log('  "{}" says no year, and TMDb dates it {} - renaming it "{}"'
-                .format(folder.name, year, base))
-        elif asked and redated:
-            log('  "{}" is dated {} by TMDb, and its length agrees - renaming '
-                'it "{}"'.format(folder.name, year, base))
-        elif asked and base != filmfolders.read_folder(folder.name)[0]:
-            log('  TMDb spells it "{}" - renaming "{}" onto it'.format(
-                base.rsplit(" (", 1)[0], folder.name))
-        if asked:
-            _report(log, base, tag,
-                    plexnames.editions_in(base, respelled, edition), by_hand)
+        if model_match is not None:
+            editions = plexnames.editions_in(base, respelled, edition)
+            ed_note = (" - editions: " + ", ".join(editions)) if editions else ""
+            reason = (" - " + model_match.reason) if model_match.reason else ""
+            log('  model matched (%s, runtime fits): "%s" -> %s%s%s'
+                % (model_match.confidence, base, tag, ed_note, reason))
+        else:
+            if asked and glued:
+                log('  "{}" has its year glued onto its title, and TMDb knows it '
+                    'as that - renaming it "{}"'.format(folder.name, base))
+            elif asked and not filmfolders.read_folder(folder.name)[0]:
+                log('  "{}" says no year, and TMDb dates it {} - renaming it "{}"'
+                    .format(folder.name, year, base))
+            elif asked and redated:
+                log('  "{}" is dated {} by TMDb, and its length agrees - renaming '
+                    'it "{}"'.format(folder.name, year, base))
+            elif asked and base != filmfolders.read_folder(folder.name)[0]:
+                log('  TMDb spells it "{}" - renaming "{}" onto it'.format(
+                    base.rsplit(" (", 1)[0], folder.name))
+            if asked:
+                _report(log, base, tag,
+                        plexnames.editions_in(base, respelled, edition), by_hand)
         # A folder already carrying its id says nothing when it has nothing to
         # do - it would repeat its line for the rest of the library's life -
         # but the renames it DOES make are its files being brought into line
@@ -717,7 +804,8 @@ def _without_the_folder_above(root: str, folder, title: str) -> str:
 
 
 def _named_by_its_files(base: str, year: str, path: str, names: list,
-                        notes: list | None = None, imdb: str = "") -> tuple:
+                        notes: list | None = None, imdb: str = "",
+                        offered: list | None = None) -> tuple:
     """The id every film in this folder answers to, and what each answered
     under - or ("", {}) when they do not agree, or cannot all be named.
 
@@ -753,7 +841,8 @@ def _named_by_its_files(base: str, year: str, path: str, names: list,
             title, its_year, functools.partial(_one_film_runtime, path, name),
             notes, imdb=imdb,
             written=functools.partial(tmdbidentify._written_year,
-                                      [os.path.join(path, name)]))
+                                      [os.path.join(path, name)]),
+            offered=offered)
         if not settled.tag:
             return "", {}
         ids.add(settled.tag)
