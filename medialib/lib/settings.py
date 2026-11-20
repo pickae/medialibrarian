@@ -202,13 +202,14 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("coverSearchTable", "The table of where that search looks, in what "
             "order, by its path", ("concat-audio", "convert-and-concat", "convert-audio"),
             "the shipped `medialib/config/coverproviders.tsv`"),
-    Setting("coverSearchLlm", "Whether a book that search found no cover for is "
-            "handed to a language model to search the web for one (the "
-            "`cover-search` task, see docs/models.md): it is told the folder's "
-            "file names, the tracks' tags and what the book probably is. Only a "
+    Setting("coverSearchLlm", "Whether a book or converted track that search "
+            "found no cover for is handed to a language model to search the web "
+            "for one (the `cover-search` task, see docs/models.md): it is told "
+            "the file names, tags and what the recording probably is. Only a "
             "model that can search is asked - Claude, or one behind "
-            "`llmHarness`: `on` or `off`",
-            ("concat-audio", "convert-and-concat"), "on"),
+            "`llmHarness` - and for a converted track a vision model "
+            "(`cover-look`) must also accept the image: `on` or `off`",
+            ("concat-audio", "convert-and-concat", "convert-audio"), "on"),
     Setting("coverLookLlm", "Whether a book folder holding two or more image "
             "files that none of the cover-name words (`front`, `cover`, "
             "`inlay`, `folder`, `back`) matched is handed to a vision model "
@@ -354,7 +355,8 @@ SETTINGS: tuple[Setting, ...] = (
             "like) are asked of the same model through the harness instead of "
             "straight to its server, so a local model can search the web as "
             "Claude does, e.g. to spell the speakers' names - and concat-audio "
-            "can ask it to search the web for a book's cover. Each request is "
+            "or convert-audio can ask it to search the web for a cover. Each "
+            "request is "
             "one throwaway session that is deleted when its answer is read, "
             "so your own sessions stay easy to find. The harness runs with "
             "its permissions auto-approved, and its prompt is the transcript "

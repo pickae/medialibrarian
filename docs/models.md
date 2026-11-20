@@ -1,25 +1,25 @@
 # Language models
 
 Several commands ask a language model for something: chapters from a
-transcript (`generate-chapters`, `convert-audio -a`, `convert-video -C`,
+transcript (`generate-chapters`, `convert-audio -C`, `convert-video -C`,
 `ingest-movies`, `ytdlp`), host-read ads in RSS and site podcasts (`ytdlp`),
 a video's encoding profile from sampled frames (`convert-video -p auto`),
 picking a book's front cover among unnamed folder images, searching for a
-book's cover where nothing else found one, its chapter titles where its file
-names only number them, or a joined book's empty metadata tags
-(`concat-audio`), reading picture subtitles into text (`ingest-movies`), the
-MusicBrainz release of an album beets skipped (`ingest-music`), classifying
-recurring filename fragment candidates (`find-fragment-candidates`),
-web-checked gap notes for numbered and dated runs (`find-gaps`), report-only
-match suggestions for unmatched or ambiguous Letterboxd entries
-(`plex-letterboxd-sync`), an e-book's language where its metadata and text
-disagree or neither gives a confident answer (`read-library`), classifying
-e-book images as book content versus advertising (`ingest-books -d`), an
-advisory likely cause and next step for unexplained errors left in a run's
-error log (`error-triage`, controlled by `errorTriageLlm`), checking whether
-a small comic page has real content worth keeping (`convert-comics`), or
-whether a borderline PDF is a comic book (`convert-comics`,
-`content-census`). Each of those is a **task**, and each
+cover where nothing else found one (`concat-audio`, `convert-audio`), a
+book's chapter titles where its file names only number them, or a joined
+book's empty metadata tags (`concat-audio`), reading picture subtitles into
+text (`ingest-movies`), the MusicBrainz release of an album beets skipped
+(`ingest-music`), classifying recurring filename fragment candidates
+(`find-fragment-candidates`), web-checked gap notes for numbered and dated
+runs (`find-gaps`), report-only match suggestions for unmatched or ambiguous
+Letterboxd entries (`plex-letterboxd-sync`), an e-book's language where its
+metadata and text disagree or neither gives a confident answer
+(`read-library`), classifying e-book images as book content versus
+advertising (`ingest-books -d`), an advisory likely cause and next step for
+unexplained errors left in a run's error log (`error-triage`, controlled by
+`errorTriageLlm`), checking whether a small comic page has real content
+worth keeping (`convert-comics`), or whether a borderline PDF is a comic book
+(`convert-comics`, `content-census`). Each of those is a **task**, and each
 task picks from the models you have, by what it needs and what it would
 rather have.
 
@@ -139,10 +139,11 @@ A task's models, best first:
 A task that can do without what it prefers still runs on a model that lacks
 it: chapters with instructions are written without web search when no model
 can search. A task that needs something no model has is skipped (the cover
-search, the music release lookup, the comic empty-page check, and
-`book-image-check`, which falls back to the fixed junk-name substrings) or
-refused before any work (the chapter commands and `convert-video -p auto`),
-saying which trait was missing.
+search, `convert-audio`'s per-track cover search whenever no vision model is
+available for `cover-look`, the music release lookup, the comic empty-page
+check, and `book-image-check`, which falls back to the fixed junk-name
+substrings) or refused before any work (the chapter commands and
+`convert-video -p auto`), saying which trait was missing.
 
 Overriding it:
 

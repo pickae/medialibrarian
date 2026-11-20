@@ -278,6 +278,129 @@ class TestTheLook:
         assert len(model.shown[0][1]) == 2
 
 
+def _episode(tmp_path, name="20240105 Flying in Winter.opus"):
+    folder = tmp_path / "Podcasts" / "Kite Talk"
+    folder.mkdir(parents=True, exist_ok=True)
+    track = folder / name
+    track.write_bytes(b"x" * 10)
+    return track
+
+
+def _episode_tags(path):
+    return {"album": "Kite Talk", "artist": "Ann Mirelle",
+            "title": "Flying in Winter", "language": "eng"}
+
+
+class TestTrackCover:
+    """Per-track (podcast episode) covers: search plus mandatory vision look."""
+
+    def test_episode_prompt_includes_show_title_and_date_from_filename(self, tmp_path):
+        track = _episode(tmp_path, "20240105 Flying in Winter.opus")
+        subject = onlinecover.track_subject(str(track), 45 * 60,
+                                            tags=_episode_tags(str(track)))
+        text = aicover.track_prompt(str(track), subject, _episode_tags)
+        assert "Show: Kite Talk; Ann Mirelle" in text
+        assert "Episode title: Flying in Winter" in text
+        assert "Date: 2024-01-05" in text
+        assert "Parent folder: Kite Talk" in text
+        assert "File: 20240105 Flying in Winter.opus" in text
+        assert "probably a podcast or a podcast episode" in text
+
+    def test_episode_prompt_uses_parent_folder_and_date_tag_when_undated(self, tmp_path):
+        track = _episode(tmp_path, "Flying in Winter.opus")
+        tags = {"artist": "Ann Mirelle", "title": "Flying in Winter",
+                "date": "2024-03-19"}
+        subject = onlinecover.track_subject(str(track), 45 * 60, tags=tags)
+        text = aicover.track_prompt(str(track), subject, lambda _p: tags)
+        assert "Show: Ann Mirelle; Kite Talk" in text
+        assert "Episode title: Flying in Winter" in text
+        assert "Date: 2024-03-19" in text
+
+    def test_vision_look_accepts_returns_accepted_image_and_records_meter(self, tmp_path):
+        track = _episode(tmp_path)
+        searcher = _Model(_THREE, can_search=True, sees=False)
+        looker = _Model("", can_search=False, sees=True,
+                        look='{"choice": 2, "why": "episode artwork matches"}')
+        meter = tmp_path / "meter"
+        image = aicover.track_cover(
+            str(track), 45 * 60, str(tmp_path / "out"),
+            searchers=[searcher], lookers=[looker],
+            meter_file=str(meter), download=_all(),
+            probe=_episode_tags, prepare=_as_is)
+        assert image == str(tmp_path / "out.jpg")
+        assert pathlib.Path(image).read_bytes().endswith(b"https://b.test/2.jpg")
+        assert len(searcher.asked) == 1
+        assert len(looker.shown) == 1
+        _spans, tally = modelmeter.gathered(str(meter))
+        assert (tally.requests, tally.tokens, tally.read) == (2, 50, 900)
+        assert sorted(os.listdir(tmp_path)) == ["Podcasts", "meter", "out.jpg"]
+
+    @pytest.mark.parametrize("look", [
+        '{"choice": null, "why": "none is this episode"}',
+        "I cannot tell",
+        '{"choice": 9}',
+        '{"choice": true}',
+    ])
+    def test_vision_look_rejects_or_gives_no_valid_choice_returns_no_cover(
+            self, tmp_path, look):
+        track = _episode(tmp_path)
+        model = _Model(_THREE, can_search=True, sees=True, look=look)
+        image = aicover.track_cover(
+            str(track), 45 * 60, str(tmp_path / "out"),
+            searchers=[model], lookers=[model],
+            download=_all(), probe=_episode_tags, prepare=_as_is)
+        assert image == ""
+        assert sorted(os.listdir(tmp_path)) == ["Podcasts"]
+
+    def test_no_vision_model_available_skips_search_and_returns_no_cover(self, tmp_path):
+        track = _episode(tmp_path)
+        searcher = _Model(_THREE, can_search=True, sees=False)
+        image = aicover.track_cover(
+            str(track), 45 * 60, str(tmp_path / "out"),
+            searchers=[searcher], lookers=[],
+            download=_all(), probe=_episode_tags, prepare=_as_is)
+        assert image == ""
+        assert searcher.asked == []
+
+    def test_no_vision_model_in_roster_skips_search(self, tmp_path, monkeypatch):
+        track = _episode(tmp_path)
+        searcher = _Model(_THREE, can_search=True, sees=False)
+        monkeypatch.setattr(aicover.llmroster, "optional",
+                            lambda task: ([], "no vision model"))
+        image = aicover.track_cover(
+            str(track), 45 * 60, str(tmp_path / "out"),
+            searchers=[searcher], lookers=None,
+            download=_all(), probe=_episode_tags, prepare=_as_is)
+        assert image == ""
+        assert searcher.asked == []
+
+    def test_looker_that_does_not_see_at_runtime_returns_no_cover(self, tmp_path):
+        track = _episode(tmp_path)
+        searcher = _Model(_THREE, can_search=True, sees=False)
+        blind = _Model("", can_search=False, sees=False, look='{"choice": 1}')
+        image = aicover.track_cover(
+            str(track), 45 * 60, str(tmp_path / "out"),
+            searchers=[searcher], lookers=[blind],
+            download=_all(), probe=_episode_tags, prepare=_as_is)
+        assert image == ""
+        assert blind.shown == []
+        assert sorted(os.listdir(tmp_path)) == ["Podcasts"]
+
+    def test_cover_search_llm_off_skips_quietly(self, tmp_path, monkeypatch):
+        monkeypatch.setenv(aicover.SWITCH_VARIABLE, "off")
+        track = _episode(tmp_path)
+        model = _Model(_THREE, can_search=True, sees=True, look='{"choice": 1}')
+        meter = tmp_path / "meter"
+        image = aicover.track_cover(
+            str(track), 45 * 60, str(tmp_path / "out"),
+            searchers=[model], lookers=[model],
+            meter_file=str(meter), download=_all(),
+            probe=_episode_tags, prepare=_as_is)
+        assert image == ""
+        assert model.asked == []
+        assert model.shown == []
+
+
 class TestFolderCoverLook:
     """Looking at a folder's unnamed image files to pick the front cover."""
 
