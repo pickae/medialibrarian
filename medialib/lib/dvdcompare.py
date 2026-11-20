@@ -39,7 +39,9 @@ __all__ = [
     "MIN_INTERVAL",
     "PACER",
     "SearchEntry",
+    "cached_extras",
     "directory",
+    "parse_extras",
     "parse_film_page",
     "parse_search",
     "pick",
@@ -254,6 +256,73 @@ def parse_film_page(text: str) -> list[Release]:
                        fields.get("Extras:", ""), default, names)
         releases.append(Release(heading, tuple(discs)))
     return releases
+
+
+def parse_extras(text: str) -> list[str]:
+    """Every extras line a film's page lists across its releases, deduplicated
+    in order of appearance. Disc headings are skipped."""
+    page = _Page()
+    page.feed(text or "")
+    seen: set[str] = set()
+    found: list[str] = []
+    for block in page.blocks:
+        if not block["release"]:
+            continue
+        items: list = []
+        label = ""
+        for kind, content in block["items"]:
+            if kind == "label":
+                label = " ".join(content.split())
+            else:
+                items.append((label, content))
+        if not items:
+            continue
+        fields = dict(items[1:])
+        for line in _lines(fields.get("Extras:", "")):
+            clean = line.replace("\x02", "").strip()
+            if not clean or _DISC_HEADING.match(clean):
+                continue
+            if clean not in seen:
+                seen.add(clean)
+                found.append(clean)
+    return found
+
+
+def cached_extras(where: str, title: str, year: str) -> list[str]:
+    """Extras lines from dvdcompare pages already cached under ``where``, or []
+    when none are on disk. Never contacts the network."""
+    if not where or not title or not year:
+        return []
+    query = search_query(title)
+    if not query:
+        return []
+    key = hashlib.sha1(query.lower().encode("utf-8")).hexdigest()[:16]
+    search_path = os.path.join(where, "search-%s.html" % key)
+    try:
+        with open(search_path, encoding="utf-8") as handle:
+            search_text = handle.read()
+    except OSError:
+        return []
+    entries = parse_search(search_text)
+    seen_lines: set[str] = set()
+    seen_fids: set[str] = set()
+    lines: list[str] = []
+    for kind in ("uhd", "bluray", "dvd"):
+        fid = pick(entries, title, year, kind)
+        if not fid or fid in seen_fids:
+            continue
+        seen_fids.add(fid)
+        film_path = os.path.join(where, "film-%s.html" % fid)
+        try:
+            with open(film_path, encoding="utf-8") as handle:
+                film_text = handle.read()
+        except OSError:
+            continue
+        for line in parse_extras(film_text):
+            if line not in seen_lines:
+                seen_lines.add(line)
+                lines.append(line)
+    return lines
 
 
 def _lines(content: str) -> list[str]:

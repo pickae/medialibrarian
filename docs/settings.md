@@ -23,6 +23,7 @@ no command reads is warned about.
 | `audiobookLosslessCompression` | The FLAC compression level of that copy | 5 | `read-library` |
 | `audiobookLosslessFilters` | The ffmpeg filters the lossless copy of an audiobook is made with; empty for none | `dynaudnorm=f=150:g=15,afftdn=nf=-70` | `read-library` |
 | `beetsConfig` | The beets config ingest-music's tagging phase runs with | the shipped `medialib/config/beets.yaml` | `ingest-music` |
+| `bonusCategoryLlm` | Whether an extra whose file name matched no bonus-folder keyword is handed to a light language model to sort into a Plex bonus folder (the `bonus-category` task, see docs/models.md): it is told the extra's file name, the film's title and year, and any disc extras listing already cached from dvdcompare.net: `on` or `off` | on | `ingest-movies` |
 | `censusRamBase` | The census's scratch, ahead of `ramScratchBase` | `ramScratchBase` | `content-census`, `content-census-bi` |
 | `comicPdfExtensions` | The file suffixes that may be comic PDFs, space-separated | pdf | `content-census` |
 | `comicPdfFallbackDpi` | The resolution used where the PDF's own cannot be read | 300 | `content-census`, `convert-comics` |

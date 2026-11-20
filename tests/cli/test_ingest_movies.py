@@ -198,22 +198,56 @@ class TestBonusCategoryFor:
     @pytest.mark.parametrize("name,expected", [
         ("The Making Of.mkv", "Behind The Scenes"),
         ("Deleted Scene 3.mkv", "Deleted Scenes"),
+        ("Alternate Ending.mkv", "Deleted Scenes"),
         ("Interview with the Director.mkv", "Interviews"),
-        ("Theatrical Trailer.mkv", "Trailers"),
-        ("Blooper Reel.mkv", "Scenes"),
+        ("Interviews.mkv", "Interviews"),
+        ("A Short Interview with the Director.mkv", "Interviews"),
         ("A Short.mkv", "Shorts"),
+        ("Animated Shorts.mkv", "Shorts"),
+        ("Short_Film.mkv", "Shorts"),
+        ("Theatrical Trailer.mkv", "Trailers"),
+        ("Trailers.mkv", "Trailers"),
+        ("Preview.mkv", "Trailers"),
+        ("TV Spot.mkv", "Trailers"),
+        ("TVSpot.mkv", "Trailers"),
+        ("TV Promo.mkv", "Trailers"),
+        ("Blooper Reel.mkv", "Scenes"),
+        ("Gag Reel.mkv", "Scenes"),
+        ("Screen Test.mkv", "Scenes"),
+        ("Screentest.mkv", "Scenes"),
         ("Critical Review.mkv", "Other"),
     ])
     def test_a_keyword_lands_its_extra(self, name, expected):
         assert im.bonus_category_for(name) == expected
 
-    def test_a_name_matching_nothing_stays_put(self):
-        assert im.bonus_category_for("Feature Film.mkv") == ""
+    @pytest.mark.parametrize("name", [
+        "Feature Film.mkv",
+        "Spotlight on the Score.mkv",
+        "The Contest Winners.mkv",
+        "Latest News.mkv",
+        "Greatest Moments.mkv",
+        "Engagement Party Scene.mkv",
+        "Chateau Tour.mkv",
+        "Shortened Opening.mkv",
+        "Promotional Gallery.mkv",
+        "Featurette.mkv",
+        "Photo Gallery.mkv",
+        "Storyboard Comparison.mkv",
+        "Making the Music.mkv",
+    ])
+    def test_false_positives_and_unmatched_names_stay_put(self, name):
+        """Substrings inside longer words (spot in Spotlight, test in
+        Contest/Latest/Greatest, gag in Engagement, chat in Chateau, short in
+        Shortened, promo in Promotional) must not misclassify an extra, and
+        names with no matching keyword stay unmatched for the optional model."""
+        assert im.bonus_category_for(name) == ""
 
     def test_the_first_matching_row_wins(self):
-        """"short" is the first row and "trailer" a later one, so a name holding
-        both lands in Shorts."""
+        """"short" comes before "trailer", so a name holding both lands in
+        Shorts; "interview" comes before "short", so a short interview lands
+        in Interviews."""
         assert im.bonus_category_for("Short Trailer.mkv") == "Shorts"
+        assert im.bonus_category_for("A Short Interview.mkv") == "Interviews"
 
 
 class TestLanguageAllowed:

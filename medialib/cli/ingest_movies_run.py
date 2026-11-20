@@ -27,6 +27,7 @@ from medialib.cli import ingest_movies_lanes as lanes
 from medialib.cli import ingest_movies_plex as plexphase
 from medialib.cli.ingest_movies import log
 from medialib.lib import (
+    aibonuscategory,
     chapterdb,
     cleannamesindividually,
     clioptions,
@@ -48,6 +49,7 @@ from medialib.lib import (
     imdbdata,
     keepparts,
     languages,
+    modelmeter,
     overwrite,
     plexnames,
     ramscratch,
@@ -1362,6 +1364,7 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
     unsure_commentaries: list = []
     # What the vision model reading picture subtitles was asked, over the run.
     ocr_usage = subtitleocr.Usage()
+    bonus_meter = os.path.join(ram_root, "bonusCategoryMeter.jsonl")
 
     # Named above the phases a Ctrl+C can cut short, so an ingest stopped halfway
     # still recaps the renames it held back instead of leaving them buried in
@@ -1374,6 +1377,7 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
         _report_unsure_commentaries(unsure_commentaries)
         if ocr_usage.requests:
             _report_ocr_usage(ocr_usage)
+        _report_bonus_category_usage(bonus_meter)
 
     safety.set_run_footer(recap)
 
@@ -1399,6 +1403,7 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
                 unfixed_movies=unfixed_movies,
                 unsure_commentaries=unsure_commentaries, disk_turns=disk_turns,
                 scratch_headroom=0, ocr_usage=ocr_usage,
+                bonus_meter=bonus_meter,
                 convert_remuxes=bool(result.values.get("convertRemuxes")),
                 keep_parts=keep_parts,
                 omit_phases=omit_phases, extras_llm=extras_llm,
@@ -1894,9 +1899,16 @@ def _layout_only(program: str, script_dir: str, roots: list,
     safety.init_safety_log(os.path.join(ram_root, "safetySkips.log"))
     safety.init_abort_flag(os.path.join(ram_root, "abortRequested"))
     safety.trap_run_abort()
+    bonus_meter = os.path.join(ram_root, "bonusCategoryMeter.jsonl")
     state = Run(script_dir=script_dir, ram_root=ram_root,
-                skips=safety.RunSkipLog(), fragments_file=fragments_file)
-    safety.set_run_footer(safety.report_safety_skips)
+                skips=safety.RunSkipLog(), fragments_file=fragments_file,
+                bonus_meter=bonus_meter)
+
+    def footer() -> None:
+        safety.report_safety_skips()
+        _report_bonus_category_usage(bonus_meter)
+
+    safety.set_run_footer(footer)
     try:
         for root in roots:
             log("Laying out: " + root)
@@ -2737,6 +2749,18 @@ def _report_ocr_usage(usage: subtitleocr.Usage) -> None:
         log("Model time over the run (subtitle OCR):\n    %s" % usage.line())
 
 
+def _report_bonus_category_usage(meter_file: str) -> None:
+    """The light model's account over the run for unmatched extras, when any
+    request was made."""
+    if not meter_file:
+        return
+    spans, tally = modelmeter.gathered(meter_file)
+    if tally.requests:
+        log("Model time over the run (bonus categories):\n    %s"
+            % modelmeter.rate_line(aibonuscategory.PURPOSE, spans.seconds,
+                                   tally))
+
+
 def _report_unsure_commentaries(lines: list) -> None:
     """The audio tracks that may be a commentary but were left as they are,
     named on stderr at the end of a full ingest, beside the other things a
@@ -3080,7 +3104,10 @@ def _lay_out(state, root: str, omit: frozenset = frozenset()) -> set:
     log("Phase: normalising file extensions to lower case")
     safety.lower_case_extensions(root, state.skips)
     log("Phase: sorting bonus material into Plex folders")
-    rules.extras_into_subfolders(root, state.skips)
+    rules.extras_into_subfolders(
+        root, state.skips,
+        script_dir=state.script_dir,
+        meter_file=getattr(state, "bonus_meter", ""))
 
     # Repeated until the names stop changing: some changes around parentheses
     # induce new double spaces, so a pass can create work for the next.

@@ -66,6 +66,13 @@ class TestTheLadder:
         assert _names(_roster(tmp_path).ladder(llmroster.COVER_LOOK)) == [
             "small-local", "big-local", "claude"]
 
+    def test_bonus_category_leans_light_with_no_required_traits(self, tmp_path):
+        assert llmroster.BONUS_CATEGORY.requires == ()
+        assert llmroster.BONUS_CATEGORY.prefers == ()
+        assert llmroster.BONUS_CATEGORY.lean == "light"
+        assert _names(_roster(tmp_path).ladder(llmroster.BONUS_CATEGORY)) == [
+            "small-local", "big-local", "claude"]
+
     def test_what_a_task_prefers_comes_before_its_lean(self, tmp_path):
         # Chapters prefer reasoning; small-local has none.
         assert _names(_roster(tmp_path).ladder(llmroster.CHAPTERS)) == [

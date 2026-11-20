@@ -223,6 +223,13 @@ SETTINGS: tuple[Setting, ...] = (
             "every chapter. Only a model that can search is asked - Claude, or "
             "one behind `llmHarness`: `on` or `off`",
             ("concat-audio", "convert-and-concat"), "on"),
+    Setting("bonusCategoryLlm", "Whether an extra whose file name matched no "
+            "bonus-folder keyword is handed to a light language model to sort "
+            "into a Plex bonus folder (the `bonus-category` task, see "
+            "docs/models.md): it is told the extra's file name, the film's "
+            "title and year, and any disc extras listing already cached from "
+            "dvdcompare.net: `on` or `off`",
+            ("ingest-movies",), "on"),
     Setting("chapterDbSite", "The chapter database's address", ("ingest-movies",),
             "`https://chapterdb.plex.tv`", tuning=True),
     Setting("dvdCompareSite", "The disc database's address", ("ingest-movies",),
