@@ -158,23 +158,40 @@ def _python_bin() -> str:
     return runlog.python_bin()
 
 
-def choose_thumbnail(input_path: str) -> str:
-    """Pick the best cover image (or a PDF page) in <input_path>."""
-    first: list[str | None] = [None] * (1 + len(_LADDER))
+def choose_thumbnail(input_path: str, *, model_meter: str = "",
+                     scratch_dir: str = "",
+                     lookers: Sequence[aicover.llmclient.Llm] | None = None,
+                     prepare: Callable[[str, str], str] | None = None) -> str:
+    """Pick the best cover image (or a PDF page) in <input_path>.
+
+    The name ladder (:data:`_LADDER`) decides first. Only when no name rung
+    matches and the folder holds two or more images is a vision model
+    (:func:`aicover.choose_folder_cover`) asked which one is the front cover;
+    on "none", error, switch off, or no vision model, the first image the
+    folder walk lists is kept."""
+    first: list[str | None] = [None] * len(_LADDER)
+    images: list[str] = []
     for path in _regular_files(input_path):
         name = os.path.basename(path)
         if not _is_image_name(name):
             continue
-        if first[0] is None:
-            first[0] = path
-        for i, conditions in enumerate(_LADDER, start=1):
+        images.append(path)
+        for i, conditions in enumerate(_LADDER):
             if first[i] is None and _matches_conditions(name, conditions):
                 first[i] = path
     for i in range(len(first) - 1, -1, -1):
         best = first[i]
         if best is not None:
             return best
-    return ""
+    if not images:
+        return ""
+    if len(images) >= 2:
+        picked = aicover.choose_folder_cover(
+            input_path, images, lookers=lookers, meter_file=model_meter,
+            scratch_dir=scratch_dir, prepare=prepare)
+        if picked:
+            return picked
+    return images[0]
 
 
 def extract_thumbnail(input_path: str, file_name: str, dpi: int,
@@ -342,7 +359,8 @@ def embed_thumbnail(input_path: str, file_name: str, image_size_limit: int,
     ram_base = f"{ram_dir}/{os.path.basename(file_name)}"
     m4b_temp_file = f"{ram_base}.temp.m4b"
 
-    thumb_file = choose_thumbnail(input_path)
+    thumb_file = choose_thumbnail(input_path, model_meter=model_meter,
+                                  scratch_dir=ram_dir)
     if os.path.isfile(thumb_file):
         _detail("    Cover from the image file %s in the input"
                 % os.path.relpath(thumb_file, input_path))
