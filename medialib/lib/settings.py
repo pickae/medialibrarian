@@ -224,6 +224,15 @@ SETTINGS: tuple[Setting, ...] = (
             "every chapter. Only a model that can search is asked - Claude, or "
             "one behind `llmHarness`: `on` or `off`",
             ("concat-audio", "convert-and-concat"), "on"),
+    Setting("bookTagsLlm", "Whether a joined book's empty metadata tags "
+            "(title, author, narrator, series, series index, year, language, "
+            "abridged) are looked up by a language model on the web (the "
+            "`book-tags` task, see docs/models.md): it is told the folder's "
+            "file names, the tracks' tags and what the book probably is. Only "
+            "empty tags are filled and the output file is never renamed. Only "
+            "a model that can search is asked - Claude, or one behind "
+            "`llmHarness`: `on` or `off`",
+            ("concat-audio", "convert-and-concat"), "on"),
     Setting("musicSearchLlm", "Whether an album beets skipped is handed to a "
             "language model to look up its MusicBrainz release ID on the web "
             "(the `music-search` task, see docs/models.md): it is told the "

@@ -323,6 +323,8 @@ def private_workspace(tmp_path_factory, monkeypatch):
     # back on would otherwise reach the model the machine's settings name.
     monkeypatch.setenv("coverSearchLlm", "off")
     monkeypatch.setenv("coverLookLlm", "off")
+    # Nor is a language model asked for audiobook metadata tags.
+    monkeypatch.setenv("bookTagsLlm", "off")
     # Nor is a language model asked to find ad reads in RSS podcasts.
     monkeypatch.setenv("podcastAdsLlm", "off")
     monkeypatch.setenv("podcastAdsCut", "off")
