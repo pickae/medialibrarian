@@ -10,10 +10,12 @@ names only number them (`concat-audio`), reading picture subtitles into text
 (`ingest-music`), classifying recurring filename fragment candidates
 (`find-fragment-candidates`), web-checked gap notes for numbered and dated
 runs (`find-gaps`), report-only match suggestions for unmatched or ambiguous
-Letterboxd entries (`plex-letterboxd-sync`), or an e-book's language where
-its metadata and text disagree or neither gives a confident answer
-(`read-library`). Each of those is a **task**, and each task picks from the
-models you have, by what it needs and what it would rather have.
+Letterboxd entries (`plex-letterboxd-sync`), an e-book's language where its
+metadata and text disagree or neither gives a confident answer
+(`read-library`), or classifying e-book images as book content versus
+advertising (`ingest-books -d`). Each of those is a **task**, and each task
+picks from the models you have, by what it needs and what it would rather
+have.
 
 ## Your models
 
@@ -109,6 +111,7 @@ Run with `-v` to see which model each task took, and what it was taken for.
 | `gaps-check` | web | reasoning | balanced |
 | `letterboxd-match` | - | reasoning, web | balanced |
 | `book-language` | - | - | light |
+| `book-image-check` | vision | - | light |
 
 A task's models, best first:
 
@@ -122,7 +125,8 @@ A task's models, best first:
 A task that can do without what it prefers still runs on a model that lacks
 it: chapters with instructions are written without web search when no model
 can search. A task that needs something no model has is skipped (the cover
-search, the music release lookup) or refused before any work (the chapter
+search, the music release lookup, and `book-image-check`, which falls back
+to the fixed junk-name substrings) or refused before any work (the chapter
 commands and `convert-video -p auto`), saying which trait was missing.
 
 Overriding it:

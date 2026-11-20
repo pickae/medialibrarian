@@ -53,7 +53,8 @@ __all__ = ["MODELS_VARIABLE", "LEAN_VARIABLE", "LEANS", "Task", "TASKS", "CHAPTE
            "CHAPTERS_INSTRUCTED", "COVER_SEARCH", "COVER_LOOK", "CONTENTS_SEARCH",
            "SUBTITLE_OCR", "VIDEO_PROFILE", "MUSIC_SEARCH", "PODCAST_ADS",
            "FRAGMENT_CLASSIFY", "GAPS_CHECK", "LETTERBOXD_MATCH", "BOOK_LANGUAGE",
-           "Roster", "RosterError", "load", "require", "optional", "chapters_task"]
+           "BOOK_IMAGE_CHECK", "Roster", "RosterError", "load", "require",
+           "optional", "chapters_task"]
 
 MODELS_VARIABLE = "llmModels"
 LEAN_VARIABLE = "llmLean"
@@ -122,12 +123,16 @@ LETTERBOXD_MATCH = Task(
     "entries for the sync report", prefers=("reasoning", "web"), lean="balanced")
 BOOK_LANGUAGE = Task("book-language", "identify a book's language from a short "
                      "excerpt", requires=(), prefers=(), lean="light")
+BOOK_IMAGE_CHECK = Task("book-image-check", "tell whether an image inside an "
+                        "e-book is part of the book or advertising",
+                        requires=("vision",), lean="light")
 
 TASKS = {task.name: task for task in (CHAPTERS, CHAPTERS_INSTRUCTED,
                                       COVER_SEARCH, COVER_LOOK, CONTENTS_SEARCH,
                                       SUBTITLE_OCR, VIDEO_PROFILE, MUSIC_SEARCH,
                                       PODCAST_ADS, FRAGMENT_CLASSIFY, GAPS_CHECK,
-                                      LETTERBOXD_MATCH, BOOK_LANGUAGE)}
+                                      LETTERBOXD_MATCH, BOOK_LANGUAGE,
+                                      BOOK_IMAGE_CHECK)}
 
 
 def chapters_task(instructions: str) -> Task:

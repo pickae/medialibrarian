@@ -330,6 +330,10 @@ def private_workspace(tmp_path_factory, monkeypatch):
     monkeypatch.setenv("letterboxdMatchLlm", "off")
     # Nor for a book's language when metadata and text disagree or say nothing.
     monkeypatch.setenv("bookLanguageLlm", "off")
+    # Nor are book images sent to a vision model during ingest-books -d: a case
+    # about book-image classification turns it back on and stands in for the
+    # model.
+    monkeypatch.setenv("bookJunkImagesLlm", "off")
     # Nor the machine's own roster of models: a case that asks the roster
     # gets the models it set up itself, or none.
     monkeypatch.setenv("llmModels", str(scratch / "no-models-file"))

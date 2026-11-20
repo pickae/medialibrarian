@@ -70,6 +70,8 @@ class TestTheLadder:
             "small-local", "big-local", "claude"]
         assert _names(_roster(tmp_path).ladder(llmroster.BOOK_LANGUAGE)) == [
             "small-local", "big-local", "claude"]
+        assert _names(_roster(tmp_path).ladder(llmroster.BOOK_IMAGE_CHECK)) == [
+            "small-local", "big-local", "claude"]
 
     def test_what_a_task_prefers_comes_before_its_lean(self, tmp_path):
         # Chapters prefer reasoning; small-local has none.

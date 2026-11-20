@@ -81,8 +81,8 @@ _SCRATCH = ("concat-audio", "content-census", "content-census-bi", "convert-and-
 # Every command that asks a language model.
 _AI_CHAPTERS = ("concat-audio", "convert-and-concat", "convert-audio", "convert-video",
                 "find-fragment-candidates", "find-gaps", "generate-chapters",
-                "ingest-movies", "ingest-music", "plex-letterboxd-sync",
-                "read-library", "ytdlp")
+                "ingest-books", "ingest-movies", "ingest-music",
+                "plex-letterboxd-sync", "read-library", "ytdlp")
 
 SETTINGS: tuple[Setting, ...] = (
     # --- logins and keys
@@ -236,6 +236,14 @@ SETTINGS: tuple[Setting, ...] = (
             "Plex film titles, years and ids are sent to the model, and nothing "
             "in Plex is changed from its answer: `on` or `off`",
             ("plex-letterboxd-sync",), "on"),
+    Setting("bookJunkImagesLlm", "Whether ingest-books -d asks a vision model "
+            "to tell book illustrations from advertising and publisher promos "
+            "(the `book-image-check` task, see docs/models.md): candidate "
+            "images inside the e-book and their file names are sent to the "
+            "model, and only a high-confidence ad verdict is removed - anything "
+            "else is kept. Without a vision model, or set to `off`, falls back "
+            "to the fixed junk-name substrings: `on` or `off`",
+            ("ingest-books",), "on"),
     Setting("chapterDbSite", "The chapter database's address", ("ingest-movies",),
             "`https://chapterdb.plex.tv`", tuning=True),
     Setting("dvdCompareSite", "The disc database's address", ("ingest-movies",),
