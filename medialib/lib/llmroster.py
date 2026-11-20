@@ -51,8 +51,8 @@ from medialib.lib import llmclient, llmtraits, runlog, settings
 
 __all__ = ["MODELS_VARIABLE", "LEAN_VARIABLE", "LEANS", "Task", "TASKS", "CHAPTERS",
            "CHAPTERS_INSTRUCTED", "COVER_SEARCH", "COVER_LOOK", "CONTENTS_SEARCH",
-           "Roster",
-           "RosterError", "load", "require", "optional", "chapters_task"]
+           "MUSIC_SEARCH", "Roster", "RosterError", "load", "require", "optional",
+           "chapters_task"]
 
 MODELS_VARIABLE = "llmModels"
 LEAN_VARIABLE = "llmLean"
@@ -95,9 +95,14 @@ COVER_LOOK = Task("cover-look", "look at the covers found and pick the "
 CONTENTS_SEARCH = Task("contents-search", "search the web for a book's table "
                        "of contents, to name the chapters its files only number",
                        requires=("web",), prefers=("reasoning",))
+MUSIC_SEARCH = Task("music-search",
+                    "search the web for the MusicBrainz release of an album "
+                    "beets could not match",
+                    requires=("web",), prefers=("reasoning",))
 
 TASKS = {task.name: task for task in (CHAPTERS, CHAPTERS_INSTRUCTED,
-                                      COVER_SEARCH, COVER_LOOK, CONTENTS_SEARCH)}
+                                      COVER_SEARCH, COVER_LOOK, CONTENTS_SEARCH,
+                                      MUSIC_SEARCH)}
 
 
 def chapters_task(instructions: str) -> Task:

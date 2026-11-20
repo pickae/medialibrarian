@@ -32,6 +32,7 @@ import time
 
 from medialib import commands
 from medialib.lib import (
+    aimusic,
     clioptions,
     console,
     cuechapters,
@@ -642,6 +643,8 @@ class Run:
     cover_max_edge: str
     ingested_sources: str
     ingested_pairs: str
+    model_meter: str
+    beets_summary: aimusic.Summary | None
     # The run's clocks, each unset until the phase it times has begun.
     run_start: float
     run_end: float | None
@@ -1340,6 +1343,14 @@ def footer(state) -> None:
     _stat_row_if_any("Folders re-homed", counters.value("folderRedirects"))
     _stat_row_if_any("Already in library",
                      counters.value("copiesAlreadyThere"))
+    beets_summary = getattr(state, "beets_summary", None)
+    if beets_summary and beets_summary.total_logged:
+        _stat_row("Beets skipped", beets_summary.total_logged)
+        _stat_row_if_any("  unmatched", beets_summary.skipped)
+        _stat_row_if_any("  matched by model", beets_summary.matched)
+        _stat_row_if_any("  still unmatched", beets_summary.still_skipped)
+        _stat_row_if_any("  duplicates", beets_summary.duplicate_skips)
+        _stat_row_if_any("  imported as-is", beets_summary.asis)
     _stat_row("Total time", "%s s (%s)" % (
         "%.2f" % total_seconds, formatting.fmt_hms("%.2f" % total_seconds)))
 
@@ -1541,6 +1552,8 @@ def _ingest(program: str, script_dir: str, download_dir: str, ingest_dir: str,
         cover_max_edge=imagesizes.height(cover_tier),
         ingested_sources=os.path.join(counter_dir, "ingestedSources"),
         ingested_pairs=os.path.join(counter_dir, "ingestedPairs"),
+        model_meter=os.path.join(counter_dir, "musicModel.meter"),
+        beets_summary=None,
         run_start=run_start, run_end=None,
         encode_start=None, encode_end=None)
     safety.set_run_footer(lambda: footer(state))
@@ -1619,8 +1632,12 @@ def _ingest(program: str, script_dir: str, download_dir: str, ingest_dir: str,
     else:
         log("Tagging and organising with beets")
         beets_log = commands.logs_file(script_dir, "beets.log")
+        beets_offset = aimusic.log_offset(beets_log)
         _run_in(ingest_dir, ["beet", "-c", beets_config,
                              "import", "-Ciq", "-l", beets_log, "."])
+        state.beets_summary = aimusic.resolve_skipped(
+            ingest_dir, beets_config, beets_log, beets_offset,
+            meter_file=state.model_meter, run_beet=_run_in)
 
     # Final name and structure cleanup, applied to the output only. It also
     # prunes any folders left empty in the ingest tree, so no separate prune is
