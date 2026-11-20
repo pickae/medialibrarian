@@ -2,10 +2,11 @@
 
 Several commands ask a language model for something: chapters from a
 transcript (`generate-chapters`, `convert-audio -a`, `convert-video`,
-`ingest-movies`, `ytdlp`), a book's cover where nothing else found one, or
-its chapter titles where its file names only number them (`concat-audio`).
-Each of those is a **task**, and each task picks from the
-models you have, by what it needs and what it would rather have.
+`ingest-movies`, `ytdlp`), picking or translating a ChapterDB chapter set
+for the library's language (`ingest-movies`), or a book's cover where
+nothing else found one or its chapter titles where its file names only
+number them (`concat-audio`). Each of those is a **task**, and each task
+picks from the models you have, by what it needs and what it would rather have.
 
 ## Your models
 
@@ -90,6 +91,7 @@ Run with `-v` to see which model each task took, and what it was taken for.
 | --- | --- | --- | --- |
 | `chapters` | - | reasoning | balanced |
 | `chapters-instructed` (chapters with your `-P` instructions) | - | web, reasoning | precise |
+| `chapterdb-choose` (pick or translate a fitting ChapterDB chapter set) | - | reasoning | balanced |
 | `cover-search` | web | reasoning | balanced |
 | `cover-look` | vision | - | light |
 | `contents-search` | web | reasoning | balanced |

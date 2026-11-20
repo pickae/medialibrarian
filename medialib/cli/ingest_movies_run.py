@@ -48,6 +48,7 @@ from medialib.lib import (
     imdbdata,
     keepparts,
     languages,
+    modelmeter,
     overwrite,
     plexnames,
     ramscratch,
@@ -2059,7 +2060,7 @@ def _write_chapter_set(work: tuple) -> str:
     return chapterdb.apply_set(movie, existing, chosen, log)
 
 
-def _chapter_phase(root: str, ahead: dict) -> None:
+def _chapter_phase(root: str, ahead: dict, meter_file: str = "") -> None:
     """The full ingest's chapter lookup, which needs curl and nothing that
     would stop the rest of the run without it - asked of the pages its
     research fetched while the run did everything else."""
@@ -2068,9 +2069,15 @@ def _chapter_phase(root: str, ahead: dict) -> None:
         return
     log("Phase: looking up chapters for films without named ones")
     ahead["chapters"].finish(log)
-    outcome = chapterdb.add_chapters(root, log, ahead["chapter pages"])
+    outcome = chapterdb.add_chapters(root, log, ahead["chapter pages"],
+                                     meter_file=meter_file)
     _report_chapters({verdict: len(films)
                       for verdict, films in outcome.items()})
+    if meter_file:
+        spans, tally = modelmeter.gathered(meter_file)
+        if tally.requests > 1:
+            log("Chapter model over the run: "
+                + modelmeter.rate_line("all", spans.seconds, tally))
 
 
 def extras(root: str) -> list:
@@ -3259,7 +3266,10 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
         log("Phase: looking up chapters for films without named ones - "
             "OMITTED (-o chapters)")
     else:
-        _chapter_phase(root, ahead)
+        ram_root = getattr(state, "ram_root", "")
+        meter_file = (os.path.join(ram_root, "chapterdb-model.jsonl")
+                      if ram_root else "")
+        _chapter_phase(root, ahead, meter_file)
     _plex_phase(root, state)
 
     # Last of all, once each film is the file it will stay: its converted copy
@@ -3533,7 +3543,8 @@ def _chapter_questions(root: str, fetch) -> None:
         verdict, title, existing = chapterdb.examine(movie)
         if verdict:
             continue
-        _chosen, answered = chapterdb.find_set(title, existing, fetch)
+        _chosen, answered = chapterdb.find_set(title, existing, fetch,
+                                               use_llm=False)
         if not answered:
             return
 

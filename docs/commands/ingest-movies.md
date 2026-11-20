@@ -791,7 +791,18 @@ be in order, and reach past the middle of the film. Of the sets that fit:
 | numbered chapters | **replaced** only by a named set with the same number of chapters, each starting within a second of the film's own: the same marks, now with names. Numbered chapters at other times — a different authoring, or marks a muxer put every five minutes — are kept, since there is no point dropping marks the film already has |
 | named chapters | not looked up at all |
 
-Among sets that fit, English names win, then the set more people confirmed.
+Among sets that fit, English names win deterministically, then the set more
+people confirmed. When fitting named sets compete across languages or when
+the deterministic winner does not match your library's primary language (the
+first language in `spokenLanguages`), and a language model is set up
+(`chapterDbLlm` is `on` by default, using the `chapterdb-choose` task in
+[docs/models.md](../models.md)), the model is sent the film title, the
+fitting candidate sets and their chapter names and may either choose one of
+the offered sets or translate its chapter names into your primary language.
+Timestamps and chapter counts are never altered; on any invalid answer,
+`unsure`, model error, or when no model is available, the deterministic
+choice stands. When the deterministic winner already clearly matches your
+primary language, no model is called.
 
 **Written in place, never remuxed.** `mkvpropedit --chapters` replaces every
 chapter the film had, so it never ends up carrying two sets. It writes as it

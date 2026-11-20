@@ -50,9 +50,9 @@ from dataclasses import dataclass
 from medialib.lib import llmclient, llmtraits, runlog, settings
 
 __all__ = ["MODELS_VARIABLE", "LEAN_VARIABLE", "LEANS", "Task", "TASKS", "CHAPTERS",
-           "CHAPTERS_INSTRUCTED", "COVER_SEARCH", "COVER_LOOK", "CONTENTS_SEARCH",
-           "Roster",
-           "RosterError", "load", "require", "optional", "chapters_task"]
+           "CHAPTERS_INSTRUCTED", "CHAPTERDB_CHOOSE", "COVER_SEARCH", "COVER_LOOK",
+           "CONTENTS_SEARCH", "Roster", "RosterError", "load", "require",
+           "optional", "chapters_task"]
 
 MODELS_VARIABLE = "llmModels"
 LEAN_VARIABLE = "llmLean"
@@ -88,6 +88,10 @@ CHAPTERS_INSTRUCTED = Task(
     "chapters-instructed", "chapter a recording following the user's own "
     "instructions, which may ask for something to be looked up",
     prefers=("web", "reasoning"), lean="precise")
+CHAPTERDB_CHOOSE = Task(
+    "chapterdb-choose",
+    "pick or translate a ChapterDB chapter set for the library's language",
+    prefers=("reasoning",))
 COVER_SEARCH = Task("cover-search", "search the web for a recording's cover",
                     requires=("web",), prefers=("reasoning",))
 COVER_LOOK = Task("cover-look", "look at the covers found and pick the "
@@ -97,7 +101,8 @@ CONTENTS_SEARCH = Task("contents-search", "search the web for a book's table "
                        requires=("web",), prefers=("reasoning",))
 
 TASKS = {task.name: task for task in (CHAPTERS, CHAPTERS_INSTRUCTED,
-                                      COVER_SEARCH, COVER_LOOK, CONTENTS_SEARCH)}
+                                      CHAPTERDB_CHOOSE, COVER_SEARCH,
+                                      COVER_LOOK, CONTENTS_SEARCH)}
 
 
 def chapters_task(instructions: str) -> Task:

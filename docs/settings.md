@@ -24,6 +24,7 @@ no command reads is warned about.
 | `audiobookLosslessFilters` | The ffmpeg filters the lossless copy of an audiobook is made with; empty for none | `dynaudnorm=f=150:g=15,afftdn=nf=-70` | `read-library` |
 | `beetsConfig` | The beets config ingest-music's tagging phase runs with | the shipped `medialib/config/beets.yaml` | `ingest-music` |
 | `censusRamBase` | The census's scratch, ahead of `ramScratchBase` | `ramScratchBase` | `content-census`, `content-census-bi` |
+| `chapterDbLlm` | Whether fitting ChapterDB chapter sets that compete across languages or do not match the library's primary language (`spokenLanguages`) are handed to a language model to pick or translate (the `chapterdb-choose` task, see docs/models.md): the film title, candidate chapter sets and chapter names are sent to the model: `on` or `off` | on | `ingest-movies` |
 | `comicPdfExtensions` | The file suffixes that may be comic PDFs, space-separated | pdf | `content-census` |
 | `comicPdfFallbackDpi` | The resolution used where the PDF's own cannot be read | 300 | `content-census`, `convert-comics` |
 | `comicPdfJpegQuality` | The JPEG quality comic PDF pages are rendered at | 92 | `content-census`, `convert-comics` |
