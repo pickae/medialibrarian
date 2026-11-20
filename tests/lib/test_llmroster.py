@@ -61,6 +61,7 @@ class TestTheLadder:
     def test_what_a_task_needs_leaves_the_rest_out(self, tmp_path):
         # Only Claude searches here: no harness is set up for the others.
         assert _names(_roster(tmp_path).ladder(llmroster.COVER_SEARCH)) == ["claude"]
+        assert _names(_roster(tmp_path).ladder(llmroster.GAPS_CHECK)) == ["claude"]
 
     def test_a_light_task_takes_the_small_cheap_and_fast_first(self, tmp_path):
         assert _names(_roster(tmp_path).ladder(llmroster.COVER_LOOK)) == [

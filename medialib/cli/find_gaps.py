@@ -38,6 +38,7 @@ from dataclasses import dataclass, field
 from medialib import commands
 from medialib.cli.clean_folder_structure import DATE_PREFIX
 from medialib.lib import (
+    aigaps,
     cleannamesindividually,
     clioptions,
     enums,
@@ -359,8 +360,66 @@ def _dated(names: list[str]) -> list[datetime.date] | None:
     return dates
 
 
+def _is_number_run(values: set[int]) -> bool:
+    """Whether ``values`` satisfy :func:`missing_numbers`'s run criteria."""
+    counted = {value for value in values if value > 0}
+    if len(counted) < 2:
+        return False
+    top = max(counted)
+    if len(counted) / top >= _MIN_COVERAGE:
+        return True
+    bottom = min(counted)
+    return len(counted) >= 3 and len(counted) / (top - bottom + 1) >= _MIN_DENSITY
+
+
+def _sample_names(names: list[str], limit: int = aigaps.MAX_SAMPLE_NAMES) -> tuple[str, ...]:
+    """Up to ``limit`` representative names: start and end of the run."""
+    if len(names) <= limit:
+        return tuple(names)
+    head = limit // 2
+    tail = limit - head
+    return tuple([*names[:head], *names[-tail:]])
+
+
+def _numbers_present(values: set[int], width: int, prefix: str = "") -> str:
+    counted = sorted(value for value in values if value > 0)
+    if not counted:
+        return ""
+    ranges = [
+        "%s%0*d" % (prefix, width, first) if first == last
+        else "%s%0*d-%s%0*d" % (prefix, width, first, prefix, width, last)
+        for first, last in _blocks(counted)
+    ]
+    return "%s (%d item(s))" % (", ".join(ranges), len(counted))
+
+
+def _episodes_present(names: list[str]) -> str:
+    seasons: dict[int, set[int]] = {}
+    for name in names:
+        for season, episode in episodes_of(name):
+            seasons.setdefault(season, set()).add(episode)
+    if not seasons:
+        return ""
+    season_width = max(2, len(str(max(seasons))))
+    episode_width = max(2, *(len(str(max(eps))) for eps in seasons.values()))
+    parts: list[str] = []
+    total = 0
+    for season in sorted(seasons):
+        label = "S%0*d" % (season_width, season)
+        eps = sorted(seasons[season])
+        total += len(eps)
+        for first, last in _blocks(eps):
+            parts.append(
+                "%sE%0*d" % (label, episode_width, first) if first == last
+                else "%sE%0*d-E%0*d" % (label, episode_width, first, episode_width, last))
+    return "%s (%d episode(s))" % (", ".join(parts), total)
+
+
 def _file_gaps(files: list[str], year_dates: list[datetime.date],
-               node: Folder, in_years: bool) -> None:
+               node: Folder, in_years: bool,
+               runs: list[aigaps.RunSummary] | None = None,
+               rel: str = ".",
+               year_samples: list[str] | None = None) -> None:
     """What is missing from the folder's own run of files, into ``node``.
 
     ``in_years`` is a year folder whose dates its parent has already counted,
@@ -368,28 +427,58 @@ def _file_gaps(files: list[str], year_dates: list[datetime.date],
     """
     run = _run_files(files) if len(files) >= 2 else files
     episodes = episode_gaps(run, os.path.basename(node.name)) if run else None
-    if episodes:
+    if episodes is not None:
         node.entries += episodes[0]
         node.missing += episodes[1]
-        return
-    if episodes is not None:
+        if runs is not None:
+            runs.append(aigaps.RunSummary(
+                folder=rel, kind="episodes",
+                present=_episodes_present(run),
+                gaps=tuple(episodes[0]),
+                sample_names=_sample_names(run)))
         return
     dates = _dated(run) if len(run) >= 2 else None
     if dates is not None and in_years:
         return
     if dates is not None or year_dates:
-        gaps = date_gaps((dates or []) + year_dates) or []
+        all_dates = (dates or []) + year_dates
+        gaps = date_gaps(all_dates) or []
         node.entries += gaps
         node.date_gaps += len(gaps)
+        if runs is not None:
+            days = sorted(set(all_dates))
+            if days:
+                cadence = ""
+                if len(days) >= _MIN_DATES:
+                    intervals = [(b - a).days
+                                 for a, b in zip(days, days[1:], strict=False)]
+                    cadence, _conspicuous = _cadence(statistics.median(intervals))
+                source_names = run if dates is not None else (year_samples or [])
+                runs.append(aigaps.RunSummary(
+                    folder=rel, kind="dates",
+                    present="%d date(s)" % len(days),
+                    gaps=tuple(gaps),
+                    sample_names=_sample_names(source_names),
+                    cadence=cadence,
+                    date_range="%s..%s" % (days[0].isoformat(), days[-1].isoformat())))
         return
     if len(run) >= 2:
         values, width = numbers_of(run, "files")
         missing = missing_numbers(values)
-        node.entries += _number_entries(missing, width)
+        entries = _number_entries(missing, width)
+        node.entries += entries
         node.missing += len(missing)
+        if runs is not None and _is_number_run(values):
+            runs.append(aigaps.RunSummary(
+                folder=rel, kind="numbers",
+                present=_numbers_present(values, width),
+                gaps=tuple(entries),
+                sample_names=_sample_names(run)))
 
 
-def _folder_gaps(folders: list[str], node: Folder) -> None:
+def _folder_gaps(folders: list[str], node: Folder,
+                 runs: list[aigaps.RunSummary] | None = None,
+                 rel: str = ".") -> None:
     """What is missing from the run the sub-folders form, into ``node``. A
     single season folder is a run, one that is missing the seasons before it."""
     seasons = [_SEASON_FOLDER.match(name) for name in folders]
@@ -401,20 +490,34 @@ def _folder_gaps(folders: list[str], node: Folder) -> None:
         # missing "Season 2", "S01" by "S02".
         sample = matched[0]
         width = len(sample.group(1))
-        for number in missing:
-            node.entries.append("%s%0*d (folder)" % (
-                sample.string[:sample.start(1)], width, number))
+        prefix = sample.string[:sample.start(1)]
+        added = ["%s%0*d (folder)" % (prefix, width, number) for number in missing]
+        node.entries += added
         node.missing += len(missing)
+        if runs is not None:
+            runs.append(aigaps.RunSummary(
+                folder=rel, kind="seasons",
+                present=_numbers_present(present, width, prefix=prefix),
+                gaps=tuple(added),
+                sample_names=_sample_names(folders)))
         return
     if len(folders) < 2:
         return
     values, width = numbers_of(folders, "folders")
     missing = missing_numbers(values)
-    node.entries += _number_entries(missing, width, " (folder)")
+    added = _number_entries(missing, width, " (folder)")
+    node.entries += added
     node.missing += len(missing)
+    if runs is not None and _is_number_run(values):
+        runs.append(aigaps.RunSummary(
+            folder=rel, kind="folders",
+            present=_numbers_present(values, width),
+            gaps=tuple(added),
+            sample_names=_sample_names(folders)))
 
 
-def _year_dates(directory: str, folders: list[str]) -> list[datetime.date]:
+def _year_dates(directory: str, folders: list[str],
+                samples: list[str] | None = None) -> list[datetime.date]:
     """The dates of the dated files in ``directory``'s year folders, which are
     one run with the folder's own - the way `clean-folder-structure -y` sorts a
     run into years."""
@@ -424,26 +527,37 @@ def _year_dates(directory: str, folders: list[str]) -> list[datetime.date]:
             continue
         files, _folders = _listing(os.path.join(directory, name))
         if files:
-            dates += _dated(_run_files(files)) or []
+            run = _run_files(files)
+            found = _dated(run) or []
+            dates += found
+            if samples is not None and found:
+                samples += ["%s/%s" % (name, f) for f in run]
     return dates
 
 
-def analyse(directory: str, name: str, in_years: bool = False) -> Folder:
+def analyse(directory: str, name: str, in_years: bool = False,
+            runs: list[aigaps.RunSummary] | None = None,
+            rel: str = ".") -> Folder:
     """The report's folder for ``directory`` and everything under it."""
     node = Folder(name)
     files, folders = _listing(directory)
     year_folders = [f for f in folders if _YEAR_FOLDER.match(f)]
     years = bool(year_folders) and len(year_folders) * 2 >= len(folders)
-    year_dates = _year_dates(directory, folders) if years else []
-    _file_gaps(files, year_dates, node, in_years)
+    year_samples: list[str] = []
+    year_dates = _year_dates(directory, folders,
+                             year_samples if runs is not None else None) if years else []
+    _file_gaps(files, year_dates, node, in_years, runs=runs, rel=rel,
+               year_samples=year_samples)
     # Year folders are not a numbered run with gaps where a year had nothing:
     # the gaps in the dates of the files in them are what is missing.
     if not (years and year_dates):
-        _folder_gaps(folders, node)
+        _folder_gaps(folders, node, runs=runs, rel=rel)
     for sub in folders:
+        child_rel = sub if rel == "." else "%s/%s" % (rel, sub)
         child = analyse(os.path.join(directory, sub), sub,
                         in_years=years and bool(year_dates)
-                        and bool(_YEAR_FOLDER.match(sub)))
+                        and bool(_YEAR_FOLDER.match(sub)),
+                        runs=runs, rel=child_rel)
         if child.has_gaps():
             node.children.append(child)
             node.missing += child.missing
@@ -522,15 +636,26 @@ def main(argv: list, program: str = "find-gaps",
     if not overwrite.confirm_overwrite([report]):
         return 1
 
-    tree = analyse(root, root)
+    runs: list[aigaps.RunSummary] = []
+    tree = analyse(root, root, runs=runs)
+    findings = aigaps.check_gaps(report_name(root), runs)
     folders = _count_folders(tree)
     with open(report, "w", encoding="utf-8", errors="surrogateescape") as handle:
         for line in render(tree):
             handle.write(line + "\n")
         handle.write("\n%d folder(s) with gaps, %d missing, %d date gap(s)\n"
                      % (folders, tree.missing, tree.date_gaps))
-    print('Wrote %d folder(s) with gaps (%d missing, %d date gap(s)) to "%s".'
-          % (folders, tree.missing, tree.date_gaps, report))
+        if findings:
+            handle.write("\n")
+            for line in aigaps.format_findings(findings):
+                handle.write(line + "\n")
+    if findings:
+        print('Wrote %d folder(s) with gaps (%d missing, %d date gap(s), '
+              '%d model note(s)) to "%s".'
+              % (folders, tree.missing, tree.date_gaps, len(findings), report))
+    else:
+        print('Wrote %d folder(s) with gaps (%d missing, %d date gap(s)) to "%s".'
+              % (folders, tree.missing, tree.date_gaps, report))
     return 0
 
 
