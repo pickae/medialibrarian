@@ -1,13 +1,22 @@
 # Language models
 
 Several commands ask a language model for something: chapters from a
-transcript (`generate-chapters`, `convert-audio -a`, `convert-video`,
-`ingest-movies`, `ytdlp`), a book's cover where nothing else found one or its
-chapter titles where its file names only number them (`concat-audio`), or an
-advisory likely cause and next step for unexplained errors left in a run's
-error log (`error-triage`, controlled by `errorTriageLlm`). Each of those is a
-**task**, and each task picks from the
-models you have, by what it needs and what it would rather have.
+transcript (`generate-chapters`, `convert-audio -a`, `convert-video -C`,
+`ingest-movies`, `ytdlp`), host-read ads in RSS and site podcasts (`ytdlp`),
+a video's encoding profile from sampled frames (`convert-video -p auto`), a
+book's cover where nothing else found one, its chapter titles where its file
+names only number them (`concat-audio`), reading picture subtitles into text
+(`ingest-movies`), the MusicBrainz release of an album beets skipped
+(`ingest-music`), classifying recurring filename fragment candidates
+(`find-fragment-candidates`), web-checked gap notes for numbered and dated
+runs (`find-gaps`), report-only match suggestions for unmatched or ambiguous
+Letterboxd entries (`plex-letterboxd-sync`), an e-book's language where its
+metadata and text disagree or neither gives a confident answer
+(`read-library`), classifying e-book images as book content versus
+advertising (`ingest-books -d`), or an advisory likely cause and next step
+for unexplained errors left in a run's error log (`error-triage`, controlled
+by `errorTriageLlm`). Each of those is a **task**, and each task picks from
+the models you have, by what it needs and what it would rather have.
 
 ## Your models
 
@@ -95,6 +104,15 @@ Run with `-v` to see which model each task took, and what it was taken for.
 | `cover-search` | web | reasoning | balanced |
 | `cover-look` | vision | - | light |
 | `contents-search` | web | reasoning | balanced |
+| `subtitle-ocr` | vision | local, cheap | light |
+| `video-profile` (`convert-video -p auto`) | vision | - | light |
+| `music-search` | web | reasoning | balanced |
+| `podcast-ads` | - | reasoning | balanced |
+| `fragment-classify` | - | reasoning, web | balanced |
+| `gaps-check` | web | reasoning | balanced |
+| `letterboxd-match` | - | reasoning, web | balanced |
+| `book-language` | - | - | light |
+| `book-image-check` | vision | - | light |
 | `error-triage` (unexplained errors in a run's error log) | - | reasoning, local | balanced |
 
 `error-triage` prefers a local model because error logs carry library paths,
@@ -113,8 +131,9 @@ A task's models, best first:
 A task that can do without what it prefers still runs on a model that lacks
 it: chapters with instructions are written without web search when no model
 can search. A task that needs something no model has is skipped (the cover
-search) or refused before any work (the chapter commands), saying which
-trait was missing.
+search, the music release lookup, and `book-image-check`, which falls back
+to the fixed junk-name substrings) or refused before any work (the chapter
+commands and `convert-video -p auto`), saying which trait was missing.
 
 Overriding it:
 
@@ -128,9 +147,17 @@ models = ["claude", "qwen-local"]     # this ladder, in this order
 
 `llmLean` sets the lean of every task the file does not.
 
-## Renamed settings
+## Renamed and replaced settings
 
 The model settings used to be called `chapterLlm…` (`chapterLlmUrl`,
 `chapterLlmModel`, …). They are `llm…` now. The old names still work, in
 the environment and in the settings file, and each run warns about them
 until they are renamed.
+
+Picture-subtitle OCR used to have its own settings (`subtitleOcrUrl`,
+`subtitleOcrServe`, `subtitleOcrServeMib`, `subtitleOcrModel`,
+`subtitleOcrOptions`, `subtitleOcrJobs`). Move that vision model into
+`models.toml` (or the `llm…` settings), where the `subtitle-ocr` task picks
+it up. The old `subtitleOcr…` settings still work for the time being — they
+join the roster as a model named `subtitle-ocr` kept to that task — and each
+run warns about them until they are moved.

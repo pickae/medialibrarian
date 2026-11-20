@@ -25,10 +25,12 @@ import datetime
 import json
 import os
 import sys
+from collections.abc import Sequence
 from typing import NamedTuple
 
 from medialib import commands
 from medialib.lib import (
+    ailetterboxd,
     clioptions,
     letterboxd,
     plexserver,
@@ -428,7 +430,8 @@ def _row_said(row: Row) -> str:
     return "  %s: %s" % (row.film, ", ".join(parts))
 
 
-def report(result: Plan, to_plex_only: bool) -> None:
+def report(result: Plan, to_plex_only: bool,
+           suggestions: Sequence[ailetterboxd.Suggestion] = ()) -> None:
     runlog.result("Letterboxd -> Plex: %d film(s) to mark played, %d to rate"
                   % (len(result.mark), len(result.rate)))
     for movie, found in result.mark:
@@ -451,6 +454,8 @@ def report(result: Plan, to_plex_only: bool) -> None:
         runlog.result("Plex -> Letterboxd: %d row(s) to import" % len(result.rows))
         for row in result.rows:
             runlog.result(_row_said(row))
+    if suggestions:
+        ailetterboxd.report_suggestions(suggestions)
 
 
 # --- the run ------------------------------------------------------------------
@@ -538,7 +543,10 @@ def main(argv: list, program: str = "plex-letterboxd-sync",
                    if library.whole else "changes since the last run read"))
         films, unnamed = name_films(films, library.movies, state.unnamed)
         result_plan = plan(movies, films, waiting, to_plex_only)
-        report(result_plan, to_plex_only)
+        # Report only: model suggestions never alter result_plan, Plex, CSVs or state.
+        suggestions = ailetterboxd.suggest_for_sync(
+            movies, films, result_plan.ambiguous)
+        report(result_plan, to_plex_only, suggestions)
         wishes = plan_watchlist(library.watchlist, lb_watchlist, films,
                                 library.movies, wanted_waiting, to_plex_only)
         report_watchlist(wishes, to_plex_only)

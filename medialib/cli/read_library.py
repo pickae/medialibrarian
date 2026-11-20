@@ -35,6 +35,7 @@ from medialib.lib import (
     ffmpegselect,
     formatting,
     imagemagick,
+    modelmeter,
     ramscratch,
     runcontext,
     runlog,
@@ -373,6 +374,7 @@ class Run:
     run_marker: str
     narration_language: str
     narration_engine: str
+    language_meter: str
     # The run's clocks, the end unset until the run has one.
     run_start: float
     run_start_epoch: int
@@ -538,7 +540,9 @@ class Run:
         # over it, and reading it in the default voice is the lesser wrong.
         language = self.narration_language or ""
         if not language:
-            language = booklanguage.book_language(source)
+            language = booklanguage.book_language(
+                source, ram_base=self.temp_path,
+                meter_file=getattr(self, "language_meter", ""))
             if language and not booknarration.narration_supports_language(
                     language):
                 self.counters.note(
@@ -705,6 +709,12 @@ def footer(state: Run) -> None:
         if total_seconds > 0:
             runlog.say("Real-time speedup: %sx\n" % formatting.fmt_ratio(
                 "%.6f" % (audio_seconds / total_seconds)))
+    meter_file = getattr(state, "language_meter", "")
+    if meter_file:
+        spans, tally = modelmeter.gathered(meter_file)
+        if tally.requests > 1:
+            runlog.say("Language model:    %s\n"
+                       % modelmeter.rate_line("all", spans.seconds, tally))
 
     sys.stderr.flush()
     safety.report_safety_skips()
@@ -1007,7 +1017,9 @@ def _read(result, program: str, script_dir: str, in_path: str, out_path: str,
         opus_jobs=opus_jobs, narration_jobs=jobs,
         resume_extensions=resume_extensions,
         run_marker=run_marker, narration_language=narration_language,
-        narration_engine=narration_engine, run_start=run_start,
+        narration_engine=narration_engine,
+        language_meter=os.path.join(counter_dir, "language.meter"),
+        run_start=run_start,
         run_start_epoch=int(run_start), run_end=None,
     )
 

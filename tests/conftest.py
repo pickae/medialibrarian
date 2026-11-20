@@ -320,6 +320,21 @@ def private_workspace(tmp_path_factory, monkeypatch):
     # Nor is a language model asked for one: a case that turns the search
     # back on would otherwise reach the model the machine's settings name.
     monkeypatch.setenv("coverSearchLlm", "off")
+    # Nor is a language model asked to find ad reads in RSS podcasts.
+    monkeypatch.setenv("podcastAdsLlm", "off")
+    monkeypatch.setenv("podcastAdsCut", "off")
+    # Nor to classify fragment candidates: existing CLI cases stay deterministic.
+    monkeypatch.setenv("fragmentCandidatesLlm", "off")
+    # Nor for find-gaps's web-checked gap notes.
+    monkeypatch.setenv("findGapsLlm", "off")
+    # Nor are unmatched or ambiguous Letterboxd entries handed to a model.
+    monkeypatch.setenv("letterboxdMatchLlm", "off")
+    # Nor for a book's language when metadata and text disagree or say nothing.
+    monkeypatch.setenv("bookLanguageLlm", "off")
+    # Nor are book images sent to a vision model during ingest-books -d: a case
+    # about book-image classification turns it back on and stands in for the
+    # model.
+    monkeypatch.setenv("bookJunkImagesLlm", "off")
     # Nor for advisory triage of error logs: a CLI case that provokes an error
     # would otherwise reach a model at exit. Triage's own cases turn it back on.
     monkeypatch.setenv("errorTriageLlm", "off")
