@@ -581,9 +581,10 @@ def load(stream=None) -> None:
                          % (path, name, RENAMED[name]))
             name = RENAMED[name]
         elif name in DEPRECATED:
-            stream.write("==> WARNING: %s sets %s, which is replaced by %s now - "
-                         "the old name works for the time being\n"
-                         % (path, name, DEPRECATED[name]))
+            if value.strip():
+                stream.write("==> WARNING: %s sets %s, which is replaced by %s now - "
+                             "the old name works for the time being\n"
+                             % (path, name, DEPRECATED[name]))
         elif name not in BY_NAME:
             near = difflib.get_close_matches(name, BY_NAME, n=1)
             stream.write("==> WARNING: %s sets %s, which no command reads%s\n"
@@ -603,7 +604,7 @@ def _apply_renamed(stream) -> None:
                          % (old, new))
             os.environ.setdefault(new, os.environ[old])
     for old, replacement in DEPRECATED.items():
-        if old in os.environ:
+        if os.environ.get(old, "").strip():
             stream.write("==> WARNING: the environment sets %s, which is "
                          "replaced by %s now - the old name works for the "
                          "time being\n" % (old, replacement))

@@ -743,7 +743,7 @@ class TestVisionRosterAndFallback:
                              said={"vision": True}, name="good")
 
         @contextlib.contextmanager
-        def fail_serving(log):
+        def fail_serving(log, **_kwargs):
             raise llmclient.LlmError("down")
             yield down  # pragma: no cover
 
@@ -753,8 +753,9 @@ class TestVisionRosterAndFallback:
 
         monkeypatch.setattr(down, "serving", fail_serving)
         monkeypatch.setattr(text_only, "serving",
-                            lambda log: serve_as(text_only))
-        monkeypatch.setattr(good, "serving", lambda log: serve_as(good))
+                            lambda log, **_kwargs: serve_as(text_only))
+        monkeypatch.setattr(good, "serving",
+                            lambda log, **_kwargs: serve_as(good))
         monkeypatch.setattr(
             good, "ask_pictures",
             lambda *a, **k: ["Bonjour.", "- Oui ?\n- Non.", "Line one.\nLine two."])
@@ -842,7 +843,9 @@ class TestTheVisionSettings:
         assert asked[0][0] == "vision-35b"
 
     def test_without_one_the_server_s_first(self, asked, tmp_path):
-        self._read(tmp_path)
+        written, logs = self._read(tmp_path)
+        assert written
+        assert logs == []
         assert len(asked) == 1
         assert asked[0][0] == "listed"
 

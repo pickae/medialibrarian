@@ -292,7 +292,8 @@ class Llm:
         return copy
 
     @contextlib.contextmanager
-    def serving(self, log: Callable[[str], None]) -> Iterator[Llm]:
+    def serving(self, log: Callable[[str], None], *,
+                announce: bool = True) -> Iterator[Llm]:
         """This model on the first server of the ladder that can be had now,
         held until the block ends: the first one answering, or the first
         started where it is not running (:attr:`serve`) and the GPU has room.
@@ -320,7 +321,7 @@ class Llm:
                 listing = _listing(url, self.key)
                 if listing is None:
                     continue
-                yield self._on(url, listing, log)
+                yield self._on(url, listing, log, announce=announce)
                 return
             finally:
                 if server is not None:
@@ -329,7 +330,7 @@ class Llm:
                        "started now" % ", ".join((self.url,) + self.fallbacks))
 
     def _on(self, url: str, listed: dict[str, int],
-            log: Callable[[str], None]) -> Llm:
+            log: Callable[[str], None], *, announce: bool = True) -> Llm:
         """This model as the server at ``url``, listing ``listed``, serves it
         - see :meth:`serving`."""
         model = self.model
@@ -342,7 +343,7 @@ class Llm:
         context = self.context_tokens
         if window and (not self.context_given or window < context):
             context = window
-        if url != self.url or model != self.model:
+        if announce and (url != self.url or model != self.model):
             log("    asking %s at %s" % (model, url))
         bound = replace(self, url=url, model=model, context_tokens=context,
                         fallbacks=(), serve="")

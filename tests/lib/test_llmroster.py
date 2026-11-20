@@ -48,6 +48,11 @@ def _fresh(monkeypatch, tmp_path):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.delenv(llmroster.LEAN_VARIABLE, raising=False)
     monkeypatch.setenv(llmroster.MODELS_VARIABLE, str(tmp_path / "models.toml"))
+    yield
+    for name in llmclient.SETTING_FIELDS.values():
+        os.environ.pop(name, None)
+    for _field, name in llmroster._LEGACY_OCR_FIELDS:
+        os.environ.pop(name, None)
 
 
 def _roster(tmp_path, text=_ROSTER):

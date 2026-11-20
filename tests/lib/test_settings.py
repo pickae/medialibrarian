@@ -141,6 +141,15 @@ def test_the_file_is_under_the_config_home(monkeypatch, tmp_path):
                                                     "settings")
 
 
+@pytest.fixture(autouse=True)
+def _restore_deprecated_env(monkeypatch):
+    for name in settings.DEPRECATED:
+        monkeypatch.delenv(name, raising=False)
+    yield
+    for name in settings.DEPRECATED:
+        os.environ.pop(name, None)
+
+
 def test_deprecated_settings_warn_without_unknown_warning(
         tmp_path, monkeypatch):
     _file(tmp_path, monkeypatch, "subtitleOcrUrl=http://127.0.0.1:8082\n")
@@ -153,3 +162,11 @@ def test_deprecated_settings_warn_without_unknown_warning(
     assert "subtitleOcrModel" in out
     assert "no command reads" not in out
     assert os.environ["subtitleOcrUrl"] == "http://127.0.0.1:8082"
+
+
+def test_blank_deprecated_settings_do_not_warn(tmp_path, monkeypatch):
+    _file(tmp_path, monkeypatch, "subtitleOcrUrl=\n")
+    monkeypatch.setenv("subtitleOcrModel", "")
+    said = io.StringIO()
+    settings.load(said)
+    assert said.getvalue() == ""

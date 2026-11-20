@@ -458,7 +458,7 @@ def _read_by_vision(image: str, row, out: str, environ,
     tried_any = False
     for llm in models:
         try:
-            with llm.serving(log) as served:
+            with llm.serving(log, announce=False) as served:
                 if not served.sees_images():
                     continue
                 if lines is None:
