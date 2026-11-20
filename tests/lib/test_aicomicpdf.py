@@ -209,7 +209,7 @@ def test_non_comic_and_errors_rejected(tmp_path, monkeypatch, raw_answer,
     else:
         assert verdict is not None
         assert verdict.comic is False
-        assert verdict.kind == expected_kind
+        assert verdict.classification == expected_kind
 
     if cached:
         assert aicomicpdf.read_cache(pdf, cache) == verdict

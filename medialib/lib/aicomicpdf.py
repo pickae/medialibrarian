@@ -121,7 +121,7 @@ Answer with JSON only:
 class Verdict:
     """One vision-model classification of a PDF."""
 
-    kind: str
+    classification: str
     comic: bool
     why: str = ""
 
@@ -223,9 +223,9 @@ def parse_verdict(answer: str) -> Verdict | None:
     why = " ".join(str(parsed.get("why") or "").split())[:200]
     if kind == "comic":
         if _is_confident(parsed):
-            return Verdict(kind="comic", comic=True, why=why)
-        return Verdict(kind="unsure", comic=False, why=why)
-    return Verdict(kind=kind, comic=False, why=why)
+            return Verdict(classification="comic", comic=True, why=why)
+        return Verdict(classification="unsure", comic=False, why=why)
+    return Verdict(classification=kind, comic=False, why=why)
 
 
 def _render_one(pdf: str, page: int, dest: str) -> str | None:
@@ -307,7 +307,7 @@ def read_cache(pdf: str, path: str = "") -> Verdict | None:
     comic = bool(entry.get("comic")) and kind == "comic"
     why_raw = entry.get("why")
     why = why_raw if isinstance(why_raw, str) else ""
-    return Verdict(kind=kind, comic=comic, why=why)
+    return Verdict(classification=kind, comic=comic, why=why)
 
 
 def write_cache(pdf: str, verdict: Verdict, path: str = "") -> None:
@@ -328,7 +328,7 @@ def write_cache(pdf: str, verdict: Verdict, path: str = "") -> None:
     record = {
         "size": size,
         "mtime_ns": mtime_ns,
-        "kind": verdict.kind,
+        "kind": verdict.classification,
         "comic": verdict.comic,
         "why": verdict.why,
     }
@@ -373,7 +373,8 @@ def judge(pdf: str, pages: int, good: int, *,
 
     cached = read_cache(pdf, cache_file)
     if cached is not None:
-        _detail('  Cached vision verdict for "%s": %s' % (name, cached.kind))
+        _detail('  Cached vision verdict for "%s": %s'
+                % (name, cached.classification))
         return cached
 
     if lookers is None:
@@ -431,5 +432,5 @@ def judge(pdf: str, pages: int, good: int, *,
         _log('  Vision judged "%s" as comic%s (%s)' % (name, reason, rate))
     else:
         _log('  Vision judged "%s" as %s (not a comic)%s (%s)'
-             % (name, verdict.kind, reason, rate))
+             % (name, verdict.classification, reason, rate))
     return verdict
