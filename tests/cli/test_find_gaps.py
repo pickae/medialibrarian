@@ -221,7 +221,7 @@ class TestModelRunCollectionAndReport:
         runs = []
         tree = find_gaps.analyse(str(tmp_path), "lib", runs=runs)
         assert find_gaps.render(tree) == ["lib", "`-- Book/", "    `-- 02"]
-        by_folder = {(r.folder, r.kind): r for r in runs}
+        by_folder = {(r.folder, r.shape): r for r in runs}
         assert ("Show/Season 1", "episodes") in by_folder
         assert by_folder[("Show/Season 1", "episodes")].gaps == ()
         assert "S01E01-E02" in by_folder[("Show/Season 1", "episodes")].present

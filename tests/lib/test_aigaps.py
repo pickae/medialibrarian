@@ -51,14 +51,14 @@ def _sample_runs() -> list[aigaps.RunSummary]:
     return [
         aigaps.RunSummary(
             folder="Show/Season 1",
-            kind="episodes",
+            shape="episodes",
             present="S01E01-E08 (8 episode(s))",
             gaps=(),
             sample_names=("Show S01E01 Pilot.mkv", "Show S01E08 Penultimate.mkv"),
         ),
         aigaps.RunSummary(
             folder="Podcast",
-            kind="dates",
+            shape="dates",
             present="16 date(s)",
             gaps=("20231128-20240114 (nothing for 48 days, otherwise weekly)",),
             sample_names=("20231002 Episode 1.mp3", "20240226 Episode 16.mp3"),
@@ -67,7 +67,7 @@ def _sample_runs() -> list[aigaps.RunSummary]:
         ),
         aigaps.RunSummary(
             folder="Audiobook",
-            kind="numbers",
+            shape="numbers",
             present="01-02, 04 (3 item(s))",
             gaps=("03",),
             sample_names=("01 Chapter One.mp3", "04 Chapter Four.mp3"),

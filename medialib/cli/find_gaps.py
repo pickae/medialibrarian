@@ -432,7 +432,7 @@ def _file_gaps(files: list[str], year_dates: list[datetime.date],
         node.missing += episodes[1]
         if runs is not None:
             runs.append(aigaps.RunSummary(
-                folder=rel, kind="episodes",
+                folder=rel, shape="episodes",
                 present=_episodes_present(run),
                 gaps=tuple(episodes[0]),
                 sample_names=_sample_names(run)))
@@ -455,7 +455,7 @@ def _file_gaps(files: list[str], year_dates: list[datetime.date],
                     cadence, _conspicuous = _cadence(statistics.median(intervals))
                 source_names = run if dates is not None else (year_samples or [])
                 runs.append(aigaps.RunSummary(
-                    folder=rel, kind="dates",
+                    folder=rel, shape="dates",
                     present="%d date(s)" % len(days),
                     gaps=tuple(gaps),
                     sample_names=_sample_names(source_names),
@@ -470,7 +470,7 @@ def _file_gaps(files: list[str], year_dates: list[datetime.date],
         node.missing += len(missing)
         if runs is not None and _is_number_run(values):
             runs.append(aigaps.RunSummary(
-                folder=rel, kind="numbers",
+                folder=rel, shape="numbers",
                 present=_numbers_present(values, width),
                 gaps=tuple(entries),
                 sample_names=_sample_names(run)))
@@ -496,7 +496,7 @@ def _folder_gaps(folders: list[str], node: Folder,
         node.missing += len(missing)
         if runs is not None:
             runs.append(aigaps.RunSummary(
-                folder=rel, kind="seasons",
+                folder=rel, shape="seasons",
                 present=_numbers_present(present, width, prefix=prefix),
                 gaps=tuple(added),
                 sample_names=_sample_names(folders)))
@@ -510,7 +510,7 @@ def _folder_gaps(folders: list[str], node: Folder,
     node.missing += len(missing)
     if runs is not None and _is_number_run(values):
         runs.append(aigaps.RunSummary(
-            folder=rel, kind="folders",
+            folder=rel, shape="folders",
             present=_numbers_present(values, width),
             gaps=tuple(added),
             sample_names=_sample_names(folders)))

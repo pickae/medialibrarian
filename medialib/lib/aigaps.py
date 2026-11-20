@@ -136,7 +136,7 @@ class RunSummary:
     numbered sub-folders."""
 
     folder: str
-    kind: str
+    shape: str
     present: str
     gaps: tuple[str, ...] = ()
     sample_names: tuple[str, ...] = ()
@@ -187,8 +187,8 @@ def _is_disallowed_uri(text: str) -> bool:
 
 def _run_priority(run: RunSummary) -> tuple[int, int]:
     """Runs with deterministic gaps first, then episodes/dates/seasons/numbers."""
-    kind_rank = {"episodes": 0, "dates": 1, "seasons": 2, "numbers": 3, "folders": 4}
-    return (0 if run.gaps else 1, kind_rank.get(run.kind, 5))
+    shape_rank = {"episodes": 0, "dates": 1, "seasons": 2, "numbers": 3, "folders": 4}
+    return (0 if run.gaps else 1, shape_rank.get(run.shape, 5))
 
 
 def select_runs(runs: Sequence[RunSummary], limit: int = MAX_RUNS) -> list[RunSummary]:
@@ -213,7 +213,7 @@ def prompt(root_name: str, runs: Sequence[RunSummary]) -> str:
         folder = normalize_folder(run.folder)
         lines.append("")
         lines.append("## Folder: %s" % folder)
-        lines.append("- Kind: %s" % _collapse(run.kind, 40))
+        lines.append("- Kind: %s" % _collapse(run.shape, 40))
         lines.append("- Present: %s" % _collapse(run.present, MAX_NOTE_CHARS))
         if run.date_range:
             cadence = " (%s)" % _collapse(run.cadence, 40) if run.cadence else ""
