@@ -423,20 +423,6 @@ INTERNAL = frozenset((
 
 BY_NAME = {setting.name: setting for setting in SETTINGS}
 
-# The names settings used to go by, and the names they go by now. An old name
-# still works - in the environment and in the file - and is warned about.
-RENAMED = {"chapterLlm" + name[len("llm"):]: name for name in (
-    "llmApi", "llmUrl", "llmModel", "llmKey", "llmContext", "llmOptions",
-    "llmJobs", "llmServe", "llmServeMib", "llmHarness", "llmHarnessModel",
-    "llmVramGB")}
-
-# Settings folded into the model roster (docs/models.md). Still read for the
-# time being, and warned about in both the environment and the file.
-DEPRECATED = {
-    "subtitleOcr" + suffix: "the model roster (docs/models.md)"
-    for suffix in ("Url", "Serve", "ServeMib", "Model", "Options", "Jobs")
-}
-
 
 def config_home() -> str:
     """The medialib configuration home: ``$XDG_CONFIG_HOME/medialib`` where
@@ -580,7 +566,6 @@ def load(stream=None) -> None:
     run: SystemExit, after saying why.
     """
     stream = sys.stderr if stream is None else stream
-    _apply_renamed(stream)
     path = settings_file()
     if not os.path.isfile(path):
         _apply_shipped()
@@ -588,8 +573,7 @@ def load(stream=None) -> None:
     try:
         values = read_file(path)
         secrets = [name for name in values
-                   if RENAMED.get(name, name) in BY_NAME
-                   and BY_NAME[RENAMED.get(name, name)].secret]
+                   if name in BY_NAME and BY_NAME[name].secret]
         if secrets and readable_by_others(path):
             raise SettingsError(
                 "%s holds %s and other accounts on this machine can read it - "
@@ -602,39 +586,12 @@ def load(stream=None) -> None:
         errorlog.record("config", str(error), files=[path], stack=False)
         raise SystemExit(1) from error
     for name, value in values.items():
-        if name in RENAMED:
-            stream.write("==> WARNING: %s sets %s, which is called %s now - the "
-                         "old name works for the time being\n"
-                         % (path, name, RENAMED[name]))
-            name = RENAMED[name]
-        elif name in DEPRECATED:
-            if value.strip():
-                stream.write("==> WARNING: %s sets %s, which is replaced by %s now - "
-                             "the old name works for the time being\n"
-                             % (path, name, DEPRECATED[name]))
-        elif name not in BY_NAME:
+        if name not in BY_NAME:
             near = difflib.get_close_matches(name, BY_NAME, n=1)
             stream.write("==> WARNING: %s sets %s, which no command reads%s\n"
                          % (path, name, " - did you mean %s?" % near[0] if near else ""))
         os.environ.setdefault(name, value)
     _apply_shipped()
-
-
-def _apply_renamed(stream) -> None:
-    """An old name set in the environment, carried over to the new one where
-    that is not set itself, and warned about; and a deprecated setting warned
-    about."""
-    for old, new in RENAMED.items():
-        if old in os.environ:
-            stream.write("==> WARNING: the environment sets %s, which is called "
-                         "%s now - the old name works for the time being\n"
-                         % (old, new))
-            os.environ.setdefault(new, os.environ[old])
-    for old, replacement in DEPRECATED.items():
-        if os.environ.get(old, "").strip():
-            stream.write("==> WARNING: the environment sets %s, which is "
-                         "replaced by %s now - the old name works for the "
-                         "time being\n" % (old, replacement))
 
 
 def _apply_shipped() -> None:

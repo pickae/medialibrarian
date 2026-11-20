@@ -258,7 +258,7 @@ ready, and one that fails or reads nothing hands the subtitle to the next:
 
 | Order | Engine | Languages | Needs |
 | --- | --- | --- | --- |
-| 1 | `vision`, a vision model | any | a vision model in the [model roster](../models.md) for the `subtitle-ocr` task (local and cheap preferred, light lean; legacy `subtitleOcr…` settings still work with a warning) |
+| 1 | `vision`, a vision model | any | a vision model in the [model roster](../models.md) for the `subtitle-ocr` task (local and cheap preferred, light lean) |
 | 2 | `paddle` (PP-OCR) on the GPU | a hundred-odd | `paddleocr` with a CUDA build of paddle, and 2 GiB free on the card — asked afresh for each subtitle, since another program may hold it |
 | 3 | `tesseract` on the CPU | the ones whose data is installed: `apt install tesseract-ocr-fra` for French, `tesseract-ocr-all` for all | `tesseract` |
 | 4 | `paddle` on the CPU, the GPU hidden from it | a hundred-odd, at about a second a line | `paddleocr` |
@@ -298,11 +298,6 @@ url = ["http://127.0.0.1:8082/v1", "http://127.0.0.1:8080/v1"]
 serve = "llama-server --model /models/vision.gguf --mmproj /models/mmproj.gguf --port 8082"
 traits = { vision = true }
 ```
-
-The old `subtitleOcrUrl`, `subtitleOcrServe`, `subtitleOcrServeMib`,
-`subtitleOcrModel`, `subtitleOcrOptions` and `subtitleOcrJobs` settings are
-still accepted for now — they appear in the roster as a model named
-`subtitle-ocr` kept to that task — and warn until moved to `models.toml`.
 
 The film's picture subtitles are taken out with `mkvextract` first, all in one
 pass: `seconv` handed the film itself would hold the whole of it in memory.
