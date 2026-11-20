@@ -69,6 +69,7 @@ These are read from the environment:
 | `losslessAudioTarget` | the codec the lossless audio is converted to | `opus`, at a per-channel target bitrate; `flac` takes the channels as they are, up to eight of them |
 | `plexUrl` | the Plex server the films are compared with | the server on this machine, `http://localhost:32400` |
 | `plexToken` | that server's X-Plex-Token | the server is asked without one, which it refuses unless told to trust this address; the comparison is then skipped |
+| `listProposalsLlm` | proposing additions to the hand-kept word and extension lists from logged refusals, near-misses, unmatched/ambiguous folders, and skipped files (the `curated-lists` task in [docs/models.md](../models.md), preferring a local reasoning model); writes proposals to `logs/ingest-movies-list-proposals-<timestamp>.txt` for manual review and never edits source files automatically | `on`; set to `off` to skip without asking any model (also skipped quietly when nothing was logged or no model is configured) |
 
 With none of the three set, no subtitle is downloaded; the ones already beside
 a film are still tested.

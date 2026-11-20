@@ -223,6 +223,16 @@ SETTINGS: tuple[Setting, ...] = (
             "every chapter. Only a model that can search is asked - Claude, or "
             "one behind `llmHarness`: `on` or `off`",
             ("concat-audio", "convert-and-concat"), "on"),
+    Setting("listProposalsLlm", "Whether reasons logged during `ingest-movies` "
+            "(unmatched, ambiguous or near-miss folders, commentary-naming "
+            "refusals, and skipped files) are handed to a language model to "
+            "propose additions to the hand-kept word and extension lists (the "
+            "`curated-lists` task, see docs/models.md, preferring a local "
+            "reasoning model): logged file names, commentary transcript "
+            "snippets, and refusal reasons are sent to the model. Proposals "
+            "are written to a report under `logs/` for review and never edit "
+            "any source file automatically: `on` or `off`",
+            ("ingest-movies",), "on"),
     Setting("chapterDbSite", "The chapter database's address", ("ingest-movies",),
             "`https://chapterdb.plex.tv`", tuning=True),
     Setting("dvdCompareSite", "The disc database's address", ("ingest-movies",),
