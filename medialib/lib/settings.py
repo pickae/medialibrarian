@@ -83,6 +83,16 @@ _SCRATCH = ("concat-audio", "content-census", "content-census-bi", "convert-and-
 _AI_CHAPTERS = ("concat-audio", "convert-and-concat", "convert-audio", "convert-video",
                 "generate-chapters", "ingest-movies", "ytdlp")
 
+# Every command in the repository (info logs and error logs).
+_ALL_COMMANDS = (
+    "clean-folder-structure", "clean-folder-structure-adb", "concat-audio",
+    "content-census", "content-census-bi", "convert-and-concat",
+    "convert-audio", "convert-comics", "convert-images", "convert-video",
+    "cue-to-chapters", "find-fragment-candidates", "find-gaps",
+    "generate-chapters", "ingest-books", "ingest-movies", "ingest-music",
+    "plex-letterboxd-sync", "read-library", "transcribe-audio", "ytdlp",
+)
+
 SETTINGS: tuple[Setting, ...] = (
     # --- logins and keys
     Setting("tmdbApiKey", "TheMovieDB API key, for naming films - and tagging their "
@@ -161,13 +171,14 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("infoLogLevel", "How much of what a run says is kept in "
             "`logs/info/`, one file per run: `off`, `quiet` (errors and results), "
             "`normal` or `verbose` - apart from the console's `-q` and `-v`",
-            ("clean-folder-structure", "clean-folder-structure-adb", "concat-audio",
-             "content-census", "content-census-bi", "convert-and-concat",
-             "convert-audio", "convert-comics", "convert-images", "convert-video",
-             "cue-to-chapters", "find-fragment-candidates", "find-gaps",
-             "generate-chapters", "ingest-books", "ingest-movies", "ingest-music",
-             "plex-letterboxd-sync",
-             "read-library", "transcribe-audio", "ytdlp"), "normal"),
+            _ALL_COMMANDS, "normal"),
+    Setting("errorTriageLlm", "Whether unexplained errors left in a run's error "
+            "log (those no built-in cause matched) are handed to a language model "
+            "at the end of the run for an advisory likely cause and next step "
+            "(the `error-triage` task, see docs/models.md): error records hold "
+            "library paths, so a local model is preferred. Advisory only - never "
+            "retries commands, deletes files or changes exit codes: `on` or `off`",
+            _ALL_COMMANDS, "on"),
     # --- where work is done
     Setting("ramScratchBase", "Where each run's scratch directories go",
             _SCRATCH, "`/dev/shm`, else the system temp directory"),

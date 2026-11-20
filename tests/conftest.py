@@ -177,6 +177,7 @@ _STATE_KNOBS = (
     "infoLogLevel",
     # The run's error log, settled by the first error and handed to children.
     "ERROR_LOG_NAME",
+    "ERROR_LOG_OWNER",
     "ERROR_LOG_RUN",
     "ERROR_LOG_STARTED",
     "ERROR_LOG_ITEM",
@@ -319,6 +320,9 @@ def private_workspace(tmp_path_factory, monkeypatch):
     # Nor is a language model asked for one: a case that turns the search
     # back on would otherwise reach the model the machine's settings name.
     monkeypatch.setenv("coverSearchLlm", "off")
+    # Nor for advisory triage of error logs: a CLI case that provokes an error
+    # would otherwise reach a model at exit. Triage's own cases turn it back on.
+    monkeypatch.setenv("errorTriageLlm", "off")
     # Nor the machine's own roster of models: a case that asks the roster
     # gets the models it set up itself, or none.
     monkeypatch.setenv("llmModels", str(scratch / "no-models-file"))
