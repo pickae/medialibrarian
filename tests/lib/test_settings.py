@@ -139,3 +139,17 @@ def test_the_file_is_under_the_config_home(monkeypatch, tmp_path):
     monkeypatch.delenv("XDG_CONFIG_HOME")
     assert settings.settings_file() == os.path.join(_HOME, ".config", "medialib",
                                                     "settings")
+
+
+def test_deprecated_settings_warn_without_unknown_warning(
+        tmp_path, monkeypatch):
+    _file(tmp_path, monkeypatch, "subtitleOcrUrl=http://127.0.0.1:8082\n")
+    monkeypatch.delenv("subtitleOcrUrl", raising=False)
+    monkeypatch.setenv("subtitleOcrModel", "gemma3")
+    said = io.StringIO()
+    settings.load(said)
+    out = said.getvalue()
+    assert "subtitleOcrUrl" in out and "replaced by" in out
+    assert "subtitleOcrModel" in out
+    assert "no command reads" not in out
+    assert os.environ["subtitleOcrUrl"] == "http://127.0.0.1:8082"

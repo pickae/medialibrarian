@@ -15,14 +15,14 @@ all is preferred wherever the machine can run it at speed. Unless the
 ``subtitleOcrEngines`` setting names the engines and their order, they are
 tried, each where it is ready and the next one where it fails:
 
-1. ``vision``, a vision model a server holds - any language. The servers in
-   ``subtitleOcrUrl`` are tried in its order: one that answers is used; the
-   first, not running, is started with ``subtitleOcrServe`` where the GPU has
-   room for it, and stopped again once idle (:mod:`medialib.lib.modelserver`);
-   and with the card taken, the next one that answers reads instead.
-   seconv only takes the lines' pictures out and their times; the pictures
-   are sent to the model here, ``subtitleOcrJobs`` at a time, since a server
-   that batches reads several nearly as fast as one;
+1. ``vision``, a vision model from the roster's ``subtitle-ocr`` task
+   (:mod:`medialib.lib.llmroster`) - any language. Each model in the ladder
+   is tried through :meth:`medialib.lib.llmclient.Llm.serving`, which handles
+   fallback servers, starting a server on demand where the GPU has room, and
+   stopping it again once idle. seconv only takes the lines' pictures out and
+   their times; the pictures are batched up to :data:`VISION_GROUP` per
+   request (scaled to the model's context window, :func:`group_size`) and
+   held to the model's ``jobs`` concurrency;
 2. ``paddle`` (PP-OCR, a hundred-odd languages) on the GPU, where its install
    has CUDA and the card has :data:`PADDLE_GPU_MIB` free - asked afresh for
    each subtitle, since another program may hold the card;
@@ -35,62 +35,63 @@ A GPU too full for paddle after all is one more failure the next engine
 answers, so the run never stops over it.
 
 What the vision model was asked is counted into a :class:`Usage`: its
-requests, the tokens it read and wrote where the server reports them (the
-``usage`` of a Chat Completions reply), and the wall-clock it was at work -
-from a subtitle's first request to its last, with time two subtitles were
-read at once counted once, so the tokens a second are the model's real pace
-however many requests ran side by side.
+requests, the tokens it read and wrote where the server reports them, and the
+wall-clock it was at work - from a subtitle's first request to its last, with
+time two subtitles were read at once counted once, so the tokens a second are
+the model's real pace however many requests ran side by side.
 
 It is optional: without seconv a film keeps its picture subtitles as they are.
 """
 
 from __future__ import annotations
 
-import base64
 import json
 import os
 import re
 import shutil
 import subprocess
 import tempfile
-import threading
-import time
-import urllib.error
-import urllib.request
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 
-from medialib.lib import enums, modelmeter, modelserver, subtitletracks, toolcapture, tooldeps
+from medialib.lib import (
+    enums,
+    llmclient,
+    llmroster,
+    modelmeter,
+    modelserver,
+    subtitletracks,
+    toolcapture,
+    tooldeps,
+)
 
-__all__ = ["TOOL", "ENGINES", "Usage", "available", "engines", "extract",
-           "recognise"]
+__all__ = ["TOOL", "ENGINES", "VISION_GROUP", "Usage", "available", "engines",
+           "extract", "group_size", "recognise"]
 
 TOOL = "seconv"
 
 # Every engine this step knows: ``vision`` is asked here, the rest by seconv.
 ENGINES = ("vision", "paddle", "tesseract")
 
-# How many requests are in flight to the vision model at once, unless
-# ``subtitleOcrJobs`` says, and how many of a subtitle's pictures each carries.
-# A server admits a request at a time, so a track goes as fast as it can be
-# put in few requests: on a French Blu-ray's 1,342 lines with a 35B-A3B model,
-# one picture a request took 210 s whatever the concurrency, 4 a request 64 s,
-# 8 a request 40 s and 16 a request 20 s. Sixteen pictures and their answers
-# fit a 4,096-token context; 32 overflowed it.
-VISION_JOBS = 32
+# How many of a subtitle's pictures go in one vision request at a 4,096-token
+# context window. A server admits a request at a time, so a track goes as fast
+# as it can be put in few requests rather than many small concurrent ones: on a
+# French Blu-ray's 1,342 lines with a 35B-A3B model, one picture a request took
+# 210 s whatever the concurrency, 4 a request 64 s, 8 a request 40 s and 16 a
+# request 20 s. Sixteen pictures and their answers fit a 4,096-token context;
+# 32 overflowed it.
 VISION_GROUP = 16
+_VISION_CONTEXT = 4096
 # The most a line's answer may run to, in tokens: a subtitle is two lines.
 _VISION_MAX_TOKENS = 200
+# Retries for a vision request refused by a busy server.
+_VISION_RETRIES = 5
+# Upper bound on concurrent batched requests for a hosted API (jobs == 0).
+_CLOUD_JOBS = 8
 # A picture this many times a one-line picture's height holds two lines, and
 # one under _SLIVER pixels tall holds no text worth measuring by.
 _TWO_LINES = 1.8
 _SLIVER = 20
-# How often a request refused by a busy server is asked again, and how long
-# to wait first, doubling each time.
-_VISION_TRIES = 6
-_VISION_BACKOFF = 2.0
-# The statuses a server answers a request it has no room for with.
-_BUSY = (429, 502, 503, 504)
 
 # What a vision model is asked of one subtitle, and of several. seconv's own
 # prompt has it say how many lines it read, which a general model writes into
@@ -107,9 +108,6 @@ _VISION_GROUP_PROMPT = ("These {count} images are consecutive subtitles from "
                         "Answer with a JSON array of exactly {count} strings, "
                         "one per image, in order, and nothing else; an image "
                         "that holds no text is an empty string.")
-# Where a reasoning model's thinking ends, when its server sends it on with the
-# answer.
-_THOUGHT_END = "</think>"
 
 # The free VRAM, in MiB, paddle is tried on the GPU with: its detection and
 # recognition models take about 1.5 GiB between them.
@@ -163,17 +161,22 @@ class Usage:
         return modelmeter.rate_line("ocr", self.seconds, self.tally)
 
 
-def _reported(answer) -> tuple:
-    """The tokens a reply says it read and wrote, as (prompt, completion):
-    None for either it does not say. Chat Completions' names, or the
-    Responses API's, which some servers answer with."""
-    usage = answer.get("usage") if isinstance(answer, dict) else None
-    if not isinstance(usage, dict):
-        return None, None
-    return tuple(next((usage[name] for name in names
-                       if type(usage.get(name)) is int), None)
-                 for names in (("prompt_tokens", "input_tokens"),
-                               ("completion_tokens", "output_tokens")))
+def group_size(context_tokens: int) -> int:
+    """How many subtitle pictures fit in one request for a model with a
+    ``context_tokens``-token window: :data:`VISION_GROUP` (16) at 4,096
+    tokens or above, scaled down below that so a smaller window never
+    overflows."""
+    if context_tokens <= 0:
+        return 1
+    return max(1, min(VISION_GROUP,
+                      context_tokens * VISION_GROUP // _VISION_CONTEXT))
+
+
+def _workers(llm: llmclient.Llm, groups: int) -> int:
+    """How many batched requests run in parallel: held to ``llm.jobs`` (the
+    roster's concurrency for that model) since batching carries the speed."""
+    limit = llm.jobs if llm.jobs > 0 else _CLOUD_JOBS
+    return max(1, min(groups, limit))
 
 
 def available() -> bool:
@@ -186,15 +189,15 @@ def engines(environ=None) -> tuple:
 
     The ``subtitleOcrEngines`` setting's names, the ones this step knows, in
     its order; or, without it, the order the module says. ``vision`` only
-    with an address in ``subtitleOcrUrl`` to ask."""
+    where the roster has a model for :data:`llmroster.SUBTITLE_OCR`."""
     environ = os.environ if environ is None else environ
-    url = (environ.get("subtitleOcrUrl") or "").strip()
+    has_vision = bool(llmroster.optional(llmroster.SUBTITLE_OCR, environ)[0])
     named = (environ.get("subtitleOcrEngines") or "").replace(",", " ").split()
     if named:
         chosen = [enums.shell_lower(name) for name in named]
         return tuple((name, "") for name in dict.fromkeys(chosen)
-                     if name in ENGINES and (name != "vision" or url))
-    order = [("vision", "")] if url else []
+                     if name in ENGINES and (name != "vision" or has_vision))
+    order = [("vision", "")] if has_vision else []
     if paddle_on_gpu():
         order.append(("paddle", ""))
     order.append(("tesseract", ""))
@@ -316,58 +319,6 @@ def _command(image: str, engine: str, row, out: str) -> list:
             "--fix-common-errors"]
 
 
-# The vision servers of this run, by address, kept from one subtitle to the
-# next so a server started for one is used for the next and stopped once idle.
-_servers: dict = {}
-_servers_lock = threading.Lock()
-# The free VRAM, in MiB, the preferred vision server is started with unless
-# ``subtitleOcrServeMib`` says: a 35B-A3B's weights are 22 GiB, its lanes and
-# picture encoder most of the rest of a 32 GiB card.
-SERVE_MIB = 26000
-# How long a vision server started here waits unused before it is stopped.
-SERVE_IDLE = 300.0
-
-
-def _vision_servers(environ) -> list:
-    """The vision servers to try, in ``subtitleOcrUrl``'s order; the first
-    started with ``subtitleOcrServe`` where it is not running and the GPU has
-    room for it."""
-    urls = [url.strip() for url in
-            (environ.get("subtitleOcrUrl") or "").split(",") if url.strip()]
-    command = (environ.get("subtitleOcrServe") or "").strip()
-    try:
-        need = int(environ.get("subtitleOcrServeMib") or SERVE_MIB)
-    except ValueError:
-        need = SERVE_MIB
-    found = []
-    with _servers_lock:
-        for at, url in enumerate(urls):
-            key = (url, command if at == 0 else "", need)
-            if key not in _servers:
-                _servers[key] = modelserver.Server(
-                    url, key[1], need, idle=SERVE_IDLE)
-            found.append(_servers[key])
-    return found
-
-
-def _model_on(server_url: str, environ) -> str:
-    """The model to ask the server for: ``subtitleOcrModel`` where the server
-    lists it, else the first it lists - a server further down the ladder
-    holds another model than the one named."""
-    listed = modelserver.served_model(server_url) or []
-    named = (environ.get("subtitleOcrModel") or "").strip()
-    if named and (named in listed or not listed):
-        return named
-    return listed[0] if listed else ""
-
-
-def _jobs(environ) -> int:
-    try:
-        return max(1, int(environ.get("subtitleOcrJobs") or VISION_JOBS))
-    except ValueError:
-        return VISION_JOBS
-
-
 def _pictures(image: str, out: str) -> list:
     """Each line of a picture subtitle as (start, end, png, height), in
     order: the pictures and their heights from seconv's BDN export, the times
@@ -418,102 +369,10 @@ def _spans(srt: str) -> list:
         return []
 
 
-def _options(environ) -> dict | None:
-    """The ``subtitleOcrOptions`` setting: more fields for every request, as a
-    JSON object - None for one that is not."""
-    text = (environ.get("subtitleOcrOptions") or "").strip()
-    try:
-        extra = json.loads(text) if text else {}
-    except ValueError:
-        return None
-    return extra if isinstance(extra, dict) else None
-
-
-def _picture_part(png: str) -> dict:
-    with open(png, "rb") as handle:
-        picture = base64.b64encode(handle.read()).decode("ascii")
-    return {"type": "image_url",
-            "image_url": {"url": "data:image/png;base64," + picture}}
-
-
-def _numbered(pngs: list) -> list:
-    """The pictures as message parts, each after its number where there are
-    several: a model that is told which picture is which keeps their answers
-    in their places."""
-    if len(pngs) == 1:
-        return [_picture_part(pngs[0])]
-    parts = []
-    for number, png in enumerate(pngs, 1):
-        parts += [{"type": "text", "text": "Image %d:" % number},
-                  _picture_part(png)]
-    return parts
-
-
-def _ask(url: str, model: str, prompt: str, pngs: list, extra=None,
-         usage: Usage | None = None):
-    """The model's answer to the prompt about the pictures, or None when the
-    server would not give one. A server with no room is asked again, after a
-    pause that doubles; any other refusal is final. An answer is counted
-    into ``usage``."""
-    body = {"messages": [{"role": "user", "content": [
-                {"type": "text", "text": prompt},
-                *_numbered(pngs)]}],
-            "max_tokens": _VISION_MAX_TOKENS * len(pngs), "temperature": 0,
-            # Both spellings servers take for "answer, without thinking".
-            "reasoning_effort": "none",
-            "chat_template_kwargs": {"enable_thinking": False}}
-    if model:
-        body["model"] = model
-    body.update(extra or {})
-    request = urllib.request.Request(
-        modelserver.root(url) + "/v1/chat/completions",
-        data=json.dumps(body).encode("utf-8"),
-        headers={"Content-Type": "application/json"})
-    pause = _VISION_BACKOFF
-    for _try in range(_VISION_TRIES):
-        try:
-            started = time.monotonic()
-            with urllib.request.urlopen(request, timeout=600) as reply:
-                answer = json.loads(reply.read().decode("utf-8", "replace"))
-            text = answer["choices"][0]["message"]["content"] or ""
-            if usage is not None:
-                read, written = _reported(answer)
-                usage.tally.add(time.monotonic() - started, written, read)
-            if _THOUGHT_END in text:
-                text = text.rsplit(_THOUGHT_END, 1)[1]
-            return text
-        except urllib.error.HTTPError as refused:
-            if refused.code not in _BUSY:
-                return None
-        except (OSError, ValueError, KeyError, IndexError, TypeError):
-            pass
-        time.sleep(pause)
-        pause *= 2
-    return None
-
-
 def _tidy(text: str) -> str:
     """One subtitle's text: its lines trimmed, the empty ones dropped."""
     return "\n".join(line.strip() for line in (text or "").splitlines()
                      if line.strip())
-
-
-def _array(text: str, count: int):
-    """The model's JSON array of ``count`` strings, or None for an answer
-    that is not one. A fence around it is taken off, and a backslash that
-    escapes nothing JSON knows is taken out: a slip, not a character."""
-    text = (text or "").strip()
-    if text.startswith("```"):
-        text = text.split("\n", 1)[-1].rsplit("```", 1)[0]
-    text = re.sub(r'\\(?!["\\/bfnrtu])', "", text)
-    try:
-        found = json.loads(text)
-    except ValueError:
-        return None
-    if not isinstance(found, list) or len(found) != count \
-            or not all(isinstance(one, str) for one in found):
-        return None
-    return [_tidy(one.replace("\\n", "\n")) for one in found]
 
 
 def _short_of_lines(text: str, height: int, line_height: int) -> bool:
@@ -533,88 +392,118 @@ def _line_height(lines: list) -> int:
     return heights[len(heights) // 4] if heights else 0
 
 
-def _read_group(url: str, model: str, row, group: list, line_height: int,
-                extra, usage: Usage | None = None) -> list:
+def _vision_options(llm: llmclient.Llm) -> dict | None:
+    """Per-request options for subtitle OCR on the openai protocol:
+    deterministic and without thinking on local servers, with any option
+    configured on ``llm`` taking precedence."""
+    if llm.api != "openai":
+        return None
+    options: dict = {}
+    if llm.local:
+        options = {
+            "temperature": 0,
+            "reasoning_effort": "none",
+            "chat_template_kwargs": {"enable_thinking": False},
+        }
+    options.update(llm.options)
+    return options or None
+
+
+def _read_group(llm: llmclient.Llm, row, group: list, line_height: int,
+                options: dict | None, usage: Usage) -> list[str | None]:
     """The text of each picture of ``group``, in order - None for one the
-    model would not read. Asked in one request; a group answered with no
-    usable array, and a picture whose answer is short of its lines, are asked
-    again a picture at a time."""
+    model would not read. Asked in one numbered request; a group answered
+    with no usable array, and a picture whose answer is short of its lines,
+    are asked again a picture at a time."""
     # A sliver holds no text; sent with the rest it would only make the model
     # lose count of which answer is which.
-    texts: list = ["" if line[3] < _SLIVER else None for line in group]
+    texts: list[str | None] = ["" if line[3] < _SLIVER else None
+                               for line in group]
     asked = [at for at, text in enumerate(texts) if text is None]
-    prompt = _VISION_GROUP_PROMPT.format(count=len(asked),
-                                         language=row.sub_word)
-    found = _array(_ask(url, model, prompt, [group[at][2] for at in asked],
-                        extra, usage), len(asked)) if len(asked) > 1 else None
-    for at, text in zip(asked, found or [], strict=False):
-        texts[at] = text
-    alone = _VISION_PROMPT.format(language=row.sub_word)
-    for at, line in enumerate(group):
-        if at not in asked:
-            continue
-        if texts[at] is not None \
-                and not _short_of_lines(texts[at], line[3], line_height):
-            continue
-        answer = _ask(url, model, alone, [line[2]], extra, usage)
-        if answer is not None:
-            texts[at] = _tidy(answer)
+    if not asked:
+        return texts
+    batch_prompt = _VISION_GROUP_PROMPT.format(count=len(asked),
+                                               language=row.sub_word)
+    alone_prompt = _VISION_PROMPT.format(language=row.sub_word)
+    found = llm.ask_pictures(
+        "", batch_prompt, alone_prompt, [group[at][2] for at in asked],
+        usage.tally, options=options, max_tokens_each=_VISION_MAX_TOKENS,
+        allow_empty=True, retries=_VISION_RETRIES,
+        reask=lambda index, text: _short_of_lines(
+            _tidy(text.replace("\\n", "\n")),
+            group[asked[index]][3], line_height),
+    )
+    for at, text in zip(asked, found, strict=True):
+        if text is not None:
+            texts[at] = _tidy(text.replace("\\n", "\n"))
     return texts
 
 
 def _read_by_vision(image: str, row, out: str, environ,
                     log: Callable[[str], None],
-                    usage: Usage | None = None) -> str:
+                    usage: Usage | None = None,
+                    models: Sequence[llmclient.Llm] | None = None) -> str:
     """The picture subtitle read into a SubRip in ``out`` by the first vision
-    server of the ladder that can be had now (:func:`_vision_servers`),
-    :data:`VISION_GROUP` pictures a request and ``subtitleOcrJobs`` requests
-    at a time; "" when none could read every line, so the next engine reads
-    the whole subtitle. A picture that holds no text is no line."""
-    extra = _options(environ)
-    if extra is None:
-        _say_once("options", log, "subtitleOcrOptions is not a JSON object, "
-                  "the vision model is not asked")
-        return ""
-    for server in _vision_servers(environ):
-        if not server.acquire(log):
-            continue
+    model of the roster's ``subtitle-ocr`` ladder that can be had now; ""
+    when none could read every line, so the next engine reads the whole
+    subtitle. A picture that holds no text is no line."""
+    if models is None:
+        models, why = llmroster.optional(llmroster.SUBTITLE_OCR, environ)
+        if not models:
+            if why:
+                _say_once("vision:" + why, log,
+                          "%s, the vision model is not asked" % why)
+            return ""
+    lines: list | None = None
+    tried_any = False
+    for llm in models:
         try:
-            written = _read_with(server.url, image, row, out, environ, extra,
-                                 log, usage)
-        finally:
-            server.release()
-        if written:
-            return written
-    log("  no vision OCR server is answering, nor can one be started now, so "
-        "the next engine reads")
+            with llm.serving(log) as served:
+                if not served.sees_images():
+                    continue
+                if lines is None:
+                    lines = _pictures(image, out)
+                    if not lines:
+                        return ""
+                tried_any = True
+                written = _read_with(served, lines, row, out, log, usage)
+                if written:
+                    return written
+        except llmclient.LlmError as error:
+            log("  vision OCR with %s could not start: %s"
+                % (llm.name, error))
+    if not tried_any:
+        log("  no vision OCR server is answering, nor can one be started "
+            "now, so the next engine reads")
     return ""
 
 
-def _read_with(url: str, image: str, row, out: str, environ, extra,
-               log: Callable[[str], None], usage: Usage | None = None) -> str:
-    """The picture subtitle read by the vision model at ``url``: see
-    :func:`_read_by_vision`. Its requests are timed into ``usage`` as one
-    stretch, from the first one's start to the last one's end, however many
-    ran at once."""
-    lines = _pictures(image, out)
+def _read_with(llm: llmclient.Llm, lines: list, row, out: str,
+               log: Callable[[str], None],
+               usage: Usage | None = None) -> str:
+    """The picture subtitle read by ``llm``: see :func:`_read_by_vision`.
+    Its requests are timed into ``usage`` as one stretch, from the first
+    one's start to the last one's end, however many ran at once."""
     if not lines:
         return ""
-    model = _model_on(url, environ)
     line_height = _line_height(lines)
-    groups = [lines[at:at + VISION_GROUP]
-              for at in range(0, len(lines), VISION_GROUP)]
+    per_request = group_size(llm.context_tokens)
+    groups = [lines[at:at + per_request]
+              for at in range(0, len(lines), per_request)]
+    options = _vision_options(llm)
     usage = Usage() if usage is None else usage
     with usage.spans.timing(), \
-            ThreadPoolExecutor(max_workers=_jobs(environ)) as pool:
+            ThreadPoolExecutor(max_workers=_workers(llm, len(groups))) as pool:
         texts = [text for found in pool.map(
-                     lambda group: _read_group(url, model, row, group,
-                                               line_height, extra, usage),
+                     lambda group: _read_group(llm, row, group, line_height,
+                                               options, usage),
                      groups)
                  for text in found]
     missing = sum(1 for text in texts if text is None)
     if missing:
+        where = llm.url or llm.name
         log("  vision OCR at %s could not read %d of the %d lines of the %s "
-            "subtitle" % (url, missing, len(lines), row.sub_word))
+            "subtitle" % (where, missing, len(lines), row.sub_word))
         return ""
     srt = os.path.join(out, "vision.srt")
     with open(srt, "w", encoding="utf-8") as handle:
