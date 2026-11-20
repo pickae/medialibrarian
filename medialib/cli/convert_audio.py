@@ -63,6 +63,7 @@ from medialib.lib import (
     imagemagick,
     imagesizes,
     llmroster,
+    modelmeter,
     onlinecover,
     ramscratch,
     runcontext,
@@ -786,6 +787,7 @@ class Run:
     duration_file: str
     chunk_root: str
     plan_root: str
+    model_meter: str
     counters: "Counters"
     # How many split files the post-conversion phase joined back together, so
     # the closing report times that phase only when it had work.
@@ -1405,7 +1407,8 @@ class Run:
             mono = self.mono
         stereo = not mono and output_channels(
             channels or source_channels(source), self.surround) >= 2
-        onlinecover.track_cover(source, seconds, tmp_dir, stereo=stereo)
+        onlinecover.track_cover(source, seconds, tmp_dir, stereo=stereo,
+                                meter_file=getattr(self, "model_meter", ""))
 
     def _reapply_sidecar_cover(self, relative: str, source: str,
                                existing: str) -> None:
@@ -1972,6 +1975,12 @@ def footer(state: Run) -> None:
     if total_seconds > 0 and audio_seconds > 0:
         runlog.say("Real-time speedup: %sx\n" % formatting.fmt_ratio(
             "%.6f" % (audio_seconds / total_seconds)))
+    meter_file = getattr(state, "model_meter", "")
+    if meter_file:
+        spans, tally = modelmeter.gathered(meter_file)
+        if tally.requests > 1:
+            runlog.log("Cover model over the run: "
+                       + modelmeter.rate_line("all", spans.seconds, tally))
 
     sys.stderr.flush()
     safety.report_safety_skips()
@@ -2246,7 +2255,8 @@ def _convert(input_dir: str, output_dir: str, probe_what: str, skips,
         tracks=[], pre_start=pre_start,
         conv_start=None, conv_end=None,
         post_start=None, post_end=None, duration_file="", counters=None,
-        chunk_root="", plan_root="", rejoined=0, background=background,
+        chunk_root="", plan_root="", model_meter="", rejoined=0,
+        background=background,
     )
     safety.set_run_footer(lambda: footer(state))
 
@@ -2443,6 +2453,7 @@ def _settle_scratch(state: Run) -> bool:
                          "run.\nNothing was changed.\n")
         return False
     state.chunk_root, state.plan_root = chunk_root, plan_root
+    state.model_meter = os.path.join(plan_root, "coverModel.meter")
     ramscratch.add_exit_cleanup([chunk_root, plan_root])
     return True
 

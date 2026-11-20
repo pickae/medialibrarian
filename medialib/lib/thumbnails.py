@@ -276,16 +276,21 @@ def _online_thumbnail(input_path: str, outputs: Sequence[str],
     """
     tracks = [path for path in _regular_files(input_path)
               if lower_extension_of(path) in _AUDIO_EXTENSIONS]
+    ordered = sorted(tracks, key=version_key)
     joined = next((path for path in outputs if os.path.isfile(path)), "")
     seconds = onlinecover.media_seconds(joined) if joined else 0.0
     stereo = bool(joined) and onlinecover.media_channels(joined) >= 2
-    image = onlinecover.book_cover(input_path, tracks[:1], seconds,
-                                   f"{ram_base}.online", stereo=stereo)
+    subject = onlinecover.book_subject(input_path, ordered, seconds, stereo,
+                                       meter_file=model_meter)
+    image = onlinecover.book_cover(input_path, ordered, seconds,
+                                   f"{ram_base}.online", stereo=stereo,
+                                   subject=subject)
     if not image:
         image = aicover.book_cover(
             input_path, os.path.basename(ram_base),
-            sorted(tracks, key=version_key), seconds,
-            f"{ram_base}.model", stereo=stereo, meter_file=model_meter)
+            ordered, seconds,
+            f"{ram_base}.model", stereo=stereo, subject=subject,
+            meter_file=model_meter)
     if image:
         _keep_in_input(image, input_path)
     return image

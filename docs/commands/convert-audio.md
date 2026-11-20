@@ -164,12 +164,17 @@ A track with no cover is looked for **online** only when it is the odd one out:
 | most of the other tracks in its folder carry a cover, or it is alone | most of them carry none (the album case) |
 
 The search works the way [concat-audio's](concat-audio.md#chapters-and-cover)
-does: a dated name or 30–200 minutes reads as a podcast, longer as an
-audiobook, and an answer is taken only when it is the same title. One
-difference: 30–200 minutes encoded in **stereo** (not `-m`, and not a mono
-source under `-a`) reads as a full-cast drama, and is looked for where
-audiobooks are. The
-`coverSearch` [setting](../settings.md) switches it off.
+does: when a [language model](../models.md) is set up and `contentKindLlm` is
+on (the `audio-content` task), the model classifies whether a track without a
+`[YouTube id]` is a podcast, an audio drama, or an audiobook from its folder
+path, file name, tags, duration, and channel count; otherwise, or when the
+model is unsure, it falls back to the length and stereo heuristic — a dated
+name or 30–200 minutes in mono reads as a podcast, 30–200 minutes encoded in
+**stereo** (not `-m`, and not a mono source under `-a`) reads as a full-cast
+drama and is looked for where audiobooks are, and anything longer reads as an
+audiobook. An answer is taken only when it is the same title. The
+`coverSearch` and `contentKindLlm` [settings](../settings.md) switch these
+steps off.
 
 ## Every conversion is measured
 

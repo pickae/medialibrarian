@@ -68,16 +68,23 @@ numbers stay. `contentsSearchLlm=off` skips this step.
 
 A book that none of the three gave a cover is looked for **online**. What it
 probably is decides where: a name ending in a `[YouTube id]` (yt-dlp's
-default) is a YouTube podcast, and that video's own thumbnail is fetched; a
-name starting with a `yyyymmdd` date, or a length of 30 to 200 minutes, reads
-as a podcast (YouTube, then the show's artwork);
-anything longer as an audiobook (Audible, Amazon, iTunes, then another
-language's edition or the printed book). An answer is taken only when it is
-the same title and nothing about it — author, running time — says otherwise;
-otherwise the book stays without a cover. Where it looks is a table,
-[`coverproviders.tsv`](../../medialib/config/coverproviders.tsv); the
-`coverSearch` and `coverSearchTable` [settings](../settings.md) switch the
-search off or point it at your own copy.
+default) is a YouTube podcast, and that video's own thumbnail is fetched;
+otherwise, when a [language model](../models.md) is set up and
+`contentKindLlm` is on, a light model (the `audio-content` task) classifies
+whether the recording is a podcast, an audio drama, or an audiobook from the
+folder's path and file names, the tracks' tags, the duration, and the channel
+count. When no model is available, `contentKindLlm=off`, or the model is
+unsure, it falls back to the length and channel-count heuristic: a name
+starting with a `yyyymmdd` date, or a length of 30 to 200 minutes in mono,
+reads as a podcast (YouTube, then the show's artwork); 30 to 200 minutes in
+stereo reads as an audio drama; anything longer as an audiobook (Audible,
+Amazon, iTunes, then another language's edition or the printed book). An answer
+is taken only when it is the same title and nothing about it — author, running
+time — says otherwise; otherwise the book stays without a cover. Where it looks
+is a table, [`coverproviders.tsv`](../../medialib/config/coverproviders.tsv);
+the `coverSearch`, `coverSearchTable` and `contentKindLlm`
+[settings](../settings.md) switch these steps off or point the search at your
+own table.
 
 Where that finds nothing, a [language model](../models.md) is asked to
 **search the web** for the cover - the `cover-search` task, which only a

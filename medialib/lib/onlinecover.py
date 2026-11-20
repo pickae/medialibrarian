@@ -38,6 +38,7 @@ import threading
 import urllib.parse
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from typing import Any
 
 from medialib import commands
 from medialib.lib import (
@@ -68,6 +69,7 @@ __all__ = [
     "probable_content",
     "read_table",
     "track_cover",
+    "track_subject",
     "track_wants_search",
 ]
 
@@ -786,9 +788,33 @@ def media_channels(path: str) -> int:
 
 # --- concat-audio ----------------------------------------------------------------------
 
+def _refine_content(subject: Subject, name: str, *,
+                    folder_path: str, tracks: Sequence[str],
+                    seconds: float, stereo: bool,
+                    list_folder: bool,
+                    classifiers: Sequence[Any] | None,
+                    meter_file: str,
+                    probe: Callable[[str], dict]) -> None:
+    """Refine ``subject.content`` and ``subject.why`` with the light content
+    classifier when enabled and available; leave the deterministic
+    :func:`probable_content` heuristic in place on any fallback."""
+    from medialib.lib import aicontentkind
+    classified = aicontentkind.classify(
+        name, folder_path=folder_path, tracks=tracks,
+        seconds=seconds, stereo=stereo,
+        heuristic=(subject.content, subject.why),
+        list_folder=list_folder, classifiers=classifiers,
+        meter_file=meter_file, probe=probe)
+    if classified is not None:
+        subject.content, subject.why = classified
+
+
 def book_cover(input_path: str, tracks: Sequence[str], seconds: float,
                dest_base: str, search: CoverSearch | None = None,
-               stereo: bool = False) -> str:
+               stereo: bool = False, *,
+               subject: Subject | None = None,
+               meter_file: str = "",
+               classifiers: Sequence[Any] | None = None) -> str:
     """An image for the book joined from ``input_path``, or "".
 
     Always asked when the local rungs failed: a book is one file, so one
@@ -797,19 +823,27 @@ def book_cover(input_path: str, tracks: Sequence[str], seconds: float,
     """
     if not enabled():
         return ""
-    return _search(book_subject(input_path, tracks, seconds, stereo),
-                   dest_base, search)
+    if subject is None:
+        subject = book_subject(input_path, tracks, seconds, stereo,
+                               meter_file=meter_file, classifiers=classifiers)
+    return _search(subject, dest_base, search)
 
 
 def book_subject(input_path: str, tracks: Sequence[str], seconds: float,
                  stereo: bool = False,
-                 probe: Callable[[str], dict] | None = None) -> Subject:
+                 probe: Callable[[str], dict] | None = None, *,
+                 meter_file: str = "",
+                 classifiers: Sequence[Any] | None = None) -> Subject:
     """What the book joined from ``input_path`` is looked for as: its folder's
     name, the first track's tags (read by ``probe``, ffprobe unless given),
-    the folder above as a possible author."""
+    the folder above as a possible author. When content classification by a
+    language model is enabled and available, its verdict refines the content
+    kind before the catalogue search runs (except for a YouTube id, which
+    fetches that video's own thumbnail directly)."""
     folder = os.path.basename(os.path.normpath(input_path))
-    tags = (probe or probe_tags)(tracks[0]) if tracks else {}
-    return subject_for(
+    tag_reader = probe or probe_tags
+    tags = tag_reader(tracks[0]) if tracks else {}
+    subject = subject_for(
         folder, seconds,
         tag_titles=[tags.get("album", "")],
         tag_creators=[tags.get("album_artist", ""), tags.get("artist", ""),
@@ -817,6 +851,12 @@ def book_subject(input_path: str, tracks: Sequence[str], seconds: float,
         guessed_creators=[os.path.basename(os.path.dirname(
             os.path.normpath(input_path)))],
         stereo=stereo)
+    if not subject.youtube_id:
+        _refine_content(
+            subject, folder, folder_path=input_path, tracks=tracks,
+            seconds=seconds, stereo=stereo, list_folder=True,
+            classifiers=classifiers, meter_file=meter_file, probe=tag_reader)
+    return subject
 
 
 def providers_for(content: str) -> list[str]:
@@ -889,10 +929,40 @@ def track_wants_search(source: str, seconds: float,
     return _siblings_mostly_covered(folder, source, has_cover)
 
 
+def track_subject(source: str, seconds: float, stereo: bool = False,
+                  probe: Callable[[str], dict] | None = None, *,
+                  meter_file: str = "",
+                  classifiers: Sequence[Any] | None = None) -> Subject:
+    """What a single track at ``source`` is looked for as: its stem, its tags
+    (read by ``probe``, ffprobe unless given), and its parent folder. When
+    content classification by a language model is enabled and available, its
+    verdict refines the content kind before the catalogue search runs (except
+    for a YouTube id)."""
+    stem = os.path.splitext(os.path.basename(source))[0]
+    tag_reader = probe or probe_tags
+    tags = tag_reader(source)
+    subject = subject_for(
+        stem, seconds,
+        tag_titles=[tags.get("title", "")],
+        tag_creators=[tags.get("album_artist", ""), tags.get("artist", "")],
+        guessed_creators=[tags.get("album", ""),
+                          os.path.basename(os.path.dirname(source))],
+        stereo=stereo)
+    if not subject.youtube_id:
+        _refine_content(
+            subject, stem, folder_path=os.path.dirname(source),
+            tracks=(source,), seconds=seconds, stereo=stereo,
+            list_folder=False, classifiers=classifiers,
+            meter_file=meter_file, probe=tag_reader)
+    return subject
+
+
 def track_cover(source: str, seconds: float, tmp_dir: str,
                 search: CoverSearch | None = None,
                 has_cover: Callable[[str], bool] = has_embedded_cover,
-                stereo: bool = False) -> None:
+                stereo: bool = False, *,
+                meter_file: str = "",
+                classifiers: Sequence[Any] | None = None) -> None:
     """Fill ``<tmp_dir>/tempCover.jpg`` from online, where the source left it
     empty and the track is worth a search. ``apply_cover`` embeds it from
     there the way it embeds a cover pulled out of the source. ``stereo`` is
@@ -902,15 +972,8 @@ def track_cover(source: str, seconds: float, tmp_dir: str,
         return
     if not track_wants_search(source, seconds, has_cover):
         return
-    stem = os.path.splitext(os.path.basename(source))[0]
-    tags = probe_tags(source)
-    subject = subject_for(
-        stem, seconds,
-        tag_titles=[tags.get("title", "")],
-        tag_creators=[tags.get("album_artist", ""), tags.get("artist", "")],
-        guessed_creators=[tags.get("album", ""),
-                          os.path.basename(os.path.dirname(source))],
-        stereo=stereo)
+    subject = track_subject(source, seconds, stereo,
+                            meter_file=meter_file, classifiers=classifiers)
     image = _search(subject, os.path.join(tmp_dir, "online"), search)
     if not image:
         return
