@@ -60,6 +60,7 @@ from medialib.cli.convert_images import (
 from medialib.lib import (
     adequacy,
     aicomicpage,
+    aicomicpdf,
     archives,
     av1gpu,
     clioptions,
@@ -1891,6 +1892,8 @@ def _vet_pdfs(state, pdfs: list, counter_dir: str, speed: int) -> None:
     for name in ("pdf.comic", "pdf.other"):
         with open(os.path.join(counter_dir, name), "w") as handle:
             handle.write("0")
+    meter_file = os.path.join(counter_dir, "comic-pdf-meter")
+    runcontext.settle(aicomicpdf.METER_VARIABLE, meter_file)
     # At the page-conversion width rather than the book width: reading a
     # PDF's page and image tables is a short burst of parsing, not a book's
     # worth of work, and none of it is held in RAM afterwards.
@@ -1898,6 +1901,10 @@ def _vet_pdfs(state, pdfs: list, counter_dir: str, speed: int) -> None:
                                    / threads_per_conversion("avif", speed))),
                    state.vet_pdf)
     safety.exit_if_aborted()
+    spans, tally = modelmeter.gathered(meter_file)
+    if tally.requests > 1:
+        log("Comic PDF model over the run: "
+            + modelmeter.rate_line("all", spans.seconds, tally))
     runlog.say("\n")
     # A single PDF's verdict is its own line above; the tally only adds
     # something once there are several.
