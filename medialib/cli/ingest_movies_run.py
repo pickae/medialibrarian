@@ -2873,6 +2873,8 @@ def _carry_out_commentary_names(plan: dict) -> str:
                 os.utime(movie, (original, original))
             except OSError:
                 pass
+    else:
+        filmrecord.forget(movie)
     directory = os.path.dirname(movie)
     skips = safety.RunSkipLog()
     for old_name, new_name in plan["sidecars"]:
