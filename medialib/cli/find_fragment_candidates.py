@@ -20,7 +20,7 @@ import sys
 import time
 
 from medialib import commands
-from medialib.lib import clioptions, runlog, safety, settings, tooldeps
+from medialib.lib import aifragments, clioptions, runlog, safety, settings, tooldeps
 
 USAGE_HEAD = """Usage:
     {program} [options] <folderOrTreeFile>
@@ -309,13 +309,16 @@ def main(argv: list, program: str = "find-fragment-candidates") -> int:
     if result.values["outOverride"]:
         report = result.values["outOverride"]
 
-    reported = write_report(report, tree_file,
-                            tally(extract_names(tree_file), minimum), minimum)
+    names = extract_names(tree_file)
+    rows = tally(names, minimum)
+    reported = write_report(report, tree_file, rows, minimum)
     # An empty report under the default floor may only mean that nothing
     # recurs, so the one flag that lists the one-offs too is named with it.
     hint = " (none carried by %d or more names; -m 1 lists every candidate)" \
         % minimum if reported == 0 and minimum > 1 else ""
     print('Wrote %d candidate(s) to "%s"%s.' % (reported, report, hint))
+    if reported > 0:
+        aifragments.propose(_sorted_rows(rows), names, tree_file=tree_file)
     return 0
 
 

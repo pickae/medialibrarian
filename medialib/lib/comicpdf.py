@@ -11,7 +11,7 @@ import re
 import shutil
 import subprocess
 
-from medialib.lib import settings, toolcapture
+from medialib.lib import aicomicpdf, runcontext, settings, toolcapture
 from medialib.lib.formatting import awk_number
 
 __all__ = [
@@ -213,9 +213,12 @@ def comic_pdf_verdict(pdf: str, max_height_px: str = "0") -> tuple:
     numbers it was reached on, for a caller that wants them rather than a line.
 
     A comic is a PDF where at least ``comicPdfMinPageShare`` percent of the
-    pages are a single full-page image; anything else is a magazine or a text
-    document, which rasterising page by page would only turn into a large,
-    unreadable .cbz.
+    pages are a single full-page image. A PDF that misses that bar but is near
+    it, or has zero matching pages at all (as digitally drawn or tiled comics
+    do), is shown to a vision model (:mod:`medialib.lib.aicomicpdf`) whose
+    verdict is cached per file so ``convert-comics`` and ``content-census``
+    agree; anything else is a magazine or a text document, which rasterising
+    page by page would only turn into a large, unreadable .cbz.
     """
     stats, _ = _stats_line(pdf, max_height_px)
     if not stats:
@@ -231,7 +234,14 @@ def comic_pdf_verdict(pdf: str, max_height_px: str = "0") -> tuple:
     if pages <= 0:
         return False, pages, good, dpi
     min_page_share = int(_knob("comicPdfMinPageShare"))
-    return good * 100 >= pages * min_page_share, pages, good, dpi
+    if good * 100 >= pages * min_page_share:
+        return True, pages, good, dpi
+    if aicomicpdf.should_ask(pages, good, min_page_share):
+        meter_file = runcontext.get(aicomicpdf.METER_VARIABLE, "")
+        verdict = aicomicpdf.judge(pdf, pages, good, meter_file=meter_file)
+        if verdict is not None and verdict.comic:
+            return True, pages, good, dpi
+    return False, pages, good, dpi
 
 
 def is_comic_pdf(pdf: str, max_height_px: str = "0") -> int:
