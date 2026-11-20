@@ -223,6 +223,15 @@ SETTINGS: tuple[Setting, ...] = (
             "every chapter. Only a model that can search is asked - Claude, or "
             "one behind `llmHarness`: `on` or `off`",
             ("concat-audio", "convert-and-concat"), "on"),
+    Setting("ambiguousEditionsLlm", "Whether ambiguous film folders and cuts "
+            "differing by more than a minute are handed to a language model "
+            "for suggestions (the `ambiguous-editions` task, see "
+            "docs/models.md): it is told the folder and file names, the film's "
+            "title, year, TMDb/IMDb id and runtimes. Proposals are written as "
+            "suggestions only and never rename files automatically. Only a "
+            "model that can search is asked - Claude, or one behind "
+            "`llmHarness`: `on` or `off`",
+            ("ingest-movies",), "on"),
     Setting("chapterDbSite", "The chapter database's address", ("ingest-movies",),
             "`https://chapterdb.plex.tv`", tuning=True),
     Setting("dvdCompareSite", "The disc database's address", ("ingest-movies",),

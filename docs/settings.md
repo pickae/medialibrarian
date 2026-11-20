@@ -20,6 +20,7 @@ no command reads is warned about.
 
 | Setting | What it does | Default | Read by |
 | --- | --- | --- | --- |
+| `ambiguousEditionsLlm` | Whether ambiguous film folders and cuts differing by more than a minute are handed to a language model for suggestions (the `ambiguous-editions` task, see docs/models.md): it is told the folder and file names, the film's title, year, TMDb/IMDb id and runtimes. Proposals are written as suggestions only and never rename files automatically. Only a model that can search is asked - Claude, or one behind `llmHarness`: `on` or `off` | on | `ingest-movies` |
 | `audiobookLosslessCompression` | The FLAC compression level of that copy | 5 | `read-library` |
 | `audiobookLosslessFilters` | The ffmpeg filters the lossless copy of an audiobook is made with; empty for none | `dynaudnorm=f=150:g=15,afftdn=nf=-70` | `read-library` |
 | `beetsConfig` | The beets config ingest-music's tagging phase runs with | the shipped `medialib/config/beets.yaml` | `ingest-music` |
