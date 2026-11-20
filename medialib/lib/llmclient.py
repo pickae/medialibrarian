@@ -74,7 +74,7 @@ __all__ = ["API_VARIABLE", "URL_VARIABLE", "MODEL_VARIABLE", "KEY_VARIABLE",
            "SERVE_MIB", "APIS", "DEFAULT_API",
            "DEFAULT_ANTHROPIC_MODEL", "DEFAULT_CONTEXT_TOKENS", "DEFAULT_JOBS",
            "THOROUGH_EFFORT", "LlmError", "Tally", "Llm", "from_environment", "build",
-           "preflight", "usable", "is_local", "first_json"]
+           "preflight", "usable", "is_local", "first_json", "json_strings"]
 
 # The settings, by the names a user gives them.
 API_VARIABLE = "llmApi"
@@ -170,10 +170,19 @@ _LIMIT_FIELDS = ("max_tokens", "max_completion_tokens", "")
 
 # A reasoning model's thinking, where a server hands it back inside the text.
 _THINKING = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+_THINKING_TAIL = re.compile(r"</think>", re.IGNORECASE)
+
+# A backslash before anything JSON does not escape (such as \' or \a in a
+# model's JSON string), which json.loads rejects.
+_STRAY_ESCAPE = re.compile(r'(?<!\\)((?:\\\\)*)\\(?!["\\/bfnrtu])')
 
 
 class LlmError(Exception):
     """The model could not be asked, or did not answer."""
+
+
+class _PermanentLlmError(LlmError):
+    """A refusal that repeating the same request will not cure."""
 
 
 @dataclass
@@ -283,7 +292,8 @@ class Llm:
         return copy
 
     @contextlib.contextmanager
-    def serving(self, log: Callable[[str], None]) -> Iterator[Llm]:
+    def serving(self, log: Callable[[str], None], *,
+                announce: bool = True) -> Iterator[Llm]:
         """This model on the first server of the ladder that can be had now,
         held until the block ends: the first one answering, or the first
         started where it is not running (:attr:`serve`) and the GPU has room.
@@ -311,7 +321,7 @@ class Llm:
                 listing = _listing(url, self.key)
                 if listing is None:
                     continue
-                yield self._on(url, listing, log)
+                yield self._on(url, listing, log, announce=announce)
                 return
             finally:
                 if server is not None:
@@ -320,7 +330,7 @@ class Llm:
                        "started now" % ", ".join((self.url,) + self.fallbacks))
 
     def _on(self, url: str, listed: dict[str, int],
-            log: Callable[[str], None]) -> Llm:
+            log: Callable[[str], None], *, announce: bool = True) -> Llm:
         """This model as the server at ``url``, listing ``listed``, serves it
         - see :meth:`serving`."""
         model = self.model
@@ -333,7 +343,7 @@ class Llm:
         context = self.context_tokens
         if window and (not self.context_given or window < context):
             context = window
-        if url != self.url or model != self.model:
+        if announce and (url != self.url or model != self.model):
             log("    asking %s at %s" % (model, url))
         bound = replace(self, url=url, model=model, context_tokens=context,
                         fallbacks=(), serve="")
@@ -367,7 +377,9 @@ class Llm:
         return self.traits.has(trait)
 
     def ask(self, system: str, prompt: str, tally: Tally | None = None,
-            images: Sequence[str] = ()) -> str:
+            images: Sequence[str] = (), *, numbered: bool = False,
+            options: dict | None = None, max_tokens: int | None = None,
+            allow_empty: bool = False, retries: int | None = None) -> str:
         """The model's text answer, its thinking taken out. LlmError when no
         answer came after the retries. Safe to call from many threads: the
         requests in flight never pass :attr:`jobs`. Every answer, a retried
@@ -375,47 +387,128 @@ class Llm:
         a slot.
 
         ``images`` are pictures - JPEG, PNG, GIF or WebP files - shown to the
-        model before the prompt, in their order; for a model that
-        :meth:`sees_images`, and never through a harness."""
+        model, in their order; for a model that :meth:`sees_images`, and never
+        through a harness. With ``numbered``, the prompt comes first and each
+        picture after its ``Image N:`` label (when there is more than one).
+        ``options`` adds per-request fields over :attr:`options` on the openai
+        protocol; ``max_tokens`` overrides the output limit; ``allow_empty``
+        lets an empty reply stand as ``""`` instead of retrying."""
         if images and self.harness:
             raise LlmError("pictures are not sent through %s" % self.harness.program)
         pictures = [_picture(path) for path in images]
+        tries = RETRIES if retries is None else retries
         last = ""
-        for attempt in range(RETRIES + 1):
+        for attempt in range(tries + 1):
             if attempt:
                 time.sleep(RETRY_WAIT_SECONDS * 2 ** (attempt - 1))
             try:
                 with self._slots or contextlib.nullcontext():
                     started = time.monotonic()
-                    text, tokens = self._ask_once(system, prompt, pictures)
+                    outcome = self._ask_once(
+                        system, prompt, pictures, numbered=numbered,
+                        options=options, max_tokens=max_tokens)
+            except _PermanentLlmError:
+                raise
             except LlmError as error:
                 last = str(error)
                 continue
+            if len(outcome) == 3:
+                text, tokens, read = outcome
+            else:
+                text, tokens = outcome
+                read = None
             if tally is not None:
-                tally.add(time.monotonic() - started, tokens)
-            text = _THINKING.sub("", text).strip()
-            if text:
+                tally.add(time.monotonic() - started, tokens, read)
+            text = _strip_thinking(text)
+            if text or allow_empty:
                 return text
             last = "an empty answer"
         raise LlmError(last)
 
-    def _ask_once(self, system: str, prompt: str,
-                  pictures: Sequence[tuple[str, str]] = ()) -> tuple[str, int | None]:
-        """The answer and the tokens the model wrote for it, None where they
-        were not reported. ``pictures`` are (media type, base64) pairs."""
+    def ask_pictures(
+        self, system: str, batch_prompt: str, alone_prompt: str,
+        images: Sequence[str], tally: Tally | None = None, *,
+        options: dict | None = None, max_tokens_each: int | None = None,
+        allow_empty: bool = False, retries: int | None = None,
+        reask: Callable[[int, str], bool] | None = None,
+    ) -> list[str | None]:
+        """Ask the model about a group of ``images`` in one numbered request
+        whose answer is a JSON array of one string per picture.
+
+        When there is only one picture, when the batched request fails, or when
+        its answer is not a JSON array of ``len(images)`` strings, each picture
+        is asked again one at a time with ``alone_prompt`` (None for a picture
+        that still fails). When the batch succeeds and ``reask(index, text)``
+        returns True for a picture, that picture alone is re-asked and its new
+        answer replaces the batch's when it comes back."""
+        if images and self.harness:
+            raise LlmError("pictures are not sent through %s" % self.harness.program)
+        if not images:
+            return []
+        found: list[str] | None = None
+        if len(images) > 1:
+            batch_limit = (max_tokens_each * len(images)
+                           if max_tokens_each is not None else None)
+            try:
+                reply = self.ask(
+                    system, batch_prompt, tally, images=images, numbered=True,
+                    options=options, max_tokens=batch_limit,
+                    allow_empty=False, retries=retries)
+                found = json_strings(reply, len(images))
+            except LlmError:
+                found = None
+        if found is None:
+            results: list[str | None] = []
+            for path in images:
+                try:
+                    results.append(self.ask(
+                        system, alone_prompt, tally, images=(path,),
+                        numbered=True, options=options,
+                        max_tokens=max_tokens_each, allow_empty=allow_empty,
+                        retries=retries))
+                except LlmError:
+                    results.append(None)
+            return results
+        checked: list[str | None] = list(found)
+        if reask is not None:
+            for index, text in enumerate(found):
+                if reask(index, text):
+                    try:
+                        checked[index] = self.ask(
+                            system, alone_prompt, tally,
+                            images=(images[index],), numbered=True,
+                            options=options, max_tokens=max_tokens_each,
+                            allow_empty=allow_empty, retries=retries)
+                    except LlmError:
+                        pass
+        return checked
+
+    def _ask_once(
+        self, system: str, prompt: str,
+        pictures: Sequence[tuple[str, str]] = (), *, numbered: bool = False,
+        options: dict | None = None, max_tokens: int | None = None,
+    ) -> tuple[str, int | None] | tuple[str, int | None, int | None]:
+        """The answer and the tokens the model wrote (and read) for it, None
+        where they were not reported. ``pictures`` are (media type, base64)
+        pairs."""
         if self.harness:
             try:
                 return llmharness.ask(
                     self.harness, self.harness_model, system, prompt,
-                    REQUEST_SECONDS, llmharness.session_title(self.purpose)), None
+                    REQUEST_SECONDS, llmharness.session_title(self.purpose)), None, None
             except llmharness.HarnessError as error:
                 raise LlmError(str(error)) from error
-        # Pictures are passed only where there are any, so a request of text
-        # is the call it always was.
-        more = (pictures,) if pictures else ()
+        # Plain text calls keep their original 3-argument shape so callers and
+        # tests patching _ask_openai / _ask_anthropic stay compatible.
         if self.api == "anthropic":
-            return _ask_anthropic(self, system, prompt, *more)
-        return _ask_openai(self, system, prompt, *more)
+            if numbered or max_tokens is not None:
+                return _ask_anthropic(self, system, prompt, pictures,
+                                      numbered=numbered, max_tokens=max_tokens)
+            return _ask_anthropic(self, system, prompt, *([pictures] if pictures else []))
+        if numbered or options is not None or max_tokens is not None:
+            return _ask_openai(self, system, prompt, pictures, numbered=numbered,
+                               options=options, max_tokens=max_tokens)
+        return _ask_openai(self, system, prompt, *([pictures] if pictures else []))
 
 
 def from_environment(environ=None) -> Llm:
@@ -439,14 +532,17 @@ SETTING_FIELDS = {"api": API_VARIABLE, "url": URL_VARIABLE, "model": MODEL_VARIA
 ROSTER_FIELDS = ("key_env", "tasks")
 
 
-def build(entry: dict, name: str, settings: bool = False) -> Llm:
+def build(entry: dict, name: str, settings: bool = False,
+          field_names: dict[str, str] | None = None) -> Llm:
     """The model one entry describes: a table of :data:`SETTING_FIELDS`'s
     fields, as the roster file holds them (typed: a list of addresses, a
     table of options or traits) or as the settings do (all text). ``name``
     is what the roster calls it; with ``settings`` a problem is named by the
-    setting it is in, otherwise by the field. LlmError for an entry that
-    cannot be used."""
+    setting it is in, otherwise by the field (or ``field_names`` when given).
+    LlmError for an entry that cannot be used."""
     def said(field: str) -> str:
+        if field_names and field in field_names:
+            return field_names[field]
         return SETTING_FIELDS[field] if settings else "%s's %s" % (name, field)
 
     unknown = sorted(set(entry) - set(SETTING_FIELDS) - set(ROSTER_FIELDS))
@@ -657,8 +753,52 @@ def _positive(entry: dict, field: str, default: int,
     return int(value)
 
 
-def _ask_openai(llm: Llm, system: str, prompt: str,
-                pictures: Sequence[tuple[str, str]] = ()) -> tuple[str, int | None]:
+def _strip_thinking(text: str) -> str:
+    """``text`` with any ``<think>...</think>`` block or leading thinking
+    before a stray ``</think>`` removed."""
+    text = _THINKING.sub("", text)
+    if _THINKING_TAIL.search(text):
+        text = _THINKING_TAIL.split(text)[-1]
+    return text.strip()
+
+
+def _image_parts(prompt: str, pictures: Sequence[tuple[str, str]],
+                 numbered: bool, make_part: Callable[[tuple[str, str]], dict]) -> list[dict]:
+    """The content parts of a user message carrying ``pictures`` and ``prompt``:
+    pictures before the prompt by default, or the prompt first and each picture
+    after its ``Image N:`` label when ``numbered`` is set."""
+    if not numbered:
+        return [*(make_part(picture) for picture in pictures),
+                {"type": "text", "text": prompt}]
+    parts: list[dict] = [{"type": "text", "text": prompt}]
+    if len(pictures) == 1:
+        parts.append(make_part(pictures[0]))
+        return parts
+    for number, picture in enumerate(pictures, 1):
+        parts.append({"type": "text", "text": "Image %d:" % number})
+        parts.append(make_part(picture))
+    return parts
+
+
+def _reported_tokens(usage) -> tuple[int | None, int | None]:
+    """(written, read) token counts from an OpenAI-style ``usage`` object."""
+    if not isinstance(usage, dict):
+        return None, None
+    written = usage.get("completion_tokens")
+    if not isinstance(written, int):
+        written = usage.get("output_tokens")
+    read = usage.get("prompt_tokens")
+    if not isinstance(read, int):
+        read = usage.get("input_tokens")
+    return (written if isinstance(written, int) else None,
+            read if isinstance(read, int) else None)
+
+
+def _ask_openai(
+    llm: Llm, system: str, prompt: str,
+    pictures: Sequence[tuple[str, str]] = (), *, numbered: bool = False,
+    options: dict | None = None, max_tokens: int | None = None,
+) -> tuple[str, int | None] | tuple[str, int | None, int | None]:
     """One Chat Completions request through curl, with ``pictures`` as
     ``image_url`` parts of the user's message where there are any.
 
@@ -668,9 +808,10 @@ def _ask_openai(llm: Llm, system: str, prompt: str,
     leniently instead (:func:`first_json`). What one server takes and another
     does not - how hard to think, a sampling setting - is the user's to add,
     in :data:`OPTIONS_VARIABLE`, except the ``reasoning_effort`` a model
-    given instructions (:meth:`Llm.following`) sends over it. The limit is what the window has
-    left after the prompt, up to :data:`MAX_OUTPUT_TOKENS`, under whichever of
-    :data:`_LIMIT_FIELDS` the server takes.
+    given instructions (:meth:`Llm.following`) sends over it, and any per-call
+    ``options`` a caller merges in. The limit is ``max_tokens`` when given, or
+    what the window has left after the prompt, up to :data:`MAX_OUTPUT_TOKENS`,
+    under whichever of :data:`_LIMIT_FIELDS` the server takes.
 
     The body goes in a file and the key in the config on stdin: /proc shows
     every account an argv, and a transcript is too long for one anyway.
@@ -678,8 +819,10 @@ def _ask_openai(llm: Llm, system: str, prompt: str,
     while True:
         tried = llm.limit_field
         try:
-            if pictures:
-                return _post_openai(llm, system, prompt, tried, pictures)
+            if pictures or numbered or options is not None or max_tokens is not None:
+                return _post_openai(llm, system, prompt, tried, pictures,
+                                    numbered=numbered, options=options,
+                                    max_tokens=max_tokens)
             return _post_openai(llm, system, prompt, tried)
         except _LimitRefused:
             # Requests running side by side can all be refused the same name;
@@ -691,25 +834,33 @@ class _LimitRefused(Exception):
     """The server refused the name the output limit was sent under."""
 
 
-def _post_openai(llm: Llm, system: str, prompt: str, tried: int,
-                 pictures: Sequence[tuple[str, str]] = ()) -> tuple[str, int | None]:
+def _post_openai(
+    llm: Llm, system: str, prompt: str, tried: int,
+    pictures: Sequence[tuple[str, str]] = (), *, numbered: bool = False,
+    options: dict | None = None, max_tokens: int | None = None,
+) -> tuple[str, int | None, int | None]:
     request: dict = dict(llm.options)
+    if options:
+        request.update(options)
     if llm.effort:
         request["reasoning_effort"] = llm.effort
     asked: str | list = prompt
     if pictures:
-        asked = [*({"type": "image_url",
-                      "image_url": {"url": "data:%s;base64,%s" % picture}}
-                     for picture in pictures),
-                   {"type": "text", "text": prompt}]
-    request.update({"model": llm.model, "messages": [
-        {"role": "system", "content": system},
-        {"role": "user", "content": asked}]})
+        asked = _image_parts(
+            prompt, pictures, numbered,
+            lambda picture: {"type": "image_url",
+                             "image_url": {"url": "data:%s;base64,%s" % picture}})
+    messages = ([{"role": "system", "content": system}] if system else []) + [
+        {"role": "user", "content": asked}]
+    request.update({"model": llm.model, "messages": messages})
     limit_field = _LIMIT_FIELDS[min(tried, len(_LIMIT_FIELDS) - 1)]
     if limit_field and not any(name in request for name in _LIMIT_FIELDS if name):
-        left = llm.context_tokens - (len(system) + len(prompt)) // 3 \
-            - PICTURE_TOKENS * len(pictures)
-        request[limit_field] = max(MIN_OUTPUT_TOKENS, min(MAX_OUTPUT_TOKENS, left))
+        if max_tokens is not None:
+            request[limit_field] = max_tokens
+        else:
+            left = llm.context_tokens - (len(system) + len(prompt)) // 3 \
+                - PICTURE_TOKENS * len(pictures)
+            request[limit_field] = max(MIN_OUTPUT_TOKENS, min(MAX_OUTPUT_TOKENS, left))
     body = json.dumps(request, ensure_ascii=False)
     descriptor, body_file = tempfile.mkstemp(prefix="llmclient.", suffix=".json")
     try:
@@ -744,7 +895,10 @@ def _post_openai(llm: Llm, system: str, prompt: str, tried: int,
             text, re.IGNORECASE):
         raise _LimitRefused()
     if not status.startswith("2"):
-        raise LlmError("%s answered HTTP %s: %s" % (llm.url, status, _error_text(text)))
+        detail = "%s answered HTTP %s: %s" % (llm.url, status, _error_text(text))
+        if status.startswith("4") and status not in ("408", "429"):
+            raise _PermanentLlmError(detail)
+        raise LlmError(detail)
     try:
         reply = json.loads(text)
         message = reply["choices"][0]["message"]
@@ -754,9 +908,8 @@ def _post_openai(llm: Llm, system: str, prompt: str, tried: int,
     if isinstance(content, list):
         content = "".join(part.get("text", "") for part in content
                           if isinstance(part, dict))
-    usage = reply.get("usage") if isinstance(reply, dict) else None
-    tokens = usage.get("completion_tokens") if isinstance(usage, dict) else None
-    return content or "", tokens if isinstance(tokens, int) else None
+    written, read = _reported_tokens(reply.get("usage") if isinstance(reply, dict) else None)
+    return content or "", written, read
 
 
 def _error_text(body: str) -> str:
@@ -770,11 +923,14 @@ def _error_text(body: str) -> str:
     return str(error or body)[:300]
 
 
-def _ask_anthropic(llm: Llm, system: str, prompt: str,
-                   pictures: Sequence[tuple[str, str]] = ()) -> tuple[str, int | None]:
+def _ask_anthropic(
+    llm: Llm, system: str, prompt: str,
+    pictures: Sequence[tuple[str, str]] = (), *, numbered: bool = False,
+    max_tokens: int | None = None,
+) -> tuple[str, int | None, int | None]:
     """One Messages request through the official SDK, streamed, because a long
-    transcript is a long request; ``pictures`` go before the prompt as image
-    blocks.
+    transcript is a long request; ``pictures`` go as image blocks (before the
+    prompt by default, or numbered after it when ``numbered`` is set).
 
     The key is the setting when there is one, and otherwise whatever the SDK
     finds itself (ANTHROPIC_API_KEY, a login profile). A refusal is retried on
@@ -801,16 +957,18 @@ def _ask_anthropic(llm: Llm, system: str, prompt: str,
                              "max_uses": MAX_SEARCHES}]
     content: str | list = prompt
     if pictures:
-        content = [*({"type": "image", "source": {
-                        "type": "base64", "media_type": media_type, "data": data}}
-                     for media_type, data in pictures),
-                   {"type": "text", "text": prompt}]
+        content = _image_parts(
+            prompt, pictures, numbered,
+            lambda picture: {"type": "image", "source": {
+                "type": "base64", "media_type": picture[0], "data": picture[1]}})
     messages: list = [{"role": "user", "content": content}]
     tokens: int | None = None
+    read: int | None = None
+    limit = max_tokens if max_tokens is not None else MAX_OUTPUT_TOKENS
     for _ in range(MAX_CONTINUATIONS + 1):
         try:
             with client.beta.messages.stream(
-                    model=llm.model, max_tokens=MAX_OUTPUT_TOKENS,
+                    model=llm.model, max_tokens=limit,
                     system=system, messages=messages,
                     output_config={"effort": llm.effort or DEFAULT_ANTHROPIC_EFFORT},
                     betas=["server-side-fallback-2026-07-01"],
@@ -821,16 +979,20 @@ def _ask_anthropic(llm: Llm, system: str, prompt: str,
                            % (error.status_code, error.message)) from error
         except anthropic.APIConnectionError as error:
             raise LlmError("the Claude API could not be reached: %s" % error) from error
-        written = getattr(getattr(message, "usage", None), "output_tokens", None)
+        usage = getattr(message, "usage", None)
+        written = getattr(usage, "output_tokens", None)
         if isinstance(written, int):
             tokens = (tokens or 0) + written
+        seen = getattr(usage, "input_tokens", None)
+        if isinstance(seen, int):
+            read = (read or 0) + seen
         if message.stop_reason != "pause_turn":
             break
         messages = [{"role": "user", "content": content},
                     {"role": "assistant", "content": message.content}]
     if message.stop_reason == "refusal":
         raise LlmError("the model declined to answer")
-    return "".join(block.text for block in message.content if block.type == "text"), tokens
+    return "".join(block.text for block in message.content if block.type == "text"), tokens, read
 
 
 def first_json(text: str):
@@ -850,3 +1012,27 @@ def first_json(text: str):
             continue
         return value
     return None
+
+
+def json_strings(text: str, count: int) -> list[str] | None:
+    """``count`` strings out of a JSON array the model answered with - fence
+    and stray backslashes stripped - or None when the answer is not one."""
+    text = text.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```[a-zA-Z]*\s*", "", text)
+        text = re.sub(r"\s*```$", "", text).strip()
+    start, end = text.find("["), text.rfind("]")
+    if start < 0 or end <= start:
+        return None
+    snippet = text[start:end + 1]
+    try:
+        items = json.loads(snippet)
+    except ValueError:
+        try:
+            items = json.loads(_STRAY_ESCAPE.sub(r"\1", snippet))
+        except ValueError:
+            return None
+    if not isinstance(items, list) or len(items) != count \
+            or not all(isinstance(item, str) for item in items):
+        return None
+    return items

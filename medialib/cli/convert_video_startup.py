@@ -274,7 +274,11 @@ def _summarise(settings, video_args: str, grain: str) -> None:
     # A profile the built-ins do not ship is the user's own: said, because the
     # rows the summary restates - the level, the encoder the hardware settles
     # on - then run on arguments the run was not built around.
-    if settings.video_profile in rules.user_video_profile_names():
+    if settings.auto_video_profile:
+        log("Video profile: auto -> chosen per file from sampled frames "
+            "(av1BluRay, av1Animation or av1Grain; default fallback %s)"
+            % rules.aivideoprofile.DEFAULT_PROFILE)
+    elif settings.video_profile in rules.user_video_profile_names():
         log("Video profile: %s -> %s (the video-profiles file defines it)"
             % (settings.video_profile, settled))
     else:
@@ -328,6 +332,10 @@ def _summarise(settings, video_args: str, grain: str) -> None:
         log("Video quality: %s %s for every file (-Q), so no resolution bias "
             "is applied." % (rules.video_quality_flag(settled),
                              settings.quality))
+    elif settings.auto_video_profile:
+        log("Video quality: each file's chosen profile default, biased per "
+            "file by the tier it is ENCODED at (%s; override with -Q)."
+            % rules.quality_bias_spellings(settings.max_resolution))
     else:
         log("Video quality: the %s profile default above, biased per file by "
             "the tier it is ENCODED at (%s; override with -Q)."
@@ -406,6 +414,12 @@ def _summarise_grain(settings, grain: str) -> None:
     if settings.encoder != "libsvtav1":
         log("Film grain: not available with %s, none synthesised."
             % settings.encoder)
+    elif settings.auto_video_profile and not grain:
+        log("Film grain: settled per file from its chosen profile "
+            "(av1Animation: none; av1BluRay: measured per file; av1Grain: %s). "
+            "Give -g to pin or turn off for every file."
+            % ("kept with SVT-AV1-HDR tune 6" if settings.svt_av1_hdr
+               else "measured per file"))
     elif settings.grain_tune:
         log("Film grain: KEPT - %s on SVT-AV1-HDR encodes the source's own "
             "grain with the fork's film grain tune (tune 6) rather than "

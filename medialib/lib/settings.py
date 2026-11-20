@@ -79,12 +79,22 @@ _SCRATCH = ("concat-audio", "content-census", "content-census-bi", "convert-and-
             "generate-chapters", "ingest-books", "ingest-movies", "ingest-music", "read-library",
             "transcribe-audio", "ytdlp")
 
-# Every command that asks a language model: for chapters, concat-audio's for
-# a cover nothing else found, or convert-comics and content-census for a PDF
-# that the image rule did not call a comic.
+# Every command that asks a language model.
 _AI_CHAPTERS = ("concat-audio", "content-census", "convert-and-concat",
                 "convert-audio", "convert-comics", "convert-video",
-                "generate-chapters", "ingest-movies", "ytdlp")
+                "find-fragment-candidates", "find-gaps", "generate-chapters",
+                "ingest-books", "ingest-movies", "ingest-music",
+                "plex-letterboxd-sync", "read-library", "ytdlp")
+
+# Every command in the repository (info logs and error logs).
+_ALL_COMMANDS = (
+    "clean-folder-structure", "clean-folder-structure-adb", "concat-audio",
+    "content-census", "content-census-bi", "convert-and-concat",
+    "convert-audio", "convert-comics", "convert-images", "convert-video",
+    "cue-to-chapters", "find-fragment-candidates", "find-gaps",
+    "generate-chapters", "ingest-books", "ingest-movies", "ingest-music",
+    "plex-letterboxd-sync", "read-library", "transcribe-audio", "ytdlp",
+)
 
 SETTINGS: tuple[Setting, ...] = (
     # --- logins and keys
@@ -117,30 +127,9 @@ SETTINGS: tuple[Setting, ...] = (
             "picture subtitles with: a comma list of `vision`, `paddle` and "
             "`tesseract`, tried in the order named until one reads the "
             "subtitle", ("ingest-movies",),
-            "a vision model where `subtitleOcrUrl` is set, paddle on the GPU "
-            "where it fits, tesseract, then paddle on the CPU"),
-    Setting("subtitleOcrUrl", "The servers holding a vision model, with the "
-            "OpenAI chat API, that ingest-movies reads picture subtitles with "
-            "first, in any language: a comma list of addresses, e.g. "
-            "`http://127.0.0.1:8082/v1,http://127.0.0.1:8080/v1`, the "
-            "preferred first; the first that answers, or can be started, "
-            "reads. Without it that engine is not tried", ("ingest-movies",)),
-    Setting("subtitleOcrServe", "The command that starts the first of those "
-            "servers when it is not running and the GPU has room for it; the "
-            "run stops it again once it has been idle five minutes, and at "
-            "its end", ("ingest-movies",)),
-    Setting("subtitleOcrServeMib", "The free GPU memory, in MiB, that server "
-            "is started with; with less, the next server down the list reads",
-            ("ingest-movies",), "26000"),
-    Setting("subtitleOcrModel", "The vision model's name, asked of a server that "
-            "lists it", ("ingest-movies",), "the first model each server lists"),
-    Setting("subtitleOcrOptions", "More fields for every request to that vision "
-            "model, as a JSON object - e.g. `{\"reasoning_effort\": "
-            "\"none\"}`; the run already asks it not to think",
-            ("ingest-movies",)),
-    Setting("subtitleOcrJobs", "How many requests are sent to that vision model at "
-            "once, each with up to 16 of a subtitle's pictures",
-            ("ingest-movies",), "32"),
+            "a vision model from the roster's `subtitle-ocr` task where there "
+            "is one (docs/models.md), paddle on the GPU where it fits, "
+            "tesseract, then paddle on the CPU"),
     # --- what a run keeps
     Setting("keepLanguages", "The languages ingest-movies' improved copy keeps "
             "beside the film's own language: a comma list of ISO 639-1 codes; "
@@ -164,13 +153,14 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("infoLogLevel", "How much of what a run says is kept in "
             "`logs/info/`, one file per run: `off`, `quiet` (errors and results), "
             "`normal` or `verbose` - apart from the console's `-q` and `-v`",
-            ("clean-folder-structure", "clean-folder-structure-adb", "concat-audio",
-             "content-census", "content-census-bi", "convert-and-concat",
-             "convert-audio", "convert-comics", "convert-images", "convert-video",
-             "cue-to-chapters", "find-fragment-candidates", "find-gaps",
-             "generate-chapters", "ingest-books", "ingest-movies", "ingest-music",
-             "plex-letterboxd-sync",
-             "read-library", "transcribe-audio", "ytdlp"), "normal"),
+            _ALL_COMMANDS, "normal"),
+    Setting("errorTriageLlm", "Whether unexplained errors left in a run's error "
+            "log (those no built-in cause matched) are handed to a language model "
+            "at the end of the run for an advisory likely cause and next step "
+            "(the `error-triage` task, see docs/models.md): error records hold "
+            "library paths, so a local model is preferred. Advisory only - never "
+            "retries commands, deletes files or changes exit codes: `on` or `off`",
+            _ALL_COMMANDS, "on"),
     # --- where work is done
     Setting("ramScratchBase", "Where each run's scratch directories go",
             _SCRATCH, "`/dev/shm`, else the system temp directory"),
@@ -226,6 +216,47 @@ SETTINGS: tuple[Setting, ...] = (
             "every chapter. Only a model that can search is asked - Claude, or "
             "one behind `llmHarness`: `on` or `off`",
             ("concat-audio", "convert-and-concat"), "on"),
+    Setting("musicSearchLlm", "Whether an album beets skipped is handed to a "
+            "language model to look up its MusicBrainz release ID on the web "
+            "(the `music-search` task, see docs/models.md): it is told the "
+            "folder and file names, track durations, existing tags and any "
+            "rip logs or cue sheets in the folder. Only a model that can "
+            "search is asked - Claude, or one behind `llmHarness`: `on` or "
+            "`off`",
+            ("ingest-music",), "on"),
+    Setting("fragmentCandidatesLlm", "Whether the candidates "
+            "find-fragment-candidates finds are handed to a language model to "
+            "sort into release groups, quality or source tags, publishers and "
+            "real title words and write proposed additions as a unified diff "
+            "under `logs/` (the `fragment-classify` task, see docs/models.md): "
+            "candidate tokens and sample folder/file names from the library "
+            "are sent to the model; `data/fragments.txt` is never edited "
+            "directly: `on` or `off`",
+            ("find-fragment-candidates",), "on"),
+    Setting("findGapsLlm", "Whether find-gaps asks a language model with web "
+            "search to check numbered, episodic and dated runs against real "
+            "episode lists and release schedules (the `gaps-check` task, see "
+            "docs/models.md): it is told folder, series and episode names, "
+            "number and date ranges, and the deterministic gaps already found, "
+            "and only appends notes and suspected missing items to the report. "
+            "Only a model that can search is asked - Claude, or one behind "
+            "`llmHarness`: `on` or `off`",
+            ("find-gaps",), "on"),
+    Setting("letterboxdMatchLlm", "Whether unmatched or ambiguous Letterboxd "
+            "entries are handed to a language model to suggest a Plex film or "
+            "TMDb id in the sync report only (the `letterboxd-match` task, see "
+            "docs/models.md): Letterboxd entry titles and years and candidate "
+            "Plex film titles, years and ids are sent to the model, and nothing "
+            "in Plex is changed from its answer: `on` or `off`",
+            ("plex-letterboxd-sync",), "on"),
+    Setting("bookJunkImagesLlm", "Whether ingest-books -d asks a vision model "
+            "to tell book illustrations from advertising and publisher promos "
+            "(the `book-image-check` task, see docs/models.md): candidate "
+            "images inside the e-book and their file names are sent to the "
+            "model, and only a high-confidence ad verdict is removed - anything "
+            "else is kept. Without a vision model, or set to `off`, falls back "
+            "to the fixed junk-name substrings: `on` or `off`",
+            ("ingest-books",), "on"),
     Setting("chapterDbSite", "The chapter database's address", ("ingest-movies",),
             "`https://chapterdb.plex.tv`", tuning=True),
     Setting("dvdCompareSite", "The disc database's address", ("ingest-movies",),
@@ -242,6 +273,16 @@ SETTINGS: tuple[Setting, ...] = (
             "to date before the fetch. `SKIP_YTDLP_UPGRADE` is accepted too",
             ("ytdlp",),
             "unset - a nightly is upgraded; a preview (-p) never is"),
+    Setting("podcastAdsLlm", "Whether a language model looks for host-read ads, "
+            "sponsor reads and self-promotion in the transcripts of RSS and site "
+            "podcast episodes (the `podcast-ads` task, see docs/models.md), "
+            "which have no SponsorBlock: `on` or `off`. Detected stretches are "
+            "marked as skippable chapters by default; `podcastAdsCut` opts in "
+            "to cutting them out", ("ytdlp",), "on"),
+    Setting("podcastAdsCut", "Whether the ad, sponsor and self-promotion "
+            "stretches `podcastAdsLlm` finds in an RSS or site podcast episode "
+            "are cut out of the file instead of only marked as chapters a "
+            "player can skip: `off` or `on`", ("ytdlp",), "off"),
     # --- language models
     Setting("llmModels", "The roster file: every language model you have, "
             "and which tasks use which - see docs/models.md. The single-model "
@@ -345,6 +386,15 @@ SETTINGS: tuple[Setting, ...] = (
             "read", _COMICS),
     Setting("comicPdfJpegQuality", "The JPEG quality comic PDF pages are rendered at",
             _COMICS),
+    Setting("comicEmptyPageLlm", "Whether small comic pages (under 40 KiB "
+            "instead of the size-only 10 KiB cutoff) are shown to a vision "
+            "model to judge whether they hold real comic-book content worth "
+            "keeping rather than being blank, an intentionally-blank notice, "
+            "just a page number, or a uniform colour (the `comic-page-check` "
+            "task, see docs/models.md): a small rendered copy is sent to the "
+            "model. When `off` or with no vision model, the existing 10 KiB "
+            "size-only rule applies unchanged: `on` or `off`",
+            ("convert-comics",), "on"),
     Setting("comicPdfLlm", "Whether a PDF that the one-image-per-page rule did not "
             "call a comic - either near the threshold or with no single-image pages "
             "at all - is judged by a vision model (the `comic-pdf-judge` task, see "
@@ -355,6 +405,11 @@ SETTINGS: tuple[Setting, ...] = (
             "by each file's path, size and modification time", _COMICS,
             "`comic-pdf-verdicts.json` in the cache directory", tuning=True),
     # --- reading books aloud
+    Setting("bookLanguageLlm", "Whether read-library asks a small language model "
+            "when a book's metadata language and its text disagree or neither "
+            "gives a confident answer (the `book-language` task, see "
+            "docs/models.md): a ~2 KB excerpt and the book's title/metadata are "
+            "sent to the model: `on` or `off`", _NARRATION, "on"),
     Setting("narrationHome", "The ebook2audiobook checkout read-library drives; `-c` "
             "overrides it", _NARRATION, "`~/ebook2audiobook`"),
     Setting("narrationLanguage", "The language a book is read in when its own cannot "
@@ -435,6 +490,13 @@ RENAMED = {"chapterLlm" + name[len("llm"):]: name for name in (
     "llmApi", "llmUrl", "llmModel", "llmKey", "llmContext", "llmOptions",
     "llmJobs", "llmServe", "llmServeMib", "llmHarness", "llmHarnessModel",
     "llmVramGB")}
+
+# Settings folded into the model roster (docs/models.md). Still read for the
+# time being, and warned about in both the environment and the file.
+DEPRECATED = {
+    "subtitleOcr" + suffix: "the model roster (docs/models.md)"
+    for suffix in ("Url", "Serve", "ServeMib", "Model", "Options", "Jobs")
+}
 
 
 def config_home() -> str:
@@ -623,6 +685,11 @@ def load(stream=None) -> None:
                          "old name works for the time being\n"
                          % (path, name, RENAMED[name]))
             name = RENAMED[name]
+        elif name in DEPRECATED:
+            if value.strip():
+                stream.write("==> WARNING: %s sets %s, which is replaced by %s now - "
+                             "the old name works for the time being\n"
+                             % (path, name, DEPRECATED[name]))
         elif name not in BY_NAME:
             near = difflib.get_close_matches(name, BY_NAME, n=1)
             stream.write("==> WARNING: %s sets %s, which no command reads%s\n"
@@ -633,13 +700,19 @@ def load(stream=None) -> None:
 
 def _apply_renamed(stream) -> None:
     """An old name set in the environment, carried over to the new one where
-    that is not set itself, and warned about."""
+    that is not set itself, and warned about; and a deprecated setting warned
+    about."""
     for old, new in RENAMED.items():
         if old in os.environ:
             stream.write("==> WARNING: the environment sets %s, which is called "
                          "%s now - the old name works for the time being\n"
                          % (old, new))
             os.environ.setdefault(new, os.environ[old])
+    for old, replacement in DEPRECATED.items():
+        if os.environ.get(old, "").strip():
+            stream.write("==> WARNING: the environment sets %s, which is "
+                         "replaced by %s now - the old name works for the "
+                         "time being\n" % (old, replacement))
 
 
 def _apply_shipped() -> None:

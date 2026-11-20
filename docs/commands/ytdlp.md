@@ -234,6 +234,25 @@ are asked for: every caption track is one more request to a provider that
 throttles a client asking for too much. The track kept is written beside the
 download as `<episode>.srt` and survives `-c`.
 
+### Ad reads in RSS and site podcasts
+
+SponsorBlock only covers YouTube (`youtubeAudio`, `youtubeVideo`); `rssAudio`,
+`rssVideo` and `siteVideo` feeds keep whatever host-read ads, sponsor reads and
+self-promotion the show baked into its enclosure. Whenever an episode from one
+of those profiles has a transcript — from `-i -C`, which embeds it inside the
+episode, or a sidecar or embedded subtitle track — `ytdlp` asks the
+`podcast-ads` model ([language models](../models.md)) to locate those
+stretches.
+
+By default (`podcastAdsLlm=on`, `podcastAdsCut=off`), every validated stretch
+is merged into the episode's chapters as `[Sponsor]`, `[Ad]` or `[Self-promo]`
+so any player can skip it without losing real chapters or re-encoding the file.
+Cutting detected stretches out of the audio or video is a separate opt-in
+(`podcastAdsCut=on`) that writes to a staged file and replaces the episode
+atomically. Spans outside the episode bounds, overlapping spans, and sets that
+would cover more than half the episode are rejected and leave the file
+untouched. Set `podcastAdsLlm=off` to skip the pass altogether.
+
 ### Merging archives (`-l`)
 
 When the same tables are run on more than one computer, each machine's archive
