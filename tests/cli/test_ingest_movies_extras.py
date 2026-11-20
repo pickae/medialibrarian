@@ -390,3 +390,123 @@ class TestOnlyInsideAMovieFolder:
         want = im.bonus_category_for("A trailer.mkv")
         assert os.path.isfile(os.path.join(film, want, "A trailer.mkv"))
         assert not os.path.exists(os.path.join(film, "Extras"))
+
+
+class TestLlmFallback:
+    """Only extras that matched no keyword are handed to the light model, and
+    only when bonusCategoryLlm is on."""
+
+    def test_unmatched_extras_use_model_while_keyword_matches_do_not(
+            self, tmp_path, skips, monkeypatch):
+        import contextlib
+
+        from medialib.lib import aibonuscategory, modelmeter
+
+        monkeypatch.setenv(aibonuscategory.SWITCH_VARIABLE, "on")
+        folder = _film(str(tmp_path), "Nightfall Harbour (1987)")
+        _write(os.path.join(folder, "Featurettes", "Theatrical Trailer.mkv"), "t")
+        _write(os.path.join(folder, "Featurettes", "Photo Gallery.mkv"), "p")
+        _write(os.path.join(folder, "Featurettes", "Storyboard Comparison.mkv"), "s")
+        _write(os.path.join(folder, "Featurettes", "Making the Music.mkv"), "m")
+        _write(os.path.join(folder, "Featurettes", "Featurette.mkv"), "f")
+
+        answers = {
+            "Photo Gallery.mkv":
+                '{"category": "Other", "confidence": "high", "why": "gallery"}',
+            "Storyboard Comparison.mkv":
+                '{"category": "Behind The Scenes", "confidence": "high", '
+                '"why": "storyboards"}',
+            "Making the Music.mkv":
+                '{"category": "Behind The Scenes", "confidence": "high", '
+                '"why": "scoring"}',
+            "Featurette.mkv":
+                '{"category": "none", "confidence": "high", "why": "generic"}',
+        }
+
+        class _StandIn:
+            name = "stand-in"
+            asked = []
+
+            @contextlib.contextmanager
+            def serving(self, log):
+                yield self
+
+            def ask(self, system, prompt, tally=None, images=()):
+                self.asked.append(prompt)
+                if tally is not None:
+                    tally.add(0.2, 15, 200)
+                for key, reply in answers.items():
+                    if "Extra file: " + key in prompt:
+                        return reply
+                return '{"category": "none", "confidence": "low"}'
+
+        model = _StandIn()
+        meter = tmp_path / "bonus.jsonl"
+        im.extras_into_subfolders(str(tmp_path), skips,
+                                  meter_file=str(meter), models=[model])
+
+        # Keyword match moved without asking the model.
+        assert os.path.isfile(os.path.join(folder, "Trailers", "Theatrical Trailer.mkv"))
+        assert not any("Theatrical Trailer.mkv" in p for p in model.asked)
+        assert len(model.asked) == 4
+
+        # High-confidence model matches moved to their categories.
+        assert (tmp_path / "Nightfall Harbour (1987)" / "Other"
+                / "Photo Gallery.mkv").read_text() == "p"
+        assert (tmp_path / "Nightfall Harbour (1987)" / "Behind The Scenes"
+                / "Storyboard Comparison.mkv").read_text() == "s"
+        assert (tmp_path / "Nightfall Harbour (1987)" / "Behind The Scenes"
+                / "Making the Music.mkv").read_text() == "m"
+
+        # "none" stayed in Featurettes.
+        assert (tmp_path / "Nightfall Harbour (1987)" / "Featurettes"
+                / "Featurette.mkv").read_text() == "f"
+        assert modelmeter.gathered(str(meter))[1].requests == 4
+
+    def test_model_match_never_clobbers_existing_target(
+            self, tmp_path, skips, monkeypatch):
+        import contextlib
+        import sys
+
+        from medialib.lib import aibonuscategory
+
+        monkeypatch.setenv(aibonuscategory.SWITCH_VARIABLE, "on")
+        folder = _film(str(tmp_path), "Nightfall Harbour (1987)")
+        _write(os.path.join(folder, "Featurettes", "Photo Gallery.mkv"), "new")
+        _write(os.path.join(folder, "Other", "Photo Gallery.mkv"), "existing")
+
+        class _StandIn:
+            name = "stand-in"
+
+            @contextlib.contextmanager
+            def serving(self, log):
+                yield self
+
+            def ask(self, system, prompt, tally=None, images=()):
+                return '{"category": "Other", "confidence": "high", "why": "gallery"}'
+
+        im.extras_into_subfolders(str(tmp_path), skips, models=[_StandIn()])
+
+        # Existing destination is never overwritten.
+        assert (tmp_path / "Nightfall Harbour (1987)" / "Other"
+                / "Photo Gallery.mkv").read_text() == "existing"
+        if sys.platform != "win32":
+            assert (tmp_path / "Nightfall Harbour (1987)" / "Other"
+                    / "Photo Gallery (2).mkv").read_text() == "new"
+
+    def test_switch_off_leaves_unmatched_extras_untouched(
+            self, tmp_path, skips, monkeypatch):
+        from medialib.lib import aibonuscategory
+
+        monkeypatch.setenv(aibonuscategory.SWITCH_VARIABLE, "off")
+        folder = _film(str(tmp_path), "Film (2020)")
+        _write(os.path.join(folder, "Featurettes", "Photo Gallery.mkv"), "p")
+
+        class _NeverAsked:
+            name = "never"
+
+            def serving(self, log):
+                raise AssertionError("model must not be called when switch is off")
+
+        im.extras_into_subfolders(str(tmp_path), skips, models=[_NeverAsked()])
+        assert os.path.isfile(os.path.join(folder, "Featurettes", "Photo Gallery.mkv"))

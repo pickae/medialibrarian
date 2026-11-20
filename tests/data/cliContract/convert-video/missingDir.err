@@ -27,7 +27,10 @@ Options:
                   *Nvenc profile (hevcNvenc, av1Nvenc) encodes on the GPU.
                   With an SVT-AV1-HDR ffmpeg, av1Grain KEEPS the source's own
                   grain (SVT-AV1-HDR's film grain tune) instead of synthesising
-                  it; without one it synthesises it like av1BluRay.
+                  it; without one it synthesises it like av1BluRay. Passing
+                  "auto" asks a vision model to classify each file from sampled
+                  frames and pick av1BluRay, av1Animation or av1Grain per file
+                  (falling back to av1BluRay on any uncertainty).
     -a, --audio-profile <profile>
                   Audio encoding profile to use (default: opus).
     -b, --audio-bitrate <kbit/s>

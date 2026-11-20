@@ -44,7 +44,7 @@ measured.
 
 | Option | Effect | Details |
 | --- | --- | --- |
-| `-p <profile>` | the video preset; `av1BluRay` is the default, a `*Nvenc` one encodes on the GPU | [Quality and grain](#quality-and-grain) |
+| `-p <profile>` | the video preset; `av1BluRay` is the default, `auto` picks per file with a vision model, a `*Nvenc` one encodes on the GPU | [Quality and grain](#quality-and-grain) |
 | `-m <tier>` | caps the resolution; never scales up | [Picture size](#picture-size--m-and--u) |
 | `-u <tier>` | upscales what is smaller, with a neural network on the GPU | [Picture size](#picture-size--m-and--u) |
 | `-c` | crops the black bands off | [Cropping](#cropping--c) |
@@ -69,7 +69,9 @@ A video that has chapters keeps them.
 
 What is said in the film is read from its first text subtitle that is its
 dialogue: not a commentary's, not one for the deaf and hard of hearing, not the
-forced lines - by the track's flags, or by its name where it has none. Only a
+forced lines - by the track's flags, or by its name where it has none (with the
+light `track-role` [language model](../models.md) consulted only on unrecognized
+descriptive titles or borderline cue samples, unless `trackRoleLlm=off`). Only a
 video with no such subtitle is transcribed with whisper, from its first
 soundtrack that is not a commentary, an audio description, an isolated score or
 music and effects; that transcript goes into the output too, as a subtitle named
@@ -217,8 +219,29 @@ are not handed the same number.
 | `av1BluRay` (default) | measured per file and synthesised |
 | `av1Grain` | for grainy sources: on an SVT-AV1-HDR build it **keeps the real grain**, with the fork's film grain tune, instead of synthesising it; without one it synthesises it like `av1BluRay` at a lower quality level |
 | `av1Animation` | none — the one case where grain is actively wrong |
+| `auto` | chosen per file from its vision-selected profile (`av1BluRay`, `av1Animation` or `av1Grain`) |
 | any, with `-g <level>` | that level, and nothing caps it |
 | any, with `-g off` | none |
+
+**Automatic per-file profile selection (`-p auto`).** In a mixed folder of live
+action, 2D animation and grainy film scans, `-p auto` samples representative
+frames across each video (skipping opening logos and closing credits) and asks a
+vision model (`video-profile` in [Language models](../models.md)) to classify
+the material:
+
+| Content kind | Profile picked |
+| --- | --- |
+| `live_action` | `av1BluRay` |
+| `animation_2d` | `av1Animation` (skips the grain probe unless `-g` is given) |
+| `cgi_3d` | `av1BluRay` |
+| `heavy_grain` | `av1Grain` (uses SVT-AV1-HDR grain tune when available and `-g` is unset) |
+
+This runs only when `-p auto` is explicitly passed; fixed profiles never call a
+model. If no vision model is configured in the roster, `-p auto` refuses cleanly
+before any encoding starts. For any file whose frames cannot be extracted or
+whose answer is uncertain or invalid, it falls back cleanly to `av1BluRay`. Each
+file's pick and reason are logged, and cumulative model usage is reported in the
+closing stats.
 
 Synthesis is **lossy and irreversible**: the grain is denoised out of the stored
 picture and a player re-generates a similar-looking one, so what comes back is an

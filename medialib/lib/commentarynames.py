@@ -30,6 +30,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections import Counter
+from collections.abc import Callable, Sequence
 from itertools import permutations
 from typing import NamedTuple
 
@@ -39,17 +40,24 @@ __all__ = [
     "Disc",
     "Release",
     "FileCommentary",
+    "CommentaryGroup",
     "Decision",
     "INTRO_SECONDS",
+    "INTRO_SAMPLE_SECONDS",
+    "TEXT_SUBTITLE_EXTENSIONS",
     "generic_number",
     "disc_format",
     "order_file_commentaries",
     "participants",
+    "opening_text",
+    "opening_subtitle_text",
     "intro_mentions",
     "track_title",
     "decide",
+    "generic_groups",
     "subtitle_renames",
     "sidecar_renames",
+    "group_sidecar_renames",
 ]
 
 
@@ -78,13 +86,29 @@ class FileCommentary(NamedTuple):
     name: str
 
 
+class CommentaryGroup(NamedTuple):
+    """Equivalent generically named commentary surfaces of one film - its
+    audio track (if present), any embedded commentary subtitle translations,
+    and any sidecar commentary files (including multiple translations) - so
+    they are analysed once and renamed together."""
+
+    key: str
+    number: int
+    label: str
+    audio_ids: tuple[str, ...]
+    subtitle_ids: tuple[str, ...]
+    sidecars: tuple[str, ...]
+
+
 class Decision(NamedTuple):
     """What to do with one film: ``names`` pairs each commentary track id with
-    the name it is to be given, empty when ``reason`` says why nothing is."""
+    the name it is to be given, empty when ``reason`` says why nothing is.
+    ``model_note`` records what a language model decided when one was asked."""
 
     names: tuple[tuple[str, str], ...]
     reason: str
     source: str = ""
+    model_note: str = ""
 
 
 # --- the file's own commentary tracks ---------------------------------------
@@ -219,6 +243,13 @@ _INTRO_REACH = 6
 # the film's opening play before they speak.
 INTRO_SECONDS = 600
 
+# The opening window sampled when naming a generic commentary directly from
+# speaker introductions in its subtitles or transcribed audio: first 5 minutes.
+INTRO_SAMPLE_SECONDS = 300
+
+# Text subtitle extensions whose cues can be read directly without OCR.
+TEXT_SUBTITLE_EXTENSIONS = ("srt", "vtt", "ass", "ssa")
+
 
 def _words(text: str) -> list[str]:
     return re.findall(r"[^\W_]+", _fold(text))
@@ -244,7 +275,67 @@ def participants(description: str, title: str = "") -> frozenset[str]:
     return frozenset(found)
 
 
-_SRT_TIME = re.compile(r"(\d+):(\d\d):(\d\d)[,.](\d+)\s*-->")
+_SRT_TIME = re.compile(r"(?:(\d+):)?(\d\d):(\d\d)[,.](\d+)\s*-->")
+_ASS_DIALOGUE = re.compile(
+    r"^Dialogue:\s*\d+\s*,\s*(\d+):(\d\d):(\d\d)[.,]\d+\s*,"
+    r"\s*\d+:\d\d:\d\d[.,]\d+\s*,[^,]*,[^,]*,[^,]*,[^,]*,[^,]*,[^,]*,(.*)$")
+_ASS_TAGS = re.compile(r"\{[^}]*\}")
+_HTML_TAGS = re.compile(r"<[^>]+>")
+
+
+def opening_text(srt: str, limit: int = INTRO_SECONDS) -> str:
+    """The spoken lines from cues starting within ``limit`` seconds of an SRT
+    or WebVTT transcript, one line per cue line."""
+    text = []
+    start = None
+    for line in (srt or "").splitlines():
+        stamp = _SRT_TIME.match(line.strip())
+        if stamp:
+            hours = int(stamp.group(1) or 0)
+            minutes, seconds = int(stamp.group(2)), int(stamp.group(3))
+            start = hours * 3600 + minutes * 60 + seconds
+            continue
+        if start is None or start >= limit:
+            continue
+        stripped = line.strip()
+        if not stripped or stripped.isdigit() or stripped.upper() == "WEBVTT":
+            continue
+        cleaned = _HTML_TAGS.sub("", stripped).strip()
+        if cleaned:
+            text.append(cleaned)
+    return "\n".join(text)
+
+
+def opening_subtitle_text(text: str,
+                          limit: int = INTRO_SAMPLE_SECONDS) -> str:
+    """Spoken lines from the first ``limit`` seconds (default 5 minutes) of an
+    SRT, WebVTT or ASS/SSA subtitle - or the plain text itself when it carries
+    no subtitle timestamps (such as an already-windowed audio transcript)."""
+    raw = (text or "").lstrip("\ufeff")
+    if not raw.strip():
+        return ""
+    if _SRT_TIME.search(raw):
+        return opening_text(raw, limit=limit)
+    ass_lines: list[str] = []
+    saw_ass = False
+    for line in raw.splitlines():
+        match = _ASS_DIALOGUE.match(line.strip())
+        if not match:
+            continue
+        saw_ass = True
+        start = (int(match.group(1)) * 3600
+                 + int(match.group(2)) * 60
+                 + int(match.group(3)))
+        if start >= limit:
+            continue
+        spoken = _ASS_TAGS.sub("", match.group(4))
+        spoken = spoken.replace("\\N", " ").replace("\\n", " ").replace("\\h", " ")
+        spoken = " ".join(spoken.split())
+        if spoken:
+            ass_lines.append(spoken)
+    if saw_ass:
+        return "\n".join(ass_lines)
+    return "\n".join(line.strip() for line in raw.splitlines() if line.strip())
 
 
 def intro_mentions(srt: str) -> Counter:
@@ -256,20 +347,7 @@ def intro_mentions(srt: str) -> Counter:
     the way through, and the names that say who is IN the commentary are the
     ones it opens by giving.
     """
-    text = []
-    start = None
-    for line in (srt or "").splitlines():
-        stamp = _SRT_TIME.match(line.strip())
-        if stamp:
-            hours, minutes, seconds = (int(g) for g in stamp.groups()[:3])
-            start = hours * 3600 + minutes * 60 + seconds
-            continue
-        if start is None or start >= INTRO_SECONDS:
-            continue
-        if line.strip().isdigit():
-            continue
-        text.append(line)
-    words = _words(" ".join(text))
+    words = _words(opening_text(srt))
     # A word is counted once however many openings reach it: "Hi, I'm" is
     # two of them in front of one name.
     reached: set[int] = set()
@@ -429,8 +507,21 @@ def _proved_order(listing: tuple, transcripts: list, title: str,
     return None, "the transcripts fit more than one order"
 
 
+def _valid_order(order: object, count: int) -> tuple[int, ...] | None:
+    """``order`` as a tuple when it is one of the permutations
+    :func:`_proved_order` tries on ``count`` tracks, else None."""
+    if not isinstance(order, (tuple, list)) or len(order) != count:
+        return None
+    if not all(type(item) is int for item in order):
+        return None
+    if sorted(order) != list(range(count)):
+        return None
+    return tuple(order)
+
+
 def decide(file_tracks: list, releases: list | None, disc_kind: str,
-           transcripts: dict, title: str = "") -> Decision:
+           transcripts: dict, title: str = "", *,
+           fallback: Callable | None = None) -> Decision:
     """The names to give one film's commentary tracks, or why none are given.
 
     ``file_tracks`` are the film's commentary audio tracks as
@@ -439,6 +530,15 @@ def decide(file_tracks: list, releases: list | None, disc_kind: str,
     is. ``disc_kind`` is :func:`disc_format`'s answer for the file.
     ``transcripts`` maps a track id to the text of its transcript, where one
     is to hand. ``title`` is the film's, whose words are nobody's name.
+
+    When the deterministic rules cannot settle which candidate listing or
+    which track order fits - and every track has a transcript - ``fallback``,
+    if given, is called with ``(ordered, candidates, texts, title)`` where
+    ``candidates`` is ``[(commentaries, tuple(release_labels)), ...]``, and
+    may return ``(listing_index, order, note)``. ``listing_index`` must name
+    one of ``candidates`` and ``order`` must be one of the permutations
+    :func:`_proved_order` tried; any other answer is refused and the existing
+    reason stands.
     """
     ordered, why = order_file_commentaries(file_tracks)
     if not ordered:
@@ -462,6 +562,8 @@ def decide(file_tracks: list, releases: list | None, disc_kind: str,
                            if listed else "there is none"))
 
     texts = [transcripts.get(track.id) for track in ordered]
+    model_note = ""
+    order: tuple[int, ...]
     if count == 1 and len(lists) == 1:
         # One commentary has no order to get wrong, and every release of this
         # kind agrees on what it is.
@@ -476,20 +578,33 @@ def decide(file_tracks: list, releases: list | None, disc_kind: str,
                 reasons.append(why)
             else:
                 proved.append((entry, fit))
-        if len(proved) != 1:
-            if len(lists) == 1:
-                return Decision((), reasons[0])
-            return Decision((), "%d %s releases list different commentaries, "
-                            "and the transcripts %s"
-                            % (len(lists), _KIND_NAMES[disc_kind],
-                               "fit none of them" if not proved
-                               else "fit more than one"))
-        chosen, order = proved[0]
+        if len(proved) == 1:
+            chosen, order = proved[0]
+        else:
+            refusal = (reasons[0] if len(lists) == 1 else
+                       "%d %s releases list different commentaries, "
+                       "and the transcripts %s"
+                       % (len(lists), _KIND_NAMES[disc_kind],
+                          "fit none of them" if not proved
+                          else "fit more than one"))
+            settled = None
+            if fallback is not None and all(t is not None for t in texts):
+                candidates = [(entry[1], tuple(entry[2])) for entry in lists]
+                index, picked_order, note = fallback(
+                    ordered, candidates, texts, title)
+                model_note = note or ""
+                valid = _valid_order(picked_order, count)
+                if (type(index) is int and 0 <= index < len(lists)
+                        and valid is not None):
+                    settled = (lists[index], valid)
+            if settled is None:
+                return Decision((), refusal, model_note=model_note)
+            chosen, order = settled
 
     given = {ordered[order[i]].id: track_title(chosen[1][i])
              for i in range(count)}
     names = tuple((track.id, given[track.id]) for track in ordered)
-    return Decision(names, "", ", ".join(chosen[2]))
+    return Decision(names, "", ", ".join(chosen[2]), model_note=model_note)
 
 
 _KIND_NAMES = {"uhd": "4K Blu-ray", "bluray": "Blu-ray", "dvd": "DVD"}
@@ -546,6 +661,205 @@ def subtitle_renames(tracks: list, renamed: list) -> tuple[list, str]:
     return out, ""
 
 
+_SIDECAR_ROLE_TAGS = frozenset((
+    "forced", "sdh", "cc", "hi", "default", "commentary",
+))
+
+
+def _strip_sidecar_lang_tags(named: str) -> tuple[str, str]:
+    """Split trailing dot-separated language/role tags off a sidecar's label
+    portion (e.g. ``'Commentary 1.en'`` -> ``('Commentary 1', '.en')``)."""
+    parts = named.split(".")
+    tail: list[str] = []
+    while len(parts) > 1:
+        token = parts[-1].strip().lower()
+        if (languages.code_from_tag(token)
+                or token in _SIDECAR_ROLE_TAGS - {"commentary"}):
+            tail.append(parts.pop())
+        else:
+            break
+    suffix = "." + ".".join(reversed(tail)) if tail else ""
+    return ".".join(parts), suffix
+
+
+def _parse_sidecar_commentary(name: str, movie_stem: str) -> tuple[str, str, str, str] | None:
+    """Parse a sidecar beside ``movie_stem`` that belongs to a commentary.
+
+    Returns ``(kind, track_id, label, suffix)`` or ``None``:
+    - ``kind == "indexed"``: ``"<stem> <track_id> <label><suffix>"`` (ingest
+      commentary extract/transcript, ``.opus`` or text subtitle);
+    - ``kind == "plain"``: ``"<stem><sep><label><suffix>"`` (ripped or external
+      commentary text subtitle without a track id, where ``sep`` is ``"."`` or
+      ``" "`` and ``label`` is generically named).
+    """
+    if not movie_stem or not name.startswith(movie_stem):
+        return None
+    rest = name[len(movie_stem):]
+    if not rest:
+        return None
+    indexed = re.match(r"^ ([0-9]+) (\S.*)$", rest, re.S)
+    if indexed:
+        track_id, tail = indexed.group(1), indexed.group(2)
+        named, suffix = plexnames._split_suffix(tail)
+        ext = suffix.rsplit(".", 1)[-1].lower() if suffix else ""
+        if ext in plexnames.COMMENTARY_EXTENSIONS or ext in TEXT_SUBTITLE_EXTENSIONS:
+            if named:
+                return ("indexed", track_id, named, suffix)
+        return None
+    sep = rest[0]
+    if sep not in (".", " "):
+        return None
+    named, suffix = plexnames._split_suffix(rest[1:])
+    ext = suffix.rsplit(".", 1)[-1].lower() if suffix else ""
+    if ext not in TEXT_SUBTITLE_EXTENSIONS or not named:
+        return None
+    base_label, extra_tags = _strip_sidecar_lang_tags(named)
+    marker = _LANGUAGE_MARKER.search(base_label)
+    clean_label = base_label[:marker.start()] if marker else base_label
+    if generic_number(clean_label) is None:
+        return None
+    return ("plain", sep, base_label, extra_tags + suffix)
+
+
+def generic_groups(tracks: list, sidecar_names: Sequence[str] = (),
+                   movie_stem: str = "") -> list[CommentaryGroup]:
+    """Group every generically named commentary surface of a film - audio
+    tracks, embedded commentary subtitles (including multiple translations) and
+    sidecar commentary files (including multiple translations) - by the
+    commentary track they represent.
+
+    Each returned :class:`CommentaryGroup` can be analysed once and its
+    resolved name applied to every audio track, embedded subtitle and sidecar
+    in the group.
+    """
+    generic_audio = [
+        track for track in tracks
+        if track.is_audio and track.is_commentary
+        and generic_number(track.name) is not None
+    ]
+    unnumbered_audio_count = sum(
+        1 for track in generic_audio if generic_number(track.name) == 0)
+
+    buckets: dict[str, dict] = {}
+    order: list[str] = []
+    audio_id_to_key: dict[str, str] = {}
+
+    def ensure(key: str, number: int, label: str) -> dict:
+        if key not in buckets:
+            buckets[key] = {
+                "number": number,
+                "label": label,
+                "audio_ids": [],
+                "subtitle_ids": [],
+                "sidecars": [],
+            }
+            order.append(key)
+        return buckets[key]
+
+    for track in generic_audio:
+        num = generic_number(track.name) or 0
+        if num > 0:
+            key = "num:%d" % num
+        elif unnumbered_audio_count <= 1:
+            key = "num:0"
+        else:
+            key = "track:%s" % track.id
+        entry = ensure(key, num, track.name)
+        entry["audio_ids"].append(track.id)
+        audio_id_to_key[track.id] = key
+
+    for track in tracks:
+        if not (track.is_subtitle and track.is_commentary):
+            continue
+        marker = _LANGUAGE_MARKER.search(track.name)
+        base = track.name[:marker.start()] if marker else track.name
+        sub_num = generic_number(base)
+        if sub_num is None:
+            continue
+        if sub_num == 0 and unnumbered_audio_count > 1:
+            continue
+        key = "num:%d" % sub_num
+        entry = ensure(key, sub_num, base)
+        entry["subtitle_ids"].append(track.id)
+
+    for filename in sorted(sidecar_names):
+        parsed = _parse_sidecar_commentary(filename, movie_stem)
+        if parsed is None:
+            continue
+        kind, token, label, _suffix = parsed
+        if kind == "indexed":
+            if token in audio_id_to_key:
+                key = audio_id_to_key[token]
+                buckets[key]["sidecars"].append(filename)
+                continue
+            sc_num = generic_number(label)
+            if sc_num is None or (sc_num == 0 and unnumbered_audio_count > 1):
+                continue
+            key = "num:%d" % sc_num
+            entry = ensure(key, sc_num, label)
+            entry["sidecars"].append(filename)
+        else:
+            marker = _LANGUAGE_MARKER.search(label)
+            base = label[:marker.start()] if marker else label
+            plain_num = generic_number(base)
+            if plain_num is None or (plain_num == 0 and unnumbered_audio_count > 1):
+                continue
+            key = "num:%d" % plain_num
+            entry = ensure(key, plain_num, base)
+            entry["sidecars"].append(filename)
+
+    return [
+        CommentaryGroup(
+            key=key,
+            number=buckets[key]["number"],
+            label=buckets[key]["label"],
+            audio_ids=tuple(buckets[key]["audio_ids"]),
+            subtitle_ids=tuple(buckets[key]["subtitle_ids"]),
+            sidecars=tuple(buckets[key]["sidecars"]),
+        )
+        for key in order
+    ]
+
+
+def group_sidecar_renames(sidecars: Sequence[str], movie_stem: str,
+                          new_name: str, clean: Callable[[str], str],
+                          old_audio_names: dict[str, str] | None = None
+                          ) -> list[tuple[str, str]]:
+    """Rename every sidecar in one :class:`CommentaryGroup` (both indexed
+    ``<stem> <id> <name>.xx.srt`` transcripts and plain
+    ``<stem>.Commentary.xx.srt`` sidecars) to ``new_name``, preserving track
+    ids, language markers/extensions and filename byte-length limits."""
+    out: list[tuple[str, str]] = []
+    new_clean = clean(new_name)
+    old_audio_names = old_audio_names or {}
+    for filename in sorted(sidecars):
+        parsed = _parse_sidecar_commentary(filename, movie_stem)
+        if parsed is None:
+            continue
+        kind, token, label, suffix = parsed
+        if kind == "indexed":
+            if token in old_audio_names:
+                old_clean = clean(old_audio_names[token])
+                if not old_clean.startswith(label):
+                    continue
+            stem = commentarytranscription.commentary_stem(
+                movie_stem, token, new_clean)
+            while stem and not plexnames.fits_name(stem + suffix):
+                stem = stem[:-1]
+            if stem and stem + suffix != filename:
+                out.append((filename, stem + suffix))
+        else:
+            marker = _LANGUAGE_MARKER.search(label)
+            suffix_with_marker = (marker.group(0) if marker else "") + suffix
+            candidate = movie_stem + token + new_clean
+            while candidate and not plexnames.fits_name(
+                    candidate + suffix_with_marker):
+                candidate = candidate[:-1]
+            if candidate and candidate + suffix_with_marker != filename:
+                out.append((filename, candidate + suffix_with_marker))
+    return out
+
+
 def sidecar_renames(names: list, movie_stem: str, tracks: list,
                     clean) -> list:
     """The sidecars beside the film to rename along with their commentary's
@@ -554,12 +868,15 @@ def sidecar_renames(names: list, movie_stem: str, tracks: list,
     A commentary's transcripts and extract are named "<film> <track id>
     <track name>", the name cleaned the way the transcription cleans it
     (``clean``) and cut to fit, and then their suffixes. ``tracks`` are
-    (track id, old name, new name) triples. Only a sidecar whose name is the
-    old one - or the old one cut short - is renamed, and it is cut the way the
-    transcription would have cut the new one, so the next run finds it where
-    it looks.
+    (track id, old name, new name) triples. Plain sidecar commentary subtitles
+    (such as ``"<film>.Commentary 1.en.srt"``) matching a renamed commentary's
+    generic number are renamed alongside them. Only a sidecar whose name is
+    the old one - or the old one cut short - is renamed, and it is cut the way
+    the transcription would have cut the new one, so the next run finds it
+    where it looks.
     """
     out = []
+    seen_old: set[str] = set()
     for track_id, old, new in tracks:
         prefix = commentarytranscription.commentary_prefix(movie_stem,
                                                            track_id)
@@ -569,8 +886,9 @@ def sidecar_renames(names: list, movie_stem: str, tracks: list,
             if not name.startswith(prefix):
                 continue
             named, suffix = plexnames._split_suffix(name[len(prefix):])
-            if suffix.rsplit(".", 1)[-1].lower() \
-                    not in plexnames.COMMENTARY_EXTENSIONS:
+            ext = suffix.rsplit(".", 1)[-1].lower() if suffix else ""
+            if ext not in plexnames.COMMENTARY_EXTENSIONS \
+                    and ext not in TEXT_SUBTITLE_EXTENSIONS:
                 continue
             if not named or not old_clean.startswith(named):
                 continue
@@ -580,4 +898,30 @@ def sidecar_renames(names: list, movie_stem: str, tracks: list,
                 stem = stem[:-1]
             if stem and stem + suffix != name:
                 out.append((name, stem + suffix))
+                seen_old.add(name)
+
+    by_number = {generic_number(old): new for _id, old, new in tracks
+                 if generic_number(old) is not None}
+    if len(by_number) == len(tracks):
+        for name in sorted(names):
+            if name in seen_old:
+                continue
+            parsed = _parse_sidecar_commentary(name, movie_stem)
+            if parsed is None or parsed[0] != "plain":
+                continue
+            _kind, sep, label, suffix = parsed
+            marker = _LANGUAGE_MARKER.search(label)
+            base = label[:marker.start()] if marker else label
+            num = generic_number(base)
+            if num not in by_number:
+                continue
+            new_clean = clean(by_number[num])
+            suffix_with_marker = (marker.group(0) if marker else "") + suffix
+            candidate = movie_stem + sep + new_clean
+            while candidate and not plexnames.fits_name(
+                    candidate + suffix_with_marker):
+                candidate = candidate[:-1]
+            if candidate and candidate + suffix_with_marker != name:
+                out.append((name, candidate + suffix_with_marker))
+                seen_old.add(name)
     return out

@@ -36,6 +36,7 @@ import tempfile
 from medialib import commands
 from medialib.lib import (
     adequacy,
+    aibookimages,
     archives,
     booktext,
     clioptions,
@@ -45,6 +46,7 @@ from medialib.lib import (
     imagecodecs,
     imagemagick,
     imagesizes,
+    modelmeter,
     ramscratch,
     runlog,
     safety,
@@ -209,10 +211,13 @@ def resize_image(path: str, geometry: str,
 
 
 def clean_book_folder(directory: str, geometry: str = "",
-                      run=subprocess.run, verdict_of=None) -> None:
+                      run=subprocess.run, verdict_of=None, *,
+                      book_name: str = "", meter_file: str = "",
+                      lookers=None, prepare=None) -> None:
     """Tidy an unpacked epub in place: drop the embedded fonts (the reader falls
-    back to a sane default), delete the junk images by name substring, and
-    downscale what is left.
+    back to a sane default), delete the junk/advertising images (classified by a
+    vision model where one is available, else by name substring), and downscale
+    what is left.
 
     Every one of those is a deletion the output cannot be walked back from,
     which is why this is only ever reached under -d.
@@ -225,16 +230,20 @@ def clean_book_folder(directory: str, geometry: str = "",
                 except OSError:
                     pass
 
+    images: list[str] = []
     for parent, _dirs, names in os.walk(directory):
-        for name in names:
-            if not _is_image(name):
-                continue
-            lowered = name.lower()
-            if any(word in lowered for word in JUNK_IMAGE_SUBSTRINGS):
-                try:
-                    os.remove(os.path.join(parent, name))
-                except OSError:
-                    pass
+        for name in sorted(names, key=os.fsencode):
+            if _is_image(name):
+                images.append(os.path.join(parent, name))
+
+    for path in aibookimages.junk_images(
+            directory, images, JUNK_IMAGE_SUBSTRINGS,
+            book_name=book_name, lookers=lookers,
+            meter_file=meter_file, prepare=prepare):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
 
     if not geometry:
         return
@@ -331,6 +340,7 @@ class Run:
         # every worker, gone with it - so a claim can never outlive the run it
         # guarded.
         self.claims_dir = os.path.join(counter_dir, "claims")
+        self.model_meter = os.path.join(counter_dir, "bookImagesModel.meter")
         self.temp_path = temp_path
         self.options = options
         self.total = total
@@ -482,7 +492,8 @@ class Run:
                 # still a link on disk; a book is files in folders.
                 archives.prune_irregular(unpacked)
 
-                clean_book_folder(unpacked, self.options["imageResolution"])
+                clean_book_folder(unpacked, self.options["imageResolution"],
+                                  book_name=base, meter_file=self.model_meter)
 
                 # -y: a link stored as a link, never followed into whatever
                 # file it points at.
@@ -785,6 +796,8 @@ def main(argv: list, program: str = "ingest-books",
             runlog.say("\n")
             workerpool.map(books, jobs, state.process_book)
             safety.exit_if_aborted()
+            if discard_extras:
+                report_image_model(state.model_meter)
 
         if clean_structure:
             runlog.say("\n")
@@ -796,6 +809,16 @@ def main(argv: list, program: str = "ingest-books",
         return workerpool.exit_status()
     finally:
         ramscratch.run_exit_cleanup()
+
+
+def report_image_model(meter_file: str) -> None:
+    """What the book-image vision model was asked over the whole run, added up
+    from what each book recorded - said only where more than one request ran,
+    since one request's line already stands under its book."""
+    spans, tally = modelmeter.gathered(meter_file)
+    if tally.requests > 1:
+        runlog.log("Book-image model over the run: "
+                   + modelmeter.rate_line("all", spans.seconds, tally))
 
 
 def _archive(out_path: str, archive_root: str) -> None:

@@ -16,11 +16,18 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Sequence
+from dataclasses import dataclass, field
 
 from medialib.cli import ingest_movies as rules
 from medialib.lib import (
+    aieditions,
     chapterdb,
     commentarytranscription,
+    filmfolders,
+    llmclient,
+    llmroster,
+    modelmeter,
     plexcarry,
     plexcompare,
     plexnames,
@@ -49,8 +56,34 @@ _VERDICTS = {
 _INTEREST = ("mixed", "different", "new", "old", "same", "unread")
 
 
+@dataclass
+class _EditionContext:
+    """Shared state for suggesting edition names across one compare_roots run."""
+
+    searchers: Sequence[llmclient.Llm] | None = None
+    resolved: bool = False
+    meter_file: str = ""
+    tally: modelmeter.Tally = field(default_factory=modelmeter.Tally)
+    spans: modelmeter.Spans = field(default_factory=modelmeter.Spans)
+    cut_entries: list | None = None
+    cut_suggestions: dict[str, list[str]] | None = None
+
+    def ladder(self) -> Sequence[llmclient.Llm]:
+        if self.searchers is not None:
+            return self.searchers
+        if not self.resolved:
+            self.resolved = True
+            ladder, _why = llmroster.optional(llmroster.AMBIGUOUS_EDITIONS)
+            self.searchers = ladder
+        return self.searchers or ()
+
+
 def compare_roots(roots: list, log, keeps_for=None, carried=None,
-                  keep_parts: frozenset = frozenset()) -> int:
+                  keep_parts: frozenset = frozenset(), *,
+                  cut_entries: list | None = None,
+                  cut_suggestions: dict[str, list[str]] | None = None,
+                  meter_file: str = "",
+                  searchers: Sequence[llmclient.Llm] | None = None) -> int:
     """Every film under each folder of ``roots`` compared with the library;
     1 where the server could not be asked at all.
 
@@ -73,14 +106,25 @@ def compare_roots(roots: list, log, keeps_for=None, carried=None,
         return 1
     log("Plex: %d film version(s) in the library" % len(copies))
     index = _index(copies)
+    edition_ctx = _EditionContext(
+        searchers=searchers,
+        resolved=searchers is not None,
+        meter_file=meter_file,
+        cut_entries=cut_entries,
+        cut_suggestions=cut_suggestions,
+    )
     tally: dict = {}
     for root in roots:
         for movie in films(root):
             verdict, places = _compare_film(movie, index, copies, log,
                                             keeps_for, carried or {},
-                                            keep_parts)
+                                            keep_parts, edition_ctx)
             tally.setdefault(verdict, []).append((movie, places))
     _report(tally, log)
+    if edition_ctx.tally.requests and not meter_file:
+        log("Ambiguous-editions model over the run: "
+            + modelmeter.rate_line("all", edition_ctx.spans.seconds,
+                                   edition_ctx.tally))
     return 0
 
 
@@ -149,7 +193,8 @@ def _found(movie: str, index: dict, copies: list, tag: str = "") -> tuple:
 
 def _compare_film(movie: str, index: dict, copies: list, log,
                   keeps_for=None, carried=None,
-                  keep_parts: frozenset = frozenset()) -> tuple:
+                  keep_parts: frozenset = frozenset(),
+                  edition_ctx: _EditionContext | None = None) -> tuple:
     """The film's verdict, and the files of its library copies."""
     log("Plex: %s" % os.path.basename(movie))
     found, how = _found(movie, index, copies)
@@ -169,7 +214,7 @@ def _compare_film(movie: str, index: dict, copies: list, log,
         verdicts.append(_against(
             movie, new, part, copy, log, keeps_for,
             made if made is not None and made.library in copy.files else None,
-            keep_parts))
+            keep_parts, edition_ctx))
     places = [path for copy in found for path in copy.files]
     # The film's own verdict: the most interesting of its copies'.
     for verdict in _INTEREST:
@@ -178,9 +223,59 @@ def _compare_film(movie: str, index: dict, copies: list, log,
     return "unread", places
 
 
+def _suggest_cut_editions(movie: str, new: plexcompare.Profile,
+                          old: plexcompare.Profile, copy, log,
+                          edition_ctx: _EditionContext) -> None:
+    """Ask the model to identify cuts >60s apart; logs suggestions only and
+    never renames files."""
+    if not aieditions.enabled():
+        return
+    ladder = edition_ctx.ladder()
+    if not ladder:
+        return
+    folder = os.path.dirname(movie)
+    folder_name = os.path.basename(folder)
+    _base, raw_tag, folder_title, folder_year, _ed = filmfolders.read_folder(
+        folder_name)
+    if not raw_tag:
+        _, raw_tag = plexnames.untagged_base(folder_name)
+    tag = plexnames.canonical_id(raw_tag) if raw_tag else ""
+    title = folder_title or copy.film.title
+    year = folder_year or copy.film.year
+    tmdb = copy.film.tmdb or (tag[6:-1] if tag.startswith("{tmdb-") else "")
+    imdb = copy.film.imdb or (tag[6:-1] if tag.startswith("{imdb-") else "")
+
+    new_label = os.path.basename(new.path)
+    old_label = os.path.basename(old.path)
+    if new_label == old_label:
+        new_label = "new: " + new_label
+        old_label = "existing: " + old_label
+    cuts = [
+        aieditions.CutInfo(file=new_label, seconds=new.seconds,
+                           edition=new.edition, role="new"),
+        aieditions.CutInfo(file=old_label, seconds=old.seconds,
+                           edition=old.edition, role="existing"),
+    ]
+    proposals = aieditions.identify_cuts(
+        title, year, cuts, tmdb=tmdb, imdb=imdb, searchers=ladder,
+        meter_file=edition_ctx.meter_file, log=log,
+        tally=edition_ctx.tally, spans=edition_ctx.spans)
+    if (proposals and edition_ctx.cut_entries is not None
+            and edition_ctx.cut_suggestions is not None):
+        if not any(entry[0] == folder for entry in edition_ctx.cut_entries):
+            edition_ctx.cut_entries.append((
+                folder,
+                "holds cuts differing by more than a minute",
+                [new_label, old_label],
+            ))
+        edition_ctx.cut_suggestions.setdefault(folder, []).extend(
+            aieditions.format_cut_report_lines(proposals))
+
+
 def _against(movie: str, new, part: str, copy, log, keeps_for=None,
              made: plexcarry.Plan | None = None,
-             keep_parts: frozenset = frozenset()) -> str:
+             keep_parts: frozenset = frozenset(),
+             edition_ctx: _EditionContext | None = None) -> str:
     if part or len(copy.files) > 1:
         log("  a film split into parts: not compared")
         return "unread"
@@ -201,6 +296,9 @@ def _against(movie: str, new, part: str, copy, log, keeps_for=None,
     log("  " + _VERDICTS[comparison.verdict][0])
     for reason in comparison.versions:
         log("    " + reason)
+    if (comparison.verdict == "different" and edition_ctx is not None
+            and plexcompare.needs_edition_names(new, old, timing)):
+        _suggest_cut_editions(movie, new, old, copy, log, edition_ctx)
     for said, points in (("new", comparison.new_better),
                          ("existing", comparison.old_better)):
         for point in points:

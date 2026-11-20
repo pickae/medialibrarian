@@ -32,8 +32,10 @@ from __future__ import annotations
 import base64
 import os
 import sys
+from collections.abc import Mapping
 
-__all__ = ["MP4_SUFFIXES", "embed_chapters", "embed_cover", "has_tag", "set_tag"]
+__all__ = ["BOOK_TAG_FIELDS", "MP4_SUFFIXES", "embed_chapters", "embed_cover",
+           "fill_book_tags", "has_tag", "read_book_tags", "set_tag"]
 
 # The containers whose metadata is MP4's rather than a Vorbis comment's: a cover
 # is a `covr` atom, and chapters are a track this module cannot write at all.
@@ -41,6 +43,54 @@ __all__ = ["MP4_SUFFIXES", "embed_chapters", "embed_cover", "has_tag", "set_tag"
 # files they are talking about - :mod:`medialib.lib.chapters` reads it for the
 # other half.
 MP4_SUFFIXES = (".m4a", ".m4b", ".mp4")
+
+_VORBIS_SUFFIXES = (".opus", ".flac", ".ogg", ".oga")
+
+# The canonical audiobook tag fields :func:`read_book_tags` and
+# :func:`fill_book_tags` know how to read and write across Vorbis, MP4 and MP3.
+BOOK_TAG_FIELDS = ("title", "author", "narrator", "series", "series_index",
+                   "year", "language", "abridged")
+
+# Vorbis comment mapping: canonical field -> (write key, existing-check keys).
+_VORBIS_BOOK_TAGS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "title": ("TITLE", ("TITLE",)),
+    "author": ("ARTIST", ("ARTIST", "AUTHOR")),
+    "narrator": ("NARRATOR", ("NARRATOR",)),
+    "series": ("SERIES", ("SERIES", "MOVEMENTNAME")),
+    "series_index": ("SERIES-PART", ("SERIES-PART", "SERIES_INDEX", "MOVEMENT")),
+    "year": ("DATE", ("DATE", "YEAR")),
+    "language": ("LANGUAGE", ("LANGUAGE",)),
+    "abridged": ("ABRIDGED", ("ABRIDGED",)),
+}
+
+# MP4 atom mapping: canonical field -> (write key, is_freeform, existing-check keys).
+_MP4_BOOK_TAGS: dict[str, tuple[str, bool, tuple[str, ...]]] = {
+    "title": ("\xa9nam", False, ("\xa9nam",)),
+    "author": ("\xa9ART", False, ("\xa9ART",)),
+    "narrator": ("\xa9nrt", False, ("\xa9nrt", "----:com.apple.iTunes:NARRATOR")),
+    "series": ("----:com.apple.iTunes:SERIES", True,
+               ("----:com.apple.iTunes:SERIES", "\xa9mvn")),
+    "series_index": ("----:com.apple.iTunes:SERIES-PART", True,
+                     ("----:com.apple.iTunes:SERIES-PART",
+                      "----:com.apple.iTunes:SERIES_INDEX")),
+    "year": ("\xa9day", False, ("\xa9day",)),
+    "language": ("----:com.apple.iTunes:LANGUAGE", True,
+                 ("----:com.apple.iTunes:LANGUAGE",)),
+    "abridged": ("----:com.apple.iTunes:ABRIDGED", True,
+                 ("----:com.apple.iTunes:ABRIDGED",)),
+}
+
+# ID3 mapping: canonical field -> (frame_id_or_txxx_desc, is_txxx, frame_checks, txxx_descs).
+_MP3_BOOK_TAGS: dict[str, tuple[str, bool, tuple[str, ...], tuple[str, ...]]] = {
+    "title": ("TIT2", False, ("TIT2",), ()),
+    "author": ("TPE1", False, ("TPE1",), ()),
+    "narrator": ("NARRATOR", True, (), ("narrator",)),
+    "series": ("SERIES", True, ("MVNM",), ("series",)),
+    "series_index": ("SERIES-PART", True, ("MVIN",), ("series-part", "series_index")),
+    "year": ("TDRC", False, ("TDRC", "TYER"), ()),
+    "language": ("TLAN", False, ("TLAN",), ()),
+    "abridged": ("ABRIDGED", True, (), ("abridged",)),
+}
 
 # Named here because the refusal below tells the reader how to override it.
 FORCE_FLAG = "--force"
@@ -142,6 +192,164 @@ def set_tag(audio: str, name: str, value: str) -> int:
         return 0
     except Exception:
         return 1
+
+
+def _vorbis_read_field(handle, check_keys: tuple[str, ...]) -> str:
+    for key in check_keys:
+        for entry in handle.get(key) or ():
+            text = str(entry).strip()
+            if text:
+                return text
+    return ""
+
+
+def _mp4_text(values) -> str:
+    for item in values or ():
+        text = item.decode("utf-8", "replace") if isinstance(item, bytes) else str(item)
+        text = text.strip()
+        if text:
+            return text
+    return ""
+
+
+def _mp4_read_field(handle, check_keys: tuple[str, ...]) -> str:
+    lower_map = {str(k).lower(): k for k in handle}
+    for key in check_keys:
+        found_key = key if key in handle else lower_map.get(key.lower())
+        if found_key is not None:
+            text = _mp4_text(handle.get(found_key))
+            if text:
+                return text
+    return ""
+
+
+def _mp3_read_field(tags, frame_checks: tuple[str, ...],
+                    txxx_descs: tuple[str, ...]) -> str:
+    if tags is None:
+        return ""
+    for frame_id in frame_checks:
+        for frame in tags.getall(frame_id):
+            for entry in getattr(frame, "text", ()) or ():
+                text = str(entry).strip()
+                if text:
+                    return text
+    if txxx_descs:
+        for frame in tags.getall("TXXX"):
+            if str(getattr(frame, "desc", "")).strip().lower() in txxx_descs:
+                for entry in getattr(frame, "text", ()) or ():
+                    text = str(entry).strip()
+                    if text:
+                        return text
+    return ""
+
+
+def read_book_tags(audio: str) -> dict[str, str]:
+    """The non-empty canonical audiobook tags already carried by ``audio``
+    (see :data:`BOOK_TAG_FIELDS`). Empty dict for an unreadable or unsupported
+    file."""
+    lower = audio.lower()
+    try:
+        if lower.endswith(_VORBIS_SUFFIXES):
+            handle = _open(audio)
+            return {field: value for field in BOOK_TAG_FIELDS
+                    if (value := _vorbis_read_field(
+                        handle, _VORBIS_BOOK_TAGS[field][1]))}
+        if lower.endswith(MP4_SUFFIXES):
+            from mutagen.mp4 import MP4
+
+            mp4 = MP4(audio)
+            return {field: value for field in BOOK_TAG_FIELDS
+                    if (value := _mp4_read_field(
+                        mp4, _MP4_BOOK_TAGS[field][2]))}
+        if lower.endswith(".mp3"):
+            from mutagen.mp3 import MP3
+
+            mp3 = MP3(audio)
+            return {field: value for field in BOOK_TAG_FIELDS
+                    if (value := _mp3_read_field(
+                        mp3.tags, _MP3_BOOK_TAGS[field][2],
+                        _MP3_BOOK_TAGS[field][3]))}
+    except Exception:
+        return {}
+    return {}
+
+
+def fill_book_tags(audio: str, tags: Mapping[str, str],
+                   written: list[str] | None = None) -> int:
+    """Write any canonical audiobook tag in ``tags`` whose slot in ``audio`` is
+    currently empty, leaving every non-empty tag untouched.
+
+    Supports Opus, FLAC, Ogg, M4A/M4B/MP4 and MP3. Appends the canonical names
+    actually written to ``written`` when given. Returns 0 on success (including
+    when nothing needed writing), 1 on error or unsupported container."""
+    lower = audio.lower()
+    added: list[str] = []
+    try:
+        if lower.endswith(_VORBIS_SUFFIXES):
+            handle = _open(audio)
+            for field in BOOK_TAG_FIELDS:
+                value = str(tags.get(field) or "").strip()
+                if not value:
+                    continue
+                write_key, check_keys = _VORBIS_BOOK_TAGS[field]
+                if _vorbis_read_field(handle, check_keys):
+                    continue
+                handle[write_key] = value
+                added.append(field)
+            if added:
+                handle.save()
+        elif lower.endswith(MP4_SUFFIXES):
+            from mutagen.mp4 import MP4, MP4FreeForm
+
+            mp4 = MP4(audio)
+            if mp4.tags is None:
+                mp4.add_tags()
+            for field in BOOK_TAG_FIELDS:
+                value = str(tags.get(field) or "").strip()
+                if not value:
+                    continue
+                write_key, is_freeform, check_keys = _MP4_BOOK_TAGS[field]
+                if _mp4_read_field(mp4, check_keys):
+                    continue
+                if is_freeform:
+                    mp4[write_key] = [MP4FreeForm(value.encode("utf-8"))]
+                else:
+                    mp4[write_key] = [value]
+                added.append(field)
+            if added:
+                mp4.save()
+        elif lower.endswith(".mp3"):
+            from mutagen.id3 import TDRC, TIT2, TLAN, TPE1, TXXX
+            from mutagen.mp3 import MP3
+
+            frames = {"TIT2": TIT2, "TPE1": TPE1, "TDRC": TDRC, "TLAN": TLAN}
+            mp3 = MP3(audio)
+            for field in BOOK_TAG_FIELDS:
+                value = str(tags.get(field) or "").strip()
+                if not value:
+                    continue
+                target_id, is_txxx, frame_checks, txxx_descs = _MP3_BOOK_TAGS[field]
+                if _mp3_read_field(mp3.tags, frame_checks, txxx_descs):
+                    continue
+                if mp3.tags is None:
+                    mp3.add_tags()
+                id3 = mp3.tags
+                if id3 is None:
+                    return 1
+                if is_txxx:
+                    id3.add(TXXX(encoding=3, desc=target_id, text=[value]))
+                else:
+                    id3.add(frames[target_id](encoding=3, text=[value]))
+                added.append(field)
+            if added:
+                mp3.save()
+        else:
+            return 1
+    except Exception:
+        return 1
+    if written is not None:
+        written.extend(added)
+    return 0
 
 
 def _chapter_keys(handle) -> list[str]:
