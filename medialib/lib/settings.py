@@ -223,6 +223,13 @@ SETTINGS: tuple[Setting, ...] = (
             "every chapter. Only a model that can search is asked - Claude, or "
             "one behind `llmHarness`: `on` or `off`",
             ("concat-audio", "convert-and-concat"), "on"),
+    Setting("subtitleAdsLlm", "Whether a subtitle in a language subcleaner has "
+            "no word list for (or when subcleaner is not installed) is handed "
+            "to a language model to spot advert cues (the `subtitle-ads` task, "
+            "see docs/models.md): its first and last 20 cues are sent to the "
+            "model, and only advert cues from those shown cues are removed: "
+            "`on` or `off`",
+            ("ingest-movies",), "on"),
     Setting("chapterDbSite", "The chapter database's address", ("ingest-movies",),
             "`https://chapterdb.plex.tv`", tuning=True),
     Setting("dvdCompareSite", "The disc database's address", ("ingest-movies",),

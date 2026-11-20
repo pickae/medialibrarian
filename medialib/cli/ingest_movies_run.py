@@ -27,6 +27,7 @@ from medialib.cli import ingest_movies_lanes as lanes
 from medialib.cli import ingest_movies_plex as plexphase
 from medialib.cli.ingest_movies import log
 from medialib.lib import (
+    aisubtitleads,
     chapterdb,
     cleannamesindividually,
     clioptions,
@@ -48,6 +49,7 @@ from medialib.lib import (
     imdbdata,
     keepparts,
     languages,
+    modelmeter,
     overwrite,
     plexnames,
     ramscratch,
@@ -1362,6 +1364,7 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
     unsure_commentaries: list = []
     # What the vision model reading picture subtitles was asked, over the run.
     ocr_usage = subtitleocr.Usage()
+    ads_meter = os.path.join(ram_root, "subtitleAds.meter")
 
     # Named above the phases a Ctrl+C can cut short, so an ingest stopped halfway
     # still recaps the renames it held back instead of leaving them buried in
@@ -1374,6 +1377,7 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
         _report_unsure_commentaries(unsure_commentaries)
         if ocr_usage.requests:
             _report_ocr_usage(ocr_usage)
+        _report_subtitle_ads_usage(ads_meter)
 
     safety.set_run_footer(recap)
 
@@ -1407,8 +1411,9 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
 
     listed = dict(zip(roots, names, strict=True))
     try:
-        for root in ingestable:
-            _ingest(state, root, subtitle_work, listed[root])
+        with aisubtitleads.metering(ads_meter):
+            for root in ingestable:
+                _ingest(state, root, subtitle_work, listed[root])
     finally:
         tmdbclient.remember_answers(False)
         diskturn.adopt("")
@@ -1745,21 +1750,25 @@ def _subtitles_only(program: str, script_dir: str, roots: list, names: list,
 
     done = donelog.DoneLog(commands.logs_file(script_dir, SUBTITLES_DONE))
     totals = {"kept": 0, "discarded": 0, "untested": 0}
-    for root, name in zip(roots, names, strict=True):
-        log('Phase: testing the subtitles already beside the films in "%s"'
-            % root + (" and downloading the missing" if download else "")
-            + ("" if write else " - DRY RUN, nothing will be changed"))
-        verdicts = subtitlefiles.check_subs(
-            root, rules.MAX_SYNC_OFFSET, rules.MAX_SYNC_QUALITY_OFFSET,
-            ffsubsync_quality, write, log, providers or None, done,
-            wanted=wanted)
-        for verdict, found in verdicts.items():
-            totals[verdict] += len(found)
-        _write_subtitle_list(commands.logs_file(script_dir,
-                                                SUBTITLES_LIST % name),
-                             root, verdicts, write)
+    with tempfile.TemporaryDirectory(dir=os.environ.get("TMPDIR")) as meter_dir:
+        ads_meter = os.path.join(meter_dir, "subtitleAds.meter")
+        with aisubtitleads.metering(ads_meter):
+            for root, name in zip(roots, names, strict=True):
+                log('Phase: testing the subtitles already beside the films in "%s"'
+                    % root + (" and downloading the missing" if download else "")
+                    + ("" if write else " - DRY RUN, nothing will be changed"))
+                verdicts = subtitlefiles.check_subs(
+                    root, rules.MAX_SYNC_OFFSET, rules.MAX_SYNC_QUALITY_OFFSET,
+                    ffsubsync_quality, write, log, providers or None, done,
+                    wanted=wanted)
+                for verdict, found in verdicts.items():
+                    totals[verdict] += len(found)
+                _write_subtitle_list(commands.logs_file(script_dir,
+                                                        SUBTITLES_LIST % name),
+                                     root, verdicts, write)
 
-    log(_subtitle_totals(totals))
+        log(_subtitle_totals(totals))
+        _report_subtitle_ads_usage(ads_meter)
     if not write:
         # What -w would do to THESE subtitles: syncing the ones in step and
         # throwing out the rest are each only promised where there are some.
@@ -2735,6 +2744,14 @@ def _report_ocr_usage(usage: subtitleocr.Usage) -> None:
     subtitle, since one subtitle's line already said it all."""
     if len(usage.spans.all()) > 1:
         log("Model time over the run (subtitle OCR):\n    %s" % usage.line())
+
+
+def _report_subtitle_ads_usage(meter_file: str) -> None:
+    """The subtitle-advert model's account over the run, when it was asked."""
+    spans, tally = modelmeter.gathered(meter_file)
+    if tally.requests:
+        log("Model time over the run (subtitle adverts):\n    %s"
+            % modelmeter.rate_line(aisubtitleads.PURPOSE, spans.seconds, tally))
 
 
 def _report_unsure_commentaries(lines: list) -> None:
