@@ -40,7 +40,7 @@ from dataclasses import dataclass
 from typing import TypeVar
 
 from medialib import commands
-from medialib.lib import chapterllm, cuechapters, safety
+from medialib.lib import chapterllm, cuechapters, modelmeter, safety
 
 __all__ = ["TRANSCRIPT_SUFFIXES", "Cue", "read_transcript", "find_transcript",
            "Passage", "passages", "generate", "PHASES", "Meter", "chapter_rows", "time_label",
@@ -640,94 +640,73 @@ PHASES = ("summarise", "outline", "refine", "review")
 
 class Meter:
     """The model's work phase by phase - on one recording, or added up over
-    a run: each phase's wall-clock seconds, and the requests it made as a
-    :class:`chapterllm.Tally`. A phase run more than once (a transcript
-    summarised in two rounds, a run of many recordings) adds up. Safe to time
-    phases into from many threads.
+    a run: the stretches of time each phase was under way, and the requests
+    it made as a :class:`modelmeter.Tally`. A phase run more than once (a
+    transcript summarised in two rounds, a run of many recordings) adds up.
+    Safe to time phases into from many threads.
 
-    ``span`` runs from the first phase's start to the last one's end, so
-    phases that ran side by side - recordings chaptered at once - count once
-    in it."""
+    A phase's wall-clock, and :attr:`span` over every phase, join the
+    stretches that overlap: recordings chaptered side by side count the time
+    they shared once, and a pause between them - the model waiting on a
+    transcript - not at all."""
 
     def __init__(self) -> None:
-        self.wall: dict[str, float] = {}
-        self.tallies: dict[str, chapterllm.Tally] = {}
-        self.first: float | None = None
-        self.last: float | None = None
+        self.spans: dict[str, modelmeter.Spans] = {}
+        self.tallies: dict[str, modelmeter.Tally] = {}
         self._lock = threading.Lock()
 
     @property
-    def span(self) -> float:
+    def wall(self) -> dict[str, float]:
+        """Each phase's wall-clock seconds."""
         with self._lock:
-            if self.first is None or self.last is None:
-                return 0.0
-            return self.last - self.first
+            spans = dict(self.spans)
+        return {name: phase.seconds for name, phase in spans.items()}
 
-    def _stamp(self, first: float | None, last: float | None) -> None:
-        if first is not None and (self.first is None or first < self.first):
-            self.first = first
-        if last is not None and (self.last is None or last > self.last):
-            self.last = last
+    @property
+    def span(self) -> float:
+        """The wall-clock the model was asked in, over every phase."""
+        with self._lock:
+            spans = list(self.spans.values())
+        return modelmeter.joined(stretch for phase in spans
+                                 for stretch in phase.all())
 
     @contextlib.contextmanager
-    def phase(self, name: str) -> Iterator[chapterllm.Tally]:
+    def phase(self, name: str) -> Iterator[modelmeter.Tally]:
         """The tally to count ``name``'s requests into, the block timed as
-        its wall-clock."""
+        one stretch of its wall-clock."""
         with self._lock:
-            tally = self.tallies.setdefault(name, chapterllm.Tally())
-            self.wall.setdefault(name, 0.0)
-        started = time.monotonic()
-        try:
+            tally = self.tallies.setdefault(name, modelmeter.Tally())
+            spans = self.spans.setdefault(name, modelmeter.Spans())
+        with spans.timing():
             yield tally
-        finally:
-            ended = time.monotonic()
-            with self._lock:
-                self.wall[name] += ended - started
-                self._stamp(started, ended)
 
     def add(self, other: Meter) -> None:
         """``other``'s phases added into this one's."""
         with other._lock:
-            phases = [(name, other.wall[name], other.tallies[name])
-                      for name in other.wall]
-            first, last = other.first, other.last
+            phases = [(name, other.spans[name], other.tallies[name])
+                      for name in other.spans]
         with self._lock:
-            for name, wall, tally in phases:
-                self.tallies.setdefault(name, chapterllm.Tally()).merge(tally)
-                self.wall[name] = self.wall.get(name, 0.0) + wall
-            self._stamp(first, last)
+            for name, spans, tally in phases:
+                self.tallies.setdefault(name, modelmeter.Tally()).merge(tally)
+                self.spans.setdefault(name, modelmeter.Spans()).merge(spans)
 
     def lines(self) -> list[str]:
-        """A line per phase that asked the model and one for them all: requests,
-        wall-clock, the tokens written and tokens a second over that
-        wall-clock - and, where several requests ran, over the time each was
-        under way, which is the model's own speed when they ran side by side.
-        The total is over :attr:`span`. Empty when the model was never
-        asked."""
+        """A line per phase that asked the model and one for them all
+        (:func:`modelmeter.rate_line`), the total over :attr:`span`. Empty
+        when the model was never asked."""
+        wall = self.wall
         with self._lock:
-            phases = [(name, self.wall[name], self.tallies[name])
+            phases = [(name, wall[name], self.tallies[name])
                       for name in PHASES
-                      if name in self.wall and self.tallies[name].requests]
+                      if name in wall and self.tallies[name].requests]
         if not phases:
             return []
-        total = chapterllm.Tally()
+        total = modelmeter.Tally()
         for _, _, tally in phases:
             total.merge(tally)
-        return ([_rate_line(name, seconds, tally) for name, seconds, tally in phases]
-                + [_rate_line("all", self.span, total)])
-
-
-def _rate_line(name: str, wall: float, tally: chapterllm.Tally) -> str:
-    text = "%-9s %3d request(s) in %7.1fs" % (name + ":", tally.requests, wall)
-    if not tally.counted:
-        return text + (", tokens not reported" if tally.requests else "")
-    text += ", %d token(s) written, %.1f tok/s" % (
-        tally.tokens, tally.tokens / wall if wall > 0 else 0.0)
-    if tally.counted > 1 and tally.counted_seconds > 0:
-        text += " (%.1f tok/s a request)" % (tally.tokens / tally.counted_seconds)
-    if tally.counted < tally.requests:
-        text += ", %d request(s) uncounted" % (tally.requests - tally.counted)
-    return text
+        return ([modelmeter.rate_line(name, seconds, tally)
+                 for name, seconds, tally in phases]
+                + [modelmeter.rate_line("all", self.span, total)])
 
 
 def too_short(duration: int, min_minutes: float = DEFAULT_MIN_MINUTES) -> bool:

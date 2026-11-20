@@ -180,6 +180,28 @@ class TestTheMeter:
         assert run.lines()[-1].startswith("all:")
         assert aichapters.Meter().lines() == []
 
+    def test_recordings_chaptered_at_once_count_their_shared_time_once(self):
+        """A hosted model chapters every file at once: two outlines that ran
+        side by side took the time they took together, not its sum, and the
+        model waiting on a transcript between passes is no time of its."""
+        run = aichapters.Meter()
+        for start in (0.0, 5.0):
+            one = aichapters.Meter()
+            with one.phase("outline") as tally:
+                tally.add(10.0, 100)
+            one.spans["outline"] = aichapters.modelmeter.Spans()
+            one.spans["outline"].add(start, start + 10.0)
+            run.add(one)
+        late = aichapters.Meter()
+        with late.phase("review") as tally:
+            tally.add(1.0, 10)
+        late.spans["review"] = aichapters.modelmeter.Spans()
+        late.spans["review"].add(100.0, 101.0)
+        run.add(late)
+        assert run.wall == {"outline": 15.0, "review": 1.0}
+        assert run.span == 16.0
+        assert "200 token(s) written, 13.3 tok/s" in run.lines()[0]
+
 
 class TestGenerate:
     def test_marks_are_the_transcripts_times_not_the_models(self):
