@@ -61,12 +61,7 @@ These are read from the environment:
 | `spokenLanguages` | the languages whose subtitles are fetched and tested; a code the language table does not know stops the run before a film is touched | the six it knows by default (en, de, fr, nl, es, it) |
 | `mediaServerNaming` | the server the names are written for | `plex`; the names are then written and read the way that server spells them |
 | `subtitleOcrEngines` | the engines a picture subtitle is read with, in the order to try them | the order below |
-| `subtitleOcrUrl` | the servers holding a vision model, for the `vision` engine: a comma list, the preferred first | that engine is not tried |
-| `subtitleOcrServe` | the command that starts the first of them when it is not running | it is only used when it is running |
-| `subtitleOcrServeMib` | the free GPU memory it is started with | 26000 |
-| `subtitleOcrModel` | that model's name, asked of a server that lists it | the first model each server lists |
-| `subtitleOcrOptions` | more fields for every request to it, as a JSON object | none |
-| `subtitleOcrJobs` | how many requests are sent to that model at once, each with up to 16 pictures | 32 |
+| `llmModels`, `llmUrl`, … | the language-model roster (see [Language models](../models.md)): a model that sees pictures serves the `vision` OCR engine (`subtitle-ocr` task) | `vision` is not tried; paddle and tesseract still are |
 | `losslessAudioTarget` | the codec the lossless audio is converted to | `opus`, at a per-channel target bitrate; `flac` takes the channels as they are, up to eight of them |
 | `plexUrl` | the Plex server the films are compared with | the server on this machine, `http://localhost:32400` |
 | `plexToken` | that server's X-Plex-Token | the server is asked without one, which it refuses unless told to trust this address; the comparison is then skipped |
@@ -264,7 +259,7 @@ ready, and one that fails or reads nothing hands the subtitle to the next:
 
 | Order | Engine | Languages | Needs |
 | --- | --- | --- | --- |
-| 1 | `vision`, a vision model | any | `subtitleOcrUrl`: servers with the OpenAI chat API holding one — llama-server, or any that lists its model at `/v1/models` — tried in order (below) |
+| 1 | `vision`, a vision model | any | a vision model in the [model roster](../models.md) for the `subtitle-ocr` task (local and cheap preferred, light lean; legacy `subtitleOcr…` settings still work with a warning) |
 | 2 | `paddle` (PP-OCR) on the GPU | a hundred-odd | `paddleocr` with a CUDA build of paddle, and 2 GiB free on the card — asked afresh for each subtitle, since another program may hold it |
 | 3 | `tesseract` on the CPU | the ones whose data is installed: `apt install tesseract-ocr-fra` for French, `tesseract-ocr-all` for all | `tesseract` |
 | 4 | `paddle` on the CPU, the GPU hidden from it | a hundred-odd, at about a second a line | `paddleocr` |
@@ -286,20 +281,29 @@ Measured on a French Blu-ray, against the pictures:
 | `tesseract` | 9 s | 232 s | well, but `V` comes out as `\/`, `Il` as `\|\|` and accented capitals lose their accent |
 | `paddle` on the CPU | 90 s | 27 min | garbles about half the lines, with seconv's picture cleaning or without it |
 
-The servers in `subtitleOcrUrl` are tried for each subtitle in the order
-given, the first started with `subtitleOcrServe` when the GPU has
-`subtitleOcrServeMib` free, the way
-[`generate-chapters`](generate-chapters.md#several-servers-one-card) does it
-with its own servers; with none to be had, the engines after `vision` read.
+The `vision` engine walks the `subtitle-ocr` ladder from
+[`models.toml`](../models.md) (or the single-model `llm…` settings), starting
+the first server with `serve` when the GPU has `serve_mib` free, and falling
+through to the next model or server — and then to paddle and tesseract — when
+none can be had. Up to 16 pictures go in one request at a 4,096-token context
+(scaled down for smaller contexts), with concurrency held to the model's
+`jobs` setting since batching carries the speed.
 
 For example, a small vision model started on port 8082 when the card is
-free, and the larger model a chat server keeps on port 8080 when that server
-holds the card:
+free, falling back to the larger model on port 8080 when that server holds
+the card:
 
-```bash
-subtitleOcrUrl=http://127.0.0.1:8082/v1,http://127.0.0.1:8080/v1
-subtitleOcrServe=llama-server --model /models/vision.gguf --mmproj /models/mmproj.gguf --port 8082
+```toml
+[models.vision-local]
+url = ["http://127.0.0.1:8082/v1", "http://127.0.0.1:8080/v1"]
+serve = "llama-server --model /models/vision.gguf --mmproj /models/mmproj.gguf --port 8082"
+traits = { vision = true }
 ```
+
+The old `subtitleOcrUrl`, `subtitleOcrServe`, `subtitleOcrServeMib`,
+`subtitleOcrModel`, `subtitleOcrOptions` and `subtitleOcrJobs` settings are
+still accepted for now — they appear in the roster as a model named
+`subtitle-ocr` kept to that task — and warn until moved to `models.toml`.
 
 The film's picture subtitles are taken out with `mkvextract` first, all in one
 pass: `seconv` handed the film itself would hold the whole of it in memory.

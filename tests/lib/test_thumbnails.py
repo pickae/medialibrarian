@@ -8,12 +8,14 @@ stub, the exact argv each tool call hands its tool, the branches the tuning
 values fall into, and the exit status the last command of each function leaves
 behind. """
 
+import contextlib
 import os
+import pathlib
 import sys
 
 import pytest
 
-from medialib.lib import onlinecover, statusline, thumbnails
+from medialib.lib import aicover, llmclient, modelmeter, onlinecover, statusline, thumbnails
 
 pytestmark = pytest.mark.stubbed
 
@@ -912,3 +914,178 @@ class TestTheModelRung:
         found = tmp_path / "found.jpg"
         found.write_bytes(b"ours")
         assert thumbnails._keep_in_input(str(found), str(tmp_path / "gone")) == ""
+
+
+class _VisionModel:
+    """Stand-in vision model for folder cover look tests."""
+
+    def __init__(self, answer, *, sees=True, name="vision-stand-in"):
+        self.answer = answer
+        self.sees = sees
+        self.name = name
+        self.model = name
+        self.shown = []
+
+    @contextlib.contextmanager
+    def serving(self, log):
+        yield self
+
+    def sees_images(self):
+        return self.sees
+
+    def ask(self, system, prompt, tally=None, images=()):
+        self.shown.append((system, prompt, list(images)))
+        if isinstance(self.answer, Exception):
+            raise self.answer
+        if tally is not None:
+            tally.add(0.5, 12, 300)
+        return self.answer
+
+
+class TestFolderCoverLook:
+    """When no cover-name rung matches and two or more images sit in the
+    folder, a vision model picks the front cover; otherwise today's rules
+    stand unchanged."""
+
+    @pytest.fixture(autouse=True)
+    def _enable_look(self, monkeypatch):
+        monkeypatch.setenv(aicover.LOOK_SWITCH_VARIABLE, "on")
+
+    @staticmethod
+    def _as_is(path, dest):
+        return path
+
+    @staticmethod
+    def _walk_images(folder):
+        return [p for p in thumbnails._regular_files(str(folder))
+                if thumbnails._is_image_name(os.path.basename(p))]
+
+    def test_ladder_match_skips_model(self, tmp_path):
+        _folder(tmp_path, ["scan01.jpg", "cover.jpg", "cd.jpg"])
+        model = _VisionModel('{"choice": 1, "why": "first"}')
+        picked = thumbnails.choose_thumbnail(
+            str(tmp_path), lookers=[model], prepare=self._as_is)
+        assert picked == str(tmp_path / "cover.jpg")
+        assert model.shown == []
+
+    def test_single_unnamed_image_skips_model(self, tmp_path):
+        _folder(tmp_path, ["scan01.jpg", "notes.txt"])
+        model = _VisionModel('{"choice": 1, "why": "only"}')
+        picked = thumbnails.choose_thumbnail(
+            str(tmp_path), lookers=[model], prepare=self._as_is)
+        assert picked == str(tmp_path / "scan01.jpg")
+        assert model.shown == []
+
+    def test_two_or_more_unnamed_images_asks_model_and_picks_index(
+            self, tmp_path, monkeypatch):
+        book = tmp_path / "The Quiet Orchard"
+        _folder(book, ["scan01.jpg", "cd.jpg", "booklet3.jpg"])
+        ordered = self._walk_images(book)
+        meter = tmp_path / "meter"
+        logged = []
+        monkeypatch.setattr(aicover, "_log", logged.append)
+        model = _VisionModel('{"choice": 2, "why": "title and author on front"}')
+        picked = thumbnails.choose_thumbnail(
+            str(book), model_meter=str(meter), scratch_dir=str(tmp_path),
+            lookers=[model], prepare=self._as_is)
+        assert picked == ordered[1]
+        assert len(model.shown) == 1
+        _system, prompt, images = model.shown[0]
+        assert images == ordered
+        assert "The Quiet Orchard" in prompt
+        assert any("Cover picked on sight of 3 folder images" in line
+                   and os.path.basename(ordered[1]) in line
+                   and "title and author on front" in line
+                   for line in logged)
+        _spans, tally = modelmeter.gathered(str(meter))
+        assert (tally.requests, tally.tokens, tally.read) == (1, 12, 300)
+
+    @pytest.mark.parametrize("answer", [
+        '{"choice": null, "why": "all disc scans"}',
+        '{"choice": 0, "why": "none is a cover"}',
+        '{"choice": "none", "why": "only booklet pages"}',
+    ])
+    def test_model_none_falls_back_to_first_image(self, tmp_path, answer):
+        _folder(tmp_path, ["scan01.jpg", "cd.jpg", "booklet3.jpg"])
+        ordered = self._walk_images(tmp_path)
+        model = _VisionModel(answer)
+        picked = thumbnails.choose_thumbnail(
+            str(tmp_path), lookers=[model], prepare=self._as_is)
+        assert picked == ordered[0]
+        assert len(model.shown) == 1
+
+    @pytest.mark.parametrize("answer", [
+        '{"choice": 9, "why": "out of range"}',
+        '{"choice": -1, "why": "negative"}',
+        '{"choice": true, "why": "bool is not an index"}',
+        "I cannot decide",
+    ])
+    def test_out_of_range_or_bad_answer_falls_back_to_first_image(
+            self, tmp_path, answer):
+        _folder(tmp_path, ["scan01.jpg", "cd.jpg"])
+        ordered = self._walk_images(tmp_path)
+        model = _VisionModel(answer)
+        picked = thumbnails.choose_thumbnail(
+            str(tmp_path), lookers=[model], prepare=self._as_is)
+        assert picked == ordered[0]
+        assert len(model.shown) == 1
+
+    def test_switch_off_falls_back_quietly(self, tmp_path, monkeypatch):
+        monkeypatch.setenv(aicover.LOOK_SWITCH_VARIABLE, "off")
+        logged = []
+        monkeypatch.setattr(aicover, "_log", logged.append)
+        _folder(tmp_path, ["scan01.jpg", "cd.jpg"])
+        ordered = self._walk_images(tmp_path)
+        model = _VisionModel('{"choice": 2, "why": "should not run"}')
+        picked = thumbnails.choose_thumbnail(
+            str(tmp_path), lookers=[model], prepare=self._as_is)
+        assert picked == ordered[0]
+        assert model.shown == []
+        assert logged == []
+
+    def test_no_vision_model_falls_back_quietly(self, tmp_path, monkeypatch):
+        for name in (llmclient.API_VARIABLE, llmclient.URL_VARIABLE,
+                     llmclient.HARNESS_VARIABLE):
+            monkeypatch.delenv(name, raising=False)
+        logged = []
+        monkeypatch.setattr(aicover, "_log", logged.append)
+        _folder(tmp_path, ["scan01.jpg", "cd.jpg"])
+        ordered = self._walk_images(tmp_path)
+        picked = thumbnails.choose_thumbnail(str(tmp_path), prepare=self._as_is)
+        assert picked == ordered[0]
+        assert logged == []
+
+    def test_embed_thumbnail_meters_and_embeds_vision_pick(
+            self, tmp_path, isolated_env, monkeypatch):
+        d = tmp_path / "case"
+        d.mkdir()
+        (d / "scan01.jpg").write_bytes(b"first-img")
+        (d / "scan02.jpg").write_bytes(b"second-img-cover")
+        (d / "track01.opus").touch()
+        ordered = self._walk_images(d)
+        expected_bytes = pathlib.Path(ordered[1]).read_bytes()
+        (d / "ram").mkdir()
+        meter = tmp_path / "meter"
+        embedded = []
+
+        def record_embed(audio, cover):
+            embedded.append((audio, cover, pathlib.Path(cover).read_bytes()))
+            return 0
+
+        monkeypatch.setattr(thumbnails.mutagentags, "embed_cover", record_embed)
+        model = _VisionModel('{"choice": 2, "why": "front artwork"}')
+        monkeypatch.setattr(aicover.llmroster, "optional",
+                            lambda task: ([model], ""))
+        monkeypatch.setattr(aicover, "_for_looking", self._as_is)
+        monkeypatch.chdir(d)
+        run = _Run()
+        monkeypatch.setenv("PATH", _stub_bin(tmp_path, []))
+        assert thumbnails.embed_thumbnail(
+            str(d), "track01", 100, 90, "1024x1024", 100, False, "ram",
+            "script", run, model_meter=str(meter)) == 0
+        assert embedded == [
+            ("track01.opus", "ram/track01.output.jpg", expected_bytes)]
+        assert len(model.shown) == 1
+        assert model.shown[0][2] == ordered
+        assert modelmeter.gathered(str(meter))[1].requests == 1
+

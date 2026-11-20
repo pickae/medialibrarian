@@ -30,6 +30,7 @@ import tempfile
 
 from medialib import commands
 from medialib.lib import (
+    aibooktags,
     aicontents,
     chapters,
     cleannamescollectively,
@@ -44,6 +45,7 @@ from medialib.lib import (
     imagemagick,
     imagesizes,
     modelmeter,
+    onlinecover,
     ramscratch,
     runcontext,
     runlog,
@@ -842,15 +844,27 @@ class Run:
             chapters.embed_chapters(chapter_file, chapter_lines, scratch)
 
         step("    Embedding thumbnail")
+        cover_meta: dict[str, str] = {}
         thumbnails.embed_thumbnail(input_path, output_path, IMAGE_SIZE_LIMIT,
                                    JPG_QUALITY_LEVEL, self.thumbnail_resolution,
                                    DPI, self.have_mkvtoolnix, scratch,
                                    self.script_dir,
-                                   model_meter=self.model_meter)
+                                   model_meter=self.model_meter,
+                                   cover_meta=cover_meta)
         if not os.path.isfile(joined):
             self.record_failure(name, "the book was lost while its chapters "
                                       "and cover were written into it.")
             return ""
+        if aibooktags.enabled():
+            step("    Filling empty book tags")
+            seconds = produced or onlinecover.media_seconds(joined)
+            stereo = onlinecover.media_channels(joined) >= 2
+            aibooktags.tag_book(
+                joined, input_path, name,
+                _sorted_by_extension(input_path, FORMATS[fmt][0]),
+                seconds, stereo=stereo,
+                cover_hints=cover_meta or None,
+                meter_file=self.model_meter)
         return joined
 
 
@@ -1108,7 +1122,7 @@ def _run_with_scratch(ram_dir: str, input_dir: str, output_dir: str,
                        state.process_pair)
         safety.exit_if_aborted()
 
-    report_model(state.model_meter, "Cover model")
+    report_model(state.model_meter, "Cover and book-tags model")
     report_model(state.contents_meter, "Chapter-name model")
 
     # By the paths this run made them at, which are all in the scratch: the join

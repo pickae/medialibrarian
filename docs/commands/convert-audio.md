@@ -11,7 +11,7 @@ carrying over chapters and cover art.
 | **Writes** | the converted files under `<outputDir>`; with `-c`, the rest copied verbatim beside them |
 | **Input** | file extensions lower-cased and `.jpeg` renamed to `.jpg`; nothing else is changed |
 | **Reruns** | an up-to-date output is skipped |
-| **Network** | none, except the language model's server under `-C` |
+| **Network** | online cover lookup for standalone tracks without a cover (`coverSearch`, `coverSearchLlm`), and the language model's server under `-C` |
 
 ## Default behavior
 
@@ -164,12 +164,28 @@ A track with no cover is looked for **online** only when it is the odd one out:
 | most of the other tracks in its folder carry a cover, or it is alone | most of them carry none (the album case) |
 
 The search works the way [concat-audio's](concat-audio.md#chapters-and-cover)
-does: a dated name or 30–200 minutes reads as a podcast, longer as an
-audiobook, and an answer is taken only when it is the same title. One
-difference: 30–200 minutes encoded in **stereo** (not `-m`, and not a mono
-source under `-a`) reads as a full-cast drama, and is looked for where
-audiobooks are. The
-`coverSearch` [setting](../settings.md) switches it off.
+does: when a [language model](../models.md) is set up and `contentKindLlm` is
+on (the `audio-content` task), the model classifies whether a track without a
+`[YouTube id]` is a podcast, an audio drama, or an audiobook from its folder
+path, file name, tags, duration, and channel count; otherwise, or when the
+model is unsure, it falls back to the length and stereo heuristic — a dated
+name or 30–200 minutes in mono reads as a podcast, 30–200 minutes encoded in
+**stereo** (not `-m`, and not a mono source under `-a`) reads as a full-cast
+drama and is looked for where audiobooks are, and anything longer reads as an
+audiobook. An answer is taken only when it is the same title. The
+`coverSearch` and `contentKindLlm` [settings](../settings.md) switch these
+steps off.
+
+When those catalogues come up empty, a language model that can **search the
+web** (`cover-search` in [docs/models.md](../models.md)) is asked for the
+episode's cover — told the show (from the album/artist tags and parent
+folder), the episode title, the date (from the filename or tags), its tags
+and what it probably is — and a model that **sees pictures** (`cover-look`)
+is shown the candidates it found. Because a wrong cover on a track is worse
+than none, the look **must accept** an image: if no vision model is
+available, or it rejects every candidate, no cover is taken.
+`coverSearchLlm=off` skips this step alone; `coverSearch=off` turns off every
+online rung.
 
 ## Every conversion is measured
 
