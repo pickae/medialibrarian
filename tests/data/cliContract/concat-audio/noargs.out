@@ -44,6 +44,10 @@ Usage:
     fallback: extract from audio files themselves
     fallback: look online, by what the book probably is - a podcast, an
               audiobook - and only for an answer with the same title
+    fallback: ask a language model that can search the web for it
+              (Claude, or one behind a harness); one that sees pictures
+              is shown what it found, and picks - see docs/models.md
+    a cover found online is also kept in the input folder as cover.<ext>
 
     Dependencies
     ------------

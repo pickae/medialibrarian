@@ -149,8 +149,12 @@ class Roster:
     def why_none(self, task: Task) -> str:
         """Why ``task`` has no model: none set up, or none with what it needs."""
         if not self.models:
-            return ("no language model is set up (the llm settings, or the "
-                    "roster file %s names)" % MODELS_VARIABLE)
+            return ("no language model is set up: %s is not set - give the "
+                    "address of an OpenAI-compatible server, e.g. "
+                    "http://localhost:11434/v1 for Ollama, or %s=anthropic for "
+                    "Claude - and there is no roster file (%s)"
+                    % (llmclient.URL_VARIABLE, llmclient.API_VARIABLE,
+                       MODELS_VARIABLE))
         return "none of %s can %s - that takes %s" % (
             ", ".join(llm.name for llm in self.models), task.about,
             " and ".join(_TRAIT_WORDS.get(trait, trait) for trait in task.requires))
