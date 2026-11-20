@@ -11,7 +11,7 @@ holds what is **missing** from its numbered or dated run, not what is there.
 | **Writes** | `logs/find-gaps/find-gaps-<folder>.tree`, one per folder given |
 | **Input** | nothing is changed: it reads names only |
 | **Reruns** | asks before replacing the report an earlier run left ([below](#reruns)) |
-| **Network** | none |
+| **Network** | optional — when a web-searching model is configured and `findGapsLlm` is on, checks series and dated runs against real release lists ([below](#model-notes)) |
 
 ## What counts as a run
 
@@ -80,8 +80,25 @@ Sub-folders are a run of their own: `Season 1`, `Season 3` reports
 The first line is the folder given. Only folders with something missing at or
 below them are drawn; a folder carries a trailing `/`, as `tree -F` marks one,
 so it cannot be mistaken for a missing number. Consecutive missing numbers are
-one line, as a range. The end of a run cannot be missing — nothing says how
-long it was meant to be.
+one line, as a range. Deterministic numbering alone cannot know where the end
+of a run was meant to be — that is where optional model notes help.
+
+## Model notes
+
+When a language model that can search the web is set up (the `gaps-check` task
+in [`docs/models.md`](../models.md)) and `findGapsLlm` is `on` (the default),
+`find-gaps` sends a concise summary of the detected numbered, episodic and
+dated runs (folder, series and episode names, number/date ranges and the
+deterministic gaps already found) so the model can look up real episode lists
+and release schedules.
+
+The model pass is strictly report-only: it never modifies files and never
+removes deterministic gaps from the tree above. Validated findings are
+appended in a separate `Model notes` section — flagging suspected missing
+trailing/final episodes, marking scheduled podcast breaks or hiatuses, noting
+genuinely short seasons or missing specials, and confirming real gaps with a
+source. Set `findGapsLlm=off` (or `-x findGapsLlm=off`) to skip this step and
+keep the run completely offline.
 
 ## Reruns
 

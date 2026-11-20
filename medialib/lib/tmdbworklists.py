@@ -8,7 +8,7 @@ folder name and its id separated by a tab.
 
 import os
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 
 from medialib.lib import filmfolders, plexnames, titlematch
 
@@ -126,12 +126,17 @@ def _write_lines(path: str, lines: list,
 
 
 def write_ambiguous_list(path: str, folders, root: str,
-                         log: Callable[[str], None] | None = None) -> bool:
+                         log: Callable[[str], None] | None = None,
+                         suggestions: Mapping[str, Sequence[str]] | None = None
+                         ) -> bool:
     """The folders holding more than one film, as a report to read and act on.
 
     Not a file to feed back: what to do about two films in one folder is to
     give the files names that say which release each one is, and only someone
     who knows them can. The report says where they are and what is in them.
+    ``suggestions``, when given, maps a folder path to model-generated
+    suggestion lines written below its files for a person to review; nothing
+    is renamed on them automatically.
     """
     lines = [
         _ID_COMMENT + " Folders the tagging left alone, and why.",
@@ -167,6 +172,10 @@ def write_ambiguous_list(path: str, folders, root: str,
         _ID_COMMENT + " which is a reading it does not have yet; two that read",
         _ID_COMMENT + " differently are two different films.",
         _ID_COMMENT + "",
+        _ID_COMMENT + " Any 'model suggestion' lines below a folder are",
+        _ID_COMMENT + " proposals from the language model only; nothing was",
+        _ID_COMMENT + " renamed or moved on them.",
+        _ID_COMMENT + "",
         _ID_COMMENT + " Rename the files and run the tagging again.",
         "",
     ]
@@ -175,6 +184,8 @@ def write_ambiguous_list(path: str, folders, root: str,
         lines += _how_close(
             filmfolders.read_folder(os.path.basename(folder))[0] or folder,
             movies)
+        for suggestion in (suggestions or {}).get(folder, ()):
+            lines.append("    " + suggestion)
         lines.append("")
     return _write_lines(path, lines, log)
 
@@ -261,7 +272,8 @@ def read_id_list(path: str, blank: list | None = None) -> dict | None:
     for line in lines:
         if not line.strip() or line.lstrip().startswith(_ID_COMMENT):
             continue
-        name, _tab, written = line.partition("\t")
+        name, _tab, rest = line.partition("\t")
+        written = rest.partition("\t")[0].partition(_ID_COMMENT)[0]
         tag = id_tag_for(written)
         if not name.strip():
             continue
@@ -273,17 +285,23 @@ def read_id_list(path: str, blank: list | None = None) -> dict | None:
 
 
 def write_id_list(path: str, names, ids: dict | None = None,
-                  log: Callable[[str], None] | None = None) -> bool:
+                  log: Callable[[str], None] | None = None,
+                  suggestions: dict | None = None) -> bool:
     """The id list as it stands: what has been filled in, then what has not.
 
     ``ids`` is written back verbatim. It is the file's whole point - the ids
     someone looked up by hand are the only record of them anywhere, and a film
     named from one still answers "identified" on the next run only because the
-    line is still there. ``names`` are the ones still to do, each left blank.
+    line is still there. ``names`` are the ones still to do, each left blank
+    unless ``suggestions`` holds a model's pick ``(id_text, confidence,
+    reason)`` for it, in which case the row is pre-filled with the pick and a
+    ``# model (...): ...`` comment for review.
 
     Rewritten whole rather than appended to, so a film that has since been
     identified by TMDb itself drops off the list instead of lingering on it.
     """
+    suggested = {name: suggestions[name] for name in names
+                 if suggestions and name in suggestions}
     lines = [
         _ID_COMMENT + " Films TheMovieDB could not identify on its own.",
         _ID_COMMENT + " Put the id after the tab - tt0000001, imdb-tt0000001",
@@ -291,10 +309,25 @@ def write_id_list(path: str, names, ids: dict | None = None,
         _ID_COMMENT + "   ingest-movies -i <this file> <library>",
         _ID_COMMENT + " adding -w once the dry run reads right. Lines still",
         _ID_COMMENT + " blank are simply the ones still to do.",
-        "",
     ]
+    if suggested:
+        lines += [
+            _ID_COMMENT + " Rows marked '# model (...)' are pre-filled model",
+            _ID_COMMENT + " suggestions - keep the id to apply it, edit it, "
+            "or clear it to leave blank.",
+        ]
+    lines.append("")
     lines += [name + "\t" + tag for name, tag in sorted((ids or {}).items())]
-    lines += [name + "\t" for name in names]
+    for name in names:
+        suggestion = suggested.get(name)
+        if suggestion:
+            id_text, confidence, reason = suggestion
+            note = "%s model (%s)" % (_ID_COMMENT, confidence or "low")
+            if reason:
+                note += ": " + reason
+            lines.append("%s\t%s\t%s" % (name, id_text, note))
+        else:
+            lines.append(name + "\t")
     return _write_lines(path, lines, log, "the id list " + path)
 
 

@@ -47,10 +47,15 @@ import threading
 import tomllib
 from dataclasses import dataclass
 
-from medialib.lib import llmclient, llmtraits, runlog, settings
+from medialib.lib import llmclient, llmtraits, modelserver, runlog, settings
 
 __all__ = ["MODELS_VARIABLE", "LEAN_VARIABLE", "LEANS", "Task", "TASKS", "CHAPTERS",
            "CHAPTERS_INSTRUCTED", "COVER_SEARCH", "COVER_LOOK", "CONTENTS_SEARCH",
+           "SUBTITLE_OCR", "VIDEO_PROFILE", "MUSIC_SEARCH", "PODCAST_ADS",
+           "FRAGMENT_CLASSIFY", "GAPS_CHECK", "LETTERBOXD_MATCH", "BOOK_LANGUAGE",
+           "BOOK_IMAGE_CHECK", "ERROR_TRIAGE", "COMIC_PAGE_CHECK",
+           "COMIC_PDF_JUDGE", "BOOK_TAGS", "AUDIO_CONTENT", "FILM_YEAR",
+           "FILM_IDENTIFY", "AMBIGUOUS_EDITIONS", "COMMENTARY_NAMES",
            "BONUS_CATEGORY", "Roster", "RosterError", "load", "require",
            "optional", "chapters_task"]
 
@@ -95,12 +100,75 @@ COVER_LOOK = Task("cover-look", "look at the covers found and pick the "
 CONTENTS_SEARCH = Task("contents-search", "search the web for a book's table "
                        "of contents, to name the chapters its files only number",
                        requires=("web",), prefers=("reasoning",))
+SUBTITLE_OCR = Task("subtitle-ocr", "read a film's picture subtitles into text",
+                    requires=("vision",), prefers=("local", "cheap"), lean="light")
+VIDEO_PROFILE = Task(
+    "video-profile", "classify a video from sampled frames to choose its "
+    "encoding profile", requires=("vision",), lean="light")
+MUSIC_SEARCH = Task("music-search",
+                    "search the web for the MusicBrainz release of an album "
+                    "beets could not match",
+                    requires=("web",), prefers=("reasoning",))
+PODCAST_ADS = Task("podcast-ads", "find sponsor reads, ads and self-promotion "
+                   "in a podcast episode's transcript", prefers=("reasoning",),
+                   lean="balanced")
+FRAGMENT_CLASSIFY = Task(
+    "fragment-classify",
+    "classify recurring filename fragments and propose additions to data/fragments.txt",
+    prefers=("reasoning", "web"),
+    lean="balanced",
+)
+GAPS_CHECK = Task("gaps-check", "check a tree's numbered and dated runs "
+                  "against real episode lists and release schedules",
+                  requires=("web",), prefers=("reasoning",), lean="balanced")
+LETTERBOXD_MATCH = Task(
+    "letterboxd-match", "suggest matches for unmatched or ambiguous Letterboxd "
+    "entries for the sync report", prefers=("reasoning", "web"), lean="balanced")
+BOOK_LANGUAGE = Task("book-language", "identify a book's language from a short "
+                     "excerpt", requires=(), prefers=(), lean="light")
+BOOK_IMAGE_CHECK = Task("book-image-check", "tell whether an image inside an "
+                        "e-book is part of the book or advertising",
+                        requires=("vision",), lean="light")
+ERROR_TRIAGE = Task("error-triage", "suggest a likely cause and next step for "
+                    "unexplained errors in the error log",
+                    prefers=("reasoning", "local"), lean="balanced")
+COMIC_PAGE_CHECK = Task("comic-page-check", "check whether a small comic page "
+                        "has real content worth keeping or should be dropped",
+                        requires=("vision",), lean="light")
+COMIC_PDF_JUDGE = Task("comic-pdf-judge", "judge whether a borderline PDF is "
+                       "a comic book", requires=("vision",), lean="light")
+BOOK_TAGS = Task("book-tags", "look up an audiobook's metadata tags on the web",
+                 requires=("web",), prefers=("reasoning",))
+AUDIO_CONTENT = Task(
+    "audio-content", "classify whether a recording is a podcast, an audio "
+    "drama, an audiobook or other", lean="light")
+FILM_YEAR = Task("film-year", "look up the release year of an undated film, "
+                 "concert, special or documentary",
+                 requires=("web",), prefers=("reasoning",))
+FILM_IDENTIFY = Task(
+    "film-identify", "pick which offered film matches an unmatched folder",
+    prefers=("web", "reasoning"), lean="precise")
+AMBIGUOUS_EDITIONS = Task(
+    "ambiguous-editions", "classify stray movie files and identify film "
+    "cuts and editions", requires=("web",), prefers=("reasoning",))
+COMMENTARY_NAMES = Task(
+    "commentary-names",
+    "match commentary tracks to a disc listing, name generic commentaries "
+    "from opening introductions, and tell apart fitting disc pages",
+    prefers=("reasoning", "web"))
 BONUS_CATEGORY = Task("bonus-category", "sort an unmatched extra into its "
                       "Plex bonus folder", lean="light")
 
 TASKS = {task.name: task for task in (CHAPTERS, CHAPTERS_INSTRUCTED,
-                                      COVER_SEARCH, COVER_LOOK,
-                                      CONTENTS_SEARCH, BONUS_CATEGORY)}
+                                      COVER_SEARCH, COVER_LOOK, CONTENTS_SEARCH,
+                                      SUBTITLE_OCR, VIDEO_PROFILE, MUSIC_SEARCH,
+                                      PODCAST_ADS, FRAGMENT_CLASSIFY, GAPS_CHECK,
+                                      LETTERBOXD_MATCH, BOOK_LANGUAGE,
+                                      BOOK_IMAGE_CHECK, ERROR_TRIAGE,
+                                      COMIC_PAGE_CHECK, COMIC_PDF_JUDGE,
+                                      BOOK_TAGS, AUDIO_CONTENT, FILM_YEAR,
+                                      FILM_IDENTIFY, AMBIGUOUS_EDITIONS,
+                                      COMMENTARY_NAMES, BONUS_CATEGORY)}
 
 
 def chapters_task(instructions: str) -> Task:
@@ -172,9 +240,14 @@ _TRAIT_WORDS = {"web": "web search (Claude, or a model behind llmHarness)",
 
 
 def models_path(environ=None) -> str:
-    environ = os.environ if environ is None else environ
-    return environ.get(MODELS_VARIABLE) or os.path.join(settings.config_home(),
-                                                        MODELS_NAME)
+    if environ is None:
+        environ = os.environ
+    if MODELS_VARIABLE in environ:
+        return environ[MODELS_VARIABLE]
+    if "XDG_CONFIG_HOME" in environ:
+        return os.path.join(environ["XDG_CONFIG_HOME"], "medialib", MODELS_NAME)
+    return os.environ.get(MODELS_VARIABLE) or os.path.join(
+        settings.config_home(), MODELS_NAME)
 
 
 def _read_file(path: str) -> tuple[list, dict, dict]:
@@ -229,10 +302,41 @@ _loaded: dict[tuple, Roster] = {}
 _loaded_lock = threading.Lock()
 
 
+# Legacy subtitleOcr… settings folded into the roster: still accepted and
+# turned into a model named "subtitle-ocr" kept to the subtitle-ocr task.
+_LEGACY_OCR_FIELDS = (
+    ("url", "subtitleOcrUrl"),
+    ("serve", "subtitleOcrServe"),
+    ("serve_mib", "subtitleOcrServeMib"),
+    ("model", "subtitleOcrModel"),
+    ("options", "subtitleOcrOptions"),
+    ("jobs", "subtitleOcrJobs"),
+)
+
+
+def _legacy_ocr_model(legacy_ocr: tuple[tuple[str, str], ...]) -> llmclient.Llm:
+    """Build the roster model described by the deprecated subtitleOcr…
+    settings. Its ``vision`` trait is declared so a server without a known
+    model name still qualifies for :data:`SUBTITLE_OCR`."""
+    entry: dict = {"traits": {"vision": True}}
+    for field, value in legacy_ocr:
+        if not value.strip():
+            continue
+        if field == "url":
+            entry["url"] = [
+                modelserver.root(address) + "/v1"
+                for address in value.split(",") if address.strip()
+            ]
+        else:
+            entry[field] = value
+    return llmclient.build(entry, SUBTITLE_OCR.name,
+                           field_names=dict(_LEGACY_OCR_FIELDS))
+
+
 def load(environ=None) -> Roster:
-    """The roster: the file's models, then the single-model settings' one.
-    RosterError (an LlmError) for a file or a setting that cannot be used.
-    Read once per file and settings."""
+    """The roster: the file's models, then any legacy subtitleOcr… model,
+    then the single-model settings' one. RosterError (an LlmError) for a file
+    or a setting that cannot be used. Read once per file and settings."""
     environ = os.environ if environ is None else environ
     path = models_path(environ)
     try:
@@ -241,8 +345,10 @@ def load(environ=None) -> Roster:
         stamp = None
     single = tuple((name, environ.get(name) or "")
                    for name in llmclient.SETTING_FIELDS.values())
+    legacy_ocr = tuple((field, environ.get(name) or "")
+                       for field, name in _LEGACY_OCR_FIELDS)
     lean = (environ.get(LEAN_VARIABLE) or "").strip().lower()
-    index = (path, stamp, single, lean)
+    index = (path, stamp, single, legacy_ocr, lean)
     with _loaded_lock:
         if index in _loaded:
             return _loaded[index]
@@ -250,6 +356,13 @@ def load(environ=None) -> Roster:
         raise RosterError("%s is %r; it takes %s" % (LEAN_VARIABLE, lean,
                                                      ", ".join(LEANS)))
     models, kept_to, tasks = _read_file(path) if stamp is not None else ([], {}, {})
+    if any(value.strip() for field, value in legacy_ocr if field == "url"):
+        if any(llm.name == SUBTITLE_OCR.name for llm in models):
+            raise RosterError("%s names a model %s, which is the legacy "
+                              "subtitleOcr settings' name - call it something "
+                              "else" % (path, SUBTITLE_OCR.name))
+        models.append(_legacy_ocr_model(legacy_ocr))
+        kept_to[SUBTITLE_OCR.name] = (SUBTITLE_OCR.name,)
     if any(value.strip() for name, value in single
            if name in (llmclient.API_VARIABLE, llmclient.URL_VARIABLE,
                        llmclient.HARNESS_VARIABLE)):
@@ -301,12 +414,12 @@ def _refuse(why: str) -> None:
                      "Nothing was changed.\n" % why)
 
 
-def optional(task: Task) -> tuple[list[llmclient.Llm], str]:
+def optional(task: Task, environ=None) -> tuple[list[llmclient.Llm], str]:
     """The models ``task`` may ask, best first, for a step that uses one only
     where there is one - and, where there is none, why. Says nothing: the
     step decides whether its not being there is worth a line."""
     try:
-        roster = load()
+        roster = load(environ)
     except llmclient.LlmError as error:
         return [], str(error)
     ladder = [llm for llm in roster.ladder(task) if llmclient.usable(llm)]

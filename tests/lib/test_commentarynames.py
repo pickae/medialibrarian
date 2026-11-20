@@ -460,3 +460,184 @@ class TestTheSidecarsThatFollow:
             [self.STEM + " 2 Director.en.srt"], self.STEM,
             [("2", "Commentary 1", "Commentary by X")], lambda name: name) \
             == []
+
+
+class TestModelFallbackAndGuards:
+    DIRECTOR = "Audio commentary by director Wenna Castellane"
+    CAST = "Audio commentary with actors Oriel Pask and Tamsin Voller"
+    CRITIC = "Audio commentary by film historian Maren Halvorsen"
+
+    def test_opening_text_stops_after_intro_seconds(self):
+        srt = (
+            "1\n00:00:05,000 --> 00:00:10,000\nOpening line.\n\n"
+            "2\n00:11:00,000 --> 00:11:05,000\nToo late.\n"
+        )
+        assert cn.opening_text(srt) == "Opening line."
+
+    def test_fallback_not_called_when_rules_decide(self):
+        called = []
+        tracks = [FileCommentary("2", "Commentary 1"),
+                  FileCommentary("3", "Commentary 2")]
+        releases = [Release("Region A", (Disc("bluray", (self.DIRECTOR, self.CAST)),))]
+        transcripts = {
+            "2": "1\n00:00:10,000 --> 00:00:12,000\nHi, I'm Wenna Castellane.\n",
+            "3": "1\n00:00:10,000 --> 00:00:12,000\nThis is Oriel Pask and Tamsin Voller.\n",
+        }
+        decision = cn.decide(
+            tracks, releases, "bluray", transcripts, "Nightfall Harbour",
+            fallback=lambda *a: called.append(a) or (None, None, ""))
+        assert decision.names and not called and decision.model_note == ""
+
+    def test_fallback_resolves_unproved_order_with_model_note(self):
+        tracks = [FileCommentary("2", "Commentary 1"),
+                  FileCommentary("3", "Commentary 2")]
+        releases = [Release("Region A", (Disc("bluray", (self.DIRECTOR, self.CAST)),))]
+        transcripts = {
+            "2": "1\n00:00:10,000 --> 00:00:12,000\nHallo zusammen.\n",
+            "3": "1\n00:00:10,000 --> 00:00:12,000\nWillkommen.\n",
+        }
+        decision = cn.decide(
+            tracks, releases, "bluray", transcripts, "Nightfall Harbour",
+            fallback=lambda *_a: (0, (1, 0), "matched by test-model"))
+        assert decision.names == (
+            ("2", "Commentary with actors Oriel Pask and Tamsin Voller"),
+            ("3", "Commentary by director Wenna Castellane"))
+        assert decision.model_note == "matched by test-model"
+
+    def test_fallback_resolves_disagreeing_releases_by_choosing_one_listing(self):
+        tracks = [FileCommentary("2", "Commentary 1"),
+                  FileCommentary("3", "Commentary 2")]
+        releases = [
+            Release("Region A", (Disc("bluray", (self.DIRECTOR, self.CAST)),)),
+            Release("Region B", (Disc("bluray", (self.DIRECTOR, self.CRITIC)),)),
+        ]
+        transcripts = {
+            "2": "1\n00:00:10,000 --> 00:00:12,000\nIntro one.\n",
+            "3": "1\n00:00:10,000 --> 00:00:12,000\nIntro two.\n",
+        }
+        decision = cn.decide(
+            tracks, releases, "bluray", transcripts, "Nightfall Harbour",
+            fallback=lambda *_a: (1, (0, 1), "picked listing 1"))
+        assert decision.names == (
+            ("2", "Commentary by director Wenna Castellane"),
+            ("3", "Commentary by film historian Maren Halvorsen"))
+        assert decision.source == "Region B"
+        assert decision.model_note == "picked listing 1"
+
+    @pytest.mark.parametrize("bad", [
+        (5, (0, 1), "out of range listing"),
+        (0, (0, 0), "duplicate order"),
+        (0, (0,), "short order"),
+        (0, (False, True), "bools in order"),
+        (None, None, "model was unsure"),
+    ])
+    def test_invalid_or_unsure_fallback_keeps_refusal(self, bad):
+        tracks = [FileCommentary("2", "Commentary 1"),
+                  FileCommentary("3", "Commentary 2")]
+        releases = [Release("Region A", (Disc("bluray", (self.DIRECTOR, self.CAST)),))]
+        transcripts = {
+            "2": "1\n00:00:10,000 --> 00:00:12,000\nNo names here.\n",
+            "3": "1\n00:00:10,000 --> 00:00:12,000\nOr here.\n",
+        }
+        decision = cn.decide(
+            tracks, releases, "bluray", transcripts, "Nightfall Harbour",
+            fallback=lambda *_a: bad)
+        assert not decision.names
+        assert decision.reason
+        assert decision.model_note == bad[2]
+
+    def test_fallback_not_called_without_transcripts(self):
+        called = []
+        tracks = [FileCommentary("2", "Commentary 1"),
+                  FileCommentary("3", "Commentary 2")]
+        releases = [Release("Region A", (Disc("bluray", (self.DIRECTOR, self.CAST)),))]
+        decision = cn.decide(
+            tracks, releases, "bluray", {}, "Nightfall Harbour",
+            fallback=lambda *a: called.append(a) or (0, (0, 1), "note"))
+        assert not decision.names and not called
+
+
+class TestOpeningExtractionAndGroups:
+    STEM = "Nightfall Harbour (1987)"
+
+    def test_opening_subtitle_text_handles_srt_vtt_ass_and_plain(self):
+        srt = (
+            "1\n00:00:10,000 --> 00:00:15,000\nHi, I'm director Ada.\n\n"
+            "2\n00:05:01,000 --> 00:05:05,000\nAfter five minutes.\n"
+        )
+        assert cn.opening_subtitle_text(srt) == "Hi, I'm director Ada."
+
+        vtt = (
+            "WEBVTT\n\n"
+            "00:12.000 --> 00:15.000\n<i>Welcome with Bob.</i>\n\n"
+            "05:05.000 --> 05:08.000\nToo late.\n"
+        )
+        assert cn.opening_subtitle_text(vtt) == "Welcome with Bob."
+
+        ass = (
+            "[Events]\n"
+            "Dialogue: 0,0:00:20.00,0:00:24.00,Default,,0,0,0,,"
+            r"{\i1}Hello,{\i0}\NI'm Carol." "\n"
+            "Dialogue: 0,0:06:00.00,0:06:05.00,Default,,0,0,0,,Too late.\n"
+        )
+        assert cn.opening_subtitle_text(ass) == "Hello, I'm Carol."
+
+        assert cn.opening_subtitle_text("Plain transcript line.") == (
+            "Plain transcript line.")
+
+    def test_generic_groups_bundle_audio_embedded_and_sidecar_translations(self):
+        class _MediaTrack:
+            def __init__(self, id, kind, name, commentary=True):
+                self.id, self.name = id, name
+                self.is_audio = kind == "audio"
+                self.is_subtitle = kind == "subtitles"
+                self.is_commentary = commentary
+
+        tracks = [
+            _MediaTrack("2", "audio", "Commentary 1"),
+            _MediaTrack("3", "audio", "Director's Commentary"),
+            _MediaTrack("4", "subtitles", "Commentary 1 (EN)"),
+            _MediaTrack("5", "subtitles", "Commentary 1 (DE)"),
+            _MediaTrack("6", "subtitles", "Commentary 2 (EN)"),
+        ]
+        sidecars = [
+            self.STEM + " 2 Commentary 1.en.srt",
+            self.STEM + " 2 Commentary 1.de.srt",
+            self.STEM + ".Commentary 1.fr.srt",
+            self.STEM + ".Commentary 2.es.vtt",
+        ]
+        groups = cn.generic_groups(tracks, sidecars, self.STEM)
+        assert len(groups) == 2
+        g1, g2 = groups
+        assert g1.number == 1
+        assert g1.audio_ids == ("2",)
+        assert g1.subtitle_ids == ("4", "5")
+        assert sorted(g1.sidecars) == sorted([
+            self.STEM + " 2 Commentary 1.en.srt",
+            self.STEM + " 2 Commentary 1.de.srt",
+            self.STEM + ".Commentary 1.fr.srt",
+        ])
+        assert g2.number == 2
+        assert g2.audio_ids == ()
+        assert g2.subtitle_ids == ("6",)
+        assert g2.sidecars == (self.STEM + ".Commentary 2.es.vtt",)
+
+    def test_group_sidecar_renames_both_indexed_and_plain_sidecars(self):
+        sidecars = [
+            self.STEM + " 2 Commentary 1.en.srt",
+            self.STEM + " 2 Commentary 1.de.srt",
+            self.STEM + ".Commentary 1.fr.srt",
+        ]
+        renamed = cn.group_sidecar_renames(
+            sidecars, self.STEM, "Commentary by Ada", lambda s: s,
+            old_audio_names={"2": "Commentary 1"})
+        assert sorted(renamed) == sorted([
+            (self.STEM + " 2 Commentary 1.en.srt",
+             self.STEM + " 2 Commentary by Ada.en.srt"),
+            (self.STEM + " 2 Commentary 1.de.srt",
+             self.STEM + " 2 Commentary by Ada.de.srt"),
+            (self.STEM + ".Commentary 1.fr.srt",
+             self.STEM + ".Commentary by Ada.fr.srt"),
+        ])
+
+
