@@ -322,6 +322,7 @@ def private_workspace(tmp_path_factory, monkeypatch):
     # Nor is a language model asked for one: a case that turns the search
     # back on would otherwise reach the model the machine's settings name.
     monkeypatch.setenv("coverSearchLlm", "off")
+    monkeypatch.setenv("coverLookLlm", "off")
     # Nor is a language model asked to find ad reads in RSS podcasts.
     monkeypatch.setenv("podcastAdsLlm", "off")
     monkeypatch.setenv("podcastAdsCut", "off")

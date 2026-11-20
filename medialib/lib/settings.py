@@ -209,6 +209,14 @@ SETTINGS: tuple[Setting, ...] = (
             "model that can search is asked - Claude, or one behind "
             "`llmHarness`: `on` or `off`",
             ("concat-audio", "convert-and-concat"), "on"),
+    Setting("coverLookLlm", "Whether a book folder holding two or more image "
+            "files that none of the cover-name words (`front`, `cover`, "
+            "`inlay`, `folder`, `back`) matched is handed to a vision model "
+            "to pick the front cover (the `cover-look` task, see "
+            "docs/models.md): those image files and their names are sent to "
+            "the model, and when none looks like a cover or no vision model "
+            "is set up, the first image is taken: `on` or `off`",
+            ("concat-audio", "convert-and-concat"), "on"),
     Setting("contentsSearchLlm", "Whether a book whose chapters its file names "
             "only number is handed to a language model to search the web for "
             "its table of contents (the `contents-search` task, see "

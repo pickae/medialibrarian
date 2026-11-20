@@ -3,7 +3,8 @@
 Several commands ask a language model for something: chapters from a
 transcript (`generate-chapters`, `convert-audio -a`, `convert-video -C`,
 `ingest-movies`, `ytdlp`), host-read ads in RSS and site podcasts (`ytdlp`),
-a video's encoding profile from sampled frames (`convert-video -p auto`), a
+a video's encoding profile from sampled frames (`convert-video -p auto`),
+picking a book's front cover among unnamed folder images, searching for a
 book's cover where nothing else found one, its chapter titles where its file
 names only number them (`concat-audio`), reading picture subtitles into text
 (`ingest-movies`), the MusicBrainz release of an album beets skipped
@@ -105,7 +106,7 @@ Run with `-v` to see which model each task took, and what it was taken for.
 | `chapters` | - | reasoning | balanced |
 | `chapters-instructed` (chapters with your `-P` instructions) | - | web, reasoning | precise |
 | `cover-search` | web | reasoning | balanced |
-| `cover-look` | vision | - | light |
+| `cover-look` (picking among web results or unnamed folder images) | vision | - | light |
 | `contents-search` | web | reasoning | balanced |
 | `subtitle-ocr` | vision | local, cheap | light |
 | `video-profile` (`convert-video -p auto`) | vision | - | light |
