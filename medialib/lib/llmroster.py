@@ -52,8 +52,8 @@ from medialib.lib import llmclient, llmtraits, runlog, settings
 __all__ = ["MODELS_VARIABLE", "LEAN_VARIABLE", "LEANS", "Task", "TASKS", "CHAPTERS",
            "CHAPTERS_INSTRUCTED", "COVER_SEARCH", "COVER_LOOK", "CONTENTS_SEARCH",
            "SUBTITLE_OCR", "VIDEO_PROFILE", "MUSIC_SEARCH", "PODCAST_ADS",
-           "FRAGMENT_CLASSIFY", "Roster", "RosterError", "load", "require",
-           "optional", "chapters_task"]
+           "FRAGMENT_CLASSIFY", "GAPS_CHECK", "Roster", "RosterError", "load",
+           "require", "optional", "chapters_task"]
 
 MODELS_VARIABLE = "llmModels"
 LEAN_VARIABLE = "llmLean"
@@ -114,11 +114,14 @@ FRAGMENT_CLASSIFY = Task(
     prefers=("reasoning", "web"),
     lean="balanced",
 )
+GAPS_CHECK = Task("gaps-check", "check a tree's numbered and dated runs "
+                  "against real episode lists and release schedules",
+                  requires=("web",), prefers=("reasoning",), lean="balanced")
 
 TASKS = {task.name: task for task in (CHAPTERS, CHAPTERS_INSTRUCTED,
                                       COVER_SEARCH, COVER_LOOK, CONTENTS_SEARCH,
                                       SUBTITLE_OCR, VIDEO_PROFILE, MUSIC_SEARCH,
-                                      PODCAST_ADS, FRAGMENT_CLASSIFY)}
+                                      PODCAST_ADS, FRAGMENT_CLASSIFY, GAPS_CHECK)}
 
 
 def chapters_task(instructions: str) -> Task:

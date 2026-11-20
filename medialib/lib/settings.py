@@ -80,8 +80,8 @@ _SCRATCH = ("concat-audio", "content-census", "content-census-bi", "convert-and-
 
 # Every command that asks a language model.
 _AI_CHAPTERS = ("concat-audio", "convert-and-concat", "convert-audio", "convert-video",
-                "find-fragment-candidates", "generate-chapters", "ingest-movies",
-                "ingest-music", "ytdlp")
+                "find-fragment-candidates", "find-gaps", "generate-chapters",
+                "ingest-movies", "ingest-music", "ytdlp")
 
 SETTINGS: tuple[Setting, ...] = (
     # --- logins and keys
@@ -219,6 +219,15 @@ SETTINGS: tuple[Setting, ...] = (
             "are sent to the model; `data/fragments.txt` is never edited "
             "directly: `on` or `off`",
             ("find-fragment-candidates",), "on"),
+    Setting("findGapsLlm", "Whether find-gaps asks a language model with web "
+            "search to check numbered, episodic and dated runs against real "
+            "episode lists and release schedules (the `gaps-check` task, see "
+            "docs/models.md): it is told folder, series and episode names, "
+            "number and date ranges, and the deterministic gaps already found, "
+            "and only appends notes and suspected missing items to the report. "
+            "Only a model that can search is asked - Claude, or one behind "
+            "`llmHarness`: `on` or `off`",
+            ("find-gaps",), "on"),
     Setting("chapterDbSite", "The chapter database's address", ("ingest-movies",),
             "`https://chapterdb.plex.tv`", tuning=True),
     Setting("dvdCompareSite", "The disc database's address", ("ingest-movies",),
