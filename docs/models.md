@@ -1,12 +1,28 @@
 # Language models
 
 Several commands ask a language model for something: chapters from a
-transcript (`generate-chapters`, `convert-audio -a`, `convert-video`,
-`ingest-movies`, `ytdlp`), classifying what kind of audio a recording is before
-an online cover search (`concat-audio`, `convert-audio`), a book's cover where
-nothing else found one, or its chapter titles where its file names only number
-them (`concat-audio`). Each of those is a **task**, and each task picks from
-the models you have, by what it needs and what it would rather have.
+transcript (`generate-chapters`, `convert-audio -C`, `convert-video -C`,
+`ingest-movies`, `ytdlp`), host-read ads in RSS and site podcasts (`ytdlp`),
+a video's encoding profile from sampled frames (`convert-video -p auto`),
+classifying what kind of audio a recording is before an online cover search
+(`concat-audio`, `convert-audio`), picking a book's front cover among unnamed
+folder images, searching for a cover where nothing else found one
+(`concat-audio`, `convert-audio`), a book's chapter titles where its file
+names only number them, or a joined book's empty metadata tags
+(`concat-audio`), reading picture subtitles into text (`ingest-movies`), the
+MusicBrainz release of an album beets skipped (`ingest-music`), classifying
+recurring filename fragment candidates (`find-fragment-candidates`),
+web-checked gap notes for numbered and dated runs (`find-gaps`), report-only
+match suggestions for unmatched or ambiguous Letterboxd entries
+(`plex-letterboxd-sync`), an e-book's language where its metadata and text
+disagree or neither gives a confident answer (`read-library`), classifying
+e-book images as book content versus advertising (`ingest-books -d`), an
+advisory likely cause and next step for unexplained errors left in a run's
+error log (`error-triage`, controlled by `errorTriageLlm`), checking whether
+a small comic page has real content worth keeping (`convert-comics`), or
+whether a borderline PDF is a comic book (`convert-comics`,
+`content-census`). Each of those is a **task**, and each task picks from the
+models you have, by what it needs and what it would rather have.
 
 ## Your models
 
@@ -92,9 +108,26 @@ Run with `-v` to see which model each task took, and what it was taken for.
 | `chapters` | - | reasoning | balanced |
 | `chapters-instructed` (chapters with your `-P` instructions) | - | web, reasoning | precise |
 | `cover-search` | web | reasoning | balanced |
-| `cover-look` | vision | - | light |
+| `cover-look` (picking among web results or unnamed folder images) | vision | - | light |
 | `contents-search` | web | reasoning | balanced |
+| `subtitle-ocr` | vision | local, cheap | light |
+| `video-profile` (`convert-video -p auto`) | vision | - | light |
+| `music-search` | web | reasoning | balanced |
+| `podcast-ads` | - | reasoning | balanced |
+| `fragment-classify` | - | reasoning, web | balanced |
+| `gaps-check` | web | reasoning | balanced |
+| `letterboxd-match` | - | reasoning, web | balanced |
+| `book-language` | - | - | light |
+| `book-image-check` | vision | - | light |
+| `error-triage` (unexplained errors in a run's error log) | - | reasoning, local | balanced |
+| `comic-page-check` | vision | - | light |
+| `comic-pdf-judge` | vision | - | light |
+| `book-tags` | web | reasoning | balanced |
 | `audio-content` | - | - | light |
+
+`error-triage` prefers a local model because error logs carry library paths,
+and is strictly advisory: it never retries commands, deletes files or changes
+a run's exit code (turned off with `errorTriageLlm=off`).
 
 A task's models, best first:
 
@@ -108,8 +141,11 @@ A task's models, best first:
 A task that can do without what it prefers still runs on a model that lacks
 it: chapters with instructions are written without web search when no model
 can search. A task that needs something no model has is skipped (the cover
-search) or refused before any work (the chapter commands), saying which
-trait was missing.
+search, `convert-audio`'s per-track cover search whenever no vision model is
+available for `cover-look`, the music release lookup, the comic empty-page
+check, and `book-image-check`, which falls back to the fixed junk-name
+substrings) or refused before any work (the chapter commands and
+`convert-video -p auto`), saying which trait was missing.
 
 Overriding it:
 
@@ -123,9 +159,17 @@ models = ["claude", "qwen-local"]     # this ladder, in this order
 
 `llmLean` sets the lean of every task the file does not.
 
-## Renamed settings
+## Renamed and replaced settings
 
 The model settings used to be called `chapterLlm…` (`chapterLlmUrl`,
 `chapterLlmModel`, …). They are `llm…` now. The old names still work, in
 the environment and in the settings file, and each run warns about them
 until they are renamed.
+
+Picture-subtitle OCR used to have its own settings (`subtitleOcrUrl`,
+`subtitleOcrServe`, `subtitleOcrServeMib`, `subtitleOcrModel`,
+`subtitleOcrOptions`, `subtitleOcrJobs`). Move that vision model into
+`models.toml` (or the `llm…` settings), where the `subtitle-ocr` task picks
+it up. The old `subtitleOcr…` settings still work for the time being — they
+join the roster as a model named `subtitle-ocr` kept to that task — and each
+run warns about them until they are moved.

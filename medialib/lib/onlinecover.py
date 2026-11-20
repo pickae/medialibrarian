@@ -930,17 +930,25 @@ def track_wants_search(source: str, seconds: float,
 
 
 def track_subject(source: str, seconds: float, stereo: bool = False,
-                  probe: Callable[[str], dict] | None = None, *,
+                  probe: Callable[[str], dict] | None = None,
+                  tags: dict[str, str] | None = None, *,
                   meter_file: str = "",
                   classifiers: Sequence[Any] | None = None) -> Subject:
     """What a single track at ``source`` is looked for as: its stem, its tags
-    (read by ``probe``, ffprobe unless given), and its parent folder. When
-    content classification by a language model is enabled and available, its
-    verdict refines the content kind before the catalogue search runs (except
-    for a YouTube id)."""
+    (read by ``probe``, ffprobe unless given, or taken from ``tags``), and its
+    parent folder. When content classification by a language model is enabled
+    and available, its verdict refines the content kind before the catalogue
+    search runs (except for a YouTube id)."""
     stem = os.path.splitext(os.path.basename(source))[0]
-    tag_reader = probe or probe_tags
-    tags = tag_reader(source)
+    tag_reader: Callable[[str], dict]
+    if tags is None:
+        tag_reader = probe or probe_tags
+        tags = tag_reader(source)
+    else:
+        known_tags = tags
+
+        def tag_reader(_path: str) -> dict:
+            return known_tags
     subject = subject_for(
         stem, seconds,
         tag_titles=[tags.get("title", "")],
@@ -960,21 +968,31 @@ def track_subject(source: str, seconds: float, stereo: bool = False,
 def track_cover(source: str, seconds: float, tmp_dir: str,
                 search: CoverSearch | None = None,
                 has_cover: Callable[[str], bool] = has_embedded_cover,
-                stereo: bool = False, *,
-                meter_file: str = "",
+                stereo: bool = False,
+                meter_file: str = "", *,
                 classifiers: Sequence[Any] | None = None) -> None:
     """Fill ``<tmp_dir>/tempCover.jpg`` from online, where the source left it
     empty and the track is worth a search. ``apply_cover`` embeds it from
     there the way it embeds a cover pulled out of the source. ``stereo`` is
-    whether the run encodes it in stereo - see :func:`probable_content`."""
+    whether the run encodes it in stereo - see :func:`probable_content`.
+
+    Falls back to :func:`medialib.lib.aicover.track_cover` when the catalogue
+    search comes up empty; ``meter_file`` records what the model was asked."""
     temp_cover = os.path.join(tmp_dir, "tempCover.jpg")
     if os.path.isfile(temp_cover) or not enabled():
         return
     if not track_wants_search(source, seconds, has_cover):
         return
-    subject = track_subject(source, seconds, stereo,
+    tags = probe_tags(source)
+    subject = track_subject(source, seconds, stereo=stereo, tags=tags,
                             meter_file=meter_file, classifiers=classifiers)
     image = _search(subject, os.path.join(tmp_dir, "online"), search)
+    if not image:
+        from medialib.lib import aicover
+        image = aicover.track_cover(
+            source, seconds, os.path.join(tmp_dir, "model"),
+            stereo=stereo, subject=subject, meter_file=meter_file,
+            probe=lambda _path: tags)
     if not image:
         return
     if image.endswith(".jpg"):
