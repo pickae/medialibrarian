@@ -78,10 +78,10 @@ _SCRATCH = ("concat-audio", "content-census", "content-census-bi", "convert-and-
             "generate-chapters", "ingest-books", "ingest-movies", "ingest-music", "read-library",
             "transcribe-audio", "ytdlp")
 
-# Every command that asks a language model: for chapters, or concat-audio's
-# for a cover nothing else found.
+# Every command that asks a language model: for chapters, concat-audio's
+# cover search, or plex-letterboxd-sync's match suggestions.
 _AI_CHAPTERS = ("concat-audio", "convert-and-concat", "convert-audio", "convert-video",
-                "generate-chapters", "ingest-movies", "ytdlp")
+                "generate-chapters", "ingest-movies", "plex-letterboxd-sync", "ytdlp")
 
 SETTINGS: tuple[Setting, ...] = (
     # --- logins and keys
@@ -223,6 +223,13 @@ SETTINGS: tuple[Setting, ...] = (
             "every chapter. Only a model that can search is asked - Claude, or "
             "one behind `llmHarness`: `on` or `off`",
             ("concat-audio", "convert-and-concat"), "on"),
+    Setting("letterboxdMatchLlm", "Whether unmatched or ambiguous Letterboxd "
+            "entries are handed to a language model to suggest a Plex film or "
+            "TMDb id in the sync report only (the `letterboxd-match` task, see "
+            "docs/models.md): Letterboxd entry titles and years and candidate "
+            "Plex film titles, years and ids are sent to the model, and nothing "
+            "in Plex is changed from its answer: `on` or `off`",
+            ("plex-letterboxd-sync",), "on"),
     Setting("chapterDbSite", "The chapter database's address", ("ingest-movies",),
             "`https://chapterdb.plex.tv`", tuning=True),
     Setting("dvdCompareSite", "The disc database's address", ("ingest-movies",),
