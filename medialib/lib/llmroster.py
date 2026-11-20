@@ -51,7 +51,7 @@ from medialib.lib import llmclient, llmtraits, runlog, settings
 
 __all__ = ["MODELS_VARIABLE", "LEAN_VARIABLE", "LEANS", "Task", "TASKS", "CHAPTERS",
            "CHAPTERS_INSTRUCTED", "COVER_SEARCH", "COVER_LOOK", "CONTENTS_SEARCH",
-           "Roster",
+           "COMIC_PAGE_CHECK", "Roster",
            "RosterError", "load", "require", "optional", "chapters_task"]
 
 MODELS_VARIABLE = "llmModels"
@@ -95,9 +95,13 @@ COVER_LOOK = Task("cover-look", "look at the covers found and pick the "
 CONTENTS_SEARCH = Task("contents-search", "search the web for a book's table "
                        "of contents, to name the chapters its files only number",
                        requires=("web",), prefers=("reasoning",))
+COMIC_PAGE_CHECK = Task("comic-page-check", "check whether a very small comic "
+                        "page is truly blank or has content",
+                        requires=("vision",), lean="light")
 
 TASKS = {task.name: task for task in (CHAPTERS, CHAPTERS_INSTRUCTED,
-                                      COVER_SEARCH, COVER_LOOK, CONTENTS_SEARCH)}
+                                      COVER_SEARCH, COVER_LOOK, CONTENTS_SEARCH,
+                                      COMIC_PAGE_CHECK)}
 
 
 def chapters_task(instructions: str) -> Task:

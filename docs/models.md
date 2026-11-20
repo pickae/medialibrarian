@@ -2,10 +2,11 @@
 
 Several commands ask a language model for something: chapters from a
 transcript (`generate-chapters`, `convert-audio -a`, `convert-video`,
-`ingest-movies`, `ytdlp`), a book's cover where nothing else found one, or
-its chapter titles where its file names only number them (`concat-audio`).
-Each of those is a **task**, and each task picks from the
-models you have, by what it needs and what it would rather have.
+`ingest-movies`, `ytdlp`), a book's cover where nothing else found one or
+its chapter titles where its file names only number them (`concat-audio`),
+or whether a very small comic page is truly blank before it is dropped
+(`convert-comics`). Each of those is a **task**, and each task picks from
+the models you have, by what it needs and what it would rather have.
 
 ## Your models
 
@@ -93,6 +94,7 @@ Run with `-v` to see which model each task took, and what it was taken for.
 | `cover-search` | web | reasoning | balanced |
 | `cover-look` | vision | - | light |
 | `contents-search` | web | reasoning | balanced |
+| `comic-page-check` | vision | - | light |
 
 A task's models, best first:
 
@@ -106,8 +108,8 @@ A task's models, best first:
 A task that can do without what it prefers still runs on a model that lacks
 it: chapters with instructions are written without web search when no model
 can search. A task that needs something no model has is skipped (the cover
-search) or refused before any work (the chapter commands), saying which
-trait was missing.
+search, the comic empty-page check) or refused before any work (the chapter
+commands), saying which trait was missing.
 
 Overriding it:
 

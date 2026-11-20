@@ -78,10 +78,11 @@ _SCRATCH = ("concat-audio", "content-census", "content-census-bi", "convert-and-
             "generate-chapters", "ingest-books", "ingest-movies", "ingest-music", "read-library",
             "transcribe-audio", "ytdlp")
 
-# Every command that asks a language model: for chapters, or concat-audio's
-# for a cover nothing else found.
-_AI_CHAPTERS = ("concat-audio", "convert-and-concat", "convert-audio", "convert-video",
-                "generate-chapters", "ingest-movies", "ytdlp")
+# Every command that asks a language model: for chapters, concat-audio's cover
+# search, or convert-comics' small-page check.
+_AI_CHAPTERS = ("concat-audio", "convert-and-concat", "convert-audio",
+                "convert-comics", "convert-video", "generate-chapters",
+                "ingest-movies", "ytdlp")
 
 SETTINGS: tuple[Setting, ...] = (
     # --- logins and keys
@@ -342,6 +343,12 @@ SETTINGS: tuple[Setting, ...] = (
             "read", _COMICS),
     Setting("comicPdfJpegQuality", "The JPEG quality comic PDF pages are rendered at",
             _COMICS),
+    Setting("comicEmptyPageLlm", "Whether a comic page whose encode came out "
+            "under 10 KiB is shown to a vision model before it is dropped as "
+            "empty (the `comic-page-check` task, see docs/models.md): a small "
+            "rendered copy of the page is sent to the model, and any page it "
+            "is not confident is blank is kept: `on` or `off`",
+            ("convert-comics",), "on"),
     # --- reading books aloud
     Setting("narrationHome", "The ebook2audiobook checkout read-library drives; `-c` "
             "overrides it", _NARRATION, "`~/ebook2audiobook`"),

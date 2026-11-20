@@ -11,7 +11,7 @@ hold one large image per page — into a tree of `.cbz` archives of AVIF pages.
 | **Writes** | one `.cbz` per book in its mirrored parent folder: the same depth and roughly the same file count as the input, not one extra folder level per book |
 | **Input** | renamed in place when an archive wears the extension of another - a zip called `.cbr` becomes `.cbz` (`-k input` keeps the name); duplicate files removed, empty folders pruned |
 | **Reruns** | a `.cbz` left by an earlier run is skipped, so a grown library neither duplicates nor rewrites finished books |
-| **Network** | none |
+| **Network** | none, unless a hosted vision model is configured for `comic-page-check` (`comicEmptyPageLlm=off` turns it off) |
 
 ## Default behavior
 
@@ -20,7 +20,7 @@ With no options, a run:
 - writes pages as **AVIF** at quality 45, speed 4, colour at full resolution (4:4:4) (`-Q`, `-s`, `-u`)
 - **scales pages taller than 2960 px down** to that height (`-m`)
 - **trims light, plain margins off every page**, treating colours within 10% of the edge as margin (`-f`; the trim is what `-k` keeps in)
-- **drops blank pages** (what the trim ends with deciding, so `-k` keeps them in with it)
+- **drops blank pages** (what the trim ends with deciding, so `-k` keeps them in with it); when a vision model is configured, pages that encoded under 10 KiB are checked before they are dropped ([below](#empty-page-check))
 - **repackages a book of mostly starved pages** instead of re-encoding it ([below](#starved-scans))
 - inspects every PDF and skips one that is not a scanned comic ([below](#pdfs))
 
@@ -98,6 +98,25 @@ The decision is taken once for the whole book, because a `.cbz` whose pages are
 half AVIF and half JPEG is worse than either. Books repackaged this way are named
 in the closing report.
 
+## Empty-page check
+
+An AVIF page that encodes to less than 10 KiB is normally dropped as empty
+(unless `-k pages` is given). Because a sparse title page, a single line of
+text or a faint pencil drawing can also encode that small, `convert-comics`
+shows those few candidate pages to a vision model when one is configured (the
+`comic-page-check` task in [language models](../models.md), needing `vision`
+and leaning `light`):
+
+- **The model can only keep a page, never drop one.** Pages at or above 10 KiB
+  are never shown to it.
+- Each candidate page is rendered to a small JPEG (up to 1024×1024) for the
+  model. A page is dropped only when the model confidently answers that it is
+  blank; if it sees content, is unsure, or fails to answer, the page is kept.
+- With no vision model configured, or with `comicEmptyPageLlm=off`, the check
+  is skipped quietly and the existing size-only rule applies unchanged.
+- Model usage is recorded across the run and printed in the closing report when
+  any requests were made.
+
 ## Keeping everything (`-k`)
 
 **A run with `-k` takes nothing away.** The `-k` is given in parts - `pages`
@@ -126,4 +145,5 @@ rules:** [file safety](../file-safety.md) ·
 [stopping a run](../file-safety.md#stopping-a-run) ·
 [missing tools](../requirements.md#missing-tools-are-refused-up-front) ·
 [what a run prints](../output.md) ·
-[settings](../settings.md)
+[settings](../settings.md) ·
+[language models](../models.md)
