@@ -11,7 +11,7 @@ hold one large image per page — into a tree of `.cbz` archives of AVIF pages.
 | **Writes** | one `.cbz` per book in its mirrored parent folder: the same depth and roughly the same file count as the input, not one extra folder level per book |
 | **Input** | renamed in place when an archive wears the extension of another - a zip called `.cbr` becomes `.cbz` (`-k input` keeps the name); duplicate files removed, empty folders pruned |
 | **Reruns** | a `.cbz` left by an earlier run is skipped, so a grown library neither duplicates nor rewrites finished books |
-| **Network** | none |
+| **Network** | none unless a vision model is configured for borderline PDFs (`comicPdfLlm`) |
 
 ## Default behavior
 
@@ -65,10 +65,17 @@ container: its pages are rendered out at the resolution the PDF's own page
 images report, and everything after that is the archive path unchanged.
 
 Unlike an archive, a PDF does not announce that it *is* a comic, so every PDF is
-inspected first and only converted when nearly all of its pages hold exactly
-one image covering (nearly) the whole page. A magazine, a manual or a text
-e-book therefore does not get rasterised page by page into a large, unreadable
-`.cbz`: it is reported with the numbers it was judged on and left alone.
+inspected first and taken when nearly all of its pages hold exactly one image
+covering (nearly) the whole page. A PDF that misses that bar but is near it, or
+has zero matching pages at all (as digitally drawn comics and tiled scans do),
+is shown to a vision [model](../models.md) (2–3 rendered pages and the file
+name) when one is configured and `comicPdfLlm` is on. Only a confident `comic`
+verdict overrides the scan check; `magazine`, `text`, `other` or any error
+leaves it skipped. Verdicts are cached per file (path, size and modification
+time, under `comicPdfCache`) so `convert-comics` and `content-census` always
+agree without asking twice. A magazine, a manual or a text e-book therefore
+does not get rasterised page by page into a large, unreadable `.cbz`: it is
+reported with the numbers it was judged on and left alone.
 
 ## Colour
 

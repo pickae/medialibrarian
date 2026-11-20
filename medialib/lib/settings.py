@@ -41,8 +41,9 @@ import stat
 import sys
 from typing import NamedTuple
 
-__all__ = ["Setting", "SETTINGS", "INTERNAL", "SettingsError", "settings_file",
-           "shipped", "value", "load", "read_file", "shell_value", "page"]
+__all__ = ["Setting", "SETTINGS", "INTERNAL", "SettingsError", "config_home",
+           "cache_home", "settings_file", "shipped", "value", "load",
+           "read_file", "shell_value", "page"]
 
 # Where a run is told to look instead, for the suite - which must never read
 # the settings of the machine it runs on - and for anyone keeping two.
@@ -78,9 +79,11 @@ _SCRATCH = ("concat-audio", "content-census", "content-census-bi", "convert-and-
             "generate-chapters", "ingest-books", "ingest-movies", "ingest-music", "read-library",
             "transcribe-audio", "ytdlp")
 
-# Every command that asks a language model: for chapters, or concat-audio's
-# for a cover nothing else found.
-_AI_CHAPTERS = ("concat-audio", "convert-and-concat", "convert-audio", "convert-video",
+# Every command that asks a language model: for chapters, concat-audio's for
+# a cover nothing else found, or convert-comics and content-census for a PDF
+# that the image rule did not call a comic.
+_AI_CHAPTERS = ("concat-audio", "content-census", "convert-and-concat",
+                "convert-audio", "convert-comics", "convert-video",
                 "generate-chapters", "ingest-movies", "ytdlp")
 
 SETTINGS: tuple[Setting, ...] = (
@@ -342,6 +345,15 @@ SETTINGS: tuple[Setting, ...] = (
             "read", _COMICS),
     Setting("comicPdfJpegQuality", "The JPEG quality comic PDF pages are rendered at",
             _COMICS),
+    Setting("comicPdfLlm", "Whether a PDF that the one-image-per-page rule did not "
+            "call a comic - either near the threshold or with no single-image pages "
+            "at all - is judged by a vision model (the `comic-pdf-judge` task, see "
+            "docs/models.md): 2-3 rendered PDF pages and the file name are sent to "
+            "it, and the verdict is cached so convert-comics and content-census "
+            "agree: `on` or `off`", _COMICS, "on"),
+    Setting("comicPdfCache", "Where those vision verdicts for PDFs are cached, keyed "
+            "by each file's path, size and modification time", _COMICS,
+            "`comic-pdf-verdicts.json` in the cache directory", tuning=True),
     # --- reading books aloud
     Setting("narrationHome", "The ebook2audiobook checkout read-library drives; `-c` "
             "overrides it", _NARRATION, "`~/ebook2audiobook`"),
@@ -431,6 +443,23 @@ def config_home() -> str:
     file and the user's profile files live."""
     base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(
         os.path.expanduser("~"), ".config")
+    return os.path.join(base, "medialib")
+
+
+def cache_home() -> str:
+    """The medialib cache home: ``$XDG_CACHE_HOME/medialib`` where that is
+    set, otherwise the platform's per-user cache directory (``~/.cache``,
+    ``~/Library/Caches`` on macOS, ``%LOCALAPPDATA%`` on Windows)."""
+    xdg = os.environ.get("XDG_CACHE_HOME", "").strip()
+    if xdg:
+        return os.path.join(xdg, "medialib")
+    if os.name == "nt":
+        local = os.environ.get("LOCALAPPDATA", "").strip()
+        base = local or os.path.join(os.path.expanduser("~"), ".cache")
+    elif sys.platform == "darwin":
+        base = os.path.join(os.path.expanduser("~"), "Library", "Caches")
+    else:
+        base = os.path.join(os.path.expanduser("~"), ".cache")
     return os.path.join(base, "medialib")
 
 

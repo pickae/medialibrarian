@@ -181,6 +181,8 @@ _STATE_KNOBS = (
     "ERROR_LOG_STARTED",
     "ERROR_LOG_ITEM",
     "ERROR_LOG_INPUT",
+    # Where workers record vision-model usage when judging borderline PDFs.
+    "COMIC_PDF_METER",
 )
 
 
@@ -319,6 +321,10 @@ def private_workspace(tmp_path_factory, monkeypatch):
     # Nor is a language model asked for one: a case that turns the search
     # back on would otherwise reach the model the machine's settings name.
     monkeypatch.setenv("coverSearchLlm", "off")
+    # Nor is a vision model asked about borderline PDFs, and any case that
+    # turns it back on keeps its verdict cache inside its own scratch folder.
+    monkeypatch.setenv("comicPdfLlm", "off")
+    monkeypatch.setenv("comicPdfCache", str(scratch / "comic-pdf-verdicts.json"))
     # Nor the machine's own roster of models: a case that asks the roster
     # gets the models it set up itself, or none.
     monkeypatch.setenv("llmModels", str(scratch / "no-models-file"))
