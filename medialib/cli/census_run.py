@@ -15,11 +15,13 @@ import sys
 
 from medialib import commands
 from medialib.lib import (
+    aicomicpdf,
     census,
     contentcensus,
     enums,
     ffmpegselect,
     imagemagick,
+    modelmeter,
     ramscratch,
     runcontext,
     runlog,
@@ -770,6 +772,8 @@ def run(arguments, depth, out_dir, run_bi, separator, extension,
                           "this run.\nNothing was changed.\n")
         results = os.path.join(scratch, "results")
         os.makedirs(results, exist_ok=True)
+        runcontext.settle(aicomicpdf.METER_VARIABLE,
+                          os.path.join(scratch, "comic-pdf-meter"))
 
         # The flag is a FILE rather than a variable, because the workers are
         # separate processes and a variable one of them sets is one nobody else
@@ -874,6 +878,13 @@ def _summarise(state, worker_roots, results, run_bi, script_dir, total):
         log("in at least one row (a .tsv has no way to quote one). Use the "
             "default .csv to")
         log("keep such paths exactly as they are.")
+
+    meter_file = runcontext.get(aicomicpdf.METER_VARIABLE, "")
+    if meter_file:
+        spans, tally = modelmeter.gathered(meter_file)
+        if tally.requests > 1:
+            log("Comic PDF model over the run: "
+                + modelmeter.rate_line("all", spans.seconds, tally))
 
     if run_bi:
         _build_cubes(reports, written, interrupted, script_dir)

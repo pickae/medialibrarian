@@ -55,6 +55,7 @@ __all__ = [
     "words",
     "judge",
     "probe",
+    "probe_opening",
     "commentary_names",
 ]
 
@@ -192,19 +193,18 @@ def judge(main: Measure, suspect: Measure) -> Verdict:
     return Verdict(UNSURE, why)
 
 
-def probe(movie: str, main: AudioTrack, others: list[AudioTrack],
-          whisper: dict) -> tuple[dict[str, Measure], str]:
-    """The measures of ``main`` and every one of ``others``, by track id, with
-    "" - or ({}, why not). ``whisper`` is the run's settled whisper; the
-    multilingual model is the one used, as the language is part of the
-    answer."""
-    tracks = [main] + others
+def _run_probe(movie: str, tracks: list[AudioTrack], whisper: dict, *,
+               seconds: int, windows: tuple[float, ...]) -> tuple[dict[str, Measure], str]:
+    """Run :data:`PROBE_COMMAND` once over ``tracks`` at the requested
+    fractional ``windows`` of ``seconds`` each."""
+    if not tracks:
+        return {}, ""
     argv = list(PROBE_COMMAND) + [
         "--model", whisper["modelMulti"], "--device", whisper["device"],
         "--compute_type", whisper["computeType"],
         "--threads", str(whisper["threads"]),
-        "--seconds", str(PROBE_SECONDS)]
-    for at in PROBE_WINDOWS:
+        "--seconds", str(seconds)]
+    for at in windows:
         argv += ["--at", str(at)]
     argv += [movie] + [str(track.audio_index) for track in tracks]
     try:
@@ -227,6 +227,24 @@ def probe(movie: str, main: AudioTrack, others: list[AudioTrack],
     except (ValueError, KeyError, TypeError):
         return {}, "the probe's answer could not be read"
     return measures, ""
+
+
+def probe(movie: str, main: AudioTrack, others: list[AudioTrack],
+          whisper: dict) -> tuple[dict[str, Measure], str]:
+    """The measures of ``main`` and every one of ``others``, by track id, with
+    "" - or ({}, why not). ``whisper`` is the run's settled whisper; the
+    multilingual model is the one used, as the language is part of the
+    answer."""
+    return _run_probe(movie, [main] + others, whisper,
+                      seconds=PROBE_SECONDS, windows=PROBE_WINDOWS)
+
+
+def probe_opening(movie: str, tracks: list[AudioTrack], whisper: dict, *,
+                  seconds: int = 300) -> tuple[dict[str, Measure], str]:
+    """Transcribe the opening ``seconds`` (default 5 minutes) of each audio
+    track in ``tracks`` in a single :data:`PROBE_COMMAND` invocation."""
+    return _run_probe(movie, list(tracks), whisper,
+                      seconds=seconds, windows=(0.0,))
 
 
 def commentary_names(audio: list[AudioTrack], found: list[str]) -> dict:

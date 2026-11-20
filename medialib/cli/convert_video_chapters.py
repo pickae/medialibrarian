@@ -139,14 +139,16 @@ def candidates(streams: list[dict]) -> list[Candidate]:
                     and subtitletracks.subtitle_role(
                         name, forced=bool(flags.get("forced")),
                         hearing_impaired=bool(flags.get("hearing_impaired")),
-                        commentary=bool(flags.get("comment"))) == "full"):
+                        commentary=bool(flags.get("comment")),
+                        language=language, allow_llm=True) == "full"):
                 subtitles.append(Candidate("subtitle", subtitle_index,
                                            language, name))
             subtitle_index += 1
         elif kind == "audio":
             if audiotracks.is_main(
                     name, commentary=bool(flags.get("comment")),
-                    visual_impaired=bool(flags.get("visual_impaired"))):
+                    visual_impaired=bool(flags.get("visual_impaired")),
+                    language=language, allow_llm=True):
                 audio.append(Candidate("audio", audio_index, language, name))
             audio_index += 1
     return subtitles + audio
@@ -255,6 +257,15 @@ def chapter(source: str, directory: str, llm, label: str, script_dir: str,
         if candidate.kind == "subtitle":
             cues = _subtitle_cues(source, candidate, work, label, disk)
             if enough_dialogue(cues, duration):
+                role = subtitletracks.refine_role(
+                    "full", cues=len(cues),
+                    texts=[cue.text for cue in cues],
+                    name=candidate.name, language=candidate.language)
+                if role in ("commentary", "forced"):
+                    log("Passed over the %s, classified as %s: %s"
+                        % (what, role, label))
+                    cues = []
+                    continue
                 log("Chaptering from the %s: %s" % (what, label))
                 break
         else:

@@ -32,6 +32,7 @@ from typing import NamedTuple
 
 from medialib import commands
 from medialib.lib import (
+    aibonuscategory,
     audiotracks,
     bitrates,
     cleannamesindividually,
@@ -39,12 +40,15 @@ from medialib.lib import (
     commentarytranscription,
     diskturn,
     durationcheck,
+    dvdcompare,
     enums,
     filmrecord,
     languages,
+    llmroster,
     objectaudio,
     plexnames,
     ramscratch,
+    runlog,
     safety,
     subtitleocr,
     subtitletracks,
@@ -177,7 +181,6 @@ MAX_WHISPER_SYNC_OFFSET = "5"
 # order - the first matching row wins.
 # https://support.plex.tv/articles/local-files-for-trailers-and-extras/
 BONUS_CATEGORIES = (
-    ("Shorts", ("short",)),
     ("Behind The Scenes", ("behind the scene", "behind-the-scene", "making of",
                            "making-of", "inside", "revealed", "filming",
                            "backstage")),
@@ -185,10 +188,37 @@ BONUS_CATEGORIES = (
                         "alternate")),
     ("Interviews", ("interview", "conversation", "talk", "chat", "discuss",
                     "q&a", "press conference", "panel")),
-    ("Trailers", ("trailer", "teaser", "spot", "promo")),
+    ("Shorts", ("short",)),
+    ("Trailers", ("trailer", "teaser", "preview", "spot", "promo")),
     ("Scenes", ("test", "blooper", "outtake", "gag", "reel")),
     ("Other", ("review",)),
 )
+
+# Longer words that contain a short bonus keyword as a false substring.
+# Blanked out before checking that keyword so run-together names like "TVSpot"
+# and "Screentest" still match while "Spotlight", "Contest" or "Chateau" do not.
+_BONUS_EXCLUSIONS: dict[str, tuple[str, ...]] = {
+    "talk": ("stalk",),
+    "chat": ("chateau",),
+    "spot": ("spotlight", "hotspot", "despot", "spotting", "spotted",
+             "spotless"),
+    "promo": ("promotional",),
+    "test": ("contest", "protest", "detest", "attest", "latest", "greatest",
+             "hottest", "fastest", "brightest", "darkest", "sweetest",
+             "smartest", "shortest", "fittest", "slightest", "tightest",
+             "neatest", "politest", "testament", "testimon", "testif",
+             "intestin"),
+    "gag": ("engag", "luggage", "baggage", "mortgage"),
+    "reel": ("freelanc",),
+    "review": ("preview",),
+}
+
+# "short" is matched as a standalone word (singular or plural) so
+# "Shortened Opening" does not land in Shorts while "A Short", "Animated
+# Shorts" and "Short_Film" do.
+_SHORT_WORD = re.compile(r"(?<![a-z])shorts?(?![a-z])")
+
+_TRAILING_YEAR = re.compile(r"\s*\(?([12][0-9]{3})\)?\s*$")
 
 # The folder names that hold bonus material rather than a film: every category
 # above, plus Featurettes - the folder extras land in before they are sorted.
@@ -341,6 +371,21 @@ def audio_stream_index(track: int, types: list) -> int:
                               else ""))
 
 
+def _keyword_matches(keyword: str, folded: str) -> bool:
+    """Whether ``keyword`` matches ``folded``, after blanking false-positive
+    superstrings for short keywords and anchoring ``short`` as a whole word."""
+    if keyword == "short":
+        return _SHORT_WORD.search(folded) is not None
+    exclusions = _BONUS_EXCLUSIONS.get(keyword)
+    if exclusions:
+        cleaned = folded
+        for word in exclusions:
+            if word in cleaned:
+                cleaned = cleaned.replace(word, " ")
+        return keyword in cleaned
+    return keyword in folded
+
+
 def bonus_category_for(name: str) -> str:
     """Which Plex bonus folder an extra belongs in, or "" for one that stays put.
 
@@ -348,9 +393,23 @@ def bonus_category_for(name: str) -> str:
     """
     folded = enums.shell_lower(name)
     for subfolder, keywords in BONUS_CATEGORIES:
-        if any(keyword in folded for keyword in keywords):
+        if any(_keyword_matches(keyword, folded) for keyword in keywords):
             return subfolder
     return ""
+
+
+def _film_title_year(folder: str) -> tuple[str, str]:
+    """The film's title and 4-digit year read from its folder name, even before
+    ``rename_folders`` has cleaned dots and brackets."""
+    base, _tag = plexnames.untagged_base(os.path.basename(folder))
+    year = plexnames.year_of(base)
+    if year:
+        return plexnames.untitled_base(base, year).strip(), year
+    cleaned = " ".join(base.replace(".", " ").replace("_", " ").split())
+    match = _TRAILING_YEAR.search(cleaned)
+    if match:
+        return cleaned[:match.start()].strip(), match.group(1)
+    return cleaned, ""
 
 
 def kept_languages() -> tuple:
@@ -948,7 +1007,8 @@ def _follow_sidecars(folder: str, old_stem: str, new_stem: str, skips) -> None:
                            skips)
 
 
-def extras_into_subfolders(root: str, skips) -> None:
+def extras_into_subfolders(root: str, skips, *, script_dir: str = "",
+                           meter_file: str = "", models=None) -> None:
     """``extrasIntoSubfolders``: bonus material sorted into the folders Plex
     recognises.
 
@@ -957,8 +1017,17 @@ def extras_into_subfolders(root: str, skips) -> None:
     is the movie folder and holds the film itself, while a movie folder's parent
     is a library or box-set folder and holds no film directly. That also keeps a
     box set working, which a fixed depth would not.
+
+    Each file is classified first by :func:`bonus_category_for`. Only when no
+    keyword matches is :func:`aibonuscategory.classify` asked as an optional
+    light-model fallback, using cached dvdcompare listings when already on
+    disk under ``script_dir``.
     """
     root = root.rstrip("/")
+    categories = tuple(name for name, _keywords in BONUS_CATEGORIES)
+    dvd_dir = dvdcompare.directory(script_dir) if script_dir else ""
+    resolved_models = models
+    models_checked = models is not None
     for folder in _folders_below(root, min_depth=2):
         parent = os.path.dirname(folder)
         if not any(enums.lower_extension_of(name) == "mkv"
@@ -990,8 +1059,36 @@ def extras_into_subfolders(root: str, skips) -> None:
             _rename_quiet(nested, destination)
         _remove_empty_below(folder)
 
+        disc_extras: list[str] | None = None
+        film_title = ""
+        film_year = ""
         for name in sorted(_names_in(folder)):
             subfolder = bonus_category_for(name)
+            if not subfolder and aibonuscategory.enabled():
+                if not models_checked:
+                    resolved_models, why_none = llmroster.optional(
+                        llmroster.BONUS_CATEGORY)
+                    models_checked = True
+                    if not resolved_models:
+                        runlog.detail(
+                            "  No model asked for unmatched extras: %s"
+                            % why_none)
+                if resolved_models:
+                    if disc_extras is None:
+                        film_title, film_year = _film_title_year(parent)
+                        disc_extras = (
+                            dvdcompare.cached_extras(
+                                dvd_dir, film_title, film_year)
+                            if dvd_dir and film_title and film_year else [])
+                    subfolder = aibonuscategory.classify(
+                        name,
+                        film_title=film_title,
+                        film_year=film_year,
+                        disc_extras=disc_extras,
+                        categories=categories,
+                        models=resolved_models,
+                        meter_file=meter_file,
+                    )
             if not subfolder:
                 continue
             category_dir = os.path.join(parent, subfolder)
@@ -1647,8 +1744,13 @@ def subtitle_roles(tracks: list) -> dict:
         reference = max((other.cues for other in subtitles
                          if other is not track
                          and other.subtitle_role != "commentary"), default=0)
+        flagged = (track.forced == "true"
+                   or track.hearing_impaired == "true"
+                   or track.commentary == "true")
         roles[track.id] = subtitletracks.refine_role(
-            track.subtitle_role, track.cues, reference)
+            track.subtitle_role, track.cues, reference,
+            name="" if track.name == "null" else track.name,
+            language=track.language, flagged=flagged)
     return roles
 
 
@@ -1664,18 +1766,24 @@ def subtitle_role_edits(tracks: list, texts=None) -> dict:
     """The subtitle tracks whose role the file says wrong, as {track id:
     (role it says, role it is)}: the role :func:`subtitle_roles` measures,
     and for a text track the ``texts`` map holds - {track id: its cues' text}
-    - the SDH its text reads as. A commentary is never changed, nor changed
-    into."""
+    - the SDH (or borderline role) its text reads as. A commentary is never
+    changed, nor changed into."""
     texts = texts or {}
-    roles = subtitle_roles(tracks)
+    subtitles = [track for track in tracks if track.is_subtitle]
     edits = {}
-    for track in tracks:
-        if not track.is_subtitle:
-            continue
-        said, measured = track.subtitle_role, roles[track.id]
-        if measured == "full" and track.id in texts:
-            measured = subtitletracks.refine_role(measured,
-                                                  texts=texts[track.id])
+    for track in subtitles:
+        reference = max((other.cues for other in subtitles
+                         if other is not track
+                         and other.subtitle_role != "commentary"), default=0)
+        flagged = (track.forced == "true"
+                   or track.hearing_impaired == "true"
+                   or track.commentary == "true")
+        said = track.subtitle_role
+        measured = subtitletracks.refine_role(
+            said, track.cues, reference,
+            texts=texts.get(track.id),
+            name="" if track.name == "null" else track.name,
+            language=track.language, flagged=flagged)
         if said != measured and "commentary" not in (said, measured):
             edits[track.id] = (said, measured)
     return edits
@@ -1856,7 +1964,10 @@ def gather_downloaded_subtitles(base: str, tracks: list, say=None) -> list:
                     or not _size_of(srt):
                 continue
             role = named if named != "full" else subtitletracks.refine_role(
-                "full", texts=subtitletracks.cue_texts(srt))
+                "full", texts=subtitletracks.cue_texts(srt),
+                language=row.code2)
+            if role not in OCR_ROLES:
+                role = "full"
             if any(_is_text_subtitle_of(track, row.code2, role)
                    for track in tracks):
                 say("  %s%s subtitle already a text track in the file, not "
