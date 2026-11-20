@@ -319,6 +319,15 @@ def private_workspace(tmp_path_factory, monkeypatch):
     # Nor is a language model asked for one: a case that turns the search
     # back on would otherwise reach the model the machine's settings name.
     monkeypatch.setenv("coverSearchLlm", "off")
+    # Nor is a language model asked to find ad reads in RSS podcasts.
+    monkeypatch.setenv("podcastAdsLlm", "off")
+    monkeypatch.setenv("podcastAdsCut", "off")
+    # Nor to classify fragment candidates: existing CLI cases stay deterministic.
+    monkeypatch.setenv("fragmentCandidatesLlm", "off")
+    # Nor for find-gaps's web-checked gap notes.
+    monkeypatch.setenv("findGapsLlm", "off")
+    # Nor are unmatched or ambiguous Letterboxd entries handed to a model.
+    monkeypatch.setenv("letterboxdMatchLlm", "off")
     # Nor for a book's language when metadata and text disagree or say nothing.
     monkeypatch.setenv("bookLanguageLlm", "off")
     # Nor the machine's own roster of models: a case that asks the roster

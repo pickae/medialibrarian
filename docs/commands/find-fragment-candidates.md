@@ -9,9 +9,9 @@ about them — so they can be reviewed and added to `data/fragments.txt`.
 | At a glance | |
 | --- | --- |
 | **Takes** | a folder, or a tree file that already exists |
-| **Writes** | the report, and for a folder its `.tree` ([below](#default-behavior)) |
-| **Input** | nothing is renamed: it reads names only |
-| **Network** | none |
+| **Writes** | the report, for a folder its `.tree` ([below](#default-behavior)), and when a language model classifies the candidates a separate proposal diff under `logs/` ([below](#classifying-candidates-with-a-language-model)) |
+| **Input** | nothing is renamed: it reads names only, and never edits `data/fragments.txt` directly |
+| **Network** | none, unless `fragmentCandidatesLlm` is `on` and a hosted or web-searching model is configured |
 
 ## Default behavior
 
@@ -32,6 +32,32 @@ is most of what a first run would otherwise show; `-m 1` lists every candidate.
 
 The fragments it finds are what [`clean-folder-structure`](clean-folder-structure.md#fragments)
 and `ingest-movies` remove.
+
+## Classifying candidates with a language model
+
+When a language model is configured (see [`docs/models.md`](../models.md), task
+`fragment-classify`) and `fragmentCandidatesLlm` is `on` (the default), the
+candidates not already in `data/fragments.txt` — together with sample
+folder/file names carrying each token and the existing sections of
+`data/fragments.txt` — are sent to the model.
+
+The model sorts each candidate into:
+
+- `release_group` — scene, P2P, ripper or encoder group tags
+- `quality_or_source` — resolution, codec, source or rip tags
+- `publisher` — recurring publisher, platform or site watermark tags
+- `title_word` — real title, series, creator or ordinary words (never proposed)
+- `unsure` — ambiguous tokens (never proposed)
+
+`data/fragments.txt` is **never edited directly**. Any proposed additions are
+written as a separate proposal and unified diff file under `logs/`
+(`logs/find-fragment-candidates-proposals-<timestamp>.diff`) for you to review
+and merge. Every model decision (proposed and excluded) and the proposal file
+path are printed in the run's output. Invented tokens, tokens already in
+`data/fragments.txt`, `title_word` and `unsure` entries are never proposed.
+
+Set `fragmentCandidatesLlm=off` (or pass `-x fragmentCandidatesLlm=off`) to
+write the candidate report without asking a model.
 
 ---
 

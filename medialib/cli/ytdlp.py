@@ -23,12 +23,14 @@ from typing import Any
 
 from medialib import commands
 from medialib.lib import (
+    aipodcastads,
     clioptions,
     downloadcleanup,
     feedtranscripts,
     ffmpegselect,
     languages,
     llmroster,
+    modelmeter,
     podcastfeeds,
     ramscratch,
     runcontext,
@@ -336,6 +338,10 @@ class Run:
         runlog.detail("%s: %s"
                       % (podcast, podcastfeeds.render_call(argv,
                                                             self.platform)))
+
+        if self.status_dir:
+            _write(os.path.join(self.status_dir, "%d.profile" % index),
+                   profile + "\n")
 
         manifest = os.path.join(self.manifest_dir, "feed%d" % index)
         block_flag = os.path.join(self.status_dir, "blocked." + provider)
@@ -692,13 +698,25 @@ class LibraryQueue:
                    if os.path.isdir(os.path.join(staging, subdir))]
         log("Library copy, batch %d: %d episode(s) of %s"
             % (self.batch, sum(count for _subdir, count in feeds), ", ".join(present)))
+        profile = _kind_profile(self.ingest, kind)
+        check_ads = (aipodcastads.enabled() and aipodcastads.eligible_profile(profile)
+                     and bool(present))
+        out_dirs = [os.path.join(self.ingest["root"], subdir) for subdir in present]
+        before_ads = _snapshot_files(out_dirs) if check_ads else {}
         only = [argument for subdir in present for argument in ("-O", subdir)]
-        if present and not safety.abort_requested() and commands.run_command(
-                "convert-audio",
-                self.ingest["args"][kind].split() + self.ingest.get("prompt", [])
-                + only + [staging, self.ingest["root"]],
-                script_dir=state.script_dir).returncode != 0:
-            failures.append(kind + " audio (%s)" % ", ".join(present))
+        converted_ok = False
+        if present and not safety.abort_requested():
+            if commands.run_command(
+                    "convert-audio",
+                    self.ingest["args"][kind].split() + self.ingest.get("prompt", [])
+                    + only + [staging, self.ingest["root"]],
+                    script_dir=state.script_dir).returncode != 0:
+                failures.append(kind + " audio (%s)" % ", ".join(present))
+            else:
+                converted_ok = True
+        if check_ads and converted_ok and not safety.abort_requested():
+            _process_ad_reads_for_files(
+                state, _new_or_changed(before_ads, out_dirs), profile)
         if failures:
             _write(os.path.join(state.status_dir, LIBRARY_FAILED + str(self.batch)),
                    "".join(failure + "\n" for failure in failures))
@@ -708,6 +726,107 @@ class LibraryQueue:
 # (with its figures), and the steps of a batch that failed.
 TIDIED = "tidied."
 LIBRARY_FAILED = "libraryFailed."
+AD_READS_METER = "podcastAds.meter"
+AD_READS_DONE = "podcastAds.done"
+
+
+def _kind_profile(ingest: dict, kind: str) -> str:
+    """The podcast profile that feeds a staging ``kind`` (e.g. Speech -> rssAudio)."""
+    mapped = ingest.get("profileForKind", {}).get(kind, "")
+    if mapped:
+        return mapped
+    for profile in podcastfeeds.PODCAST_PROFILES:
+        spec_line = podcastfeeds.podcast_profile_ingest(profile)
+        if spec_line and spec_line.partition(" ")[0] == kind:
+            return profile
+    return ""
+
+
+def _snapshot_files(roots) -> dict[str, int]:
+    """Current ``{abspath: mtime_ns}`` for every file under ``roots``."""
+    found: dict[str, int] = {}
+    for root in roots:
+        if not os.path.isdir(root):
+            continue
+        for parent, _dirs, files in os.walk(root):
+            for name in files:
+                path = os.path.abspath(os.path.join(parent, name))
+                try:
+                    found[path] = os.stat(path).st_mtime_ns
+                except OSError:
+                    pass
+    return found
+
+
+def _new_or_changed(before: dict[str, int], roots) -> list[str]:
+    """Files under ``roots`` created or modified since ``before``."""
+    after = _snapshot_files(roots)
+    return sorted(path for path, mtime in after.items()
+                  if before.get(path) != mtime)
+
+
+def _ad_checked_set(status_dir: str) -> set[str]:
+    if not status_dir:
+        return set()
+    try:
+        with open(os.path.join(status_dir, AD_READS_DONE), encoding="utf-8") as handle:
+            return {line.strip() for line in handle if line.strip()}
+    except OSError:
+        return set()
+
+
+def _record_ad_checked(status_dir: str, path: str) -> None:
+    if not status_dir:
+        return
+    try:
+        with open(os.path.join(status_dir, AD_READS_DONE), "a", encoding="utf-8") as handle:
+            handle.write(os.path.abspath(path) + "\n")
+    except OSError:
+        pass
+
+
+def _process_ad_reads_for_files(state, files, profile: str) -> None:
+    """Run podcast ad-read detection on each eligible episode not yet checked."""
+    if not files or not aipodcastads.enabled() or not aipodcastads.eligible_profile(profile):
+        return
+    meter_file = os.path.join(state.status_dir, AD_READS_METER) if state.status_dir else ""
+    done = _ad_checked_set(state.status_dir)
+    for path in files:
+        if safety.abort_requested():
+            return
+        full = os.path.abspath(path)
+        if full in done or not os.path.isfile(full):
+            continue
+        aipodcastads.process_episode(
+            full, profile, meter_file=meter_file, tmp_dir=state.status_dir)
+        _record_ad_checked(state.status_dir, full)
+        done.add(full)
+
+
+def _process_non_ingested_ad_reads(state) -> None:
+    """Check downloaded episodes of eligible non-ingested feeds (such as
+    rssVideo, siteVideo, or rssAudio without -i) that carry a transcript."""
+    if (not state.native_manifest_dir or not state.status_dir
+            or not aipodcastads.enabled()):
+        return
+    for name in sorted(os.listdir(state.manifest_dir), key=os.fsencode):
+        if safety.abort_requested():
+            return
+        if not name.startswith("feed") or not name[4:].isdigit():
+            continue
+        profile_file = os.path.join(state.status_dir, name[4:] + ".profile")
+        try:
+            with open(profile_file, encoding="utf-8") as handle:
+                profile = handle.read().strip()
+        except OSError:
+            continue
+        if profile in state.staging_for_profile or not aipodcastads.eligible_profile(profile):
+            continue
+        manifest = os.path.join(state.manifest_dir, name)
+        episodes = [path for path in podcastfeeds.manifest_paths(manifest)
+                    if os.path.isfile(path)]
+        if episodes:
+            _process_ad_reads_for_files(state, episodes, profile)
 
 
 def _write(path: str, text: str) -> None:
@@ -1201,6 +1320,7 @@ def _plan_ingest(output_path: str, profiles, ingests, tables, script_dir: str):
         "root": os.path.join(base, "Ingested"),
         "args": {},
         "staging": {},
+        "profileForKind": {},
         "kinds": [],
         "carried": [],
         "notIngested": [],
@@ -1220,6 +1340,7 @@ def _plan_ingest(output_path: str, profiles, ingests, tables, script_dir: str):
             all_kinds.append(kind)
         plan["args"][kind] = arguments
         plan["staging"][kind] = os.path.join(base, "Staging", kind)
+        plan["profileForKind"].setdefault(kind, profile)
 
     # A table's #!ingest line replaces what its profile's conversion is run
     # with. The staging folder it downloads into is the profile's own, and a
@@ -1454,6 +1575,11 @@ def _announce(state, tables, feed_count, ingest, native_output) -> None:
                 "%s, else en" % ",".join(state.spoken))
             if state.options.get("instructions"):
                 log("Chapter instructions: " + state.options["instructions"])
+            if aipodcastads.enabled():
+                mode = ("cut out (%s=on)" % aipodcastads.CUT_VARIABLE
+                        if aipodcastads.cut_enabled()
+                        else "marked as skippable chapters")
+                log("RSS/site podcast ad reads: " + mode)
         if ingest["notIngested"]:
             log("Not converted, downloaded straight to %s: %s"
                 % (native_output, " ".join(ingest["notIngested"])))
@@ -1566,6 +1692,16 @@ def _report(state, ingest, started, feed_count) -> int:
         # encoding at that moment is the opposite of what was asked.
         log("Interrupted before the library copy was finished - the downloads "
             "are in %s/Staging, -i again ingests them" % ingest["base"])
+
+    if not interrupted:
+        _process_non_ingested_ad_reads(state)
+
+    if state.status_dir:
+        ad_spans, ad_tally = modelmeter.gathered(
+            os.path.join(state.status_dir, AD_READS_METER))
+        if ad_tally.requests:
+            log(modelmeter.rate_line(aipodcastads.PURPOSE, ad_spans.seconds,
+                                     ad_tally))
 
     _skips(skipped_inactive, skipped_unmatched, options["match"])
 
@@ -1694,12 +1830,18 @@ def _build_library(state, ingest):
             failures.append(kind + " names")
         log("Converting %s into %s (%s)" % (staging, ingest["root"],
                                             ingest["args"][kind]))
+        profile = _kind_profile(ingest, kind)
+        check_ads = aipodcastads.enabled() and aipodcastads.eligible_profile(profile)
+        before_ads = _snapshot_files([ingest["root"]]) if check_ads else {}
         if commands.run_command(
                 "convert-audio",
                 ingest["args"][kind].split() + ingest.get("prompt", [])
                 + [staging, ingest["root"]],
                 script_dir=state.script_dir).returncode != 0:
             failures.append(kind + " audio")
+        elif check_ads and not safety.abort_requested():
+            _process_ad_reads_for_files(
+                state, _new_or_changed(before_ads, [ingest["root"]]), profile)
     if failures:
         log("The library copy did not finish: " + " ".join(failures))
     elif ingested > 0:
