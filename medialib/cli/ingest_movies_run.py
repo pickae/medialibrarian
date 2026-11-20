@@ -3363,9 +3363,10 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
     log("Phase: checking for folders without a movie")
     check_folders(root)
 
-    if state.skips.skips:
+    skips = getattr(state, "skips", None)
+    if skips is not None and skips.skips:
         proposal_reasons.extend(
-            ailistproposals.reasons_from_skips(state.skips.skips, root))
+            ailistproposals.reasons_from_skips(skips.skips, root))
     if proposal_reasons:
         ailistproposals.propose(proposal_reasons, state.script_dir, log=log)
 
