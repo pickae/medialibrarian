@@ -66,6 +66,16 @@ titles are taken only when it gives exactly one for every chapter. Any other
 count means the files aren't cut where the book's chapters are, so the
 numbers stay. `contentsSearchLlm=off` skips this step.
 
+Among image files in the input folder, cover names win first (`cover` +
+`front`, `front`, `cover` without `back`, `inlay`, `folder`, `back`, in
+decreasing order). When none of those match and the folder holds two or more
+images (for instance `scan01.jpg`, `cd.jpg`, `booklet3.jpg`), a
+[language model](../models.md) that **sees pictures** — the `cover-look` task
+— is shown those images with their file names and the folder's name and picks
+which one is the front cover; when none looks like one, no vision model is set
+up, or `coverLookLlm=off`, the first image found is taken. Those image files
+and their names go to that model, so use one you trust with them.
+
 A book that none of the three gave a cover is looked for **online**. What it
 probably is decides where: a name ending in a `[YouTube id]` (yt-dlp's
 default) is a YouTube podcast, and that video's own thumbnail is fetched; a
