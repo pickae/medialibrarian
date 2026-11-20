@@ -120,6 +120,16 @@ models = ["small-local", "claude"]
         assert _names(_roster(tmp_path, text).ladder(llmroster.COVER_SEARCH)) == [
             "claude", "small-local"]
 
+    def test_fragment_classify_prefers_reasoning_and_web_with_balanced_lean(
+            self, tmp_path):
+        # Claude has both reasoning and web; big-local has reasoning only;
+        # small-local has neither, and is still kept because nothing is required.
+        assert llmroster.FRAGMENT_CLASSIFY.name in llmroster.TASKS
+        assert llmroster.FRAGMENT_CLASSIFY.prefers == ("reasoning", "web")
+        assert llmroster.FRAGMENT_CLASSIFY.lean == "balanced"
+        assert _names(_roster(tmp_path).ladder(llmroster.FRAGMENT_CLASSIFY)) == [
+            "claude", "big-local", "small-local"]
+
 
 class TestTheSources:
     def test_the_single_model_settings_come_after_the_file(self, tmp_path, monkeypatch):

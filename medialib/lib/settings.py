@@ -78,10 +78,10 @@ _SCRATCH = ("concat-audio", "content-census", "content-census-bi", "convert-and-
             "generate-chapters", "ingest-books", "ingest-movies", "ingest-music", "read-library",
             "transcribe-audio", "ytdlp")
 
-# Every command that asks a language model: for chapters, concat-audio's for
-# a cover nothing else found, or ingest-music's for an album beets skipped.
+# Every command that asks a language model.
 _AI_CHAPTERS = ("concat-audio", "convert-and-concat", "convert-audio", "convert-video",
-                "generate-chapters", "ingest-movies", "ingest-music", "ytdlp")
+                "find-fragment-candidates", "generate-chapters", "ingest-movies",
+                "ingest-music", "ytdlp")
 
 SETTINGS: tuple[Setting, ...] = (
     # --- logins and keys
@@ -210,6 +210,15 @@ SETTINGS: tuple[Setting, ...] = (
             "search is asked - Claude, or one behind `llmHarness`: `on` or "
             "`off`",
             ("ingest-music",), "on"),
+    Setting("fragmentCandidatesLlm", "Whether the candidates "
+            "find-fragment-candidates finds are handed to a language model to "
+            "sort into release groups, quality or source tags, publishers and "
+            "real title words and write proposed additions as a unified diff "
+            "under `logs/` (the `fragment-classify` task, see docs/models.md): "
+            "candidate tokens and sample folder/file names from the library "
+            "are sent to the model; `data/fragments.txt` is never edited "
+            "directly: `on` or `off`",
+            ("find-fragment-candidates",), "on"),
     Setting("chapterDbSite", "The chapter database's address", ("ingest-movies",),
             "`https://chapterdb.plex.tv`", tuning=True),
     Setting("dvdCompareSite", "The disc database's address", ("ingest-movies",),

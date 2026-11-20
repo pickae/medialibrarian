@@ -6,9 +6,11 @@ transcript (`generate-chapters`, `convert-audio -a`, `convert-video -C`,
 a video's encoding profile from sampled frames (`convert-video -p auto`), a
 book's cover where nothing else found one, its chapter titles where its file
 names only number them (`concat-audio`), reading picture subtitles into text
-(`ingest-movies`), or the MusicBrainz release of an album beets skipped
-(`ingest-music`). Each of those is a **task**, and each task picks from the
-models you have, by what it needs and what it would rather have.
+(`ingest-movies`), the MusicBrainz release of an album beets skipped
+(`ingest-music`), or classifying recurring filename fragment candidates
+(`find-fragment-candidates`). Each of those is a **task**, and each task
+picks from the models you have, by what it needs and what it would rather
+have.
 
 ## Your models
 
@@ -100,6 +102,7 @@ Run with `-v` to see which model each task took, and what it was taken for.
 | `video-profile` (`convert-video -p auto`) | vision | - | light |
 | `music-search` | web | reasoning | balanced |
 | `podcast-ads` | - | reasoning | balanced |
+| `fragment-classify` | - | reasoning, web | balanced |
 
 A task's models, best first:
 
