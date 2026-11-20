@@ -13,10 +13,12 @@ runs (`find-gaps`), report-only match suggestions for unmatched or ambiguous
 Letterboxd entries (`plex-letterboxd-sync`), an e-book's language where its
 metadata and text disagree or neither gives a confident answer
 (`read-library`), classifying e-book images as book content versus
-advertising (`ingest-books -d`), or an advisory likely cause and next step
-for unexplained errors left in a run's error log (`error-triage`, controlled
-by `errorTriageLlm`). Each of those is a **task**, and each task picks from
-the models you have, by what it needs and what it would rather have.
+advertising (`ingest-books -d`), an advisory likely cause and next step for
+unexplained errors left in a run's error log (`error-triage`, controlled by
+`errorTriageLlm`), or checking whether a small comic page has real content
+worth keeping (`convert-comics`). Each of those is a **task**, and each task
+picks from the models you have, by what it needs and what it would rather
+have.
 
 ## Your models
 
@@ -114,6 +116,7 @@ Run with `-v` to see which model each task took, and what it was taken for.
 | `book-language` | - | - | light |
 | `book-image-check` | vision | - | light |
 | `error-triage` (unexplained errors in a run's error log) | - | reasoning, local | balanced |
+| `comic-page-check` | vision | - | light |
 
 `error-triage` prefers a local model because error logs carry library paths,
 and is strictly advisory: it never retries commands, deletes files or changes
@@ -131,9 +134,10 @@ A task's models, best first:
 A task that can do without what it prefers still runs on a model that lacks
 it: chapters with instructions are written without web search when no model
 can search. A task that needs something no model has is skipped (the cover
-search, the music release lookup, and `book-image-check`, which falls back
-to the fixed junk-name substrings) or refused before any work (the chapter
-commands and `convert-video -p auto`), saying which trait was missing.
+search, the music release lookup, the comic empty-page check, and
+`book-image-check`, which falls back to the fixed junk-name substrings) or
+refused before any work (the chapter commands and `convert-video -p auto`),
+saying which trait was missing.
 
 Overriding it:
 

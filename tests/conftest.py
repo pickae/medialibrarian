@@ -338,6 +338,8 @@ def private_workspace(tmp_path_factory, monkeypatch):
     # Nor for advisory triage of error logs: a CLI case that provokes an error
     # would otherwise reach a model at exit. Triage's own cases turn it back on.
     monkeypatch.setenv("errorTriageLlm", "off")
+    # Nor is a vision model asked about tiny comic pages in unrelated cases.
+    monkeypatch.setenv("comicEmptyPageLlm", "off")
     # Nor the machine's own roster of models: a case that asks the roster
     # gets the models it set up itself, or none.
     monkeypatch.setenv("llmModels", str(scratch / "no-models-file"))

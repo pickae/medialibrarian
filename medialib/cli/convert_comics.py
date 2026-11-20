@@ -59,6 +59,7 @@ from medialib.cli.convert_images import (
 )
 from medialib.lib import (
     adequacy,
+    aicomicpage,
     archives,
     av1gpu,
     clioptions,
@@ -72,6 +73,7 @@ from medialib.lib import (
     imagecodecs,
     imagemagick,
     keepparts,
+    modelmeter,
     numbering,
     ramscratch,
     runcontext,
@@ -146,10 +148,15 @@ OPT_VARS = "Q:quality u:chroma s:speedPreset m:maxRes f:fuzz k:keepParts"
 OPT_COLUMN = 20
 OPT_LONG = "h:help Q:quality u:chroma s:speed m:max-resolution f:fuzz k:keep"
 
-# The smallest an AVIF page can plausibly be, in bytes. A page that encodes to
-# less than this is an empty page - nothing on it worth a page in the book - and
-# it is dropped and counted as such. Not a failure: the encode did its job.
+# The smallest an AVIF page can plausibly be, in bytes, under the size-only
+# rule (without AI). A page that encodes to less than this is dropped as empty.
 MIN_PAGE_SIZE = 10 * 1024
+
+# Candidate ceiling when the AI empty-page check is active: eased above the
+# 10 KiB size-only rule so sparse "this page is intentionally blank" notices,
+# lone page numbers, or noisy uniform-colour scans are shown to the vision model
+# instead of relying on the tight byte cutoff.
+AI_CANDIDATE_PAGE_SIZE = 40 * 1024
 
 # Beside a book's AVIF folder while it is converted: the per-book
 # convert-images said a page of it failed. A file rather than a return value
@@ -793,6 +800,8 @@ class Run:
     # Whether the lane's card decides the -c trim of the pages it takes, so
     # the per-book runs list those pages without decoding them.
     gpu_trim: bool = False
+    # Where the empty-page vision model's usage is recorded across workers.
+    model_meter: str = ""
 
     def __init__(self, **settings) -> None:
         self.__dict__.update(settings)
@@ -950,28 +959,14 @@ class Run:
         # converted - it wrote a file and exited 0 - and only its size
         # afterwards says it holds nothing. -k pages keeps the page as it came
         # in, and the small ones are among the pages it keeps.
-        empty = 0
+        empty = kept_small = 0
         if not self.keep_pages:
-            for parent, _dirs, names in os.walk(book_avif):
-                for name in names:
-                    if not name.endswith(".avif"):
-                        continue
-                    path = os.path.join(parent, name)
-                    try:
-                        size = os.path.getsize(path)
-                        if size < MIN_PAGE_SIZE:
-                            os.remove(path)
-                            empty += 1
-                            runlog.detail("%s: %s - dropped empty - its "
-                                          "encode is %s, under %s"
-                                          % (file_name, name,
-                                             formatting.fmt_bytes(size),
-                                             formatting.fmt_bytes(
-                                                 MIN_PAGE_SIZE)))
-                    except OSError:
-                        pass
+            empty, kept_small = drop_empty_pages(
+                book_avif, file_name, meter_file=self.model_meter)
         if empty:
             self.counters.bump("pagesEmpty", empty)
+        if kept_small:
+            self.counters.bump("pagesSmallKept", kept_small)
         _number_pages(book_avif)
 
         # The pages the lane could not encode at all - the card left them to
@@ -1100,6 +1095,87 @@ class Run:
                            % (relative, share))
             sys.stderr.flush()
         self.counters.bump("pdf.comic" if comic else "pdf.other")
+
+
+def drop_empty_pages(book_avif: str, file_name: str, *,
+                     meter_file: str = "",
+                     check_blank=None) -> tuple[int, int]:
+    """Drop empty AVIF pages in ``book_avif``, returning ``(dropped, kept)``.
+
+    Without AI (``comicEmptyPageLlm=off`` or no vision model configured), the
+    status-quo size-only rule applies unchanged: pages under
+    :data:`MIN_PAGE_SIZE` (10 KiB) are dropped and larger pages are untouched.
+
+    When AI checking is active (or a custom ``check_blank`` is supplied), the
+    hard size rule is eased to :data:`AI_CANDIDATE_PAGE_SIZE` (40 KiB) so the
+    vision model judges whether each small candidate has real comic-book
+    content worth keeping. ``True`` drops the page, ``False`` keeps it (counting
+    sub-10 KiB saves in ``kept``), and ``None`` falls back to the 10 KiB
+    size-only rule.
+    """
+    if check_blank is None:
+        models = aicomicpage.resolve_models()
+        ai_active = bool(models)
+        check = (
+            (lambda path, *, book_name="", page_name="", meter_file="":
+                aicomicpage.is_blank(
+                    path, book_name=book_name, page_name=page_name,
+                    models=models, meter_file=meter_file))
+            if ai_active else None
+        )
+    else:
+        ai_active = True
+        check = check_blank
+    threshold = AI_CANDIDATE_PAGE_SIZE if ai_active else MIN_PAGE_SIZE
+    dropped = 0
+    kept = 0
+    for parent, _dirs, names in os.walk(book_avif):
+        for name in sorted(names):
+            if not name.endswith(".avif"):
+                continue
+            path = os.path.join(parent, name)
+            try:
+                size = os.path.getsize(path)
+                if size >= threshold:
+                    continue
+                verdict = (
+                    check(path, book_name=file_name, page_name=name,
+                          meter_file=meter_file)
+                    if check is not None else None
+                )
+                if verdict is False:
+                    if size < MIN_PAGE_SIZE:
+                        kept += 1
+                    runlog.detail("%s: %s - kept small page - its encode is "
+                                  "%s, under %s"
+                                  % (file_name, name,
+                                     formatting.fmt_bytes(size),
+                                     formatting.fmt_bytes(threshold)))
+                    continue
+                if verdict is None and size >= MIN_PAGE_SIZE:
+                    continue
+                os.remove(path)
+                dropped += 1
+                reason = ("dropped empty (confirmed blank)"
+                          if verdict is True else "dropped empty")
+                runlog.detail("%s: %s - %s - its encode is %s, under %s"
+                              % (file_name, name, reason,
+                                 formatting.fmt_bytes(size),
+                                 formatting.fmt_bytes(threshold)))
+            except OSError:
+                pass
+    return dropped, kept
+
+
+def report_empty_page_model(meter_file: str) -> None:
+    """What the vision model was asked about small pages over the run, said
+    only when at least one request was made."""
+    if not meter_file:
+        return
+    spans, tally = modelmeter.gathered(meter_file)
+    if tally.requests:
+        runlog.say("Empty-page model: %s\n"
+                   % modelmeter.rate_line("all", spans.seconds, tally))
 
 
 def _number_pages(book_dir: str) -> None:
@@ -1314,6 +1390,7 @@ def footer(state: Run) -> None:
                           lane.fallbacks, lane.cpu_busy,
                           _megapixels_per_second(lane.cpu_pixels,
                                                  lane.cpu_busy)))
+        report_empty_page_model(state.model_meter)
         # Said under -q too, as each failed book's own line is.
         failed = counters.read("failedBooks")
         if failed > 0:
@@ -1354,6 +1431,8 @@ def footer(state: Run) -> None:
             # the GPU lane, which then wrote it empty - or could not write it.
             _print_page_stat("of those empty, dropped",
                              counters.read("pagesEmpty"), page_total)
+            _print_page_stat("of those small, kept",
+                             counters.read("pagesSmallKept"), page_total)
             _print_page_stat("of those failed, missing",
                              counters.read("pagesMissing"), page_total)
 
@@ -1592,6 +1671,7 @@ def _run(result, declaration, program: str, script_dir: str,
         stats_file=os.path.join(counter_dir, "pageStats"),
         phase_start=None, phase_end=None, total=0, lane=None,
         read_path=read_path,
+        model_meter=os.path.join(counter_dir, "emptyPageModel.meter"),
     )
     safety.set_run_footer(lambda: footer(state))
 
@@ -1744,8 +1824,8 @@ def _open_converting(state, counter_dir: str, out_path: str, packaged: list,
                      converting: bool) -> None:
     """The conversion phase's counters zeroed, the books already packaged
     said, and the page statistics file and the output folder made."""
-    for name in ("current", "pagesFound", "pagesEmpty", "pagesMissing",
-                 "failedBooks"):
+    for name in ("current", "pagesFound", "pagesEmpty", "pagesSmallKept",
+                 "pagesMissing", "failedBooks"):
         with open(os.path.join(counter_dir, name), "w") as handle:
             handle.write("0")
     for name in ("packaged", "existing"):

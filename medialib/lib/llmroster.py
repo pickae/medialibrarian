@@ -53,8 +53,8 @@ __all__ = ["MODELS_VARIABLE", "LEAN_VARIABLE", "LEANS", "Task", "TASKS", "CHAPTE
            "CHAPTERS_INSTRUCTED", "COVER_SEARCH", "COVER_LOOK", "CONTENTS_SEARCH",
            "SUBTITLE_OCR", "VIDEO_PROFILE", "MUSIC_SEARCH", "PODCAST_ADS",
            "FRAGMENT_CLASSIFY", "GAPS_CHECK", "LETTERBOXD_MATCH", "BOOK_LANGUAGE",
-           "BOOK_IMAGE_CHECK", "ERROR_TRIAGE", "Roster", "RosterError", "load",
-           "require", "optional", "chapters_task"]
+           "BOOK_IMAGE_CHECK", "ERROR_TRIAGE", "COMIC_PAGE_CHECK", "Roster",
+           "RosterError", "load", "require", "optional", "chapters_task"]
 
 MODELS_VARIABLE = "llmModels"
 LEAN_VARIABLE = "llmLean"
@@ -129,13 +129,17 @@ BOOK_IMAGE_CHECK = Task("book-image-check", "tell whether an image inside an "
 ERROR_TRIAGE = Task("error-triage", "suggest a likely cause and next step for "
                     "unexplained errors in the error log",
                     prefers=("reasoning", "local"), lean="balanced")
+COMIC_PAGE_CHECK = Task("comic-page-check", "check whether a small comic page "
+                        "has real content worth keeping or should be dropped",
+                        requires=("vision",), lean="light")
 
 TASKS = {task.name: task for task in (CHAPTERS, CHAPTERS_INSTRUCTED,
                                       COVER_SEARCH, COVER_LOOK, CONTENTS_SEARCH,
                                       SUBTITLE_OCR, VIDEO_PROFILE, MUSIC_SEARCH,
                                       PODCAST_ADS, FRAGMENT_CLASSIFY, GAPS_CHECK,
                                       LETTERBOXD_MATCH, BOOK_LANGUAGE,
-                                      BOOK_IMAGE_CHECK, ERROR_TRIAGE)}
+                                      BOOK_IMAGE_CHECK, ERROR_TRIAGE,
+                                      COMIC_PAGE_CHECK)}
 
 
 def chapters_task(instructions: str) -> Task:

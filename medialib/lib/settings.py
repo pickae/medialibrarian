@@ -79,10 +79,10 @@ _SCRATCH = ("concat-audio", "content-census", "content-census-bi", "convert-and-
             "transcribe-audio", "ytdlp")
 
 # Every command that asks a language model.
-_AI_CHAPTERS = ("concat-audio", "convert-and-concat", "convert-audio", "convert-video",
-                "find-fragment-candidates", "find-gaps", "generate-chapters",
-                "ingest-books", "ingest-movies", "ingest-music",
-                "plex-letterboxd-sync", "read-library", "ytdlp")
+_AI_CHAPTERS = ("concat-audio", "convert-and-concat", "convert-audio",
+                "convert-comics", "convert-video", "find-fragment-candidates",
+                "find-gaps", "generate-chapters", "ingest-books", "ingest-movies",
+                "ingest-music", "plex-letterboxd-sync", "read-library", "ytdlp")
 
 # Every command in the repository (info logs and error logs).
 _ALL_COMMANDS = (
@@ -384,6 +384,15 @@ SETTINGS: tuple[Setting, ...] = (
             "read", _COMICS),
     Setting("comicPdfJpegQuality", "The JPEG quality comic PDF pages are rendered at",
             _COMICS),
+    Setting("comicEmptyPageLlm", "Whether small comic pages (under 40 KiB "
+            "instead of the size-only 10 KiB cutoff) are shown to a vision "
+            "model to judge whether they hold real comic-book content worth "
+            "keeping rather than being blank, an intentionally-blank notice, "
+            "just a page number, or a uniform colour (the `comic-page-check` "
+            "task, see docs/models.md): a small rendered copy is sent to the "
+            "model. When `off` or with no vision model, the existing 10 KiB "
+            "size-only rule applies unchanged: `on` or `off`",
+            ("convert-comics",), "on"),
     # --- reading books aloud
     Setting("bookLanguageLlm", "Whether read-library asks a small language model "
             "when a book's metadata language and its text disagree or neither "
