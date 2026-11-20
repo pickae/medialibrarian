@@ -2,10 +2,12 @@
 
 Several commands ask a language model for something: chapters from a
 transcript (`generate-chapters`, `convert-audio -a`, `convert-video`,
-`ingest-movies`, `ytdlp`), a book's cover where nothing else found one, or
-its chapter titles where its file names only number them (`concat-audio`).
-Each of those is a **task**, and each task picks from the
-models you have, by what it needs and what it would rather have.
+`ingest-movies`, `ytdlp`), a book's cover where nothing else found one or its
+chapter titles where its file names only number them (`concat-audio`), or a
+subtitle or audio track's role where the flags, title and measurements could
+not settle it (`ingest-movies`, `convert-video`). Each of those is a **task**,
+and each task picks from the models you have, by what it needs and what it
+would rather have.
 
 ## Your models
 
@@ -93,6 +95,7 @@ Run with `-v` to see which model each task took, and what it was taken for.
 | `cover-search` | web | reasoning | balanced |
 | `cover-look` | vision | - | light |
 | `contents-search` | web | reasoning | balanced |
+| `track-role` | - | - | light |
 
 A task's models, best first:
 

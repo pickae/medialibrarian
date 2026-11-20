@@ -223,6 +223,13 @@ SETTINGS: tuple[Setting, ...] = (
             "every chapter. Only a model that can search is asked - Claude, or "
             "one behind `llmHarness`: `on` or `off`",
             ("concat-audio", "convert-and-concat"), "on"),
+    Setting("trackRoleLlm", "Whether a subtitle or audio track whose role the "
+            "flags, names and line or speech counts leave borderline or "
+            "unmeasurable is handed to a light language model (the "
+            "`track-role` task, see docs/models.md): sampled subtitle cues or "
+            "a short audio transcript, with the track's title, language and "
+            "flags, are sent to the model: `on` or `off`",
+            ("convert-video", "ingest-movies"), "on"),
     Setting("chapterDbSite", "The chapter database's address", ("ingest-movies",),
             "`https://chapterdb.plex.tv`", tuning=True),
     Setting("dvdCompareSite", "The disc database's address", ("ingest-movies",),

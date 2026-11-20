@@ -67,6 +67,7 @@ These are read from the environment:
 | `subtitleOcrOptions` | more fields for every request to it, as a JSON object | none |
 | `subtitleOcrJobs` | how many requests are sent to that model at once, each with up to 16 pictures | 32 |
 | `losslessAudioTarget` | the codec the lossless audio is converted to | `opus`, at a per-channel target bitrate; `flac` takes the channels as they are, up to eight of them |
+| `trackRoleLlm` | asking a light language model to classify a borderline subtitle or audio track from sampled cues, a short transcript, and its title/language (`on`/`off`) | `on`; skipped when no model is configured, or set to `off` to keep the deterministic rules alone |
 | `plexUrl` | the Plex server the films are compared with | the server on this machine, `http://localhost:32400` |
 | `plexToken` | that server's X-Plex-Token | the server is asked without one, which it refuses unless told to trust this address; the comparison is then skipped |
 
@@ -227,6 +228,13 @@ A downloaded `<name>.xx.srt` whose text reads as SDH is muxed in flagged SDH and
 named "SDH". The sidecar keeps its `.xx.srt` name, which is what tells the next
 run's download that the language is there.
 
+Where a subtitle sits near one of those thresholds, could not be measured
+against a reference track, or carries an unrecognized descriptive title, a
+light [language model](../models.md) (the `track-role` task) can be asked with
+sampled subtitle cues and the track's title and language. Clear tracks never
+call a model, only high-confidence answers change the role, and setting
+`trackRoleLlm=off` turns this off.
+
 ### Picture subtitles read into text
 
 A Blu-ray's subtitles (PGS) and a DVD's (VobSub) are pictures of the lines: a
@@ -338,9 +346,12 @@ twice over:
 
 A track both say so of is flagged as a commentary and named "Commentary N" in
 place, which the commentary naming later replaces with who speaks in it. A
-track only one says so of is left as it is and listed at the end of the run, to
-be listened to. A track flagged for the visually impaired, or named as an audio
-description, a score or music, is not listened to at all.
+track only one says so of is checked with the light [language model](../models.md)
+(`track-role`, unless `trackRoleLlm=off`) using its sampled transcript beside
+the main track's; if the model is still unsure or no model is configured, the
+track is left as it is and listed at the end of the run, to be listened to. A
+track flagged for the visually impaired, or named as an audio description, a
+score or music, is not listened to at all.
 
 A commentary the file does flag but leaves without a name is numbered the same
 way, among the others in file order. Otherwise its transcript would be called
