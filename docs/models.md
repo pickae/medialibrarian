@@ -9,10 +9,11 @@ names only number them (`concat-audio`), reading picture subtitles into text
 (`ingest-movies`), the MusicBrainz release of an album beets skipped
 (`ingest-music`), classifying recurring filename fragment candidates
 (`find-fragment-candidates`), web-checked gap notes for numbered and dated
-runs (`find-gaps`), or report-only match suggestions for unmatched or
-ambiguous Letterboxd entries (`plex-letterboxd-sync`). Each of those is a
-**task**, and each task picks from the models you have, by what it needs and
-what it would rather have.
+runs (`find-gaps`), report-only match suggestions for unmatched or ambiguous
+Letterboxd entries (`plex-letterboxd-sync`), or an e-book's language where
+its metadata and text disagree or neither gives a confident answer
+(`read-library`). Each of those is a **task**, and each task picks from the
+models you have, by what it needs and what it would rather have.
 
 ## Your models
 
@@ -107,6 +108,7 @@ Run with `-v` to see which model each task took, and what it was taken for.
 | `fragment-classify` | - | reasoning, web | balanced |
 | `gaps-check` | web | reasoning | balanced |
 | `letterboxd-match` | - | reasoning, web | balanced |
+| `book-language` | - | - | light |
 
 A task's models, best first:
 

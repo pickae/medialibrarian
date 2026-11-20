@@ -52,8 +52,8 @@ from medialib.lib import llmclient, llmtraits, runlog, settings
 __all__ = ["MODELS_VARIABLE", "LEAN_VARIABLE", "LEANS", "Task", "TASKS", "CHAPTERS",
            "CHAPTERS_INSTRUCTED", "COVER_SEARCH", "COVER_LOOK", "CONTENTS_SEARCH",
            "SUBTITLE_OCR", "VIDEO_PROFILE", "MUSIC_SEARCH", "PODCAST_ADS",
-           "FRAGMENT_CLASSIFY", "GAPS_CHECK", "LETTERBOXD_MATCH", "Roster",
-           "RosterError", "load", "require", "optional", "chapters_task"]
+           "FRAGMENT_CLASSIFY", "GAPS_CHECK", "LETTERBOXD_MATCH", "BOOK_LANGUAGE",
+           "Roster", "RosterError", "load", "require", "optional", "chapters_task"]
 
 MODELS_VARIABLE = "llmModels"
 LEAN_VARIABLE = "llmLean"
@@ -120,12 +120,14 @@ GAPS_CHECK = Task("gaps-check", "check a tree's numbered and dated runs "
 LETTERBOXD_MATCH = Task(
     "letterboxd-match", "suggest matches for unmatched or ambiguous Letterboxd "
     "entries for the sync report", prefers=("reasoning", "web"), lean="balanced")
+BOOK_LANGUAGE = Task("book-language", "identify a book's language from a short "
+                     "excerpt", requires=(), prefers=(), lean="light")
 
 TASKS = {task.name: task for task in (CHAPTERS, CHAPTERS_INSTRUCTED,
                                       COVER_SEARCH, COVER_LOOK, CONTENTS_SEARCH,
                                       SUBTITLE_OCR, VIDEO_PROFILE, MUSIC_SEARCH,
                                       PODCAST_ADS, FRAGMENT_CLASSIFY, GAPS_CHECK,
-                                      LETTERBOXD_MATCH)}
+                                      LETTERBOXD_MATCH, BOOK_LANGUAGE)}
 
 
 def chapters_task(instructions: str) -> Task:
