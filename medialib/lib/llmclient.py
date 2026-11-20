@@ -532,17 +532,14 @@ SETTING_FIELDS = {"api": API_VARIABLE, "url": URL_VARIABLE, "model": MODEL_VARIA
 ROSTER_FIELDS = ("key_env", "tasks")
 
 
-def build(entry: dict, name: str, settings: bool = False,
-          field_names: dict[str, str] | None = None) -> Llm:
+def build(entry: dict, name: str, settings: bool = False) -> Llm:
     """The model one entry describes: a table of :data:`SETTING_FIELDS`'s
     fields, as the roster file holds them (typed: a list of addresses, a
     table of options or traits) or as the settings do (all text). ``name``
     is what the roster calls it; with ``settings`` a problem is named by the
-    setting it is in, otherwise by the field (or ``field_names`` when given).
+    setting it is in, otherwise by the field.
     LlmError for an entry that cannot be used."""
     def said(field: str) -> str:
-        if field_names and field in field_names:
-            return field_names[field]
         return SETTING_FIELDS[field] if settings else "%s's %s" % (name, field)
 
     unknown = sorted(set(entry) - set(SETTING_FIELDS) - set(ROSTER_FIELDS))

@@ -8,12 +8,11 @@ order breaks every tie; a task or a model can be pinned in the file; a
 mistake in the file is said, naming where it is.
 """
 
-import io
 import os
 
 import pytest
 
-from medialib.lib import llmclient, llmroster, llmtraits, settings
+from medialib.lib import llmclient, llmroster, llmtraits
 
 pytestmark = pytest.mark.pure
 
@@ -44,14 +43,10 @@ def _fresh(monkeypatch, tmp_path):
     monkeypatch.setattr(llmtraits, "_server_json", lambda *a, **k: None)
     for name in llmclient.SETTING_FIELDS.values():
         monkeypatch.delenv(name, raising=False)
-    for _field, name in llmroster._LEGACY_OCR_FIELDS:
-        monkeypatch.delenv(name, raising=False)
     monkeypatch.delenv(llmroster.LEAN_VARIABLE, raising=False)
     monkeypatch.setenv(llmroster.MODELS_VARIABLE, str(tmp_path / "models.toml"))
     yield
     for name in llmclient.SETTING_FIELDS.values():
-        os.environ.pop(name, None)
-    for _field, name in llmroster._LEGACY_OCR_FIELDS:
         os.environ.pop(name, None)
 
 
@@ -186,26 +181,6 @@ class TestAskingForOne:
         assert llmroster.chapters_task("Name the guests") is llmroster.CHAPTERS_INSTRUCTED
 
 
-class TestTheOldNames:
-    def test_an_old_name_in_the_environment_still_works(self, monkeypatch, tmp_path):
-        monkeypatch.setenv(settings.FILE_VARIABLE, str(tmp_path / "none"))
-        monkeypatch.setenv("chapterLlmUrl", "http://localhost:7/v1")
-        said = io.StringIO()
-        settings.load(said)
-        assert os.environ["llmUrl"] == "http://localhost:7/v1"
-        assert "called llmUrl now" in said.getvalue()
-
-    def test_an_old_name_in_the_file_still_works(self, monkeypatch, tmp_path):
-        path = tmp_path / "settings"
-        path.write_text("chapterLlmModel=qwen\n")
-        monkeypatch.setenv(settings.FILE_VARIABLE, str(path))
-        said = io.StringIO()
-        settings.load(said)
-        assert os.environ["llmModel"] == "qwen"
-        assert "which no command reads" not in said.getvalue()
-        assert "called llmModel now" in said.getvalue()
-
-
 class TestTheQueue:
     """A local model's requests queue for its GPU; a cloud API's never wait.
     Which one a model is, is its local trait - the address, or what the
@@ -239,8 +214,7 @@ class TestTheQueue:
 
 
 class TestSubtitleOcrTask:
-    """SUBTITLE_OCR requires vision, prefers local and cheap, and leans light;
-    the legacy subtitleOcr… settings join the roster scoped to that task."""
+    """SUBTITLE_OCR requires vision, prefers local and cheap, and leans light."""
 
     def test_selects_local_cheap_light_vision_first(self, tmp_path):
         roster = _roster(tmp_path, '''
@@ -266,60 +240,3 @@ traits = { vision = true, params = 4, speed = "fast" }
 ''')
         assert _names(roster.ladder(llmroster.SUBTITLE_OCR)) == [
             "small-local-vision", "big-local-vision", "cloud-vision"]
-
-    def test_legacy_subtitle_ocr_settings_map_to_a_scoped_roster_model(
-            self, monkeypatch):
-        monkeypatch.setenv("subtitleOcrUrl",
-                           "http://127.0.0.1:8082, http://127.0.0.1:8080/v1")
-        monkeypatch.setenv("subtitleOcrServe", "llama-server --port 8082")
-        monkeypatch.setenv("subtitleOcrServeMib", "12000")
-        monkeypatch.setenv("subtitleOcrModel", "vision-12b")
-        monkeypatch.setenv("subtitleOcrOptions", '{"top_k": 1}')
-        roster = llmroster.load()
-        ocr_ladder = roster.ladder(llmroster.SUBTITLE_OCR)
-        assert _names(ocr_ladder) == ["subtitle-ocr"]
-        llm = ocr_ladder[0]
-        assert llm.url == "http://127.0.0.1:8082/v1"
-        assert llm.fallbacks == ("http://127.0.0.1:8080/v1",)
-        assert llm.serve == "llama-server --port 8082"
-        assert llm.serve_mib == 12000
-        assert llm.model == "vision-12b"
-        assert llm.options == {"top_k": 1}
-        assert llm.jobs == llmclient.DEFAULT_JOBS
-        assert llm.has("vision")
-        # Scoped to subtitle-ocr only: never picked for chapters or covers.
-        assert roster.ladder(llmroster.CHAPTERS) == []
-        assert roster.ladder(llmroster.COVER_LOOK) == []
-
-    def test_legacy_subtitle_ocr_jobs_setting_is_honoured(self, monkeypatch):
-        monkeypatch.setenv("subtitleOcrUrl", "http://127.0.0.1:8082")
-        monkeypatch.setenv("subtitleOcrJobs", "4")
-        llm = llmroster.load().ladder(llmroster.SUBTITLE_OCR)[0]
-        assert llm.jobs == 4
-
-    def test_legacy_name_collision_with_models_toml_fails(self, tmp_path,
-                                                          monkeypatch):
-        (tmp_path / "models.toml").write_text(
-            '[models.subtitle-ocr]\nurl = "http://localhost:8082/v1"\n'
-            'traits = { vision = true }\n', encoding="utf-8")
-        monkeypatch.setenv("subtitleOcrUrl", "http://127.0.0.1:8083")
-        with pytest.raises(llmroster.RosterError, match="subtitle-ocr"):
-            llmroster.load()
-
-    def test_legacy_subtitle_ocr_settings_warn_on_load(self, tmp_path,
-                                                       monkeypatch):
-        path = tmp_path / "settings"
-        path.write_text("subtitleOcrUrl=http://127.0.0.1:8082\n",
-                        encoding="utf-8")
-        monkeypatch.setenv(settings.FILE_VARIABLE, str(path))
-        monkeypatch.setenv("subtitleOcrJobs", "3")
-        said = io.StringIO()
-        settings.load(said)
-        warnings = said.getvalue()
-        assert "subtitleOcrUrl" in warnings and "models.md" in warnings
-        assert "subtitleOcrJobs" in warnings
-        assert "no command reads" not in warnings
-        assert os.environ["subtitleOcrUrl"] == "http://127.0.0.1:8082"
-        assert os.environ["subtitleOcrJobs"] == "3"
-        llm = llmroster.load().ladder(llmroster.SUBTITLE_OCR)[0]
-        assert (llm.url, llm.jobs) == ("http://127.0.0.1:8082/v1", 3)

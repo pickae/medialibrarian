@@ -66,8 +66,6 @@ def bin_dir(tmp_path, monkeypatch):
         os.symlink(real_curl, path / "curl")
     monkeypatch.setenv("PATH", str(path))
     monkeypatch.delenv("subtitleOcrEngines", raising=False)
-    for _field, name in llmroster._LEGACY_OCR_FIELDS:
-        monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(subtitleocr, "_said", set())
     monkeypatch.setattr(subtitleocr, "_tesseract_languages", None)
     monkeypatch.setattr(subtitleocr, "paddle_on_gpu", lambda: False)
@@ -77,6 +75,25 @@ def bin_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(llmtraits, "_server_json", lambda *a, **k: None)
     (path / "cues.srt").write_text(_CUES)
     return path
+
+
+def _toml(value):
+    if isinstance(value, dict):
+        return "{ %s }" % ", ".join("%s = %s" % (key, _toml(each))
+                                    for key, each in value.items())
+    return json.dumps(value)
+
+
+def _vision(tmp_path, url, **fields):
+    """The environment of a roster holding one vision model at ``url``;
+    ``fields`` are that model's own (jobs, model, options)."""
+    lines = ['[models.vision]', 'url = %s' % json.dumps(url),
+             'traits = { vision = true }']
+    lines += ["%s = %s" % (field, _toml(value))
+              for field, value in fields.items()]
+    path = tmp_path / "models.toml"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return {"llmModels": str(path)}
 
 
 def _tool(bin_dir, name, script):
@@ -143,10 +160,6 @@ class TestTheEngines:
         assert subtitleocr.engines({}) == (("paddle", ""), ("tesseract", ""),
                                            ("paddle", "cpu"))
 
-    def test_a_vision_model_before_all_where_there_is_one(self):
-        assert subtitleocr.engines(
-            {"subtitleOcrUrl": "http://127.0.0.1:8080"})[0] == ("vision", "")
-
     def test_a_roster_vision_model_enables_vision(self, tmp_path):
         models = tmp_path / "models.toml"
         models.write_text(
@@ -174,11 +187,11 @@ class TestTheEngines:
         assert subtitleocr.engines(
             {"subtitleOcrEngines": "nocr,tesseract"}) == (("tesseract", ""),)
 
-    def test_vision_only_with_a_server_to_ask(self):
+    def test_vision_only_with_a_server_to_ask(self, tmp_path):
         named = {"subtitleOcrEngines": "vision,tesseract"}
         assert subtitleocr.engines(named) == (("tesseract", ""),)
         assert subtitleocr.engines(
-            dict(named, subtitleOcrUrl="http://127.0.0.1:8080")) \
+            dict(named, **_vision(tmp_path, "http://127.0.0.1:8080/v1"))) \
             == (("vision", ""), ("tesseract", ""))
 
 
@@ -448,9 +461,10 @@ class TestTheVisionModel:
     def _read(self, bin_dir, tmp_path, server, jobs="2", usage=None):
         _tool(bin_dir, "seconv", _SECONV_PICTURES)
         return _read(bin_dir, tmp_path,
-                     environ={"subtitleOcrEngines": "vision",
-                              "subtitleOcrUrl": server["url"] + "/v1",
-                              "subtitleOcrJobs": jobs}, usage=usage)
+                     environ=dict(
+                         _vision(tmp_path, server["url"] + "/v1",
+                                 jobs=int(jobs)),
+                         subtitleOcrEngines="vision"), usage=usage)
 
     def _alone(self, server):
         return [body for body in server["bodies"]
@@ -535,8 +549,8 @@ class TestTheVisionModel:
         _tool(bin_dir, "seconv", _SECONV_PICTURES)
         engine, _srt, logs = _read(
             bin_dir, tmp_path,
-            environ={"subtitleOcrEngines": "vision",
-                     "subtitleOcrUrl": "http://127.0.0.1:1"})
+            environ=dict(_vision(tmp_path, "http://127.0.0.1:1/v1"),
+                         subtitleOcrEngines="vision"))
         assert engine == ""
         assert any("no vision OCR server is answering" in line for line in logs)
 
@@ -547,9 +561,10 @@ class TestTheVisionModel:
         _tool(bin_dir, "seconv", _SECONV_PICTURES)
         engine, srt, _logs = _read(
             bin_dir, tmp_path,
-            environ={"subtitleOcrEngines": "vision",
-                     "subtitleOcrUrl": "http://127.0.0.1:1/v1, "
-                                       + server["url"] + "/v1"})
+            environ=dict(
+                _vision(tmp_path, ["http://127.0.0.1:1/v1",
+                                   server["url"] + "/v1"]),
+                subtitleOcrEngines="vision"))
         assert engine == "vision"
         assert "Bonjour." in srt.read_text()
 
@@ -830,15 +845,14 @@ class TestTheVisionSettings:
         return calls
 
     def _read(self, tmp_path, **settings):
-        environ = {"subtitleOcrUrl": "http://127.0.0.1:8082"}
-        environ.update(settings)
+        environ = _vision(tmp_path, "http://127.0.0.1:8082/v1", **settings)
         logs = []
         written = subtitleocr._read_by_vision("t.sup", FRENCH, str(tmp_path),
                                               environ, logs.append)
         return written, logs
 
     def test_the_model_named_is_the_one_asked_for(self, asked, tmp_path):
-        self._read(tmp_path, subtitleOcrModel="vision-35b")
+        self._read(tmp_path, model="vision-35b")
         assert len(asked) == 1
         assert asked[0][0] == "vision-35b"
 
@@ -850,7 +864,7 @@ class TestTheVisionSettings:
         assert asked[0][0] == "listed"
 
     def test_the_options_go_with_every_request(self, asked, tmp_path):
-        self._read(tmp_path, subtitleOcrOptions='{"top_k": 1}')
+        self._read(tmp_path, options={"top_k": 1})
         assert len(asked) == 1
         assert asked[0][0] == "listed"
         assert asked[0][1]["top_k"] == 1
@@ -860,8 +874,8 @@ class TestTheVisionSettings:
                                                          tmp_path,
                                                          monkeypatch):
         monkeypatch.setattr(subtitleocr, "_said", set())
-        written, logs = self._read(tmp_path, subtitleOcrOptions="[1]")
+        written, logs = self._read(tmp_path, options=[1])
         assert written == "" and asked == []
         assert len(logs) == 1
-        assert "subtitleOcrOptions" in logs[0]
+        assert "vision's options" in logs[0]
         assert "the vision model is not asked" in logs[0]

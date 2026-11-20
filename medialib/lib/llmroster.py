@@ -47,7 +47,7 @@ import threading
 import tomllib
 from dataclasses import dataclass
 
-from medialib.lib import llmclient, llmtraits, modelserver, runlog, settings
+from medialib.lib import llmclient, llmtraits, runlog, settings
 
 __all__ = ["MODELS_VARIABLE", "LEAN_VARIABLE", "LEANS", "Task", "TASKS", "CHAPTERS",
            "CHAPTERS_INSTRUCTED", "COVER_SEARCH", "COVER_LOOK", "CONTENTS_SEARCH",
@@ -237,41 +237,10 @@ _loaded: dict[tuple, Roster] = {}
 _loaded_lock = threading.Lock()
 
 
-# Legacy subtitleOcr… settings folded into the roster: still accepted and
-# turned into a model named "subtitle-ocr" kept to the subtitle-ocr task.
-_LEGACY_OCR_FIELDS = (
-    ("url", "subtitleOcrUrl"),
-    ("serve", "subtitleOcrServe"),
-    ("serve_mib", "subtitleOcrServeMib"),
-    ("model", "subtitleOcrModel"),
-    ("options", "subtitleOcrOptions"),
-    ("jobs", "subtitleOcrJobs"),
-)
-
-
-def _legacy_ocr_model(legacy_ocr: tuple[tuple[str, str], ...]) -> llmclient.Llm:
-    """Build the roster model described by the deprecated subtitleOcr…
-    settings. Its ``vision`` trait is declared so a server without a known
-    model name still qualifies for :data:`SUBTITLE_OCR`."""
-    entry: dict = {"traits": {"vision": True}}
-    for field, value in legacy_ocr:
-        if not value.strip():
-            continue
-        if field == "url":
-            entry["url"] = [
-                modelserver.root(address) + "/v1"
-                for address in value.split(",") if address.strip()
-            ]
-        else:
-            entry[field] = value
-    return llmclient.build(entry, SUBTITLE_OCR.name,
-                           field_names=dict(_LEGACY_OCR_FIELDS))
-
-
 def load(environ=None) -> Roster:
-    """The roster: the file's models, then any legacy subtitleOcr… model,
-    then the single-model settings' one. RosterError (an LlmError) for a file
-    or a setting that cannot be used. Read once per file and settings."""
+    """The roster: the file's models, then the single-model settings' one.
+    RosterError (an LlmError) for a file or a setting that cannot be used.
+    Read once per file and settings."""
     environ = os.environ if environ is None else environ
     path = models_path(environ)
     try:
@@ -280,10 +249,8 @@ def load(environ=None) -> Roster:
         stamp = None
     single = tuple((name, environ.get(name) or "")
                    for name in llmclient.SETTING_FIELDS.values())
-    legacy_ocr = tuple((field, environ.get(name) or "")
-                       for field, name in _LEGACY_OCR_FIELDS)
     lean = (environ.get(LEAN_VARIABLE) or "").strip().lower()
-    index = (path, stamp, single, legacy_ocr, lean)
+    index = (path, stamp, single, lean)
     with _loaded_lock:
         if index in _loaded:
             return _loaded[index]
@@ -291,13 +258,6 @@ def load(environ=None) -> Roster:
         raise RosterError("%s is %r; it takes %s" % (LEAN_VARIABLE, lean,
                                                      ", ".join(LEANS)))
     models, kept_to, tasks = _read_file(path) if stamp is not None else ([], {}, {})
-    if any(value.strip() for field, value in legacy_ocr if field == "url"):
-        if any(llm.name == SUBTITLE_OCR.name for llm in models):
-            raise RosterError("%s names a model %s, which is the legacy "
-                              "subtitleOcr settings' name - call it something "
-                              "else" % (path, SUBTITLE_OCR.name))
-        models.append(_legacy_ocr_model(legacy_ocr))
-        kept_to[SUBTITLE_OCR.name] = (SUBTITLE_OCR.name,)
     if any(value.strip() for name, value in single
            if name in (llmclient.API_VARIABLE, llmclient.URL_VARIABLE,
                        llmclient.HARNESS_VARIABLE)):
