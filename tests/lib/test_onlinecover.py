@@ -479,6 +479,51 @@ def test_track_cover_leaves_a_cover_the_source_gave(tmp_path):
     assert (scratch / "tempCover.jpg").read_bytes() == b"mine"
 
 
+def test_track_cover_falls_back_to_aicover_only_when_catalogue_returns_nothing(
+        tmp_path, monkeypatch):
+    from medialib.lib import aicover
+
+    source = _touch(tmp_path / "Kite Talk" / "20240105 Flying in Winter.opus")
+    scratch = tmp_path / "tmp"
+    scratch.mkdir()
+
+    # Catalogue succeeds -> aicover.track_cover is not called.
+    called = []
+    monkeypatch.setattr(aicover, "track_cover",
+                        lambda *a, **k: (called.append((a, k)), "")[1])
+    net_hit = _Net({"ytsearch5:": json.dumps({"entries": [
+        {"id": "v1", "title": "Flying in Winter", "duration": 3000}]})},
+        {"https://i.ytimg.com/vi/v1/maxresdefault.jpg": JPEG})
+    onlinecover.track_cover(source, 3000, str(scratch),
+                            CoverSearch(ROWS, net_hit.fetch, net_hit.download, pace=False),
+                            lambda p: False)
+    assert called == []
+    assert (scratch / "tempCover.jpg").read_bytes() == JPEG
+
+    # Catalogue misses -> aicover.track_cover runs and fills tempCover.jpg.
+    (scratch / "tempCover.jpg").unlink()
+    ai_jpg = JPEG + b"ai"
+    meter = str(tmp_path / "cover.meter")
+
+    def fake_ai(src, seconds, dest_base, *, stereo=False, subject=None,
+                meter_file="", probe=None, **kwargs):
+        called.append((src, seconds, dest_base, stereo, subject, meter_file))
+        out = dest_base + ".jpg"
+        with open(out, "wb") as handle:
+            handle.write(ai_jpg)
+        return out
+
+    monkeypatch.setattr(aicover, "track_cover", fake_ai)
+    net_miss = _Net({}, {})
+    onlinecover.track_cover(source, 3000, str(scratch),
+                            CoverSearch(ROWS, net_miss.fetch, net_miss.download, pace=False),
+                            lambda p: False, meter_file=meter)
+    assert len(called) == 1
+    assert called[0][0] == source
+    assert called[0][5] == meter
+    assert (scratch / "tempCover.jpg").read_bytes() == ai_jpg
+
+
 def test_switched_off_nothing_is_asked(monkeypatch, tmp_path):
     monkeypatch.setenv("coverSearch", "off")
     net = _Net({}, {})

@@ -28,6 +28,8 @@ from medialib.cli import ingest_movies_plex as plexphase
 from medialib.cli.ingest_movies import log
 from medialib.lib import (
     aieditions,
+    aifilmyear,
+    aitmdb,
     chapterdb,
     cleannamesindividually,
     clioptions,
@@ -1351,7 +1353,9 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
     # TMDb's answers kept, since the subtitles fetched ahead ask the tagging's
     # questions long before the tagging does.
     disk_turns = diskturn.init(os.path.join(ram_root, "diskTurns"))
+    film_year_meter = os.path.join(ram_root, "filmYearMeter")
     tmdbclient.remember_answers()
+    aifilmyear.remember_answers()
     skips = safety.RunSkipLog()
     long_names = tmdblookup.LongNames()
     safety.init_abort_flag(os.path.join(ram_root, "abortRequested"))
@@ -1376,6 +1380,10 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
         _report_unsure_commentaries(unsure_commentaries)
         if ocr_usage.requests:
             _report_ocr_usage(ocr_usage)
+        spans, tally = modelmeter.gathered(film_year_meter)
+        if tally.requests > 1:
+            log("Undated folder year model: "
+                + modelmeter.rate_line(aifilmyear.PURPOSE, spans.seconds, tally))
 
     safety.set_run_footer(recap)
 
@@ -1404,6 +1412,7 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
                 convert_remuxes=bool(result.values.get("convertRemuxes")),
                 keep_parts=keep_parts,
                 omit_phases=omit_phases, extras_llm=extras_llm,
+                film_year_meter=film_year_meter,
                 gpu_gate=gputurn.Gate(os.path.join(ram_root, "gpuTurns")),
                 keep_languages=kept, subtitle_languages=wanted)
 
@@ -1412,6 +1421,7 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
         for root in ingestable:
             _ingest(state, root, subtitle_work, listed[root])
     finally:
+        aifilmyear.remember_answers(False)
         tmdbclient.remember_answers(False)
         diskturn.adopt("")
         ramscratch.run_exit_cleanup()
@@ -1577,6 +1587,7 @@ def _tags_only(program: str, script_dir: str, roots: list, names: list,
     # that mode collects them: without -i each folder's are written as its own
     # folder is finished.
     shared: list = []
+    shared_suggestions: dict = {}
     # Every film folder the walk considered, across all the folders given: a row
     # in the id list is checked against the whole run rather than against each
     # folder in turn, or the one that named a film in the second library would
@@ -1587,10 +1598,12 @@ def _tags_only(program: str, script_dir: str, roots: list, names: list,
     tagged: dict = {}
     editions_tally = modelmeter.Tally()
     editions_spans = modelmeter.Spans()
+    model_meter = (modelmeter.Spans(), modelmeter.Tally())
     for root, name in zip(roots, names, strict=True):
         if len(roots) > 1:
             log('Tagging "%s"' % root)
         unmatched: list = []
+        suggestions: dict = {}
         ambiguous: list | None = None if id_list else []
         planned: list | None = None if id_list else []
         alias_titles: list | None = None if id_list else []
@@ -1604,7 +1617,9 @@ def _tags_only(program: str, script_dir: str, roots: list, names: list,
                                 near_misses=near_misses,
                                 aliases=alias_titles, seen=seen,
                                 skip=set(blank), long_names=long_names,
-                                imdb=imdb, tagged=tagged)
+                                imdb=imdb, tagged=tagged,
+                                suggestions=suggestions,
+                                model_meter=model_meter)
         # Under -i as well: this is not one of -t's worklists but a record of
         # what the run did, and a -iw run refuses renames like any other.
         if skips.skips:
@@ -1614,12 +1629,21 @@ def _tags_only(program: str, script_dir: str, roots: list, names: list,
                     'taken - listed in "%s"' % (len(skips.skips), root, listing))
         if id_list:
             shared += unmatched
+            shared_suggestions.update(suggestions)
             continue
         if unmatched:
             listing = commands.logs_file(script_dir, UNMATCHED_LIST % name)
-            if tmdbworklists.write_id_list(listing, unmatched, None, log):
-                log('%d film(s) in "%s" could not be identified - listed in '
-                    '"%s" to fill in by hand' % (len(unmatched), root, listing))
+            if tmdbworklists.write_id_list(listing, unmatched, None, log,
+                                           suggestions=suggestions):
+                suggested = sum(1 for one in unmatched if one in suggestions)
+                if suggested:
+                    log('%d film(s) in "%s" could not be identified (%d with '
+                        'model suggestions) - listed in "%s" to review and '
+                        'fill in' % (len(unmatched), root, suggested, listing))
+                else:
+                    log('%d film(s) in "%s" could not be identified - listed '
+                        'in "%s" to fill in by hand'
+                        % (len(unmatched), root, listing))
         if ambiguous:
             suggestions = aieditions.suggest_for_ambiguous(
                 ambiguous, log=log, tally=editions_tally,
@@ -1683,7 +1707,8 @@ def _tags_only(program: str, script_dir: str, roots: list, names: list,
     # rewrites it, because -i is read while the file is being filled in and a
     # dry run has no business editing the document it was handed.
     if id_list and write:
-        if tmdbworklists.write_id_list(id_list, shared, ids, log) and shared:
+        if tmdbworklists.write_id_list(id_list, shared, ids, log,
+                                       suggestions=shared_suggestions) and shared:
             log('%d film(s) could not be identified - listed in "%s" to fill '
                 "in by hand" % (len(shared), id_list))
 
@@ -1694,6 +1719,11 @@ def _tags_only(program: str, script_dir: str, roots: list, names: list,
         if unasked:
             log("%d film(s) had no id filled in and were not asked about"
                 % unasked)
+
+    if model_meter[1].requests > 1:
+        log("Model time over the run (film identify):\n    %s"
+            % modelmeter.rate_line(aitmdb.PURPOSE, model_meter[0].seconds,
+                                   model_meter[1]))
 
     if not write:
         log("Dry run: nothing was renamed. Pass -w to carry these out.")
@@ -3129,7 +3159,7 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
     # Which film each folder is, asked once for the subtitle lane, the remux
     # and the carry-over from the Plex library: the remux keeps the language
     # TMDb says the film was made in. Asked as soon as the names have settled.
-    state.film_tags = lanes.FilmTags(root)
+    state.film_tags = lanes.FilmTags(root, getattr(state, "film_year_meter", ""))
     if os.environ.get("tmdbApiKey"):
         state.film_tags.start()
     # The library's copies looked up and measured against from now on, while
@@ -3233,9 +3263,16 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
             "OMITTED (-o tagging)")
     else:
         log("Phase: tagging movies with IMDb ids (Plex/Jellyfin naming)")
+        id_meter = (modelmeter.Spans(), modelmeter.Tally())
         tmdblookup.tag_plex_ids(root, log, state.skips,
                                 ambiguous=ambiguous,
-                                long_names=state.long_names)
+                                long_names=state.long_names,
+                                model_meter=id_meter,
+                                meter_file=getattr(state, "film_year_meter", ""))
+        if id_meter[1].requests > 1:
+            log("Model time over the phase (film identify):\n    %s"
+                % modelmeter.rate_line(aitmdb.PURPOSE, id_meter[0].seconds,
+                                       id_meter[1]))
         if ambiguous:
             ambiguous_suggestions = aieditions.suggest_for_ambiguous(
                 ambiguous, log=log, meter_file=editions_meter)
