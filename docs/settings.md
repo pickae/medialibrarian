@@ -23,6 +23,7 @@ no command reads is warned about.
 | `audiobookLosslessCompression` | The FLAC compression level of that copy | 5 | `read-library` |
 | `audiobookLosslessFilters` | The ffmpeg filters the lossless copy of an audiobook is made with; empty for none | `dynaudnorm=f=150:g=15,afftdn=nf=-70` | `read-library` |
 | `beetsConfig` | The beets config ingest-music's tagging phase runs with | the shipped `medialib/config/beets.yaml` | `ingest-music` |
+| `bookTagsLlm` | Whether a joined book's empty metadata tags (title, author, narrator, series, series index, year, language, abridged) are looked up by a language model on the web (the `book-tags` task, see docs/models.md): it is told the folder's file names, the tracks' tags and what the book probably is. Only empty tags are filled and the output file is never renamed. Only a model that can search is asked - Claude, or one behind `llmHarness`: `on` or `off` | on | `concat-audio`, `convert-and-concat` |
 | `censusRamBase` | The census's scratch, ahead of `ramScratchBase` | `ramScratchBase` | `content-census`, `content-census-bi` |
 | `comicPdfExtensions` | The file suffixes that may be comic PDFs, space-separated | pdf | `content-census` |
 | `comicPdfFallbackDpi` | The resolution used where the PDF's own cannot be read | 300 | `content-census`, `convert-comics` |

@@ -98,6 +98,20 @@ A cover found online either way is also **kept in the input folder**, as
 nothing is overwritten), so the folder has its cover from then on and the
 next run takes it from there.
 
+## Metadata tags
+
+After chapters and cover are embedded, a [language model](../models.md) that
+can search the web can look up the recording's metadata tags - the `book-tags`
+task (`title`, `author`, `narrator`, `series`, `series_index`, `year`,
+`language`, and `abridged`). It is told the folder's file names, the tracks'
+tags, what the book probably is, and any hints the cover search returned when
+that ran; it also runs when the book already had a local cover.
+
+Only tags that are currently empty on the joined output file are filled —
+non-empty tags are never overwritten, and the output file is never renamed.
+`bookTagsLlm=off` switches this step off; the files' names and tags go to the
+model, so use one you trust with them.
+
 ---
 
 **Options:** `concat-audio -h` lists every option and its default. **Shared

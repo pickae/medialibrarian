@@ -252,6 +252,7 @@ def book_cover(input_path: str, output_name: str, tracks: Sequence[str],
                searchers: Sequence[llmclient.Llm] | None = None,
                lookers: Sequence[llmclient.Llm] | None = None,
                meter_file: str = "",
+               found_meta: dict[str, str] | None = None,
                download: Download = onlinecover.curl_download,
                probe: Callable[[str], dict] = onlinecover.probe_tags,
                prepare: Callable[[str, str], str] | None = None) -> str:
@@ -325,6 +326,11 @@ def book_cover(input_path: str, output_name: str, tracks: Sequence[str],
     path, item = found[choice]
     image = "%s.%s" % (dest_base, onlinecover.image_kind(path) or "jpg")
     os.replace(path, image)
+    if found_meta is not None:
+        for key in ("title", "language", "edition"):
+            value = str(item.get(key) or "").strip()
+            if value:
+                found_meta[key] = value
     title = str(item.get("title") or "").strip()
     _log("    Cover found by the model (%s): %s%s%s" % (
         subject.content, urllib.parse.urlsplit(item["url"]).netloc,

@@ -261,7 +261,8 @@ def _say_embedded(source: str, file_name: str, input_path: str) -> None:
 
 
 def _online_thumbnail(input_path: str, outputs: Sequence[str],
-                      ram_base: str, model_meter: str = "") -> str:
+                      ram_base: str, model_meter: str = "",
+                      cover_meta: dict[str, str] | None = None) -> str:
     """A cover found online for the book joined from <input_path>, or "".
 
     The catalogues first (:mod:`onlinecover`), then a model that can search
@@ -285,7 +286,8 @@ def _online_thumbnail(input_path: str, outputs: Sequence[str],
         image = aicover.book_cover(
             input_path, os.path.basename(ram_base),
             sorted(tracks, key=version_key), seconds,
-            f"{ram_base}.model", stereo=stereo, meter_file=model_meter)
+            f"{ram_base}.model", stereo=stereo, meter_file=model_meter,
+            found_meta=cover_meta)
     if image:
         _keep_in_input(image, input_path)
     return image
@@ -329,11 +331,13 @@ def embed_thumbnail(input_path: str, file_name: str, image_size_limit: int,
                     jpg_quality_level: int, thumbnail_resolution: str,
                     dpi: int, have_mkvtoolnix: bool, ram_dir: str,
                     script_dir: str, run: Runner = _run,
-                    model_meter: str = "") -> int:
+                    model_meter: str = "",
+                    cover_meta: dict[str, str] | None = None) -> int:
     """Write the chosen thumbnail into the output file(s) next to <file_name>.
 
     <model_meter> is where what a model was asked for the cover is recorded
-    for the run's total (:func:`modelmeter.record`)."""
+    for the run's total (:func:`modelmeter.record`). <cover_meta>, when given,
+    receives any metadata the cover model returned alongside the chosen cover."""
     file_name = file_name.removesuffix("/")
     opus_file = f"{file_name}.opus"
     mp3_file = f"{file_name}.mp3"
@@ -356,7 +360,7 @@ def embed_thumbnail(input_path: str, file_name: str, image_size_limit: int,
         if onlinecover.enabled():
             thumb_file = _online_thumbnail(
                 input_path, (opus_file, mp3_file, m4b_file, flac_file),
-                ram_base, model_meter)
+                ram_base, model_meter, cover_meta)
         else:
             _detail("    No cover looked for online: the coverSearch "
                     "setting is off")
