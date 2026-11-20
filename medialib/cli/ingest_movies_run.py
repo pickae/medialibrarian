@@ -120,6 +120,9 @@ class Run:
     # What each film takes from its copy in the Plex library, looked up while
     # the run does its first phases. Read with a default too.
     carry: carryphase.LibraryCarry | None
+    # What the vision model reading picture subtitles was asked over the run
+    # (subtitleocr.Usage). Read with a default too.
+    ocr_usage: subtitleocr.Usage | None
 
     def __init__(self, **settings) -> None:
         self.__dict__.update(settings)
@@ -295,17 +298,26 @@ class Run:
                         "be taken out of the film to read"
                         % (job.row.sub_word, job.track.id))
                     continue
-                engine = subtitleocr.recognise(image, job.row, job.srt, say)
+                usage = subtitleocr.Usage()
+                engine = subtitleocr.recognise(image, job.row, job.srt, say,
+                                               usage=usage)
                 if not engine:
                     say("  WARNING: no OCR engine could read the %s picture "
                         "subtitle (track %s)" % (job.row.sub_word,
                                                  job.track.id))
-                    continue
-                say("  Read the %s picture subtitle (track %s) by %s OCR: "
-                    "%d lines -> %s"
-                    % (job.row.sub_word, job.track.id, engine,
-                       len(subtitletracks.cue_texts(job.srt)),
-                       os.path.basename(job.srt)))
+                else:
+                    say("  Read the %s picture subtitle (track %s) by %s "
+                        "OCR: %d lines -> %s"
+                        % (job.row.sub_word, job.track.id, engine,
+                           len(subtitletracks.cue_texts(job.srt)),
+                           os.path.basename(job.srt)))
+                # The vision model's account, as generate-chapters gives its
+                # own: also where it was asked and another engine read.
+                if usage.requests:
+                    say("    model %s" % usage.line())
+                    run_usage = getattr(self, "ocr_usage", None)
+                    if run_usage is not None:
+                        run_usage.merge(usage)
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
 
@@ -1349,6 +1361,8 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
     # is what someone has to look at.
     unfixed_movies: list = []
     unsure_commentaries: list = []
+    # What the vision model reading picture subtitles was asked, over the run.
+    ocr_usage = subtitleocr.Usage()
 
     # Named above the phases a Ctrl+C can cut short, so an ingest stopped halfway
     # still recaps the renames it held back instead of leaving them buried in
@@ -1359,6 +1373,8 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
         _report_long_names(long_names)
         _report_unfixed_movies(unfixed_movies)
         _report_unsure_commentaries(unsure_commentaries)
+        if ocr_usage.requests:
+            _report_ocr_usage(ocr_usage)
 
     safety.set_run_footer(recap)
 
@@ -1383,7 +1399,7 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
                 ffsubsync_quality=ffsubsync_quality, long_names=long_names,
                 unfixed_movies=unfixed_movies,
                 unsure_commentaries=unsure_commentaries, disk_turns=disk_turns,
-                scratch_headroom=0,
+                scratch_headroom=0, ocr_usage=ocr_usage,
                 convert_remuxes=bool(result.values.get("convertRemuxes")),
                 keep_parts=keep_parts,
                 omit_phases=omit_phases, extras_llm=extras_llm,
@@ -1938,8 +1954,9 @@ def _ocr_only(program: str, script_dir: str, roots: list,
     ramscratch.add_exit_cleanup([ram_root])
     safety.init_abort_flag(os.path.join(ram_root, "abortRequested"))
     safety.trap_run_abort()
+    usage = subtitleocr.Usage()
     state = Run(script_dir=script_dir, ram_root=ram_root,
-                subtitle_languages=wanted)
+                subtitle_languages=wanted, ocr_usage=usage)
     try:
         for root in roots:
             log('Phase: reading the picture subtitles of the films in "%s"'
@@ -1955,6 +1972,8 @@ def _ocr_only(program: str, script_dir: str, roots: list,
                                            tracks, log)
             safety.exit_if_aborted()
     finally:
+        if usage.requests:
+            _report_ocr_usage(usage)
         ramscratch.run_exit_cleanup()
     return 0
 
@@ -2709,6 +2728,14 @@ def _flag_commentaries(movie: str, tracks: list, names: dict) -> None:
             os.utime(movie, (original, original))
         except OSError:
             pass
+
+
+def _report_ocr_usage(usage: subtitleocr.Usage) -> None:
+    """The vision model's account over the run, the way generate-chapters
+    closes a run of several files: only where it read more than one
+    subtitle, since one subtitle's line already said it all."""
+    if len(usage.spans.all()) > 1:
+        log("Model time over the run (subtitle OCR):\n    %s" % usage.line())
 
 
 def _report_unsure_commentaries(lines: list) -> None:

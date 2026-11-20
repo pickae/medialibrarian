@@ -34,6 +34,13 @@ tried, each where it is ready and the next one where it fails:
 A GPU too full for paddle after all is one more failure the next engine
 answers, so the run never stops over it.
 
+What the vision model was asked is counted into a :class:`Usage`: its
+requests, the tokens it read and wrote where the server reports them (the
+``usage`` of a Chat Completions reply), and the wall-clock it was at work -
+from a subtitle's first request to its last, with time two subtitles were
+read at once counted once, so the tokens a second are the model's real pace
+however many requests ran side by side.
+
 It is optional: without seconv a film keeps its picture subtitles as they are.
 """
 
@@ -53,9 +60,10 @@ import urllib.request
 from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
 
-from medialib.lib import enums, modelserver, subtitletracks, toolcapture, tooldeps
+from medialib.lib import enums, modelmeter, modelserver, subtitletracks, toolcapture, tooldeps
 
-__all__ = ["TOOL", "ENGINES", "available", "engines", "extract", "recognise"]
+__all__ = ["TOOL", "ENGINES", "Usage", "available", "engines", "extract",
+           "recognise"]
 
 TOOL = "seconv"
 
@@ -122,6 +130,50 @@ _tesseract_languages: set | None = None
 _paddle_cuda: bool | None = None
 # The engines already said to be unusable, so a run says it once each.
 _said: set = set()
+
+
+class Usage:
+    """What the vision model was asked, on one subtitle or over a run: the
+    requests it answered and the tokens their replies report
+    (:class:`modelmeter.Tally`), and the stretches of time it was at work
+    (:class:`modelmeter.Spans`). Safe to count into from many threads."""
+
+    def __init__(self) -> None:
+        self.tally = modelmeter.Tally()
+        self.spans = modelmeter.Spans()
+
+    @property
+    def requests(self) -> int:
+        return self.tally.requests
+
+    @property
+    def seconds(self) -> float:
+        """The wall-clock the model was at work, each moment once."""
+        return self.spans.seconds
+
+    def merge(self, other: Usage) -> None:
+        self.tally.merge(other.tally)
+        self.spans.merge(other.spans)
+
+    def line(self) -> str:
+        """The usage said the way generate-chapters says a pass
+        (:func:`modelmeter.rate_line`); "" when the model was never asked."""
+        if not self.requests:
+            return ""
+        return modelmeter.rate_line("ocr", self.seconds, self.tally)
+
+
+def _reported(answer) -> tuple:
+    """The tokens a reply says it read and wrote, as (prompt, completion):
+    None for either it does not say. Chat Completions' names, or the
+    Responses API's, which some servers answer with."""
+    usage = answer.get("usage") if isinstance(answer, dict) else None
+    if not isinstance(usage, dict):
+        return None, None
+    return tuple(next((usage[name] for name in names
+                       if type(usage.get(name)) is int), None)
+                 for names in (("prompt_tokens", "input_tokens"),
+                               ("completion_tokens", "output_tokens")))
 
 
 def available() -> bool:
@@ -397,10 +449,12 @@ def _numbered(pngs: list) -> list:
     return parts
 
 
-def _ask(url: str, model: str, prompt: str, pngs: list, extra=None):
+def _ask(url: str, model: str, prompt: str, pngs: list, extra=None,
+         usage: Usage | None = None):
     """The model's answer to the prompt about the pictures, or None when the
     server would not give one. A server with no room is asked again, after a
-    pause that doubles; any other refusal is final."""
+    pause that doubles; any other refusal is final. An answer is counted
+    into ``usage``."""
     body = {"messages": [{"role": "user", "content": [
                 {"type": "text", "text": prompt},
                 *_numbered(pngs)]}],
@@ -418,9 +472,13 @@ def _ask(url: str, model: str, prompt: str, pngs: list, extra=None):
     pause = _VISION_BACKOFF
     for _try in range(_VISION_TRIES):
         try:
+            started = time.monotonic()
             with urllib.request.urlopen(request, timeout=600) as reply:
                 answer = json.loads(reply.read().decode("utf-8", "replace"))
             text = answer["choices"][0]["message"]["content"] or ""
+            if usage is not None:
+                read, written = _reported(answer)
+                usage.tally.add(time.monotonic() - started, written, read)
             if _THOUGHT_END in text:
                 text = text.rsplit(_THOUGHT_END, 1)[1]
             return text
@@ -476,7 +534,7 @@ def _line_height(lines: list) -> int:
 
 
 def _read_group(url: str, model: str, row, group: list, line_height: int,
-                extra) -> list:
+                extra, usage: Usage | None = None) -> list:
     """The text of each picture of ``group``, in order - None for one the
     model would not read. Asked in one request; a group answered with no
     usable array, and a picture whose answer is short of its lines, are asked
@@ -488,7 +546,7 @@ def _read_group(url: str, model: str, row, group: list, line_height: int,
     prompt = _VISION_GROUP_PROMPT.format(count=len(asked),
                                          language=row.sub_word)
     found = _array(_ask(url, model, prompt, [group[at][2] for at in asked],
-                        extra), len(asked)) if len(asked) > 1 else None
+                        extra, usage), len(asked)) if len(asked) > 1 else None
     for at, text in zip(asked, found or [], strict=False):
         texts[at] = text
     alone = _VISION_PROMPT.format(language=row.sub_word)
@@ -498,14 +556,15 @@ def _read_group(url: str, model: str, row, group: list, line_height: int,
         if texts[at] is not None \
                 and not _short_of_lines(texts[at], line[3], line_height):
             continue
-        answer = _ask(url, model, alone, [line[2]], extra)
+        answer = _ask(url, model, alone, [line[2]], extra, usage)
         if answer is not None:
             texts[at] = _tidy(answer)
     return texts
 
 
 def _read_by_vision(image: str, row, out: str, environ,
-                    log: Callable[[str], None]) -> str:
+                    log: Callable[[str], None],
+                    usage: Usage | None = None) -> str:
     """The picture subtitle read into a SubRip in ``out`` by the first vision
     server of the ladder that can be had now (:func:`_vision_servers`),
     :data:`VISION_GROUP` pictures a request and ``subtitleOcrJobs`` requests
@@ -521,7 +580,7 @@ def _read_by_vision(image: str, row, out: str, environ,
             continue
         try:
             written = _read_with(server.url, image, row, out, environ, extra,
-                                 log)
+                                 log, usage)
         finally:
             server.release()
         if written:
@@ -532,9 +591,11 @@ def _read_by_vision(image: str, row, out: str, environ,
 
 
 def _read_with(url: str, image: str, row, out: str, environ, extra,
-               log: Callable[[str], None]) -> str:
+               log: Callable[[str], None], usage: Usage | None = None) -> str:
     """The picture subtitle read by the vision model at ``url``: see
-    :func:`_read_by_vision`."""
+    :func:`_read_by_vision`. Its requests are timed into ``usage`` as one
+    stretch, from the first one's start to the last one's end, however many
+    ran at once."""
     lines = _pictures(image, out)
     if not lines:
         return ""
@@ -542,10 +603,13 @@ def _read_with(url: str, image: str, row, out: str, environ, extra,
     line_height = _line_height(lines)
     groups = [lines[at:at + VISION_GROUP]
               for at in range(0, len(lines), VISION_GROUP)]
-    with ThreadPoolExecutor(max_workers=_jobs(environ)) as pool:
+    usage = Usage() if usage is None else usage
+    with usage.spans.timing(), \
+            ThreadPoolExecutor(max_workers=_jobs(environ)) as pool:
         texts = [text for found in pool.map(
                      lambda group: _read_group(url, model, row, group,
-                                               line_height, extra), groups)
+                                               line_height, extra, usage),
+                     groups)
                  for text in found]
     missing = sum(1 for text in texts if text is None)
     if missing:
@@ -585,11 +649,13 @@ def _written(stdout: str, out: str) -> str:
 
 
 def recognise(image: str, row, srt: str,
-              log: Callable[[str], None], environ=None) -> str:
+              log: Callable[[str], None], environ=None,
+              usage: Usage | None = None) -> str:
     """The picture subtitle ``image``, in the language of ``row`` (one of
     :func:`languages.recognised`), read into ``srt`` by the first engine
     that manages it; the engine's name, or "" when none did. An engine that
-    exits 0 having written no line is a failure too."""
+    exits 0 having written no line is a failure too. What a vision model was
+    asked is counted into ``usage``, whether or not it read the subtitle."""
     environ = os.environ if environ is None else environ
     for engine, device in engines(environ):
         if not _ready(engine, row, log):
@@ -598,7 +664,8 @@ def recognise(image: str, row, srt: str,
         try:
             try:
                 if engine == "vision":
-                    written = _read_by_vision(image, row, out, environ, log)
+                    written = _read_by_vision(image, row, out, environ, log,
+                                              usage)
                 else:
                     done = toolcapture.watched(
                         _command(image, engine, row, out),

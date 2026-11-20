@@ -92,14 +92,14 @@ def _calls(bin_dir):
     return calls
 
 
-def _read(bin_dir, tmp_path, row=FRENCH, environ=None):
+def _read(bin_dir, tmp_path, row=FRENCH, environ=None, usage=None):
     image = tmp_path / "scratch" / "track3.sup"
     image.parent.mkdir(exist_ok=True)
     image.write_bytes(b"PG")
     srt = tmp_path / "Film.fr.srt"
     logs = []
     engine = subtitleocr.recognise(str(image), row, str(srt), logs.append,
-                                   environ=environ)
+                                   environ=environ, usage=usage)
     return engine, srt, logs
 
 
@@ -366,7 +366,8 @@ class TestTheVisionModel:
         import json
         import threading
 
-        state = {"bodies": [], "busy": 0, "refuse": False, "group": None}
+        state = {"bodies": [], "busy": 0, "refuse": False, "group": None,
+                 "usage": None}
 
         class Handler(http.server.BaseHTTPRequestHandler):
             def log_message(self, *args):
@@ -402,8 +403,10 @@ class TestTheVisionModel:
                     answer = TestTheVisionModel.ALONE[seen[0]]
                 else:
                     answer = state["group"](seen)
-                self._send(200, {"choices": [{"message": {
-                    "content": answer}}]})
+                reply = {"choices": [{"message": {"content": answer}}]}
+                if state["usage"] is not None:
+                    reply["usage"] = state["usage"](len(seen))
+                self._send(200, reply)
 
         httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
@@ -415,12 +418,12 @@ class TestTheVisionModel:
         yield state
         httpd.shutdown()
 
-    def _read(self, bin_dir, tmp_path, server, jobs="2"):
+    def _read(self, bin_dir, tmp_path, server, jobs="2", usage=None):
         _tool(bin_dir, "seconv", _SECONV_PICTURES)
         return _read(bin_dir, tmp_path,
                      environ={"subtitleOcrEngines": "vision",
                               "subtitleOcrUrl": server["url"] + "/v1",
-                              "subtitleOcrJobs": jobs})
+                              "subtitleOcrJobs": jobs}, usage=usage)
 
     def _alone(self, server):
         return [body for body in server["bodies"]
@@ -524,6 +527,65 @@ class TestTheVisionModel:
         assert engine == "vision"
         assert "Bonjour." in srt.read_text()
 
+    def _counted(self, monkeypatch, tmp_path, server, jobs="2"):
+        """The pictures read straight off the server, seconv's part stood
+        in for, into a fresh :class:`subtitleocr.Usage`."""
+        folder = tmp_path / "pictures"
+        folder.mkdir()
+        lines = []
+        for at, (name, height) in enumerate((("one", 50), ("two", 48),
+                                             ("dots", 10), ("tall", 110))):
+            (folder / (name + ".png")).write_text(name)
+            lines.append(("00:00:0%d,000" % at, "00:00:0%d,500" % at,
+                          str(folder / (name + ".png")), height))
+        monkeypatch.setattr(subtitleocr, "_pictures", lambda image, out: lines)
+        monkeypatch.setattr(subtitleocr.toolcapture, "watched",
+                            lambda *a, **k: None)
+        usage = subtitleocr.Usage()
+        written = subtitleocr._read_with(
+            server["url"] + "/v1", "t.sup", FRENCH, str(tmp_path),
+            {"subtitleOcrJobs": jobs}, {}, lambda line: None, usage)
+        assert written
+        return usage
+
+    def test_the_tokens_the_server_reports_are_counted(self, monkeypatch,
+                                                       tmp_path, server):
+        """Every answered request, the group and the one asked again alone,
+        with the tokens its reply reports; the wall-clock is the reading's."""
+        import json
+        server["group"] = lambda seen: json.dumps(
+            ["Bonjour.", "- Oui ?\n- Non.", "Line one."])
+        server["usage"] = lambda pictures: {"prompt_tokens": 100 * pictures,
+                                            "completion_tokens": 7}
+        usage = self._counted(monkeypatch, tmp_path, server)
+        assert (usage.requests, usage.tally.counted) == (2, 2)
+        assert (usage.tally.read, usage.tally.tokens) == (400, 14)
+        assert len(usage.spans.all()) == 1
+        line = usage.line()
+        assert line.startswith("ocr:")
+        assert "14 token(s) written" in line
+        assert "400 read, 414 in all" in line
+
+    def test_a_server_that_reports_none_is_only_timed(self, monkeypatch,
+                                                      tmp_path, server):
+        usage = self._counted(monkeypatch, tmp_path, server)
+        assert (usage.requests, usage.tally.counted) == (1, 0)
+        assert usage.line().endswith(", tokens not reported")
+
+    def test_the_responses_api_names_are_read_too(self):
+        assert subtitleocr._reported({"usage": {"input_tokens": 9,
+                                                "output_tokens": 3}}) \
+            == (9, 3)
+        assert subtitleocr._reported({"usage": None}) == (None, None)
+        assert subtitleocr._reported({}) == (None, None)
+
+    def test_a_refused_request_is_not_counted(self, monkeypatch, tmp_path,
+                                              server):
+        server["busy"] = 3
+        usage = self._counted(monkeypatch, tmp_path, server, jobs="1")
+        assert len(server["bodies"]) == 4
+        assert usage.requests == 1
+
     @pytest.mark.parametrize("value,jobs", [("8", 8), ("", 32), ("x", 32),
                                             ("0", 1)])
     def test_how_many_requests_at_once(self, value, jobs):
@@ -539,7 +601,8 @@ class TestTheVisionSettings:
         monkeypatch.setattr(subtitleocr.modelserver, "served_model",
                             lambda url: ["listed", "vision-35b"])
         monkeypatch.setattr(subtitleocr, "_ask",
-                            lambda url, model, prompt, pngs, extra:
+                            lambda url, model, prompt, pngs, extra,
+                            usage=None:
                             calls.append((model, extra)) or "Oui")
         monkeypatch.setattr(subtitleocr.toolcapture, "watched",
                             lambda *a, **k: None)

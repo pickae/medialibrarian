@@ -132,7 +132,8 @@ class TestTheSidecarsGathered:
 
 @pytest.mark.fs
 class TestTheRemuxReadsThem:
-    def _read(self, monkeypatch, tmp_path, available=True, omit=frozenset()):
+    def _read(self, monkeypatch, tmp_path, available=True, omit=frozenset(),
+              engine="tesseract", state=None):
         base = str(tmp_path / "Film (2006)")
         calls, lines = [], []
         monkeypatch.setattr(run_module.subtitleocr, "available",
@@ -143,20 +144,55 @@ class TestTheRemuxReadsThem:
             return {number: os.path.join(scratch, number + ".sup")
                     for number, _codec in tracks if number != "4"}
 
-        def recognise(image, row, srt, log):
+        def recognise(image, row, srt, log, usage=None):
             calls.append(("read", os.path.basename(image), row.code2,
                           os.path.basename(srt)))
+            if engine == "vision":
+                # Each subtitle read in ten seconds by two requests, the
+                # second film's starting before the first's ended.
+                start = 0.0 if image.endswith("3.sup") else 6.0
+                usage.spans.add(start, start + 10.0)
+                usage.tally.add(5.0, 50, read=1000)
+                usage.tally.add(5.0, 50, read=1000)
             with open(srt, "w") as handle:
                 handle.write("1\n00:00:01,000 --> 00:00:02,000\nOui\n")
-            return "tesseract"
+            return engine
 
         monkeypatch.setattr(run_module.subtitleocr, "extract", extract)
         monkeypatch.setattr(run_module.subtitleocr, "recognise", recognise)
-        state = run_module.Run(subtitle_languages=(ENGLISH, FRENCH),
-                               omit_phases=omit)
+        if state is None:
+            state = run_module.Run(subtitle_languages=(ENGLISH, FRENCH),
+                                   omit_phases=omit)
         state.read_image_subtitles(base + ".mkv", base, _film(),
                                    lines.append)
         return calls, lines
+
+    def test_the_vision_model_s_account_follows_each_subtitle(
+            self, monkeypatch, tmp_path):
+        """Said the way generate-chapters says a pass, and added up over the
+        run with the time two subtitles shared counted once."""
+        usage = run_module.subtitleocr.Usage()
+        state = run_module.Run(subtitle_languages=(ENGLISH, FRENCH),
+                               omit_phases=frozenset(), ocr_usage=usage)
+        _calls, lines = self._read(monkeypatch, tmp_path, engine="vision",
+                                   state=state)
+        model = ("    model ocr:        2 request(s) in    10.0s, 100 token(s) "
+                 "written, 10.0 tok/s (10.0 tok/s a request), 2000 read, "
+                 "2100 in all")
+        assert lines[1:] == [
+            "  Read the French picture subtitle (track 3) by vision OCR: "
+            "1 lines -> Film (2006).fr.srt", model,
+            "  Read the French picture subtitle (track 5) by vision OCR: "
+            "1 lines -> Film (2006).fr.forced.srt", model]
+        assert usage.requests == 4
+        assert usage.seconds == 16.0
+        logged = []
+        monkeypatch.setattr(run_module, "log", logged.append)
+        run_module._report_ocr_usage(usage)
+        assert logged == [
+            "Model time over the run (subtitle OCR):\n"
+            "    ocr:        4 request(s) in    16.0s, 200 token(s) written, "
+            "12.5 tok/s (10.0 tok/s a request), 4000 read, 4200 in all"]
 
     def test_every_track_comes_out_at_once_and_is_read_into_its_sidecar(
             self, monkeypatch, tmp_path):

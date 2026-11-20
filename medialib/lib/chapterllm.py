@@ -58,6 +58,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field, replace
 
 from medialib.lib import llmharness, modelserver, tmdbclient, tooldeps
+from medialib.lib.modelmeter import Tally
 
 __all__ = ["API_VARIABLE", "URL_VARIABLE", "MODEL_VARIABLE", "KEY_VARIABLE",
            "CONTEXT_VARIABLE", "OPTIONS_VARIABLE", "JOBS_VARIABLE",
@@ -160,39 +161,6 @@ _THINKING = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 
 class LlmError(Exception):
     """The model could not be asked, or did not answer."""
-
-
-@dataclass
-class Tally:
-    """What the requests counted into it took: how many answered, the seconds
-    each was under way summed, and the tokens the model wrote, from those
-    whose server reported them (``counted`` of them, over ``counted_seconds``).
-    A harness reports none. Safe to add to from many threads."""
-
-    requests: int = 0
-    seconds: float = 0.0
-    tokens: int = 0
-    counted: int = 0
-    counted_seconds: float = 0.0
-    _lock: threading.Lock = field(default_factory=threading.Lock, init=False,
-                                  repr=False, compare=False)
-
-    def add(self, seconds: float, tokens: int | None) -> None:
-        with self._lock:
-            self.requests += 1
-            self.seconds += seconds
-            if tokens is not None:
-                self.tokens += tokens
-                self.counted += 1
-                self.counted_seconds += seconds
-
-    def merge(self, other: Tally) -> None:
-        with self._lock:
-            self.requests += other.requests
-            self.seconds += other.seconds
-            self.tokens += other.tokens
-            self.counted += other.counted
-            self.counted_seconds += other.counted_seconds
 
 
 @dataclass
