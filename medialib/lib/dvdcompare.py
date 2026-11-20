@@ -24,6 +24,7 @@ import hashlib
 import os
 import re
 import subprocess
+import threading
 import time
 import unicodedata
 from collections.abc import Callable
@@ -39,9 +40,12 @@ __all__ = [
     "MIN_INTERVAL",
     "PACER",
     "SearchEntry",
+    "cached_extras",
     "directory",
+    "parse_extras",
     "parse_film_page",
     "parse_search",
+    "fitting_pages",
     "pick",
     "search_query",
     "Site",
@@ -256,6 +260,73 @@ def parse_film_page(text: str) -> list[Release]:
     return releases
 
 
+def parse_extras(text: str) -> list[str]:
+    """Every extras line a film's page lists across its releases, deduplicated
+    in order of appearance. Disc headings are skipped."""
+    page = _Page()
+    page.feed(text or "")
+    seen: set[str] = set()
+    found: list[str] = []
+    for block in page.blocks:
+        if not block["release"]:
+            continue
+        items: list = []
+        label = ""
+        for kind, content in block["items"]:
+            if kind == "label":
+                label = " ".join(content.split())
+            else:
+                items.append((label, content))
+        if not items:
+            continue
+        fields = dict(items[1:])
+        for line in _lines(fields.get("Extras:", "")):
+            clean = line.replace("\x02", "").strip()
+            if not clean or _DISC_HEADING.match(clean):
+                continue
+            if clean not in seen:
+                seen.add(clean)
+                found.append(clean)
+    return found
+
+
+def cached_extras(where: str, title: str, year: str) -> list[str]:
+    """Extras lines from dvdcompare pages already cached under ``where``, or []
+    when none are on disk. Never contacts the network."""
+    if not where or not title or not year:
+        return []
+    query = search_query(title)
+    if not query:
+        return []
+    key = hashlib.sha1(query.lower().encode("utf-8")).hexdigest()[:16]
+    search_path = os.path.join(where, "search-%s.html" % key)
+    try:
+        with open(search_path, encoding="utf-8") as handle:
+            search_text = handle.read()
+    except OSError:
+        return []
+    entries = parse_search(search_text)
+    seen_lines: set[str] = set()
+    seen_fids: set[str] = set()
+    lines: list[str] = []
+    for kind in ("uhd", "bluray", "dvd"):
+        fid = pick(entries, title, year, kind)
+        if not fid or fid in seen_fids:
+            continue
+        seen_fids.add(fid)
+        film_path = os.path.join(where, "film-%s.html" % fid)
+        try:
+            with open(film_path, encoding="utf-8") as handle:
+                film_text = handle.read()
+        except OSError:
+            continue
+        for line in parse_extras(film_text):
+            if line not in seen_lines:
+                seen_lines.add(line)
+                lines.append(line)
+    return lines
+
+
 def _lines(content: str) -> list[str]:
     return [" ".join(line.split()) for line in content.split("\n")
             if line.strip()]
@@ -353,21 +424,17 @@ def search_query(title: str) -> str:
     return " ".join(words)
 
 
-def pick(entries: list[SearchEntry], title: str, year: str,
-         kind: str) -> str:
-    """The one page of this film for this kind of disc, or "".
-
-    The page must be of the year the library dates the film to, or failing any
-    such, one year either side of it - a festival premiere and a release a year
-    later are the same film - and carry the title, under any of its names, the
-    way :mod:`titlematch` reads two titles as one. Television is never a film.
-    Two pages that both fit are no answer at all.
-    """
+def fitting_pages(entries: list[SearchEntry], title: str, year: str,
+                  kind: str) -> list[SearchEntry]:
+    """Every page of this film for this kind of disc that fits ``title`` and
+    ``year``: exact year first, else one year either side. Television is never
+    a film. Deduplicated by fid, in search order."""
     wanted = titlematch.title_keys(title)
     candidates = [entry for entry in entries
                   if entry.kind == kind and not entry.tv]
     for spread in (0, 1):
         fitting = []
+        seen: set[str] = set()
         for entry in candidates:
             if not year.isdigit() or not entry.year.isdigit():
                 continue
@@ -375,9 +442,35 @@ def pick(entries: list[SearchEntry], title: str, year: str,
                 continue
             if any(titlematch.title_keys(name) & wanted
                    for name in entry.names):
-                fitting.append(entry.fid)
+                if entry.fid not in seen:
+                    seen.add(entry.fid)
+                    fitting.append(entry)
         if fitting:
-            return fitting[0] if len(set(fitting)) == 1 else ""
+            return fitting
+    return []
+
+
+def pick(entries: list[SearchEntry], title: str, year: str,
+         kind: str, *,
+         choose: Callable[[list[SearchEntry]], str] | None = None) -> str:
+    """The one page of this film for this kind of disc, or "".
+
+    The page must be of the year the library dates the film to, or failing any
+    such, one year either side of it - a festival premiere and a release a year
+    later are the same film - and carry the title, under any of its names, the
+    way :mod:`titlematch` reads two titles as one. Television is never a film.
+    Two pages that both fit are no answer at all unless ``choose`` is given,
+    in which case ``choose`` is handed those fitting pages and may return the
+    ``fid`` of one of them (or ""); any answer outside those fitting pages is
+    refused.
+    """
+    fitting = fitting_pages(entries, title, year, kind)
+    if len(fitting) == 1:
+        return fitting[0].fid
+    if len(fitting) > 1 and choose is not None:
+        chosen = choose(fitting)
+        allowed = {entry.fid for entry in fitting}
+        return chosen if chosen in allowed else ""
     return ""
 
 
@@ -389,20 +482,33 @@ class Site:
     ``fetch`` is handed a URL and the form fields to post (or None) and
     answers with the page's text or None; the default is curl. ``pacer``
     spaces the requests out, :data:`PACER` unless a test brings a clock of its
-    own. The first time the site does not answer, nothing more is asked of it
-    this run - it is down, or it has started refusing - and only the pages
-    already kept are read.
+    own. ``choose_page``, when given, is called as
+    ``choose_page(fitting, title, year, page_kind)`` whenever two or more
+    pages fit a search and returns ``(fid, note)``. The first time the site
+    does not answer, nothing more is asked of it this run - it is down, or it
+    has started refusing - and only the pages already kept are read.
     """
 
     def __init__(self, where: str, log: Callable[[str], None],
                  fetch: Callable | None = None,
-                 pacer: politepacing.Pacer | None = None) -> None:
+                 pacer: politepacing.Pacer | None = None,
+                 choose_page: Callable[[list[SearchEntry], str, str, str],
+                                       tuple[str, str]] | None = None) -> None:
         self.where = where
         self.log = log
         self.fetch = fetch or _curl
         self.pacer = pacer or PACER
+        self.choose_page = choose_page
         self.down = False
         self._searches: dict = {}
+        self._notes: dict[tuple[str, str, str], list[str]] = {}
+        self._lock = threading.Lock()
+
+    def page_notes(self, title: str, year: str, kind: str) -> tuple[str, ...]:
+        """Any decision note recorded while choosing a page for
+        ``(title, year, kind)``."""
+        with self._lock:
+            return tuple(self._notes.get((title, year, kind), ()))
 
     def releases(self, title: str, year: str, kind: str) -> list | None:
         """What the site lists for this film on this kind of disc, or None
@@ -418,16 +524,33 @@ class Site:
             return None
         found = []
         answered = False
+        notes: list[str] = []
         for page_kind in kinds:
-            fid = pick(entries, title, year, page_kind)
+            def _choose(fitting: list[SearchEntry],
+                        _page_kind: str = page_kind) -> str:
+                if self.choose_page is None:
+                    return ""
+                chosen, note = self.choose_page(fitting, title, year, _page_kind)
+                if note:
+                    notes.append(note)
+                return chosen
+
+            fid = pick(entries, title, year, page_kind,
+                       choose=_choose if self.choose_page is not None else None)
             if not fid:
                 continue
             text = self._page("film-%s.html" % fid, BASE + "film.php?fid=" + fid,
                               None, FILM_PAGE_DAYS)
             if text is None:
+                if notes:
+                    with self._lock:
+                        self._notes[(title, year, kind)] = notes
                 return None
             answered = True
             found += parse_film_page(text)
+        if notes:
+            with self._lock:
+                self._notes[(title, year, kind)] = notes
         return found if answered else None
 
     def _search(self, query: str) -> list | None:

@@ -31,6 +31,7 @@ coordinate either, and one formatter and one locked append is all there is.
 
 from __future__ import annotations
 
+import atexit
 import contextlib
 import datetime
 import errno
@@ -64,8 +65,11 @@ ERROR_DIR = "error"
 # Handed down to every worker and child of the run, so all of them write to
 # the one file and name the command line the run was started with.
 NAME_VARIABLE = "ERROR_LOG_NAME"
+OWNER_VARIABLE = "ERROR_LOG_OWNER"
 RUN_VARIABLE = "ERROR_LOG_RUN"
 STARTED_VARIABLE = "ERROR_LOG_STARTED"
+
+_EXIT_HOOK_INSTALLED = False
 
 ERROR, WARNING = "ERROR", "WARNING"
 
@@ -368,6 +372,46 @@ def settle_run(argv: list | None = None) -> None:
     record beside the run's.
     """
     _settle_name(argv)
+    if runcontext.get(OWNER_VARIABLE) == str(os.getpid()):
+        _install_exit_hook()
+
+
+def _install_exit_hook() -> None:
+    global _EXIT_HOOK_INSTALLED
+    if _EXIT_HOOK_INSTALLED:
+        return
+    _EXIT_HOOK_INSTALLED = True
+    atexit.register(_triage_at_exit)
+
+
+def _triage_at_exit() -> None:
+    """Ask for advisory triage on unexplained errors when the run that owns
+    the error log ends. Strictly advisory: never raises, never alters the
+    run's exit code, and skips interrupted runs and child processes."""
+    try:
+        if runcontext.get(OWNER_VARIABLE) != str(os.getpid()):
+            return
+        if not runcontext.get(NAME_VARIABLE):
+            return
+        if runcontext.abort_requested():
+            return
+        path = current_file()
+        if not os.path.isfile(path):
+            return
+        # An atexit hook registered during exit does not run, so if triage
+        # lazily loads modelserver and starts an on-demand server, stop it
+        # explicitly before the process leaves.
+        had_server = "medialib.lib.modelserver" in sys.modules
+        from medialib.lib import aierrorlog
+        try:
+            aierrorlog.triage_file(path)
+        finally:
+            if not had_server:
+                server = sys.modules.get("medialib.lib.modelserver")
+                if server is not None:
+                    server.stop_all()
+    except Exception:
+        pass
 
 
 def current_file() -> str:
@@ -389,6 +433,7 @@ def _settle_name(argv: list | None = None) -> None:
     safe = re.sub(r"[^A-Za-z0-9._-]+", "-", program).strip("-") or "run"
     runcontext.settle(NAME_VARIABLE, "%s-%s-%d.log" % (
         time.strftime("%Y%m%d-%H%M%S"), safe, os.getpid()))
+    runcontext.settle(OWNER_VARIABLE, str(os.getpid()))
     runcontext.settle(STARTED_VARIABLE, _stamp())
     runcontext.settle(RUN_VARIABLE,
                       shlex.join([program] + [str(a) for a in argv]))
