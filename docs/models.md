@@ -1,10 +1,11 @@
 # Language models
 
 Several commands ask a language model for something: chapters from a
-transcript (`generate-chapters`, `convert-audio -a`, `convert-video`,
-`ingest-movies`, `ytdlp`), a book's cover where nothing else found one, or
-its chapter titles where its file names only number them (`concat-audio`).
-Each of those is a **task**, and each task picks from the
+transcript (`generate-chapters`, `convert-audio -C`, `convert-video`,
+`ingest-movies`, `ytdlp`), a cover where nothing else found one
+(`concat-audio`, `convert-audio`), or a book's chapter titles where its file
+names only number them (`concat-audio`). Each of those is a **task**, and
+each task picks from the
 models you have, by what it needs and what it would rather have.
 
 ## Your models
@@ -106,8 +107,10 @@ A task's models, best first:
 A task that can do without what it prefers still runs on a model that lacks
 it: chapters with instructions are written without web search when no model
 can search. A task that needs something no model has is skipped (the cover
-search) or refused before any work (the chapter commands), saying which
-trait was missing.
+search, and `convert-audio`'s per-track cover search whenever no vision model
+is available for `cover-look`, since a track cover must be accepted on sight)
+or refused before any work (the chapter commands), saying which trait was
+missing.
 
 Overriding it:
 

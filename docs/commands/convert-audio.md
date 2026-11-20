@@ -11,7 +11,7 @@ carrying over chapters and cover art.
 | **Writes** | the converted files under `<outputDir>`; with `-c`, the rest copied verbatim beside them |
 | **Input** | file extensions lower-cased and `.jpeg` renamed to `.jpg`; nothing else is changed |
 | **Reruns** | an up-to-date output is skipped |
-| **Network** | none, except the language model's server under `-C` |
+| **Network** | online cover lookup for standalone tracks without a cover (`coverSearch`, `coverSearchLlm`), and the language model's server under `-C` |
 
 ## Default behavior
 
@@ -170,6 +170,17 @@ difference: 30–200 minutes encoded in **stereo** (not `-m`, and not a mono
 source under `-a`) reads as a full-cast drama, and is looked for where
 audiobooks are. The
 `coverSearch` [setting](../settings.md) switches it off.
+
+When those catalogues come up empty, a language model that can **search the
+web** (`cover-search` in [docs/models.md](../models.md)) is asked for the
+episode's cover — told the show (from the album/artist tags and parent
+folder), the episode title, the date (from the filename or tags), its tags
+and what it probably is — and a model that **sees pictures** (`cover-look`)
+is shown the candidates it found. Because a wrong cover on a track is worse
+than none, the look **must accept** an image: if no vision model is
+available, or it rejects every candidate, no cover is taken.
+`coverSearchLlm=off` skips this step alone; `coverSearch=off` turns off every
+online rung.
 
 ## Every conversion is measured
 

@@ -68,6 +68,7 @@ __all__ = [
     "probable_content",
     "read_table",
     "track_cover",
+    "track_subject",
     "track_wants_search",
 ]
 
@@ -889,29 +890,50 @@ def track_wants_search(source: str, seconds: float,
     return _siblings_mostly_covered(folder, source, has_cover)
 
 
-def track_cover(source: str, seconds: float, tmp_dir: str,
-                search: CoverSearch | None = None,
-                has_cover: Callable[[str], bool] = has_embedded_cover,
-                stereo: bool = False) -> None:
-    """Fill ``<tmp_dir>/tempCover.jpg`` from online, where the source left it
-    empty and the track is worth a search. ``apply_cover`` embeds it from
-    there the way it embeds a cover pulled out of the source. ``stereo`` is
-    whether the run encodes it in stereo - see :func:`probable_content`."""
-    temp_cover = os.path.join(tmp_dir, "tempCover.jpg")
-    if os.path.isfile(temp_cover) or not enabled():
-        return
-    if not track_wants_search(source, seconds, has_cover):
-        return
+def track_subject(source: str, seconds: float, stereo: bool = False,
+                  probe: Callable[[str], dict] | None = None,
+                  tags: dict[str, str] | None = None) -> Subject:
+    """What the track at ``source`` is looked for as: its filename stem, its
+    tags (read by ``probe``, ffprobe unless given, or taken from ``tags``),
+    and its parent folder as a possible show."""
     stem = os.path.splitext(os.path.basename(source))[0]
-    tags = probe_tags(source)
-    subject = subject_for(
+    if tags is None:
+        tags = (probe or probe_tags)(source)
+    return subject_for(
         stem, seconds,
         tag_titles=[tags.get("title", "")],
         tag_creators=[tags.get("album_artist", ""), tags.get("artist", "")],
         guessed_creators=[tags.get("album", ""),
                           os.path.basename(os.path.dirname(source))],
         stereo=stereo)
+
+
+def track_cover(source: str, seconds: float, tmp_dir: str,
+                search: CoverSearch | None = None,
+                has_cover: Callable[[str], bool] = has_embedded_cover,
+                stereo: bool = False,
+                meter_file: str = "") -> None:
+    """Fill ``<tmp_dir>/tempCover.jpg`` from online, where the source left it
+    empty and the track is worth a search. ``apply_cover`` embeds it from
+    there the way it embeds a cover pulled out of the source. ``stereo`` is
+    whether the run encodes it in stereo - see :func:`probable_content`.
+
+    Falls back to :func:`medialib.lib.aicover.track_cover` when the catalogue
+    search comes up empty; ``meter_file`` records what the model was asked."""
+    temp_cover = os.path.join(tmp_dir, "tempCover.jpg")
+    if os.path.isfile(temp_cover) or not enabled():
+        return
+    if not track_wants_search(source, seconds, has_cover):
+        return
+    tags = probe_tags(source)
+    subject = track_subject(source, seconds, stereo=stereo, tags=tags)
     image = _search(subject, os.path.join(tmp_dir, "online"), search)
+    if not image:
+        from medialib.lib import aicover
+        image = aicover.track_cover(
+            source, seconds, os.path.join(tmp_dir, "model"),
+            stereo=stereo, subject=subject, meter_file=meter_file,
+            probe=lambda _path: tags)
     if not image:
         return
     if image.endswith(".jpg"):
