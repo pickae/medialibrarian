@@ -48,7 +48,7 @@ from medialib.lib import (
 )
 from medialib.lib.enums import shell_lower
 
-__all__ = ["SWITCH_VARIABLE", "PURPOSE", "enabled", "prompt", "look_prompt",
+__all__ = ["SWITCH_VARIABLE", "PURPOSE", "enabled", "account", "prompt", "look_prompt",
            "book_cover", "candidates"]
 
 # Whether the model is asked at all: on unless set to off.
@@ -178,18 +178,18 @@ def _tag_lines(input_path: str, tracks: Sequence[str],
     return lines
 
 
-def prompt(input_path: str, output_name: str, tracks: Sequence[str],
-           subject: onlinecover.Subject,
-           probe: Callable[[str], dict] = onlinecover.probe_tags) -> str:
-    """What the model is told about the book joined from ``input_path``."""
+def account(input_path: str, output_name: str, tracks: Sequence[str],
+            subject: onlinecover.Subject,
+            probe: Callable[[str], dict] = onlinecover.probe_tags) -> list[str]:
+    """What a model is told about the book joined from ``input_path``, a
+    section to an item: its folder and files, the tags inside its tracks, the
+    name it is written out under, and what it probably is."""
     folder = os.path.normpath(input_path)
     parents = [part for part in folder.replace(os.sep, "/").split("/")[-4:-1] if part]
     content = _CONTENT.get(subject.content, subject.content)
     if subject.why:
         content += ", because of %s" % subject.why
-    tried = onlinecover.providers_for(subject.content)
-    sections = [
-        "Find the cover image for this recording.",
+    return [
         "## The input folder\n\nIts name: %s\nThe folders it sits in, outermost "
         "first: %s\n\nIts files:\n%s" % (
             os.path.basename(folder), " / ".join(parents) or "(none)",
@@ -206,6 +206,17 @@ def prompt(input_path: str, output_name: str, tracks: Sequence[str],
             if subject.seconds > 0 else "",
             "; ".join(subject.titles) or "(none)",
             "; ".join(subject.creators) or "(none)"),
+    ]
+
+
+def prompt(input_path: str, output_name: str, tracks: Sequence[str],
+           subject: onlinecover.Subject,
+           probe: Callable[[str], dict] = onlinecover.probe_tags) -> str:
+    """What the model is told about the book joined from ``input_path``."""
+    tried = onlinecover.providers_for(subject.content)
+    sections = [
+        "Find the cover image for this recording.",
+        *account(input_path, output_name, tracks, subject, probe),
         "## Already tried\n\nA search of %s by these titles found no answer "
         "sure enough. Look further: other spellings, the edition in the "
         "recording's own language, the publisher's or the show's own site." % (

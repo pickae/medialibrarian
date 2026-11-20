@@ -216,6 +216,13 @@ SETTINGS: tuple[Setting, ...] = (
             "model that can search is asked - Claude, or one behind "
             "`llmHarness`: `on` or `off`",
             ("concat-audio", "convert-and-concat"), "on"),
+    Setting("contentsSearchLlm", "Whether a book whose chapters its file names "
+            "only number is handed to a language model to search the web for "
+            "its table of contents (the `contents-search` task, see "
+            "docs/models.md); its titles are taken only when there is one for "
+            "every chapter. Only a model that can search is asked - Claude, or "
+            "one behind `llmHarness`: `on` or `off`",
+            ("concat-audio", "convert-and-concat"), "on"),
     Setting("chapterDbSite", "The chapter database's address", ("ingest-movies",),
             "`https://chapterdb.plex.tv`", tuning=True),
     Setting("dvdCompareSite", "The disc database's address", ("ingest-movies",),

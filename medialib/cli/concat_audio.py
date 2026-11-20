@@ -30,6 +30,7 @@ import tempfile
 
 from medialib import commands
 from medialib.lib import (
+    aicontents,
     chapters,
     cleannamescollectively,
     cleannamesindividually,
@@ -578,8 +579,10 @@ class Run:
     # The output names that held a file before this run started: books an
     # earlier run made, as opposed to a name another folder of THIS run took.
     present_before: frozenset
-    # Where the workers record what the cover model was asked, for the total.
+    # Where the workers record what the cover model was asked, for the total,
+    # and what the model naming numbered chapters was.
     model_meter: str
+    contents_meter: str
 
     def __init__(self, **settings) -> None:
         self.__dict__.update(settings)
@@ -827,6 +830,12 @@ class Run:
             chapter_lines = chapters.chapters_from_files(concat_list)
             if scan.audio_files == 1 and len(chapter_lines) < 4:
                 chapter_lines = []
+            # Files that only number the book give chapters that only number
+            # it: a model that can search may find the book's own titles.
+            chapter_lines = aicontents.book_titles(
+                input_path, name, chapter_lines,
+                [chapters._entry_path(entry) for entry in concat_list], joined,
+                meter_file=self.contents_meter)
 
         if chapter_lines:
             step("    Embedding chapters")
@@ -1091,6 +1100,7 @@ def _run_with_scratch(ram_dir: str, input_dir: str, output_dir: str,
         total=total,
         present_before=_present_before(output_paths),
         model_meter=os.path.join(ram_dir, "coverModel.meter"),
+        contents_meter=os.path.join(ram_dir, "contentsModel.meter"),
     )
 
     if total:
@@ -1098,14 +1108,15 @@ def _run_with_scratch(ram_dir: str, input_dir: str, output_dir: str,
                        state.process_pair)
         safety.exit_if_aborted()
 
-    report_cover_model(state.model_meter)
+    report_model(state.model_meter, "Cover model")
+    report_model(state.contents_meter, "Chapter-name model")
 
     # By the paths this run made them at, which are all in the scratch: the join
     # and the thumbnail leave nothing in the output tree to clean up.
     log("Cleaning up temporary files")
     for path in (os.path.join(ram_dir, "concat.progress"), run_console.lock_path,
                  state.reservation_file, state.reservation_file + ".lock",
-                 state.publish_lock, state.model_meter):
+                 state.publish_lock, state.model_meter, state.contents_meter):
         try:
             os.remove(path)
         except OSError:
@@ -1141,13 +1152,13 @@ def _run_with_scratch(ram_dir: str, input_dir: str, output_dir: str,
     return workerpool.exit_status(1 if failed else 0)
 
 
-def report_cover_model(meter_file: str) -> None:
-    """What the cover model was asked over the whole run, added up from what
-    each book recorded - said only where more than one book asked it, since
-    one book's line already stands under it."""
+def report_model(meter_file: str, what: str) -> None:
+    """What the model ``what`` names was asked over the whole run, added up
+    from what each book recorded - said only where more than one book asked
+    it, since one book's line already stands under it."""
     spans, tally = modelmeter.gathered(meter_file)
     if tally.requests > 1:
-        log("Cover model over the run: "
+        log(what + " over the run: "
             + modelmeter.rate_line("all", spans.seconds, tally))
 
 
