@@ -75,7 +75,7 @@ def _on(monkeypatch):
 class TestPromptAndCandidates:
     def test_prompt_for_ambiguous_plex_candidates(self):
         entry = ailetterboxd.Entry(
-            kind="ambiguous",
+            status="ambiguous",
             subject=Film("Crash", ""),
             candidates=(
                 Film("Crash", "1996", tmdb="883"),
@@ -94,7 +94,7 @@ class TestPromptAndCandidates:
 
     def test_prompt_for_ambiguous_letterboxd_candidates(self):
         entry = ailetterboxd.Entry(
-            kind="ambiguous",
+            status="ambiguous",
             subject=Film("Harbour Tales", "1977"),
             candidates=(
                 Film("The Harbour Tales", "1977"),
@@ -112,7 +112,7 @@ class TestPromptAndCandidates:
 
     def test_prompt_for_unmatched_entry_with_and_without_candidates(self):
         with_cands = ailetterboxd.Entry(
-            kind="unmatched",
+            status="unmatched",
             subject=Film("Spirited Away", "2001"),
             candidates=(Film("Sen to Chihiro no Kamikakushi", "2001", tmdb="129"),),
         )
@@ -122,7 +122,7 @@ class TestPromptAndCandidates:
         assert "<1..1 or null>" in text
 
         no_cands = ailetterboxd.Entry(
-            kind="unmatched",
+            status="unmatched",
             subject=Film("Obscure Film", "1961"),
             candidates=(),
         )
@@ -167,10 +167,10 @@ class TestPromptAndCandidates:
         plan = sync.plan(movies, films, [])
         entries = ailetterboxd.collect_entries(movies, films, plan.ambiguous)
         assert len(entries) == 2
-        assert entries[0].kind == "ambiguous"
+        assert entries[0].status == "ambiguous"
         assert entries[0].direction == "letterboxd"
         assert entries[0].subject.title == "Harbour Tales"
-        assert entries[1].kind == "unmatched"
+        assert entries[1].status == "unmatched"
         assert entries[1].subject.title == "Spirited Away"
         assert [c.title for c in entries[1].candidates] == [
             "Sen to Chihiro no Kamikakushi"]
@@ -185,7 +185,7 @@ class TestStrictParsingAndGuards:
             Film("Crash", "2004", tmdb="1640"),
         )[:count]
         return ailetterboxd.Entry(
-            kind="ambiguous" if count > 1 else "unmatched",
+            status="ambiguous" if count > 1 else "unmatched",
             subject=Film("Crash", ""),
             candidates=cands,
         )
@@ -204,7 +204,7 @@ class TestStrictParsingAndGuards:
         assert suggestion.reason == "Matches the 2004 ensemble film."
 
     def test_valid_null_choice_with_positive_integer_tmdb(self):
-        entry = ailetterboxd.Entry(kind="unmatched", subject=Film("Spirited Away", "2001"))
+        entry = ailetterboxd.Entry(status="unmatched", subject=Film("Spirited Away", "2001"))
         s_int = ailetterboxd.parse_answer(
             '{"choice": null, "tmdb": 129, "confidence": "high", "reason": "TMDb 129."}',
             entry)
@@ -241,7 +241,7 @@ class TestStrictParsingAndGuards:
         assert suggestion.tmdb == ""
 
     def test_rejects_choice_when_no_candidates_offered(self):
-        entry = ailetterboxd.Entry(kind="unmatched", subject=Film("Solo", "2018"))
+        entry = ailetterboxd.Entry(status="unmatched", subject=Film("Solo", "2018"))
         suggestion = ailetterboxd.parse_answer(
             '{"choice": 1, "tmdb": 348350, "confidence": "high", "reason": "picked"}',
             entry)
@@ -271,7 +271,7 @@ class TestStrictParsingAndGuards:
 
         # Subject already has tmdb="129", model claims 555.
         entry = ailetterboxd.Entry(
-            kind="unmatched", subject=Film("Spirited Away", "2001", tmdb="129"))
+            status="unmatched", subject=Film("Spirited Away", "2001", tmdb="129"))
         conflict_subj = ailetterboxd.parse_answer(
             '{"choice": null, "tmdb": 555, "confidence": "high", "reason": "x"}',
             entry)
@@ -292,7 +292,7 @@ class TestExecutionAndMetering:
     def test_switch_off_asks_no_model(self, monkeypatch):
         monkeypatch.setenv(ailetterboxd.SWITCH_VARIABLE, "off")
         entry = ailetterboxd.Entry(
-            kind="unmatched",
+            status="unmatched",
             subject=Film("Spirited Away", "2001"),
             candidates=(Film("Sen to Chihiro no Kamikakushi", "2001", tmdb="129"),),
         )
@@ -305,7 +305,7 @@ class TestExecutionAndMetering:
                      llmclient.HARNESS_VARIABLE):
             monkeypatch.delenv(name, raising=False)
         entry = ailetterboxd.Entry(
-            kind="unmatched",
+            status="unmatched",
             subject=Film("Spirited Away", "2001"),
             candidates=(Film("Sen to Chihiro no Kamikakushi", "2001", tmdb="129"),),
         )
@@ -313,7 +313,7 @@ class TestExecutionAndMetering:
 
     def test_records_modelmeter_and_uses_search_when_available(self, tmp_path):
         entry = ailetterboxd.Entry(
-            kind="unmatched",
+            status="unmatched",
             subject=Film("Spirited Away", "2001"),
             candidates=(Film("Sen to Chihiro no Kamikakushi", "2001", tmdb="129"),),
         )
@@ -331,7 +331,7 @@ class TestExecutionAndMetering:
 
     def test_model_without_web_search_still_reasons_directly(self):
         entry = ailetterboxd.Entry(
-            kind="unmatched",
+            status="unmatched",
             subject=Film("Birdman", "2014"),
             candidates=(Film("Birdman or (The Unexpected Virtue of Ignorance)", "2014"),),
         )
@@ -345,7 +345,7 @@ class TestExecutionAndMetering:
 
     def test_llm_error_falls_back_to_next_model_or_reports_error(self, tmp_path):
         entry = ailetterboxd.Entry(
-            kind="unmatched",
+            status="unmatched",
             subject=Film("Spirited Away", "2001"),
             candidates=(Film("Sen to Chihiro no Kamikakushi", "2001", tmdb="129"),),
         )
@@ -394,7 +394,7 @@ class _Server:
 def test_format_suggestions_covers_every_decision_kind():
     s_pick = ailetterboxd.Suggestion(
         entry=ailetterboxd.Entry(
-            kind="unmatched",
+            status="unmatched",
             subject=Film("Spirited Away", "2001"),
             candidates=(Film("Sen to Chihiro no Kamikakushi", "2001", tmdb="129"),),
         ),
@@ -405,14 +405,14 @@ def test_format_suggestions_covers_every_decision_kind():
         reason="Japanese original title.",
     )
     s_tmdb = ailetterboxd.Suggestion(
-        entry=ailetterboxd.Entry(kind="unmatched", subject=Film("Obscure", "1999")),
+        entry=ailetterboxd.Entry(status="unmatched", subject=Film("Obscure", "1999")),
         tmdb="4242",
         confidence="medium",
         reason="Matched by year and title.",
     )
     s_none = ailetterboxd.Suggestion(
         entry=ailetterboxd.Entry(
-            kind="ambiguous",
+            status="ambiguous",
             subject=Film("Harbour Tales", "1977"),
             candidates=(Film("The Harbour Tales", "1977"), Film("Harbour Tales, The", "1977")),
             direction="letterboxd",
@@ -421,7 +421,7 @@ def test_format_suggestions_covers_every_decision_kind():
         reason="Not enough detail to distinguish.",
     )
     s_bad = ailetterboxd.Suggestion(
-        entry=ailetterboxd.Entry(kind="unmatched", subject=Film("Broken", "2005")),
+        entry=ailetterboxd.Entry(status="unmatched", subject=Film("Broken", "2005")),
         rejected="invented candidate index 9 (no candidates offered)",
     )
     lines = ailetterboxd.format_suggestions([s_pick, s_tmdb, s_none, s_bad])

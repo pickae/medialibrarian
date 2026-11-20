@@ -116,7 +116,7 @@ Answer with JSON only, in this form:
 class Entry:
     """One unmatched or ambiguous sync entry to ask the model about."""
 
-    kind: str                           # "ambiguous" or "unmatched"
+    status: str                         # "ambiguous" or "unmatched"
     subject: Film                       # the entry being matched
     candidates: tuple[Film, ...] = ()   # offered Plex (or Letterboxd) candidates
     direction: str = "plex"             # "plex" (candidates are Plex) or "letterboxd"
@@ -282,7 +282,7 @@ def collect_entries(movies: Sequence[plexserver.Movie],
             if key not in seen_subjects:
                 seen_subjects.add(key)
                 ambiguous_entries.append(Entry(
-                    kind="ambiguous", subject=pfilm, candidates=cands,
+                    status="ambiguous", subject=pfilm, candidates=cands,
                     direction="letterboxd", how=found.how))
 
     unmatched_scored: list[tuple[tuple[int, float, int, int], Entry]] = []
@@ -296,7 +296,7 @@ def collect_entries(movies: Sequence[plexserver.Movie],
             if len(distinct) >= 2:
                 seen_subjects.add(lb_key)
                 ambiguous_entries.append(Entry(
-                    kind="ambiguous", subject=lb_film, candidates=distinct,
+                    status="ambiguous", subject=lb_film, candidates=distinct,
                     direction="plex", how=found.how))
                 continue
         mutual = in_plex.find_from(lb_film, on_letterboxd)
@@ -311,7 +311,7 @@ def collect_entries(movies: Sequence[plexserver.Movie],
             if top_rank is not None else (0, 0.0, 0, -99)
         unmatched_scored.append((
             priority,
-            Entry(kind="unmatched", subject=lb_film, candidates=cands,
+            Entry(status="unmatched", subject=lb_film, candidates=cands,
                   direction="plex"),
         ))
 
@@ -347,7 +347,7 @@ def prompt(entry: Entry) -> str:
     else:
         subject_side, candidate_side = "Letterboxd", "Plex"
 
-    if entry.kind == "ambiguous":
+    if entry.status == "ambiguous":
         lead = (
             "This %s film matched more than one %s film equally well%s. "
             "Pick which candidate below, if any, is the same film."
@@ -582,7 +582,7 @@ def format_suggestions(suggestions: Sequence[Suggestion]) -> list[str]:
     for suggestion in suggestions:
         entry = suggestion.entry
         subject = _short_film(entry.subject)
-        tag = "[%s]" % entry.kind
+        tag = "[%s]" % entry.status
         if suggestion.rejected:
             lines.append("  %s %s: no suggestion (rejected: %s)"
                          % (subject, tag, suggestion.rejected))
