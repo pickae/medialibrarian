@@ -361,15 +361,17 @@ class FilmTags:
     asking that failed is tried again by the next to want it.
     """
 
-    def __init__(self, root: str) -> None:
+    def __init__(self, root: str, meter_file: str = "") -> None:
         self._root = root
+        self._meter_file = meter_file
         self._lock = threading.Lock()
         self._tags: dict | None = None
 
     def __getstate__(self) -> dict:
         # The run is handed to its worker processes with this inside it: they
         # get the answer as far as it is known, and a lock of their own.
-        return {"_root": self._root, "_tags": self._tags}
+        return {"_root": self._root, "_meter_file": self._meter_file,
+                "_tags": self._tags}
 
     def __setstate__(self, state: dict) -> None:
         self.__dict__.update(state)
@@ -401,7 +403,8 @@ class FilmTags:
         tagged: dict = {}
         tmdblookup.tag_plex_ids(self._root, _quiet, safety.SkipLog(),
                                 dry_run=True, tagged=tagged,
-                                long_names=tmdblookup.LongNames())
+                                long_names=tmdblookup.LongNames(),
+                                meter_file=self._meter_file)
         return {key(folder): tag for tag, folders in tagged.items()
                 for folder in folders}
 

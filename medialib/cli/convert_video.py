@@ -24,6 +24,7 @@ import re
 
 from medialib.cli import convert_video_source as videosource
 from medialib.lib import (
+    aivideoprofile,
     bitrates,
     clioptions,
     codecs,
@@ -62,7 +63,10 @@ p | <profile> | Video encoding profile to use (default: av1BluRay). Selecting a
                   *Nvenc profile (hevcNvenc, av1Nvenc) encodes on the GPU.
                   With an SVT-AV1-HDR ffmpeg, av1Grain KEEPS the source's own
                   grain (SVT-AV1-HDR's film grain tune) instead of synthesising
-                  it; without one it synthesises it like av1BluRay.
+                  it; without one it synthesises it like av1BluRay. Passing
+                  "auto" asks a vision model to classify each file from sampled
+                  frames and pick av1BluRay, av1Animation or av1Grain per file
+                  (falling back to av1BluRay on any uncertainty).
 a | <profile> | Audio encoding profile to use (default: opus).
 b | <kbit/s> | Opus bitrate applied to every audio track, overriding the
                   per-channel table. Implies -a opusCustom when no audio profile
@@ -222,6 +226,9 @@ SVT_AV1_HDR_PROBE = "-c:v libsvtav1 -svtav1-params cdef-scaling=10"
 # The profile that keeps the source's real grain on SVT-AV1-HDR, with the fork's
 # film grain tune, instead of denoising it away and synthesising it again.
 SVT_AV1_HDR_GRAIN_PROFILE = "av1Grain"
+
+# The -p spelling that opts in to per-file vision profile selection.
+AUTO_PROFILE = aivideoprofile.AUTO_PROFILE
 
 AUDIO_PROFILES = """
 opus|-c:a libopus
@@ -413,6 +420,19 @@ def video_profiles() -> str:
     """The video profiles as this host has them: the built-ins with the
     user's video-profiles file over them."""
     return _profiles_over(VIDEO_PROFILES, video_profile_file())
+
+
+def resolve_video_profile(wanted: str) -> tuple[str, bool]:
+    """Resolve ``-p <wanted>`` to ``(ffmpeg_args, is_auto)``.
+
+    ``auto`` is accepted as the explicit opt-in to per-file vision profile
+    selection and resolves against :data:`aivideoprofile.DEFAULT_PROFILE` for
+    startup validation and ffmpeg capability probing. Every other name is
+    looked up strictly in :func:`video_profiles`.
+    """
+    if wanted == AUTO_PROFILE:
+        return profile_args(video_profiles(), aivideoprofile.DEFAULT_PROFILE), True
+    return profile_args(video_profiles(), wanted), False
 
 
 def audio_profiles() -> str:
@@ -1056,6 +1076,9 @@ class Settings:
         self.output_dir = ""
         self.cores = 1
         self.video_profile = "av1BluRay"
+        # -p auto: a vision model classifies each file from sampled frames and
+        # picks av1BluRay, av1Animation or av1Grain on its own copy of Settings.
+        self.auto_video_profile = False
         self.audio_profile = "opus"
         self.custom_audio_bitrate = ""
         # -s: a track above stereo is re-encoded at the source's own channel
@@ -1068,6 +1091,7 @@ class Settings:
         self.max_resolution = ""
         self.crop_wanted = False
         self.fast_decode = ""
+        self.grain_option = ""
         self.grain_level = "0"
         self.grain_probe_wanted = False
         self.required_saving = DEFAULT_BITRATE_SAVING

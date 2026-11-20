@@ -20,10 +20,10 @@ import shutil
 import subprocess
 import tempfile
 import unicodedata
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any
 
-from medialib.lib import languages
+from medialib.lib import aibooklanguage, languages, llmroster, runlog
 from medialib.lib.booktext import book_to_text
 from medialib.lib.enums import lower_extension_of
 
@@ -31,6 +31,7 @@ __all__ = [
     "STOP_WORDS",
     "MIN_SCORE",
     "MIN_SCRIPT_SHARE",
+    "BORDERLINE_RATIO",
     "SKIP_BYTES",
     "SAMPLE_BYTES",
     "book_language_code",
@@ -68,6 +69,10 @@ MIN_SCORE = 0.04
 # that script decides the answer by itself. Well above the stray quotation, well
 # below anything really written in it.
 MIN_SCRIPT_SHARE = 0.15
+# When a second stop-word language also clears MIN_SCORE and reaches at least
+# this fraction of the top score, the Latin stop-word result is borderline
+# (for example mixed or bilingual prose) rather than an unambiguous winner.
+BORDERLINE_RATIO = 0.55
 # What is read of a book to judge it: how much is skipped first (the front of a
 # book is a title page, a copyright notice and a table of contents - which in a
 # translated book are routinely in a different language from the book itself),
@@ -178,6 +183,28 @@ def _first_metadata_language(meta: str) -> str:
     return ""
 
 
+def _raw_metadata_language(src: str,
+                           lower_extension: Callable[[str], str]
+                           = lower_extension_of,
+                           which: Callable[[str], str | None] = shutil.which,
+                           run: Callable[..., Any] = subprocess.run) -> str:
+    """The raw language tag the book states about itself, or ""."""
+    raw = ""
+    if lower_extension(src) == "epub" and which("unzip"):
+        proc = run(["unzip", "-p", "--", src, "*.opf"], stdout=subprocess.PIPE,
+                   stderr=subprocess.DEVNULL)
+        raw = _first_opf_language(proc.stdout.decode("utf-8", "replace"))
+        raw = re.sub(r"[ \t\r\n\f\v]", "", raw)
+    if not raw and which("ebook-meta"):
+        proc = run(["ebook-meta", src], stdout=subprocess.PIPE,
+                   stderr=subprocess.DEVNULL)
+        raw = _first_metadata_language(
+            proc.stdout.decode("utf-8", "replace"))
+        raw = raw.split(",", 1)[0]
+        raw = re.sub(r"[ \t\r\n\f\v]", "", raw)
+    return raw
+
+
 def book_metadata_language(src: str,
                            lower_extension: Callable[[str], str]
                            = lower_extension_of,
@@ -192,33 +219,19 @@ def book_metadata_language(src: str,
     there is simply no answer, which is the right degradation for a step that
     only ever ADDS certainty.
     """
-    raw = ""
-    if lower_extension(src) == "epub" and which("unzip"):
-        proc = run(["unzip", "-p", "--", src, "*.opf"], stdout=subprocess.PIPE,
-                   stderr=subprocess.DEVNULL)
-        raw = _first_opf_language(proc.stdout.decode("utf-8", "replace"))
-        raw = re.sub(r"[ \t\r\n\f\v]", "", raw)
-    if not raw and which("ebook-meta"):
-        proc = run(["ebook-meta", src], stdout=subprocess.PIPE,
-                   stderr=subprocess.DEVNULL)
-        raw = _first_metadata_language(
-            proc.stdout.decode("utf-8", "replace"))
-        raw = raw.split(",", 1)[0]
-        raw = re.sub(r"[ \t\r\n\f\v]", "", raw)
+    raw = _raw_metadata_language(src, lower_extension=lower_extension,
+                                 which=which, run=run)
     if not raw:
         return ""
     return book_language_code(raw)
 
 
-def detect_text_language(text: str) -> str:
-    """The ISO 639-3 code ``text`` is most likely written in, or "".
+_DEFAULT_BOOK_METADATA_LANGUAGE = book_metadata_language
 
-    A script of its own settles its language outright (the kana test first,
-    because Japanese text always carries kana and would otherwise read as
-    Chinese); the Latin script is scored on stop words, and the winner has to
-    clear MIN_SCORE, so a language not in the table gets no answer rather than
-    the closest of the wrong ones.
-    """
+
+def _detect_text_language_detail(text: str) -> tuple[str, bool]:
+    """``(code, ambiguous)`` for ``text``: the ISO 639-3 code or ``""``, and
+    whether the Latin stop-word score was borderline between two languages."""
     kana = hangul = han = cyrillic = arabic = devanagari = letters = 0
     word_count = 0
     score: dict[str, int] = {}
@@ -260,29 +273,94 @@ def detect_text_language(text: str) -> str:
     if letters:
         threshold = letters * MIN_SCRIPT_SHARE
         if kana >= threshold:
-            return "jpn"
+            return "jpn", False
         if hangul >= threshold:
-            return "kor"
+            return "kor", False
         if han >= threshold:
-            return "zho"
+            return "zho", False
         if cyrillic >= threshold:
-            return "rus"
+            return "rus", False
         if arabic >= threshold:
-            return "ara"
+            return "ara", False
         if devanagari >= threshold:
-            return "hin"
+            return "hin", False
     if word_count <= 0:
-        return ""
+        return "", False
     best = ""
     best_score = 0.0
+    second_score = 0.0
     for lang in _LANG_ORDER:
         value = score.get(lang, 0) / word_count
         if value > best_score:
+            second_score = best_score
             best_score = value
             best = lang
+        elif value > second_score:
+            second_score = value
     if best and best_score >= MIN_SCORE:
-        return best
-    return ""
+        ambiguous = (second_score >= MIN_SCORE
+                     and second_score >= best_score * BORDERLINE_RATIO)
+        return best, ambiguous
+    return "", False
+
+
+def detect_text_language(text: str) -> str:
+    """The ISO 639-3 code ``text`` is most likely written in, or "".
+
+    A script of its own settles its language outright (the kana test first,
+    because Japanese text always carries kana and would otherwise read as
+    Chinese); the Latin script is scored on stop words, and the winner has to
+    clear MIN_SCORE, so a language not in the table gets no answer rather than
+    the closest of the wrong ones.
+    """
+    return _detect_text_language_detail(text)[0]
+
+
+def _book_text_sample(src: str, ram_base: str | None = None,
+                      book_to_text_fn: Callable[[str, str], int]
+                      = book_to_text) -> tuple[str, str, bool]:
+    """``(code, sample, ambiguous)`` from converting ``src`` to plain text.
+
+    ``sample`` is the decoded text slice scored (past the front matter when
+    present, else from the top) so an LLM fallback sees the same prose.
+    """
+    if ram_base is None:
+        ram_base = os.environ.get("TMPDIR", "/tmp")
+    if src.lower().endswith(".pdf"):
+        if not (shutil.which("pdftotext") or shutil.which("ebook-convert")):
+            return "", "", False
+    elif not shutil.which("ebook-convert"):
+        return "", "", False
+
+    scratch = tempfile.mkdtemp(prefix="bookLanguage.", dir=ram_base)
+    try:
+        text_path = f"{scratch}/book.txt"
+        code = ""
+        sample = ""
+        ambiguous = False
+        if book_to_text_fn(src, text_path) == 0:
+            try:
+                with open(text_path, "rb") as handle:
+                    data = handle.read()
+            except OSError:
+                # A converter that finished without a file is an empty answer,
+                # not an error.
+                data = b""
+            if data:
+                # The sample starts past the front matter; a book shorter than
+                # the skip reads from the top instead.
+                body = data[SKIP_BYTES - 1:][:SAMPLE_BYTES].decode(
+                    "utf-8", "replace")
+                code, ambiguous = _detect_text_language_detail(body)
+                sample = body
+                if not code:
+                    head = data[:SAMPLE_BYTES].decode("utf-8", "replace")
+                    code, ambiguous = _detect_text_language_detail(head)
+                    if code or not sample.strip():
+                        sample = head
+        return code, sample, ambiguous
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
 
 
 def book_text_language(src: str, ram_base: str | None = None,
@@ -296,47 +374,53 @@ def book_text_language(src: str, ram_base: str | None = None,
     simply no answer - and WHICH converter is ``book_to_text_fn``'s decision, not
     this one's, so the guard asks for the tool that would actually run.
     """
-    if ram_base is None:
-        ram_base = os.environ.get("TMPDIR", "/tmp")
-    if src.lower().endswith(".pdf"):
-        if not (shutil.which("pdftotext") or shutil.which("ebook-convert")):
-            return ""
-    elif not shutil.which("ebook-convert"):
-        return ""
-
-    scratch = tempfile.mkdtemp(prefix="bookLanguage.", dir=ram_base)
-    try:
-        text_path = f"{scratch}/book.txt"
-        code = ""
-        if book_to_text_fn(src, text_path) == 0:
-            try:
-                with open(text_path, "rb") as handle:
-                    data = handle.read()
-            except OSError:
-                # A converter that finished without a file is an empty answer,
-                # not an error.
-                data = b""
-            if data:
-                # The sample starts past the front matter; a book shorter than
-                # the skip reads from the top instead.
-                sample = data[SKIP_BYTES - 1:][:SAMPLE_BYTES]
-                code = detect_text_language(
-                    sample.decode("utf-8", "replace"))
-                if not code:
-                    code = detect_text_language(
-                        data[:SAMPLE_BYTES].decode("utf-8", "replace"))
-        return code
-    finally:
-        shutil.rmtree(scratch, ignore_errors=True)
+    return _book_text_sample(src, ram_base=ram_base,
+                             book_to_text_fn=book_to_text_fn)[0]
 
 
-def book_language(src: str, ram_base: str | None = None) -> str:
+def book_language(src: str, ram_base: str | None = None, *,
+                  meter_file: str = "",
+                  models: Sequence[Any] | None = None) -> str:
     """The book's language as one ISO 639-3 code: what it says about itself,
-    else what its text reads like, else nothing at all. The caller decides
-    what to do with "nothing" - it is a real answer here, and better than a
-    confident guess that sends a whole book to be read in the wrong voice.
+    else what its text reads like, with a small language model
+    (:mod:`medialib.lib.aibooklanguage`) consulted only when metadata and text
+    disagree or neither gives a confident answer. The caller decides what to do
+    with "nothing" - it is a real answer here, and better than a confident
+    guess that sends a whole book to be read in the wrong voice.
     """
-    code = book_metadata_language(src)
-    if not code:
-        code = book_text_language(src, ram_base=ram_base)
-    return code
+    if book_metadata_language is _DEFAULT_BOOK_METADATA_LANGUAGE:
+        raw_meta = _raw_metadata_language(src)
+        meta_code = book_language_code(raw_meta) if raw_meta else ""
+    else:
+        raw_meta = ""
+        meta_code = book_metadata_language(src)
+
+    if not aibooklanguage.enabled():
+        return meta_code or book_text_language(src, ram_base=ram_base)
+
+    if models is None:
+        models, why = llmroster.optional(llmroster.BOOK_LANGUAGE)
+        if not models:
+            if meta_code:
+                return meta_code
+            text_code = book_text_language(src, ram_base=ram_base)
+            if not text_code:
+                runlog.detail("    No model asked for book language (%s): %s"
+                              % (os.path.basename(src) or src, why))
+            return text_code
+    elif not models:
+        return meta_code or book_text_language(src, ram_base=ram_base)
+
+    text_code, sample, ambiguous = _book_text_sample(src, ram_base=ram_base)
+    declared = meta_code or aibooklanguage.normalize_language_code(raw_meta)
+    fallback = meta_code or text_code
+    return aibooklanguage.detect_language(
+        sample,
+        title=os.path.basename(src),
+        metadata_language=declared,
+        text_language=text_code,
+        text_ambiguous=ambiguous,
+        fallback=fallback,
+        models=models,
+        meter_file=meter_file,
+    )

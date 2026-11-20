@@ -36,8 +36,8 @@ __all__ = ["Run", "current", "adopt", "snapshot", "reset", "settle", "get",
 HANDED_DOWN = (
     "LOG_VERBOSITY", "LOG_TIMESTAMPS", "HAVE_FLOCK", "UNCOUNTED_PROGRESS_WARNED",
     "ABORT_FLAG", "ABORT_FLAG_OWNER", "SAFETY_LOG", "LENGTH_LOG",
-    "ERROR_LOG_NAME", "ERROR_LOG_RUN", "ERROR_LOG_STARTED", "infoLogLevel",
-    "SKIP_TOOL_PREFLIGHT",
+    "ERROR_LOG_NAME", "ERROR_LOG_OWNER", "ERROR_LOG_RUN", "ERROR_LOG_STARTED",
+    "infoLogLevel", "SKIP_TOOL_PREFLIGHT", "COMIC_PDF_METER",
 )
 
 # The tmpfs every Linux host has, where a run's scratch goes first.

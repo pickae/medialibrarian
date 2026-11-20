@@ -229,3 +229,56 @@ class TestAskingTheSite:
         made.releases("Nightfall Harbour", "1987", "dvd")
         made.releases("Twin Harbour", "1995", "dvd")
         assert len(asked) == 1
+
+
+class TestAmbiguousPageFallback:
+    TWO_FITTING = [
+        dvdcompare.SearchEntry("101", ("Nightfall Harbour",), "bluray", "1987", False),
+        dvdcompare.SearchEntry("202", ("Nightfall Harbour",), "bluray", "1987", False),
+    ]
+
+    def test_pick_uses_choose_only_when_multiple_pages_fit_and_guards_fid(self):
+        seen = []
+        assert dvdcompare.pick(
+            self.TWO_FITTING, "Nightfall Harbour", "1987", "bluray",
+            choose=lambda pages: seen.extend(pages) or "202") == "202"
+        assert [entry.fid for entry in seen] == ["101", "202"]
+
+        # Invented fid is rejected.
+        assert dvdcompare.pick(
+            self.TWO_FITTING, "Nightfall Harbour", "1987", "bluray",
+            choose=lambda _pages: "999") == ""
+
+        # Single fitting page never calls choose.
+        called = []
+        assert dvdcompare.pick(
+            self.TWO_FITTING[:1], "Nightfall Harbour", "1987", "bluray",
+            choose=lambda pages: called.append(pages) or "101") == "101"
+        assert called == []
+
+    def test_site_records_page_pick_note_from_choose_page(self, tmp_path):
+        two_search = (
+            '<li><a href="film.php?fid=101">Nightfall Harbour (Blu-ray) (1987)</a></li>'
+            '<li><a href="film.php?fid=202">Nightfall Harbour (Blu-ray) (1987)</a></li>'
+        )
+        seen_urls = []
+
+        def fetch(url, _form):
+            seen_urls.append(url)
+            return two_search if url.endswith("search.php") else FILM
+
+        made = dvdcompare.Site(
+            str(tmp_path), lambda _line: None, fetch,
+            pacer=politepacing.Pacer(
+                dvdcompare.MIN_INTERVAL, dvdcompare.JITTER,
+                now=_Clock().now, sleep=lambda _s: None,
+                draw=lambda _low, high: high),
+            choose_page=lambda _pages, _t, _y, _k: (
+                "202", "disc page fid=202 chosen by test-model"))
+
+        releases = made.releases("Nightfall Harbour", "1987", "bluray")
+        assert releases is not None
+        assert any("fid=202" in url for url in seen_urls)
+        assert made.page_notes("Nightfall Harbour", "1987", "bluray") == (
+            "disc page fid=202 chosen by test-model",)
+
