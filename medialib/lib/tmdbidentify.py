@@ -287,7 +287,8 @@ def identify(title: str, year: str,
              notes: list | None = None, also: tuple = (),
              imdb: str = "",
              written: Callable[[], str] | None = None,
-             offered: list | None = None) -> Match:
+             offered: list | None = None,
+             verify_runtime: bool = False) -> Match:
     """A film's id and catalogue spelling, ONLY when the match is unambiguous.
 
     Returns an empty :class:`Match` (never a half-certain id) when it is not
@@ -380,13 +381,14 @@ def identify(title: str, year: str,
     for query in _queries(reading):
         found = _under(api_key, query, want, year, runtime, notes, plainly,
                        named_for_the_year, latin, subtitles, carried, written,
-                       offered)
+                       offered, verify_runtime=verify_runtime)
         if found.tag:
             return found
     if imdb:
         return _in_the_imdb_lists(imdb, want, year, runtime, notes, plainly,
                                   named_for_the_year, latin, written,
-                                  bool(carried), offered)
+                                  bool(carried), offered,
+                                  verify_runtime=verify_runtime)
     return Match()
 
 
@@ -411,7 +413,8 @@ def _in_the_imdb_lists(database: str, want: frozenset, year: str,
                        latin: bool = False,
                        written: Callable[[], str] | None = None,
                        carried: bool = False,
-                       offered: list | None = None) -> Match:
+                       offered: list | None = None,
+                       verify_runtime: bool = False) -> Match:
     """The certainty rule over what the local IMDb lists hold under this
     title, where TMDb has already been asked under every spelling and could
     not answer - see :mod:`medialib.lib.imdbdata`.
@@ -447,7 +450,7 @@ def _in_the_imdb_lists(database: str, want: frozenset, year: str,
             _record_offer(offered, _offer_from_candidate(candidate, "imdb"))
         settled = _settle(candidates, [], want,
                           year, runtime, notes, plainly, named_for_the_year, (),
-                          [True], written, found)
+                          [True], written, found, verify_runtime=verify_runtime)
         if settled.tag or found:
             return settled
     if carried:
@@ -463,7 +466,7 @@ def _in_the_imdb_lists(database: str, want: frozenset, year: str,
         _record_offer(offered, _offer_from_candidate(candidate, "imdb"))
     return _settle(candidates, [], want, year,
                    runtime, notes, plainly, named_for_the_year, (), [], written,
-                   part_of_name=False)
+                   part_of_name=False, verify_runtime=verify_runtime)
 
 
 def _imdb_candidates(rows: list, latin: bool,
@@ -521,7 +524,8 @@ def _settle_the_year(title: str, year: str, others: list,
                      notes: list | None = None, also: tuple = (),
                      imdb: str = "",
                      written: Callable[[], str] | None = None,
-                     offered: list | None = None) -> tuple:
+                     offered: list | None = None,
+                     verify_runtime: bool = False) -> tuple:
     """A film looked up where its folder and its files disagree about the year
     by one, as (the match, the year it is really under, the further spellings
     of the folder's name that settling it justified).
@@ -547,12 +551,13 @@ def _settle_the_year(title: str, year: str, others: list,
     The third is why this returns a year at all: everything downstream writes
     the folder from it.
     """
-    found = identify(title, year, runtime, notes, also, imdb, written, offered)
+    found = identify(title, year, runtime, notes, also, imdb, written, offered,
+                     verify_runtime=verify_runtime)
     for other in [one for one in others if one != year and _near(one, year)]:
         _note(notes, 'its files are dated %s where the folder says %s: '
               "asking under that year too" % (other, year))
         second = identify(title, other, runtime, notes, also, imdb, written,
-                          offered)
+                          offered, verify_runtime=verify_runtime)
         if found.tag and second.tag and found.tag != second.tag:
             _note(notes, "    %s and %s are two different films" % (year, other))
             continue
@@ -620,7 +625,8 @@ def _under(api_key: str, query: str, want: frozenset, year: str,
            subtitles: tuple = (),
            carried: list | None = None,
            written: Callable[[], str] | None = None,
-           offered: list | None = None) -> Match:
+           offered: list | None = None,
+           verify_runtime: bool = False) -> Match:
     """The certainty rule over one query's results.
 
     ``query`` is what TMDb is asked; ``want`` stays the folder's own keys
@@ -667,7 +673,8 @@ def _under(api_key: str, query: str, want: frozenset, year: str,
     for row in rows:
         _record_offer(offered, _offer_from_row(row))
     return _settle(candidates, over_budget, want, year, runtime, notes,
-                   plainly, named_for_the_year, subtitles, carried, written)
+                   plainly, named_for_the_year, subtitles, carried, written,
+                   verify_runtime=verify_runtime)
 
 
 def _settle(candidates: list, over_budget: list, want: frozenset, year: str,
@@ -679,7 +686,8 @@ def _settle(candidates: list, over_budget: list, want: frozenset, year: str,
             carried: list | None = None,
             written: Callable[[], str] | None = None,
             found: list | None = None,
-            part_of_name: bool = True) -> Match:
+            part_of_name: bool = True,
+            verify_runtime: bool = False) -> Match:
     """The certainty rule over one set of candidates, wherever they came from.
 
     ``over_budget`` are the search results that were never made candidates,
@@ -710,6 +718,11 @@ def _settle(candidates: list, over_budget: list, want: frozenset, year: str,
                               or row.titles & named_for_the_year],
                              year, notes)
     if len(dated) == 1:
+        if verify_runtime and runtime is not None:
+            seconds = runtime()
+            if _runtime_agrees(seconds, dated[0].runtime) is False:
+                _note_the_lengths(notes, dated, seconds)
+                return Match()
         return _matched(dated[0], want, plainly, notes)
 
     # Several films of one title and one year - a remake released the same year,

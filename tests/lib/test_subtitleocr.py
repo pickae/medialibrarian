@@ -7,13 +7,23 @@ or has no data for the language left out, the tracks taken out of the film in
 one pass, and the text read back out of what was written.
 """
 
+import contextlib
+import json
 import os
+import shutil
+import threading
+import time
 
 import pytest
 
-from medialib.lib import languages, subtitleocr, subtitletracks
-
-pytestmark = [pytest.mark.stubbed, pytest.mark.seconv]
+from medialib.lib import (
+    languages,
+    llmclient,
+    llmroster,
+    llmtraits,
+    subtitleocr,
+    subtitletracks,
+)
 
 FRENCH = next(row for row in languages.recognised() if row.code2 == "fr")
 ENGLISH = next(row for row in languages.recognised() if row.code2 == "en")
@@ -49,15 +59,22 @@ esac
 
 @pytest.fixture()
 def bin_dir(tmp_path, monkeypatch):
+    real_curl = shutil.which("curl")
     path = tmp_path / "bin"
     path.mkdir()
+    if real_curl and os.name != "nt":
+        os.symlink(real_curl, path / "curl")
     monkeypatch.setenv("PATH", str(path))
     monkeypatch.delenv("subtitleOcrEngines", raising=False)
-    monkeypatch.delenv("subtitleOcrUrl", raising=False)
+    for _field, name in llmroster._LEGACY_OCR_FIELDS:
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(subtitleocr, "_said", set())
     monkeypatch.setattr(subtitleocr, "_tesseract_languages", None)
     monkeypatch.setattr(subtitleocr, "paddle_on_gpu", lambda: False)
-    monkeypatch.setattr(subtitleocr, "_servers", {})
+    monkeypatch.setattr(llmclient, "_servers", {})
+    llmroster.forget()
+    llmtraits.forget()
+    monkeypatch.setattr(llmtraits, "_server_json", lambda *a, **k: None)
     (path / "cues.srt").write_text(_CUES)
     return path
 
@@ -103,6 +120,7 @@ def _read(bin_dir, tmp_path, row=FRENCH, environ=None, usage=None):
     return engine, srt, logs
 
 
+@pytest.mark.pure
 class TestTheEngines:
     """An engine that reads every language first, where the machine can run
     it at speed; tesseract's few languages next; every language slowly last."""
@@ -110,6 +128,9 @@ class TestTheEngines:
     @pytest.fixture(autouse=True)
     def _gpu(self, monkeypatch):
         self.gpu = [False]
+        llmroster.forget()
+        llmtraits.forget()
+        monkeypatch.setattr(llmtraits, "_server_json", lambda *a, **k: None)
         monkeypatch.setattr(subtitleocr, "paddle_on_gpu",
                             lambda: self.gpu[0])
 
@@ -125,6 +146,24 @@ class TestTheEngines:
     def test_a_vision_model_before_all_where_there_is_one(self):
         assert subtitleocr.engines(
             {"subtitleOcrUrl": "http://127.0.0.1:8080"})[0] == ("vision", "")
+
+    def test_a_roster_vision_model_enables_vision(self, tmp_path):
+        models = tmp_path / "models.toml"
+        models.write_text(
+            '[models.vision-local]\nurl = "http://127.0.0.1:8082/v1"\n'
+            'model = "gemma3-12b"\ntraits = { vision = true }\n',
+            encoding="utf-8")
+        assert subtitleocr.engines(
+            {"llmModels": str(models)})[0] == ("vision", "")
+
+    def test_a_text_only_roster_does_not_enable_vision(self, tmp_path):
+        models = tmp_path / "models.toml"
+        models.write_text(
+            '[models.text-only]\nurl = "http://127.0.0.1:8082/v1"\n'
+            'model = "qwen3-8b"\ntraits = { vision = false }\n',
+            encoding="utf-8")
+        assert subtitleocr.engines({"llmModels": str(models)}) == (
+            ("tesseract", ""), ("paddle", "cpu"))
 
     def test_the_setting_names_them_and_their_order(self):
         assert subtitleocr.engines(
@@ -143,28 +182,7 @@ class TestTheEngines:
             == (("vision", ""), ("tesseract", ""))
 
 
-class TestTheModelAskedFor:
-    @pytest.fixture()
-    def listed(self, monkeypatch):
-        models = [["vision-35b", "other"]]
-        monkeypatch.setattr(subtitleocr.modelserver, "served_model",
-                            lambda url: models[0])
-        return models
-
-    def test_the_one_named_where_the_server_lists_it(self, listed):
-        assert subtitleocr._model_on(
-            "u", {"subtitleOcrModel": "other"}) == "other"
-
-    def test_a_server_down_the_ladder_s_own_otherwise(self, listed):
-        """The 27B a run falls back on holds no 35B-A3B."""
-        listed[0] = ["vision-27b"]
-        assert subtitleocr._model_on(
-            "u", {"subtitleOcrModel": "vision-35b"}) == "vision-27b"
-
-    def test_without_a_name_the_first_listed(self, listed):
-        assert subtitleocr._model_on("u", {}) == "vision-35b"
-
-
+@pytest.mark.pure
 class TestTheGpu:
     def test_paddle_goes_there_with_cuda_and_room(self, monkeypatch):
         monkeypatch.setattr(subtitleocr, "_paddle_has_cuda", lambda: True)
@@ -182,6 +200,8 @@ class TestTheGpu:
         assert not subtitleocr.paddle_on_gpu()
 
 
+@pytest.mark.stubbed
+@pytest.mark.seconv
 class TestReading:
     def test_the_first_engine_that_reads_it_writes_the_sidecar(
             self, bin_dir, tmp_path):
@@ -279,6 +299,8 @@ class TestReading:
         assert subtitleocr.available()
 
 
+@pytest.mark.stubbed
+@pytest.mark.seconv
 class TestTakingTheTracksOut:
     _MKVEXTRACT = r"""#!/bin/bash
 PATH="$PATH:/usr/bin:/bin"
@@ -311,10 +333,12 @@ done
         assert subtitleocr.readable("S_HDMV/PGS")
 
 
+@pytest.mark.pure
 class TestTheText:
     def test_each_cue_with_its_lines(self, tmp_path):
         srt = tmp_path / "a.srt"
-        srt.write_text("﻿" + _CUES.replace("\n", "\r\n"))
+        srt.write_text("\ufeff" + _CUES.replace("\n", "\r\n"),
+                       encoding="utf-8", newline="")
         assert subtitletracks.cue_texts(str(srt)) == ["Bonjour.",
                                                    "- Oui ?\n- Non."]
 
@@ -338,7 +362,7 @@ case "$*" in
       printf '4\n00:01:05,000 --> 00:01:07,000\n\n'; } > "$out/track3.srt" ;;
   *BDNXml*)
     mkdir -p "$out/track3"
-    for name in one two dots tall; do printf '%s' "$name" > "$out/track3/$name.png"; done
+    for name in one two dots tall; do printf '\x89PNG%s' "$name" > "$out/track3/$name.png"; done
     printf '<BDN><Events>'\
 '<Event><Graphic Width="9" Height="50">one.png</Graphic></Event>'\
 '<Event><Graphic Width="9" Height="48">two.png</Graphic></Event>'\
@@ -350,6 +374,8 @@ exit 0
 """
 
 
+@pytest.mark.stubbed
+@pytest.mark.seconv
 class TestTheVisionModel:
     """The lines' pictures sent to a model on a server of its own, several to
     a request and several requests at once: a real HTTP server stands in for
@@ -396,7 +422,7 @@ class TestTheVisionModel:
                     self._send(400, {"error": "no"})
                     return
                 seen = [base64.b64decode(part["image_url"]["url"].split(
-                            ",", 1)[1]).decode()
+                            ",", 1)[1]).removeprefix(b"\x89PNG").decode()
                         for part in body["messages"][0]["content"]
                         if part["type"] == "image_url"]
                 if len(seen) == 1:
@@ -410,7 +436,8 @@ class TestTheVisionModel:
 
         httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
-        monkeypatch.setattr(subtitleocr, "_VISION_BACKOFF", 0)
+        monkeypatch.setattr(llmclient, "RETRY_WAIT_SECONDS", 0)
+        monkeypatch.setattr(llmtraits, "_server_json", lambda *a, **k: None)
         state["url"] = "http://127.0.0.1:%d" % httpd.server_address[1]
         state["group"] = lambda seen: json.dumps(
             [{"one": "Bonjour.", "two": "- Oui ?\n- Non.",
@@ -511,8 +538,7 @@ class TestTheVisionModel:
             environ={"subtitleOcrEngines": "vision",
                      "subtitleOcrUrl": "http://127.0.0.1:1"})
         assert engine == ""
-        assert logs[0] == ("  no vision OCR server is answering, nor can one "
-                           "be started now, so the next engine reads")
+        assert any("no vision OCR server is answering" in line for line in logs)
 
     def test_down_the_ladder_the_next_server_that_answers_reads(
             self, bin_dir, tmp_path, server):
@@ -535,16 +561,16 @@ class TestTheVisionModel:
         lines = []
         for at, (name, height) in enumerate((("one", 50), ("two", 48),
                                              ("dots", 10), ("tall", 110))):
-            (folder / (name + ".png")).write_text(name)
+            (folder / (name + ".png")).write_bytes(b"\x89PNG" + name.encode())
             lines.append(("00:00:0%d,000" % at, "00:00:0%d,500" % at,
                           str(folder / (name + ".png")), height))
-        monkeypatch.setattr(subtitleocr, "_pictures", lambda image, out: lines)
         monkeypatch.setattr(subtitleocr.toolcapture, "watched",
                             lambda *a, **k: None)
+        llm = llmclient.Llm("openai", server["url"] + "/v1", "vision-35b",
+                            jobs=int(jobs), said={"vision": True})
         usage = subtitleocr.Usage()
         written = subtitleocr._read_with(
-            server["url"] + "/v1", "t.sup", FRENCH, str(tmp_path),
-            {"subtitleOcrJobs": jobs}, {}, lambda line: None, usage)
+            llm, lines, FRENCH, str(tmp_path), lambda line: None, usage)
         assert written
         return usage
 
@@ -552,7 +578,6 @@ class TestTheVisionModel:
                                                        tmp_path, server):
         """Every answered request, the group and the one asked again alone,
         with the tokens its reply reports; the wall-clock is the reading's."""
-        import json
         server["group"] = lambda seen: json.dumps(
             ["Bonjour.", "- Oui ?\n- Non.", "Line one."])
         server["usage"] = lambda pictures: {"prompt_tokens": 100 * pictures,
@@ -572,13 +597,6 @@ class TestTheVisionModel:
         assert (usage.requests, usage.tally.counted) == (1, 0)
         assert usage.line().endswith(", tokens not reported")
 
-    def test_the_responses_api_names_are_read_too(self):
-        assert subtitleocr._reported({"usage": {"input_tokens": 9,
-                                                "output_tokens": 3}}) \
-            == (9, 3)
-        assert subtitleocr._reported({"usage": None}) == (None, None)
-        assert subtitleocr._reported({}) == (None, None)
-
     def test_a_refused_request_is_not_counted(self, monkeypatch, tmp_path,
                                               server):
         server["busy"] = 3
@@ -586,24 +604,227 @@ class TestTheVisionModel:
         assert len(server["bodies"]) == 4
         assert usage.requests == 1
 
-    @pytest.mark.parametrize("value,jobs", [("8", 8), ("", 32), ("x", 32),
-                                            ("0", 1)])
-    def test_how_many_requests_at_once(self, value, jobs):
-        assert subtitleocr._jobs({"subtitleOcrJobs": value}) == jobs
+
+@pytest.mark.pure
+class TestGroupSizeAndConcurrency:
+    """Batch size scales safely with the model's context window, and
+    concurrency stays governed by the roster model's ``jobs``."""
+
+    @pytest.mark.parametrize("context, expected", [
+        (32000, 16), (4096, 16), (2048, 8), (1024, 4), (512, 2), (256, 1), (0, 1),
+    ])
+    def test_group_size_scales_with_context(self, context, expected):
+        assert subtitleocr.group_size(context) == expected
+
+    def test_workers_governed_by_llm_jobs_not_32(self):
+        local = llmclient.build(
+            {"url": "http://127.0.0.1:8082/v1", "model": "gemma3-12b"}, "v")
+        assert local.jobs == llmclient.DEFAULT_JOBS
+        assert subtitleocr._workers(local, 100) == llmclient.DEFAULT_JOBS
+        assert subtitleocr._workers(local, 1) == 1
+
+        custom = llmclient.build(
+            {"url": "http://127.0.0.1:8082/v1", "model": "gemma3-12b", "jobs": "4"},
+            "v")
+        assert subtitleocr._workers(custom, 100) == 4
+
+        cloud = llmclient.build({"api": "anthropic"}, "claude")
+        assert cloud.jobs == 0
+        assert subtitleocr._workers(cloud, 100) == subtitleocr._CLOUD_JOBS
+
+    def test_small_context_splits_batches_and_holds_concurrency(
+            self, monkeypatch, tmp_path):
+        lines = []
+        for idx in range(10):
+            png = tmp_path / ("p%d.png" % idx)
+            png.write_bytes(b"\x89PNG" + str(idx).encode())
+            lines.append(("00:00:%02d,000" % idx, "00:00:%02d,500" % idx,
+                          str(png), 50))
+        llm = llmclient.Llm("openai", "http://127.0.0.1:8082/v1", "small",
+                            context_tokens=2048, jobs=1, said={"vision": True})
+        batches = []
+        active = 0
+        peak = 0
+        lock = threading.Lock()
+
+        def fake_ask_pictures(system, batch_prompt, alone_prompt, images,
+                              tally=None, **kwargs):
+            nonlocal active, peak
+            with lock:
+                active += 1
+                peak = max(peak, active)
+                batches.append(len(images))
+            time.sleep(0.01)
+            with lock:
+                active -= 1
+            return ["line %d" % i for i in range(len(images))]
+
+        monkeypatch.setattr(llm, "ask_pictures", fake_ask_pictures)
+        monkeypatch.setattr(subtitleocr.toolcapture, "watched",
+                            lambda *a, **k: None)
+        srt = subtitleocr._read_with(llm, lines, FRENCH, str(tmp_path),
+                                     lambda line: None, subtitleocr.Usage())
+        assert srt
+        assert sorted(batches, reverse=True) == [8, 2]
+        assert peak == 1
 
 
+@pytest.mark.pure
+class TestVisionRosterAndFallback:
+    """Roster ladder walk, modelmeter accounting, short-array/tall-line
+    re-asking, and fallback to paddle/tesseract when vision cannot read."""
+
+    @pytest.fixture(autouse=True)
+    def _clean(self, monkeypatch):
+        llmroster.forget()
+        llmtraits.forget()
+        monkeypatch.setattr(llmtraits, "_server_json", lambda *a, **k: None)
+        monkeypatch.setattr(subtitleocr, "_said", set())
+        monkeypatch.setattr(subtitleocr, "paddle_on_gpu", lambda: False)
+
+    def _make_lines(self, tmp_path):
+        lines = []
+        for at, (name, height) in enumerate((("one", 50), ("two", 48),
+                                             ("dots", 10), ("tall", 110))):
+            png = tmp_path / (name + ".png")
+            png.write_bytes(b"\x89PNG" + name.encode())
+            lines.append(("00:00:0%d,000" % at, "00:00:0%d,500" % at,
+                          str(png), height))
+        return lines
+
+    def test_short_array_reasks_alone_and_tall_line_reasks_with_meter(
+            self, monkeypatch, tmp_path):
+        lines = self._make_lines(tmp_path)
+        llm = llmclient.Llm("openai", "http://127.0.0.1:8082/v1", "vision-12b",
+                            said={"vision": True})
+        calls = []
+
+        def fake_post(model, system, prompt, tried, pictures=(), **kwargs):
+            calls.append((len(pictures), kwargs.get("numbered"),
+                          kwargs.get("options"), kwargs.get("max_tokens")))
+            if len(pictures) == 3:
+                return json.dumps(["Bonjour.", "- Oui ?\n- Non.", "Line one."]), 10, 300
+            return "Line one.\nLine two.", 6, 100
+
+        monkeypatch.setattr(llmclient, "_post_openai", fake_post)
+        monkeypatch.setattr(subtitleocr.toolcapture, "watched",
+                            lambda *a, **k: None)
+        usage = subtitleocr.Usage()
+        srt = subtitleocr._read_with(llm, lines, FRENCH, str(tmp_path),
+                                     lambda line: None, usage)
+        assert srt
+        assert subtitletracks.cue_texts(srt) == [
+            "Bonjour.", "- Oui ?\n- Non.", "Line one.\nLine two."]
+        assert len(calls) == 2
+        assert calls[0][0] == 3 and calls[0][1] is True and calls[0][3] == 600
+        assert calls[1][0] == 1 and calls[1][1] is True and calls[1][3] == 200
+        assert (usage.requests, usage.tally.read, usage.tally.tokens) == (2, 400, 16)
+        assert "16 token(s) written" in usage.line()
+        assert "400 read, 416 in all" in usage.line()
+
+    def test_responses_api_token_names_are_reported(self):
+        assert llmclient._reported_tokens(
+            {"input_tokens": 9, "output_tokens": 3}) == (3, 9)
+        assert llmclient._reported_tokens(None) == (None, None)
+        assert llmclient._reported_tokens({}) == (None, None)
+
+    def test_ladder_falls_back_to_next_vision_model_and_skips_non_vision(
+            self, monkeypatch, tmp_path):
+        lines = self._make_lines(tmp_path)
+        monkeypatch.setattr(subtitleocr, "_pictures", lambda image, out: lines)
+        monkeypatch.setattr(subtitleocr.toolcapture, "watched",
+                            lambda *a, **k: None)
+
+        down = llmclient.Llm("openai", "http://127.0.0.1:8081/v1", "down",
+                             said={"vision": True}, name="down")
+        text_only = llmclient.Llm("openai", "http://127.0.0.1:8082/v1", "text",
+                                  said={"vision": False}, name="text")
+        good = llmclient.Llm("openai", "http://127.0.0.1:8083/v1", "good",
+                             said={"vision": True}, name="good")
+
+        @contextlib.contextmanager
+        def fail_serving(log, **_kwargs):
+            raise llmclient.LlmError("down")
+            yield down  # pragma: no cover
+
+        @contextlib.contextmanager
+        def serve_as(target):
+            yield target
+
+        monkeypatch.setattr(down, "serving", fail_serving)
+        monkeypatch.setattr(text_only, "serving",
+                            lambda log, **_kwargs: serve_as(text_only))
+        monkeypatch.setattr(good, "serving",
+                            lambda log, **_kwargs: serve_as(good))
+        monkeypatch.setattr(
+            good, "ask_pictures",
+            lambda *a, **k: ["Bonjour.", "- Oui ?\n- Non.", "Line one.\nLine two."])
+
+        logs = []
+        srt = subtitleocr._read_by_vision(
+            "t.sup", FRENCH, str(tmp_path), {}, logs.append,
+            models=[down, text_only, good])
+        assert srt
+        assert subtitletracks.cue_texts(srt) == [
+            "Bonjour.", "- Oui ?\n- Non.", "Line one.\nLine two."]
+        assert any("down could not start" in line for line in logs)
+
+    def test_recognise_falls_back_to_tesseract_when_vision_fails(
+            self, monkeypatch, tmp_path):
+        image = tmp_path / "track3.sup"
+        image.write_bytes(b"PG")
+        srt = tmp_path / "Film.fr.srt"
+        models_file = tmp_path / "models.toml"
+        models_file.write_text(
+            '[models.v]\nurl = "http://127.0.0.1:8082/v1"\n'
+            'model = "gemma3-4b"\ntraits = { vision = true }\n',
+            encoding="utf-8")
+
+        monkeypatch.setattr(subtitleocr, "_read_by_vision",
+                            lambda *a, **k: "")
+        monkeypatch.setattr(subtitleocr, "_ready", lambda *a, **k: True)
+
+        def fake_watched(cmd, **kwargs):
+            out_dir = next(arg.split(":", 1)[1] for arg in cmd
+                           if arg.startswith("--output-folder:"))
+            out_srt = os.path.join(out_dir, "read.srt")
+            with open(out_srt, "w", encoding="utf-8") as handle:
+                handle.write(_CUES)
+            return type("Done", (), {
+                "returncode": 0,
+                "stdout": json.dumps({"files": [{"success": True, "output": out_srt}]}),
+            })()
+
+        monkeypatch.setattr(subtitleocr.toolcapture, "watched", fake_watched)
+        logs = []
+        engine = subtitleocr.recognise(
+            str(image), FRENCH, str(srt), logs.append,
+            environ={"llmModels": str(models_file)})
+        assert engine == "tesseract"
+        assert srt.read_text(encoding="utf-8") == _CUES
+        assert any("vision OCR read nothing" in line for line in logs)
+
+
+@pytest.mark.pure
 class TestTheVisionSettings:
     @pytest.fixture()
     def asked(self, monkeypatch, tmp_path):
+        llmroster.forget()
+        llmtraits.forget()
+        monkeypatch.setattr(llmtraits, "_server_json", lambda *a, **k: None)
+        png = tmp_path / "1.png"
+        png.write_bytes(b"\x89PNGone")
         calls = []
         monkeypatch.setattr(subtitleocr, "_pictures", lambda image, out: [
-            ("00:00:01,000", "00:00:02,000", str(tmp_path / "1.png"), 50)])
-        monkeypatch.setattr(subtitleocr.modelserver, "served_model",
-                            lambda url: ["listed", "vision-35b"])
-        monkeypatch.setattr(subtitleocr, "_ask",
-                            lambda url, model, prompt, pngs, extra,
-                            usage=None:
-                            calls.append((model, extra)) or "Oui")
+            ("00:00:01,000", "00:00:02,000", str(png), 50)])
+        monkeypatch.setattr(llmclient, "_listing",
+                            lambda url, key="": {"listed": 4096, "vision-35b": 4096})
+
+        def fake_post(llm, system, prompt, tried, pictures=(), **kwargs):
+            calls.append((llm.model, kwargs.get("options")))
+            return "Oui", 2, 10
+
+        monkeypatch.setattr(llmclient, "_post_openai", fake_post)
         monkeypatch.setattr(subtitleocr.toolcapture, "watched",
                             lambda *a, **k: None)
         return calls
@@ -618,15 +839,22 @@ class TestTheVisionSettings:
 
     def test_the_model_named_is_the_one_asked_for(self, asked, tmp_path):
         self._read(tmp_path, subtitleOcrModel="vision-35b")
-        assert asked == [("vision-35b", {})]
+        assert len(asked) == 1
+        assert asked[0][0] == "vision-35b"
 
     def test_without_one_the_server_s_first(self, asked, tmp_path):
-        self._read(tmp_path)
-        assert asked == [("listed", {})]
+        written, logs = self._read(tmp_path)
+        assert written
+        assert logs == []
+        assert len(asked) == 1
+        assert asked[0][0] == "listed"
 
     def test_the_options_go_with_every_request(self, asked, tmp_path):
         self._read(tmp_path, subtitleOcrOptions='{"top_k": 1}')
-        assert asked == [("listed", {"top_k": 1})]
+        assert len(asked) == 1
+        assert asked[0][0] == "listed"
+        assert asked[0][1]["top_k"] == 1
+        assert asked[0][1]["temperature"] == 0
 
     def test_options_that_are_not_an_object_ask_nothing(self, asked,
                                                          tmp_path,
@@ -634,5 +862,6 @@ class TestTheVisionSettings:
         monkeypatch.setattr(subtitleocr, "_said", set())
         written, logs = self._read(tmp_path, subtitleOcrOptions="[1]")
         assert written == "" and asked == []
-        assert logs == ["  WARNING: subtitleOcrOptions is not a JSON object, "
-                        "the vision model is not asked"]
+        assert len(logs) == 1
+        assert "subtitleOcrOptions" in logs[0]
+        assert "the vision model is not asked" in logs[0]

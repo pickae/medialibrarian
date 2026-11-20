@@ -66,18 +66,35 @@ titles are taken only when it gives exactly one for every chapter. Any other
 count means the files aren't cut where the book's chapters are, so the
 numbers stay. `contentsSearchLlm=off` skips this step.
 
+Among image files in the input folder, cover names win first (`cover` +
+`front`, `front`, `cover` without `back`, `inlay`, `folder`, `back`, in
+decreasing order). When none of those match and the folder holds two or more
+images (for instance `scan01.jpg`, `cd.jpg`, `booklet3.jpg`), a
+[language model](../models.md) that **sees pictures** — the `cover-look` task
+— is shown those images with their file names and the folder's name and picks
+which one is the front cover; when none looks like one, no vision model is set
+up, or `coverLookLlm=off`, the first image found is taken. Those image files
+and their names go to that model, so use one you trust with them.
+
 A book that none of the three gave a cover is looked for **online**. What it
 probably is decides where: a name ending in a `[YouTube id]` (yt-dlp's
-default) is a YouTube podcast, and that video's own thumbnail is fetched; a
-name starting with a `yyyymmdd` date, or a length of 30 to 200 minutes, reads
-as a podcast (YouTube, then the show's artwork);
-anything longer as an audiobook (Audible, Amazon, iTunes, then another
-language's edition or the printed book). An answer is taken only when it is
-the same title and nothing about it — author, running time — says otherwise;
-otherwise the book stays without a cover. Where it looks is a table,
-[`coverproviders.tsv`](../../medialib/config/coverproviders.tsv); the
-`coverSearch` and `coverSearchTable` [settings](../settings.md) switch the
-search off or point it at your own copy.
+default) is a YouTube podcast, and that video's own thumbnail is fetched;
+otherwise, when a [language model](../models.md) is set up and
+`contentKindLlm` is on, a light model (the `audio-content` task) classifies
+whether the recording is a podcast, an audio drama, or an audiobook from the
+folder's path and file names, the tracks' tags, the duration, and the channel
+count. When no model is available, `contentKindLlm=off`, or the model is
+unsure, it falls back to the length and channel-count heuristic: a name
+starting with a `yyyymmdd` date, or a length of 30 to 200 minutes in mono,
+reads as a podcast (YouTube, then the show's artwork); 30 to 200 minutes in
+stereo reads as an audio drama; anything longer as an audiobook (Audible,
+Amazon, iTunes, then another language's edition or the printed book). An answer
+is taken only when it is the same title and nothing about it — author, running
+time — says otherwise; otherwise the book stays without a cover. Where it looks
+is a table, [`coverproviders.tsv`](../../medialib/config/coverproviders.tsv);
+the `coverSearch`, `coverSearchTable` and `contentKindLlm`
+[settings](../settings.md) switch these steps off or point the search at your
+own table.
 
 Where that finds nothing, a [language model](../models.md) is asked to
 **search the web** for the cover - the `cover-search` task, which only a
@@ -97,6 +114,20 @@ A cover found online either way is also **kept in the input folder**, as
 `cover.jpg` (or `.png`, `.webp`; `cover (2).jpg` where that name is taken -
 nothing is overwritten), so the folder has its cover from then on and the
 next run takes it from there.
+
+## Metadata tags
+
+After chapters and cover are embedded, a [language model](../models.md) that
+can search the web can look up the recording's metadata tags - the `book-tags`
+task (`title`, `author`, `narrator`, `series`, `series_index`, `year`,
+`language`, and `abridged`). It is told the folder's file names, the tracks'
+tags, what the book probably is, and any hints the cover search returned when
+that ran; it also runs when the book already had a local cover.
+
+Only tags that are currently empty on the joined output file are filled —
+non-empty tags are never overwritten, and the output file is never renamed.
+`bookTagsLlm=off` switches this step off; the files' names and tags go to the
+model, so use one you trust with them.
 
 ---
 

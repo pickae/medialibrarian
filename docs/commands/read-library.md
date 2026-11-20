@@ -13,7 +13,7 @@ driven headless.
 | **Writes** | `<outputDir>/opus/…` and `<outputDir>/flac/…`, each mirroring the book's name and sub-folder |
 | **Input** | never modified |
 | **Reruns** | resume: a book is either fully in the library or not in it at all, so an interrupted run costs at most the book it was reading |
-| **Network** | none of its own — whatever the checkout fetches for itself is the checkout's |
+| **Network** | none of its own unless a hosted [language model](../models.md) is configured for uncertain book languages (`bookLanguageLlm`) — whatever the checkout fetches for itself is the checkout's |
 
 ## Default behavior
 
@@ -65,7 +65,13 @@ only be the engine's own `.m4b` lands in `<out>/m4b` rather than among the FLACs
 **Each book's language is established, not assumed.** A TTS engine is *told*
 what language its input is in and detects nothing, so a book read without that
 is read out by an English speaker. The language comes from the book's own
-metadata, and from its text when the metadata says nothing. `-l` sets one for
+metadata, and from its text when the metadata says nothing. When a
+[language model](../models.md) is configured (`bookLanguageLlm`, on by
+default) and a book's metadata disagrees with its text, neither answers (for
+example a language outside the stop-word table), or the text is borderline
+(such as mixed or bilingual prose), a ~2 KB excerpt together with the book's
+title/metadata is checked by the `book-language` task, falling back to the
+deterministic result if the model is unsure or fails. `-l` sets one for
 the whole run instead; a language the engine cannot speak is refused up front
 rather than per book, hours into a queue.
 
