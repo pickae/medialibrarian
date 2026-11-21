@@ -1,5 +1,5 @@
 """`ytdlp -i`'s library copy, built while the downloads go on: the finished
-feeds it is handed, the batches it converts them in, and -C's chapters.
+feeds it is handed, the batches it converts them in, and -A's chapters.
 
 In process, with the two commands it runs recorded rather than run: what is
 asserted is which calls the queue makes and when, not what they do - that is
@@ -37,7 +37,7 @@ def library(tmp_path, monkeypatch):
         status_dir=str(status), manifest_dir=str(manifests), script_dir="",
         options={"cleanUp": False, "aiChapters": False},
         ingest={"staging": {"Music": str(staging)}, "root": str(tmp_path / "Ingested"),
-                "args": {"Music": "-c -b 65 -C"}},
+                "args": {"Music": "-c -b 65 -A"}},
         transcripts_for=lambda profile: ())
     index = [0]
 
@@ -83,7 +83,7 @@ class TestBatches:
         assert len(conversions) == 1
         assert conversions[0][-2:] == [str(library.staging),
                                        library.state.ingest["root"]]
-        assert conversions[0][1:-2] == ["-c", "-b", "65", "-C",
+        assert conversions[0][1:-2] == ["-c", "-b", "65", "-A",
                                         "-O", "A", "-O", "B", "-O", "C"]
 
     def test_the_chapter_instructions_go_over_whole(self, library):
@@ -93,7 +93,7 @@ class TestBatches:
         library.feed("A", 1)
         library.drain()
         assert _conversions(library.calls)[0][1:-2] == [
-            "-c", "-b", "65", "-C", "-P", "Name each speaker and topic.", "-O", "A"]
+            "-c", "-b", "65", "-A", "-P", "Name each speaker and topic.", "-O", "A"]
 
     def test_a_batch_short_of_the_size_still_goes_when_the_downloads_end(self, library):
         library.feed("A", 1)
@@ -157,20 +157,22 @@ class TestBeforeTheNamesChange:
 
 
 class TestTheOption:
-    def test_g_without_i_is_refused(self, tmp_path, capsys):
-        status = ytdlp.main(["-C", str(tmp_path / "out"), "archive.log"])
+    def test_P_with_a_but_without_i_is_refused(self, tmp_path, capsys):
+        status = ytdlp.main(["-A", "-P", "Name them.", str(tmp_path / "out"),
+                             "archive.log"])
         assert status == 1
-        assert "-C chapters the library copy, so it needs -i" in capsys.readouterr().err
+        assert "-P is for the chapter model, so it needs -A and -i" in \
+            capsys.readouterr().err
 
     def test_P_without_g_is_refused(self, tmp_path, capsys):
         status = ytdlp.main(["-i", "-P", "Name them.", str(tmp_path / "out"),
                              "archive.log"])
         assert status == 1
-        assert "-P is for the chapter model, so it needs -C" in capsys.readouterr().err
+        assert "-P is for the chapter model, so it needs -A and -i" in capsys.readouterr().err
 
     def test_an_unknown_spoken_language_is_refused(self, tmp_path, capsys, monkeypatch):
         monkeypatch.setenv("spokenLanguages", "xx")
-        assert ytdlp.main(["-i", "-C", str(tmp_path / "out"), "archive.log"]) == 1
+        assert ytdlp.main(["-i", "-A", str(tmp_path / "out"), "archive.log"]) == 1
         assert "spokenLanguages" in capsys.readouterr().err
 
     def test_only_a_youtube_feed_fetches_captions(self):

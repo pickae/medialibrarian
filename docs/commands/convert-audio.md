@@ -11,7 +11,7 @@ carrying over chapters and cover art.
 | **Writes** | the converted files under `<outputDir>`; with `-c`, the rest copied verbatim beside them |
 | **Input** | file extensions lower-cased and `.jpeg` renamed to `.jpg`; nothing else is changed |
 | **Reruns** | an up-to-date output is skipped |
-| **Network** | online cover lookup for standalone tracks without a cover (`coverSearch`, `coverSearchLlm`), and the language model's server under `-C` |
+| **Network** | online cover lookup for standalone tracks without a cover (`coverSearch`), and under `-A` the language model's server (the cover search and chapters) |
 
 ## Default behavior
 
@@ -125,9 +125,9 @@ that recording. This is how a format with no place for chapters, such as raw
 `.aac`, keeps the chapters `generate-chapters -w` left beside it. An output
 already holding exactly those chapters is left as it is.
 
-## Chapters for what has none (`-C`)
+## Chapters for what has none (`-A`)
 
-With `-C`, every output whose source has no chapters, and no chapter file
+With `-A`, every output whose source has no chapters, and no chapter file
 beside it, gets some, worked out by a
 language model from a transcript of the speech, exactly as
 [`generate-chapters`](generate-chapters.md) does it and with the same
@@ -135,11 +135,11 @@ settings. The transcript is the sidecar where there is one. Otherwise the
 outputs are transcribed by `transcribe-audio` once all the encoding is done, and
 that transcript goes into the output with the chapters. A source with chapters
 of its own keeps them and is not sent to the model. A rerun tries again only for
-outputs that still have none. Without a usable model, `-C` is refused before
+outputs that still have none. Without a usable model, `-A` is refused before
 anything is encoded.
 
 `-P "<text>"` adds your own instructions for the model, as
-[`generate-chapters -P`](generate-chapters.md#your-own-instructions) does; it needs `-C`.
+[`generate-chapters -P`](generate-chapters.md#your-own-instructions) does; it needs `-A`.
 
 ## Some folders of the input (`-O`)
 
@@ -164,8 +164,8 @@ A track with no cover is looked for **online** only when it is the odd one out:
 | most of the other tracks in its folder carry a cover, or it is alone | most of them carry none (the album case) |
 
 The search works the way [concat-audio's](concat-audio.md#chapters-and-cover)
-does: when a [language model](../models.md) is set up and `contentKindLlm` is
-on (the `audio-content` task), the model classifies whether a track without a
+does: under `-A`, when a [language model](../models.md) is set up and
+`contentKindLlm` is on (the `audio-content` task), the model classifies whether a track without a
 `[YouTube id]` is a podcast, an audio drama, or an audiobook from its folder
 path, file name, tags, duration, and channel count; otherwise, or when the
 model is unsure, it falls back to the length and stereo heuristic — a dated
@@ -176,8 +176,8 @@ audiobook. An answer is taken only when it is the same title. The
 `coverSearch` and `contentKindLlm` [settings](../settings.md) switch these
 steps off.
 
-When those catalogues come up empty, a language model that can **search the
-web** (`cover-search` in [docs/models.md](../models.md)) is asked for the
+When those catalogues come up empty and the run is given `-A`, a language
+model that can **search the web** (`cover-search` in [docs/models.md](../models.md)) is asked for the
 episode's cover — told the show (from the album/artist tags and parent
 folder), the episode title, the date (from the filename or tags), its tags
 and what it probably is — and a model that **sees pictures** (`cover-look`)

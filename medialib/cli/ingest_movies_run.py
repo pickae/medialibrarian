@@ -1043,6 +1043,8 @@ def main(argv: list, program: str = "ingest-movies",
 
     if "O" in result.given:
         return _only_phases(declaration, result, program, script_dir)
+    # -A chapters the extras beside a full ingest.
+    result.values["extrasChapters"] = "1" if "A" in result.given else ""
     return _main_one(declaration, result, program, script_dir)
 
 
@@ -1057,8 +1059,7 @@ def _only_phases(declaration, result, program: str, script_dir: str) -> int:
         clioptions.refuse_usage(declaration, error.message)
         return 1
     phases = result.values["onlyPhases"].split(",")
-    for letter, key in (("r", "convertRemuxes"), ("C", "extrasChapters"),
-                        ("k", None), ("o", None)):
+    for letter, key in (("r", "convertRemuxes"), ("k", None), ("o", None)):
         if (letter in result.given if key is None
                 else result.values.get(key)):
             clioptions.refuse_usage(
@@ -1066,6 +1067,12 @@ def _only_phases(declaration, result, program: str, script_dir: str) -> int:
                 "-O names the phases to run on their own, and -%s belongs to "
                 "a full ingest.\nDrop one." % letter)
             return 1
+    if "extras-chapters" in phases and "A" not in result.given:
+        clioptions.refuse_usage(
+            declaration,
+            "-O extras-chapters asks a language model, and one is asked only "
+            "under -A.")
+        return 1
     if "P" in result.given and "extras-chapters" not in phases:
         clioptions.refuse_usage(
             declaration,
@@ -1189,11 +1196,11 @@ def _main_one(declaration, result, program: str, script_dir: str,
             "-k says take nothing away, and -r converts the remuxes by "
             "encoding\nthem: they contradict each other. Drop one.")
         return 1
-    # The instructions are for the model -C asks; without it there is none.
+    # The instructions are for the model -A asks; without it there is none.
     if ("P" in result.given and not result.values.get("extrasChapters")
             and phase != "extras-chapters"):
         clioptions.refuse_usage(declaration, "-P (instructions for the chapter "
-                                "model) needs -C, or -O extras-chapters.")
+                                "model) needs -A, or -O extras-chapters.")
         return 1
 
     script_dir = script_dir or commands.script_dir()
@@ -1324,7 +1331,7 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
     tools = ["ffmpeg", "ffprobe", "mkvmerge", "mkvpropedit", "mediainfo"]
     if os.environ.get("tmdbApiKey"):
         tools.append("curl")
-    # -C transcribes a bonus video with no dialogue subtitle through
+    # -A transcribes a bonus video with no dialogue subtitle through
     # transcribe-audio, in the last phase.
     if result.values.get("extrasChapters"):
         tools += [spec for spec in tooldeps.command_tools("transcribe-audio")
@@ -1337,7 +1344,7 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
     if result.values.get("extrasChapters"):
         extras_llm = chapterwork.model(
             program, (result.values.get("chapterInstructions") or "").strip(),
-            "-C", log)
+            "-A", log)
         if extras_llm is None:
             return 1
 
@@ -2092,7 +2099,7 @@ def _extras_chapters_only(program: str, script_dir: str, roots: list,
                           instructions: str) -> int:
     """The extras' chapters phase on its own: every bonus video below each
     folder given that has no chapters is given some worked out by the chapter
-    model from what is said in it, written in place with mkvpropedit - what -C
+    model from what is said in it, written in place with mkvpropedit - what -A
     does beside a full ingest. -P adds instructions for the model."""
     if tooldeps.require_tools(program, tooldeps.command_tools("transcribe-audio")
                               + ["ffprobe", "mkvmerge", "mkvpropedit"]):

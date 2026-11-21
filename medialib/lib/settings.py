@@ -118,7 +118,7 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("subDlApiKey", "API key of a free SubDL account, asked third for subtitles",
             ("ingest-movies",), secret=True),
     Setting("spokenLanguages", "The languages you speak: ingest-movies fetches "
-            "and tests subtitles in them, and ytdlp -C takes a YouTube "
+            "and tests subtitles in them, and ytdlp -A takes a YouTube "
             "episode's transcript in its own language when it is one of them, "
             "in English when it is not. A comma list of ISO 639-1 codes, in the "
             "order to fetch them; track names are also read in the names these "
@@ -809,6 +809,10 @@ def page() -> str:
         "with `-x name=value`, repeatable: the value lands in the run's",
         "environment and wins over the file. A secret is not taken there - the",
         "file is where it goes.",
+        "",
+        "A setting named `…Llm` turns off one step that asks a language model.",
+        "Such a step runs only when the command was given `-A`",
+        "([models](models.md#asking-for-it--a)), so `on` means \"under `-A`\".",
         "",
         "A file that holds a secret (marked below) must be readable by you alone -",
         "`chmod 600` - or every command refuses to start. A name in the file that",

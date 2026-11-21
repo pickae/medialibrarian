@@ -138,13 +138,15 @@ g | <depth> | Judge the files under each folder <depth> levels into
                     out half converted. A video, or a format that is always
                     converted, has its whole folder converted with it.
                     Cannot be combined with -a.
-C |  | Add chapters to every output whose source has none, and no
-                    <name>.chapters.txt beside it, worked out by a language
-                    model (docs/models.md) from a transcript of the
-                    speech, and write the transcript into the output as
-                    well. A transcript sidecar is used rather than
-                    transcribing again.
-P | <text> | With -C: more instructions for the model, added to every
+A |  | Let language models help (docs/models.md): add chapters to
+                    every output whose source has none, and no
+                    <name>.chapters.txt beside it, worked out from a
+                    transcript of the speech, and write the transcript into
+                    the output as well (a transcript sidecar is used rather
+                    than transcribing again); and let the cover search and
+                    the other steps that ask a model do so. Without -A none
+                    is asked.
+P | <text> | With -A: more instructions for the model, added to every
                     request, e.g. "a chapter per speaker, titled with their
                     name and topic". The model then reasons at medium effort,
                     and Claude may search the web.
@@ -161,7 +163,7 @@ OPT_FLAGS = "repeat:O"
 OPT_COLUMN = 20
 OPT_LONG = ("h:help m:mono s:surround a:adaptive c:copy-others "
             "e:encoding b:bitrate T:threshold j:jobs g:group "
-            "C:ai-chapters P:prompt O:only")
+            "P:prompt O:only")
 
 # The codec has to be one this command can write, or a typo would only surface
 # as a per-file failure deep into a run. The choices are joined with an ESCAPED
@@ -2041,7 +2043,7 @@ def main(argv: list, program: str = "convert-audio",
     bitrate = int(result.values["bitrate"] or DEFAULT_BITRATES[codec])
     jobs = int(result.values["jobs"] or runlog.cpu_count())
     group_depth = int(result.values["groupDepth"] or 0)
-    ai_chapters = "C" in result.given
+    ai_chapters = "A" in result.given
     instructions = (result.values["instructions"] or "").strip()
     only = tuple(result.values["only"] or ())
 
@@ -2064,10 +2066,10 @@ def main(argv: list, program: str = "convert-audio",
                             clioptions.page(declaration)))
         return 1
 
-    # The instructions are for the model -C asks; without it there is none.
+    # The instructions are for the model -A asks; without it there is none.
     if "P" in result.given and not ai_chapters:
         sys.stderr.write("%s\n\nerror: -P (instructions for the chapter model) "
-                         "needs -C.\n\n%s\n"
+                         "needs -A.\n\n%s\n"
                          % (declaration.credits,
                             clioptions.page(declaration)))
         return 1
@@ -2130,7 +2132,7 @@ def _settle_and_convert(program: str, script_dir: str, input_dir: str,
                         only=(), instructions: str = "") -> int:
     ffmpegselect.select_ffmpeg()
     ffmpegselect.report_ffmpeg_selection()
-    # -C transcribes what has no transcript through transcribe-audio, after
+    # -A transcribes what has no transcript through transcribe-audio, after
     # the last encode, so its tools are asked for now.
     if tooldeps.require_tools(program, tooldeps.command_tools(
             "convert-audio", *(["transcribe-audio"] if ai_chapters else []))):
@@ -2299,7 +2301,7 @@ def _add_transcripts_and_chapters(state: Run, llm) -> None:
     """The last phase, over every output this run's codec wrote, encoded now
     or by an earlier run: a transcript sidecar beside its source written into
     it, a chapter file beside its source (``<name>.chapters.txt``) likewise,
-    and - with -C - chapters for one that has neither that nor chapters of its
+    and - with -A - chapters for one that has neither that nor chapters of its
     own.
 
     Every transcript that is missing is made by transcribe-audio, from the

@@ -50,7 +50,9 @@ instead.
 
 ## Chapters and cover
 
-Each is taken from the first source that has one:
+Each is taken from the first source that has one. The steps below that ask
+a [language model](../models.md) do so only when the run is given `-A`
+(`convert-and-concat` hands its `-A` down):
 
 | | First | Then | Last |
 | --- | --- | --- | --- |
@@ -79,11 +81,11 @@ and their names go to that model, so use one you trust with them.
 A book that none of the three gave a cover is looked for **online**. What it
 probably is decides where: a name ending in a `[YouTube id]` (yt-dlp's
 default) is a YouTube podcast, and that video's own thumbnail is fetched;
-otherwise, when a [language model](../models.md) is set up and
+otherwise, under `-A`, when a [language model](../models.md) is set up and
 `contentKindLlm` is on, a light model (the `audio-content` task) classifies
 whether the recording is a podcast, an audio drama, or an audiobook from the
 folder's path and file names, the tracks' tags, the duration, and the channel
-count. When no model is available, `contentKindLlm=off`, or the model is
+count. When the run has no `-A`, no model is available, `contentKindLlm=off`, or the model is
 unsure, it falls back to the length and channel-count heuristic: a name
 starting with a `yyyymmdd` date, or a length of 30 to 200 minutes in mono,
 reads as a podcast (YouTube, then the show's artwork); 30 to 200 minutes in

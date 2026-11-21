@@ -108,16 +108,18 @@ m | <match> | Only the feeds whose subdir or URL contains <match>
 s | <system> | Build the calls for "windows" or "linux" instead of for
                     this host. Only useful with -p, to read off what the other
                     machine would run.
-C |  | With -i: chapters for every episode in the library that has
-                    none, worked out by a language model
-                    (docs/models.md) from a transcript, which is written into the
-                    episode as well (convert-audio -C). A YouTube episode's
+A |  | Let language models help (docs/models.md): find host-read ads
+                    in RSS and site episodes, and with -i add chapters to every
+                    episode in the library that has none, worked out from a
+                    transcript, which is written into the episode as well
+                    (convert-audio -A). Without -A none is asked. A YouTube
+                    episode's
                     transcript is YouTube's own captions, fetched with it in
                     the episode's language when the spokenLanguages setting
                     names it and in English when it does not, and written into
                     the episode even when it has chapters; an RSS episode is
                     transcribed on this machine.
-P | <text> | With -C: more instructions for the chapter model, added to
+P | <text> | With -A and -i: more instructions for the chapter model, added to
                     every request, e.g. "a chapter per speaker, titled with
                     their name and topic" (convert-audio -P). The model then
                     reasons at medium effort, and Claude may search the web.
@@ -135,7 +137,7 @@ l |  | Consolidate archives instead of downloading: every line of
 # tables can be read in one run. The rest assign once, last flag winning.
 OPT_FLAGS = "repeat:t"
 OPT_VARS = ("t:tables j:jobCap p:dryRun a:includeInactive c:cleanUp i:ingest m:match "
-            "l:consolidate C:aiChapters P:instructions")
+            "l:consolidate P:instructions")
 
 # -j caps a table's own parallelism and 0 means "no cap", so zero belongs in the
 # range; -s is the one option whose accepted values are words rather than a
@@ -147,8 +149,7 @@ s | enum:windows\\|linux\\|auto | system
 """
 
 OPT_LONG = ("h:help t:table j:jobs p:preview a:include-inactive "
-            "c:clean-up i:ingest m:match s:system l:consolidate C:ai-chapters "
-            "P:prompt")
+            "c:clean-up i:ingest m:match s:system l:consolidate P:prompt")
 
 USAGE_TAIL = """
 
@@ -263,7 +264,7 @@ class Run:
     # Handed over once the tables have been read, by the run that read them.
     rows_of: list[list[str]]
     # The -i plan, when the library is built during the run, and the
-    # languages a YouTube transcript is taken in, when -C fetches them.
+    # languages a YouTube transcript is taken in, when -A fetches them.
     ingest: dict | None = None
     spoken: tuple = ()
 
@@ -296,7 +297,7 @@ class Run:
 
     def transcripts_for(self, profile: str) -> tuple:
         """The languages a feed of this profile fetches its captions in:
-        the spoken ones, for a YouTube feed whose episodes -C chapters - and
+        the spoken ones, for a YouTube feed whose episodes -A chapters - and
         none for the rest, whose episodes are transcribed here."""
         if (self.options.get("aiChapters") and profile in self.staging_for_profile
                 and podcastfeeds.podcast_profile_provider(profile) == "youtube"):
@@ -580,7 +581,7 @@ LIBRARY_QUEUE = "library"
 DOWNLOADS_DONE = "downloadsDone"
 
 # How many new episodes a batch of the library copy waits for. Each batch is
-# one convert-audio, and with -C one transcription and one round of the model:
+# one convert-audio, and with -A one transcription and one round of the model:
 # its whisper starts once, with the probe that settles the GPU, and the model
 # and whisper take turns on the card once a batch and not once an episode. A
 # few is enough for that; more only leaves the card idle longer while the
@@ -595,7 +596,7 @@ class LibraryQueue:
     """The library copy, built while the downloads go on.
 
     The downloads wait on the network and on the pauses a provider asks for,
-    and leave the processor all but idle; the conversion - and with -C the
+    and leave the processor all but idle; the conversion - and with -A the
     transcription and the model, which take far longer - is work that would
     otherwise begin only once the last feed is fetched. So each feed that
     brought episodes is taken up as soon as it is finished: its captions
@@ -1058,19 +1059,16 @@ def main(argv: list, program: str = "ytdlp", script_dir: str = "") -> int:
         "match": result.values["match"],
         "jobCap": int(result.values["jobCap"] or 0),
         "outputPath": output_path,
-        "aiChapters": bool(result.values["aiChapters"]),
+        # -A chapters the library copy, which only -i makes.
+        "aiChapters": "A" in result.given and bool(result.values["ingest"]),
         "instructions": (result.values["instructions"] or "").strip(),
         "spoken": (),
     }
     if "P" in result.given and not options["aiChapters"]:
         clioptions.refuse_usage(declaration, "-P is for the chapter model, "
-                                "so it needs -C")
+                                "so it needs -A and -i")
         return 1
     if options["aiChapters"]:
-        if not options["ingest"]:
-            clioptions.refuse_usage(declaration, "-C chapters the library copy, "
-                                    "so it needs -i")
-            return 1
         try:
             options["spoken"] = tuple(row.code2 for row in languages.spoken_languages())
         except clioptions.UsageError as error:
@@ -1175,7 +1173,7 @@ def _settle_and_run(options, tables, profiles, jobs_of, rows_of, ingest_of,
                      for profile in profiles))
 
     # -i hands every batch to clean-folder-structure and convert-audio, the
-    # first one after the first downloads, and -a adds convert-audio's -C.
+    # first one after the first downloads, and -a adds convert-audio's -A.
     if options["ingest"] and not options["dryRun"] and tooldeps.require_tools(
             "the library copy (-i)", tooldeps.command_tools(
                 "clean-folder-structure", "convert-audio",
@@ -1433,7 +1431,7 @@ def _run(options, tables, profiles, jobs_of, rows_of, ingest_of, feed_count,
             return 1
         if options["aiChapters"]:
             for kind in ingest["args"]:
-                ingest["args"][kind] += " -C"
+                ingest["args"][kind] += " -A"
             # Kept apart from the arguments above, which are split on spaces.
             if options["instructions"]:
                 ingest["prompt"] = ["-P", options["instructions"]]

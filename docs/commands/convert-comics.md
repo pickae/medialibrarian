@@ -11,7 +11,7 @@ hold one large image per page — into a tree of `.cbz` archives of AVIF pages.
 | **Writes** | one `.cbz` per book in its mirrored parent folder: the same depth and roughly the same file count as the input, not one extra folder level per book |
 | **Input** | renamed in place when an archive wears the extension of another - a zip called `.cbr` becomes `.cbz` (`-k input` keeps the name); duplicate files removed, empty folders pruned |
 | **Reruns** | a `.cbz` left by an earlier run is skipped, so a grown library neither duplicates nor rewrites finished books |
-| **Network** | none, unless a hosted vision model is configured for `comic-page-check` (`comicEmptyPageLlm=off`) or borderline PDFs (`comicPdfLlm=off`) |
+| **Network** | none, unless the run is given `-A` and a hosted vision model is configured for `comic-page-check` (`comicEmptyPageLlm=off`) or borderline PDFs (`comicPdfLlm=off`) |
 
 ## Default behavior
 
@@ -69,7 +69,7 @@ inspected first and taken when nearly all of its pages hold exactly one image
 covering (nearly) the whole page. A PDF that misses that bar but is near it, or
 has zero matching pages at all (as digitally drawn comics and tiled scans do),
 is shown to a vision [model](../models.md) (2–3 rendered pages and the file
-name) when one is configured and `comicPdfLlm` is on. Only a confident `comic`
+name) under `-A`, when one is configured and `comicPdfLlm` is on. Only a confident `comic`
 verdict overrides the scan check; `magazine`, `text`, `other` or any error
 leaves it skipped. Verdicts are cached per file (path, size and modification
 time, under `comicPdfCache`) so `convert-comics` and `content-census` always
@@ -111,7 +111,7 @@ Without a vision model (or with `comicEmptyPageLlm=off`), an AVIF page that
 encodes to less than 10 KiB is dropped as empty (unless `-k pages` is given)
 and larger pages are untouched — the existing size-only rule applies unchanged.
 
-When a vision model is configured and `comicEmptyPageLlm` is on (the
+Under `-A`, when a vision model is configured and `comicEmptyPageLlm` is on (the
 `comic-page-check` task in [language models](../models.md), needing `vision`
 and leaning `light`), the hard rules are eased and the model judges small
 candidate pages (up to 40 KiB):

@@ -123,7 +123,7 @@ def test_one_letter_never_gets_two_names_or_one_name_two_letters():
         assert len(set(names)) == len(names), f"{stem}: name twice"
 
 
-# --- the shared -v, -q and -x -------------------------------------------------
+# --- the shared -A, -v, -q and -x ---------------------------------------------
 # One meaning on every page: a letter that says "quiet" in one command and
 # "quality" in the next is the thing these replaced.
 
@@ -137,23 +137,41 @@ def test_every_command_takes_the_shared_options():
         if stem in _NO_OPTIONS:
             continue
         longs = dict(clioptions.long_pairs(declaration))
-        if longs.get("v") != "verbose" or longs.get("q") != "quiet" \
-                or longs.get("x") != "set":
+        if longs.get("A") != "ai" or longs.get("v") != "verbose" \
+                or longs.get("q") != "quiet" or longs.get("x") != "set":
             missing.append(stem)
-    assert not missing, "without the shared -v/-q/-x: %s" % missing
+    assert not missing, "without the shared -A/-v/-q/-x: %s" % missing
 
 
 def test_and_words_them_the_shared_way():
     """Built through clioptions.with_shared_options rather than written out,
-    so a page cannot drift into its own wording of the three."""
+    so a page cannot drift into its own wording of -v, -q and -x. -A is
+    worded by a command whose -A also adds chapters or picks a profile."""
     drifted = []
     for stem, declaration in _cli_modules():
         if stem in _NO_OPTIONS:
             continue
-        if clioptions.shared_option_lines(declaration.column) \
+        if clioptions.shared_option_lines(declaration.column, "A") \
                 not in declaration.options:
             drifted.append(stem)
     assert not drifted, "-v/-q/-x worded their own way: %s" % drifted
+
+
+# The commands whose -A does more than let the background steps ask a model.
+_OWN_A = {"convert_audio", "convert_video", "ingest_movies", "ytdlp"}
+
+
+def test_a_is_worded_once_on_every_page():
+    wrong = []
+    for stem, declaration in _cli_modules():
+        if stem in _NO_OPTIONS:
+            continue
+        shared = clioptions.shared_option_lines(declaration.column)
+        if (shared in declaration.options) == (stem in _OWN_A) \
+                or declaration.options.count("\nA |") \
+                + declaration.options.startswith("A |") != 1:
+            wrong.append(stem)
+    assert not wrong, "-A not worded once, the right way: %s" % wrong
 
 
 # --- -x through a real run ------------------------------------------------------

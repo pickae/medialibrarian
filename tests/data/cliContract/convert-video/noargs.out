@@ -27,10 +27,11 @@ Options:
                   *Nvenc profile (hevcNvenc, av1Nvenc) encodes on the GPU.
                   With an SVT-AV1-HDR ffmpeg, av1Grain KEEPS the source's own
                   grain (SVT-AV1-HDR's film grain tune) instead of synthesising
-                  it; without one it synthesises it like av1BluRay. Passing
-                  "auto" asks a vision model to classify each file from sampled
-                  frames and pick av1BluRay, av1Animation or av1Grain per file
-                  (falling back to av1BluRay on any uncertainty).
+                  it; without one it synthesises it like av1BluRay. "auto",
+                  the default under -A, asks a vision model to classify each
+                  file from sampled frames and pick av1BluRay, av1Animation or
+                  av1Grain per file (falling back to av1BluRay on any
+                  uncertainty); it needs -A.
     -a, --audio-profile <profile>
                   Audio encoding profile to use (default: opus).
     -b, --audio-bitrate <kbit/s>
@@ -123,17 +124,18 @@ Options:
                   track's name, language and flags the way it found them.
                   Needs mkvmerge. Not with -a, -b or -s, which say how the
                   audio is re-encoded.
-    -C, --ai-chapters
-                  Add chapters to every video that has none, worked out by a
-                  language model (docs/models.md) from what is said.
+    -A, --ai      Let language models help (docs/models.md): pick the profile
+                  per file (-p auto) unless -p names one, and add chapters to
+                  every video that has none, worked out from what is said.
                   The first text subtitle that is the film's dialogue - not a
                   commentary, SDH or forced one - is read for it; a video with
                   none is transcribed from its first soundtrack that is not a
                   commentary, audio description or isolated score, and that
                   transcript is added to the output as a subtitle as well.
-                  Runs beside the video encode.
+                  The chapters are made beside the video encode. The other
+                  steps that ask a model do so too. Without -A none is asked.
     -P, --prompt <text>
-                  With -C: more instructions for the model, added to every
+                  With -A: more instructions for the model, added to every
                   request, e.g. "a chapter per scene, titled with where it
                   takes place". The model then reasons at medium effort, and
                   Claude may search the web.

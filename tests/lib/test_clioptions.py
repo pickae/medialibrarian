@@ -616,6 +616,21 @@ class TestTheSharedFlags:
         assert runcontext.get("LOG_TIMESTAMPS") == "1"
         assert os.environ.get("LOG_TIMESTAMPS") == "1"
 
+    @pytest.mark.parametrize("argv, allowed", [
+        (["-A"], "1"), (["--ai"], "1"), ([], "")])
+    def test_a_is_settled_for_the_run_and_its_children(self, monkeypatch,
+                                                         argv, allowed):
+        from medialib.lib import runcontext
+        monkeypatch.delenv(runcontext.AI_VARIABLE, raising=False)
+        cli.settle_verbosity(cli.parse(self.shared_spec(), argv))
+        assert runcontext.get(runcontext.AI_VARIABLE) == allowed
+        assert os.environ.get(runcontext.AI_VARIABLE, "") == allowed
+
+    def test_a_command_may_word_its_own_a(self):
+        page = cli.render_options(cli.with_shared_options(spec(
+            options="A |  | Chapters too.\n", long="")))
+        assert page.count("-A, --ai") == 1 and "Chapters too." in page
+
     @pytest.mark.parametrize("argv", [[], ["-q"]])
     def test_without_verbose_the_clock_is_not_set(self, monkeypatch, argv):
         from medialib.lib import runcontext
@@ -632,14 +647,14 @@ class TestWithSharedOptions:
         assert built.options.startswith("a |  | Something.\n")
         letters = [cli._entry_letter(line)
                    for line in built.options.split("\n")]
-        assert [letter for letter in letters if letter] == ["a", "v", "q",
-                                                            "x"]
-        assert built.long == "a:something v:verbose q:quiet x:set"
+        assert [letter for letter in letters if letter] == ["a", "A", "v",
+                                                            "q", "x"]
+        assert built.long == "a:something A:ai v:verbose q:quiet x:set"
 
     def test_a_block_without_its_final_break_gets_one(self):
         built = cli.with_shared_options(spec(options="a |  | Something.",
                                              column=20))
-        assert "Something.\nv |  |" in built.options
+        assert "Something.\nA |  |" in built.options
 
     def test_the_override_is_repeatable_and_marked_for_application(self):
         built = cli.with_shared_options(spec(options="a |  | Something.\n",

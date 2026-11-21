@@ -126,8 +126,8 @@ which is less obvious:
   AcoustID, and asks MusicBrainz, Last.fm, a lyrics site and a cover-art host
   about the release. It also writes the tags it settles back **into your
   files** (`write: yes`). A config of your own runs the same phase with fewer
-  of its plugins. When beets skips an unmatched album and a web-searching
-  language model is configured (`musicSearchLlm`, on by default), the folder
+  of its plugins. When beets skips an unmatched album, the run is given `-A`
+  and a web-searching language model is configured (`musicSearchLlm`), the folder
   and file names, track durations, existing tags and any rip logs or cue
   sheets in that folder are sent to the model to look up the MusicBrainz
   release ID.

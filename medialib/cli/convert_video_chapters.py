@@ -1,4 +1,4 @@
-"""convert-video's -C: chapters for a video that has none, worked out by a
+"""convert-video's -A: chapters for a video that has none, worked out by a
 language model from what is said in it, and handed to the final mux.
 
 What is said is read, where it can be, from a text subtitle that is the film's

@@ -64,18 +64,19 @@ Options:
                     Build the calls for "windows" or "linux" instead of for
                     this host. Only useful with -p, to read off what the other
                     machine would run.
-    -C, --ai-chapters
-                    With -i: chapters for every episode in the library that has
-                    none, worked out by a language model
-                    (docs/models.md) from a transcript, which is written into the
-                    episode as well (convert-audio -C). A YouTube episode's
+    -A, --ai        Let language models help (docs/models.md): find host-read ads
+                    in RSS and site episodes, and with -i add chapters to every
+                    episode in the library that has none, worked out from a
+                    transcript, which is written into the episode as well
+                    (convert-audio -A). Without -A none is asked. A YouTube
+                    episode's
                     transcript is YouTube's own captions, fetched with it in
                     the episode's language when the spokenLanguages setting
                     names it and in English when it does not, and written into
                     the episode even when it has chapters; an RSS episode is
                     transcribed on this machine.
     -P, --prompt <text>
-                    With -C: more instructions for the chapter model, added to
+                    With -A and -i: more instructions for the chapter model, added to
                     every request, e.g. "a chapter per speaker, titled with
                     their name and topic" (convert-audio -P). The model then
                     reasons at medium effort, and Claude may search the web.

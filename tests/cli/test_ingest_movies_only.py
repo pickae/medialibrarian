@@ -59,7 +59,7 @@ def test_an_id_list_needs_the_tagging_phase(calls, tmp_path, capsys):
     assert calls == []
 
 
-@pytest.mark.parametrize("other", [["-o", "junk"], ["-k"], ["-r"], ["-C"]])
+@pytest.mark.parametrize("other", [["-o", "junk"], ["-k"], ["-r"]])
 def test_a_full_ingest_option_is_refused(calls, tmp_path, capsys, other):
     assert run.main(["-O", "plex", *other, str(tmp_path)]) == 1
     assert "belongs to a full ingest" in capsys.readouterr().err

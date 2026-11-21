@@ -13,7 +13,7 @@ driven headless.
 | **Writes** | `<outputDir>/opus/…` and `<outputDir>/flac/…`, each mirroring the book's name and sub-folder |
 | **Input** | never modified |
 | **Reruns** | resume: a book is either fully in the library or not in it at all, so an interrupted run costs at most the book it was reading |
-| **Network** | none of its own unless a hosted [language model](../models.md) is configured for uncertain book languages (`bookLanguageLlm`) — whatever the checkout fetches for itself is the checkout's |
+| **Network** | none of its own unless the run is given `-A` and a hosted [language model](../models.md) is configured for uncertain book languages (`bookLanguageLlm`) — whatever the checkout fetches for itself is the checkout's |
 
 ## Default behavior
 

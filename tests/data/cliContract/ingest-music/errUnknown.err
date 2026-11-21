@@ -37,6 +37,8 @@ Options:
                   part.
     -o, --offline Offline: the tagging phase is skipped, so the run reaches no
                   network and needs no beets.
+    -A, --ai      Let language models help (docs/models.md). Without -A no step
+                  asks one; the commands this one starts are handed it.
     -v, --verbose Also say why each item was handled the way it was, and on a
                   failure print the tool's whole output rather than its last
                   lines.

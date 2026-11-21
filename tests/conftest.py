@@ -238,6 +238,15 @@ def no_picture_subtitle_ocr(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def language_models_allowed(monkeypatch):
+    """Every case runs as if under -A: the cases about a step that asks a
+    model are about what it does with one, not about the flag. The cases
+    about -A itself take the variable away."""
+    from medialib.lib import runcontext
+    monkeypatch.setenv(runcontext.AI_VARIABLE, "1")
+
+
+@pytest.fixture(autouse=True)
 def interrupt_handlers_put_back():
     """A command run in-process installs the run's interrupt handler, and
     nothing in the command takes it off again: a run's process ends with it.

@@ -1,4 +1,4 @@
-"""`convert-audio -C`: chapters for what has none, and the transcripts that go
+"""`convert-audio -A`: chapters for what has none, and the transcripts that go
 into the outputs.
 
 The encoders are the stubs the other convert-audio cases use, so an output is
@@ -72,7 +72,7 @@ def _run(convert, tmp_path, *options, env=None, expect=0):
 
 
 def test_only_an_output_whose_source_has_no_chapters_is_transcribed(convert, tmp_path):
-    said = _run(convert, tmp_path, "-C")
+    said = _run(convert, tmp_path, "-A")
     whisper = (tmp_path / "whisper.calls").read_text()
     assert "plain.opus" in whisper
     assert "chaptered" not in whisper
@@ -85,7 +85,7 @@ def test_an_output_with_chapters_of_its_own_is_left_alone(convert, tmp_path):
     # A rerun after chapters were written: the sources have none, but every
     # output (.opus) already has two, so nothing is transcribed or rewritten.
     convert.with_tool("ffprobe", _FFPROBE.replace("*chaptered*", "*.opus"))
-    said = _run(convert, tmp_path, "-C")
+    said = _run(convert, tmp_path, "-A")
     assert (tmp_path / "whisper.calls").read_text() == ""
     assert (tmp_path / "model.calls").read_text() == ""
     assert "Chaptering" not in said
@@ -95,7 +95,7 @@ def test_a_sidecar_is_the_transcript_and_nothing_is_transcribed(convert, tmp_pat
     (tmp_path / "in" / "plain.en.srt").write_text("".join(
         "%d\n00:%02d:%02d,000 --> 00:%02d:%02d,500\nwords\n\n"
         % (n, s // 60, s % 60, s // 60, s % 60) for n, s in enumerate(range(0, 1200, 10), 1)))
-    _run(convert, tmp_path, "-C")
+    _run(convert, tmp_path, "-A")
     assert (tmp_path / "whisper.calls").read_text() == ""
     assert (tmp_path / "model.calls").read_text() != ""
 
@@ -109,7 +109,7 @@ def test_without_t_neither_whisper_nor_the_model_is_asked(convert, tmp_path):
 def test_t_without_a_model_is_refused_before_anything_is_encoded(convert, tmp_path):
     environment = dict(convert.environment)
     del environment["llmUrl"]
-    said = _run(convert, tmp_path, "-C", env=environment, expect=1)
+    said = _run(convert, tmp_path, "-A", env=environment, expect=1)
     assert "llmUrl is not set" in said
     assert not (tmp_path / "out" / "plain.opus").exists()
 
@@ -119,13 +119,13 @@ def test_an_output_too_short_for_chapters_is_not_transcribed(convert, tmp_path):
     turn it down whatever was said; transcribing it would be paid for on
     every rerun."""
     convert.with_tool("ffprobe", _FFPROBE.replace("echo 1200.000", "echo 100.000"))
-    _run(convert, tmp_path, "-C")
+    _run(convert, tmp_path, "-A")
     assert (tmp_path / "whisper.calls").read_text() == ""
     assert (tmp_path / "model.calls").read_text() == ""
 
 
 def test_p_puts_the_instructions_into_every_request(convert, tmp_path):
-    said = _run(convert, tmp_path, "-C", "-P", "Name each speaker.")
+    said = _run(convert, tmp_path, "-A", "-P", "Name each speaker.")
     assert "reasoning at medium effort" in said
     requests = (tmp_path / "model.calls").read_text().splitlines()
     assert len(requests) == 2
@@ -134,7 +134,7 @@ def test_p_puts_the_instructions_into_every_request(convert, tmp_path):
 
 def test_p_without_t_is_refused_before_anything_is_encoded(convert, tmp_path):
     said = _run(convert, tmp_path, "-P", "Name each speaker.", expect=1)
-    assert "-P (instructions for the chapter model) needs -C" in said
+    assert "-P (instructions for the chapter model) needs -A" in said
     assert not (tmp_path / "out").exists()
 
 
@@ -145,7 +145,7 @@ def test_a_chapter_file_beside_the_source_keeps_it_from_the_model(convert,
     (tmp_path / "in" / "plain.chapters.txt").write_text(
         "CHAPTER01=00:00:00.000\nCHAPTER01NAME=One\n"
         "CHAPTER02=00:10:00.000\nCHAPTER02NAME=Two\n")
-    said = _run(convert, tmp_path, "-C")
+    said = _run(convert, tmp_path, "-A")
     assert (tmp_path / "whisper.calls").read_text() == ""
     assert (tmp_path / "model.calls").read_text() == ""
     assert "Chaptering" not in said

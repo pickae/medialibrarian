@@ -10,7 +10,7 @@ content type (audio, video, images, books, comics).
 | **Takes** | one or more library folders, read recursively |
 | **Writes** | one report per content type, into the folder that was censused and named after it (`-o` puts them elsewhere) |
 | **Input** | never changed: nothing in the tree is renamed, moved or converted |
-| **Network** | none unless a vision model is configured for borderline PDFs (`comicPdfLlm`) |
+| **Network** | none unless the run is given `-A` and a vision model is configured for borderline PDFs (`comicPdfLlm`) |
 
 ## Default behavior
 

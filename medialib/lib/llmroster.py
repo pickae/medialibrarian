@@ -47,7 +47,7 @@ import threading
 import tomllib
 from dataclasses import dataclass
 
-from medialib.lib import llmclient, llmtraits, runlog, settings
+from medialib.lib import llmclient, llmtraits, runcontext, runlog, settings
 
 __all__ = ["MODELS_VARIABLE", "LEAN_VARIABLE", "LEANS", "Task", "TASKS", "CHAPTERS",
            "CHAPTERS_INSTRUCTED", "CHAPTERDB_CHOOSE", "COVER_SEARCH", "COVER_LOOK",
@@ -396,7 +396,16 @@ def _refuse(why: str) -> None:
 def optional(task: Task, environ=None) -> tuple[list[llmclient.Llm], str]:
     """The models ``task`` may ask, best first, for a step that uses one only
     where there is one - and, where there is none, why. Says nothing: the
-    step decides whether its not being there is worth a line."""
+    step decides whether its not being there is worth a line.
+
+    None at all unless the run was given -A: a language model is asked only
+    when the user asked for one. An ``environ`` of its own stands in for the
+    run's say; the process's is the run's, which a worker was handed."""
+    allowed = (runcontext.get(runcontext.AI_VARIABLE)
+               if environ is None or environ is os.environ
+               else environ.get(runcontext.AI_VARIABLE))
+    if not allowed:
+        return [], "language models are asked only under -A"
     try:
         roster = load(environ)
     except llmclient.LlmError as error:
