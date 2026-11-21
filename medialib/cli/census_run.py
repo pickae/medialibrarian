@@ -758,8 +758,7 @@ def run(arguments, depth, out_dir, run_bi, separator, extension,
         ffmpegselect.report_ffmpeg_selection()
         tools = needed_tools(seen, run_bi)
         if tools and tooldeps.require_tools(
-                census_subject(in_paths, run_bi, program), tools,
-                skip_preflight=bool(os.environ.get("SKIP_TOOL_PREFLIGHT", ""))):
+                census_subject(in_paths, run_bi, program), tools):
             return 1
         warn_optional_tools(seen)
 

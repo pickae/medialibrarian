@@ -40,6 +40,7 @@ from medialib.lib import (
     toolcapture,
     tooldeps,
     workerpool,
+    xheaac,
 )
 from medialib.lib.formatting import fmt_bytes, fmt_hms
 from medialib.lib.runlog import log
@@ -1113,7 +1114,7 @@ def main(argv: list, program: str = "ytdlp", script_dir: str = "") -> int:
     platform = podcastfeeds.podcast_platform(
         runcontext.get("PODCAST_PLATFORM", ""), uname, os_env)
     ytdlp_command = _resolve_ytdlp(platform, script_dir)
-    skip_preflight = bool(os.environ.get("SKIP_TOOL_PREFLIGHT", ""))
+    skip_preflight = tooldeps.preflight_skipped()
     if ytdlp_command is None:
         if tooldeps.require_tools("the podcast downloads", ["yt-dlp"],
                                   skip_preflight=skip_preflight):
@@ -1172,6 +1173,15 @@ def _settle_and_run(options, tables, profiles, jobs_of, rows_of, ingest_of,
             ytdlp_command,
             warn=any(podcastfeeds.podcast_profile_provider(profile) == "youtube"
                      for profile in profiles))
+
+    # -i hands every batch to clean-folder-structure and convert-audio, the
+    # first one after the first downloads, and -a adds convert-audio's -C.
+    if options["ingest"] and not options["dryRun"] and tooldeps.require_tools(
+            "the library copy (-i)", tooldeps.command_tools(
+                "clean-folder-structure", "convert-audio",
+                *(["transcribe-audio"] if options["aiChapters"] else [])),
+            skip_preflight=skip_preflight):
+        return 1
 
     # Asked before anything is fetched: a model that cannot be reached is
     # better found out now than after the first batch has been converted.
@@ -1406,9 +1416,6 @@ def _run(options, tables, profiles, jobs_of, rows_of, ingest_of, feed_count,
          ffmpeg_location) -> int:
     ingest = None
     if options["ingest"]:
-        # No preflight for the two commands the library copy runs: they are
-        # modules of this package rather than files that can be missing from a
-        # checkout, which is what the check that stood here was for.
         ingest = _plan_ingest(output_path, profiles, ingest_of, tables,
                               script_dir)
         if ingest["faults"]:
@@ -1417,6 +1424,13 @@ def _run(options, tables, profiles, jobs_of, rows_of, ingest_of, feed_count,
             for fault in ingest["faults"]:
                 log(fault)
             return 2
+        # A table's own convert-audio arguments can ask for xHE-AAC, which
+        # ffmpeg cannot encode; the rest of convert-audio's tools were asked
+        # for with the run's.
+        if not options["dryRun"] \
+                and any("xheaac" in args.split() for args in ingest["args"].values()) \
+                and xheaac.require_encoder("the library copy (-i, -e xheaac)"):
+            return 1
         if options["aiChapters"]:
             for kind in ingest["args"]:
                 ingest["args"][kind] += " -C"
@@ -1853,6 +1867,9 @@ def _build_library(state, ingest):
 def cli(argv: list | None = None) -> int:
     settings.load()
     runlog.start_run(argv)
+    if tooldeps.require_declared_packages(
+            commands.program_name(__spec__.name)):
+        return 1
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, program=commands.program_name(__spec__.name),

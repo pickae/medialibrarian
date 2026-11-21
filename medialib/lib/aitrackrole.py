@@ -30,8 +30,6 @@ import unicodedata
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
-import pycountry
-
 from medialib.lib import (
     enums,
     languages,
@@ -204,6 +202,7 @@ def _language_words() -> frozenset[str]:
                 folded = _fold_word(token)
                 if folded:
                     words.add(folded)
+    import pycountry
     for entry in pycountry.languages:
         raw_name = getattr(entry, "name", "")
         for token in re.findall(r"[^\W\d_]+", raw_name):

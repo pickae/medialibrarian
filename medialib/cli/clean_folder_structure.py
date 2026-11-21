@@ -720,6 +720,9 @@ def main(argv: list, program: str = "clean-folder-structure",
 def cli(argv: list | None = None) -> int:
     settings.load()
     runlog.start_run(argv)
+    if tooldeps.require_declared_packages(
+            commands.program_name(__spec__.name)):
+        return 1
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, program=commands.program_name(__spec__.name),

@@ -23,14 +23,47 @@ import subprocess
 import sys
 from collections.abc import Sequence
 
-from medialib.lib import errorlog, hostos
+from medialib.lib import errorlog, hostos, imagemagick, runcontext, runlog
 
 __all__ = [
+    "DECLARED_PACKAGES",
     "tool_present",
     "tool_note",
     "require_tools",
     "require_python_module",
+    "require_declared_packages",
+    "preflight_skipped",
+    "COMMAND_TOOLS",
+    "command_tools",
 ]
+
+# What each command another one starts refuses without, whatever its flags.
+# The command asks for its own row, and a command that starts it asks for the
+# row too, before its own long part: a tool only the child needs is otherwise
+# found missing when the child starts, after the parent's work.
+COMMAND_TOOLS = {
+    "clean-folder-structure": (),
+    "concat-audio": ("ffmpeg", "ffprobe", imagemagick.CONVERT_SPEC),
+    "content-census-bi": ("duckdb",),
+    "convert-audio": ("ffmpeg", "ffprobe", "rsync", imagemagick.CONVERT_SPEC),
+    "convert-video": ("ffmpeg", "ffprobe"),
+    "transcribe-audio": ("ffmpeg", "pipx"),
+}
+
+# The Python packages pyproject.toml declares, each with what it is for. Every
+# command asks for all of them as it starts (require_declared_packages), so a
+# package the install lacks is one refusal before any work rather than an
+# ImportError in whichever child process first reaches it. The modules import
+# them inside the functions that use them, never at the top, so that check can
+# run at all - tests/lib/test_tooldeps.py holds both of those to account.
+DECLARED_PACKAGES = {
+    "mutagen": "writes the cover art and chapter marks ffmpeg cannot write",
+    "pycountry": "the ISO 639 language codes and names",
+}
+
+# The interpreter the declared packages were last found on, handed down so a
+# command started by another one does not ask again.
+_PACKAGES_FOUND_VARIABLE = "DECLARED_PACKAGES_FOUND"
 
 # "<role>|<install hint>" for one command name: what the scripts use it for,
 # and how to get it on a Debian/Ubuntu box (the platform the README's
@@ -222,6 +255,23 @@ def tool_note(tool: str, platform: str | None = None) -> str:
     return role + "|" + _MACOS_HINTS.get(tool, _MACOS_GENERIC_HINT % tool)
 
 
+def preflight_skipped() -> bool:
+    """Whether the run was started with ``SKIP_TOOL_PREFLIGHT`` set, which
+    every check here honours unless its caller says otherwise - read in one
+    place, so a command started by another one cannot refuse what its parent
+    was told not to ask about."""
+    return bool(runcontext.get("SKIP_TOOL_PREFLIGHT"))
+
+
+def _refuse(text: str, file) -> None:
+    """A refusal on the console, and in the run's info log when it went to the
+    console: the log is otherwise left ending at the last progress line, with
+    nothing saying why the run stopped there."""
+    file.write(text)
+    if file is sys.stderr:
+        runlog.keep(text, runlog.QUIET)
+
+
 def _pad_bytes(text: str, width: int) -> str:
     """The field is counted in BYTES, so a multibyte name earns fewer spaces
     than a character count would give."""
@@ -229,7 +279,7 @@ def _pad_bytes(text: str, width: int) -> str:
 
 
 def require_tools(what: str, specs: Sequence[str], *,
-                  skip_preflight: bool = False, file=None) -> int:
+                  skip_preflight: bool | None = None, file=None) -> int:
     """Name every missing tool at once and return 1; return 0 silently when
     they are all there.
 
@@ -243,7 +293,7 @@ def require_tools(what: str, specs: Sequence[str], *,
     """
     if file is None:
         file = sys.stderr
-    if skip_preflight:
+    if preflight_skipped() if skip_preflight is None else skip_preflight:
         return 0
     missing = [spec for spec in specs if not tool_present(spec)]
     if not missing:
@@ -277,7 +327,7 @@ def require_tools(what: str, specs: Sequence[str], *,
         text += "  {}  {}  {}\n".format(_pad_bytes(name, width),
                                         _pad_bytes(role, role_width), hint)
     text += "\nInstall the above (or put it on PATH) and run again. Nothing was changed.\n"
-    file.write(text)
+    _refuse(text, file)
     errorlog.record("tool-missing", "Cannot run %s: %s not found"
                     % (what, ", ".join(names)), stack=False)
     return 1
@@ -296,7 +346,7 @@ def _module_hint(module: str, platform: str | None = None) -> str:
 
 
 def require_python_module(module: str, what: str, role: str = "used by this script", *,
-                          skip_preflight: bool = False, file=None) -> int:
+                          skip_preflight: bool | None = None, file=None) -> int:
     """The same refusal for an importable Python package: the dependency is of
     exactly the same kind as a binary here.
 
@@ -314,7 +364,7 @@ def require_python_module(module: str, what: str, role: str = "used by this scri
     """
     if file is None:
         file = sys.stderr
-    if skip_preflight:
+    if preflight_skipped() if skip_preflight is None else skip_preflight:
         return 0
     try:
         ran = subprocess.run([sys.executable, "-c", "import " + module],
@@ -328,8 +378,91 @@ def require_python_module(module: str, what: str, role: str = "used by this scri
     text += "  {}  {}\n".format(module, role)
     text += "  {}  {}\n".format(" " * len(module), _module_hint(module))
     text += "\nInstall it and run again. Nothing was changed.\n"
-    file.write(text)
+    _refuse(text, file)
     errorlog.record("tool-missing", 'Cannot run %s: the Python "%s" package is '
                     "not importable by %s" % (what, module, sys.executable),
                     stack=False)
     return 1
+
+def _unimportable(modules: Sequence[str]) -> list[str]:
+    """The ones of ``modules`` that do not import on ``sys.executable``, asked
+    of a fresh process for the reason :func:`require_python_module` gives."""
+    probe = ("import importlib, sys\n"
+             "for name in sys.argv[1:]:\n"
+             "    try:\n"
+             "        importlib.import_module(name)\n"
+             "    except Exception:\n"
+             "        print(name)\n")
+    try:
+        ran = subprocess.run([sys.executable, "-c", probe, *modules],
+                             capture_output=True, text=True)
+    except OSError:
+        return list(modules)
+    if ran.returncode != 0:
+        return list(modules)
+    return [name for name in ran.stdout.split() if name in modules]
+
+
+def _reinstall_hint(packages: Sequence[str]) -> str:
+    """How to put the declared packages back into the environment this runs
+    from. A pipx install is reached through ``pipx runpip``; anything else
+    through this interpreter's own pip."""
+    names = " ".join(packages)
+    parts = os.path.normpath(sys.prefix).split(os.sep)
+    if len(parts) >= 3 and parts[-3:-1] == ["pipx", "venvs"]:
+        return "pipx runpip {} install {}".format(parts[-1], names)
+    return "{} -m pip install {}".format(sys.executable, names)
+
+
+def require_declared_packages(what: str, *, skip_preflight: bool | None = None,
+                              file=None) -> int:
+    """Every one of :data:`DECLARED_PACKAGES` the install lacks, named at once,
+    and 1; 0 silently when they are all there.
+
+    They are this distribution's own dependencies, so a missing one is an
+    install that predates the dependency (an editable install keeps the
+    packages it was installed with) rather than something the host lacks, and
+    the hint says how to install into the environment that runs this. A
+    command started by one that already found them on the same interpreter
+    does not ask again. ``skip_preflight`` defaults to ``SKIP_TOOL_PREFLIGHT``, like the other
+    checks.
+    """
+    if file is None:
+        file = sys.stderr
+    if skip_preflight is None:
+        skip_preflight = preflight_skipped()
+    if skip_preflight or runcontext.get(_PACKAGES_FOUND_VARIABLE) == sys.executable:
+        return 0
+    missing = _unimportable(list(DECLARED_PACKAGES))
+    if not missing:
+        runcontext.settle(_PACKAGES_FOUND_VARIABLE, sys.executable)
+        return 0
+    width = max(len(name) for name in missing)
+    text = "\n"
+    if len(missing) == 1:
+        text += 'Cannot run {}: the Python package "{}" is not installed.\n\n'.format(
+            what, missing[0])
+    else:
+        text += "Cannot run {}: {} Python packages it needs are not installed.\n\n".format(
+            what, len(missing))
+    for name in missing:
+        text += "  {}  {}\n".format(name.ljust(width), DECLARED_PACKAGES[name])
+    text += "\nInstall them into the environment this runs from:\n\n"
+    text += "  {}\n".format(_reinstall_hint(missing))
+    text += "\nand run again. Nothing was changed.\n"
+    _refuse(text, file)
+    errorlog.record("tool-missing", "Cannot run %s: Python package(s) %s not "
+                    "importable by %s" % (what, ", ".join(missing), sys.executable),
+                    stack=False)
+    return 1
+
+
+def command_tools(*commands: str) -> list[str]:
+    """The :data:`COMMAND_TOOLS` rows of ``commands``, as one list in the
+    order given, each tool once."""
+    found: list[str] = []
+    for command in commands:
+        for spec in COMMAND_TOOLS[command]:
+            if spec not in found:
+                found.append(spec)
+    return found

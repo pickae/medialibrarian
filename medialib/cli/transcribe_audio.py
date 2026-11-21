@@ -545,8 +545,7 @@ def _transcribe(program: str, input_dir: str, output_dir: str, fmt: str,
     ffmpegselect.select_ffmpeg()
     ffmpegselect.report_ffmpeg_selection()
     if tooldeps.require_tools(
-            program, ["ffmpeg", "pipx"],
-            skip_preflight=bool(os.environ.get("SKIP_TOOL_PREFLIGHT", ""))):
+            program, tooldeps.command_tools("transcribe-audio")):
         return 1
     runlog.warn_uncounted_progress()
 
@@ -625,6 +624,9 @@ def _transcribe(program: str, input_dir: str, output_dir: str, fmt: str,
 def cli(argv: list | None = None) -> int:
     settings.load()
     runlog.start_run(argv)
+    if tooldeps.require_declared_packages(
+            commands.program_name(__spec__.name)):
+        return 1
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, program=commands.program_name(__spec__.name))

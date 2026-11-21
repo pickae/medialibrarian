@@ -60,7 +60,6 @@ from medialib.lib import (
     errorlog,
     ffmpegselect,
     formatting,
-    imagemagick,
     imagesizes,
     llmroster,
     modelmeter,
@@ -2131,19 +2130,17 @@ def _settle_and_convert(program: str, script_dir: str, input_dir: str,
                         only=(), instructions: str = "") -> int:
     ffmpegselect.select_ffmpeg()
     ffmpegselect.report_ffmpeg_selection()
-    if tooldeps.require_tools(program, ["ffmpeg", "ffprobe", "rsync",
-                                        imagemagick.CONVERT_SPEC]):
-        return 1
-    if tooldeps.require_python_module(
-            "mutagen", program,
-            "writes the chapter marks and the cover art into the output"):
+    # -C transcribes what has no transcript through transcribe-audio, after
+    # the last encode, so its tools are asked for now.
+    if tooldeps.require_tools(program, tooldeps.command_tools(
+            "convert-audio", *(["transcribe-audio"] if ai_chapters else []))):
         return 1
     # Having ffmpeg is not having an xHE-AAC encoder: ffmpeg cannot produce the
     # codec at all, so that back-end is a separate binary this host has or has
     # not got. Asked up front, and only when -e asked for the codec, so an Opus
     # run neither pays for the probe nor is blocked by it.
     if codec == "xheaac":
-        skip_preflight = bool(os.environ.get("SKIP_TOOL_PREFLIGHT", ""))
+        skip_preflight = tooldeps.preflight_skipped()
         if xheaac.require_encoder("%s (-e %s)" % (program, codec),
                                   skip_preflight=skip_preflight):
             return 1
@@ -2853,6 +2850,9 @@ def _warn_mkvtoolnix(tracks: list) -> None:
 def cli(argv: list | None = None) -> int:
     settings.load()
     runlog.start_run(argv)
+    if tooldeps.require_declared_packages(
+            commands.program_name(__spec__.name)):
+        return 1
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, program=commands.program_name(__spec__.name),

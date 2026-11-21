@@ -386,3 +386,89 @@ class TestTheMacosHints:
         tooldeps.require_python_module("notARealModuleQqq", "s", file=buf)
         assert "pip install notARealModuleQqq" in buf.getvalue()
         assert "apt install" not in buf.getvalue()
+
+
+class TestPreflightSkipped:
+    def test_an_unsaid_skip_follows_the_variable(self, monkeypatch, pathdir):
+        monkeypatch.setenv("SKIP_TOOL_PREFLIGHT", "1")
+        buf = io.StringIO()
+        assert tooldeps.require_tools("s", ["definitelyNotAToolQqq"], file=buf) == 0
+        assert tooldeps.require_python_module("notARealModuleQqq", "s", file=buf) == 0
+        assert buf.getvalue() == ""
+
+    def test_a_said_skip_wins_over_the_variable(self, monkeypatch, pathdir):
+        monkeypatch.setenv("SKIP_TOOL_PREFLIGHT", "1")
+        buf = io.StringIO()
+        assert tooldeps.require_tools("s", ["definitelyNotAToolQqq"],
+                                      skip_preflight=False, file=buf) == 1
+
+
+class TestRequireDeclaredPackages:
+    @pytest.fixture(autouse=True)
+    def fresh(self, monkeypatch):
+        monkeypatch.delenv("SKIP_TOOL_PREFLIGHT", raising=False)
+        monkeypatch.delenv(tooldeps._PACKAGES_FOUND_VARIABLE, raising=False)
+        monkeypatch.setattr(tooldeps.runcontext, "settle",
+                            lambda name, value: os.environ.__setitem__(name, value))
+
+    def test_all_there_is_silent_and_remembered_for_the_children(self):
+        buf = io.StringIO()
+        assert tooldeps.require_declared_packages("s", file=buf) == 0
+        assert buf.getvalue() == ""
+        assert os.environ[tooldeps._PACKAGES_FOUND_VARIABLE] == tooldeps.sys.executable
+
+    def test_a_child_of_a_run_that_found_them_does_not_ask(self, monkeypatch):
+        monkeypatch.setenv(tooldeps._PACKAGES_FOUND_VARIABLE, tooldeps.sys.executable)
+        monkeypatch.setattr(tooldeps, "_unimportable", lambda names: list(names))
+        assert tooldeps.require_declared_packages("s", file=io.StringIO()) == 0
+
+    def test_every_missing_one_is_named_with_the_way_back(self, monkeypatch):
+        monkeypatch.setattr(tooldeps, "_unimportable", lambda names: list(names))
+        monkeypatch.setattr(tooldeps.sys, "prefix",
+                            "/home/u/.local/pipx/venvs/medialibrarian")
+        buf = io.StringIO()
+        assert tooldeps.require_declared_packages("some-command", file=buf) == 1
+        text = buf.getvalue()
+        assert text.startswith("\nCannot run some-command: %d Python packages it "
+                               "needs are not installed.\n" % len(tooldeps.DECLARED_PACKAGES))
+        for name, role in tooldeps.DECLARED_PACKAGES.items():
+            assert name in text and role in text
+        assert ("  pipx runpip medialibrarian install %s\n"
+                % " ".join(tooldeps.DECLARED_PACKAGES)) in text
+        assert text.endswith("Nothing was changed.\n")
+        assert tooldeps._PACKAGES_FOUND_VARIABLE not in os.environ
+
+    def test_outside_pipx_the_hint_is_this_interpreters_pip(self, monkeypatch):
+        monkeypatch.setattr(tooldeps, "_unimportable", lambda names: ["pycountry"])
+        monkeypatch.setattr(tooldeps.sys, "prefix", "/usr")
+        buf = io.StringIO()
+        assert tooldeps.require_declared_packages("s", file=buf) == 1
+        assert 'the Python package "pycountry" is not installed' in buf.getvalue()
+        assert "%s -m pip install pycountry" % tooldeps.sys.executable in buf.getvalue()
+
+    def test_the_probe_names_what_does_not_import(self):
+        assert tooldeps._unimportable(["json", "notARealModuleQqq"]) == [
+            "notARealModuleQqq"]
+
+
+class TestCommandTools:
+    def test_every_row_is_a_command(self):
+        from medialib import commands
+        assert set(tooldeps.COMMAND_TOOLS) <= set(commands.COMMANDS)
+
+    def test_rows_join_in_order_each_tool_once(self):
+        assert tooldeps.command_tools("transcribe-audio", "convert-audio") == [
+            "ffmpeg", "pipx", "ffprobe", "rsync", "convert|magick"]
+
+    def test_every_command_another_one_starts_has_a_row(self):
+        """A parent asks for its children's rows, so a child without one
+        would be started unasked-for."""
+        import re
+
+        from tests import blackbox
+        started = set()
+        for path in (blackbox.REPO / "medialib").rglob("*.py"):
+            started |= set(re.findall(r'run_command\(\s*"([a-z-]+)"',
+                                      path.read_text(encoding="utf-8")))
+        assert started
+        assert started <= set(tooldeps.COMMAND_TOOLS)

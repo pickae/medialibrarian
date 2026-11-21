@@ -27,7 +27,7 @@ import sys
 import tempfile
 
 from medialib import commands
-from medialib.lib import clioptions, runlog, safety, settings
+from medialib.lib import clioptions, runlog, safety, settings, tooldeps
 from medialib.lib.runlog import log
 
 USAGE_HEAD = """Usage:
@@ -496,6 +496,9 @@ def _install_interrupt(plan: Plan) -> None:
 def cli(argv: list | None = None) -> int:
     settings.load()
     runlog.start_run(argv)
+    if tooldeps.require_declared_packages(
+            commands.program_name(__spec__.name)):
+        return 1
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, program=commands.program_name(__spec__.name),

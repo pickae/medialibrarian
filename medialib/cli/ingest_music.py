@@ -1486,10 +1486,6 @@ def _settle_and_ingest(program: str, script_dir: str, download_dir: str,
         tools.remove("beet")
     if tooldeps.require_tools(program, tools):
         return 1
-    if tooldeps.require_python_module(
-            "mutagen", program,
-            "writes the cue-sheet chapter marks into the ingested FLACs"):
-        return 1
     runlog.warn_uncounted_progress()
 
     # Unlike the other wrappers this one ingests a whole download folder rather
@@ -1913,6 +1909,9 @@ def _run_child(command: str, argv: list, script_dir: str) -> int:
 def cli(argv: list | None = None) -> int:
     settings.load()
     runlog.start_run(argv)
+    if tooldeps.require_declared_packages(
+            commands.program_name(__spec__.name)):
+        return 1
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, commands.program_name(__spec__.name),
