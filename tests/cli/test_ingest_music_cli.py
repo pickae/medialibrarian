@@ -1310,7 +1310,8 @@ class TestOfflineNeedsNoBeet:
         download.mkdir()
         done = no_beet.run("ingest-music", str(download),
                            str(tmp_path / "library"),
-                           str(tmp_path / "libraryopus"))
+                           str(tmp_path / "libraryopus"),
+                           env=dict(os.environ, SKIP_TOOL_PREFLIGHT=""))
         assert done.returncode == 1, done.stdout + done.stderr
         assert "Cannot run ingest-music: it needs a tool" in done.stderr
         assert "beet" in done.stderr

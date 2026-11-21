@@ -27,6 +27,7 @@ releases and the transcripts' text, and is handed back a plan or a reason.
 
 from __future__ import annotations
 
+import functools
 import re
 import unicodedata
 from collections import Counter
@@ -113,14 +114,19 @@ class Decision(NamedTuple):
 
 # --- the file's own commentary tracks ---------------------------------------
 
-# Words a numbered name carries beside the commentary word and the number, and
-# which say nothing about who is speaking: the language, "audio", "track".
-_FILLER_WORDS = frozenset(
-    ["audio", "track", "spur", "piste", "no", "nr", "number", "num", "the"]
-    + [keyword for row in languages.recognised() for keyword in row.keywords]
-    + [row.sub_word.lower() for row in languages.recognised()]
-    + [row.code2 for row in languages.recognised()]
-    + [row.code3 for row in languages.recognised()])
+@functools.cache
+def _filler_words() -> frozenset:
+    """Words a numbered name carries beside the commentary word and the
+    number, and which say nothing about who is speaking: the language,
+    "audio", "track". Built on first use, once the settings that pick the
+    languages are loaded."""
+    rows = languages.recognised()
+    return frozenset(
+        ["audio", "track", "spur", "piste", "no", "nr", "number", "num", "the"]
+        + [keyword for row in rows for keyword in row.keywords]
+        + [row.sub_word.lower() for row in rows]
+        + [row.code2 for row in rows]
+        + [row.code3 for row in rows])
 
 def _fold(text: str) -> str:
     """Lower case without accents, so "Kommentär" and "Kommentar" are one
@@ -149,7 +155,7 @@ def generic_number(name: str) -> int | None:
             number = int(word)
         elif languages.is_commentary_word(word):
             commentary += 1
-        elif word not in _FILLER_WORDS:
+        elif word not in _filler_words():
             return None
     if commentary != 1:
         return None

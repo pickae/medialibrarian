@@ -1324,6 +1324,11 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
     tools = ["ffmpeg", "ffprobe", "mkvmerge", "mkvpropedit", "mediainfo"]
     if os.environ.get("tmdbApiKey"):
         tools.append("curl")
+    # -C transcribes a bonus video with no dialogue subtitle through
+    # transcribe-audio, in the last phase.
+    if result.values.get("extrasChapters"):
+        tools += [spec for spec in tooldeps.command_tools("transcribe-audio")
+                  if spec not in tools]
     if tooldeps.require_tools(program, tools):
         return 1
     # Asked now, so a run whose model is not set up is refused before hours of
@@ -2089,8 +2094,8 @@ def _extras_chapters_only(program: str, script_dir: str, roots: list,
     folder given that has no chapters is given some worked out by the chapter
     model from what is said in it, written in place with mkvpropedit - what -C
     does beside a full ingest. -P adds instructions for the model."""
-    if tooldeps.require_tools(program, ["ffmpeg", "ffprobe", "mkvmerge",
-                                        "mkvpropedit"]):
+    if tooldeps.require_tools(program, tooldeps.command_tools("transcribe-audio")
+                              + ["ffprobe", "mkvmerge", "mkvpropedit"]):
         return 1
     llm = chapterwork.model(program, instructions, "-O extras-chapters", log)
     if llm is None:
@@ -3585,7 +3590,7 @@ def _settle_subtitle_work(commentary_only: bool = False) -> bool:
     else: the warning names only what that run loses, and does not promise the
     rest of a full ingest it is not going to do.
     """
-    if os.environ.get("SKIP_TOOL_PREFLIGHT"):
+    if tooldeps.preflight_skipped():
         return True
     missing = [name for name in ("ffsubsync", "pipx") if not _has_tool(name)]
     if not missing:
@@ -3619,7 +3624,7 @@ def _settle_subtitle_work(commentary_only: bool = False) -> bool:
 def _warn_without_subcleaner() -> None:
     """Said once at the start: without subcleaner a subtitle keeps the adverts
     it came with, and the run goes on."""
-    if os.environ.get("SKIP_TOOL_PREFLIGHT") or subtitleads.available():
+    if tooldeps.preflight_skipped() or subtitleads.available():
         return
     log("WARNING: subcleaner not installed - subtitles keep the adverts they "
         "came with.")
@@ -3630,7 +3635,7 @@ def _warn_without_subcleaner() -> None:
 def _warn_without_seconv() -> None:
     """Said once at the start: without seconv a film's picture subtitles stay
     pictures, and the run goes on."""
-    if os.environ.get("SKIP_TOOL_PREFLIGHT") or subtitleocr.available():
+    if tooldeps.preflight_skipped() or subtitleocr.available():
         return
     log("WARNING: seconv not installed - picture subtitles are not read into "
         "text.")
@@ -4405,6 +4410,9 @@ def _check_audio(root: str, ram_root: str, lane: str, item: tuple) -> None:
 def cli(argv: list | None = None) -> int:
     settings.load()
     runlog.start_run(argv)
+    if tooldeps.require_declared_packages(
+            commands.program_name(__spec__.name)):
+        return 1
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, commands.program_name(__spec__.name),

@@ -42,7 +42,6 @@ from medialib.lib import (
     enums,
     ffmpegselect,
     formatting,
-    imagemagick,
     imagesizes,
     modelmeter,
     onlinecover,
@@ -1012,13 +1011,7 @@ def _settle_and_run(input_dir: str, output_dir: str, pretreat: bool,
     # output but MP3 writes its chapters without it, so a host without it loses
     # only the MP3 chapters and titles, said once at startup rather than
     # refusing a run that can do everything else.
-    if tooldeps.require_tools(program, ["ffmpeg", "ffprobe",
-                                        imagemagick.CONVERT_SPEC]):
-        return 1
-    if tooldeps.require_python_module(
-            "mutagen", program,
-            "writes the chapter marks and the cover art into the concatenated "
-            "book"):
+    if tooldeps.require_tools(program, tooldeps.command_tools("concat-audio")):
         return 1
     runlog.warn_uncounted_progress()
 
@@ -1220,6 +1213,9 @@ def _settle_mkvtoolnix(input_dir: str) -> bool:
 def cli(argv: list | None = None) -> int:
     settings.load()
     runlog.start_run(argv)
+    if tooldeps.require_declared_packages(
+            commands.program_name(__spec__.name)):
+        return 1
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, program=commands.program_name(__spec__.name),

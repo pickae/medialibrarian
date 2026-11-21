@@ -176,6 +176,8 @@ def _run(program: str, script_dir: str, input_dir: str, output_dir: str,
             and tooldeps.require_tools("writing chapters into Matroska (-w)",
                                        ["mkvpropedit"]):
         return 1
+    if tooldeps.require_tools(program, ["ffprobe"]):
+        return 1
 
     def chapter_file(relative: str) -> str:
         return os.path.join(output_dir, os.path.splitext(relative)[0] + CHAPTER_SUFFIX)
@@ -200,7 +202,7 @@ def _run(program: str, script_dir: str, input_dir: str, output_dir: str,
     for relative in inputs:
         if relative not in todo:
             runlog.say("already present: %s\n" % relative)
-    failed = _chapter(script_dir, input_dir, output_dir, todo, llm,
+    failed = _chapter(program, script_dir, input_dir, output_dir, todo, llm,
                       min_minutes, typical, chapter_file) if todo else 0
     if embed:
         failed |= _write_into(input_dir, [relative for relative in inputs
@@ -283,7 +285,7 @@ def _put_beside(made: str, sidecar: str) -> bool:
         return False
 
 
-def _chapter(script_dir: str, input_dir: str, output_dir: str,
+def _chapter(program: str, script_dir: str, input_dir: str, output_dir: str,
              todo: list[str], llm, min_minutes: float,
              typical: int, chapter_file) -> int:
     """The two phases over ``todo``: transcripts first where there are none,
@@ -304,6 +306,9 @@ def _chapter(script_dir: str, input_dir: str, output_dir: str,
     untranscribed = [(relative, os.path.join(input_dir, relative))
                      for relative in todo if not transcript(relative)]
 
+    if untranscribed and tooldeps.require_tools(
+            program, tooldeps.command_tools("transcribe-audio")):
+        return 1
     failed = 0
     transcribe = None
     if untranscribed:
@@ -382,6 +387,9 @@ def _chapter(script_dir: str, input_dir: str, output_dir: str,
 def cli(argv: list | None = None) -> int:
     settings.load()
     runlog.start_run(argv)
+    if tooldeps.require_declared_packages(
+            commands.program_name(__spec__.name)):
+        return 1
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, commands.program_name(__spec__.name), commands.script_dir())

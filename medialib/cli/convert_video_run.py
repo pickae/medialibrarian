@@ -1084,8 +1084,12 @@ def _settle_and_run(settings, program: str, video_args: str, grain: str,
     ffmpegselect.select_ffmpeg(
         _takes_profile(video_args),
         prefer=rank)
-    if tooldeps.require_tools(program, ["ffmpeg", "ffprobe"]
-                              + (["mkvmerge"] if settings.keep_tracks else [])):
+    # -C transcribes a source with no dialogue subtitle through
+    # transcribe-audio, so its tools are asked for with the rest.
+    if tooldeps.require_tools(program, tooldeps.command_tools(
+            "convert-video",
+            *(["transcribe-audio"] if settings.ai_chapters else []))
+            + (["mkvmerge"] if settings.keep_tracks else [])):
         return 1
     # Asked now, so a run whose model is not set up is refused before hours of
     # encoding rather than found out at the first file's mux.
@@ -1334,6 +1338,9 @@ def _run_all(settings, llm=None, profile_llm=None) -> int:
 def cli(argv: list | None = None) -> int:
     settings.load()
     runlog.start_run(argv)
+    if tooldeps.require_declared_packages(
+            commands.program_name(__spec__.name)):
+        return 1
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, commands.program_name(__spec__.name),

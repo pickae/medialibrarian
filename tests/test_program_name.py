@@ -22,7 +22,8 @@ pytestmark = pytest.mark.pure
 _REPO = blackbox.REPO
 
 # The argument each one names the run in, by position.
-_SUBJECT = {"require_tools": 0, "require_python_module": 1}
+_SUBJECT = {"require_tools": 0, "require_python_module": 1,
+            "require_declared_packages": 0}
 
 # A subject that names the RUN rather than the command is right and stays:
 # "simulation mode (-p)" and "the tidy-up (-c) of the video tables" are what a

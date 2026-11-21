@@ -827,10 +827,6 @@ def _settle_and_read(result, program: str, script_dir: str, in_path: str,
     ffmpegselect.report_ffmpeg_selection()
     if tooldeps.require_tools(program, tools):
         return 1
-    if (opus_bitrate != 0 or keep_lossless) and tooldeps.require_python_module(
-            "mutagen", program,
-            "writes the chapter marks and the cover art into the audiobooks"):
-        return 1
     runlog.warn_uncounted_progress()
     _settle_mkvtoolnix(opus_bitrate != 0)
 
@@ -1176,6 +1172,9 @@ def _settle_mkvtoolnix(opus_wanted: bool) -> None:
 def cli(argv: list | None = None) -> int:
     settings.load()
     runlog.start_run(argv)
+    if tooldeps.require_declared_packages(
+            commands.program_name(__spec__.name)):
+        return 1
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, program=commands.program_name(__spec__.name),

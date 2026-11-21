@@ -741,7 +741,7 @@ def preflight(llm: Llm, program: str, purpose: str = "") -> bool:
     package, or curl - after saying what is missing where it is not. With
     ``purpose``, a harness listed and none installed is warned about: what
     it was for (``purpose``) is asked without web search."""
-    skip = bool(os.environ.get("SKIP_TOOL_PREFLIGHT", ""))
+    skip = tooldeps.preflight_skipped()
     if purpose and llm.harnesses and llm.api == "openai" \
             and not llmharness.installed(llm.harnesses):
         sys.stderr.write("\nWarning: %s lists %s, and none is installed: "
