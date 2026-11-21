@@ -329,6 +329,8 @@ def private_workspace(tmp_path_factory, monkeypatch):
     # Nor is a language model asked for an undated film folder's release year:
     # a CLI case over undated folders would otherwise reach a configured model.
     monkeypatch.setenv("undatedYearLlm", "off")
+    # Nor is a language model asked to settle an unmatched film folder.
+    monkeypatch.setenv("filmIdentifyLlm", "off")
     # Nor is a language model asked to find ad reads in RSS podcasts.
     monkeypatch.setenv("podcastAdsLlm", "off")
     monkeypatch.setenv("podcastAdsCut", "off")

@@ -72,6 +72,94 @@ class _Candidate(NamedTuple):
     lead: frozenset = frozenset()  # its primary and original titles, folded
 
 
+class Offer(NamedTuple):
+    """One candidate film TMDb or the local IMDb lists offered during a
+    lookup, kept so a later step can weigh it when the certainty rules could
+    not settle on one."""
+
+    imdb: str = ""
+    tmdb: str = ""
+    titles: tuple = ()
+    years: tuple = ()
+    released: str = ""
+    runtime: float = 0.0
+    source: str = "tmdb"
+
+    @property
+    def tag(self) -> str:
+        """The id tag this offer names a folder with, or "" if it has none."""
+        if self.imdb:
+            return plexnames.id_tag("imdb", self.imdb)
+        return plexnames.id_tag("tmdb", self.tmdb) if self.tmdb else ""
+
+    @property
+    def id_text(self) -> str:
+        """The plain id as written into an unmatched list or shown to a model."""
+        if self.imdb:
+            return self.imdb
+        return ("tmdb-" + self.tmdb) if self.tmdb else ""
+
+
+def _offer_from_candidate(candidate: _Candidate, source: str) -> Offer:
+    years = tuple(sorted(candidate.years))
+    released = candidate.released or (years[0] if len(years) == 1 else "")
+    return Offer(
+        imdb=candidate.imdb,
+        tmdb=candidate.tmdb,
+        titles=candidate.spellings,
+        years=years,
+        released=released,
+        runtime=candidate.runtime,
+        source=source,
+    )
+
+
+def _offer_from_row(row: dict) -> Offer:
+    tmdb = _id_token(row.get("id"))
+    if not tmdb.isdigit():
+        return Offer()
+    titles = tuple(dict.fromkeys(
+        name.strip() for name in (row.get("title"), row.get("original_title"))
+        if isinstance(name, str) and name.strip()
+    ))
+    released = _primary_year(row)
+    return Offer(
+        tmdb=tmdb,
+        titles=titles,
+        years=(released,) if released else (),
+        released=released,
+        source="tmdb-search",
+    )
+
+
+def _record_offer(offered: list | None, offer: Offer) -> None:
+    """Keep ``offer`` in ``offered``, merging into an earlier entry when TMDb
+    and the local IMDb lists (or two queries) offered the same film."""
+    if offered is None or (not offer.imdb and not offer.tmdb):
+        return
+    for index, existing in enumerate(offered):
+        same_imdb = bool(offer.imdb and existing.imdb == offer.imdb)
+        same_tmdb = bool(offer.tmdb and existing.tmdb == offer.tmdb)
+        if not (same_imdb or same_tmdb):
+            continue
+        titles = tuple(dict.fromkeys(existing.titles + offer.titles))
+        years = tuple(sorted(set(existing.years) | set(offer.years)))
+        source = (offer.source
+                  if existing.source == "tmdb-search" and offer.source != "tmdb-search"
+                  else existing.source)
+        offered[index] = Offer(
+            imdb=existing.imdb or offer.imdb,
+            tmdb=existing.tmdb or offer.tmdb,
+            titles=titles,
+            years=years,
+            released=existing.released or offer.released,
+            runtime=existing.runtime or offer.runtime,
+            source=source,
+        )
+        return
+    offered.append(offer)
+
+
 class Match(NamedTuple):
     """What a lookup settled on: the id to tag with, and the spelling to use.
 
@@ -199,6 +287,7 @@ def identify(title: str, year: str,
              notes: list | None = None, also: tuple = (),
              imdb: str = "",
              written: Callable[[], str] | None = None,
+             offered: list | None = None,
              verify_runtime: bool = False) -> Match:
     """A film's id and catalogue spelling, ONLY when the match is unambiguous.
 
@@ -292,13 +381,14 @@ def identify(title: str, year: str,
     for query in _queries(reading):
         found = _under(api_key, query, want, year, runtime, notes, plainly,
                        named_for_the_year, latin, subtitles, carried, written,
-                       verify_runtime=verify_runtime)
+                       offered, verify_runtime=verify_runtime)
         if found.tag:
             return found
     if imdb:
         return _in_the_imdb_lists(imdb, want, year, runtime, notes, plainly,
                                   named_for_the_year, latin, written,
-                                  bool(carried), verify_runtime=verify_runtime)
+                                  bool(carried), offered,
+                                  verify_runtime=verify_runtime)
     return Match()
 
 
@@ -323,6 +413,7 @@ def _in_the_imdb_lists(database: str, want: frozenset, year: str,
                        latin: bool = False,
                        written: Callable[[], str] | None = None,
                        carried: bool = False,
+                       offered: list | None = None,
                        verify_runtime: bool = False) -> Match:
     """The certainty rule over what the local IMDb lists hold under this
     title, where TMDb has already been asked under every spelling and could
@@ -354,7 +445,10 @@ def _in_the_imdb_lists(database: str, want: frozenset, year: str,
     if rows:
         # The weaker readings are for a title nothing carries, and these are
         # the titles its own keys reach.
-        settled = _settle(_imdb_candidates(rows, latin, runtime), [], want,
+        candidates = _imdb_candidates(rows, latin, runtime)
+        for candidate in candidates:
+            _record_offer(offered, _offer_from_candidate(candidate, "imdb"))
+        settled = _settle(candidates, [], want,
                           year, runtime, notes, plainly, named_for_the_year, (),
                           [True], written, found, verify_runtime=verify_runtime)
         if settled.tag or found:
@@ -367,7 +461,10 @@ def _in_the_imdb_lists(database: str, want: frozenset, year: str,
           % len(rows))
     if not rows:
         return Match()
-    return _settle(_imdb_candidates(rows, latin, runtime), [], want, year,
+    candidates = _imdb_candidates(rows, latin, runtime)
+    for candidate in candidates:
+        _record_offer(offered, _offer_from_candidate(candidate, "imdb"))
+    return _settle(candidates, [], want, year,
                    runtime, notes, plainly, named_for_the_year, (), [], written,
                    part_of_name=False, verify_runtime=verify_runtime)
 
@@ -427,6 +524,7 @@ def _settle_the_year(title: str, year: str, others: list,
                      notes: list | None = None, also: tuple = (),
                      imdb: str = "",
                      written: Callable[[], str] | None = None,
+                     offered: list | None = None,
                      verify_runtime: bool = False) -> tuple:
     """A film looked up where its folder and its files disagree about the year
     by one, as (the match, the year it is really under, the further spellings
@@ -453,13 +551,13 @@ def _settle_the_year(title: str, year: str, others: list,
     The third is why this returns a year at all: everything downstream writes
     the folder from it.
     """
-    found = identify(title, year, runtime, notes, also, imdb, written,
+    found = identify(title, year, runtime, notes, also, imdb, written, offered,
                      verify_runtime=verify_runtime)
     for other in [one for one in others if one != year and _near(one, year)]:
         _note(notes, 'its files are dated %s where the folder says %s: '
               "asking under that year too" % (other, year))
         second = identify(title, other, runtime, notes, also, imdb, written,
-                          verify_runtime=verify_runtime)
+                          offered, verify_runtime=verify_runtime)
         if found.tag and second.tag and found.tag != second.tag:
             _note(notes, "    %s and %s are two different films" % (year, other))
             continue
@@ -527,6 +625,7 @@ def _under(api_key: str, query: str, want: frozenset, year: str,
            subtitles: tuple = (),
            carried: list | None = None,
            written: Callable[[], str] | None = None,
+           offered: list | None = None,
            verify_runtime: bool = False) -> Match:
     """The certainty rule over one query's results.
 
@@ -567,6 +666,12 @@ def _under(api_key: str, query: str, want: frozenset, year: str,
     asking, over_budget = worth[:MAX_CANDIDATES], worth[MAX_CANDIDATES:]
     _note_the_passed_over(notes, rows, asking, over_budget)
     candidates = [_candidate(api_key, row, latin) for row in asking]
+    for candidate in candidates:
+        _record_offer(offered, _offer_from_candidate(candidate, "tmdb"))
+    for row in over_budget:
+        _record_offer(offered, _offer_from_row(row))
+    for row in rows:
+        _record_offer(offered, _offer_from_row(row))
     return _settle(candidates, over_budget, want, year, runtime, notes,
                    plainly, named_for_the_year, subtitles, carried, written,
                    verify_runtime=verify_runtime)

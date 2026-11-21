@@ -261,7 +261,8 @@ def read_id_list(path: str, blank: list | None = None) -> dict | None:
     for line in lines:
         if not line.strip() or line.lstrip().startswith(_ID_COMMENT):
             continue
-        name, _tab, written = line.partition("\t")
+        name, _tab, rest = line.partition("\t")
+        written = rest.partition("\t")[0].partition(_ID_COMMENT)[0]
         tag = id_tag_for(written)
         if not name.strip():
             continue
@@ -273,17 +274,23 @@ def read_id_list(path: str, blank: list | None = None) -> dict | None:
 
 
 def write_id_list(path: str, names, ids: dict | None = None,
-                  log: Callable[[str], None] | None = None) -> bool:
+                  log: Callable[[str], None] | None = None,
+                  suggestions: dict | None = None) -> bool:
     """The id list as it stands: what has been filled in, then what has not.
 
     ``ids`` is written back verbatim. It is the file's whole point - the ids
     someone looked up by hand are the only record of them anywhere, and a film
     named from one still answers "identified" on the next run only because the
-    line is still there. ``names`` are the ones still to do, each left blank.
+    line is still there. ``names`` are the ones still to do, each left blank
+    unless ``suggestions`` holds a model's pick ``(id_text, confidence,
+    reason)`` for it, in which case the row is pre-filled with the pick and a
+    ``# model (...): ...`` comment for review.
 
     Rewritten whole rather than appended to, so a film that has since been
     identified by TMDb itself drops off the list instead of lingering on it.
     """
+    suggested = {name: suggestions[name] for name in names
+                 if suggestions and name in suggestions}
     lines = [
         _ID_COMMENT + " Films TheMovieDB could not identify on its own.",
         _ID_COMMENT + " Put the id after the tab - tt0000001, imdb-tt0000001",
@@ -291,10 +298,25 @@ def write_id_list(path: str, names, ids: dict | None = None,
         _ID_COMMENT + "   ingest-movies -i <this file> <library>",
         _ID_COMMENT + " adding -w once the dry run reads right. Lines still",
         _ID_COMMENT + " blank are simply the ones still to do.",
-        "",
     ]
+    if suggested:
+        lines += [
+            _ID_COMMENT + " Rows marked '# model (...)' are pre-filled model",
+            _ID_COMMENT + " suggestions - keep the id to apply it, edit it, "
+            "or clear it to leave blank.",
+        ]
+    lines.append("")
     lines += [name + "\t" + tag for name, tag in sorted((ids or {}).items())]
-    lines += [name + "\t" for name in names]
+    for name in names:
+        suggestion = suggested.get(name)
+        if suggestion:
+            id_text, confidence, reason = suggestion
+            note = "%s model (%s)" % (_ID_COMMENT, confidence or "low")
+            if reason:
+                note += ": " + reason
+            lines.append("%s\t%s\t%s" % (name, id_text, note))
+        else:
+            lines.append(name + "\t")
     return _write_lines(path, lines, log, "the id list " + path)
 
 

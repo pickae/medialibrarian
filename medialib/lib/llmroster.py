@@ -55,8 +55,8 @@ __all__ = ["MODELS_VARIABLE", "LEAN_VARIABLE", "LEANS", "Task", "TASKS", "CHAPTE
            "FRAGMENT_CLASSIFY", "GAPS_CHECK", "LETTERBOXD_MATCH", "BOOK_LANGUAGE",
            "BOOK_IMAGE_CHECK", "ERROR_TRIAGE", "COMIC_PAGE_CHECK",
            "COMIC_PDF_JUDGE", "BOOK_TAGS", "AUDIO_CONTENT", "FILM_YEAR",
-           "Roster", "RosterError", "load", "require", "optional",
-           "chapters_task"]
+           "FILM_IDENTIFY", "Roster", "RosterError", "load", "require",
+           "optional", "chapters_task"]
 
 MODELS_VARIABLE = "llmModels"
 LEAN_VARIABLE = "llmLean"
@@ -144,6 +144,9 @@ AUDIO_CONTENT = Task(
 FILM_YEAR = Task("film-year", "look up the release year of an undated film, "
                  "concert, special or documentary",
                  requires=("web",), prefers=("reasoning",))
+FILM_IDENTIFY = Task(
+    "film-identify", "pick which offered film matches an unmatched folder",
+    prefers=("web", "reasoning"), lean="precise")
 
 TASKS = {task.name: task for task in (CHAPTERS, CHAPTERS_INSTRUCTED,
                                       COVER_SEARCH, COVER_LOOK, CONTENTS_SEARCH,
@@ -152,7 +155,8 @@ TASKS = {task.name: task for task in (CHAPTERS, CHAPTERS_INSTRUCTED,
                                       LETTERBOXD_MATCH, BOOK_LANGUAGE,
                                       BOOK_IMAGE_CHECK, ERROR_TRIAGE,
                                       COMIC_PAGE_CHECK, COMIC_PDF_JUDGE,
-                                      BOOK_TAGS, AUDIO_CONTENT, FILM_YEAR)}
+                                      BOOK_TAGS, AUDIO_CONTENT, FILM_YEAR,
+                                      FILM_IDENTIFY)}
 
 
 def chapters_task(instructions: str) -> Task:

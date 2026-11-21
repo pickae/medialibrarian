@@ -159,7 +159,7 @@ class TestTheListsEachFolderLeaves:
                      unmatched=None, recursive=False, ambiguous=None,
                      planned=None, near_misses=None, aliases=None,
                      seen=None, skip=None, long_names=None, imdb="",
-                     tagged=None):
+                     tagged=None, suggestions=None, model_meter=None):
             asked.append(root)
             self.imdb = imdb
             skips.record(root + "/Name In Use (1999)",

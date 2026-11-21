@@ -251,6 +251,15 @@ SETTINGS: tuple[Setting, ...] = (
             "files on its own. Only a model that can search is asked - Claude, "
             "or one behind `llmHarness`: `on` or `off`",
             ("ingest-movies",), "on"),
+    Setting("filmIdentifyLlm", "Whether a film TMDb and the local IMDb lists "
+            "could not settle is handed to a language model to pick among the "
+            "offered candidates (the `film-identify` task, see docs/models.md): "
+            "it is told the folder's name, its file names, runtime, mux year "
+            "and the near-miss notes. `on` accepts a high-confidence pick only "
+            "when its runtime also fits and writes every other pick as a "
+            "suggestion in the unmatched list; `suggest` writes suggestions "
+            "only; `off` never asks the model",
+            ("ingest-movies",), "on"),
     Setting("musicSearchLlm", "Whether an album beets skipped is handed to a "
             "language model to look up its MusicBrainz release ID on the web "
             "(the `music-search` task, see docs/models.md): it is told the "

@@ -614,6 +614,33 @@ a third, and the files are then the only names a catalogue has ever heard of.
 Every film in the folder must answer, and all of them to the same id — a folder
 whose films answer to two ids is a folder holding two films.
 
+### When a language model helps settle an unmatched film
+
+Where TMDb and the local IMDb lists offered candidates but could not settle on
+one, and a model is configured in the [model roster](../models.md) (the
+`film-identify` task, preferring web search and reasoning), the folder's name,
+file names, runtime on disk, earliest container creation year, near-miss notes
+and the offered candidates are handed to the model.
+
+The model may only choose one of the ids already offered, or none — any
+invented id is ignored and noted. Controlled by the `filmIdentifyLlm`
+[setting](../settings.md):
+
+- **`on`** (default): accepts a pick outright only when the model marks it
+  `high` confidence, the candidate was not released after the file was written,
+  a year is known, and the disk runtime also fits the candidate's stated runtime
+  (5 min / 7%). Every other offered pick is written as a pre-filled suggestion
+  row in `ingest-movies-unmatched-<folder>.tsv` with its confidence and reason
+  in a trailing `# model (...): ...` comment.
+- **`suggest`**: never accepts outright; writes every pick as a pre-filled
+  suggestion row for review.
+- **`off`**: never asks a model.
+
+Every model decision is printed in the run's output and recorded in the reports
+(`ingest-movies-renames-<folder>.txt`, `ingest-movies-unmatched-<folder>.tsv`
+and `ingest-movies-nearmisses-<folder>.txt`), so a dry run (`-O tagging`) shows
+what the model would do.
+
 ### The lists tagging writes
 
 Each folder given gets these lists, in `logs/ingest-movies/` in the medialib
@@ -649,6 +676,10 @@ A line of the unmatched list, filled in:
 ```
 Your Film (1975)	tt0000002
 ```
+
+Rows pre-filled by a language model carry a third-column `# model (...): ...`
+comment after the id; `-i` reads the id column and ignores the comment, so you
+can keep the id as suggested, edit it, or clear it to leave the row blank.
 
 An id is read however you have it to hand (`tt0000002`, `imdb-tt0000002`, a bare
 TMDb number), answers before the network is asked, and stays in the file so the
