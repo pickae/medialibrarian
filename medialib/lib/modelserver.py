@@ -11,6 +11,8 @@ server there:
 - not answering, it is started - in a process group of its own, its output
   kept in a log beside the run's scratch - where the GPU has the room it needs
   free, and used once it answers;
+- started here and no longer answering though its process is still there, it
+  is stopped and started again;
 - started here, it is stopped once nothing has used it for ``idle`` seconds,
   and when the run ends at the latest;
 - with no room on the GPU, or no command to start it with, it is not to be had
@@ -100,6 +102,7 @@ class Server:
         self._lock = threading.Lock()
         self._users = 0
         self._timer: threading.Timer | None = None
+        self._answered = False
 
     @property
     def started_here(self) -> bool:
@@ -113,8 +116,14 @@ class Server:
             if self._timer is not None:
                 self._timer.cancel()
                 self._timer = None
-            if not answering(self.url) and not self._start(log):
-                return False
+            if not answering(self.url):
+                if self._process is not None and self._process.poll() is None \
+                        and self._answered:
+                    log("  The model server for %s stopped answering; "
+                        "restarting it" % self.url)
+                    self._stop()
+                if not self._start(log):
+                    return False
             self._users += 1
             return True
 
@@ -163,6 +172,7 @@ class Server:
             if self._process is None or self._process.poll() is not None:
                 break
             if answering(self.url):
+                self._answered = True
                 return True
             time.sleep(_POLL)
         log("  WARNING: the model server for %s did not come up, see %s"
@@ -177,6 +187,7 @@ class Server:
 
     def _stop(self) -> None:
         process, self._process = self._process, None
+        self._answered = False
         if process is None or process.poll() is not None:
             return
         try:

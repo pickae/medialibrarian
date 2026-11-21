@@ -834,6 +834,7 @@ class TestTheVisionSettings:
             ("00:00:01,000", "00:00:02,000", str(png), 50)])
         monkeypatch.setattr(llmclient, "_listing",
                             lambda url, key="": {"listed": 4096, "vision-35b": 4096})
+        monkeypatch.setattr(llmclient, "_refused", lambda url: False)
 
         def fake_post(llm, system, prompt, tried, pictures=(), **kwargs):
             calls.append((llm.model, kwargs.get("options")))
