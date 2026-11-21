@@ -720,8 +720,11 @@ def too_short(duration: int, min_minutes: float = DEFAULT_MIN_MINUTES) -> bool:
 def generate(cues: Sequence[Cue], llm, *, min_minutes: float = DEFAULT_MIN_MINUTES,
              typical_minutes: int = DEFAULT_TYPICAL_MINUTES,
              log: Callable[[str], None] = lambda line: None,
-             meter: Meter | None = None) -> list[tuple[int, str]]:
+             meter: Meter | None = None,
+             raise_if_down: bool = False) -> list[tuple[int, str]]:
     """The chapters of a recording, as (start ms, title), the first at 0.
+    With ``raise_if_down``, a model server that does not answer is
+    :class:`llmclient.NoServerError` instead of no chapters.
 
     Each pass the model is asked in is timed into ``meter`` with the
     requests it made.
@@ -749,6 +752,11 @@ def generate(cues: Sequence[Cue], llm, *, min_minutes: float = DEFAULT_MIN_MINUT
             return _chapters(cues, found, served, duration, count,
                              typical_minutes, min_minutes, log, instructions,
                              meter or Meter())
+    except llmclient.NoServerError as error:
+        if raise_if_down:
+            raise
+        log("    no model to ask: %s" % error)
+        return []
     except llmclient.LlmError as error:
         log("    no model to ask: %s" % error)
         return []

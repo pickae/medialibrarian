@@ -181,6 +181,10 @@ class LlmError(Exception):
     """The model could not be asked, or did not answer."""
 
 
+class NoServerError(LlmError):
+    """No server answers where the model is, and none can be started now."""
+
+
 class _PermanentLlmError(LlmError):
     """A refusal that repeating the same request will not cure."""
 
@@ -306,9 +310,14 @@ class Llm:
         names no model and lists none.
 
         A single address with a model and no command is used as it is,
-        unasked - a hosted API need not list its models."""
+        unasked - a hosted API need not list its models - unless nothing
+        listens there at all (the connection is refused): that is named
+        (NoServerError) instead of failing every request that follows."""
         if self.api != "openai" or not (self.fallbacks or self.serve
                                         or not self.model):
+            if self.api == "openai" and _refused(self.url):
+                raise NoServerError("no model server answers at %s, nor can "
+                                    "one be started now" % self.url)
             yield self
             return
         for at, url in enumerate((self.url,) + self.fallbacks):
@@ -326,8 +335,8 @@ class Llm:
             finally:
                 if server is not None:
                     server.release()
-        raise LlmError("no model server answers at %s, nor can one be "
-                       "started now" % ", ".join((self.url,) + self.fallbacks))
+        raise NoServerError("no model server answers at %s, nor can one be "
+                            "started now" % ", ".join((self.url,) + self.fallbacks))
 
     def _on(self, url: str, listed: dict[str, int],
             log: Callable[[str], None], *, announce: bool = True) -> Llm:
@@ -631,6 +640,19 @@ def _server(url: str, command: str, need_mib: int) -> modelserver.Server:
             _servers[key] = modelserver.Server(url, command, need_mib,
                                                idle=SERVE_IDLE)
         return _servers[key]
+
+
+def _refused(url: str) -> bool:
+    """Whether the connection to the server at ``url`` is refused: nothing
+    listens there."""
+    try:
+        with urllib.request.urlopen(url.rstrip("/") + "/models", timeout=10):
+            pass
+    except urllib.error.URLError as error:
+        return isinstance(error.reason, ConnectionRefusedError)
+    except OSError:
+        pass
+    return False
 
 
 def _listing(url: str, key: str = "") -> dict[str, int] | None:

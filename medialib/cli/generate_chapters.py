@@ -34,6 +34,7 @@ from medialib.lib import (
     chapters,
     clioptions,
     enums,
+    llmclient,
     llmroster,
     ramscratch,
     runlog,
@@ -321,6 +322,7 @@ def _chapter(script_dir: str, input_dir: str, output_dir: str,
 
     numbers = {relative: number for number, relative in enumerate(todo, 1)}
     run_meter = aichapters.Meter()
+    down: list[str] = []
 
     def chapter(relative: str, source: str) -> bool:
         label = "[%d/%d] %s" % (numbers[relative], len(todo), relative)
@@ -331,11 +333,21 @@ def _chapter(script_dir: str, input_dir: str, output_dir: str,
         if not source:
             runlog.error("%s: no transcript to chapter from" % label)
             return False
+        if down:
+            return False
         cues = aichapters.read_transcript(source)
         runlog.say("%s: %d transcript line(s)\n" % (label, len(cues)))
         meter = aichapters.Meter()
-        marks = aichapters.generate(cues, llm, min_minutes=min_minutes,
-                                    typical_minutes=typical, log=log, meter=meter)
+        try:
+            marks = aichapters.generate(cues, llm, min_minutes=min_minutes,
+                                        typical_minutes=typical, log=log,
+                                        meter=meter, raise_if_down=True)
+        except llmclient.NoServerError as error:
+            # Every file after this one would meet the same closed port.
+            down.append(str(error))
+            runlog.error("%s: %s. Stopping here; the transcripts are kept, so "
+                         "a rerun picks up where this left off." % (label, error))
+            return False
         run_meter.add(meter)
         for line in meter.lines():
             log("    model %s" % line)

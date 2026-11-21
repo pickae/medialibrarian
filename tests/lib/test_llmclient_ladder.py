@@ -8,11 +8,14 @@ has room and stopped again; with no room, the next that answers is used with
 the model and window it lists; with none, a recording gets no chapters.
 """
 
+import contextlib
 import os
+import signal
 import socket
 import subprocess
 import sys
 import time
+import urllib.request
 
 import pytest
 
@@ -39,6 +42,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(payload)
 http.server.HTTPServer(("127.0.0.1", port), Handler).serve_forever()
 """
+
+
+def _quick(urlopen):
+    """``urlopen`` with a short timeout, so a stopped stand-in is found
+    silent at once rather than after ten seconds."""
+    return lambda url, timeout=10: urlopen(url, timeout=1)
 
 
 def _port() -> int:
@@ -141,6 +150,27 @@ class TestTheFirstServer:
             time.sleep(0.1)
         assert not modelserver.answering(_url(port))
 
+    def test_that_is_there_but_stopped_answering_is_restarted(self, gpu, serve,
+                                                              monkeypatch):
+        monkeypatch.setattr(modelserver, "_POLL", 0.05)
+        monkeypatch.setattr(modelserver, "_STOP_GRACE", 0.3)
+        monkeypatch.setattr(urllib.request, "urlopen", _quick(urllib.request.urlopen))
+        port = _port()
+        server = modelserver.Server(_url(port), serve(port), 20000)
+        lines = []
+        assert server.acquire(lines.append)
+        first = server._process
+        os.killpg(first.pid, signal.SIGSTOP)
+        try:
+            server.release()
+            assert server.acquire(lines.append)
+        finally:
+            server.stop()
+            with contextlib.suppress(OSError):
+                os.killpg(first.pid, signal.SIGKILL)
+        assert server._process is not first or first.poll() is not None
+        assert any("stopped answering" in line for line in lines)
+
     def test_is_stopped_at_the_end_of_the_run(self, gpu, serve):
         port = _port()
         llm = _llm([_url(port)], serve=serve(port))
@@ -204,10 +234,23 @@ class TestNoServer:
         assert aichapters.generate(cues, llm, log=lines.append) == []
         assert lines[-1].startswith("    no model to ask: no model server")
 
-    def test_one_address_with_a_model_is_used_unasked(self, gpu):
-        llm = _llm([_url(_port())])
+    def test_one_address_that_does_not_resolve_is_used_unasked(self, gpu):
+        llm = _llm(["http://model.invalid/v1"])
         with llm.serving(print) as served:
             assert served is llm
+
+    def test_one_address_with_nothing_listening_is_named_at_once(self, gpu):
+        llm = _llm([_url(_port())])
+        with pytest.raises(llmclient.NoServerError, match="no model server"), \
+                llm.serving(print):
+            pass
+
+    def test_a_caller_can_have_it_raised_instead_of_no_chapters(self, gpu):
+        llm = _llm([_url(_port())])
+        cues = [aichapters.Cue(second * 1000, second * 1000 + 900, "line")
+                for second in range(0, 3600, 10)]
+        with pytest.raises(llmclient.NoServerError):
+            aichapters.generate(cues, llm, raise_if_down=True)
 
 
 class TestGenerate:
