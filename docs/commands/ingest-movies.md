@@ -346,13 +346,18 @@ twice over:
 | how many of its words the film's track also has | few: the dialogue is ducked under the commentators | most of them — except a dub, which is in another language |
 
 A track both say so of is flagged as a commentary and named "Commentary N" in
-place, which the commentary naming later replaces with who speaks in it. A
-track only one says so of is checked with the light [language model](../models.md)
-(`track-role`, unless `trackRoleLlm=off`) using its sampled transcript beside
-the main track's; if the model is still unsure or no model is configured, the
-track is left as it is and listed at the end of the run, to be listened to. A
-track flagged for the visually impaired, or named as an audio description, a
-score or music, is not listened to at all.
+place, which the commentary naming later replaces with who speaks in it. When
+only one signal fires and a language model is set up (the `commentary-judge`
+task, see [models](../models.md); turned off with `commentaryJudgeLlm=off`),
+the model is sent the whisper transcripts already taken from the main and
+suspect tracks, along with their names and languages. Only a high-confidence
+`commentary` (flagged and named like above) or `description` (flagged for the
+visually impaired) is acted on automatically; any other opinion — a dub, an
+isolated score, music and effects, unsure, or lower confidence — leaves the
+track unflagged and adds the model's opinion to the end-of-run list to be
+listened to. Without a model, the track is left as it is and listed at the end
+of the run. A track flagged for the visually impaired, or named as an audio
+description, a score or music, is not listened to at all.
 
 A commentary the file does flag but leaves without a name is numbered the same
 way, among the others in file order. Otherwise its transcript would be called

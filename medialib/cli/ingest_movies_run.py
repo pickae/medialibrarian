@@ -28,11 +28,11 @@ from medialib.cli import ingest_movies_plex as plexphase
 from medialib.cli.ingest_movies import log
 from medialib.lib import (
     aibonuscategory,
+    aicommentary,
     aicommentarynames,
     aieditions,
     aifilmyear,
     aitmdb,
-    audiotracks,
     chapterdb,
     cleannamesindividually,
     clioptions,
@@ -130,6 +130,9 @@ class Run:
     # What the vision model reading picture subtitles was asked over the run
     # (subtitleocr.Usage). Read with a default too.
     ocr_usage: subtitleocr.Usage | None
+    # What the language model judging ambiguous audio tracks was asked over
+    # the run (aicommentary.Usage). Read with a default too.
+    commentary_judge_usage: aicommentary.Usage | None
     # What the commentary-naming model was asked over the run
     # (aicommentarynames.Usage). Read with a default too.
     commentary_names_usage: aicommentarynames.Usage | None
@@ -1390,6 +1393,8 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
     unsure_commentaries: list = []
     # What the vision model reading picture subtitles was asked, over the run.
     ocr_usage = subtitleocr.Usage()
+    # What the language model judging ambiguous audio tracks was asked.
+    commentary_judge_usage = aicommentary.Usage()
     bonus_meter = os.path.join(ram_root, "bonusCategoryMeter.jsonl")
     # What the commentary-naming model was asked, over the run.
     commentary_names_usage = aicommentarynames.Usage()
@@ -1403,6 +1408,8 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
         _report_long_names(long_names)
         _report_unfixed_movies(unfixed_movies)
         _report_unsure_commentaries(unsure_commentaries)
+        if commentary_judge_usage.requests:
+            _report_commentary_judge_usage(commentary_judge_usage)
         if ocr_usage.requests:
             _report_ocr_usage(ocr_usage)
         _report_bonus_category_usage(bonus_meter)
@@ -1437,6 +1444,7 @@ def _run_phases(result, program: str, script_dir: str, roots: list,
                 unfixed_movies=unfixed_movies,
                 unsure_commentaries=unsure_commentaries, disk_turns=disk_turns,
                 scratch_headroom=0, ocr_usage=ocr_usage,
+                commentary_judge_usage=commentary_judge_usage,
                 bonus_meter=bonus_meter,
                 commentary_names_usage=commentary_names_usage,
                 convert_remuxes=bool(result.values.get("convertRemuxes")),
@@ -3091,9 +3099,12 @@ def _detect_commentaries(state, root: str) -> None:
     (see :mod:`medialib.lib.commentarydetection`), and each one found to be a
     commentary flagged and named "Commentary N" in place - a header edit, so
     the remux, the transcription and the commentary naming after it take it
-    for the commentary it is. A commentary the file flags but leaves unnamed is
-    numbered the same way, so its transcript is too. A film already improved
-    was looked at by the run that improved it, and is not listened to again."""
+    for the commentary it is. A track only one signal fires on may be judged by
+    a language model (:mod:`medialib.lib.aicommentary`), which can also flag a
+    confident audio description for the visually impaired. A commentary the
+    file flags but leaves unnamed is numbered the same way, so its transcript
+    is too. A film already improved was looked at by the run that improved it,
+    and is not listened to again."""
     for movie in main_movies(root):
         if safety.abort_requested():
             return
@@ -3106,22 +3117,31 @@ def _detect_commentaries(state, root: str) -> None:
                      track.is_commentary, track.visual_impaired == "true")
                  for position, track in enumerate(tracks, start=1)
                  if track.is_audio]
-        found = _listen_for_commentaries(state, movie, audio)
+        track_languages = {
+            track.id: languages.track_language(track.language,
+                                               track.language_ietf)
+            for track in tracks if track.is_audio}
+        found, descriptions = _listen_for_commentaries(
+            state, movie, audio, track_languages)
         unnamed = commentarydetection.unnamed(audio)
-        if unnamed and not found:
+        if unnamed and not found and not descriptions:
             log("Numbering the commentaries the file does not name: " + movie)
-        if found or unnamed:
+        if found or unnamed or descriptions:
             _flag_commentaries(movie, tracks,
                                commentarydetection.commentary_names(
-                                   audio, found + unnamed))
+                                   audio, found + unnamed),
+                               descriptions)
 
 
-def _listen_for_commentaries(state, movie: str, audio: list) -> list:
-    """The ids of the film's suspect audio tracks that are commentaries,
-    each verdict said, and an unsure one kept for the end of the run."""
+def _listen_for_commentaries(state, movie: str, audio: list,
+                             track_languages: dict | None = None
+                             ) -> tuple[list[str], list[str]]:
+    """The ids of the film's suspect audio tracks that are commentaries and
+    those that are audio descriptions, each verdict said, and an unsure one
+    kept for the end of the run."""
     suspects = commentarydetection.suspects(audio)
     if not suspects:
-        return []
+        return [], []
     while state.whisper_said:
         log(state.whisper_said.pop(0))
     log("Listening for commentaries: " + movie)
@@ -3130,8 +3150,15 @@ def _listen_for_commentaries(state, movie: str, audio: list) -> list:
     if why:
         log("  WARNING: could not listen to the audio tracks, left as "
             "they are: " + why)
-        return []
-    found = []
+        return [], []
+    track_languages = track_languages or {}
+    film = os.path.splitext(os.path.basename(movie))[0]
+    usage = getattr(state, "commentary_judge_usage", None)
+    main_sample = aicommentary.TrackSample(
+        audio[0].name, track_languages.get(audio[0].id, ""),
+        measures[audio[0].id])
+    found: list[str] = []
+    descriptions: list[str] = []
     for track in suspects:
         said = "audio track %s (%s)" % (track.id, track.name or "no name")
         verdict = commentarydetection.judge(measures[audio[0].id],
@@ -3140,36 +3167,39 @@ def _listen_for_commentaries(state, movie: str, audio: list) -> list:
             found.append(track.id)
             log("  A commentary: %s - %s" % (said, verdict.why))
         elif verdict.kind == commentarydetection.UNSURE:
-            refined = audiotracks.refine_audio_role(
-                "main",
-                name=track.name,
-                language=measures[track.id].language,
-                transcript=measures[track.id].text,
-                main_transcript=measures[audio[0].id].text,
-                speech=measures[track.id].speech,
-                main_speech=measures[audio[0].id].speech,
-                unsure=True,
-            )
-            if refined == "commentary":
+            suspect_sample = aicommentary.TrackSample(
+                track.name, track_languages.get(track.id, ""),
+                measures[track.id])
+            opinion = aicommentary.judge(
+                main_sample, suspect_sample, film=film, why=verdict.why,
+                usage=usage)
+            acted = opinion.acted_kind if opinion is not None else ""
+            if acted == "commentary" and opinion is not None:
                 found.append(track.id)
-                log("  A commentary (model-confirmed): %s - %s"
-                    % (said, verdict.why))
-            elif refined != "main":
-                log("  Classified as %s, left as it is: %s - %s"
-                    % (refined, said, verdict.why))
+                log("  A commentary (per model): %s - %s; %s"
+                    % (said, verdict.why, opinion.describe()))
+            elif acted == "description" and opinion is not None:
+                descriptions.append(track.id)
+                log("  An audio description (per model): %s - %s; %s"
+                    % (said, verdict.why, opinion.describe()))
             else:
+                note = ("%s; %s" % (verdict.why, opinion.describe())
+                        if opinion is not None else verdict.why)
                 log("  Maybe a commentary, left as it is: %s - %s"
-                    % (said, verdict.why))
+                    % (said, note))
                 state.unsure_commentaries.append(
-                    "%s: %s - %s" % (movie, said, verdict.why))
+                    "%s: %s - %s" % (movie, said, note))
         else:
             log("  Not a commentary: %s - %s" % (said, verdict.why))
-    return found
+    return found, descriptions
 
 
-def _flag_commentaries(movie: str, tracks: list, names: dict) -> None:
+def _flag_commentaries(movie: str, tracks: list, names: dict,
+                       descriptions: list | tuple = ()) -> None:
     """The tracks ``names`` holds flagged as commentaries and given its
-    names, in place, the film's time stamp kept."""
+    names, and those in ``descriptions`` flagged for the visually impaired,
+    in place, the film's time stamp kept."""
+    described = set(descriptions)
     arguments = []
     for position, track in enumerate(tracks, start=1):
         if track.id in names:
@@ -3179,6 +3209,11 @@ def _flag_commentaries(movie: str, tracks: list, names: dict) -> None:
             log('  track %s "%s" -> "%s"'
                 % (track.id, "" if track.name == "null" else track.name,
                    names[track.id]))
+        elif track.id in described:
+            arguments += ["--edit", "track:%d" % position,
+                          "--set", "flag-visual-impaired=1"]
+            log('  track %s "%s" -> flag-visual-impaired=1'
+                % (track.id, "" if track.name == "null" else track.name))
     try:
         original = os.stat(movie).st_mtime
     except OSError:
@@ -3186,7 +3221,7 @@ def _flag_commentaries(movie: str, tracks: list, names: dict) -> None:
     failure = rules._run_capture(["mkvpropedit", movie] + arguments)
     filmrecord.forget(movie)
     if failure:
-        log("  WARNING: mkvpropedit could not flag the commentaries: "
+        log("  WARNING: mkvpropedit could not flag the tracks: "
             + failure.replace("\n", " | "))
         return
     if original is not None:
@@ -3194,6 +3229,15 @@ def _flag_commentaries(movie: str, tracks: list, names: dict) -> None:
             os.utime(movie, (original, original))
         except OSError:
             pass
+
+
+def _report_commentary_judge_usage(usage: aicommentary.Usage) -> None:
+    """The language model's account over the run for judging ambiguous audio
+    tracks: only where it judged more than one, since one track's line already
+    said it all."""
+    if len(usage.spans.all()) > 1:
+        log("Model time over the run (commentary judgement):\n    %s"
+            % usage.line())
 
 
 def _report_ocr_usage(usage: subtitleocr.Usage) -> None:

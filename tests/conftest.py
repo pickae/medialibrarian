@@ -339,6 +339,8 @@ def private_workspace(tmp_path_factory, monkeypatch):
     monkeypatch.setenv("bonusCategoryLlm", "off")
     # Nor is a language model asked about borderline subtitle or audio tracks.
     monkeypatch.setenv("trackRoleLlm", "off")
+    # Nor to judge ambiguous audio tracks that may be commentaries.
+    monkeypatch.setenv("commentaryJudgeLlm", "off")
     # Nor is a language model asked to find ad reads in RSS podcasts.
     monkeypatch.setenv("podcastAdsLlm", "off")
     monkeypatch.setenv("podcastAdsCut", "off")

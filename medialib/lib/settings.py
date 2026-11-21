@@ -294,6 +294,13 @@ SETTINGS: tuple[Setting, ...] = (
             "a short audio transcript, with the track's title, language and "
             "flags, are sent to the model: `on` or `off`",
             ("convert-video", "ingest-movies"), "on"),
+    Setting("commentaryJudgeLlm", "Whether an audio track that commentary "
+            "detection was unsure of is handed to a language model to judge "
+            "(the `commentary-judge` task, see docs/models.md): it is sent the "
+            "sampled whisper transcripts of the main and suspect tracks, along "
+            "with their track names and languages. Only a confident commentary "
+            "or audio description is flagged automatically: `on` or `off`",
+            ("ingest-movies",), "on"),
     Setting("musicSearchLlm", "Whether an album beets skipped is handed to a "
             "language model to look up its MusicBrainz release ID on the web "
             "(the `music-search` task, see docs/models.md): it is told the "
