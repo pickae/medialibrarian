@@ -55,8 +55,8 @@ __all__ = ["MODELS_VARIABLE", "LEAN_VARIABLE", "LEANS", "Task", "TASKS", "CHAPTE
            "FRAGMENT_CLASSIFY", "GAPS_CHECK", "LETTERBOXD_MATCH", "BOOK_LANGUAGE",
            "BOOK_IMAGE_CHECK", "ERROR_TRIAGE", "COMIC_PAGE_CHECK",
            "COMIC_PDF_JUDGE", "BOOK_TAGS", "AUDIO_CONTENT", "FILM_YEAR",
-           "FILM_IDENTIFY", "AMBIGUOUS_EDITIONS", "Roster", "RosterError",
-           "load", "require",
+           "FILM_IDENTIFY", "AMBIGUOUS_EDITIONS", "COMMENTARY_NAMES",
+           "Roster", "RosterError", "load", "require",
            "optional", "chapters_task"]
 
 MODELS_VARIABLE = "llmModels"
@@ -151,6 +151,11 @@ FILM_IDENTIFY = Task(
 AMBIGUOUS_EDITIONS = Task(
     "ambiguous-editions", "classify stray movie files and identify film "
     "cuts and editions", requires=("web",), prefers=("reasoning",))
+COMMENTARY_NAMES = Task(
+    "commentary-names",
+    "match commentary tracks to a disc listing, name generic commentaries "
+    "from opening introductions, and tell apart fitting disc pages",
+    prefers=("reasoning", "web"))
 
 TASKS = {task.name: task for task in (CHAPTERS, CHAPTERS_INSTRUCTED,
                                       COVER_SEARCH, COVER_LOOK, CONTENTS_SEARCH,
@@ -160,7 +165,8 @@ TASKS = {task.name: task for task in (CHAPTERS, CHAPTERS_INSTRUCTED,
                                       BOOK_IMAGE_CHECK, ERROR_TRIAGE,
                                       COMIC_PAGE_CHECK, COMIC_PDF_JUDGE,
                                       BOOK_TAGS, AUDIO_CONTENT, FILM_YEAR,
-                                      FILM_IDENTIFY, AMBIGUOUS_EDITIONS)}
+                                      FILM_IDENTIFY, AMBIGUOUS_EDITIONS,
+                                      COMMENTARY_NAMES)}
 
 
 def chapters_task(instructions: str) -> Task:

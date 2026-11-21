@@ -125,6 +125,11 @@ models = ["small-local", "claude"]
         assert _names(_roster(tmp_path, text).ladder(llmroster.COVER_SEARCH)) == [
             "claude", "small-local"]
 
+    def test_commentary_names_prefers_reasoning_and_web_but_keeps_the_rest(self, tmp_path):
+        # Claude has reasoning + web, big-local has reasoning, small-local has neither.
+        assert _names(_roster(tmp_path).ladder(llmroster.COMMENTARY_NAMES)) == [
+            "claude", "big-local", "small-local"]
+
     def test_fragment_classify_prefers_reasoning_and_web_with_balanced_lean(
             self, tmp_path):
         # Claude has both reasoning and web; big-local has reasoning only;

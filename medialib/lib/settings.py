@@ -269,6 +269,17 @@ SETTINGS: tuple[Setting, ...] = (
             "model that can search is asked - Claude, or one behind "
             "`llmHarness`: `on` or `off`",
             ("ingest-movies",), "on"),
+    Setting("commentaryNamesLlm", "Whether generically named commentary tracks "
+            "(such as `Commentary` or `Commentary N`) that cannot be settled by "
+            "disc listings alone - or ambiguous disc database pages where two "
+            "or more fit - are handed to a language model (the "
+            "`commentary-names` task, see docs/models.md): it is sent the "
+            "film's title, year, TMDb id, alternative titles, candidate "
+            "listings from dvdcompare.net, or the first 5 minutes of a "
+            "commentary's subtitle or transcribed audio to look for speaker "
+            "introductions and apply the name across equivalent audio, "
+            "embedded subtitle and sidecar subtitle tracks: `on` or `off`",
+            ("ingest-movies",), "on"),
     Setting("musicSearchLlm", "Whether an album beets skipped is handed to a "
             "language model to look up its MusicBrainz release ID on the web "
             "(the `music-search` task, see docs/models.md): it is told the "
