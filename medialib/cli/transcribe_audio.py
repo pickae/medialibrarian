@@ -73,7 +73,8 @@ f | <format> | Transcript format: txt, srt, vtt or tsv.
 l |  | Also write a copy of each Opus, FLAC, .m4a and .m4b input into the
                     output, with its transcript embedded as lyrics.
 j | <jobs> | Run up to <jobs> transcriptions in parallel.
-                    Default: what the card can hold, or 2 on the CPU
+                    Default: what the card can hold, or one per
+                    4 CPU threads on the CPU
 """
 
 # The format has to be one whisper-ctranslate2 knows, or it would only surface as

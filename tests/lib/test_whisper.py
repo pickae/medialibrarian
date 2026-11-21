@@ -240,11 +240,12 @@ class TestSettlement:
         assert calls == []
         assert answer == {"device": "cpu", "computeType": "int8",
                           "model": "base.en", "modelMulti": "base",
-                          "threads": "4", "jobs": whisper.WHISPER_JOBS,
-                          "batchSlots": 0}
+                          "threads": "4", "jobs": 2,
+                          "batchSlots": whisper.WHISPER_CPU_BATCH_SLOTS}
         assert logs == [
             "No GPU found: the model settles on the CPU",
-            "Transcribing on the CPU (int8, 4 threads) with base.en, 2 at a time",
+            "Transcribing on the CPU (int8, 4 threads) with base.en, 2 at a time, "
+            "4 batch slots each",
             "Non-English work (detection, foreign transcripts, translations) "
             "runs on base",
         ]
@@ -464,3 +465,17 @@ class TestDetectedLanguages:
         assert whisper.detected_languages(
             ["Transcribing input/track.mp3",
              "Transcription results written to 'out' directory"]) == []
+
+
+class TestCpuJobs:
+    """The CPU is kept busy with whole runs, as many 4-thread ones as the
+    logical cores hold."""
+
+    @pytest.mark.parametrize("cores,expected", [
+        ("32", 8), ("16", 4), ("8", 2), ("7", 1), ("4", 1), ("2", 1),
+        ("1", 1), ("x", 1), (None, 1),
+    ])
+    def test_one_run_per_four_threads(self, w, cores, expected):
+        answer = whisper.init_whisper_model(cores, w.ram, lambda _: None)
+        assert answer["jobs"] == expected
+        assert answer["batchSlots"] == whisper.WHISPER_CPU_BATCH_SLOTS

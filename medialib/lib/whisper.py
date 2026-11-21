@@ -44,10 +44,23 @@ __all__ = [
 # faster-whisper can still open audio with - see the helper for why.
 WHISPER_COMMAND = ("pipx", "run", helpers.path_of("whisper_transcribe.py"))
 
-# The most runs at once. Two, on the CPU as well as on the GPU: on a card with
-# room for a third it measured 2% and left no headroom for the desktop, which
-# is a poor trade for work that answers an out-of-memory with status 0.
+# The most runs at once on a GPU. Two: on a card with room for a third it
+# measured 2% and left no headroom for the desktop, which is a poor trade for
+# work that answers an out-of-memory with status 0.
 WHISPER_JOBS = 2
+
+# The threads one CPU run is given, at most. int8 transcription is
+# memory-bandwidth bound, so a run does not get faster with more intra-threads:
+# on a 32-thread host one process measured 15x realtime at 4 threads, 24x at 8,
+# and 16x and 4x at 16 and 32, the threads spinning instead of working. A CPU
+# is kept busy with more PROCESSES of this width, not with wider ones.
+WHISPER_CPU_THREADS = 4
+
+# The batch slots of a CPU run. Batching the thirty-second windows through one
+# pass beats the unbatched path on the CPU too (about 1.8x with a full set of
+# processes, 3x for one), and a few slots get all of it: 4 measured at least
+# as fast as 8 or 16.
+WHISPER_CPU_BATCH_SLOTS = 4
 
 # The most batch slots one GPU run is given. Sixteen: past it the card stops
 # answering faster while the memory goes on rising, so the slots above it are
@@ -240,25 +253,23 @@ def init_whisper_model(cores: str, ram_root: str, log) -> dict:
     dict: ``device``, ``computeType``, ``model`` (the best overall),
     ``modelMulti`` (the best MULTILINGUAL one - English-only models cannot do
     detection or translation), ``threads``, ``jobs`` (how many runs the queue
-    may have going) and ``batchSlots`` (how wide each run decodes, 0 for the
-    unbatched path the CPU takes).
+    may have going) and ``batchSlots`` (how wide each run decodes).
     """
-    # whisper's thread count: the core count capped at 4, where whisper's own
-    # default proved fastest on the CPU - int8 transcription is
-    # memory-bandwidth bound, so a run does not get faster with more
-    # intra-threads and in practice runs slower with them. A core count that
-    # cannot be parsed reads as 0.
+    # whisper's thread count: the core count capped at WHISPER_CPU_THREADS. A
+    # core count that cannot be parsed reads as 0.
     try:
         count = int(cores)
     except (TypeError, ValueError):
         count = 0
-    threads = str(count if count < 4 else 4)
+    threads = str(min(count, WHISPER_CPU_THREADS))
     device = "cpu"
     compute_type = "int8"
     model = "base.en"
     model_multi = "base"
-    jobs = WHISPER_JOBS
-    slots = 0
+    # The CPU is filled with whole runs of that width: as many as the logical
+    # cores hold, so a 32-thread host runs 8 and a 4-thread one runs 1.
+    jobs = max(count // WHISPER_CPU_THREADS, 1)
+    slots = WHISPER_CPU_BATCH_SLOTS
 
     listing = _nvidia_smi(["-L"])
     gpu_present = any(line.startswith("GPU") for line in listing.splitlines())
@@ -314,8 +325,8 @@ def init_whisper_model(cores: str, ram_root: str, log) -> dict:
             # the model rather than the CPU line below appearing without a
             # reason.
             log("No GPU found: the model settles on the CPU")
-        log("Transcribing on the CPU (int8, {} threads) with {}, {} at a time"
-            .format(threads, model, jobs))
+        log("Transcribing on the CPU (int8, {} threads) with {}, {} at a time, "
+            "{} batch slots each".format(threads, model, jobs, slots))
     if model_multi != model:
         log("Non-English work (detection, foreign transcripts, translations) "
             "runs on {}".format(model_multi))
