@@ -1,0 +1,60 @@
+name: release
+
+# A release is an annotated SemVer tag on main, pushed:
+#
+#   git switch main && git pull --ff-only
+#   git tag -a v0.1.0 -m v0.1.0
+#   git push origin v0.1.0
+#
+# This job builds the sdist and wheel at that tag and publishes them as a GitHub
+# Release, with notes generated from the PRs merged since the previous tag. The
+# version inside them comes from the tag itself (setuptools-scm, pyproject.toml).
+#
+# Releases come from main only. A fix for an older major, once main has moved
+# past it, goes on a release/<major>.x branch cut from that major's last tag and
+# is tagged there - the check below then accepts that branch as well.
+on:
+  push:
+    tags: ["v[0-9]*.[0-9]*.[0-9]*"]
+
+permissions:
+  contents: write
+
+jobs:
+  github-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history and tags: setuptools-scm reads the version from them,
+          # and the branch check needs main to compare against.
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: check the tag is on main or a release branch
+        run: |
+          for branch in $(git branch -r --contains "$GITHUB_SHA" --format='%(refname:short)'); do
+            case "$branch" in origin/main|origin/release/*) exit 0;; esac
+          done
+          echo "::error::$GITHUB_REF_NAME is not on main or a release/* branch"
+          exit 1
+
+      - run: pip install build
+      - run: python -m build
+
+      # A tag the build did not take as its exact version (a dirty tree, a tag
+      # that is not PEP 440) would publish a dev version under a release name.
+      - name: check the built version matches the tag
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          ls dist
+          test -f "dist/medialibrarian-$version-py3-none-any.whl"
+          test -f "dist/medialibrarian-$version.tar.gz"
+
+      - name: publish the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --generate-notes --title "$GITHUB_REF_NAME"
