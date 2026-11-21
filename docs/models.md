@@ -17,7 +17,8 @@ picking among fitting disc pages, judging an ambiguous audio track that may be
 a commentary or audio description, sorting an unmatched extra into its
 Plex bonus folder, spotting advert cues in a subtitle when subcleaner has no
 word list for its language, picking or translating a ChapterDB chapter set for
-the library's language (`ingest-movies`), or classifying a borderline subtitle or
+the library's language, or proposing additions to hand-kept word and extension
+lists from logged reasons (`ingest-movies`), or classifying a borderline subtitle or
 audio track's role where the flags, title and measurements could not settle it
 (`ingest-movies`, `convert-video`), the MusicBrainz release
 of an album beets skipped (`ingest-music`), classifying recurring filename
@@ -143,6 +144,7 @@ Run with `-v` to see which model each task took, and what it was taken for.
 | `track-role` | - | - | light |
 | `commentary-judge` | - | reasoning | balanced |
 | `subtitle-ads` | - | - | light |
+| `curated-lists` | - | reasoning, local | balanced |
 
 `error-triage` prefers a local model because error logs carry library paths,
 and is strictly advisory: it never retries commands, deletes files or changes

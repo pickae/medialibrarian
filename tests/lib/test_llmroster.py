@@ -89,6 +89,14 @@ class TestTheLadder:
         assert _names(_roster(tmp_path).ladder(llmroster.COMMENTARY_JUDGE)) == [
             "big-local", "claude", "small-local"]
 
+    def test_curated_lists_prefers_local_reasoning_models(self, tmp_path):
+        # big-local has both reasoning and local; small-local has local and
+        # claude has reasoning (both match one preferred trait, roster order
+        # decides ties under balanced lean).
+        assert llmroster.TASKS["curated-lists"] is llmroster.CURATED_LISTS
+        assert _names(_roster(tmp_path).ladder(llmroster.CURATED_LISTS)) == [
+            "big-local", "small-local", "claude"]
+
     def test_a_precise_task_takes_the_large_first(self, tmp_path):
         task = llmroster.Task("t", "test", lean="precise")
         assert _names(_roster(tmp_path).ladder(task)) == [

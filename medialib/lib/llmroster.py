@@ -57,8 +57,8 @@ __all__ = ["MODELS_VARIABLE", "LEAN_VARIABLE", "LEANS", "Task", "TASKS", "CHAPTE
            "COMIC_PAGE_CHECK", "COMIC_PDF_JUDGE", "BOOK_TAGS", "AUDIO_CONTENT",
            "FILM_YEAR", "FILM_IDENTIFY", "AMBIGUOUS_EDITIONS",
            "COMMENTARY_NAMES", "BONUS_CATEGORY", "TRACK_ROLE",
-           "COMMENTARY_JUDGE", "SUBTITLE_ADS", "Roster", "RosterError", "load",
-           "require", "optional", "chapters_task"]
+           "COMMENTARY_JUDGE", "SUBTITLE_ADS", "CURATED_LISTS", "Roster",
+           "RosterError", "load", "require", "optional", "chapters_task"]
 
 MODELS_VARIABLE = "llmModels"
 LEAN_VARIABLE = "llmLean"
@@ -171,6 +171,9 @@ COMMENTARY_JUDGE = Task(
     prefers=("reasoning",))
 SUBTITLE_ADS = Task("subtitle-ads", "spot advert cues in a subtitle",
                     lean="light")
+CURATED_LISTS = Task("curated-lists", "propose additions to hand-kept word "
+                     "and extension lists from logged ingest-movies reasons",
+                     prefers=("reasoning", "local"), lean="balanced")
 
 TASKS = {task.name: task for task in (CHAPTERS, CHAPTERS_INSTRUCTED,
                                       CHAPTERDB_CHOOSE, COVER_SEARCH,
@@ -184,7 +187,7 @@ TASKS = {task.name: task for task in (CHAPTERS, CHAPTERS_INSTRUCTED,
                                       FILM_IDENTIFY, AMBIGUOUS_EDITIONS,
                                       COMMENTARY_NAMES, BONUS_CATEGORY,
                                       TRACK_ROLE, COMMENTARY_JUDGE,
-                                      SUBTITLE_ADS)}
+                                      SUBTITLE_ADS, CURATED_LISTS)}
 
 
 def chapters_task(instructions: str) -> Task:

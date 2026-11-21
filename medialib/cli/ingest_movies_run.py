@@ -32,6 +32,7 @@ from medialib.lib import (
     aicommentarynames,
     aieditions,
     aifilmyear,
+    ailistproposals,
     aisubtitleads,
     aitmdb,
     chapterdb,
@@ -1638,6 +1639,7 @@ def _tags_only(program: str, script_dir: str, roots: list, names: list,
     # Every folder's id across all the folders given, since the same film kept
     # twice is as likely to be on two disks as in two corners of one.
     tagged: dict = {}
+    proposal_reasons: list[ailistproposals.Reason] = []
     editions_tally = modelmeter.Tally()
     editions_spans = modelmeter.Spans()
     model_meter = (modelmeter.Spans(), modelmeter.Tally())
@@ -1712,6 +1714,13 @@ def _tags_only(program: str, script_dir: str, roots: list, names: list,
                 log('%d folder(s) in "%s" were left alone - what was asked and '
                     'what came back is in "%s"'
                     % (len(near_misses), root, listing))
+        proposal_reasons.extend(ailistproposals.reasons_from_tagging(
+            unmatched=unmatched,
+            ambiguous=ambiguous or (),
+            near_misses=near_misses or (),
+            skips=skips.skips,
+            root=root,
+        ))
 
     _report_long_names(long_names)
     if editions_tally.requests:
@@ -1762,6 +1771,8 @@ def _tags_only(program: str, script_dir: str, roots: list, names: list,
             log("%d film(s) had no id filled in and were not asked about"
                 % unasked)
 
+    if proposal_reasons:
+        ailistproposals.propose(proposal_reasons, script_dir, log=log)
     if model_meter[1].requests > 1:
         log("Model time over the run (film identify):\n    %s"
             % modelmeter.rate_line(aitmdb.PURPOSE, model_meter[0].seconds,
@@ -2357,14 +2368,20 @@ def _commentary_names(roots: list, names: list, write: bool, lookup,
     of disc)`` and answering with the film's releases or None. ``queued``
     renames each film while the database is asked about the next.
     """
+    proposal_reasons: list[ailistproposals.Reason] = []
     for root, name in zip(roots, names, strict=True):
         log('Phase: naming numbered commentary tracks in "%s"' % root
             + ("" if write else " - DRY RUN, nothing will be renamed"))
         _commentary_names_in(root, name, write, lookup, fragments_file,
-                             script_dir, queued, site=site, usage=usage,
+                             script_dir, queued,
+                             proposal_reasons=proposal_reasons,
+                             site=site, usage=usage,
                              film_tags=film_tags, whisper=whisper,
                              whisper_provider=whisper_provider)
         safety.exit_if_aborted()
+    if proposal_reasons:
+        ailistproposals.propose(proposal_reasons, script_dir,
+                                log=_preview_log(write))
     if usage is not None and usage.requests:
         _report_commentary_names_usage(usage)
     if not write:
@@ -2374,7 +2391,8 @@ def _commentary_names(roots: list, names: list, write: bool, lookup,
 
 def _commentary_names_in(root: str, name: str, write: bool, lookup,
                          fragments_file: str, script_dir: str,
-                         queued: bool = False, *,
+                         queued: bool = False,
+                         proposal_reasons: list | None = None, *,
                          site: dvdcompare.Site | None = None,
                          usage: aicommentarynames.Usage | None = None,
                          film_tags: dict[tuple[str, str], str] | None = None,
@@ -2394,14 +2412,17 @@ def _commentary_names_in(root: str, name: str, write: bool, lookup,
     log = _preview_log(write)
     named: list = []
     refused: list = []
+    refusal_contexts: dict[str, list[str]] = {}
     planned: list = []
 
     def plans():
         films = list(_commentary_films(root))
         for index, (movie, base) in enumerate(films, start=1):
             log(runlog.film_header(index, len(films), root, movie))
+            context: list[str] = []
             plan, why = _plan_commentary_names(
                 movie, base, lookup, fragments_file,
+                context_out=context if proposal_reasons is not None else None,
                 site=site, usage=usage, film_tags=film_tags,
                 whisper=whisper, whisper_provider=whisper_provider)
             relative = "./" + os.path.relpath(movie, root)
@@ -2410,6 +2431,8 @@ def _commentary_names_in(root: str, name: str, write: bool, lookup,
                     log("  left alone: " + why)
                     if why not in _QUIET_REFUSALS:
                         refused.append((relative, why))
+                        if context:
+                            refusal_contexts[relative] = context
                 continue
             yield relative, plan
 
@@ -2439,6 +2462,9 @@ def _commentary_names_in(root: str, name: str, write: bool, lookup,
     _write_commentary_names_list(
         commands.logs_file(script_dir, COMMENTARY_NAMES_LIST % name),
         root, named, refused, write)
+    if proposal_reasons is not None and refused:
+        proposal_reasons.extend(ailistproposals.reasons_from_commentary(
+            refused, refusal_contexts))
 
 
 def _commentary_films(root: str):
@@ -2499,8 +2525,52 @@ def _commentary_questions(root: str, lookup,
             lookup(*film[3:])
 
 
+def _srt_opening_excerpt(srt: str, limit: int = 200) -> str:
+    """Spoken opening lines of an SRT transcript, stripped of cue numbers and
+    timestamps, for list-proposal context."""
+    words: list[str] = []
+    for raw in (srt or "").splitlines():
+        line = raw.strip()
+        if not line or line.isdigit() or "-->" in line:
+            continue
+        words.append(line)
+        if sum(len(part) + 1 for part in words) >= limit:
+            break
+    text = " ".join(words)
+    return text[:limit]
+
+
+def _commentary_refusal_context(releases, kind: str,
+                                transcripts: dict) -> list[str]:
+    """Brief listed commentary descriptions and transcript openings explaining
+    why commentary naming refused a film."""
+    notes: list[str] = []
+    if releases:
+        seen_descriptions: set[str] = set()
+        for release in releases:
+            for disc in getattr(release, "discs", ()):
+                if kind and getattr(disc, "format", "") != kind:
+                    continue
+                for description in getattr(disc, "commentaries", ()):
+                    if description and description not in seen_descriptions:
+                        seen_descriptions.add(description)
+                        notes.append("listed: %s" % description)
+                        if len(notes) >= 3:
+                            break
+                if len(notes) >= 3:
+                    break
+            if len(notes) >= 3:
+                break
+    for track_id, srt in list(transcripts.items())[:3]:
+        excerpt = _srt_opening_excerpt(srt)
+        if excerpt:
+            notes.append("transcript (%s): %s" % (track_id, excerpt))
+    return notes
+
+
 def _plan_commentary_names(movie: str, base: str, lookup,
-                           fragments_file: str, *,
+                           fragments_file: str,
+                           context_out: list[str] | None = None, *,
                            site: dvdcompare.Site | None = None,
                            usage: aicommentarynames.Usage | None = None,
                            film_tags: dict[tuple[str, str], str] | None = None,
@@ -2559,9 +2629,9 @@ def _plan_commentary_names(movie: str, base: str, lookup,
                 year=year, disc_kind=kind, usage=usage, log=log)
         fallback = _fallback
 
+    transcripts = _commentary_transcripts(stem, file_tracks)
     decision = commentarynames.decide(
-        file_tracks, releases, kind,
-        _commentary_transcripts(stem, file_tracks), title,
+        file_tracks, releases, kind, transcripts, title,
         fallback=fallback)
     notes = tuple(note for note in (*site_notes, decision.model_note) if note)
     if decision.names:
@@ -2583,7 +2653,13 @@ def _plan_commentary_names(movie: str, base: str, lookup,
             whisper=whisper, whisper_provider=whisper_provider)
         if intro_plan is not None:
             return intro_plan, ""
+        if context_out is not None and intro_why not in _QUIET_REFUSALS:
+            context_out.extend(_commentary_refusal_context(
+                releases, kind, transcripts))
         return None, intro_why
+    if context_out is not None and decision.reason not in _QUIET_REFUSALS:
+        context_out.extend(_commentary_refusal_context(
+            releases, kind, transcripts))
     return None, reason
 
 
@@ -3761,6 +3837,7 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
             fetching.finish()
     finally:
         run_console.hide()
+    proposal_reasons: list[ailistproposals.Reason] = []
     editions_meter = (os.path.join(state.ram_root, "editionsModel.meter")
                       if getattr(state, "ram_root", "") else "")
     ambiguous: list = []
@@ -3770,12 +3847,22 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
             "OMITTED (-o tagging)")
     else:
         log("Phase: tagging movies with IMDb ids (Plex/Jellyfin naming)")
+        tag_unmatched: list = []
+        tag_near_misses: list = []
         id_meter = (modelmeter.Spans(), modelmeter.Tally())
         tmdblookup.tag_plex_ids(root, log, state.skips,
+                                unmatched=tag_unmatched,
                                 ambiguous=ambiguous,
+                                near_misses=tag_near_misses,
                                 long_names=state.long_names,
                                 model_meter=id_meter,
                                 meter_file=getattr(state, "film_year_meter", ""))
+        proposal_reasons.extend(ailistproposals.reasons_from_tagging(
+            unmatched=tag_unmatched,
+            ambiguous=ambiguous,
+            near_misses=tag_near_misses,
+            root=root,
+        ))
         if id_meter[1].requests > 1:
             log("Model time over the phase (film identify):\n    %s"
                 % modelmeter.rate_line(aitmdb.PURPOSE, id_meter[0].seconds,
@@ -3824,7 +3911,7 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
         log("Phase: naming numbered commentary tracks - OMITTED "
             "(-o commentary)")
     else:
-        _commentary_name_phase(state, root, name, ahead)
+        _commentary_name_phase(state, root, name, ahead, proposal_reasons)
     if "chapters" in omit:
         log("Phase: looking up chapters for films without named ones - "
             "OMITTED (-o chapters)")
@@ -3872,6 +3959,13 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
         rules.cleanup(root)
     log("Phase: checking for folders without a movie")
     check_folders(root)
+
+    skips = getattr(state, "skips", None)
+    if skips is not None and skips.skips:
+        proposal_reasons.extend(
+            ailistproposals.reasons_from_skips(skips.skips, root))
+    if proposal_reasons:
+        ailistproposals.propose(proposal_reasons, state.script_dir, log=log)
 
     safety.print_run_footer()
     log("Ingest complete: " + root)
@@ -4141,7 +4235,8 @@ def _chapter_questions(root: str, fetch) -> None:
             return
 
 
-def _commentary_name_phase(state, root: str, name: str, ahead: dict) -> None:
+def _commentary_name_phase(state, root: str, name: str, ahead: dict,
+                           proposal_reasons: list | None = None) -> None:
     """The full ingest's commentary naming: -n's, carried out rather than a
     dry run, asked of what the research learnt while the run did everything
     else."""
@@ -4154,6 +4249,7 @@ def _commentary_name_phase(state, root: str, name: str, ahead: dict) -> None:
     _say_what_was_said(ahead)
     _commentary_names_in(root, name, True, ahead["names"],
                          state.fragments_file, state.script_dir,
+                         proposal_reasons=proposal_reasons,
                          site=ahead.get("site"),
                          usage=getattr(state, "commentary_names_usage", None),
                          film_tags=ahead.get("film_tags"),
