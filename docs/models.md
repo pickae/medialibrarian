@@ -9,19 +9,21 @@ classifying what kind of audio a recording is before an online cover search
 folder images, searching for a cover where nothing else found one
 (`concat-audio`, `convert-audio`), a book's chapter titles where its file
 names only number them, or a joined book's empty metadata tags
-(`concat-audio`), reading picture subtitles into text (`ingest-movies`), the
-MusicBrainz release of an album beets skipped (`ingest-music`), classifying
-recurring filename fragment candidates (`find-fragment-candidates`),
-web-checked gap notes for numbered and dated runs (`find-gaps`), report-only
-match suggestions for unmatched or ambiguous Letterboxd entries
-(`plex-letterboxd-sync`), an e-book's language where its metadata and text
-disagree or neither gives a confident answer (`read-library`), classifying
-e-book images as book content versus advertising (`ingest-books -d`), an
-advisory likely cause and next step for unexplained errors left in a run's
-error log (`error-triage`, controlled by `errorTriageLlm`), checking whether
-a small comic page has real content worth keeping (`convert-comics`), or
-whether a borderline PDF is a comic book (`convert-comics`,
-`content-census`). Each of those is a **task**, and each task picks from the
+(`concat-audio`), reading picture subtitles into text or looking up the
+release year of an undated film folder before TMDb identification
+(`ingest-movies`), the MusicBrainz release of an album beets skipped
+(`ingest-music`), classifying recurring filename fragment candidates
+(`find-fragment-candidates`), web-checked gap notes for numbered and dated
+runs (`find-gaps`), report-only match suggestions for unmatched or ambiguous
+Letterboxd entries (`plex-letterboxd-sync`), an e-book's language where its
+metadata and text disagree or neither gives a confident answer
+(`read-library`), classifying e-book images as book content versus
+advertising (`ingest-books -d`), an advisory likely cause and next step for
+unexplained errors left in a run's error log (`error-triage`, controlled by
+`errorTriageLlm`), checking whether a small comic page has real content
+worth keeping (`convert-comics`), or whether a borderline PDF is a comic book
+(`convert-comics`, `content-census`). Each of those is a **task**, and each
+task picks from the
 models you have, by what it needs and what it would rather have.
 
 ## Your models
@@ -124,6 +126,7 @@ Run with `-v` to see which model each task took, and what it was taken for.
 | `comic-pdf-judge` | vision | - | light |
 | `book-tags` | web | reasoning | balanced |
 | `audio-content` | - | - | light |
+| `film-year` | web | reasoning | balanced |
 
 `error-triage` prefers a local model because error logs carry library paths,
 and is strictly advisory: it never retries commands, deletes files or changes
@@ -142,10 +145,10 @@ A task that can do without what it prefers still runs on a model that lacks
 it: chapters with instructions are written without web search when no model
 can search. A task that needs something no model has is skipped (the cover
 search, `convert-audio`'s per-track cover search whenever no vision model is
-available for `cover-look`, the music release lookup, the comic empty-page
-check, and `book-image-check`, which falls back to the fixed junk-name
-substrings) or refused before any work (the chapter commands and
-`convert-video -p auto`), saying which trait was missing.
+available for `cover-look`, the undated film-year lookup, the music release
+lookup, the comic empty-page check, and `book-image-check`, which falls back
+to the fixed junk-name substrings) or refused before any work (the chapter
+commands and `convert-video -p auto`), saying which trait was missing.
 
 Overriding it:
 

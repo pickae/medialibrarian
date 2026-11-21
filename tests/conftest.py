@@ -326,6 +326,9 @@ def private_workspace(tmp_path_factory, monkeypatch):
     monkeypatch.setenv("coverLookLlm", "off")
     # Nor is a language model asked for audiobook metadata tags.
     monkeypatch.setenv("bookTagsLlm", "off")
+    # Nor is a language model asked for an undated film folder's release year:
+    # a CLI case over undated folders would otherwise reach a configured model.
+    monkeypatch.setenv("undatedYearLlm", "off")
     # Nor is a language model asked to find ad reads in RSS podcasts.
     monkeypatch.setenv("podcastAdsLlm", "off")
     monkeypatch.setenv("podcastAdsCut", "off")
