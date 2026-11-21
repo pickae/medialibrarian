@@ -1744,8 +1744,13 @@ def subtitle_roles(tracks: list) -> dict:
         reference = max((other.cues for other in subtitles
                          if other is not track
                          and other.subtitle_role != "commentary"), default=0)
+        flagged = (track.forced == "true"
+                   or track.hearing_impaired == "true"
+                   or track.commentary == "true")
         roles[track.id] = subtitletracks.refine_role(
-            track.subtitle_role, track.cues, reference)
+            track.subtitle_role, track.cues, reference,
+            name="" if track.name == "null" else track.name,
+            language=track.language, flagged=flagged)
     return roles
 
 
@@ -1761,18 +1766,24 @@ def subtitle_role_edits(tracks: list, texts=None) -> dict:
     """The subtitle tracks whose role the file says wrong, as {track id:
     (role it says, role it is)}: the role :func:`subtitle_roles` measures,
     and for a text track the ``texts`` map holds - {track id: its cues' text}
-    - the SDH its text reads as. A commentary is never changed, nor changed
-    into."""
+    - the SDH (or borderline role) its text reads as. A commentary is never
+    changed, nor changed into."""
     texts = texts or {}
-    roles = subtitle_roles(tracks)
+    subtitles = [track for track in tracks if track.is_subtitle]
     edits = {}
-    for track in tracks:
-        if not track.is_subtitle:
-            continue
-        said, measured = track.subtitle_role, roles[track.id]
-        if measured == "full" and track.id in texts:
-            measured = subtitletracks.refine_role(measured,
-                                                  texts=texts[track.id])
+    for track in subtitles:
+        reference = max((other.cues for other in subtitles
+                         if other is not track
+                         and other.subtitle_role != "commentary"), default=0)
+        flagged = (track.forced == "true"
+                   or track.hearing_impaired == "true"
+                   or track.commentary == "true")
+        said = track.subtitle_role
+        measured = subtitletracks.refine_role(
+            said, track.cues, reference,
+            texts=texts.get(track.id),
+            name="" if track.name == "null" else track.name,
+            language=track.language, flagged=flagged)
         if said != measured and "commentary" not in (said, measured):
             edits[track.id] = (said, measured)
     return edits
@@ -1953,7 +1964,10 @@ def gather_downloaded_subtitles(base: str, tracks: list, say=None) -> list:
                     or not _size_of(srt):
                 continue
             role = named if named != "full" else subtitletracks.refine_role(
-                "full", texts=subtitletracks.cue_texts(srt))
+                "full", texts=subtitletracks.cue_texts(srt),
+                language=row.code2)
+            if role not in OCR_ROLES:
+                role = "full"
             if any(_is_text_subtitle_of(track, row.code2, role)
                    for track in tracks):
                 say("  %s%s subtitle already a text track in the file, not "

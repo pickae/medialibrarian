@@ -69,7 +69,9 @@ A video that has chapters keeps them.
 
 What is said in the film is read from its first text subtitle that is its
 dialogue: not a commentary's, not one for the deaf and hard of hearing, not the
-forced lines - by the track's flags, or by its name where it has none. Only a
+forced lines - by the track's flags, or by its name where it has none (with the
+light `track-role` [language model](../models.md) consulted only on unrecognized
+descriptive titles or borderline cue samples, unless `trackRoleLlm=off`). Only a
 video with no such subtitle is transcribed with whisper, from its first
 soundtrack that is not a commentary, an audio description, an isolated score or
 music and effects; that transcript goes into the output too, as a subtitle named

@@ -32,6 +32,7 @@ from medialib.lib import (
     aieditions,
     aifilmyear,
     aitmdb,
+    audiotracks,
     chapterdb,
     cleannamesindividually,
     clioptions,
@@ -3139,10 +3140,28 @@ def _listen_for_commentaries(state, movie: str, audio: list) -> list:
             found.append(track.id)
             log("  A commentary: %s - %s" % (said, verdict.why))
         elif verdict.kind == commentarydetection.UNSURE:
-            log("  Maybe a commentary, left as it is: %s - %s"
-                % (said, verdict.why))
-            state.unsure_commentaries.append(
-                "%s: %s - %s" % (movie, said, verdict.why))
+            refined = audiotracks.refine_audio_role(
+                "main",
+                name=track.name,
+                language=measures[track.id].language,
+                transcript=measures[track.id].text,
+                main_transcript=measures[audio[0].id].text,
+                speech=measures[track.id].speech,
+                main_speech=measures[audio[0].id].speech,
+                unsure=True,
+            )
+            if refined == "commentary":
+                found.append(track.id)
+                log("  A commentary (model-confirmed): %s - %s"
+                    % (said, verdict.why))
+            elif refined != "main":
+                log("  Classified as %s, left as it is: %s - %s"
+                    % (refined, said, verdict.why))
+            else:
+                log("  Maybe a commentary, left as it is: %s - %s"
+                    % (said, verdict.why))
+                state.unsure_commentaries.append(
+                    "%s: %s - %s" % (movie, said, verdict.why))
         else:
             log("  Not a commentary: %s - %s" % (said, verdict.why))
     return found

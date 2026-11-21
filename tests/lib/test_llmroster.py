@@ -72,6 +72,8 @@ class TestTheLadder:
             "small-local", "big-local", "claude"]
         assert _names(_roster(tmp_path).ladder(llmroster.BOOK_IMAGE_CHECK)) == [
             "small-local", "big-local", "claude"]
+        assert _names(_roster(tmp_path).ladder(llmroster.TRACK_ROLE)) == [
+            "small-local", "big-local", "claude"]
 
     def test_bonus_category_leans_light_with_no_required_traits(self, tmp_path):
         assert llmroster.BONUS_CATEGORY.requires == ()

@@ -287,6 +287,13 @@ SETTINGS: tuple[Setting, ...] = (
             "title and year, and any disc extras listing already cached from "
             "dvdcompare.net: `on` or `off`",
             ("ingest-movies",), "on"),
+    Setting("trackRoleLlm", "Whether a subtitle or audio track whose role the "
+            "flags, names and line or speech counts leave borderline or "
+            "unmeasurable is handed to a light language model (the "
+            "`track-role` task, see docs/models.md): sampled subtitle cues or "
+            "a short audio transcript, with the track's title, language and "
+            "flags, are sent to the model: `on` or `off`",
+            ("convert-video", "ingest-movies"), "on"),
     Setting("musicSearchLlm", "Whether an album beets skipped is handed to a "
             "language model to look up its MusicBrainz release ID on the web "
             "(the `music-search` task, see docs/models.md): it is told the "

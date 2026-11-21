@@ -56,8 +56,8 @@ __all__ = ["MODELS_VARIABLE", "LEAN_VARIABLE", "LEANS", "Task", "TASKS", "CHAPTE
            "BOOK_IMAGE_CHECK", "ERROR_TRIAGE", "COMIC_PAGE_CHECK",
            "COMIC_PDF_JUDGE", "BOOK_TAGS", "AUDIO_CONTENT", "FILM_YEAR",
            "FILM_IDENTIFY", "AMBIGUOUS_EDITIONS", "COMMENTARY_NAMES",
-           "BONUS_CATEGORY", "Roster", "RosterError", "load", "require",
-           "optional", "chapters_task"]
+           "BONUS_CATEGORY", "TRACK_ROLE", "Roster", "RosterError", "load",
+           "require", "optional", "chapters_task"]
 
 MODELS_VARIABLE = "llmModels"
 LEAN_VARIABLE = "llmLean"
@@ -158,6 +158,8 @@ COMMENTARY_NAMES = Task(
     prefers=("reasoning", "web"))
 BONUS_CATEGORY = Task("bonus-category", "sort an unmatched extra into its "
                       "Plex bonus folder", lean="light")
+TRACK_ROLE = Task("track-role", "classify a subtitle or audio track's role "
+                  "where tags and counts are borderline", lean="light")
 
 TASKS = {task.name: task for task in (CHAPTERS, CHAPTERS_INSTRUCTED,
                                       COVER_SEARCH, COVER_LOOK, CONTENTS_SEARCH,
@@ -168,7 +170,8 @@ TASKS = {task.name: task for task in (CHAPTERS, CHAPTERS_INSTRUCTED,
                                       COMIC_PAGE_CHECK, COMIC_PDF_JUDGE,
                                       BOOK_TAGS, AUDIO_CONTENT, FILM_YEAR,
                                       FILM_IDENTIFY, AMBIGUOUS_EDITIONS,
-                                      COMMENTARY_NAMES, BONUS_CATEGORY)}
+                                      COMMENTARY_NAMES, BONUS_CATEGORY,
+                                      TRACK_ROLE)}
 
 
 def chapters_task(instructions: str) -> Task:
