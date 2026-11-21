@@ -14,37 +14,6 @@ live in **the medialib data directory**: `~/.local/share/medialib` (or
 `pip install -e .`, or wherever the environment variable `CLI_SCRIPT_DIR`
 points.
 
-## Built to use the whole machine
-
-**These commands are written for an enthusiast desktop, and try to keep all of
-it busy** — a many-core CPU, a large NVIDIA GPU, plenty of RAM, fast disks and a
-network connection — rather than leaving most of it idle while one part works:
-
-- **GPU first, CPU as the fallback.** Where a job has a GPU road, it takes it:
-  AVIF pages and images go to the card through av1gpu, video can encode on
-  NVENC and upscale on TensorRT, whisper transcribes on CUDA. Without the GPU,
-  or for the pieces it declines, the same job runs on the CPU and still
-  finishes.
-- **Different resources at the same time.** Work that leans on different parts
-  of the machine is overlapped instead of queued: GPU transcription beside CPU
-  transcodes, remuxes to disk while the next film is still encoding, slow
-  network lookups on a background thread while the local work carries on (see
-  how [`ingest-movies`](docs/commands/ingest-movies.md) does it).
-- **Parallel where it pays.** CPU-bound work is spread over the cores in jobs
-  sized to them, and kept narrower where it would only fight a GPU job or
-  another encoder for the same cores.
-- **RAM before disk.** Heavy intermediate work is kept in RAM (`/dev/shm` /
-  tmpfs) wherever possible, so only final outputs are written back to disk.
-  Each run gets a scratch directory of its own in there, so several can run at
-  once without sharing one.
-
-A smaller machine runs them too — just with the CPU roads and less overlap.
-
-> **Platform:** these target **Linux**. **macOS** is untested (see
-> [Running on a Mac](docs/requirements.md#running-on-a-mac)). On a Windows
-> machine **WSL2** is the way to run them; native Windows is experimental, as
-> the commands that drive the media tools expect a POSIX host.
-
 ## At a glance
 
 Each command has a page of its own under [`docs/commands/`](docs/commands/), laid
@@ -109,6 +78,37 @@ so any argument list but those two prints its usage and fails.
 Every option has both forms: `-j 8` and `--jobs 8` (or `--jobs=8`) are the same
 option. Abbreviations are not accepted — `--job` is not `--jobs` — so a new
 option can never change what a command you already type means.
+
+## Built to use the whole machine
+
+**These commands are written for an enthusiast desktop, and try to keep all of
+it busy** — a many-core CPU, a large NVIDIA GPU, plenty of RAM, fast disks and a
+network connection — rather than leaving most of it idle while one part works:
+
+- **GPU first, CPU as the fallback.** Where a job has a GPU road, it takes it:
+  AVIF pages and images go to the card through av1gpu, video can encode on
+  NVENC and upscale on TensorRT, whisper transcribes on CUDA. Without the GPU,
+  or for the pieces it declines, the same job runs on the CPU and still
+  finishes.
+- **Different resources at the same time.** Work that leans on different parts
+  of the machine is overlapped instead of queued: GPU transcription beside CPU
+  transcodes, remuxes to disk while the next film is still encoding, slow
+  network lookups on a background thread while the local work carries on (see
+  how [`ingest-movies`](docs/commands/ingest-movies.md) does it).
+- **Parallel where it pays.** CPU-bound work is spread over the cores in jobs
+  sized to them, and kept narrower where it would only fight a GPU job or
+  another encoder for the same cores.
+- **RAM before disk.** Heavy intermediate work is kept in RAM (`/dev/shm` /
+  tmpfs) wherever possible, so only final outputs are written back to disk.
+  Each run gets a scratch directory of its own in there, so several can run at
+  once without sharing one.
+
+A smaller machine runs them too — just with the CPU roads and less overlap.
+
+> **Platform:** these target **Linux**. **macOS** is untested (see
+> [Running on a Mac](docs/requirements.md#running-on-a-mac)). On a Windows
+> machine **WSL2** is the way to run them; native Windows is experimental, as
+> the commands that drive the media tools expect a POSIX host.
 
 ## Requirements
 
