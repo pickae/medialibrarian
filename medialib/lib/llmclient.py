@@ -240,6 +240,18 @@ class Llm:
         if self.jobs > 0:
             self._slots = threading.BoundedSemaphore(self.jobs)
 
+    # Pickled with the run state a worker is started from: the copy gets
+    # request slots of its own, as many as this model has.
+    def __getstate__(self) -> dict:
+        state = dict(self.__dict__)
+        state["_slots"] = None
+        return state
+
+    def __setstate__(self, state: dict) -> None:
+        self.__dict__.update(state)
+        if self.jobs > 0:
+            self._slots = threading.BoundedSemaphore(self.jobs)
+
     def describe(self) -> str:
         """The model as a run reports it: which, and where, and how hard it
         thinks when that was raised."""

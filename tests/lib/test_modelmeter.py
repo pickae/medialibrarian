@@ -5,6 +5,8 @@ once, a pause between them not at all, and the line says the tokens written,
 their pace and, where a server said, the tokens read.
 """
 
+import pickle
+
 import pytest
 
 from medialib.lib import modelmeter
@@ -87,3 +89,24 @@ class TestTheRecord:
         path = tmp_path / "meter"
         path.write_text('{"spans": [[0, 1]], "tally": {"requests": 1}}\nnot json\n')
         assert modelmeter.gathered(str(path))[1].requests == 0
+
+
+class TestPickled:
+    """Handed to a worker process as part of the run it is started from."""
+
+    def test_a_tally_keeps_its_counts_and_gets_a_lock_of_its_own(self):
+        tally = modelmeter.Tally()
+        tally.add(3.0, 30, read=7)
+        copy = pickle.loads(pickle.dumps(tally))
+        assert copy == tally
+        assert copy._lock is not tally._lock
+        copy.add(1.0, None)
+        assert (copy.requests, tally.requests) == (2, 1)
+
+    def test_spans_keep_their_stretches_and_get_a_lock_of_their_own(self):
+        spans = modelmeter.Spans()
+        spans.add(0.0, 4.0)
+        copy = pickle.loads(pickle.dumps(spans))
+        assert copy.all() == [(0.0, 4.0)]
+        copy.add(10.0, 11.0)
+        assert (copy.seconds, spans.seconds) == (5.0, 4.0)

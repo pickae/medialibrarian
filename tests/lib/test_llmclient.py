@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import pickle
 import subprocess
 import sys
 import threading
@@ -546,3 +547,15 @@ class TestSeeingPictures:
         assert llmclient.json_strings("not json", 1) is None
         assert llmclient._strip_thinking("Hmm.</think>- Oui ?\n- Non.") \
             == "- Oui ?\n- Non."
+
+
+def test_a_pickled_model_gets_request_slots_of_its_own():
+    """Handed to a worker process as part of the run it is started from."""
+    llm = llmclient.Llm(api="openai", url="http://127.0.0.1:1", model="m",
+                        jobs=2)
+    copy = pickle.loads(pickle.dumps(llm))
+    assert copy == llm
+    assert copy._slots is not None and copy._slots is not llm._slots
+    assert copy._slots.acquire(blocking=False)
+    assert copy._slots.acquire(blocking=False)
+    assert not copy._slots.acquire(blocking=False)

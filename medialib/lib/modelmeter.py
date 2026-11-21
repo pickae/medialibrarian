@@ -65,6 +65,18 @@ class Tally:
             self.counted_seconds += taken[4]
             self.read += taken[5]
 
+    # Pickled with the run state a worker is started from: the counts go,
+    # and the copy gets a lock of its own.
+    def __getstate__(self) -> dict:
+        with self._lock:
+            state = dict(self.__dict__)
+        del state["_lock"]
+        return state
+
+    def __setstate__(self, state: dict) -> None:
+        self.__dict__.update(state)
+        self._lock = threading.Lock()
+
 
 class Spans:
     """The stretches of time something was at work, as (start, end) on the
@@ -92,6 +104,13 @@ class Spans:
             taken = list(other._spans)
         with self._lock:
             self._spans += taken
+
+    def __getstate__(self) -> dict:
+        return {"_spans": self.all()}
+
+    def __setstate__(self, state: dict) -> None:
+        self._spans = list(state["_spans"])
+        self._lock = threading.Lock()
 
     def all(self) -> list[tuple[float, float]]:
         with self._lock:
