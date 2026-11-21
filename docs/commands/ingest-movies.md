@@ -649,7 +649,7 @@ data directory:
 | List | What is in it | Written |
 |---|---|---|
 | `ingest-movies-unmatched-<folder>.tsv` | films TMDb could not name — fill in their ids and feed the file back with `-i` | always |
-| `ingest-movies-ambiguous-<folder>.txt` | folders holding more than one film, which no id can settle — give the files names that say which release each one is | always |
+| `ingest-movies-ambiguous-<folder>.txt` | folders holding more than one film, which no id can settle — give the files names that say which release each one is (with model suggestions appended when `ambiguousEditionsLlm` is on and a web-capable model is configured) | always |
 | `ingest-movies-othertitles-<folder>.txt` | folders holding one film under several of its titles ([above](#folders-whose-names-cannot-agree)) | always |
 | `ingest-movies-conflicts-<folder>.txt` | renames held back because the name was already taken — most often by the same film, tagged before | always, `-i` too |
 | `ingest-movies-renames-<folder>.txt` | every rename the run would make | dry run only |
@@ -658,6 +658,19 @@ data directory:
 **A list an earlier run left is not replaced without asking**, for
 `-O subtitles`, `-O names` and `-O commentary` too: see
 [overwriting a report](../output.md#overwriting-a-report).
+
+**Model suggestions for ambiguous folders and differing cuts.** When a
+web-capable language model is set up (the `ambiguous-editions` task in
+[language models](../models.md)), tagging asks it about each ambiguous folder's
+stray video files — whether each is another edition of the same film (with a
+suggested `{edition-...}` name), a sequel, another film, an extra, or `unsure`
+— and the Plex comparison asks it about cuts differing by more than a minute
+without distinct edition tags, using the film's title, year, TMDb/IMDb id, file
+names and runtimes to suggest which known cut each runtime matches. Every
+decision is printed in the run's output and written into
+`ingest-movies-ambiguous-<folder>.txt` as a suggestion only; files are never
+renamed or moved on the model's word. Set `ambiguousEditionsLlm=off` in
+[settings](../settings.md) to switch it off.
 
 A folder is on the unmatched list or the ambiguous one, never both.
 

@@ -260,6 +260,15 @@ SETTINGS: tuple[Setting, ...] = (
             "suggestion in the unmatched list; `suggest` writes suggestions "
             "only; `off` never asks the model",
             ("ingest-movies",), "on"),
+    Setting("ambiguousEditionsLlm", "Whether ambiguous film folders and cuts "
+            "differing by more than a minute are handed to a language model "
+            "for suggestions (the `ambiguous-editions` task, see "
+            "docs/models.md): it is told the folder and file names, the film's "
+            "title, year, TMDb/IMDb id and runtimes. Proposals are written as "
+            "suggestions only and never rename files automatically. Only a "
+            "model that can search is asked - Claude, or one behind "
+            "`llmHarness`: `on` or `off`",
+            ("ingest-movies",), "on"),
     Setting("musicSearchLlm", "Whether an album beets skipped is handed to a "
             "language model to look up its MusicBrainz release ID on the web "
             "(the `music-search` task, see docs/models.md): it is told the "

@@ -27,6 +27,7 @@ from medialib.cli import ingest_movies_lanes as lanes
 from medialib.cli import ingest_movies_plex as plexphase
 from medialib.cli.ingest_movies import log
 from medialib.lib import (
+    aieditions,
     aifilmyear,
     aitmdb,
     chapterdb,
@@ -1595,6 +1596,8 @@ def _tags_only(program: str, script_dir: str, roots: list, names: list,
     # Every folder's id across all the folders given, since the same film kept
     # twice is as likely to be on two disks as in two corners of one.
     tagged: dict = {}
+    editions_tally = modelmeter.Tally()
+    editions_spans = modelmeter.Spans()
     model_meter = (modelmeter.Spans(), modelmeter.Tally())
     for root, name in zip(roots, names, strict=True):
         if len(roots) > 1:
@@ -1642,8 +1645,12 @@ def _tags_only(program: str, script_dir: str, roots: list, names: list,
                         'in "%s" to fill in by hand'
                         % (len(unmatched), root, listing))
         if ambiguous:
+            suggestions = aieditions.suggest_for_ambiguous(
+                ambiguous, log=log, tally=editions_tally,
+                spans=editions_spans)
             listing = commands.logs_file(script_dir, AMBIGUOUS_LIST % name)
-            if tmdbworklists.write_ambiguous_list(listing, ambiguous, root, log):
+            if tmdbworklists.write_ambiguous_list(
+                    listing, ambiguous, root, log, suggestions=suggestions):
                 log('%d folder(s) in "%s" hold more than one film - listed in '
                     '"%s"' % (len(ambiguous), root, listing))
         if planned:
@@ -1665,6 +1672,10 @@ def _tags_only(program: str, script_dir: str, roots: list, names: list,
                     % (len(near_misses), root, listing))
 
     _report_long_names(long_names)
+    if editions_tally.requests:
+        log("Ambiguous-editions model over the run: "
+            + modelmeter.rate_line("all", editions_spans.seconds,
+                                   editions_tally))
     duplicates = tmdblookup.duplicate_films(tagged)
     if duplicates:
         listing = commands.logs_file(script_dir, DUPLICATES_LIST)
@@ -2153,7 +2164,10 @@ def _chapter_extra(state, root: str, llm, movie: str, whisper: bool) -> str:
         shutil.rmtree(scratch, ignore_errors=True)
 
 
-def _plex_phase(root: str, state=None) -> None:
+def _plex_phase(root: str, state=None, *,
+                cut_entries: list | None = None,
+                cut_suggestions: dict[str, list[str]] | None = None,
+                meter_file: str = "") -> None:
     """The films as this run leaves them, held up against the Plex library's
     copies of them - last, once the names, tracks and chapters are final, and
     each said with what it carried over from its copy."""
@@ -2170,7 +2184,10 @@ def _plex_phase(root: str, state=None) -> None:
                             keeps_for=state.carry_keeps if state else None,
                             carried=carry.plans if carry is not None else None,
                             keep_parts=getattr(state, "keep_parts",
-                                               frozenset()))
+                                               frozenset()),
+                            cut_entries=cut_entries,
+                            cut_suggestions=cut_suggestions,
+                            meter_file=meter_file)
 
 
 # How each verdict of the chapter lookup is counted in its closing line.
@@ -3237,6 +3254,10 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
             fetching.finish()
     finally:
         run_console.hide()
+    editions_meter = (os.path.join(state.ram_root, "editionsModel.meter")
+                      if getattr(state, "ram_root", "") else "")
+    ambiguous: list = []
+    ambiguous_suggestions: dict[str, list[str]] = {}
     if "tagging" in omit:
         log("Phase: tagging movies with IMDb ids (Plex/Jellyfin naming) - "
             "OMITTED (-o tagging)")
@@ -3244,6 +3265,7 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
         log("Phase: tagging movies with IMDb ids (Plex/Jellyfin naming)")
         id_meter = (modelmeter.Spans(), modelmeter.Tally())
         tmdblookup.tag_plex_ids(root, log, state.skips,
+                                ambiguous=ambiguous,
                                 long_names=state.long_names,
                                 model_meter=id_meter,
                                 meter_file=getattr(state, "film_year_meter", ""))
@@ -3251,6 +3273,9 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
             log("Model time over the phase (film identify):\n    %s"
                 % modelmeter.rate_line(aitmdb.PURPOSE, id_meter[0].seconds,
                                        id_meter[1]))
+        if ambiguous:
+            ambiguous_suggestions = aieditions.suggest_for_ambiguous(
+                ambiguous, log=log, meter_file=editions_meter)
 
     # The tagging gave every folder its id, and a mangled name that the first
     # pass could not anchor on a tag can now be conformed. The transcription is
@@ -3298,7 +3323,31 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
             "OMITTED (-o chapters)")
     else:
         _chapter_phase(root, ahead)
-    _plex_phase(root, state)
+    cut_entries: list = []
+    cut_suggestions: dict[str, list[str]] = {}
+    _plex_phase(root, state, cut_entries=cut_entries,
+                cut_suggestions=cut_suggestions, meter_file=editions_meter)
+    all_suggestions: dict[str, list[str]] = {
+        folder: list(lines) for folder, lines in ambiguous_suggestions.items()
+    }
+    for folder, lines in cut_suggestions.items():
+        all_suggestions.setdefault(folder, []).extend(lines)
+    if all_suggestions:
+        seen_folders = {entry[0] for entry in ambiguous}
+        report_entries = list(ambiguous) + [
+            entry for entry in cut_entries if entry[0] not in seen_folders
+        ]
+        listing = commands.logs_file(state.script_dir, AMBIGUOUS_LIST % name)
+        if tmdbworklists.write_ambiguous_list(
+                listing, report_entries, root, log,
+                suggestions=all_suggestions):
+            log('Ambiguous folder and edition suggestions written to "%s"'
+                % listing)
+    if editions_meter:
+        spans, tally = modelmeter.gathered(editions_meter)
+        if tally.requests:
+            log("Ambiguous-editions model over the run: "
+                + modelmeter.rate_line("all", spans.seconds, tally))
 
     # Last of all, once each film is the file it will stay: its converted copy
     # carries its tracks, names and chapters as they are now, and is written

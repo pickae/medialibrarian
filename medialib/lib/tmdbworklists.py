@@ -8,7 +8,7 @@ folder name and its id separated by a tab.
 
 import os
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 
 from medialib.lib import filmfolders, plexnames, titlematch
 
@@ -126,12 +126,17 @@ def _write_lines(path: str, lines: list,
 
 
 def write_ambiguous_list(path: str, folders, root: str,
-                         log: Callable[[str], None] | None = None) -> bool:
+                         log: Callable[[str], None] | None = None,
+                         suggestions: Mapping[str, Sequence[str]] | None = None
+                         ) -> bool:
     """The folders holding more than one film, as a report to read and act on.
 
     Not a file to feed back: what to do about two films in one folder is to
     give the files names that say which release each one is, and only someone
     who knows them can. The report says where they are and what is in them.
+    ``suggestions``, when given, maps a folder path to model-generated
+    suggestion lines written below its files for a person to review; nothing
+    is renamed on them automatically.
     """
     lines = [
         _ID_COMMENT + " Folders the tagging left alone, and why.",
@@ -167,6 +172,10 @@ def write_ambiguous_list(path: str, folders, root: str,
         _ID_COMMENT + " which is a reading it does not have yet; two that read",
         _ID_COMMENT + " differently are two different films.",
         _ID_COMMENT + "",
+        _ID_COMMENT + " Any 'model suggestion' lines below a folder are",
+        _ID_COMMENT + " proposals from the language model only; nothing was",
+        _ID_COMMENT + " renamed or moved on them.",
+        _ID_COMMENT + "",
         _ID_COMMENT + " Rename the files and run the tagging again.",
         "",
     ]
@@ -175,6 +184,8 @@ def write_ambiguous_list(path: str, folders, root: str,
         lines += _how_close(
             filmfolders.read_folder(os.path.basename(folder))[0] or folder,
             movies)
+        for suggestion in (suggestions or {}).get(folder, ()):
+            lines.append("    " + suggestion)
         lines.append("")
     return _write_lines(path, lines, log)
 

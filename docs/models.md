@@ -10,20 +10,21 @@ folder images, searching for a cover where nothing else found one
 (`concat-audio`, `convert-audio`), a book's chapter titles where its file
 names only number them, or a joined book's empty metadata tags
 (`concat-audio`), reading picture subtitles into text, looking up the release
-year of an undated film folder before TMDb identification, or picking which
-offered film matches an unmatched folder (`ingest-movies`), the MusicBrainz
-release of an album beets skipped (`ingest-music`), classifying recurring
-filename fragment candidates (`find-fragment-candidates`), web-checked gap
-notes for numbered and dated runs (`find-gaps`), report-only match
-suggestions for unmatched or ambiguous Letterboxd entries
-(`plex-letterboxd-sync`), an e-book's language where its metadata and text
-disagree or neither gives a confident answer (`read-library`), classifying
-e-book images as book content versus advertising (`ingest-books -d`), an
-advisory likely cause and next step for unexplained errors left in a run's
-error log (`error-triage`, controlled by `errorTriageLlm`), checking whether
-a small comic page has real content worth keeping (`convert-comics`), or
-whether a borderline PDF is a comic book (`convert-comics`,
-`content-census`). Each of those is a **task**, and each task picks from the
+year of an undated film folder before TMDb identification, picking which
+offered film matches an unmatched folder, or suggesting fixes for ambiguous
+movie folders and differing cuts (`ingest-movies`), the MusicBrainz release
+of an album beets skipped (`ingest-music`), classifying recurring filename
+fragment candidates (`find-fragment-candidates`), web-checked gap notes for
+numbered and dated runs (`find-gaps`), report-only match suggestions for
+unmatched or ambiguous Letterboxd entries (`plex-letterboxd-sync`), an
+e-book's language where its metadata and text disagree or neither gives a
+confident answer (`read-library`), classifying e-book images as book content
+versus advertising (`ingest-books -d`), an advisory likely cause and next step
+for unexplained errors left in a run's error log (`error-triage`, controlled
+by `errorTriageLlm`), checking whether a small comic page has real content
+worth keeping (`convert-comics`), or whether a borderline PDF is a comic book
+(`convert-comics`, `content-census`). Each of those is a **task**, and each
+task picks from the
 models you have, by what it needs and what it would rather have.
 
 ## Your models
@@ -128,6 +129,7 @@ Run with `-v` to see which model each task took, and what it was taken for.
 | `audio-content` | - | - | light |
 | `film-year` | web | reasoning | balanced |
 | `film-identify` | - | web, reasoning | precise |
+| `ambiguous-editions` | web | reasoning | balanced |
 
 `error-triage` prefers a local model because error logs carry library paths,
 and is strictly advisory: it never retries commands, deletes files or changes
