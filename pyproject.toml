@@ -4,7 +4,10 @@
 # fetch that one. The package, the data folder under ~/.local/share and the
 # command names are unaffected - only the name a wheel is published under.
 name = "medialibrarian"
-version = "0.0.0"
+# The version is the latest git tag (v0.1.0 -> 0.1.0), read by setuptools-scm at
+# build time, so a release is a tag on main and nothing in this file changes.
+# Between tags it is the next patch as a dev release, e.g. 0.1.1.dev3+g689b328.
+dynamic = ["version"]
 description = "Twenty-one commands for building and keeping a media library: transcoding video, audio, images and comics, ingesting films, music and books, cleaning names, a census of what is in it, and syncing what was watched"
 readme = "README.md"
 # 3.11.4 and not 3.11: the archive extraction asks tarfile.extractall for the
@@ -53,8 +56,13 @@ transcribe-audio = "medialib.cli.transcribe_audio:cli"
 ytdlp = "medialib.cli.ytdlp:cli"
 
 [build-system]
-requires = ["setuptools>=77"]
+requires = ["setuptools>=77", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
+
+# fallback_version for a copy with no git history (a source zip), where there is
+# no tag to read.
+[tool.setuptools_scm]
+fallback_version = "0.0.0"
 
 [tool.setuptools.packages.find]
 include = ["medialib*"]
