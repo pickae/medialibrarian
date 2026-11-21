@@ -1517,7 +1517,7 @@ def _missing_tools(program: str, image_format: str, reverse: bool,
     changes what is done, is settled and warned about instead."""
     tools = [imagemagick.CONVERT_SPEC] + (
         [imagemagick.IDENTIFY_SPEC] if identify else [])
-    skip_preflight = bool(os.environ.get("SKIP_TOOL_PREFLIGHT", ""))
+    skip_preflight = tooldeps.preflight_skipped()
     if tooldeps.require_tools(program, tools,
                               skip_preflight=skip_preflight):
         return True
@@ -1601,7 +1601,7 @@ def _calibrate(declaration, program, result, input_dir, output_dir) -> int:
         return 1
     if safety.require_separate_output(input_dir, output_dir):
         return 1
-    skip_preflight = bool(os.environ.get("SKIP_TOOL_PREFLIGHT", ""))
+    skip_preflight = tooldeps.preflight_skipped()
     if tooldeps.require_tools("calibration (-k)",
                               [imagemagick.CONVERT_SPEC,
                                imagemagick.IDENTIFY_SPEC, SCORER],
@@ -1876,6 +1876,9 @@ def _road_line(label: str, images: int, pixels: int, seconds: float) -> str:
 def cli(argv: list | None = None) -> int:
     settings.load()
     runlog.start_run(argv)
+    if tooldeps.require_declared_packages(
+            commands.program_name(__spec__.name)):
+        return 1
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, program=commands.program_name(__spec__.name))

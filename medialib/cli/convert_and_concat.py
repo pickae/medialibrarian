@@ -33,7 +33,6 @@ from medialib.lib import (
     clioptions,
     enums,
     ffmpegselect,
-    imagemagick,
     ramscratch,
     runcontext,
     runlog,
@@ -136,8 +135,10 @@ def progress(*message) -> None:
 
 def shortfall(*message) -> None:
     """A line like :func:`progress` about something the run did not do, which
-    every verbosity prints."""
-    sys.stderr.write(_stamped(message))
+    every verbosity prints, and the info log keeps."""
+    text = _stamped(message)
+    sys.stderr.write(text)
+    runlog.keep(text, runlog.QUIET)
 
 
 def _audio_names():
@@ -485,11 +486,10 @@ def _missing_tools(program: str, only_concat: bool, codec: str,
     pass over the input, so a tool only the concatenator needs would otherwise
     be reported after the long part of the run.
     """
-    chain = ["ffmpeg", "ffprobe", imagemagick.CONVERT_SPEC]
-    if not only_concat:
-        chain += ["rsync"]
-    chain += archive_tools
-    skip = bool(os.environ.get("SKIP_TOOL_PREFLIGHT", ""))
+    chain = tooldeps.command_tools(
+        *(["clean-folder-structure", "convert-audio"] if not only_concat else []),
+        "concat-audio") + archive_tools
+    skip = tooldeps.preflight_skipped()
     ffmpegselect.select_ffmpeg()
     ffmpegselect.report_ffmpeg_selection()
     if tooldeps.require_tools(program, chain,
@@ -504,10 +504,7 @@ def _missing_tools(program: str, only_concat: bool, codec: str,
         return True
     runlog.warn_uncounted_progress()
     _settle_mkvtoolnix()
-    return bool(tooldeps.require_python_module(
-        "mutagen", program,
-        "writes the chapter marks and the cover art into the "
-        "concatenated book", skip_preflight=skip))
+    return False
 
 
 def _settle_mkvtoolnix() -> None:
@@ -751,6 +748,9 @@ def _failed_concatenations(failed: list, total: int) -> int:
 def cli(argv: list | None = None) -> int:
     settings.load()
     runlog.start_run(argv)
+    if tooldeps.require_declared_packages(
+            commands.program_name(__spec__.name)):
+        return 1
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, program=commands.program_name(__spec__.name),

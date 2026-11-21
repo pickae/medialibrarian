@@ -23,8 +23,6 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 
-import pycountry
-
 from medialib.lib import (
     languages,
     llmclient,
@@ -149,6 +147,7 @@ def normalize_language_code(raw: str) -> str:
         if code:
             return code
     if len(mapped) == 3:
+        import pycountry
         entry = (pycountry.languages.get(alpha_3=mapped)
                  or pycountry.languages.get(bibliographic=mapped))
         if entry is not None and getattr(entry, "scope", "") != "S":

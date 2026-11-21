@@ -17,8 +17,6 @@ import re
 import unicodedata
 from typing import NamedTuple
 
-import pycountry
-
 from medialib.lib import clioptions, settings, titlematch
 from medialib.lib.enums import shell_lower
 
@@ -75,6 +73,7 @@ def _fold_accents(text: str) -> str:
 def _by_tag() -> dict:
     """Every spelling of every ISO 639 code that has a two-letter one, to
     its language."""
+    import pycountry
     found = {}
     for entry in pycountry.languages:
         if not getattr(entry, "alpha_2", ""):
@@ -99,6 +98,7 @@ def _catalogue(locale: str):
     """ISO 639's name list translated into ``locale``, or None where
     pycountry has none. A language with only regional translations (Norwegian
     has nb_NO and nn, Chinese zh_CN) takes the first it has."""
+    import pycountry
     found = sorted(name for name in os.listdir(pycountry.LOCALES_DIR)
                    if name == locale or name.startswith(locale + "_")
                    or (locale == "no" and name in ("nb_NO", "nn")))

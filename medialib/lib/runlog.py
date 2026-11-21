@@ -232,7 +232,7 @@ def warn_uncounted_progress() -> None:
     """
     if have_flock():
         return
-    if os.environ.get("SKIP_TOOL_PREFLIGHT", ""):
+    if runcontext.get("SKIP_TOOL_PREFLIGHT"):
         return
     if runcontext.get("UNCOUNTED_PROGRESS_WARNED"):
         return

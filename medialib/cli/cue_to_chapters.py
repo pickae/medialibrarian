@@ -10,7 +10,7 @@ there is no help page to ask for and the usage is the whole spec.
 import sys
 
 from medialib import commands
-from medialib.lib import clioptions, cuechapters, errorlog, runlog, settings
+from medialib.lib import clioptions, cuechapters, errorlog, runlog, settings, tooldeps
 
 USAGE_HEAD = """Usage:
     {program} <input.cue> <output.chapters>"""
@@ -46,6 +46,9 @@ def main(argv: list, program: str = "cue-to-chapters",
 def cli(argv: list | None = None) -> int:
     settings.load()
     runlog.start_run(argv)
+    if tooldeps.require_declared_packages(
+            commands.program_name(__spec__.name)):
+        return 1
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, commands.program_name(__spec__.name),

@@ -727,8 +727,7 @@ def main(argv: list, program: str = "ingest-books",
             tools += ["zpaq"]
         runlog.settle_flock()
         if tooldeps.require_tools(
-                program, tools,
-                skip_preflight=bool(os.environ.get("SKIP_TOOL_PREFLIGHT", ""))):
+                program, tools):
             return 1
         runlog.warn_uncounted_progress()
 
@@ -839,6 +838,9 @@ def _archive(out_path: str, archive_root: str) -> None:
 def cli(argv: list | None = None) -> int:
     settings.load()
     runlog.start_run(argv)
+    if tooldeps.require_declared_packages(
+            commands.program_name(__spec__.name)):
+        return 1
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, program=commands.program_name(__spec__.name),

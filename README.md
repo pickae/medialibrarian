@@ -112,7 +112,7 @@ A smaller machine runs them too — just with the CPU roads and less overlap.
 
 ## Requirements
 
-- Python 3.11.4+, and two packages with it: `mutagen` and `pycountry` (the ISO 639 language tables), which the install brings in
+- Python 3.11.4+, and two packages with it: `mutagen` and `pycountry` (the ISO 639 language tables), which the install brings in. An editable install made before a package was added does not get it on a pull; every command then refuses at startup and prints the `pip` (or `pipx runpip`) line that installs it
 - A UTF-8 locale (accented/multibyte filenames are handled character-wise)
 - Per-tool external dependencies (see each command's `-h` output). Across the set:
   `ffmpeg`, `mkvtoolnix`, `dovi_tool`, `hdr10plus_tool`, `mediainfo`, `ImageMagick`, `rsync`,

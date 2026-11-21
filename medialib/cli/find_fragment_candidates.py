@@ -225,8 +225,7 @@ def resolve_paths(argument: str, program: str = "") -> tuple[str, str]:
         # other missing-tool refusal in the repo.
         if tooldeps.require_tools(
                 "%s on a folder (a tree file needs no tool)" % program,
-                ["tree"],
-                skip_preflight=bool(os.environ.get("SKIP_TOOL_PREFLIGHT", ""))):
+                ["tree"]):
             raise SystemExit(1)
         # Fragments are found in the NAMES of the entries, so an input holding
         # no entry has nothing to look at. Refused before the .tree snapshot is
@@ -277,6 +276,9 @@ def write_report(report: str, tree_file: str, rows, minimum: int) -> int:
 def cli(argv: list | None = None) -> int:
     settings.load()
     runlog.start_run(argv)
+    if tooldeps.require_declared_packages(
+            commands.program_name(__spec__.name)):
+        return 1
     if argv is None:
         argv = sys.argv[1:]
     return main(argv, program=commands.program_name(__spec__.name))

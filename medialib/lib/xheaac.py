@@ -84,7 +84,7 @@ def encoder_present(present=None) -> bool:
 
 
 def require_encoder(what: str, *, present=None,
-                    skip_preflight: bool = False, file=None) -> int:
+                    skip_preflight: bool | None = None, file=None) -> int:
     """Refuse before any work starts when this host cannot encode xhe-aac, and
     return 0 silently when it can.
 
@@ -98,7 +98,7 @@ def require_encoder(what: str, *, present=None,
     """
     if file is None:
         file = sys.stderr
-    if skip_preflight:
+    if tooldeps.preflight_skipped() if skip_preflight is None else skip_preflight:
         return 0
     if encoder_present(present):
         return 0
