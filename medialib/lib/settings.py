@@ -202,6 +202,14 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("coverSearchTable", "The table of where that search looks, in what "
             "order, by its path", ("concat-audio", "convert-and-concat", "convert-audio"),
             "the shipped `medialib/config/coverproviders.tsv`"),
+    Setting("contentKindLlm", "Whether a language model classifies a recording "
+            "as podcast, audio drama or audiobook before that online cover "
+            "search runs (the `audio-content` task, see docs/models.md), instead "
+            "of guessing from length and channel count alone: it is told the "
+            "folder's path and file names, the tracks' tags, the duration and "
+            "the channel layout, and falls back to the length heuristic when "
+            "uncertain or unavailable: `on` or `off`",
+            ("concat-audio", "convert-and-concat", "convert-audio"), "on"),
     Setting("coverSearchLlm", "Whether a book or converted track that search "
             "found no cover for is handed to a language model to search the web "
             "for one (the `cover-search` task, see docs/models.md): it is told "

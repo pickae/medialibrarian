@@ -1975,6 +1975,12 @@ def footer(state: Run) -> None:
     if total_seconds > 0 and audio_seconds > 0:
         runlog.say("Real-time speedup: %sx\n" % formatting.fmt_ratio(
             "%.6f" % (audio_seconds / total_seconds)))
+    meter_file = getattr(state, "model_meter", "")
+    if meter_file:
+        spans, tally = modelmeter.gathered(meter_file)
+        if tally.requests > 1:
+            runlog.log("Cover model over the run: "
+                       + modelmeter.rate_line("all", spans.seconds, tally))
 
     sys.stderr.flush()
     safety.report_safety_skips()

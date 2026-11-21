@@ -54,8 +54,8 @@ __all__ = ["MODELS_VARIABLE", "LEAN_VARIABLE", "LEANS", "Task", "TASKS", "CHAPTE
            "SUBTITLE_OCR", "VIDEO_PROFILE", "MUSIC_SEARCH", "PODCAST_ADS",
            "FRAGMENT_CLASSIFY", "GAPS_CHECK", "LETTERBOXD_MATCH", "BOOK_LANGUAGE",
            "BOOK_IMAGE_CHECK", "ERROR_TRIAGE", "COMIC_PAGE_CHECK",
-           "COMIC_PDF_JUDGE", "BOOK_TAGS", "Roster", "RosterError", "load",
-           "require", "optional", "chapters_task"]
+           "COMIC_PDF_JUDGE", "BOOK_TAGS", "AUDIO_CONTENT", "Roster",
+           "RosterError", "load", "require", "optional", "chapters_task"]
 
 MODELS_VARIABLE = "llmModels"
 LEAN_VARIABLE = "llmLean"
@@ -137,6 +137,9 @@ COMIC_PDF_JUDGE = Task("comic-pdf-judge", "judge whether a borderline PDF is "
                        "a comic book", requires=("vision",), lean="light")
 BOOK_TAGS = Task("book-tags", "look up an audiobook's metadata tags on the web",
                  requires=("web",), prefers=("reasoning",))
+AUDIO_CONTENT = Task(
+    "audio-content", "classify whether a recording is a podcast, an audio "
+    "drama, an audiobook or other", lean="light")
 
 TASKS = {task.name: task for task in (CHAPTERS, CHAPTERS_INSTRUCTED,
                                       COVER_SEARCH, COVER_LOOK, CONTENTS_SEARCH,
@@ -145,7 +148,7 @@ TASKS = {task.name: task for task in (CHAPTERS, CHAPTERS_INSTRUCTED,
                                       LETTERBOXD_MATCH, BOOK_LANGUAGE,
                                       BOOK_IMAGE_CHECK, ERROR_TRIAGE,
                                       COMIC_PAGE_CHECK, COMIC_PDF_JUDGE,
-                                      BOOK_TAGS)}
+                                      BOOK_TAGS, AUDIO_CONTENT)}
 
 
 def chapters_task(instructions: str) -> Task:
