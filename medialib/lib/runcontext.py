@@ -28,7 +28,7 @@ __all__ = ["Run", "current", "adopt", "snapshot", "reset", "settle", "get",
            "forget", "can_lock", "settle_flock", "have_flock", "take_lock",
            "abort_flag", "abort_requested", "request_abort", "label",
            "working_on", "subject", "child_environment",
-           "ITEM_VARIABLE", "INPUT_VARIABLE"]
+           "ITEM_VARIABLE", "INPUT_VARIABLE", "AI_VARIABLE"]
 
 # The values a parent command hands its run down by, which a worker is handed
 # whether or not this process settled them itself: read here from the
@@ -37,8 +37,11 @@ HANDED_DOWN = (
     "LOG_VERBOSITY", "LOG_TIMESTAMPS", "HAVE_FLOCK", "UNCOUNTED_PROGRESS_WARNED",
     "ABORT_FLAG", "ABORT_FLAG_OWNER", "SAFETY_LOG", "LENGTH_LOG",
     "ERROR_LOG_NAME", "ERROR_LOG_OWNER", "ERROR_LOG_RUN", "ERROR_LOG_STARTED",
-    "infoLogLevel", "SKIP_TOOL_PREFLIGHT", "COMIC_PDF_METER",
+    "infoLogLevel", "SKIP_TOOL_PREFLIGHT", "COMIC_PDF_METER", "AI_ALLOWED",
 )
+
+# Set by -A: this run, and what it starts, may ask a language model.
+AI_VARIABLE = "AI_ALLOWED"
 
 # The tmpfs every Linux host has, where a run's scratch goes first.
 SHM = "/dev/shm"

@@ -12,7 +12,7 @@ import os
 
 import pytest
 
-from medialib.lib import llmclient, llmroster, llmtraits
+from medialib.lib import llmclient, llmroster, llmtraits, runcontext
 
 pytestmark = pytest.mark.pure
 
@@ -219,6 +219,25 @@ class TestAskingForOne:
         ladder, why = llmroster.optional(llmroster.COVER_LOOK)
         assert ladder and why == ""
         assert capsys.readouterr().err == ""
+
+    def test_optional_gives_none_without_a(self, tmp_path, monkeypatch, capsys):
+        _roster(tmp_path)
+        monkeypatch.delenv(runcontext.AI_VARIABLE)
+        ladder, why = llmroster.optional(llmroster.COVER_LOOK)
+        assert ladder == [] and "-A" in why
+        assert capsys.readouterr().err == ""
+
+    def test_optional_reads_a_given_environment(self, tmp_path, monkeypatch):
+        _roster(tmp_path)
+        assert llmroster.optional(llmroster.COVER_LOOK, environ={})[0] == []
+
+    def test_require_does_not_ask_for_a(self, tmp_path, monkeypatch):
+        """generate-chapters is nothing but a model's work, and the commands
+        whose -A asks for chapters have checked it already."""
+        monkeypatch.setenv("SKIP_TOOL_PREFLIGHT", "1")
+        monkeypatch.delenv(runcontext.AI_VARIABLE)
+        _roster(tmp_path)
+        assert llmroster.require("x", llmroster.CHAPTERS).name == "big-local"
 
     def test_the_chapter_task_follows_the_instructions(self):
         assert llmroster.chapters_task("") is llmroster.CHAPTERS

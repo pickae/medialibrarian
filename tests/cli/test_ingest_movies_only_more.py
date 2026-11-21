@@ -26,7 +26,7 @@ def phases(monkeypatch):
     ("layout", "_layout_only"), ("roles", "_roles_only"),
     ("ocr", "_ocr_only"), ("extras-chapters", "_extras_chapters_only")])
 def test_each_phase_reaches_its_own_handler(phases, tmp_path, phase, handler):
-    assert run.main(["-O", phase, str(tmp_path)]) == 0
+    assert run.main(["-A", "-O", phase, str(tmp_path)]) == 0
     assert phases == [handler]
 
 
@@ -49,9 +49,15 @@ def test_write_alone_with_them_is_refused(phases, tmp_path, capsys):
 
 
 def test_instructions_go_with_extras_chapters(phases, tmp_path):
-    assert run.main(["-O", "extras-chapters", "-P", "a chapter per scene",
+    assert run.main(["-A", "-O", "extras-chapters", "-P", "a chapter per scene",
                      str(tmp_path)]) == 0
     assert phases == ["_extras_chapters_only"]
+
+
+def test_extras_chapters_without_a_is_refused(phases, tmp_path, capsys):
+    assert run.main(["-O", "extras-chapters", str(tmp_path)]) == 1
+    assert "only under -A" in capsys.readouterr().err
+    assert phases == []
 
 
 def test_instructions_are_refused_without_extras_chapters(phases, tmp_path,

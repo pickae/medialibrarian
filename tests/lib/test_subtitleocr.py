@@ -21,6 +21,7 @@ from medialib.lib import (
     llmclient,
     llmroster,
     llmtraits,
+    runcontext,
     subtitleocr,
     subtitletracks,
 )
@@ -85,15 +86,15 @@ def _toml(value):
 
 
 def _vision(tmp_path, url, **fields):
-    """The environment of a roster holding one vision model at ``url``;
-    ``fields`` are that model's own (jobs, model, options)."""
+    """The environment of a roster holding one vision model at ``url``, in a
+    run given -A; ``fields`` are that model's own (jobs, model, options)."""
     lines = ['[models.vision]', 'url = %s' % json.dumps(url),
              'traits = { vision = true }']
     lines += ["%s = %s" % (field, _toml(value))
               for field, value in fields.items()]
     path = tmp_path / "models.toml"
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return {"llmModels": str(path)}
+    return {"llmModels": str(path), runcontext.AI_VARIABLE: "1"}
 
 
 def _tool(bin_dir, name, script):
@@ -167,7 +168,11 @@ class TestTheEngines:
             'model = "gemma3-12b"\ntraits = { vision = true }\n',
             encoding="utf-8")
         assert subtitleocr.engines(
-            {"llmModels": str(models)})[0] == ("vision", "")
+            {"llmModels": str(models), runcontext.AI_VARIABLE: "1"})[0] == \
+            ("vision", "")
+        # Without -A the model is not asked to read.
+        assert subtitleocr.engines(
+            {"llmModels": str(models)})[0] != ("vision", "")
 
     def test_a_text_only_roster_does_not_enable_vision(self, tmp_path):
         models = tmp_path / "models.toml"
@@ -814,7 +819,8 @@ class TestVisionRosterAndFallback:
         logs = []
         engine = subtitleocr.recognise(
             str(image), FRENCH, str(srt), logs.append,
-            environ={"llmModels": str(models_file)})
+            environ={"llmModels": str(models_file),
+                     runcontext.AI_VARIABLE: "1"})
         assert engine == "tesseract"
         assert srt.read_text(encoding="utf-8") == _CUES
         assert any("vision OCR read nothing" in line for line in logs)

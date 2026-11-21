@@ -89,11 +89,13 @@ O | <phases> | do only these phases, each on its own, over the whole tree
                   the first that fails: layout, roles, ocr, tagging,
                   subtitles, commentary, names, chapters, extras-chapters,
                   plex and backups, comma-separated. Cannot be combined with
-                  -r, -C, -k or -o.
-C |  | also chapter the extras that have no chapters, by the
-                  language model (docs/models.md). A full ingest
-                  only.
-P | <text> | with -C or -O extras-chapters: more instructions for the
+                  -r, -k or -o.
+A |  | let language models help (docs/models.md): in a full ingest
+                  also chapter the extras that have no chapters, and in any
+                  run let the identification, track, commentary, subtitle
+                  and extras steps ask a model. Without -A none is asked,
+                  and -O extras-chapters is refused.
+P | <text> | with -A or -O extras-chapters: more instructions for the
                   model, added to every request.
 w |  | with -O tagging, subtitles, names or backups: carry out what
                   their dry run only prints. On its own it is refused.
@@ -101,12 +103,12 @@ i | <file> | with -O tagging: the unmatched list, filled in with ids, read
                   back. A dry run unless -w is given."""
 
 OPT_VARS = ("f:fragmentsOverride "
-            "r:convertRemuxes C:extrasChapters P:chapterInstructions "
+            "r:convertRemuxes P:chapterInstructions "
             "w:writeTags i:idList k:keepParts o:omitPhases "
             "O:onlyPhases")
 OPT_COLUMN = 18
 OPT_LONG = ("f:fragments "
-            "r:convert-remuxes C:extras-chapters P:prompt w:write "
+            "r:convert-remuxes P:prompt w:write "
             "i:ids k:keep o:omit O:only")
 
 # The single-phase sweeps -O names, in the order the page lists them. The
@@ -126,7 +128,7 @@ USAGE_TAIL = """
 
     Phases
     ------
-    A full ingest runs all but backups (and extras-chapters without -C), one
+    A full ingest runs all but backups (and extras-chapters without -A), one
     level below each folder given, and remuxes each film once into an
     improved copy, keeping the original as "<name> (old).mkv". -O runs them
     one at a time over the whole tree.
@@ -141,7 +143,7 @@ USAGE_TAIL = """
     commentary       finds and transcribes the commentary tracks (whisper)
     names            names numbered commentaries after who speaks in them
     chapters         gives the films their disc's chapters from ChapterDB
-    extras-chapters  chapters the extras by the language model (-C)
+    extras-chapters  chapters the extras by the language model (-A)
     plex             compares each film with the Plex library's copy, and
                      carries over what it lacks
     backups          drops the (old) originals whose copies pass the checks

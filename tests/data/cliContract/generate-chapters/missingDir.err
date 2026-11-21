@@ -37,6 +37,8 @@ Options:
                     e.g. "a chapter per speaker, titled with their name and
                     topic". The model then reasons at medium effort, and Claude
                     may search the web.
+    -A, --ai        Let language models help (docs/models.md). Without -A no
+                    step asks one; the commands this one starts are handed it.
     -v, --verbose   Also say why each item was handled the way it was, and on a
                     failure print the tool's whole output rather than its last
                     lines.

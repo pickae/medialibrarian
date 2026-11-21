@@ -14,6 +14,10 @@ with `-x name=value`, repeatable: the value lands in the run's
 environment and wins over the file. A secret is not taken there - the
 file is where it goes.
 
+A setting named `…Llm` turns off one step that asks a language model.
+Such a step runs only when the command was given `-A`
+([models](models.md#asking-for-it--a)), so `on` means "under `-A`".
+
 A file that holds a secret (marked below) must be readable by you alone -
 `chmod 600` - or every command refuses to start. A name in the file that
 no command reads is warned about.
@@ -100,7 +104,7 @@ no command reads is warned about.
 | `ramScratchMinFreeBytes` | With this little free in RAM, new scratch goes to disk instead | 1073741824 | `concat-audio`, `content-census`, `content-census-bi`, `convert-and-concat`, `convert-audio`, `convert-comics`, `convert-images`, `convert-video`, `generate-chapters`, `ingest-books`, `ingest-movies`, `ingest-music`, `read-library`, `transcribe-audio`, `ytdlp` |
 | `readLibraryRamBase` | read-library's scratch, ahead of `ramScratchBase` | `ramScratchBase` | `read-library` |
 | `skipYtdlpUpgrade` | Set to 1 and a nightly yt-dlp is not brought up to date before the fetch. `SKIP_YTDLP_UPGRADE` is accepted too | unset - a nightly is upgraded; a preview (-p) never is | `ytdlp` |
-| `spokenLanguages` | The languages you speak: ingest-movies fetches and tests subtitles in them, and ytdlp -C takes a YouTube episode's transcript in its own language when it is one of them, in English when it is not. A comma list of ISO 639-1 codes, in the order to fetch them; track names are also read in the names these languages give each other | en,de,fr,nl,es,it | `ingest-movies`, `ytdlp` |
+| `spokenLanguages` | The languages you speak: ingest-movies fetches and tests subtitles in them, and ytdlp -A takes a YouTube episode's transcript in its own language when it is one of them, in English when it is not. A comma list of ISO 639-1 codes, in the order to fetch them; track names are also read in the names these languages give each other | en,de,fr,nl,es,it | `ingest-movies`, `ytdlp` |
 | `subDlApiKey` (secret) | API key of a free SubDL account, asked third for subtitles | unset | `ingest-movies` |
 | `subtitleAdsLlm` | Whether a subtitle in a language subcleaner has no word list for (or when subcleaner is not installed) is handed to a language model to spot advert cues (the `subtitle-ads` task, see docs/models.md): its first and last 20 cues are sent to the model, and only advert cues from those shown cues are removed: `on` or `off` | on | `ingest-movies` |
 | `subtitleOcrEngines` | The OCR engines ingest-movies reads a film's picture subtitles with: a comma list of `vision`, `paddle` and `tesseract`, tried in the order named until one reads the subtitle | a vision model from the roster's `subtitle-ocr` task where there is one (docs/models.md), paddle on the GPU where it fits, tesseract, then paddle on the CPU | `ingest-movies` |

@@ -14,6 +14,8 @@ Options:
     -o, --output <file>
                     Write the report to <file> instead of the default location.
     -h, --help      Print this help page.
+    -A, --ai        Let language models help (docs/models.md). Without -A no
+                    step asks one; the commands this one starts are handed it.
     -v, --verbose   Also say why each item was handled the way it was, and on a
                     failure print the tool's whole output rather than its last
                     lines.

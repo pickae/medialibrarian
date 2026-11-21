@@ -28,6 +28,8 @@ Options:
                     Run up to <jobs> transcriptions in parallel.
                     Default: what the card can hold, or one per
                     4 CPU threads on the CPU
+    -A, --ai        Let language models help (docs/models.md). Without -A no
+                    step asks one; the commands this one starts are handed it.
     -v, --verbose   Also say why each item was handled the way it was, and on a
                     failure print the tool's whole output rather than its last
                     lines.

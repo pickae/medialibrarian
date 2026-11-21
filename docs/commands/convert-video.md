@@ -52,8 +52,8 @@ measured.
 | `-g <level\|off>` | names the film grain yourself, or turns it off | [Quality and grain](#quality-and-grain) |
 | `-t [percent]` | converts only what has room to save | [Only what has room to save](#only-what-has-room-to-save--t) |
 | `-k` | keeps every track except the video as the source has it (below) | — |
-| `-C` | adds chapters to a video that has none, worked out by a language model | [Chapters](#chapters--c) |
-| `-P "<text>"` | with `-C`: your own instructions for that model | [Chapters](#chapters--c) |
+| `-A` | lets language models help: picks the profile per file (`-p auto`) unless `-p` names one, adds chapters to a video that has none, and lets the track-role check ask a model | [Chapters](#chapters--a) |
+| `-P "<text>"` | with `-A`: your own instructions for the chapter model | [Chapters](#chapters--a) |
 
 **`-k` keeps everything but the picture.** The audio is not re-encoded, and the
 finished video is combined with the source's audio, subtitles, attachments,
@@ -61,7 +61,7 @@ chapters and tags by `mkvmerge`, which keeps each track's name, language and fla
 (commentary, forced, …) unchanged. It needs `mkvmerge` and is refused together
 with `-a`, `-b` or `-s`.
 
-## Chapters (`-C`)
+## Chapters (`-A`)
 
 A video that has no chapters is given some, worked out by the language model the
 `llm` [settings](../settings.md) name, the way `generate-chapters` does it.
@@ -83,7 +83,7 @@ so the output is written once. The work runs beside the video encode, one file
 at a time.
 
 `-P "<text>"` adds your own instructions for the model, as
-[`generate-chapters -P`](generate-chapters.md#your-own-instructions) does; it needs `-C`.
+[`generate-chapters -P`](generate-chapters.md#your-own-instructions) does; it needs `-A`.
 
 ## Hardware and parallelism
 
@@ -223,8 +223,9 @@ are not handed the same number.
 | any, with `-g <level>` | that level, and nothing caps it |
 | any, with `-g off` | none |
 
-**Automatic per-file profile selection (`-p auto`).** In a mixed folder of live
-action, 2D animation and grainy film scans, `-p auto` samples representative
+**Automatic per-file profile selection (`-p auto`, the default under
+`-A`).** In a mixed folder of live action, 2D animation and grainy film scans,
+`-p auto` samples representative
 frames across each video (skipping opening logos and closing credits) and asks a
 vision model (`video-profile` in [Language models](../models.md)) to classify
 the material:
@@ -236,7 +237,8 @@ the material:
 | `cgi_3d` | `av1BluRay` |
 | `heavy_grain` | `av1Grain` (uses SVT-AV1-HDR grain tune when available and `-g` is unset) |
 
-This runs only when `-p auto` is explicitly passed; fixed profiles never call a
+This runs only under `-A`, where it is the default unless `-p` names a
+profile; `-p auto` without `-A` is refused, and fixed profiles never call a
 model. If no vision model is configured in the roster, `-p auto` refuses cleanly
 before any encoding starts. For any file whose frames cannot be extracted or
 whose answer is uncertain or invalid, it falls back cleanly to `av1BluRay`. Each

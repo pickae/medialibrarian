@@ -134,10 +134,12 @@ A smaller machine runs them too — just with the CPU roads and less overlap.
 - `convert-video -u` additionally needs an NVIDIA GPU and a VapourSynth +
   TensorRT environment of its own, one piece of which has to be built (see
   [`convert-video`](docs/commands/convert-video.md)).
-- `generate-chapters`, `convert-audio -C` and `ytdlp -C` additionally need a language model to
-  ask: any server speaking OpenAI's chat protocol, local (Ollama, llama.cpp,
+- `generate-chapters`, and `convert-audio`, `convert-video`, `ytdlp -i` and a
+  full `ingest-movies` given `-A`, need a language model to ask: any server speaking OpenAI's chat protocol, local (Ollama, llama.cpp,
   vLLM…) or hosted, or Claude through the `anthropic` package (`pip install
   anthropic`) (see [`generate-chapters`](docs/commands/generate-chapters.md#which-model)).
+  Every other command uses one only when given `-A`, and only where one is
+  set up ([Language models](docs/models.md#asking-for-it--a)).
 - The GPU road for AVIF in `convert-images` and `convert-comics` is
   [av1gpu](https://github.com/maddog107/av1gpu), which has to be built (see
   [`convert-images`](docs/commands/convert-images.md#on-the-gpu)); without it

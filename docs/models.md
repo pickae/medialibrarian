@@ -1,9 +1,9 @@
 # Language models
 
 Several commands ask a language model for something: chapters from a
-transcript (`generate-chapters`, `convert-audio -C`, `convert-video -C`,
+transcript (`generate-chapters`, `convert-audio -A`, `convert-video -A`,
 `ingest-movies`, `ytdlp`), host-read ads in RSS and site podcasts (`ytdlp`),
-a video's encoding profile from sampled frames (`convert-video -p auto`),
+a video's encoding profile from sampled frames (`convert-video -A`),
 classifying what kind of audio a recording is before an online cover search
 (`concat-audio`, `convert-audio`), picking a book's front cover among unnamed
 folder images, searching for a cover where nothing else found one
@@ -34,6 +34,23 @@ worth keeping (`convert-comics`), or whether a borderline PDF is a comic book
 (`convert-comics`, `content-census`). Each of those is a **task**, and each
 task picks from the
 models you have, by what it needs and what it would rather have.
+
+## Asking for it (`-A`)
+
+No command asks a model unless you pass `-A`. Every command takes it. Without
+it, each of those steps does what it does when no model is set up: it skips
+the model and falls back to its rules, or leaves the item for you.
+`generate-chapters` is the exception, since asking a model is all it does.
+
+`-A` also turns on the features that are nothing but a model's work: chapters
+for `convert-audio`, `convert-video`, `ytdlp -i` and a full `ingest-movies`,
+and `convert-video`'s per-file profile (`-p auto`, the default under `-A`
+unless `-p` names a profile). Those need a model and refuse to start without
+one. `ingest-movies -O extras-chapters` and `convert-video -p auto` are
+refused without `-A`.
+
+A command that starts another one hands `-A` down to it. Under `-A`, each
+`…Llm` [setting](settings.md) still turns one task off.
 
 ## Your models
 
@@ -123,7 +140,7 @@ Run with `-v` to see which model each task took, and what it was taken for.
 | `cover-look` (picking among web results or unnamed folder images) | vision | - | light |
 | `contents-search` | web | reasoning | balanced |
 | `subtitle-ocr` | vision | local, cheap | light |
-| `video-profile` (`convert-video -p auto`) | vision | - | light |
+| `video-profile` (`convert-video -A`, or `-p auto`) | vision | - | light |
 | `music-search` | web | reasoning | balanced |
 | `podcast-ads` | - | reasoning | balanced |
 | `fragment-classify` | - | reasoning, web | balanced |
@@ -166,7 +183,7 @@ search, `convert-audio`'s per-track cover search whenever no vision model is
 available for `cover-look`, the undated film-year lookup, the music release
 lookup, the comic empty-page check, and `book-image-check`, which falls back
 to the fixed junk-name substrings) or refused before any work (the chapter
-commands and `convert-video -p auto`), saying which trait was missing.
+commands and `convert-video -A`), saying which trait was missing.
 
 Overriding it:
 

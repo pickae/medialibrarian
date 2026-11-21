@@ -1,4 +1,4 @@
-"""convert-video -C: which track the chapters are worked out from, and how
+"""convert-video -A: which track the chapters are worked out from, and how
 the chapters and a transcript reach the output in the one mux."""
 
 from __future__ import annotations
@@ -174,7 +174,7 @@ class TestTheInstructions:
         assert run_module.main(["-P", "A chapter per scene.",
                                 str(tmp_path / "in"),
                                 str(tmp_path / "out")]) == 1
-        assert "-P (instructions for the chapter model) needs -C" in \
+        assert "-P (instructions for the chapter model) needs -A" in \
             capsys.readouterr().err
         assert not (tmp_path / "out").exists()
 
@@ -184,11 +184,32 @@ class TestTheInstructions:
         seen = []
         monkeypatch.setattr(run_module, "_settle_and_run",
                             lambda settings, *_a: seen.append(settings) or 0)
-        assert run_module.main(["-C", "--prompt", "  A chapter per scene. ",
+        assert run_module.main(["-A", "--prompt", "  A chapter per scene. ",
                                 str(tmp_path / "in"),
                                 str(tmp_path / "out")]) == 0
         assert seen[0].ai_chapters
         assert seen[0].chapter_instructions == "A chapter per scene."
+        # -A picks the profile per file, as -p auto does.
+        assert seen[0].auto_video_profile
+
+    def test_a_named_profile_stands_under_a(self, tmp_path, monkeypatch):
+        (tmp_path / "in").mkdir()
+        (tmp_path / "in" / "film.mkv").touch()
+        seen = []
+        monkeypatch.setattr(run_module, "_settle_and_run",
+                            lambda settings, *_a: seen.append(settings) or 0)
+        assert run_module.main(["-A", "-p", "av1BluRay", str(tmp_path / "in"),
+                                str(tmp_path / "out")]) == 0
+        assert not seen[0].auto_video_profile
+
+    def test_p_auto_without_a_is_refused(self, tmp_path, capsys):
+        (tmp_path / "in").mkdir()
+        (tmp_path / "in" / "film.mkv").touch()
+        assert run_module.main(["-p", "auto", str(tmp_path / "in"),
+                                str(tmp_path / "out")]) == 1
+        assert "-p auto (a vision model picks the profile) needs -A" in \
+            capsys.readouterr().err
+        assert not (tmp_path / "out").exists()
 
     def test_the_model_is_handed_them(self, monkeypatch):
         monkeypatch.setattr(run_module, "log", lambda *a, **k: None)

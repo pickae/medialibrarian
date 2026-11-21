@@ -151,8 +151,8 @@ the two systems and is worked out at run time:
 | `-q` | prints only failures: no episode lines and no warnings |
 | [`-c`](#tidying-up-after-a-run--c) | tidies up after the run |
 | [`-i`](#building-the-phones-library-from-the-run--i) | builds the phone's library from the run |
-| [`-C`](#chapters-for-the-library--c) | with `-i`, chapters every episode in the library that has none |
-| [`-P`](#chapters-for-the-library--c) | with `-C`, your own instructions for the chapter model |
+| [`-A`](#chapters-for-the-library--a) | lets language models help: finds host-read ads in RSS and site episodes, and with `-i` chapters every episode in the library that has none |
+| [`-P`](#chapters-for-the-library--a) | with `-A` and `-i`, your own instructions for the chapter model |
 | [`-l`](#merging-archives--l) | merges archives; downloads nothing |
 
 ### Tidying up after a run (`-c`)
@@ -209,18 +209,18 @@ converted as soon as it is finished, a few episodes at a time. When the
 downloads are over, the last batch is converted, and so are the staging folders
 no table in this run downloads into.
 
-### Chapters for the library (`-C`)
+### Chapters for the library (`-A`)
 
-With `-i`, `-C` is passed on to every conversion: every episode in the library
+With `-i`, `-A` is passed on to every conversion: every episode in the library
 that has no chapters gets some, worked out by a language model from a
-transcript of the speech ([`convert-audio -C`](convert-audio.md#chapters-for-what-has-none--c),
+transcript of the speech ([`convert-audio -A`](convert-audio.md#chapters-for-what-has-none--a),
 with the `llm` settings). That covers the episodes already in a feed's
-staging folder as well as the new ones, so the first run with `-C` chapters a
+staging folder as well as the new ones, so the first run with `-A` chapters a
 feed's back catalogue too. A run whose model cannot be reached is refused
 before anything is fetched.
 
 `-P "<text>"` adds your own instructions for the model, as
-[`generate-chapters -P`](generate-chapters.md#your-own-instructions) does; it needs `-C`.
+[`generate-chapters -P`](generate-chapters.md#your-own-instructions) does; it needs `-A` and `-i`.
 
 Where the transcript comes from depends on the feed:
 
@@ -239,12 +239,12 @@ download as `<episode>.srt` and survives `-c`.
 SponsorBlock only covers YouTube (`youtubeAudio`, `youtubeVideo`); `rssAudio`,
 `rssVideo` and `siteVideo` feeds keep whatever host-read ads, sponsor reads and
 self-promotion the show baked into its enclosure. Whenever an episode from one
-of those profiles has a transcript — from `-i -C`, which embeds it inside the
-episode, or a sidecar or embedded subtitle track — `ytdlp` asks the
+of those profiles has a transcript — from `-i -A`, which embeds it inside the
+episode, or a sidecar or embedded subtitle track — `ytdlp -A` asks the
 `podcast-ads` model ([language models](../models.md)) to locate those
 stretches.
 
-By default (`podcastAdsLlm=on`, `podcastAdsCut=off`), every validated stretch
+Under `-A`, by default (`podcastAdsLlm=on`, `podcastAdsCut=off`), every validated stretch
 is merged into the episode's chapters as `[Sponsor]`, `[Ad]` or `[Self-promo]`
 so any player can skip it without losing real chapters or re-encoding the file.
 Cutting detected stretches out of the audio or video is a separate opt-in

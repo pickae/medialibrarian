@@ -3,7 +3,7 @@ podcasts, where yt-dlp's SponsorBlock does not reach.
 
 YouTube profiles already carry SponsorBlock; ``rss*`` and ``site*`` feeds keep
 whatever ads the show baked into its enclosure. When an episode has a
-transcript - from ``ytdlp -i -C`` (embedded inside the converted audio) or a
+transcript - from ``ytdlp -i -A`` (embedded inside the converted audio) or a
 sidecar beside the download - a language model (:data:`llmroster.PODCAST_ADS`)
 reads the timestamped transcript and lists the ``{start, end, kind}`` stretches
 of ads, sponsor reads and self-promotion.

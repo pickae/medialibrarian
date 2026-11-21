@@ -126,7 +126,7 @@ class Run:
 
     def __init__(self, settings) -> None:
         self.settings = settings
-        # -C's language model, and the lock that has one file chaptered at a
+        # -A's language model, and the lock that has one file chaptered at a
         # time: whisper fills the GPU on its own, and a local model shares it.
         self.llm = None
         self.chaptering = threading.Lock()
@@ -433,7 +433,7 @@ class Run:
             audio = workerpool.start_worker(
                 _audio_worker, (relative, directory, settings),
                 os.path.join(settings.input_dir, relative))
-            # -C's chapters too: reading a subtitle or transcribing a
+            # -A's chapters too: reading a subtitle or transcribing a
             # soundtrack, and the model's questions, need nothing the encoder
             # does, and what they make is only wanted at the mux.
             chaptering = self._start_chaptering(plan)
@@ -476,9 +476,9 @@ class Run:
         return tail
 
     def _start_chaptering(self, plan: Plan):
-        """-C's chapters for this file started on a thread of their own, and
+        """-A's chapters for this file started on a thread of their own, and
         handed back as a callable that waits for them and returns what the mux
-        is to add - None without -C, or when there is nothing to add."""
+        is to add - None without -A, or when there is nothing to add."""
         if not plan.settings.ai_chapters or self.llm is None:
             return None
         done: list = []
@@ -794,7 +794,7 @@ class Run:
         output = encode.output_path_for(relative, settings, replacing)
         muxed = encode.mux_final(relative, directory, settings, output,
                                  chaptered)
-        # What -C added is the one part of the mux that was not already in a
+        # What -A added is the one part of the mux that was not already in a
         # file the tools read, so it is what is let go of first.
         if muxed != 0 and chaptered is not None:
             log("WARNING: the mux with the generated chapters failed, muxing "
@@ -964,7 +964,10 @@ def main(argv: list, program: str = "convert-video",
         input_dir=result.positionals[0],
         output_dir=result.positionals[1],
         cores=int(result.values["CORES"] or runlog.cpu_count()),
-        video_profile=result.values["videoProfile"] or "av1BluRay",
+        # -A picks the profile per file, unless -p names one.
+        video_profile=(result.values["videoProfile"]
+                       or (rules.AUTO_PROFILE if "A" in result.given
+                           else "av1BluRay")),
         audio_profile=result.values["audioProfile"] or "opus",
         custom_audio_bitrate=result.values["customAudioBitrate"] or "",
         surround="s" in result.given,
@@ -976,7 +979,7 @@ def main(argv: list, program: str = "convert-video",
         fast_decode=result.values["videoFastDecode"] or "",
         test_source_bitrate="t" in result.given,
         keep_tracks="k" in result.given,
-        ai_chapters="C" in result.given,
+        ai_chapters="A" in result.given,
         chapter_instructions=(result.values["chapterInstructions"]
                               or "").strip(),
         required_saving=saving[0])
@@ -1020,10 +1023,16 @@ def main(argv: list, program: str = "convert-video",
     settings.auto_video_profile = auto_profile
     settings.grain_option = grain
 
-    # The instructions are for the model -C asks; without it there is none.
+    # -p auto asks a model, and a model is asked only under -A.
+    if auto_profile and "A" not in result.given:
+        clioptions.refuse_usage(declaration, "-p auto (a vision model picks "
+                                "the profile) needs -A.")
+        return 1
+
+    # The instructions are for the model -A asks; without it there is none.
     if "P" in result.given and not settings.ai_chapters:
         clioptions.refuse_usage(declaration, "-P (instructions for the chapter "
-                                "model) needs -C.")
+                                "model) needs -A.")
         return 1
 
     refusal = startup._validate(settings, video_args, grain, engines_override)
@@ -1084,7 +1093,7 @@ def _settle_and_run(settings, program: str, video_args: str, grain: str,
     ffmpegselect.select_ffmpeg(
         _takes_profile(video_args),
         prefer=rank)
-    # -C transcribes a source with no dialogue subtitle through
+    # -A transcribes a source with no dialogue subtitle through
     # transcribe-audio, so its tools are asked for with the rest.
     if tooldeps.require_tools(program, tooldeps.command_tools(
             "convert-video",
@@ -1144,9 +1153,9 @@ def _settle_and_run(settings, program: str, video_args: str, grain: str,
 
 
 def chapter_model(program: str, settings):
-    """-C's model, given -P's instructions for every request, or None when
+    """-A's chapter model, given -P's instructions for every request, or None when
     none is set up (which has been said)."""
-    return chapterwork.model(program, settings.chapter_instructions, "-C", log)
+    return chapterwork.model(program, settings.chapter_instructions, "-A", log)
 
 
 class _HeldOutput:

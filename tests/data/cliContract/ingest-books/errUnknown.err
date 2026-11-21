@@ -22,6 +22,9 @@ Options:
     -z, --zpaq
           Text mode only: also create a zpaq archive of the resulting folder
           (output folder, or input folder when no conversion was done).
+    -A, --ai
+          Let language models help (docs/models.md). Without -A no step asks
+          one; the commands this one starts are handed it.
     -v, --verbose
           Also say why each item was handled the way it was, and on a failure
           print the tool's whole output rather than its last lines.

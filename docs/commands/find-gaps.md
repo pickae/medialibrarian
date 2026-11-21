@@ -11,7 +11,7 @@ holds what is **missing** from its numbered or dated run, not what is there.
 | **Writes** | `logs/find-gaps/find-gaps-<folder>.tree`, one per folder given |
 | **Input** | nothing is changed: it reads names only |
 | **Reruns** | asks before replacing the report an earlier run left ([below](#reruns)) |
-| **Network** | optional — when a web-searching model is configured and `findGapsLlm` is on, checks series and dated runs against real release lists ([below](#model-notes)) |
+| **Network** | optional — under `-A`, when a web-searching model is configured and `findGapsLlm` is on, checks series and dated runs against real release lists ([below](#model-notes)) |
 
 ## What counts as a run
 
@@ -85,8 +85,9 @@ of a run was meant to be — that is where optional model notes help.
 
 ## Model notes
 
-When a language model that can search the web is set up (the `gaps-check` task
-in [`docs/models.md`](../models.md)) and `findGapsLlm` is `on` (the default),
+When the run is given `-A`, a language model that can search the web is set up
+(the `gaps-check` task in [`docs/models.md`](../models.md)) and `findGapsLlm`
+is `on` (the default),
 `find-gaps` sends a concise summary of the detected numbered, episodic and
 dated runs (folder, series and episode names, number/date ranges and the
 deterministic gaps already found) so the model can look up real episode lists

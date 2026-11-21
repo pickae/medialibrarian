@@ -493,7 +493,7 @@ def test_ytdlp_library_queue_checks_ads_only_for_eligible_profile(monkeypatch, t
         ingest={
             "root": str(ingested),
             "staging": {"Speech": str(staging_speech), "Music": str(staging_music)},
-            "args": {"Speech": "-c -m -C", "Music": "-c -b 65 -C"},
+            "args": {"Speech": "-c -m -A", "Music": "-c -b 65 -A"},
         },
     )
     queue = ytdlp.LibraryQueue(state)  # type: ignore[arg-type]

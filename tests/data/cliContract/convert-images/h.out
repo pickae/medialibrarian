@@ -31,6 +31,8 @@ Options:
     -k, --calibrate Measure what the GPU encoder has to be asked for to
                     match the CPU, on crops of the images in <inputDir>, and
                     save it. Works in <outputDir>; converts nothing.
+    -A, --ai        Let language models help (docs/models.md). Without -A no
+                    step asks one; the commands this one starts are handed it.
     -v, --verbose   Also say why each item was handled the way it was, and on a
                     failure print the tool's whole output rather than its last
                     lines.

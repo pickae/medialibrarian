@@ -12,7 +12,7 @@ Letterboxd lacks is written to a CSV for its importer.
 | **Takes** | a Letterboxd data export, or an account name; `plexUrl` and `plexToken` |
 | **Writes** | the import CSV and the state file ([below](#default-behavior)) |
 | **Input** | marks films played, rates them and adds to the watchlist in Plex; `-p` previews instead |
-| **Network** | the Plex server, plex.tv (the watchlist), Letterboxd's RSS feed when given an account, TheMovieDB when `tmdbApiKey` is set, and a configured language model when `letterboxdMatchLlm` is on |
+| **Network** | the Plex server, plex.tv (the watchlist), Letterboxd's RSS feed when given an account, TheMovieDB when `tmdbApiKey` is set, and, under `-A`, a configured language model when `letterboxdMatchLlm` is on |
 
 ## Default behavior
 
@@ -105,8 +105,9 @@ with the Letterboxd spelling beside it, and `-v` says which rule made it.
 
 ### Model suggestions (report only)
 
-When a language model is configured (see [language models](../models.md), the
-`letterboxd-match` task) and `letterboxdMatchLlm` is `on` (the default), any
+When the run is given `-A`, a language model is configured (see
+[language models](../models.md), the `letterboxd-match` task) and
+`letterboxdMatchLlm` is `on` (the default), any
 ambiguous matches and unmatched Letterboxd entries that have close candidates
 in the Plex library are handed to the model. The model is sent the Letterboxd
 entry titles and years and the candidate Plex film titles, years and ids; it

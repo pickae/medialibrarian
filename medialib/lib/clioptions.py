@@ -32,19 +32,24 @@ _SPACE = " \t\n\v\f\r"
 # A control character no help text carries.
 _PIPE_HOLD = "\x01"
 
+# A spec's own -A line, which the shared one then gives way to.
+_OWN_A = re.compile(r"^A[ \t]*\|", re.M)
+
 _ENTRY = re.compile(r"[a-zA-Z][ \t\n\v\f\r]*\|")
 
 DEFAULT_CREDITS = "David Ernst"
 DEFAULT_COLUMN = 20
 
-# The -v, -q and -x every command shares, worded once. The long names go into a
-# spec's ``long`` field as they are; the option lines come from
+# The -A, -v, -q and -x every command shares, worded once. The long names go
+# into a spec's ``long`` field as they are; the option lines come from
 # :func:`shared_option_lines`, which wraps them for the spec's own column. -x
-# is the only one of the three that takes a value: name=value, repeatable,
+# is the only one of the four that takes a value: name=value, repeatable,
 # validated against the settings registry as the parse ends and applied to
 # this process's environment, where the settings are read from.
-SHARED_LONG = "v:verbose q:quiet x:set"
+SHARED_LONG = "A:ai v:verbose q:quiet x:set"
 _SHARED_HELP = (
+    ("A", "", "Let language models help (docs/models.md). Without -A no "
+          "step asks one; the commands this one starts are handed it."),
     ("v", "", "Also say why each item was handled the way it was, and on a "
           "failure print the tool's whole output rather than its last lines."),
     ("q", "", "Print errors only - no progress and no warnings."),
@@ -446,17 +451,20 @@ def refuse_missing_dir(spec: Spec, directory: str) -> None:
                     files=[directory], stack=False)
 
 
-def shared_option_lines(column: int) -> str:
-    """The shared -v, -q and -x option lines, wrapped to 80 columns at
+def shared_option_lines(column: int, own: str = "") -> str:
+    """The shared -A, -v, -q and -x option lines, wrapped to 80 columns at
     ``column``.
 
     A spec appends this to its own ``options`` and :data:`SHARED_LONG` to its
-    ``long``, so every command's page words the three the same way. Wrapped
+    ``long``, so every command's page words the four the same way. Wrapped
     here and not written out because a continuation line is emitted as it
-    stands, and each spec has its own column to indent it to.
+    stands, and each spec has its own column to indent it to. A letter in
+    ``own`` is left out: the spec words that one itself.
     """
     lines = []
     for letter, placeholder, help_text in _SHARED_HELP:
+        if letter in own:
+            continue
         wrapped = textwrap.wrap(help_text, width=80 - column)
         lines.append(f"{letter} | {placeholder} | {wrapped[0]}")
         lines.extend(" " * column + rest for rest in wrapped[1:])
@@ -464,18 +472,23 @@ def shared_option_lines(column: int) -> str:
 
 
 def with_shared_options(spec: Spec) -> Spec:
-    """``spec`` with the shared -v, -q and -x added: their lines at the end of
-    its option block, their long names after its own. Every command's page is
-    built through this, so the three read the same everywhere.
+    """``spec`` with the shared -A, -v, -q and -x added: their lines at the end
+    of its option block, their long names after its own. Every command's page is
+    built through this, so the four read the same everywhere.
 
     -x declares a repeatable value in a variable of its own and marks its
     letter for the application :func:`parse` makes at the end of it, so a
-    command gets the override without saying anything about it."""
+    command gets the override without saying anything about it.
+
+    A command whose -A does more than let the background steps ask a model -
+    adds chapters, picks a profile - writes its own -A line, which then
+    stands in for the shared one."""
     options = spec.options if spec.options.endswith("\n") \
         else spec.options + "\n"
+    own = "A" if _OWN_A.search(options) else ""
     flags = spec.flags + (" " if spec.flags else "") + "repeat:x override:x"
     return dataclasses.replace(
-        spec, options=options + shared_option_lines(spec.column),
+        spec, options=options + shared_option_lines(spec.column, own),
         long=(spec.long + " " + SHARED_LONG).strip(),
         vars=(spec.vars + " x:setValues").strip(),
         flags=flags)
@@ -491,7 +504,12 @@ def settle_verbosity(result: Result) -> int:
 
     -v settles the console's clock as well: the run's lines then carry the
     time they were said, so which step is the slow one reads off the output.
+
+    -A is settled here too, for the same reason: what a command another one
+    started may ask a language model is what its parent may.
     """
+    if "A" in result.given:
+        runcontext.settle(runcontext.AI_VARIABLE, "1")
     verbose = "v" in result.given
     quiet = "q" in result.given
     if verbose and quiet:
