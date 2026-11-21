@@ -50,15 +50,15 @@ from dataclasses import dataclass
 from medialib.lib import llmclient, llmtraits, runlog, settings
 
 __all__ = ["MODELS_VARIABLE", "LEAN_VARIABLE", "LEANS", "Task", "TASKS", "CHAPTERS",
-           "CHAPTERS_INSTRUCTED", "COVER_SEARCH", "COVER_LOOK", "CONTENTS_SEARCH",
-           "SUBTITLE_OCR", "VIDEO_PROFILE", "MUSIC_SEARCH", "PODCAST_ADS",
-           "FRAGMENT_CLASSIFY", "GAPS_CHECK", "LETTERBOXD_MATCH", "BOOK_LANGUAGE",
-           "BOOK_IMAGE_CHECK", "ERROR_TRIAGE", "COMIC_PAGE_CHECK",
-           "COMIC_PDF_JUDGE", "BOOK_TAGS", "AUDIO_CONTENT", "FILM_YEAR",
-           "FILM_IDENTIFY", "AMBIGUOUS_EDITIONS", "COMMENTARY_NAMES",
-           "BONUS_CATEGORY", "TRACK_ROLE", "COMMENTARY_JUDGE", "SUBTITLE_ADS",
-           "Roster", "RosterError", "load", "require", "optional",
-           "chapters_task"]
+           "CHAPTERS_INSTRUCTED", "CHAPTERDB_CHOOSE", "COVER_SEARCH", "COVER_LOOK",
+           "CONTENTS_SEARCH", "SUBTITLE_OCR", "VIDEO_PROFILE", "MUSIC_SEARCH",
+           "PODCAST_ADS", "FRAGMENT_CLASSIFY", "GAPS_CHECK", "LETTERBOXD_MATCH",
+           "BOOK_LANGUAGE", "BOOK_IMAGE_CHECK", "ERROR_TRIAGE",
+           "COMIC_PAGE_CHECK", "COMIC_PDF_JUDGE", "BOOK_TAGS", "AUDIO_CONTENT",
+           "FILM_YEAR", "FILM_IDENTIFY", "AMBIGUOUS_EDITIONS",
+           "COMMENTARY_NAMES", "BONUS_CATEGORY", "TRACK_ROLE",
+           "COMMENTARY_JUDGE", "SUBTITLE_ADS", "Roster", "RosterError", "load",
+           "require", "optional", "chapters_task"]
 
 MODELS_VARIABLE = "llmModels"
 LEAN_VARIABLE = "llmLean"
@@ -94,6 +94,10 @@ CHAPTERS_INSTRUCTED = Task(
     "chapters-instructed", "chapter a recording following the user's own "
     "instructions, which may ask for something to be looked up",
     prefers=("web", "reasoning"), lean="precise")
+CHAPTERDB_CHOOSE = Task(
+    "chapterdb-choose",
+    "pick or translate a ChapterDB chapter set for the library's language",
+    prefers=("reasoning",))
 COVER_SEARCH = Task("cover-search", "search the web for a recording's cover",
                     requires=("web",), prefers=("reasoning",))
 COVER_LOOK = Task("cover-look", "look at the covers found and pick the "
@@ -169,7 +173,8 @@ SUBTITLE_ADS = Task("subtitle-ads", "spot advert cues in a subtitle",
                     lean="light")
 
 TASKS = {task.name: task for task in (CHAPTERS, CHAPTERS_INSTRUCTED,
-                                      COVER_SEARCH, COVER_LOOK, CONTENTS_SEARCH,
+                                      CHAPTERDB_CHOOSE, COVER_SEARCH,
+                                      COVER_LOOK, CONTENTS_SEARCH,
                                       SUBTITLE_OCR, VIDEO_PROFILE, MUSIC_SEARCH,
                                       PODCAST_ADS, FRAGMENT_CLASSIFY, GAPS_CHECK,
                                       LETTERBOXD_MATCH, BOOK_LANGUAGE,

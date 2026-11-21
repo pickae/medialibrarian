@@ -367,6 +367,8 @@ def private_workspace(tmp_path_factory, monkeypatch):
     monkeypatch.setenv("comicPdfCache", str(scratch / "comic-pdf-verdicts.json"))
     # Nor is a language model asked to spot subtitle adverts.
     monkeypatch.setenv("subtitleAdsLlm", "off")
+    # Nor is a language model asked to pick or translate ChapterDB sets.
+    monkeypatch.setenv("chapterDbLlm", "off")
     # Nor the machine's own roster of models: a case that asks the roster
     # gets the models it set up itself, or none.
     monkeypatch.setenv("llmModels", str(scratch / "no-models-file"))

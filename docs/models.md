@@ -16,7 +16,8 @@ movie folders and differing cuts, naming generic commentary tracks and
 picking among fitting disc pages, judging an ambiguous audio track that may be
 a commentary or audio description, sorting an unmatched extra into its
 Plex bonus folder, spotting advert cues in a subtitle when subcleaner has no
-word list for its language (`ingest-movies`), or classifying a borderline subtitle or
+word list for its language, picking or translating a ChapterDB chapter set for
+the library's language (`ingest-movies`), or classifying a borderline subtitle or
 audio track's role where the flags, title and measurements could not settle it
 (`ingest-movies`, `convert-video`), the MusicBrainz release
 of an album beets skipped (`ingest-music`), classifying recurring filename
@@ -116,6 +117,7 @@ Run with `-v` to see which model each task took, and what it was taken for.
 | --- | --- | --- | --- |
 | `chapters` | - | reasoning | balanced |
 | `chapters-instructed` (chapters with your `-P` instructions) | - | web, reasoning | precise |
+| `chapterdb-choose` (pick or translate a fitting ChapterDB chapter set) | - | reasoning | balanced |
 | `cover-search` | web | reasoning | balanced |
 | `cover-look` (picking among web results or unnamed folder images) | vision | - | light |
 | `contents-search` | web | reasoning | balanced |

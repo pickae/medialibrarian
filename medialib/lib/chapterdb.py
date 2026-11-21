@@ -359,16 +359,21 @@ def same_marks(chapter_set: ChapterSet, existing: Existing) -> bool:
         for one, other in zip(theirs, ours, strict=True))
 
 
-def choose(sets, existing: Existing) -> ChapterSet | None:
+def choose(sets, existing: Existing, *, title: str = "",
+           log: Callable[[str], None] = runlog.log,
+           use_llm: bool = True,
+           meter_file: str = "") -> ChapterSet | None:
     """The set this film should be given, or ``None``.
 
     Only sets :func:`plausible` passes, and of those a named one over a
     numbered one - a numbered one only for a film that has no chapters at all,
     and for a film with numbered ones only a named set with
     :func:`same_marks`.
-    Then English names, since there is no knowing which of the others a
-    library would read; then the set more people confirmed; then the closer
-    length.
+    Deterministically, English names win, then the set more people confirmed,
+    then the closer length. When ``use_llm`` is true and named sets fit,
+    :func:`medialib.lib.aichapterdb.choose` may pick a set matching the
+    library's language or translate one into it, falling back to that
+    deterministic winner otherwise.
     """
     if existing.kind == "named":
         return None
@@ -380,9 +385,17 @@ def choose(sets, existing: Existing) -> ChapterSet | None:
                    if candidate.named and same_marks(candidate, existing)]
     if not fitting:
         return None
-    return min(fitting, key=lambda candidate: (
+    best = min(fitting, key=lambda candidate: (
         not candidate.named, candidate.language != "eng",
         -candidate.confirmations, abs(candidate.seconds - existing.seconds)))
+    if not use_llm:
+        return best
+    named = [candidate for candidate in fitting if candidate.named]
+    if not named:
+        return best
+    from medialib.lib import aichapterdb
+    return aichapterdb.choose(named, best, film_title=title,
+                              meter_file=meter_file, log=log)
 
 
 # --- the film -----------------------------------------------------------------
@@ -492,7 +505,10 @@ def _ascii(title: str) -> str:
 
 
 def find_set(title: str, existing: Existing,
-             fetch: Callable | None = None) -> tuple:
+             fetch: Callable | None = None, *,
+             log: Callable[[str], None] = runlog.log,
+             use_llm: bool = True,
+             meter_file: str = "") -> tuple:
     """(the set for this film or ``None``, whether the archive answered)."""
     fetch = fetch or ask_archive
     queries = [title] + ([_ascii(title)] if _ascii(title) != title else [])
@@ -512,7 +528,8 @@ def find_set(title: str, existing: Existing,
         parsed = parse_set(row.set_id, body) if body is not None else None
         if parsed is not None:
             sets.append(parsed)
-    return choose(sets, existing), True
+    return choose(sets, existing, title=title, log=log, use_llm=use_llm,
+                  meter_file=meter_file), True
 
 
 def examine(movie: str) -> tuple:
@@ -531,7 +548,8 @@ def examine(movie: str) -> tuple:
 
 
 def findings(directory: str, log: Callable[[str], None],
-             fetch: Callable | None = None):
+             fetch: Callable | None = None, *,
+             meter_file: str = ""):
     """Every film under ``directory`` as ``(movie, verdict, existing, set)``:
     the verdicts :func:`examine` comes to, "unmatched" for a film the archive
     has no fitting set for, and "found" with the set it has.
@@ -553,7 +571,8 @@ def findings(directory: str, log: Callable[[str], None],
             log("  " + _NOT_LOOKED_UP[verdict])
             yield movie, verdict, existing, None
             continue
-        chosen, answered = find_set(title, existing, fetch)
+        chosen, answered = find_set(title, existing, fetch, log=log,
+                                    meter_file=meter_file)
         if not answered:
             log("WARNING: the chapter archive at %s did not answer - no more "
                 "films are looked up this run"
@@ -597,12 +616,14 @@ def empty_outcome() -> dict:
 
 
 def add_chapters(directory: str, log: Callable[[str], None],
-                 fetch: Callable | None = None) -> dict:
+                 fetch: Callable | None = None, *,
+                 meter_file: str = "") -> dict:
     """Give every tagged film under ``directory`` the chapters :func:`choose`
     picks for it, one film at a time, and return the films by what came of
     them. ``fetch`` is :func:`findings`'."""
     outcome = empty_outcome()
-    for movie, verdict, existing, chosen in findings(directory, log, fetch):
+    for movie, verdict, existing, chosen in findings(directory, log, fetch,
+                                                     meter_file=meter_file):
         if verdict == "found":
             verdict = apply_set(movie, existing, chosen, log)
         outcome[verdict].append(movie)
