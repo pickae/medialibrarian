@@ -12,8 +12,9 @@ names only number them, or a joined book's empty metadata tags
 (`concat-audio`), reading picture subtitles into text, looking up the release
 year of an undated film folder before TMDb identification, picking which
 offered film matches an unmatched folder, suggesting fixes for ambiguous
-movie folders and differing cuts, or naming generic commentary tracks and
-picking among fitting disc pages (`ingest-movies`), the MusicBrainz release
+movie folders and differing cuts, naming generic commentary tracks and
+picking among fitting disc pages, or sorting an unmatched extra into its
+Plex bonus folder (`ingest-movies`), the MusicBrainz release
 of an album beets skipped (`ingest-music`), classifying recurring filename
 fragment candidates (`find-fragment-candidates`), web-checked gap notes for
 numbered and dated runs (`find-gaps`), report-only match suggestions for
@@ -132,6 +133,7 @@ Run with `-v` to see which model each task took, and what it was taken for.
 | `film-identify` | - | web, reasoning | precise |
 | `ambiguous-editions` | web | reasoning | balanced |
 | `commentary-names` | - | reasoning, web | balanced |
+| `bonus-category` | - | - | light |
 
 `error-triage` prefers a local model because error logs carry library paths,
 and is strictly advisory: it never retries commands, deletes files or changes

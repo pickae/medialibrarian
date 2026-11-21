@@ -22,7 +22,7 @@ given (one level deep, not the whole tree):
 
 - **deletes release junk**: files with the `movieJunkExtensions` suffixes (`txt nfo exe doc sfv` by default - an empty setting deletes none), samples, `.mkv`s under 1000 KiB, folders named `.unwanted` (qBittorrent's skipped files), and folders left empty
 - **remuxes non-Matroska video** (avi, mp4, mov, …) into `.mkv`, deleting the source
-- sorts loose films into a folder each, with extras where Plex looks for them
+- sorts loose films into a folder each, with extras where Plex looks for them (by keyword first, and optionally by a light language model for unmatched extras — `bonusCategoryLlm=off` skips the model)
 - cleans folder, film and subtitle names
 - **transcodes lossless audio to Opus** — or FLAC, the `losslessAudioTarget` setting — leaving lossy tracks as they are
 - **finds forced and SDH subtitles the file does not flag**, and puts their flags right ([details](#subtitles-the-file-flags-wrong))
@@ -63,6 +63,7 @@ These are read from the environment:
 | `subtitleOcrEngines` | the engines a picture subtitle is read with, in the order to try them | the order below |
 | `llmModels`, `llmUrl`, … | the language-model roster (see [Language models](../models.md)): a model that sees pictures serves the `vision` OCR engine (`subtitle-ocr` task) | `vision` is not tried; paddle and tesseract still are |
 | `losslessAudioTarget` | the codec the lossless audio is converted to | `opus`, at a per-channel target bitrate; `flac` takes the channels as they are, up to eight of them |
+| `bonusCategoryLlm` | sorting extras whose file name matched no keyword with a light language model (`bonus-category` task, see [docs/models.md](../models.md)): sends the extra's name, film title/year and any cached dvdcompare extras listing | on by default when a model is set up; `off` leaves unmatched extras in `Featurettes` |
 | `plexUrl` | the Plex server the films are compared with | the server on this machine, `http://localhost:32400` |
 | `plexToken` | that server's X-Plex-Token | the server is asked without one, which it refuses unless told to trust this address; the comparison is then skipped |
 

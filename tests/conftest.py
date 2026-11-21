@@ -335,6 +335,8 @@ def private_workspace(tmp_path_factory, monkeypatch):
     monkeypatch.setenv("ambiguousEditionsLlm", "off")
     # Nor for commentary naming or disc-page disambiguation.
     monkeypatch.setenv("commentaryNamesLlm", "off")
+    # Nor is a language model asked to sort unmatched movie extras.
+    monkeypatch.setenv("bonusCategoryLlm", "off")
     # Nor is a language model asked to find ad reads in RSS podcasts.
     monkeypatch.setenv("podcastAdsLlm", "off")
     monkeypatch.setenv("podcastAdsCut", "off")

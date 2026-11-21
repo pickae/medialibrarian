@@ -280,6 +280,13 @@ SETTINGS: tuple[Setting, ...] = (
             "introductions and apply the name across equivalent audio, "
             "embedded subtitle and sidecar subtitle tracks: `on` or `off`",
             ("ingest-movies",), "on"),
+    Setting("bonusCategoryLlm", "Whether an extra whose file name matched no "
+            "bonus-folder keyword is handed to a light language model to sort "
+            "into a Plex bonus folder (the `bonus-category` task, see "
+            "docs/models.md): it is told the extra's file name, the film's "
+            "title and year, and any disc extras listing already cached from "
+            "dvdcompare.net: `on` or `off`",
+            ("ingest-movies",), "on"),
     Setting("musicSearchLlm", "Whether an album beets skipped is handed to a "
             "language model to look up its MusicBrainz release ID on the web "
             "(the `music-search` task, see docs/models.md): it is told the "

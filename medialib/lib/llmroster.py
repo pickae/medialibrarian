@@ -56,7 +56,7 @@ __all__ = ["MODELS_VARIABLE", "LEAN_VARIABLE", "LEANS", "Task", "TASKS", "CHAPTE
            "BOOK_IMAGE_CHECK", "ERROR_TRIAGE", "COMIC_PAGE_CHECK",
            "COMIC_PDF_JUDGE", "BOOK_TAGS", "AUDIO_CONTENT", "FILM_YEAR",
            "FILM_IDENTIFY", "AMBIGUOUS_EDITIONS", "COMMENTARY_NAMES",
-           "Roster", "RosterError", "load", "require",
+           "BONUS_CATEGORY", "Roster", "RosterError", "load", "require",
            "optional", "chapters_task"]
 
 MODELS_VARIABLE = "llmModels"
@@ -156,6 +156,8 @@ COMMENTARY_NAMES = Task(
     "match commentary tracks to a disc listing, name generic commentaries "
     "from opening introductions, and tell apart fitting disc pages",
     prefers=("reasoning", "web"))
+BONUS_CATEGORY = Task("bonus-category", "sort an unmatched extra into its "
+                      "Plex bonus folder", lean="light")
 
 TASKS = {task.name: task for task in (CHAPTERS, CHAPTERS_INSTRUCTED,
                                       COVER_SEARCH, COVER_LOOK, CONTENTS_SEARCH,
@@ -166,7 +168,7 @@ TASKS = {task.name: task for task in (CHAPTERS, CHAPTERS_INSTRUCTED,
                                       COMIC_PAGE_CHECK, COMIC_PDF_JUDGE,
                                       BOOK_TAGS, AUDIO_CONTENT, FILM_YEAR,
                                       FILM_IDENTIFY, AMBIGUOUS_EDITIONS,
-                                      COMMENTARY_NAMES)}
+                                      COMMENTARY_NAMES, BONUS_CATEGORY)}
 
 
 def chapters_task(instructions: str) -> Task:
