@@ -19,7 +19,7 @@ in a mirrored output folder.
 
 With no options, a run:
 
-- **picks the whisper model for the host**: the biggest the free VRAM holds, or `base` on the CPU
+- **picks the whisper model for the host**: the biggest the free VRAM holds, or `base` on the CPU, where it runs one 4-thread worker per 4 logical cores
 - detects each file's language itself
 - writes plain `.txt` transcripts (`-f`)
 - transcribes only the first audio track of a video

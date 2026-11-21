@@ -26,7 +26,8 @@ Options:
                     output, with its transcript embedded as lyrics.
     -j, --jobs <jobs>
                     Run up to <jobs> transcriptions in parallel.
-                    Default: what the card can hold, or 2 on the CPU
+                    Default: what the card can hold, or one per
+                    4 CPU threads on the CPU
     -v, --verbose   Also say why each item was handled the way it was, and on a
                     failure print the tool's whole output rather than its last
                     lines.
