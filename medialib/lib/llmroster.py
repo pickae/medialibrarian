@@ -56,8 +56,9 @@ __all__ = ["MODELS_VARIABLE", "LEAN_VARIABLE", "LEANS", "Task", "TASKS", "CHAPTE
            "BOOK_IMAGE_CHECK", "ERROR_TRIAGE", "COMIC_PAGE_CHECK",
            "COMIC_PDF_JUDGE", "BOOK_TAGS", "AUDIO_CONTENT", "FILM_YEAR",
            "FILM_IDENTIFY", "AMBIGUOUS_EDITIONS", "COMMENTARY_NAMES",
-           "BONUS_CATEGORY", "TRACK_ROLE", "COMMENTARY_JUDGE", "Roster",
-           "RosterError", "load", "require", "optional", "chapters_task"]
+           "BONUS_CATEGORY", "TRACK_ROLE", "COMMENTARY_JUDGE", "SUBTITLE_ADS",
+           "Roster", "RosterError", "load", "require", "optional",
+           "chapters_task"]
 
 MODELS_VARIABLE = "llmModels"
 LEAN_VARIABLE = "llmLean"
@@ -164,6 +165,8 @@ COMMENTARY_JUDGE = Task(
     "commentary-judge",
     "judge an ambiguous audio track from its sampled transcript",
     prefers=("reasoning",))
+SUBTITLE_ADS = Task("subtitle-ads", "spot advert cues in a subtitle",
+                    lean="light")
 
 TASKS = {task.name: task for task in (CHAPTERS, CHAPTERS_INSTRUCTED,
                                       COVER_SEARCH, COVER_LOOK, CONTENTS_SEARCH,
@@ -175,7 +178,8 @@ TASKS = {task.name: task for task in (CHAPTERS, CHAPTERS_INSTRUCTED,
                                       BOOK_TAGS, AUDIO_CONTENT, FILM_YEAR,
                                       FILM_IDENTIFY, AMBIGUOUS_EDITIONS,
                                       COMMENTARY_NAMES, BONUS_CATEGORY,
-                                      TRACK_ROLE, COMMENTARY_JUDGE)}
+                                      TRACK_ROLE, COMMENTARY_JUDGE,
+                                      SUBTITLE_ADS)}
 
 
 def chapters_task(instructions: str) -> Task:

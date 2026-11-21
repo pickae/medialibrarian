@@ -59,6 +59,7 @@ These are read from the environment:
 | `openSubtitlesComUser`, `openSubtitlesComPassword` | asking OpenSubtitles.com second — a separate service, with free accounts of its own | it is not asked |
 | `subDlApiKey` | asking SubDL third — the key a free account at subdl.com gets | it is not asked |
 | `spokenLanguages` | the languages whose subtitles are fetched and tested; a code the language table does not know stops the run before a film is touched | the six it knows by default (en, de, fr, nl, es, it) |
+| `subtitleAdsLlm` | whether a subtitle in a language subcleaner has no word list for (or when subcleaner is absent) is handed to a language model (`subtitle-ads`, see [docs/models.md](../models.md)): its first and last 20 cues are sent | `on` |
 | `mediaServerNaming` | the server the names are written for | `plex`; the names are then written and read the way that server spells them |
 | `subtitleOcrEngines` | the engines a picture subtitle is read with, in the order to try them | the order below |
 | `llmModels`, `llmUrl`, … | the language-model roster (see [Language models](../models.md)): a model that sees pictures serves the `vision` OCR engine (`subtitle-ocr` task) | `vision` is not tried; paddle and tesseract still are |
@@ -189,8 +190,12 @@ ln -s ~/.local/share/subcleaner/subcleaner.py ~/.local/bin/subcleaner
 subcleaner only knows the words of a few languages by heart; for the others to
 be cleaned too (German, French and Italian among ours), set
 `require_language_profile = false` in its `subcleaner.conf` — the file appears
-in `~/.local/share/subcleaner` the first time it runs. The run warns once a language when it
-is not.
+in `~/.local/share/subcleaner` the first time it runs. Where subcleaner has no
+word list for a language (or is not installed) and a language model is set up
+(the `subtitle-ads` task, see [docs/models.md](../models.md)), the first and
+last 20 cues are shown to the model and only advert cues from those shown cues
+are removed (`subtitleAdsLlm=off` turns this off). When neither cleans a
+language, the run warns once a language.
 
 Where the film carries a picture subtitle of its own (a Blu-ray's or a DVD's,
 not forced), the times its lines are on screen stand in for the speech: they

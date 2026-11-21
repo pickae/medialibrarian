@@ -365,6 +365,8 @@ def private_workspace(tmp_path_factory, monkeypatch):
     # turns it back on keeps its verdict cache inside its own scratch folder.
     monkeypatch.setenv("comicPdfLlm", "off")
     monkeypatch.setenv("comicPdfCache", str(scratch / "comic-pdf-verdicts.json"))
+    # Nor is a language model asked to spot subtitle adverts.
+    monkeypatch.setenv("subtitleAdsLlm", "off")
     # Nor the machine's own roster of models: a case that asks the roster
     # gets the models it set up itself, or none.
     monkeypatch.setenv("llmModels", str(scratch / "no-models-file"))
