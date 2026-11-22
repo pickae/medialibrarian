@@ -166,7 +166,7 @@ A track with no cover is looked for **online** only when it is the odd one out:
 The search works the way [concat-audio's](concat-audio.md#chapters-and-cover)
 does: under `-A`, when a [language model](../models.md) is set up and
 `contentKindLlm` is on (the `audio-content` task), the model classifies whether a track without a
-`[YouTube id]` is a podcast, an audio drama, or an audiobook from its folder
+`[YouTube id]` is a podcast, an audio drama, an audiobook, music or classical music from its folder
 path, file name, tags, duration, and channel count; otherwise, or when the
 model is unsure, it falls back to the length and stereo heuristic — a dated
 name or 30–200 minutes in mono reads as a podcast, 30–200 minutes encoded in

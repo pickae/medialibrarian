@@ -69,24 +69,41 @@ count means the files aren't cut where the book's chapters are, so the
 numbers stay. `contentsSearchLlm=off` skips this step.
 
 Among image files in the input folder, cover names win first (`cover` +
-`front`, `front`, `cover` without `back`, `inlay`, `folder`, `back`, in
-decreasing order). When none of those match and the folder holds two or more
-images (for instance `scan01.jpg`, `cd.jpg`, `booklet3.jpg`), a
+`front`, `front`, `cover` without `back`, `inlay`, `folder`, in decreasing
+order). When none of those match and the folder holds two or more images
+(for instance `scan01.jpg`, `cd.jpg`, `booklet3.jpg`, or `Back.jpg`,
+`Label.jpg`, `Page 01.jpg`), a
 [language model](../models.md) that **sees pictures** — the `cover-look` task
 — is shown those images with their file names and the folder's name and picks
 which one is the front cover; when none looks like one, no vision model is set
-up, or `coverLookLlm=off`, the first image found is taken. Those image files
-and their names go to that model, so use one you trust with them.
+up, or `coverLookLlm=off`, an image named `back` is taken, else the first
+image found. Those image files and their names go to that model, so use one
+you trust with them. Under convert-and-concat the images and the PDF
+booklet are looked for beside the source folder, since its intermediate
+tree holds only the transcoded audio.
 
 A book that none of the three gave a cover is looked for **online**. What it
 probably is decides where: a name ending in a `[YouTube id]` (yt-dlp's
 default) is a YouTube podcast, and that video's own thumbnail is fetched;
 otherwise, under `-A`, when a [language model](../models.md) is set up and
 `contentKindLlm` is on, a light model (the `audio-content` task) classifies
-whether the recording is a podcast, an audio drama, or an audiobook from the
-folder's path and file names, the tracks' tags, the duration, and the channel
-count. When the run has no `-A`, no model is available, `contentKindLlm=off`, or the model is
-unsure, it falls back to the length and channel-count heuristic: a name
+whether the recording is a podcast, an audio drama, an audiobook, music or
+classical music from the folder's path and file names, the tracks' tags, the
+duration, and the channel count. Without a model, music is told by its tags
+or where it is kept: a genre that is not speech reads as music, and a
+classical genre, a conductor, a catalogue number such as "Op. 27", or a
+folder named Klassik or Classical on the way to it reads as classical; an
+untagged folder under one named Music reads as music. Music is looked for as
+an album (iTunes, Deezer, MusicBrainz's Cover Art Archive); classical music
+as one performance of a work, by its performer and the work - an untagged
+recording's own folder naming the performer and the one above it the work -
+and taken only when the release's artist is that performer and its title
+names the work - and, where the folder names its label ("35 Lindqvist
+(Nordlabel, 1972)"), only a release that label's copyright line names, since
+a performer may have recorded the work more than once. Under convert-and-concat these clues are read from the
+source folders, not its intermediate tree. When the run has no `-A`, no
+model is available, `contentKindLlm=off`, or the model is unsure, and
+nothing says music, it falls back to the length and channel-count heuristic: a name
 starting with a `yyyymmdd` date, or a length of 30 to 200 minutes in mono,
 reads as a podcast (YouTube, then the show's artwork); 30 to 200 minutes in
 stereo reads as an audio drama; anything longer as an audiobook (Audible,
@@ -124,7 +141,11 @@ can search the web can look up the recording's metadata tags - the `book-tags`
 task (`title`, `author`, `narrator`, `series`, `series_index`, `year`,
 `language`, and `abridged`). It is told the folder's file names, the tracks'
 tags, what the book probably is, and any hints the cover search returned when
-that ran; it also runs when the book already had a local cover.
+that ran; it also runs when the book already had a local cover. Music is
+asked for an album's tags instead (`title`, `album`, `artist`,
+`album_artist`, `year`, `genre`, `label`), and classical music for its
+`composer`, `work`, `performer`, `conductor` and `ensemble` as tags of their
+own, with the performers - never the composer - as its artist.
 
 Only tags that are currently empty on the joined output file are filled —
 non-empty tags are never overwritten, and the output file is never renamed.

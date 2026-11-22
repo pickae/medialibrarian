@@ -203,7 +203,8 @@ SETTINGS: tuple[Setting, ...] = (
             "order, by its path", ("concat-audio", "convert-and-concat", "convert-audio"),
             "the shipped `medialib/config/coverproviders.tsv`"),
     Setting("contentKindLlm", "Whether a language model classifies a recording "
-            "as podcast, audio drama or audiobook before that online cover "
+            "as podcast, audio drama, audiobook, music or classical music "
+            "before that online cover "
             "search runs (the `audio-content` task, see docs/models.md), instead "
             "of guessing from length and channel count alone: it is told the "
             "folder's path and file names, the tracks' tags, the duration and "
@@ -237,7 +238,11 @@ SETTINGS: tuple[Setting, ...] = (
             "(title, author, narrator, series, series index, year, language, "
             "abridged) are looked up by a language model on the web (the "
             "`book-tags` task, see docs/models.md): it is told the folder's "
-            "file names, the tracks' tags and what the book probably is. Only "
+            "file names, the tracks' tags and what the book probably is. A "
+            "music album is asked for an album's tags instead (title, album, "
+            "artist, album artist, year, genre, label), and a classical one "
+            "for its composer, work, performer, conductor and ensemble as "
+            "tags of their own. Only "
             "empty tags are filled and the output file is never renamed. Only "
             "a model that can search is asked - Claude, or one behind "
             "`llmHarness`: `on` or `off`",

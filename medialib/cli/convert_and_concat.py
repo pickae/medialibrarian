@@ -33,6 +33,7 @@ from medialib.lib import (
     clioptions,
     enums,
     ffmpegselect,
+    onlinecover,
     ramscratch,
     runcontext,
     runlog,
@@ -660,6 +661,13 @@ def _concat_phase(in_path, out_path, temp_path, stage, only_concat,
     """Every book concatenated; returns how many of the concat-audio runs
     failed one or more of theirs."""
     os.chdir(temp_path)
+    # The intermediate tree holds the transcoded audio alone; where each of
+    # its folders came from is handed down, for the cover search and the
+    # content classifier to read the folders the source lies in - "Music",
+    # "Klassik" - rather than the scratch's.
+    if not only_concat and os.path.isdir(in_path):
+        runcontext.settle(onlinecover.SOURCE_TREE_VARIABLE,
+                          "%s\t%s" % (temp_path, in_path))
     # -p, because the given output can name a path several levels into an empty
     # target disk.
     os.makedirs(out_path, exist_ok=True)
