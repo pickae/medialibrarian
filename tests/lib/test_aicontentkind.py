@@ -177,7 +177,7 @@ class TestStrictParsing:
         "not json at all",
         '["podcast"]',
         '{"content": "unsure", "confidence": "high", "why": "cannot tell"}',
-        '{"content": "music", "confidence": "high", "why": "songs"}',
+        '{"content": "songs", "confidence": "high", "why": "songs"}',
         '{"content": "hoerspiel", "confidence": "high"}',
         '{"content": "audiobook", "confidence": "certain"}',
         '{"content": "audiobook", "confidence": 0.9}',
@@ -223,7 +223,7 @@ class TestClassifyAndFallbacks:
         '{"content": "drama", "confidence": "low", "why": "not enough clues"}',
         '{"content": "unsure", "confidence": "high", "why": "ambiguous"}',
         "I am not sure what this is.",
-        '{"content": "music", "confidence": "high"}',
+        '{"content": "lecture", "confidence": "high"}',
     ])
     def test_other_low_confidence_unsure_or_invalid_falls_back(
             self, tmp_path, monkeypatch, answer):

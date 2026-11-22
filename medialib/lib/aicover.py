@@ -108,7 +108,10 @@ _CONTENT = {
     "podcast": "probably a podcast or a podcast episode",
     "drama": "probably an audio drama with a full cast",
     "audiobook": "probably an audiobook",
-    "other": "unclear - perhaps music, a short story or a lecture",
+    "music": "probably a music album",
+    "classical": "probably a classical music recording, known by its "
+                 "composer, work and performers",
+    "other": "unclear - perhaps a short story or a lecture",
 }
 
 SYSTEM = """You find cover images for a personal audio library. You can search \
@@ -126,7 +129,11 @@ and words - not a translation's cover.
 audio label, a library's audiobook record) over the printed book's; the \
 printed book's cover when no audiobook cover exists. For a podcast, the \
 episode's own image over the show's artwork; the show's artwork when the \
-episode has none. For an audio drama, the release's own cover.
+episode has none. For an audio drama, the release's own cover. For music, \
+the album's own front cover. For classical music, the cover of THIS \
+performance - the same soloist, conductor or orchestra, and the same label \
+and year where the names give them - never another performance of the same \
+work, whose cover is a different record.
 4. High resolution: the largest version a site offers (at least 500 pixels \
 on the short side where there is one), square or portrait, without \
 watermarks, stickers, borders or a store's overlay.
@@ -140,7 +147,7 @@ from the address where the site serves the original that way).
 Answer with JSON only, in this form:
 {"images": [{"url": "https://...", "page": "the page you found it on", \
 "title": "the title as that page gives it", "language": "its language", \
-"edition": "audiobook, book, podcast, episode or drama", \
+"edition": "audiobook, book, podcast, episode, drama or album", \
 "why": "one sentence on why it is this recording"}]}
 Best first, at most %d. {"images": []} when you found nothing you are sure \
 of.""" % MAX_IMAGES
@@ -206,6 +213,17 @@ def _tag_lines(input_path: str, tracks: Sequence[str],
     return lines
 
 
+def _music_line(subject: onlinecover.Subject) -> str:
+    """The work, performer and composer a music subject is known by, as a
+    sentence to follow what it probably is; "" for anything else."""
+    named = [(label, value) for label, value in (
+        ("work or album", subject.work), ("performer", subject.performer),
+        ("composer", subject.composer)) if value]
+    if subject.content not in ("music", "classical") or not named:
+        return ""
+    return ". Probably: " + "; ".join("%s %s" % pair for pair in named)
+
+
 def account(input_path: str, output_name: str, tracks: Sequence[str],
             subject: onlinecover.Subject,
             probe: Callable[[str], dict] = onlinecover.probe_tags) -> list[str]:
@@ -213,10 +231,14 @@ def account(input_path: str, output_name: str, tracks: Sequence[str],
     section to an item: its folder and files, the tags inside its tracks, the
     name it is written out under, and what it probably is."""
     folder = os.path.normpath(input_path)
-    parents = [part for part in folder.replace(os.sep, "/").split("/")[-4:-1] if part]
+    # Where it came from rather than convert-and-concat's scratch tree, whose
+    # folders say nothing about it.
+    source = os.path.normpath(onlinecover.source_folder(input_path))
+    parents = [part for part in source.replace(os.sep, "/").split("/")[-4:-1] if part]
     content = _CONTENT.get(subject.content, subject.content)
     if subject.why:
         content += ", because of %s" % subject.why
+    content += _music_line(subject)
     return [
         "## The input folder\n\nIts name: %s\nThe folders it sits in, outermost "
         "first: %s\n\nIts files:\n%s" % (
