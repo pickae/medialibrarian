@@ -76,22 +76,22 @@ _FFMPEG = ("concat-audio", "content-census", "convert-and-concat", "convert-audi
 # Every command that keeps scratch in RAM.
 _SCRATCH = ("concat-audio", "content-census", "content-census-bi", "convert-and-concat",
             "convert-audio", "convert-comics", "convert-images", "convert-video",
-            "generate-chapters", "ingest-books", "ingest-movies", "ingest-music", "read-library",
-            "transcribe-audio", "ytdlp")
+            "find-covers", "generate-chapters", "ingest-books", "ingest-movies", "ingest-music",
+            "read-library", "transcribe-audio", "ytdlp")
 
 # Every command that asks a language model.
 _AI_CHAPTERS = ("concat-audio", "content-census", "convert-and-concat",
                 "convert-audio", "convert-comics", "convert-video",
-                "find-fragment-candidates", "find-gaps", "generate-chapters",
-                "ingest-books", "ingest-movies", "ingest-music",
-                "plex-letterboxd-sync", "read-library", "ytdlp")
+                "find-covers", "find-fragment-candidates", "find-gaps",
+                "generate-chapters", "ingest-books", "ingest-movies",
+                "ingest-music", "plex-letterboxd-sync", "read-library", "ytdlp")
 
 # Every command in the repository (info logs and error logs).
 _ALL_COMMANDS = (
     "clean-folder-structure", "clean-folder-structure-adb", "concat-audio",
     "content-census", "content-census-bi", "convert-and-concat",
     "convert-audio", "convert-comics", "convert-images", "convert-video",
-    "cue-to-chapters", "find-fragment-candidates", "find-gaps",
+    "cue-to-chapters", "find-covers", "find-fragment-candidates", "find-gaps",
     "generate-chapters", "ingest-books", "ingest-movies", "ingest-music",
     "plex-letterboxd-sync", "read-library", "transcribe-audio", "ytdlp",
 )
@@ -197,10 +197,13 @@ SETTINGS: tuple[Setting, ...] = (
             "`<upscaleHome>/models`", ("convert-video",), "`2xLiveActionV1_SPAN_490000.onnx`"),
     Setting("coverSearch", "Whether a cover nothing local supplied is looked for "
             "online - for a book always, for a converted track only when it is a "
-            "long or dated one among tracks that carry covers: `on` or `off`",
-            ("concat-audio", "convert-and-concat", "convert-audio"), "on"),
+            "long or dated one among tracks that carry covers, and by find-covers "
+            "for every file it looks at: `on` or `off`",
+            ("concat-audio", "convert-and-concat", "convert-audio",
+             "find-covers"), "on"),
     Setting("coverSearchTable", "The table of where that search looks, in what "
-            "order, by its path", ("concat-audio", "convert-and-concat", "convert-audio"),
+            "order, by its path", ("concat-audio", "convert-and-concat", "convert-audio",
+             "find-covers"),
             "the shipped `medialib/config/coverproviders.tsv`"),
     Setting("contentKindLlm", "Whether a language model classifies a recording "
             "as podcast, audio drama or audiobook before that online cover "
@@ -209,7 +212,8 @@ SETTINGS: tuple[Setting, ...] = (
             "folder's path and file names, the tracks' tags, the duration and "
             "the channel layout, and falls back to the length heuristic when "
             "uncertain or unavailable: `on` or `off`",
-            ("concat-audio", "convert-and-concat", "convert-audio"), "on"),
+            ("concat-audio", "convert-and-concat", "convert-audio",
+             "find-covers"), "on"),
     Setting("coverSearchLlm", "Whether a book or converted track that search "
             "found no cover for is handed to a language model to search the web "
             "for one (the `cover-search` task, see docs/models.md): it is told "
@@ -217,7 +221,8 @@ SETTINGS: tuple[Setting, ...] = (
             "model that can search is asked - Claude, or one behind "
             "`llmHarness` - and for a converted track a vision model "
             "(`cover-look`) must also accept the image: `on` or `off`",
-            ("concat-audio", "convert-and-concat", "convert-audio"), "on"),
+            ("concat-audio", "convert-and-concat", "convert-audio",
+             "find-covers"), "on"),
     Setting("coverLookLlm", "Whether a book folder holding two or more image "
             "files that none of the cover-name words (`front`, `cover`, "
             "`inlay`, `folder`, `back`) matched is handed to a vision model "

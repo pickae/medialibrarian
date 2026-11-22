@@ -51,6 +51,7 @@ _MISSING_DIR = {
     "read-library": ["no-such-dir", "out"],
     "ingest-movies": ["no-such-dir"],
     "find-gaps": ["no-such-dir"],
+    "find-covers": ["no-such-dir", "out"],
 }
 
 

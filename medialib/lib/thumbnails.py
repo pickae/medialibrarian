@@ -42,7 +42,9 @@ __all__ = [
     "extract_thumbnail",
     "embed_thumbnail",
     "apply_cover",
+    "embed_cover_file",
     "extract_source_cover",
+    "online_book_cover",
 ]
 
 # The image extensions the ladder knows. Matched on the basename the way
@@ -282,22 +284,35 @@ def _online_thumbnail(input_path: str, outputs: Sequence[str],
                       cover_meta: dict[str, str] | None = None) -> str:
     """A cover found online for the book joined from <input_path>, or "".
 
-    The catalogues first (:mod:`onlinecover`), then a model that can search
-    the web (:mod:`aicover`), told everything the catalogues were. The book's
-    length and channel count are read off the joined output, the tags off its
-    source tracks: they say what the book probably is and which answer is it.
-    Podcast length in stereo is most likely a full-cast drama, since
-    convert-audio keeps a talk mono.
+    The book's length and channel count are read off the joined output: they
+    say what the book probably is and which answer is it. Podcast length in
+    stereo is most likely a full-cast drama, since convert-audio keeps a talk
+    mono.
 
-    A cover either found is kept in <input_path> as well
-    (:func:`_keep_in_input`), so the folder has its cover from then on.
+    A cover found is kept in <input_path> as well (:func:`_keep_in_input`),
+    so the folder has its cover from then on.
     """
-    tracks = [path for path in _regular_files(input_path)
-              if lower_extension_of(path) in _AUDIO_EXTENSIONS]
-    ordered = sorted(tracks, key=version_key)
     joined = next((path for path in outputs if os.path.isfile(path)), "")
     seconds = onlinecover.media_seconds(joined) if joined else 0.0
     stereo = bool(joined) and onlinecover.media_channels(joined) >= 2
+    image = online_book_cover(input_path, seconds, stereo, ram_base,
+                              model_meter, cover_meta)
+    if image:
+        _keep_in_input(image, input_path)
+    return image
+
+
+def online_book_cover(input_path: str, seconds: float, stereo: bool,
+                      ram_base: str, model_meter: str = "",
+                      cover_meta: dict[str, str] | None = None) -> str:
+    """A cover found online for the book in <input_path>, saved beside
+    <ram_base>, or "". The catalogues first (:mod:`onlinecover`), then a
+    model that can search the web (:mod:`aicover`, only under -A), told
+    everything the catalogues were. The tags are read off the folder's audio
+    tracks; <input_path> itself is only read."""
+    tracks = [path for path in _regular_files(input_path)
+              if lower_extension_of(path) in _AUDIO_EXTENSIONS]
+    ordered = sorted(tracks, key=version_key)
     subject = onlinecover.book_subject(input_path, ordered, seconds, stereo,
                                        meter_file=model_meter)
     image = onlinecover.book_cover(input_path, ordered, seconds,
@@ -309,8 +324,6 @@ def _online_thumbnail(input_path: str, outputs: Sequence[str],
             ordered, seconds,
             f"{ram_base}.model", stereo=stereo, subject=subject,
             meter_file=model_meter, found_meta=cover_meta)
-    if image:
-        _keep_in_input(image, input_path)
     return image
 
 
@@ -465,26 +478,39 @@ def apply_cover(track: str, target: str | None, cover_threshold: int,
     if not os.path.isfile(temp_cover):
         return 0
 
-    file_size = os.stat(temp_cover).st_size
+    # Whatever the embed did, the status is zero; only a successful embed
+    # drops the now-redundant sidecar copies in the output folder.
+    if embed_cover_file(track, target, temp_cover, cover, cover_threshold,
+                        cover_quality, cover_resolution, run,
+                        origin=origin) == 0:
+        _remove_quiet(disk_cover)
+        _remove_quiet(disk_cover_webp)
+    return 0
+
+
+def embed_cover_file(track: str, target: str, image: str, cover: str,
+                     cover_threshold: int, cover_quality: int,
+                     cover_resolution: str, run: Runner = _run,
+                     origin: str = "the source's own art") -> int:
+    """<image> embedded in <target> by way of <cover>: recompressed to
+    <cover_resolution> at <cover_quality> when it is <cover_threshold> bytes
+    or more, copied as it is otherwise. The embed's status - 0 when <target>
+    carries it. <track> and <origin> are what -v says it was, and from where.
+    """
+    file_size = os.stat(image).st_size
     if file_size >= cover_threshold:
         run(imagemagick.convert_argv(
-            [imagecodecs.coder_prefixed(temp_cover),
+            [imagecodecs.coder_prefixed(image),
              "-quality", str(cover_quality),
              "-resize", f"{cover_resolution}>", cover]))
         recompressed = True
     else:
-        shutil.copyfile(temp_cover, cover)
+        shutil.copyfile(image, cover)
         recompressed = False
     _detail("    %s: cover from %s, %s, %s"
             % (track, origin, formatting.fmt_bytes(file_size),
                "recompressed" if recompressed else "kept at its own size"))
-
-    # Whatever the embed did, the status is zero; only a successful embed
-    # drops the now-redundant sidecar copies in the output folder.
-    if mutagentags.embed_cover(target, cover) == 0:
-        _remove_quiet(disk_cover)
-        _remove_quiet(disk_cover_webp)
-    return 0
+    return mutagentags.embed_cover(target, cover)
 
 
 def extract_source_cover(src: str, tmp_dir: str, run: Runner = _run) -> int:

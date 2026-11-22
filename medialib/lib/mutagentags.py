@@ -34,8 +34,9 @@ import os
 import sys
 from collections.abc import Mapping
 
-__all__ = ["BOOK_TAG_FIELDS", "MP4_SUFFIXES", "embed_chapters", "embed_cover",
-           "fill_book_tags", "has_tag", "read_book_tags", "set_tag"]
+__all__ = ["BOOK_TAG_FIELDS", "COVER_SUFFIXES", "MP4_SUFFIXES",
+           "embed_chapters", "embed_cover", "fill_book_tags", "has_tag",
+           "read_book_tags", "set_tag"]
 
 # The containers whose metadata is MP4's rather than a Vorbis comment's: a cover
 # is a `covr` atom, and chapters are a track this module cannot write at all.
@@ -45,6 +46,9 @@ __all__ = ["BOOK_TAG_FIELDS", "MP4_SUFFIXES", "embed_chapters", "embed_cover",
 MP4_SUFFIXES = (".m4a", ".m4b", ".mp4")
 
 _VORBIS_SUFFIXES = (".opus", ".flac", ".ogg", ".oga")
+MP3_SUFFIXES = (".mp3", ".mpga")
+# What :func:`embed_cover` can put a cover in.
+COVER_SUFFIXES = (*MP4_SUFFIXES, *_VORBIS_SUFFIXES, *MP3_SUFFIXES)
 
 # The canonical audiobook tag fields :func:`read_book_tags` and
 # :func:`fill_book_tags` know how to read and write across Vorbis, MP4 and MP3.
@@ -114,9 +118,25 @@ def embed_cover(audio: str, cover: str) -> int:
     cleared first so a rerun replaces rather than accumulates. Opus carries the
     same structure base64-encoded in a METADATA_BLOCK_PICTURE comment. MP4 keeps
     neither: a `covr` atom holds the JPEG bytes on their own, with no picture
-    structure around them, so it is the one branch that does not build one.
+    structure around them. An MP3 keeps it in an ID3 APIC frame, and an .ogg
+    whichever codec it holds the way Opus does.
     """
     try:
+        if audio.lower().endswith(MP3_SUFFIXES):
+            from mutagen.id3 import APIC, ID3, ID3NoHeaderError
+
+            try:
+                id3 = ID3(audio)
+            except ID3NoHeaderError:
+                id3 = ID3()
+            with open(cover, "rb") as image:
+                data = image.read()
+            id3.delall("APIC")
+            id3.add(APIC(encoding=3, mime="image/jpeg", type=3, desc="Cover",
+                         data=data))
+            id3.save(audio)
+            return 0
+
         if audio.lower().endswith(MP4_SUFFIXES):
             from mutagen.mp4 import MP4, MP4Cover
 
@@ -139,9 +159,7 @@ def embed_cover(audio: str, cover: str) -> int:
             handle.save()
             return 0
 
-        from mutagen.oggopus import OggOpus
-
-        opus = OggOpus(audio)
+        opus = _open(audio)
         # Through the file rather than through `.tags`, which mutagen types as
         # optional - the same mapping the line below and `embed_chapters` already
         # use, and it answers "no picture" for a file with no tags at all rather

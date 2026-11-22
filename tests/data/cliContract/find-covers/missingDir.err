@@ -1,0 +1,27 @@
+Directory "no-such-dir" does not exist.
+
+Usage:
+    find-covers [options] <inputDir> <outputDir>
+
+    inputDir      the tree whose audio files are looked at; only read.
+    outputDir     where a copy of each file a cover was found for is written,
+                  at the same relative path, with the cover embedded. Created
+                  if missing, and refused if it lies inside inputDir.
+Options:
+    -h, --help      Print this help page.
+    -i, --ignore-folder-covers
+                    Also look for a file whose folder holds a cover image
+                    (folder.jpg, cover.png, an image sharing its name, ...),
+                    rather than taking that image as its cover.
+    -n, --dry-run   Only list the files that would be looked for; nothing is
+                    searched or written.
+    -A, --ai        Let language models help (docs/models.md). Without -A no
+                    step asks one; the commands this one starts are handed it.
+    -v, --verbose   Also say why each item was handled the way it was, and on a
+                    failure print the tool's whole output rather than its last
+                    lines.
+    -q, --quiet     Print errors only - no progress and no warnings.
+    -x, --set <name=value>
+                    Override a setting for this run, over the settings file;
+                    repeatable. A secret is refused - the settings file is where
+                    it goes. The settings page lists the names.

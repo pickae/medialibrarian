@@ -69,6 +69,7 @@ __all__ = [
     "probable_content",
     "read_table",
     "track_cover",
+    "track_image",
     "track_subject",
     "track_wants_search",
 ]
@@ -965,6 +966,28 @@ def track_subject(source: str, seconds: float, stereo: bool = False,
     return subject
 
 
+def track_image(source: str, seconds: float, dest_dir: str,
+                search: CoverSearch | None = None, *,
+                stereo: bool = False, meter_file: str = "",
+                classifiers: Sequence[Any] | None = None) -> str:
+    """An image found for the track at ``source``, saved in ``dest_dir``
+    with its own extension, or "": the catalogues first, then
+    :func:`medialib.lib.aicover.track_cover`, which asks a model only under
+    -A. Asked whatever the track is - whether it is worth asking is the
+    caller's to decide."""
+    tags = probe_tags(source)
+    subject = track_subject(source, seconds, stereo=stereo, tags=tags,
+                            meter_file=meter_file, classifiers=classifiers)
+    image = _search(subject, os.path.join(dest_dir, "online"), search)
+    if not image:
+        from medialib.lib import aicover
+        image = aicover.track_cover(
+            source, seconds, os.path.join(dest_dir, "model"),
+            stereo=stereo, subject=subject, meter_file=meter_file,
+            probe=lambda _path: tags)
+    return image
+
+
 def track_cover(source: str, seconds: float, tmp_dir: str,
                 search: CoverSearch | None = None,
                 has_cover: Callable[[str], bool] = has_embedded_cover,
@@ -983,16 +1006,8 @@ def track_cover(source: str, seconds: float, tmp_dir: str,
         return
     if not track_wants_search(source, seconds, has_cover):
         return
-    tags = probe_tags(source)
-    subject = track_subject(source, seconds, stereo=stereo, tags=tags,
-                            meter_file=meter_file, classifiers=classifiers)
-    image = _search(subject, os.path.join(tmp_dir, "online"), search)
-    if not image:
-        from medialib.lib import aicover
-        image = aicover.track_cover(
-            source, seconds, os.path.join(tmp_dir, "model"),
-            stereo=stereo, subject=subject, meter_file=meter_file,
-            probe=lambda _path: tags)
+    image = track_image(source, seconds, tmp_dir, search, stereo=stereo,
+                        meter_file=meter_file, classifiers=classifiers)
     if not image:
         return
     if image.endswith(".jpg"):
