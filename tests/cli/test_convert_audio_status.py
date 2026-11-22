@@ -111,6 +111,45 @@ class TestStatusRow:
             "  0.00x realtime")
 
 
+class TestEncodingDone:
+    """Every job counted and none still encoding: what is left is the covers
+    and tags hung on the last outputs, which is not encoding, so the row's
+    clock and speed stop where the last encode ended."""
+
+    def test_the_clock_and_speed_stop_where_the_last_encode_ended(
+            self, counters, monkeypatch):
+        counters.progress.write_text("80\n")
+        with counters.encoding():
+            pass
+        monkeypatch.setattr(ca.time, "time", lambda: float(NOW + 600))
+        assert counters.status_text() == (
+            "  encoding 80/80 jobs done: elapsed 3:07  encoded 3:14:08"
+            "  62.3x realtime  finishing covers and tags")
+
+    def test_an_encode_still_in_flight_keeps_the_clock_running(
+            self, counters, monkeypatch):
+        counters.progress.write_text("80\n")
+        with counters.encoding():
+            pass
+        counters.console.count("encoding")
+        monkeypatch.setattr(ca.time, "time", lambda: float(NOW + 13))
+        assert counters.status_text() == (
+            "  encoding 80/80 jobs: elapsed 3:20  encoded 3:14:08"
+            "  58.2x realtime")
+
+    def test_jobs_still_to_start_keep_the_clock_running(self, counters):
+        with counters.encoding():
+            pass
+        assert counters.status_text() == (
+            "  encoding 12/80 jobs: elapsed 3:07  encoded 3:14:08"
+            "  62.3x realtime")
+
+    def test_a_queue_of_nothing_but_skips_never_claims_an_encode_done(
+            self, counters):
+        counters.progress.write_text("80\n")
+        assert "done" not in counters.status_text()
+
+
 class TestPerFileLine:
     """What keeps the row AT THE BOTTOM while the per-file reports scroll past
     above it: every worker erases the row before printing its own line and

@@ -8,6 +8,7 @@ with it, so it is not repeated here; nor is the encoder choice itself, which is
 `medialib/lib/xheaac.py` and has its own file.
 """
 
+import contextlib
 import itertools
 import os
 
@@ -1007,6 +1008,8 @@ class TestAnOpusEncodeOfASurroundSource:
             def report_progress(self, *args):
                 pass
 
+            encoding = contextlib.nullcontext
+
         # The chunk's own measurement is not what is under test; declining it
         # stops the job right after the encode.
         monkeypatch.setattr(ca.durationcheck, "verify", lambda *a: False)
@@ -1157,6 +1160,8 @@ class TestTheAacEncode:
         class _Counters:
             def report_progress(self, *args):
                 pass
+
+            encoding = contextlib.nullcontext
 
             def tally_duration(self, duration):
                 pass
