@@ -461,19 +461,23 @@ def apply_cover(track: str, target: str | None, cover_threshold: int,
                 cover_quality: int, cover_resolution: str, input_dir: str,
                 output_dir: str, tmp_dir: str, opus: str, script_dir: str,
                 run: Runner = _run,
-                origin: str = "the source's own art") -> int:
+                origin: str = "the source's own art",
+                out_track: str | None = None) -> int:
     """Let a sidecar cover override the source's, then embed it in <target>.
 
     <target> defaults to <opus>. <origin> is where a cover that is not a
     sidecar was taken from - the source's own art, or an online search.
+    <out_track> is <track> as it is named under <output_dir>, where the
+    sidecar's copy is dropped once embedded; <track> itself unless given.
     """
     if not target:
         target = opus
     temp_cover = f"{tmp_dir}/tempCover.jpg"
     cover = f"{tmp_dir}/cover.jpg"
     stem = _stem_of(track)
-    disk_cover = f"{output_dir}/{stem}.jpg"
-    disk_cover_webp = f"{output_dir}/{stem}.webp"
+    out_stem = _stem_of(out_track) if out_track else stem
+    disk_cover = f"{output_dir}/{out_stem}.jpg"
+    disk_cover_webp = f"{output_dir}/{out_stem}.webp"
 
     # The sidecar is an image sharing the track's base name in the INPUT
     # folder, where it always sits next to the source audio. Copied (not

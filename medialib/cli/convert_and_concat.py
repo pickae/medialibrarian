@@ -33,6 +33,7 @@ from medialib.lib import (
     clioptions,
     enums,
     ffmpegselect,
+    mobilenames,
     onlinecover,
     ramscratch,
     runcontext,
@@ -87,6 +88,8 @@ s |  | iterate through different input subfolders independently
 c |  | Skip the conversion: join the files as they are.
 b | <bitrate> | The conversion's bitrate, handed to convert-audio -b.
 i |  | Clean the names in the input folders first.
+k |  | Keep the output names as they are, handed to concat-audio -k;
+            by default they are made safe for Android and iOS.
 e | <codec> | output encoding of the transcoding phase, handed to
             convert-audio: {codecs}. aac and xheaac are written as .m4a,
             which the concatenating phase joins into an .m4b; xheaac
@@ -95,10 +98,10 @@ e | <codec> | output encoding of the transcoding phase, handed to
 """.format(codecs=" or ".join(enums.AUDIO_CODECS), codec=DEFAULT_CODEC)
 
 OPT_VARS = ("m:mono s:subFolders c:onlyConcat b:bitrate i:inputClean "
-            "e:outputCodec")
+            "e:outputCodec k:keepNames")
 OPT_COLUMN = 12
 OPT_LONG = ("m:mono s:sub-folders c:only-concat b:bitrate i:clean-input "
-            "e:encoding")
+            "e:encoding k:keep-names")
 
 # Checked here and not left to the child: the transcode is the THIRD phase, so
 # a typo would surface only after the cleaning and unpacking have run.
@@ -373,6 +376,7 @@ def main(argv: list, program: str = "convert-and-concat",
     sub_folders = "s" in result.given
     only_concat = "c" in result.given
     input_clean = "i" in result.given
+    keep_names = "k" in result.given
     bitrate = result.values["bitrate"]
     codec = result.values["outputCodec"] or DEFAULT_CODEC
     script_dir = script_dir or commands.script_dir()
@@ -449,7 +453,8 @@ def main(argv: list, program: str = "convert-and-concat",
 
         # PHASE 4
         failed = _concat_phase(in_path, out_path, temp_path, stage,
-                               only_concat, sub_folders, script_dir)
+                               only_concat, sub_folders, script_dir,
+                               keep_names)
 
         if not only_concat or stage:
             progress("Cleaning up RAM temp folder")
@@ -622,6 +627,11 @@ def _transcode_phase(in_path, temp_path, stage, only_concat, mono, bitrate,
     # would come out part converted and part copied as it was, two formats the
     # concatenation then cannot join.
     options += ["-g", "2" if sub_folders else "1"]
+    # The staging tree keeps the input's names: the cue sheets are copied into
+    # it and the cover search reads the source beside it by the same relative
+    # path, and the concatenation names the books and their chapters from it.
+    # The finished books are what concat-audio names for a phone.
+    options += ["-k"]
 
     # One transcoded tree, fed from up to two input trees: the input as given,
     # and the unpacked archives. Each is handed over only when it holds
@@ -657,7 +667,7 @@ def _transcode_phase(in_path, temp_path, stage, only_concat, mono, bitrate,
 
 
 def _concat_phase(in_path, out_path, temp_path, stage, only_concat,
-                  sub_folders, script_dir) -> int:
+                  sub_folders, script_dir, keep_names=False) -> int:
     """Every book concatenated; returns how many of the concat-audio runs
     failed one or more of theirs."""
     os.chdir(temp_path)
@@ -706,11 +716,13 @@ def _concat_phase(in_path, out_path, temp_path, stage, only_concat,
             # it; the same path is handed over, so the created folder and the
             # output target match. The input keeps its real, raw name.
             safe = safety.clean_input_path(name)
+            if not keep_names:
+                safe = mobilenames.mobile_name(safe)
             progress("Concatenating subfolder %d/%d: %s -> %s"
                      % (index, len(sub_dirs), name, safe))
             target = os.path.join(out_path, safe)
             os.makedirs(target, exist_ok=True)
-            if not _concat_one(sub_dir, target, script_dir):
+            if not _concat_one(sub_dir, target, script_dir, keep_names):
                 failed.append(name)
         return _failed_concatenations(failed, len(sub_dirs))
 
@@ -724,19 +736,22 @@ def _concat_phase(in_path, out_path, temp_path, stage, only_concat,
     failed = []
     for root in unit_roots:
         progress("Concatenating single output folder: " + root)
-        if not _concat_one(root, out_path, script_dir):
+        if not _concat_one(root, out_path, script_dir, keep_names):
             failed.append(root)
     return _failed_concatenations(failed, len(unit_roots))
 
 
-def _concat_one(source: str, target: str, script_dir: str) -> bool:
+def _concat_one(source: str, target: str, script_dir: str,
+                keep_names: bool = False) -> bool:
     """One concat-audio run; whether it made every book it was handed.
 
     Unlike the other phases, a concatenation that ends non-zero does not end
     this run: it has already said which of its books failed, and the trees
     still to come are other books, which that failure has no bearing on.
     """
-    done = commands.run_command("concat-audio", [source, target],
+    done = commands.run_command("concat-audio",
+                                (["-k"] if keep_names else [])
+                                + [source, target],
                                 script_dir=script_dir).returncode == 0
     # A concatenation shares this run's abort flag, so an interrupt ends it
     # non-zero too - and that is this run being stopped, not a failed book.

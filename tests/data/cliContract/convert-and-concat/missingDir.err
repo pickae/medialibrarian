@@ -37,6 +37,9 @@ Usage:
             The conversion's bitrate, handed to convert-audio -b.
     -i, --clean-input
             Clean the names in the input folders first.
+    -k, --keep-names
+            Keep the output names as they are, handed to concat-audio -k;
+            by default they are made safe for Android and iOS.
     -e, --encoding <codec>
             output encoding of the transcoding phase, handed to
             convert-audio: opus or aac or xheaac. aac and xheaac are written as .m4a,

@@ -8,6 +8,9 @@ Usage:
     -p, --pretreat
             opt-in input pretreatment (in-place): renames folders/files in
             <inputDir> before concatenation.
+    -k, --keep-names
+            keep the output names as they are; by default they are made
+            safe for Android and iOS (no : ? * " < > | and the like).
     -h, --help
             print this help page.
     -A, --ai

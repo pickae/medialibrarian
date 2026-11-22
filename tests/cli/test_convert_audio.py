@@ -280,6 +280,38 @@ class TestTheOutputCodec:
         assert run.output_path("track").endswith("track.opus")
 
 
+class TestOutputsAreNamedForAPhone:
+    """Without -k every output file and folder is named the way Android and
+    iOS accept it; with it, the input's names stand."""
+
+    def _run(self, mobile):
+        return ca.Run(input_dir="in", output_dir="out", codec="opus",
+                      extension="opus", mobile=mobile)
+
+    def test_by_default_every_component_is_mapped(self):
+        relative = os.path.join("Act 1: Live", "Why?.flac")
+        assert (self._run(True).output_path(relative)
+                == os.path.join("out", "Act 1 - Live", "Why.opus"))
+
+    def test_keep_names_leaves_them_as_they_are(self):
+        relative = os.path.join("Act 1: Live", "Why?.flac")
+        assert (self._run(False).output_path(relative)
+                == os.path.join("out", "Act 1: Live", "Why?.opus"))
+
+    def test_the_mirror_copies_covers_under_mapped_names(self, tmp_path):
+        """With names Windows can hold too, so the test runs there: a leading
+        dot and a leading space, both of which a phone's name drops."""
+        source = tmp_path / "in" / ".Disc 1"
+        source.mkdir(parents=True)
+        (source / " cover.jpg").write_bytes(b"jpg")
+        (source / "track.flac").write_bytes(b"")
+        out = tmp_path / "out"
+        ca._mirror_folders_and_covers(str(tmp_path / "in"), str(out),
+                                      mobile=True)
+        assert (out / "Disc 1" / "cover.jpg").read_bytes() == b"jpg"
+        assert not (out / "Disc 1" / "track.flac").exists()
+
+
 class TestWhichSourcesAreAlreadyFinished:
     """The lift-out asks "is this stream already what I would produce". For
     xhe-aac that cannot be answered by the codec name alone."""
