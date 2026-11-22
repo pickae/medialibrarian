@@ -289,23 +289,27 @@ class TestOutputsAreNamedForAPhone:
                       extension="opus", mobile=mobile)
 
     def test_by_default_every_component_is_mapped(self):
-        assert (self._run(True).output_path("Act 1: Live/Why?.flac")
+        relative = os.path.join("Act 1: Live", "Why?.flac")
+        assert (self._run(True).output_path(relative)
                 == os.path.join("out", "Act 1 - Live", "Why.opus"))
 
     def test_keep_names_leaves_them_as_they_are(self):
-        assert (self._run(False).output_path("Act 1: Live/Why?.flac")
+        relative = os.path.join("Act 1: Live", "Why?.flac")
+        assert (self._run(False).output_path(relative)
                 == os.path.join("out", "Act 1: Live", "Why?.opus"))
 
     def test_the_mirror_copies_covers_under_mapped_names(self, tmp_path):
-        source = tmp_path / "in" / "Disc: 1"
+        """With names Windows can hold too, so the test runs there: a leading
+        dot and a leading space, both of which a phone's name drops."""
+        source = tmp_path / "in" / ".Disc 1"
         source.mkdir(parents=True)
-        (source / "cover?.jpg").write_bytes(b"jpg")
+        (source / " cover.jpg").write_bytes(b"jpg")
         (source / "track.flac").write_bytes(b"")
         out = tmp_path / "out"
         ca._mirror_folders_and_covers(str(tmp_path / "in"), str(out),
                                       mobile=True)
-        assert (out / "Disc - 1" / "cover.jpg").read_bytes() == b"jpg"
-        assert not (out / "Disc - 1" / "track.flac").exists()
+        assert (out / "Disc 1" / "cover.jpg").read_bytes() == b"jpg"
+        assert not (out / "Disc 1" / "track.flac").exists()
 
 
 class TestWhichSourcesAreAlreadyFinished:

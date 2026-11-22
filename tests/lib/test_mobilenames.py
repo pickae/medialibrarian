@@ -1,5 +1,7 @@
 """The white box for medialib/lib/mobilenames.py."""
 
+import os
+
 import pytest
 
 from medialib.lib import mobilenames as mn
@@ -53,8 +55,8 @@ class TestMobileName:
 
 class TestMobilePath:
     def test_every_component_is_mapped(self):
-        assert (mn.mobile_path("CD1: Live/Track?.opus")
-                == "CD1 - Live/Track.opus")
+        assert (mn.mobile_path(os.path.join("CD1: Live", "Track?.opus"))
+                == os.path.join("CD1 - Live", "Track.opus"))
 
     def test_an_empty_path_stays_empty(self):
         assert mn.mobile_path("") == ""

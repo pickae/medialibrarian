@@ -79,8 +79,13 @@ def mobile_name(name: str, reserve: int = 0) -> str:
 
 
 def mobile_path(relative: str) -> str:
-    """A relative path with every component a phone accepts."""
+    """A relative path with every component a phone accepts. Split on this
+    system's separators only - "/" as well as "\\" on Windows - so that a
+    backslash, which is a character in a Linux name, is mapped rather than
+    taken for a folder."""
     if not relative:
         return relative
+    separators = re.escape(os.sep + (os.altsep or ""))
     return os.path.join(*(mobile_name(part) if part not in (".", "..") else part
-                          for part in relative.split(os.sep) if part))
+                          for part in re.split("[%s]" % separators, relative)
+                          if part))
