@@ -17,11 +17,20 @@ server there:
   and when the run ends at the latest;
 - with no room on the GPU, or no command to start it with, it is not to be had
   now, and the caller goes down its ladder to what it can have.
+
+A run that fans out to worker processes holds its servers in the run's own
+process instead (:func:`held_for_run`): a worker lives for one item, and a
+server it started would be stopped when it ends, under every other worker still
+asking it. The run starts what is not answering, keeps it for the whole run,
+starts it again when it goes down, and stops at the end only what it started.
+A worker of such a run never starts or stops a server itself: it uses one that
+answers, and waits for the run to bring back one that does not.
 """
 
 from __future__ import annotations
 
 import atexit
+import contextlib
 import json
 import os
 import shlex
@@ -31,15 +40,27 @@ import tempfile
 import threading
 import time
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Iterator
 
-__all__ = ["Server", "free_vram", "answering", "served_model", "stop_all"]
+from medialib.lib import runcontext
+
+__all__ = ["Server", "free_vram", "answering", "served_model", "stop_all",
+           "held_for_run", "OWNER_VARIABLE"]
+
+# The process that holds the run's servers (:func:`held_for_run`), by its pid,
+# handed to the workers and the commands it starts.
+OWNER_VARIABLE = "MODEL_SERVER_OWNER"
 
 # How long a server started here has to answer, and how often it is asked.
 START_TIMEOUT = 300
 _POLL = 2.0
 # How long a stopped server has to exit before it is killed.
 _STOP_GRACE = 30
+# How often the run holding its servers looks whether they still answer, and
+# how many looks in a row a server whose process is still there may miss
+# before it is started again - a server swapping models is slow to answer.
+WATCH_SECONDS = 10.0
+_WATCH_MISSES = 6
 
 # Every server this process started, so the run's end stops them all.
 _started: list = []
@@ -87,6 +108,26 @@ def answering(url: str) -> bool:
     return served_model(url) is not None
 
 
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+def _owner() -> int:
+    """The live process, other than this one, that holds the run's servers;
+    0 where there is none."""
+    try:
+        pid = int(runcontext.get(OWNER_VARIABLE) or 0)
+    except ValueError:
+        return 0
+    return pid if pid > 0 and pid != os.getpid() and _alive(pid) else 0
+
+
 class Server:
     """One model server: its address, and how to start it where it is not
     running - see the module."""
@@ -103,15 +144,22 @@ class Server:
         self._users = 0
         self._timer: threading.Timer | None = None
         self._answered = False
+        self._misses = 0
 
     @property
     def started_here(self) -> bool:
         return self._process is not None
 
-    def acquire(self, log: Callable[[str], None]) -> bool:
+    def acquire(self, log: Callable[[str], None],
+                until: float | None = None) -> bool:
         """Whether the server can be used now - answering, or started here
         and answering - and, when it can, it is held in use until
-        :meth:`release`."""
+        :meth:`release`. In a worker of a run that holds its servers, only
+        whether it answers, waiting for the run to bring it back - until
+        ``until``, a time.monotonic() reading, where that comes sooner."""
+        owner = _owner()
+        if owner:
+            return self._await(owner, until)
         with self._lock:
             if self._timer is not None:
                 self._timer.cancel()
@@ -137,6 +185,37 @@ class Server:
             self._timer = threading.Timer(self.idle, self._idle_stop)
             self._timer.daemon = True
             self._timer.start()
+
+    def _await(self, owner: int, until: float | None) -> bool:
+        deadline = time.monotonic() + START_TIMEOUT
+        if until is not None:
+            deadline = min(deadline, until)
+        while True:
+            if answering(self.url):
+                return True
+            if time.monotonic() >= deadline or not _alive(owner):
+                return False
+            time.sleep(_POLL)
+
+    def keep_up(self, log: Callable[[str], None]) -> None:
+        """Started again where it has stopped answering: at once when the
+        process started here is gone, after :data:`_WATCH_MISSES` looks in a
+        row otherwise. A server found running that went away is started here
+        as one would be that was never running."""
+        with self._lock:
+            if answering(self.url):
+                self._misses = 0
+                return
+            self._misses += 1
+            gone = self._process is not None and self._process.poll() is not None
+            if not gone and self._misses < _WATCH_MISSES:
+                return
+            self._misses = 0
+            if self._process is not None:
+                log("  The model server for %s stopped answering; restarting it"
+                    % self.url)
+                self._stop()
+            self._start(log)
 
     def _start(self, log: Callable[[str], None]) -> bool:
         if self._process is not None and self._process.poll() is None:
@@ -215,6 +294,50 @@ def stop_all() -> None:
         _started.clear()
     for server in servers:
         server.stop()
+
+
+@contextlib.contextmanager
+def held_for_run(servers: Iterable[Server], log: Callable[[str], None],
+                 watch: float = WATCH_SECONDS) -> Iterator[list[Server]]:
+    """``servers`` held by this process for as long as the block runs, for
+    the worker processes it starts - see the module. Each is started where it
+    is not answering and there is room for it, watched every ``watch``
+    seconds and started again when it goes down, and stopped at the end when
+    it was started here; one found running is left running. Yields the ones
+    that answer as the block starts.
+
+    Nothing is held where another live process already holds the run's
+    servers: that one's workers, and so this process's, use what it holds."""
+    if _owner():
+        yield []
+        return
+    unique = list({id(server): server for server in servers}.values())
+    answered = [server for server in unique if server.acquire(log)]
+    had = runcontext.get(OWNER_VARIABLE, None)
+    runcontext.settle(OWNER_VARIABLE, str(os.getpid()))
+    done = threading.Event()
+
+    def look() -> None:
+        while not done.wait(watch):
+            for server in unique:
+                server.keep_up(log)
+
+    watcher = threading.Thread(target=look, name="model-server-watch",
+                               daemon=True)
+    watcher.start()
+    try:
+        yield answered
+    finally:
+        done.set()
+        watcher.join()
+        if had is None:
+            runcontext.forget(OWNER_VARIABLE)
+        else:
+            runcontext.settle(OWNER_VARIABLE, had)
+        for server in unique:
+            with server._lock:
+                server._users = 0
+            server.stop()
 
 
 atexit.register(stop_all)

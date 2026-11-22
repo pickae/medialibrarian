@@ -40,6 +40,15 @@ case "$STUB_MODE" in
   fail) echo '{"type":"step_start","sessionID":"ses_1"}'; echo boom >&2; exit 3;;
   hang) echo '{"type":"step_start","sessionID":"ses_1"}'; sleep 30;;
   empty) echo '{"type":"step_start","sessionID":"ses_1"}'; exit 0;;
+  refused) echo '{"type":"step_start","sessionID":"ses_1"}'
+    echo '{"type":"error","sessionID":"ses_1","error":{"type":"provider.transport","message":"ECONNREFUSED: Unable to connect."}}'
+    exit 1;;
+  full) echo '{"type":"step_start","sessionID":"ses_1"}'
+    echo '{"type":"error","sessionID":"ses_1","error":{"type":"provider.rate-limit","message":"inference request queue is full","status":429}}'
+    exit 1;;
+  broken) echo '{"type":"step_start","sessionID":"ses_1"}'
+    echo '{"type":"error","sessionID":"ses_1","error":{"type":"tool","message":"the tool broke"}}'
+    exit 1;;
 esac
 echo '{"type":"text","sessionID":"ses_1","part":{"messageID":"m1","type":"text","text":"let me search"}}'
 echo '{"type":"tool_use","sessionID":"ses_1","part":{"messageID":"m1","type":"tool"}}'
@@ -111,6 +120,21 @@ class TestAsking:
         with pytest.raises(llmharness.HarnessError, match="did not answer"):
             _ask(timeout=1)
         assert opencode.lines()[-1] == "delete ses_1"
+
+    @pytest.mark.parametrize("mode,said", [("refused", "ECONNREFUSED"),
+                                           ("full", "queue is full")])
+    def test_a_server_that_refused_the_session_is_named_unavailable(
+            self, opencode, monkeypatch, mode, said):
+        monkeypatch.setenv("STUB_MODE", mode)
+        with pytest.raises(llmharness.HarnessUnavailable, match=said):
+            _ask()
+        assert opencode.lines()[-1] == "delete ses_1"
+
+    def test_any_other_error_the_session_names_is_said(self, opencode, monkeypatch):
+        monkeypatch.setenv("STUB_MODE", "broken")
+        with pytest.raises(llmharness.HarnessError, match="the tool broke") as raised:
+            _ask()
+        assert not isinstance(raised.value, llmharness.HarnessUnavailable)
 
     def test_no_text_is_no_answer(self, opencode, monkeypatch):
         monkeypatch.setenv("STUB_MODE", "empty")

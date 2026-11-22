@@ -63,7 +63,9 @@ error always keeps it — including rescuing real book illustrations whose
 filename happens to match a junk-name substring. With `bookJunkImagesLlm=off`
 or no vision model available, `-d` falls back to the fixed junk-name substrings
 (`teaser`, `backadd`). Candidate images and their file names are sent to that
-model, so use one you trust with them.
+model, so use one you trust with them. A book's checks share one time limit,
+`llmItemSeconds` (five minutes by default); a check that runs out of time or
+fails keeps every image, and the book is still written.
 
 An illustration has to be worth downscaling on *both* counts before `-d` touches
 it: over the size threshold, and not already starved. Scaling a picture that has

@@ -43,6 +43,8 @@ from medialib.lib import (
     ffmpegselect,
     formatting,
     imagesizes,
+    llmclient,
+    llmroster,
     modelmeter,
     onlinecover,
     ramscratch,
@@ -133,6 +135,12 @@ JOBS_FROM_DISK = 2
 # How much bigger than its sources a book is reckoned when RAM is reserved for
 # it: the cover it gains, and a FLAC re-encode that can come out a little larger.
 BOOK_SIZE_MARGIN = 1.1
+
+# The uses of a model a book may make, whose servers the run holds for its
+# workers.
+_LLM_TASKS = (llmroster.AUDIO_CONTENT, llmroster.CONTENTS_SEARCH,
+              llmroster.COVER_SEARCH, llmroster.COVER_LOOK,
+              llmroster.BOOK_TAGS, llmroster.MUSIC_SEARCH)
 BOOK_SIZE_SLACK = 64 * 1024 * 1024
 
 # The join, per format: which extension the sources have, which container comes
@@ -759,7 +767,6 @@ class Run:
         """One book, joined and given its chapters and cover, all in
         <scratch>. Returns the finished file, or "" when there is none -
         which has already been said and recorded."""
-        chapter_file = output_path + ".ch"
         name = os.path.basename(output_path)
 
         # The per-step lines are -v's: the progress line above is the one a
@@ -815,6 +822,20 @@ class Run:
         # so a lone file keeps its chapters only through here - and a lone
         # file without any would get one chapter for the whole book, which is
         # no chapter at all.
+        # Every model step below shares one time limit, so a slow or failing
+        # model holds the book up for that long at most and never costs it:
+        # what is not found by then is left out, and the book is written.
+        with llmclient.time_limit(llmroster.item_seconds()):
+            return self._finish(scan, input_path, output_path, fmt, label,
+                                scratch, concat_list, joined, produced)
+
+    def _finish(self, scan: "Scan", input_path: str, output_path: str,
+                fmt: str, label: str, scratch: str, concat_list: list,
+                joined: str, produced: float) -> str:
+        """The joined book given its chapters, cover and tags."""
+        chapter_file = output_path + ".ch"
+        name = os.path.basename(output_path)
+        step = runlog.detail
         chapter_lines = []
         if scan.cues and scan.audio_files == 1:
             cue, why = select_cue_sheet(scan.cues, scan.audio_file)
@@ -833,10 +854,13 @@ class Run:
                 chapter_lines = []
             # Files that only number the book give chapters that only number
             # it: a model that can search may find the book's own titles.
-            chapter_lines = aicontents.book_titles(
-                input_path, name, chapter_lines,
-                [chapters._entry_path(entry) for entry in concat_list], joined,
-                meter_file=self.contents_meter)
+            numbered = chapter_lines
+            with llmclient.guarded("the chapter-name search for %s" % name,
+                                   log):
+                chapter_lines = aicontents.book_titles(
+                    input_path, name, numbered,
+                    [chapters._entry_path(entry) for entry in concat_list],
+                    joined, meter_file=self.contents_meter)
 
         if chapter_lines:
             step("    Embedding chapters")
@@ -844,27 +868,33 @@ class Run:
 
         step("    Embedding thumbnail")
         cover_meta: dict[str, str] = {}
-        thumbnails.embed_thumbnail(input_path, output_path, IMAGE_SIZE_LIMIT,
-                                   JPG_QUALITY_LEVEL, self.thumbnail_resolution,
-                                   DPI, self.have_mkvtoolnix, scratch,
-                                   self.script_dir,
-                                   model_meter=self.model_meter,
-                                   cover_meta=cover_meta)
+        with llmclient.guarded("the cover for %s" % name, log):
+            thumbnails.embed_thumbnail(
+                input_path, output_path, IMAGE_SIZE_LIMIT, JPG_QUALITY_LEVEL,
+                self.thumbnail_resolution, DPI, self.have_mkvtoolnix, scratch,
+                self.script_dir, model_meter=self.model_meter,
+                cover_meta=cover_meta)
         if not os.path.isfile(joined):
             self.record_failure(name, "the book was lost while its chapters "
                                       "and cover were written into it.")
             return ""
         if aibooktags.enabled():
             step("    Filling empty book tags")
-            seconds = produced or onlinecover.media_seconds(joined)
-            stereo = onlinecover.media_channels(joined) >= 2
-            aibooktags.tag_book(
-                joined, input_path, name,
-                _sorted_by_extension(input_path, FORMATS[fmt][0]),
-                seconds, stereo=stereo,
-                cover_hints=cover_meta or None,
-                meter_file=self.model_meter)
+            with llmclient.guarded("the tag search for %s" % name, log):
+                seconds = produced or onlinecover.media_seconds(joined)
+                stereo = onlinecover.media_channels(joined) >= 2
+                aibooktags.tag_book(
+                    joined, input_path, name,
+                    _sorted_by_extension(input_path, FORMATS[fmt][0]),
+                    seconds, stereo=stereo,
+                    cover_hints=cover_meta or None,
+                    meter_file=self.model_meter)
         return joined
+
+
+def run_models() -> list:
+    """The models a book of this run may ask, each once: none without -A."""
+    return llmroster.run_models(_LLM_TASKS)
 
 
 def _read_count(path: str) -> int:
@@ -1111,8 +1141,13 @@ def _run_with_scratch(ram_dir: str, input_dir: str, output_dir: str,
     )
 
     if total:
-        workerpool.map(list(zip(input_paths, output_paths, strict=True)), jobs,
-                       state.process_pair)
+        # The model servers held here rather than in the workers: one a
+        # worker started would stop with it, under every other worker.
+        models = run_models() if total > len(state.present_before) else []
+        with llmclient.held_for_run(models, os.path.join(ram_dir, "llmSlots"),
+                                    log):
+            workerpool.map(list(zip(input_paths, output_paths, strict=True)),
+                           jobs, state.process_pair)
         safety.exit_if_aborted()
 
     report_model(state.model_meter, "Cover and book-tags model")

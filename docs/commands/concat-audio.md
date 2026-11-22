@@ -131,6 +131,23 @@ non-empty tags are never overwritten, and the output file is never renamed.
 `bookTagsLlm=off` switches this step off; the files' names and tags go to the
 model, so use one you trust with them.
 
+## When the model is slow or down
+
+A model never costs a book its audio. Each book's model steps - chapter
+names, cover and tag searches, waiting for the model included - share one
+time limit, `llmItemSeconds` (five minutes by default). When it runs out, the
+steps still waiting get nothing and the book is written with what was found by
+then. A step that fails in any other way is skipped with a warning, and the
+book is still written. A server that refuses a request, because nothing is listening or its
+queue is full, is not asked again for that request.
+
+All the books building at once share the model's request slots: `llmJobs`
+requests in flight over the whole run, not per book. When the model's server
+isn't running and `llmServe` says how to start it, the run starts it once,
+before the first book, keeps it up for the whole run, starts it again if it
+goes down, and stops it at the end. A server that was already running is left
+running.
+
 ---
 
 **Options:** `concat-audio -h` lists every option and its default. **Shared

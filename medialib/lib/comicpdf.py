@@ -11,7 +11,15 @@ import re
 import shutil
 import subprocess
 
-from medialib.lib import aicomicpdf, runcontext, settings, toolcapture
+from medialib.lib import (
+    aicomicpdf,
+    llmclient,
+    llmroster,
+    runcontext,
+    runlog,
+    settings,
+    toolcapture,
+)
 from medialib.lib.formatting import awk_number
 
 __all__ = [
@@ -238,7 +246,13 @@ def comic_pdf_verdict(pdf: str, max_height_px: str = "0") -> tuple:
         return True, pages, good, dpi
     if aicomicpdf.should_ask(pages, good, min_page_share):
         meter_file = runcontext.get(aicomicpdf.METER_VARIABLE, "")
-        verdict = aicomicpdf.judge(pdf, pages, good, meter_file=meter_file)
+        # A judge that breaks or runs out of time is no verdict: the rule's
+        # "not a comic" stands.
+        verdict = None
+        with llmclient.time_limit(llmroster.item_seconds()), \
+                llmclient.guarded("the comic check of %s" % os.path.basename(pdf),
+                                  runlog.log):
+            verdict = aicomicpdf.judge(pdf, pages, good, meter_file=meter_file)
         if verdict is not None and verdict.comic:
             return True, pages, good, dpi
     return False, pages, good, dpi
