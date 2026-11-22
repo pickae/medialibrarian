@@ -109,6 +109,9 @@ def answering(url: str) -> bool:
 
 
 def _alive(pid: int) -> bool:
+    # On Windows os.kill ends the process rather than asking after it.
+    if os.name == "nt":
+        return True
     try:
         os.kill(pid, 0)
     except ProcessLookupError:

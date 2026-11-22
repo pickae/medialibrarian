@@ -176,6 +176,9 @@ RETRY_WAIT_SECONDS = 5
 # rather than over each one (:func:`held_for_run`).
 SLOTS_VARIABLE = "LLM_SLOTS_DIR"
 _SLOT_POLL = 0.25
+# Whether this platform can lock those files; Windows cannot, and each
+# process keeps its own slots there.
+_CAN_LOCK = importlib.util.find_spec("fcntl") is not None
 
 # When the requests of the step now running on this thread must be done by,
 # as a time.monotonic() reading (``until``); unset while no :func:`time_limit`
@@ -390,10 +393,11 @@ class Llm:
     def _slot(self):
         """One request slot, held while a request is in flight: shared by the
         whole run where it keeps its slots in files (:data:`SLOTS_VARIABLE`),
-        this process's own otherwise. A model's slots are its server's, so
+        this process's own otherwise, and on a platform that cannot lock
+        files. A model's slots are its server's, so
         two entries asking the same model at the same address share them."""
         directory = runcontext.get(SLOTS_VARIABLE)
-        if directory and self.jobs > 0:
+        if directory and self.jobs > 0 and _CAN_LOCK:
             key = hashlib.sha1(("%s %s" % (modelserver.root(self.url), self.model))
                                .encode("utf-8")).hexdigest()[:16]
             return _RunSlot(directory, key, self.jobs)

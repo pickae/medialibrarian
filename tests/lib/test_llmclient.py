@@ -346,6 +346,7 @@ class TestTimeLimit:
             assert llmclient._request_seconds() == llmclient.REQUEST_SECONDS
 
 
+@pytest.mark.skipif(not llmclient._CAN_LOCK, reason="no fcntl on this platform")
 class TestRunWideSlots:
     """Slots kept in files hold every process of the run to the model's jobs,
     not each one."""
@@ -686,3 +687,13 @@ def test_a_pickled_model_gets_request_slots_of_its_own():
     assert copy._slots.acquire(blocking=False)
     assert copy._slots.acquire(blocking=False)
     assert not copy._slots.acquire(blocking=False)
+
+
+def test_where_files_cannot_be_locked_a_process_keeps_its_own_slots(
+        tmp_path, monkeypatch):
+    monkeypatch.setenv(llmclient.SLOTS_VARIABLE, str(tmp_path))
+    monkeypatch.setattr(llmclient, "_CAN_LOCK", False)
+    llm = llmclient.from_environment(dict(_LOCAL, llmJobs="1"))
+    assert not isinstance(llm._slot(), llmclient._RunSlot)
+    with llm._slot():
+        pass
