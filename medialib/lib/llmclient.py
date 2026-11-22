@@ -41,30 +41,44 @@ A model behind the openai protocol cannot look anything up, so where the user
 has an agent harness (:data:`HARNESS_VARIABLE`, :mod:`medialib.lib.llmharness`)
 a request that is to search the web (:meth:`Llm.searching`) is asked through
 it instead. :mod:`medialib.lib.modelmeter` counts what each use asked.
+
+A run that fans out to worker processes shares its models' servers and their
+request slots across them (:func:`held_for_run`), and a step that must not hold
+up its item gives its requests a :func:`time_limit`.
 """
 
 from __future__ import annotations
 
 import base64
 import contextlib
+import hashlib
 import importlib.util
 import ipaddress
 import json
 import os
 import re
+import shutil
 import socket
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+import typing
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field, replace
 
-from medialib.lib import llmharness, llmtraits, modelserver, tmdbclient, tooldeps
+from medialib.lib import (
+    llmharness,
+    llmtraits,
+    modelserver,
+    runcontext,
+    tmdbclient,
+    tooldeps,
+)
 from medialib.lib.modelmeter import Tally
 
 __all__ = ["API_VARIABLE", "URL_VARIABLE", "MODEL_VARIABLE", "KEY_VARIABLE",
@@ -73,8 +87,10 @@ __all__ = ["API_VARIABLE", "URL_VARIABLE", "MODEL_VARIABLE", "KEY_VARIABLE",
            "HARNESS_VARIABLE", "HARNESS_MODEL_VARIABLE", "TRAITS_VARIABLE",
            "SERVE_MIB", "APIS", "DEFAULT_API",
            "DEFAULT_ANTHROPIC_MODEL", "DEFAULT_CONTEXT_TOKENS", "DEFAULT_JOBS",
-           "THOROUGH_EFFORT", "LlmError", "Tally", "Llm", "from_environment", "build",
-           "preflight", "usable", "is_local", "first_json", "json_strings"]
+           "THOROUGH_EFFORT", "LlmError", "OutOfTimeError", "Tally", "Llm",
+           "from_environment", "build", "preflight", "usable", "is_local",
+           "first_json", "json_strings", "time_limit", "guarded", "held_for_run",
+           "SLOTS_VARIABLE"]
 
 # The settings, by the names a user gives them.
 API_VARIABLE = "llmApi"
@@ -155,6 +171,20 @@ REQUEST_SECONDS = 900
 RETRIES = 2
 RETRY_WAIT_SECONDS = 5
 
+# Where a run that fans out to worker processes keeps its request slots: one
+# lock file per slot, so :attr:`Llm.jobs` holds over every process of the run
+# rather than over each one (:func:`held_for_run`).
+SLOTS_VARIABLE = "LLM_SLOTS_DIR"
+_SLOT_POLL = 0.25
+# Whether this platform can lock those files; Windows cannot, and each
+# process keeps its own slots there.
+_CAN_LOCK = importlib.util.find_spec("fcntl") is not None
+
+# When the requests of the step now running on this thread must be done by,
+# as a time.monotonic() reading (``until``); unset while no :func:`time_limit`
+# is. Per thread, because a command's threads each work an item of their own.
+_limit = threading.local()
+
 # The most a reply may run to. An outline is a few kilobytes of JSON; the
 # headroom is for a model that reasons before it answers, which can spend
 # tens of thousands of tokens on a long transcript - and a server left to its
@@ -187,6 +217,114 @@ class NoServerError(LlmError):
 
 class _PermanentLlmError(LlmError):
     """A refusal that repeating the same request will not cure."""
+
+
+class OutOfTimeError(LlmError):
+    """The time a :func:`time_limit` gave the step's requests ran out."""
+
+
+class _UnavailableError(LlmError):
+    """Nothing listens at the server, or its queue is full: asking again a
+    few seconds later only adds to the load that refused it."""
+
+
+@contextlib.contextmanager
+def time_limit(seconds: float) -> Iterator[None]:
+    """Every request asked inside the block - waiting for a slot, waiting
+    for the server, the request itself and its retries - done within
+    ``seconds`` of the block starting: what is left of it is each request's
+    timeout, and once it is spent a request is not sent (OutOfTimeError).
+    0 or less is no limit. Inside another limit, the earlier one stands.
+    For the thread it is set on: a thread started inside the block asks
+    without one."""
+    before = _deadline()
+    if seconds > 0:
+        until = time.monotonic() + seconds
+        _limit.until = until if before is None else min(before, until)
+    try:
+        yield
+    finally:
+        _limit.until = before
+
+
+@contextlib.contextmanager
+def guarded(what: str, log: Callable[[str], None]) -> Iterator[None]:
+    """A step that asks a model, kept from costing the item it is a step of:
+    any error out of the block - one the step did not expect, as well as a
+    model's - is said as a warning and goes no further, so what the item makes
+    is still written. An interrupt still stops the run."""
+    try:
+        yield
+    except Exception as error:
+        log("    WARNING: %s failed and was left out: %s"
+            % (what, str(error) or type(error).__name__))
+
+
+def _deadline() -> float | None:
+    return getattr(_limit, "until", None)
+
+
+def _seconds_left() -> float | None:
+    until = _deadline()
+    return None if until is None else until - time.monotonic()
+
+
+def _request_seconds() -> int:
+    """How long the next request may take: :data:`REQUEST_SECONDS`, or what
+    is left of the :func:`time_limit` where that is less."""
+    left = _seconds_left()
+    if left is None:
+        return REQUEST_SECONDS
+    return max(1, min(REQUEST_SECONDS, int(left)))
+
+
+def _out_of_time(what: str = "") -> OutOfTimeError:
+    return OutOfTimeError("the time given for asking ran out%s"
+                          % (" " + what if what else ""))
+
+
+class _RunSlot:
+    """One of ``count`` request slots shared by every process of the run: a
+    lock file per slot in ``directory``, the first free one taken. Waited
+    for until the :func:`time_limit`, if there is one."""
+
+    def __init__(self, directory: str, key: str, count: int) -> None:
+        self.paths = [os.path.join(directory, "%s.%d" % (key, slot))
+                      for slot in range(count)]
+        self.handle: typing.TextIO | None = None
+
+    def __enter__(self) -> _RunSlot:
+        import fcntl
+        while True:
+            for path in self.paths:
+                handle = open(path, "a")
+                try:
+                    fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except OSError:
+                    handle.close()
+                    continue
+                self.handle = handle
+                return self
+            left = _seconds_left()
+            if left is not None and left <= 0:
+                raise _out_of_time("waiting for the model")
+            time.sleep(_SLOT_POLL if left is None else min(_SLOT_POLL, left))
+
+    def __exit__(self, *_exc) -> None:
+        if self.handle is not None:
+            self.handle.close()
+            self.handle = None
+
+
+@contextlib.contextmanager
+def _semaphore(slots: threading.BoundedSemaphore) -> Iterator[None]:
+    left = _seconds_left()
+    if not slots.acquire(timeout=None if left is None else max(0.0, left)):
+        raise _out_of_time("waiting for the model")
+    try:
+        yield
+    finally:
+        slots.release()
 
 
 @dataclass
@@ -251,6 +389,19 @@ class Llm:
         self.__dict__.update(state)
         if self.jobs > 0:
             self._slots = threading.BoundedSemaphore(self.jobs)
+
+    def _slot(self):
+        """One request slot, held while a request is in flight: shared by the
+        whole run where it keeps its slots in files (:data:`SLOTS_VARIABLE`),
+        this process's own otherwise, and on a platform that cannot lock
+        files. A model's slots are its server's, so
+        two entries asking the same model at the same address share them."""
+        directory = runcontext.get(SLOTS_VARIABLE)
+        if directory and self.jobs > 0 and _CAN_LOCK:
+            key = hashlib.sha1(("%s %s" % (modelserver.root(self.url), self.model))
+                               .encode("utf-8")).hexdigest()[:16]
+            return _RunSlot(directory, key, self.jobs)
+        return _semaphore(self._slots) if self._slots else contextlib.nullcontext()
 
     def describe(self) -> str:
         """The model as a run reports it: which, and where, and how hard it
@@ -336,7 +487,7 @@ class Llm:
             server = None
             if at == 0 and self.serve:
                 server = _server(url, self.serve, self.serve_mib)
-                if not server.acquire(log):
+                if not server.acquire(log, until=_deadline()):
                     continue
             try:
                 listing = _listing(url, self.key)
@@ -413,7 +564,11 @@ class Llm:
         picture after its ``Image N:`` label (when there is more than one).
         ``options`` adds per-request fields over :attr:`options` on the openai
         protocol; ``max_tokens`` overrides the output limit; ``allow_empty``
-        lets an empty reply stand as ``""`` instead of retrying."""
+        lets an empty reply stand as ``""`` instead of retrying.
+
+        A request the server refused - nothing listening, its queue full - is
+        not sent again; nor is one once the :func:`time_limit` is spent
+        (OutOfTimeError)."""
         if images and self.harness:
             raise LlmError("pictures are not sent through %s" % self.harness.program)
         pictures = [_picture(path) for path in images]
@@ -421,16 +576,26 @@ class Llm:
         last = ""
         for attempt in range(tries + 1):
             if attempt:
-                time.sleep(RETRY_WAIT_SECONDS * 2 ** (attempt - 1))
+                wait = RETRY_WAIT_SECONDS * 2 ** (attempt - 1)
+                left = _seconds_left()
+                if left is not None and left <= wait:
+                    raise _out_of_time("after: %s" % last)
+                time.sleep(wait)
+            left = _seconds_left()
+            if left is not None and left <= 0:
+                raise _out_of_time()
             try:
-                with self._slots or contextlib.nullcontext():
+                with self._slot():
                     started = time.monotonic()
                     outcome = self._ask_once(
                         system, prompt, pictures, numbered=numbered,
                         options=options, max_tokens=max_tokens)
-            except _PermanentLlmError:
+            except (_PermanentLlmError, _UnavailableError, OutOfTimeError):
                 raise
             except LlmError as error:
+                left = _seconds_left()
+                if left is not None and left <= 0:
+                    raise _out_of_time("after: %s" % error) from error
                 last = str(error)
                 continue
             if len(outcome) == 3:
@@ -516,7 +681,9 @@ class Llm:
             try:
                 return llmharness.ask(
                     self.harness, self.harness_model, system, prompt,
-                    REQUEST_SECONDS, llmharness.session_title(self.purpose)), None, None
+                    _request_seconds(), llmharness.session_title(self.purpose)), None, None
+            except llmharness.HarnessUnavailable as error:
+                raise _UnavailableError(str(error)) from error
             except llmharness.HarnessError as error:
                 raise LlmError(str(error)) from error
         # Plain text calls keep their original 3-argument shape so callers and
@@ -652,6 +819,30 @@ def _server(url: str, command: str, need_mib: int) -> modelserver.Server:
             _servers[key] = modelserver.Server(url, command, need_mib,
                                                idle=SERVE_IDLE)
         return _servers[key]
+
+
+@contextlib.contextmanager
+def held_for_run(llms, slots_dir: str,
+                 log: Callable[[str], None]) -> Iterator[None]:
+    """The servers ``llms`` start where they are not running, held by this
+    process for the worker processes it starts (:func:`modelserver.held_for_run`),
+    and every model's request slots shared by them all through files in
+    ``slots_dir`` - so :attr:`Llm.jobs` is what the server is asked at once
+    over the whole run, not in each worker. Nothing at all without a model."""
+    llms = list(llms)
+    if not llms:
+        yield
+        return
+    servers = [_server(llm.url, llm.serve, llm.serve_mib)
+               for llm in llms if llm.api == "openai" and llm.serve]
+    os.makedirs(slots_dir, exist_ok=True)
+    runcontext.settle(SLOTS_VARIABLE, slots_dir)
+    try:
+        with modelserver.held_for_run(servers, log):
+            yield
+    finally:
+        runcontext.forget(SLOTS_VARIABLE)
+        shutil.rmtree(slots_dir, ignore_errors=True)
 
 
 def _refused(url: str) -> bool:
@@ -900,7 +1091,7 @@ def _post_openai(
         value = tmdbclient._config_value
         lines = ["url = " + value(llm.url + "/chat/completions"),
                  "request = \"POST\"", "silent", "show-error",
-                 "max-time = %d" % REQUEST_SECONDS,
+                 "max-time = %d" % _request_seconds(),
                  'header = "Content-Type: application/json"',
                  "data-binary = " + value("@" + body_file),
                  'write-out = "\\n%{http_code}"']
@@ -918,8 +1109,10 @@ def _post_openai(
         except OSError:
             pass
     if proc.returncode != 0:
-        raise LlmError("%s: %s" % (llm.url, proc.stderr.decode("utf-8", "replace").strip()
-                                   or "curl exited %d" % proc.returncode))
+        detail = "%s: %s" % (llm.url, proc.stderr.decode("utf-8", "replace").strip()
+                             or "curl exited %d" % proc.returncode)
+        # 7: the connection was refused - nothing listens there.
+        raise (_UnavailableError if proc.returncode == 7 else LlmError)(detail)
     text, _, status = proc.stdout.decode("utf-8", "replace").rpartition("\n")
     if status == "400" and limit_field and re.search(
             r"max_(completion_)?tokens|unsupported parameter|unrecognized",
@@ -927,6 +1120,10 @@ def _post_openai(
         raise _LimitRefused()
     if not status.startswith("2"):
         detail = "%s answered HTTP %s: %s" % (llm.url, status, _error_text(text))
+        # A local server's queue is full: the run's own requests filled it.
+        # A hosted API's rate limit is waited out like any other failure.
+        if status == "429" and llm.local:
+            raise _UnavailableError(detail)
         if status.startswith("4") and status not in ("408", "429"):
             raise _PermanentLlmError(detail)
         raise LlmError(detail)
@@ -981,7 +1178,7 @@ def _ask_anthropic(
         options["api_key"] = llm.key
     if llm.url:
         options["base_url"] = llm.url
-    client = anthropic.Anthropic(timeout=REQUEST_SECONDS, **options)
+    client = anthropic.Anthropic(timeout=_request_seconds(), **options)
     request: dict = {}
     if llm.search:
         request["tools"] = [{"type": "web_search_20260209", "name": "web_search",

@@ -74,6 +74,8 @@ from medialib.lib import (
     imagecodecs,
     imagemagick,
     keepparts,
+    llmclient,
+    llmroster,
     modelmeter,
     numbering,
     ramscratch,
@@ -87,6 +89,10 @@ from medialib.lib import (
 )
 from medialib.lib.runlog import log
 from medialib.lib.versionsort import version_key
+
+# The uses of a model a comic may make, whose servers the run holds for its
+# workers.
+_LLM_TASKS = (llmroster.COMIC_PAGE_CHECK, llmroster.COMIC_PDF_JUDGE)
 
 USAGE_HEAD = """Usage:
     {program} [options] <inputDir> <outputDir>
@@ -962,8 +968,11 @@ class Run:
         # in, and the small ones are among the pages it keeps.
         empty = kept_small = 0
         if not self.keep_pages:
-            empty, kept_small = drop_empty_pages(
-                book_avif, file_name, meter_file=self.model_meter)
+            # The book's model checks under one time limit: a page the model
+            # had no time for falls back to the size rule.
+            with llmclient.time_limit(llmroster.item_seconds()):
+                empty, kept_small = drop_empty_pages(
+                    book_avif, file_name, meter_file=self.model_meter)
         if empty:
             self.counters.bump("pagesEmpty", empty)
         if kept_small:
@@ -1139,11 +1148,14 @@ def drop_empty_pages(book_avif: str, file_name: str, *,
                 size = os.path.getsize(path)
                 if size >= threshold:
                     continue
-                verdict = (
-                    check(path, book_name=file_name, page_name=name,
-                          meter_file=meter_file)
-                    if check is not None else None
-                )
+                # A check that breaks is no verdict: the size rule decides,
+                # and the book is still packaged.
+                verdict = None
+                if check is not None:
+                    with llmclient.guarded("the blank-page check of %s: %s"
+                                           % (file_name, name), log):
+                        verdict = check(path, book_name=file_name,
+                                        page_name=name, meter_file=meter_file)
                 if verdict is False:
                     if size < MIN_PAGE_SIZE:
                         kept += 1
@@ -1593,8 +1605,13 @@ def main(argv: list, program: str = "convert-comics",
                              "this run.\nNothing was changed.\n")
             return 1
         ramscratch.add_exit_cleanup([counter_dir])
-        return _run(result, declaration, program, script_dir, counter_dir,
-                    keep_parts)
+        # The model servers held here rather than in the workers: one a
+        # worker started would stop with it, under every other worker.
+        with llmclient.held_for_run(
+                llmroster.run_models(_LLM_TASKS),
+                os.path.join(counter_dir, "llmSlots"), log):
+            return _run(result, declaration, program, script_dir,
+                        counter_dir, keep_parts)
     finally:
         # The run directory, both RAM work trees and the counter dir go back
         # to the tmpfs however this run ends.

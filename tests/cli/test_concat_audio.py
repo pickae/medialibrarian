@@ -4,7 +4,9 @@ The integration files drive the whole pipeline with stubbed tools; what is
 pinned here is the cue-sheet choice and the two rules the join is built on.
 """
 
+import contextlib
 import os
+import time
 
 import pytest
 
@@ -526,3 +528,124 @@ class TestTheChapterSourceAFolderHolds:
         assert scan.audio_files == 1
         assert cue_calls == []
         assert len(file_calls) == 1
+
+
+class TestABooksModelStepsShareOneTimeLimit:
+    """A slow or failing model holds a book up for llmItemSeconds at most and
+    never costs it: the book is written with what was found by then."""
+
+    def _build(self, monkeypatch, tmp_path, titles):
+        folder = tmp_path / "Book"
+        folder.mkdir()
+        for number in (1, 2):
+            (folder / ("%02d.mp3" % number)).write_text("")
+        scratch = tmp_path / "scratch"
+        scratch.mkdir()
+
+        def fake_concat_format(_folder, base_name, fmt, _ram, _ffmpeg, _run):
+            with open("%s.%s" % (base_name, ca.FORMATS[fmt][1]), "w") as handle:
+                handle.write("x")
+            return [str(folder / "01.mp3"), str(folder / "02.mp3")]
+
+        monkeypatch.setattr(ca, "concat_format", fake_concat_format)
+        monkeypatch.setattr(ca.chapters, "chapters_from_files",
+                            lambda _list: ["one", "two"])
+        monkeypatch.setattr(ca.aicontents, "book_titles", titles)
+        monkeypatch.setattr(ca.chapters, "embed_chapters", lambda *a, **k: "")
+        monkeypatch.setattr(ca.thumbnails, "embed_thumbnail", lambda *a, **k: "")
+        monkeypatch.setattr(ca.aibooktags, "enabled", lambda: False)
+        monkeypatch.setattr(ca.durationcheck, "checking", lambda: False)
+        run = ca.Run(verbose=False, ffmpeg="ffmpeg", script_dir=str(scratch),
+                     have_mkvtoolnix=False, thumbnail_resolution="x",
+                     model_meter="", contents_meter="")
+        return run._build(ca.Scan(str(folder)), str(folder),
+                          str(scratch / "Book"), "mp3", "MP3", str(scratch))
+
+    def test_the_steps_run_under_the_setting_s_limit(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("llmItemSeconds", "120")
+        seen = []
+
+        def titles(*args, **kwargs):
+            seen.append(ca.llmclient._seconds_left())
+            return args[2]
+
+        assert self._build(monkeypatch, tmp_path, titles)
+        assert seen and seen[0] is not None and 110 < seen[0] <= 120
+        assert ca.llmclient._deadline() is None
+
+    def test_a_model_past_the_limit_still_leaves_the_book(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("llmItemSeconds", "0.2")
+        asked = []
+
+        def titles(*args, **kwargs):
+            time.sleep(0.3)
+            try:
+                ca.llmclient.Llm(api="openai", url="http://127.0.0.1:9/v1",
+                                 model="m").ask("s", "u")
+            except ca.llmclient.LlmError as error:
+                asked.append(error)
+            return args[2]
+
+        built = self._build(monkeypatch, tmp_path, titles)
+        assert built.endswith("Book.mp3") and os.path.isfile(built)
+        assert isinstance(asked[0], ca.llmclient.OutOfTimeError)
+
+    def test_a_step_that_breaks_still_leaves_the_book(self, monkeypatch, tmp_path):
+        def titles(*args, **kwargs):
+            raise ValueError("the model's answer made no sense")
+
+        built = self._build(monkeypatch, tmp_path, titles)
+        assert built.endswith("Book.mp3") and os.path.isfile(built)
+
+
+class TestTheRunHoldsTheModelServers:
+    """The servers are held by the run's own process around the whole queue,
+    not by the worker that asks first - which would stop it when it ends."""
+
+    def _run(self, monkeypatch, tmp_path, models, existing=False):
+        source = tmp_path / "in"
+        (source / "Book").mkdir(parents=True)
+        (source / "Book" / "01.mp3").write_text("")
+        output = tmp_path / "out"
+        output.mkdir()
+        if existing:
+            (output / "Book.mp3").write_text("x")
+        ram = tmp_path / "ram"
+        ram.mkdir()
+        events = []
+
+        @contextlib.contextmanager
+        def held(llms, slots_dir, _log):
+            events.append(("hold", list(llms), slots_dir.startswith(str(ram))))
+            yield
+            events.append(("let go",))
+
+        monkeypatch.setattr(ca, "run_models", lambda: models)
+        monkeypatch.setattr(ca.llmclient, "held_for_run", held)
+        monkeypatch.setattr(ca, "books_at_once", lambda _dir: 4)
+        monkeypatch.setattr(ca.workerpool, "map",
+                            lambda items, jobs, work: events.append(("map",)))
+        monkeypatch.setattr(ca.safety, "trap_run_abort", lambda: None)
+        monkeypatch.chdir(tmp_path)
+        ca._run_with_scratch(str(ram), str(source), str(output), False,
+                             "concat-audio", str(tmp_path), False)
+        return events
+
+    def test_around_the_whole_queue(self, monkeypatch, tmp_path):
+        events = self._run(monkeypatch, tmp_path, ["a model"])
+        assert events == [("hold", ["a model"], True), ("map",), ("let go",)]
+
+    def _held(self, events) -> list:
+        return [event[1] for event in events if event[0] == "hold"]
+
+    def test_not_without_a_model_to_ask(self, monkeypatch, tmp_path):
+        assert self._held(self._run(monkeypatch, tmp_path, [])) == [[]]
+
+    def test_not_when_every_book_is_already_there(self, monkeypatch, tmp_path):
+        assert self._held(self._run(monkeypatch, tmp_path, ["a model"],
+                                    existing=True)) == [[]]
+
+    def test_without_ai_no_model_is_held(self, monkeypatch):
+        from medialib.lib import runcontext
+        monkeypatch.setattr(runcontext, "get", lambda name, default="": default)
+        assert ca.run_models() == []

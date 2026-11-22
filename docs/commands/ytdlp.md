@@ -251,7 +251,9 @@ Cutting detected stretches out of the audio or video is a separate opt-in
 (`podcastAdsCut=on`) that writes to a staged file and replaces the episode
 atomically. Spans outside the episode bounds, overlapping spans, and sets that
 would cover more than half the episode are rejected and leave the file
-untouched. Set `podcastAdsLlm=off` to skip the pass altogether.
+untouched. Set `podcastAdsLlm=off` to skip the pass altogether. An episode
+whose check fails is left as it is, said in a warning and tried again on the
+next run, and the rest of the batch goes on.
 
 ### Merging archives (`-l`)
 

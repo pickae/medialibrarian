@@ -361,6 +361,33 @@ def load(environ=None) -> Roster:
     return roster
 
 
+# The setting for how long one item's model steps may take together.
+ITEM_SECONDS_VARIABLE = "llmItemSeconds"
+
+
+def item_seconds() -> float:
+    """How long one item's model steps - a book's, a track's, a comic's - may
+    take together (:data:`ITEM_SECONDS_VARIABLE`), for
+    :func:`llmclient.time_limit`; 0 is no limit."""
+    for text in (settings.value(ITEM_SECONDS_VARIABLE),
+                 settings.shipped().get(ITEM_SECONDS_VARIABLE, "")):
+        try:
+            return max(0.0, float(text))
+        except ValueError:
+            continue
+    return 0.0
+
+
+def run_models(tasks) -> list[llmclient.Llm]:
+    """The models a run may ask for ``tasks``, each once - for
+    :func:`llmclient.held_for_run`. None without -A."""
+    found: dict = {}
+    for task in tasks:
+        for llm in optional(task)[0]:
+            found.setdefault(llm.name, llm)
+    return list(found.values())
+
+
 def forget() -> None:
     """Forget every roster read. For a test."""
     with _loaded_lock:

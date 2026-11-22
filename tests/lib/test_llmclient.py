@@ -262,10 +262,138 @@ class TestTheRequest:
             return original(*args)
 
         monkeypatch.setattr(llmclient, "_ask_openai", counted)
-        curl["rc"] = 7
+        curl["rc"] = 28
         with pytest.raises(llmclient.LlmError, match="refused"):
             llmclient.from_environment(_LOCAL).ask("s", "u")
         assert len(calls) == llmclient.RETRIES + 1
+
+    def _counted(self, monkeypatch) -> list:
+        calls: list = []
+        original = llmclient._ask_openai
+
+        def counted(*args):
+            calls.append(1)
+            return original(*args)
+
+        monkeypatch.setattr(llmclient, "_ask_openai", counted)
+        return calls
+
+    def test_a_refused_connection_is_not_sent_again(self, curl, monkeypatch):
+        calls = self._counted(monkeypatch)
+        curl["rc"] = 7
+        with pytest.raises(llmclient.LlmError, match="refused"):
+            llmclient.from_environment(_LOCAL).ask("s", "u")
+        assert len(calls) == 1
+
+    def test_a_local_server_with_a_full_queue_is_not_asked_again(
+            self, curl, monkeypatch):
+        calls = self._counted(monkeypatch)
+        curl["stdout"] = '{"error": {"message": "queue is full"}}\n429'
+        with pytest.raises(llmclient.LlmError, match="429: queue is full"):
+            llmclient.from_environment(_LOCAL).ask("s", "u")
+        assert len(calls) == 1
+
+    def test_a_hosted_apis_rate_limit_is_waited_out(self, curl, monkeypatch):
+        calls = self._counted(monkeypatch)
+        curl["stdout"] = '{"error": {"message": "slow down"}}\n429'
+        with pytest.raises(llmclient.LlmError, match="429"):
+            llmclient.Llm(api="openai", url="https://api.example.com/v1",
+                          model="m", local=False).ask("s", "u")
+        assert len(calls) == llmclient.RETRIES + 1
+
+    def test_a_request_is_given_what_is_left_of_the_time_limit(self, curl):
+        with llmclient.time_limit(42):
+            llmclient.from_environment(_LOCAL).ask("s", "u")
+        assert "max-time = 4" in curl["config"]
+        assert "max-time = 41" in curl["config"] or "max-time = 42" in curl["config"]
+        llmclient.from_environment(_LOCAL).ask("s", "u")
+        assert "max-time = %d" % llmclient.REQUEST_SECONDS in curl["config"]
+
+    def test_nothing_is_sent_once_the_time_limit_is_spent(
+            self, curl, monkeypatch):
+        calls = self._counted(monkeypatch)
+        clock = [1000.0]
+        monkeypatch.setattr(llmclient.time, "monotonic", lambda: clock[0])
+        with llmclient.time_limit(10):
+            clock[0] += 11
+            with pytest.raises(llmclient.OutOfTimeError):
+                llmclient.from_environment(_LOCAL).ask("s", "u")
+        assert calls == []
+
+    def test_retries_stop_when_the_time_limit_is_spent(self, curl, monkeypatch):
+        calls = self._counted(monkeypatch)
+        monkeypatch.setattr(llmclient, "RETRY_WAIT_SECONDS", 60)
+        curl["rc"] = 28
+        with llmclient.time_limit(30), pytest.raises(llmclient.OutOfTimeError):
+            llmclient.from_environment(_LOCAL).ask("s", "u")
+        assert len(calls) == 1
+
+
+class TestTimeLimit:
+    def test_an_inner_limit_never_outlasts_the_outer_one(self):
+        with llmclient.time_limit(5):
+            outer = llmclient._deadline()
+            with llmclient.time_limit(500):
+                assert llmclient._deadline() == outer
+            with llmclient.time_limit(1):
+                assert llmclient._deadline() is not None
+                assert outer is not None and llmclient._deadline() < outer
+        assert llmclient._deadline() is None
+
+    def test_zero_is_no_limit(self):
+        with llmclient.time_limit(0):
+            assert llmclient._deadline() is None
+            assert llmclient._request_seconds() == llmclient.REQUEST_SECONDS
+
+
+@pytest.mark.skipif(not llmclient._CAN_LOCK, reason="no fcntl on this platform")
+class TestRunWideSlots:
+    """Slots kept in files hold every process of the run to the model's jobs,
+    not each one."""
+
+    def test_a_slot_held_elsewhere_is_not_taken_again(self, tmp_path, monkeypatch):
+        monkeypatch.setenv(llmclient.SLOTS_VARIABLE, str(tmp_path))
+        llm = llmclient.from_environment(dict(_LOCAL, llmJobs="1"))
+        other = llmclient.from_environment(dict(_LOCAL, llmJobs="1"))
+        with llm._slot(), llmclient.time_limit(0.3), \
+                    pytest.raises(llmclient.OutOfTimeError, match="waiting"), other._slot():
+            pass
+        with other._slot():
+            pass
+
+    def test_another_process_holding_every_slot_is_waited_for(
+            self, tmp_path, monkeypatch):
+        monkeypatch.setenv(llmclient.SLOTS_VARIABLE, str(tmp_path))
+        llm = llmclient.from_environment(dict(_LOCAL, llmJobs="2"))
+        with llm._slot():
+            path = llm._slot().paths[1]
+        holder = subprocess.Popen(
+            [sys.executable, "-c",
+             "import fcntl, sys, time\n"
+             "h = open(sys.argv[1], 'a'); fcntl.flock(h, fcntl.LOCK_EX)\n"
+             "print('held', flush=True); time.sleep(30)", path],
+            stdout=subprocess.PIPE, text=True)
+        try:
+            assert holder.stdout is not None
+            assert holder.stdout.readline().strip() == "held"
+            with llm._slot(), llmclient.time_limit(0.3), \
+                        pytest.raises(llmclient.OutOfTimeError), llm._slot():
+                pass
+        finally:
+            holder.kill()
+            holder.wait()
+
+    def test_models_at_one_server_share_its_slots(self, tmp_path, monkeypatch):
+        monkeypatch.setenv(llmclient.SLOTS_VARIABLE, str(tmp_path))
+        llm = llmclient.from_environment(dict(_LOCAL, llmJobs="3"))
+        assert llm._slot().paths == llm.following("Look.")._slot().paths
+        elsewhere = llmclient.from_environment(dict(_LOCAL, llmModel="n"))
+        assert elsewhere._slot().paths != llm._slot().paths
+
+    def test_without_the_run_s_folder_a_process_keeps_its_own(self, monkeypatch):
+        monkeypatch.delenv(llmclient.SLOTS_VARIABLE, raising=False)
+        llm = llmclient.from_environment(dict(_LOCAL, llmJobs="1"))
+        assert not isinstance(llm._slot(), llmclient._RunSlot)
 
 
 class TestOptions:
@@ -559,3 +687,13 @@ def test_a_pickled_model_gets_request_slots_of_its_own():
     assert copy._slots.acquire(blocking=False)
     assert copy._slots.acquire(blocking=False)
     assert not copy._slots.acquire(blocking=False)
+
+
+def test_where_files_cannot_be_locked_a_process_keeps_its_own_slots(
+        tmp_path, monkeypatch):
+    monkeypatch.setenv(llmclient.SLOTS_VARIABLE, str(tmp_path))
+    monkeypatch.setattr(llmclient, "_CAN_LOCK", False)
+    llm = llmclient.from_environment(dict(_LOCAL, llmJobs="1"))
+    assert not isinstance(llm._slot(), llmclient._RunSlot)
+    with llm._slot():
+        pass

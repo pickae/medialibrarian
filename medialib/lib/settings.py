@@ -415,8 +415,9 @@ SETTINGS: tuple[Setting, ...] = (
             "unset - required for `openai`"),
     Setting("llmServe", "The command that starts the first of those servers "
             "when it is not running and the GPU has room for it; the run stops it "
-            "again once it has been idle five minutes, and at its end. A server found "
-            "running is left running", _AI_CHAPTERS),
+            "again once it has been idle five minutes, and at its end. concat-audio "
+            "and convert-and-concat start it once for the whole run instead and "
+            "keep it up until the end. A server found running is left running", _AI_CHAPTERS),
     Setting("llmServeMib", "The free GPU memory, in MiB, that server is "
             "started with; with less, the next server down the list is asked",
             _AI_CHAPTERS, "26000"),
@@ -474,6 +475,14 @@ SETTINGS: tuple[Setting, ...] = (
             "for its turn; only a model served from this machine or its network is "
             "waited for", ("ingest-movies",),
             "unset - the model takes the whole card, so it never runs beside whisper"),
+    Setting("llmItemSeconds", "How long, in seconds, one item's language-model "
+            "steps may take together - a book's chapter names, cover and tag "
+            "searches, a track's cover search, a book's or comic's image checks, a "
+            "PDF's comic check - "
+            "waiting for the model included, before the item is written out with "
+            "what they found by then; `0` is no limit",
+            ("concat-audio", "content-census", "convert-and-concat",
+             "convert-audio", "convert-comics", "ingest-books")),
     Setting("llmJobs", "How many requests are sent to the model at once, "
             "over the whole run. Whether the model is local is read off "
             "`llmUrl`: localhost, a private or Tailscale address, or a "

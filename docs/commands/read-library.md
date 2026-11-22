@@ -71,7 +71,8 @@ default) and a book's metadata disagrees with its text, neither answers (for
 example a language outside the stop-word table), or the text is borderline
 (such as mixed or bilingual prose), a ~2 KB excerpt together with the book's
 title/metadata is checked by the `book-language` task, falling back to the
-deterministic result if the model is unsure or fails. `-l` sets one for
+deterministic result if the model is unsure or fails - or the default voice
+when the check itself breaks. `-l` sets one for
 the whole run instead; a language the engine cannot speak is refused up front
 rather than per book, hours into a queue.
 

@@ -46,6 +46,8 @@ from medialib.lib import (
     imagecodecs,
     imagemagick,
     imagesizes,
+    llmclient,
+    llmroster,
     modelmeter,
     ramscratch,
     runlog,
@@ -236,10 +238,18 @@ def clean_book_folder(directory: str, geometry: str = "",
             if _is_image(name):
                 images.append(os.path.join(parent, name))
 
-    for path in aibookimages.junk_images(
+    # Under the book's time limit, and kept from costing the book: when the
+    # check fails, every image stays and the book is still written.
+    junk: list[str] = []
+    with llmclient.time_limit(llmroster.item_seconds()), \
+            llmclient.guarded("the image check for %s"
+                              % (book_name or os.path.basename(directory)),
+                              runlog.log):
+        junk = list(aibookimages.junk_images(
             directory, images, JUNK_IMAGE_SUBSTRINGS,
             book_name=book_name, lookers=lookers,
-            meter_file=meter_file, prepare=prepare):
+            meter_file=meter_file, prepare=prepare))
+    for path in junk:
         try:
             os.remove(path)
         except OSError:
@@ -793,7 +803,13 @@ def main(argv: list, program: str = "ingest-books",
             runlog.say(discard_summary(discard_extras, image_resolution,
                                        has_pdf, has_reflowable) + "\n")
             runlog.say("\n")
-            workerpool.map(books, jobs, state.process_book)
+            # The model servers held here rather than in the workers: one a
+            # worker started would stop with it, under every other worker.
+            with llmclient.held_for_run(
+                    llmroster.run_models((llmroster.BOOK_IMAGE_CHECK,))
+                    if discard_extras else [],
+                    os.path.join(temp_path, "llmSlots"), runlog.log):
+                workerpool.map(books, jobs, state.process_book)
             safety.exit_if_aborted()
             if discard_extras:
                 report_image_model(state.model_meter)

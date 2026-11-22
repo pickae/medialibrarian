@@ -187,6 +187,14 @@ available, or it rejects every candidate, no cover is taken.
 `coverSearchLlm=off` skips this step alone; `coverSearch=off` turns off every
 online rung.
 
+The search never costs a track its audio. It gets `llmItemSeconds` (five
+minutes by default) per track, waiting for the model included, and a search
+that runs out of time or fails is skipped with a warning; the track is written
+without the cover it would have found. The tracks encoding at once share the
+model's `llmJobs` request slots, and when `llmServe` has to start the model's
+server, the run starts it once for the encode and the rejoin and stops it
+again before the transcripts, which need the GPU for whisper.
+
 ## Every conversion is measured
 
 Every conversion is measured afterwards: an output that is not as long as its input is removed and named, and

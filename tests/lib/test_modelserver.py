@@ -170,6 +170,137 @@ class TestAServerNotRunning:
         assert not modelserver.answering(server.url)
 
 
+class TestARunHoldingItsServers:
+    """A run that fans out to workers holds its servers in its own process:
+    a worker neither starts nor stops one, and the run's end stops only what
+    it started."""
+
+    @pytest.fixture(autouse=True)
+    def fresh_run(self):
+        from medialib.lib import runcontext
+        runcontext.forget(modelserver.OWNER_VARIABLE)
+        yield
+        runcontext.forget(modelserver.OWNER_VARIABLE)
+
+    def test_a_server_not_running_is_started_held_and_stopped_at_the_end(
+            self, gpu, serve):
+        port = _port()
+        server = _server("http://127.0.0.1:%d" % port, serve(port), idle=0.1)
+        with modelserver.held_for_run([server], print) as held:
+            assert held == [server]
+            time.sleep(0.4)
+            assert modelserver.answering(server.url)
+        assert not modelserver.answering(server.url)
+        assert not server.started_here
+
+    def test_a_server_found_running_is_left_running(self, gpu, serve):
+        import subprocess
+        port = _port()
+        running = subprocess.Popen(serve(port).split())
+        try:
+            url = "http://127.0.0.1:%d/v1" % port
+            for _ in range(50):
+                if modelserver.answering(url):
+                    break
+                time.sleep(0.1)
+            with modelserver.held_for_run([_server(url, "false")], print):
+                pass
+            assert running.poll() is None
+            assert modelserver.answering(url)
+        finally:
+            running.kill()
+            running.wait()
+
+    def test_a_worker_neither_starts_nor_stops_a_server(
+            self, gpu, serve, monkeypatch):
+        from medialib.lib import runcontext
+        parent = subprocess_sleeper()
+        try:
+            runcontext.settle(modelserver.OWNER_VARIABLE, str(parent.pid))
+            monkeypatch.setattr(modelserver, "START_TIMEOUT", 0.5)
+            port = _port()
+            worker = _server("http://127.0.0.1:%d" % port, serve(port))
+            assert not worker.acquire(print)
+            assert not worker.started_here
+        finally:
+            parent.kill()
+            parent.wait()
+
+    def test_a_worker_waits_for_the_run_to_bring_its_server_back(
+            self, gpu, serve):
+        import subprocess
+
+        from medialib.lib import runcontext
+        port = _port()
+        url = "http://127.0.0.1:%d" % port
+        parent = subprocess_sleeper()
+        coming = subprocess.Popen(serve(port, "0.5").split())
+        try:
+            runcontext.settle(modelserver.OWNER_VARIABLE, str(parent.pid))
+            worker = _server(url, "false")
+            assert worker.acquire(print)
+            worker.release()
+            assert not worker.started_here
+        finally:
+            for process in (parent, coming):
+                process.kill()
+                process.wait()
+        assert not modelserver.answering(url)
+
+    def test_a_worker_gives_up_waiting_at_its_deadline(self, gpu):
+        from medialib.lib import runcontext
+        parent = subprocess_sleeper()
+        try:
+            runcontext.settle(modelserver.OWNER_VARIABLE, str(parent.pid))
+            started = time.monotonic()
+            assert not _server("http://127.0.0.1:%d" % _port()).acquire(
+                print, until=started + 0.3)
+            assert time.monotonic() - started < 5
+        finally:
+            parent.kill()
+            parent.wait()
+
+    def test_a_server_that_went_down_is_started_again(self, gpu, serve):
+        import signal
+        port = _port()
+        server = _server("http://127.0.0.1:%d" % port, serve(port))
+        lines: list = []
+        with modelserver.held_for_run([server], lines.append, watch=0.1):
+            assert server._process is not None
+            os.killpg(server._process.pid, signal.SIGKILL)
+            server._process.wait()
+            for _ in range(100):
+                time.sleep(0.1)
+                if server._process is not None \
+                        and server._process.poll() is None \
+                        and modelserver.answering(server.url):
+                    break
+            assert modelserver.answering(server.url)
+        assert any("restarting" in line for line in lines)
+        assert not modelserver.answering(server.url)
+
+    def test_inside_a_run_that_holds_them_nothing_more_is_held(self, gpu, serve):
+        from medialib.lib import runcontext
+        parent = subprocess_sleeper()
+        try:
+            runcontext.settle(modelserver.OWNER_VARIABLE, str(parent.pid))
+            port = _port()
+            server = _server("http://127.0.0.1:%d" % port, serve(port))
+            with modelserver.held_for_run([server], print) as held:
+                assert held == []
+                assert not server.started_here
+            assert runcontext.get(modelserver.OWNER_VARIABLE) == str(parent.pid)
+        finally:
+            parent.kill()
+            parent.wait()
+
+
+def subprocess_sleeper():
+    """A live process standing in for the run that holds the servers."""
+    import subprocess
+    return subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+
+
 class TestTheAddress:
     @pytest.mark.parametrize("url", ["127.0.0.1:8082",
                                      "http://127.0.0.1:8082/v1",

@@ -35,6 +35,7 @@ from medialib.lib import (
     ffmpegselect,
     formatting,
     imagemagick,
+    llmclient,
     modelmeter,
     ramscratch,
     runcontext,
@@ -540,9 +541,12 @@ class Run:
         # over it, and reading it in the default voice is the lesser wrong.
         language = self.narration_language or ""
         if not language:
-            language = booklanguage.book_language(
-                source, ram_base=self.temp_path,
-                meter_file=getattr(self, "language_meter", ""))
+            # A language check that breaks reads the book in the default voice
+            # rather than not at all.
+            with llmclient.guarded("the language check for %s" % base, log):
+                language = booklanguage.book_language(
+                    source, ram_base=self.temp_path,
+                    meter_file=getattr(self, "language_meter", ""))
             if language and not booknarration.narration_supports_language(
                     language):
                 self.counters.note(
