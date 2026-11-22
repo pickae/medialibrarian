@@ -39,6 +39,7 @@ whole thing. What the plan settles joins the files the seed did not cover, and
 the queue takes the two as one run ordered largest job first.
 """
 
+import contextlib
 import os
 import re
 import shutil
@@ -706,6 +707,28 @@ class Counters:
         self.console.counted("%s: %s" % (verb, label), self._total(),
                              name="progress")
 
+    @contextlib.contextmanager
+    def encoding(self):
+        """Around one job's encode alone, not the covers and tags hung on the
+        output after it: how many are in flight, and when the latest ended, is
+        what lets the row tell a queue still encoding from one that is only
+        finishing off its last outputs."""
+        self.console.count("encoding")
+        try:
+            yield
+        finally:
+            with self.console.locked():
+                self.console.count("encoding", -1)
+                self.console.set("encoded_at", max(
+                    self.console.value("encoded_at"), int(time.time())))
+
+    def _encoding_done(self, current: int, total) -> bool:
+        """Every job counted, none of them still encoding, and at least one
+        that did: the queue is only finishing off what it already encoded."""
+        return (total is not None and current >= total
+                and self.console.value("encoding") <= 0
+                and self.console.value("encoded_at") > 0)
+
     def tally_duration(self, add) -> None:
         """The audio-seconds actually encoded, serialised across the parallel
         jobs. Tallied as work happens rather than re-probed at the end, so a
@@ -730,10 +753,16 @@ class Counters:
         with self.console.locked():
             duration = formatting.awk_number(self._read(self.duration_file, "0"))
 
-        elapsed = max(0, int(time.time()) - self.run_start_epoch)
+        total = self._total()
+        # Once the encoding is over the clock stops where it ended: a cover
+        # search after the last encode is not encoding, and left running the
+        # clock would drag the speed down for as long as the search took.
+        done = self._encoding_done(current, total)
+        end = (self.console.value("encoded_at") if done
+               else int(time.time()))
+        elapsed = max(0, end - self.run_start_epoch)
         speed = formatting.fmt_ratio(
             "%.6f" % (duration / elapsed) if elapsed > 0 else "0")
-        total = self._total()
         if total is None:
             # The queue is still loading, so the only honest position is the one
             # the counter has counted so far, without a denominator it cannot
@@ -745,9 +774,10 @@ class Counters:
             position = ("%d/%d jobs" % (current, total)
                         if runlog.have_flock()
                         else "%d jobs" % total)
-        return "  encoding %s: elapsed %s  encoded %s  %sx realtime" % (
-            position, formatting.fmt_clock(elapsed),
-            formatting.fmt_clock("%.3f" % duration), speed)
+        return "  encoding %s%s: elapsed %s  encoded %s  %sx realtime%s" % (
+            position, " done" if done else "", formatting.fmt_clock(elapsed),
+            formatting.fmt_clock("%.3f" % duration), speed,
+            "  finishing covers and tags" if done else "")
 
 
 class Run:
@@ -929,7 +959,13 @@ class Run:
         os.makedirs(directory, exist_ok=True)
         out = self.chunk_path(directory, int(index))
         bitrate = resolve_bitrate(self.bitrate, self.mono, self.codec)
+        with self.counters.encoding():
+            self._encode_chunk(relative, index, total, start, duration,
+                               source, out, bitrate)
 
+    def _encode_chunk(self, relative: str, index: str, total: str, start: str,
+                      duration: str, source: str, out: str,
+                      bitrate: int) -> None:
         if self.codec == "xheaac":
             self._encode_xheaac(source, out, self.mono, bitrate,
                                 duration=duration, start=start, take=duration)
@@ -1318,23 +1354,15 @@ class Run:
         cover_origin = "the source's own art"
 
         if self.transcodes(relative, source_bitrate, threshold):
-            if lift_out:
-                self._remux(source, out)
-            elif not self._encode(source, out, mono, bitrate, channels,
-                                  input_duration_raw):
-                durationcheck.record(relative, input_duration_raw, 0)
-                return
-
-            # An output is checked against its input before anything is hung on
-            # it: an encode can finish, exit 0 and still have stopped early, and
-            # a short book with chapters and a cover on it looks converted.
-            # Everything below - the metadata, the timestamp, the tally - is for
-            # a file that is all there.
-            if not durationcheck.verify(relative, source, out,
-                                        input_duration_raw):
-                self._replay(out, relative)
-                return
-            self.tool_runs.pop(out, None)
+            with self.counters.encoding():
+                if not self._encode_verified(relative, source, out, mono,
+                                             bitrate, channels,
+                                             input_duration_raw, lift_out):
+                    return
+                # Counted once, and only for output that is all there; here,
+                # with the encode, so the row's figure is complete the moment
+                # the last encode ends rather than after its cover search.
+                self.counters.tally_duration(input_duration_raw)
 
             # Neither encoder carries chapters through, so they are re-attached
             # from the source - with mutagen for Opus, and as a chapter track
@@ -1357,7 +1385,9 @@ class Run:
             copied = os.path.join(self.output_dir, relative)
             os.makedirs(os.path.dirname(copied) or self.output_dir,
                         exist_ok=True)
-            shutil.copyfile(source, copied)
+            with self.counters.encoding():
+                shutil.copyfile(source, copied)
+                self.counters.tally_duration(input_duration_raw)
             cover_target = copied
 
         if cover_target:
@@ -1370,9 +1400,29 @@ class Run:
             # mutagen writes each bump it, so the final timestamp matches the
             # source rather than whichever edit happened to run last.
             _touch_from(source, cover_target)
-            # Counted once, and only when output was actually produced: a skipped
-            # low-bitrate no-op leaves no target and tallies nothing.
-            self.counters.tally_duration(input_duration_raw)
+
+    def _encode_verified(self, relative: str, source: str, out: str,
+                         mono: bool, bitrate: int, channels: int,
+                         input_duration_raw: str, lift_out: bool) -> bool:
+        """The encode, or the lift-out of a video's finished audio, and whether
+        what came out is all there."""
+        if lift_out:
+            self._remux(source, out)
+        elif not self._encode(source, out, mono, bitrate, channels,
+                              input_duration_raw):
+            durationcheck.record(relative, input_duration_raw, 0)
+            return False
+
+        # An output is checked against its input before anything is hung on
+        # it: an encode can finish, exit 0 and still have stopped early, and a
+        # short book with chapters and a cover on it looks converted.
+        # Everything after - the metadata, the timestamp, the tally - is for a
+        # file that is all there.
+        if not durationcheck.verify(relative, source, out, input_duration_raw):
+            self._replay(out, relative)
+            return False
+        self.tool_runs.pop(out, None)
+        return True
 
     def _say_chapters(self, relative: str, source: str) -> None:
         """-v: what chapters a source carried - the source and the count."""
