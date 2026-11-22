@@ -427,6 +427,20 @@ class TestTheChapterWordIsSpacedFromItsNumber:
         assert self._named(tmp_path, folder) == [folder]
 
 
+class TestTheBookIsNamedForAPhone:
+    def _named(self, tmp_path, mobile):
+        (tmp_path / "in" / "Part: Finale? <Live>").mkdir(parents=True)
+        _inputs, outputs = ca.name_output_files(str(tmp_path / "in"), "/out",
+                                                mobile=mobile)
+        return [os.path.basename(path) for path in outputs]
+
+    def test_with_mobile_a_refused_character_is_mapped(self, tmp_path):
+        assert self._named(tmp_path, True) == ["Part - Finale (Live)"]
+
+    def test_without_it_the_name_stands(self, tmp_path):
+        assert self._named(tmp_path, False) == ["Part: Finale? <Live>"]
+
+
 class TestEveryOutputIsNamedInsideTheOutputFolder:
     """Whatever the cleaning takes away, each book keeps a name of its own,
     with nothing trailing it, directly under the output folder."""

@@ -79,11 +79,28 @@ def time_from_cue_string(text: str) -> int:
             // CUE_FRAMES_PER_SECOND)
 
 
+def decode_cue(raw: bytes) -> str:
+    """A cue sheet's text, whichever encoding the ripper wrote it in.
+
+    UTF-8 (with or without a BOM) when the bytes are valid UTF-8, and
+    Windows-1252 otherwise - what EAC and most Windows rippers write - so a
+    curly quote, an en dash or an umlaut in a title arrives as that character
+    and not as an undecodable byte that no chapter file can hold. The few bytes
+    Windows-1252 leaves undefined fall back to Latin-1, which defines them all.
+    """
+    for encoding in ("utf-8-sig", "cp1252"):
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            pass
+    return raw.decode("latin-1")
+
+
 def _lines(cue_file: str) -> list[str]:
     """The cue's lines, carriage returns dropped and leading space stripped."""
-    with open(cue_file, encoding="utf-8", errors="surrogateescape") as handle:
-        return [line.replace("\r", "").lstrip() for line in
-                handle.read().split("\n")]
+    with open(cue_file, "rb") as handle:
+        text = decode_cue(handle.read())
+    return [line.replace("\r", "").lstrip() for line in text.split("\n")]
 
 
 def _describes_one_file(lines: list[str]) -> bool:

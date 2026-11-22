@@ -128,6 +128,21 @@ class TestChaptersFromCue:
         assert (cc.chapters_from_cue(_cue(tmp_path, JOINED.replace("\n", "\r\n")))
                 == cc.chapters_from_cue(_cue(tmp_path, JOINED)))
 
+    @pytest.mark.parametrize("encoding", ["cp1252", "utf-8", "utf-8-sig"])
+    def test_a_title_reads_in_the_encoding_it_was_ripped_in(self, tmp_path,
+                                                             encoding):
+        """A Windows ripper writes cp1252: its curly quotes, dashes and umlauts
+        are real characters in the chapter, not bytes UTF-8 cannot write."""
+        title = "Song “Quoted” – Grüße, für"
+        path = tmp_path / "in.cue"
+        path.write_bytes(JOINED.replace("Intro", title).encode(encoding))
+        rows = cc.chapters_from_cue(str(path))
+        assert "CHAPTER01NAME=" + cc.clean_names_individually(title)[1] in rows
+        "\n".join(rows).encode("utf-8")
+
+    def test_a_byte_cp1252_leaves_undefined_still_reads(self):
+        assert cc.decode_cue(b"TITLE \"a\x81b\"") == "TITLE \"a\x81b\""
+
     def test_a_title_is_cleaned_the_way_every_other_name_is(self, tmp_path):
         """The quotes a cue puts round a title are not part of the chapter."""
         text = JOINED.replace('TITLE "Intro"', 'TITLE "01. Intro"')

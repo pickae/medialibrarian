@@ -45,6 +45,7 @@ from medialib.lib import (
     imagesizes,
     llmclient,
     llmroster,
+    mobilenames,
     modelmeter,
     onlinecover,
     ramscratch,
@@ -73,6 +74,8 @@ OPT_COLUMN = 12
 OPT_SPEC = """
 p |  | opt-in input pretreatment (in-place): renames folders/files in
             <inputDir> before concatenation.
+k |  | keep the output names as they are; by default they are made
+            safe for Android and iOS (no : ? * " < > | and the like).
 h |  | print this help page.
 """
 
@@ -114,8 +117,8 @@ USAGE_TAIL = """
     pdftoppm (renders a booklet PDF's first page as the cover; without it the
     embedded cover art is used instead), flock (numbers the progress lines)"""
 
-OPT_VARS = "p:pretreat"
-OPT_LONG = "p:pretreat h:help"
+OPT_VARS = "p:pretreat k:keepNames"
+OPT_LONG = "p:pretreat k:keep-names h:help"
 
 IMAGE_SIZE_LIMIT = 700000
 DPI = 300
@@ -142,6 +145,10 @@ _LLM_TASKS = (llmroster.AUDIO_CONTENT, llmroster.CONTENTS_SEARCH,
               llmroster.COVER_SEARCH, llmroster.COVER_LOOK,
               llmroster.BOOK_TAGS, llmroster.MUSIC_SEARCH)
 BOOK_SIZE_SLACK = 64 * 1024 * 1024
+
+# The longest extension a joined book is given (".flac"), kept free when its
+# name is shortened to fit a phone's limit.
+_EXTENSION_BYTES = 5
 
 # The join, per format: which extension the sources have, which container comes
 # out, and how the two are joined. mp3 and opus are already container-framed, so
@@ -453,8 +460,10 @@ def concat_format(folder: str, base_name: str, fmt: str, ram_dir: str,
                                 output_file, ram_dir, ffmpeg, run)
 
 
-def name_output_files(input_dir: str, output_dir: str) -> tuple:
-    """The input sub-folders and the output path each one becomes."""
+def name_output_files(input_dir: str, output_dir: str,
+                      mobile: bool = False) -> tuple:
+    """The input sub-folders and the output path each one becomes - with
+    ``mobile``, named as Android and iOS accept them."""
     input_paths = sorted(
         (entry.path for entry in os.scandir(input_dir) if entry.is_dir()),
         key=version_key)
@@ -507,8 +516,10 @@ def name_output_files(input_dir: str, output_dir: str) -> tuple:
             prefix, name = first_prefixes[index], names[index]
         # A dot in a folder name would not make an acceptable file name.
         name = name.replace(".", "")
-        path = os.path.join(output_dir,
-                            " ".join(part for part in (prefix, name) if part))
+        joined = " ".join(part for part in (prefix, name) if part)
+        if mobile:
+            joined = mobilenames.mobile_name(joined, reserve=_EXTENSION_BYTES)
+        path = os.path.join(output_dir, joined)
         output_paths.append(path.replace("//", "/"))
 
     return input_paths, output_paths
@@ -1019,7 +1030,7 @@ def main(argv: list, program: str = "concat-audio",
 
     try:
         return _settle_and_run(input_dir, output_dir, pretreat, program,
-                               script_dir)
+                               script_dir, keep_names="k" in result.given)
     finally:
         # However this run ends - a refusal after the ffmpeg pin included - the
         # run directory and the scratch go back to the tmpfs rather than
@@ -1028,7 +1039,8 @@ def main(argv: list, program: str = "concat-audio",
 
 
 def _settle_and_run(input_dir: str, output_dir: str, pretreat: bool,
-                    program: str, script_dir: str) -> int:
+                    program: str, script_dir: str,
+                    keep_names: bool = False) -> int:
     # Which of this machine's ffmpeg builds does the work, before the preflight
     # below asks whether PATH can reach one.
     ffmpegselect.select_ffmpeg()
@@ -1071,12 +1083,14 @@ def _settle_and_run(input_dir: str, output_dir: str, pretreat: bool,
         return 1
     ramscratch.add_exit_cleanup([ram_dir])
     return _run_with_scratch(ram_dir, input_dir, output_dir, pretreat,
-                             program, script_dir, have_mkvtoolnix)
+                             program, script_dir, have_mkvtoolnix,
+                             keep_names=keep_names)
 
 
 def _run_with_scratch(ram_dir: str, input_dir: str, output_dir: str,
                       pretreat: bool, program: str,
-                      script_dir: str, have_mkvtoolnix: bool) -> int:
+                      script_dir: str, have_mkvtoolnix: bool,
+                      keep_names: bool = False) -> int:
     safety.init_safety_log(os.path.join(ram_dir, "safetySkips.log"))
     skips = safety.RunSkipLog()
     # Shared with the parallel workers, so one Ctrl+C stops the whole run rather
@@ -1109,7 +1123,8 @@ def _run_with_scratch(ram_dir: str, input_dir: str, output_dir: str,
         log("Skipping input pretreatment (enable with -p)")
 
     log("Determining output file names")
-    input_paths, output_paths = name_output_files(input_dir, output_dir)
+    input_paths, output_paths = name_output_files(input_dir, output_dir,
+                                                  mobile=not keep_names)
 
     total = len(input_paths)
     run_console = console.Console(ram_dir).activate()

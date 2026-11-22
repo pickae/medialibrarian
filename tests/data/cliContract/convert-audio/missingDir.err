@@ -23,6 +23,10 @@ Options:
                     splitting.
     -c, --copy-others
                     Copy non transcoded files from <inputDir> into <outputDir>
+    -k, --keep-names
+                    Keep the input's file and folder names in the output. By
+                    default they are made safe for Android and iOS: no
+                    : ? * " < > | and the like, which a phone refuses.
     -e, --encoding <codec>
                     Output encoding: opus or aac or xheaac.
                     aac and xheaac are written as .m4a; xheaac needs an

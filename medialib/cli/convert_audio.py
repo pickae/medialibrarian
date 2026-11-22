@@ -64,6 +64,7 @@ from medialib.lib import (
     imagesizes,
     llmclient,
     llmroster,
+    mobilenames,
     modelmeter,
     onlinecover,
     ramscratch,
@@ -126,6 +127,9 @@ a |  | Adaptive mode: decide channels and bitrate per file rather
                     Cannot be combined with -m or -b, and disables long-file
                     splitting.
 c |  | Copy non transcoded files from <inputDir> into <outputDir>
+k |  | Keep the input's file and folder names in the output. By
+                    default they are made safe for Android and iOS: no
+                    : ? * " < > | and the like, which a phone refuses.
 e | <codec> | Output encoding: {codecs}.
                     aac and xheaac are written as .m4a; xheaac needs an
                     external encoder ({encoders}).
@@ -164,11 +168,11 @@ O | <folder> | Only the files under <inputDir>/<folder>, converted to
            encoders=xheaac.ENCODER_SPEC,
            codec=DEFAULT_CODEC)
 
-OPT_VARS = ("m:mono s:surround a:adaptive c:copy e:outputCodec "
+OPT_VARS = ("m:mono s:surround a:adaptive c:copy k:keepNames e:outputCodec "
             "b:bitrate T:threshold j:jobs g:groupDepth O:only P:instructions")
 OPT_FLAGS = "repeat:O"
 OPT_COLUMN = 20
-OPT_LONG = ("h:help m:mono s:surround a:adaptive c:copy-others "
+OPT_LONG = ("h:help m:mono s:surround a:adaptive c:copy-others k:keep-names "
             "e:encoding b:bitrate T:threshold j:jobs g:group "
             "P:prompt O:only")
 
@@ -794,6 +798,9 @@ class Run:
     surround: bool
     adaptive: bool
     copy: bool
+    # Without -k: every output file and folder named the way a phone accepts
+    # it. False unless set, so a Run made with fewer settings maps nothing.
+    mobile: bool = False
     bitrate: int
     threshold: int
     # The cut-off a mono run, or the mono file of an adaptive run, is judged
@@ -885,7 +892,12 @@ class Run:
         stem, extension = os.path.splitext(relative)
         if extension and stem in self._shared_stems(os.path.dirname(relative)):
             stem = "%s-%s" % (stem, extension[1:])
-        return os.path.join(self.output_dir, stem + "." + self.extension)
+        return os.path.join(self.output_dir,
+                            self.out_relative(stem + "." + self.extension))
+
+    def out_relative(self, relative: str) -> str:
+        """A path relative to the input, as it is named under the output."""
+        return mobilenames.mobile_path(relative) if self.mobile else relative
 
     def _shared_stems(self, folder: str) -> frozenset:
         """The stems, relative to the input, that more than one track in
@@ -1382,7 +1394,7 @@ class Run:
                                    mono, channels)
             cover_target = out
         elif self.copy:
-            copied = os.path.join(self.output_dir, relative)
+            copied = os.path.join(self.output_dir, self.out_relative(relative))
             os.makedirs(os.path.dirname(copied) or self.output_dir,
                         exist_ok=True)
             with self.counters.encoding():
@@ -1395,7 +1407,8 @@ class Run:
                                    COVER_QUALITY, self.cover_resolution,
                                    self.input_dir, self.output_dir, tmp_dir,
                                    out, self.script_dir,
-                                   origin=cover_origin)
+                                   origin=cover_origin,
+                                   out_track=self.out_relative(relative))
             # The source's modification time, set last: the encode and the
             # mutagen writes each bump it, so the final timestamp matches the
             # source rather than whichever edit happened to run last.
@@ -1489,7 +1502,8 @@ class Run:
             thumbnails.apply_cover(relative, None, COVER_THRESHOLD,
                                    COVER_QUALITY, self.cover_resolution,
                                    self.input_dir, self.output_dir, tmp_dir,
-                                   existing, self.script_dir)
+                                   existing, self.script_dir,
+                                   out_track=self.out_relative(relative))
             # Re-embedding bumped the existing output's mtime; restore the
             # source's so the output keeps matching the input.
             _touch_from(source, existing)
@@ -1562,7 +1576,8 @@ class Run:
                                    COVER_QUALITY, self.cover_resolution,
                                    self.input_dir, self.output_dir, tmp_dir,
                                    stage, self.script_dir,
-                                   origin=cover_origin)
+                                   origin=cover_origin,
+                                   out_track=self.out_relative(relative))
 
             # The source's modification time, after the mutagen writes that each
             # bumped it, so the final timestamp matches the source.
@@ -2098,6 +2113,7 @@ def main(argv: list, program: str = "convert-audio",
     surround = "s" in result.given
     adaptive = "a" in result.given
     copy = "c" in result.given
+    keep_names = "k" in result.given
     bitrate_set = bool(result.values["bitrate"])
     cutoff = int(result.values["threshold"] or 0) * 1000
     codec = result.values["outputCodec"] or DEFAULT_CODEC
@@ -2178,7 +2194,7 @@ def main(argv: list, program: str = "convert-audio",
                                    mono, adaptive, copy, bitrate,
                                    cutoff, jobs, codec, chunk_over_ceiling,
                                    surround, group_depth, ai_chapters, only,
-                                   instructions)
+                                   instructions, keep_names=keep_names)
     finally:
         # The ffmpeg pin can make the run directory before init_ram_base
         # does, and every refusal after it must hand it back.
@@ -2190,7 +2206,8 @@ def _settle_and_convert(program: str, script_dir: str, input_dir: str,
                         copy: bool, bitrate: int, cutoff: int,
                         jobs: int, codec: str, chunk_over_ceiling: bool,
                         surround: bool, group_depth: int, ai_chapters: bool,
-                        only=(), instructions: str = "") -> int:
+                        only=(), instructions: str = "",
+                        keep_names: bool = False) -> int:
     ffmpegselect.select_ffmpeg()
     ffmpegselect.report_ffmpeg_selection()
     # -A transcribes what has no transcript through transcribe-audio, after
@@ -2244,7 +2261,8 @@ def _settle_and_convert(program: str, script_dir: str, input_dir: str,
                         surround=surround, adaptive=adaptive, copy=copy,
                         bitrate=bitrate, cutoff=cutoff, codec=codec,
                         chunk_over_ceiling=chunk_over_ceiling,
-                        group_depth=group_depth, llm=llm, only=only)
+                        group_depth=group_depth, llm=llm, only=only,
+                        keep_names=keep_names)
     finally:
         console.hide_active()
         safety.release_abort_flag()
@@ -2288,7 +2306,7 @@ def _convert(input_dir: str, output_dir: str, probe_what: str, skips,
              mono: bool, surround: bool, adaptive: bool, copy: bool,
              bitrate: int, cutoff: int = 0, codec: str,
              chunk_over_ceiling: bool, group_depth: int, llm=None,
-             only=()) -> int:
+             only=(), keep_names: bool = False) -> int:
     """The run itself, once the tools are checked. The command line's choices
     are keyword-only: there are too many flags of one type to pass by
     position."""
@@ -2300,7 +2318,7 @@ def _convert(input_dir: str, output_dir: str, probe_what: str, skips,
     state = Run(
         input_dir=input_dir, output_dir=output_dir, script_dir=script_dir,
         mono=mono, surround=surround, adaptive=adaptive, copy=copy,
-        bitrate=bitrate,
+        bitrate=bitrate, mobile=not keep_names,
         # A -T value stands for both cut-offs; without one the defaults stand.
         threshold=cutoff or THRESHOLD,
         mono_threshold=cutoff or MONO_THRESHOLD,
@@ -2326,7 +2344,8 @@ def _convert(input_dir: str, output_dir: str, probe_what: str, skips,
         os.chdir(input_dir)
     except OSError:
         return 1
-    _mirror_folders_and_covers(input_dir, output_dir, only)
+    _mirror_folders_and_covers(input_dir, output_dir, only,
+                               mobile=not keep_names)
 
     state.tracks = _scan_tracks(input_dir, only)
     # Belt and braces: the pre-flight probe is case-INsensitive while this scan
@@ -2492,9 +2511,16 @@ def _rewrite(source: str, out: str, change) -> int:
         _touch_from(source, out)
 
 
-def _mirror_folders_and_covers(input_dir: str, output_dir: str, only=()) -> None:
+_COVER_EXTENSIONS = (".jpg", ".png", ".webp", ".avif")
+
+
+def _mirror_folders_and_covers(input_dir: str, output_dir: str, only=(),
+                               mobile: bool = False) -> None:
     """The input's folder tree built under the output, and its images copied
-    across."""
+    across - with ``mobile``, under the names a phone accepts."""
+    if mobile:
+        _mirror_for_mobile(input_dir, output_dir, only)
+        return
     for parent, _dirs, _names in _walk(input_dir, only):
         os.makedirs(os.path.join(output_dir,
                                  os.path.relpath(parent, input_dir)),
@@ -2509,6 +2535,33 @@ def _mirror_folders_and_covers(input_dir: str, output_dir: str, only=()) -> None
                              "--exclude=*", root + "/",
                              os.path.join(output_dir, os.path.relpath(root, input_dir))],
                             skipped="the cover art was not copied")
+
+
+def _mirror_for_mobile(input_dir: str, output_dir: str, only=()) -> None:
+    """The mirror rsync makes, with every name mapped for a phone - which
+    rsync cannot do. An image already there at the same size and time is left
+    alone, the way rsync's -t leaves it."""
+    for parent, _dirs, names in _walk(input_dir, only):
+        relative = os.path.relpath(parent, input_dir)
+        target = os.path.join(output_dir, mobilenames.mobile_path(relative))
+        os.makedirs(target, exist_ok=True)
+        for name in names:
+            if not name.lower().endswith(_COVER_EXTENSIONS):
+                continue
+            source = os.path.join(parent, name)
+            copy = os.path.join(target, mobilenames.mobile_name(name))
+            try:
+                held, wanted = os.stat(copy), os.stat(source)
+                if (held.st_size == wanted.st_size
+                        and int(held.st_mtime) == int(wanted.st_mtime)):
+                    continue
+            except OSError:
+                pass
+            try:
+                shutil.copy2(source, copy)
+            except OSError as error:
+                runlog.warn("%s: the cover art was not copied (%s)"
+                            % (source, error.strerror or error))
 
 
 def _settle_scratch(state: Run) -> bool:

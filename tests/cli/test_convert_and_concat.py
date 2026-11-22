@@ -115,6 +115,30 @@ class TestEachBookIsJudgedWhole:
         assert argv[argv.index("-g") + 1] == "2"
 
 
+class TestOnlyTheFinishedBooksAreRenamedForAPhone:
+    """The staging tree mirrors the input name for name - the cue sheets and
+    the cover search find their way back by relative path - so the transcoder
+    always keeps names, and -k reaches only the concatenation."""
+
+    def test_the_transcoder_always_keeps_the_names(self, phases, tmp_path):
+        assert "-k" in _transcode(phases, tmp_path)
+
+    @pytest.mark.parametrize("keep,expected", [(False, []), (True, ["-k"])])
+    def test_k_is_handed_to_the_concatenation(self, monkeypatch, keep,
+                                              expected):
+        started = []
+
+        class Done:
+            returncode = 0
+
+        monkeypatch.setattr(cac.commands, "run_command",
+                            lambda command, argv, **_k: (
+                                started.append((command, argv)) or Done()))
+        monkeypatch.setattr(cac, "_stop_if_interrupted", lambda: None)
+        cac._concat_one("src", "dst", "", keep)
+        assert started == [("concat-audio", expected + ["src", "dst"])]
+
+
 class TestTheOptionPage:
     def test_the_codecs_offered_are_the_ones_convert_audio_writes(self):
         """One list, so the two pages cannot come to disagree about what -e
