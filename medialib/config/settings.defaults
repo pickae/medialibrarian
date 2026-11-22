@@ -46,3 +46,7 @@ comicPdfJpegQuality=92
 ramScratchMaxPercent=50
 # With this little free in RAM, new scratch goes to disk instead.
 ramScratchMinFreeBytes=1073741824
+
+# --- language models
+# How long one item's model steps may take together, in seconds.
+llmItemSeconds=300

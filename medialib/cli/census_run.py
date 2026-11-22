@@ -21,6 +21,8 @@ from medialib.lib import (
     enums,
     ffmpegselect,
     imagemagick,
+    llmclient,
+    llmroster,
     modelmeter,
     ramscratch,
     runcontext,
@@ -804,9 +806,16 @@ def run(arguments, depth, out_dir, run_bi, separator, extension,
                     "counts are unaffected.")
             log("Censusing %d libraries from the %d folders given, one worker "
                 "each" % (len(lib_paths), len(worker_roots)))
-            workerpool.run([(in_paths[index], index) for index in worker_roots],
-                           len(worker_roots), state.root,
-                           lambda root: (root[1],))
+            # The comic judge's server held here rather than in the
+            # library workers: one a worker started would stop with it,
+            # under the others.
+            with llmclient.held_for_run(
+                    llmroster.run_models((llmroster.COMIC_PDF_JUDGE,)),
+                    os.path.join(scratch, "llmSlots"), log):
+                workerpool.run([(in_paths[index], index)
+                                for index in worker_roots],
+                               len(worker_roots), state.root,
+                               lambda root: (root[1],))
         else:
             for root_index in worker_roots:
                 state.root(root_index)

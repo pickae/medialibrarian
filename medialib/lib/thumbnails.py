@@ -167,10 +167,13 @@ def choose_thumbnail(input_path: str, *, model_meter: str = "",
     """Pick the best cover image (or a PDF page) in <input_path>.
 
     The name ladder (:data:`_LADDER`) decides first. Only when no name rung
-    matches and the folder holds two or more images is a vision model
-    (:func:`aicover.choose_folder_cover`) asked which one is the front cover;
-    on "none", error, switch off, or no vision model, the first image the
-    folder walk lists is kept."""
+    above the back cover's matches and the folder holds two or more images is
+    a vision model (:func:`aicover.choose_folder_cover`) asked which one is
+    the front cover; on "none", error, switch off, or no vision model, the
+    back cover is kept where there is one, else the first image the folder
+    walk lists. A back cover is the ladder's last resort, not a front: a
+    folder of scans named Back, Label and Page 01 has its front among the
+    others."""
     first: list[str | None] = [None] * len(_LADDER)
     images: list[str] = []
     for path in _regular_files(input_path):
@@ -181,7 +184,7 @@ def choose_thumbnail(input_path: str, *, model_meter: str = "",
         for i, conditions in enumerate(_LADDER):
             if first[i] is None and _matches_conditions(name, conditions):
                 first[i] = path
-    for i in range(len(first) - 1, -1, -1):
+    for i in range(len(first) - 1, 0, -1):
         best = first[i]
         if best is not None:
             return best
@@ -193,22 +196,25 @@ def choose_thumbnail(input_path: str, *, model_meter: str = "",
             scratch_dir=scratch_dir, prepare=prepare)
         if picked:
             return picked
-    return images[0]
+    return first[0] or images[0]
 
 
 def extract_thumbnail(input_path: str, file_name: str, dpi: int,
-                      have_mkvtoolnix: bool, run: Runner = _run) -> int:
+                      have_mkvtoolnix: bool, run: Runner = _run,
+                      pdf_dir: str = "") -> int:
     """Downscale/convert the chosen image for embedding, into <file_name>.jpg.
 
     From the booklet PDF if there is one (and poppler to read it), else from
     the cover embedded in one of the audio files. Returns pdftoppm's own exit
     status when the PDF was read, 0 otherwise - every other branch ends at
-    zero.
+    zero. The PDF is looked for in ``pdf_dir`` where given - the folder the
+    audio was transcoded from - and in ``input_path`` otherwise.
     """
-    pdf = _first_file(input_path,
+    pdf_dir = pdf_dir or input_path
+    pdf = _first_file(pdf_dir,
                       lambda b: _iname(b, "*scan*") and _iname(b, "*.pdf"))
     if pdf is None:
-        pdf = _first_file(input_path,
+        pdf = _first_file(pdf_dir,
                           lambda b: _iname(b, "*booklet*") and _iname(b, "*.pdf"))
 
     # A booklet PDF is the PREFERRED cover source, not the only one, so a host
@@ -227,7 +233,7 @@ def extract_thumbnail(input_path: str, file_name: str, dpi: int,
         # leaves the embedded-artwork rungs their turn, and they say theirs.
         if os.path.isfile(f"{file_name}.jpg"):
             _detail("    Cover from the first page of the PDF booklet %s"
-                    % os.path.relpath(pdf, input_path))
+                    % os.path.relpath(pdf, pdf_dir))
         return status
 
     source_opus = _first_file(input_path, lambda b: _iname(b, "*.opus"))
@@ -380,14 +386,19 @@ def embed_thumbnail(input_path: str, file_name: str, image_size_limit: int,
     ram_base = f"{ram_dir}/{os.path.basename(file_name)}"
     m4b_temp_file = f"{ram_base}.temp.m4b"
 
-    thumb_file = choose_thumbnail(input_path, model_meter=model_meter,
+    # Under convert-and-concat the folder is its intermediate tree, which
+    # holds the transcoded audio alone: the images and the booklet beside the
+    # source stay there, and are looked for there.
+    cover_dir = onlinecover.source_folder(input_path)
+    thumb_file = choose_thumbnail(cover_dir, model_meter=model_meter,
                                   scratch_dir=ram_dir)
     if os.path.isfile(thumb_file):
         _detail("    Cover from the image file %s in the input"
-                % os.path.relpath(thumb_file, input_path))
+                % os.path.relpath(thumb_file, cover_dir))
 
     if not os.path.isfile(thumb_file):
-        extract_thumbnail(input_path, ram_base, dpi, have_mkvtoolnix, run)
+        extract_thumbnail(input_path, ram_base, dpi, have_mkvtoolnix, run,
+                          pdf_dir=cover_dir)
         thumb_file = f"{ram_base}.jpg"
 
     # Online is the last rung, when none of the local ones held a cover.

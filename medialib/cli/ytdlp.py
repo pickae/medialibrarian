@@ -799,8 +799,16 @@ def _process_ad_reads_for_files(state, files, profile: str) -> None:
         full = os.path.abspath(path)
         if full in done or not os.path.isfile(full):
             continue
-        aipodcastads.process_episode(
-            full, profile, meter_file=meter_file, tmp_dir=state.status_dir)
+        # One episode's check that breaks is said and left for the next run,
+        # and never stops the library copy that called it.
+        try:
+            aipodcastads.process_episode(
+                full, profile, meter_file=meter_file, tmp_dir=state.status_dir)
+        except Exception as error:
+            log("WARNING: the ad-read check of %s failed and is left for the "
+                "next run: %s" % (os.path.basename(full),
+                                  str(error) or type(error).__name__))
+            continue
         _record_ad_checked(state.status_dir, full)
         done.add(full)
 

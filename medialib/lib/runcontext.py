@@ -38,6 +38,7 @@ HANDED_DOWN = (
     "ABORT_FLAG", "ABORT_FLAG_OWNER", "SAFETY_LOG", "LENGTH_LOG",
     "ERROR_LOG_NAME", "ERROR_LOG_OWNER", "ERROR_LOG_RUN", "ERROR_LOG_STARTED",
     "infoLogLevel", "SKIP_TOOL_PREFLIGHT", "COMIC_PDF_METER", "AI_ALLOWED",
+    "SOURCE_TREE",
 )
 
 # Set by -A: this run, and what it starts, may ask a language model.

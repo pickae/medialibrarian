@@ -347,6 +347,48 @@ def test_the_jpg_check_is_case_sensitively_exact(tmp_path, isolated_env, monkeyp
     assert run.called("convert")
 
 
+@pytest.fixture
+def source_tree(tmp_path):
+    """convert-and-concat's layout: an intermediate tree holding the audio
+    alone, and the source folder beside it holding the rest."""
+    from medialib.lib import runcontext
+    tree, source = tmp_path / "tree", tmp_path / "source"
+    (tree / "case" / "ram").mkdir(parents=True)
+    (source / "case").mkdir(parents=True)
+    runcontext.settle(onlinecover.SOURCE_TREE_VARIABLE,
+                      "%s\t%s" % (tree, source))
+    yield tree / "case", source / "case"
+    runcontext.forget(onlinecover.SOURCE_TREE_VARIABLE)
+
+
+def test_a_cover_image_beside_the_source_is_the_cover(source_tree, isolated_env,
+                                                      monkeypatch, tmp_path):
+    d, source = source_tree
+    _folder(d, ["a.opus"])
+    _file_with_size(source, "folder.jpg", 10)
+    monkeypatch.chdir(d)
+    run = _Run()
+    monkeypatch.setenv("PATH", _stub_bin(tmp_path, ["ffmpeg"]))
+    thumbnails.embed_thumbnail(
+        str(d), "track01", 100, 90, "1024x1024", 100, False, "ram", "script", run)
+    assert (d / "ram" / "track01.output.jpg").is_file()
+    assert run.called("ffmpeg") == []
+
+
+def test_a_booklet_beside_the_source_is_read_before_the_embedded_art(
+        source_tree, isolated_env, monkeypatch, tmp_path):
+    d, source = source_tree
+    _folder(d, ["a.opus"])
+    _folder(source, ["Booklet.pdf"])
+    monkeypatch.chdir(d)
+    run = _Run(writes={"pdftoppm": ["ram/track01.jpg"]})
+    monkeypatch.setenv("PATH", _stub_bin(tmp_path, ["pdftoppm", "ffmpeg"]))
+    thumbnails.embed_thumbnail(
+        str(d), "track01", 100, 90, "1024x1024", 100, False, "ram", "script", run)
+    assert run.called("pdftoppm")[0][1] == str(source / "Booklet.pdf")
+    assert run.called("ffmpeg") == []
+
+
 def test_the_extraction_falls_through_when_no_image_was_chosen(tmp_path,
                                                                 isolated_env,
                                                                 monkeypatch):
@@ -967,6 +1009,25 @@ class TestFolderCoverLook:
             str(tmp_path), lookers=[model], prepare=self._as_is)
         assert picked == str(tmp_path / "cover.jpg")
         assert model.shown == []
+
+    def test_a_back_cover_alone_does_not_skip_the_model(self, tmp_path):
+        _folder(tmp_path, ["Scans/Back.jpg", "Scans/Label.jpg",
+                           "Scans/Page 01.jpg"])
+        ordered = self._walk_images(tmp_path)
+        front = next(p for p in ordered if p.endswith("Page 01.jpg"))
+        model = _VisionModel('{"choice": %d, "why": "title and artwork"}'
+                             % (ordered.index(front) + 1))
+        picked = thumbnails.choose_thumbnail(
+            str(tmp_path), lookers=[model], prepare=self._as_is)
+        assert picked == front
+        assert len(model.shown) == 1
+
+    def test_the_back_cover_is_kept_when_the_model_sees_no_front(self, tmp_path):
+        _folder(tmp_path, ["Scans/Label.jpg", "Scans/Back.jpg"])
+        model = _VisionModel('{"choice": null, "why": "a disc and a back"}')
+        picked = thumbnails.choose_thumbnail(
+            str(tmp_path), lookers=[model], prepare=self._as_is)
+        assert picked == str(tmp_path / "Scans" / "Back.jpg")
 
     def test_single_unnamed_image_skips_model(self, tmp_path):
         _folder(tmp_path, ["scan01.jpg", "notes.txt"])

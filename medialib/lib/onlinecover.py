@@ -19,7 +19,14 @@ What the audio probably IS decides which rows are asked:
 * 30 to 200 minutes is most likely a podcast - unless it is encoded in
   stereo, which makes it most likely a full-cast drama;
 * anything longer is most likely an audiobook;
-* anything shorter is "other".
+* anything shorter is "other";
+* whatever its length, music says so in its tags or where it is kept: a
+  genre that is not speech, a conductor, a catalogue number such as "Op. 27"
+  or "K. 999", or a folder called Music or Klassik on the way to it. Music
+  with the marks of classical music - a classical genre, a conductor, a
+  catalogue number, a Klassik folder - is "classical", which is looked for by
+  its performer and its work rather than by an album title, the way classical
+  releases are sold.
 
 An answer is taken only when it is the same title, and nothing about it says
 otherwise - an author or channel that is somebody else, a running time that is
@@ -49,6 +56,7 @@ from medialib.lib import (
     imagemagick,
     podcastfeeds,
     politepacing,
+    runcontext,
     runlog,
     titlematch,
 )
@@ -84,8 +92,40 @@ TABLE_NAME = "coverproviders.tsv"
 PODCAST_MIN_SECONDS = 30 * 60
 AUDIOBOOK_MIN_SECONDS = 200 * 60
 
-CONTENTS = ("podcast", "drama", "audiobook", "other")
-MATCHES = ("id", "strict", "loose", "show")
+CONTENTS = ("podcast", "drama", "audiobook", "music", "classical", "other")
+MATCHES = ("id", "strict", "loose", "show", "performer")
+
+# Where convert-and-concat's intermediate tree came from: "<tree>\t<source>".
+# The tree holds the transcoded audio alone, under the source's own folder
+# names; the source still has the folders it sits in, which say what it is.
+SOURCE_TREE_VARIABLE = "SOURCE_TREE"
+
+# Words a genre tag or a folder name says music with. A genre is music unless
+# it is one of the speech ones or says nothing; a folder only by these words.
+_MUSIC_FOLDER_WORDS = frozenset((
+    "music", "musik", "muziek", "musique", "musica", "música", "musikk",
+    "muzyka", "muzika", "musiikki"))
+_CLASSICAL_FOLDER_WORDS = frozenset((
+    "classical", "klassik", "klassiek", "classique", "clasica", "clásica",
+    "classica", "klassisk", "klasyczna", "klassiikki", "opera", "opern"))
+_CLASSICAL_GENRE_WORDS = _CLASSICAL_FOLDER_WORDS | frozenset((
+    "baroque", "barock", "barok", "symphony", "symphonie", "sinfonie",
+    "symfonie", "concerto", "sonata", "sonate", "orchestral", "chamber",
+    "kammermusik", "requiem", "cantata", "kantate", "oratorio", "oper",
+    "romantic", "romantik", "renaissance", "medieval", "early"))
+_SPEECH_GENRE_WORDS = frozenset((
+    "audiobook", "audiobooks", "hörbuch", "hörbücher", "hoerbuch", "horbuch",
+    "luisterboek", "audiolibro", "audiolivre", "book", "books", "hörspiel",
+    "hoerspiel", "horspiel", "hörspiele", "podcast", "podcasts", "speech",
+    "spoken", "talk", "lecture", "lesung", "drama", "radio", "comedy",
+    "kabarett", "cabaret", "audio drama", "story", "stories", "kinder"))
+_EMPTY_GENRES = frozenset(("", "other", "others", "unknown", "misc", "genre",
+                           "none", "various", "default"))
+# A classical catalogue number in a title: "Op. 27", "BWV 9999", "K. 999",
+# "Hob. XVI:99", "D 999", "RV 999", "WoO 999".
+_CATALOGUE = re.compile(
+    r"\b(?:op|opus|bwv|kv|k|hob|d|rv|woo|hwv|sz|bb|l|s|twv)\.?\s*"
+    r"(?:[ivxl]+:)?\d+", re.IGNORECASE)
 
 # How far a catalogue's running time may be from the audio's and still be the
 # same recording: a tenth, or two minutes for a short one. An abridged edition
@@ -234,6 +274,59 @@ def probable_content(name: str, seconds: float, stereo: bool = False) -> tuple:
     return "other", "no length"
 
 
+def _words_of(text: str) -> set[str]:
+    return set(re.findall(r"[^\W\d_]+", shell_lower(text)))
+
+
+def source_folder(path: str) -> str:
+    """The folder ``path`` was transcoded from, where it lies in
+    convert-and-concat's intermediate tree and the source folder is still
+    there; ``path`` itself otherwise."""
+    tree, _, source = str(runcontext.get(SOURCE_TREE_VARIABLE, "")).partition("\t")
+    if not tree or not source:
+        return path
+    norm, tree = os.path.normpath(path), os.path.normpath(tree)
+    if norm != tree and not norm.startswith(tree + os.sep):
+        return path
+    mapped = os.path.normpath(os.path.join(source, os.path.relpath(norm, tree)))
+    return mapped if os.path.isdir(mapped) else path
+
+
+def music_content(tag_sets: Sequence[dict], folder: str = "") -> tuple | None:
+    """("music" or "classical", what it is on) when the tracks' tags or the
+    folders ``folder`` lies in say music; None when nothing does.
+
+    A genre decides when there is one: a speech genre is not music, a
+    classical one is classical, any other is music. A conductor or a
+    catalogue number in a title is classical. Failing those, a folder named
+    for classical music, then one named for music, anywhere on the way."""
+    genres = [str(tags.get("genre", "")).strip() for tags in tag_sets]
+    genres = [g for g in genres if shell_lower(g) not in _EMPTY_GENRES]
+    for genre in genres:
+        words = _words_of(genre)
+        if words & _SPEECH_GENRE_WORDS or shell_lower(genre) in _SPEECH_GENRE_WORDS:
+            return None
+    for genre in genres:
+        if _words_of(genre) & _CLASSICAL_GENRE_WORDS:
+            return "classical", "the genre %s" % genre
+    for tags in tag_sets:
+        if str(tags.get("conductor", "")).strip():
+            return "classical", "a conductor in the tags"
+        for key in ("title", "album", "work"):
+            if _CATALOGUE.search(str(tags.get(key, ""))):
+                return "classical", "a catalogue number in the %s" % key
+    if genres:
+        return "music", "the genre %s" % genres[0]
+    parts = [part for part in os.path.normpath(folder).split(os.sep) if part]
+    for part in parts:
+        if _words_of(part) & _CLASSICAL_FOLDER_WORDS:
+            return "classical", "the folder %s" % part
+    for part in parts:
+        if _words_of(part) & _MUSIC_FOLDER_WORDS:
+            return "music", "the folder %s" % part
+    return None
+
+
 # What a name carries that is not its title: the "(Unabridged)" and
 # "[B0ABC12345]" behind.
 _BRACKETED = re.compile(r"\s*[\(\[\{][^\)\]\}]*[\)\]\}]\s*")
@@ -285,6 +378,13 @@ class Subject:
     youtube_id: str = ""
     why: str = ""
     episode: str = ""
+    # For music: the work or album, its performer and its composer, as the
+    # classical catalogues are searched by them.
+    work: str = ""
+    performer: str = ""
+    composer: str = ""
+    # The label a folder names its performance by - "(Nordlabel, 1972)".
+    label: str = ""
 
     @property
     def title(self) -> str:
@@ -331,6 +431,8 @@ class Candidate:
     seconds: float = 0.0
     images: tuple[str, ...] = ()
     creators_certain: bool = True
+    # The label or copyright line, where the site gives one ("" where not).
+    label: str = ""
 
 
 def _json(text: str | None):
@@ -361,7 +463,8 @@ def read_itunes(text: str | None) -> list[Candidate]:
             item.get("collectionName") or item.get("trackName") or "",
             tuple(n for n in (item.get("artistName"),) if n),
             float(millis) / 1000 if isinstance(millis, (int, float)) else 0.0,
-            tuple(_unique([_itunes_large(art), art]))))
+            tuple(_unique([_itunes_large(art), art])),
+            label=str(item.get("copyright") or "")))
     return found
 
 
@@ -454,10 +557,48 @@ def read_youtube(text: str | None) -> list[Candidate]:
     return found
 
 
+def read_deezer(text: str | None) -> list[Candidate]:
+    """Deezer's album search: its albums, the largest cover first."""
+    found = []
+    for item in _json(text).get("data") or ():
+        if not isinstance(item, dict):
+            continue
+        images = tuple(_unique([item.get("cover_xl") or "",
+                                item.get("cover_big") or ""]))
+        if not images:
+            continue
+        artist = item.get("artist")
+        if not isinstance(artist, dict):
+            artist = {}
+        found.append(Candidate(
+            item.get("title") or "",
+            tuple(n for n in (artist.get("name"),) if n), 0.0, images))
+    return found
+
+
+def read_musicbrainz(text: str | None) -> list[Candidate]:
+    """MusicBrainz's release-group search, each group's front cover asked of
+    the Cover Art Archive - which answers 404 where it has none, and the next
+    group is tried."""
+    found = []
+    for item in _json(text).get("release-groups") or ():
+        if not isinstance(item, dict) or not item.get("id"):
+            continue
+        credits = [credit.get("name") or (credit.get("artist") or {}).get("name")
+                   for credit in item.get("artist-credit") or ()
+                   if isinstance(credit, dict)]
+        found.append(Candidate(
+            item.get("title") or "", tuple(n for n in credits if n), 0.0,
+            ("https://coverartarchive.org/release-group/%s/front" % item["id"],)))
+    return found
+
+
 PROVIDERS: dict[str, Callable[[str | None], list[Candidate]]] = {
     "amazon": read_amazon,
     "audible": read_audible,
+    "deezer": read_deezer,
     "itunes": read_itunes,
+    "musicbrainz": read_musicbrainz,
     "openlibrary": read_openlibrary,
     "youtube": read_youtube,
 }
@@ -529,6 +670,8 @@ def accepts(match: str, subject: Subject, candidate: Candidate) -> bool:
     if match == "show":
         return any(titlematch.equivalent(name, candidate.title)
                    for name in subject.creators)
+    if match == "performer":
+        return _performer_and_work(subject, candidate)
     title = _matched_title(subject, candidate)
     if not title or _another_episode(subject, candidate):
         return False
@@ -544,6 +687,51 @@ def accepts(match: str, subject: Subject, candidate: Candidate) -> bool:
         return False
     return (creators_agree or runtime == "agrees"
             or len(title.split()) >= SHORT_TITLE_WORDS)
+
+
+def _performer_and_work(subject: Subject, candidate: Candidate) -> bool:
+    """A classical release is the subject's when its artist is the subject's
+    performer and its title names the work: "Velder: Harbour Suite; Ostrand:
+    Night Pieces" by the pianist is the pianist's "Harbour Suite", couplings
+    and all - a title match would
+    never take it, and a performer alone would take any of their records."""
+    performers = _unique([subject.performer, *subject.trusted_creators])
+    performers = [p for p in performers
+                  if shell_lower(p) != shell_lower(subject.composer)]
+    if not performers or not _names_agree(performers, candidate.creators):
+        return False
+    # A performer who recorded the work more than once: where the folder
+    # names the label, the release must be that label's - and one that does
+    # not say its label cannot be told from the others, so is not taken. A
+    # label's own release may well be named for its recital rather than the
+    # work, so it needs only a word of the work in its title.
+    label_agrees = False
+    if subject.label:
+        if not _label_agrees(subject.label, candidate.label):
+            return False
+        label_agrees = True
+    work = _words(subject.work or subject.title)
+    if not work:
+        return False
+    shared = len(work & _words(candidate.title))
+    return shared >= 1 if label_agrees else shared * 3 >= len(work) * 2
+
+
+# What a folder abbreviates a label to, and how the label calls itself.
+_LABEL_NAMES = {"dg": "deutsche grammophon", "hm": "harmonia mundi",
+                "dhm": "deutsche harmonia mundi", "rca": "rca",
+                "emi": "emi", "bbc": "bbc"}
+
+
+def _label_agrees(ours: str, theirs: str) -> bool:
+    """Whether a release's label or copyright line ``theirs`` is the label a
+    folder named, ``ours``: every word of ours, or of its long name, in it."""
+    if not theirs:
+        return False
+    full = _LABEL_NAMES.get(shell_lower(ours.strip()), ours)
+    line = _words_of(theirs)
+    return any(words and words <= line
+               for words in (_words_of(ours), _words_of(full)))
 
 
 # --- the network ---------------------------------------------------------------------
@@ -651,7 +839,9 @@ def _address(row: Row, subject: Subject) -> str:
     subject does not have."""
     values = {"title": subject.title, "creator": subject.creator,
               "query": " ".join(v for v in (subject.title, subject.creator) if v),
-              "youtube_id": subject.youtube_id, "episode": subject.episode}
+              "youtube_id": subject.youtube_id, "episode": subject.episode,
+              "work": subject.work, "performer": subject.performer,
+              "composer": subject.composer}
     for key, value in values.items():
         placeholder = "{%s}" % key
         if placeholder not in row.address:
@@ -842,22 +1032,75 @@ def book_subject(input_path: str, tracks: Sequence[str], seconds: float,
     kind before the catalogue search runs (except for a YouTube id, which
     fetches that video's own thumbnail directly)."""
     folder = os.path.basename(os.path.normpath(input_path))
+    source = source_folder(input_path)
     tag_reader = probe or probe_tags
     tags = tag_reader(tracks[0]) if tracks else {}
+    parent = os.path.basename(os.path.dirname(os.path.normpath(source)))
     subject = subject_for(
         folder, seconds,
         tag_titles=[tags.get("album", "")],
         tag_creators=[tags.get("album_artist", ""), tags.get("artist", ""),
                       tags.get("composer", "")],
-        guessed_creators=[os.path.basename(os.path.dirname(
-            os.path.normpath(input_path)))],
+        guessed_creators=[parent],
         stereo=stereo)
-    if not subject.youtube_id:
-        _refine_content(
-            subject, folder, folder_path=input_path, tracks=tracks,
-            seconds=seconds, stereo=stereo, list_folder=True,
-            classifiers=classifiers, meter_file=meter_file, probe=tag_reader)
+    if subject.youtube_id or _dated(folder):
+        return subject
+    sampled = [tags]
+    if len(tracks) > 1:
+        sampled.append(tag_reader(tracks[-1]))
+    music = music_content(sampled, source)
+    if music:
+        subject.content, subject.why = music
+    _refine_content(
+        subject, folder, folder_path=source, tracks=tracks,
+        seconds=seconds, stereo=stereo, list_folder=True,
+        classifiers=classifiers, meter_file=meter_file, probe=tag_reader)
+    if subject.content in ("music", "classical"):
+        _music_names(subject, tags, folder, parent)
     return subject
+
+
+# Anything in round, square or curly brackets, anywhere in a tag.
+_BRACKETED_ANY = re.compile(r"[\(\[\{][^\)\]\}]*[\)\]\}]")
+
+# The label and date a performance folder ends in: "(Nordlabel, 1972)",
+# "(Live Label, ~1985)", "(Nordlabel, 10.2.1969)".
+_FOLDER_LABEL = re.compile(r"\(([^(),]*[^\W\d_][^(),]*),\s*[~\d][^()]*\)\s*$")
+
+
+def _folder_label(folder: str) -> str:
+    """The label a performance folder names in its closing brackets, or ""."""
+    found = _FOLDER_LABEL.search(folder)
+    return found.group(1).strip() if found else ""
+
+
+def _music_names(subject: Subject, tags: dict, folder: str,
+                 parent: str) -> None:
+    """The work, performer and composer of a music subject, from its tags,
+    else from where it lies: a classical collection is kept as one folder
+    per work holding one folder per performance - "Harbour Suite / 35
+    Lindqvist (Nordlabel, 1972)" - so an untagged recording's
+    own folder names the performer and the one above it the work."""
+    cleaned = clean_name(folder)
+    composer = tags.get("composer", "").strip()
+    performer = next((name.strip() for name in (
+        tags.get("album_artist", ""), tags.get("artist", ""),
+        tags.get("performer", ""), tags.get("conductor", ""))
+        if name.strip() and shell_lower(name.strip()) != shell_lower(composer)),
+        "")
+    subject.composer = composer
+    subject.label = _folder_label(folder)
+    # Without what a tag carries in brackets - "(piano)", "[FLAC]", "(Nordlabel
+    # Series 1000, NL-70530)" - which only narrows a catalogue's search to
+    # nothing.
+    work = _BRACKETED_ANY.sub(" ", tags.get("work", "") or tags.get("album", ""))
+    subject.work = " ".join(work.split()) \
+        or (clean_name(parent) if subject.content == "classical" else cleaned)
+    performer = " ".join(_BRACKETED_ANY.sub(" ", performer).split())
+    subject.performer = performer or (
+        cleaned if subject.content == "classical" else subject.creator)
+    if subject.content == "classical" and subject.performer:
+        subject.creators = _unique([subject.performer, *subject.creators])
 
 
 def providers_for(content: str) -> list[str]:

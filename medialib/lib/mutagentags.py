@@ -32,11 +32,11 @@ from __future__ import annotations
 import base64
 import os
 import sys
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 
-__all__ = ["BOOK_TAG_FIELDS", "COVER_SUFFIXES", "MP4_SUFFIXES",
-           "embed_chapters", "embed_cover", "fill_book_tags", "has_tag",
-           "read_book_tags", "set_tag"]
+__all__ = ["BOOK_TAG_FIELDS", "CLASSICAL_TAG_FIELDS", "COVER_SUFFIXES",
+           "MP4_SUFFIXES", "MUSIC_TAG_FIELDS", "embed_chapters", "embed_cover",
+           "fill_book_tags", "has_tag", "read_book_tags", "set_tag"]
 
 # The containers whose metadata is MP4's rather than a Vorbis comment's: a cover
 # is a `covr` atom, and chapters are a track this module cannot write at all.
@@ -95,6 +95,58 @@ _MP3_BOOK_TAGS: dict[str, tuple[str, bool, tuple[str, ...], tuple[str, ...]]] = 
     "language": ("TLAN", False, ("TLAN",), ()),
     "abridged": ("ABRIDGED", True, (), ("abridged",)),
 }
+
+# The canonical music tag fields, for a joined album: a classical one keeps
+# its composer, work, soloist, conductor and orchestra apart, the way the
+# classical catalogues and players do.
+MUSIC_TAG_FIELDS = ("title", "album", "artist", "album_artist", "year",
+                    "genre", "label")
+CLASSICAL_TAG_FIELDS = ("title", "album", "composer", "work", "artist",
+                        "album_artist", "performer", "conductor", "ensemble",
+                        "year", "genre", "label")
+
+_VORBIS_BOOK_TAGS.update({
+    "album": ("ALBUM", ("ALBUM",)),
+    "artist": ("ARTIST", ("ARTIST",)),
+    "album_artist": ("ALBUMARTIST", ("ALBUMARTIST", "ALBUM_ARTIST",
+                                     "ALBUM ARTIST")),
+    "composer": ("COMPOSER", ("COMPOSER",)),
+    "work": ("WORK", ("WORK",)),
+    "performer": ("PERFORMER", ("PERFORMER",)),
+    "conductor": ("CONDUCTOR", ("CONDUCTOR",)),
+    "ensemble": ("ENSEMBLE", ("ENSEMBLE", "ORCHESTRA")),
+    "genre": ("GENRE", ("GENRE",)),
+    "label": ("LABEL", ("LABEL", "ORGANIZATION", "PUBLISHER")),
+})
+_MP4_BOOK_TAGS.update({
+    "album": ("\xa9alb", False, ("\xa9alb",)),
+    "artist": ("\xa9ART", False, ("\xa9ART",)),
+    "album_artist": ("aART", False, ("aART",)),
+    "composer": ("\xa9wrt", False, ("\xa9wrt",)),
+    "work": ("\xa9wrk", False, ("\xa9wrk",)),
+    "performer": ("----:com.apple.iTunes:PERFORMER", True,
+                  ("----:com.apple.iTunes:PERFORMER",)),
+    "conductor": ("----:com.apple.iTunes:CONDUCTOR", True,
+                  ("----:com.apple.iTunes:CONDUCTOR",)),
+    "ensemble": ("----:com.apple.iTunes:ENSEMBLE", True,
+                 ("----:com.apple.iTunes:ENSEMBLE",
+                  "----:com.apple.iTunes:ORCHESTRA")),
+    "genre": ("\xa9gen", False, ("\xa9gen",)),
+    "label": ("----:com.apple.iTunes:LABEL", True,
+              ("----:com.apple.iTunes:LABEL",)),
+})
+_MP3_BOOK_TAGS.update({
+    "album": ("TALB", False, ("TALB",), ()),
+    "artist": ("TPE1", False, ("TPE1",), ()),
+    "album_artist": ("TPE2", False, ("TPE2",), ()),
+    "composer": ("TCOM", False, ("TCOM",), ()),
+    "work": ("WORK", True, (), ("work",)),
+    "performer": ("PERFORMER", True, (), ("performer",)),
+    "conductor": ("TPE3", False, ("TPE3",), ()),
+    "ensemble": ("ENSEMBLE", True, (), ("ensemble", "orchestra")),
+    "genre": ("TCON", False, ("TCON",), ()),
+    "label": ("TPUB", False, ("TPUB",), ()),
+})
 
 # Named here because the refusal below tells the reader how to override it.
 FORCE_FLAG = "--force"
@@ -261,29 +313,31 @@ def _mp3_read_field(tags, frame_checks: tuple[str, ...],
     return ""
 
 
-def read_book_tags(audio: str) -> dict[str, str]:
-    """The non-empty canonical audiobook tags already carried by ``audio``
-    (see :data:`BOOK_TAG_FIELDS`). Empty dict for an unreadable or unsupported
-    file."""
+def read_book_tags(audio: str,
+                   fields: Sequence[str] = BOOK_TAG_FIELDS) -> dict[str, str]:
+    """The non-empty canonical tags among ``fields`` already carried by
+    ``audio`` (:data:`BOOK_TAG_FIELDS` unless given, or
+    :data:`MUSIC_TAG_FIELDS` / :data:`CLASSICAL_TAG_FIELDS`). Empty dict for
+    an unreadable or unsupported file."""
     lower = audio.lower()
     try:
         if lower.endswith(_VORBIS_SUFFIXES):
             handle = _open(audio)
-            return {field: value for field in BOOK_TAG_FIELDS
+            return {field: value for field in fields
                     if (value := _vorbis_read_field(
                         handle, _VORBIS_BOOK_TAGS[field][1]))}
         if lower.endswith(MP4_SUFFIXES):
             from mutagen.mp4 import MP4
 
             mp4 = MP4(audio)
-            return {field: value for field in BOOK_TAG_FIELDS
+            return {field: value for field in fields
                     if (value := _mp4_read_field(
                         mp4, _MP4_BOOK_TAGS[field][2]))}
         if lower.endswith(".mp3"):
             from mutagen.mp3 import MP3
 
             mp3 = MP3(audio)
-            return {field: value for field in BOOK_TAG_FIELDS
+            return {field: value for field in fields
                     if (value := _mp3_read_field(
                         mp3.tags, _MP3_BOOK_TAGS[field][2],
                         _MP3_BOOK_TAGS[field][3]))}
@@ -293,7 +347,8 @@ def read_book_tags(audio: str) -> dict[str, str]:
 
 
 def fill_book_tags(audio: str, tags: Mapping[str, str],
-                   written: list[str] | None = None) -> int:
+                   written: list[str] | None = None,
+                   fields: Sequence[str] = BOOK_TAG_FIELDS) -> int:
     """Write any canonical audiobook tag in ``tags`` whose slot in ``audio`` is
     currently empty, leaving every non-empty tag untouched.
 
@@ -305,7 +360,7 @@ def fill_book_tags(audio: str, tags: Mapping[str, str],
     try:
         if lower.endswith(_VORBIS_SUFFIXES):
             handle = _open(audio)
-            for field in BOOK_TAG_FIELDS:
+            for field in fields:
                 value = str(tags.get(field) or "").strip()
                 if not value:
                     continue
@@ -322,7 +377,7 @@ def fill_book_tags(audio: str, tags: Mapping[str, str],
             mp4 = MP4(audio)
             if mp4.tags is None:
                 mp4.add_tags()
-            for field in BOOK_TAG_FIELDS:
+            for field in fields:
                 value = str(tags.get(field) or "").strip()
                 if not value:
                     continue
@@ -337,12 +392,26 @@ def fill_book_tags(audio: str, tags: Mapping[str, str],
             if added:
                 mp4.save()
         elif lower.endswith(".mp3"):
-            from mutagen.id3 import TDRC, TIT2, TLAN, TPE1, TXXX
+            from mutagen.id3 import (
+                TALB,
+                TCOM,
+                TCON,
+                TDRC,
+                TIT2,
+                TLAN,
+                TPE1,
+                TPE2,
+                TPE3,
+                TPUB,
+                TXXX,
+            )
             from mutagen.mp3 import MP3
 
-            frames = {"TIT2": TIT2, "TPE1": TPE1, "TDRC": TDRC, "TLAN": TLAN}
+            frames = {"TIT2": TIT2, "TPE1": TPE1, "TDRC": TDRC, "TLAN": TLAN,
+                      "TALB": TALB, "TPE2": TPE2, "TPE3": TPE3, "TCOM": TCOM,
+                      "TCON": TCON, "TPUB": TPUB}
             mp3 = MP3(audio)
-            for field in BOOK_TAG_FIELDS:
+            for field in fields:
                 value = str(tags.get(field) or "").strip()
                 if not value:
                     continue

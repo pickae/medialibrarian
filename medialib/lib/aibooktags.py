@@ -13,6 +13,13 @@ renamed. When cover search (:mod:`aicover`) already ran for the same book, any
 metadata it returned (``title``, ``language``, ``edition``) is passed as hints
 and merged for any field the tag lookup did not return, while books that
 already had a local cover are still tagged independently.
+
+A joined music album is asked for an album's tags instead
+(:data:`mutagentags.MUSIC_TAG_FIELDS`): title, album, artist, album artist,
+year, genre and label - and a classical one
+(:data:`mutagentags.CLASSICAL_TAG_FIELDS`) for its composer, work, soloist,
+conductor and orchestra as tags of their own, never run together into the
+artist.
 """
 
 import math
@@ -45,6 +52,7 @@ __all__ = [
     "SYSTEM",
     "enabled",
     "merge_hints",
+    "parse_music_tags",
     "parse_tags",
     "prompt",
     "tag_book",
@@ -75,6 +83,8 @@ _CONTENT = {
     "drama": "a full-cast audio drama or radio play",
     "podcast": "a podcast episode or series",
     "youtube": "a YouTube video or podcast",
+    "music": "a music album",
+    "classical": "a classical music recording",
 }
 
 SYSTEM = (
@@ -104,6 +114,74 @@ SYSTEM = (
     "- year must be a 4-digit year (e.g. 2019).\n"
     "- abridged must be a JSON boolean (true or false) or null.\n"
 )
+
+
+MUSIC_SYSTEM = (
+    "You identify music albums from a folder's file names and audio tags, "
+    "verify the release on the web, and return clean metadata tags for it.\n\n"
+    "Search the web to confirm the release (MusicBrainz, Discogs, the label's "
+    "or the artist's pages, store listings). Prefer the details of the very "
+    "release the files point to - its label and year - over another "
+    "edition's.\n\n"
+    "Reply with one JSON object and nothing else, with exactly these keys:\n"
+    "{\n"
+    '  "title": string or null,\n'
+    '  "album": string or null,\n'
+    '  "artist": string or null,\n'
+    '  "album_artist": string or null,\n'
+    '  "year": 4-digit integer or null,\n'
+    '  "genre": string or null,\n'
+    '  "label": string or null\n'
+    "}\n\n"
+    "Rules:\n"
+    "- Use null for any field you cannot verify with confidence. Never guess.\n"
+    "- Every string must be a single line with no surrounding quotes or notes.\n"
+    "- title is the album's title, which the joined file is named for.\n"
+    "- year is the release's year (e.g. 1987).\n"
+)
+
+CLASSICAL_SYSTEM = (
+    "You identify classical music recordings from a folder's file names and "
+    "audio tags, verify the release on the web, and return clean metadata "
+    "tags for it.\n\n"
+    "A classical recording is one performance of a work: who composed it, "
+    "what the work is, and who performs it - a soloist, a conductor, an "
+    "orchestra or ensemble - are separate facts, each in its own tag. Search "
+    "the web to confirm THIS performance (MusicBrainz, Discogs, Presto "
+    "Music, the label's catalogue, store listings): the same performers, "
+    "and the label and year the folder names give where they give them.\n\n"
+    "Reply with one JSON object and nothing else, with exactly these keys:\n"
+    "{\n"
+    '  "title": string or null,\n'
+    '  "album": string or null,\n'
+    '  "composer": string or null,\n'
+    '  "work": string or null,\n'
+    '  "artist": string or null,\n'
+    '  "album_artist": string or null,\n'
+    '  "performer": string or null,\n'
+    '  "conductor": string or null,\n'
+    '  "ensemble": string or null,\n'
+    '  "year": 4-digit integer or null,\n'
+    '  "genre": string or null,\n'
+    '  "label": string or null\n'
+    "}\n\n"
+    "Rules:\n"
+    "- Use null for any field you cannot verify with confidence. Never guess.\n"
+    "- Every string must be a single line with no surrounding quotes or notes.\n"
+    "- composer: the composer's full name (e.g. Anton Velder); work: the work's "
+    "usual title (e.g. Harbour Suite).\n"
+    "- performer: the soloist(s) or ensemble leader; conductor: the conductor "
+    "only; ensemble: the orchestra, choir or ensemble. null where there is "
+    "none - a solo piano recital has no conductor.\n"
+    "- artist and album_artist: the performers as the release credits them, "
+    "never the composer.\n"
+    "- title: the album's title as released, which the joined file is named "
+    "for; year: the year this performance was recorded or first released.\n"
+)
+
+_SYSTEMS = {"music": MUSIC_SYSTEM, "classical": CLASSICAL_SYSTEM}
+_MUSIC_FIELDS = {"music": mutagentags.MUSIC_TAG_FIELDS,
+                 "classical": mutagentags.CLASSICAL_TAG_FIELDS}
 
 
 @dataclass(frozen=True)
@@ -192,15 +270,21 @@ def prompt(input_path: str, output_name: str, tracks: Sequence[str],
            subject: onlinecover.Subject,
            existing_tags: Mapping[str, str] | None = None,
            cover_hints: Mapping[str, str] | None = None,
-           probe: Callable[[str], dict] = onlinecover.probe_tags) -> str:
-    """Everything the model is told about one book before it looks up tags."""
+           probe: Callable[[str], dict] = onlinecover.probe_tags,
+           fields: Sequence[str] = mutagentags.BOOK_TAG_FIELDS) -> str:
+    """Everything the model is told about one book before it looks up tags:
+    of ``fields``, those it already carries and those still needed."""
     content = _CONTENT.get(subject.content, subject.content)
     if subject.why:
         content += ", because of %s" % subject.why
+    named = [(label, value) for label, value in (
+        ("work or album", subject.work), ("performer", subject.performer),
+        ("composer", subject.composer)) if value]
+    if subject.content in _MUSIC_FIELDS and named:
+        content += ". Probably: " + "; ".join("%s %s" % pair for pair in named)
     existing = {k: v for k, v in (existing_tags or {}).items()
-                if k in mutagentags.BOOK_TAG_FIELDS and str(v).strip()}
-    missing = [field for field in mutagentags.BOOK_TAG_FIELDS
-               if field not in existing]
+                if k in fields and str(v).strip()}
+    missing = [field for field in fields if field not in existing]
     sections = [
         "## Files\n\n" + _listing(input_path),
         "## Tags in the audio\n\n" + _tag_lines(tracks, probe),
@@ -219,7 +303,7 @@ def prompt(input_path: str, output_name: str, tracks: Sequence[str],
         known_lines.append(
             "Tags already set on the output file (will not be overwritten): "
             + ", ".join("%s=%s" % (k, existing[k])
-                        for k in mutagentags.BOOK_TAG_FIELDS if k in existing))
+                        for k in fields if k in existing))
     hints = {k: str(v).strip() for k, v in (cover_hints or {}).items()
              if str(v).strip()}
     if hints:
@@ -341,6 +425,24 @@ def parse_tags(answer: str) -> BookTags:
     )
 
 
+def parse_music_tags(answer: str,
+                     fields: Sequence[str] = mutagentags.MUSIC_TAG_FIELDS
+                     ) -> dict[str, str]:
+    """The validated tags among ``fields`` in the model's answer: a single
+    line of text each, the year a plausible year. {} when ``answer`` holds no
+    JSON object; an invalid field is dropped rather than failing the rest."""
+    found = llmclient.first_json(answer)
+    if not isinstance(found, dict):
+        return {}
+    tags: dict[str, str] = {}
+    for field in fields:
+        value = (_clean_year(found.get(field)) if field == "year"
+                 else _clean_text(found.get(field)))
+        if value:
+            tags[field] = value
+    return tags
+
+
 def merge_hints(tags: BookTags,
                 cover_hints: Mapping[str, str] | None) -> BookTags:
     """Fill any empty field in ``tags`` from validated cover-search metadata.
@@ -391,27 +493,31 @@ def tag_book(joined: str, input_path: str, output_name: str,
     if not os.path.isfile(joined):
         return []
 
-    existing = mutagentags.read_book_tags(joined)
-    missing = [field for field in mutagentags.BOOK_TAG_FIELDS
-               if not existing.get(field)]
+    if subject is None:
+        subject = onlinecover.book_subject(input_path, tracks, seconds, stereo,
+                                           probe)
+    fields = _MUSIC_FIELDS.get(subject.content, mutagentags.BOOK_TAG_FIELDS)
+    music = subject.content in _MUSIC_FIELDS
+    existing = mutagentags.read_book_tags(joined, fields)
+    missing = [field for field in fields if not existing.get(field)]
     if not missing:
-        _detail("    Book tags already filled; no model asked")
+        _detail("    %s tags already filled; no model asked"
+                % ("Music" if music else "Book"))
         return []
 
     if searchers is None:
         searchers, why = llmroster.optional(llmroster.BOOK_TAGS)
         if not searchers:
-            _detail("    No model asked for book tags: %s" % why)
+            _detail("    No model asked for %s tags: %s"
+                    % ("music" if music else "book", why))
             return _apply_tags(joined, existing,
-                               merge_hints(BookTags(), cover_hints),
-                               source="cover search")
+                               _hinted({}, cover_hints, music),
+                               source="cover search", fields=fields)
 
-    if subject is None:
-        subject = onlinecover.book_subject(input_path, tracks, seconds, stereo,
-                                           probe)
     request = prompt(input_path, output_name, tracks, subject,
                      existing_tags=existing, cover_hints=cover_hints,
-                     probe=probe)
+                     probe=probe, fields=fields)
+    system = _SYSTEMS.get(subject.content, SYSTEM)
     tally, spans = modelmeter.Tally(), modelmeter.Spans()
     answer = ""
     model_used = ""
@@ -422,31 +528,54 @@ def tag_book(joined: str, input_path: str, output_name: str,
                 continue
             try:
                 with spans.timing():
-                    answer = searcher.ask(SYSTEM, request, tally)
+                    answer = searcher.ask(system, request, tally)
                 model_used = llm.name
                 break
             except llmclient.LlmError as error:
-                _log("    No book tags from %s: %s" % (llm.name, error))
+                _log("    No %s tags from %s"
+                     % ("music" if music else "book", llm.name) + ": %s" % error)
     finally:
         if tally.requests:
             _log("    " + modelmeter.rate_line(PURPOSE, spans.seconds, tally))
         if meter_file:
             modelmeter.record(meter_file, spans, tally)
 
-    parsed = parse_tags(answer) if answer else BookTags()
-    merged = merge_hints(parsed, cover_hints)
-    written = _apply_tags(joined, existing, merged,
-                          source=model_used or "cover search")
+    if music:
+        found = parse_music_tags(answer, fields) if answer else {}
+    else:
+        found = (parse_tags(answer) if answer else BookTags()).to_tag_map()
+    written = _apply_tags(joined, existing, _hinted(found, cover_hints, music),
+                          source=model_used or "cover search", fields=fields)
     if not written and answer:
-        _log("    No new book tags found by %s" % (model_used or "the model"))
+        _log("    No new %s tags found by %s"
+             % ("music" if music else "book", model_used or "the model"))
     return written
 
 
-def _apply_tags(joined: str, existing: Mapping[str, str], tags: BookTags,
-                source: str) -> list[str]:
+def _hinted(found: Mapping[str, str], cover_hints: Mapping[str, str] | None,
+            music: bool) -> dict[str, str]:
+    """``found`` with its empty fields filled from cover-search metadata: a
+    book's title, language and abridgement (:func:`merge_hints`), an album's
+    title alone - a cover's edition and language say nothing about music."""
+    if not music:
+        book = BookTags(**{k: v for k, v in found.items()
+                           if k != "abridged"},
+                        abridged=None if "abridged" not in found
+                        else found["abridged"] == "true")
+        return merge_hints(book, cover_hints).to_tag_map()
+    merged = dict(found)
+    title = _clean_text((cover_hints or {}).get("title"))
+    if title and not merged.get("title"):
+        merged["title"] = title
+    return merged
+
+
+def _apply_tags(joined: str, existing: Mapping[str, str],
+                tags: Mapping[str, str], source: str,
+                fields: Sequence[str] = mutagentags.BOOK_TAG_FIELDS) -> list[str]:
     """Write validated empty-only tags from ``tags`` onto ``joined`` and log
     every decision."""
-    tag_map = tags.to_tag_map()
+    tag_map = dict(tags)
     # Never write a dangling series_index without a series name (existing or new).
     if "series_index" in tag_map and not (
             existing.get("series") or tag_map.get("series")):
@@ -456,7 +585,8 @@ def _apply_tags(joined: str, existing: Mapping[str, str], tags: BookTags,
     if not candidate_map:
         return []
     written: list[str] = []
-    status = mutagentags.fill_book_tags(joined, candidate_map, written=written)
+    status = mutagentags.fill_book_tags(joined, candidate_map, written=written,
+                                        fields=fields)
     if status != 0:
         _log("    Book tags could not be written to %s"
              % os.path.basename(joined))
@@ -464,5 +594,7 @@ def _apply_tags(joined: str, existing: Mapping[str, str], tags: BookTags,
     if written:
         summary = ", ".join("%s=%s" % (field, candidate_map[field])
                             for field in written)
-        _log("    Book tags filled (%s): %s" % (source, summary))
+        _log("    %s tags filled (%s): %s"
+             % ("Book" if fields is mutagentags.BOOK_TAG_FIELDS else "Music",
+                source, summary))
     return written

@@ -125,7 +125,9 @@ candidate pages (up to 40 KiB):
   40 KiB — while sparse pages with real content (such as title pages or faint
   sketches under 10 KiB) are kept.
 - If the model sees content, has low confidence, is unsure, or fails to answer,
-  the page is kept.
+  the page is kept. A check that fails outright, or comes after the book's
+  `llmItemSeconds` (five minutes by default) are spent, leaves the page to the
+  size rule, and the book is still packaged.
 - Model usage is recorded across the run and printed in the closing report when
   any requests were made.
 

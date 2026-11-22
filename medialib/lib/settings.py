@@ -206,7 +206,8 @@ SETTINGS: tuple[Setting, ...] = (
              "find-covers"),
             "the shipped `medialib/config/coverproviders.tsv`"),
     Setting("contentKindLlm", "Whether a language model classifies a recording "
-            "as podcast, audio drama or audiobook before that online cover "
+            "as podcast, audio drama, audiobook, music or classical music "
+            "before that online cover "
             "search runs (the `audio-content` task, see docs/models.md), instead "
             "of guessing from length and channel count alone: it is told the "
             "folder's path and file names, the tracks' tags, the duration and "
@@ -242,7 +243,11 @@ SETTINGS: tuple[Setting, ...] = (
             "(title, author, narrator, series, series index, year, language, "
             "abridged) are looked up by a language model on the web (the "
             "`book-tags` task, see docs/models.md): it is told the folder's "
-            "file names, the tracks' tags and what the book probably is. Only "
+            "file names, the tracks' tags and what the book probably is. A "
+            "music album is asked for an album's tags instead (title, album, "
+            "artist, album artist, year, genre, label), and a classical one "
+            "for its composer, work, performer, conductor and ensemble as "
+            "tags of their own. Only "
             "empty tags are filled and the output file is never renamed. Only "
             "a model that can search is asked - Claude, or one behind "
             "`llmHarness`: `on` or `off`",
@@ -420,8 +425,9 @@ SETTINGS: tuple[Setting, ...] = (
             "unset - required for `openai`"),
     Setting("llmServe", "The command that starts the first of those servers "
             "when it is not running and the GPU has room for it; the run stops it "
-            "again once it has been idle five minutes, and at its end. A server found "
-            "running is left running", _AI_CHAPTERS),
+            "again once it has been idle five minutes, and at its end. concat-audio "
+            "and convert-and-concat start it once for the whole run instead and "
+            "keep it up until the end. A server found running is left running", _AI_CHAPTERS),
     Setting("llmServeMib", "The free GPU memory, in MiB, that server is "
             "started with; with less, the next server down the list is asked",
             _AI_CHAPTERS, "26000"),
@@ -479,6 +485,14 @@ SETTINGS: tuple[Setting, ...] = (
             "for its turn; only a model served from this machine or its network is "
             "waited for", ("ingest-movies",),
             "unset - the model takes the whole card, so it never runs beside whisper"),
+    Setting("llmItemSeconds", "How long, in seconds, one item's language-model "
+            "steps may take together - a book's chapter names, cover and tag "
+            "searches, a track's cover search, a book's or comic's image checks, a "
+            "PDF's comic check - "
+            "waiting for the model included, before the item is written out with "
+            "what they found by then; `0` is no limit",
+            ("concat-audio", "content-census", "convert-and-concat",
+             "convert-audio", "convert-comics", "ingest-books")),
     Setting("llmJobs", "How many requests are sent to the model at once, "
             "over the whole run. Whether the model is local is read off "
             "`llmUrl`: localhost, a private or Tailscale address, or a "

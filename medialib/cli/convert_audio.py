@@ -61,6 +61,7 @@ from medialib.lib import (
     ffmpegselect,
     formatting,
     imagesizes,
+    llmclient,
     llmroster,
     modelmeter,
     onlinecover,
@@ -79,6 +80,11 @@ from medialib.lib import (
     xheaac,
 )
 from medialib.lib.runlog import log
+
+# The uses of a model a track may make, whose servers the run holds for its
+# workers.
+_LLM_TASKS = (llmroster.AUDIO_CONTENT, llmroster.COVER_SEARCH,
+              llmroster.COVER_LOOK)
 
 USAGE_HEAD = """Usage:
     {program} [options] <inputDir> <outputDir>
@@ -1402,14 +1408,19 @@ class Run:
             return
         if not onlinecover.enabled():
             return
-        if seconds is None:
-            seconds = onlinecover.media_seconds(source)
-        if mono is None:
-            mono = self.mono
-        stereo = not mono and output_channels(
-            channels or source_channels(source), self.surround) >= 2
-        onlinecover.track_cover(source, seconds, tmp_dir, stereo=stereo,
-                                meter_file=getattr(self, "model_meter", ""))
+        # Under the track's time limit, and kept from costing the track: the
+        # encoded file is written whatever the search does.
+        with llmclient.time_limit(llmroster.item_seconds()), \
+                llmclient.guarded("the online cover search for %s" % relative,
+                                  log):
+            if seconds is None:
+                seconds = onlinecover.media_seconds(source)
+            if mono is None:
+                mono = self.mono
+            stereo = not mono and output_channels(
+                channels or source_channels(source), self.surround) >= 2
+            onlinecover.track_cover(source, seconds, tmp_dir, stereo=stereo,
+                                    meter_file=getattr(self, "model_meter", ""))
 
     def _reapply_sidecar_cover(self, relative: str, source: str,
                                existing: str) -> None:
@@ -2283,8 +2294,15 @@ def _convert(input_dir: str, output_dir: str, probe_what: str, skips,
     if not _settle_scratch(state):
         return 1
 
-    _encode_all(state, jobs)
-    _rejoin_split_files(state, jobs)
+    # The model servers held here rather than in the workers: one a worker
+    # started would stop with it, under every other worker. Let go before the
+    # transcripts, which want the card for whisper; the chapters after them
+    # start their server again when they ask.
+    with llmclient.held_for_run(
+            llmroster.run_models(_LLM_TASKS),
+            os.path.join(state.plan_root, "llmSlots"), log):
+        _encode_all(state, jobs)
+        _rejoin_split_files(state, jobs)
     report_cover_model(state.model_meter)
     _add_transcripts_and_chapters(state, llm)
     runlog.say("Done.\n")

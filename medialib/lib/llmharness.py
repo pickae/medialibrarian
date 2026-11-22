@@ -26,6 +26,7 @@ from __future__ import annotations
 import enum
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -36,7 +37,7 @@ from medialib import commands
 from medialib.lib import errorlog, runlog
 
 __all__ = ["HARNESS_VARIABLE", "MODEL_VARIABLE", "Harness", "HarnessError",
-           "parse", "installed", "ask"]
+           "HarnessUnavailable", "parse", "installed", "ask"]
 
 HARNESS_VARIABLE = "llmHarness"
 MODEL_VARIABLE = "llmHarnessModel"
@@ -61,6 +62,11 @@ _MESSAGE = ("The attached file is your complete task: read it and do exactly "
 
 class HarnessError(Exception):
     """The harness could not be run, or did not answer."""
+
+
+class HarnessUnavailable(HarnessError):
+    """The model's server refused the session: nothing listens there, or its
+    queue is full."""
 
 
 class Harness(enum.Enum):
@@ -113,6 +119,7 @@ def ask(harness: Harness, model: str, system: str, prompt: str,
                 proc = _opencode(work, model, timeout, title)
                 session = _opencode_session(proc.stdout)
                 if proc.returncode != 0:
+                    _raise_session_error(proc.stdout)
                     raise HarnessError("opencode: %s" % (
                         proc.stderr.decode("utf-8", "replace").strip()[-300:]
                         or "exited %d" % proc.returncode))
@@ -165,6 +172,40 @@ def _opencode_session(output: bytes) -> str:
                  if event.get("sessionID")), "")
 
 
+# What a session ends on when its model's server refused it: nothing listens
+# there, or its queue is full.
+_UNAVAILABLE = re.compile(r"ECONNREFUSED|connection refused|queue is full"
+                          r"|rate[-_ ]limit|server_overloaded", re.IGNORECASE)
+
+
+def _session_error(event: dict):
+    """The error a session's event carries: its own, or the message's."""
+    if event.get("type") == "error":
+        return event.get("error")
+    for holder in (event, event.get("part"), event.get("info")):
+        if isinstance(holder, dict) and isinstance(holder.get("error"), dict):
+            return holder["error"]
+    return None
+
+
+def _raise_session_error(output: bytes) -> None:
+    """The last error a failed session's events name, raised -
+    HarnessUnavailable where its server refused it - and nothing where they
+    name none."""
+    found = None
+    for event in _events(output):
+        error = _session_error(event)
+        if error is not None:
+            found = error
+    if found is None:
+        return
+    text = json.dumps(found, ensure_ascii=False)
+    status = found.get("status") if isinstance(found, dict) else None
+    kind = HarnessUnavailable if status == 429 or _UNAVAILABLE.search(text) \
+        else HarnessError
+    raise kind("opencode: %s" % text[:300])
+
+
 def _opencode_answer(output: bytes) -> str:
     """The text of the last message that has any: the messages before it are
     the harness thinking aloud between its tool calls."""
@@ -172,7 +213,8 @@ def _opencode_answer(output: bytes) -> str:
     parts: list[str] = []
     for event in _events(output):
         if event.get("type") == "error":
-            raise HarnessError("opencode: %s" % json.dumps(event.get("error"))[:300])
+            _raise_session_error(json.dumps(event).encode("utf-8"))
+            raise HarnessError("opencode: %s" % json.dumps(event)[:300])
         part = event.get("part")
         if event.get("type") != "text" or not isinstance(part, dict):
             continue

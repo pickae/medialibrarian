@@ -10,14 +10,19 @@
 # first.
 #
 # The columns:
-#   content   what the audio probably is: podcast, drama, audiobook or other.
-#             A file name ending in a [YouTube id] - yt-dlp's default - or
-#             starting with a yyyymmdd date, or a length from 30 to 200
-#             minutes, reads as a podcast - but 30 to 200 minutes in stereo
-#             reads as a drama, since a talk is encoded mono. Anything longer
-#             reads as an audiobook; a shorter one as other.
-#   provider  how the answer is read: audible, amazon, itunes, openlibrary or
-#             youtube. A new site needs a reader in medialib/lib/onlinecover.py;
+#   content   what the audio probably is: podcast, drama, audiobook, music,
+#             classical or other. A file name ending in a [YouTube id] -
+#             yt-dlp's default - or starting with a yyyymmdd date, or a length
+#             from 30 to 200 minutes, reads as a podcast - but 30 to 200
+#             minutes in stereo reads as a drama, since a talk is encoded
+#             mono. Anything longer reads as an audiobook; a shorter one as
+#             other. Whatever its length, a genre tag that is not speech, or
+#             a folder called Music on the way to it, reads as music - and a
+#             classical genre, a conductor, a catalogue number such as
+#             "Op. 27" or a folder called Klassik reads as classical.
+#   provider  how the answer is read: audible, amazon, deezer, itunes,
+#             musicbrainz (its front cover from the Cover Art Archive),
+#             openlibrary or youtube. A new site needs a reader in medialib/lib/onlinecover.py;
 #             a new address for a known one only needs a row.
 #   match     how sure the answer has to be:
 #               id      none: the address names the very video the file came
@@ -29,11 +34,17 @@
 #                       the printed book instead of the audiobook.
 #               show    the podcast's own name, for the show's artwork rather
 #                       than the episode's.
+#               performer  a classical release: its artist is the
+#                       recording's performer, and its title names the work
+#                       - with whatever else the record couples it with.
+#                       Where the folder names a label - "35 Lindqvist
+#                       (Nordlabel, 1972)" - only that label's release, by
+#                       the copyright line a site gives (iTunes does).
 #   pace      seconds between two requests to this provider, at least.
 #   address   the request. {title}, {creator}, {query} (both together),
 #             {episode} (what follows the last " - " of a name in parts:
-#             "Series - Episode 6 - Its Title") and {youtube_id} are filled
-#             in, URL-encoded; a row that needs one the file does not have is
+#             "Series - Episode 6 - Its Title"), {youtube_id}, and for music
+#             {work}, {performer} and {composer} are filled in, URL-encoded; a row that needs one the file does not have is
 #             passed over. youtube's address is handed
 #             to yt-dlp: a ytsearchN: search, or a watch address.
 #
@@ -67,3 +78,15 @@ drama	amazon	strict	6	https://www.amazon.com/s?k={query}&i=audible
 other	audible	strict	2	https://api.audible.com/1.0/catalog/products?keywords={query}&num_results=10&response_groups=media,contributors,product_attrs&image_sizes=1215
 other	itunes	strict	3	https://itunes.apple.com/search?term={query}&media=audiobook&limit=10
 other	youtube	strict	3	ytsearch5:{query}
+#
+# music: the album, by its title and artist.
+music	itunes	strict	3	https://itunes.apple.com/search?term={query}&media=music&entity=album&limit=25
+music	deezer	strict	2	https://api.deezer.com/search/album?q={query}&limit=25
+music	musicbrainz	strict	2	https://musicbrainz.org/ws/2/release-group/?query={query}&fmt=json&limit=10
+#
+# classical: one performance of a work, by the work and its performer; then
+# by the performer and the composer, for a record named after neither.
+classical	itunes	performer	3	https://itunes.apple.com/search?term={work}+{performer}&media=music&entity=album&limit=50
+classical	deezer	performer	2	https://api.deezer.com/search/album?q={work}%20{performer}&limit=50
+classical	musicbrainz	performer	2	https://musicbrainz.org/ws/2/release-group/?query={work}%20{performer}&fmt=json&limit=25
+classical	itunes	performer	3	https://itunes.apple.com/search?term={performer}+{composer}&media=music&entity=album&limit=50

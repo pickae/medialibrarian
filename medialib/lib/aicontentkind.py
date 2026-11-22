@@ -13,8 +13,9 @@ available for :data:`llmroster.AUDIO_CONTENT` (no special traits required,
 leaning light), the model is shown the folder path and file names, sampled
 track tags, duration, and channel count, and answers strictly in JSON with one
 of :data:`onlinecover.CONTENTS` (``podcast``, ``drama``, ``audiobook``,
-``other``) and a confidence level. On ``other``, low confidence, invalid JSON,
-a model error, the switch being off, or no model being available, this returns
+``music``, ``classical``, ``other``) and a confidence level. On ``other``, low
+confidence, invalid JSON, a model error, the switch being off, or no model
+being available, this returns
 ``None`` so the caller falls back cleanly to :func:`onlinecover.probable_content`.
 
 What the model was asked is counted (:mod:`medialib.lib.modelmeter`), logged,
@@ -68,7 +69,7 @@ USABLE_CONFIDENCES = ("high", "medium")
 SYSTEM = """You classify audio recordings for a personal audio library so a \
 cover search queries the right catalogues.
 
-Choose one of these four exact values for "content":
+Choose one of these six exact values for "content":
 - "podcast": a podcast episode, interview, talk show, panel discussion, radio \
 or web talk show, or YouTube commentary.
 - "drama": a full-cast audio drama, radio play, or Hoerspiel (a dramatised \
@@ -77,9 +78,13 @@ Radio Tatort, BBC Radio drama, Die drei ???, etc.).
 - "audiobook": a narrated book (one or a few narrators reading a novel, \
 non-fiction book, or story collection; often split into chapters, CDs, or \
 parts).
-- "other": music, a standalone lecture, comedy album, soundscape, or anything \
-that does not clearly fit podcast, drama, or audiobook (or when you cannot \
-tell).
+- "music": a music album or single that is not classical: pop, rock, jazz, \
+folk, electronic, film score, a song collection.
+- "classical": classical music (a symphony, concerto, sonata, opera, \
+chamber or choral work, early or contemporary art music), where a release is \
+known by its composer, work and performers - soloist, conductor, orchestra.
+- "other": a standalone lecture, comedy album, soundscape, or anything that \
+does not clearly fit the kinds above (or when you cannot tell).
 
 Judge from all clues together: parent folder names, folder/file names, track \
 tags (genre, album, artist, comment, publisher), running time, and channel \
@@ -88,7 +93,7 @@ classification sends the search to the wrong catalogues, so report "low" \
 confidence or "other" when you are unsure.
 
 Answer with JSON only, in this exact form:
-{"content": "podcast|drama|audiobook|other", \
+{"content": "podcast|drama|audiobook|music|classical|other", \
 "confidence": "high|medium|low", \
 "why": "one short sentence"}"""
 
@@ -268,8 +273,8 @@ def classify(name: str, *, folder_path: str = "",
              probe: Callable[[str], dict] = onlinecover.probe_tags
              ) -> tuple[str, str] | None:
     """Classify the recording via :data:`llmroster.AUDIO_CONTENT`, returning
-    ``(content, why)`` when confident about ``podcast``, ``drama``, or
-    ``audiobook``, or ``None`` to fall back to
+    ``(content, why)`` when confident about any kind but ``other``, or
+    ``None`` to fall back to
     :func:`onlinecover.probable_content`."""
     if not enabled():
         _detail("    No model asked for content kind: the %s setting is off"
