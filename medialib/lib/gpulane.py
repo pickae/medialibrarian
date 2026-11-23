@@ -62,7 +62,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from medialib.lib import av1gpu, errorlog, runlog, safety, toolcapture
+from medialib.lib import av1gpu, errorlog, hostmem, runlog, safety, toolcapture
 
 __all__ = ["READY", "MANIFEST", "Lane"]
 
@@ -295,28 +295,16 @@ class Lane:
         less. Both are read afresh - other programs use the machine too."""
         stat = os.statvfs(self.root)
         free = stat.f_bavail * stat.f_frsize
-        try:
-            with open("/proc/meminfo") as handle:
-                for line in handle:
-                    if line.startswith("MemAvailable:"):
-                        free = min(free, int(line.split()[1]) * 1024)
-                        break
-        except (OSError, ValueError):
-            pass
+        available = hostmem.available_ram_bytes()
+        if available:
+            free = min(free, available)
         return free
 
     def _total_ram_bytes(self) -> int:
         """The machine's total RAM, read once; 0 when it cannot be read."""
         if self._total_ram:
             return self._total_ram
-        try:
-            with open("/proc/meminfo") as handle:
-                for line in handle:
-                    if line.startswith("MemTotal:"):
-                        self._total_ram = int(line.split()[1]) * 1024
-                        break
-        except (OSError, ValueError):
-            pass
+        self._total_ram = hostmem.total_ram_bytes()
         return self._total_ram
 
     def _ram_reserve(self) -> int:

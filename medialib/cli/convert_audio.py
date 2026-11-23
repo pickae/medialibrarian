@@ -1532,7 +1532,14 @@ class Run:
         runlog.say("Joining %s chunks: %s\n" % (total, relative))
         sys.stderr.flush()
 
-        tmp_dir, status = ramscratch.ram_scratch_dir("convertAudio.rc")
+        chunk_bytes = 0
+        for chunk in chunk_files:
+            try:
+                chunk_bytes += os.path.getsize(chunk)
+            except OSError:
+                pass
+        tmp_dir, _on_disk, status = ramscratch.ram_scratch_dir_for(
+            str(chunk_bytes) if chunk_bytes else "", "convertAudio.rc")
         if status != 0 or not tmp_dir:
             return
         stage = os.path.join(tmp_dir, "out." + self.extension)
@@ -2565,14 +2572,20 @@ def _mirror_for_mobile(input_dir: str, output_dir: str, only=()) -> None:
 
 
 def _settle_scratch(state: Run) -> bool:
-    """The run's chunk and plan folders in RAM scratch, or False - said - when
-    either could not be made."""
-    chunk_root, chunk_status = ramscratch.ram_scratch_dir("convertAudio.chunks")
+    """The run's chunk and plan folders in RAM scratch (spilling chunks to
+    disk when the input tree is too large for available RAM), or False - said -
+    when either could not be made."""
+    input_bytes = ramscratch.tree_size_bytes(state.input_dir)
+    chunk_root, on_disk, chunk_status = ramscratch.ram_scratch_dir_for(
+        str(input_bytes) if input_bytes else "", "convertAudio.chunks")
     plan_root, plan_status = ramscratch.ram_scratch_dir("convertAudio.plans")
     if chunk_status != 0 or plan_status != 0 or not chunk_root or not plan_root:
         sys.stderr.write("\nError: no scratch directory could be made for this "
                          "run.\nNothing was changed.\n")
         return False
+    if on_disk:
+        log("Input too large for RAM scratch, keeping audio chunks on disk: "
+            + chunk_root)
     state.chunk_root, state.plan_root = chunk_root, plan_root
     state.model_meter = os.path.join(plan_root, "coverModel.meter")
     ramscratch.add_exit_cleanup([chunk_root, plan_root])

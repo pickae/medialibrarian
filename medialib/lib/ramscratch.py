@@ -30,7 +30,7 @@ import tempfile
 import threading
 
 from medialib import commands
-from medialib.lib import hostos, runcontext, runlog, safety, settings
+from medialib.lib import hostmem, hostos, runcontext, runlog, safety, settings
 
 _INT = re.compile(r"^[0-9]+$")
 
@@ -278,8 +278,31 @@ def ram_dir_free_bytes(directory):
         # total/100 first, so the multiplication cannot overflow on a large
         # tmpfs; the rounding it costs is under a hundred bytes.
         capped = usage.total // 100 * pct
-        return min(capped, usage.free)
+        free = min(capped, usage.free)
+        # A tmpfs mount's own free space ignores physical RAM already claimed
+        # by other processes. Cap by truly available host RAM (which still
+        # counts Linux's reclaimable OS page cache as available).
+        available = hostmem.available_ram_bytes()
+        if available > 0:
+            return min(free, available)
+        return free
     return usage.free
+
+
+def tree_size_bytes(directory: str) -> int:
+    """Total size in bytes of all regular files under ``directory`` (0 on error).
+
+    Used to estimate how much scratch space a folder-level staging pass needs
+    before placing it on tmpfs.
+    """
+    total = 0
+    for parent, _dirs, names in os.walk(directory):
+        for name in names:
+            try:
+                total += os.path.getsize(os.path.join(parent, name))
+            except OSError:
+                pass
+    return total
 
 
 def _user_cache_home():

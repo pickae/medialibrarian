@@ -42,6 +42,7 @@ from medialib.lib import (
     enums,
     errorlog,
     formatting,
+    hostmem,
     imagebitrate,
     imagecodecs,
     imagemagick,
@@ -177,14 +178,7 @@ BYTES_PER_PIXEL = 8
 def _mem_available() -> int:
     """The RAM the kernel says another process may take, in bytes; 0 when it
     cannot be read, which leaves the pool to the cores alone."""
-    try:
-        with open("/proc/meminfo") as handle:
-            for line in handle:
-                if line.startswith("MemAvailable:"):
-                    return int(line.split()[1]) * 1024
-    except (OSError, ValueError):
-        pass
-    return 0
+    return hostmem.available_ram_bytes()
 
 
 def _default_jobs(state, work, core_jobs: int, threads: float) -> int:

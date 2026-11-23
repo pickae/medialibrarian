@@ -218,6 +218,26 @@ class Run:
                 self.count("skipped")
                 return None
 
+        # A large source (e.g. a 4K Blu-ray remux) can produce chunks plus a
+        # rejoined video intermediate that exceed available RAM. Spill this
+        # file's chunk scratch to disk when it will not fit in the run's RAM
+        # scratch; smaller files in the same run stay in RAM.
+        try:
+            source_size = os.path.getsize(source)
+        except OSError:
+            source_size = 0
+        if source_size:
+            free = ramscratch.ram_dir_free_bytes(settings.chunk_root)
+            if free is not None and source_size > free:
+                spill, on_disk, status = ramscratch.ram_scratch_dir_for(
+                    str(source_size), "convertVideo.chunks")
+                if status == 0 and on_disk and spill:
+                    ramscratch.add_exit_cleanup([spill])
+                    settings.chunk_root = spill
+                    plan.directory = segments.chunk_dir_for(spill, relative)
+                    log("  Too large for RAM scratch, encoding chunks on "
+                        "disk: " + relative)
+
         directory = plan.directory
         os.makedirs(directory, exist_ok=True)
 

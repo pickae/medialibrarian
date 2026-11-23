@@ -408,12 +408,17 @@ def main(argv: list, program: str = "convert-and-concat",
     stage = None
     try:
         if not only_concat:
-            temp_path, status = ramscratch.ram_scratch_dir("convertAndConcat")
+            input_bytes = ramscratch.tree_size_bytes(in_path)
+            temp_path, on_disk, status = ramscratch.ram_scratch_dir_for(
+                str(input_bytes) if input_bytes else "", "convertAndConcat")
             if status != 0 or not temp_path:
                 sys.stderr.write("\nError: no scratch directory could be made "
                                  "for this run.\nNothing was changed.\n")
                 return 1
             ramscratch.add_exit_cleanup([temp_path])
+            if on_disk:
+                progress("Input too large for RAM scratch, staging on disk: "
+                         + temp_path)
         safety.init_abort_flag()
         # RECORDS the interrupt; the phase that is running finishes and is
         # stopped at the next boundary - it always gets to finish, print its
@@ -580,17 +585,37 @@ def _warn_top_level_archives(in_path: str) -> None:
             return
 
 
+def _archives_size_bytes(in_path: str, depth: int) -> int:
+    archive_names = {e.lower() for e in enums.ARCHIVE_EXTENSIONS}
+    total = 0
+    for candidate in _at_depth(in_path, depth, want_dirs=False):
+        if enums.lower_extension_of(candidate) not in archive_names:
+            continue
+        try:
+            total += os.path.getsize(candidate)
+        except OSError:
+            pass
+    return total
+
+
 def _unpack_phase(in_path: str, archive_types, depth: int):
     if not archive_types:
         progress("PHASE 2/4: no archives to unpack")
         return None
     progress("PHASE 2/4: unpacking archives (%s)" % " ".join(archive_types))
-    path, status = ramscratch.ram_scratch_dir("convertAndConcat.archives")
+    archive_bytes = _archives_size_bytes(in_path, depth)
+    needed = int(archive_bytes * 1.1) if archive_bytes else 0
+    path, on_disk, status = ramscratch.ram_scratch_dir_for(
+        str(needed) if needed else "", "convertAndConcat.archives")
     if status != 0 or not path:
         shortfall("PHASE 2/4: no scratch for the archives, unpacking nothing")
         return None
     ramscratch.add_exit_cleanup([path])
-    progress("Unpacked to: " + path)
+    if on_disk:
+        progress("Archives too large for RAM scratch, unpacking on disk: "
+                 + path)
+    else:
+        progress("Unpacked to: " + path)
     stage = Staging(path)
     if depth == 1:
         stage.unpack_in(in_path)
