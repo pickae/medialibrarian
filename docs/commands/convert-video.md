@@ -321,19 +321,34 @@ the preset's own arguments, and the first that takes all of them is used. The ru
 says which build it settled on and warns when that build cannot do everything the
 preset asks.
 
-**An AV1 preset picks between an SVT-AV1-HDR build and the newest SVT-AV1.**
-[SVT-AV1-HDR](https://github.com/juliobbv-p/svt-av1-hdr) is SVT-AV1 with
-perceptual tuning of its own, shipped inside community ffmpeg builds rather than as
-an encoder of its own, and it usually trails the newest mainline SVT-AV1 release.
-Among the builds that take the whole preset, SVT-AV1-HDR wins when the run uses what
-only it does: `av1Grain` without `-g`, or a PQ source among the files not yet
-converted. Otherwise the build with the newest SVT-AV1 release wins, and the fork
-still wins a tie. The startup summary says when one kind was chosen over the other,
-and why. Every other preset takes the first build that can run it. On
-the fork the AV1 presets leave its own quantisation-matrix floor alone, and a PQ
-source gets its PQ-specific curve by itself. The quality levels are still the ones tuned for
-mainline SVT-AV1, and the fork spends bits differently, so sizes differ from a
-mainline encode of the same preset.
+**An AV1 preset picks between SVT-AV1-HDR, SVT-AV1-Essential and mainline SVT-AV1.**
+[SVT-AV1-HDR](https://github.com/juliobbv-p/svt-av1-hdr) and
+[SVT-AV1-Essential](https://github.com/nekotrix/SVT-AV1-Essential) are
+perceptually tuned SVT-AV1 forks shipped inside community ffmpeg builds rather
+than as separate encoders. Among the builds that take the whole preset:
+
+- **PQ HDR or `av1Grain` without `-g`:** SVT-AV1-HDR wins (it has `tune=6` for
+  real grain retention and HDR-specific tuning), followed by SVT-AV1-Essential
+  (which also carries the PQ variance-boost curve, with `luminance-qp-bias=0`
+  passed explicitly on HDR sources, and uses `distortion-bias-preset=4` to
+  preserve real grain on `av1Grain` when SVT-AV1-HDR is not installed), then
+  mainline.
+- **SDR:** the newest SVT-AV1 release wins, with SVT-AV1-Essential preferred
+  over SVT-AV1-HDR and mainline on the same release. When an SVT-AV1-Essential
+  build supports internal per-scene automatic film grain analysis
+  (`film-grain=-1`, v4.3.1-Essential+), `convert-video` uses it in place of the
+  pre-encode grain probe (while keeping the pre-encode probe for older builds
+  and for `-t`) and enables `fgs-seed=-1` whenever film grain is synthesised.
+
+The startup summary says which build was chosen and why. Every other preset
+takes the first build that can run it. On both SVT-AV1-HDR and
+SVT-AV1-Essential, the AV1 presets drop `qm-min=0` so each fork keeps its own
+quantisation-matrix floor, and a PQ source gets its PQ-specific curve by
+itself. On SVT-AV1-Essential, `low-memory=1` is enabled per file only when
+probed available host RAM (including reclaimable OS page cache) is tight for
+the file's encoded resolution and chunk concurrency. The quality levels are
+still the ones tuned for mainline SVT-AV1, and the forks spend bits
+differently, so sizes differ from a mainline encode of the same preset.
 
 ## Failures and pausing
 

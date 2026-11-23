@@ -138,6 +138,7 @@ def ffmpeg_candidates(path: str | None = None, home: str | None = None) -> list[
                  "/opt/homebrew/bin",
                  "/usr/local/bin",
                  "/opt/ffmpeg/bin",
+                 "/opt/ffmpeg-essential/bin",
                  "/usr/bin"]
     seen = []
     for c in [_command_v("ffmpeg", path)] + [r + "/ffmpeg" for r in rungs]:
