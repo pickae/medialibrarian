@@ -40,13 +40,13 @@ def rejoin(tmp_path, monkeypatch):
 
     staging = []
 
-    def scratch(name):
+    def scratch(_byte_count, name, disk_parent=""):
         made = tmp_path / ("%s.%d" % (name, len(staging)))
         made.mkdir()
         staging.append(made)
-        return str(made), 0
+        return str(made), 0, 0
 
-    monkeypatch.setattr(ca.ramscratch, "ram_scratch_dir", scratch)
+    monkeypatch.setattr(ca.ramscratch, "ram_scratch_dir_for", scratch)
     for module, name in ((ca.chapters, "attach_chapters"),
                          (ca.thumbnails, "extract_source_cover"),
                          (ca.thumbnails, "apply_cover")):
