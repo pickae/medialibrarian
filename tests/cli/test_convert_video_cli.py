@@ -201,7 +201,8 @@ class TestSvtAv1Hdr:
         log = self._run(video, self.ESSENTIAL)
         assert "SVT-AV1-Essential: this ffmpeg's libsvtav1 is " \
                "SVT-AV1-Essential (with internal automatic film grain " \
-               "analysis)." in log
+               "analysis), so the profile runs without qm-min=0 (the fork " \
+               "keeps its own default)." in log
         assert "Film grain: automatic per-scene analysis and synthesis " \
                "(SVT-AV1-Essential film-grain=-1), the av1BluRay default" in log
 
