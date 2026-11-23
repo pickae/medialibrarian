@@ -29,6 +29,7 @@ from medialib.lib import (
     clioptions,
     codecs,
     enums,
+    hostmem,
     resolutions,
     settings,
     upscale,
@@ -226,6 +227,19 @@ av1Nvenc|-c:v av1_nvenc -preset p7 -tune uhq -rc vbr -cq 28 -b:v 0 -spatial-aq 1
 # "useful" setting, and the probe encode is all it is used for.
 SVT_AV1_HDR_PROBE = "-c:v libsvtav1 -svtav1-params cdef-scaling=10"
 
+# The libsvtav1 key only SVT-AV1-Essential has - neither mainline SVT-AV1 nor
+# SVT-AV1-HDR has it - so a build that parses it without complaint is linked
+# against SVT-AV1-Essential.
+SVT_AV1_ESSENTIAL_PROBE = "-c:v libsvtav1 -svtav1-params distortion-bias-preset=0"
+
+# SVT-AV1-Essential v4.3.1+ internal per-scene automatic film grain analysis
+# and randomised per-frame film grain seed. Probed directly rather than
+# inferred from the version number so older Essential builds keep using
+# videograin.py.
+SVT_AV1_AUTO_GRAIN_PROBE = (
+    "-c:v libsvtav1 -svtav1-params film-grain=-1:fgs-multiplier=1:fgs-seed=-1"
+)
+
 # The profile that keeps the source's real grain on SVT-AV1-HDR, with the fork's
 # film grain tune, instead of denoising it away and synthesising it again.
 SVT_AV1_HDR_GRAIN_PROFILE = "av1Grain"
@@ -292,6 +306,21 @@ CHUNK_COUNT_TABLE = """
 SD      6
 unknown 3
 """
+
+# Plausible peak RAM (GiB) per parallel 10-bit SVT-AV1 Random Access worker at
+# each encoded resolution tier (picture/reference/lookahead buffers plus the
+# ffmpeg decode/filter pipeline). Used to decide whether to enable
+# SVT-AV1-Essential's low-memory=1 when available host RAM is tight.
+SVT_AV1_WORKER_GIB = {
+    "4320p": 32.0,
+    "2160p": 18.0,
+    "1440p": 7.0,
+    "1080p": 3.5,
+    "720p": 1.5,
+    "SD": 1.0,
+    resolutions.UNKNOWN_TIER: 3.5,
+}
+SVT_AV1_RAM_HEADROOM = 0.80
 
 # The field separator the chunk queue joins on.
 UNIT = "\x1f"
@@ -806,6 +835,41 @@ def svt_av1_hdr_args(args: str, grain_tune: bool = False) -> str:
     return args
 
 
+def svt_av1_essential_args(args: str, grain_tune: bool = False) -> str:
+    """A libsvtav1 row as SVT-AV1-Essential is given it.
+
+    Drops ``qm-min=0`` so Essential keeps its own tuned minimum quantisation
+    matrix default (``qm-min=2``). When ``grain_tune`` is set (``av1Grain``
+    without ``-g``, only reached when SVT-AV1-HDR is not installed), adds
+    ``distortion-bias-preset=4`` so Essential preserves real film grain rather
+    than denoising and synthesising it.
+    """
+    args = args.replace("qm-min=0:", "").replace(":qm-min=0", "")
+    if grain_tune:
+        args = merge_param(args, "-svtav1-params", "distortion-bias-preset=4")
+    return args
+
+
+def svt_av1_low_memory_needed(width, height, cores: int,
+                              available_bytes: int | None = None) -> bool:
+    """Whether parallel SVT-AV1 workers at ``width`` x ``height`` would exceed
+    the safe share of truly available host RAM, warranting ``low-memory=1``.
+
+    Returns False when available RAM cannot be probed (``0``), so an unreadable
+    probe never throttles an encode unnecessarily.
+    """
+    available = (hostmem.available_ram_bytes()
+                 if available_bytes is None else available_bytes)
+    if available <= 0:
+        return False
+    tier = resolutions.tier_of(width, height)
+    per_worker = SVT_AV1_WORKER_GIB.get(
+        tier, SVT_AV1_WORKER_GIB[resolutions.UNKNOWN_TIER])
+    workers = chunk_count_for(width, height, cores)
+    needed = workers * per_worker * (1024 ** 3)
+    return needed > available * SVT_AV1_RAM_HEADROOM
+
+
 def build_video_args(base: str, path: str, settings) -> str:
     """``buildVideoArgs``: the COMPLETE video output-argument string for a file.
 
@@ -840,22 +904,42 @@ def build_video_args(base: str, path: str, settings) -> str:
     encoder = encoder_of(base)
     if encoder == "libsvtav1" and settings.svt_av1_hdr:
         base = svt_av1_hdr_args(base, settings.grain_tune)
+    elif encoder == "libsvtav1" and settings.svt_av1_essential:
+        base = svt_av1_essential_args(base, settings.grain_tune)
 
-    # The two libsvtav1 settings the profile row deliberately leaves out, merged
+    # The libsvtav1 settings the profile row deliberately leaves out, merged
     # in here rather than written into the row so the row cannot carry a stale
     # value that would duplicate the injected key.
     if encoder == "libsvtav1":
         extra = ""
         # film-grain-accompanies-denoise: asking for synthesis without the denoise
         # would store the source's grain AND re-generate more on top of it.
-        if int(settings.grain_level or 0) > 0:
+        synthesising = False
+        if settings.grain_auto:
+            extra += "film-grain=-1:film-grain-denoise=1:"
+            synthesising = True
+        elif int(settings.grain_level or 0) > 0:
             extra += "film-grain=%s:film-grain-denoise=1:" % settings.grain_level
+            synthesising = True
+        if synthesising and settings.svt_av1_auto_grain:
+            extra += "fgs-seed=-1:"
         if settings.fast_decode:
             extra += "fast-decode=%s:" % settings.fast_decode
+        if (settings.svt_av1_essential
+                and svt_av1_low_memory_needed(enc_width, enc_height,
+                                              settings.cores)):
+            extra += "low-memory=1:"
         if extra:
             base = merge_param(base, "-svtav1-params", extra.rstrip(":"))
 
     color_args = videosource.video_color_args(path)
+    # SVT-AV1-Essential defaults luminance-qp-bias to 10 (for SDR) and only
+    # auto-disables it on HDR via its standalone FFMS2 reader, not through
+    # libsvtav1 in ffmpeg. Turn it off explicitly on PQ/HLG sources.
+    if (encoder == "libsvtav1" and settings.svt_av1_essential
+            and (" -color_trc smpte2084" in color_args
+                 or " -color_trc arib-std-b67" in color_args)):
+        base = merge_param(base, "-svtav1-params", "luminance-qp-bias=0")
     metadata = videosource.hdr_master_display(path)
     if metadata:
         display, _space, light = metadata.rpartition(" ")
@@ -1032,7 +1116,8 @@ def conversion_worthwhile(relative: str, width, height, enc_width, enc_height,
     # (which -m may have lowered), at the same frame rate, with grain synthesised
     # whenever this run synthesises any.
     out_codec = codecs.encoder_codec(settings.encoder)
-    out_synth = "1" if int(settings.grain_level or 0) > 0 else "0"
+    out_synth = ("1" if (settings.grain_auto or int(settings.grain_level or 0) > 0)
+                 else "0")
     out_tier = resolutions.tier_of(enc_width, enc_height)
     out_adequate = videobitrate.adequate_video_bitrate(
         out_codec, enc_width, enc_height, fps, grain, out_synth,
@@ -1097,6 +1182,7 @@ class Settings:
         self.grain_option = ""
         self.grain_level = "0"
         self.grain_probe_wanted = False
+        self.grain_auto = False
         self.required_saving = DEFAULT_BITRATE_SAVING
         self.test_source_bitrate = False
         # -k: the audio left alone, and every track but the video taken from
@@ -1112,10 +1198,14 @@ class Settings:
         self.nvenc_master_display = False
         self.decode_accel = ""
         self.dv_encoder_support = False
-        # The chosen ffmpeg's libsvtav1 is SVT-AV1-HDR, and - on the av1Grain
-        # profile with no -g - that the fork's film grain tune keeps the
-        # source's grain in place of synthesising it.
+        # The chosen ffmpeg's libsvtav1 fork (SVT-AV1-HDR or SVT-AV1-Essential),
+        # whether it supports internal automatic film grain analysis
+        # (film-grain=-1), and - on av1Grain with SVT-AV1-HDR and no -g - that
+        # the fork's film grain tune keeps the source's grain in place of
+        # synthesising it.
         self.svt_av1_hdr = False
+        self.svt_av1_essential = False
+        self.svt_av1_auto_grain = False
         self.grain_tune = False
         # Why the run's SVT-AV1 build is the one it is, when that is not the
         # obvious answer: "" when there was no choice between a fork and a

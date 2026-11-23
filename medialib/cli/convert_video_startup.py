@@ -112,29 +112,39 @@ def _positive(value: str) -> bool:
 
 
 def _settle_grain(settings, grain: str, video_args: str) -> tuple:
-    """The grain decision for the whole run.
+    """The grain decision for the whole run, as
+    ``(grain_level, grain_probe_wanted, grain_auto)``.
 
     No -g leaves the profile's own default in force, an explicit level is what
-    every file gets, "off" is none, and 0 is what asks for the per-file probe. The
-    probe is skipped for the encoders that could not act on the answer; an explicit
-    -g 0 is NOT skipped on any AV1 profile, whatever that profile's own default
-    says, because asking for the probe is asking to be told what the source has.
+    every file gets, "off" is none, and 0 is what asks for automatic grain
+    estimation. When the chosen build supports SVT-AV1-Essential's internal
+    automatic film grain analysis (film-grain=-1), that replaces the pre-encode
+    probe; otherwise videograin.py measures each file. An explicit -g 0 is NOT
+    skipped on any AV1 profile, whatever that profile's own default says.
     """
     software_av1 = settings.encoder == "libsvtav1"
     # The source's own grain is kept, so there is none to synthesise and nothing
     # to measure for it; -t still measures a source it tests, on its own.
     if settings.grain_tune:
-        return "0", False
+        return "0", False, False
     if grain == "":
         default = videograin.grain_default_for(settings.video_profile)
         if default != "probe":
-            return default, False
-        return "0", software_av1
+            return default, False, False
+        if not software_av1:
+            return "0", False, False
+        if settings.svt_av1_auto_grain:
+            return "0", False, True
+        return "0", True, False
     if grain == "0":
-        return "0", software_av1
+        if not software_av1:
+            return "0", False, False
+        if settings.svt_av1_auto_grain:
+            return "0", False, True
+        return "0", True, False
     if grain == "off":
-        return "0", False
-    return grain, False
+        return "0", False, False
+    return grain, False, False
 
 
 def _detect_hardware(settings, video_args: str, engines_override: str) -> None:
@@ -266,6 +276,13 @@ def _summarise(settings, video_args: str, grain: str) -> None:
             "a PQ source gets its PQ variance-boost curve. The quality levels "
             "are tuned for mainline SVT-AV1, so sizes will not match a mainline "
             "encode.")
+    elif settings.svt_av1_essential:
+        settled = rules.svt_av1_essential_args(settled, settings.grain_tune)
+        log("SVT-AV1-Essential: this ffmpeg's libsvtav1 is SVT-AV1-Essential%s, "
+            "so the profile runs without qm-min=0 (the fork keeps its own "
+            "default)."
+            % (" (with internal automatic film grain analysis)"
+               if settings.svt_av1_auto_grain else ""))
     elif settings.encoder == "libsvtav1" and not settings.svt_build_note:
         log("SVT-AV1-HDR: not found, encoding with this ffmpeg's own "
             "libsvtav1.")
@@ -415,16 +432,39 @@ def _summarise_grain(settings, grain: str) -> None:
         log("Film grain: not available with %s, none synthesised."
             % settings.encoder)
     elif settings.auto_video_profile and not grain:
+        auto_label = ("automatic per-scene (SVT-AV1-Essential)"
+                      if settings.svt_av1_auto_grain else "measured per file")
+        if settings.svt_av1_hdr:
+            grain_label = "kept with SVT-AV1-HDR tune 6"
+        elif settings.svt_av1_essential:
+            grain_label = "kept with SVT-AV1-Essential distortion-bias-preset=4"
+        else:
+            grain_label = auto_label
         log("Film grain: settled per file from its chosen profile "
-            "(av1Animation: none; av1BluRay: measured per file; av1Grain: %s). "
+            "(av1Animation: none; av1BluRay: %s; av1Grain: %s). "
             "Give -g to pin or turn off for every file."
-            % ("kept with SVT-AV1-HDR tune 6" if settings.svt_av1_hdr
-               else "measured per file"))
-    elif settings.grain_tune:
+            % (auto_label, grain_label))
+    elif settings.grain_tune and settings.svt_av1_hdr:
         log("Film grain: KEPT - %s on SVT-AV1-HDR encodes the source's own "
             "grain with the fork's film grain tune (tune 6) rather than "
             "denoising it and synthesising it again; nothing is measured for "
             "it (-g puts the profile back on synthesis)."
+            % settings.video_profile)
+    elif settings.grain_tune and settings.svt_av1_essential:
+        log("Film grain: KEPT - %s on SVT-AV1-Essential encodes the source's "
+            "own grain with distortion-bias-preset=4 rather than denoising it "
+            "and synthesising it again; nothing is measured for it (-g puts "
+            "the profile back on synthesis)."
+            % settings.video_profile)
+    elif settings.grain_auto and grain:
+        log("Film grain: -g 0 - automatic per-scene analysis and synthesis "
+            "(SVT-AV1-Essential film-grain=-1; lossy: the source grain is "
+            "denoised away and re-generated at playback).")
+    elif settings.grain_auto:
+        log("Film grain: automatic per-scene analysis and synthesis "
+            "(SVT-AV1-Essential film-grain=-1), the %s default (-g pins one "
+            "level for every file, -g off none). Lossy: the source grain is "
+            "denoised away and re-generated at playback."
             % settings.video_profile)
     elif settings.grain_probe_wanted and grain:
         log("Film grain: -g 0 - measured per file and synthesised as measured "

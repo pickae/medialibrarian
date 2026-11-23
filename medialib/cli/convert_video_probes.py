@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import subprocess
+from typing import NamedTuple
 
 from medialib.cli import convert_video as rules
 from medialib.cli import convert_video_source as videosource
@@ -135,6 +136,18 @@ def svt_av1_hdr_works(binary: str) -> bool:
     return ffmpeg_takes_args(binary, rules.SVT_AV1_HDR_PROBE)[0]
 
 
+def svt_av1_essential_works(binary: str) -> bool:
+    """True when that build's libsvtav1 is SVT-AV1-Essential: it parses a key
+    only the Essential fork has."""
+    return ffmpeg_takes_args(binary, rules.SVT_AV1_ESSENTIAL_PROBE)[0]
+
+
+def svt_av1_auto_grain_works(binary: str) -> bool:
+    """True when that build's libsvtav1 supports internal per-scene automatic
+    film grain analysis (SVT-AV1-Essential v4.3.1+: film-grain=-1)."""
+    return ffmpeg_takes_args(binary, rules.SVT_AV1_AUTO_GRAIN_PROBE)[0]
+
+
 _SVT_AV1_RELEASE = re.compile(rb"Encoder Lib v(\d+)\.(\d+)\.(\d+)")
 
 
@@ -144,9 +157,10 @@ def svt_av1_release(binary: str) -> tuple:
     log its banner.
 
     Read from the banner the library itself logs, since ffmpeg's own version says
-    nothing about it. SVT-AV1-HDR numbers its releases after the mainline one it
-    is based on, so the two compare; the commits a nightly carries past its
-    release are left out, because they are not comparable across the two.
+    nothing about it. SVT-AV1-HDR and SVT-AV1-Essential both number their
+    releases after the mainline one they are based on, so all three compare; the
+    commits a nightly carries past its release are left out, because they are
+    not comparable across forks.
     """
     done = _run([binary, "-hide_banner", "-nostdin", "-loglevel", "info",
                  "-f", "lavfi", "-i", "color=c=black:s=256x256:r=5:d=1",
@@ -156,55 +170,89 @@ def svt_av1_release(binary: str) -> tuple:
     return tuple(int(part) for part in found.groups()) if found else ()
 
 
+class SvtBuildFacts(NamedTuple):
+    """What a candidate ffmpeg's libsvtav1 build is."""
+    kind: str       # "hdr", "essential", or "mainline"
+    release: tuple  # (major, minor, patch) or ()
+    auto_grain: bool
+
+
+_HDR_TIER = {"hdr": 2, "essential": 1, "mainline": 0}
+_SDR_TIER = {"essential": 2, "hdr": 1, "mainline": 0}
+_KIND_LABEL = {"hdr": "SVT-AV1-HDR", "essential": "SVT-AV1-Essential",
+               "mainline": "mainline"}
+
+
 class SvtBuildRank:
     """The rank convert-video's ffmpeg ladder orders SVT-AV1 builds by.
 
-    The fork is worth more than a newer encoder only when the run uses what it
-    does that mainline cannot: its PQ variance-boost curve, or av1Grain's film
-    grain tune. Such a run ranks SVT-AV1-HDR first and the release second; any
-    other ranks the newer release first, with the fork still winning a tie. Each
-    build's answers are kept, for the startup summary and so the build that
-    wins is not asked again.
+    When the run uses what SVT-AV1-HDR excels at (PQ HDR sources, or av1Grain's
+    film grain tune), SVT-AV1-HDR ranks first, SVT-AV1-Essential second (it has
+    the PQ variance-boost curve too, but not tune 6), and mainline third, with
+    release breaking ties. Otherwise (SDR), the newer release wins, and on the
+    same release SVT-AV1-Essential ranks first (auto-FGS and SDR perceptual
+    defaults), SVT-AV1-HDR second, and mainline third. Each build's answers are
+    kept, for the startup summary and so the build that wins is not asked again.
     """
 
     def __init__(self, fork_use: str) -> None:
-        # What the run would use the fork for, "" when nothing.
+        # What the run would use SVT-AV1-HDR for, "" when nothing.
         self.fork_use = fork_use
-        self.seen: dict = {}
+        self.seen: dict[str, SvtBuildFacts] = {}
 
-    def facts(self, binary: str) -> tuple:
-        """(is SVT-AV1-HDR, release) for that build."""
+    def facts(self, binary: str) -> SvtBuildFacts:
+        """``SvtBuildFacts(kind, release, auto_grain)`` for that build."""
         if binary not in self.seen:
-            self.seen[binary] = (svt_av1_hdr_works(binary),
-                                 svt_av1_release(binary))
+            if svt_av1_hdr_works(binary):
+                kind = "hdr"
+                auto_grain = False
+            elif svt_av1_essential_works(binary):
+                kind = "essential"
+                auto_grain = svt_av1_auto_grain_works(binary)
+            else:
+                kind = "mainline"
+                auto_grain = False
+            self.seen[binary] = SvtBuildFacts(
+                kind, svt_av1_release(binary), auto_grain)
         return self.seen[binary]
 
     def __call__(self, binary: str) -> tuple:
-        fork, release = self.facts(binary)
-        return (fork, release) if self.fork_use else (release, fork)
+        f = self.facts(binary)
+        if self.fork_use:
+            return (_HDR_TIER[f.kind], f.release)
+        return (f.release, _SDR_TIER[f.kind])
 
     def note(self, chosen: str) -> str:
-        """Why the build chosen is the SVT-AV1 one it is, when a build of the
-        other kind was also able to run the profile; "" when there was no such
-        choice."""
-        fork, release = self.facts(chosen)
-        others = [(binary, facts) for binary, facts in self.seen.items()
-                  if facts[0] != fork]
-        if not others:
+        """Why SVT-AV1-HDR was chosen over a newer build, or passed over for
+        another build, when both were able to run the profile; "" otherwise."""
+        f = self.facts(chosen)
+        if f.kind == "hdr":
+            newer = [(b, other) for b, other in self.seen.items()
+                     if other.kind != "hdr" and other.release > f.release]
+            if not newer:
+                return ""
+            other_bin, other = max(
+                newer,
+                key=lambda pair: (pair[1].release, _SDR_TIER[pair[1].kind]))
+            return ("chosen over the newer %s SVT-AV1 %s in %s, "
+                    "because this run uses %s"
+                    % (_KIND_LABEL[other.kind], _release_text(other.release),
+                       other_bin, self.fork_use))
+        hdrs = [(b, other) for b, other in self.seen.items()
+                if other.kind == "hdr"]
+        if not hdrs:
             return ""
-        other, (_other_fork, other_release) = others[0]
-        if fork:
-            if other_release > release:
-                return ("chosen over the newer mainline SVT-AV1 %s in %s, "
-                        "because this run uses %s"
-                        % (_release_text(other_release), other,
-                           self.fork_use))
-            return ""
+        other_bin, other = max(hdrs, key=lambda pair: pair[1].release)
+        if f.release > other.release:
+            return ("passed over (%s, SVT-AV1 %s): this run uses neither its "
+                    "PQ curve (no PQ source left to convert) nor av1Grain's "
+                    "film grain tune, and this build's SVT-AV1 %s is newer"
+                    % (other_bin, _release_text(other.release),
+                       _release_text(f.release)))
         return ("passed over (%s, SVT-AV1 %s): this run uses neither its PQ "
                 "curve (no PQ source left to convert) nor av1Grain's film "
-                "grain tune, and this build's SVT-AV1 %s is newer"
-                % (other, _release_text(other_release),
-                   _release_text(release)))
+                "grain tune, and SVT-AV1-Essential is preferred for SDR"
+                % (other_bin, _release_text(other.release)))
 
 
 def _release_text(release: tuple) -> str:

@@ -652,6 +652,83 @@ class TestBuildVideoArgs:
         built = build("-c:v libsvtav1 -crf 30", grain_level="12")
         assert "film-grain=12:film-grain-denoise=1" in built
 
+    def test_auto_grain_passes_negative_one_with_denoise(self, build):
+        built = build("-c:v libsvtav1 -crf 30 -svtav1-params tune=0",
+                      grain_auto=True)
+        assert "-svtav1-params film-grain=-1:film-grain-denoise=1:tune=0" \
+            in built
+
+    def test_essential_adds_fgs_seed_when_synthesising(self, build):
+        auto = build("-c:v libsvtav1 -crf 30 -svtav1-params tune=0",
+                     svt_av1_essential=True, svt_av1_auto_grain=True,
+                     grain_auto=True)
+        pinned = build("-c:v libsvtav1 -crf 30 -svtav1-params tune=0",
+                       svt_av1_essential=True, svt_av1_auto_grain=True,
+                       grain_level="12")
+        no_grain = build("-c:v libsvtav1 -crf 30 -svtav1-params tune=0",
+                         svt_av1_essential=True, svt_av1_auto_grain=True)
+        assert "film-grain=-1:film-grain-denoise=1:fgs-seed=-1" in auto
+        assert "film-grain=12:film-grain-denoise=1:fgs-seed=-1" in pinned
+        assert "fgs-seed" not in no_grain
+
+    def test_svt_av1_essential_strips_qm_min_zero_and_keeps_other_qm_min(
+            self, build):
+        built = build(self.ROW, svt_av1_essential=True)
+        assert "qm-min" not in built
+        assert "tune=0:enable-qm=1:qm-max=15" in built
+        anim = build("-c:v libsvtav1 -crf 30 -svtav1-params tune=0:qm-min=8",
+                     svt_av1_essential=True)
+        assert "qm-min=8" in anim
+
+    def test_svt_av1_essential_grain_tune_adds_distortion_bias_preset_4(
+            self, build):
+        built = build(self.ROW, svt_av1_essential=True, grain_tune=True)
+        assert "distortion-bias-preset=4" in built
+        assert "film-grain" not in built
+        assert "fgs-seed" not in built
+
+    def test_svt_av1_essential_low_memory_gated_by_available_ram(
+            self, build, monkeypatch):
+        # 4K (1 worker on 32 cores) needs ~18 GiB: tight on 16 GiB, fine on 32 GiB.
+        monkeypatch.setattr(cv.hostmem, "available_ram_bytes",
+                            lambda: 16 * 1024 ** 3)
+        tight = build(self.ROW, dimensions=("3840", "2160"),
+                      svt_av1_essential=True, cores=32)
+        assert "low-memory=1" in tight
+
+        monkeypatch.setattr(cv.hostmem, "available_ram_bytes",
+                            lambda: 32 * 1024 ** 3)
+        plenty = build(self.ROW, dimensions=("3840", "2160"),
+                       svt_av1_essential=True, cores=32)
+        assert "low-memory=1" not in plenty
+
+        # 64 cores runs 2 x 4K workers (~36 GiB): tight on 32 GiB.
+        two_workers = build(self.ROW, dimensions=("3840", "2160"),
+                            svt_av1_essential=True, cores=64)
+        assert "low-memory=1" in two_workers
+
+        # Unreadable RAM probe (0) must never force low-memory=1.
+        monkeypatch.setattr(cv.hostmem, "available_ram_bytes", lambda: 0)
+        unknown = build(self.ROW, dimensions=("3840", "2160"),
+                        svt_av1_essential=True, cores=32)
+        assert "low-memory=1" not in unknown
+
+        # Never emitted on mainline or SVT-AV1-HDR.
+        monkeypatch.setattr(cv.hostmem, "available_ram_bytes",
+                            lambda: 8 * 1024 ** 3)
+        assert "low-memory=1" not in build(self.ROW, dimensions=("3840", "2160"),
+                                           svt_av1_hdr=True, cores=32)
+
+    def test_svt_av1_essential_disables_luminance_qp_bias_on_hdr_only(
+            self, build):
+        pq = build(self.ROW, colour=self.HDR10, svt_av1_essential=True)
+        hlg = build(self.ROW, colour=self.HLG, svt_av1_essential=True)
+        sdr = build(self.ROW, colour=" -color_primaries bt709 -color_trc bt709",
+                    svt_av1_essential=True)
+        assert "luminance-qp-bias=0" in pq
+        assert "luminance-qp-bias=0" in hlg
+        assert "luminance-qp-bias=0" not in sdr
+
     def test_neither_is_merged_for_an_encoder_that_has_no_such_knob(self,
                                                                     build):
         built = build("-c:v hevc_nvenc -cq 24", grain_level="12",
@@ -1053,13 +1130,15 @@ class TestConversionWorthwhile:
     @pytest.fixture
     def decide(self, monkeypatch):
         def run(stats, width=1920, height=1080, enc_width=1920,
-                enc_height=1080, grain="0", saving="50", grain_level="0"):
+                enc_height=1080, grain="0", saving="50", grain_level="0",
+                grain_auto=False):
             monkeypatch.setattr(cv.videobitrate, "video_bitrate_stats",
                                 lambda path: stats)
             lines = []
             settings = cv.Settings(input_dir="/in", encoder="libsvtav1",
                                    hardware_encode=False,
                                    grain_level=grain_level,
+                                   grain_auto=grain_auto,
                                    required_saving=saving)
             verdict = cv.conversion_worthwhile(
                 "a.mkv", width, height, enc_width, enc_height, grain,
@@ -1108,6 +1187,8 @@ class TestConversionWorthwhile:
         assert decide("h264 24 9000 stated", grain="40")[0] is False
         assert decide("h264 24 9000 stated", grain="40",
                       grain_level="12")[0] is True
+        assert decide("h264 24 9000 stated", grain="40",
+                      grain_auto=True)[0] is True
 
     def test_an_unreadable_measurement_converts_anyway_and_says_so(self,
                                                                    decide):
@@ -1121,3 +1202,55 @@ class TestConversionWorthwhile:
     def test_an_unreadable_frame_size_converts_anyway(self, decide):
         assert decide("h264 24 6000 stated", width="", height="",
                       enc_width="", enc_height="")[0] is True
+
+
+class TestSvtBuildRank:
+    """Three-way SVT-AV1 ladder ranking across SVT-AV1-HDR, SVT-AV1-Essential
+    and mainline SVT-AV1, plus _settle_grain with internal auto-FGS."""
+
+    def _rank(self, fork_use, builds):
+        from medialib.cli import convert_video_probes as probes
+        rank = probes.SvtBuildRank(fork_use)
+        for binary, facts in builds.items():
+            rank.seen[binary] = probes.SvtBuildFacts(*facts)
+        return rank
+
+    def test_sdr_prefers_essential_over_hdr_and_mainline_on_same_release(self):
+        builds = {
+            "/bin/mainline": ("mainline", (4, 3, 1), False),
+            "/bin/hdr": ("hdr", (4, 3, 1), False),
+            "/bin/essential": ("essential", (4, 3, 1), True),
+        }
+        rank = self._rank("", builds)
+        winner = max(builds, key=rank)
+        assert winner == "/bin/essential"
+        assert "SVT-AV1-Essential is preferred for SDR" in rank.note(winner)
+
+    def test_hdr_or_av1Grain_prefers_hdr_then_essential_then_mainline(self):
+        builds = {
+            "/bin/mainline": ("mainline", (4, 3, 1), False),
+            "/bin/essential": ("essential", (4, 3, 1), True),
+            "/bin/hdr": ("hdr", (4, 2, 0), False),
+        }
+        rank = self._rank("its PQ variance-boost curve on a PQ source", builds)
+        ordered = sorted(builds, key=rank, reverse=True)
+        assert ordered == ["/bin/hdr", "/bin/essential", "/bin/mainline"]
+        assert "chosen over the newer SVT-AV1-Essential SVT-AV1 4.3.1" \
+            in rank.note("/bin/hdr")
+
+    def test_settle_grain_uses_internal_auto_grain_when_supported(self):
+        from medialib.cli import convert_video_startup as startup
+        settings = cv.Settings(encoder="libsvtav1", video_profile="av1BluRay",
+                               svt_av1_auto_grain=True)
+        assert startup._settle_grain(settings, "", "") == ("0", False, True)
+        assert startup._settle_grain(settings, "0", "") == ("0", False, True)
+        assert startup._settle_grain(settings, "off", "") == ("0", False, False)
+        assert startup._settle_grain(settings, "15", "") == ("15", False, False)
+
+    def test_settle_grain_falls_back_to_probe_without_auto_grain(self):
+        from medialib.cli import convert_video_startup as startup
+        settings = cv.Settings(encoder="libsvtav1", video_profile="av1BluRay",
+                               svt_av1_auto_grain=False)
+        assert startup._settle_grain(settings, "", "") == ("0", True, False)
+        assert startup._settle_grain(settings, "0", "") == ("0", True, False)
+

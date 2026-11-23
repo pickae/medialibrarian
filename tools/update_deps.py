@@ -90,6 +90,7 @@ CARGO_CRATES = ("dovi_tool", "hdr10plus_tool", "ssimulacra2_rs")
 FFMPEG_BUILDS = (
     (HOME / ".local/bin", "BtbN/FFmpeg-Builds"),
     (Path("/opt/ffmpeg/bin"), "QuickFatHedgehog/FFmpeg-Builds-SVT-AV1-HDR"),
+    (Path("/opt/ffmpeg-essential/bin"), "nekotrix/FFmpeg-Builds-SVT-AV1-Essential"),
 )
 
 # What is installed here but deliberately not updated, said at the end so it
