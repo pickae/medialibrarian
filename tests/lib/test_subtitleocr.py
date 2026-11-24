@@ -886,3 +886,23 @@ class TestTheVisionSettings:
         assert len(logs) == 1
         assert "vision's options" in logs[0]
         assert "the vision model is not asked" in logs[0]
+
+
+def test_a_subtitles_requests_wait_out_a_full_queue(tmp_path, monkeypatch):
+    # Its requests go out at once; one refused would lose the whole subtitle.
+    png = tmp_path / "line.png"
+    png.write_bytes(b"\x89PNG")
+    llm = llmclient.Llm("openai", "http://127.0.0.1:8080/v1", "m",
+                        said={"vision": True})
+    asked: dict = {}
+
+    def fake_ask_pictures(*args, **kwargs):
+        asked.update(kwargs)
+        return ["a line"]
+
+    monkeypatch.setattr(llm, "ask_pictures", fake_ask_pictures)
+    texts = subtitleocr._read_group(
+        llm, FRENCH, [("00:00:01,000", "00:00:02,000", str(png), 50)], 50,
+        None, subtitleocr.Usage())
+    assert texts == ["a line"]
+    assert asked["queue_waits"] == subtitleocr._VISION_QUEUE_WAITS > 0
