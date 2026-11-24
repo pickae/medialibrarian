@@ -415,7 +415,7 @@ class TestWhatARunLoaded:
         modelserver._loaded_here.clear()
         assert os.path.exists(modelserver._shared_file())
         runcontext.request_abort()
-        modelserver._eject_if_interrupted()
+        modelserver._eject_at_exit()
         assert holder.unloaded == ["big"]
         assert not os.path.exists(modelserver._shared_file())
 
@@ -433,17 +433,43 @@ class TestWhatARunLoaded:
         runcontext.request_abort()
         # The command's own cleanup, before the exit hooks.
         shutil.rmtree(scratch)
-        modelserver._eject_if_interrupted()
+        modelserver._eject_at_exit()
         assert holder.unloaded == ["big"]
 
-    def test_a_run_that_finishes_leaves_its_models_loaded(self, holder, tmp_path):
+    def test_a_run_that_finishes_unloads_its_models_too(self, holder, tmp_path):
+        # A switching server never lets an idle model go by itself.
         from medialib.lib import safety
         safety.init_abort_flag(str(tmp_path / "abortRequested"))
         _note_request(holder.url, "big")
         holder.held.add("big")
-        modelserver._eject_if_interrupted()
-        assert holder.unloaded == []
+        modelserver._loaded_here.clear()     # a worker's note
+        modelserver._eject_at_exit()
+        assert holder.unloaded == ["big"]
         assert not os.path.exists(modelserver._shared_file())
+
+    def test_a_command_finishing_inside_another_run_leaves_its_models(
+            self, holder, tmp_path, monkeypatch):
+        from medialib.lib import runcontext, safety
+        # settle() hands the run down through the environment: put it back.
+        for name in ("ABORT_FLAG", "ABORT_FLAG_OWNER"):
+            monkeypatch.delenv(name, raising=False)
+        safety.init_abort_flag(str(tmp_path / "abortRequested"))
+        runcontext.settle("ABORT_FLAG_OWNER", str(os.getpid() + 99999))
+        _note_request(holder.url, "big")
+        holder.held.add("big")
+        modelserver._eject_at_exit()
+        assert holder.unloaded == []
+        # Its note is left for the run that owns it.
+        assert os.path.exists(modelserver._shared_file())
+
+    def test_a_process_no_run_was_settled_in_unloads_what_it_loaded(
+            self, holder, monkeypatch):
+        for name in ("ABORT_FLAG", "ABORT_FLAG_OWNER"):
+            monkeypatch.delenv(name, raising=False)
+        _note_request(holder.url, "big")
+        holder.held.add("big")
+        modelserver._eject_at_exit()
+        assert holder.unloaded == ["big"]
 
     def test_the_flag_gone_at_exit_still_counts_as_interrupted(
             self, holder, tmp_path):
@@ -454,5 +480,5 @@ class TestWhatARunLoaded:
         open(flag, "w").close()     # a worker's interrupt, not this process's
         safety.release_abort_flag()
         assert runcontext.interrupted()
-        modelserver._eject_if_interrupted()
+        modelserver._eject_at_exit()
         assert holder.unloaded == ["big"]

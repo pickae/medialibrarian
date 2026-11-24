@@ -267,8 +267,11 @@ def _from_server(url: str, model: str, key: str) -> dict:
     if said or not model:
         return said
     # A POST naming the model is a request to load it on the ninfer switcher,
-    # as on Ollama: noted like any other, so an interrupted run unloads it.
-    from medialib.lib import modelserver
+    # as on Ollama: noted like any other, so an interrupted run unloads it,
+    # and not sent at all once the run is interrupted.
+    from medialib.lib import modelserver, runcontext
+    if runcontext.interrupted():
+        return said
     modelserver.note_request(url, model)
     shown = _server_json(root + "/api/show", key, {"model": model})
     if not isinstance(shown, dict):

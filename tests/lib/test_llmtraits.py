@@ -99,6 +99,17 @@ class TestTheServer:
         _named("my-own-name")
         assert noted == ["my-own-name"]
 
+    def test_nothing_is_probed_once_the_run_is_interrupted(self, monkeypatch):
+        from medialib.lib import modelserver, runcontext
+        monkeypatch.setattr(modelserver, "note_request",
+                            lambda url, model: pytest.fail("noted"))
+        asked = []
+        monkeypatch.setattr(llmtraits, "_server_json",
+                            lambda url, key, body=None: asked.append(url))
+        runcontext.note_interrupted()
+        _named("my-own-name")
+        assert not any(url.endswith("/api/show") for url in asked)
+
     def test_a_hosted_api_is_not_asked(self, monkeypatch):
         monkeypatch.setattr(llmtraits, "_server_json",
                             lambda *a, **k: pytest.fail("a hosted API was asked"))

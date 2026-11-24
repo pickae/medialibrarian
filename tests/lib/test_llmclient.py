@@ -322,6 +322,20 @@ class TestTheRequest:
             llmclient.from_environment(_LOCAL).ask("s", "u", queue_waits=2)
         assert len(calls) == 3
 
+    def test_nothing_is_asked_once_the_run_is_interrupted(
+            self, curl, monkeypatch):
+        # A thread still finishing its step after Ctrl+C must not load the
+        # model the run's exit has just unloaded.
+        from medialib.lib import modelserver, runcontext
+        calls = self._counted(monkeypatch)
+        noted: list = []
+        monkeypatch.setattr(modelserver, "note_request",
+                            lambda url, model: noted.append(model))
+        runcontext.note_interrupted()
+        with pytest.raises(llmclient.RunInterruptedError):
+            llmclient.from_environment(_LOCAL).ask("s", "u")
+        assert (calls, noted) == ([], [])
+
     def test_a_hosted_apis_rate_limit_is_waited_out(self, curl, monkeypatch):
         calls = self._counted(monkeypatch)
         curl["stdout"] = '{"error": {"message": "slow down"}}\n429'
