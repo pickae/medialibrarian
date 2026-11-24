@@ -393,7 +393,9 @@ def _triage_at_exit() -> None:
             return
         if not runcontext.get(NAME_VARIABLE):
             return
-        if runcontext.abort_requested():
+        # interrupted(), not the flag: the run's scratch, the flag with it,
+        # is handed back before the exit hooks run.
+        if runcontext.interrupted():
             return
         path = current_file()
         if not os.path.isfile(path):

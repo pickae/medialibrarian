@@ -413,11 +413,28 @@ class TestWhatARunLoaded:
         holder.held.add("big")
         # Another process's note: only the shared file carries it.
         modelserver._loaded_here.clear()
-        assert (tmp_path / "abortRequested.models").exists()
+        assert os.path.exists(modelserver._shared_file())
         runcontext.request_abort()
         modelserver._eject_if_interrupted()
         assert holder.unloaded == ["big"]
-        assert not (tmp_path / "abortRequested.models").exists()
+        assert not os.path.exists(modelserver._shared_file())
+
+    def test_the_workers_notes_outlive_the_scratch_handed_back_first(
+            self, holder, tmp_path):
+        import shutil
+
+        from medialib.lib import runcontext, safety
+        scratch = tmp_path / "scratch"
+        scratch.mkdir()
+        safety.init_abort_flag(str(scratch / "abortRequested"))
+        _note_request(holder.url, "big")
+        holder.held.add("big")
+        modelserver._loaded_here.clear()
+        runcontext.request_abort()
+        # The command's own cleanup, before the exit hooks.
+        shutil.rmtree(scratch)
+        modelserver._eject_if_interrupted()
+        assert holder.unloaded == ["big"]
 
     def test_a_run_that_finishes_leaves_its_models_loaded(self, holder, tmp_path):
         from medialib.lib import safety
@@ -426,7 +443,7 @@ class TestWhatARunLoaded:
         holder.held.add("big")
         modelserver._eject_if_interrupted()
         assert holder.unloaded == []
-        assert not (tmp_path / "abortRequested.models").exists()
+        assert not os.path.exists(modelserver._shared_file())
 
     def test_the_flag_gone_at_exit_still_counts_as_interrupted(
             self, holder, tmp_path):
