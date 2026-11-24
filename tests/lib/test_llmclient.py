@@ -293,6 +293,35 @@ class TestTheRequest:
             llmclient.from_environment(_LOCAL).ask("s", "u")
         assert len(calls) == 1
 
+    def _queue_full(self, monkeypatch, times: int) -> list:
+        calls: list = []
+        original = llmclient._ask_openai
+
+        def full_then_answered(*args, **kwargs):
+            calls.append(1)
+            if len(calls) <= times:
+                raise llmclient._QueueFullError("429: queue is full")
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(llmclient, "_ask_openai", full_then_answered)
+        return calls
+
+    def test_a_full_queue_is_waited_out_where_the_caller_would_wait(
+            self, curl, monkeypatch):
+        calls = self._queue_full(monkeypatch, 3)
+        # The waits are not retries: none is left, and the answer still comes.
+        answer = llmclient.from_environment(_LOCAL).ask(
+            "s", "u", retries=0, queue_waits=3)
+        assert answer == '{"ok": true}'
+        assert len(calls) == 4
+
+    def test_a_queue_still_full_after_the_waits_is_given_up(
+            self, curl, monkeypatch):
+        calls = self._queue_full(monkeypatch, 10)
+        with pytest.raises(llmclient.LlmError, match="queue is full"):
+            llmclient.from_environment(_LOCAL).ask("s", "u", queue_waits=2)
+        assert len(calls) == 3
+
     def test_a_hosted_apis_rate_limit_is_waited_out(self, curl, monkeypatch):
         calls = self._counted(monkeypatch)
         curl["stdout"] = '{"error": {"message": "slow down"}}\n429'

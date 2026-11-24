@@ -172,6 +172,8 @@ REQUEST_SECONDS = 900
 # long to wait before each, doubling.
 RETRIES = 2
 RETRY_WAIT_SECONDS = 5
+# The longest one wait for a local server's full queue to drain.
+QUEUE_WAIT_SECONDS = 60
 
 # Where a run that fans out to worker processes keeps its request slots: one
 # lock file per slot, so :attr:`Llm.jobs` holds over every process of the run
@@ -228,6 +230,12 @@ class OutOfTimeError(LlmError):
 class _UnavailableError(LlmError):
     """Nothing listens at the server, or its queue is full: asking again a
     few seconds later only adds to the load that refused it."""
+
+
+class _QueueFullError(_UnavailableError):
+    """A local server's queue is full: the run's own requests filled it. Not
+    asked again, unless the caller would rather wait for it to drain
+    (:meth:`Llm.ask`'s ``queue_waits``)."""
 
 
 @contextlib.contextmanager
@@ -553,7 +561,8 @@ class Llm:
     def ask(self, system: str, prompt: str, tally: Tally | None = None,
             images: Sequence[str] = (), *, numbered: bool = False,
             options: dict | None = None, max_tokens: int | None = None,
-            allow_empty: bool = False, retries: int | None = None) -> str:
+            allow_empty: bool = False, retries: int | None = None,
+            queue_waits: int = 0) -> str:
         """The model's text answer, its thinking taken out. LlmError when no
         answer came after the retries. Safe to call from many threads: the
         requests in flight never pass :attr:`jobs`. Every answer, a retried
@@ -570,19 +579,25 @@ class Llm:
 
         A request the server refused - nothing listening, its queue full - is
         not sent again; nor is one once the :func:`time_limit` is spent
-        (OutOfTimeError)."""
+        (OutOfTimeError). With ``queue_waits``, a local server's full queue
+        is waited out that many times instead, each wait twice the last up to
+        :data:`QUEUE_WAIT_SECONDS`, without using up a retry: for a step that
+        sends many requests at once and loses its whole work to one refused."""
         if images and self.harness:
             raise LlmError("pictures are not sent through %s" % self.harness.program)
         pictures = [_picture(path) for path in images]
         tries = RETRIES if retries is None else retries
         last = ""
-        for attempt in range(tries + 1):
-            if attempt:
+        attempt = waited = 0
+        waited_now = False
+        while attempt <= tries:
+            if attempt and not waited_now:
                 wait = RETRY_WAIT_SECONDS * 2 ** (attempt - 1)
                 left = _seconds_left()
                 if left is not None and left <= wait:
                     raise _out_of_time("after: %s" % last)
                 time.sleep(wait)
+            waited_now = False
             left = _seconds_left()
             if left is not None and left <= 0:
                 raise _out_of_time()
@@ -592,6 +607,17 @@ class Llm:
                     outcome = self._ask_once(
                         system, prompt, pictures, numbered=numbered,
                         options=options, max_tokens=max_tokens)
+            except _QueueFullError as error:
+                if waited >= queue_waits:
+                    raise
+                wait = min(QUEUE_WAIT_SECONDS, RETRY_WAIT_SECONDS * 2 ** waited)
+                waited += 1
+                left = _seconds_left()
+                if left is not None and left <= wait:
+                    raise _out_of_time("after: %s" % error) from error
+                time.sleep(wait)
+                waited_now = True
+                continue
             except (_PermanentLlmError, _UnavailableError, OutOfTimeError):
                 raise
             except LlmError as error:
@@ -599,6 +625,7 @@ class Llm:
                 if left is not None and left <= 0:
                     raise _out_of_time("after: %s" % error) from error
                 last = str(error)
+                attempt += 1
                 continue
             if len(outcome) == 3:
                 text, tokens, read = outcome
@@ -611,6 +638,7 @@ class Llm:
             if text or allow_empty:
                 return text
             last = "an empty answer"
+            attempt += 1
         raise LlmError(last)
 
     def ask_pictures(
@@ -618,7 +646,7 @@ class Llm:
         images: Sequence[str], tally: Tally | None = None, *,
         options: dict | None = None, max_tokens_each: int | None = None,
         allow_empty: bool = False, retries: int | None = None,
-        reask: Callable[[int, str], bool] | None = None,
+        reask: Callable[[int, str], bool] | None = None, queue_waits: int = 0,
     ) -> list[str | None]:
         """Ask the model about a group of ``images`` in one numbered request
         whose answer is a JSON array of one string per picture.
@@ -628,7 +656,8 @@ class Llm:
         is asked again one at a time with ``alone_prompt`` (None for a picture
         that still fails). When the batch succeeds and ``reask(index, text)``
         returns True for a picture, that picture alone is re-asked and its new
-        answer replaces the batch's when it comes back."""
+        answer replaces the batch's when it comes back. ``queue_waits`` is
+        :meth:`ask`'s, for every request of the group."""
         if images and self.harness:
             raise LlmError("pictures are not sent through %s" % self.harness.program)
         if not images:
@@ -641,7 +670,8 @@ class Llm:
                 reply = self.ask(
                     system, batch_prompt, tally, images=images, numbered=True,
                     options=options, max_tokens=batch_limit,
-                    allow_empty=False, retries=retries)
+                    allow_empty=False, retries=retries,
+                    queue_waits=queue_waits)
                 found = json_strings(reply, len(images))
             except LlmError:
                 found = None
@@ -653,7 +683,7 @@ class Llm:
                         system, alone_prompt, tally, images=(path,),
                         numbered=True, options=options,
                         max_tokens=max_tokens_each, allow_empty=allow_empty,
-                        retries=retries))
+                        retries=retries, queue_waits=queue_waits))
                 except LlmError:
                     results.append(None)
             return results
@@ -666,7 +696,8 @@ class Llm:
                             system, alone_prompt, tally,
                             images=(images[index],), numbered=True,
                             options=options, max_tokens=max_tokens_each,
-                            allow_empty=allow_empty, retries=retries)
+                            allow_empty=allow_empty, retries=retries,
+                            queue_waits=queue_waits)
                     except LlmError:
                         pass
         return checked
@@ -1130,7 +1161,7 @@ def _post_openai(
         # A local server's queue is full: the run's own requests filled it.
         # A hosted API's rate limit is waited out like any other failure.
         if status == "429" and llm.local:
-            raise _UnavailableError(detail)
+            raise _QueueFullError(detail)
         if status.startswith("4") and status not in ("408", "429"):
             raise _PermanentLlmError(detail)
         raise LlmError(detail)
