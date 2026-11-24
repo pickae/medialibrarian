@@ -535,6 +535,8 @@ def release_abort_flag() -> None:
     was never interrupted."""
     if runcontext.get("ABORT_FLAG_OWNER") != str(os.getpid()):
         return
+    if runcontext.abort_requested():
+        runcontext.note_interrupted()
     try:
         os.remove(runcontext.get("ABORT_FLAG"))
     except OSError:

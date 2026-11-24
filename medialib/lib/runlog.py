@@ -391,6 +391,8 @@ def install_hooks() -> None:
     previous = sys.excepthook
 
     def hook(kind, value, tb):
+        if issubclass(kind, KeyboardInterrupt):
+            runcontext.note_interrupted()
         if issubclass(kind, KeyboardInterrupt | SystemExit) or value is None:
             previous(kind, value, tb)
             return

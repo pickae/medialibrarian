@@ -697,3 +697,27 @@ def test_where_files_cannot_be_locked_a_process_keeps_its_own_slots(
     assert not isinstance(llm._slot(), llmclient._RunSlot)
     with llm._slot():
         pass
+
+
+class TestALocalRequestIsNoted:
+    """Before a local model is asked, the server is looked at for whether this
+    run makes it load the model (`medialib/lib/modelserver.py`)."""
+
+    def _noted(self, monkeypatch, llm):
+        from medialib.lib import modelserver
+        seen = []
+        monkeypatch.setattr(modelserver, "note_request",
+                            lambda url, model: seen.append((url, model)))
+        monkeypatch.setattr(llmclient, "_ask_openai",
+                            lambda *args, **kwargs: ("ok", 1))
+        llm.ask("s", "p")
+        return seen
+
+    def test_a_local_model_is_noted(self, monkeypatch):
+        llm = llmclient.Llm("openai", "http://127.0.0.1:8080/v1", "big")
+        assert self._noted(monkeypatch, llm) == [("http://127.0.0.1:8080/v1", "big")]
+
+    def test_a_hosted_one_is_not(self, monkeypatch):
+        llm = llmclient.Llm("openai", "https://api.example.com/v1", "big",
+                            local=False)
+        assert self._noted(monkeypatch, llm) == []

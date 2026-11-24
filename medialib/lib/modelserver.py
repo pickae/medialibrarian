@@ -25,6 +25,17 @@ asking it. The run starts what is not answering, keeps it for the whole run,
 starts it again when it goes down, and stops at the end only what it started.
 A worker of such a run never starts or stops a server itself: it uses one that
 answers, and waits for the run to bring back one that does not.
+
+A server already running may still load a model because this run asked it -
+Ollama, LM Studio and the ninfer switcher all load the one a request names -
+and that model stays in VRAM after the run. Before a run first asks a local
+server for a model, it looks whether the server holds it already
+(:func:`loaded_models`); one it did not, the run made it load
+(:func:`note_request`). A run that is interrupted unloads those again as it
+ends (:func:`eject_loaded`), where the server still holds them; a run that
+finishes leaves them loaded for the next. The worker processes of a run note
+theirs in a file beside the run's abort flag, so the process that ends the
+run unloads what every worker made a server load.
 """
 
 from __future__ import annotations
@@ -34,8 +45,10 @@ import contextlib
 import json
 import os
 import shlex
+import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -45,7 +58,8 @@ from collections.abc import Callable, Iterable, Iterator
 from medialib.lib import runcontext
 
 __all__ = ["Server", "free_vram", "answering", "served_model", "stop_all",
-           "held_for_run", "OWNER_VARIABLE"]
+           "held_for_run", "OWNER_VARIABLE", "loaded_models", "unload",
+           "note_request", "eject_loaded"]
 
 # The process that holds the run's servers (:func:`held_for_run`), by its pid,
 # handed to the workers and the commands it starts.
@@ -343,4 +357,202 @@ def held_for_run(servers: Iterable[Server], log: Callable[[str], None],
             server.stop()
 
 
+# --- the models a run made a server load ----------------------------------------
+
+# How long a server has to say what it holds, and to unload a model - the ninfer
+# switcher stops the model's process before it answers.
+_PROBE_TIMEOUT = 5
+_UNLOAD_TIMEOUT = 90
+
+# The (address, model) pairs this process has looked at, and the ones of them
+# its requests made a server load.
+_looked: set[tuple[str, str]] = set()
+_loaded_here: set[tuple[str, str]] = set()
+_loaded_lock = threading.Lock()
+
+# What kind of server each address is, once found: "switcher" (ninfer-swap's
+# /health names the model it holds), "ollama", "lmstudio", or "" for one that
+# cannot say what it holds.
+_kinds: dict[str, str] = {}
+
+
+def _get_json(url: str):
+    try:
+        with urllib.request.urlopen(url, timeout=_PROBE_TIMEOUT) as reply:
+            return json.loads(reply.read().decode("utf-8", "replace"))
+    except (OSError, ValueError):
+        return None
+
+
+def _post_json(url: str, payload: dict) -> bool:
+    request = urllib.request.Request(
+        url, data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=_UNLOAD_TIMEOUT) as reply:
+            reply.read()
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _holding(kind: str, base: str) -> set[str] | None:
+    if kind == "switcher":
+        health = _get_json(base + "/health")
+        if not isinstance(health, dict) or "current" not in health:
+            return None
+        return {str(health["current"])} if health["current"] else set()
+    if kind == "ollama":
+        running = _get_json(base + "/api/ps")
+        if not isinstance(running, dict) or not isinstance(
+                running.get("models"), list):
+            return None
+        held: set[str] = set()
+        for entry in running["models"]:
+            if isinstance(entry, dict):
+                held.update(str(entry.get(name) or "")
+                            for name in ("name", "model"))
+        return held - {""}
+    if kind == "lmstudio":
+        listing = _get_json(base + "/api/v0/models")
+        if not isinstance(listing, dict) or not isinstance(
+                listing.get("data"), list):
+            return None
+        return {str(entry.get("id") or "") for entry in listing["data"]
+                if isinstance(entry, dict) and entry.get("state") == "loaded"}
+    return None
+
+
+def loaded_models(url: str) -> set[str] | None:
+    """The models the server at ``url`` holds in memory now, None where it
+    cannot say - it does not answer, or is of no kind this knows."""
+    base = root(url)
+    kind = _kinds.get(base)
+    if kind is not None:
+        return _holding(kind, base) if kind else None
+    for kind in ("switcher", "ollama", "lmstudio"):
+        held = _holding(kind, base)
+        if held is not None:
+            _kinds[base] = kind
+            return held
+    if answering(url):
+        _kinds[base] = ""
+    return None
+
+
+def _holds(held: set[str], model: str) -> bool:
+    # Ollama lists the tag a request left out.
+    return model in held or ":" not in model and model + ":latest" in held
+
+
+def _lms() -> str:
+    found = os.path.expanduser("~/.lmstudio/bin/lms")
+    return found if os.path.exists(found) else shutil.which("lms") or ""
+
+
+def unload(url: str, model: str) -> bool:
+    """Ask the server at ``url`` to let ``model`` go: whether it took the
+    request. The ninfer switcher lets it go once no request is running on it."""
+    base = root(url)
+    kind = _kinds.get(base)
+    if kind == "switcher":
+        return _post_json(base + "/unload", {"model": model})
+    if kind == "ollama":
+        return _post_json(base + "/api/generate",
+                          {"model": model, "keep_alive": 0})
+    if kind == "lmstudio":
+        lms = _lms()
+        if not lms:
+            return False
+        try:
+            return subprocess.run([lms, "unload", model],
+                                  stdin=subprocess.DEVNULL,
+                                  stdout=subprocess.DEVNULL,
+                                  stderr=subprocess.DEVNULL,
+                                  timeout=_UNLOAD_TIMEOUT).returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+    return False
+
+
+def _shared_file() -> str:
+    flag = runcontext.abort_flag()
+    return flag + ".models" if flag else ""
+
+
+def note_request(url: str, model: str) -> None:
+    """Call before asking the server at ``url`` for ``model``: the first time
+    for each, it is noted as loaded by this run when the server does not hold
+    it yet. A server that cannot say what it holds is not noted."""
+    key = (root(url), model)
+    with _loaded_lock:
+        if key in _looked:
+            return
+        _looked.add(key)
+        held = loaded_models(url)
+        if held is None or _holds(held, model):
+            return
+        _loaded_here.add(key)
+        shared = _shared_file()
+    if shared:
+        try:
+            with open(shared, "a", encoding="utf-8") as handle:
+                handle.write("%s\t%s\n" % key)
+        except OSError:
+            pass
+
+
+def _claim_shared() -> set[tuple[str, str]]:
+    """The pairs the run's processes noted, taken out of the shared file so
+    only one process unloads them."""
+    shared = _shared_file()
+    if not shared:
+        return set()
+    claimed = "%s.%d" % (shared, os.getpid())
+    try:
+        os.rename(shared, claimed)
+    except OSError:
+        return set()
+    pairs = set()
+    try:
+        with open(claimed, encoding="utf-8") as handle:
+            for line in handle:
+                base, _tab, model = line.rstrip("\n").partition("\t")
+                if base and model:
+                    pairs.add((base, model))
+    except OSError:
+        pass
+    with contextlib.suppress(OSError):
+        os.remove(claimed)
+    return pairs
+
+
+def eject_loaded(log: Callable[[str], None] | None = None) -> None:
+    """Every model this run made a server load unloaded again, where the
+    server still holds it."""
+    with _loaded_lock:
+        pairs = set(_loaded_here)
+        _loaded_here.clear()
+    pairs |= _claim_shared()
+    for base, model in sorted(pairs):
+        held = loaded_models(base)
+        if held is None or not _holds(held, model):
+            continue
+        done = unload(base, model)
+        if log is not None:
+            log("Unloading %s from %s, loaded for this interrupted run%s"
+                % (model, base, "" if done else ": the server refused"))
+
+
+def _eject_if_interrupted() -> None:
+    if runcontext.interrupted():
+        eject_loaded(lambda line: print(line, file=sys.stderr))
+    elif runcontext.get("ABORT_FLAG_OWNER") == str(os.getpid()):
+        with contextlib.suppress(OSError):
+            os.remove(_shared_file())
+
+
 atexit.register(stop_all)
+# After stop_all in the list, so it runs first: a server this run started is
+# stopped anyway, one found running is unloaded from.
+atexit.register(_eject_if_interrupted)
