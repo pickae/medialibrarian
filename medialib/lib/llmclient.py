@@ -36,6 +36,8 @@ with :data:`SERVE_VARIABLE` where the GPU has room for it, and stopped again
 once idle (:mod:`medialib.lib.modelserver`); further down, the model a server
 lists is asked when it does not list :data:`MODEL_VARIABLE`, and the window
 is the one it lists when that is smaller than :data:`CONTEXT_VARIABLE`.
+A model a local server loads because this run asked for it is unloaded
+again when the run is interrupted (:func:`modelserver.note_request`).
 
 A model behind the openai protocol cannot look anything up, so where the user
 has an agent harness (:data:`HARNESS_VARIABLE`, :mod:`medialib.lib.llmharness`)
@@ -677,6 +679,11 @@ class Llm:
         """The answer and the tokens the model wrote (and read) for it, None
         where they were not reported. ``pictures`` are (media type, base64)
         pairs."""
+        if self.api == "openai" and self.local:
+            # A harness asks for the model by its provider's name for it.
+            modelserver.note_request(
+                self.url, self.harness_model.rpartition("/")[2]
+                if self.harness and self.harness_model else self.model)
         if self.harness:
             try:
                 return llmharness.ask(

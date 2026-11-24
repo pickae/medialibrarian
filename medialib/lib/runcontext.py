@@ -26,7 +26,8 @@ import typing
 
 __all__ = ["Run", "current", "adopt", "snapshot", "reset", "settle", "get",
            "forget", "can_lock", "settle_flock", "have_flock", "take_lock",
-           "abort_flag", "abort_requested", "request_abort", "label",
+           "abort_flag", "abort_requested", "request_abort", "interrupted",
+           "note_interrupted", "label",
            "working_on", "subject", "child_environment",
            "ITEM_VARIABLE", "INPUT_VARIABLE", "AI_VARIABLE"]
 
@@ -72,7 +73,8 @@ class Run:
     (`medialib/lib/ramscratch.py`); ``disk_turns`` is where the disks' turns
     are shared (`medialib/lib/diskturn.py`); ``terminal`` is the status
     row's geometry; ``failures`` are the abnormal worker exits this process
-    reaped (`medialib/lib/workerpool.py`).
+    reaped (`medialib/lib/workerpool.py`); ``interrupted`` is whether this
+    process saw the run interrupted (:func:`interrupted`).
     """
 
     def __init__(self) -> None:
@@ -83,6 +85,7 @@ class Run:
         self.disk_turns = ""
         self.terminal = Terminal()
         self.failures: list = []
+        self.interrupted = False
 
     def __getstate__(self) -> dict:
         # What a worker is handed: everything but the failures, which are this
@@ -250,6 +253,7 @@ def request_abort() -> None:
     Never raises: it runs inside a signal handler, where a failure would take
     down the run it exists to end tidily.
     """
+    note_interrupted()
     flag = abort_flag()
     if not flag:
         return
@@ -261,6 +265,19 @@ def request_abort() -> None:
 
 
 # --- what the work in hand is about -------------------------------------------------
+
+def note_interrupted() -> None:
+    """Remember in this process that the run was interrupted - for an
+    interrupt that never reached the flag, and for the run's last moments,
+    after the flag is gone."""
+    _RUN.interrupted = True
+
+
+def interrupted() -> bool:
+    """Whether the run was interrupted: its flag says so, or this process
+    saw it (:func:`note_interrupted`)."""
+    return bool(getattr(_RUN, "interrupted", False)) or abort_requested()
+
 
 def label(item) -> str:
     """The name a piece of work goes by - a worker's, and the item its errors
