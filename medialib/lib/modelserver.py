@@ -34,14 +34,17 @@ server for a model, it looks whether the server holds it already
 (:func:`note_request`). A run that is interrupted unloads those again as it
 ends (:func:`eject_loaded`), where the server still holds them; a run that
 finishes leaves them loaded for the next. The worker processes of a run note
-theirs in a file beside the run's abort flag, so the process that ends the
-run unloads what every worker made a server load.
+theirs in a file named after the run's abort flag, so the process that ends the
+run unloads what every worker made a server load. It is kept in the temporary
+directory rather than beside the flag: a run's scratch, the flag with it, is
+handed back before the exit hooks run.
 """
 
 from __future__ import annotations
 
 import atexit
 import contextlib
+import hashlib
 import json
 import os
 import shlex
@@ -477,7 +480,10 @@ def unload(url: str, model: str) -> bool:
 
 def _shared_file() -> str:
     flag = runcontext.abort_flag()
-    return flag + ".models" if flag else ""
+    if not flag:
+        return ""
+    digest = hashlib.sha1(flag.encode("utf-8")).hexdigest()[:16]
+    return os.path.join(tempfile.gettempdir(), "medialib-models." + digest)
 
 
 def note_request(url: str, model: str) -> None:
