@@ -31,9 +31,12 @@ Ollama, LM Studio and the ninfer switcher all load the one a request names -
 and that model stays in VRAM after the run. Before a run first asks a local
 server for a model, it looks whether the server holds it already
 (:func:`loaded_models`); one it did not, the run made it load
-(:func:`note_request`). A run that is interrupted unloads those again as it
-ends (:func:`eject_loaded`), where the server still holds them; a run that
-finishes leaves them loaded for the next. The worker processes of a run note
+(:func:`note_request`). The run unloads those again as it ends
+(:func:`eject_loaded`), where the server still holds them: a server that
+switches models never lets an idle one go by itself. A run that finishes
+unloads them from the process that owns it, so a command run inside another
+leaves the outer run its models; an interrupted one from wherever it ends,
+since the whole run is stopping. The worker processes of a run note
 theirs in a file named after the run's abort flag, so the process that ends the
 run unloads what every worker made a server load. It is kept in the temporary
 directory rather than beside the flag: a run's scratch, the flag with it, is
@@ -533,9 +536,10 @@ def _claim_shared() -> set[tuple[str, str]]:
     return pairs
 
 
-def eject_loaded(log: Callable[[str], None] | None = None) -> None:
+def eject_loaded(log: Callable[[str], None] | None = None,
+                 why: str = "this run") -> None:
     """Every model this run made a server load unloaded again, where the
-    server still holds it."""
+    server still holds it; ``why`` is who it was loaded for, as said."""
     with _loaded_lock:
         pairs = set(_loaded_here)
         _loaded_here.clear()
@@ -546,19 +550,26 @@ def eject_loaded(log: Callable[[str], None] | None = None) -> None:
             continue
         done = unload(base, model)
         if log is not None:
-            log("Unloading %s from %s, loaded for this interrupted run%s"
-                % (model, base, "" if done else ": the server refused"))
+            log("Unloading %s from %s, loaded for %s%s"
+                % (model, base, why, "" if done else ": the server refused"))
 
 
-def _eject_if_interrupted() -> None:
+def _eject_at_exit() -> None:
+    """The models this run made a server load, unloaded as it ends: from any
+    process once the run is interrupted, otherwise only from the one that
+    owns the run (or a process no run was settled in)."""
+    def say(line: str) -> None:
+        print(line, file=sys.stderr)
+
     if runcontext.interrupted():
-        eject_loaded(lambda line: print(line, file=sys.stderr))
-    elif runcontext.get("ABORT_FLAG_OWNER") == str(os.getpid()):
-        with contextlib.suppress(OSError):
-            os.remove(_shared_file())
+        eject_loaded(say, "this interrupted run")
+        return
+    owner = runcontext.get("ABORT_FLAG_OWNER")
+    if not owner or owner == str(os.getpid()):
+        eject_loaded(say)
 
 
 atexit.register(stop_all)
 # After stop_all in the list, so it runs first: a server this run started is
 # stopped anyway, one found running is unloaded from.
-atexit.register(_eject_if_interrupted)
+atexit.register(_eject_at_exit)
