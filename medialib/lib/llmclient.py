@@ -89,7 +89,8 @@ __all__ = ["API_VARIABLE", "URL_VARIABLE", "MODEL_VARIABLE", "KEY_VARIABLE",
            "HARNESS_VARIABLE", "HARNESS_MODEL_VARIABLE", "TRAITS_VARIABLE",
            "SERVE_MIB", "APIS", "DEFAULT_API",
            "DEFAULT_ANTHROPIC_MODEL", "DEFAULT_CONTEXT_TOKENS", "DEFAULT_JOBS",
-           "THOROUGH_EFFORT", "LlmError", "OutOfTimeError", "Tally", "Llm",
+           "THOROUGH_EFFORT", "LlmError", "OutOfTimeError", "RunInterruptedError",
+           "Tally", "Llm",
            "from_environment", "build", "preflight", "usable", "is_local",
            "first_json", "json_strings", "time_limit", "guarded", "held_for_run",
            "SLOTS_VARIABLE"]
@@ -221,6 +222,12 @@ class NoServerError(LlmError):
 
 class _PermanentLlmError(LlmError):
     """A refusal that repeating the same request will not cure."""
+
+
+class RunInterruptedError(_PermanentLlmError):
+    """The run was interrupted: no request goes out after that, so a step a
+    thread is still finishing cannot load a model again once the run has
+    unloaded it (:func:`modelserver.eject_loaded`)."""
 
 
 class OutOfTimeError(LlmError):
@@ -710,6 +717,9 @@ class Llm:
         """The answer and the tokens the model wrote (and read) for it, None
         where they were not reported. ``pictures`` are (media type, base64)
         pairs."""
+        if runcontext.interrupted():
+            raise RunInterruptedError("the run was interrupted, %s is not asked"
+                                      % (self.model or self.url))
         if self.api == "openai" and self.local:
             # A harness asks for the model by its provider's name for it.
             modelserver.note_request(
