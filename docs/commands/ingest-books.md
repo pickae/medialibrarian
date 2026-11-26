@@ -31,6 +31,19 @@ written to disk.
 | `mobi`/`chm`/`azw3`/`azw`/`lit`/`txt`/`fb2`/`docx`/`rtf`/`djvu` | converted to epub |
 | epub (and the just-converted epubs) | re-converted once more for consistent readability — copied across instead with `-k` |
 
+### Which EPUB version
+
+The epubs a run writes are **EPUB 2**, the version the most readers open,
+unless EPUB 2 would lose something:
+
+| The book holds | Written as |
+| --- | --- |
+| nothing beyond ordinary text, images and SVG | EPUB 2 |
+| MathML, audio or video | EPUB 3: the only version that content is valid in |
+| a fixed layout or read-aloud (media overlays) | not re-converted at all, because Calibre drops both whatever version it writes; the epub goes across as it came in (still cleaned with `-d`) |
+
+An epub copied across with `-k` keeps whatever version it already was.
+
 ## Options
 
 | Option | Effect |

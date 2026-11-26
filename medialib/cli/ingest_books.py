@@ -11,6 +11,11 @@ keeping the name and the sub-folder layout:
   PDF is, and the other formats are converted to epub, once, without that
   re-conversion.
 
+An epub is written as EPUB 2, the version the most readers open, unless the
+book holds MathML, audio or video, which only an EPUB 3 carries. An epub with a
+fixed layout or read-aloud is not re-converted at all: Calibre drops both
+whichever version it writes.
+
 None of that throws any of a book away. The steps that DO - dropping the
 embedded fonts, deleting the junk/teaser images, downscaling the illustrations,
 and stripping a PDF's images - are the ones a reader cannot get back from the
@@ -42,6 +47,7 @@ from medialib.lib import (
     clioptions,
     console,
     enums,
+    epubversion,
     imagebitrate,
     imagecodecs,
     imagemagick,
@@ -476,6 +482,22 @@ class Run:
                     self.progress("FAILED (convert): " + base,
                                   toolcapture.replay_text(done))
                     return
+                # With -k this conversion is the book. It was written as the
+                # default EPUB 2, which Calibre fills with the EPUB 3 content
+                # all the same, so the content says whether it has to be
+                # written again as the version that content is valid in.
+                needs = (epubversion.needs_epub3(epub)
+                         if self.options["keep"] else [])
+                if needs:
+                    self.note("EPUB 3 (%s): %s" % (", ".join(needs), base))
+                    done = toolcapture.run(
+                        ["ebook-convert", source, epub,
+                         "--no-default-epub-cover", "--epub-version", "3"],
+                        base, report=False)
+                    if not done.ok:
+                        self.progress("FAILED (convert): " + base,
+                                      toolcapture.replay_text(done))
+                        return
 
             # Unpacking and repacking exist only to reach the cleaner between
             # them, and the cleaner is what -d gates - so without -d the epub
@@ -515,14 +537,26 @@ class Run:
 
             # Re-converted once more for consistent readability - the step -k
             # answers to - and the epub that went in is the fallback when that
-            # heavier step is unavailable.
-            if self.options["keep"]:
+            # heavier step is unavailable. EPUB 2, which the most readers
+            # open, unless the book holds what only an EPUB 3 carries; and not
+            # at all when Calibre would drop part of the book in either one.
+            dropped = ([] if self.options["keep"]
+                       else epubversion.calibre_drops(source_epub))
+            if dropped:
+                self.note("Not re-converted (%s would be lost): %s"
+                          % (", ".join(dropped), base))
+            if self.options["keep"] or dropped:
                 final = source_epub
             else:
                 final = os.path.join(work, "final.epub")
+                needs = epubversion.needs_epub3(source_epub)
+                version = []
+                if needs:
+                    self.note("EPUB 3 (%s): %s" % (", ".join(needs), base))
+                    version = ["--epub-version", "3"]
                 done = toolcapture.run(
                     ["ebook-convert", source_epub, final,
-                     "--no-default-epub-cover"],
+                     "--no-default-epub-cover", *version],
                     base, report=False)
                 if not done.ok or not os.path.exists(final):
                     runlog.detail("        Re-conversion of %s did not finish (%s), "
