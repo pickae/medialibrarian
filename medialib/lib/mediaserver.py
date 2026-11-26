@@ -94,14 +94,12 @@ class Naming(NamedTuple):
 
     ``imdb`` and ``tmdb`` are the id tag, with ``%s`` for the number.
     ``edition`` is ``"tag"`` - ``{edition-Name}`` - or ``"label"``, a
-    `` - Name`` after the whole name. ``sidecar_titles``: the server takes a
-    subtitle's track name from the sidecar's own file name.
+    `` - Name`` after the whole name.
     """
 
     imdb: str
     tmdb: str
     edition: str
-    sidecar_titles: bool
 
 
 class Provider(NamedTuple):
@@ -164,13 +162,13 @@ class MediaServer(Protocol):
 PROVIDERS: dict[str, Provider] = {
     "plex": Provider(
         "plex", "Plex", "medialib.lib.plexserver",
-        Naming("{imdb-%s}", "{tmdb-%s}", "tag", sidecar_titles=False),
+        Naming("{imdb-%s}", "{tmdb-%s}", "tag"),
         Capabilities(play_history=True, dated_marks=False, watchlist=True,
                      rating_in_ui=True),
         ("plexUrl", "plexToken")),
     "jellyfin": Provider(
         "jellyfin", "Jellyfin", "medialib.lib.jellyfinserver",
-        Naming("[imdbid-%s]", "[tmdbid-%s]", "label", sidecar_titles=True),
+        Naming("[imdbid-%s]", "[tmdbid-%s]", "label"),
         Capabilities(play_history=False, dated_marks=True, watchlist=False,
                      rating_in_ui=False),
         ("jellyfinUrl", "jellyfinUser", "jellyfinApiKey")),

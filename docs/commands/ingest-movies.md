@@ -817,14 +817,16 @@ A transcript already beside a film is left alone, with two exceptions:
   name still says which commentary it is. The srt itself is left untouched, and
   the renumbered sidecar is judged by the size rule like any other.
 
-A transcript is named `<film> <track> <track name>.<language>.srt` for Plex,
-which reads no title out of a sidecar's name. For Jellyfin
-(`mediaServer` or `mediaServerNaming` set to `jellyfin`) the track number is
-held off the film by a dot — `<film>.<track> <track name>.<language>.srt` —
-and Jellyfin then shows `<track> <track name>` as the subtitle's title; the
-commentary's `.opus` extract, named the same way, is offered as an extra audio
-track. A library switched from one server to the other has its transcripts
-renamed in place by the tagging, and none is transcribed again.
+A transcript is named after the whole name of the film file it belongs to —
+title, year, id tag and edition — then a dot, the track's number and name,
+and its language: `<film>.<track> <track name>.<language>.srt`, for example
+`Rivertown (2049) [imdbid-tt0000001] - Director's Cut.2 Commentary with the
+Director.en.srt`. Jellyfin shows `2 Commentary with the Director` as that
+version's subtitle title, and offers the commentary's `.opus` extract, named
+the same way, as an extra audio track; Plex reads no title from a sidecar's
+name either way. Transcripts an older run wrote with a space instead of the
+dot are still found, and the tagging renames them in place — none is
+transcribed again.
 
 ## Commentary names
 

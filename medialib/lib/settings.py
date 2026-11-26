@@ -157,11 +157,10 @@ SETTINGS: tuple[Setting, ...] = (
             ("ingest-movies",), "opus"),
     Setting("mediaServerNaming", "The server the names are written for: "
             "`plex` or `jellyfin`. The id tag is written the way that server "
-            "reads it - `{imdb-tt…}` and `[imdbid-tt…]` - an edition as its "
-            "tag, or its version label after the name, and for Jellyfin a "
-            "commentary transcript with its track's name as the subtitle's "
-            "title; names written either way are read back whatever it says, "
-            "so a library can be switched", ("ingest-movies",),
+            "reads it - `{imdb-tt…}` and `[imdbid-tt…]` - and an edition as its "
+            "tag, or its version label after the name; names written either "
+            "way are read back whatever it says, so a library can be "
+            "switched", ("ingest-movies",),
             "`mediaServer`"),
     Setting("movieJunkExtensions", "The file suffixes ingest-movies deletes "
             "from a release as junk, space-separated; empty deletes none - the "

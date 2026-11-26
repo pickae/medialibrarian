@@ -212,22 +212,20 @@ def commentary_prefix(movie_stem: str, track_id) -> str:
     long for the filesystem is cut into - so this is what says "an output of this
     track", whatever length the rest of it ended up being.
 
-    The number is held off the film the way the server the names are for
-    wants it (:func:`plexnames.commentary_separator`).
+    The number is held off the film by a dot
+    (:data:`plexnames.COMMENTARY_SEPARATOR`), so a server that reads a
+    sidecar's title out of its name shows the commentary's.
     """
-    return "%s%s%s " % (movie_stem, plexnames.commentary_separator(), track_id)
+    return "%s%s%s " % (movie_stem, plexnames.COMMENTARY_SEPARATOR, track_id)
 
 
 def commentary_prefixes(movie_stem: str, track_id) -> tuple:
     """Every prefix an output of this track may already be on disk under: the
-    one :func:`commentary_prefix` writes first, then the one the other servers'
-    names write. What looks for a track's outputs asks all of them, so a
-    library switched from one server to the other finds the transcripts it
-    has rather than making them again."""
-    first = commentary_prefix(movie_stem, track_id)
-    return (first,) + tuple("%s%s%s " % (movie_stem, separator, track_id)
-                            for separator in plexnames.COMMENTARY_SEPARATORS
-                            if "%s%s%s " % (movie_stem, separator, track_id) != first)
+    one :func:`commentary_prefix` writes first, then the space an older run
+    held the number off with. What looks for a track's outputs asks all of
+    them, so a transcript written before is found rather than made again."""
+    return tuple("%s%s%s " % (movie_stem, separator, track_id)
+                 for separator in plexnames.COMMENTARY_SEPARATORS)
 
 
 def commentary_stem(movie_stem: str, track_id, name: str) -> str:

@@ -434,11 +434,11 @@ class TestTheSidecarsThatFollow:
             lambda name: name)
         assert sorted(renames) == sorted([
             (self.STEM + " 2 Commentary 1.en.srt",
-             self.STEM + " 2 Commentary by X.en.srt"),
+             self.STEM + ".2 Commentary by X.en.srt"),
             (self.STEM + " 2 Commentary 1.de.srt",
-             self.STEM + " 2 Commentary by X.de.srt"),
+             self.STEM + ".2 Commentary by X.de.srt"),
             (self.STEM + " 2 Commentary 1.opus",
-             self.STEM + " 2 Commentary by X.opus")])
+             self.STEM + ".2 Commentary by X.opus")])
 
     def test_the_name_is_cleaned_the_way_the_transcription_cleans_it(self):
         renames = cn.sidecar_renames(
@@ -446,7 +446,7 @@ class TestTheSidecarsThatFollow:
             [("2", "Commentary 1", "Commentary by Dr. X & Y")],
             lambda name: name.replace(".", " ").replace("&", "and"))
         assert renames == [(self.STEM + " 2 Commentary 1.en.srt",
-                            self.STEM + " 2 Commentary by Dr  X and Y.en.srt")]
+                            self.STEM + ".2 Commentary by Dr  X and Y.en.srt")]
 
     def test_a_long_name_is_cut_to_fit(self):
         long_name = "Commentary by " + "X" * 300
@@ -633,9 +633,9 @@ class TestOpeningExtractionAndGroups:
             old_audio_names={"2": "Commentary 1"})
         assert sorted(renamed) == sorted([
             (self.STEM + " 2 Commentary 1.en.srt",
-             self.STEM + " 2 Commentary by Ada.en.srt"),
+             self.STEM + ".2 Commentary by Ada.en.srt"),
             (self.STEM + " 2 Commentary 1.de.srt",
-             self.STEM + " 2 Commentary by Ada.de.srt"),
+             self.STEM + ".2 Commentary by Ada.de.srt"),
             (self.STEM + ".Commentary 1.fr.srt",
              self.STEM + ".Commentary by Ada.fr.srt"),
         ])

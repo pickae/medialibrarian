@@ -236,33 +236,29 @@ COMMENTARY_EXTENSIONS = ("opus", "srt")
 # What a commentary's output puts after the film it belongs to: the track's
 # number, then the track's own name. The number is what says which of a film's
 # commentaries the file is of, and is the one part of the tail that may not be
-# cut into. It is held off the film by a space - or, for a server that takes a
-# subtitle's title from its file name, by a dot, which makes the number and
-# the name that title - and either is read back.
+# cut into. It is held off the film by a dot: Jellyfin reads what stands
+# between the film's name and the language as the subtitle's title, and offers
+# an .opus named that way as another audio track, so the number and the name
+# are what its player shows; Plex reads no title there either way. A space is
+# how it was written before, and is read back and renamed.
 _COMMENTARY_TAIL = re.compile(r"^[ .]([0-9]+) (\S.*)$", re.S)
 
-# The two ways that number is held off the film.
-COMMENTARY_SEPARATORS = (" ", ".")
-
-
-def commentary_separator() -> str:
-    """What holds a commentary's track number off the film, written for the
-    server the names are for: a dot where that server reads a subtitle's or
-    an audio file's title out of its name, so the commentary's name is the
-    title its player shows - a space where it reads nothing there."""
-    return "." if _naming().sidecar_titles else " "
+# What holds the number off the film, and what did before.
+COMMENTARY_SEPARATOR = "."
+LEGACY_COMMENTARY_SEPARATOR = " "
+COMMENTARY_SEPARATORS = (COMMENTARY_SEPARATOR, LEGACY_COMMENTARY_SEPARATOR)
 
 
 def _commentary_tail(tail: str) -> str:
-    """A commentary output's tail, its separator written for the server the
-    names are for - any other tail as it is. A library named for one server
-    so has its transcripts renamed in place when it is switched to the other,
-    and is never transcribed again for it."""
+    """A commentary output's tail, held off the film by
+    :data:`COMMENTARY_SEPARATOR` - any other tail as it is. A transcript an
+    older run wrote with a space is so renamed in place, and never transcribed
+    again."""
     named, suffix = _split_suffix(tail)
     if not _COMMENTARY_TAIL.match(named) \
             or suffix.rsplit(".", 1)[-1].lower() not in COMMENTARY_EXTENSIONS:
         return tail
-    return commentary_separator() + tail[1:]
+    return COMMENTARY_SEPARATOR + tail[1:]
 
 # The language the transcription writes between a commentary's name and its
 # extension: two or three letters, and nothing a track name would end on.

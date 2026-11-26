@@ -1278,14 +1278,14 @@ class TestStem:
 
     def test_a_name_that_fits_is_left_whole(self):
         assert ct.commentary_stem("./Film (2001)", 2, "Director") == \
-            "./Film (2001) 2 Director"
+            "./Film (2001).2 Director"
 
     def test_the_prefix_is_what_no_cut_may_reach(self):
         """The film and the track number say which track a file is of, whatever
         was left of the name after the cut."""
         name = "Commentary by " + "Someone " * 40
         prefix = ct.commentary_prefix("./Film", 3)
-        assert prefix == "./Film 3 "
+        assert prefix == "./Film.3 "
         assert ct.commentary_stem("./Film", 3, name).startswith(prefix)
 
 
@@ -1455,22 +1455,17 @@ class TestCommentaryLanguage:
         assert ct.commentary_language("Commentary", "eng", mka, str(ram),
                                       WHISPER, lambda line: None) == ("", "")
 
-class TestOutputsUnderEitherServersNames:
-    """A transcript written for one server's names is found under the other's,
-    so switching a library's server never transcribes a commentary again."""
+class TestOutputsUnderEitherSpelling:
+    """A transcript an older run held off its film with a space is found
+    under the dot it is written with now, so it is never transcribed again."""
 
-    def test_the_prefix_follows_the_server(self, monkeypatch):
-        monkeypatch.setenv("mediaServerNaming", "jellyfin")
+    def test_the_prefix_holds_the_number_off_with_a_dot(self):
         assert ct.commentary_prefix("./Film", 3) == "./Film.3 "
-        monkeypatch.setenv("mediaServerNaming", "plex")
-        assert ct.commentary_prefix("./Film", 3) == "./Film 3 "
 
-    def test_both_prefixes_the_written_one_first(self, monkeypatch):
-        monkeypatch.setenv("mediaServerNaming", "jellyfin")
+    def test_both_prefixes_the_written_one_first(self):
         assert ct.commentary_prefixes("./Film", 3) == ("./Film.3 ", "./Film 3 ")
 
-    def test_an_output_named_for_plex_is_found_for_jellyfin(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("mediaServerNaming", "jellyfin")
+    def test_an_output_an_older_run_wrote_is_found(self, tmp_path):
         (tmp_path / "Film 3 Commentary.en.srt").write_text("x")
         prefixes = ct.commentary_prefixes(str(tmp_path / "Film"), 3)
         assert ct._has_existing_output(prefixes)

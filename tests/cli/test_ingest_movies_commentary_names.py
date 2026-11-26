@@ -93,7 +93,7 @@ def test_a_single_commentary_is_named_and_its_transcripts_follow(film):
                       "name=Commentary by director Wenna Castellane"]]
     assert sorted(os.listdir(folder)) == sorted([
         FILM + ".mkv",
-        FILM + " 2 Commentary by director Wenna Castellane.en.srt"])
+        FILM + ".2 Commentary by director Wenna Castellane.en.srt"])
 
 
 def test_a_dry_run_changes_nothing(film):
@@ -388,8 +388,8 @@ def test_intro_naming_analyses_once_and_renames_audio_embedded_and_sidecar_trans
                       "name=Commentary by director Wenna Castellane (DE)"]]
     assert sorted(os.listdir(folder)) == sorted([
         FILM + ".mkv",
-        FILM + " 2 Commentary by director Wenna Castellane.en.srt",
-        FILM + " 2 Commentary by director Wenna Castellane.de.srt",
+        FILM + ".2 Commentary by director Wenna Castellane.en.srt",
+        FILM + ".2 Commentary by director Wenna Castellane.de.srt",
         FILM + ".Commentary by director Wenna Castellane.fr.srt",
     ])
 
