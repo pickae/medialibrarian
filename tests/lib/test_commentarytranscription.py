@@ -1454,3 +1454,25 @@ class TestCommentaryLanguage:
         w.rc("pipx", "0")
         assert ct.commentary_language("Commentary", "eng", mka, str(ram),
                                       WHISPER, lambda line: None) == ("", "")
+
+class TestOutputsUnderEitherServersNames:
+    """A transcript written for one server's names is found under the other's,
+    so switching a library's server never transcribes a commentary again."""
+
+    def test_the_prefix_follows_the_server(self, monkeypatch):
+        monkeypatch.setenv("mediaServerNaming", "jellyfin")
+        assert ct.commentary_prefix("./Film", 3) == "./Film.3 "
+        monkeypatch.setenv("mediaServerNaming", "plex")
+        assert ct.commentary_prefix("./Film", 3) == "./Film 3 "
+
+    def test_both_prefixes_the_written_one_first(self, monkeypatch):
+        monkeypatch.setenv("mediaServerNaming", "jellyfin")
+        assert ct.commentary_prefixes("./Film", 3) == ("./Film.3 ", "./Film 3 ")
+
+    def test_an_output_named_for_plex_is_found_for_jellyfin(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("mediaServerNaming", "jellyfin")
+        (tmp_path / "Film 3 Commentary.en.srt").write_text("x")
+        prefixes = ct.commentary_prefixes(str(tmp_path / "Film"), 3)
+        assert ct._has_existing_output(prefixes)
+        assert not ct._has_existing_output(ct.commentary_prefixes(
+            str(tmp_path / "Film"), 4))

@@ -1601,9 +1601,8 @@ def gather_commentary_transcripts(base: str, tracks: list,
         # the track's own name after the cut for length, and the cut moves with
         # every other part of the path. The film and the track number are the
         # part of it no cut may reach.
-        found_at = commentarytranscription.commentary_prefix(base, track.id)
-        directory = os.path.dirname(found_at) or "."
-        prefix = os.path.basename(found_at)
+        directory, prefix = commentarytranscription.split_prefixes(
+            commentarytranscription.commentary_prefixes(base, track.id))
 
         # Gathered before any is muxed, so a track with more than one can have
         # the language put into their titles - and one per language, because

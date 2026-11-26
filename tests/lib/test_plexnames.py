@@ -1116,10 +1116,27 @@ class TestTheNamingSetting:
         assert "plex" in error.value.message
         assert "jellyfin" in error.value.message
 
-    def test_an_empty_setting_is_refused_too(self, monkeypatch):
+    def test_an_empty_setting_follows_the_media_server(self, monkeypatch):
         monkeypatch.setenv("mediaServerNaming", "")
-        with pytest.raises(clioptions.UsageError):
+        monkeypatch.setenv("mediaServer", "jellyfin")
+        assert plexnames.naming_style() == "jellyfin"
+
+    def test_unset_it_follows_the_media_server(self, monkeypatch):
+        monkeypatch.delenv("mediaServerNaming", raising=False)
+        monkeypatch.setenv("mediaServer", "jellyfin")
+        assert plexnames.naming_style() == "jellyfin"
+
+    def test_set_it_wins_over_the_media_server(self, monkeypatch):
+        monkeypatch.setenv("mediaServerNaming", "plex")
+        monkeypatch.setenv("mediaServer", "jellyfin")
+        assert plexnames.naming_style() == "plex"
+
+    def test_a_media_server_the_registry_does_not_know_is_refused(self, monkeypatch):
+        monkeypatch.delenv("mediaServerNaming", raising=False)
+        monkeypatch.setenv("mediaServer", "kodi")
+        with pytest.raises(clioptions.UsageError) as error:
             plexnames.naming_style()
+        assert "mediaServer setting" in error.value.message
 
 
 class TestWritingForJellyfin:
@@ -1273,3 +1290,57 @@ class TestSwitchingTheServer:
             ["Film (2020) {imdb-tt0120737} {edition-Colorized}.mkv"])
         assert plan == [("Film (2020) {imdb-tt0120737} {edition-Colorized}.mkv",
                          "Film (2020) [imdbid-tt0120737] - Colorized.mkv")]
+
+
+class TestACommentaryTitledForJellyfin:
+    """Jellyfin reads a sidecar's title out of its name - the part between the
+    film and the language - and Plex reads none, so for Jellyfin the track's
+    number is held off the film by a dot, and its name is the title the
+    player shows. Either spelling is renamed into the other in place."""
+
+    FOLDER = "Film Of The Night (1983)"
+    JTAG = "[imdbid-tt0000001]"
+    PLEX_TALK = " 2 Commentary By Two People.en.srt"
+    JELLY_TALK = ".2 Commentary By Two People.en.srt"
+
+    def test_the_number_is_held_off_by_a_dot(self, monkeypatch):
+        monkeypatch.setenv("mediaServerNaming", "jellyfin")
+        assert plexnames.commentary_separator() == "."
+        monkeypatch.setenv("mediaServerNaming", "plex")
+        assert plexnames.commentary_separator() == " "
+
+    def test_a_transcript_named_for_plex_is_renamed_for_jellyfin(self, monkeypatch):
+        monkeypatch.setenv("mediaServerNaming", "jellyfin")
+        named = self.FOLDER + " " + self.JTAG
+        assert plexnames.folder_renames(
+            self.FOLDER, self.JTAG,
+            [named + ".mkv", named + self.PLEX_TALK,
+             named + " 2 Commentary By Two People.opus"]) == [
+            (named + self.PLEX_TALK, named + self.JELLY_TALK),
+            (named + " 2 Commentary By Two People.opus",
+             named + ".2 Commentary By Two People.opus")]
+
+    def test_and_back_again_for_plex(self):
+        named = self.FOLDER + " " + TAG
+        assert plexnames.folder_renames(
+            self.FOLDER, TAG, [named + ".mkv", named + self.JELLY_TALK]) == [
+            (named + self.JELLY_TALK, named + self.PLEX_TALK)]
+
+    def test_a_second_run_has_nothing_to_do(self, monkeypatch):
+        monkeypatch.setenv("mediaServerNaming", "jellyfin")
+        named = self.FOLDER + " " + self.JTAG
+        assert plexnames.folder_renames(
+            self.FOLDER, self.JTAG, [named + ".mkv", named + self.JELLY_TALK]) == []
+
+    def test_a_plain_sidecar_is_no_commentary_output(self, monkeypatch):
+        monkeypatch.setenv("mediaServerNaming", "jellyfin")
+        named = self.FOLDER + " " + self.JTAG
+        assert plexnames.folder_renames(
+            self.FOLDER, self.JTAG, [named + ".mkv", named + ".en.forced.srt"]) == []
+
+    def test_a_dotted_transcript_is_cut_only_into_its_name(self):
+        wanted = self.FOLDER + " " + self.JTAG
+        tail = ".2 " + "Commentary " * 40 + ".en.srt"
+        cut = plexnames.crop_commentary(wanted, tail)
+        assert cut.startswith(wanted + ".2 Commentary") and cut.endswith(".en.srt")
+        assert plexnames.fits_name(cut)

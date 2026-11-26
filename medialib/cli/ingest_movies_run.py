@@ -3061,8 +3061,8 @@ def _commentary_transcripts(stem: str, tracks: list) -> dict:
     entries = sorted(rules._names_in(directory or "."))
     found = {}
     for track in tracks:
-        prefix = os.path.basename(
-            commentarytranscription.commentary_prefix(stem, track.id))
+        _where, prefix = commentarytranscription.split_prefixes(
+            commentarytranscription.commentary_prefixes(stem, track.id))
         texts = []
         for entry in entries:
             if not (entry.startswith(prefix) and entry.endswith(".srt")):
@@ -3105,7 +3105,7 @@ def _write_commentary_names_list(listing: str, root: str, named: list,
            len(refused), listing))
 
 
-def _sidecar_too_small(prefix: str, movie: str, durations: dict) -> bool:
+def _sidecar_too_small(prefix, movie: str, durations: dict) -> bool:
     """Whether the commentary sidecar already beside the film is too small to be
     its real transcript.
 
@@ -3125,8 +3125,7 @@ def _sidecar_too_small(prefix: str, movie: str, durations: dict) -> bool:
     minutes = seconds / 60.0
     if minutes <= 0:
         return False
-    directory, start = os.path.split(prefix)
-    directory = directory or "."
+    directory, start = commentarytranscription.split_prefixes(prefix)
     try:
         names = os.listdir(directory)
     except OSError:

@@ -106,6 +106,21 @@ SETTINGS: tuple[Setting, ...] = (
             "unset - ingest-movies then asks `http://localhost:32400`"),
     Setting("plexToken", "That server's X-Plex-Token",
             ("ingest-movies", "plex-letterboxd-sync"), secret=True),
+    Setting("mediaServer", "The media server the library is kept for: `plex` "
+            "or `jellyfin`. plex-letterboxd-sync and ingest-movies' library "
+            "comparison talk to it, and the names are written for it unless "
+            "`mediaServerNaming` says otherwise. Jellyfin keeps no watchlist "
+            "and no play history beyond the last play, and its player does not "
+            "show the rating a sync gives a film",
+            ("ingest-movies", "plex-letterboxd-sync"), "plex"),
+    Setting("jellyfinUrl", "The Jellyfin server, e.g. `http://192.168.1.10:8096`",
+            ("ingest-movies", "plex-letterboxd-sync"), "`http://localhost:8096`"),
+    Setting("jellyfinApiKey", "An API key that Jellyfin server made "
+            "(Dashboard > API Keys)",
+            ("ingest-movies", "plex-letterboxd-sync"), secret=True),
+    Setting("jellyfinUser", "The Jellyfin user whose plays and ratings are read "
+            "and written, by name", ("ingest-movies", "plex-letterboxd-sync"),
+            "unset - the server's one user, where it has only one"),
     Setting("openSubtitlesUser", "OpenSubtitles.org login; with "
             "`openSubtitlesPassword`, subtitles are looked for there first",
             ("ingest-movies",), secret=True),
@@ -142,10 +157,12 @@ SETTINGS: tuple[Setting, ...] = (
             ("ingest-movies",), "opus"),
     Setting("mediaServerNaming", "The server the names are written for: "
             "`plex` or `jellyfin`. The id tag is written the way that server "
-            "reads it - `{imdb-tt…}` and `[imdbid-tt…]` - and an edition as its "
-            "tag, or its version label after the name; names written either "
-            "way are read back whatever it says, so a library can be "
-            "switched", ("ingest-movies",), "plex"),
+            "reads it - `{imdb-tt…}` and `[imdbid-tt…]` - an edition as its "
+            "tag, or its version label after the name, and for Jellyfin a "
+            "commentary transcript with its track's name as the subtitle's "
+            "title; names written either way are read back whatever it says, "
+            "so a library can be switched", ("ingest-movies",),
+            "`mediaServer`"),
     Setting("movieJunkExtensions", "The file suffixes ingest-movies deletes "
             "from a release as junk, space-separated; empty deletes none - the "
             "sample clips, the tiny .mkv files and the .unwanted folders go "

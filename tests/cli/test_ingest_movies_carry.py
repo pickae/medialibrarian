@@ -202,7 +202,7 @@ class TestSettling:
                     "1", Film("Film", "2006", imdb="tt0000001"), "Films", "",
                     (str(old),))]
 
-        monkeypatch.setattr(carryphase.plexserver, "local", Server)
+        monkeypatch.setattr(plexserver, "local", Server)
         monkeypatch.setattr(carryphase.plexcompare, "read_profile",
                             lambda path, edition="": new_profile
                             if path == str(movie) else old_profile)

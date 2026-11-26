@@ -39,6 +39,8 @@ __all__ = [
     "SYNC_SETTLE_SECONDS",
     "COMMENTARY_NO_NAME",
     "commentary_prefix",
+    "commentary_prefixes",
+    "split_prefixes",
     "commentary_stem",
     "detect_commentary_language",
     "commentary_language",
@@ -209,8 +211,23 @@ def commentary_prefix(movie_stem: str, track_id) -> str:
     Everything after it is the track's own name, which is the one part a name too
     long for the filesystem is cut into - so this is what says "an output of this
     track", whatever length the rest of it ended up being.
+
+    The number is held off the film the way the server the names are for
+    wants it (:func:`plexnames.commentary_separator`).
     """
-    return "%s %s " % (movie_stem, track_id)
+    return "%s%s%s " % (movie_stem, plexnames.commentary_separator(), track_id)
+
+
+def commentary_prefixes(movie_stem: str, track_id) -> tuple:
+    """Every prefix an output of this track may already be on disk under: the
+    one :func:`commentary_prefix` writes first, then the one the other servers'
+    names write. What looks for a track's outputs asks all of them, so a
+    library switched from one server to the other finds the transcripts it
+    has rather than making them again."""
+    first = commentary_prefix(movie_stem, track_id)
+    return (first,) + tuple("%s%s%s " % (movie_stem, separator, track_id)
+                            for separator in plexnames.COMMENTARY_SEPARATORS
+                            if "%s%s%s " % (movie_stem, separator, track_id) != first)
 
 
 def commentary_stem(movie_stem: str, track_id, name: str) -> str:
@@ -238,7 +255,16 @@ def _display_name(raw: str) -> str:
     return raw if raw and raw != "null" else COMMENTARY_NO_NAME
 
 
-def _existing_outputs(prefix: str) -> list:
+def split_prefixes(prefixes) -> tuple:
+    """:func:`commentary_prefixes` - or one prefix - as (the directory they
+    are in, the start of a name each says), for a listing to be asked of."""
+    if isinstance(prefixes, str):
+        prefixes = (prefixes,)
+    directory = os.path.dirname(prefixes[0]) or "."
+    return directory, tuple(os.path.basename(prefix) for prefix in prefixes)
+
+
+def _existing_outputs(prefix) -> list:
     """The outputs of this track already on disk.
 
     Asked of the track and not of today's exact stem: the stem is cut at a
@@ -246,8 +272,7 @@ def _existing_outputs(prefix: str) -> list:
     renamed, an id tag added - and a check for the exact name would miss the
     transcript sitting right there and transcribe it a second time.
     """
-    directory, start = os.path.split(prefix)
-    directory = directory or "."
+    directory, start = split_prefixes(prefix)
     try:
         names = os.listdir(directory)
     except OSError:
@@ -256,7 +281,7 @@ def _existing_outputs(prefix: str) -> list:
             if name.startswith(start) and name.endswith((".opus", ".srt"))]
 
 
-def _has_existing_output(prefix: str) -> bool:
+def _has_existing_output(prefix) -> bool:
     """The resume check: whether this TRACK already has an output of any kind."""
     return bool(_existing_outputs(prefix))
 
@@ -274,7 +299,7 @@ def _size_of(path: str) -> int:
         return 0
 
 
-def _remove_sidecars(prefix: str) -> None:
+def _remove_sidecars(prefix) -> None:
     """The track's transcripts, gone: the too-small sidecars a -a run discards
     before re-transcribing. Only the .srt is removed - the .opus this phase never
     writes to disk would belong to a run that did the opus pass, and is left
@@ -650,7 +675,7 @@ def export_commentary(directory: str, read_track_info, is_bonus_folder,
                 name = name.replace("/", "").replace("&", "and")
                 name = rename(name)
                 file_stem = _strip_last_ext(file)
-                prefix = commentary_prefix(file_stem, i - 1)
+                prefix = commentary_prefixes(file_stem, i - 1)
                 base = commentary_stem(file_stem, i - 1, name)
                 # the large temp audio extract goes to RAM, mirroring the
                 # absolute disk path so the outputs end up next to the movie.

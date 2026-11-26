@@ -11,18 +11,20 @@ header, so it is in neither the process table nor a URL a log might keep.
 
 from __future__ import annotations
 
-import datetime
 import os
 import subprocess
 import time
 import xml.etree.ElementTree as ET
-from typing import NamedTuple
 
-from medialib.lib import tmdbclient
+from medialib.lib import mediaserver, tmdbclient
 from medialib.lib.filmmatch import Film
+from medialib.lib.mediaserver import Copy, Library, Movie, Wanted, updated
+
+# The provider this client is, in :data:`mediaserver.PROVIDERS`.
+NAME = "plex"
 
 __all__ = ["PlexError", "Server", "Movie", "Copy", "Library", "Wanted",
-           "from_environment", "local"]
+           "from_environment", "local", "updated"]
 
 # The identifier a scrobble or a rating names the library by - the one every
 # Plex server answers to for its own libraries.
@@ -59,38 +61,8 @@ _PAGE = 200
 _CHANGED = ("addedAt", "updatedAt", "lastViewedAt", "lastRatedAt")
 
 
-class PlexError(Exception):
+class PlexError(mediaserver.MediaServerError):
     """The server could not be asked, or gave an answer that is not one."""
-
-
-class Movie(NamedTuple):
-    """One film in a Plex library: the server's key for it, and the film -
-    with its rating, and the days it was played once :meth:`Server.movies`
-    has read the history."""
-
-    key: str
-    film: Film
-    played: bool
-    section: str
-
-
-class Copy(NamedTuple):
-    """One version of a film in a Plex library - Plex merges several into one
-    film - with its edition and the file or files it is kept in (several for
-    a film split into parts)."""
-
-    key: str
-    film: Film
-    section: str
-    edition: str
-    files: tuple
-
-
-class Wanted(NamedTuple):
-    """A film on the account's watchlist: Plex's catalogue id, and the film."""
-
-    key: str
-    film: Film
 
 
 class Server:
@@ -140,16 +112,17 @@ class Server:
         :data:`FULL_EVERY`."""
         now = int(time.time())
         sections = self.movie_sections()
-        if whole or not cache or cache.get("server") != self.url \
-                or [list(pair) for pair in sections] != cache.get("sections") \
+        if whole or not cache \
+                or not mediaserver.cache_is_for(cache, NAME, self.url, sections) \
                 or now - int(cache.get("full", 0)) > FULL_EVERY:
             movies = self.movies()
             wanted = self.watchlist()
-            return Library(movies, _cache(self.url, sections, now, now, movies, wanted),
-                           True, wanted)
+            return Library(movies, mediaserver.cache(NAME, self.url, sections, now, now,
+                                                     movies, wanted), True, wanted)
 
         since = str(int(cache["read"]) - _OVERLAP)
-        by_key = {movie.key: movie for movie in map(_unpacked, cache["movies"])}
+        by_key = {movie.key: movie
+                  for movie in map(mediaserver.unpacked, cache["movies"])}
         for key, title in sections:
             for field in _CHANGED:
                 for video in self._ask("/library/sections/%s/all" % key,
@@ -165,10 +138,11 @@ class Server:
                     by_key[rating_key] = played._replace(film=played.film._replace(
                         dates=tuple(sorted(set(played.film.dates) | days))))
         movies = list(by_key.values())
-        wanted = self.watchlist([Wanted(entry["key"], _unpacked_film(entry))
+        wanted = self.watchlist([Wanted(entry["key"], mediaserver.unpacked_film(entry))
                                  for entry in cache.get("watchlist", ())])
-        return Library(movies, _cache(self.url, sections, int(cache["full"]), now,
-                                      movies, wanted), False, wanted)
+        return Library(movies, mediaserver.cache(NAME, self.url, sections,
+                                                 int(cache["full"]), now, movies, wanted),
+                       False, wanted)
 
     def movies(self, sections=()) -> list[Movie]:
         """Every film in the movie libraries - only the ones titled in
@@ -222,7 +196,7 @@ class Server:
             if video.get("type") == "movie" and viewed.isdigit() \
                     and video.get("accountID", self.account) == self.account:
                 days.setdefault(video.get("ratingKey", ""), set()).add(
-                    _day(viewed))
+                    mediaserver.day_of(viewed))
         return days
 
     def watchlist(self, known: list | None = None) -> list[Wanted]:
@@ -269,65 +243,18 @@ class Server:
         self._ask(_DISCOVER + "/actions/addToWatchlist", (("ratingKey", key),),
                   method="PUT")
 
-    def mark_played(self, movie: Movie) -> None:
+    def mark_played(self, movie: Movie, day: str = "") -> str:
+        """Mark a film played - as of now: Plex takes no day for it, so
+        ``day`` is not passed on. It leaves no play in the history, so no day
+        a later read would see."""
         self._ask("/:/scrobble", (("identifier", _LIBRARY), ("key", movie.key)))
+        return ""
 
     def rate(self, movie: Movie, rating: int) -> None:
         """Give a film a rating out of 10 - Plex's five stars, halves
         included."""
         self._ask("/:/rate", (("identifier", _LIBRARY), ("key", movie.key),
                               ("rating", str(rating))), method="PUT")
-
-
-class Library(NamedTuple):
-    """A library read: its films, what to keep for the next read, and
-    whether it was read whole."""
-
-    movies: list
-    cache: dict
-    whole: bool
-    watchlist: list = []
-
-
-def _cache(url: str, sections: list, full: int, read: int, movies: list,
-           wanted: list) -> dict:
-    return {"server": url, "sections": [list(pair) for pair in sections],
-            "full": full, "read": read, "movies": [_packed(movie) for movie in movies],
-            "watchlist": [dict(_packed_film(entry.film), key=entry.key)
-                          for entry in wanted]}
-
-
-def _packed_film(film: Film) -> dict:
-    return {"title": film.title, "year": film.year, "tmdb": film.tmdb,
-            "imdb": film.imdb, "aliases": list(film.aliases),
-            "rating": film.rating, "dates": list(film.dates)}
-
-
-def _unpacked_film(entry: dict) -> Film:
-    return Film(entry["title"], entry["year"], entry["tmdb"], entry["imdb"],
-                tuple(entry["aliases"]), rating=entry["rating"],
-                dates=tuple(entry["dates"]))
-
-
-def _packed(movie: Movie) -> dict:
-    return dict(_packed_film(movie.film), key=movie.key, section=movie.section,
-                played=movie.played)
-
-
-def _unpacked(entry: dict) -> Movie:
-    return Movie(entry["key"], _unpacked_film(entry), entry["played"],
-                 entry["section"])
-
-
-def updated(cache: dict, movie: Movie) -> None:
-    """Keep in ``cache`` what this run changed about a film on the server."""
-    for at, entry in enumerate(cache["movies"]):
-        if entry["key"] == movie.key:
-            cache["movies"][at] = _packed(movie)
-
-
-def _day(epoch: str) -> str:
-    return datetime.datetime.fromtimestamp(int(epoch)).date().isoformat()
 
 
 def _movie(video: ET.Element, section: str) -> Movie:
@@ -359,9 +286,9 @@ def local() -> Server:
                   os.environ.get("plexToken", ""))
 
 
-def from_environment(account: str = OWNER) -> Server | None:
+def from_environment(account: str = "") -> Server | None:
     """The server ``plexUrl`` and ``plexToken`` name, read for ``account``'s
-    plays - or None while either is unset."""
+    plays - its owner's where that is "" - or None while either is unset."""
     url = os.environ.get("plexUrl", "")
     token = os.environ.get("plexToken", "")
-    return Server(url, token, account) if url and token else None
+    return Server(url, token, account or OWNER) if url and token else None

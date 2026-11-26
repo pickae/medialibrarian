@@ -27,11 +27,11 @@ from medialib.lib import (
     filmfolders,
     llmclient,
     llmroster,
+    mediaserver,
     modelmeter,
     plexcarry,
     plexcompare,
     plexnames,
-    plexserver,
 )
 
 __all__ = ["compare_roots", "folder_key", "timing_of", "transcripts_beside"]
@@ -95,16 +95,16 @@ def compare_roots(roots: list, log, keeps_for=None, carried=None,
     -k parts a full ingest was told to keep, of which this decides two:
     ``audio`` encodes nothing of what it carries, and ``tracks`` takes an
     audio description whatever the soundtracks."""
-    server = plexserver.local()
-    log("Plex: reading the library at %s" % server.url)
+    provider = mediaserver.provider()
+    server = provider.local()
+    log("%s: reading the library at %s" % (provider.display, server.url))
     try:
         copies = server.copies()
-    except plexserver.PlexError as error:
-        log("Plex: SKIPPED, the server could not be asked (%s)%s" % (
-            error, "" if server.token else
-            " - set plexToken to that server's X-Plex-Token"))
+    except mediaserver.MediaServerError as error:
+        log("%s: SKIPPED, the server could not be asked (%s) - %s"
+            % (provider.display, error, provider.hint()))
         return 1
-    log("Plex: %d film version(s) in the library" % len(copies))
+    log("%s: %d film version(s) in the library" % (provider.display, len(copies)))
     index = _index(copies)
     edition_ctx = _EditionContext(
         searchers=searchers,
@@ -126,6 +126,11 @@ def compare_roots(roots: list, log, keeps_for=None, carried=None,
             + modelmeter.rate_line("all", edition_ctx.spans.seconds,
                                    edition_ctx.tally))
     return 0
+
+
+def _server() -> str:
+    """What the log calls the server the library is read from."""
+    return mediaserver.provider().display
 
 
 def films(root: str) -> list:
@@ -196,7 +201,7 @@ def _compare_film(movie: str, index: dict, copies: list, log,
                   keep_parts: frozenset = frozenset(),
                   edition_ctx: _EditionContext | None = None) -> tuple:
     """The film's verdict, and the files of its library copies."""
-    log("Plex: %s" % os.path.basename(movie))
+    log("%s: %s" % (_server(), os.path.basename(movie)))
     found, how = _found(movie, index, copies)
     if not found:
         log("  not in the library (looked for %s)" % how)
@@ -363,7 +368,7 @@ def transcripts_beside(library: str):
         names = []
 
     def find(audio) -> tuple:
-        prefix = commentarytranscription.commentary_prefix(stem, audio.track)
+        prefix = commentarytranscription.commentary_prefixes(stem, audio.track)
         best: dict = {}
         for name in names:
             if not (name.startswith(prefix) and name.endswith(".srt")):
@@ -395,14 +400,14 @@ def _clock(seconds: float) -> str:
 
 def _report(tally: dict, log) -> None:
     if not tally:
-        log("Plex: no film found")
+        log("%s: no film found" % _server())
         return
-    log("Plex: " + ", ".join("%d %s" % (len(tally[verdict]), said)
-                             for verdict, (_long, said) in _VERDICTS.items()
-                             if verdict in tally))
+    log(_server() + ": " + ", ".join("%d %s" % (len(tally[verdict]), said)
+                                     for verdict, (_long, said) in _VERDICTS.items()
+                                     if verdict in tally))
     for verdict in _INTEREST:
         for movie, places in tally.get(verdict, ()):
-            log("Plex: %s: %s" % ("MIXED, needs a look" if verdict == "mixed"
-                                  else _VERDICTS[verdict][1], movie))
+            log("%s: %s: %s" % (_server(), "MIXED, needs a look" if verdict == "mixed"
+                                else _VERDICTS[verdict][1], movie))
             for path in places:
-                log("Plex:   the library's: " + path)
+                log(_server() + ":   the library's: " + path)

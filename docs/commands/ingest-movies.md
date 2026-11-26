@@ -63,7 +63,8 @@ These are read from the environment:
 | `subDlApiKey` | asking SubDL third — the key a free account at subdl.com gets | it is not asked |
 | `spokenLanguages` | the languages whose subtitles are fetched and tested; a code the language table does not know stops the run before a film is touched | the six it knows by default (en, de, fr, nl, es, it) |
 | `subtitleAdsLlm` | whether a subtitle in a language subcleaner has no word list for (or when subcleaner is absent) is handed to a language model (`subtitle-ads`, see [docs/models.md](../models.md)): its first and last 20 cues are sent | `on` |
-| `mediaServerNaming` | the server the names are written for | `plex`; the names are then written and read the way that server spells them |
+| `mediaServer` | the media server the library is kept for — `plex` or `jellyfin`: the one the library comparison reads, and the one the names are written for | `plex` |
+| `mediaServerNaming` | the server the names are written for, where it is not `mediaServer` | `mediaServer`; the names are then written and read the way that server spells them |
 | `subtitleOcrEngines` | the engines a picture subtitle is read with, in the order to try them | the order below |
 | `llmModels`, `llmUrl`, … | the language-model roster (see [Language models](../models.md)): a model that sees pictures serves the `vision` OCR engine (`subtitle-ocr` task) | `vision` is not tried; paddle and tesseract still are |
 | `losslessAudioTarget` | the codec the lossless audio is converted to | `opus`, at a per-channel target bitrate; `flac` takes the channels as they are, up to eight of them |
@@ -816,6 +817,15 @@ A transcript already beside a film is left alone, with two exceptions:
   name still says which commentary it is. The srt itself is left untouched, and
   the renumbered sidecar is judged by the size rule like any other.
 
+A transcript is named `<film> <track> <track name>.<language>.srt` for Plex,
+which reads no title out of a sidecar's name. For Jellyfin
+(`mediaServer` or `mediaServerNaming` set to `jellyfin`) the track number is
+held off the film by a dot — `<film>.<track> <track name>.<language>.srt` —
+and Jellyfin then shows `<track> <track name>` as the subtitle's title; the
+commentary's `.opus` extract, named the same way, is offered as an extra audio
+track. A library switched from one server to the other has its transcripts
+renamed in place by the tagging, and none is transcribed again.
+
 ## Commentary names
 
 **`-O names` names numbered commentary tracks.** A rip often calls its commentaries
@@ -934,8 +944,9 @@ the run does without it. Needs `curl`.
 
 **Is the film already in the library, and which copy is better?** The full
 ingest asks this last, once each film is the file it will stay; `-O plex` asks it
-alone, of every film under the folders given. The server is `plexUrl`, or else
-the one on this machine; the library is read once per run. A film is found by
+alone, of every film under the folders given. The server is the one
+`mediaServer` names — Plex at `plexUrl`, or Jellyfin at `jellyfinUrl`, each
+else the one on this machine; the library is read once per run. A film is found by
 its id tag — Plex keeps the IMDb and TMDb ids of every film it matched — or, for
 one the tagging could not name, by its title and year. A copy in the film's own
 folder is the film itself, or a version kept beside it on purpose, and does not

@@ -703,7 +703,7 @@ def _parse_sidecar_commentary(name: str, movie_stem: str) -> tuple[str, str, str
     rest = name[len(movie_stem):]
     if not rest:
         return None
-    indexed = re.match(r"^ ([0-9]+) (\S.*)$", rest, re.S)
+    indexed = re.match(r"^[ .]([0-9]+) (\S.*)$", rest, re.S)
     if indexed:
         track_id, tail = indexed.group(1), indexed.group(2)
         named, suffix = plexnames._split_suffix(tail)
@@ -884,12 +884,13 @@ def sidecar_renames(names: list, movie_stem: str, tracks: list,
     out = []
     seen_old: set[str] = set()
     for track_id, old, new in tracks:
-        prefix = commentarytranscription.commentary_prefix(movie_stem,
-                                                           track_id)
+        prefixes = commentarytranscription.commentary_prefixes(movie_stem,
+                                                               track_id)
         old_clean = clean(old)
         new_clean = clean(new)
         for name in sorted(names):
-            if not name.startswith(prefix):
+            prefix = next((start for start in prefixes if name.startswith(start)), "")
+            if not prefix:
                 continue
             named, suffix = plexnames._split_suffix(name[len(prefix):])
             ext = suffix.rsplit(".", 1)[-1].lower() if suffix else ""
