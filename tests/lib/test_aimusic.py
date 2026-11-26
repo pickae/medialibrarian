@@ -289,6 +289,35 @@ class TestResolveSkipped:
         monkeypatch.setattr(runlog, "log", lines.append)
         return lines
 
+    def test_a_layout_that_moves_albums_retries_with_its_own_options(
+        self, tmp_path, monkeypatch
+    ):
+        """The retry moves the album where the first pass would have: the
+        layout's -d before import, and -m in place of -C."""
+        self._capture_logs(monkeypatch)
+        ingest = tmp_path / "ingest"
+        album = _album(ingest)
+        beets_log = tmp_path / "beets.log"
+        beets_log.write_text(f"skip {album}\n", encoding="utf-8")
+        model = _Model('{"mbid": "%s"}' % _VALID_UUID)
+        beet_calls: list[list[str]] = []
+
+        def fake_beet(cwd: str, argv: list[str]) -> int:
+            beet_calls.append(argv)
+            return 0
+
+        aimusic.resolve_skipped(
+            str(ingest), "/cfg/beets-plex.yaml", str(beets_log), 0,
+            searchers=[model], meter_file=str(tmp_path / "meter"),
+            probe=_probe, run_beet=fake_beet,
+            beet_options=["-d", str(ingest)], import_flags="-mIq",
+        )
+
+        assert beet_calls[0][:7] == [
+            "beet", "-c", "/cfg/beets-plex.yaml", "-d", str(ingest),
+            "import", "-mIq",
+        ]
+
     def test_valid_mbid_retries_beets_quietly_and_records_meter(
         self, tmp_path, monkeypatch
     ):

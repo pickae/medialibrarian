@@ -204,6 +204,21 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("beetsConfig", "The beets config ingest-music's tagging phase runs "
             "with", ("ingest-music",),
             "the shipped `medialib/config/beets.yaml`"),
+    Setting("musicLayout", "Who names ingest-music's library: `keep` "
+            "keeps the download's folders and cleans their names; `plex` "
+            "(`Artist/Album/01 - Title`, a multi-disc album's discs in one "
+            "folder as `101 - Title`), `jellyfin` (the same, with a "
+            "`Disc N` folder for each disc) and `beets` (beets' own "
+            "`Artist/Album/01 Title`) have beets move each matched album and "
+            "keep its names. Each runs with its own shipped beets config, "
+            "unless `beetsConfig` or `-c` names another",
+            ("ingest-music",), "keep"),
+    Setting("discogsToken", "A Discogs user token (discogs.com, Settings, "
+            "Developers). With it, ingest-music's beets also matches albums "
+            "against Discogs, as a second source next to MusicBrainz. Needs "
+            "beets' discogs plugin installed (`python3-discogs-client`), and "
+            "applies to the shipped beets configs only",
+            ("ingest-music",), "unset - MusicBrainz alone", secret=True),
     Setting("imageGpuEncoder", "The GPU AVIF encoder (av1gpu) tried before "
             "ImageMagick, by name or path; empty to encode every image on the CPU",
             ("convert-comics", "convert-images"), "`av1gpu`"),

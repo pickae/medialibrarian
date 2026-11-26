@@ -1,0 +1,68 @@
+# beets configuration for ingest-music's "plex" music layout
+# ----------------------------------------------------------
+# Picked with musicLayout=plex. Unlike the shipped beets.yaml, which tags the
+# files where they lie, this one lets beets MOVE each matched album to the path
+# below, and ingest-music does not clean the names afterwards.
+#
+# This is Plex's documented layout. Each artist has a folder, each album is a
+# folder inside it, and tracks are named "TrackNumber - TrackName". Every disc of
+# a multi-disc album shares the album's folder, with the disc number put in front
+# of the track number (Plex still needs the disc number in the tags too).
+# Compilations go under an artist literally called "Various Artists":
+#
+#     Artist/Album/01 - Title.flac
+#     Artist/Album/201 - Title.flac         (multi-disc: disc 2, track 1)
+#     Various Artists/Album/01 - Title.flac (compilation)
+#
+# ingest-music runs this file as "beet -c <it> -d <ingestDir>", so the
+# directory below is only a fallback. An album beets cannot match is skipped
+# and stays where the download put it.
+
+directory: .
+library: ~/.cache/ingestMusic/beets.db
+
+import:
+    copy: no
+    move: yes         # move each matched album to its path below
+    write: yes        # write resolved tags back into the files
+    resume: no
+    incremental: no  # do not skip folders already imported on a re-run
+    quiet_fallback: skip
+
+# Number the tracks per disc, so the second disc starts at 201 again.
+per_disc_numbering: yes
+
+paths:
+    default: $albumartist/$album%aunique{}/%if{$multidisc,$discnumber}$track - $title
+    comp: Various Artists/$album%aunique{}/%if{$multidisc,$discnumber}$track - $title
+    singleton: $artist/Non-Album/$title
+
+# fromfilename: an album with poor tags is matched on its file names too.
+# missing, duplicates and badfiles: ingest-music reads their reports after the
+# import (albums missing tracks, albums held twice, files failing their check).
+# mbsync: "beet -c <this file> mbsync" refreshes the tags from MusicBrainz.
+# discogs is added at run time, and only when the discogsToken setting is set.
+# inline: the two fields the paths above use. ftintitle: "Artist feat. Guest"
+# moves the guest into the title, so the guest does not become an artist of
+# their own in Plex.
+plugins: fetchart embedart lastgenre lyrics replaygain chroma fromfilename mbsync missing duplicates badfiles inline ftintitle
+
+item_fields:
+    multidisc: 1 if disctotal > 1 else 0
+    discnumber: str(disc)
+
+fetchart:
+    cautious: true
+    cover_names: front back
+    maxwidth: 2000
+
+embedart:
+    maxwidth: 1000
+
+# The ffmpeg backend: the default "command" backend only runs mp3gain or
+# aacgain, which skip every FLAC - and the library is FLAC.
+replaygain:
+    backend: ffmpeg
+
+match:
+    strong_rec_thresh: 0.10

@@ -647,10 +647,16 @@ def resolve_skipped(
     probe: TrackProbe = probe_track,
     run_beet: BeetRunner | None = None,
     dry_run: bool = False,
+    beet_options: Sequence[str] = (),
+    import_flags: str = "-CIq",
 ) -> Summary:
     """Read new skips from ``beets_log``, report them, and (when enabled and a
     web-searching model is available) look up MusicBrainz release IDs and
-    retry beets in quiet mode with ``--search-id``."""
+    retry beets in quiet mode with ``--search-id``.
+
+    ``beet_options`` go before ``import`` (a music layout's ``-d``), and
+    ``import_flags`` are the retry's: ``-CIq`` leaves the album where it is,
+    and a layout that moves albums passes ``-mIq``."""
     entries = read_skips(beets_log, log_offset_before)
     if not entries:
         return Summary()
@@ -756,16 +762,18 @@ def resolve_skipped(
             summary.still_skipped += 1
             continue
 
-        # -C keeps nocopy and -q keeps quiet mode (quiet_fallback: skip so a
-        # weak match is still skipped); -I disables incremental history lookup
-        # so beets does not ignore the folder it just recorded during pass 1.
+        # -C keeps nocopy (-m moves, for a layout that names the library) and
+        # -q keeps quiet mode (quiet_fallback: skip so a weak match is still
+        # skipped); -I disables incremental history lookup so beets does not
+        # ignore the folder it just recorded during pass 1.
         retry_offset = log_offset(beets_log)
         argv = [
             "beet",
             "-c",
             beets_config,
+            *beet_options,
             "import",
-            "-CIq",
+            import_flags,
             "-l",
             beets_log,
             "--search-id",

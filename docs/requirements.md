@@ -70,6 +70,10 @@ Along the way:
 - **a pipx venv in use is left alone**, to be updated once the run is over;
 - **major releases are held** for cargo tools and DuckDB until `--allow-major`.
 
+Besides the tools a command checks for, it also updates the packages beets'
+plugins need for `ingest-music`: the Discogs client, as the
+`python3-discogs-client` apt package or inside a pipx-installed beets.
+
 exhale and the VapourSynth stack for `convert-video -u` are not updated by it:
 exhale is built by hand, and VapourSynth is held at R79 on purpose.
 

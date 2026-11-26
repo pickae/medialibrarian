@@ -6,8 +6,12 @@
 # "beet -c <it>" and from inside the ingest directory, so the relative
 # "directory: ." below resolves to whatever <ingestDir> the run is building.
 #
-# It is intentionally conservative: tags are written, and cover art
-# is fetched when missing.
+# It is intentionally conservative: tags are written, cover art is fetched
+# when missing, and the files stay where they are - this is the "keep"
+# music layout (the musicLayout setting). beets-plex.yaml, beets-jellyfin.yaml
+# and beets-defaults.yaml are the other layouts: they let beets move each album
+# to a path of its own. Every section except import's move and the paths is
+# the same in all four files.
 
 # Organise files where beets is invoked from (ingest-music cds into $ingestDir).
 directory: .
@@ -22,7 +26,12 @@ import:
     incremental: no  # do not skip folders already imported on a re-run
     quiet_fallback: skip
 
-plugins: fetchart embedart lastgenre lyrics replaygain chroma
+# fromfilename: an album with poor tags is matched on its file names too.
+# missing, duplicates and badfiles: ingest-music reads their reports after the
+# import (albums missing tracks, albums held twice, files failing their check).
+# mbsync: "beet -c <this file> mbsync" refreshes the tags from MusicBrainz.
+# discogs is added at run time, and only when the discogsToken setting is set.
+plugins: fetchart embedart lastgenre lyrics replaygain chroma fromfilename mbsync missing duplicates badfiles
 
 fetchart:
     cautious: true
@@ -31,6 +40,11 @@ fetchart:
 
 embedart:
     maxwidth: 1000
+
+# The ffmpeg backend: the default "command" backend only runs mp3gain or
+# aacgain, which skip every FLAC - and the library is FLAC.
+replaygain:
+    backend: ffmpeg
 
 match:
     strong_rec_thresh: 0.10
