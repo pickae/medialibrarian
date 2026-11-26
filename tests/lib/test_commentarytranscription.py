@@ -316,7 +316,7 @@ class TestQueue:
         # an English transcription goes to the multilingual model, and the
         # English initial prompt only fronts runs that OUTPUT English
         en = _srt_calls(w.calls(), _mka(
-            ram, root, "FilmA2020/FilmA2020 1 DirectorCommentary"))
+            ram, root, "FilmA2020/FilmA2020.1 DirectorCommentary"))
         assert len(en) == 1
         assert _flag(en[0], "--task") == "transcribe"
         assert _flag(en[0], "--language") == "en"
@@ -324,7 +324,7 @@ class TestQueue:
         assert _flag(en[0], "--initial_prompt") == "Hello."
 
         dutch = _srt_calls(w.calls(), _mka(
-            ram, root, "FilmA2020/FilmA2020 2 DutchCommentary"))
+            ram, root, "FilmA2020/FilmA2020.2 DutchCommentary"))
         assert len(dutch) == 2
         native = [c for c in dutch if _flag(c, "--task") == "transcribe"][0]
         assert _flag(native, "--language") == "nl"
@@ -338,7 +338,7 @@ class TestQueue:
 # whisper heard English in the "foreign" track, so it got the English
         # treatment: one plain transcription, English model, English prompt
         foreign = _srt_calls(w.calls(), _mka(
-            ram, root, "FilmA2020/FilmA2020 4 CommentaryForeign"))
+            ram, root, "FilmA2020/FilmA2020.4 CommentaryForeign"))
         assert len(foreign) == 1
         assert _flag(foreign[0], "--task") == "transcribe"
         assert _flag(foreign[0], "--language") == "en"
