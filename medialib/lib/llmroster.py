@@ -171,6 +171,9 @@ COMMENTARY_JUDGE = Task(
     prefers=("reasoning",))
 SUBTITLE_ADS = Task("subtitle-ads", "spot advert cues in a subtitle",
                     lean="light")
+EPISODE_SEAM = Task("episode-seam", "confirm where one episode ends and the "
+                    "next begins in a file holding several",
+                    prefers=("reasoning",))
 CURATED_LISTS = Task("curated-lists", "propose additions to hand-kept word "
                      "and extension lists from logged ingest-movies reasons",
                      prefers=("reasoning", "local"), lean="balanced")
@@ -187,7 +190,8 @@ TASKS = {task.name: task for task in (CHAPTERS, CHAPTERS_INSTRUCTED,
                                       FILM_IDENTIFY, AMBIGUOUS_EDITIONS,
                                       COMMENTARY_NAMES, BONUS_CATEGORY,
                                       TRACK_ROLE, COMMENTARY_JUDGE,
-                                      SUBTITLE_ADS, CURATED_LISTS)}
+                                      SUBTITLE_ADS, CURATED_LISTS,
+                                      EPISODE_SEAM)}
 
 
 def chapters_task(instructions: str) -> Task:

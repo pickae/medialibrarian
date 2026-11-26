@@ -158,7 +158,8 @@ def test_and_words_them_the_shared_way():
 
 
 # The commands whose -A does more than let the background steps ask a model.
-_OWN_A = {"convert_audio", "convert_video", "ingest_movies", "ytdlp"}
+_OWN_A = {"convert_audio", "convert_video", "ingest_movies", "ingest_series",
+          "ytdlp"}
 
 
 def test_a_is_worded_once_on_every_page():

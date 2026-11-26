@@ -177,6 +177,45 @@ class Server:
                                             in media.iter("Part"))))
         return found
 
+    def show_sections(self) -> list[tuple[str, str]]:
+        """Every show library on the server, as (key, title)."""
+        return [(directory.get("key", ""), directory.get("title", ""))
+                for directory in self._ask("/library/sections").iter("Directory")
+                if directory.get("type") == "show"]
+
+    def episode_copies(self) -> list[mediaserver.EpisodeCopy]:
+        """Every version of every episode in the show libraries: the shows
+        read once for their ids, then the episodes (type 4) with the season
+        and number each is filed under and its files."""
+        found: list[mediaserver.EpisodeCopy] = []
+        for key, title in self.show_sections():
+            shows: dict = {}
+            for show in self._ask("/library/sections/%s/all" % key,
+                                  (("type", "2"), ("includeGuids", "1"))
+                                  ).iter("Directory"):
+                ids: dict = {}
+                for guid in show.iter("Guid"):
+                    scheme, _, value = (guid.get("id") or "").partition("://")
+                    ids.setdefault(scheme, value)
+                shows[show.get("ratingKey", "")] = (ids, show.get("title", ""))
+            for video in self._ask("/library/sections/%s/all" % key,
+                                   (("type", "4"),)).iter("Video"):
+                ids, show_title = shows.get(
+                    video.get("grandparentRatingKey", ""),
+                    ({}, video.get("grandparentTitle", "")))
+                try:
+                    season = int(video.get("parentIndex", ""))
+                    episode = int(video.get("index", ""))
+                except ValueError:
+                    continue
+                for media in video.iter("Media"):
+                    found.append(mediaserver.EpisodeCopy(
+                        video.get("ratingKey", ""), ids, show_title, season,
+                        episode, title,
+                        tuple(part.get("file", "")
+                              for part in media.iter("Part"))))
+        return found
+
     def _plays(self, section: str, since: str = "") -> dict[str, set]:
         """The days each film in a library was played to the end, by its key
         - only since the moment ``since`` names, where it names one.

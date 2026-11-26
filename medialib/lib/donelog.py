@@ -37,8 +37,11 @@ class DoneLog:
     later run wants.
     """
 
-    def __init__(self, path: str) -> None:
+    def __init__(self, path: str, key=None) -> None:
         self.path = path
+        # What a file is known by: a film's id key, or the key another
+        # command's files carry (ingest-series' episodes, seriesnames.series_key).
+        self._key = key or plexnames.id_key
         self._scope: dict = {}
         self._lines: list = []
         self._line: dict = {}
@@ -62,7 +65,7 @@ class DoneLog:
     def has(self, movie: str, wanted: tuple = ()) -> bool:
         """Is ``movie`` recorded as done for every code in ``wanted`` - the
         codes a run wants, ``()`` for one that wants none in particular?"""
-        key = plexnames.id_key(movie)
+        key = self._key(movie)
         if not key or key not in self._scope:
             return False
         return set(wanted) <= self._scope[key]
@@ -72,7 +75,7 @@ class DoneLog:
         be: a film with no id tag cannot. A film already recorded is
         rewritten only when this run got through more than its line says -
         its line then carries the wider scope, in place."""
-        key = plexnames.id_key(movie)
+        key = self._key(movie)
         if not key:
             return False
         scope = self._scope.get(key, frozenset()) | set(codes)

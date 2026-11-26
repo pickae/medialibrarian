@@ -71,20 +71,21 @@ _NARRATION = ("read-library",)
 _COMICS = ("content-census", "convert-comics")
 # Every command that may pick an ffmpeg build.
 _FFMPEG = ("concat-audio", "content-census", "convert-and-concat", "convert-audio",
-           "convert-video", "ingest-movies", "ingest-music", "read-library",
-           "transcribe-audio", "ytdlp")
+           "convert-video", "ingest-movies", "ingest-music", "ingest-series",
+           "read-library", "transcribe-audio", "ytdlp")
 # Every command that keeps scratch in RAM.
 _SCRATCH = ("concat-audio", "content-census", "content-census-bi", "convert-and-concat",
             "convert-audio", "convert-comics", "convert-images", "convert-video",
             "find-covers", "generate-chapters", "ingest-books", "ingest-movies", "ingest-music",
-            "read-library", "transcribe-audio", "ytdlp")
+            "ingest-series", "read-library", "transcribe-audio", "ytdlp")
 
 # Every command that asks a language model.
 _AI_CHAPTERS = ("concat-audio", "content-census", "convert-and-concat",
                 "convert-audio", "convert-comics", "convert-video",
                 "find-covers", "find-fragment-candidates", "find-gaps",
                 "generate-chapters", "ingest-books", "ingest-movies",
-                "ingest-music", "plex-letterboxd-sync", "read-library", "ytdlp")
+                "ingest-music", "ingest-series", "plex-letterboxd-sync",
+                "read-library", "ytdlp")
 
 # Every command in the repository (info logs and error logs).
 _ALL_COMMANDS = (
@@ -93,55 +94,64 @@ _ALL_COMMANDS = (
     "convert-audio", "convert-comics", "convert-images", "convert-video",
     "cue-to-chapters", "find-covers", "find-fragment-candidates", "find-gaps",
     "generate-chapters", "ingest-books", "ingest-movies", "ingest-music",
-    "plex-letterboxd-sync", "read-library", "transcribe-audio", "ytdlp",
+    "ingest-series", "plex-letterboxd-sync", "read-library",
+    "transcribe-audio", "ytdlp",
 )
 
 SETTINGS: tuple[Setting, ...] = (
     # --- logins and keys
     Setting("tmdbApiKey", "TheMovieDB API key, for naming films - and tagging their "
             "folders with an id, or matching them to Letterboxd's; without it the "
-            "lookup is skipped", ("ingest-movies", "plex-letterboxd-sync"), secret=True),
+            "lookup is skipped",
+            ("ingest-movies", "ingest-series", "plex-letterboxd-sync"), secret=True),
+    Setting("tvdbApiKey", "TheTVDB project API key (v4), for naming a show "
+            "TMDb cannot name, or can only name in an order the episodes on "
+            "disk do not fit; without it ingest-series asks TMDb alone",
+            ("ingest-series",), secret=True),
+    Setting("tvdbPin", "The subscriber PIN a user-supported TheTVDB key "
+            "is exchanged with; most keys need none",
+            ("ingest-series",), secret=True),
     Setting("plexUrl", "The Plex server, e.g. `http://192.168.1.10:32400`",
-            ("ingest-movies", "plex-letterboxd-sync"),
+            ("ingest-movies", "ingest-series", "plex-letterboxd-sync"),
             "unset - ingest-movies then asks `http://localhost:32400`"),
     Setting("plexToken", "That server's X-Plex-Token",
-            ("ingest-movies", "plex-letterboxd-sync"), secret=True),
+            ("ingest-movies", "ingest-series", "plex-letterboxd-sync"), secret=True),
     Setting("mediaServer", "The media server the library is kept for: `plex` "
             "or `jellyfin`. plex-letterboxd-sync and ingest-movies' library "
             "comparison talk to it, and the names are written for it unless "
             "`mediaServerNaming` says otherwise. Jellyfin keeps no watchlist "
             "and no play history beyond the last play, and its player does not "
             "show the rating a sync gives a film",
-            ("ingest-movies", "plex-letterboxd-sync"), "plex"),
+            ("ingest-movies", "ingest-series", "plex-letterboxd-sync"), "plex"),
     Setting("jellyfinUrl", "The Jellyfin server, e.g. `http://192.168.1.10:8096`",
-            ("ingest-movies", "plex-letterboxd-sync"), "`http://localhost:8096`"),
+            ("ingest-movies", "ingest-series", "plex-letterboxd-sync"), "`http://localhost:8096`"),
     Setting("jellyfinApiKey", "An API key that Jellyfin server made "
             "(Dashboard > API Keys)",
-            ("ingest-movies", "plex-letterboxd-sync"), secret=True),
+            ("ingest-movies", "ingest-series", "plex-letterboxd-sync"), secret=True),
     Setting("jellyfinUser", "The Jellyfin user whose plays and ratings are read "
-            "and written, by name", ("ingest-movies", "plex-letterboxd-sync"),
+            "and written, by name", ("ingest-movies", "ingest-series", "plex-letterboxd-sync"),
             "unset - the server's one user, where it has only one"),
     Setting("openSubtitlesUser", "OpenSubtitles.org login; with "
             "`openSubtitlesPassword`, subtitles are looked for there first",
-            ("ingest-movies",), secret=True),
-    Setting("openSubtitlesPassword", "OpenSubtitles.org password", ("ingest-movies",),
-            secret=True),
+            ("ingest-movies", "ingest-series"), secret=True),
+    Setting("openSubtitlesPassword", "OpenSubtitles.org password",
+            ("ingest-movies", "ingest-series"), secret=True),
     Setting("openSubtitlesComUser", "OpenSubtitles.com login - a separate service, "
-            "asked second", ("ingest-movies",), secret=True),
-    Setting("openSubtitlesComPassword", "OpenSubtitles.com password", ("ingest-movies",),
-            secret=True),
+            "asked second", ("ingest-movies", "ingest-series"), secret=True),
+    Setting("openSubtitlesComPassword", "OpenSubtitles.com password",
+            ("ingest-movies", "ingest-series"), secret=True),
     Setting("subDlApiKey", "API key of a free SubDL account, asked third for subtitles",
-            ("ingest-movies",), secret=True),
+            ("ingest-movies", "ingest-series"), secret=True),
     Setting("spokenLanguages", "The languages you speak: ingest-movies fetches "
             "and tests subtitles in them, and ytdlp -A takes a YouTube "
             "episode's transcript in its own language when it is one of them, "
             "in English when it is not. A comma list of ISO 639-1 codes, in the "
             "order to fetch them; track names are also read in the names these "
-            "languages give each other", ("ingest-movies", "ytdlp")),
+            "languages give each other", ("ingest-movies", "ingest-series", "ytdlp")),
     Setting("subtitleOcrEngines", "The OCR engines ingest-movies reads a film's "
             "picture subtitles with: a comma list of `vision`, `paddle` and "
             "`tesseract`, tried in the order named until one reads the "
-            "subtitle", ("ingest-movies",),
+            "subtitle", ("ingest-movies", "ingest-series"),
             "a vision model from the roster's `subtitle-ocr` task where there "
             "is one (docs/models.md), paddle on the GPU where it fits, "
             "tesseract, then paddle on the CPU"),
@@ -149,23 +159,23 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("keepLanguages", "The languages ingest-movies' improved copy keeps "
             "beside the film's own language: a comma list of ISO 639-1 codes; "
             "the film's own language is kept whatever it says",
-            ("ingest-movies",)),
+            ("ingest-movies", "ingest-series")),
     Setting("losslessAudioTarget", "The codec ingest-movies' improved copy "
             "converts the lossless audio to: `opus` (the default, at a "
             "per-channel target bitrate) or `flac`, which takes the channels "
             "as they are, up to eight of them",
-            ("ingest-movies",), "opus"),
+            ("ingest-movies", "ingest-series"), "opus"),
     Setting("mediaServerNaming", "The server the names are written for: "
             "`plex` or `jellyfin`. The id tag is written the way that server "
             "reads it - `{imdb-tt…}` and `[imdbid-tt…]` - and an edition as its "
             "tag, or its version label after the name; names written either "
             "way are read back whatever it says, so a library can be "
-            "switched", ("ingest-movies",),
+            "switched", ("ingest-movies", "ingest-series"),
             "`mediaServer`"),
     Setting("movieJunkExtensions", "The file suffixes ingest-movies deletes "
             "from a release as junk, space-separated; empty deletes none - the "
             "sample clips, the tiny .mkv files and the .unwanted folders go "
-            "whatever it says", ("ingest-movies",), "txt nfo exe doc sfv"),
+            "whatever it says", ("ingest-movies", "ingest-series"), "txt nfo exe doc sfv"),
     Setting("infoLogLevel", "How much of what a run says is kept in "
             "`logs/info/`, one file per run: `off`, `quiet` (errors and results), "
             "`normal` or `verbose` - apart from the console's `-q` and `-v`",
@@ -319,14 +329,14 @@ SETTINGS: tuple[Setting, ...] = (
             "`track-role` task, see docs/models.md): sampled subtitle cues or "
             "a short audio transcript, with the track's title, language and "
             "flags, are sent to the model: `on` or `off`",
-            ("convert-video", "ingest-movies"), "on"),
+            ("convert-video", "ingest-movies", "ingest-series"), "on"),
     Setting("commentaryJudgeLlm", "Whether an audio track that commentary "
             "detection was unsure of is handed to a language model to judge "
             "(the `commentary-judge` task, see docs/models.md): it is sent the "
             "sampled whisper transcripts of the main and suspect tracks, along "
             "with their track names and languages. Only a confident commentary "
             "or audio description is flagged automatically: `on` or `off`",
-            ("ingest-movies",), "on"),
+            ("ingest-movies", "ingest-series"), "on"),
     Setting("musicSearchLlm", "Whether an album beets skipped is handed to a "
             "language model to look up its MusicBrainz release ID on the web "
             "(the `music-search` task, see docs/models.md): it is told the "
@@ -374,7 +384,7 @@ SETTINGS: tuple[Setting, ...] = (
             "see docs/models.md): its first and last 20 cues are sent to the "
             "model, and only advert cues from those shown cues are removed: "
             "`on` or `off`",
-            ("ingest-movies",), "on"),
+            ("ingest-movies", "ingest-series"), "on"),
     Setting("chapterDbLlm", "Whether fitting ChapterDB chapter sets that "
             "compete across languages or do not match the library's primary "
             "language (`spokenLanguages`) are handed to a language model to "

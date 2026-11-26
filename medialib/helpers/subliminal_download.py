@@ -36,6 +36,10 @@ its code, a tab and what became of it: ``already``, ``none``, or ``saved``, a
 tab and the subtitle's id. The exit status is 0 whatever each language's answer
 was. It is the first try of each, so no ids are thrown out.
 
+An episode is asked for by its SERIES' IMDb id with its season and episode,
+``tt0000001:S01E02``: only a subtitle filed under that series, season and
+episode is taken.
+
 A provider's login comes from the environment rather than from argv, which
 every account on the machine can read: ``openSubtitlesUser`` and
 ``openSubtitlesPassword`` for opensubtitles, ``openSubtitlesComUser`` and
@@ -108,6 +112,39 @@ def _guess_name(path: str) -> str:
     return _CURLY_TAG.sub("", _BRACKET_ID.sub("", path))
 
 
+_EPISODE_ID = re.compile(r"^(tt[0-9]+|[0-9]+):S([0-9]+)E([0-9]+)$", re.I)
+
+
+def _episode_of(imdb: str) -> tuple:
+    """(series IMDb id, season, episode) of an episode's id, or (imdb, None,
+    None) for a film's."""
+    match = _EPISODE_ID.match(imdb or "")
+    if not match:
+        return imdb, None, None
+    return match.group(1), int(match.group(2)), int(match.group(3))
+
+
+def _same_episode(subtitle, number: int, season: int, episode: int) -> bool:
+    """Whether a provider files ``subtitle`` under this series' episode: the
+    series' IMDb id where the provider says it, and the season and episode."""
+    series = None
+    for name in ("series_imdb_id", "imdb_id"):
+        series = _imdb_number(getattr(subtitle, name, None))
+        if series is not None:
+            break
+    if series is not None and series != number:
+        return False
+    for names, wanted in ((("season", "series_season"), season),
+                          (("episode", "series_episode"), episode)):
+        for name in names:
+            value = getattr(subtitle, name, None)
+            if value is not None:
+                if str(value).isdigit() and int(value) != wanted:
+                    return False
+                break
+    return True
+
+
 def _imdb_number(value) -> int | None:
     """An IMDb id as a number, so "tt0000001" and "tt1" are the same film."""
     digits = str(value or "").lower().removeprefix("tt")
@@ -125,7 +162,7 @@ def _scan(path: str):
 
 
 def _subliminal(provider: str, video, languages: set, number: int | None,
-                thrown: list[str]) -> list:
+                thrown: list[str], season=None, episode=None) -> list:
     """The best subtitle of each language one of subliminal's providers has,
     downloaded."""
     config: dict[str, dict] = {provider: dict(OPTIONS.get(provider, {}))}
@@ -136,7 +173,10 @@ def _subliminal(provider: str, video, languages: set, number: int | None,
     with ProviderPool(providers=[provider], provider_configs=config) as pool:
         found = [s for s in pool.list_subtitles(video, set(languages))
                  if str(s.id) not in thrown]
-        if number is not None:
+        if number is not None and season is not None:
+            found = [s for s in found
+                     if _same_episode(s, number, season, episode)]
+        elif number is not None:
             found = [s for s in found
                      if _imdb_number(getattr(s, "movie_imdb_id", None)) == number]
         return pool.download_best_subtitles(found, video, set(languages))
@@ -155,17 +195,24 @@ def _srt_in(archive: bytes) -> bytes | None:
         return None
 
 
-def _subdl(language, number: int | None, thrown: list[str]) -> list:
-    """The first subtitle SubDL files under the film, in the order it lists
-    them, downloaded - leaving out the machine translations."""
+def _subdl(language, number: int | None, thrown: list[str], season=None,
+           episode=None) -> list:
+    """The first subtitle SubDL files under the film - or the series'
+    episode - in the order it lists them, downloaded, leaving out the machine
+    translations."""
     if number is None:
         return []
     code = language.alpha2.upper()
+    params = {"api_key": os.environ.get(SUBDL_KEY, ""),
+              "imdb_id": "tt%07d" % number, "type": "movie",
+              "languages": code, "subs_per_page": 30}
+    if season is not None:
+        # SubDL's television search: the series' id, and the episode by its
+        # season and number.
+        params.update(type="tv", season_number=season, episode_number=episode)
     try:
-        answer = requests.get(_SUBDL_SEARCH, timeout=_TIMEOUT, params={
-            "api_key": os.environ.get(SUBDL_KEY, ""),
-            "imdb_id": "tt%07d" % number, "type": "movie",
-            "languages": code, "subs_per_page": 30}).json()
+        answer = requests.get(_SUBDL_SEARCH, timeout=_TIMEOUT,
+                              params=params).json()
     except (requests.RequestException, ValueError):
         return []
     if not answer.get("status"):
@@ -174,6 +221,9 @@ def _subdl(language, number: int | None, thrown: list[str]) -> list:
         name = str(item.get("name") or "")
         if (not name or name in thrown or item.get("ai_translated")
                 or str(item.get("language", "")).upper() != code):
+            continue
+        if season is not None and str(item.get("episode") or "").isdigit() \
+                and int(item["episode"]) != episode:
             continue
         try:
             fetched = requests.get(urljoin(_SUBDL_FILES, item.get("url", "")),
@@ -191,8 +241,10 @@ def _subdl(language, number: int | None, thrown: list[str]) -> list:
 
 def main(argv: list[str]) -> int:
     code, imdb, path, provider, *thrown = argv
+    imdb, season, episode = _episode_of(imdb)
     if "," in code:
-        return _main_many(code.split(","), imdb, path, provider)
+        return _main_many(code.split(","), imdb, path, provider, season,
+                          episode)
     region.configure("dogpile.cache.memory")
     language = Language.fromietf(code)
     video = _scan(path)
@@ -209,18 +261,29 @@ def main(argv: list[str]) -> int:
     if number is not None:
         # After the refiners, which search by title and would put their own
         # answer here.
-        video.imdb_id = "tt%07d" % number
+        _set_id(video, number, season)
     if provider == "subdl":
-        best = _subdl(language, number, thrown)
+        best = _subdl(language, number, thrown, season, episode)
     else:
-        best = _subliminal(provider, video, {language}, number, thrown)
+        best = _subliminal(provider, video, {language}, number, thrown,
+                           season, episode)
     saved = save_subtitles(video, best, encoding="utf-8")
     if saved:
         print(saved[0].id)
     return 0
 
 
-def _main_many(codes: list[str], imdb: str, path: str, provider: str) -> int:
+def _set_id(video, number: int, season) -> None:
+    """The id a provider searches the video by: the film's, or for an
+    episode its series'."""
+    if season is None:
+        video.imdb_id = "tt%07d" % number
+    else:
+        video.series_imdb_id = "tt%07d" % number
+
+
+def _main_many(codes: list[str], imdb: str, path: str, provider: str,
+               season=None, episode=None) -> int:
     """The first try of every language in ``codes``, in one search."""
     region.configure("dogpile.cache.memory")
     asked = [(code, Language.fromietf(code)) for code in codes if code]
@@ -236,15 +299,16 @@ def _main_many(codes: list[str], imdb: str, path: str, provider: str) -> int:
                   if language not in video.subtitle_languages}
     number = _imdb_number(imdb)
     if number is not None:
-        video.imdb_id = "tt%07d" % number
+        _set_id(video, number, season)
     best: list = []
     if wanted:
         if provider == "subdl":
             for _code, language in asked:
                 if language in wanted:
-                    best += _subdl(language, number, [])
+                    best += _subdl(language, number, [], season, episode)
         else:
-            best = _subliminal(provider, video, wanted, number, [])
+            best = _subliminal(provider, video, wanted, number, [], season,
+                               episode)
     saved = {subtitle.language: subtitle
              for subtitle in save_subtitles(video, best, encoding="utf-8")}
     for code, language in asked:

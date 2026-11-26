@@ -1,4 +1,4 @@
-"""The twenty-two commands: what each is called, and which module is it.
+"""The twenty-three commands: what each is called, and which module is it.
 
 One table, because three separate things need exactly this mapping and must not
 disagree about it - the console scripts ``pyproject.toml`` installs, the program
@@ -6,9 +6,9 @@ name each help page prints, and :func:`run_command`, which is how one command
 starts another.
 
 The names are kebab-case. Two of them run a module whose name is not the
-obvious one: ``convert-video`` and ``ingest-movies`` are large enough that their
-tables and their run halves are separate modules, and it is the run half that
-owns ``main``.
+obvious one: ``convert-video``, ``ingest-movies`` and ``ingest-series`` are
+large enough that their tables and their run halves are separate modules, and
+it is the run half that owns ``main``.
 """
 
 from __future__ import annotations
@@ -42,6 +42,7 @@ COMMANDS = {
     "ingest-books": "medialib.cli.ingest_books",
     "ingest-movies": "medialib.cli.ingest_movies_run",
     "ingest-music": "medialib.cli.ingest_music",
+    "ingest-series": "medialib.cli.ingest_series_run",
     "plex-letterboxd-sync": "medialib.cli.plex_letterboxd_sync",
     "read-library": "medialib.cli.read_library",
     "transcribe-audio": "medialib.cli.transcribe_audio",
