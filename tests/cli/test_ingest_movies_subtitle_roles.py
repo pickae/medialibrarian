@@ -211,7 +211,7 @@ class TestTheTagPhase:
         movie.write_bytes(rules.MATROSKA_MAGIC + b"\0" * 16)
         return str(movie)
 
-    def _tag(self, monkeypatch, tmp_path, roles):
+    def _tag(self, monkeypatch, tmp_path, roles, original_of=None):
         movie = self._film_on_disk(tmp_path)
         argv, measured = [], []
         monkeypatch.setattr(rules, "_run", lambda command: 0)
@@ -221,8 +221,32 @@ class TestTheTagPhase:
         monkeypatch.setattr(rules, "_measured_role_edits",
                             lambda path, tracks: measured.append(path)
                             or {"4": ("full", "forced")})
-        rules.update_tags(str(tmp_path), roles=roles)
+        rules.update_tags(str(tmp_path), roles=roles, original_of=original_of)
         return movie, argv, measured
+
+    def test_the_original_flags_go_by_the_film_s_original_language(
+            self, monkeypatch, tmp_path):
+        """The French soundtrack and the French dialogue subtitle are the
+        original; the English subtitle is not, nor the French signs track
+        measured to be forced."""
+        asked = []
+        movie, argv, _measured = self._tag(
+            monkeypatch, tmp_path, True,
+            original_of=lambda path: asked.append(path) or "fr")
+        assert asked == [movie]
+        (call,) = argv
+        flags = {position: [one for one in _scope(call, position)
+                            if one.startswith("flag-original")]
+                 for position in range(1, 6)}
+        assert flags == {1: [], 2: ["flag-original=1"],
+                         3: ["flag-original=1"], 4: ["flag-original=0"],
+                         5: ["flag-original=0"]}
+
+    def test_without_an_original_language_the_flags_are_left_alone(
+            self, monkeypatch, tmp_path):
+        _movie, argv, _measured = self._tag(monkeypatch, tmp_path, True,
+                                            original_of=lambda path: "")
+        assert not any(one.startswith("flag-original") for one in argv[0])
 
     def test_the_corrections_ride_in_the_flag_call(self, monkeypatch,
                                                   tmp_path):

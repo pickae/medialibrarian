@@ -293,6 +293,49 @@ class TestTheRequest:
             llmclient.from_environment(_LOCAL).ask("s", "u")
         assert len(calls) == 1
 
+    def _queue_full(self, monkeypatch, times: int) -> list:
+        calls: list = []
+        original = llmclient._ask_openai
+
+        def full_then_answered(*args, **kwargs):
+            calls.append(1)
+            if len(calls) <= times:
+                raise llmclient._QueueFullError("429: queue is full")
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(llmclient, "_ask_openai", full_then_answered)
+        return calls
+
+    def test_a_full_queue_is_waited_out_where_the_caller_would_wait(
+            self, curl, monkeypatch):
+        calls = self._queue_full(monkeypatch, 3)
+        # The waits are not retries: none is left, and the answer still comes.
+        answer = llmclient.from_environment(_LOCAL).ask(
+            "s", "u", retries=0, queue_waits=3)
+        assert answer == '{"ok": true}'
+        assert len(calls) == 4
+
+    def test_a_queue_still_full_after_the_waits_is_given_up(
+            self, curl, monkeypatch):
+        calls = self._queue_full(monkeypatch, 10)
+        with pytest.raises(llmclient.LlmError, match="queue is full"):
+            llmclient.from_environment(_LOCAL).ask("s", "u", queue_waits=2)
+        assert len(calls) == 3
+
+    def test_nothing_is_asked_once_the_run_is_interrupted(
+            self, curl, monkeypatch):
+        # A thread still finishing its step after Ctrl+C must not load the
+        # model the run's exit has just unloaded.
+        from medialib.lib import modelserver, runcontext
+        calls = self._counted(monkeypatch)
+        noted: list = []
+        monkeypatch.setattr(modelserver, "note_request",
+                            lambda url, model: noted.append(model))
+        runcontext.note_interrupted()
+        with pytest.raises(llmclient.RunInterruptedError):
+            llmclient.from_environment(_LOCAL).ask("s", "u")
+        assert (calls, noted) == ([], [])
+
     def test_a_hosted_apis_rate_limit_is_waited_out(self, curl, monkeypatch):
         calls = self._counted(monkeypatch)
         curl["stdout"] = '{"error": {"message": "slow down"}}\n429'
@@ -697,3 +740,27 @@ def test_where_files_cannot_be_locked_a_process_keeps_its_own_slots(
     assert not isinstance(llm._slot(), llmclient._RunSlot)
     with llm._slot():
         pass
+
+
+class TestALocalRequestIsNoted:
+    """Before a local model is asked, the server is looked at for whether this
+    run makes it load the model (`medialib/lib/modelserver.py`)."""
+
+    def _noted(self, monkeypatch, llm):
+        from medialib.lib import modelserver
+        seen = []
+        monkeypatch.setattr(modelserver, "note_request",
+                            lambda url, model: seen.append((url, model)))
+        monkeypatch.setattr(llmclient, "_ask_openai",
+                            lambda *args, **kwargs: ("ok", 1))
+        llm.ask("s", "p")
+        return seen
+
+    def test_a_local_model_is_noted(self, monkeypatch):
+        llm = llmclient.Llm("openai", "http://127.0.0.1:8080/v1", "big")
+        assert self._noted(monkeypatch, llm) == [("http://127.0.0.1:8080/v1", "big")]
+
+    def test_a_hosted_one_is_not(self, monkeypatch):
+        llm = llmclient.Llm("openai", "https://api.example.com/v1", "big",
+                            local=False)
+        assert self._noted(monkeypatch, llm) == []

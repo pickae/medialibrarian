@@ -101,6 +101,11 @@ class TestParsing:
         assert asset["name"] == "ffmpeg-N-128560-g967f0ffb10-linux64-gpl.tar.xz"
         assert number == 128560
 
+    def test_ffmpeg_builds_tracks_svt_av1_essential(self):
+        repos = {path.as_posix(): repo for path, repo in u.FFMPEG_BUILDS}
+        assert repos["/opt/ffmpeg-essential/bin"] == (
+            "nekotrix/FFmpeg-Builds-SVT-AV1-Essential")
+
     def test_the_duckdb_asset_is_not_the_musl_one(self):
         assets = [{"name": "duckdb-cli-linux-amd64-musl.tar.gz"},
                   {"name": "duckdb-cli-linux-aarch64.tar.gz"},

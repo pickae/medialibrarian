@@ -84,8 +84,13 @@ VISION_GROUP = 16
 _VISION_CONTEXT = 4096
 # The most a line's answer may run to, in tokens: a subtitle is two lines.
 _VISION_MAX_TOKENS = 200
-# Retries for a vision request refused by a busy server.
+# Retries for a vision request that failed.
 _VISION_RETRIES = 5
+# How many times a local server's full queue is waited out (5 s doubling to a
+# minute, ~3 min in all): the subtitle's requests go out at once, more than a
+# server shared with other steps may queue, and one line refused loses the
+# whole subtitle to the next engine.
+_VISION_QUEUE_WAITS = 6
 # Upper bound on concurrent batched requests for a hosted API (jobs == 0).
 _CLOUD_JOBS = 8
 # A picture this many times a one-line picture's height holds two lines, and
@@ -429,6 +434,7 @@ def _read_group(llm: llmclient.Llm, row, group: list, line_height: int,
         "", batch_prompt, alone_prompt, [group[at][2] for at in asked],
         usage.tally, options=options, max_tokens_each=_VISION_MAX_TOKENS,
         allow_empty=True, retries=_VISION_RETRIES,
+        queue_waits=_VISION_QUEUE_WAITS,
         reask=lambda index, text: _short_of_lines(
             _tidy(text.replace("\\n", "\n")),
             group[asked[index]][3], line_height),

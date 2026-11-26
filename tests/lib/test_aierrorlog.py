@@ -446,6 +446,19 @@ class TestExitHook:
         )
         errorlog._triage_at_exit()
 
+    def test_triage_at_exit_skips_a_run_interrupted_after_its_flag_is_gone(
+            self, monkeypatch, tmp_path):
+        monkeypatch.setenv("errorTriageLlm", "on")
+        errorlog.settle_run(["convert-audio", "/lib"])
+        _write_sample_log(tmp_path)
+        seen: list[str] = []
+        monkeypatch.setattr(aierrorlog, "triage_file", lambda p: seen.append(p) or [])
+        runcontext.settle(errorlog.OWNER_VARIABLE, str(os.getpid()))
+        runcontext.note_interrupted()
+        assert not runcontext.abort_requested()
+        errorlog._triage_at_exit()
+        assert seen == []
+
     def test_triage_at_exit_stops_lazily_loaded_modelserver(self, monkeypatch, tmp_path):
         monkeypatch.setenv("errorTriageLlm", "on")
         errorlog.settle_run(["convert-audio", "/lib"])

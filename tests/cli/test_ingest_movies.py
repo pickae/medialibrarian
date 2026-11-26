@@ -545,6 +545,79 @@ class TestRoleFlagsFromTheName:
         assert "flag-hearing-impaired" not in flags
 
 
+class TestTheOriginalFlag:
+    """The original flag marks the film in the language TMDb says it was
+    made in: its soundtrack and its full subtitles, and nothing else - not a
+    commentary, an audio description, a dub, or a forced or SDH subtitle."""
+
+    @staticmethod
+    def _film():
+        return [
+            im.Track(id="0", type="video"),
+            im.Track(id="1", type="audio", language="jpn", name="Main"),
+            im.Track(id="2", type="audio", language="eng", name="English dub"),
+            im.Track(id="3", type="audio", language="jpn",
+                     name="Commentary by the director"),
+            im.Track(id="4", type="audio", language="jpn",
+                     visual_impaired="true"),
+            im.Track(id="5", type="subtitles", language="jpn"),
+            im.Track(id="6", type="subtitles", language="jpn",
+                     forced="true"),
+            im.Track(id="7", type="subtitles", language="jpn",
+                     hearing_impaired="true"),
+            im.Track(id="8", type="subtitles", language="jpn",
+                     commentary="true"),
+            im.Track(id="9", type="subtitles", language="eng")]
+
+    @staticmethod
+    def _original(arguments):
+        return {track: value for track, sets in
+                _sets_by_track(arguments).items()
+                for key, value in sets if key == "flag-original"}
+
+    def test_set_on_the_soundtrack_and_full_subtitle_and_cleared_elsewhere(
+            self):
+        assert self._original(im._tag_arguments(self._film(),
+                                                original="ja")) == {
+            "track:2": "1", "track:3": "0", "track:4": "0", "track:5": "0",
+            "track:6": "1", "track:7": "0", "track:8": "0", "track:9": "0",
+            "track:10": "0"}
+
+    def test_left_alone_when_the_original_language_is_unknown(self):
+        assert self._original(im._tag_arguments(self._film())) == {}
+
+    def test_left_alone_when_the_file_has_no_soundtrack_in_it(self):
+        """A release that comes dubbed and nothing else: TMDb's language is
+        not one the file can be said to carry the film in."""
+        tracks = [im.Track(id="0", type="video"),
+                  im.Track(id="1", type="audio", language="ger"),
+                  im.Track(id="2", type="subtitles", language="jpn")]
+        assert self._original(im._tag_arguments(tracks, original="ja")) == {}
+
+    def test_judged_on_the_language_the_name_gives_the_track(self):
+        tracks = [im.Track(id="0", type="video"),
+                  im.Track(id="1", type="audio", language="jpn"),
+                  im.Track(id="2", type="audio", language="und",
+                           name="Japanese 2.0")]
+        assert self._original(im._tag_arguments(tracks, original="ja")) \
+            == {"track:2": "1", "track:3": "1"}
+
+    def test_a_subtitle_measured_as_sdh_is_not_the_original(self):
+        tracks = [im.Track(id="0", type="video"),
+                  im.Track(id="1", type="audio", language="jpn"),
+                  im.Track(id="2", type="subtitles", language="jpn")]
+        assert self._original(im._tag_arguments(
+            tracks, {"2": ("full", "sdh")}, original="ja")) \
+            == {"track:2": "1", "track:3": "0"}
+
+    def test_any_spelling_of_the_language_counts(self):
+        """TMDb writes a film's language as one code; the track may spell it
+        in any of its tags."""
+        track = im.Track(type="audio", language="ger", language_ietf="de")
+        assert im.is_original_version(track, "de")
+        assert not im.is_original_version(track, "")
+
+
 class TestAudioDescriptions:
     """A narration for the blind is dropped where its language has a
     soundtrack of its own, and kept where it is all a kept language has."""

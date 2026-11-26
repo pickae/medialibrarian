@@ -89,6 +89,27 @@ class TestTheServer:
         assert (traits.vision, traits.tools, traits.reasoning) == (True, False, True)
         assert (traits.params_b, traits.moe) == (30.5, True)
 
+    def test_asking_ollamas_way_notes_the_model_it_names(self, monkeypatch):
+        # The ninfer switcher loads the model a POST names, /api/show too.
+        from medialib.lib import modelserver
+        noted = []
+        monkeypatch.setattr(modelserver, "note_request",
+                            lambda url, model: noted.append(model))
+        self._server(monkeypatch, {})
+        _named("my-own-name")
+        assert noted == ["my-own-name"]
+
+    def test_nothing_is_probed_once_the_run_is_interrupted(self, monkeypatch):
+        from medialib.lib import modelserver, runcontext
+        monkeypatch.setattr(modelserver, "note_request",
+                            lambda url, model: pytest.fail("noted"))
+        asked = []
+        monkeypatch.setattr(llmtraits, "_server_json",
+                            lambda url, key, body=None: asked.append(url))
+        runcontext.note_interrupted()
+        _named("my-own-name")
+        assert not any(url.endswith("/api/show") for url in asked)
+
     def test_a_hosted_api_is_not_asked(self, monkeypatch):
         monkeypatch.setattr(llmtraits, "_server_json",
                             lambda *a, **k: pytest.fail("a hosted API was asked"))

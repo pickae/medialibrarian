@@ -1241,7 +1241,8 @@ def _ingest(state, root: str, subtitle_work: bool, name: str) -> None:
             "OMITTED (-o roles)")
     else:
         log("Phase: refreshing mkv tags and track flags")
-    movierules.update_tags(root, roles="roles" not in omit)
+    movierules.update_tags(root, roles="roles" not in omit,
+                           original_of=state.known_original_language)
     if "junk" not in omit:
         movierules.cleanup(root)
 

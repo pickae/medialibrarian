@@ -311,3 +311,174 @@ class TestTheAddress:
     def test_a_silent_one_lists_nothing(self):
         assert modelserver.served_model("http://127.0.0.1:%d" % _port()) \
             is None
+
+
+# --- the models a run made a server load -----------------------------------------
+
+# The real one, before the suite's fixture stands it in with a no-op.
+_note_request = modelserver.note_request
+
+
+class _Holder:
+    """A model server in this process that loads what it is asked for: the
+    ninfer switcher (/health, /unload) or Ollama (/api/ps, keep_alive 0)."""
+
+    def __init__(self, kind):
+        import http.server
+        import json
+        import threading
+        self.kind = kind
+        self.held: set = set()
+        self.unloaded: list = []
+        holder = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def _send(self, code, obj):
+                payload = json.dumps(obj).encode()
+                self.send_response(code)
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def do_GET(self):
+                if kind == "switcher" and self.path == "/health":
+                    current = next(iter(holder.held), None)
+                    return self._send(200, {"status": "ok", "current": current})
+                if kind == "ollama" and self.path == "/api/ps":
+                    return self._send(200, {"models": [
+                        {"name": name, "model": name} for name in holder.held]})
+                if self.path == "/v1/models":
+                    return self._send(200, {"data": [{"id": "m"}]})
+                self._send(404, {})
+
+            def do_POST(self):
+                body = json.loads(self.rfile.read(
+                    int(self.headers.get("Content-Length") or 0)) or b"{}")
+                if kind == "switcher" and self.path == "/unload" \
+                        or kind == "ollama" and self.path == "/api/generate" \
+                        and body.get("keep_alive") == 0:
+                    holder.held.discard(body["model"])
+                    holder.unloaded.append(body["model"])
+                    return self._send(200, {"status": "unloaded"})
+                self._send(404, {})
+
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.url = "http://127.0.0.1:%d/v1" % self.server.server_address[1]
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+@pytest.fixture(params=["switcher", "ollama"])
+def holder(request):
+    made = _Holder(request.param)
+    yield made
+    made.close()
+
+
+class TestWhatARunLoaded:
+    def test_a_model_the_server_did_not_hold_is_unloaded_after_an_interrupt(
+            self, holder):
+        _note_request(holder.url, "big")
+        holder.held.add("big:latest" if holder.kind == "ollama" else "big")
+        modelserver.eject_loaded()
+        assert holder.unloaded == ["big"]
+
+    def test_one_the_server_held_already_is_left(self, holder):
+        holder.held.add("big")
+        _note_request(holder.url, "big")
+        modelserver.eject_loaded()
+        assert holder.unloaded == []
+        assert holder.held == {"big"}
+
+    def test_one_the_server_has_let_go_since_is_not_asked_again(self, holder):
+        _note_request(holder.url, "big")
+        modelserver.eject_loaded()
+        assert holder.unloaded == []
+
+    def test_a_server_that_cannot_say_what_it_holds_is_left_alone(self):
+        _note_request("http://127.0.0.1:%d/v1" % _port(), "big")
+        assert modelserver._loaded_here == set()
+
+    def test_the_workers_notes_reach_the_process_that_ends_the_run(
+            self, holder, tmp_path):
+        from medialib.lib import runcontext, safety
+        safety.init_abort_flag(str(tmp_path / "abortRequested"))
+        _note_request(holder.url, "big")
+        holder.held.add("big")
+        # Another process's note: only the shared file carries it.
+        modelserver._loaded_here.clear()
+        assert os.path.exists(modelserver._shared_file())
+        runcontext.request_abort()
+        modelserver._eject_at_exit()
+        assert holder.unloaded == ["big"]
+        assert not os.path.exists(modelserver._shared_file())
+
+    def test_the_workers_notes_outlive_the_scratch_handed_back_first(
+            self, holder, tmp_path):
+        import shutil
+
+        from medialib.lib import runcontext, safety
+        scratch = tmp_path / "scratch"
+        scratch.mkdir()
+        safety.init_abort_flag(str(scratch / "abortRequested"))
+        _note_request(holder.url, "big")
+        holder.held.add("big")
+        modelserver._loaded_here.clear()
+        runcontext.request_abort()
+        # The command's own cleanup, before the exit hooks.
+        shutil.rmtree(scratch)
+        modelserver._eject_at_exit()
+        assert holder.unloaded == ["big"]
+
+    def test_a_run_that_finishes_unloads_its_models_too(self, holder, tmp_path):
+        # A switching server never lets an idle model go by itself.
+        from medialib.lib import safety
+        safety.init_abort_flag(str(tmp_path / "abortRequested"))
+        _note_request(holder.url, "big")
+        holder.held.add("big")
+        modelserver._loaded_here.clear()     # a worker's note
+        modelserver._eject_at_exit()
+        assert holder.unloaded == ["big"]
+        assert not os.path.exists(modelserver._shared_file())
+
+    def test_a_command_finishing_inside_another_run_leaves_its_models(
+            self, holder, tmp_path, monkeypatch):
+        from medialib.lib import runcontext, safety
+        # settle() hands the run down through the environment: put it back.
+        for name in ("ABORT_FLAG", "ABORT_FLAG_OWNER"):
+            monkeypatch.delenv(name, raising=False)
+        safety.init_abort_flag(str(tmp_path / "abortRequested"))
+        runcontext.settle("ABORT_FLAG_OWNER", str(os.getpid() + 99999))
+        _note_request(holder.url, "big")
+        holder.held.add("big")
+        modelserver._eject_at_exit()
+        assert holder.unloaded == []
+        # Its note is left for the run that owns it.
+        assert os.path.exists(modelserver._shared_file())
+
+    def test_a_process_no_run_was_settled_in_unloads_what_it_loaded(
+            self, holder, monkeypatch):
+        for name in ("ABORT_FLAG", "ABORT_FLAG_OWNER"):
+            monkeypatch.delenv(name, raising=False)
+        _note_request(holder.url, "big")
+        holder.held.add("big")
+        modelserver._eject_at_exit()
+        assert holder.unloaded == ["big"]
+
+    def test_the_flag_gone_at_exit_still_counts_as_interrupted(
+            self, holder, tmp_path):
+        from medialib.lib import runcontext, safety
+        flag = safety.init_abort_flag(str(tmp_path / "abortRequested"))
+        _note_request(holder.url, "big")
+        holder.held.add("big")
+        open(flag, "w").close()     # a worker's interrupt, not this process's
+        safety.release_abort_flag()
+        assert runcontext.interrupted()
+        modelserver._eject_at_exit()
+        assert holder.unloaded == ["big"]

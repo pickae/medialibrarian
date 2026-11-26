@@ -87,8 +87,14 @@ class TestSvtAv1Hdr:
     unparsed and ignores. The stub is either build: it accepts every probe, and
     the mainline one complains about the fork's key the way libsvtav1 does."""
 
-    MAINLINE = ('case "$*" in *cdef-scaling*) echo "[libsvtav1 @ 0x1] Error '
-                'parsing option cdef-scaling: 10." >&2;; esac; exit 0')
+    MAINLINE = (
+        'case "$*" in '
+        '*cdef-scaling*) echo "[libsvtav1 @ 0x1] Error parsing option '
+        'cdef-scaling: 10." >&2;; '
+        '*distortion-bias-preset*) echo "[libsvtav1 @ 0x1] Error parsing '
+        'option distortion-bias-preset: 0." >&2;; '
+        'esac; exit 0'
+    )
 
     @pytest.fixture
     def video(self, sandbox, tmp_path):
@@ -181,6 +187,56 @@ class TestSvtAv1Hdr:
         log = self._run(video, "exit 0")
         assert ("Film grain: measured per file and synthesised as measured, "
                 "the av1BluRay default") in log
+
+    ESSENTIAL = (
+        'case "$*" in '
+        '*cdef-scaling*) echo "[libsvtav1 @ 0x1] Error parsing option '
+        'cdef-scaling: 10." >&2;; '
+        '*"-loglevel info"*libsvtav1*) echo "Svt[info]: SVT [version]: '
+        'SVT-AV1-Essential Encoder Lib v4.3.1-Essential" >&2;; '
+        'esac; exit 0'
+    )
+
+    def test_svt_av1_essential_uses_internal_auto_grain(self, video):
+        log = self._run(video, self.ESSENTIAL)
+        assert "SVT-AV1-Essential: this ffmpeg's libsvtav1 is " \
+               "SVT-AV1-Essential (with internal automatic film grain " \
+               "analysis), so the profile runs without qm-min=0 (the fork " \
+               "keeps its own default)." in log
+        assert "Film grain: automatic per-scene analysis and synthesis " \
+               "(SVT-AV1-Essential film-grain=-1), the av1BluRay default" in log
+
+    def test_svt_av1_essential_wins_sdr_over_same_release_mainline(
+            self, video, monkeypatch):
+        ladder = video.work / "ladder-essential"
+        ladder.mkdir(exist_ok=True)
+        ess = ladder / "ffmpeg"
+        ess.write_text("#!/usr/bin/env bash\n%s\n" % self.ESSENTIAL)
+        ess.chmod(0o755)
+        monkeypatch.setenv("ffmpegLadder", str(ladder))
+        mainline_431 = (
+            self.MAINLINE[:-len("exit 0")]
+            + 'case "$*" in *"-loglevel info"*libsvtav1*) echo '
+            '"Svt[info]: SVT [version]: SVT-AV1 Encoder Lib '
+            'v4.3.1-1-gabc" >&2;; esac; exit 0'
+        )
+        log = self._run(video, mainline_431)
+        assert "Using ffmpeg: " + str(ess) in log
+        assert "SVT-AV1-Essential:" in log
+
+    def test_svt_av1_hdr_still_wins_av1Grain_over_essential(
+            self, video, monkeypatch):
+        ladder = video.work / "ladder-hdr-vs-ess"
+        ladder.mkdir(exist_ok=True)
+        fork = ladder / "ffmpeg"
+        fork.write_text("#!/usr/bin/env bash\n%s\n" % self.OLDER_FORK)
+        fork.chmod(0o755)
+        monkeypatch.setenv("ffmpegLadder", str(ladder))
+        log = self._run(video, self.ESSENTIAL, "-p", "av1Grain")
+        assert "Using ffmpeg: " + str(fork) in log
+        assert ("SVT-AV1-HDR: chosen over the newer SVT-AV1-Essential "
+                "SVT-AV1 4.3.1") in log
+        assert "tune=6" in log
 
 
 @pytest.fixture

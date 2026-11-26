@@ -103,7 +103,8 @@ it at the front of that run's `PATH`, so the whole run uses it — the command
 itself, the parallel workers it spawns and the commands it calls. Whatever is on `PATH` wins: an
 ffmpeg you put there is a deliberate choice. A run whose `PATH` has none — a cron
 job, a systemd unit, a file-manager action — falls through to `$HOME/.local/bin`,
-`/opt/homebrew/bin`, `/usr/local/bin` and `/opt/ffmpeg/bin`, where a
+`/opt/homebrew/bin`, `/usr/local/bin`, `/opt/ffmpeg/bin` and
+`/opt/ffmpeg-essential/bin`, where a
 hand-installed or Homebrew build goes, and last `/usr/bin`. Set
 `ffmpegOverride` to an absolute path to pin one outright. `ffprobe` comes from the
 same build, and a choice that is **not** what your own shell would have run is said

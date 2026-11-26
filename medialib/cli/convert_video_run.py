@@ -218,6 +218,26 @@ class Run:
                 self.count("skipped")
                 return None
 
+        # A large source (e.g. a 4K Blu-ray remux) can produce chunks plus a
+        # rejoined video intermediate that exceed available RAM. Spill this
+        # file's chunk scratch to disk when it will not fit in the run's RAM
+        # scratch; smaller files in the same run stay in RAM.
+        try:
+            source_size = os.path.getsize(source)
+        except OSError:
+            source_size = 0
+        if source_size:
+            free = ramscratch.ram_dir_free_bytes(settings.chunk_root)
+            if free is not None and source_size > free:
+                spill, on_disk, status = ramscratch.ram_scratch_dir_for(
+                    str(source_size), "convertVideo.chunks")
+                if status == 0 and on_disk and spill:
+                    ramscratch.add_exit_cleanup([spill])
+                    settings.chunk_root = spill
+                    plan.directory = segments.chunk_dir_for(spill, relative)
+                    log("  Too large for RAM scratch, encoding chunks on "
+                        "disk: " + relative)
+
         directory = plan.directory
         os.makedirs(directory, exist_ok=True)
 
@@ -287,12 +307,13 @@ class Run:
         settings.video_profile = pick.profile
         picked_args = rules.profile_args(rules.video_profiles(), pick.profile)
         settings.grain_tune = (
-            settings.svt_av1_hdr and not settings.grain_option
+            (settings.svt_av1_hdr or settings.svt_av1_essential)
+            and not settings.grain_option
             and settings.video_profile == rules.SVT_AV1_HDR_GRAIN_PROFILE
         )
-        settings.grain_level, settings.grain_probe_wanted = (
-            startup._settle_grain(settings, settings.grain_option, picked_args)
-        )
+        (settings.grain_level, settings.grain_probe_wanted,
+         settings.grain_auto) = startup._settle_grain(
+            settings, settings.grain_option, picked_args)
 
     def _settle_picture(self, plan: Plan, geometry: tuple, fields) -> None:
         """The crop, the upscale, the HDR10+ and the chunk boundaries, once the
@@ -1135,17 +1156,23 @@ def _settle_and_run(settings, program: str, video_args: str, grain: str,
     ramscratch.init_ram_base()
 
     chosen = ffmpegselect.selected_ffmpeg()
-    settings.svt_av1_hdr = bool(rank is not None and chosen
-                                and rank.facts(chosen)[0])
     if rank is not None and chosen:
+        facts = rank.facts(chosen)
+        settings.svt_av1_hdr = facts.kind == "hdr"
+        settings.svt_av1_essential = facts.kind == "essential"
+        settings.svt_av1_auto_grain = facts.auto_grain
         settings.svt_build_note = rank.note(chosen)
     # An explicit -g is a request for synthesis (or for none), which the grain
     # tune does not do - so asking for it is also opting out of the tune.
-    settings.grain_tune = (settings.svt_av1_hdr and not grain
-                           and settings.video_profile
-                           == rules.SVT_AV1_HDR_GRAIN_PROFILE)
-    settings.grain_level, settings.grain_probe_wanted = startup._settle_grain(
-        settings, grain, video_args)
+    # SVT-AV1-Essential is only chosen on av1Grain when SVT-AV1-HDR is absent,
+    # and uses distortion-bias-preset=4 in place of HDR's tune=6.
+    settings.grain_tune = (
+        (settings.svt_av1_hdr or settings.svt_av1_essential)
+        and not grain
+        and settings.video_profile == rules.SVT_AV1_HDR_GRAIN_PROFILE
+    )
+    (settings.grain_level, settings.grain_probe_wanted,
+     settings.grain_auto) = startup._settle_grain(settings, grain, video_args)
     startup._detect_hardware(settings, video_args, engines_override)
     startup._summarise(settings, video_args, grain)
 

@@ -280,8 +280,14 @@ def private_workspace(tmp_path_factory, monkeypatch):
     # would be counted as the code under test's own leavings.
     # A fresh run (medialib/lib/runcontext.py) for every case: what one case's
     # command settled about its run is not the next case's.
-    from medialib.lib import filmrecord, runcontext
+    from medialib.lib import filmrecord, modelserver, runcontext
     runcontext.reset()
+    # No case asks a real model server on this machine what it holds, nor
+    # leaves a model noted for the suite's own exit to unload from it.
+    monkeypatch.setattr(modelserver, "note_request", lambda url, model: None)
+    monkeypatch.setattr(modelserver, "_looked", set())
+    monkeypatch.setattr(modelserver, "_loaded_here", set())
+    monkeypatch.setattr(modelserver, "_kinds", {})
     # And what the probes said about the films of the case before, which
     # stubs that answer differently would otherwise be answered from.
     filmrecord.reset()

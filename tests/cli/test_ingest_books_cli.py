@@ -632,3 +632,76 @@ class TestKeep:
         shelf.stock({"novel.epub": "one two"})
         shelf.ingest("-t", "-k")
         assert (shelf.outputs / "novel.txt").read_text() == "one two"
+
+
+def _zipped_book(path, page="<p>words</p>", package="<package/>"):
+    """A source that is a real zip with one package document and one page:
+    the converter stand-in copies it through, so what the run reads to choose
+    the version is exactly this."""
+    with zipfile.ZipFile(path, "w") as packed:
+        packed.writestr("OEBPS/content.opf", package)
+        packed.writestr("OEBPS/c1.xhtml", "<html><body>%s</body></html>" % page)
+
+
+class TestTheEpubVersion:
+    """EPUB 2 unless the book holds what only an EPUB 3 carries; and no
+    re-conversion at all when Calibre would drop part of the book in either."""
+
+    @pytest.fixture
+    def calls(self, shelf):
+        log = shelf.work / "ebook-calls"
+        shelf.with_tool("ebook-convert", _EBOOK_CONVERT_CALLS(str(log)))
+
+        def made():
+            return log.read_text().splitlines() if log.exists() else []
+        return made
+
+    def test_a_plain_epub_is_re_converted_as_the_default_epub2(self, shelf, calls):
+        _zipped_book(shelf.source / "novel.epub")
+        shelf.ingest()
+        made = calls()
+        assert len(made) == 1, made
+        assert "--epub-version" not in made[0]
+
+    def test_an_epub_with_mathml_is_re_converted_as_epub3(self, shelf, calls):
+        _zipped_book(shelf.source / "maths.epub", page="<math><mi>x</mi></math>")
+        log = shelf.ingest()
+        made = calls()
+        assert len(made) == 1, made
+        assert made[0].endswith("--epub-version 3"), made
+        assert re.search(r"^\s+EPUB 3 \(MathML\): maths\.epub$", log,
+                         re.MULTILINE), log
+
+    def test_a_fixed_layout_epub_is_not_re_converted(self, shelf, calls):
+        _zipped_book(shelf.source / "comic.epub", package=(
+            '<package><metadata><meta property="rendition:layout">'
+            'pre-paginated</meta></metadata></package>'))
+        source = (shelf.source / "comic.epub").read_bytes()
+        log = shelf.ingest()
+        assert calls() == []
+        assert (shelf.outputs / "comic.epub").read_bytes() == source
+        assert re.search(r"^\s+Not re-converted \(fixed layout would be lost\): "
+                         r"comic\.epub$", log, re.MULTILINE), log
+        _counts_each_book_once(log, 1)
+
+    def test_another_format_with_video_ends_as_epub3(self, shelf, calls):
+        """The first conversion is the default; only the re-conversion, which
+        writes the book that comes out, is asked for EPUB 3."""
+        _zipped_book(shelf.source / "film.docx", page='<video src="v.mp4"/>')
+        shelf.ingest()
+        made = calls()
+        assert len(made) == 2, made
+        assert "--epub-version" not in made[0]
+        assert made[1].endswith("--epub-version 3"), made
+
+    def test_with_k_the_one_conversion_is_redone_as_epub3_only_when_needed(
+            self, shelf, calls):
+        _zipped_book(shelf.source / "maths.docx", page="<math/>")
+        _zipped_book(shelf.source / "plain.docx")
+        log = shelf.ingest("-k")
+        made = calls()
+        assert sorted(len(line.split("--epub-version 3")) for line in made) \
+            == [1, 1, 2], made
+        assert any("maths.docx" in line and line.endswith("--epub-version 3")
+                   for line in made), made
+        _counts_each_book_once(log, 2)

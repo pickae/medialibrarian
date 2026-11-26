@@ -62,6 +62,7 @@ def _state(tmp_path, monkeypatch):
     # outlive the suite.
     monkeypatch.setattr(ramscratch, "SHM", str(tmp_path / "shm"))
     monkeypatch.setattr(ramscratch.tempfile, "tempdir", str(tmp_path / "plat"))
+    monkeypatch.setattr(ramscratch.hostmem, "available_ram_bytes", lambda: 0)
     os.makedirs(tmp_path / "plat")
     monkeypatch.delenv("ramScratchBase", raising=False)
     monkeypatch.delenv("ramScratchDiskBase", raising=False)
@@ -377,6 +378,31 @@ class TestRamDirFreeBytes:
         monkeypatch.setenv("ramScratchMaxPercent", raw)
         _as_tmpfs(tmp_path, monkeypatch, str(tmp_path), BIG)
         assert ramscratch.ram_dir_free_bytes(str(tmp_path)) == expected
+
+    def test_tmpfs_cap_clamped_by_available_host_ram(self, tmp_path,
+                                                     monkeypatch):
+        """A tmpfs mount's own free space ignores RAM used by other processes;
+        available host RAM (including reclaimable page cache) caps it."""
+        monkeypatch.delenv("ramScratchMaxPercent", raising=False)
+        _as_tmpfs(tmp_path, monkeypatch, str(tmp_path), BIG)
+        monkeypatch.setattr(ramscratch.hostmem, "available_ram_bytes",
+                            lambda: 2 * 1024 ** 3)
+        assert ramscratch.ram_dir_free_bytes(str(tmp_path)) == 2 * 1024 ** 3
+
+    def test_disk_base_ignores_available_host_ram(self, tmp_path, monkeypatch):
+        _mounts(tmp_path, monkeypatch,
+                ["disk %s ext4 rw 0 0\n" % os.path.realpath(tmp_path)])
+        monkeypatch.setattr(ramscratch, "_disk_usage", lambda _d: _Usage(*BIG))
+        monkeypatch.setattr(ramscratch.hostmem, "available_ram_bytes",
+                            lambda: 1 * 1024 ** 3)
+        assert ramscratch.ram_dir_free_bytes(str(tmp_path)) == 5368709120
+
+    def test_tree_size_bytes_sums_nested_files(self, tmp_path):
+        sub = tmp_path / "book"
+        sub.mkdir()
+        (sub / "a.mp3").write_bytes(b"x" * 100)
+        (sub / "b.mp3").write_bytes(b"y" * 250)
+        assert ramscratch.tree_size_bytes(str(tmp_path)) == 350
 
     def test_the_host_s_own_ram_filesystem_answers_something(self):
         """The measurement end to end, against whatever the host really has."""
